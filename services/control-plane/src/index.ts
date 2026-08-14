@@ -3143,6 +3143,9 @@ app.post("/account/automation-runs", asyncHandler(async (req, res) => {
   const sandbox = ["read-only", "workspace-write", "danger-full-access"].includes(req.body?.sandbox) ? req.body.sandbox : undefined;
   const maxAttempts = Number(req.body?.maxAttempts ?? 2);
   if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 10) return res.status(400).json({ error: "maxAttempts must be an integer from 1 to 10" });
+  const targetKind = req.body?.targetKind === "existing_session" ? "existing_session" : "new_session";
+  const targetSessionId = typeof req.body?.targetSessionId === "string" ? req.body.targetSessionId.trim() : "";
+  if (targetKind === "existing_session" && !targetSessionId) return res.status(400).json({ error: "targetSessionId is required when targetKind is existing_session" });
   const run = await store.enqueueAutomationRun(client.accountId, {
     source: "manual",
     triggerKind: "manual",
@@ -3157,6 +3160,9 @@ app.post("/account/automation-runs", asyncHandler(async (req, res) => {
     approvalMode,
     sandbox,
     maxAttempts,
+    target: targetKind === "existing_session"
+      ? { kind: "existing_session", sessionId: targetSessionId }
+      : { kind: "new_session" },
   });
   // Manual runs are real automation work too: wake connected nodes and, when
   // routing targets an ephemeral config, launch the unattended runner. Without

@@ -19,6 +19,7 @@ import {
   fetchGithubApp,
   fetchGithubQueue,
   fetchAutomationRuns,
+  createOneOffRun,
   cancelAutomationRun as apiCancelAutomationRun,
   recordProductMetric,
   activationFromState,
@@ -137,7 +138,6 @@ import {
   unb64url,
   seal,
   createAutomation,
-  runAutomationNow,
   deleteAutomation,
   fetchAutomations,
   updateAutomation,
@@ -3679,41 +3679,47 @@ export class AppController {
     }
   }
 
-  /** Turn the current Session into unattended work without dropping its
-   * conversation/native-resume context. The instruction is E2E-sealed for the
-   * owning Machine; the control plane stores ciphertext and creates a Run that
-   * targets this exact Session. The node resumes/waits for that Session or
-   * fails explicitly—it never silently cold-starts a replacement. */
-  async delegateSession(sessionId: string, instruction: string): Promise<{ runId?: string; error?: string }> {
+  /** Start a durable Run from the message currently in the composer. A draft
+   * creates a fresh Session; an active Session is referenced as execution
+   * context. The message is the Run objective, not a permanent Session mode. */
+  async startRun(
+    instruction: string,
+    options: { approvalMode: "risky" | "autonomous"; maxAttempts: number },
+  ): Promise<{ runId?: string; error?: string }> {
     const text = instruction.trim();
-    if (!text) return { error: "Describe what the agent should finish in the background." };
-    if (!this.accountMode()) return { error: "Sign in to delegate this Session." };
-    const nodeId = this.resolveSessionNodeId(sessionId);
-    if (!nodeId) return { error: "This Session has no owning Machine." };
+    if (!text) return { error: "Describe the task this Run should complete." };
+    if (!this.accountMode()) return { error: "Sign in to start a Run." };
+
+    const state = this.store.getState();
+    const sessionId = state.activeSessionId ?? undefined;
+    const active = sessionId ? state.sessions.find((session) => session.sessionId === sessionId) : undefined;
+    const nodeId = sessionId ? this.resolveSessionNodeId(sessionId) : state.currentNodeId ?? undefined;
+    if (!nodeId) return { error: sessionId ? "This Session has no owning Machine." : "Choose a Machine before starting a Run." };
     const roomKeyB64 = this.local.keys()[nodeId];
     if (!roomKeyB64) return { error: "This Machine isn't paired on this device—open it first so the instruction can be encrypted." };
-    let automationId: string | undefined;
+    const label = this.resolveNodeLabel(nodeId);
+    if (!label) return { error: "This Machine has no routing name. Reconnect it before starting a Run." };
+
     try {
       const roomKey = await importRoomKey(unb64url(roomKeyB64));
       const encrypted = await seal(roomKey, text);
-      const created = await createAutomation(this.local, {
-        name: "Delegated Session work",
-        templateCiphertext: `${TEMPLATE_PREFIX}:${nodeId}:${encrypted}`,
-        trigger: "manual",
-        nodeLabel: this.resolveNodeLabel(nodeId),
-        targetKind: "existing_session",
+      const run = await createOneOffRun(this.local, {
+        title: (text.split(/\r?\n/, 1)[0] || "Run").slice(0, 120),
+        body: `${TEMPLATE_PREFIX}:${nodeId}:${encrypted}`,
+        label,
+        repo: sessionId ? undefined : state.draftRepo ?? undefined,
+        runtimeId: sessionId ? undefined : state.selectedAgentId ?? undefined,
+        model: sessionId ? undefined : state.currentModel?.id,
+        approvalMode: options.approvalMode,
+        sandbox: active?.sandbox ?? (!sessionId ? state.draftSandbox ?? state.nodeSettings?.defaultSandbox : undefined),
+        maxAttempts: options.maxAttempts,
+        targetKind: sessionId ? "existing_session" : "new_session",
         targetSessionId: sessionId,
-        message: false,
-        enabled: true,
       });
-      automationId = created.id;
-      const run = await runAutomationNow(this.local, created.id);
       this.recordProductMilestone("run_accepted");
       return { runId: run.id };
     } catch (error) {
-      return { error: error instanceof Error ? error.message : "Could not delegate this Session." };
-    } finally {
-      if (automationId) void deleteAutomation(this.local, automationId).catch(() => {});
+      return { error: error instanceof Error ? error.message : "Could not start this Run." };
     }
   }
 
@@ -3725,7 +3731,7 @@ export class AppController {
   }
 
   /**
-   * "Schedule this message for later" (long-press Send → ScheduleSheet): write a
+   * "Schedule this message for later" (split Send → ScheduleSheet): write a
    * one-off scheduled message to the account's control plane (`message: true`,
    * E2E-sealed for the owning node) so the always-on node delivers it on time
    * even when this app is closed, and — for an existing session — surface it as

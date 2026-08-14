@@ -9,6 +9,8 @@ import { RepoPicker, AgentPicker, ModelPicker, SandboxPicker } from "./Pickers.j
 import { firstSessionSummary } from "../firstSession.js";
 import { FollowupQueue } from "./FollowupQueue.js";
 import { ScheduleSheet } from "./ScheduleSheet.js";
+import { RunTaskSheet } from "./RunTaskSheet.js";
+import { openRun } from "../runRoute.js";
 import { SANDBOX_TIERS } from "./Settings.js";
 import { VoiceRecorder } from "./VoiceRecorder.js";
 import { WebSpeechRecorder, webSpeechSupported } from "./WebSpeechRecorder.js";
@@ -165,12 +167,12 @@ export function Composer({
   const [readingCount, setReadingCount] = useState(0);
   const [viewing, setViewing] = useState<string | null>(null);
   const dragDepth = useRef(0);
-  // Long-press Send opens the "schedule this for later" sheet (account/relay
-  // mode only — the always-on node + control plane is what makes a scheduled
-  // message deliverable while the app is closed).
+  // Alternative delivery modes live behind one compound Send control so Run
+  // and Schedule stay discoverable without adding permanent composer buttons.
+  const [sendOptionsOpen, setSendOptionsOpen] = useState(false);
   const [scheduling, setScheduling] = useState(false);
-  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const longPressFired = useRef(false);
+  const [startingRun, setStartingRun] = useState(false);
+  const sendOptionsRef = useRef<HTMLDivElement>(null);
 
   // Some runtimes (e.g. Codex / Codex approvals) own model selection themselves
   // and expose no in-app model list — advertised via
@@ -555,50 +557,21 @@ export function Composer({
   // the always-on node, so the affordance only exists when signed in.
   const accountMode = Boolean(controller.local.s && controller.local.cp);
 
-  // Long-press (hold ~500ms) on Send schedules instead of sending. The held
-  // pointer would otherwise submit the form on release, so the button's onClick
-  // swallows the click that follows a fired long-press, and a one-shot capture
-  // click listener swallows that release click wherever it lands — the sheet is
-  // mounted under the still-held finger, so without it the release would hit
-  // the just-opened sheet (or its backdrop) and dismiss it the instant it opens.
-  // iOS: text selection / the callout bubble preempt the pointer stream and
-  // fire pointercancel before the timer elapses, so the same gesture is also
-  // wired to touch events (double-run on iOS 13+: each press resets the same
-  // timer — see startLongPress, which clears any armed timer first). The
-  // button's CSS kills selection + callout, and onContextMenu opens the
-  // schedule sheet (the desktop long-press equivalent) on right-click.
-  const LONG_PRESS_MS = 500;
-  function openSchedule() {
-    const swallow = (ev: MouseEvent) => {
-      ev.preventDefault();
-      ev.stopPropagation();
-      window.removeEventListener("click", swallow, true);
+  useEffect(() => {
+    if (!sendOptionsOpen) return;
+    const close = (event: MouseEvent) => {
+      if (!sendOptionsRef.current?.contains(event.target as Node)) setSendOptionsOpen(false);
     };
-    window.addEventListener("click", swallow, true);
-    setScheduling(true);
-  }
-  function startLongPress() {
-    if (!accountMode || !canSend) return;
-    // A single tap fires both onPointerDown and onTouchStart, so this runs
-    // twice per press; clear any timer we already armed before starting a new
-    // one, or the first (orphaned) timer keeps running past a quick tap's
-    // release and pops the schedule sheet unbidden.
-    cancelLongPress();
-    // A fresh press always starts clean: a stale flag from an earlier
-    // long-press (whose release click landed on the sheet, not this button)
-    // must not swallow the next real tap.
-    longPressFired.current = false;
-    longPressTimer.current = setTimeout(() => {
-      if (longPressFired.current) return;
-      longPressFired.current = true;
-      openSchedule();
-    }, LONG_PRESS_MS);
-  }
-  function cancelLongPress() {
-    if (longPressTimer.current) clearTimeout(longPressTimer.current);
-    longPressTimer.current = null;
-  }
-  useEffect(() => () => cancelLongPress(), []);
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSendOptionsOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [sendOptionsOpen]);
 
   // B2 — a first session exposes exactly four decisions: machine, repo,
   // agent/model, protection. On a draft we render a single explicit summary of
@@ -902,49 +875,61 @@ export function Composer({
               <button type="button" className="composer-btn stop" onClick={onAbort} title="Stop">
                 ■
               </button>
+            ) : accountMode ? (
+              <div className="split-send" ref={sendOptionsRef}>
+                <button
+                  type="submit"
+                  className="composer-btn send split-send-main"
+                  disabled={!canSend}
+                  title={working ? "Queue follow-up" : firstIsolatedRun ? "Launch Machine and send task" : "Send message"}
+                  aria-label={firstIsolatedRun ? "Launch Machine and send task" : working ? "Queue follow-up" : "Send message"}
+                >
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  className="split-send-toggle"
+                  disabled={!canSend}
+                  aria-label="More send options"
+                  aria-haspopup="menu"
+                  aria-expanded={sendOptionsOpen}
+                  onClick={() => setSendOptionsOpen((open) => !open)}
+                >
+                  ▾
+                </button>
+                {sendOptionsOpen && (
+                  <div className="send-options-menu" role="menu">
+                    <button
+                      type="button"
+                      className="send-option"
+                      role="menuitem"
+                      disabled={attachments.length > 0 || !text.trim()}
+                      onClick={() => { setSendOptionsOpen(false); setStartingRun(true); }}
+                    >
+                      <strong>Start a Run</strong>
+                      <span>{attachments.length ? "Runs currently support text instructions only." : "Checks, evidence, attempts, and recovery."}</span>
+                    </button>
+                    <div className="send-options-divider" />
+                    <button
+                      type="button"
+                      className="send-option"
+                      role="menuitem"
+                      disabled={attachments.length > 0 || !text.trim()}
+                      onClick={() => { setSendOptionsOpen(false); setScheduling(true); }}
+                    >
+                      <strong>Schedule for later</strong>
+                      <span>{attachments.length ? "Scheduled messages currently support text only." : "Send at a chosen time, even if the app is closed."}</span>
+                    </button>
+                  </div>
+                )}
+              </div>
             ) : (
               <button
                 type="submit"
                 className="composer-btn send"
                 disabled={!canSend}
-                title={working ? "Queue follow-up" : firstIsolatedRun ? "Launch Machine and send task" : accountMode ? "Send — hold to schedule for later" : "Send"}
+                title={working ? "Queue follow-up" : firstIsolatedRun ? "Launch Machine and send task" : "Send"}
                 aria-label={firstIsolatedRun ? "Launch Machine and send task" : working ? "Queue follow-up" : "Send"}
-                onPointerDown={(e) => {
-                  if (e.button !== 0) return;
-                  startLongPress();
-                }}
-                onPointerUp={cancelLongPress}
-                onPointerLeave={cancelLongPress}
-                onPointerCancel={cancelLongPress}
-                onTouchStart={() => {
-                  // iOS long-press: the browser's text-selection takeover can
-                  // fire pointercancel before 500ms; the touch handlers keep
-                  // the timer armed regardless.
-                  startLongPress();
-                }}
-                onTouchMove={cancelLongPress}
-                onTouchEnd={cancelLongPress}
-                onTouchCancel={cancelLongPress}
-                onContextMenu={(e) => {
-                  // Right-click is the desktop equivalent of the touch
-                  // long-press: open the schedule sheet instead of the
-                  // browser context menu. cancelLongPress so a pending
-                  // hold-timer doesn't fire a second time.
-                  e.preventDefault();
-                  if (!accountMode || !canSend) return;
-                  cancelLongPress();
-                  longPressFired.current = true;
-                  openSchedule();
-                }}
-                onClick={(e) => {
-                  if (longPressFired.current) {
-                    // A long-press already opened the schedule sheet; the release
-                    // click must not also submit the form. (The capture listener
-                    // above usually intercepts it first — this is the fallback.)
-                    e.preventDefault();
-                    longPressFired.current = false;
-                  }
-                }}
               >
                 ↑
               </button>
@@ -956,6 +941,18 @@ export function Composer({
       {picker === "sandbox" && <SandboxPicker state={state} onClose={() => setPicker(null)} />}
       {picker === "agent" && <AgentPicker state={state} onClose={() => setPicker(null)} />}
       {picker === "model" && modelSelectable && <ModelPicker state={state} onClose={() => setPicker(null)} />}
+      {startingRun && accountMode && (
+        <RunTaskSheet
+          state={state}
+          text={text}
+          onClose={() => setStartingRun(false)}
+          onStarted={(runId) => {
+            setStartingRun(false);
+            clearComposer();
+            openRun(runId);
+          }}
+        />
+      )}
       {scheduling && accountMode && (
         <ScheduleSheet
           state={state}

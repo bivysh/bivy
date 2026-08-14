@@ -6,7 +6,7 @@
 // above the composer so queued text, its delivery order, and its state
 // (queued/sending/failed) are never invisible the way a straight-through send
 // into a busy session used to be. Also carries the session's *scheduled*
-// messages (long-press Send → ScheduleSheet): the control-plane automation
+// messages (split Send → ScheduleSheet): the control-plane automation
 // delivers those on its own timer, so they sit here as timestamped rows that
 // can be cancelled (✕) before they fire, or re-timed (✎ → inline datetime
 // field) by updating the automation in place — rather than only living inside

@@ -12,7 +12,6 @@ import { createPortal } from "react-dom";
 import cronstrue from "cronstrue";
 import {
   createAutomation,
-  createOneOffRun,
   deleteAutomation,
   fetchAccountNodes,
   fetchAutomationRuns,
@@ -428,105 +427,6 @@ const AUTOMATIONS_TABS: Array<{ label: string; section: AutomationsSection | nul
   { label: "Rulesets", section: "rulesets" },
 ];
 
-/** Small, task-first composer for ad-hoc governed work. This belongs beside
- * "New automation": Runs are things users start; Automations are things that
- * start Runs later. */
-function OneOffRunDialog({ state, onClose, onCreated }: { state: AppState; onClose: () => void; onCreated: (run: AccountAutomationRun) => void }) {
-  const paired = state.nodes.filter((node) => Boolean(controller.local.keys()[node.id]));
-  const initialNode = paired.find((node) => node.id === state.currentNodeId) ?? paired[0];
-  const [nodeId, setNodeId] = useState(initialNode?.id ?? "");
-  const [title, setTitle] = useState("");
-  const [instructions, setInstructions] = useState("");
-  const [repo, setRepo] = useState("");
-  const [runtimeId, setRuntimeId] = useState("");
-  const [model, setModel] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const selected = state.nodes.find((node) => node.id === nodeId);
-
-  async function submit() {
-    const text = instructions.trim();
-    const roomKey = controller.local.keys()[nodeId];
-    if (!text || !selected || !roomKey) return;
-    setBusy(true);
-    setError("");
-    try {
-      const encrypted = await seal(await importRoomKey(unb64url(roomKey)), text);
-      const run = await createOneOffRun(controller.local, {
-        title: (title.trim() || text.split(/\r?\n/, 1)[0] || "One-off Run").slice(0, 120),
-        body: `${TEMPLATE_PREFIX}:${nodeId}:${encrypted}`,
-        label: `bivy/${String(selected.name || selected.id)}`,
-        repo: repo.trim() || undefined,
-        runtimeId: runtimeId || undefined,
-        model: model || undefined,
-        approvalMode: "risky",
-        sandbox: "workspace-write",
-        maxAttempts: 2,
-      });
-      controller.recordProductMilestone("run_accepted");
-      onCreated(run);
-    } catch (cause) {
-      setError(String((cause as Error)?.message || cause));
-      setBusy(false);
-    }
-  }
-
-  return createPortal(
-    <div className="app-dialog" role="dialog" aria-modal="true" aria-label="New Run">
-      <div className="app-dialog-backdrop" onClick={busy ? undefined : onClose} />
-      <div className="app-dialog-body">
-        <h3>New one-off Run</h3>
-        <p>Delegate unattended work with checks, evidence, and a Receipt. No Automation is saved.</p>
-        <div className="settings-field">
-          <label className="field-label" htmlFor="one-off-instructions">Instructions</label>
-          <textarea id="one-off-instructions" className="picker-search" rows={6} value={instructions} onChange={(event) => setInstructions(event.target.value)} placeholder="What should the agent finish?" autoFocus disabled={busy} />
-        </div>
-        <div className="settings-field">
-          <label className="field-label" htmlFor="one-off-machine">Machine</label>
-          <select id="one-off-machine" className="picker-search" value={nodeId} onChange={(event) => setNodeId(event.target.value)} disabled={busy}>
-            <option value="">Choose a paired machine…</option>
-            {paired.map((node) => <option key={node.id} value={node.id}>{String(node.name || node.id)}{node.online ? " · online" : " · offline"}</option>)}
-          </select>
-        </div>
-        <div className="settings-field">
-          <label className="field-label" htmlFor="one-off-repo">Repository <span className="muted">(optional)</span></label>
-          <input id="one-off-repo" className="picker-search" value={repo} onChange={(event) => setRepo(event.target.value)} placeholder="owner/name" disabled={busy} />
-        </div>
-        <details>
-          <summary>Agent, model &amp; title</summary>
-          <div className="wizard-advanced">
-            <div className="settings-field">
-              <label className="field-label" htmlFor="one-off-agent">Agent</label>
-              <select id="one-off-agent" className="picker-search" value={runtimeId} onChange={(event) => setRuntimeId(event.target.value)} disabled={busy}>
-                <option value="">Machine default</option>
-                {state.runtimes.map((runtime) => <option key={runtime.id} value={runtime.id}>{String(runtime.displayName || runtime.name || runtime.id)}</option>)}
-              </select>
-            </div>
-            <div className="settings-field">
-              <label className="field-label" htmlFor="one-off-model">Model</label>
-              <select id="one-off-model" className="picker-search" value={model} onChange={(event) => setModel(event.target.value)} disabled={busy}>
-                <option value="">Agent default</option>
-                {state.models.map((item) => <option key={item.id} value={item.id}>{String(item.name || item.id)}</option>)}
-              </select>
-            </div>
-            <div className="settings-field">
-              <label className="field-label" htmlFor="one-off-title">Title</label>
-              <input id="one-off-title" className="picker-search" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Defaults to the first instruction line" disabled={busy} />
-            </div>
-          </div>
-        </details>
-        {paired.length === 0 && <div className="setup-error">Pair this device with a Machine first so the instructions can be encrypted.</div>}
-        {error && <div className="setup-error" role="alert">{error}</div>}
-        <div className="app-dialog-actions">
-          <button className="btn" onClick={onClose} disabled={busy}>Cancel</button>
-          <button className="btn primary" onClick={() => void submit()} disabled={busy || !instructions.trim() || !nodeId}>{busy ? "Queuing…" : "Start Run"}</button>
-        </div>
-      </div>
-    </div>,
-    document.body,
-  );
-}
-
 export function AutomationsView({
   state,
   onClose,
@@ -566,7 +466,6 @@ export function AutomationsView({
   const [cancelError, setCancelError] = useState<string | null>(null);
   /** Create chooser (scratch + templates). Opens from New automation. */
   const [chooserOpen, setChooserOpen] = useState(false);
-  const [oneOffOpen, setOneOffOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   const refreshRuns = useCallback(async () => {
@@ -1128,7 +1027,6 @@ export function AutomationsView({
               definitions={items}
               cancelBusyId={cancelBusyId}
               onRefresh={() => void refresh().catch((e) => setError(String((e as Error).message || e)))}
-              onNewRun={() => setOneOffOpen(true)}
               onCancel={(run) => { setCancelError(null); setCancelRun(run); }}
               onOpenRun={onOpenRun}
               onOpenSession={(sessionId) => { onOpenSession(sessionId); onClose(); }}
@@ -1150,8 +1048,6 @@ export function AutomationsView({
 
         {section === "rulesets" && <RulesetsPanel state={state} />}
       </div>
-
-      {oneOffOpen && <OneOffRunDialog state={state} onClose={() => setOneOffOpen(false)} onCreated={(run) => { setOneOffOpen(false); setRuns((current) => [run, ...current]); onOpenRun?.(run.id); }} />}
 
       {cancelRun && (
         <ConfirmDialog

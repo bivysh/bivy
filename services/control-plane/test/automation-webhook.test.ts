@@ -133,8 +133,13 @@ async function main() {
     body: "bivy-room-v1:node-as-code:opaque-app-run",
     label: "bivy/config-runner",
     sandbox: "read-only",
+    targetKind: "existing_session",
+    targetSessionId: "session-from-composer",
   }, token);
   expect(appRun.status === 201 && appRun.body.triggerKind === "manual" && !appRun.body.definitionId, "account API creates a manual one-off Run");
+  expect(appRun.body.target?.kind === "existing_session" && appRun.body.target?.sessionId === "session-from-composer", "a composer Run can target its existing Session context");
+  const missingRunTarget = await json(port, "POST", "/account/automation-runs", { title: "Missing target", targetKind: "existing_session" }, token);
+  expect(missingRunTarget.status === 400, "an existing-Session Run requires an exact Session target");
   const oneOffWork = await json(port, "GET", "/account/work-items", undefined, token);
   const cliWork = oneOffWork.body.find((w: any) => w.id === oneOffCliRun.body.id);
   const pendingNodeWork = await json(port, "GET", "/node/work?labels=bivy%2Fconfig-runner", undefined, nodeToken);
