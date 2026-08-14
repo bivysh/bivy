@@ -5,11 +5,10 @@
  * PATH. These records describe integrations; they do not bundle or implement
  * the upstream agents.
  */
-import { sandboxArgsFor, type SandboxTier } from "../harness/sandbox.js";
-import { loadGrokTranscript } from "../runtime/grok-sessions.js";
-import type { ProcessPromptMode } from "../runtime/process.js";
-import type { RuntimeMessage } from "../runtime/types.js";
 import type { AgentSupportTier } from "./types.js";
+
+export type AgentProfileSandboxTier = "read-only" | "workspace-write" | "danger-full-access";
+export type AgentProfilePromptMode = "stdin" | "argv";
 
 
 export type AgentProfileId =
@@ -54,7 +53,7 @@ export type AgentProfile = {
   displayName: string;
   command: string;
   packageName: string;
-  promptMode: ProcessPromptMode;
+  promptMode: AgentProfilePromptMode;
   /**
    * Hidden from the agent picker (still runnable via `BIVY_RUNTIME=<id>`). The
    * honest home for an agent whose ProcessRuntime capabilities aren't picker-grade
@@ -86,7 +85,7 @@ export type AgentProfile = {
    * (resume stays off, and the catalog reports it off) — the honest state for an
    * agent with no native "continue session <id>" form (e.g. Aider, Crush).
    */
-  resume?: { template: string[]; loadHistory?: (sessionId: string) => RuntimeMessage[] };
+  resume?: { template: string[]; historyLoader?: "grok" };
   /**
    * Model selection, the data-driven way. `flag` is the CLI's model option (its
    * value is the chosen model id); `insertAt` places it in the launch args (0 =
@@ -122,14 +121,13 @@ export type AgentProfile = {
    * flag and the agent gets structured fidelity by default (a one-field edit).
    */
   parserUnverified?: boolean;
-  /**
-   * Native exec sandbox. When set, builds the full launch args for a given
-   * structured-mode + sandbox tier, inserting the agent's native sandbox/approval
-   * flags in the right place (the prompt is appended by ProcessRuntime after
-   * these). Takes precedence over args/jsonArgs. Agents without a native sandbox
-   * omit this and fall back to args/jsonArgs.
-   */
-  composeArgs?: (opts: { structured: boolean; tier: SandboxTier }) => string[];
+  /** Native sandbox arguments as data. `insertAt: -1` means immediately
+   * before the final base argument (for CLIs whose prompt flag must remain last);
+   * omission appends them. The runtime interprets this recipe. */
+  nativeSandbox?: {
+    argsByTier: Record<AgentProfileSandboxTier, string[]>;
+    insertAt?: number;
+  };
   /**
    * The agent speaks the Agent Client Protocol (ACP) — the highest-capability
    * general wrapping path. `args` launches it in ACP mode (e.g. Gemini's
@@ -166,7 +164,13 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     jsonArgs: ["exec", "--json"],
     parserId: "codex-json",
     // `codex exec --json --sandbox <tier> <prompt>` — native OS sandbox.
-    composeArgs: ({ structured, tier }) => ["exec", ...(structured ? ["--json"] : []), "--sandbox", tier],
+    nativeSandbox: {
+      argsByTier: {
+        "read-only": ["--sandbox", "read-only"],
+        "workspace-write": ["--sandbox", "workspace-write"],
+        "danger-full-access": ["--sandbox", "danger-full-access"],
+      },
+    },
     // Reasoning effort via a config override, after the `exec` subcommand.
     // `codex exec -c model_reasoning_effort=<level> …`.
     thinking: { levels: ["minimal", "low", "medium", "high"], default: "medium", template: ["-c", "model_reasoning_effort={level}"], insertAt: 1 },
@@ -274,7 +278,6 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     jsonArgs: ["run", "--output-format", "stream-json", "-t"],
     parserId: "goose-stream-json",
     // Goose has no CLI sandbox flag; governed by the FS/MCP/network channels.
-    composeArgs: ({ structured }) => (structured ? ["run", "--output-format", "stream-json", "-t"] : ["run", "-t"]),
     // `goose run --resume --session-id <id> -t "<prompt>"` continues a prior
     // session by id (`--session-id` "Requires --resume", per `goose run --help`).
     resume: { template: ["run", "--output-format", "stream-json", "--resume", "--session-id", "{id}", "-t"] },
@@ -318,7 +321,14 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     parserId: "gemini-json",
     // Gemini contains via --approval-mode; -p must stay last so the prompt
     // (appended by ProcessRuntime) lands as its value.
-    composeArgs: ({ structured, tier }) => [...(structured ? ["-o", "json"] : []), ...sandboxArgsFor("gemini", tier), "-p"],
+    nativeSandbox: {
+      insertAt: -1,
+      argsByTier: {
+        "read-only": ["--approval-mode", "plan"],
+        "workspace-write": ["--approval-mode", "auto_edit"],
+        "danger-full-access": ["--approval-mode", "yolo"],
+      },
+    },
     // `gemini -o json --approval-mode <mode> -r <id> -p "<prompt>"` continues a
     // previous session (`-r, --resume  Resume a previous session. Use "latest" for
     // most recent or index number (e.g. --resume 5)`, per `gemini --help`; a
@@ -354,7 +364,14 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     jsonArgs: ["--output-format", "json", "-p"],
     parserId: "gemini-json",
     // Shares Gemini's `--approval-mode` containment (see sandboxArgsFor("qwen")).
-    composeArgs: ({ structured, tier }) => [...(structured ? ["--output-format", "json"] : []), ...sandboxArgsFor("qwen", tier), "-p"],
+    nativeSandbox: {
+      insertAt: -1,
+      argsByTier: {
+        "read-only": ["--approval-mode", "plan"],
+        "workspace-write": ["--approval-mode", "auto_edit"],
+        "danger-full-access": ["--approval-mode", "yolo"],
+      },
+    },
     // Gemini-CLI fork: same `--resume <id>` headless resume form (Qwen Code docs,
     // "Headless Mode"). `{sandbox}` re-derives --approval-mode from the tier.
     resume: { template: ["--output-format", "json", "{sandbox}", "--resume", "{id}", "-p"] },
@@ -501,7 +518,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     args: ["-p"],
     resume: {
       template: ["--resume", "{id}", "-p"],
-      loadHistory: (sessionId: string) => loadGrokTranscript(sessionId),
+      historyLoader: "grok",
     },
     model: {
       flag: "-m",

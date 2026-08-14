@@ -50,6 +50,13 @@ const RULES = [
     note: "credentials must be a pure domain + injected-port service; upward deps become ports (see pilot spec).",
   },
   {
+    name: "agent-profiles-are-declarative-data",
+    dir: "src/agents/profiles.ts",
+    forbid: ["../runtime", "../harness", "node:", "process", "=>"],
+    enforce: true,
+    note: "agent definitions are immutable recipes; runtime factories interpret launch and history-loader identities.",
+  },
+  {
     name: "controllers-dont-import-server",
     dir: "src/controllers",
     forbid: ["../server", "./server"],
@@ -132,11 +139,11 @@ const RULES = [
     note: "provider-neutral machine facts depend only on other value projections.",
   },
   {
-    name: "ephemeral-launch-plan-is-a-pure-decision",
+    name: "ephemeral-launch-plan-is-a-safe-pure-decision",
     dir: "packages/core/src/ephemeral-launch-plan.ts",
-    forbid: ["./ephemeral-storage", "./ephemeral-provider-adapters", "./ephemeral.js", "./transport", "./local-store", "node:", "react"],
+    forbid: ["./ephemeral-execution-envelope", "./ephemeral-storage", "./ephemeral-provider-adapters", "./ephemeral.js", "./transport", "./local-store", "BootstrapOpts", "enrollmentToken", "roomKeyB64", "githubToken", "node:", "react"],
     enforce: true,
-    note: "launch planning combines supplied facts into intent data; orchestration interprets the plan at the effect edge.",
+    note: "inspectable launch plans contain no bootstrap credentials; the execution envelope is separate and effect-edge-only.",
   },
   {
     name: "ephemeral-provider-ports-dont-import-effects",

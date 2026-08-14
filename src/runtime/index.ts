@@ -17,7 +17,7 @@ import {
 import { invalidatePiCommandProbe, piAgentDir, piCommandAvailable, piIntegration } from "../agents/pi/integration.js";
 import { deleteCodexSession, loadCodexTranscript } from "./codex-sessions.js";
 import { deleteOpenCodeSession, loadOpenCodeTranscript, writeOpenCodeHistory } from "./opencode-sessions.js";
-import { discoverNativeGrokSessions, listGrokSessions } from "./grok-sessions.js";
+import { discoverNativeGrokSessions, listGrokSessions, loadGrokTranscript } from "./grok-sessions.js";
 import { createCredentialStore } from "./credentials.js";
 import { AgentRegistry } from "../agents/registry.js";
 import { applyCertification } from "../certification/index.js";
@@ -632,7 +632,7 @@ function cliAgentInfo(id: string, spec: AgentProfile): RuntimeInfo {
       nativeSessionDiscovery: id === "grok" && commandAvailable(spec.command),
       nativeSessionAdoption: id === "grok" && resume,
     }),
-    nativeSandbox: Boolean(spec.composeArgs),
+    nativeSandbox: Boolean(spec.nativeSandbox),
     supportTier: spec.supportTier ?? (id === "codex" ? "supported" : "experimental"),
     testedVersion: spec.testedVersion,
     authOwner: spec.authOwner ?? "agent",
@@ -1213,15 +1213,21 @@ function makeCliRuntime(id: string, options: RuntimeFactoryOptions, spec: AgentP
       const structured = executionMode === "structured-pipe";
       const parserId = process.env.BIVY_AGENT_PARSER || (structured ? spec.parserId : undefined);
       const tier = sandboxTier(options.sandbox);
-      // BIVY_<ID>_ARGS overrides the launch flags for a CLI version we haven't
-      // pinned; else composeArgs (native sandbox) wins; else structured jsonArgs;
-      // else the plain args.
-      const runArgs = cliArgsOverride(id)
-        ?? (spec.composeArgs
-          ? spec.composeArgs({ structured, tier })
-          : structured && spec.jsonArgs
-            ? spec.jsonArgs
-            : spec.args);
+      // Operators may override the launch recipe for an unpinned CLI version;
+      // otherwise interpret the profile's immutable argument data.
+      const baseArgs = structured && spec.jsonArgs ? spec.jsonArgs : spec.args;
+      const runArgs = cliArgsOverride(id) ?? (() => {
+        if (!spec.nativeSandbox) return baseArgs;
+        const base = [...(baseArgs ?? [])];
+        const sandboxArgs = spec.nativeSandbox.argsByTier[tier];
+        const declared = spec.nativeSandbox.insertAt;
+        const index = declared === undefined
+          ? base.length
+          : declared < 0
+            ? Math.max(0, base.length + declared)
+            : Math.min(base.length, declared);
+        return [...base.slice(0, index), ...sandboxArgs, ...base.slice(index)];
+      })();
       // Preflights validate the agent's own login. Grok explicitly declares
       // mixed auth and may materialize a Bivy-connected subscription; Codex and
       // OpenCode retain their native stores without credential replacement.
@@ -1257,7 +1263,7 @@ function makeCliRuntime(id: string, options: RuntimeFactoryOptions, spec: AgentP
         : resumeTemplate
           ? {
               resumable: true,
-              loadHistory: spec.resume?.loadHistory,
+              loadHistory: spec.resume?.historyLoader === "grok" ? loadGrokTranscript : undefined,
               // `{sandbox}` expands to that agent's native containment flags for
               // the tier (e.g. Gemini/Qwen's `--approval-mode <mode>`) — a whole
               // token, not a string substitution, since it can be multiple argv

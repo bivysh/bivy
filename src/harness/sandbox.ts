@@ -65,7 +65,7 @@ function geminiApprovalArgs(tier: SandboxTier): string[] {
 /**
  * Native sandbox/approval flags for an agent at a tier. Empty when the agent has
  * no native sandbox. These are inserted by the runtime when composing the
- * launch args (see AGENT_PROFILES.composeArgs).
+ * launch args (see AGENT_PROFILES.nativeSandbox).
  */
 export function sandboxArgsFor(agentId: string, tier: SandboxTier): string[] {
   switch (agentId) {

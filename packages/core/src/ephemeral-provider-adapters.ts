@@ -6,7 +6,15 @@
 import { ephemeralCostEstimate as deriveEphemeralCostEstimate } from "./ephemeral-lifecycle.js";
 import type { ProviderSize } from "./ephemeral-provider-ports.js";
 
-export * from "./ephemeral-provider-ports.js";
+export type {
+  BootstrapOpts,
+  ExecFn,
+  ExecRequest,
+  ExecResult,
+  ProviderAdapter,
+  ProviderProvisionConfig,
+  ProviderSize,
+} from "./ephemeral-provider-ports.js";
 export { buildBootstrapUserData } from "./ephemeral-provider-bootstrap.js";
 export { ephemeralAdapter, validateEphemeralProviderToken } from "./ephemeral-provider-registry.js";
 export { ALLOWED_HOSTS, assertAllowedUrl, extractProviderMessage } from "./ephemeral-provider-utils.js";
