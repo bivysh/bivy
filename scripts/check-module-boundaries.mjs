@@ -129,6 +129,7 @@ const RULES = [
   ...[
     "connection-event-fold.ts",
     "session-index-event-fold.ts",
+    "terminal-event-fold.ts",
     "catalog-settings-event-fold.ts",
     "presentation-event-fold.ts",
   ].map((file) => ({
