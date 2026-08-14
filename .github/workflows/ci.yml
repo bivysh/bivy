@@ -138,6 +138,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run lint
       - run: pnpm run check:boundaries
+      - run: pnpm run check:routes
       - run: pnpm run check:design
       - run: pnpm run typecheck
       - run: pnpm run typecheck:web

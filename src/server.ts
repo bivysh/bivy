@@ -9376,12 +9376,15 @@ app.post("/api/sessions/rename", (req, res, next) => {
   }
 });
 
-// Local device token management for the loopback development UI.
-app.get("/api/devices", (_req, res) => {
+// Local bearer-token management for the loopback development UI. These are
+// authentication records in node.json, not the X25519-linked remote devices at
+// /api/devices above. Keeping the resources on distinct paths prevents Express's
+// first matching route from silently shadowing one of the two device stores.
+app.get("/api/auth/devices", (_req, res) => {
   res.json(identity.listDevices());
 });
 
-app.post("/api/devices", (req, res, next) => {
+app.post("/api/auth/devices", (req, res, next) => {
   try {
     const { device, token } = identity.createDevice(String(req.body?.name ?? ""));
     broadcast({ type: "device.created", device });
@@ -9392,7 +9395,7 @@ app.post("/api/devices", (req, res, next) => {
   }
 });
 
-app.delete("/api/devices/:id", (req, res) => {
+app.delete("/api/auth/devices/:id", (req, res) => {
   const removed = identity.revokeDevice(req.params.id);
   if (removed) broadcast({ type: "device.revoked", id: req.params.id });
   res.status(removed ? 200 : 404).json({ ok: removed });
