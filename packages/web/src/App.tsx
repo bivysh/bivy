@@ -34,6 +34,8 @@ import { NodePicker } from "./components/Pickers.js";
 import { ConnectRunner } from "./components/ConnectRunner.js";
 import { buildInboxItems } from "./components/Inbox.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "./flags.js";
+import { PwaLifecycleNotice } from "./components/PwaLifecycleNotice.js";
+import { clearQueuedPrompts, markPromptQueued, setFollowupQueuedPrompts, setTurnActive } from "./pwaLifecycle.js";
 // The terminal pulls in xterm + its GPU/search/link addons (~a third of the JS
 // bundle). It's an on-demand overlay, so load it lazily to keep the initial app
 // paint fast; the chunk is fetched the first time the user opens a terminal.
@@ -180,6 +182,10 @@ export function App() {
     });
   }, []);
   const online = state.status === "online";
+  useEffect(() => setTurnActive(state.working), [state.working]);
+  useEffect(() => { if (online) clearQueuedPrompts(); }, [online]);
+  const queuedFollowupCount = Object.values(state.followupsBySession).reduce((total, items) => total + items.length, 0);
+  useEffect(() => setFollowupQueuedPrompts(queuedFollowupCount), [queuedFollowupCount]);
   const activation = useMemo(() => deriveActivation({
     accountSignedIn: controller.direct ? true : state.signedIn,
     machineOnline: state.status === "online" ? true : state.status === "offline" ? false : undefined,
@@ -802,12 +808,17 @@ export function App() {
               )}
             </div>
 
+            <PwaLifecycleNotice status={state.status} hasCachedTranscript={state.transcript.length > 0} />
             <Composer
               state={state}
               disabled={!canCompose}
               disabledHint={state.status === "offline" ? "Not connected" : "Connecting…"}
               working={state.working}
-              onSend={(text, attachments) => controller.sendPrompt(text, attachments)}
+              onSend={(text, attachments) => {
+                if (state.status !== "online") markPromptQueued();
+                setTurnActive(true); // close the pre-`working` update-activation race
+                controller.sendPrompt(text, attachments);
+              }}
               onAbort={() => controller.abort()}
               onError={(message) => controller.store.setError(message)}
             />
