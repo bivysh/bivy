@@ -87,12 +87,17 @@ test("re-entrancy: a naming already in flight is a no-op", async () => {
   assert.deepEqual(renamed, []);
 });
 
-test("setSessionName sets, locks, persists, and broadcasts", async () => {
+test("setSessionName sets, locks, persists, and survives a later interactive message", async () => {
   const { namer, persisted, broadcasts } = harness();
   const record: NamerSession = { id: "s9", session: fakeSession() } as any;
   namer.setSessionName(record, "  Manual Title  ");
   assert.equal(record.session.getName(), "Manual Title", "trimmed and set");
   assert.equal(record.namedFromFirstPrompt, true, "locked against the first-prompt namer");
+
+  // Run-created sessions are named explicitly before their internal turn. A
+  // later human follow-up must not replace that Run title with e.g. "status".
+  await namer.maybeNameSession(record, "status");
+  assert.equal(record.session.getName(), "Manual Title");
   assert.deepEqual(persisted, ["s9"]);
   assert.equal(broadcasts.filter((b) => b.type === "session.renamed").length, 1);
 });

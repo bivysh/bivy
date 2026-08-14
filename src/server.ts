@@ -5271,6 +5271,12 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
   record.automationRunId = item.id;
   record.delegationDepth = delegatedProvenance?.depth ?? 0;
   record.approvalMode = safety.approval;
+  // A Run already has a deliberate, durable title. Make that the Session title
+  // and lock it before the first agent turn; otherwise the next message a human
+  // sends after the Run is mistaken for the Session's first naming prompt (the
+  // internal Run turn does not pass through the interactive prompt handler), so
+  // rows named after the Run suddenly become "status", "continue", etc.
+  sessionNamer.setSessionName(record, item.title);
   persistSessionMetadata(record);
   if (item.model) {
     try { await record.session.setModel("", item.model); } catch {}
