@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { deriveActivation, cancelAutomationRun, fetchAutomationRun, recordProductMetric, retryAutomationRun, type AccountAutomationRun, type GithubQueueItem } from "@bivy/core";
+import { deriveActivation, cancelAutomationRun, deriveArtifacts, fetchAutomationRun, recordProductMetric, retryAutomationRun, type AccountAutomationRun, type GithubQueueItem } from "@bivy/core";
 import { useAppState } from "./store/useStore.js";
 import { SessionList } from "./components/SessionList.js";
 import { ChatView } from "./components/ChatView.js";
@@ -25,6 +25,7 @@ import { RunPill } from "./components/RunPill.js";
 import { classifySource } from "./sessionSource.js";
 import { indexRunEvidence, failingCheckNames } from "./runEvidence.js";
 import { SessionChangesSheet, countUniqueEditedFiles } from "./components/SessionChangesSheet.js";
+import { ArtifactsSheet } from "./components/ArtifactsSheet.js";
 import { ErrorToast } from "./components/ErrorToast.js";
 import { NoticeToast } from "./components/NoticeToast.js";
 import { Settings } from "./components/Settings.js";
@@ -73,6 +74,12 @@ export function App() {
   // Full-session file changes sheet — opened from the run pill / summary sheet
   // ("N files edited"), not a card stacked above the composer.
   const [changesSheetOpen, setChangesSheetOpen] = useState(false);
+  // Session/Run artifacts sheet — opened from the run pill ("N artifacts"),
+  // mirroring the changes sheet above. The projection itself is a pure fold
+  // over the transcript the store already holds (see deriveArtifacts) — no
+  // extra round trip to the node.
+  const [artifactsSheetOpen, setArtifactsSheetOpen] = useState(false);
+  const artifacts = useMemo(() => deriveArtifacts(state.transcript), [state.transcript]);
   const [terminalOpen, setTerminalOpen] = useState(false);
   /** A live `bivy run` PTY selected from the sidebar; null means open the
    * ordinary shell terminal for the active chat/node. */
@@ -742,6 +749,10 @@ export function App() {
               />
             )}
 
+            {artifactsSheetOpen && (
+              <ArtifactsSheet artifacts={artifacts} onClose={() => setArtifactsSheetOpen(false)} />
+            )}
+
             <div className="composer-gh">
               {/* The run card now stands for every active session — an automation
                   trigger, a fork, or a plain hand-opened one — carrying whatever
@@ -761,6 +772,8 @@ export function App() {
                   forkedFrom={activeForkedFrom}
                   filesEdited={countUniqueEditedFiles(state.changesHistory)}
                   onOpenChanges={() => setChangesSheetOpen(true)}
+                  artifactsCount={artifacts.length}
+                  onOpenArtifacts={() => setArtifactsSheetOpen(true)}
                   onOpenRun={(runId) => openRun(runId)}
                   onRecover={(kind) => {
                     // C2: recover a terminal run using existing capabilities. fix/retry

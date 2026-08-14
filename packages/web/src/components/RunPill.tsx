@@ -113,6 +113,8 @@ export function RunPill({
   forkedFrom,
   filesEdited,
   onOpenChanges,
+  artifactsCount,
+  onOpenArtifacts,
   onRecover,
   onOpenRun,
   anchorId,
@@ -144,6 +146,12 @@ export function RunPill({
   filesEdited?: number;
   /** Open the full session-changes sheet (diff tree, undo, review). */
   onOpenChanges?: () => void;
+  /** Count of distinct artifacts (agent-sent attachments, user uploads,
+   *  resolved inline images) this session's transcript carries — from
+   *  deriveArtifacts(state.transcript), computed in App. */
+  artifactsCount?: number;
+  /** Open the Artifacts sheet. */
+  onOpenArtifacts?: () => void;
   /** Invoked when the user taps a recovery action on a terminal run (C2). The
    *  parent (App) maps each kind onto a real capability: fix → send a "fix the
    *  failing checks" prompt, retry → re-run the checks, fork → fork the session.
@@ -190,6 +198,9 @@ export function RunPill({
 
   const filesLabel = filesEdited && filesEdited > 0
     ? `${filesEdited} file${filesEdited === 1 ? "" : "s"} edited`
+    : null;
+  const artifactsLabel = artifactsCount && artifactsCount > 0
+    ? `${artifactsCount} artifact${artifactsCount === 1 ? "" : "s"}`
     : null;
 
   return (
@@ -295,6 +306,18 @@ export function RunPill({
                 <span className="run-sheet-changes-icon" aria-hidden>◈</span>
                 <span>{filesLabel}</span>
                 <span className="run-sheet-changes-hint">View diffs</span>
+              </button>
+            )}
+
+            {artifactsLabel && onOpenArtifacts && (
+              <button
+                type="button"
+                className="action-sheet-item run-sheet-changes"
+                onClick={() => { setOpen(false); onOpenArtifacts(); }}
+              >
+                <span className="run-sheet-changes-icon" aria-hidden>📎</span>
+                <span>{artifactsLabel}</span>
+                <span className="run-sheet-changes-hint">View artifacts</span>
               </button>
             )}
 

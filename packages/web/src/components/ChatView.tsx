@@ -363,7 +363,7 @@ const EntryView = memo(function EntryView({
     // still sees that something was attached.
     const text = hasAttachments ? stripAttachmentPlaceholders(entry.text) : entry.text;
     return (
-      <div className="msg user">
+      <div className="msg user" id={hasAttachments ? `msg-${entry.id}` : undefined}>
         {hasAttachments && (
           <div className="msg-attachments">
             {entry.attachments!.map((a, i) => (
@@ -391,7 +391,7 @@ const EntryView = memo(function EntryView({
   // hash-only refs rehydrate their bytes on demand exactly like inbound ones.
   const hasAttachments = !!entry.attachments && entry.attachments.length > 0;
   return (
-    <div className="assistant-row">
+    <div className="assistant-row" id={hasAttachments ? `msg-${entry.id}` : undefined}>
       {hasAttachments && (
         <div className="msg-attachments">
           {entry.attachments!.map((a, i) => (
