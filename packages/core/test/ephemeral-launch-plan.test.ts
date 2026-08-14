@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { describe, expect, it } from "vitest";
+import * as ephemeralPublic from "../src/ephemeral.js";
+import { createEphemeralExecutionEnvelope } from "../src/ephemeral-execution-envelope.js";
 import {
-  createEphemeralExecutionEnvelope,
   planEphemeralLaunch,
   trackProvisionedMachine,
   type EphemeralMachine,
@@ -35,7 +36,8 @@ describe("ephemeral launch plan values", () => {
     });
   });
 
-  it("keeps secret bootstrap material in an explicit execution envelope", () => {
+  it("keeps secret bootstrap material in a separate execution envelope", () => {
+    expect(ephemeralPublic.createEphemeralExecutionEnvelope).toBe(createEphemeralExecutionEnvelope);
     const plan = planEphemeralLaunch(input);
     const envelope = createEphemeralExecutionEnvelope({
       provider: plan.provider,

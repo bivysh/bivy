@@ -254,6 +254,45 @@ if (!contractHasOneSource) {
   hardFailures += 1;
 }
 
+// Compatibility entrypoints must enumerate the API they support. This keeps
+// internal interpreter details from leaking accidentally as modules are split.
+const explicitFacadeChecks = [
+  {
+    file: "packages/core/src/ephemeral.ts",
+    reject: /export\s*\*/,
+    reason: "the ephemeral compatibility facade must use explicit exports",
+  },
+  {
+    file: "packages/core/src/ephemeral-provider-adapters.ts",
+    reject: /export\s*\*/,
+    reason: "the provider compatibility facade must use explicit exports",
+  },
+  ...[
+    "ephemeral.js",
+    "connection-event-fold.js",
+    "session-index-event-fold.js",
+    "catalog-settings-event-fold.js",
+    "presentation-event-fold.js",
+    "active-session-event-fold.js",
+    "attention-event-fold.js",
+    "transcript-event-fold.js",
+  ].map((specifier) => ({
+    file: "packages/core/src/index.ts",
+    reject: new RegExp(`export\\s*\\*\\s*from\\s*["']\\./${specifier.replace(".", "\\.")}["']`),
+    reason: `the core entrypoint must explicitly export supported ${specifier} symbols`,
+  })),
+];
+const facadeViolations = explicitFacadeChecks.filter(({ file, reject }) =>
+  reject.test(fs.readFileSync(path.join(repoRoot, file), "utf8")),
+);
+console.log(`\n[${facadeViolations.length ? "FAIL" : "CLEAN"}] core-facades-have-explicit-exports  — ${facadeViolations.length} violation(s)`);
+console.log("        touched compatibility facades enumerate their supported exports.");
+for (const violation of facadeViolations) console.log(`        ${violation.file}  → ${violation.reason}`);
+if (facadeViolations.length) {
+  totalViolations += facadeViolations.length;
+  hardFailures += facadeViolations.length;
+}
+
 for (const rule of RULES) {
   const files = walk(rule.dir);
   const violations = [];
