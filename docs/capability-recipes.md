@@ -97,11 +97,11 @@ curl -fsS -X POST http://localhost:4317/api/models/custom \
   }'
 ```
 
-On a hardened multi-user host, the local API may require a device bearer token;
-use the authenticated app instead of weakening local auth. Open `bivy open`,
-start a Pi Session, and choose the newly registered model. Keep the Bivy Machine
-and inference endpoint on the same host, or replace `baseUrl` with a private URL
-that the Machine can reach.
+On a hardened multi-user host, add `Authorization: Bearer <token>` to the
+request, using a token minted by `bivy token`; do not weaken local auth. Open
+`bivy open`, start a Pi Session, and choose the newly registered model. Keep the
+Bivy Machine and inference endpoint on the same host, or replace `baseUrl` with
+a private URL that the Machine can reach.
 
 Local inference availability is not a claim that every runtime supports every
 model. The model server, context limits, GPU drivers, and model behavior remain
@@ -439,7 +439,7 @@ or stable v1 contract yet. See [Plugins](plugins.md) and the generic
 Authentication belongs either to Bivy or to the upstream agent:
 
 ```bash
-bivy login             # Pi/Aider: supported OAuth or API-key choices
+bivy login             # Bivy-owned OAuth or API-key choices
 claude                 # Claude Code: use /login; can reuse Claude Pro/Max
 codex login            # Codex: ChatGPT subscription or API key
 ```
