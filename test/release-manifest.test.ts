@@ -86,6 +86,20 @@ check("workspaces field is dropped", () => {
   assert.ok(!("workspaces" in staged), "staged manifest must not carry the monorepo workspaces field");
 });
 
+// The repo develops with pnpm; the published package is installed with npm. If
+// `packageManager` shipped, corepack would try to download and run pnpm inside a
+// user's install — a hard failure on a machine that has only npm.
+check("packageManager does not leak into the published manifest", () => {
+  assert.ok(rootPkg.packageManager, "repo manifest should pin a dev package manager for this test to be meaningful");
+  assert.ok(!("packageManager" in staged), "staged manifest must not carry the dev-time packageManager pin");
+});
+
+// The npm-format `overrides` are what resolve the published artifact's tree, so
+// they must survive curation even though pnpm reads its own copy elsewhere.
+check("security overrides are retained for the npm-resolved artifact", () => {
+  assert.deepEqual(staged.overrides, rootPkg.overrides, "staged manifest must keep the npm overrides");
+});
+
 check("staged manifest is publishable and does not bundle an agent", () => {
   assert.ok(!("private" in staged), "staged manifest must not be private (the repo root is; the staging dir publishes)");
   assert.ok(!staged.bundledDependencies, "agents must be resolved normally instead of embedded in Bivy's tarball");

@@ -7,38 +7,21 @@ const COMPOSER = new URL("../../packages/web/src/components/Composer.tsx", impor
 const SHEET = new URL("../../packages/web/src/components/ScheduleSheet.tsx", import.meta.url);
 const QUEUE = new URL("../../packages/web/src/components/FollowupQueue.tsx", import.meta.url);
 
-test("long-press Send: touch-aware hold that suppresses the release click", async () => {
+test("split Send keeps normal sending primary and exposes Run and Schedule alternatives", async () => {
   const source = await readFile(COMPOSER, "utf8");
-  // The schedule sheet is opened from a hold, so the release must never submit.
-  expect(source).toContain("window.addEventListener(\"click\", swallow, true)");
-  // Right-click is the desktop equivalent. Assert the handler's behavior rather
-  // than requiring the old one-line implementation: it now also cancels the
-  // armed hold timer and opens the sheet directly.
-  const contextMenuStart = source.indexOf("onContextMenu={(e) => {");
-  const contextMenuEnd = source.indexOf("onClick={(e) => {", contextMenuStart);
-  expect(contextMenuStart).toBeGreaterThan(-1);
-  const contextMenu = source.slice(contextMenuStart, contextMenuEnd);
-  expect(contextMenu).toContain("e.preventDefault()");
-  expect(contextMenu).toContain("cancelLongPress()");
-  expect(contextMenu).toContain("openSchedule()");
-  // iOS long-presses preempt the pointer stream with text-selection/callout, so
-  // the hold must also be armed from touch events, not only pointer events.
-  expect(source).toContain("onPointerDown={(e) => {");
-  expect(source).toContain("onTouchStart={() => {");
-  expect(source).toContain("onTouchMove={cancelLongPress}");
-  expect(source).toContain("onTouchEnd={cancelLongPress}");
-  expect(source).toContain("onPointerCancel={cancelLongPress}");
+  expect(source).toContain('className="split-send"');
+  expect(source).toContain('type="submit"\n                  className="composer-btn send split-send-main"');
+  expect(source).toContain('aria-label="More send options"');
+  expect(source).toContain("Start a Run");
+  expect(source).toContain("Schedule for later");
+  expect(source).toContain("setScheduling(true)");
 });
 
-test("send-button callout suppression so a hold doesn't select text or pop the menu", async () => {
+test("split Send is one compound visual control with two accessible targets", async () => {
   const css = await readFile(STYLES, "utf8");
-  // Everything from the first .composer-btn.send rule through .composer-btn.stop
-  // (the send button owns both declarations; .stop separates the two blocks).
-  const block = css.slice(css.indexOf(".composer-btn.send"), css.indexOf(".composer-btn.stop"));
-  expect(block).toContain("-webkit-touch-callout: none;");
-  expect(block).toContain("-webkit-user-select: none;");
-  expect(block).toContain("user-select: none;");
-  expect(block).toContain("touch-action: manipulation;");
+  expect(css).toContain(".split-send { position: relative;");
+  expect(css).toContain(".split-send-toggle {");
+  expect(css).toContain(".send-options-menu {");
 });
 
 /** The declaration block of the exact CSS rule `selector { … }` — anchored at

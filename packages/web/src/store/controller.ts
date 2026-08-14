@@ -19,7 +19,12 @@ import {
   fetchGithubApp,
   fetchGithubQueue,
   fetchAutomationRuns,
+  createOneOffRun,
   cancelAutomationRun as apiCancelAutomationRun,
+  recordProductMetric,
+  activationFromState,
+  type ProductMetricEvent,
+  type ActivationCheckId,
   assignWorkItem,
   deleteWorkItem,
   clearWorkQueue,
@@ -84,6 +89,7 @@ import {
   ephemeralMachineFromCorrelation,
   type SessionCorrelation,
   createDeviceVaultKeyStore,
+  DeviceVaultConflictError,
   deviceKeypair,
   listEphemeralSizes,
   ephemeralNodeLabel,
@@ -125,12 +131,13 @@ import {
   supportsSteering as runtimeSupportsSteering,
   type Transport,
   type LocalStore,
+  type LocalModelDiscoveryResult,
+  type LocalModelEndpointResult,
   importRoomKey,
   open as openSealed,
   unb64url,
   seal,
   createAutomation,
-  runAutomationNow,
   deleteAutomation,
   fetchAutomations,
   updateAutomation,
@@ -138,6 +145,7 @@ import {
 } from "@bivy/core";
 import { navigate, parseRoute, routePath, type Route } from "../router.js";
 import { EPHEMERAL_MACHINES_ENABLED, EPHEMERAL_KEEP_FAILED_MACHINES } from "../flags.js";
+import { markFirstSuccessfulResponse } from "../pwaLifecycle.js";
 
 /**
  * Bounded discovery metadata for a provider-native session Bivy did not start
@@ -257,8 +265,9 @@ export class AppController {
   private correlatedSessions = new Set<string>();
   /** Subscribers for terminal / multiplexer events (the terminal overlay). */
   private terminalListeners = new Set<(e: ServerEvent) => void>();
-  /** In-flight transcription requests, resolved when the node returns text. */
+  /** In-flight transcription and speech requests, correlated with node replies. */
   private pendingTranscriptions = new Map<string, { resolve: (text: string) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  private pendingSpeech = new Map<string, { resolve: (audio: { audio: string; mimeType: string }) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   /** In-flight session-fork requests (export → bundle, import → done), by requestId. */
   private pendingForks = new Map<string, { resolve: (event: ServerEvent) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   /** In-flight saves awaiting a node ack (node.settings, provider.apiKey,
@@ -284,12 +293,19 @@ export class AppController {
   private pendingRouteNode: string | null = null;
   /** Session selected from another node in the all-node sidebar; opened after reconnecting to its owner node. */
   private pendingCrossNodeOpen: { sessionId: string; path?: string } | null = null;
+  /** Subscribers for content-free control-plane Run-change hints. The relay
+   *  never carries the Run body/evidence here; subscribers refetch canonically. */
+  private runUpdateListeners = new Set<(runId: string, revision?: string) => void>();
   /** Subscribers that want the composer input focused (e.g. after "New"). */
   private composerFocusListeners = new Set<() => void>();
   /** Subscribers that accept editable text drafted by contextual UI actions. */
   private composerPrefillListeners = new Set<(text: string) => void>();
   /** Subscribers that want the composer's slash-command menu opened (the "/" pill). */
   private slashOpenListeners = new Set<() => void>();
+  /** Product milestones are aggregate and content-free. Once-only activation
+   *  events are latched in this browser so reconnect/history replay cannot
+   *  inflate them; the in-flight guard also closes double-emission races. */
+  private productMetricsInFlight = new Set<ProductMetricEvent>();
 
   constructor() {
     // Persist each applied history snapshot + cursor, and re-request canonical
@@ -516,10 +532,23 @@ export class AppController {
           for (const fn of this.terminalListeners) fn(event);
           return;
         }
+        // Content-free control-plane hint delivered over the existing relay.
+        // Keep it out of the Session reducer; feature subscribers refetch the
+        // canonical account-scoped Run and polling remains their recovery path.
+        if (type === "run.updated") {
+          const runId = typeof event.runId === "string" ? event.runId : "";
+          const revision = typeof event.revision === "string" ? event.revision : undefined;
+          if (runId) for (const listener of this.runUpdateListeners) listener(runId, revision);
+          return;
+        }
         // One-shot transcription result — resolve the awaiting caller and stop;
         // it never touches the session reducer.
         if (type === "transcription") {
           this.resolveTranscription(event);
+          return;
+        }
+        if (type === "speech.audio") {
+          this.resolveSpeech(event);
           return;
         }
         // One-shot session-fork replies (bundle / done / error) resolve the
@@ -535,8 +564,10 @@ export class AppController {
           this.resolveFork(event);
           return;
         }
+        const before = this.store.getState();
         const appliedEvent = this.eventWithNodeScope(event);
         this.store.apply(appliedEvent);
+        this.observeActivationMilestones(before, appliedEvent);
         if (appliedEvent.type === "session.deleted") this.persistDeletedSessionTombstones();
         this.maybeFlushPendingPrompt(appliedEvent);
         this.maybeConfirmFollowup(appliedEvent);
@@ -545,8 +576,10 @@ export class AppController {
         this.reconcileSessionList(appliedEvent);
       },
       onStatus: (status: ConnectionStatus) => {
-        const prev = this.store.getState().status;
+        const before = this.store.getState();
+        const prev = before.status;
         this.store.setStatus(status);
+        this.observeActivationMilestones(before, { type: "connection.status" });
         if (status === "online" && prev !== "online") {
           this.onReconnected();
         } else if (status === "reconnecting" || status === "offline") {
@@ -566,6 +599,69 @@ export class AppController {
     return this.direct
       ? new DirectTransport({ bootstrap: new URLSearchParams(location.search).get("bootstrap") || "", handlers })
       : new RelayTransport({ store: this.local, handlers });
+  }
+
+  private productMetricClient(): "desktop" | "mobile" {
+    return matchMedia("(max-width: 700px)").matches ? "mobile" : "desktop";
+  }
+
+  /** Emit a content-free milestone. Once-only events are persisted only after
+   *  the authenticated endpoint accepts them, so an offline attempt can retry. */
+  recordProductMilestone(event: ProductMetricEvent, once = false): void {
+    if (this.direct || this.solo || !this.local.s) return;
+    const key = `bivy.product-metric.${event}`;
+    if (once) {
+      try { if (localStorage.getItem(key) === "1") return; } catch { /* best effort */ }
+      if (this.productMetricsInFlight.has(event)) return;
+      this.productMetricsInFlight.add(event);
+    }
+    void recordProductMetric(this.local, event, this.productMetricClient())
+      .then(() => {
+        if (once) {
+          try { localStorage.setItem(key, "1"); } catch { /* best effort */ }
+        }
+      })
+      .catch(() => {})
+      .finally(() => this.productMetricsInFlight.delete(event));
+  }
+
+  /** One ok/failed product-metric pair per readiness-led first-run step,
+   *  keyed by the activation check it tracks. `agent_answered` and
+   *  `account_signed_in` are excluded: the former already has its own
+   *  dedicated `first_useful_response` milestone below, and the latter is
+   *  always resolved by the time this model runs (see activation.ts) so a
+   *  transition into it is never observed. */
+  private static readonly FIRST_RUN_STEP_EVENTS: Partial<Record<ActivationCheckId, { ok: ProductMetricEvent; failed: ProductMetricEvent }>> = {
+    machine_online: { ok: "first_run_machine_ready", failed: "first_run_machine_failed" },
+    agent_installed: { ok: "first_run_agent_verified", failed: "first_run_agent_failed" },
+    credential_valid: { ok: "first_run_provider_connected", failed: "first_run_provider_failed" },
+  };
+
+  /** Observe only concrete state transitions. History snapshots are excluded
+   *  from first response: opening an old Session must not look like activation. */
+  private observeActivationMilestones(before: ReturnType<SessionStore["getState"]>, event: { type?: unknown }): void {
+    const after = this.store.getState();
+    const beforeActivation = activationFromState({ ...before, direct: this.direct });
+    const afterActivation = activationFromState({ ...after, direct: this.direct });
+    // Every check but the final agent-answered one — robust to the chain
+    // growing (e.g. the leading sign-in step) without re-deriving the cutoff.
+    const readyBefore = beforeActivation.checks.slice(0, -1).every((check) => check.state === "passed");
+    const readyAfter = afterActivation.checks.slice(0, -1).every((check) => check.state === "passed");
+    if (!readyBefore && readyAfter) this.recordProductMilestone("activation_ready", true);
+
+    for (const [id, events] of Object.entries(AppController.FIRST_RUN_STEP_EVENTS) as Array<[ActivationCheckId, { ok: ProductMetricEvent; failed: ProductMetricEvent }]>) {
+      const b = beforeActivation.checks.find((c) => c.id === id)?.state;
+      const a = afterActivation.checks.find((c) => c.id === id)?.state;
+      if (b !== "passed" && a === "passed") this.recordProductMilestone(events.ok, true);
+      if (b !== "failed" && a === "failed") this.recordProductMilestone(events.failed, true);
+    }
+
+    if (event.type === "session.history") return;
+    const assistantCount = (state: typeof after) => state.transcript.filter((entry) => entry.role === "assistant" && Boolean(entry.text) && !entry.tool).length;
+    if (assistantCount(before) === 0 && assistantCount(after) > 0) {
+      markFirstSuccessfulResponse();
+      this.recordProductMilestone("first_useful_response", true);
+    }
   }
 
   /** Hosted control plane, not signed in yet. */
@@ -618,7 +714,7 @@ export class AppController {
     // Reconcile the device vault once on sign-in: a producer device satisfies any
     // pending wrapped-key requests from the account's other devices; a consumer
     // device pulls its wrapped key so a synced token is ready to wake a machine.
-    void this.syncDeviceVault();
+    void this.syncDeviceVault().catch(() => { /* durable sync state exposes retry */ });
     this.connect();
   }
 
@@ -661,6 +757,13 @@ export class AppController {
     // Back/forward navigation between sessions: sync the app to the URL the user
     // landed on, without writing history back (the browser already did).
     window.addEventListener("popstate", () => this.applyRoute(parseRoute(), { navigate: false }));
+  }
+
+  /** Subscribe to account Run changes pushed over the relay. The callback is a
+   *  cache-invalidation hint only; callers must fetch durable state. */
+  onRunUpdated(fn: (runId: string, revision?: string) => void): () => void {
+    this.runUpdateListeners.add(fn);
+    return () => this.runUpdateListeners.delete(fn);
   }
 
   /** Subscribe to composer-focus requests (the Composer wires its textarea here).
@@ -1614,6 +1717,7 @@ export class AppController {
    * turn that streamed during the outage appears and any stuck "working" clears.
    */
   private onReconnected(): void {
+    this.send({ kind: "activation.readiness" });
     let openedAfterNodeSwitch = false;
     if (this.pendingCrossNodeOpen) {
       const pending = this.pendingCrossNodeOpen;
@@ -1622,6 +1726,10 @@ export class AppController {
       openedAfterNodeSwitch = true;
     }
     void this.refreshAccountSessions();
+    // Converge account API keys in both directions. This also handles the
+    // node-less-first flow: keys added in the PWA are installed when the user's
+    // first persistent or ephemeral node appears.
+    void this.syncAccountCredentialsWithNode();
     // A scheduled message may have delivered while this device was offline —
     // drop its queue row so it stops showing as "scheduled" (see the method doc).
     void this.resyncScheduledFollowups();
@@ -1716,6 +1824,7 @@ export class AppController {
       branch: s.draftRepo ? s.draftBranch || undefined : undefined,
       agent: s.selectedAgentId || undefined,
       sandbox: s.draftSandbox || undefined,
+      acknowledgeReducedProtections: s.draftAcknowledgeReducedProtections || undefined,
       model,
     };
   }
@@ -1733,6 +1842,14 @@ export class AppController {
   /** Sandbox tier for the next new session (null = use the node default). */
   setSessionSandbox(tier: import("@bivy/core").SandboxTier | null): void {
     this.store.setDraftSandbox(tier);
+  }
+
+  /** Record the confirm-to-continue acknowledgement for the currently selected
+   *  agent's Effective Session Contract preview (see AgentPicker) so the next
+   *  session.new carries it — the node re-checks server-side and would
+   *  otherwise reject a "supported" profile whose live protection is degraded. */
+  acknowledgeSessionAgentReducedProtections(value: boolean): void {
+    this.store.setDraftAcknowledgeReducedProtections(value);
   }
 
   /**
@@ -2261,6 +2378,14 @@ export class AppController {
     this.send({ kind: "node.stats", sessionId });
   }
 
+  /** Ask the node for a fresh Machine capability inventory. The reply arrives
+   *  as a `capabilities` event and lands in `state.capabilities`. Fetched on
+   *  demand (panel open / explicit refresh) — capabilities change rarely,
+   *  unlike live resource stats, so this is not polled. */
+  requestCapabilities(): void {
+    this.send({ kind: "capabilities.get" });
+  }
+
   listModels(): void {
     const s = this.store.getState();
     const sessionId = s.activeSessionId ?? undefined;
@@ -2372,6 +2497,32 @@ export class AppController {
   listCredentialRecords(): void {
     this.send({ kind: "credentials.list" });
   }
+  private credentialSyncInFlight: Promise<void> | null = null;
+  /** Bidirectional API-key convergence between the PWA account vault and node. */
+  private syncAccountCredentialsWithNode(): Promise<void> {
+    if (this.direct || this.store.getState().status !== "online") return Promise.resolve();
+    if (this.credentialSyncInFlight) return this.credentialSyncInFlight;
+    this.credentialSyncInFlight = (async () => {
+      // Pull first so an existing node seeds a new device. Then push the merged
+      // account set so a node-less-created key reaches the newly enrolled node.
+      const event = await this.awaitAck({ kind: "credentials.account.export" });
+      const incoming = Array.isArray(event.entries)
+        ? event.entries.filter((entry): entry is { provider: string; key: string } => Boolean(entry)
+          && typeof (entry as { provider?: unknown }).provider === "string"
+          && typeof (entry as { key?: unknown }).key === "string")
+        : [];
+      await this.ephemeralKeys.importModelKeys(incoming);
+      const accountKeys = (await this.ephemeralKeys.modelKeyEntries()).filter((entry) => entry.scope === "account");
+      for (const { provider, key } of accountKeys) {
+        await this.awaitAck({ kind: "credential.set", provider, label: "default", key });
+      }
+      this.listCredentialRecords();
+      this.listProviders();
+    })().catch(() => {
+      // Best effort during reconnect; the next reconnect/settings open retries.
+    }).finally(() => { this.credentialSyncInFlight = null; });
+    return this.credentialSyncInFlight;
+  }
   /** Add/replace a labeled credential — an API key, or an op://…/env://… reference. */
   setCredential(provider: string, label: string, value: { key?: string; ref?: string }): Promise<void> {
     return this.awaitAck({ kind: "credential.set", provider, label, ...value }).then(() => undefined);
@@ -2383,6 +2534,17 @@ export class AppController {
   /** Toggle whether a credential syncs across your nodes or stays on this one. */
   setCredentialSync(provider: string, label: string, sync: "account" | "node"): void {
     this.send({ kind: "credential.sync.set", provider, label, sync });
+  }
+  /** "Test connection": a bounded, non-secret liveness probe for one credential
+   *  (see credential.test in server.ts). Resolves with the redacted result even
+   *  when the probe itself reports failure — only a transport-level problem
+   *  rejects. Direct/self-host mode has no handler for this command yet (same
+   *  gap as the rest of the labeled-credentials surface), so it always reports
+   *  "not supported" there rather than hanging. */
+  async testCredential(provider: string, label: string): Promise<{ ok: boolean; at: number; reason?: string }> {
+    if (this.direct) return { ok: false, at: Date.now(), reason: "not_supported" };
+    const event = (await this.awaitAck({ kind: "credential.test", provider, label }, 15000)) as { ok?: boolean; at?: number; reason?: string };
+    return { ok: Boolean(event.ok), at: Number(event.at) || Date.now(), ...(event.reason ? { reason: event.reason } : {}) };
   }
   /** Ask for the selection presets; the node replies with `credentials.presets`. */
   getCredentialPresets(): void {
@@ -2405,12 +2567,22 @@ export class AppController {
   listLocalModelPresets(): void {
     this.send({ kind: "models.custom.presets" });
   }
+  /** Explicitly probe only the node's fixed localhost allowlist. */
+  async discoverLocalModels(): Promise<LocalModelDiscoveryResult> {
+    return await this.awaitAck({ kind: "models.custom.discover" }, 10_000) as unknown as LocalModelDiscoveryResult;
+  }
+  /** Verify one user-entered endpoint and return its normalized catalog health. */
+  async verifyLocalModel(baseUrl: string, apiKey?: string): Promise<LocalModelEndpointResult> {
+    const event = await this.awaitAck({ kind: "models.custom.verify", baseUrl, ...(apiKey ? { apiKey } : {}) }, 10_000) as any;
+    return event.result as LocalModelEndpointResult;
+  }
   /** Save (create or update) a local/custom provider. `spec` matches the node's
    *  save shape: { providerId, name?, baseUrl, api?, apiKey?, compat?, models[] }.
    *  Resolves once the node acks the save (or rejects with its error) instead
    *  of assuming success the moment it was sent. */
-  saveLocalModel(spec: Record<string, unknown>): Promise<void> {
-    return this.awaitAck({ kind: "models.custom.save", spec }).then(() => undefined);
+  async saveLocalModel(spec: Record<string, unknown>): Promise<string> {
+    const event = await this.awaitAck({ kind: "models.custom.save", spec }) as { provider?: unknown };
+    return String(event.provider ?? spec.providerId ?? "local");
   }
   removeLocalModel(id: string): void {
     this.send({ kind: "models.custom.remove", id });
@@ -2476,6 +2648,30 @@ export class AppController {
     const error = (event as any).error;
     if (error) pending.reject(new Error(String(error)));
     else pending.resolve(String((event as any).text ?? "").trim());
+  }
+
+  /** Generate neural read-aloud audio on the node using its OpenAI key. */
+  synthesize(text: string, voice: string, instructions: string): Promise<{ audio: string; mimeType: string }> {
+    const rid = requestId();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingSpeech.delete(rid);
+        reject(new Error("Speech generation timed out. Check your connection and try again."));
+      }, 60_000);
+      this.pendingSpeech.set(rid, { resolve, reject, timer });
+      void this.transport.send({ kind: "synthesize", requestId: rid, text, voice, instructions });
+    });
+  }
+
+  private resolveSpeech(event: ServerEvent): void {
+    const rid = String(event.requestId || "");
+    const pending = rid ? this.pendingSpeech.get(rid) : undefined;
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.pendingSpeech.delete(rid);
+    const error = (event as any).error;
+    if (error) pending.reject(new Error(String(error)));
+    else pending.resolve({ audio: String((event as any).audio ?? ""), mimeType: String((event as any).mimeType ?? "audio/mpeg") });
   }
 
   // --- Settings: GitHub App one-click (manifest) flow --------------------
@@ -2629,13 +2825,23 @@ export class AppController {
   // in (Settings), they're additionally synced to the account's other devices
   // through an E2E device vault so a second device can wake/reach a machine the
   // first launched (P2 / Gap A) — the control plane only ever sees ciphertext.
+  private ephemeralModelKeys: EphemeralModelKeyStore = createEphemeralModelKeyStore();
   private ephemeralKeys: DeviceVaultKeyStore = createDeviceVaultKeyStore({
     local: createEphemeralKeyStore(),
+    modelKeys: this.ephemeralModelKeys,
     remote: this.deviceVaultRemote(),
     device: () => deviceKeypair(this.local),
-    enabled: () => this.deviceTokenSyncEnabled(),
+    // The account credential vault is available before the first node exists.
+    // Compute-provider token widening remains a separate explicit opt-in.
+    enabled: () => !this.direct && Boolean(this.local.s),
+    providerTokenSyncEnabled: () => this.deviceTokenSyncEnabled(),
+    state: {
+      load: async () => {
+        try { return JSON.parse(localStorage.getItem("bivy_device_vault_state") || "null") ?? undefined; } catch { return undefined; }
+      },
+      save: async (value) => { try { localStorage.setItem("bivy_device_vault_state", JSON.stringify(value)); } catch { /* status remains in memory */ } },
+    },
   });
-  private ephemeralModelKeys: EphemeralModelKeyStore = createEphemeralModelKeyStore();
   private ephemeralPrefs: EphemeralPrefsStore = createEphemeralPrefsStore();
   private ephemeralSetups: EphemeralSetupStore = createEphemeralSetupStore();
   private ephemeralMachines: MachineStore = createMachineStore();
@@ -2657,13 +2863,13 @@ export class AppController {
    *  vault over the E2E channel (closes the cold-start gap — see
    *  docs/ephemeral-sessions.md, "Closing the cold-start gap"). API keys only. */
   listEphemeralModelKeys(): Promise<EphemeralModelKeyInfo[]> {
-    return this.ephemeralModelKeys.list();
+    return this.ephemeralKeys.listModelKeys();
   }
-  setEphemeralModelKey(provider: string, key: string): Promise<void> {
-    return this.ephemeralModelKeys.set(provider, key);
+  setEphemeralModelKey(provider: string, key: string, scope: "account" | "device" = "account"): Promise<void> {
+    return this.ephemeralKeys.setModelKey(provider, key, scope);
   }
   removeEphemeralModelKey(provider: string): Promise<void> {
-    return this.ephemeralModelKeys.remove(provider);
+    return this.ephemeralKeys.removeModelKey(provider);
   }
   getEphemeralToken(id: string): Promise<string> {
     return this.ephemeralKeys.getToken(id);
@@ -2733,12 +2939,16 @@ export class AppController {
     } catch {
       /* noop */
     }
-    if (enabled) void this.syncDeviceVault();
+    if (enabled) void this.syncDeviceVault().catch(() => { /* surfaced by getDeviceVaultSyncState */ });
   }
-  /** Reconcile the device vault (consume a wrapped key, or publish + satisfy
-   *  peers' requests). Safe/no-op when disabled. */
+  /** Reconcile the device vault. Failures remain observable through
+   * `getDeviceVaultSyncState()` and reject explicit callers instead of being
+   * silently swallowed. */
   syncDeviceVault(): Promise<void> {
-    return this.ephemeralKeys.sync().catch(() => {});
+    return this.ephemeralKeys.sync();
+  }
+  getDeviceVaultSyncState() {
+    return this.ephemeralKeys.getSyncState();
   }
   /** Fetch-backed control-plane transport for the device vault. Ciphertext +
    *  wrapped keys only — never a token. */
@@ -2750,19 +2960,24 @@ export class AppController {
         const dev = await deviceKeypair(this.local);
         const res = await fetch(`${base()}/device-vault?device=${encodeURIComponent(dev.pub)}`, { headers: { authorization: `Bearer ${this.local.s}` } });
         if (!res.ok) throw new Error(`device-vault get failed (${res.status})`);
-        const data = (await res.json()) as { vault?: string | null; wrappedKey?: { wrappedKey: string; wrappedByPublicKeyB64: string } | null; requests?: string[] };
-        return { vault: data.vault ?? null, wrappedKey: data.wrappedKey ?? null, requests: Array.isArray(data.requests) ? data.requests : [] };
+        const data = (await res.json()) as { vault?: string | null; wrappedKey?: { wrappedKey: string; wrappedByPublicKeyB64: string; generation?: number } | null; requests?: string[]; generation?: number; keyGeneration?: number; recipients?: string[] };
+        return { vault: data.vault ?? null, wrappedKey: data.wrappedKey ?? null, requests: Array.isArray(data.requests) ? data.requests : [], generation: data.generation ?? 0, keyGeneration: data.keyGeneration ?? 0, recipients: Array.isArray(data.recipients) ? data.recipients : [] };
       },
-      putVault: async (ciphertext: string) => {
+      putVault: async (ciphertext: string, expectedGeneration?: number, keyGeneration?: number) => {
         const dev = await deviceKeypair(this.local);
-        await fetch(`${base()}/device-vault`, { method: "PUT", headers: jsonAuth(), body: JSON.stringify({ devicePublicKeyB64: dev.pub, ciphertext }) });
+        const res = await fetch(`${base()}/device-vault`, { method: "PUT", headers: jsonAuth(), body: JSON.stringify({ devicePublicKeyB64: dev.pub, ciphertext, expectedGeneration, keyGeneration }) });
+        if (res.status === 409) throw new DeviceVaultConflictError();
+        if (!res.ok) throw new Error(`device-vault put failed (${res.status})`);
+        const data = await res.json() as { generation?: number };
+        return { generation: data.generation ?? (expectedGeneration ?? 0) + 1 };
       },
       requestKey: async () => {
         const dev = await deviceKeypair(this.local);
         await fetch(`${base()}/device-vault/key/request`, { method: "POST", headers: jsonAuth(), body: JSON.stringify({ devicePublicKeyB64: dev.pub }) });
       },
-      putWrapped: async (target: string, wrappedKey: string, wrappedByPublicKeyB64: string) => {
-        await fetch(`${base()}/device-vault/key/wrapped`, { method: "PUT", headers: jsonAuth(), body: JSON.stringify({ targetDevicePublicKeyB64: target, wrappedKey, wrappedByPublicKeyB64 }) });
+      putWrapped: async (target: string, wrappedKey: string, wrappedByPublicKeyB64: string, generation?: number) => {
+        const res = await fetch(`${base()}/device-vault/key/wrapped`, { method: "PUT", headers: jsonAuth(), body: JSON.stringify({ targetDevicePublicKeyB64: target, wrappedKey, wrappedByPublicKeyB64, generation }) });
+        if (!res.ok) throw new Error(`device-vault wrapped-key put failed (${res.status})`);
       },
     };
   }
@@ -2816,7 +3031,7 @@ export class AppController {
     if (!machines.some((m) => m.nodeId === nodeId)) return;
     let entries: { provider: string; key: string }[];
     try {
-      entries = await this.ephemeralModelKeys.entries();
+      entries = await this.ephemeralKeys.modelKeyEntries();
     } catch {
       return;
     }
@@ -3472,40 +3687,47 @@ export class AppController {
     }
   }
 
-  /** Turn the current Session into unattended work without dropping its
-   * conversation/native-resume context. The instruction is E2E-sealed for the
-   * owning Machine; the control plane stores ciphertext and creates a Run that
-   * targets this exact Session. The node resumes/waits for that Session or
-   * fails explicitly—it never silently cold-starts a replacement. */
-  async delegateSession(sessionId: string, instruction: string): Promise<{ runId?: string; error?: string }> {
+  /** Start a durable Run from the message currently in the composer. A draft
+   * creates a fresh Session; an active Session is referenced as execution
+   * context. The message is the Run objective, not a permanent Session mode. */
+  async startRun(
+    instruction: string,
+    options: { approvalMode: "risky" | "autonomous"; maxAttempts: number },
+  ): Promise<{ runId?: string; error?: string }> {
     const text = instruction.trim();
-    if (!text) return { error: "Describe what the agent should finish in the background." };
-    if (!this.accountMode()) return { error: "Sign in to delegate this Session." };
-    const nodeId = this.resolveSessionNodeId(sessionId);
-    if (!nodeId) return { error: "This Session has no owning Machine." };
+    if (!text) return { error: "Describe the task this Run should complete." };
+    if (!this.accountMode()) return { error: "Sign in to start a Run." };
+
+    const state = this.store.getState();
+    const sessionId = state.activeSessionId ?? undefined;
+    const active = sessionId ? state.sessions.find((session) => session.sessionId === sessionId) : undefined;
+    const nodeId = sessionId ? this.resolveSessionNodeId(sessionId) : state.currentNodeId ?? undefined;
+    if (!nodeId) return { error: sessionId ? "This Session has no owning Machine." : "Choose a Machine before starting a Run." };
     const roomKeyB64 = this.local.keys()[nodeId];
     if (!roomKeyB64) return { error: "This Machine isn't paired on this device—open it first so the instruction can be encrypted." };
-    let automationId: string | undefined;
+    const label = this.resolveNodeLabel(nodeId);
+    if (!label) return { error: "This Machine has no routing name. Reconnect it before starting a Run." };
+
     try {
       const roomKey = await importRoomKey(unb64url(roomKeyB64));
       const encrypted = await seal(roomKey, text);
-      const created = await createAutomation(this.local, {
-        name: "Delegated Session work",
-        templateCiphertext: `${TEMPLATE_PREFIX}:${nodeId}:${encrypted}`,
-        trigger: "manual",
-        nodeLabel: this.resolveNodeLabel(nodeId),
-        targetKind: "existing_session",
+      const run = await createOneOffRun(this.local, {
+        title: (text.split(/\r?\n/, 1)[0] || "Run").slice(0, 120),
+        body: `${TEMPLATE_PREFIX}:${nodeId}:${encrypted}`,
+        label,
+        repo: sessionId ? undefined : state.draftRepo ?? undefined,
+        runtimeId: sessionId ? undefined : state.selectedAgentId ?? undefined,
+        model: sessionId ? undefined : state.currentModel?.id,
+        approvalMode: options.approvalMode,
+        sandbox: active?.sandbox ?? (!sessionId ? state.draftSandbox ?? state.nodeSettings?.defaultSandbox : undefined),
+        maxAttempts: options.maxAttempts,
+        targetKind: sessionId ? "existing_session" : "new_session",
         targetSessionId: sessionId,
-        message: false,
-        enabled: true,
       });
-      automationId = created.id;
-      const run = await runAutomationNow(this.local, created.id);
+      this.recordProductMilestone("run_accepted");
       return { runId: run.id };
     } catch (error) {
-      return { error: error instanceof Error ? error.message : "Could not delegate this Session." };
-    } finally {
-      if (automationId) void deleteAutomation(this.local, automationId).catch(() => {});
+      return { error: error instanceof Error ? error.message : "Could not start this Run." };
     }
   }
 
@@ -3517,7 +3739,7 @@ export class AppController {
   }
 
   /**
-   * "Schedule this message for later" (long-press Send → ScheduleSheet): write a
+   * "Schedule this message for later" (split Send → ScheduleSheet): write a
    * one-off scheduled message to the account's control plane (`message: true`,
    * E2E-sealed for the owning node) so the always-on node delivers it on time
    * even when this app is closed, and — for an existing session — surface it as
@@ -3849,6 +4071,7 @@ export class AppController {
 
   resolveApproval(id: string, approved: boolean): void {
     this.send({ kind: "approval", id, approved });
+    if (!this.direct) void recordProductMetric(this.local, "remote_intervention", matchMedia("(max-width: 700px)").matches ? "mobile" : "desktop").catch(() => {});
   }
 
   /** Answer a pending clarifying question (see UserQuestionRequest). Unlike
@@ -3856,10 +4079,12 @@ export class AppController {
    *  approvals are looked up in a single global list keyed by id alone. */
   answerQuestion(requestId: string, sessionId: string | undefined, answers: Record<string, string>): void {
     this.send({ kind: "session.question.answer", requestId, sessionId, answers });
+    if (!this.direct) void recordProductMetric(this.local, "remote_intervention", matchMedia("(max-width: 700px)").matches ? "mobile" : "desktop").catch(() => {});
   }
 
   cancelQuestion(requestId: string, sessionId: string | undefined): void {
     this.send({ kind: "session.question.answer", requestId, sessionId, cancelled: true });
+    if (!this.direct) void recordProductMetric(this.local, "remote_intervention", matchMedia("(max-width: 700px)").matches ? "mobile" : "desktop").catch(() => {});
   }
 }
 

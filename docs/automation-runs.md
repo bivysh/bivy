@@ -23,6 +23,14 @@ The domain separates four records:
   evidence timeline (below) can record a `retry`/`fallback` event with a bounded
   reason and an incremented attempt number.
 
+A one-off Run can be started directly with **New Run** in the app or
+`bivy runs start "<instructions>"`; it does not require or save an Automation
+definition. Instructions are encrypted for the selected Machine before upload.
+Operators and other agents can probe lifecycle metadata with `bivy runs list`,
+`bivy runs status <id>`, or block on a handoff with `bivy runs wait <id>`. These
+surfaces expose bounded status/evidence/output references, not instructions or
+transcripts.
+
 Each run targets a new session. Routing intent carries the
 node label, runtime, model, ephemeral preference, sandbox tier, and approval
 mode (`never` / `risky` / `always` / `autonomous`, the same vocabulary as
@@ -97,11 +105,34 @@ run's own evidence. Neither carries a run, session, account, or user identifier.
 
 ## Run evidence and outcome reports
 
+A Run keeps one causal, append-only milestone timeline. The vocabulary covers
+`trigger_received`, `trigger_matched`, `queued`, `routed`, `provisioning`,
+`claimed`, `agent_started`, `checks_started`, `checks_completed`,
+`result_delivery`, `notification`, `retry`, `cancel_requested`, and exactly one
+`terminal` outcome. A stage is recorded only when the system observes it; old
+rows may therefore have gaps rather than invented timestamps. Each milestone is
+bounded, attempt-aware, and may carry only an allowlisted reason or evidence
+reference. Repeated reports with the same milestone id are idempotent.
+
+Active Run changes are pushed as content-free `run.updated` hints over the
+existing relay connection to every connected client on the account. A hint
+contains the Run id and revision, not instructions or evidence. The client then
+fetches the canonical account-scoped record. Periodic and reconnect polling
+remain as recovery when a hint is dropped or a client version does not support
+it.
+
+Operational state is explicit: **parked** means a nonterminal Run is waiting for
+an operator or an external dependency; **dead-letter** means it terminated
+without an automatic retry remaining. Both can be filtered independently from
+the ordinary active/history feed. Attention severity and the canonical Run
+projection determine the next valid operator action; clients do not manufacture
+a retry, cancel, or review action from presentation state.
+
 Every run also carries a small, structured **evidence** record — the piece a
 PR alone can't show: what triggered the job, where it ran, which agent/model
-and why, what checks passed, and why any retry or fallback happened. Three
-fields, all allowlisted and bounded by
-`services/control-plane/src/run-evidence.ts` before they ever reach storage:
+and why, what checks passed, and why any retry or fallback happened. Fields are
+allowlisted and bounded by `services/control-plane/src/run-evidence.ts` before
+they ever reach storage:
 
 - **`routingReason`** — a short, free-text explanation of why this node/
   runtime/model was chosen (queue label, manual override, node default,
@@ -109,16 +140,22 @@ fields, all allowlisted and bounded by
 - **`checks`** — declared validation commands and their `passed` / `failed` /
   `skipped` status plus exit code. The command text itself is never stored,
   only a name and, optionally, a hash of the command.
-- **`events`** — an ordered, capped (100 entries) timeline. Every lifecycle
-  transition (claimed, running, needs-attention, completed, cancelled) is
-  stamped automatically by the control plane, so a run has a readable
-  trigger→claim→attempt→outcome timeline even if the node never reports
-  anything further. A node MAY layer richer events on top through
-  `POST /node/work/:id/evidence` — routing changes, checkpoints, approvals,
-  policy denials, retries/fallback (each with its own attempt number and
-  reason), branch creation, and PR opened — plus `output` references
-  (`checkpoint`/`commit` in addition to the existing session/branch/PR/
-  artifact/failure fields).
+- **`events`** — the ordered, capped lifecycle/milestone timeline described
+  above. Stable `milestoneId` values make duplicate reports idempotent; attempt,
+  reason code, and evidence reference are bounded metadata.
+- **`usage`** — aggregate input/output/cache token counts and USD cost when the
+  provider reports them. Never token values or credentials.
+- **`notification`** — `not_requested`, `pending`, `delivered`, or `failed`, with
+  an allowlisted channel and bounded failure reason.
+- **`references` / `attention`** — bounded Receipt/evidence/log identifiers or
+  URLs and a structured warning/error/critical operator-attention reason. Log
+  content remains on the Machine.
+
+A node MAY layer richer events on top through `POST /node/work/:id/evidence` —
+routing changes, checkpoints, approvals, policy denials, retries/fallback (each
+with its own attempt number and reason), branch creation, and PR opened — plus
+`output` references (`checkpoint`/`commit` in addition to the existing
+session/branch/PR/artifact/failure fields).
 
 For unattended issue work, the node also runs declared standard package scripts
 (`test`, `lint`, and `typecheck` when present; configurable with
@@ -135,7 +172,7 @@ becomes `Needs review`, never silent success.
 The evidence endpoint requires the reporting node to be the run's current
 claimant and rejects (400, not a silent drop) any field that looks like a
 prompt, transcript, diff, file content, secret, token, or raw command/tool
-output. The GitHub queue UI renders this as a per-run "Outcome reports"
+output. The Runs UI renders this as per-Run details
 timeline with a **Copy sanitized report** export — the same JSON object the
 control plane stores, nothing more.
 

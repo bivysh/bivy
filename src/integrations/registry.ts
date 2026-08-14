@@ -44,6 +44,14 @@ export const ATTACH_TO_CHAT_TOOL: StandaloneToolDef = {
   parameters: Type.Object({
     filePath: Type.String({ description: "Path to the file, absolute or relative to the session workspace." }),
     caption: Type.Optional(Type.String({ description: "Short caption shown next to the attachment in the chat." })),
+    artifact: Type.Optional(
+      Type.Boolean({
+        description:
+          "Mark this as a named artifact — a durable output worth surfacing in the session's Artifacts list " +
+          "(a report, benchmark result, coverage output, or build archive) — rather than an incidental inline " +
+          "image. Leave unset for an ordinary screenshot or chart.",
+      }),
+    ),
   }),
 };
 

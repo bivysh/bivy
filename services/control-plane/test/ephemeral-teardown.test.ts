@@ -69,6 +69,30 @@ const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
   assert.equal(destroyed, 1);
 }
 
+// A tracked attempt is actively observed and a runner that never joins is
+// deleted at the boot deadline rather than burning its full TTL.
+{
+  const old = { id: "boot-stuck", provider: "fly", nodeId: "eph-stuck", attemptId: "attempt-stuck", createdAt: iso(20 * 60_000), ttlMinutes: 60, status: "starting" };
+  const { store } = fakeStore([old], { fly: "fly-token" });
+  const attempt = { accountId: "acct", attemptId: "attempt-stuck", provider: "fly", nodeId: "eph-stuck", state: "tracked", desired: {}, machine: old, retryCount: 0, createdAt: old.createdAt, updatedAt: old.createdAt } as const;
+  Object.assign(store, {
+    listHostedMachineAttempts: async () => [attempt],
+    getHostedMachineAttempt: async () => attempt,
+    putHostedMachineAttempt: async (next: unknown) => next,
+    getEphemeralConfigs: async () => [],
+  });
+  // Two observe calls now: the pre-destroy check (still "starting", which is
+  // what triggers the boot-deadline destroy) and the post-destroy confirmed-
+  // deletion check (returns "gone", so the attempt/machine actually finalize).
+  let observed = 0;
+  let destroyed = 0;
+  const observeFn = async () => { observed++; return observed === 1 ? "starting" : "gone"; };
+  const n = await reconcileHostedMachines(store, "acct", Date.now(), env, async () => { destroyed++; }, observeFn);
+  assert.equal(n, 1);
+  assert.equal(observed, 2);
+  assert.equal(destroyed, 1);
+}
+
 // Without env, reconcile is bookkeeping-only (no active destroy) — back-compat.
 {
   const { store } = fakeStore(

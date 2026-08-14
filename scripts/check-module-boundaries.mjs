@@ -3,8 +3,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 //
 // Architectural fitness check: fail when a module imports across a forbidden
-// boundary. This is the enforcement spine for the platform modularization plan
-// (docs/internal/platform-modularization-plan.md).
+// boundary. This is the enforcement spine for the modular architecture.
 //
 // Rules are declarative: each rule names a source glob and a set of import
 // specifiers that source is NOT allowed to reach. A module is only as modular
@@ -139,6 +138,6 @@ for (const rule of RULES) {
 
 console.log(`\n${totalViolations} total violation(s); ${hardFailures} enforced.`);
 if (hardFailures > 0) {
-  console.error("\nModule boundary check failed. See docs/internal/platform-modularization-plan.md.");
+  console.error("\nModule boundary check failed.");
   process.exit(1);
 }

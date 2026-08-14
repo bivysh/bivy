@@ -63,6 +63,7 @@ export interface Command extends CommandBase {
     // `credentials.records` ({ records: CredentialRecordSummary[] }). set/remove/
     // sync.set mutate one `provider:label` slot and ack via requestId.
     | "credentials.list"
+    | "credentials.account.export"
     | "credential.set"
     | "credential.remove"
     | "credential.sync.set"
@@ -73,6 +74,8 @@ export interface Command extends CommandBase {
     | "credentials.presets.setMapping"
     | "models.custom.list"
     | "models.custom.presets"
+    | "models.custom.discover"
+    | "models.custom.verify"
     | "models.custom.save"
     | "models.custom.remove"
     | "rulesets.list"
@@ -98,12 +101,16 @@ export interface Command extends CommandBase {
     | "stt.config.get"
     | "stt.config.set"
     | "transcribe"
+    | "synthesize"
     | "terminal.list"
     | "terminal.multiplexers"
     | "terminal.takeover"
     | "terminal.open.tui"
     | "terminal.close.tui"
     | "node.stats"
+    // Machine capability inventory (Settings → Nodes panel). Reply/emit:
+    // `capabilities` ({ capabilities: MachineCapabilities }).
+    | "capabilities.get"
     // Fetch a stored attachment's bytes by content hash (see AttachmentStore).
     // Reply: `attachment.data` (base64) or `attachment.error`.
     | "attachment.fetch"
@@ -133,6 +140,11 @@ export interface CredentialRecordSummary {
   expiresAt?: number;
   /** The non-secret pointer, when `kind === "reference"`. */
   ref?: string;
+  /** Whether "Test connection" supports this provider/kind. */
+  testable: boolean;
+  /** The most recent "Test connection" result for this record, if any run. */
+  lastVerifiedAt?: number;
+  lastVerifiedOk?: boolean;
 }
 
 /**
@@ -172,6 +184,23 @@ export interface PromptAttachment {
    * what makes attachments re-findable after a reload or on another device.
    */
   hash?: string;
+  /**
+   * Epoch ms this attachment was produced, when known. Set for an agent-sent
+   * (outbound) or resolved inline-image attachment — both carry a durable
+   * `createdAt` on the node (see OutboundAttachmentLogEntry / InlineImageLogEntry)
+   * — absent for an ordinary user upload, which has no equivalent durable
+   * timestamp today. Best-effort: a consumer (e.g. the Artifacts sheet) must
+   * treat its absence as "unknown", not as "now".
+   */
+  createdAt?: number;
+  /**
+   * Whether the sender explicitly marked this as a named artifact — a durable
+   * output worth surfacing outside the transcript (a report, a benchmark
+   * result, a build archive) — rather than an incidental inline image. Set via
+   * `attach_to_chat`'s / `bivy attach`'s `artifact` flag (see AttachmentEvent).
+   * Ordinary attachments simply omit it; existing callers need no changes.
+   */
+  artifact?: boolean;
 }
 
 /**
@@ -207,6 +236,10 @@ export interface AttachmentEvent {
   id: string;
   ref: AttachmentRef;
   caption?: string;
+  /** See PromptAttachment.artifact — carried through unchanged from the
+   *  `bivy attach --artifact` / `attach_to_chat({ artifact: true })` call that
+   *  produced this attachment. */
+  artifact?: boolean;
 }
 
 /**

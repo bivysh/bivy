@@ -325,11 +325,11 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     const acct = await store.findOrCreateAccount("contract-evidence@example.com");
     const { node } = await store.enrollNode(acct.id, "node-evidence", "Laptop");
     const run = await store.enqueueWorkItem(acct.id, { label: "bivy", source: "github:issue", title: "Flaky", repo: "o/r", issueNumber: 42, url: "https://github.com/o/r/issues/42" });
-    assert.equal(run.events?.[0]?.kind, "triggered");
+    assert.deepEqual(run.events?.map((event) => event.kind), ["trigger_received", "trigger_matched", "queued", "routed"]);
 
     assert.ok(await store.claimWorkItem(acct.id, node.id, run.id));
     const afterClaim = await store.getAutomationRun(acct.id, run.id);
-    assert.deepEqual(afterClaim?.events?.map((e) => e.kind), ["triggered", "claimed"]);
+    assert.deepEqual(afterClaim?.events?.map((e) => e.kind), ["trigger_received", "trigger_matched", "queued", "routed", "claimed"]);
 
     // The node reports why it chose this runtime, then hits a transient error
     // and falls back to a different one (attempt 1 -> 2), each with its reason.
@@ -361,7 +361,7 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.equal(final?.output?.commit, "def456");
     assert.deepEqual(final?.checks?.map((c) => c.status), ["passed"]);
     const kinds = final?.events?.map((e) => e.kind);
-    assert.deepEqual(kinds, ["triggered", "claimed", "retry", "fallback", "pull_request", "attempt_started", "completed"]);
+    assert.deepEqual(kinds, ["trigger_received", "trigger_matched", "queued", "routed", "claimed", "retry", "fallback", "pull_request", "checks_started", "checks_completed", "agent_started", "result_delivery", "terminal"]);
     const retryEvent = final?.events?.find((e) => e.kind === "retry");
     assert.equal(retryEvent?.attempt, 1);
     assert.match(retryEvent?.summary ?? "", /rate-limit/);
@@ -468,12 +468,12 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.equal(cancelled?.run.claimedByNodeId, node.id, "owner tombstone remains for cancellation acknowledgement");
     assert.ok(cancelled?.run.completedAt);
     assert.equal(cancelled?.run.events?.length, 100);
-    assert.equal(cancelled?.run.events?.at(-1)?.kind, "cancelled");
+    assert.equal(cancelled?.run.events?.at(-1)?.kind, "terminal");
 
     const repeated = await store.cancelAutomationRun(acct.id, run.id);
     assert.equal(repeated?.transitioned, false);
     assert.equal(repeated?.previousStatus, "cancelled");
-    assert.equal(repeated?.run.events?.filter((event) => event.kind === "cancelled").length, 1);
+    assert.equal(repeated?.run.events?.filter((event) => event.kind === "cancel_requested").length, 1);
     assert.equal(repeated?.run.completedAt, cancelled?.run.completedAt);
 
     for (const status of ["pending", "claimed", "needs_attention"] as const) {
@@ -509,6 +509,8 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.ok(await store.claimWorkItem(acct.id, a.id, run.id));
     assert.equal(await store.transitionAutomationRun(acct.id, run.id, "running", undefined, b.id), undefined, "a non-owner node cannot advance the Run");
     assert.equal(await store.completeWorkItem(acct.id, run.id, b.id), undefined, "a non-owner node cannot complete the Run");
+    assert.equal(await store.appendRunEvidence(acct.id, run.id, { events: [{ at: new Date().toISOString(), kind: "checkpoint", summary: "stale write" }] }, b.id), undefined, "a non-owner node cannot append evidence");
+    assert.equal((await store.getAutomationRun(acct.id, run.id))?.events?.some((event) => event.summary === "stale write"), false);
     assert.equal((await store.getAutomationRun(acct.id, run.id))?.status, "claimed", "the losing node's writes never landed");
     assert.equal((await store.transitionAutomationRun(acct.id, run.id, "running", undefined, a.id))?.status, "running", "the true owner still advances");
     assert.equal((await store.completeWorkItem(acct.id, run.id, a.id))?.status, "succeeded");

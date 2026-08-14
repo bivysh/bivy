@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// "Schedule this message for later": long-press Send in the composer to open
+// "Schedule this message for later": choose it from the split Send control to open
 // this sheet. It writes a one-off scheduled message onto the account's control
 // plane (AppController.scheduleMessage → createAutomation with `message: true`),
 // E2E-sealed for the session's owning node, so the always-on node delivers it

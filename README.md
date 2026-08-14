@@ -1,27 +1,59 @@
 # Bivy
 
-Route coding-agent work to infrastructure you own.
+**Give coding agents your real environment, then reach them from anywhere.**
 
-Bivy turns GitHub issues, Slack requests, signed webhooks, schedules, and live
-prompts into governed agent runs on your laptop, server, or cloud account. Choose
-the node, agent, and model; burst onto a short-lived runner in your own cloud;
-then watch, steer, and approve from a phone, browser, or terminal.
+A provider sandbox starts from an approximation. A Bivy Machine can use the
+repository, local services and databases, private networks, existing tools and
+caches, and GPUs or local inference already available on your workstation or
+server. Bivy turns that local capability into Sessions you can continue remotely
+and Runs you can leave working unattended.
 
-Agents run with your repository, keys, and toolchain. Interactive session
-traffic is end-to-end encrypted between your node and devices; Bivy's relay and
-control plane do not receive repository contents, interactive prompts,
-transcripts, or model keys. Inbound Slack commands and generic webhook
-instructions necessarily reach the control plane and are retained with their
-queue item until it is deleted; GitHub and Linear issue text is fetched directly
-by the node instead. Bivy adds routing, durable sessions, approvals, fallback
-rules, and outcome reports around agents you already use.
+## What Bivy lets you do
+
+- **Work where the full environment lives.** Run Claude Code, Codex, Pi, or
+  another agent beside real repos, dev servers, databases, internal APIs,
+  toolchains, package caches, and specialized compute.
+- **Continue from a phone, browser, or terminal.** Reconnect to the same Session,
+  steer or stop it, answer questions, and approve supported tool calls. The PWA
+  supports voice input and read-aloud, phone-to-agent file/image uploads, and
+  agent-to-phone attachments. Native terminal Sessions can stay remote-visible;
+  supported runtimes can hand work between terminal and structured chat.
+- **Move work without starting over.** Import existing Claude Code and Codex
+  Sessions, or fork/copy/move a Bivy Session to another agent, model, or Machine.
+  Fidelity is runtime-dependent: a fork may use a native transcript, replayed
+  history, or a bounded seeded continuation, and cross-Machine moves require the
+  destination's repo access, agent, and credentials.
+- **Operate more than one Machine.** Keep a workstation, private-network server,
+  and GPU box on one account; select the environment a Session or Run needs.
+  Optional warm Session replication is Beta, off by default, and manually
+  promoted rather than automatic failover.
+- **Let events start checked work.** Create Runs manually or from failed CI,
+  GitHub/Linear issues, Slack, schedules, and signed webhooks. Automations can
+  pin a Machine, agent, model, sandbox, approval mode, and attempt ceiling, then
+  report bounded check and outcome evidence in a Receipt.
+- **Bring your own stack.** Use provider subscriptions through supported native
+  agent logins, API keys in Bivy's vault, or local/OpenAI-compatible inference.
+  Add an existing ACP or headless process agent with `bivy agent add`; declarative
+  agent plugins are Experimental (`v1alpha1`) and run out of process.
+
+Start with the [five-minute quickstart](docs/quickstart.md), then try the
+[capability recipes](docs/capability-recipes.md) or check the exact
+[runtime support matrix](docs/runtime-support-matrix.md).
+
+Interactive Session traffic is end-to-end encrypted between a Machine and its
+paired devices, so the relay cannot decrypt it. The seatbelt has a precise edge:
+explicitly enabled hosted provisioning may give the control plane technical
+access to encrypted cloud, repository, or key-escrow material, while Slack and
+generic webhook instructions reach it in plaintext. See [Why Bivy](docs/why-bivy.md)
+and the [security model](docs/security-model.md) for the complete trust model.
 
 - **Website:** [bivy.sh](https://bivy.sh)
-- **Documentation:** [`docs/`](docs/README.md) — start with the [quickstart](docs/quickstart.md)
+- **Documentation:** [`docs/`](docs/README.md)
 - **License:** [AGPL-3.0-only](LICENSE)
 
-> Bivy is 0.x software. The core loop is solid and used daily, but interfaces
-> and behaviour can change between releases.
+> Bivy is 0.x software. The core loop is solid and used daily, but interfaces,
+> cross-runtime fidelity, and behaviour can change between releases. Check the
+> support matrix before depending on a particular agent capability.
 
 ## Install
 
@@ -69,8 +101,8 @@ For example: `BIVY_CHANNEL=staging curl -fsSL https://bivy.sh/install.sh | bash`
 Working from a checkout of this repository instead:
 
 ```bash
-npm install
-npm run setup
+pnpm install
+pnpm run setup
 ```
 
 See [`docs/install.md`](docs/install.md) for where data lives, service
@@ -90,7 +122,7 @@ background service so the node reconnects on the new build:
 |---|---|
 | npm global (`npm i -g`) | `npm install -g @bivy/bivy@<channel>`, then restart the service |
 | installer / packaged | re-runs `install.sh` (migrating to npm if needed), then restart |
-| git checkout | `git pull --ff-only` + `npm ci`, then restart |
+| git checkout | `git pull --ff-only` + `pnpm install --frozen-lockfile`, then restart |
 | `npx` run | nothing to update — each run already fetches the latest |
 
 Updates follow the release **channel** recorded at install time — `latest`
@@ -140,9 +172,9 @@ See [`docs/remote-access.md`](docs/remote-access.md) and
 
 ## Supported agents
 
-Nineteen agents are available in the picker, each driven through its native interface.
-Pi, Claude Code, Codex, and OpenCode are the release-tested **Supported** paths;
-the rest are explicitly Beta in the picker and support matrix:
+**Claude Code and Codex are the recommended, release-certified paths.** The
+broader catalog remains available under **More agents** for users who need it;
+capabilities and fidelity vary by runtime:
 
 | Agent | Command | Notes |
 |---|---|---|
@@ -254,11 +286,13 @@ picker's Protection label. **Bivy does not currently ship its own OS-level jail.
 
 ## Credentials
 
-Provider credentials stay on the node or in a vault you control. Bivy Cloud does
-not receive model keys, GitHub repository tokens, OAuth refresh tokens,
-interactive session prompts, transcripts, or workspace files. See the
-[security model](docs/security-model.md#what-the-control-plane-sees) for the
-separate inbound-automation data boundary.
+Interactive prompts, transcripts, and workspace files stay encrypted across the
+relay. Credentials can remain on a Machine or in a vault you control. If you
+explicitly enable hosted unattended provisioning, Bivy Cloud may instead store
+encrypted cloud, repository, model, or key-escrow material that the service can
+technically access. Treat this as an explicit hosted-custody mode, not as relay
+blindness. See the
+[security model](docs/security-model.md#what-the-control-plane-sees).
 
 ```bash
 bivy secrets list
@@ -288,11 +322,11 @@ lives beside the job—sandbox, approval mode, and a hard attempt ceiling that
 retry/fallback rules cannot exceed. See
 [`docs/automations-as-code.md`](docs/automations-as-code.md).
 
-## GitHub work queue
+## GitHub Runs
 
-Label an issue `bivy` (or `bivy/<node>` to target a machine), or mention the Bivy
-GitHub App in a comment. A node you own claims the work, runs the agent in an
-isolated worktree, and the agent opens the pull request itself.
+Label an issue `bivy` (or `bivy/<machine>` to target a Machine), or mention the
+Bivy GitHub App in a comment. Bivy creates a Run on the selected Machine, uses an
+isolated worktree, executes configured checks, and reports an explicit outcome.
 
 Available on every plan. On Bivy Cloud, the free trial shows the first 25
 distinct sessions in the hosted app and includes 10 unattended automations per
@@ -308,28 +342,31 @@ with its own key and `@`-mention handle.
 
 See [`docs/github-work-queue.md`](docs/github-work-queue.md).
 
-## Linear work queue
+## Linear Runs
 
-Apply `bivy` or `bivy/<node>` to a Linear issue to dispatch it to the same hosted queue. The node fetches issue content directly from Linear, works in an isolated GitHub worktree, and asks the agent to open a pull request. See [`docs/linear-work-queue.md`](docs/linear-work-queue.md).
+Apply `bivy` or `bivy/<machine>` to a Linear issue to create a Run on the selected
+Machine. The Machine fetches issue content directly from Linear, works in an
+isolated GitHub worktree, and asks the agent to open a pull request. See
+[`docs/linear-work-queue.md`](docs/linear-work-queue.md).
 
 ## Development
 
 ```bash
-npm install
-npm run dev          # node daemon on http://localhost:4317
-npm run dev:web      # web client dev server (proxies /api and /ws to the node)
+pnpm install
+pnpm run dev          # node daemon on http://localhost:4317
+pnpm run dev:web      # web client dev server (proxies /api and /ws to the node)
 ```
 
 Checks — all of these run in CI:
 
 ```bash
-npm run typecheck
-npm run typecheck:web
-npm run lint
-npm run test:unit
-npm run test:core
-npm run check:licenses
-npm run check:secrets
+pnpm run typecheck
+pnpm run typecheck:web
+pnpm run lint
+pnpm run test:unit
+pnpm run test:core
+pnpm run check:licenses
+pnpm run check:secrets
 ```
 
 Repository layout:

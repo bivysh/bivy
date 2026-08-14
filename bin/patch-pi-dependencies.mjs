@@ -7,6 +7,12 @@
  * lockfile/audit result but do not replace those shrinkwrapped files during
  * installation. Replace the affected nested packages with direct, exact patched
  * dependencies until pi publishes a corrected shrinkwrap.
+ *
+ * This matters for the PUBLISHED package, which users install with npm. It is a
+ * no-op in this repo's own dev install: pnpm ignores a dependency's shrinkwrap
+ * and resolves everything through pnpm-lock.yaml, so the vulnerable nested
+ * copies are never created and the loop below finds nothing to replace. Either
+ * way scripts/check-security-pins.mjs asserts the end state.
  */
 import fs from "node:fs";
 import path from "node:path";

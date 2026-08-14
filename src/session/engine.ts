@@ -2,8 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 //
 // SessionEngine — owns the live-session registry and the simple lifecycle, as
-// the first behavioural slice of the session-engine decomposition (platform
-// modularization Phase 2, step 2b; see docs/internal/platform-modularization-plan.md).
+// the first behavioural slice of the session-engine decomposition.
 //
 // It CREATES and owns the `openSessions` Map and returns a reference: server.ts
 // destructures it and still reads/writes records in place (the agreed Option 1 —

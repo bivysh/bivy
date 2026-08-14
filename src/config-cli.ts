@@ -18,6 +18,7 @@ import {
   type NodeConfig,
 } from "./node-config.js";
 import { PROJECT_POLICY_PATH, STARTER_PROJECT_POLICY, findProjectPolicy, loadProjectPolicy, parseProjectPolicy, resolveProjectSafety } from "./project-policy.js";
+import { PROJECT_ENVIRONMENT_PATH, STARTER_PROJECT_ENVIRONMENT, parseProjectEnvironment } from "./project-environment.js";
 
 const dataDir = path.resolve(process.env.BIVY_DATA_DIR || path.join(process.env.HOME || "", ".bivy"));
 const file = nodeConfigPath(dataDir);
@@ -85,21 +86,24 @@ function usage(): never {
 Typed node configuration in ${file}
 
 Commands:
-  init [--project]        Create node config, or .bivy/policy.yaml
-  validate [--project]    Validate node or repository policy config
+  init [--project|--environment]      Create node config, .bivy/policy.yaml, or .bivy/environment.yaml
+  validate [--project|--environment]  Validate node, repository policy, or environment config
   show [--json]           Print the canonical configuration
   get <key>               Read a dotted key
   set <key> <yaml-value>  Set and validate a dotted key
   unset <key>             Remove a dotted key
   explain <key>           Show the effective value and where it came from
-  path                    Print the configuration path
+  path [--project|--environment]      Print the configuration path
 
 Examples:
   bivy config set defaults.agent codex
   bivy config set defaults.sandbox read-only
   bivy config set node.maxConcurrentAutomations 2
   bivy config set automation.checks '[test, lint, typecheck]'
+  bivy config set node.capabilities '[gpu, docker]'
   bivy config explain defaults.sandbox
+  bivy config init --environment
+  bivy config validate --environment
 
 Secrets belong in the vault; use secret://, env://, or op:// references in
 advanced environment entries. Restart the node after changing boot settings.`);
@@ -208,9 +212,12 @@ function unsetValue(config: NodeConfig, dotted: string): NodeConfig {
 async function main() {
   const [command, ...args] = process.argv.slice(2);
   if (!command || ["help", "-h", "--help"].includes(command)) usage();
-  if (command === "path") { console.log(args.includes("--project") ? path.resolve(PROJECT_POLICY_PATH) : file); return; }
+  if (command === "path") {
+    console.log(args.includes("--environment") ? path.resolve(PROJECT_ENVIRONMENT_PATH) : args.includes("--project") ? path.resolve(PROJECT_POLICY_PATH) : file);
+    return;
+  }
   if (command === "edit") {
-    const target = args.includes("--project") ? path.resolve(PROJECT_POLICY_PATH) : file;
+    const target = args.includes("--environment") ? path.resolve(PROJECT_ENVIRONMENT_PATH) : args.includes("--project") ? path.resolve(PROJECT_POLICY_PATH) : file;
     fs.mkdirSync(path.dirname(target), { recursive: true });
     if (!fs.existsSync(target)) fs.writeFileSync(target, "");
     const editor = process.env.VISUAL || process.env.EDITOR || (process.platform === "win32" ? "notepad" : "nano");
@@ -227,6 +234,14 @@ async function main() {
     console.log(`Created ${target}`);
     return;
   }
+  if (command === "init" && args.includes("--environment")) {
+    const target = path.resolve(PROJECT_ENVIRONMENT_PATH);
+    if (fs.existsSync(target)) throw new Error(`${target} already exists`);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, STARTER_PROJECT_ENVIRONMENT, { mode: 0o644 });
+    console.log(`Created ${target}`);
+    return;
+  }
   if (command === "init" || command === "migrate") {
     const result = migrate(args.includes("--from-legacy"));
     if (!args.includes("--quiet")) console.log(`${result.created ? "Created" : "Synchronized"} ${file}`);
@@ -235,6 +250,13 @@ async function main() {
   if (command === "validate" && args.includes("--project")) {
     const target = path.resolve(PROJECT_POLICY_PATH);
     const result = parseProjectPolicy(fs.readFileSync(target, "utf8"));
+    if (!result.ok) { for (const error of result.errors) console.error(`error: ${error}`); process.exit(1); }
+    console.log(`Valid: ${target}`);
+    return;
+  }
+  if (command === "validate" && args.includes("--environment")) {
+    const target = path.resolve(PROJECT_ENVIRONMENT_PATH);
+    const result = parseProjectEnvironment(fs.readFileSync(target, "utf8"));
     if (!result.ok) { for (const error of result.errors) console.error(`error: ${error}`); process.exit(1); }
     console.log(`Valid: ${target}`);
     return;

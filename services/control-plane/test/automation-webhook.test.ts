@@ -97,6 +97,10 @@ async function main() {
   expect(managedUpdate.status === 200 && managedUpdate.body.id === managed.body.id, "re-applying a config key updates instead of duplicating");
   const managedList = await json(port, "GET", "/node/automation-config", undefined, nodeToken);
   expect(managedList.body.automations.filter((d: any) => d.configKey === "managed-ci").length === 1, "managed definitions list by stable config key");
+  const cliList = await json(port, "GET", "/node/automations", undefined, nodeToken);
+  expect(cliList.status === 200 && cliList.body.automations.some((d: any) => d.id === managed.body.id), "an enrolled node can list account automations for the CLI");
+  const unauthorizedCliList = await json(port, "GET", "/node/automations");
+  expect(unauthorizedCliList.status === 401, "listing automations requires node authentication");
   const pwaEdit = await json(port, "PUT", `/account/automations/${managed.body.id}`, { name: "UI overwrite" }, token);
   expect(pwaEdit.status === 409, "the account/PWA API cannot overwrite a file-managed automation");
   const pwaDelete = await json(port, "DELETE", `/account/automations/${managed.body.id}`, undefined, token);
@@ -105,8 +109,77 @@ async function main() {
   expect(wrongNode.status === 400, "a node cannot apply instructions encrypted for another node");
   const managedRun = await json(port, "POST", `/account/automations/${managed.body.id}/run`, undefined, token);
   expect(managedRun.status === 201, "a managed automation can be dispatched normally");
+  const cliRun = await json(port, "POST", `/node/automations/${managed.body.id}/run`, undefined, nodeToken);
+  expect(cliRun.status === 201 && cliRun.body.definitionId === managed.body.id, "an enrolled node can trigger an automation for the CLI");
+  const unauthorizedCliRun = await json(port, "POST", `/node/automations/${managed.body.id}/run`);
+  expect(unauthorizedCliRun.status === 401, "triggering an automation requires node authentication");
   const managedWork = await json(port, "GET", "/account/work-items", undefined, token);
   expect(managedWork.body.find((w: any) => w.id === managedRun.body.id)?.maxAttempts === 2, "managed run inherits its hard attempt ceiling");
+
+  // --- One-off Runs: CLI/node and PWA/account paths create queue work without
+  //     leaving an Automation definition behind. ---
+  const oneOffCliRun = await json(port, "POST", "/node/automation-runs", {
+    title: "Inspect flaky tests",
+    body: "bivy-room-v1:node-as-code:opaque-one-off",
+    repo: "acme/api",
+    runtimeId: "pi",
+    maxAttempts: 3,
+  }, nodeToken);
+  expect(oneOffCliRun.status === 201 && !oneOffCliRun.body.definitionId, "node API creates a definition-free one-off Run");
+  const wrongCipherRun = await json(port, "POST", "/node/automation-runs", { title: "No", body: "plaintext" }, nodeToken);
+  expect(wrongCipherRun.status === 400, "node API rejects plaintext one-off instructions");
+  const appRun = await json(port, "POST", "/account/automation-runs", {
+    title: "Update docs",
+    body: "bivy-room-v1:node-as-code:opaque-app-run",
+    label: "bivy/config-runner",
+    sandbox: "read-only",
+    targetKind: "existing_session",
+    targetSessionId: "session-from-composer",
+  }, token);
+  expect(appRun.status === 201 && appRun.body.triggerKind === "manual" && !appRun.body.definitionId, "account API creates a manual one-off Run");
+  expect(appRun.body.target?.kind === "existing_session" && appRun.body.target?.sessionId === "session-from-composer", "a composer Run can target its existing Session context");
+  const missingRunTarget = await json(port, "POST", "/account/automation-runs", { title: "Missing target", targetKind: "existing_session" }, token);
+  expect(missingRunTarget.status === 400, "an existing-Session Run requires an exact Session target");
+  const oneOffWork = await json(port, "GET", "/account/work-items", undefined, token);
+  const cliWork = oneOffWork.body.find((w: any) => w.id === oneOffCliRun.body.id);
+  const pendingNodeWork = await json(port, "GET", "/node/work?labels=bivy%2Fconfig-runner", undefined, nodeToken);
+  const privateCliWork = pendingNodeWork.body.items.find((w: any) => w.id === oneOffCliRun.body.id);
+  expect(cliWork?.repo === "acme/api" && cliWork?.maxAttempts === 3 && privateCliWork?.body === "bivy-room-v1:node-as-code:opaque-one-off", "one-off Run preserves encrypted instructions and bounded routing");
+  const nodeRunList = await json(port, "GET", "/node/automation-runs?limit=10", undefined, nodeToken);
+  expect(nodeRunList.status === 200 && nodeRunList.body.runs.some((r: any) => r.id === oneOffCliRun.body.id), "an enrolled node can list Run statuses for orchestration");
+  const nodeRunStatus = await json(port, "GET", `/node/automation-runs/${oneOffCliRun.body.id}`, undefined, nodeToken);
+  expect(nodeRunStatus.status === 200 && nodeRunStatus.body.status === "pending" && nodeRunStatus.body.body === undefined, "an enrolled node can inspect content-free Run status");
+  const unknownNodeRun = await json(port, "GET", "/node/automation-runs/not-a-run", undefined, nodeToken);
+  expect(unknownNodeRun.status === 404, "Run status lookup is account-scoped and returns 404 for unknown Runs");
+  const unauthorizedNodeRuns = await json(port, "GET", "/node/automation-runs");
+  expect(unauthorizedNodeRuns.status === 401, "Run status probing requires node authentication");
+
+  // Agent-to-agent/Machine uses the same one-off queue. Ciphertext must target
+  // the selected sibling Machine; provenance is content-free and idempotency is
+  // scoped to the parent Session.
+  const sibling = await json(port, "POST", "/nodes/enroll", { nodeId: "node-linux", name: "linux" }, token);
+  const delegatedInput = {
+    title: "Delegated Run",
+    body: "bivy-room-v1:node-linux:opaque-review",
+    node: "linux",
+    repo: "acme/api",
+    parentSessionId: "parent-session",
+    parentRunId: "parent-run",
+    delegationDepth: 1,
+    idempotencyKey: "review-branch",
+  };
+  const delegated = await json(port, "POST", "/node/automation-runs", delegatedInput, nodeToken);
+  const duplicate = await json(port, "POST", "/node/automation-runs", delegatedInput, nodeToken);
+  expect(delegated.status === 201 && duplicate.body.id === delegated.body.id, "delegated Run creation is idempotent within its parent Session");
+  expect(delegated.body.routing.nodeLabel === "bivy/linux" && String(delegated.body.source).startsWith("agent-delegation:v1:1:"), "delegated Run carries bounded provenance and routes through the existing Machine queue");
+  const linuxWork = await json(port, "GET", "/node/work?labels=bivy%2Flinux", undefined, sibling.body.enrollmentToken);
+  expect(linuxWork.body.items.find((w: any) => w.id === delegated.body.id)?.body === delegatedInput.body, "the target Machine receives only the E2E-encrypted instruction envelope");
+  const wrongTargetCipher = await json(port, "POST", "/node/automation-runs", { ...delegatedInput, body: "bivy-room-v1:node-as-code:opaque" }, nodeToken);
+  expect(wrongTargetCipher.status === 400, "delegation rejects instructions encrypted for a different Machine");
+  const tooDeep = await json(port, "POST", "/node/automation-runs", { ...delegatedInput, idempotencyKey: "deep", delegationDepth: 4 }, nodeToken);
+  expect(tooDeep.status === 400, "control-plane ingress enforces the delegation depth ceiling");
+  const delegatedStatus = await json(port, "GET", `/node/automation-runs/${delegated.body.id}`, undefined, nodeToken);
+  expect(delegatedStatus.body.body === undefined && delegatedStatus.body.eventContext === undefined && delegatedStatus.body.source.includes("agent-delegation"), "delegated status exposes provenance but redacts encrypted bodies and inbound content");
 
   // --- Webhook-triggered automation *definition* (runs the operator's own
   //     pre-configured routing/agent/model/sandbox + E2E template) ---

@@ -5,8 +5,8 @@
 // three dependencies the vault (credential-store.ts) and resolver
 // (credentials.ts) currently import *upward* — authenticated crypto, reference
 // resolution, and OAuth refresh — so that when those engines move into this
-// layer (pilot steps 3-4, see docs/internal/platform-modularization-plan.md)
-// they depend on these contracts instead of runtime/, secrets.ts, and e2e.ts.
+// layer, they depend on these contracts instead of runtime/, secrets.ts, and
+// e2e.ts.
 //
 // The provider catalog is already inverted (joinProviderCatalog in api.ts, with
 // runtime/provider-catalog.ts as the consumer-side Pi bridge), so it is not

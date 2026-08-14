@@ -40,8 +40,8 @@ Already have the repo checked out?
 ```bash
 git clone https://github.com/bivysh/bivy.git
 cd bivy
-npm install
-npm run setup     # same wizard, via the bundled bivy CLI
+pnpm install
+pnpm run setup     # same wizard, via the bundled bivy CLI
 ```
 
 ## 2. What `bivy setup` asks

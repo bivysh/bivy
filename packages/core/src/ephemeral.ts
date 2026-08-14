@@ -37,6 +37,13 @@ export interface EphemeralProviderCatalog {
   blurb: string;
   steps: string[];
   links: { label: string; url: string }[];
+  /** Mirrors the adapter's `guestCanEnsureDeletion === false`: this provider's
+   * guest shutdown does not stop billing, so a device-only (browser-held
+   * token) launch is refused outright — only hosted/control-plane
+   * provisioning (which retains independent deletion authority) can launch
+   * it. Onboarding surfaces should say so up front rather than let the user
+   * connect a token and hit the launch-time refusal cold. */
+  hostedOnly?: boolean;
 }
 
 export const EPHEMERAL_PROVIDERS: EphemeralProviderCatalog[] = [
@@ -63,7 +70,7 @@ export const EPHEMERAL_PROVIDERS: EphemeralProviderCatalog[] = [
     computeClass: "byo-cloud",
     maturity: "stable",
     tokenLabel: "Hetzner Cloud API token",
-    blurb: "Bivy creates a temporary server, runs the session, then deletes it.",
+    blurb: "Powering off a Hetzner server doesn't stop billing, so Bivy only launches one through hosted (control-plane) provisioning, which keeps independent deletion authority.",
     steps: [
       "Open the Hetzner Cloud Console and select or create a project for Bivy's runners.",
       "Go to Security → API Tokens and click Generate API token.",
@@ -73,6 +80,7 @@ export const EPHEMERAL_PROVIDERS: EphemeralProviderCatalog[] = [
       { label: "Hetzner Cloud Console", url: "https://console.hetzner.cloud/projects" },
       { label: "API token docs", url: "https://docs.hetzner.com/cloud/api/getting-started/generating-api-token/" },
     ],
+    hostedOnly: true,
   },
   {
     id: "sprites",
@@ -278,15 +286,21 @@ export function createEphemeralKeyStore(backend: KvBackend = defaultBackend("pro
   };
 }
 
+export type DeviceCredentialScope = "device" | "account";
+
 export interface EphemeralModelKeyInfo {
   provider: string;
   configured: boolean;
   updatedAt: string | null;
+  /** Account keys enter the E2E device vault; device keys never leave this PWA. */
+  scope: DeviceCredentialScope;
 }
 
 export interface EphemeralModelKeyEntry {
   provider: string;
   key: string;
+  updatedAt?: string | null;
+  scope: DeviceCredentialScope;
 }
 
 /**
@@ -308,7 +322,7 @@ export interface EphemeralModelKeyStore {
   /** The stored keys, for seeding a node. Secrets — never surface in the UI. */
   entries(): Promise<EphemeralModelKeyEntry[]>;
   get(provider: string): Promise<string>;
-  set(provider: string, key: string): Promise<void>;
+  set(provider: string, key: string, scope?: DeviceCredentialScope): Promise<void>;
   remove(provider: string): Promise<void>;
 }
 
@@ -328,14 +342,27 @@ export function createEphemeralModelKeyStore(
       const stored = await all();
       return stored
         .filter((r) => r && r.provider)
-        .map((r) => ({ provider: String(r.provider), configured: Boolean(r.key), updatedAt: r.updatedAt ?? null }))
+        .map((r) => ({
+          provider: String(r.provider),
+          configured: Boolean(r.key),
+          updatedAt: r.updatedAt ?? null,
+          // Existing ephemeral seed keys become account keys: this preserves their
+          // old purpose (making a newly-created node usable) while moving them to
+          // the unified account vault.
+          scope: r.scope === "device" ? "device" as const : "account" as const,
+        }))
         .sort((a, b) => a.provider.localeCompare(b.provider));
     },
     async entries() {
       const stored = await all();
       return stored
         .filter((r) => r && r.provider && r.key)
-        .map((r) => ({ provider: String(r.provider), key: String(r.key) }));
+        .map((r) => ({
+          provider: String(r.provider),
+          key: String(r.key),
+          updatedAt: r.updatedAt ?? null,
+          scope: r.scope === "device" ? "device" as const : "account" as const,
+        }));
     },
     async get(provider) {
       const id = norm(provider);
@@ -343,12 +370,13 @@ export function createEphemeralModelKeyStore(
       const rec = (await all()).find((r) => r.provider === id);
       return rec && rec.key ? rec.key : "";
     },
-    async set(provider, key) {
+    async set(provider, key, scope = "account") {
       const id = norm(provider);
       if (!id) throw new Error("Provider is required");
       const value = String(key || "").trim();
       if (!value) throw new Error("API key cannot be empty");
-      await backend.put(id, { provider: id, key: value, updatedAt: nowIso() });
+      if (scope !== "account" && scope !== "device") throw new Error("Credential scope must be account or device");
+      await backend.put(id, { provider: id, key: value, scope, updatedAt: nowIso() });
     },
     async remove(provider) {
       const id = norm(provider);
@@ -604,6 +632,10 @@ export interface EphemeralMachine {
   status: string; // starting | running | stopped | gone
   ip: string | null;
   createdAt: string;
+  /** Stable id for the launch operation. Provider resources are tagged with it
+   * and idempotent create APIs use it, so a controller can recover an accepted
+   * create whose response was lost instead of launching a duplicate. */
+  attemptId?: string;
   /** Cold-start timestamps. `requestedAt` begins the user-visible budget;
    * `providerAcceptedAt` means the create API returned, not that the agent is
    * ready. Later milestones are server-stamped from the enrolled node. */
@@ -995,6 +1027,10 @@ export interface ProviderAdapter {
    * invalid/under-scoped credentials fail before Bivy stores or launches with
    * them. Must never create, update, wake, stop, or delete a resource. */
   validateToken?(args: { exec: ExecFn; token: string; region?: string }): Promise<void>;
+  /** False when guest shutdown does not delete the paid resource. Such a
+   * provider may launch only when an independent controller has teardown
+   * credentials; device-only TTL shutdown is not a billing guarantee. */
+  guestCanEnsureDeletion?: boolean;
   /** Optionally fetch the provider's live, currently-orderable sizes so the
    *  hardcoded `sizes` list can't silently go stale (e.g. a plan gets
    *  deprecated). When a region is given, results are narrowed to what that
@@ -1007,6 +1043,15 @@ export interface ProviderAdapter {
   provision(args: { exec: ExecFn; token: string; config: any; userData: string; bootstrap?: BootstrapOpts }): Promise<EphemeralMachine>;
   status(args: { exec: ExecFn; token: string; machine: EphemeralMachine }): Promise<string>;
   destroy(args: { exec: ExecFn; token: string; machine: EphemeralMachine }): Promise<void>;
+  /** List every live resource tagged with `ownershipTag` at the provider,
+   *  independent of anything Bivy currently has tracked. This is the recovery
+   *  path for the one failure #554's per-attempt idempotent-create/adopt can't
+   *  cover: the durable attempt row itself being lost (both the row AND the
+   *  legacy inventory array) after a resource was actually created. Only
+   *  implemented for providers where an orphaned resource keeps billing
+   *  (Hetzner/Fly/EC2) — a suspend-when-idle managed sandbox (Sprites/E2B)
+   *  doesn't carry the same cost risk and is intentionally left without one. */
+  discover?(args: { exec: ExecFn; token: string; ownershipTag: string }): Promise<EphemeralMachine[]>;
   /** True when the provider's machines suspend themselves to ~zero cost while
    *  idle and resume with full state (Fly Sprites). Such a machine is kept —
    *  never TTL-destroyed on finish — and is woken via `wake` before reconnect.
@@ -1194,6 +1239,9 @@ const hetzner: ProviderAdapter = {
   // x86, 4 GB — closest drop-in for the retired cx22, and x86 avoids the
   // Arm-compat pitfalls of the cax line for Docker images and binaries.
   defaultSize: "cpx21",
+  // `shutdown -h now` only powers a Hetzner server off; billing continues until
+  // the API resource is deleted. Hosted reconciliation supplies that authority.
+  guestCanEnsureDeletion: false,
   async validateToken({ exec, token }) {
     const res = await call(exec, {
       method: "GET",
@@ -1225,6 +1273,20 @@ const hetzner: ProviderAdapter = {
   },
   async provision({ exec, token, config, userData }) {
     const name = `bivy-${config.slug}`;
+    // Hetzner has no create idempotency token. The stable attempt label is the
+    // recovery key: after a timeout, a retry adopts the accepted server instead
+    // of issuing another paid create.
+    if (config.attemptId) {
+      const found = await call(exec, {
+        method: "GET",
+        url: `https://api.hetzner.cloud/v1/servers?label_selector=${encodeURIComponent(`bivy-attempt=${config.attemptId}`)}`,
+        headers: bearer(token),
+      });
+      if (found.status < 300 && Array.isArray(found.body?.servers) && found.body.servers[0]) {
+        const s = found.body.servers[0];
+        return { id: String(s.id), provider: "hetzner", name, region: config.region || "nbg1", status: mapHetznerStatus(s.status), ip: s.public_net?.ipv4?.ip || null, createdAt: nowIso(), ttlMinutes: config.ttlMinutes };
+      }
+    }
     const res = await call(exec, {
       method: "POST",
       url: "https://api.hetzner.cloud/v1/servers",
@@ -1236,7 +1298,11 @@ const hetzner: ProviderAdapter = {
         location: config.region || "nbg1",
         user_data: userData,
         start_after_create: true,
-        labels: { bivy: "ephemeral" },
+        labels: {
+          bivy: "ephemeral",
+          ...(config.attemptId ? { "bivy-attempt": String(config.attemptId) } : {}),
+          ...(config.ownershipTag ? { "bivy-account": String(config.ownershipTag) } : {}),
+        },
       },
     });
     if (res.status >= 300) throw new Error(providerError(res, "create server"));
@@ -1270,6 +1336,25 @@ const hetzner: ProviderAdapter = {
       headers: bearer(token),
     });
     if (res.status >= 300 && res.status !== 404) throw new Error(providerError(res, "delete server"));
+  },
+  async discover({ exec, token, ownershipTag }) {
+    const res = await call(exec, {
+      method: "GET",
+      url: `https://api.hetzner.cloud/v1/servers?label_selector=${encodeURIComponent(`bivy-account=${ownershipTag}`)}`,
+      headers: bearer(token),
+    });
+    if (res.status >= 300) throw new Error(providerError(res, "list servers"));
+    const servers = Array.isArray(res.body?.servers) ? res.body.servers : [];
+    return servers.map((s: any): EphemeralMachine => ({
+      id: String(s.id),
+      provider: "hetzner",
+      name: String(s.name || ""),
+      region: s.datacenter?.location?.name || "",
+      status: mapHetznerStatus(s.status),
+      ip: s.public_net?.ipv4?.ip || null,
+      createdAt: typeof s.created === "string" ? s.created : "",
+      attemptId: typeof s.labels?.["bivy-attempt"] === "string" ? s.labels["bivy-attempt"] : undefined,
+    }));
   },
 };
 
@@ -1362,6 +1447,19 @@ const fly: ProviderAdapter = {
       body: { app_name: app, org_slug: org },
     });
     if (created.status >= 300 && created.status !== 409) throw new Error(providerError(created, "create app"));
+    // Fly app creation is naturally name-idempotent, but machine creation is
+    // not. Adopt a machine carrying this attempt metadata before retrying create.
+    if (config.attemptId) {
+      const found = await call(exec, {
+        method: "GET",
+        url: `https://api.machines.dev/v1/apps/${encodeURIComponent(app)}/machines`,
+        headers: bearer(token),
+      });
+      const existing = Array.isArray(found.body) ? found.body.find((m: any) => m?.config?.metadata?.["bivy-attempt"] === String(config.attemptId)) : null;
+      if (found.status < 300 && existing?.id) {
+        return { id: String(existing.id), provider: "fly", app, name: app, region: existing.region || config.region || "iad", status: mapFlyStatus(existing.state), ip: null, createdAt: nowIso(), ttlMinutes: config.ttlMinutes };
+      }
+    }
     // A Fly Machine is an OCI image in a Firecracker microVM, NOT a cloud-init
     // VM: the `#cloud-config` user_data the other providers use is never
     // executed, and a bare `ubuntu:24.04` just runs `/bin/bash`, which exits
@@ -1369,15 +1467,11 @@ const fly: ProviderAdapter = {
     // self-destructs before it ever installs Bivy (that's the "app has no
     // machines" / node-offline symptom). Instead we materialize the same
     // relay.json + start.sh via `files` and run them ourselves as a blocking
-    // foreground init process. `auto_destroy` then tears the machine down once
-    // the daemon exits — but note the daemon (`bivy start`) is a persistent
-    // session process that stays alive across turns to serve follow-ups, so it
-    // does NOT exit on a single `agent_end`. In practice this fires only when the
-    // TTL `timeout` elapses (or the daemon crashes) — i.e. it implements the TTL
-    // safety fallback, NOT the per-turn "destroy when the agent finishes"
-    // contract. That per-turn teardown is device-driven (the launching browser
-    // issues the destroy on `agent_end`; see controller.maybeTeardownFinishedEphemeral).
-    // Falls back to user_data only if no structured bootstrap is given.
+    // foreground init process. `auto_destroy` tears the machine down when the
+    // daemon exits. The daemon's quiet-state teardown snapshots completed work
+    // and exits after `agent_end`, so this no longer depends on a watching
+    // device; the TTL `timeout` remains an independent hard backstop. Falls back
+    // to user_data only if no structured bootstrap is given.
     const machineInit = bootstrap ? flyInit(bootstrap) : { init: { user_data: userData } };
     const machine = await call(exec, {
       method: "POST",
@@ -1392,7 +1486,11 @@ const fly: ProviderAdapter = {
           auto_destroy: bootstrap?.debugKeepMachine ? false : true,
           restart: { policy: "no" },
           guest: { cpu_kind: "shared", cpus: Number(config.cpus) || guest.cpus, memory_mb: Number(config.memoryMb) || guest.memoryMb },
-          metadata: { bivy: "ephemeral" },
+          metadata: {
+            bivy: "ephemeral",
+            ...(config.attemptId ? { "bivy-attempt": String(config.attemptId) } : {}),
+            ...(config.ownershipTag ? { "bivy-account": String(config.ownershipTag) } : {}),
+          },
           ...machineInit,
         },
       },
@@ -1429,6 +1527,40 @@ const fly: ProviderAdapter = {
       headers: bearer(token),
     });
     if (res.status >= 300 && res.status !== 404) throw new Error(providerError(res, "delete machine"));
+  },
+  // Fly has no account-wide "list machines by tag" call — a Machine is scoped
+  // to its app. Discovery instead lists every `bivy-`-prefixed app reachable
+  // with this token and checks each one's machines for the ownership tag.
+  // Bounded by how many bivy- apps exist for the token (normally very few);
+  // one app's list call failing is skipped rather than aborting the scan.
+  async discover({ exec, token, ownershipTag }) {
+    const appsRes = await call(exec, { method: "GET", url: "https://api.machines.dev/v1/apps", headers: bearer(token) });
+    if (appsRes.status >= 300) throw new Error(providerError(appsRes, "list apps"));
+    const apps: any[] = Array.isArray(appsRes.body?.apps) ? appsRes.body.apps : Array.isArray(appsRes.body) ? appsRes.body : [];
+    const found: EphemeralMachine[] = [];
+    for (const a of apps) {
+      const name = String(a?.name || "");
+      if (!name.startsWith("bivy-")) continue;
+      const res = await call(exec, { method: "GET", url: `https://api.machines.dev/v1/apps/${encodeURIComponent(name)}/machines`, headers: bearer(token) });
+      if (res.status >= 300) continue;
+      const machines: any[] = Array.isArray(res.body) ? res.body : [];
+      for (const m of machines) {
+        const meta = m?.config?.metadata || {};
+        if (meta.bivy !== "ephemeral" || meta["bivy-account"] !== ownershipTag) continue;
+        found.push({
+          id: String(m.id),
+          provider: "fly",
+          app: name,
+          name,
+          region: m.region || "",
+          status: mapFlyStatus(m.state),
+          ip: null,
+          createdAt: typeof m.created_at === "string" ? m.created_at : "",
+          attemptId: typeof meta["bivy-attempt"] === "string" ? meta["bivy-attempt"] : undefined,
+        });
+      }
+    }
+    return found;
   },
 };
 
@@ -1871,11 +2003,22 @@ const aws: ProviderAdapter = {
         MaxCount: "1",
         UserData: b64(utf8.encode(userData)),
         InstanceInitiatedShutdownBehavior: "terminate",
+        // EC2 makes RunInstances idempotent for this token. A retry after a
+        // timeout returns the original instance rather than billing for another.
+        ...(config.attemptId ? { ClientToken: String(config.attemptId) } : {}),
         "TagSpecification.1.ResourceType": "instance",
         "TagSpecification.1.Tag.1.Key": "Name",
         "TagSpecification.1.Tag.1.Value": name,
         "TagSpecification.1.Tag.2.Key": "bivy",
         "TagSpecification.1.Tag.2.Value": "ephemeral",
+        ...(config.attemptId ? {
+          "TagSpecification.1.Tag.3.Key": "bivy-attempt",
+          "TagSpecification.1.Tag.3.Value": String(config.attemptId),
+        } : {}),
+        ...(config.ownershipTag ? {
+          "TagSpecification.1.Tag.4.Key": "bivy-account",
+          "TagSpecification.1.Tag.4.Value": String(config.ownershipTag),
+        } : {}),
       },
       "launch instance",
     );
@@ -1918,6 +2061,58 @@ const aws: ProviderAdapter = {
     } catch (err) {
       if (!String((err as Error).message || "").includes("InvalidInstanceID.NotFound")) throw err;
     }
+  },
+  // EC2 has no cross-region "list by tag" call — a DescribeInstances Filter is
+  // always scoped to the region it's sent to. Scanning the whole curated
+  // region list keeps this correct even if an account's config region ever
+  // changed; it's bounded (six regions) and this only runs on the slow,
+  // infrequent orphan-sweep cadence, not the fast convergence loop. One
+  // region failing (e.g. not opted into that region) is skipped, not fatal.
+  async discover({ exec, token, ownershipTag }) {
+    const creds = parseAwsToken(token);
+    const found: EphemeralMachine[] = [];
+    for (const region of AWS_REGIONS.map((r) => r.id)) {
+      let xml: XmlEl;
+      try {
+        xml = await awsEc2Call(
+          exec,
+          creds,
+          region,
+          "DescribeInstances",
+          {
+            "Filter.1.Name": "tag:bivy-account",
+            "Filter.1.Value.1": ownershipTag,
+            "Filter.2.Name": "instance-state-name",
+            "Filter.2.Value.1": "pending",
+            "Filter.2.Value.2": "running",
+            "Filter.2.Value.3": "stopping",
+            "Filter.2.Value.4": "stopped",
+          },
+          "list instances",
+        );
+      } catch {
+        continue;
+      }
+      for (const reservation of xmlChildren(xmlChild(xml, "reservationSet"), "item")) {
+        for (const item of xmlChildren(xmlChild(reservation, "instancesSet"), "item")) {
+          const instanceId = xmlChild(item, "instanceId")?.text;
+          if (!instanceId) continue;
+          const stateName = xmlChild(xmlChild(item, "instanceState"), "name")?.text;
+          const attemptTag = xmlChildren(xmlChild(item, "tagSet"), "item").find((t) => xmlChild(t, "key")?.text === "bivy-attempt");
+          found.push({
+            id: instanceId,
+            provider: "aws",
+            name: instanceId,
+            region,
+            status: mapAwsStatus(stateName),
+            ip: xmlChild(item, "ipAddress")?.text || null,
+            createdAt: xmlChild(item, "launchTime")?.text || "",
+            attemptId: attemptTag ? xmlChild(attemptTag, "value")?.text : undefined,
+          });
+        }
+      }
+    }
+    return found;
   },
 };
 
@@ -2254,8 +2449,33 @@ function randHex(bytes: number): string {
   return [...arr].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+export type EphemeralLaunchPhase = "requested" | "enrolled" | "provider-accepted" | "tracked" | "failed";
+
+export interface EphemeralLaunchEvent {
+  attemptId: string;
+  nodeId: string;
+  phase: EphemeralLaunchPhase;
+  machine?: EphemeralMachine;
+  error?: string;
+}
+
 export interface LaunchOpts {
   provider: string;
+  /** Stable operation identity. Hosted controllers persist this before any
+   * side effect; device launches generate one locally. */
+  attemptId?: string;
+  /** The caller has an independent, durable controller holding deletion
+   * authority. Required for providers where guest shutdown does not stop billing. */
+  externalTeardownGuaranteed?: boolean;
+  /** Opaque per-account tag (see `ownershipTagFor` in the control plane's
+   * store) applied to the created resource alongside the attempt tag, so a
+   * later orphan-discovery scan can find it even if this specific attempt's
+   * record was lost. Hosted-only — device launches have no server-side
+   * discovery sweep to feed, so they omit it. */
+  ownershipTag?: string;
+  /** Durable lifecycle sink. The initial `requested` callback is awaited before
+   * enrollment, and `provider-accepted` is awaited before local machine storage. */
+  onLifecycle?: (event: EphemeralLaunchEvent) => Promise<void>;
   region?: string;
   size?: string;
   /** Optional, device-local progress sink for an interactive launch. Messages
@@ -2412,11 +2632,18 @@ export async function launchEphemeralMachine(
   progress(`Preparing ${adapter.name} launch…`);
   const token = await deps.keys.getToken(opts.provider);
   if (!token) throw new Error(`Add a ${adapter.name} token first.`);
+  if (adapter.guestCanEnsureDeletion === false && !opts.externalTeardownGuaranteed) {
+    throw new Error(`${adapter.name} requires hosted provisioning: powering off its guest does not delete the billable server, so a device-only launch is unsafe.`);
+  }
 
   // Rebuild-resume reuses the torn-down session's node id so the launching device
   // still reaches it (it holds that node's room key) and the daemon knows which
-  // snapshot to restore; a normal launch mints a fresh one.
+  // snapshot to restore; a normal launch mints a fresh one. Persist the stable
+  // attempt before enrollment: after this callback every later side effect has a
+  // durable owner even if this process crashes.
+  const attemptId = opts.attemptId || randHex(16);
   const nodeId = opts.reuseNodeId || "eph-" + randHex(8);
+  await opts.onLifecycle?.({ attemptId, nodeId, phase: "requested" });
   const enrollBody = JSON.stringify({ nodeId, name: opts.name || `Ephemeral ${adapter.name}` });
   progress("Enrolling a secure Bivy node…");
   const enrollOnce = async () => {
@@ -2439,7 +2666,12 @@ export async function launchEphemeralMachine(
   if (!enrollRes.ok && enrollRes.status === 402 && /node limit/i.test(String(enroll?.error ?? ""))) {
     if ((await reapOrphanEphemeralNodes(deps, fetchImpl)) > 0) ({ res: enrollRes, data: enroll } = await enrollOnce());
   }
-  if (!enrollRes.ok || !enroll?.enrollmentToken) throw new Error(enroll?.error || "Could not enroll the machine");
+  if (!enrollRes.ok || !enroll?.enrollmentToken) {
+    const error = enroll?.error || "Could not enroll the machine";
+    await opts.onLifecycle?.({ attemptId, nodeId, phase: "failed", error });
+    throw new Error(error);
+  }
+  await opts.onLifecycle?.({ attemptId, nodeId, phase: "enrolled" });
   progress("Node enrolled. Building its secure bootstrap…");
 
   // Reuse the old session's room key on rebuild so the device (which already
@@ -2476,13 +2708,26 @@ export async function launchEphemeralMachine(
   const size = opts.size || adapter.defaultSize;
   const region = opts.region || adapter.defaultRegion;
   progress(`Creating the machine in ${region} (${size})…`);
-  const machine = await adapter.provision({
-    exec: deps.exec,
-    token,
-    userData,
-    bootstrap,
-    config: { slug: ephemeralNodeLabel(nodeId), region, size, image: opts.image, ttlMinutes: opts.ttlMinutes },
-  });
+  let machine: EphemeralMachine;
+  try {
+    machine = await adapter.provision({
+      exec: deps.exec,
+      token,
+      userData,
+      bootstrap,
+      config: { slug: ephemeralNodeLabel(nodeId), region, size, image: opts.image, ttlMinutes: opts.ttlMinutes, attemptId, ownershipTag: opts.ownershipTag },
+    });
+  } catch (error) {
+    await opts.onLifecycle?.({
+      attemptId,
+      nodeId,
+      phase: "failed",
+      error: String((error as Error)?.message || error).slice(0, 500),
+    });
+    throw error;
+  }
+  machine.attemptId = attemptId;
+  await opts.onLifecycle?.({ attemptId, nodeId, phase: "provider-accepted", machine });
   progress("Machine created. Boot setup is installing and starting Bivy…");
   machine.size = size;
   machine.milestones = { ...(machine.milestones ?? {}), requestedAt, providerAcceptedAt: nowIso() };
@@ -2500,6 +2745,7 @@ export async function launchEphemeralMachine(
   if (opts.workItemId) machine.workItemId = opts.workItemId;
   if (opts.purpose) machine.purpose = opts.purpose;
   await deps.machines.add(machine);
+  await opts.onLifecycle?.({ attemptId, nodeId, phase: "tracked", machine });
   return machine;
 }
 

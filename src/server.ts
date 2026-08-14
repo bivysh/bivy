@@ -29,7 +29,7 @@ import { InMemorySessionLocationRegistry, type SessionLocation, type SessionLoca
 import { InMemoryLocationRegistry } from "./runtime/location-registry.js";
 import { ControlPlaneSessionLocationRegistry, LayeredSessionLocationRegistry, type NodeSessionRow } from "./runtime/control-plane-location.js";
 import { attachAdoptedSessions, classifyAttachFailure } from "./runtime/adoption.js";
-import { createCredentialStore } from "./runtime/credentials.js";
+import { createCredentialStore, testProviderCredential } from "./runtime/credentials.js";
 import { isModelAuthError, authProviderForSession } from "./runtime/auth-errors.js";
 import { createCredentialVault, migrateVaultDir } from "./runtime/credential-store.js";
 import { probeAnthropicAccess } from "./runtime/anthropic-preflight.js";
@@ -49,8 +49,9 @@ import { discoverPiSessionForCwd } from "./runtime/pi-session-discovery.js";
 import type { BivySessionRecord, BivySessionStatus } from "./session/bivy-session.js";
 import { deriveSessionState, type SessionState } from "./session/session-state.js";
 import type { SessionRecord, PromptOptions, StreamingBehavior, PromptImage } from "./session/record.js";
+import { resolveStreamingBehavior } from "./session/record.js";
 import { createSessionEngine } from "./session/engine.js";
-import { exportProviderAuth, exportSyncableProviderAuth, exportProviderAuthTombstones, importProviderAuth, removeProvider, setProviderApiKey, listCredentialRecords, setProviderApiKeyLabeled, setProviderReferenceLabeled, removeProviderCredential, setCredentialSync, getCredentialPresets, setActiveCredentialPreset, setCredentialPresetMapping, exportSyncableRecords, exportRecordTombstones, importCredentialRecords } from "./credentials/api.js";
+import { exportProviderAuth, exportAccountApiKeys, exportSyncableProviderAuth, exportProviderAuthTombstones, importProviderAuth, removeProvider, setProviderApiKey, listCredentialRecords, setProviderApiKeyLabeled, setProviderReferenceLabeled, removeProviderCredential, setCredentialSync, getCredentialPresets, setActiveCredentialPreset, setCredentialPresetMapping, exportSyncableRecords, exportRecordTombstones, importCredentialRecords } from "./credentials/api.js";
 import { listProviders } from "./runtime/provider-catalog.js";
 import { exportLocalModels, importLocalModels } from "./runtime/local-model-store.js";
 import { execEphemeralRequest, type EphemeralExecRequest } from "./ephemeral-exec.js";
@@ -122,6 +123,7 @@ import { buildLinearTaskPrompt, getLinearIssue, linearBranchName } from "./linea
 import { PairingStore } from "./device-registry.js";
 import { IntegrationManager, type SessionIdRef } from "./integrations/index.js";
 import { listInstalledPlugins } from "./plugins/store.js";
+import { createCapabilitiesController } from "./controllers/capabilities.js";
 import { historyDelta, type HistoryCursor } from "./history-sync.js";
 import { MetadataStore, type MetadataSession } from "./metadata.js";
 import { resolveResumeRef, resumeRefFor } from "./session-ref.js";
@@ -146,6 +148,7 @@ import {
 import { ReplicationService } from "./session/replication-service.js";
 import type { ReplWireFrame } from "./session/replicator.js";
 import { createSessionNewDedupe } from "./session/session-new-dedupe.js";
+import { computeSessionContract, type SessionContractRuntimeFacts } from "./session/session-contract.js";
 import { evaluateForkPrereqs, blockingForkPrereqs, missingForkPrereqs, type ForkPrereqInput, type ForkPrereq } from "./session/fork-prereqs.js";
 import { SecretVault, resolveSecret } from "./secrets.js";
 import { deviceFlowClientId, requestDeviceCode, pollAccessTokenOnce, REPO_CONNECT_SCOPE, type DeviceCode } from "./github-device-auth.js";
@@ -179,7 +182,9 @@ import {
   MAX_AUDIO_BYTES,
   type SttProvider,
 } from "./stt.js";
+import { synthesizeOpenAiSpeech } from "./tts.js";
 import { seal, open } from "./e2e.js";
+import { RunDelegationService, parseDelegationSource, runToolProvider, type StartRunInput } from "./run-tools.js";
 import {
   ControlPlaneTaskPoller,
   resolveControlPlaneTaskConfig,
@@ -296,6 +301,9 @@ const settingsPath = path.join(appDir, "settings.json");
 // source. Any mutation to the registry re-emits that projection.
 const localModelsDir = appDir;
 const piModelsProjectionPath = path.join(piDir, "models.json");
+// Machine identity is needed here so loopback model entries can be scoped before
+// they are projected into Pi. Loading is idempotent and remains part of boot.
+const identity = NodeIdentity.load(appDir);
 
 // The local-model provider domain lives in its own controller (platform
 // modularization Phase 2). server.ts wires it with the node dirs, broadcast,
@@ -310,9 +318,17 @@ const modelController = createModelController({
   broadcast,
   refreshSessionAfterAuth,
   pushModelAuthToControlPlane,
+  machine: { id: identity.nodeId, name: identity.name },
 });
-const { writePiModelsProjection, localModelSummaries, broadcastLocalModels, persistLocalModelSave, persistLocalModelRemove } =
-  modelController;
+const {
+  writePiModelsProjection,
+  localModelSummaries,
+  broadcastLocalModels,
+  persistLocalModelSave,
+  persistLocalModelRemove,
+  discoverModelsOnMachine,
+  verifyModelEndpoint,
+} = modelController;
 void modelController.initLocalModelRegistry();
 
 // --- Rulesets (run-orchestration policy; docs/rulesets.md). --------------------
@@ -348,7 +364,6 @@ fs.mkdirSync(credsDir, { recursive: true, mode: 0o700 });
 if (migrateVaultDir(piDir, credsDir)) {
   console.log(`Migrated credential vault: ${piDir} -> ${credsDir}`);
 }
-const identity = NodeIdentity.load(appDir);
 const metadata = MetadataStore.load(appDir);
 // A fresh process has no live runtimes, so any persisted "working" status is
 // stale from a prior crash/kill. Clear it at boot; otherwise those sessions'
@@ -539,7 +554,57 @@ function resolveApproval(id: string, approved: boolean) {
   }
   return ok;
 }
-const integrations = new IntegrationManager(appDir, undefined, attachToChatForSession);
+async function delegatedRunRequest(pathname: string, init: RequestInit = {}): Promise<Record<string, unknown>> {
+  if (!sessionAdvertiseTarget) throw new Error("Hosted Runs are not configured. Run bivy setup first.");
+  const headers = new Headers(init.headers);
+  headers.set("authorization", `Bearer ${sessionAdvertiseTarget.enrollmentToken}`);
+  if (init.body) headers.set("content-type", "application/json");
+  const response = await fetch(`${sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "")}${pathname}`, { ...init, headers, signal: init.signal ?? AbortSignal.timeout(15_000) });
+  const body = await response.json().catch(() => ({})) as Record<string, unknown>;
+  if (!response.ok) throw new Error(typeof body.error === "string" ? body.error : `control plane returned ${response.status}`);
+  return body;
+}
+
+const runDelegation = new RunDelegationService({
+  parentContext: (sessionId) => {
+    const record = openSessions.get(sessionId);
+    return record ? { parentRunId: record.automationRunId, depth: record.delegationDepth } : undefined;
+  },
+  listRecent: async () => {
+    const body = await delegatedRunRequest("/node/automation-runs?limit=100");
+    return Array.isArray(body.runs) ? body.runs as Record<string, unknown>[] : [];
+  },
+  get: async (runId) => {
+    try { return await delegatedRunRequest(`/node/automation-runs/${encodeURIComponent(runId)}`); }
+    catch (error) { if (error instanceof Error && /not found/i.test(error.message)) return undefined; throw error; }
+  },
+  start: async (_sessionId, input: StartRunInput, provenance) => {
+    const machine = input.machine?.trim() || identity.name;
+    const nodes = await delegatedRunRequest("/nodes") as unknown;
+    const target = Array.isArray(nodes) ? nodes.find((node) => node && typeof node === "object" && (node as Record<string, unknown>).name === machine) as Record<string, unknown> | undefined : undefined;
+    const targetId = typeof target?.id === "string" ? target.id : machine === identity.name ? identity.nodeId : undefined;
+    if (!targetId) throw new Error(`Machine not found on this account: ${machine}`);
+    return delegatedRunRequest("/node/automation-runs", {
+      method: "POST",
+      body: JSON.stringify({
+        title: "Delegated Run",
+        body: `bivy-room-v1:${targetId}:${seal(pairingStore.roomKey(), input.instructions)}`,
+        repo: input.repo,
+        node: machine,
+        runtimeId: input.agent,
+        model: input.model,
+        approvalMode: input.safety?.approval,
+        sandbox: input.safety?.sandbox,
+        maxAttempts: input.safety?.maxAttempts ?? 2,
+        idempotencyKey: input.idempotencyKey,
+        parentSessionId: provenance.parentSessionId,
+        parentRunId: provenance.parentRunId,
+        delegationDepth: provenance.depth,
+      }),
+    });
+  },
+});
+const integrations = new IntegrationManager(appDir, undefined, attachToChatForSession, (ref) => runToolProvider(runDelegation, () => ref.current));
 const terminals = new TerminalManager();
 // Per-session agents: a node holds one AgentRuntime instance *per agent id*,
 // built lazily and cached, instead of a single global runtime. `defaultRuntimeId`
@@ -865,7 +930,7 @@ function startOAuthLoginSweeper(): void {
 // SessionRecord + its prompt helper types now live in ./session/record.ts (the
 // SessionEngine decomposition, step 2a) — imported at the top of this file.
 // Kept as a plain mutable data shape; server.ts still reads/writes fields in
-// place. See docs/internal/platform-modularization-plan.md.
+// place.
 
 // Options for createSession. `worktree` runs the session in an isolated git
 // worktree/branch (optional for manual sessions, forced for issue pickup);
@@ -1032,7 +1097,14 @@ function streamingBehaviorFrom(value: unknown): StreamingBehavior | undefined {
 }
 
 function promptOptionsFor(record: SessionRecord, requested?: unknown, images?: PromptImage[]): PromptOptions {
-  const streamingBehavior = streamingBehaviorFrom(requested) ?? (record.session.isStreaming ? "steer" : undefined);
+  // Default to steering only when a turn is genuinely in flight — judged from
+  // Bivy's own `isWorking` AND the runtime's `isStreaming`, not `isStreaming`
+  // alone (which can be stuck-true after a turn ends and would silently steer a
+  // fresh message into a dead turn). See resolveStreamingBehavior.
+  const streamingBehavior = resolveStreamingBehavior(streamingBehaviorFrom(requested), {
+    isWorking: record.isWorking,
+    isStreaming: record.session.isStreaming,
+  });
   return { ...(streamingBehavior ? { streamingBehavior } : {}), ...(images?.length ? { images } : {}) };
 }
 
@@ -1203,7 +1275,7 @@ function materializeAttachments(record: SessionRecord, files: DecodedAttachment[
 function recordAttachment(
   record: SessionRecord,
   bytes: Buffer,
-  opts: { name: string; mimeType: string; kind: "image" | "file"; caption?: string },
+  opts: { name: string; mimeType: string; kind: "image" | "file"; caption?: string; artifact?: boolean },
 ): { ref: AttachmentRef } | { error: string } {
   let ref: AttachmentRef;
   try {
@@ -1214,11 +1286,12 @@ function recordAttachment(
   (record.seenAttachmentHashes ??= new Set()).add(ref.hash);
   const entryId = `att-${randomBytes(8).toString("hex")}`;
   const caption = opts.caption ? String(opts.caption).slice(0, 2000) : undefined;
+  const artifact = Boolean(opts.artifact);
   // Anchor at the current base length so history replay interleaves the
   // attachment where it was emitted (see event-log outbound projection).
   const afterMessageCount = record.session.getMessages().length;
-  eventLog.appendOutboundAttachment(record.id, { afterMessageCount, id: entryId, ref, caption });
-  broadcast(stampSessionEvent({ type: "session.event", sessionId: record.id, event: { type: "attachment", id: entryId, ref, caption } }));
+  eventLog.appendOutboundAttachment(record.id, { afterMessageCount, id: entryId, ref, caption, artifact });
+  broadcast(stampSessionEvent({ type: "session.event", sessionId: record.id, event: { type: "attachment", id: entryId, ref, caption, ...(artifact ? { artifact } : {}) } }));
   return { ref };
 }
 
@@ -1231,7 +1304,7 @@ function recordAttachment(
  */
 function attachToChat(
   record: SessionRecord,
-  opts: { filePath: string; caption?: string; mimeType?: string; name?: string },
+  opts: { filePath: string; caption?: string; mimeType?: string; name?: string; artifact?: boolean },
 ): { ref: AttachmentRef } | { error: string } {
   const plan = planAttachment({
     workspaceDir: harnessDirFor(record),
@@ -1240,7 +1313,7 @@ function attachToChat(
     name: opts.name,
   });
   if (isAttachPlanError(plan)) return { error: plan.error };
-  return recordAttachment(record, plan.bytes, { name: plan.name, mimeType: plan.mimeType, kind: plan.kind, caption: opts.caption });
+  return recordAttachment(record, plan.bytes, { name: plan.name, mimeType: plan.mimeType, kind: plan.kind, caption: opts.caption, artifact: opts.artifact });
 }
 
 /** Extension guess for a passively-surfaced tool image, from its mime type. */
@@ -1297,7 +1370,7 @@ function handlePassiveToolImage(record: SessionRecord, event: Record<string, unk
  */
 function attachToChatForSession(
   sessionId: string,
-  opts: { filePath: string; caption?: string; mimeType?: string; name?: string },
+  opts: { filePath: string; caption?: string; mimeType?: string; name?: string; artifact?: boolean },
 ): { ref: AttachmentRef } | { error: string } {
   const record = openSessions.get(sessionId);
   if (!record) return { error: "Session not found" };
@@ -1399,6 +1472,47 @@ const {
   addSavedWorkspace,
   removeSavedWorkspace,
 } = createWorkspaceController({ readSettings, writeSettings, metadata });
+
+// The Machine capability inventory lives in its own controller (platform
+// modularization Phase 2, alongside the workspace/model/ruleset controllers
+// above). server.ts adapts the node's existing canonical stores — the agent
+// registry, credential vault, local-model registry, plugin store, and saved
+// workspace list — into the controller's plain fact shapes; the controller
+// itself owns the bounded Docker/GPU probing and result caching.
+const capabilitiesController = createCapabilitiesController({
+  listAgents: () =>
+    listRuntimes().map((runtime) => {
+      const maintained = runtime.source?.kind === "package" && runtime.source.location === "distribution";
+      return {
+        id: runtime.id,
+        label: runtime.displayName,
+        kind: maintained ? "maintained" as const : "custom" as const,
+        installed: runtime.status === "available",
+        ...(runtime.supportTier ? { supportTier: runtime.supportTier } : {}),
+      };
+    }),
+  listConfiguredProviderIds: async () => {
+    const configured = await createCredentialVault(credsDir, piDir).list();
+    return [...new Set(configured.map((entry) => entry.providerId))];
+  },
+  listLocalEndpoints: async () =>
+    (await localModelSummaries())
+      // Machine-scoped endpoints (see local-model-discovery.ts) belong to
+      // whichever Machine's loopback actually serves them; a synced entry
+      // for a *different* Machine must not inflate this one's inventory.
+      // Network-scoped custom endpoints have no owning Machine and always count.
+      .filter((provider) => provider.availableOnThisMachine)
+      .map((provider) => ({ id: provider.id, modelCount: provider.modelCount })),
+  listPlugins: () =>
+    listInstalledPlugins(appDir).map((plugin) => ({
+      id: plugin.id,
+      valid: Boolean(plugin.manifest) && plugin.errors.length === 0,
+      agentCount: plugin.manifest?.contributes.agents.length ?? 0,
+      ...(plugin.manifest?.metadata.name ? { name: plugin.manifest.metadata.name } : {}),
+      ...(plugin.manifest?.metadata.version ? { version: plugin.manifest.metadata.version } : {}),
+    })),
+  countWorkspaces: () => loadSavedWorkspaces().length,
+});
 
 function saveApprovalMode(mode: ApprovalMode) {
   const settings = readSettings();
@@ -1749,6 +1863,12 @@ const eventLog = new EventLog(eventLogDir, eventLogPath, redactSecrets, 500, (is
   record.warning = warning;
   broadcast({ type: "session.notice", sessionId: record.id, level: "error", message: warning });
 });
+
+function eventLogHealthForSession(sessionId: string): { state: "healthy" | "degraded"; operation?: "read" | "parse" | "append" | "rewrite"; at?: number } {
+  const issue = eventLogIssues.get(sessionId);
+  if (!issue) return { state: "healthy" };
+  return { state: "degraded", operation: issue.operation as "read" | "parse" | "append" | "rewrite", at: issue.at };
+}
 
 // Global content-addressed store for message attachments (images + files). Unlike
 // the per-session `.bivy-attachments/` worktree copy (kept so the agent can open
@@ -2108,6 +2228,11 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
     const stats = await collectNodeStats(nodeStatsOptsFor(msg.sessionId));
     ctx.reply({ type: "node.stats", stats });
   },
+  async "capabilities.get"(_msg, ctx) {
+    // Machine capability inventory for the Settings → Nodes panel. Reply only
+    // to the requesting client, mirroring node.stats above.
+    ctx.reply({ type: "capabilities", capabilities: await capabilitiesController.getCapabilities() });
+  },
   "session.rename"(msg, ctx) {
     const sid = String(msg.sessionId ?? "");
     const newName = String(msg.name ?? "").trim();
@@ -2152,6 +2277,9 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
   },
   async "repos.list"() {
     relay?.sendEvent({ type: "repos.list", ...(await listAccessibleRepos()) });
+  },
+  async "activation.readiness"(_msg, ctx) {
+    ctx.broadcast({ type: "activation.readiness", ...(await activationReadinessSnapshot()) });
   },
   // Web-driven "Connect GitHub" for the repo picker: start the node's device
   // flow, then poll it on GitHub's interval. Both answer with the same
@@ -2291,6 +2419,12 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
         forkedFrom: rec?.forkedFrom ?? meta?.forkedFrom,
         branch: rec?.worktree?.branch ?? meta?.branch,
         sandbox: rec?.sandbox ?? normalizeSandboxTier(meta?.sandbox),
+        approvalMode: rec?.approvalMode,
+        ephemeral: rec?.ephemeral,
+        executionProfile: rec ? (rec.ephemeral ? "isolated_customer_cloud" : "trusted_workstation") : undefined,
+        contract: rec?.contract ?? meta?.contract,
+        auditHealth: rec ? auditLog.health() : undefined,
+        eventLogHealth: rec ? eventLogHealthForSession(rec.id) : undefined,
         prUrl: rec?.prUrl ?? meta?.prUrl,
         prs: rec?.prs ?? meta?.prs,
         status: needsAction ? "needs_action" : (rec ? sessionState(rec).displayStatus : "saved"),
@@ -2624,6 +2758,11 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
   async "credentials.list"() {
     relay?.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
   },
+  async "credentials.account.export"(_msg, ctx) {
+    // This reply travels inside the already-paired E2E node channel. It contains
+    // API keys only; OAuth/ref/node-local material is excluded by the API.
+    ctx.reply({ type: "credentials.account.export", requestId: _msg.requestId, entries: await exportAccountApiKeys(credsDir) });
+  },
   async "credential.set"(msg, ctx) {
     try {
       const provider = String(msg.provider ?? "").trim().toLowerCase();
@@ -2663,6 +2802,21 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
       relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
     }
   },
+  // "Test connection": a bounded, non-secret liveness probe for one credential
+  // record (see credentials/api.ts testCredential). The reply carries only
+  // ok/at/reason — the credential's own token never leaves this handler.
+  async "credential.test"(msg, ctx) {
+    const provider = String(msg.provider ?? "").trim().toLowerCase();
+    const label = String(msg.label ?? "");
+    try {
+      const result = await testProviderCredential(credsDir, provider, label);
+      ctx.reply({ type: "credential.test.result", requestId: msg.requestId, provider, label, ...result });
+      relay?.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
+    } catch (error) {
+      ctx.reply({ type: "credential.test.result", requestId: msg.requestId, provider, label, ok: false, at: Date.now(), reason: "network_error" });
+      relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
+    }
+  },
   async "credentials.presets.get"() {
     relay?.sendEvent({ type: "credentials.presets", presets: getCredentialPresets(credsDir) });
   },
@@ -2691,14 +2845,29 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
   async "models.custom.presets"() {
     relay?.sendEvent({ type: "models.custom.presets", presets: await localModelPresets() });
   },
+  async "models.custom.discover"(_msg, ctx) {
+    try {
+      ctx.reply({ type: "models.custom.discover.ok", ...(await discoverModelsOnMachine()) });
+    } catch (error) {
+      ctx.reply({ type: "models.custom.discover.error", error: error instanceof Error ? error.message : String(error) });
+    }
+  },
+  async "models.custom.verify"(msg, ctx) {
+    try {
+      ctx.reply({ type: "models.custom.verify.ok", result: await verifyModelEndpoint(msg) });
+    } catch (error) {
+      ctx.reply({ type: "models.custom.verify.error", error: error instanceof Error ? error.message : String(error) });
+    }
+  },
   async "models.custom.save"(msg, ctx) {
     try {
       // The client sends the same field set as the REST body (baseUrl, api,
       // apiKey, models[], compat, name, providerId). persistLocalModelSave
       // broadcasts the refreshed list to every client, requester included.
-      await persistLocalModelSave((msg as any)?.spec ?? msg);
-      // Dedicated per-request ack — see the provider.apiKey comment above (#140).
-      ctx.reply({ type: "models.custom.save.ok", requestId: msg.requestId });
+      const result = await persistLocalModelSave((msg as any)?.spec ?? msg);
+      // Return the normalized (Machine-scoped) provider id so the PWA can make
+      // the imported model the next draft's explicit choice.
+      ctx.reply({ type: "models.custom.save.ok", requestId: msg.requestId, provider: result.id });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       relay?.sendEvent({ type: "session.error", error: message });
@@ -2760,6 +2929,20 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
       relay?.sendEvent({ type: "transcription", requestId, text });
     } catch (error) {
       relay?.sendEvent({ type: "transcription", requestId, error: error instanceof Error ? error.message : String(error) });
+    }
+  },
+  async synthesize(msg) {
+    const requestId = String(msg.requestId ?? "");
+    try {
+      const audio = await synthesizeOpenAiSpeech({
+        appDir,
+        text: String(msg.text ?? ""),
+        voice: msg.voice,
+        instructions: msg.instructions,
+      });
+      relay?.sendEvent({ type: "speech.audio", requestId, audio: audio.toString("base64"), mimeType: "audio/mpeg" });
+    } catch (error) {
+      relay?.sendEvent({ type: "speech.audio", requestId, error: error instanceof Error ? error.message : String(error) });
     }
   },
   // Session replication (docs/session-replication.md): the STANDBY receives a
@@ -3067,6 +3250,32 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
     const workspaceInput = typeof msg.workspace === "string" ? msg.workspace.trim() : "";
     const title = typeof msg.title === "string" ? msg.title : undefined;
     const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
+    // Prevent silent downgrade: for a "supported" (certified) agent whose live
+    // protection would be degraded, require the client to have explicitly
+    // acknowledged it (the picker's confirm-to-continue step) before this
+    // request is allowed to launch a session — checked before any side-effecting
+    // work (repo clone / worktree allocation) so a rejection is cheap. Gating
+    // facts (protectionLevel, executionMode, capabilities, supportTier) are all
+    // runtime-level, not workspace-policy-dependent, so this pre-creation check
+    // stays correct regardless of what per-workspace sandbox/approval policy
+    // resolves to afterward.
+    const acknowledgeReducedProtections = msg.acknowledgeReducedProtections === true;
+    const gateNow = new Date().toISOString();
+    const rt = getRuntime(agentFrom(msg) ?? defaultRuntimeId);
+    const gateContract = computeSessionContract(
+      { runtime: rt as SessionContractRuntimeFacts, preview: false, sandbox: sandboxFrom(msg), acknowledgedAt: acknowledgeReducedProtections ? gateNow : undefined },
+      gateNow,
+    );
+    if (gateContract.requiresAcknowledgement) {
+      relay?.sendEvent({
+        type: "session.error",
+        code: "reduced_protections_ack_required",
+        error: `${rt.displayName || rt.id} would run this session with reduced protections for a certified profile. Confirm to continue.`,
+        contract: gateContract,
+        requestId,
+      });
+      return;
+    }
     let record: SessionRecord;
     try {
       // Deduped by requestId so a client's post-reconnect retry adopts the
@@ -3094,6 +3303,14 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
       relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
       return;
     }
+    // Resolve once from the session's actual, now-known launch facts (final
+    // sandbox/approval after per-workspace policy) and store it — never
+    // live-recomputed later, so it can't silently "improve" behind the user.
+    record.contract = computeSessionContract(
+      { runtime: getRuntime(record.runtimeId) as SessionContractRuntimeFacts, preview: false, sandbox: record.sandbox, approvalMode: record.approvalMode, acknowledgedAt: acknowledgeReducedProtections ? gateNow : undefined },
+      gateNow,
+    );
+    persistSessionMetadata(record);
     relay?.sendEvent({
       ...transcripts.buildHistoryEvent({
         sessionId: record.id,
@@ -3720,6 +3937,20 @@ async function pushProviderSummaryToControlPlane() {
   }
 }
 
+// Owner-declared capability tags (node.capabilities in config.yaml) — pushed
+// once when the node opts into the hosted queue. Like other node.* boot
+// settings, a change made with `bivy config set node.capabilities` reaches the
+// control plane on the node's next restart (see config-cli.ts's usage text).
+async function pushCapabilitiesToControlPlane() {
+  if (!sessionAdvertiseTarget) return;
+  try {
+    const capabilities = canonicalNodeConfig.node?.capabilities ?? [];
+    await modelAuthFetch("/node/capabilities", { method: "PUT", body: JSON.stringify({ capabilities }) });
+  } catch (error) {
+    console.warn("[auth-sync] could not push capabilities:", (error as Error).message);
+  }
+}
+
 // Re-project the vault into Pi's plaintext auth.json when it changes while a
 // native `bivy run pi` TUI is live, so a credential that lands AFTER launch
 // (e.g. a login synced from another node, or a token refresh) reaches the
@@ -4120,6 +4351,16 @@ interface RunIssueOverrides {
   /** Cancellation for a control-plane-dispatched Run. Aborts the active runtime
    * turn; callers must still rely on the durable control-plane status. */
   signal?: AbortSignal;
+  correlation?: { runId: string; attempt: number; machineId: string };
+}
+
+function recordRunAuditCorrelation(record: SessionRecord, correlation?: RunIssueOverrides["correlation"]): void {
+  if (correlation) {
+    record.automationRunId = correlation.runId;
+    record.delegationDepth ??= 0;
+    persistSessionMetadata(record);
+    auditLog.record({ kind: "run.correlation", session: record.id, agent: record.runtimeId, ...correlation });
+  }
 }
 
 async function runIssueTask(cfg: GitHubTaskConfig, issue: GitHubIssue, overrides: RunIssueOverrides = {}) {
@@ -4166,6 +4407,7 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
           approvalMode: record.approvalMode,
           runtimeEnforcement: runtimeInfo?.protectionLevel,
           toolInterception: runtimeInfo?.capabilities?.toolInterception === true,
+          correlation: overrides.correlation,
         }) } : {}),
       });
     }
@@ -4268,6 +4510,7 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
   if (!record.worktree) throw new Error("worktree was not created for the issue session");
 
   try {
+    recordRunAuditCorrelation(record, overrides.correlation);
     emit(record, "started", `Started work on ${cfg.owner}/${cfg.repo}#${issue.number}.`);
     await runSessionTurn(record, buildTaskPrompt(issue, nodeGithubIssuePrompt()), overrides.signal);
     if (overrides.signal?.aborted) throw overrides.signal.reason ?? new Error("Run cancelled");
@@ -4293,6 +4536,7 @@ async function runIssueFollowUp(cfg: GitHubTaskConfig, issue: GitHubIssue, recor
   const wt = record.worktree;
   if (!wt) throw new Error("issue session has no worktree");
   try {
+    recordRunAuditCorrelation(record, overrides.correlation);
     emit(record, "started", `Follow-up on ${cfg.owner}/${cfg.repo}#${issue.number}.`);
 
     // Bring the branch up to date with the base before the agent starts its
@@ -4994,6 +5238,7 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
       approvalMode: approvalModeFrom(item.approvalMode),
       onEvidence: report,
       signal,
+      correlation: { runId: item.id, attempt: item.attempt ?? 1, machineId: identity.nodeId },
     });
     return;
   }
@@ -5045,7 +5290,8 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
   // definition name is metadata, not part of the instructions, so don't fold it
   // into the prompt. A scheduled chat message must arrive verbatim; the name is
   // only the run/session label.
-  const request = item.source === "schedule"
+  const delegatedProvenance = parseDelegationSource(item.source);
+  const request = item.source === "schedule" || delegatedProvenance
     ? (item.body || item.title)
     : item.body ? `${item.title}\n\n${item.body}` : item.title;
   // Plain chat messages (scheduled "message me later" reminders) skip the
@@ -5083,10 +5329,28 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
   // Preserve queue provenance for non-repo work. Repo-backed sessions retain
   // `repo:owner/repo`, which is required by branch push/PR detection.
   if (!parsedRepo && !record.worktree) record.source = `queue:${item.source}`;
+  record.automationRunId = item.id;
+  record.delegationDepth = delegatedProvenance?.depth ?? 0;
   record.approvalMode = safety.approval;
+  // A Run already has a deliberate, durable title. Make that the Session title
+  // and lock it before the first agent turn; otherwise the next message a human
+  // sends after the Run is mistaken for the Session's first naming prompt (the
+  // internal Run turn does not pass through the interactive prompt handler), so
+  // rows named after the Run suddenly become "status", "continue", etc.
+  sessionNamer.setSessionName(record, item.title);
+  persistSessionMetadata(record);
   if (item.model) {
     try { await record.session.setModel("", item.model); } catch {}
   }
+  // Record the session id with the control plane BEFORE the (potentially long)
+  // turn runs, not just after it completes. A machine restart mid-turn must leave
+  // the Run pointing at THIS session so a stale-lease reclaim resumes it
+  // (withResumeTarget derives an existing_session target from output.sessionId).
+  // Reporting only after runSessionTurn — as this path used to — meant an
+  // interrupted turn left output.sessionId unset, so the reclaim cold-started a
+  // duplicate session while the original sat abandoned on disk (two sidebar
+  // sessions for one Run). Mirrors the Linear path's create-then-report ordering.
+  await report({ output: { sessionId: record.id, branch: record.worktree?.branch } });
   const prompt = isMessage
     ? request
     : (parsedRepo || record.worktree)
@@ -5154,11 +5418,13 @@ function startControlPlaneTasksIfConfigured() {
   // it's installed on nothing (the app is inert until installed somewhere).
   // Re-run on every boot/connect so a later install is reflected.
   void reportGithubAppInstallations();
+  void pushCapabilitiesToControlPlane();
   if (controlPlanePoller) return;
   // Pass the node's own name so it auto-serves `bivy/<name>` — matching the label
   // the control plane routes to for a default node / `bivy/<node>` / `on <node>`,
-  // with no manual BIVY_NODE_LABEL needed.
-  const cfg = resolveControlPlaneTaskConfig(loadRelayConfig(appDir), process.env, identity.name);
+  // with no manual BIVY_NODE_LABEL needed. Also pass this node's own declared
+  // capabilities so the poller can gate/rank capability-requesting items.
+  const cfg = resolveControlPlaneTaskConfig(loadRelayConfig(appDir), process.env, identity.name, canonicalNodeConfig.node?.capabilities ?? []);
   if (!cfg) return;
   // Policy-driven run orchestration: classify a failed queue attempt into a
   // stable condition and decide retry / reroute / park instead of the historical
@@ -6129,6 +6395,7 @@ function sessionState(record: SessionRecord): SessionState {
     transportReachable: clients.size > 0 || Boolean(relay?.connected),
     processAlive,
     working: sessionBusy(record),
+    waitingBackground: (record.backgroundTaskCount ?? 0) > 0,
     awaitingInput: sessionHasPendingApproval(record),
     workspace: record.workspaceState ?? "clean",
     lastTurnFailed: Boolean(record.lastFailureAt),
@@ -6201,6 +6468,12 @@ function bivySessionEnvelope(record: SessionRecord): BivySessionRecord {
     lastActivityAt: isoFrom(record.workingStartedAt ?? touched, now),
     capabilities: rt.capabilities,
     sandbox: record.sandbox,
+    approvalMode: record.approvalMode,
+    ephemeral: record.ephemeral,
+    executionProfile: record.ephemeral ? "isolated_customer_cloud" : "trusted_workstation",
+    contract: record.contract,
+    auditHealth: auditLog.health(),
+    eventLogHealth: eventLogHealthForSession(record.id),
     repoSlug: gh.repoSlug,
     issueNumber: gh.issueNumber,
     issueUrl: issueUrl || record.githubIssueUrl,
@@ -6239,9 +6512,12 @@ function persistSessionMetadata(record: SessionRecord, status = sessionStatus(re
     workspace: record.workspace,
     source: record.source ?? "manual",
     forkedFrom: record.forkedFrom,
+    automationRunId: record.automationRunId,
+    delegationDepth: record.delegationDepth,
     runtimeId: record.runtimeId,
     sandbox: record.sandbox,
     agentName: getRuntime(record.runtimeId).displayName,
+    contract: record.contract,
     status,
     branch: record.worktree?.branch,
     worktree: record.worktree?.path,
@@ -6288,6 +6564,7 @@ function bivySessionEnvelopeFromSummary(s: SessionSummary & { agent: string; age
     // `rec` is undefined here (the live path returned above via bivySessionEnvelope),
     // so the tier comes from the persisted metadata row.
     sandbox: normalizeSandboxTier(meta?.sandbox),
+    contract: meta?.contract,
     repoSlug,
     issueNumber: gh.issueNumber,
     issueUrl,
@@ -7218,6 +7495,28 @@ function attachSessionListeners(record: SessionRecord) {
       persistSessionMetadata(record);
       broadcast({ type: "session.updated", sessionId: record.id, sessionFile: record.sessionFile, bivySession: bivySessionEnvelope(record) });
     }
+    if (event.type === "background_tasks_changed") {
+      const previous = record.backgroundTaskCount ?? 0;
+      const countValue = Number((event as Record<string, unknown>).count);
+      const count = Number.isSafeInteger(countValue) && countValue > 0 ? countValue : 0;
+      record.backgroundTaskCount = count;
+      touchSession(record);
+      persistSessionMetadata(record);
+      broadcastSessionState(record);
+      scheduleAdvertise();
+      // A background process ending is the real completion boundary when the
+      // agent already ended its turn. Do not claim the session finished while
+      // tests/builds it launched are still running.
+      if (previous > 0 && count === 0 && !sessionBusy(record)) {
+        void sendNotificationHint({
+          kind: "session_done",
+          sessionId: record.id,
+          targetSessionId: record.id,
+          title: "Background work finished",
+          body: `${sessionNotifyLabel(record)} finished its background tasks — tap to review the result.`,
+        });
+      }
+    }
     if ([
       "agent_start",
       "turn_start",
@@ -7377,7 +7676,7 @@ function attachSessionListeners(record: SessionRecord) {
           title: "Session hit an error",
           body: `${sessionNotifyLabel(record)} failed its last turn — tap to see what went wrong.`,
         });
-      } else if (!record.isWorking && !record.remoteActive) {
+      } else if (!record.isWorking && !record.remoteActive && (record.backgroundTaskCount ?? 0) === 0) {
         void sendNotificationHint({
           kind: "session_done",
           sessionId: record.id,
@@ -7690,7 +7989,7 @@ async function recoverRecordAfterAbort(record: SessionRecord): Promise<void> {
 }
 
 /** Shared Stop path for relay/web clients and the local HTTP/CLI API. */
-function abortSessionRecord(record: SessionRecord, emit: (event: unknown) => void = broadcast): void {
+function abortSessionRecord(record: SessionRecord, emit: (event: unknown) => void = broadcast): Promise<void> {
   // A wedged runtime may never resolve abort() or emit agent_end. Settle the
   // daemon and client first, then make the SDK abort best-effort. The synthetic
   // agent_end also closes running tool cards and drains visible follow-ups.
@@ -7709,6 +8008,7 @@ function abortSessionRecord(record: SessionRecord, emit: (event: unknown) => voi
     onAbortError: (error) => console.warn(`[session-abort] runtime abort failed for ${record.id}:`, error),
   });
   record.abortRecovery = recoverRecordAfterAbort(record);
+  return record.abortRecovery;
 }
 
 async function createSession(workspace = defaultWorkspace, sessionFile?: string, opts: CreateSessionOptions = {}) {
@@ -7882,7 +8182,25 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
   // bump it to now (only real activity should reorder the sidebar). A brand-new
   // session legitimately starts "active now".
   const resumedLastActive = requestedSessionFile ? metaLastActiveMs(storedMeta) : undefined;
-  const record: SessionRecord = { id: sessionId, session, runtimeId: rt.id, sandbox: sessionSandbox, approvalMode: sessionSafety.approval, workspace: sessionWorkspace, sessionFile: session.sessionFile, agentServiceAddress: attachedAddress ?? (rt as { agentServiceAddress?: string }).agentServiceAddress, worktree, source, prUrl: storedMeta?.prUrl, prs: storedMeta?.prs, lastTouchedAt: resumedLastActive ?? Date.now(), warning: modelFallbackMessage, ephemeral: opts.ephemeral, workspaceState: runGit(["status", "--porcelain", "--untracked-files=normal"], sessionWorkspace) ? "dirty" : "clean" };
+  // Rehydrate the persisted contract on resume/reopen (not recomputed — a
+  // stored contract reflects what the original launch actually got, per
+  // session-contract.ts). Brand-new sessions (no storedMeta) start undefined
+  // here; session.new stamps a freshly computed one right after creation.
+  // Rehydrating (rather than leaving this undefined for a resumed session)
+  // also avoids a persistSessionMetadata call later silently clobbering the
+  // stored contract with undefined via its `{...prev, ...input}` merge.
+  const record: SessionRecord = { id: sessionId, session, runtimeId: rt.id, sandbox: sessionSandbox, approvalMode: sessionSafety.approval, automationRunId: storedMeta?.automationRunId, delegationDepth: storedMeta?.delegationDepth, workspace: sessionWorkspace, sessionFile: session.sessionFile, agentServiceAddress: attachedAddress ?? (rt as { agentServiceAddress?: string }).agentServiceAddress, worktree, source, prUrl: storedMeta?.prUrl, prs: storedMeta?.prs, contract: storedMeta?.contract, lastTouchedAt: resumedLastActive ?? Date.now(), warning: modelFallbackMessage, ephemeral: opts.ephemeral, workspaceState: runGit(["status", "--porcelain", "--untracked-files=normal"], sessionWorkspace) ? "dirty" : "clean" };
+  // Migration: a session resumed/reopened from before this feature (or from a
+  // node that predates it) has no stored contract. Stamp an honest one now
+  // from currently-observed facts rather than leaving it blank forever or
+  // inventing what launch actually got years ago — the same "don't fabricate
+  // history" rule session-contract.ts applies elsewhere.
+  if (!record.contract) {
+    record.contract = computeSessionContract(
+      { runtime: getRuntime(rt.id) as SessionContractRuntimeFacts, preview: false, sandbox: sessionSandbox, approvalMode: sessionSafety.approval },
+      new Date().toISOString(),
+    );
+  }
   // Apply this session's sandbox network policy as a per-session egress proxy
   // (its own proxy/decider, never the node-global one). Opt-in via BIVY_SANDBOX_NET:
   // a read-only session then actually blocks outbound network even for a CLI agent
@@ -8709,6 +9027,17 @@ app.get("/api/diagnostics", (_req, res) => {
       approvalMode,
       relayConnected: Boolean(relay?.connected),
       turnRecoveries: turnWatchdog.turnRecoveryStats(),
+      turnRecoverySlo: turnWatchdog.turnRecoverySloStats(),
+      audit: auditLog.health(),
+      eventLog: {
+        ok: eventLog.health().ok,
+        pendingSessions: eventLog.health().pendingSessions,
+        affectedSessions: eventLogIssues.size,
+        issuesByOperation: [...eventLogIssues.values()].reduce<Record<string, number>>((counts, issue) => {
+          counts[issue.operation] = (counts[issue.operation] ?? 0) + 1;
+          return counts;
+        }, {}),
+      },
       plugins: (() => {
         const installed = listInstalledPlugins(appDir);
         return {
@@ -8726,6 +9055,20 @@ app.get("/api/diagnostics", (_req, res) => {
     generatedAt: new Date().toISOString(),
   });
   res.json(report);
+});
+
+// Machine capability inventory (capability discovery, not deep scanning): what
+// this Machine unlocks for agents — OS/arch, installed maintained/custom
+// agents, configured providers/local endpoints, Docker/GPU availability,
+// installed plugins, and a bounded workspace count. Backs `bivy capabilities`
+// and the PWA's Machine settings surface. See src/capabilities.ts for the
+// redaction/bounding rules applied before this ever leaves the process.
+app.get("/api/capabilities", async (_req, res, next) => {
+  try {
+    res.json(await capabilitiesController.getCapabilities());
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get("/api/status", (_req, res) => {
@@ -9063,6 +9406,25 @@ app.get("/api/models/custom", async (_req, res, next) => {
   }
 });
 
+app.post("/api/models/discover", async (_req, res, next) => {
+  try {
+    res.json(await discoverModelsOnMachine());
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/models/verify", async (req, res, next) => {
+  try {
+    res.json({ result: await verifyModelEndpoint(req.body || {}) });
+  } catch (error) {
+    if (error instanceof Error && /endpoint|URL|hostname|http:\/\//i.test(error.message)) {
+      return res.status(400).json({ error: error.message });
+    }
+    next(error);
+  }
+});
+
 app.post("/api/models/custom", async (req, res, next) => {
   try {
     const result = await persistLocalModelSave(req.body || {});
@@ -9309,12 +9671,12 @@ async function applySttConfigChange(body: {
   if (setKey && setKey.provider !== undefined) {
     const p = String(setKey.provider);
     if (!isSttProvider(p)) throw new Error(`Unknown speech provider: ${p}`);
-    setSttKey(appDir, p, String(setKey.value ?? ""));
+    await setSttKey(appDir, p, String(setKey.value ?? ""));
   }
   if (body.removeKey !== undefined) {
     const p = String(body.removeKey);
     if (!isSttProvider(p)) throw new Error(`Unknown speech provider: ${p}`);
-    removeSttKey(appDir, p);
+    await removeSttKey(appDir, p);
   }
   return getSttConfig(appDir);
 }
@@ -9364,6 +9726,20 @@ app.post("/api/transcribe", async (req, res) => {
     // 200 with an `error` field: the client resolves transcription through a
     // uniform result event across transports, so a failure must still carry a
     // readable message rather than a bare HTTP error the event layer drops.
+    res.json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.post("/api/speech", async (req, res) => {
+  try {
+    const audio = await synthesizeOpenAiSpeech({
+      appDir,
+      text: String(req.body?.text ?? ""),
+      voice: req.body?.voice,
+      instructions: req.body?.instructions,
+    });
+    res.json({ audio: audio.toString("base64"), mimeType: "audio/mpeg" });
+  } catch (error) {
     res.json({ error: error instanceof Error ? error.message : String(error) });
   }
 });
@@ -9660,6 +10036,24 @@ app.post("/api/session", async (req, res, next) => {
       parsed = parseRepo(repoInput);
       if (!parsed) return res.status(400).json({ error: `Invalid repository "${repoInput}" — use owner/repo.` });
     }
+    // Same downgrade gate as the relay session.new handler — this direct API
+    // route (CLI/scripted callers, no picker in front of it) must not launch a
+    // "supported" profile with degraded live protection any more silently than
+    // the PWA can.
+    const acknowledgeReducedProtections = req.body?.acknowledgeReducedProtections === true;
+    const gateNow = new Date().toISOString();
+    const rt = getRuntime(agentFrom(req.body ?? {}) ?? defaultRuntimeId);
+    const gateContract = computeSessionContract(
+      { runtime: rt as SessionContractRuntimeFacts, preview: false, sandbox: sandboxFrom(req.body ?? {}), acknowledgedAt: acknowledgeReducedProtections ? gateNow : undefined },
+      gateNow,
+    );
+    if (gateContract.requiresAcknowledgement) {
+      return res.status(409).json({
+        error: `${rt.displayName || rt.id} would run this session with reduced protections for a certified profile. Pass acknowledgeReducedProtections: true to confirm.`,
+        code: "reduced_protections_ack_required",
+        contract: gateContract,
+      });
+    }
     let session: SessionRecord;
     try {
       // Deduped by requestId so a direct client's post-reconnect retry adopts the
@@ -9676,6 +10070,11 @@ app.post("/api/session", async (req, res, next) => {
       if (parsed) return res.status(502).json({ error: `Could not clone ${parsed.slug}: ${error instanceof Error ? error.message : String(error)}` });
       throw error;
     }
+    session.contract = computeSessionContract(
+      { runtime: getRuntime(session.runtimeId) as SessionContractRuntimeFacts, preview: false, sandbox: session.sandbox, approvalMode: session.approvalMode, acknowledgedAt: acknowledgeReducedProtections ? gateNow : undefined },
+      gateNow,
+    );
+    persistSessionMetadata(session);
     res.json({ id: session.id, workspace: session.workspace, source: session.source, branch: session.worktree?.branch, prUrl: session.prUrl, sessionFile: session.sessionFile, name: session.session.getName(), runtimeId: session.runtimeId, agentName: getRuntime(session.runtimeId).displayName, model: publicModel(session.session.getCurrentModel(), session.session.getCurrentModel()), sessionState: sessionState(session) });
   } catch (error) {
     res.status(400).json({ error: actionableAgentError(agentFrom(req.body ?? {}) ?? defaultRuntimeId, error) });
@@ -10334,7 +10733,7 @@ app.get("/api/repos", async (_req, res) => {
 // flags, these checks run where the credential and repository access actually
 // live. Inconclusive provider/network failures remain "unknown" instead of
 // falsely blocking activation.
-app.get("/api/activation/readiness", async (_req, res) => {
+async function activationReadinessSnapshot() {
   const vault = createCredentialVault(credsDir, piDir);
   const configured = await vault.list();
   const anthropic = configured.some((entry) => entry.providerId === "anthropic")
@@ -10345,7 +10744,7 @@ app.get("/api/activation/readiness", async (_req, res) => {
     : undefined;
   const repos = await listAccessibleRepos();
   const repositoryChosen = Boolean(await gitRepoRoot(defaultWorkspace));
-  res.json({
+  return {
     credential: {
       configured: configured.length > 0,
       providers: configured.map((entry) => entry.providerId),
@@ -10362,7 +10761,11 @@ app.get("/api/activation/readiness", async (_req, res) => {
       authed: repos.authed,
       ...(repos.error ? { reason: repos.error } : {}),
     },
-  });
+  };
+}
+
+app.get("/api/activation/readiness", async (_req, res) => {
+  res.json(await activationReadinessSnapshot());
 });
 
 // Direct-transport (local PWA) equivalents of the github.connect.* commands.
@@ -10409,10 +10812,27 @@ app.post("/api/session/:id/attach", (req, res) => {
     caption: typeof req.body?.caption === "string" ? req.body.caption : undefined,
     mimeType: typeof req.body?.mimeType === "string" ? req.body.mimeType : undefined,
     name: typeof req.body?.name === "string" ? req.body.name : undefined,
+    artifact: req.body?.artifact === true,
   });
   if ("error" in result) return res.status(400).json({ error: result.error });
   const { hash, name, mimeType, size, kind } = result.ref;
   res.json({ ok: true, hash, name, mimeType, size, kind });
+});
+
+// Bivy-owned child Run tools for MCP agents. These use the exact same service as
+// Pi's native ToolProvider and remain behind /api authentication. The service
+// authorizes every status lookup against this parent Session's provenance.
+app.post("/api/session/:id/delegated-runs", async (req, res) => {
+  try { res.status(201).json(await runDelegation.startRun(String(req.params.id), req.body as StartRunInput)); }
+  catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
+});
+app.get("/api/session/:id/delegated-runs/:runId", async (req, res) => {
+  try { res.json(await runDelegation.getRunStatus(String(req.params.id), String(req.params.runId))); }
+  catch (error) { res.status(404).json({ error: error instanceof Error ? error.message : String(error) }); }
+});
+app.post("/api/session/:id/delegated-runs/:runId/wait", async (req, res) => {
+  try { res.json(await runDelegation.waitForRun(String(req.params.id), String(req.params.runId), Number(req.body?.timeoutSeconds), AbortSignal.timeout(305_000))); }
+  catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
 });
 
 app.post("/api/session/prompt", async (req, res, next) => {

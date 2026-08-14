@@ -1,18 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { AccountMe, AccountNode, AppState, CredentialPresetsView, CredentialRecordSummary, EphemeralNodeConfig, LocalModelPreset, LocalModelProvider, PairedDevice, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralModelKeyInfo, ProviderKeyInfo, ProviderSize, HostedAuditEvent, HostedMachineSummary, HostedProvisioningStatus } from "@bivy/core";
-import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint, ephemeralCostEstimate, ephemeralLifecyclePhase, formatEphemeralPrice } from "@bivy/core";
+import type { AccountMe, AccountNode, AppState, CredentialPresetsView, CredentialRecordSummary, EphemeralNodeConfig, LocalModelEndpointResult, LocalModelPreset, LocalModelProvider, PairedDevice, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralModelKeyInfo, ProviderKeyInfo, ProviderSize, HostedAuditEvent, HostedMachineSummary, HostedProvisioningStatus } from "@bivy/core";
+import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint, ephemeralCostEstimate, ephemeralLifecyclePhase, formatEphemeralPrice, deriveCredentialReadiness } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { OauthStep } from "./ProviderConnect.js";
 import { ImportSessionContent } from "./ImportSessionSheet.js";
+import { MachineCapabilitiesSection } from "./MachineCapabilities.js";
 import { currentThemeSetting, setTheme, type ThemeSetting } from "../theme.js";
 import { useModalEscape } from "../modalStack.js";
 import type { SettingsView } from "../router.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
+import { ChevronRightIcon, CloseIcon } from "./UiIcons.js";
+
+const VoiceSettings = lazy(() => import("./VoiceSettings.js").then((module) => ({ default: module.VoiceSettings })));
 
 // The view enumeration lives in router.ts (as `SettingsView`) so the router can
 // validate a `/settings/:view` path without importing this component module;
@@ -137,7 +141,7 @@ const TITLES: Record<View, string> = {
   import: "Import session",
   providers: "Keys & OAuth",
   models: "Local models",
-  voice: "Voice input",
+  voice: "Voice",
   github: "GitHub App",
   linear: "Linear",
   slack: "Slack",
@@ -158,7 +162,7 @@ const SEARCH_TERMS: Record<View, string> = {
   import: "session transcript file upload migrate",
   providers: "api key oauth openai anthropic google login credentials",
   models: "ollama local model endpoint",
-  voice: "microphone speech transcription",
+  voice: "microphone speech transcription read aloud reader text to speech voice tone speed",
   github: "github app repository installation issue pull request",
   linear: "linear workspace issue integration",
   slack: "slack workspace channel integration",
@@ -257,7 +261,7 @@ export function Settings({
       items: [
         { id: "appearance", label: "Appearance", icon: <IconAppearance /> },
         { id: "notifications", label: "Notifications", icon: <IconBell /> },
-        { id: "voice", label: "Voice input", icon: <IconMic /> },
+        { id: "voice", label: "Voice", icon: <IconMic /> },
         { id: "import", label: "Import session", icon: <IconImport /> },
       ],
     },
@@ -287,7 +291,7 @@ export function Settings({
         <aside className="settings-nav">
           <div className="settings-nav-top">
             <span className="settings-nav-heading">Settings</span>
-            <button className="settings-x" onClick={onClose} aria-label="Close settings">×</button>
+            <button className="settings-x" onClick={onClose} aria-label="Close settings"><CloseIcon /></button>
           </div>
           <div className="settings-search-wrap">
             <svg className="settings-search-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
@@ -317,7 +321,7 @@ export function Settings({
                     >
                       <span className="settings-nav-icon">{it.icon}</span>
                       <span className="settings-nav-label">{it.label}</span>
-                      <span className="settings-nav-chevron" aria-hidden>›</span>
+                      <span className="settings-nav-chevron"><ChevronRightIcon size={18} /></span>
                     </button>
                   ))}
                 </div>
@@ -340,15 +344,19 @@ export function Settings({
               </button>
             )}
             <h2 className="settings-head-title">{title}</h2>
-            <button className="settings-x settings-x-content" onClick={onClose} aria-label="Close settings">×</button>
+            <button className="settings-x settings-x-content" onClick={onClose} aria-label="Close settings"><CloseIcon /></button>
           </header>
           <div className="settings-body">
             {activeView === "appearance" && <AppearancePanel />}
             {activeView === "notifications" && <NotificationsPanel />}
             {activeView === "import" && <ImportPanel onImported={(id) => onImported?.(id)} />}
             {activeView === "providers" && <ProvidersPanel state={state} />}
-            {activeView === "models" && <LocalModelsPanel state={state} />}
-            {activeView === "voice" && <VoicePanel state={state} />}
+            {activeView === "models" && <LocalModelsPanel state={state} onStartWork={onClose} />}
+            {activeView === "voice" && (
+              <Suspense fallback={<div className="muted">Loading voice settings…</div>}>
+                <VoiceSettings state={state} />
+              </Suspense>
+            )}
             {/* github / linear / slack / queue / webhooks / rulesets moved to the
                 Automations hub — a deep link to any of them redirects there (see
                 the redirect effect above), so they render nothing here. */}
@@ -549,7 +557,7 @@ function nodeProviderSummary(n: AccountNode): { text: string; expired: boolean }
 // keys, plus password-manager references. The single "API key" field above is the
 // provider's `default` credential; this manages the extra labeled ones and each
 // one's cross-node sync (the per-credential opt-out).
-function ProviderCredentials({ providerId, records, presets }: { providerId: string; records: CredentialRecordSummary[]; presets: CredentialPresetsView | null }) {
+function ProviderCredentials({ providerId, records, presets, accountEmail }: { providerId: string; records: CredentialRecordSummary[]; presets: CredentialPresetsView | null; accountEmail?: string }) {
   const [label, setLabel] = useState("");
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
@@ -588,21 +596,24 @@ function ProviderCredentials({ providerId, records, presets }: { providerId: str
       {extra.length > 0 && (
         <div className="picker-list">
           {extra.map((r) => (
-            <div key={r.label} className="cred-row" style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0" }}>
-              <span style={{ fontWeight: 600 }}>{r.label}</span>
-              <span className="chip">{r.kind === "reference" ? "reference" : r.kind === "oauth" ? "OAuth" : "API key"}</span>
-              {r.origin === "agent-native" && <span className="chip">from agent</span>}
-              <span style={{ flex: 1 }} />
-              <button
-                className="link-btn"
-                title={r.sync === "account" ? "Syncs to your other machines — tap to keep on this machine only" : "Stays on this machine — tap to sync across your machines"}
-                onClick={() => controller.setCredentialSync(providerId, r.label, r.sync === "account" ? "node" : "account")}
-              >
-                {r.sync === "account" ? "Syncing" : "This machine only"}
-              </button>
-              <button className="link-btn danger" onClick={() => { controller.removeCredential(providerId, r.label); setTimeout(() => controller.listCredentialRecords(), 400); }}>
-                Remove
-              </button>
+            <div key={r.label} className="cred-row-group" style={{ padding: "6px 0" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontWeight: 600 }}>{r.label}</span>
+                <span className="chip">{r.kind === "reference" ? "reference" : r.kind === "oauth" ? "OAuth" : "API key"}</span>
+                {r.origin === "agent-native" && <span className="chip">from agent</span>}
+                <span style={{ flex: 1 }} />
+                <button
+                  className="link-btn"
+                  title={r.sync === "account" ? "Syncs to your other machines — tap to keep on this machine only" : "Stays on this machine — tap to sync across your machines"}
+                  onClick={() => controller.setCredentialSync(providerId, r.label, r.sync === "account" ? "node" : "account")}
+                >
+                  {r.sync === "account" ? "Syncing" : "This machine only"}
+                </button>
+                <button className="link-btn danger" onClick={() => { controller.removeCredential(providerId, r.label); setTimeout(() => controller.listCredentialRecords(), 400); }}>
+                  Remove
+                </button>
+              </div>
+              <CredentialReadinessRow providerId={providerId} record={r} accountEmail={accountEmail} />
             </div>
           ))}
         </div>
@@ -632,6 +643,73 @@ function ProviderCredentials({ providerId, records, presets }: { providerId: str
       )}
     </div>
   );
+}
+
+/** One credential's redacted provider × machine × agent readiness — who it
+ *  belongs to, whether it syncs across your machines, and whether it's been
+ *  verified to actually work — replacing a plain "Connected" boolean. Derived
+ *  by packages/core/src/credentialReadiness.ts, which never fabricates an
+ *  owner or a verification result it doesn't have. */
+function CredentialReadinessRow({ providerId, record, accountEmail }: { providerId: string; record: CredentialRecordSummary; accountEmail?: string }) {
+  const [testing, setTesting] = useState(false);
+  const [testErr, setTestErr] = useState<string | null>(null);
+  const readiness = deriveCredentialReadiness(record, accountEmail);
+  const verifiedLabel =
+    readiness.verified === "verified" ? `Verified ${relativeTime(readiness.lastVerifiedAt)}`
+    : readiness.verified === "failed" ? `Verification failed ${relativeTime(readiness.lastVerifiedAt)}`
+    : "Not yet verified";
+  return (
+    <div className="cred-readiness" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 4 }}>
+      <span className="muted small">{readiness.ownerLabel}</span>
+      <span className="muted small" aria-hidden>·</span>
+      <span className={`chip small ${readiness.verified === "verified" ? "ok" : readiness.verified === "failed" ? "warn" : ""}`}>{verifiedLabel}</span>
+      {readiness.testable && (
+        <button
+          type="button"
+          className="link-btn"
+          disabled={testing}
+          onClick={async () => {
+            setTesting(true);
+            setTestErr(null);
+            try {
+              const result = await controller.testCredential(providerId, record.label);
+              if (!result.ok) setTestErr(testFailureReason(result.reason));
+              controller.listCredentialRecords();
+            } catch {
+              setTestErr("Couldn't reach your machine to test this connection.");
+            } finally {
+              setTesting(false);
+            }
+          }}
+        >
+          {testing ? "Testing…" : "Test connection"}
+        </button>
+      )}
+      {testErr && <span className="muted small">{testErr}</span>}
+    </div>
+  );
+}
+
+function testFailureReason(reason?: string): string {
+  switch (reason) {
+    case "unauthorized": return "The provider rejected this credential.";
+    case "refresh_failed": return "Couldn't refresh the OAuth session.";
+    case "not_supported": return "This provider isn't testable yet.";
+    case "not_found": return "No credential to test.";
+    default: return "Couldn't reach the provider.";
+  }
+}
+
+function relativeTime(at?: number): string {
+  if (!at) return "";
+  const deltaSec = Math.max(0, Math.round((Date.now() - at) / 1000));
+  if (deltaSec < 60) return "just now";
+  const minutes = Math.round(deltaSec / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  return `${days}d ago`;
 }
 
 // The active-preset chooser at the top of Keys & OAuth. A preset picks which
@@ -694,6 +772,10 @@ function ProvidersPanel({ state }: { state: AppState }) {
   const [busy, setBusy] = useState(false);
   const [keyErr, setKeyErr] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<null | { title: string; message: string; label?: string; action: () => void }>(null);
+  // The signed-in account's own email, fetched once — used only to label an
+  // account-synced credential's redacted owner (see CredentialReadinessRow).
+  // Never fetched/shown in direct/self-host mode, which has no account.
+  const [accountEmail, setAccountEmail] = useState<string | undefined>(undefined);
   useEffect(() => {
     controller.listProviders();
     controller.listCredentialRecords();
@@ -701,6 +783,7 @@ function ProvidersPanel({ state }: { state: AppState }) {
     // Pull the node list (with each node's plaintext OAuth summary) so the
     // switcher can describe every node's login state up front.
     if (hosted) void controller.refreshNodes();
+    if (hosted) controller.fetchMe().then((me) => setAccountEmail(me?.account?.email)).catch(() => {});
   }, [hosted]);
   // Switching node reconnects the transport to a different daemon, so the
   // provider list open before the switch belongs to the old node — drop back to
@@ -826,13 +909,18 @@ function ProvidersPanel({ state }: { state: AppState }) {
             )}
           </>
         )}
-        <ProviderCredentials providerId={managing.id} records={state.credentialRecords} presets={state.credentialPresets} />
+        {(() => {
+          const defaultRecord = state.credentialRecords.find((r) => r.provider === managing.id && r.label === "default");
+          return defaultRecord ? <CredentialReadinessRow providerId={managing.id} record={defaultRecord} accountEmail={accountEmail} /> : null;
+        })()}
+        <ProviderCredentials providerId={managing.id} records={state.credentialRecords} presets={state.credentialPresets} accountEmail={accountEmail} />
       </div>
     );
   }
 
   return (
     <div className="settings-form">
+      <AccountApiKeys />
       {showNodePicker && (
         <>
           <p className="muted settings-intro">
@@ -880,7 +968,18 @@ function ProvidersPanel({ state }: { state: AppState }) {
               key={p.id}
               title={p.name || p.id}
               meta={p.configured ? (p.kind === "oauth" ? "OAuth token" : `API key${p.source ? ` · ${p.source}` : ""}`) : "Not connected"}
-              right={p.configured ? <span className="chip ok">Connected</span> : undefined}
+              right={(() => {
+                if (!p.configured) return undefined;
+                // A record in the vault gets the honest, never-overclaiming
+                // readiness label (only "Verified" once an actual test ran);
+                // an env-sourced credential has no record to test, so it keeps
+                // the plain "Connected" chip it always had.
+                const record = state.credentialRecords.find((r) => r.provider === p.id && r.label === "default");
+                const verified = record ? deriveCredentialReadiness(record, accountEmail).verified : undefined;
+                if (verified === "verified") return <span className="chip ok">Verified</span>;
+                if (verified === "failed") return <span className="chip warn">Verification failed</span>;
+                return <span className="chip ok">Connected</span>;
+              })()}
               onClick={() => setManagingId(p.id)}
             />
           ))}
@@ -968,10 +1067,15 @@ function draftFromPreset(p: LocalModelPreset): LocalModelDraft {
   };
 }
 
-function LocalModelsPanel({ state }: { state: AppState }) {
+function LocalModelsPanel({ state, onStartWork }: { state: AppState; onStartWork: () => void }) {
   const [draft, setDraft] = useState<LocalModelDraft | null>(null);
   const [busy, setBusy] = useState(false);
   const [saveErr, setSaveErr] = useState<string | null>(null);
+  const [verification, setVerification] = useState<LocalModelEndpointResult | null>(null);
+  const [discovered, setDiscovered] = useState<LocalModelEndpointResult[] | null>(null);
+  const [discovering, setDiscovering] = useState(false);
+  const [discoveryError, setDiscoveryError] = useState<string | null>(null);
+  const [discoveryMachine, setDiscoveryMachine] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<null | { title: string; message: string; action: () => void }>(null);
 
   useEffect(() => {
@@ -984,20 +1088,26 @@ function LocalModelsPanel({ state }: { state: AppState }) {
   // previous attempt, so it can't linger on an unrelated endpoint.
   const openDraft = (d: LocalModelDraft | null) => {
     setSaveErr(null);
+    setVerification(null);
     setDraft(d);
+  };
+  const startWithModel = (provider: string, model: { id: string; name?: string }) => {
+    controller.newSession();
+    controller.chooseModel({ id: model.id, label: model.name || model.id, provider });
+    onStartWork();
   };
 
   if (draft) {
     const canSave = draft.baseUrl.trim().length > 0 && !busy;
     const apiIsKnown = KNOWN_APIS.some((o) => o.value === draft.api);
     const isAzure = draft.api.toLowerCase().startsWith("azure");
-    const save = async () => {
+    const save = async (startWork = false) => {
       setBusy(true);
       setSaveErr(null);
       try {
         // Awaits the node's real ack instead of a blind timer that closed the
         // form (looking saved) even when the node rejected it — see #140.
-        await controller.saveLocalModel({
+        const provider = await controller.saveLocalModel({
           providerId: (draft.providerId || draft.name || "local").trim(),
           name: draft.name.trim() || undefined,
           baseUrl: draft.baseUrl.trim(),
@@ -1008,6 +1118,8 @@ function LocalModelsPanel({ state }: { state: AppState }) {
           models: parseModelLines(draft.models),
         });
         controller.listLocalModels();
+        const imported = parseModelLines(draft.models);
+        if (startWork && imported[0]) startWithModel(provider, imported[0]);
         setDraft(null);
       } catch (e) {
         setSaveErr(String((e as Error)?.message || e));
@@ -1020,13 +1132,12 @@ function LocalModelsPanel({ state }: { state: AppState }) {
         <button className="link-btn" onClick={() => openDraft(null)}>‹ All endpoints</button>
         <h3>{draft.editing ? draft.name || draft.providerId : "Add endpoint"}</h3>
         <p className="muted">
-          Any OpenAI-compatible server — Ollama, LM Studio, vLLM, SGLang, or a self-hosted / Azure endpoint.
+          Verify an OpenAI-compatible server, then import the models it actually reports. Ollama, LM Studio, vLLM,
+          SGLang, and custom endpoints are supported.
         </p>
         <p className="muted small">
-          This endpoint is account-wide, not just this machine: it syncs (encrypted) to every machine signed in to your
-          account, the same way provider keys do. A <code>localhost</code> base URL only resolves on the machine
-          that has it — another machine can use it only if it also runs the same server at that address locally. If
-          the server is reachable over the network, point the base URL at that machine's address instead.
+          A localhost endpoint is bound to this connected Machine and will not appear as usable on another Machine.
+          An explicitly entered network endpoint can be shared only where that URL is really reachable.
         </p>
 
         <label className="field-label">Display name</label>
@@ -1079,6 +1190,35 @@ function LocalModelsPanel({ state }: { state: AppState }) {
         />
         {draft.hasSavedApiKey && !draft.apiKey && <p className="muted small">An API key is saved. Leave this blank to keep it, or enter a new key to replace it.</p>}
 
+        <div className="row-actions">
+          <button
+            className="btn"
+            disabled={!draft.baseUrl.trim() || busy}
+            onClick={async () => {
+              setBusy(true); setSaveErr(null); setVerification(null);
+              try {
+                const result = await controller.verifyLocalModel(draft.baseUrl.trim(), draft.apiKey.trim() || undefined);
+                setVerification(result);
+                if (result.status === "ready") {
+                  const existing = parseModelLines(draft.models);
+                  const merged = [...existing, ...result.models].filter((model, index, all) => all.findIndex((candidate) => candidate.id === model.id) === index);
+                  set({ models: merged.map((model) => model.name && model.name !== model.id ? `${model.id} | ${model.name}` : model.id).join("\n") });
+                }
+              } catch (error) { setSaveErr(String((error as Error)?.message || error)); }
+              finally { setBusy(false); }
+            }}
+          >
+            {busy ? "Verifying…" : "Verify endpoint & list models"}
+          </button>
+        </div>
+        {verification && (
+          <div className={`banner inline ${verification.status === "ready" ? "success" : "error"}`}>
+            {verification.status === "ready"
+              ? `Verified on ${verification.machineName}: ${verification.models.length} model${verification.models.length === 1 ? "" : "s"} available.`
+              : `${verification.status.replace("_", " ")}: ${verification.detail || "No compatible catalog was returned."}`}
+          </div>
+        )}
+
         <label className="field-label">Models — one per line (<code>id</code> or <code>id | Name</code>)</label>
         <textarea
           className="picker-search"
@@ -1095,9 +1235,12 @@ function LocalModelsPanel({ state }: { state: AppState }) {
         )}
 
         <div className="row-actions">
-          <button className="btn primary" disabled={!canSave} onClick={save}>
-            {busy ? "Saving…" : draft.editing ? "Save changes" : "Add endpoint"}
+          <button className="btn primary" disabled={!canSave} onClick={() => void save(false)}>
+            {busy ? "Saving…" : draft.editing ? "Save changes" : "Import models"}
           </button>
+          {parseModelLines(draft.models).length > 0 && (
+            <button className="btn" disabled={!canSave} onClick={() => void save(true)}>Import & use in new session</button>
+          )}
           <button className="btn" onClick={() => openDraft(null)}>Cancel</button>
         </div>
         {saveErr && <div className="banner error inline">{saveErr}</div>}
@@ -1119,35 +1262,78 @@ function LocalModelsPanel({ state }: { state: AppState }) {
       )}
 
       <p className="muted settings-intro">
-        Endpoints here sync to every machine signed in to your account, the same as provider keys — they aren't scoped
-        to just this machine. A <code>localhost</code> base URL is only reachable from the machine that has it, so an
-        endpoint like Ollama's default needs that same server running on each machine that should use it.
+        Discover checks a short, fixed list of common localhost ports on the connected Machine only. It never scans
+        your LAN. Localhost models stay tied to the Machine that hosts them; explicit network endpoints remain available.
       </p>
 
+      <button
+        className="btn primary block"
+        disabled={discovering}
+        onClick={async () => {
+          setDiscovering(true); setDiscoveryError(null);
+          try {
+            const result = await controller.discoverLocalModels();
+            setDiscovered(result.endpoints);
+            setDiscoveryMachine(result.machineName);
+          } catch (error) { setDiscoveryError(String((error as Error)?.message || error)); }
+          finally { setDiscovering(false); }
+        }}
+      >
+        {discovering ? "Discovering on this Machine…" : "Discover on this Machine"}
+      </button>
+      {discoveryMachine && <p className="muted small">Results from <strong>{discoveryMachine}</strong>. They do not describe other Machines.</p>}
+      {discoveryError && <div className="banner error inline">{discoveryError}</div>}
+      {discovered && (
+        <div className="picker-list">
+          {discovered.map((endpoint) => (
+            <PickerItem
+              key={endpoint.candidateId || endpoint.baseUrl}
+              title={endpoint.name || endpoint.baseUrl}
+              meta={endpoint.status === "ready"
+                ? `${endpoint.models.length} model${endpoint.models.length === 1 ? "" : "s"} available on ${endpoint.machineName}`
+                : `${endpoint.status.replace("_", " ")} · ${endpoint.detail || "No compatible response"}`}
+              right={endpoint.status === "ready" ? <span className="chip ok">Import</span> : endpoint.status === "auth_required" ? <span className="chip warn">Add key</span> : <span className="chip warn">{endpoint.status.replace("_", " ")}</span>}
+              onClick={endpoint.status === "ready" || endpoint.status === "auth_required" ? () => openDraft({
+                ...draftFromPreset({ id: endpoint.candidateId || "local", name: endpoint.name || "Local models", baseUrl: endpoint.baseUrl, api: endpoint.api }),
+                models: endpoint.models.map((model) => model.name !== model.id ? `${model.id} | ${model.name}` : model.id).join("\n"),
+              }) : undefined}
+            />
+          ))}
+        </div>
+      )}
+
+      <label className="field-label">Configured for this account</label>
       <div className="picker-list">
         {state.localModels.length === 0 && <div className="picker-empty">No local or custom endpoints yet.</div>}
         {state.localModels.map((p) => (
           <PickerItem
             key={p.id}
             title={p.name || p.id}
-            meta={`${p.baseUrl} · ${p.modelCount} model${p.modelCount === 1 ? "" : "s"}${p.hasKey ? " · key" : ""}`}
+            meta={`${p.baseUrl} · ${p.modelCount} model${p.modelCount === 1 ? "" : "s"}${p.hasKey ? " · key" : ""} · ${p.scope === "machine" ? `hosted by ${p.machineName || "one Machine"}` : "network endpoint"}${p.availableOnThisMachine ? "" : " · unavailable on this Machine"}`}
             right={
-              <button
-                className="btn danger-ghost sm"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setConfirm({
-                    title: "Remove endpoint?",
-                    message: `Remove ${p.name || p.id}? This also removes its models.`,
-                    action: () => {
-                      controller.removeLocalModel(p.id);
-                      setTimeout(() => controller.listLocalModels(), 400);
-                    },
-                  });
-                }}
-              >
-                Remove
-              </button>
+              <div className="row-actions">
+                {p.availableOnThisMachine && p.models[0] && (
+                  <button className="btn sm" onClick={(e) => { e.stopPropagation(); startWithModel(p.id, p.models[0]!); }}>
+                    Use
+                  </button>
+                )}
+                <button
+                  className="btn danger-ghost sm"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setConfirm({
+                      title: "Remove endpoint?",
+                      message: `Remove ${p.name || p.id}? This also removes its models.`,
+                      action: () => {
+                        controller.removeLocalModel(p.id);
+                        setTimeout(() => controller.listLocalModels(), 400);
+                      },
+                    });
+                  }}
+                >
+                  Remove
+                </button>
+              </div>
             }
             onClick={() => openDraft(draftFromProvider(p))}
           />
@@ -1168,117 +1354,6 @@ function LocalModelsPanel({ state }: { state: AppState }) {
           </div>
         </>
       )}
-    </div>
-  );
-}
-
-// ---- Voice input (speech-to-text) ----
-function VoicePanel({ state }: { state: AppState }) {
-  const [keys, setKeys] = useState<Record<string, string>>({});
-  // Keyed by provider id, not a single shared flag — saving one provider's key
-  // used to disable Save for every other row too (#140).
-  const [busyId, setBusyId] = useState<string | null>(null);
-  const [errById, setErrById] = useState<Record<string, string>>({});
-  const [confirm, setConfirm] = useState<null | { title: string; message: string; action: () => void }>(null);
-  useEffect(() => {
-    controller.getSttConfig();
-  }, []);
-  const config = state.sttConfig;
-  const providers = config?.providers ?? [];
-
-  return (
-    <div className="settings-form">
-      {confirm && (
-        <ConfirmDialog
-          title={confirm.title}
-          message={confirm.message}
-          confirmLabel="Remove"
-          danger
-          onCancel={() => setConfirm(null)}
-          onConfirm={() => { confirm.action(); setConfirm(null); }}
-        />
-      )}
-      <p className="muted settings-intro">
-        Dictate into the composer with the mic button. With a key set, recordings are transcribed by your chosen
-        provider using the key stored on this node. With no key, voice falls back to your browser's built-in dictation
-        (no key needed, but lower accuracy). Note: <strong>Groq</strong> (fast Whisper hosting, key from console.groq.com)
-        is a different company from <strong>xAI / Grok</strong> — an xAI key won't work here, and xAI has no speech API.
-      </p>
-
-      <label className="field-label">Preferred provider</label>
-      <div className="seg-row">
-        {providers.map((p) => (
-          <button
-            key={p.id}
-            type="button"
-            className={`seg-btn${config?.provider === p.id ? " active" : ""}`}
-            onClick={() => controller.setSttProvider(p.id)}
-          >
-            {p.label}
-          </button>
-        ))}
-        {providers.length === 0 && <span className="muted">Loading…</span>}
-      </div>
-
-      {providers.map((p) => (
-        <div key={p.id} className="voice-provider">
-          <div className="voice-provider-head">
-            <span className="field-label">{p.label}</span>
-            {p.configured ? <span className="chip ok">Key set</span> : <span className="chip">No key</span>}
-          </div>
-          <div className="muted small">{p.model}</div>
-          <div className="row-actions">
-            <input
-              className="picker-search"
-              type="password"
-              value={keys[p.id] || ""}
-              placeholder={p.configured ? "Replace API key" : "Paste API key"}
-              onChange={(e) => setKeys((k) => ({ ...k, [p.id]: e.target.value }))}
-            />
-          </div>
-          <div className="row-actions">
-            <button
-              className="btn primary"
-              disabled={!(keys[p.id] || "").trim() || busyId === p.id}
-              onClick={async () => {
-                setBusyId(p.id);
-                setErrById((e) => ({ ...e, [p.id]: "" }));
-                try {
-                  // Awaits the node's real ack instead of a blind timer — see #140.
-                  await controller.saveSttKey(p.id, (keys[p.id] || "").trim());
-                  setKeys((k) => ({ ...k, [p.id]: "" }));
-                  // "Key set" chip is reactive off state.sttConfig — refresh it.
-                  controller.getSttConfig();
-                } catch (e) {
-                  setErrById((cur) => ({ ...cur, [p.id]: String((e as Error)?.message || e) }));
-                } finally {
-                  setBusyId(null);
-                }
-              }}
-            >
-              {busyId === p.id ? "Saving…" : "Save key"}
-            </button>
-            {p.configured && (
-              <button
-                className="btn danger-ghost"
-                onClick={() => setConfirm({
-                  title: "Remove speech key?",
-                  message: `Remove the stored ${p.label} key?`,
-                  action: () => {
-                    controller.removeSttKey(p.id);
-                    // stt.config.set (remove) has no direct ack — re-fetch so
-                    // the "Key set" chip reflects the node's real outcome.
-                    setTimeout(() => controller.getSttConfig(), 500);
-                  },
-                })}
-              >
-                Remove
-              </button>
-            )}
-          </div>
-          {errById[p.id] && <div className="banner error inline">{errById[p.id]}</div>}
-        </div>
-      ))}
     </div>
   );
 }
@@ -1407,6 +1482,8 @@ function NodesPanel({ state }: { state: AppState }) {
         </section>
       )}
 
+      <MachineCapabilitiesSection online={nodeOnline} />
+
       {!nodeOnline ? (
         <p className="muted">
           {state.status === "offline"
@@ -1486,8 +1563,9 @@ function NodesPanel({ state }: { state: AppState }) {
             <p className="muted small">{SANDBOX_TIERS.find((t) => t.id === form.defaultSandbox)?.hint}</p>
           </section>
 
-          <section className="settings-section">
-            <h4 className="settings-subhead">GitHub</h4>
+          <details className="settings-section settings-disclosure">
+            <summary className="settings-disclosure-summary">GitHub</summary>
+            <div className="settings-disclosure-body">
             <label className="field-label">GitHub session limit</label>
             <input
               className="picker-search"
@@ -1513,10 +1591,12 @@ function NodesPanel({ state }: { state: AppState }) {
             <div className="row-actions">
               <button className="btn" onClick={resetIssuePrompt}>Reset to default</button>
             </div>
-          </section>
+            </div>
+          </details>
 
-          <section className="settings-section">
-            <h4 className="settings-subhead">Session resume</h4>
+          <details className="settings-section settings-disclosure">
+            <summary className="settings-disclosure-summary">Session resume</summary>
+            <div className="settings-disclosure-body">
             <label className="field-label">After a restart interrupts a session</label>
             <div className="seg-row">
               {([
@@ -1539,10 +1619,12 @@ function NodesPanel({ state }: { state: AppState }) {
                 ? "Interrupted sessions wait for you to tap Resume — nothing runs on its own. GitHub issue automation still resumes automatically."
                 : "The agent picks up an interrupted turn on its own after the machine restarts."}
             </p>
-          </section>
+            </div>
+          </details>
 
-          <section className="settings-section">
-            <h4 className="settings-subhead">Attachments</h4>
+          <details className="settings-section settings-disclosure">
+            <summary className="settings-disclosure-summary">Attachments</summary>
+            <div className="settings-disclosure-body">
             <div className="settings-toggle-row">
               <div className="settings-toggle-text">
                 <span className="settings-toggle-title">Auto-attach images from tool results</span>
@@ -1558,10 +1640,12 @@ function NodesPanel({ state }: { state: AppState }) {
                 label="Enable auto-attach for tool images"
               />
             </div>
-          </section>
+            </div>
+          </details>
 
-          <section className="settings-section">
-            <h4 className="settings-subhead">Session sync</h4>
+          <details className="settings-section settings-disclosure">
+            <summary className="settings-disclosure-summary">Session sync</summary>
+            <div className="settings-disclosure-body">
             <div className="settings-toggle-row">
               <div className="settings-toggle-text">
                 <span className="settings-toggle-title">Keep sessions synced to a standby machine</span>
@@ -1619,9 +1703,10 @@ function NodesPanel({ state }: { state: AppState }) {
                 </p>
               </>
             )}
-          </section>
+            </div>
+          </details>
 
-          <div className="row-actions">
+          <div className="row-actions settings-save-actions">
             <button className="btn primary" disabled={saving} onClick={save}>{saving ? "Saving…" : "Save"}</button>
             {savedMsg && <span className="chip ok">{savedMsg}</span>}
             {saveErr && <span className="chip err">{saveErr}</span>}
@@ -1750,7 +1835,6 @@ function EphemeralPanel() {
         })}
       </div>
       <EphemeralTokenSync />
-      <EphemeralModelKeys />
       {!controller.direct && <HostedRunnerManagement />}
     </div>
   );
@@ -1911,10 +1995,11 @@ const COMMON_MODEL_PROVIDERS = [
   "openrouter", "deepseek", "xai", "together", "fireworks", "cohere",
 ];
 
-function EphemeralModelKeys() {
+function AccountApiKeys() {
   const [keys, setKeys] = useState<EphemeralModelKeyInfo[]>([]);
   const [provider, setProvider] = useState("");
   const [key, setKey] = useState("");
+  const [scope, setScope] = useState<"account" | "device">("account");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -1927,10 +2012,10 @@ function EphemeralModelKeys() {
     setMsg(null);
     setErr(null);
     try {
-      await controller.setEphemeralModelKey(provider, key);
+      await controller.setEphemeralModelKey(provider, key, scope);
       setProvider("");
       setKey("");
-      setMsg("Saved on this device.");
+      setMsg(scope === "account" ? "Saved to your end-to-end encrypted account vault." : "Saved on this device only.");
       refresh();
     } catch (e) {
       setErr(String((e as Error)?.message || e));
@@ -1941,11 +2026,11 @@ function EphemeralModelKeys() {
 
   return (
     <section className="settings-section">
-      <h4 className="settings-subhead">Model keys for new machines</h4>
+      <h4 className="settings-subhead">Account API keys</h4>
       <p className="muted small">
-        API keys kept on this device and pushed into a freshly-launched machine over its encrypted channel, so a
-        brand-new machine has model credentials even when it's your only machine. Never sent to our servers or baked into
-        the machine image. API keys only — agent subscription logins can't be seeded this way.
+        Add model and voice API keys here even before you own a machine. Account keys synchronize end-to-end with your
+        PWAs and are installed on persistent and isolated machines when they connect. The control plane stores only
+        ciphertext. OAuth subscription logins still require a machine-assisted sign-in.
       </p>
       {keys.length > 0 && (
         <div className="picker-list">
@@ -1953,7 +2038,7 @@ function EphemeralModelKeys() {
             <PickerItem
               key={k.provider}
               title={k.provider}
-              meta={k.configured ? "Key saved on this device" : "Not set"}
+              meta={k.configured ? (k.scope === "account" ? "Account · end-to-end encrypted" : "This device only") : "Not set"}
               right={
                 <button
                   type="button"
@@ -1973,7 +2058,7 @@ function EphemeralModelKeys() {
       {confirmRemove && (
         <ConfirmDialog
           title="Remove model key?"
-          message={`Forget the ${confirmRemove} model key on this device? New machines won't be seeded with it.`}
+          message={`Forget the ${confirmRemove} API key from this device vault?`}
           confirmLabel="Remove"
           danger
           onCancel={() => setConfirmRemove(null)}
@@ -2005,6 +2090,11 @@ function EphemeralModelKeys() {
         placeholder="Paste key"
         onChange={(e) => setKey(e.target.value)}
       />
+      <label className="field-label">Scope</label>
+      <select className="picker-search" value={scope} onChange={(e) => setScope(e.target.value as "account" | "device")}>
+        <option value="account">My account — E2E sync to devices and machines</option>
+        <option value="device">This device only</option>
+      </select>
       <button className="btn primary" disabled={busy || !provider.trim() || !key.trim()} onClick={save}>
         {busy ? "Saving…" : "Save key"}
       </button>

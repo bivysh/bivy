@@ -121,12 +121,15 @@ try {
   let output = "";
   setup.stdout.on("data", (chunk) => { output += chunk.toString(); });
   setup.stderr.on("data", (chunk) => { output += chunk.toString(); });
-  setup.stdin.end("p\n");
+  setup.stdin.end("m\np\n");
   const code = await new Promise<number | null>((resolve) => setup.on("exit", resolve));
   assert.equal(code, 0, output);
   assert.match(output, /Which agent do you want to try first\?/);
-  assert.match(output, /\n\s+p\s+Pi \(default/);
   assert.match(output, /\n\s+c\s+Claude Code/);
+  assert.match(output, /\n\s+x\s+Codex/);
+  assert.match(output, /\n\s+m\s+More agents…/);
+  assert.match(output, /Choose another agent/);
+  assert.match(output, /\n\s+p\s+Pi/);
   assert.doesNotMatch(output, /p=Pi.*c=Claude Code/);
   assert.match(output, /Default agent: Pi/);
   assert.match(output, /Background-service install skipped/);

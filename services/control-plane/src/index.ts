@@ -2,13 +2,14 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import path from "node:path";
 import fs from "node:fs";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import express, { type Request, type Response, type NextFunction } from "express";
 import Stripe from "stripe";
 import webpush from "web-push";
-import { providerCredentialFingerprint, type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
-import { maybeAutoProvision, planAutoProvision, hostedExecutionReadiness, mintHostedInstallationToken, reapSettledHostedMachine, reconcileAllHostedMachines, reconcileAllReadyCapacity, validateHostedProviderToken, markHostedMachineMilestone, EPHEMERAL_MILESTONES, ephemeralMachinesEnabled } from "./ephemeral-provisioner.js";
+import { validateCapabilityTags } from "@bivy/core";
+import { providerCredentialFingerprint, type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, type AutomationRun, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
+import { maybeAutoProvision, planAutoProvision, hostedExecutionReadiness, mintHostedInstallationToken, reapSettledHostedMachine, reconcileAllHostedMachines, reconcileAllReadyCapacity, sweepAllOrphanProviderResources, validateHostedProviderToken, markHostedMachineMilestone, EPHEMERAL_MILESTONES, ephemeralMachinesEnabled } from "./ephemeral-provisioner.js";
 import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecret } from "./hosted-crypto.js";
 import { listAppInstallations, listInstallationRepositories } from "./hosted-github-auth.js";
 import { correlateHostedSessions } from "./hosted-correlation.js";
@@ -17,7 +18,7 @@ import { createStore } from "./store-factory.js";
 import { AutomationScheduler, nextOccurrence, normalizeSchedule } from "./schedule.js";
 import { parseShardUrls, shardForNode } from "./relay-shards.js";
 import { safeReturnPath } from "./redirect.js";
-import { register, httpMetricsMiddleware, bindRelayTicketMetrics, startUsageCollector, recordFunnelEvent, recordDurableRunLifecycleResult, recordRunFailureStage, classifyRunFailureStage } from "./metrics.js";
+import { register, httpMetricsMiddleware, bindRelayTicketMetrics, startUsageCollector, recordFunnelEvent, recordDurableRunLifecycleResult, recordRunFailureStage, classifyRunFailureStage, recordProductEvent, PRODUCT_EVENT_VALUES, PRODUCT_CLIENT_VALUES, type ProductEvent, type ProductClient } from "./metrics.js";
 import { initSentry } from "./instrument.js";
 import { sanitizeEvidencePatch } from "./run-evidence.js";
 import {
@@ -50,8 +51,12 @@ import {
   sourceAutomationSeedInput,
   DEFAULT_FIX_CI_PROMPT,
   normalizeEventRules,
+  evaluateAccountAutomation,
+  gatherPreflightSignals,
+  type PreflightSignalContext,
   type SourceTriggerKind,
 } from "./automation-match.js";
+import { gateFromChecks, runPreflightChecks, type EvaluationEvent, type GithubEventName as EvaluationGithubEventName } from "@bivy/automation-core";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -162,6 +167,19 @@ function relayHttpUrl(relayUrl: string): string {
   return relayUrl;
 }
 
+async function notifyRelaysRunUpdated(accountId: string, run: Pick<AutomationRun, "id" | "events" | "completedAt" | "startedAt" | "claimedAt" | "createdAt">) {
+  const revision = run.events?.at(-1)?.at ?? run.completedAt ?? run.startedAt ?? run.claimedAt ?? run.createdAt;
+  await Promise.allSettled(
+    relayShardUrls.map(async (url) => {
+      await fetch(`${relayHttpUrl(url).replace(/\/$/, "")}/internal/run-updated`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${process.env.RELAY_SECRET ?? "dev-relay-secret"}` },
+        body: JSON.stringify({ accountId, id: run.id, revision }),
+      });
+    }),
+  );
+}
+
 async function notifyRelaysWorkAvailable(
   accountId: string,
   item: { id: string; label: string },
@@ -179,6 +197,10 @@ async function notifyRelaysWorkAvailable(
       });
     }),
   );
+  // The same relay is also the active operator update channel. Enqueue callers
+  // have only routing metadata here, so use the id as a content-free revision;
+  // later lifecycle mutations publish their durable event timestamp.
+  void notifyRelaysRunUpdated(accountId, { id: item.id, createdAt: item.id });
   // Cancelling must never start a machine. Normal enqueue notifications retain
   // the unattended-provisioning check.
   if (options.autoProvision !== false) void maybeAutoProvision(store, accountId, provisionEnv());
@@ -259,6 +281,50 @@ async function runAllowance(accountId: string): Promise<{ limit?: number; used: 
   if (!enforceRunLimit) return { limit, used, warn: false, exhausted: false };
   return { limit, used, warn: used >= limit && used < limit + RUN_GRACE, exhausted: used >= limit + RUN_GRACE };
 }
+
+// Fetch every signal the shared preflight checklist (src/automation/preflight.ts,
+// via gatherPreflightSignals) needs, for one account. Shared by the create/update
+// save gate and the simulate endpoint so a draft and an already-saved automation
+// see identical checks.
+async function preflightSignalContext(accountId: string): Promise<PreflightSignalContext> {
+  const [hooks, nodes, allowance] = await Promise.all([
+    store.listInboundHooks(accountId),
+    store.listNodes(accountId),
+    runAllowance(accountId),
+  ]);
+  return { hooks, nodes, allowance };
+}
+
+// The event-fixture vocabulary documented in docs/automations-as-code.md and
+// accepted by `bivy automation test` — validated the same way config-as-code's
+// parseSimulationEvent validates it, so the simulate endpoint rejects the same
+// malformed fixtures the CLI would.
+function parseSimulationEventBody(value: unknown): EvaluationEvent {
+  if (!value || typeof value !== "object") throw new Error("event must be an object");
+  const o = value as Record<string, unknown>;
+  const kind = o.kind;
+  if (kind !== "github" && kind !== "linear" && kind !== "schedule" && kind !== "webhook" && kind !== "manual") {
+    throw new Error("event.kind must be github, linear, schedule, webhook, or manual");
+  }
+  const labels = o.labels === undefined ? undefined : normalizeStringList(o.labels, 50);
+  const repo = typeof o.repo === "string" ? normalizeAutomationRepo(o.repo) : undefined;
+  const githubEvents: EvaluationGithubEventName[] = ["issues", "issue_comment", "pull_request", "pull_request_review_comment", "workflow_run"];
+  const event = o.event === undefined ? undefined : String(o.event) as EvaluationGithubEventName;
+  if (kind === "github" && (!event || !githubEvents.includes(event))) {
+    throw new Error(`event.event is required for github fixtures and must be one of ${githubEvents.join(", ")}`);
+  }
+  return {
+    kind,
+    repo,
+    labels,
+    mention: o.mention === true,
+    event,
+    action: typeof o.action === "string" ? o.action : undefined,
+    conclusion: typeof o.conclusion === "string" ? o.conclusion : undefined,
+    workflow: typeof o.workflow === "string" ? o.workflow : undefined,
+  };
+}
+
 // The account's LIFETIME hosted-session trial status. On Bivy Cloud "free" is the
 // pre-subscription trial: the first `limit` distinct sessions surface through the
 // hosted app, then new ones are withheld and Pro is prompted. `enforced` is false
@@ -393,7 +459,12 @@ setInterval(pruneExpiredAuthTokens, 60 * 60_000).unref();
 // even when no new work arrives and the runner never reports /node/settled.
 // Cleanup deliberately ignores the launch feature flag: an emergency kill switch
 // must stop new spend without disabling deletion of resources already billing.
-const HOSTED_MACHINE_RECONCILE_MS = Math.max(60_000, Number(process.env.HOSTED_MACHINE_RECONCILE_MS) || 5 * 60_000);
+// Continuous convergence: this now runs on a short interval (default 60s, was
+// 5 minutes) so a create that never joins or a runner past TTL is observed and
+// destroyed promptly instead of waiting out a long, fixed sweep window — see
+// docs/ephemeral-lifecycle-review.md P1 "tracked state is not a convergent
+// controller model". Bounded to per-account tracked machines, which is small.
+const HOSTED_MACHINE_RECONCILE_MS = Math.max(60_000, Number(process.env.HOSTED_MACHINE_RECONCILE_MS) || 60_000);
 async function reconcileHostedMachineFleet() {
   try {
     const result = await reconcileAllHostedMachines(store, provisionEnv());
@@ -410,6 +481,28 @@ async function reconcileHostedMachineFleet() {
 }
 void reconcileHostedMachineFleet();
 setInterval(reconcileHostedMachineFleet, HOSTED_MACHINE_RECONCILE_MS).unref();
+
+// Discover-based orphan recovery (docs/ephemeral-lifecycle-review.md P1
+// "deletion needs discovery, not only a remembered id"): the one failure the
+// fast convergence sweep above can't catch is tracking itself being lost, so
+// this asks each provider directly for everything tagged as an account's and
+// reconciles anything neither the legacy inventory nor any attempt row still
+// knows about. Runs on its own, coarser interval — `discover` is a heavier,
+// multi-call provider operation with no business running every 60s — and
+// visits every hosted-enabled account, not only ones with something tracked.
+const HOSTED_ORPHAN_SWEEP_MS = Math.max(60_000, Number(process.env.HOSTED_ORPHAN_SWEEP_MS) || 5 * 60_000);
+async function sweepHostedOrphans() {
+  try {
+    const result = await sweepAllOrphanProviderResources(store, provisionEnv());
+    if (result.found || result.failed) {
+      console.log(`[hosted-orphan-sweep] accounts=${result.accounts} found=${result.found} reaped=${result.reaped} failed=${result.failed}`);
+    }
+  } catch (error) {
+    console.error("[hosted-orphan-sweep] account scan failed:", error);
+  }
+}
+void sweepHostedOrphans();
+setInterval(sweepHostedOrphans, HOSTED_ORPHAN_SWEEP_MS).unref();
 
 function securityHeaders(_req: Request, res: Response, next: NextFunction) {
   res.setHeader("X-Content-Type-Options", "nosniff");
@@ -700,7 +793,12 @@ h1{font-size:20px;margin:0 0 8px}p{color:#9aa6cf;margin:6px 0;line-height:1.45}
 // Send the device sign-in failure page, relaxing this one response's CSP just
 // enough to run the close-button snippet (whitelisted by hash) and its inline
 // styles; the global script-src stays 'self'-only for every other route.
-function sendSignInFailed(res: Response, status: number, detail: string): void {
+function sendSignInFailed(res: Response, status: number, detail: string, source: string): void {
+  // No account exists yet at a sign-in failure (that's the failure), so this
+  // uses the unauthenticated, low-cardinality funnel counter (see
+  // recordFunnelEvent) rather than the authenticated per-account product
+  // metrics — the same reason `sign_in_completed` below isn't tracked there.
+  recordFunnelEvent("sign_in_failed", source, "unknown");
   res.setHeader(
     "Content-Security-Policy",
     [
@@ -895,6 +993,16 @@ const requireNode = asyncHandler(async (req, res, next) => {
   next();
 });
 
+app.post("/account/product-events", requireUser, (req, res) => {
+  const event = String(req.body?.event ?? "") as ProductEvent;
+  const productClient = String(req.body?.client ?? "") as ProductClient;
+  if (!(PRODUCT_EVENT_VALUES as readonly string[]).includes(event) || !(PRODUCT_CLIENT_VALUES as readonly string[]).includes(productClient)) {
+    return res.status(400).json({ error: "Invalid product event" });
+  }
+  recordProductEvent(event, productClient);
+  res.status(204).end();
+});
+
 // --- Accounts -----------------------------------------------------------
 
 // Passwordless email sign-in. In production this requires RESEND_API_KEY.
@@ -912,7 +1020,10 @@ app.post("/auth/magic-link/start", asyncHandler(async (req, res) => {
 app.post("/auth/magic-link/consume", asyncHandler(async (req, res) => {
   const loginToken = String(req.body?.token ?? "").trim();
   const account = await store.consumeLoginToken(loginToken);
-  if (!account) return res.status(401).json({ error: "Invalid or expired login token" });
+  if (!account) {
+    recordFunnelEvent("sign_in_failed", "email_api", "unknown");
+    return res.status(401).json({ error: "Invalid or expired login token" });
+  }
   const token = await store.createSession(account.id);
   recordFunnelEvent("sign_in_completed", "email_api", account.plan);
   res.json({ ok: true, token, account: { id: account.id, email: account.email, plan: account.plan } });
@@ -922,7 +1033,7 @@ app.get("/auth/magic-link/consume", asyncHandler(async (req, res) => {
   const loginToken = String(req.query?.token ?? "").trim();
   const deviceId = String(req.query?.device ?? "").trim();
   const account = await store.consumeLoginToken(loginToken);
-  if (!account) return sendSignInFailed(res, 401, "This sign-in link is invalid or has expired. Request a new one from the sign-in screen.");
+  if (!account) return sendSignInFailed(res, 401, "This sign-in link is invalid or has expired. Request a new one from the sign-in screen.", deviceId ? "email_device" : "email_browser");
   // Device-login flow (hands-free CLI sign-in): mark the pending device login
   // complete and tell the user to return to their terminal. No session is
   // embedded here — the CLI mints it when it polls.
@@ -1030,8 +1141,9 @@ app.get("/auth/github/callback", asyncHandler(async (req, res) => {
         reason === "token-exchange"
           ? "Couldn't complete GitHub sign-in — the authorization code could not be exchanged. This is a server configuration issue; please try again in a moment."
           : "GitHub didn't return a verified email. Make sure your GitHub account has a verified email address and that you granted the email permission, then try again.";
-      return sendSignInFailed(res, 400, detail);
+      return sendSignInFailed(res, 400, detail, "github_device");
     }
+    recordFunnelEvent("sign_in_failed", "github_browser", "unknown");
     const path = safeReturnPath(stored.returnPath, "/");
     return res.redirect(`${path}${path.includes("?") ? "&" : "?"}authError=${errCode}`);
   }
@@ -1116,11 +1228,15 @@ app.get("/device-vault", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   const devicePub = String(req.query.device ?? "");
   const rec = devicePub ? await store.getDeviceVaultWrappedKey(account.id, devicePub) : undefined;
+  const vault = await store.getDeviceVault(account.id);
   res.json({
     ok: true,
-    vault: (await store.getDeviceVault(account.id))?.ciphertext ?? null,
-    wrappedKey: rec ? { wrappedKey: rec.wrappedKey, wrappedByPublicKeyB64: rec.wrappedByPublicKey } : null,
+    vault: vault?.ciphertext ?? null,
+    generation: vault?.generation ?? 0,
+    keyGeneration: vault?.keyGeneration ?? 0,
+    wrappedKey: rec ? { wrappedKey: rec.wrappedKey, wrappedByPublicKeyB64: rec.wrappedByPublicKey, generation: rec.generation } : null,
     requests: devicePub ? (await store.listDeviceVaultKeyRequests(account.id, devicePub)).map((r) => r.devicePublicKey) : [],
+    recipients: (await store.listPairedDevices(account.id)).map((device) => device.id),
   });
 }));
 
@@ -1128,9 +1244,11 @@ app.put("/device-vault", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   const devicePub = String(req.body?.devicePublicKeyB64 ?? "");
   const ciphertext = String(req.body?.ciphertext ?? "");
-  if (!devicePub || !ciphertext) { res.status(400).json({ error: "devicePublicKeyB64 and ciphertext required" }); return; }
-  await store.setDeviceVault(account.id, devicePub, ciphertext);
-  res.json({ ok: true });
+  const expectedGeneration = Number(req.body?.expectedGeneration ?? 0);
+  const keyGeneration = Number(req.body?.keyGeneration ?? 0);
+  if (!devicePub || !ciphertext || !Number.isSafeInteger(expectedGeneration) || !Number.isSafeInteger(keyGeneration)) { res.status(400).json({ error: "devicePublicKeyB64, ciphertext and valid generations required" }); return; }
+  const updated = await store.setDeviceVault(account.id, devicePub, ciphertext, expectedGeneration, keyGeneration);
+  res.json({ ok: true, generation: updated.generation });
 }));
 
 app.post("/device-vault/key/request", requireUser, asyncHandler(async (req, res) => {
@@ -1146,8 +1264,9 @@ app.put("/device-vault/key/wrapped", requireUser, asyncHandler(async (req, res) 
   const target = String(req.body?.targetDevicePublicKeyB64 ?? "");
   const wrappedByPublicKey = String(req.body?.wrappedByPublicKeyB64 ?? "");
   const wrappedKey = String(req.body?.wrappedKey ?? "");
-  if (!target || !wrappedByPublicKey || !wrappedKey) { res.status(400).json({ error: "target, wrappedBy and wrappedKey required" }); return; }
-  await store.setDeviceVaultWrappedKey(account.id, target, wrappedByPublicKey, wrappedKey);
+  const generation = Number(req.body?.generation ?? 0);
+  if (!target || !wrappedByPublicKey || !wrappedKey || !Number.isSafeInteger(generation)) { res.status(400).json({ error: "target, wrappedBy, wrappedKey and generation required" }); return; }
+  await store.setDeviceVaultWrappedKey(account.id, target, wrappedByPublicKey, wrappedKey, generation);
   res.json({ ok: true });
 }));
 
@@ -1887,6 +2006,18 @@ app.put("/node/provider-summary", requireNode, asyncHandler(async (req, res) => 
   res.json({ ok: true });
 }));
 
+// Owner-declared capability tags (see NodeRecord.capabilities in store.ts) —
+// pushed by the node from its local node.capabilities config, overwritten
+// wholesale on every change. Assertions, not verified facts: the control
+// plane stores exactly what the owner declared and never re-checks it.
+app.put("/node/capabilities", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const result = validateCapabilityTags(req.body?.capabilities);
+  if (!result.ok) return res.status(400).json({ error: result.errors.join("; ") });
+  await store.setNodeCapabilities(node.id, result.tags);
+  res.json({ ok: true });
+}));
+
 // --- Work queue (E2 GitHub webhook sink, E4 Slack) ----------------------
 // Inbound front doors enqueue WorkItems; the node (outbound-only) pulls them.
 // The control plane only routes metadata — the node runs the work with its own
@@ -2388,6 +2519,47 @@ function publicAutomation(def: AutomationDefinition, req: Request) {
     : base;
 }
 
+function nodePublicAutomation(definition: AutomationDefinition, req: Request) {
+  const { accountId: _accountId, templateCiphertext: _templateCiphertext, ...safe } = publicAutomation(definition, req);
+  return safe;
+}
+
+async function dispatchAutomationDefinition(definition: AutomationDefinition) {
+  const run = await store.enqueueAutomationRun(definition.accountId, {
+    source: "manual",
+    triggerKind: "manual",
+    title: definition.name,
+    body: definition.templateCiphertext,
+    definitionId: definition.id,
+    label: definition.nodeLabel,
+    runtimeId: definition.runtimeId,
+    model: definition.model,
+    approvalMode: definition.approvalMode,
+    sandbox: definition.sandbox,
+    target: definition.target,
+    message: definition.message,
+    repo: definition.repo,
+  });
+  void notifyRelaysWorkAvailable(definition.accountId, { id: run.id, label: run.routing.nodeLabel });
+  return run;
+}
+
+// Node-authenticated operator surface used by `bivy automation list/trigger`.
+// An enrollment token is account-scoped and already authorizes this node to
+// receive account work; these routes make that same capability explicit for a
+// local operator without requiring a browser session token.
+app.get("/node/automations", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  res.json({ automations: (await store.listAutomationDefinitions(node.accountId)).map((d) => nodePublicAutomation(d, req)) });
+}));
+
+app.post("/node/automations/:id/run", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const definition = await store.getAutomationDefinition(node.accountId, String(req.params.id));
+  if (!definition) return res.status(404).json({ error: "Automation not found" });
+  res.status(201).json(await dispatchAutomationDefinition(definition));
+}));
+
 // Node-authenticated reconciliation surface for `.bivy/automations.yaml`.
 // A definition applied from a node is deliberately bound to that node: its
 // instructions are encrypted with that node's room key, so allowing another
@@ -2483,6 +2655,75 @@ app.put("/node/automation-config/:key", requireNode, asyncHandler(async (req, re
   return res.status(201).json({ ...publicAutomation(created, req), ...(webhookSecret ? { webhookSecret } : {}) });
 }));
 
+// Start a one-off governed Run from the CLI. Unlike `bivy run`, this is
+// unattended queue work: the instruction is E2E-encrypted for this node, gets
+// checks/evidence, and does not leave behind an Automation definition.
+// Account-scoped Run inspection for local operators and agent orchestration.
+// Strip the encrypted instruction and inbound webhook context; callers receive
+// lifecycle/evidence/output references, not instruction bodies, transcripts,
+// diffs, file content, or raw tool/check output.
+function nodePublicRun(run: AutomationRun) {
+  const { accountId: _accountId, body: _body, eventContext: _eventContext, ...metadata } = run;
+  return metadata;
+}
+
+app.get("/node/automation-runs", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 30));
+  res.json({ runs: (await store.listAutomationRuns(node.accountId, limit)).map(nodePublicRun) });
+}));
+
+app.get("/node/automation-runs/:id", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const run = await store.getAutomationRun(node.accountId, String(req.params.id));
+  if (!run) return res.status(404).json({ error: "Run not found" });
+  res.json(nodePublicRun(run));
+}));
+
+app.post("/node/automation-runs", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const title = typeof req.body?.title === "string" ? req.body.title.trim() : "";
+  const body = typeof req.body?.body === "string" ? req.body.body : "";
+  if (!title || title.length > 120) return res.status(400).json({ error: "title is required and must be at most 120 characters" });
+  const machine = typeof req.body?.node === "string" && req.body.node.trim() ? req.body.node.trim() : node.name;
+  const targetNode = (await store.listNodes(node.accountId)).find((candidate) => candidate.name === machine);
+  if (!targetNode) return res.status(404).json({ error: "Machine not found" });
+  if (!body.startsWith(`bivy-room-v1:${targetNode.id}:`)) {
+    return res.status(400).json({ error: "instructions must be encrypted for the target Machine" });
+  }
+  const parentSessionId = typeof req.body?.parentSessionId === "string" ? req.body.parentSessionId.trim() : "";
+  const parentRunId = typeof req.body?.parentRunId === "string" ? req.body.parentRunId.trim() : "";
+  const delegationDepth = Number(req.body?.delegationDepth);
+  const delegated = Boolean(parentSessionId || parentRunId || req.body?.delegationDepth !== undefined);
+  if (delegated && (!parentSessionId || parentSessionId.length > 256 || (parentRunId && parentRunId.length > 256) || !Number.isInteger(delegationDepth) || delegationDepth < 1 || delegationDepth > 3)) {
+    return res.status(400).json({ error: "invalid bounded delegation provenance" });
+  }
+  const encodeRef = (value: string) => Buffer.from(value).toString("base64url");
+  const idempotencyKey = typeof req.body?.idempotencyKey === "string" ? req.body.idempotencyKey.trim() : "";
+  if (idempotencyKey.length > 128) return res.status(400).json({ error: "idempotencyKey must be at most 128 characters" });
+  const idempotencyDigest = idempotencyKey ? createHash("sha256").update(idempotencyKey).digest("base64url").slice(0, 22) : "";
+  const source = delegated ? `agent-delegation:v1:${delegationDepth}:${encodeRef(parentSessionId)}:${parentRunId ? encodeRef(parentRunId) : "-"}${idempotencyDigest ? `:${idempotencyDigest}` : ""}` : "manual";
+  let repo: string | undefined;
+  try { repo = normalizeAutomationRepo(req.body?.repo); }
+  catch (error) { return res.status(400).json({ error: (error as Error).message }); }
+  const approvalMode = req.body?.approvalMode ?? "risky";
+  const sandbox = req.body?.sandbox ?? "workspace-write";
+  const maxAttempts = Number(req.body?.maxAttempts ?? 2);
+  if (!["never", "risky", "always", "autonomous"].includes(approvalMode)) return res.status(400).json({ error: "unsupported approvalMode" });
+  if (!["read-only", "workspace-write", "danger-full-access"].includes(sandbox)) return res.status(400).json({ error: "unsupported sandbox" });
+  if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 10) return res.status(400).json({ error: "maxAttempts must be an integer from 1 to 10" });
+  const run = await store.enqueueAutomationRun(node.accountId, {
+    source, triggerKind: "manual", title, body, repo,
+    label: `bivy/${targetNode.name}`,
+    dedupeKey: idempotencyKey ? `delegation:${createHash("sha256").update(`${parentSessionId}\0${idempotencyKey}`).digest("base64url")}` : undefined,
+    runtimeId: typeof req.body?.runtimeId === "string" ? req.body.runtimeId.trim() || undefined : undefined,
+    model: typeof req.body?.model === "string" ? req.body.model.trim() || undefined : undefined,
+    approvalMode, sandbox, maxAttempts,
+  });
+  void notifyRelaysWorkAvailable(node.accountId, { id: run.id, label: run.routing.nodeLabel }, { nodeId: targetNode.id, autoProvision: false });
+  res.status(201).json(run);
+}));
+
 app.delete("/node/automation-config/:key", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const key = String(req.params.key ?? "");
@@ -2553,6 +2794,8 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
   let repos: string[] | undefined;
   let on: AutomationDefinition["on"] | undefined;
   let target: AutomationDefinition["target"];
+  let requiredCapabilities: string[] | undefined;
+  let preferredCapabilities: string[] | undefined;
   try {
     repo = normalizeAutomationRepo(req.body?.repo);
     labels = normalizeStringList(req.body?.labels);
@@ -2568,11 +2811,21 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
       if (!targetSessionId) return res.status(400).json({ error: "targetSessionId is required when targetKind is existing_session" });
       target = { kind: "existing_session", sessionId: targetSessionId };
     }
+    if (req.body?.requiredCapabilities !== undefined) {
+      const result = validateCapabilityTags(req.body.requiredCapabilities);
+      if (!result.ok) throw new Error(result.errors.join("; "));
+      requiredCapabilities = result.tags.length ? result.tags : undefined;
+    }
+    if (req.body?.preferredCapabilities !== undefined) {
+      const result = validateCapabilityTags(req.body.preferredCapabilities);
+      if (!result.ok) throw new Error(result.errors.join("; "));
+      preferredCapabilities = result.tags.length ? result.tags : undefined;
+    }
   } catch (error) {
     return res.status(400).json({ error: (error as Error).message });
   }
   const templateId = typeof req.body?.templateId === "string" ? req.body.templateId.trim() || undefined : undefined;
-  const definition = await store.createAutomationDefinition(client.accountId, {
+  const input: Omit<AutomationDefinition, "id" | "accountId" | "createdAt" | "updatedAt"> = {
     name,
     templateCiphertext: typeof req.body?.templateCiphertext === "string" ? req.body.templateCiphertext : undefined,
     runtimeId: typeof req.body?.runtimeId === "string" ? req.body.runtimeId : undefined,
@@ -2581,6 +2834,7 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
     ephemeral: typeof req.body?.ephemeral === "boolean" ? req.body.ephemeral : undefined,
     approvalMode: ["never", "risky", "always", "autonomous"].includes(req.body?.approvalMode) ? req.body.approvalMode : undefined,
     sandbox: ["read-only", "workspace-write", "danger-full-access"].includes(req.body?.sandbox) ? req.body.sandbox : undefined,
+    allowDangerous: req.body?.allowDangerous === true,
     maxAttempts: Number.isInteger(req.body?.maxAttempts) && req.body.maxAttempts >= 1 && req.body.maxAttempts <= 10 ? req.body.maxAttempts : undefined,
     enabled,
     trigger,
@@ -2594,7 +2848,17 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
     schedule,
     nextRunAt,
     message: req.body?.message === true,
-  });
+    requiredCapabilities,
+    preferredCapabilities,
+  };
+  // Close the gap where autonomous+danger-full-access was only hard-blocked by
+  // config-as-code parsing: every save path now runs the same shared preflight
+  // gate (see docs/automation-evaluator.md).
+  const gate = gateFromChecks(runPreflightChecks(gatherPreflightSignals(input, await preflightSignalContext(client.accountId))));
+  if (gate.blocked) {
+    return res.status(400).json({ error: gate.blockingChecks.map((c) => `${c.label}: ${c.detail}`).join("; "), preflight: gate.blockingChecks });
+  }
+  const definition = await store.createAutomationDefinition(client.accountId, input);
   // Return the signing secret exactly once (create). It's never echoed again.
   res.status(201).json({ ...publicAutomation(definition, req), ...(webhookSecret ? { webhookSecret } : {}) });
 }));
@@ -2636,6 +2900,8 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
   let repos = current.repos;
   let on = current.on;
   let target = current.target;
+  let requiredCapabilities = current.requiredCapabilities;
+  let preferredCapabilities = current.preferredCapabilities;
   try {
     if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "repo")) {
       // Empty string clears the workspace target.
@@ -2662,6 +2928,22 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
         target = undefined;
       }
     }
+    if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "requiredCapabilities")) {
+      if (req.body.requiredCapabilities === null) requiredCapabilities = undefined;
+      else {
+        const result = validateCapabilityTags(req.body.requiredCapabilities);
+        if (!result.ok) throw new Error(result.errors.join("; "));
+        requiredCapabilities = result.tags.length ? result.tags : undefined;
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "preferredCapabilities")) {
+      if (req.body.preferredCapabilities === null) preferredCapabilities = undefined;
+      else {
+        const result = validateCapabilityTags(req.body.preferredCapabilities);
+        if (!result.ok) throw new Error(result.errors.join("; "));
+        preferredCapabilities = result.tags.length ? result.tags : undefined;
+      }
+    }
   } catch (error) {
     return res.status(400).json({ error: (error as Error).message });
   }
@@ -2673,6 +2955,7 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
     nodeLabel: typeof req.body?.nodeLabel === "string" ? req.body.nodeLabel.trim() || undefined : current.nodeLabel,
     approvalMode: ["never", "risky", "always", "autonomous"].includes(req.body?.approvalMode) ? req.body.approvalMode : current.approvalMode,
     sandbox: ["read-only", "workspace-write", "danger-full-access"].includes(req.body?.sandbox) ? req.body.sandbox : current.sandbox,
+    allowDangerous: typeof req.body?.allowDangerous === "boolean" ? req.body.allowDangerous : current.allowDangerous,
     maxAttempts: Number.isInteger(req.body?.maxAttempts) && req.body.maxAttempts >= 1 && req.body.maxAttempts <= 10 ? req.body.maxAttempts : current.maxAttempts,
     enabled,
     schedule,
@@ -2684,7 +2967,16 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
     target,
     templateId: typeof req.body?.templateId === "string" ? req.body.templateId.trim() || undefined : current.templateId,
     message: typeof req.body?.message === "boolean" ? req.body.message : current.message,
+    requiredCapabilities,
+    preferredCapabilities,
   };
+  // Same save gate as create (see docs/automation-evaluator.md) — evaluated
+  // against the patched definition, not the stored one, so tightening (e.g.
+  // switching to autonomous + danger-full-access) is caught before it saves.
+  const gate = gateFromChecks(runPreflightChecks(gatherPreflightSignals({ ...current, ...patch }, await preflightSignalContext(client.accountId))));
+  if (gate.blocked) {
+    return res.status(400).json({ error: gate.blockingChecks.map((c) => `${c.label}: ${c.detail}`).join("; "), preflight: gate.blockingChecks });
+  }
   const updated = await store.updateAutomationDefinition(client.accountId, current.id, patch);
   res.json(updated ? publicAutomation(updated, req) : updated);
 }));
@@ -2713,28 +3005,111 @@ app.delete("/account/automations/:id", asyncHandler(async (req, res) => {
   res.status(204).end();
 }));
 
+// Fields the simulate endpoint accepts as a draft/patch — the same vocabulary
+// POST/PUT /account/automations accept, minus anything that only make sense
+// once a row exists (webhookSecret, configKey, ...). Shared by both simulate
+// branches: patching an existing automation to preview an edit, and
+// evaluating a brand-new draft that hasn't been saved yet.
+function draftAutomationPatch(body: Record<string, unknown>): Partial<AutomationDefinition> {
+  const patch: Partial<AutomationDefinition> = {};
+  if (typeof body.name === "string") patch.name = body.name.trim();
+  if (typeof body.trigger === "string") {
+    const t = body.trigger;
+    if (t !== "schedule" && t !== "webhook" && t !== "manual" && t !== "github" && t !== "linear" && t !== "github_ci") {
+      throw new Error("draft.trigger must be one of schedule, webhook, manual, github, linear, github_ci");
+    }
+    patch.trigger = t;
+  }
+  if (body.enabled !== undefined) patch.enabled = body.enabled !== false;
+  if (body.repo !== undefined) patch.repo = body.repo === null || body.repo === "" ? undefined : normalizeAutomationRepo(body.repo);
+  if (body.repos !== undefined) {
+    patch.repos = body.repos === null ? undefined : normalizeStringList(body.repos);
+    if (patch.repos) for (const r of patch.repos) normalizeAutomationRepo(r);
+  }
+  if (body.labels !== undefined) patch.labels = body.labels === null ? undefined : normalizeStringList(body.labels);
+  if (body.on !== undefined) patch.on = body.on === null ? undefined : normalizeEventRules(body.on);
+  if (typeof body.templateCiphertext === "string") patch.templateCiphertext = body.templateCiphertext;
+  if (typeof body.runtimeId === "string") patch.runtimeId = body.runtimeId.trim() || undefined;
+  if (typeof body.model === "string") patch.model = body.model.trim() || undefined;
+  if (typeof body.nodeLabel === "string") patch.nodeLabel = body.nodeLabel.trim() || undefined;
+  if (["never", "risky", "always", "autonomous"].includes(body.approvalMode as string)) patch.approvalMode = body.approvalMode as AutomationDefinition["approvalMode"];
+  if (["read-only", "workspace-write", "danger-full-access"].includes(body.sandbox as string)) patch.sandbox = body.sandbox as AutomationDefinition["sandbox"];
+  if (typeof body.allowDangerous === "boolean") patch.allowDangerous = body.allowDangerous;
+  return patch;
+}
+
+function buildSimulateDraft(accountId: string, body: Record<string, unknown>): AutomationDefinition {
+  const patch = draftAutomationPatch(body);
+  if (!patch.trigger) throw new Error("draft.trigger is required for a not-yet-saved automation");
+  const now = new Date().toISOString();
+  return {
+    id: `draft_${randomUUID()}`,
+    accountId,
+    name: patch.name || "Untitled automation",
+    enabled: patch.enabled ?? true,
+    trigger: patch.trigger,
+    schedule: SENTINEL_SCHEDULE,
+    createdAt: now,
+    updatedAt: now,
+    ...patch,
+  };
+}
+
+// Explain what would happen for a representative event WITHOUT creating a run
+// — the control-plane half of "Test event" (see docs/automation-evaluator.md
+// and packages/web/src/components/AutomationsView.tsx). Accepts either an
+// existing automation (optionally previewing an unsaved edit via `draft`) or a
+// brand-new draft that has never been saved.
+app.post("/account/automations/simulate", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const definitions = await store.listAutomationDefinitions(client.accountId);
+  const draftBody = req.body?.draft && typeof req.body.draft === "object" && !Array.isArray(req.body.draft)
+    ? req.body.draft as Record<string, unknown>
+    : undefined;
+  let subject: AutomationDefinition;
+  try {
+    if (typeof req.body?.automationId === "string") {
+      const existing = definitions.find((d) => d.id === req.body.automationId);
+      if (!existing) return res.status(404).json({ error: "Automation not found" });
+      subject = draftBody ? { ...existing, ...draftAutomationPatch(draftBody) } : existing;
+    } else {
+      if (!draftBody) return res.status(400).json({ error: "automationId or draft is required" });
+      subject = buildSimulateDraft(client.accountId, draftBody);
+    }
+  } catch (error) {
+    return res.status(400).json({ error: (error as Error).message });
+  }
+  let event: EvaluationEvent | undefined;
+  if (req.body?.event !== undefined) {
+    try {
+      event = parseSimulationEventBody(req.body.event);
+    } catch (error) {
+      return res.status(400).json({ error: (error as Error).message });
+    }
+  }
+  const ctx = await preflightSignalContext(client.accountId);
+  const result = evaluateAccountAutomation(subject, definitions, event, ctx);
+  res.json({
+    // The subject's id — a real id when previewing an existing automation
+    // (with or without a draft patch), or a synthetic never-persisted one for
+    // a brand-new draft. Lets the client identify "which row is mine" in
+    // `trail`/`overlaps` without needing to already know a not-yet-saved id.
+    subjectId: subject.id,
+    matchedId: result.match?.matched?.id,
+    trail: result.match?.trail ?? [],
+    overlaps: result.overlaps,
+    preflight: result.preflight,
+    gate: result.gate,
+  });
+}));
+
 app.post("/account/automations/:id/run", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const definition = await store.getAutomationDefinition(client.accountId, String(req.params.id));
   if (!definition) return res.status(404).json({ error: "Automation not found" });
-  const run = await store.enqueueAutomationRun(client.accountId, {
-    source: "manual",
-    triggerKind: "manual",
-    title: definition.name,
-    body: definition.templateCiphertext,
-    definitionId: definition.id,
-    label: definition.nodeLabel,
-    runtimeId: definition.runtimeId,
-    model: definition.model,
-    approvalMode: definition.approvalMode,
-    sandbox: definition.sandbox,
-    target: definition.target,
-    message: definition.message,
-    repo: definition.repo,
-  });
-  void notifyRelaysWorkAvailable(client.accountId, { id: run.id, label: run.routing.nodeLabel });
-  res.status(201).json(run);
+  res.status(201).json(await dispatchAutomationDefinition(definition));
 }));
 
 app.get("/account/automation-runs", asyncHandler(async (req, res) => {
@@ -2774,6 +3149,7 @@ app.post("/account/automation-runs/:id/cancel", asyncHandler(async (req, res) =>
   }
   if (result.transitioned) {
     recordDurableRunLifecycleResult(result.run, "cancelled");
+    void notifyRelaysRunUpdated(client.accountId, result.run);
     const owner = result.run.claimedByNodeId;
     if (owner) {
       void notifyRelaysWorkAvailable(client.accountId, { id: result.run.id, label: result.run.routing.nodeLabel }, {
@@ -2805,15 +3181,49 @@ app.post("/account/automation-runs", asyncHandler(async (req, res) => {
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const title = typeof req.body?.title === "string" ? req.body.title.trim() : "";
   if (!title) return res.status(400).json({ error: "title is required" });
+  const body = typeof req.body?.body === "string" ? req.body.body : undefined;
+  if (body && !body.startsWith("bivy-room-v1:")) return res.status(400).json({ error: "instructions must be end-to-end encrypted" });
+  let repo: string | undefined;
+  try { repo = normalizeAutomationRepo(req.body?.repo); }
+  catch (error) { return res.status(400).json({ error: (error as Error).message }); }
+  const approvalMode = ["never", "risky", "always", "autonomous"].includes(req.body?.approvalMode) ? req.body.approvalMode : undefined;
+  const sandbox = ["read-only", "workspace-write", "danger-full-access"].includes(req.body?.sandbox) ? req.body.sandbox : undefined;
+  const maxAttempts = Number(req.body?.maxAttempts ?? 2);
+  if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 10) return res.status(400).json({ error: "maxAttempts must be an integer from 1 to 10" });
+  const targetKind = req.body?.targetKind === "existing_session" ? "existing_session" : "new_session";
+  const targetSessionId = typeof req.body?.targetSessionId === "string" ? req.body.targetSessionId.trim() : "";
+  if (targetKind === "existing_session" && !targetSessionId) return res.status(400).json({ error: "targetSessionId is required when targetKind is existing_session" });
+  let requiredCapabilities: string[] | undefined;
+  let preferredCapabilities: string[] | undefined;
+  if (req.body?.requiredCapabilities !== undefined) {
+    const result = validateCapabilityTags(req.body.requiredCapabilities);
+    if (!result.ok) return res.status(400).json({ error: result.errors.join("; ") });
+    requiredCapabilities = result.tags.length ? result.tags : undefined;
+  }
+  if (req.body?.preferredCapabilities !== undefined) {
+    const result = validateCapabilityTags(req.body.preferredCapabilities);
+    if (!result.ok) return res.status(400).json({ error: result.errors.join("; ") });
+    preferredCapabilities = result.tags.length ? result.tags : undefined;
+  }
   const run = await store.enqueueAutomationRun(client.accountId, {
     source: "manual",
     triggerKind: "manual",
     title,
+    body,
+    repo,
     label: typeof req.body?.label === "string" ? req.body.label : undefined,
     definitionId: typeof req.body?.definitionId === "string" ? req.body.definitionId : undefined,
     dedupeKey: typeof req.body?.sourceKey === "string" ? req.body.sourceKey : undefined,
     runtimeId: typeof req.body?.runtimeId === "string" ? req.body.runtimeId : undefined,
     model: typeof req.body?.model === "string" ? req.body.model : undefined,
+    approvalMode,
+    sandbox,
+    maxAttempts,
+    target: targetKind === "existing_session"
+      ? { kind: "existing_session", sessionId: targetSessionId }
+      : { kind: "new_session" },
+    requiredCapabilities,
+    preferredCapabilities,
   });
   // Manual runs are real automation work too: wake connected nodes and, when
   // routing targets an ephemeral config, launch the unattended runner. Without
@@ -3027,7 +3437,16 @@ app.get("/account/hosted-machines", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const machines = await store.getHostedMachines(client.accountId);
-  res.json(machines.map((m) => ({
+  // Join in the durable attempt for lifecycle fields the legacy inventory row
+  // doesn't carry — phase, deadline, last provider-observed status, and the
+  // last error, so the PWA can show WHY a machine is stuck rather than just
+  // that it exists. Best-effort: a missing/unreadable attempt just omits them.
+  const machinesWithAttempts = await Promise.all(machines.map(async (m) => {
+    const attemptId = typeof m.attemptId === "string" ? m.attemptId : "";
+    const attempt = attemptId ? await store.getHostedMachineAttempt(client.accountId, attemptId).catch(() => undefined) : undefined;
+    return { m, attempt };
+  }));
+  res.json(machinesWithAttempts.map(({ m, attempt }) => ({
     id: typeof m.id === "string" ? m.id : "",
     nodeId: typeof m.nodeId === "string" ? m.nodeId : undefined,
     name: typeof m.name === "string" ? m.name : undefined,
@@ -3041,6 +3460,11 @@ app.get("/account/hosted-machines", asyncHandler(async (req, res) => {
     purpose: m.purpose === "queue-item" || m.purpose === "queue-default" || m.purpose === "ready-capacity" ? m.purpose : undefined,
     claimedAt: typeof m.claimedAt === "string" ? m.claimedAt : undefined,
     milestones: m.milestones && typeof m.milestones === "object" ? m.milestones : undefined,
+    lifecycleState: attempt?.state,
+    desiredState: attempt?.desiredState,
+    observedState: attempt?.observedState,
+    deadlineAt: attempt?.deadlineAt,
+    lastError: attempt?.lastError,
   })));
 }));
 
@@ -3584,6 +4008,10 @@ app.post("/node/work/:id/claim", requireNode, asyncHandler(async (req, res) => {
   }
   const item = await store.claimWorkItem(node.accountId, node.id, String(req.params.id));
   if (!item) return res.status(409).json({ error: "Already claimed or unknown" });
+  void notifyRelaysRunUpdated(node.accountId, {
+    id: item.id, events: item.events, completedAt: item.completedAt,
+    startedAt: item.startedAt, claimedAt: item.claimedAt, createdAt: item.createdAt,
+  });
   res.json({ ok: true, item });
 }));
 
@@ -3626,6 +4054,7 @@ app.post("/node/work/:id/complete", requireNode, asyncHandler(async (req, res) =
   // Compatibility for older nodes that skip the explicit /running transition.
   const started = await store.recordRunStart(node.accountId, `automation:${id}`);
   if (started) recordFunnelEvent("run_started", "automation", (await store.entitlements(node.accountId)).plan);
+  void notifyRelaysRunUpdated(node.accountId, run);
   res.json({ ok: true, run });
 }));
 
@@ -3640,6 +4069,7 @@ app.post("/node/work/:id/running", requireNode, asyncHandler(async (req, res) =>
   if (!run) return res.status(409).json({ error: "Run is no longer claimed by this node" });
   const started = await store.recordRunStart(node.accountId, `automation:${id}`);
   if (started) recordFunnelEvent("run_started", "automation", (await store.entitlements(node.accountId)).plan);
+  void notifyRelaysRunUpdated(node.accountId, run);
   res.json({ ok: true, run });
 }));
 
@@ -3656,6 +4086,7 @@ app.post("/node/work/:id/fail", requireNode, asyncHandler(async (req, res) => {
   if (!run) return res.status(409).json({ error: "Run already reached a terminal outcome or was reclaimed" });
   recordDurableRunLifecycleResult(run, "failed");
   recordRunFailureStage(classifyRunFailureStage(run));
+  void notifyRelaysRunUpdated(node.accountId, run);
   res.json({ ok: true, run });
 }));
 
@@ -3676,6 +4107,7 @@ app.post("/node/work/:id/needs-attention", requireNode, asyncHandler(async (req,
   if (!run) return res.status(409).json({ error: "Run already reached a terminal outcome or was reclaimed" });
   recordDurableRunLifecycleResult(run, "needs_attention");
   recordRunFailureStage(classifyRunFailureStage(run, true));
+  void notifyRelaysRunUpdated(node.accountId, run);
   res.json({ ok: true, run });
 }));
 
@@ -3700,8 +4132,9 @@ app.post("/node/work/:id/evidence", requireNode, asyncHandler(async (req, res) =
   } catch (error) {
     return res.status(400).json({ error: (error as Error).message });
   }
-  const run = await store.appendRunEvidence(node.accountId, id, patch);
-  if (!run) return res.status(404).json({ error: "Unknown run" });
+  const run = await store.appendRunEvidence(node.accountId, id, patch, node.id);
+  if (!run) return res.status(409).json({ error: "Run ownership changed before evidence was persisted" });
+  void notifyRelaysRunUpdated(node.accountId, run);
   res.json({ ok: true, run });
 }));
 

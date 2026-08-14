@@ -22,7 +22,23 @@ import {
   retryAutomationRun,
   fetchAutomationRun,
   RunFetchError,
+  recordProductMetric,
 } from "../src/index.js";
+
+describe("recordProductMetric", () => {
+  it("sends only fixed content-free event and client fields", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.s = "tok";
+    store.cp = "https://cp.test";
+    let request: { url?: string; init?: RequestInit } = {};
+    await recordProductMetric(store, "receipt_reviewed", "mobile", (async (url, init) => {
+      request = { url: String(url), init };
+      return new Response(null, { status: 204 });
+    }) as typeof fetch);
+    expect(request.url).toBe("https://cp.test/account/product-events");
+    expect(JSON.parse(String(request.init?.body))).toEqual({ event: "receipt_reviewed", client: "mobile" });
+  });
+});
 
 function mem(): Storage {
   const m = new Map<string, string>();

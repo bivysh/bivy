@@ -8,7 +8,6 @@ import { ForkSheet } from "./ForkSheet.js";
 import { sessionReferenceText, writeClipboard } from "../clipboard.js";
 import { routePath } from "../router.js";
 import { useModalEscape } from "../modalStack.js";
-import { openRun } from "../runRoute.js";
 
 // See SessionList's identical constant/rationale.
 const PR_BUSY_TIMEOUT_MS = 20000;
@@ -71,51 +70,6 @@ function ResumeCommandDialog({
   );
 }
 
-function DelegateSessionDialog({ sessionId, name, onCancel }: { sessionId: string; name: string; onCancel: () => void }) {
-  const [instruction, setInstruction] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const titleId = useId();
-  useModalEscape(onCancel, !busy);
-  const delegate = async () => {
-    setBusy(true);
-    setError("");
-    const result = await controller.delegateSession(sessionId, instruction);
-    if (result.runId) {
-      onCancel();
-      openRun(result.runId);
-      return;
-    }
-    setError(result.error ?? "Could not delegate this Session.");
-    setBusy(false);
-  };
-  return createPortal(
-    <div className="app-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId}>
-      <div className="app-dialog-backdrop" onClick={busy ? undefined : onCancel} />
-      <div className="app-dialog-body">
-        <h3 id={titleId}>Delegate this Session</h3>
-        <p>Tell the agent what to finish in “{name}.” Bivy creates a Run that waits for the current turn, resumes this same Session, and keeps working if you close the app.</p>
-        <textarea
-          className="picker-search"
-          rows={5}
-          value={instruction}
-          onChange={(event) => setInstruction(event.target.value)}
-          placeholder="For example: finish the implementation, run the tests, and open a pull request."
-          autoFocus
-          disabled={busy}
-        />
-        <p className="repo-connect-alt">If the Session cannot be resumed on its Machine, the Run fails visibly instead of starting without its context.</p>
-        {error && <div className="setup-error" role="alert">{error}</div>}
-        <div className="app-dialog-actions">
-          <button className="btn" onClick={onCancel} disabled={busy}>Cancel</button>
-          <button className="btn primary" onClick={delegate} disabled={busy || !instruction.trim()}>{busy ? "Delegating…" : "Delegate"}</button>
-        </div>
-      </div>
-    </div>,
-    document.body,
-  );
-}
-
 /**
  * Header dot-menu for the active session. Rendered as an inline popover
  * anchored to the header — the header isn't a scroll container, so it doesn't
@@ -131,6 +85,11 @@ export function SessionMenu({
   worktree,
   branch,
   sessionFile,
+  executionProfile,
+  effectiveProtection,
+  trustMode,
+  auditHealth,
+  eventLogHealth,
   onContinueInTerminal,
 }: {
   sessionId: string;
@@ -142,6 +101,16 @@ export function SessionMenu({
   worktree?: string;
   branch?: string;
   sessionFile?: string;
+  executionProfile?: string;
+  effectiveProtection?: string;
+  trustMode?: string;
+  auditHealth?: {
+    storage: "healthy" | "missing" | "corrupt" | "unreadable";
+    writes: "healthy" | "unknown" | "degraded";
+    failedWrites: number;
+    corruptLines: number;
+  };
+  eventLogHealth?: { state: "healthy" | "degraded"; operation?: "read" | "parse" | "append" | "rewrite"; at?: number };
   /** "Continue in terminal": hand this session to the runtime's interactive TUI.
    *  Undefined (item hidden) when the runtime lacks `interactiveTui` or the node
    *  is offline — the reverse of the terminal's "continue in chat". */
@@ -152,7 +121,6 @@ export function SessionMenu({
   const [deleting, setDeleting] = useState(false);
   const [forkOpen, setForkOpen] = useState(false);
   const [resumeOpen, setResumeOpen] = useState(false);
-  const [delegateOpen, setDelegateOpen] = useState(false);
   const [prBusy, setPrBusy] = useState(false);
   const { prResult, error } = useAppState();
   const prBusyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -239,7 +207,6 @@ export function SessionMenu({
       )}
       {forkOpen && <ForkSheet sessionId={sessionId} onClose={() => setForkOpen(false)} />}
       {resumeOpen && <ResumeCommandDialog sessionId={sessionId} name={name} onCancel={() => setResumeOpen(false)} />}
-      {delegateOpen && <DelegateSessionDialog sessionId={sessionId} name={name} onCancel={() => setDelegateOpen(false)} />}
       {deleting && (
         <ConfirmDialog
           title="Delete session?"
@@ -252,6 +219,23 @@ export function SessionMenu({
       )}
       {open && (
         <div className="session-actions-menu" role="menu">
+          <div className="session-actions-context" aria-label="Session protection context">
+            {executionProfile && <span><strong>Execution</strong>{executionProfile}</span>}
+            {effectiveProtection && <span><strong>Protection</strong>{effectiveProtection}</span>}
+            {trustMode && <span><strong>Connection</strong>{trustMode}</span>}
+          </div>
+          {auditHealth && (["corrupt", "unreadable"].includes(auditHealth.storage) || auditHealth.writes === "degraded") && (
+            <div className="session-actions-audit-warning" role="status">
+              <strong>Audit evidence degraded</strong>
+              <span>{auditHealth.writes === "degraded" ? `${auditHealth.failedWrites} audit write${auditHealth.failedWrites === 1 ? "" : "s"} failed.` : `Audit storage is ${auditHealth.storage}.`}</span>
+            </div>
+          )}
+          {eventLogHealth?.state === "degraded" && (
+            <div className="session-actions-audit-warning" role="status">
+              <strong>Session history persistence degraded</strong>
+              <span>The last {eventLogHealth.operation ?? "storage"} operation failed. History may be incomplete.</span>
+            </div>
+          )}
           <button className="session-actions-item" role="menuitem" onClick={copyReference} disabled={prBusy}>
             Copy session reference
           </button>
@@ -279,15 +263,6 @@ export function SessionMenu({
             title="Copy a `bivy resume` command to run on your own machine"
           >
             Continue in terminal locally…
-          </button>
-          <button
-            className="session-actions-item"
-            role="menuitem"
-            onClick={() => { close(); setDelegateOpen(true); }}
-            disabled={prBusy}
-            title="Create a background Run that continues this Session"
-          >
-            Delegate this Session…
           </button>
           {isRepo && (
             <button className="session-actions-item" role="menuitem" onClick={refreshPrStatus} disabled={prBusy}>

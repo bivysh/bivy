@@ -22,6 +22,7 @@ import {
   fetchSlackHook,
   runAutomationNow,
   rotateAutomationWebhook,
+  simulateAutomation,
   updateAutomation,
   importRoomKey,
   seal,
@@ -33,6 +34,10 @@ import {
   type AccountAutomation,
   type AccountAutomationRun,
   type AccountNode,
+  type AutomationPreflightSeverity,
+  type AutomationSimulationDraft,
+  type AutomationSimulationEvent,
+  type AutomationSimulationResult,
   type GithubAppInfo,
   type LinearHook,
   type SlackHook,
@@ -50,12 +55,16 @@ import { WorkQueueSetupSheet, type SourceSetupFocus } from "./WorkQueueSetupShee
 import { GithubQueuePanel } from "./GithubQueue.js";
 import { RulesetsPanel } from "./Rulesets.js";
 import { QueueRoutingSection } from "./QueueRouting.js";
+import { HostedMachinesPanel } from "./HostedMachines.js";
 import { takeAutomationsSetupFocus } from "../automationsRoute.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import type { AutomationsSection } from "../router.js";
 import type { GithubQueueItem } from "@bivy/core";
-import { isTerminalRun, projectRunDetail } from "../runDetail.js";
 import { ConfirmDialog } from "./AppDialog.js";
+import { CloseIcon, PlusIcon } from "./UiIcons.js";
+import { AutomationSourcesPanel } from "./AutomationSourcesPanel.js";
+import { RunHistory } from "./RunHistory.js";
+import { compactCronSummary, formatAutomationMoment, formatNextAutomationRun } from "../automationPresentation.js";
 
 const TEMPLATE_PREFIX = "bivy-room-v1";
 
@@ -128,8 +137,8 @@ function scheduleSummary(item: AccountAutomation): string {
   if (item.trigger === "linear") return `Linear · label ${labels}${repo || repos}${node}`;
   if (item.trigger === "webhook") return `Webhook · runs on a signed request${repo}`;
   if (!item.schedule) return `Scheduled${repo}`;
-  if (item.schedule.kind === "once") return `Once · ${new Date(item.schedule.at).toLocaleString()}${repo}`;
-  const when = describeCron(item.schedule.expression) || `${item.schedule.expression} · ${item.schedule.timezone}`;
+  if (item.schedule.kind === "once") return `Runs once · ${formatAutomationMoment(item.schedule.at)}${repo}`;
+  const when = compactCronSummary(item.schedule.expression) || describeCron(item.schedule.expression) || `${item.schedule.expression} · ${item.schedule.timezone}`;
   return `${when}${repo}`;
 }
 
@@ -201,6 +210,28 @@ function buildGithubOn(
   return on;
 }
 
+/**
+ * A representative event fixture for the editor's "Test event" workflow —
+ * derived from whichever GitHub event toggle (or the Linear label filter) is
+ * currently enabled, so testing needs no separate fixture-authoring step. The
+ * first enabled toggle wins, matching first-match's own "first wins"
+ * intuition; a source trigger with nothing enabled yet has nothing
+ * representative to test.
+ */
+function buildRepresentativeEvent(d: Draft): AutomationSimulationEvent | undefined {
+  const repo = d.repo.trim() || d.repos.split(/[,\n]/).map((v) => v.trim()).find(Boolean);
+  const labels = d.labels.split(/[,\n]/).map((v) => v.trim()).filter(Boolean);
+  const workflows = d.workflows.split(/[,\n]/).map((v) => v.trim()).filter(Boolean);
+  if (d.trigger === "linear") return { kind: "linear", repo, labels: labels.length ? labels : ["bivy"] };
+  if (d.trigger !== "github") return undefined;
+  if (d.githubEvents.issuesLabeled) return { kind: "github", repo, event: "issues", action: "labeled", labels: labels.length ? labels : ["bivy"] };
+  if (d.githubEvents.issueMention) return { kind: "github", repo, event: "issue_comment", mention: true };
+  if (d.githubEvents.prLabeled) return { kind: "github", repo, event: "pull_request", action: "labeled", labels: labels.length ? labels : ["bivy"] };
+  if (d.githubEvents.prMention) return { kind: "github", repo, event: "pull_request_review_comment", mention: true };
+  if (d.githubEvents.workflowFailed) return { kind: "github", repo, event: "workflow_run", action: "completed", conclusion: "failure", workflow: workflows[0] };
+  return undefined;
+}
+
 function nodeLabelSuffix(nodeLabel?: string): string {
   if (!nodeLabel) return "";
   return nodeLabel.startsWith("bivy/") ? nodeLabel.slice("bivy/".length) : nodeLabel;
@@ -268,22 +299,24 @@ function sourceAutomationChip(
   item: AccountAutomation,
   sources: SourcesSnapshot,
 ): { tone: "on" | "off" | "warn"; label: string } {
-  if (!item.enabled) return { tone: "off", label: "Paused" };
   const executorReady = sources.nodes.some((node) => node.online) || Boolean(sources.hosted?.execution.ready);
   if (item.trigger === "github" || item.trigger === "github_ci") {
     const gh = githubSourceStatus(sources.github, Boolean(sources.hosted?.execution.ready));
-    if (gh.tone === "off") return { tone: "warn", label: "Needs GitHub" };
-    if (gh.tone === "warn") return { tone: "warn", label: gh.label };
+    if (gh.tone === "off") return { tone: "warn", label: item.enabled ? "Needs GitHub" : "Draft · needs GitHub" };
+    if (gh.tone === "warn") return { tone: "warn", label: item.enabled ? gh.label : `Draft · ${gh.label}` };
+    if (!item.enabled) return { tone: "off", label: "Paused" };
     if (!executorReady) return { tone: "warn", label: "Needs executor" };
     if (item.trigger === "github_ci") return { tone: "on", label: "Active · verify workflow_run" };
     return { tone: "on", label: "Active" };
   }
   if (item.trigger === "linear") {
     const lin = linearSourceStatus(sources.linear);
-    if (lin.tone === "off") return { tone: "warn", label: "Needs Linear" };
-    if (lin.tone === "warn") return { tone: "warn", label: lin.label };
+    if (lin.tone === "off") return { tone: "warn", label: item.enabled ? "Needs Linear" : "Draft · needs Linear" };
+    if (lin.tone === "warn") return { tone: "warn", label: item.enabled ? lin.label : `Draft · ${lin.label}` };
+    if (!item.enabled) return { tone: "off", label: "Paused" };
     return executorReady ? { tone: "on", label: "Active" } : { tone: "warn", label: "Needs executor" };
   }
+  if (!item.enabled) return { tone: "off", label: "Paused" };
   return executorReady ? { tone: "on", label: "Active" } : { tone: "warn", label: "Needs executor" };
 }
 
@@ -435,6 +468,11 @@ export function AutomationsView({
   const [chooserOpen, setChooserOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
+  const refreshRuns = useCallback(async () => {
+    const recent = await fetchAutomationRuns(controller.local, 30);
+    setRuns(recent);
+  }, []);
+
   const refresh = useCallback(async () => {
     const canQuery = !controller.direct;
     const [definitions, recent, gh, lin, slack, nodes, hosted] = await Promise.all([
@@ -453,6 +491,17 @@ export function AutomationsView({
   }, []);
 
   useEffect(() => { void refresh().catch((e) => { setError(String(e)); setLoading(false); }); }, [refresh]);
+  useEffect(() => {
+    let debounce: ReturnType<typeof setTimeout> | null = null;
+    const unsubscribe = controller.onRunUpdated(() => {
+      if (debounce) clearTimeout(debounce);
+      debounce = setTimeout(() => void refreshRuns().catch(() => {}), 100);
+    });
+    // Polling is recovery only: a backgrounded browser or old relay can miss a
+    // best-effort hint. Keep the interval deliberately calm.
+    const recovery = section === "queue" ? setInterval(() => void refreshRuns().catch(() => {}), 30_000) : null;
+    return () => { unsubscribe(); if (debounce) clearTimeout(debounce); if (recovery) clearInterval(recovery); };
+  }, [refreshRuns, section]);
   useEffect(() => {
     controller.listRuntimes();
     controller.listModels();
@@ -533,45 +582,46 @@ export function AutomationsView({
     setError("");
     setNotice(null);
     try {
+      // A source Automation is a Draft until its source is actually connected.
+      // Creating an enabled definition first made the UI claim “on” while no
+      // event could reach it. Probe before writing, then persist truthful state.
+      const github = template.trigger === "github" || template.trigger === "github_ci"
+        ? await fetchGithubApp(controller.local).catch(() => null)
+        : null;
+      const linear = template.trigger === "linear"
+        ? await fetchLinearHook(controller.local).catch(() => null)
+        : null;
+      const needsGithub = Boolean(github && githubSourceStatus(github).tone !== "on") || ((template.trigger === "github" || template.trigger === "github_ci") && !github);
+      const needsLinear = template.trigger === "linear" && linearSourceStatus(linear).tone !== "on";
+      const sourceReady = !needsGithub && !needsLinear;
+
       const existing = items.find((i) => i.trigger === template.trigger);
       if (existing) {
-        if (!existing.enabled) {
-          await updateAutomation(controller.local, existing.id, { enabled: true });
-        }
+        if (sourceReady && !existing.enabled) await updateAutomation(controller.local, existing.id, { enabled: true });
       } else {
         await createAutomation(controller.local, {
           name: template.prefill.name,
           trigger: template.trigger,
           templateId: template.prefill.templateId,
           labels: template.prefill.labels,
-          enabled: true,
+          enabled: sourceReady,
         });
       }
       await refresh();
-
-      // Stay here. Only open the connect sheet when the source itself is missing.
-      const needsGithub = (template.trigger === "github" || template.trigger === "github_ci")
-        && githubSourceStatus(
-          // Re-read after refresh would race; use a fresh fetch path via sources after refresh.
-          // refresh() just set sources — but state is async. Fetch inline.
-          await fetchGithubApp(controller.local).catch(() => null),
-        ).tone !== "on";
-      const needsLinear = template.trigger === "linear"
-        && linearSourceStatus(await fetchLinearHook(controller.local).catch(() => null)).tone !== "on";
 
       if (needsGithub) {
         openSetup(template.trigger === "github_ci" ? "github" : "work-queue");
         setNotice({
           tone: "info",
-          title: `${template.title} is on — finish connecting GitHub`,
-          body: "Stay on this sheet. Once the app is installed, matching events start sessions.",
+          title: `${template.title} saved as a draft`,
+          body: "Connect and install the GitHub App, then resume the Automation. It cannot receive events yet.",
         });
       } else if (needsLinear) {
         openSetup("linear");
         setNotice({
           tone: "info",
-          title: `${template.title} is on — finish connecting Linear`,
-          body: "Create the webhook URL, paste it into Linear, then bring the signing secret back.",
+          title: `${template.title} saved as a draft`,
+          body: "Finish connecting Linear, then resume the Automation. It cannot receive events yet.",
         });
       } else {
         setNotice({
@@ -695,6 +745,7 @@ export function AutomationsView({
     setMenuId(null);
     try {
       const run = await runAutomationNow(controller.local, item.id);
+      controller.recordProductMilestone("run_accepted");
       await refresh();
       const sessionId = run.output?.sessionId;
       setNotice({
@@ -750,7 +801,7 @@ export function AutomationsView({
     } catch (e) { setError(String((e as Error).message || e)); }
   }
 
-  const definitionRuns = useMemo(() => runs.filter((r) => r.definitionId), [runs]);
+  const definitionRuns = runs;
   const ghStatus = githubSourceStatus(sources.github);
   const linStatus = linearSourceStatus(sources.linear);
   const slackStatus = slackSourceStatus(sources.slack);
@@ -763,8 +814,11 @@ export function AutomationsView({
           <p className="automations-view-sub">Jobs that run on your machines while you&apos;re away.</p>
         </div>
         <div className="automations-view-head-actions">
-          <button type="button" className="btn autom-new-btn" onClick={openChooser}>New automation</button>
-          <button type="button" className="icon-btn" onClick={onClose} title="Close" aria-label="Close automations">✕</button>
+          <button type="button" className="autom-new-btn" onClick={openChooser} aria-label="New automation">
+            <PlusIcon size={18} />
+            <span className="autom-new-btn-label">New automation</span>
+          </button>
+          <button type="button" className="icon-btn autom-close-btn" onClick={onClose} title="Close" aria-label="Close automations"><CloseIcon /></button>
         </div>
       </header>
 
@@ -808,24 +862,15 @@ export function AutomationsView({
 
         {section === null && (
         <>
-        {/* Compact live source strip — connect stays in-sheet, never Settings. */}
-        <section className="autom-sources-strip" aria-label="Connected sources">
-          <SourcePill
-            name="GitHub"
-            status={ghStatus}
-            onClick={() => openSetup(ghStatus.tone === "on" ? "github" : "work-queue")}
-          />
-          <SourcePill
-            name="Linear"
-            status={linStatus}
-            onClick={() => openSetup("linear")}
-          />
-          <SourcePill
-            name="Slack"
-            status={slackStatus}
-            onClick={() => openSetup("slack")}
-          />
-        </section>
+        {/* Sources collapse to one overview row. Connection details stay nearby
+            without making three setup cards the first thing on every visit. */}
+        <AutomationSourcesPanel
+          sources={[
+            { name: "GitHub", status: ghStatus, onClick: () => openSetup(ghStatus.tone === "on" ? "github" : "work-queue") },
+            { name: "Linear", status: linStatus, onClick: () => openSetup("linear") },
+            { name: "Slack", status: slackStatus, onClick: () => openSetup("slack") },
+          ]}
+        />
 
         {items.some((i) => i.trigger === "github_ci" && i.enabled) && sources.github?.connected && (
           <div className="autom-banner" role="status">
@@ -864,33 +909,25 @@ export function AutomationsView({
             <section className="autom-section">
               <div className="autom-section-head">
                 <h2 className="autom-section-label">Your automations</h2>
-                <span className="autom-count">{items.length}</span>
               </div>
               <div className="automation-list">
                 {items.map((item) => {
                   const chip = isSourceTrigger(item.trigger)
                     ? sourceAutomationChip(item, sources)
                     : { tone: item.enabled ? "on" as const : "off" as const, label: item.enabled ? "Active" : "Paused" };
-                  const needsConnect = isSourceTrigger(item.trigger) && chip.tone === "warn" && chip.label.startsWith("Needs");
+                  const needsConnect = isSourceTrigger(item.trigger) && chip.tone === "warn" && chip.label.toLowerCase().includes("needs");
+                  const nextRun = item.enabled && item.nextRunAt && item.schedule?.kind !== "once"
+                    ? formatNextAutomationRun(item.nextRunAt)
+                    : null;
+                  const meta = [scheduleSummary(item), item.configKey ? "Managed by file" : null, nextRun].filter(Boolean).join(" · ");
                   return (
                     <div className={`automation-row${item.enabled ? "" : " is-paused"}`} key={item.id}>
                       <div className="automation-row-main">
                         <div className="automation-row-title">
                           <strong>{item.name}</strong>
-                          <span className={`autom-status ${chip.tone}`}>{chip.label}</span>
-                          {item.configKey && <span className="autom-status off" title={`Managed from ${item.configKey}`}>Managed by file</span>}
+                          {chip.tone !== "on" && !needsConnect && <span className={`autom-status ${chip.tone}`}>{chip.label}</span>}
                         </div>
-                        <div className="settings-hint">
-                          {scheduleSummary(item)}
-                          {item.configKey ? ` · .bivy/automations.yaml#${item.configKey}` : ""}
-                          {item.enabled && item.nextRunAt ? ` · next ${new Date(item.nextRunAt).toLocaleString()}` : ""}
-                        </div>
-                        {item.trigger === "webhook" && item.webhookUrl && (
-                          <div className="reveal-row">
-                            <code className="reveal-value">{item.webhookUrl}</code>
-                            <button type="button" className="btn sm" onClick={() => copyText(item.webhookUrl!)}>Copy URL</button>
-                          </div>
-                        )}
+                        <div className="settings-hint">{meta}</div>
                         {item.trigger === "webhook" && rotated?.id === item.id && (
                           <div className="reveal-row">
                             <code className="reveal-value">{rotated.secret}</code>
@@ -909,15 +946,6 @@ export function AutomationsView({
                             Connect
                           </button>
                         )}
-                        {!isSourceTrigger(item.trigger) && (
-                          <button type="button" className="btn sm" onClick={() => void runNow(item)}>
-                            {item.trigger === "webhook" ? "Test run" : "Run now"}
-                          </button>
-                        )}
-                        {item.trigger === "webhook" && (
-                          <button type="button" className="btn sm" onClick={() => void rotate(item)}>Rotate secret</button>
-                        )}
-                        {!item.configKey && <button type="button" className="btn sm" onClick={() => void edit(item)}>Edit</button>}
                         {(!item.configKey || isSourceTrigger(item.trigger)) && <div className="row-menu" ref={menuId === item.id ? menuRef : undefined}>
                           <button
                             type="button"
@@ -926,10 +954,26 @@ export function AutomationsView({
                             aria-expanded={menuId === item.id}
                             onClick={() => setMenuId((cur) => (cur === item.id ? null : item.id))}
                           >
-                            ···
+                            …
                           </button>
                           {menuId === item.id && (
                             <div className="row-menu-pop" role="menu">
+                              {!isSourceTrigger(item.trigger) && (
+                                <button type="button" className="row-menu-item" role="menuitem" onClick={() => { setMenuId(null); void runNow(item); }}>
+                                  {item.trigger === "webhook" ? "Test run" : "Run now"}
+                                </button>
+                              )}
+                              {!item.configKey && <button type="button" className="row-menu-item" role="menuitem" onClick={() => { setMenuId(null); void edit(item); }}>Edit</button>}
+                              {item.trigger === "webhook" && item.webhookUrl && (
+                                <button type="button" className="row-menu-item" role="menuitem" onClick={() => {
+                                  setMenuId(null);
+                                  void copyText(item.webhookUrl!);
+                                  setNotice({ tone: "ok", title: "Webhook URL copied" });
+                                }}>Copy webhook URL</button>
+                              )}
+                              {item.trigger === "webhook" && (
+                                <button type="button" className="row-menu-item" role="menuitem" onClick={() => { setMenuId(null); void rotate(item); }}>Rotate secret</button>
+                              )}
                               {!item.configKey && <button type="button" className="row-menu-item" role="menuitem" onClick={() => void toggle(item)}>
                                 {item.enabled ? "Pause" : "Resume"}
                               </button>}
@@ -963,77 +1007,42 @@ export function AutomationsView({
 
         {section === "queue" && (
           <>
-            <section className="autom-section runs-overview">
-              <div className="autom-section-head">
-                <div>
-                  <h2 className="autom-section-label">Automation runs</h2>
-                  <p className="settings-hint">Current state and recent results from scheduled, webhook, and manual runs.</p>
-                </div>
-                <button type="button" className="btn sm" onClick={() => void refresh().catch((e) => setError(String((e as Error).message || e)))}>Refresh</button>
-              </div>
-              {cancelError && <div className="banner error inline">Could not cancel run: {cancelError}</div>}
-              {definitionRuns.length === 0 ? (
-                <p className="settings-hint autom-empty-hint">
-                  No automation runs yet. Use <strong>Run now</strong> on an automation to test the full path.
-                </p>
-              ) : (
-                <div className="automation-list">
-                  {definitionRuns.slice(0, 12).map((run) => {
-                    const detail = projectRunDetail(run);
-                    const outcomeTone = detail.outcome.tone === "success" ? "ok" : detail.outcome.tone === "danger" ? "bad" : detail.outcome.tone === "warning" ? "warn" : "info";
-                    const defName = items.find((i) => i.id === run.definitionId)?.name;
-                    const sessionId = detail.sessionId;
-                    const rowMain = (
-                      <>
-                        <div className="automation-row-title">
-                          <strong>{run.title}</strong>
-                          <span className={`run-status ${outcomeTone}`}>{detail.outcome.label}</span>
-                        </div>
-                        <div className="settings-hint">
-                          {[defName, new Date(run.createdAt).toLocaleString(), run.triggerKind, detail.checksSummary, detail.attempt > 1 ? `attempt ${detail.attempt}` : null].filter(Boolean).join(" · ")}
-                        </div>
-                        {detail.failure && <div className="settings-hint warn-text">{detail.failure}</div>}
-                      </>
-                    );
-                    return (
-                      <div className="automation-row run-row" key={run.id}>
-                        {onOpenRun
-                          ? <button type="button" className="automation-row-main run-row-open" onClick={() => onOpenRun(run.id)}>{rowMain}</button>
-                          : <div className="automation-row-main">{rowMain}</div>}
-                        <div className="automation-row-actions">
-                          {!isTerminalRun(run) && (
-                            <button type="button" className="btn sm danger" disabled={cancelBusyId === run.id} onClick={() => { setCancelError(null); setCancelRun(run); }}>
-                              {cancelBusyId === run.id ? "Cancelling…" : "Cancel"}
-                            </button>
-                          )}
-                          {sessionId && (
-                            <button type="button" className="btn sm primary" onClick={() => { onOpenSession(sessionId); onClose(); }}>
-                              Open session
-                            </button>
-                          )}
-                          {run.output?.prUrl && <a className="btn sm" href={run.output.prUrl} target="_blank" rel="noreferrer">View PR</a>}
-                          {onOpenRun && <span className="run-row-chevron" aria-hidden="true">›</span>}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </section>
-            <GithubQueuePanel
-              queue={githubQueue ?? null}
-              onRefresh={() => onRefreshGithubQueue?.()}
-              onPick={(id) => { onOpenSession(id); onClose(); }}
-              onOpenRun={onOpenRun}
-              onOpenGithubSettings={() => openSetup("github")}
-            />
+            {cancelError && <div className="banner error inline">Could not cancel run: {cancelError}</div>}
             {EPHEMERAL_MACHINES_ENABLED && (
-              <section className="autom-section">
-                <h2 className="autom-section-label">Queue routing</h2>
-                <p className="settings-hint">Where queued work runs by default when an automation doesn&apos;t pin a machine.</p>
-                <QueueRoutingSection hosted={sources.hosted} onConfigureCredentials={() => openSetup("work-queue")} />
-              </section>
+              <details className="runs-setup">
+                <summary>
+                  <span>
+                    <strong>Run setup &amp; routing</strong>
+                    <small>Choose where unattended work runs</small>
+                  </span>
+                  <span className="runs-setup-chevron" aria-hidden="true">›</span>
+                </summary>
+                <div className="runs-setup-body">
+                  <QueueRoutingSection hosted={sources.hosted} onConfigureCredentials={() => openSetup("work-queue")} />
+                </div>
+              </details>
             )}
+            <RunHistory
+              runs={definitionRuns}
+              definitions={items}
+              cancelBusyId={cancelBusyId}
+              onRefresh={() => void refresh().catch((e) => setError(String((e as Error).message || e)))}
+              onCancel={(run) => { setCancelError(null); setCancelRun(run); }}
+              onOpenRun={onOpenRun}
+              onOpenSession={(sessionId) => { onOpenSession(sessionId); onClose(); }}
+            />
+            <section className="autom-section incoming-work">
+              <h2 className="autom-section-label">Incoming work</h2>
+              <GithubQueuePanel
+                queue={githubQueue ?? null}
+                onRefresh={() => onRefreshGithubQueue?.()}
+                onPick={(id) => { onOpenSession(id); onClose(); }}
+                onOpenRun={onOpenRun}
+                onOpenGithubSettings={() => openSetup("github")}
+                showHistory={false}
+              />
+            </section>
+            {EPHEMERAL_MACHINES_ENABLED && <HostedMachinesPanel />}
           </>
         )}
 
@@ -1280,27 +1289,6 @@ function NewAutomationPicker({
   );
 }
 
-// ── Source pill (compact strip) ─────────────────────────────────────────────
-
-function SourcePill({
-  name,
-  status,
-  onClick,
-}: {
-  name: string;
-  status: { tone: "on" | "off" | "warn"; label: string };
-  onClick: () => void;
-}) {
-  const cta = status.tone === "off" ? "Connect" : status.tone === "warn" ? "Fix" : "Manage";
-  return (
-    <button type="button" className={`autom-source-pill tone-${status.tone}`} onClick={onClick}>
-      <span className="autom-source-pill-name">{name}</span>
-      <span className={`autom-status ${status.tone}`}>{status.tone === "on" ? "Live" : status.label}</span>
-      <span className="autom-source-pill-cta">{cta}</span>
-    </button>
-  );
-}
-
 // ── Template card ───────────────────────────────────────────────────────────
 
 function TemplateCard({
@@ -1332,6 +1320,122 @@ function TemplateCard({
 }
 
 // ── Source automation editor (GitHub / Linear / CI) ─────────────────────────
+
+// ── Test event / preflight — shared by both editors ────────────────────────
+// Explains, without creating a run, which automation a representative event
+// would fire (and why the rest didn't), overlap/shadow warnings across the
+// account's rules, and the seven-check preflight — the same contract
+// `bivy automation test` and the control-plane's live intake use (see
+// docs/automation-evaluator.md). Every Save also runs this silently (no
+// event) so a hard failure never reaches the API, and a non-blocking warning
+// always requires the explicit acknowledgement checkbox below before Save
+// is enabled — the draft/gate can change between runs, so a fresh result
+// always clears any prior acknowledgement.
+function useAutomationPreflight(automationId: string | undefined) {
+  const [result, setResult] = useState<AutomationSimulationResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [ack, setAck] = useState(false);
+
+  const run = useCallback(async (
+    draft: AutomationSimulationDraft,
+    event?: AutomationSimulationEvent,
+    opts?: { resetAck?: boolean },
+  ) => {
+    setBusy(true);
+    setError("");
+    try {
+      const r = await simulateAutomation(controller.local, { automationId, draft, event });
+      setResult(r);
+      // An explicit Test event / Check readiness click always clears a stale
+      // acknowledgement (new warnings deserve a fresh look). Save's own
+      // silent pre-check passes resetAck: false so a user who already ticked
+      // the box doesn't get it cleared out from under them by the very same
+      // click that's supposed to consume it.
+      if (opts?.resetAck !== false) setAck(false);
+      return r;
+    } catch (e) {
+      setResult(null);
+      setError(String((e as Error).message || e));
+      throw e;
+    } finally {
+      setBusy(false);
+    }
+  }, [automationId]);
+
+  return { result, busy, error, ack, setAck, run };
+}
+
+function preflightIcon(severity: AutomationPreflightSeverity): string {
+  if (severity === "ok") return "✓";
+  if (severity === "block") return "✗";
+  if (severity === "warn") return "⚠";
+  if (severity === "skipped") return "·";
+  return "ℹ";
+}
+
+function AutomationPreflightPanel({
+  result,
+  error,
+  ack,
+  onAckChange,
+  showTrail,
+}: {
+  result: AutomationSimulationResult | null;
+  error: string;
+  ack: boolean;
+  onAckChange: (value: boolean) => void;
+  showTrail: boolean;
+}) {
+  if (error) return <p className="settings-error">{error}</p>;
+  if (!result) return null;
+  const ownOverlaps = result.overlaps.filter((o) => o.beforeId === result.subjectId || o.afterId === result.subjectId);
+  const visibleChecks = result.preflight.filter((c) => c.severity !== "skipped");
+  return (
+    <div className="autom-preflight" role="status">
+      {showTrail && result.trail.length > 0 && (
+        <div className="autom-preflight-trail">
+          <div className="autom-field-label">Rule evaluation (first match wins)</div>
+          <ul className="autom-preflight-list">
+            {result.trail.map((t) => (
+              <li key={t.id} className={t.matched ? "ok" : undefined}>
+                <span>{t.matched ? "✓" : "·"}</span>{" "}
+                {t.id === result.subjectId ? <strong>this automation</strong> : t.id}: {t.reason}
+              </li>
+            ))}
+          </ul>
+          {!result.matchedId && <p className="schedule-hint warn">No automation — including this one — would fire for this event.</p>}
+        </div>
+      )}
+      {ownOverlaps.map((o, i) => (
+        <p key={i} className={o.kind === "shadowed" ? "settings-error" : "schedule-hint warn"}>{o.detail}</p>
+      ))}
+      {visibleChecks.length > 0 && (
+        <div className="autom-preflight-checks">
+          <div className="autom-field-label">Preflight</div>
+          <ul className="autom-preflight-list">
+            {visibleChecks.map((c) => (
+              <li key={c.id} className={`preflight-${c.severity}`}>
+                <span>{preflightIcon(c.severity)}</span> <strong>{c.label}</strong>: {c.detail}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {result.gate.blocked && (
+        <p className="settings-error">
+          Can&apos;t save yet — {result.gate.blockingChecks.map((c) => c.label).join(", ")}.
+        </p>
+      )}
+      {!result.gate.blocked && result.gate.requiresAck && (
+        <label className="autom-check-row">
+          <input type="checkbox" checked={ack} onChange={(e) => onAckChange(e.target.checked)} />
+          <span>I understand the warnings above and want to save anyway.</span>
+        </label>
+      )}
+    </div>
+  );
+}
 
 function SourceAutomationEditor({
   item,
@@ -1373,6 +1477,7 @@ function SourceAutomationEditor({
     ?? "everyone";
   const [triggerAccess, setTriggerAccess] = useState<"everyone" | "contributor" | "collaborator">(initialTriggerAccess);
   const [triggerAccessDirty, setTriggerAccessDirty] = useState(false);
+  const preflight = useAutomationPreflight(item.id || undefined);
 
   const needsConnect =
     (trigger === "github" || trigger === "github_ci") && githubSourceStatus(sources.github).tone === "off"
@@ -1422,6 +1527,18 @@ function SourceAutomationEditor({
           patch.labels = workflows ?? [];
         }
       }
+
+      // Shared preflight gate before ever calling create/update (see
+      // docs/automation-evaluator.md). resetAck: false so a box already
+      // ticked on a prior Save click still counts on this one.
+      const evaluation = await preflight.run({ ...patch, trigger, templateCiphertext: item.templateCiphertext }, undefined, { resetAck: false });
+      if (evaluation.gate.blocked) {
+        throw new Error(`Can't save yet — ${evaluation.gate.blockingChecks.map((c) => c.label).join(", ")}. See the checklist below.`);
+      }
+      if (evaluation.gate.requiresAck && !preflight.ack) {
+        throw new Error("Review the warnings below, check the acknowledgement box, then save again.");
+      }
+
       if (item.id) {
         await updateAutomation(controller.local, item.id, patch);
       } else {
@@ -1441,6 +1558,34 @@ function SourceAutomationEditor({
     } finally {
       setBusy(false);
     }
+  }
+
+  /** Best-effort draft (works even before the form is complete, unlike
+   *  save()) run through the shared evaluator — explains source connection,
+   *  machine, credential, and quota readiness without starting a run. */
+  async function checkAutomation() {
+    const labels = parseList(labelsText);
+    const workflows = parseList(workflowsText);
+    const repos = parseList(reposText);
+    const draft: AutomationSimulationDraft = {
+      name: name.trim() || item.name,
+      trigger,
+      enabled,
+      templateCiphertext: item.templateCiphertext,
+      labels: labels ?? [],
+      repos: repos ?? [],
+      repo: repoDefault.trim() || undefined,
+      nodeLabel: nodeSuffix.trim() ? `bivy/${nodeSuffix.trim()}` : undefined,
+      runtimeId: runtimeId.trim() || undefined,
+      model: model.trim() || undefined,
+      ...(isGithub ? { on: buildGithubOn(events, labels, workflows) } : {}),
+    };
+    const event: AutomationSimulationEvent | undefined = trigger === "linear"
+      ? { kind: "linear", repo: repoDefault.trim() || undefined, labels: labels ?? ["bivy"] }
+      : trigger === "github_ci"
+        ? { kind: "github", repo: repoDefault.trim() || undefined, event: "workflow_run", action: "completed", conclusion: "failure", workflow: workflows?.[0] }
+        : undefined;
+    await preflight.run(draft, event, { resetAck: true }).catch(() => {});
   }
 
   const action = item.id ? "Edit" : "Create";
@@ -1647,6 +1792,23 @@ function SourceAutomationEditor({
             </div>
           </details>
 
+          <div className="settings-field">
+            <button type="button" className="btn sm" disabled={preflight.busy} onClick={() => void checkAutomation()}>
+              {preflight.busy ? "Checking…" : "Check readiness"}
+            </button>
+            <p className="settings-hint">
+              Explains source connection, machine, credential, and quota readiness — and, for CI, whether a
+              representative failed-workflow event would fire — without starting a run.
+            </p>
+            <AutomationPreflightPanel
+              result={preflight.result}
+              error={preflight.error}
+              ack={preflight.ack}
+              onAckChange={preflight.setAck}
+              showTrail={trigger === "github_ci" || trigger === "linear"}
+            />
+          </div>
+
           {error && <p className="settings-error">{error}</p>}
         </div>
         <div className="wizard-actions">
@@ -1689,8 +1851,10 @@ function AutomationEditor({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState<{ url: string; secret: string; name: string } | null>(null);
+  const [allowDangerous, setAllowDangerous] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setD((prev) => ({ ...prev, [k]: v }));
+  const preflight = useAutomationPreflight(d.id || undefined);
 
   const tzList = useMemo(() => timezoneOptions(d.timezone), [d.timezone]);
   const cronHuman = useMemo(() => describeCron(d.cron), [d.cron]);
@@ -1760,6 +1924,43 @@ function AutomationEditor({
   if (!d.nodeId) missing.push("a machine");
   else if (!controller.local.keys()[d.nodeId]) missing.push("a paired machine (encryption key missing)");
   const canSave = missing.length === 0;
+  const unsafeCombo = d.approvalMode === "autonomous" && d.sandbox === "danger-full-access";
+
+  /** Builds the same draft shape save() would submit (best-effort — this
+   *  works even on an incomplete draft, unlike save() which requires
+   *  canSave) and runs it through the shared evaluator, with a
+   *  representative event for source triggers. Powers the "Test event" /
+   *  "Check readiness" button; save() runs its own stricter pass right
+   *  before submitting (see below). */
+  async function checkAutomation() {
+    const roomKey = d.nodeId ? controller.local.keys()[d.nodeId] : undefined;
+    let templateCiphertext: string | undefined;
+    if (d.nodeId && roomKey && d.instructions.trim()) {
+      templateCiphertext = `${TEMPLATE_PREFIX}:${d.nodeId}:${await seal(await importRoomKey(unb64url(roomKey)), d.instructions.trim())}`;
+    }
+    const labels = d.labels.split(/[,\n]/).map((v) => v.trim()).filter(Boolean);
+    const repos = d.repos.split(/[,\n]/).map((v) => v.trim()).filter(Boolean);
+    const workflows = d.workflows.split(/[,\n]/).map((v) => v.trim()).filter(Boolean);
+    const draft: AutomationSimulationDraft = {
+      name: d.name.trim() || undefined,
+      trigger: d.trigger,
+      enabled: true,
+      templateCiphertext,
+      nodeLabel: selectedNode?.name ? `bivy/${selectedNode.name}` : undefined,
+      runtimeId: d.runtimeId.trim() || undefined,
+      model: d.model.trim() || undefined,
+      approvalMode: d.approvalMode,
+      sandbox: d.sandbox,
+      allowDangerous,
+      repo: d.repo.trim() || undefined,
+      ...(d.trigger === "github" || d.trigger === "linear" ? {
+        labels,
+        repos,
+        ...(d.trigger === "github" ? { on: buildGithubOn(d.githubEvents, labels, workflows) } : {}),
+      } : {}),
+    };
+    await preflight.run(draft, buildRepresentativeEvent(d), { resetAck: true }).catch(() => {});
+  }
 
   async function save() {
     if (!canSave) return;
@@ -1788,6 +1989,7 @@ function AutomationEditor({
         model: d.model.trim() || undefined,
         approvalMode: d.approvalMode,
         sandbox: d.sandbox,
+        allowDangerous,
         enabled: true,
         trigger: d.trigger,
         repo: repo || (d.id ? "" : undefined),
@@ -1804,6 +2006,23 @@ function AutomationEditor({
             }
           : {}),
       };
+
+      // Run the shared preflight gate before ever calling create/update — a
+      // hard failure (e.g. autonomous + full access without the checkbox
+      // below) never reaches the API, and a non-blocking warning always
+      // needs the acknowledgement checkbox first (see
+      // docs/automation-evaluator.md). resetAck: false so a box the user
+      // already ticked on a prior Save click still counts on this one.
+      const evaluation = await preflight.run(input, undefined, { resetAck: false });
+      if (evaluation.gate.blocked) {
+        setError(`Can't save yet — ${evaluation.gate.blockingChecks.map((c) => c.label).join(", ")}. See the checklist below.`);
+        return;
+      }
+      if (evaluation.gate.requiresAck && !preflight.ack) {
+        setError("Review the warnings below, check the acknowledgement box, then save again.");
+        return;
+      }
+
       if (d.id) {
         await updateAutomation(controller.local, d.id, input);
         onSaved({ kind: "updated", name: d.name.trim(), id: d.id });
@@ -2195,10 +2414,41 @@ function AutomationEditor({
                         <option value="danger-full-access">Full access</option>
                       </select>
                     </div>
+                    {unsafeCombo && (
+                      <label className="autom-check-row">
+                        <input type="checkbox" checked={allowDangerous} onChange={(e) => setAllowDangerous(e.target.checked)} />
+                        <span>I understand the risk of autonomous approval with full access — allow it anyway.</span>
+                      </label>
+                    )}
                   </div>
                 )}
                 <p className="settings-hint">Encrypted for the assigned machine before upload. The hosted control plane never sees the prompt, your code, or credentials.</p>
               </div>
+
+              {d.hasTrigger && (
+                <div className="settings-field">
+                  <button
+                    type="button"
+                    className="btn sm"
+                    disabled={preflight.busy}
+                    onClick={() => void checkAutomation()}
+                  >
+                    {preflight.busy ? "Checking…" : (d.trigger === "github" || d.trigger === "linear") ? "Test event" : "Check readiness"}
+                  </button>
+                  <p className="settings-hint">
+                    {(d.trigger === "github" || d.trigger === "linear")
+                      ? "Explains which automation a representative event would fire — including overlap/shadow warnings — without starting a run."
+                      : "Explains source connection, machine, credential, and quota readiness without starting a run."}
+                  </p>
+                  <AutomationPreflightPanel
+                    result={preflight.result}
+                    error={preflight.error}
+                    ack={preflight.ack}
+                    onAckChange={preflight.setAck}
+                    showTrail={d.trigger === "github" || d.trigger === "linear"}
+                  />
+                </div>
+              )}
 
               {error && <p className="settings-error">{error}</p>}
               {!canSave && missing.length > 0 && (

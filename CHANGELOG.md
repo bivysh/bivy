@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Machines can declare owner-asserted capability tags (`bivy config set
+  node.capabilities '[gpu, docker]'`); repositories can declare required/
+  preferred capability tags and named service health-check/start scripts in
+  `.bivy/environment.yaml`. One-off Runs and Automation definitions can
+  request required/preferred tags: a required tag honestly parks the Run
+  (`needs_attention`) only when no Machine anywhere has ever declared it,
+  and never fabricates availability for a preferred tag. CLI-only for now —
+  see the capability-routing PR for the PWA-editing follow-up.
+- `bivy run <agent> --chat` starts a governed session through the same runtime
+  path as the web/PWA app and opens it directly; `--no-open` creates it without
+  launching a browser and prints the session URL instead.
 - Declarative agent plugins: `bivy plugin init|validate|doctor|test|install|list|remove`
   scaffolds and installs strict `bivy.sh/v1alpha1` manifests from local files.
   Plugins can contribute process or ACP agents to the CLI and web runtime catalog

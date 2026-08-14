@@ -1,0 +1,33 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+.pwa-lifecycle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 16px 8px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface) 92%, var(--accent) 8%);
+  color: var(--muted);
+  font-size: 12px;
+}
+.pwa-lifecycle-copy, .pwa-install { display: flex; align-items: center; gap: 8px; }
+.pwa-lifecycle-copy strong { color: var(--text); white-space: nowrap; }
+.pwa-install p { margin: 4px 0 0; max-width: 48ch; }
+.attachment-recovery {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  color: var(--muted);
+  font-size: 11px;
+  border-radius: 8px;
+  background: var(--surface-raised, var(--surface));
+}
+.update-toast button:disabled { opacity: .5; cursor: not-allowed; }
+@media (max-width: 720px) {
+  .pwa-lifecycle, .pwa-lifecycle-copy, .pwa-install { align-items: flex-start; flex-direction: column; }
+  .pwa-lifecycle { margin-inline: 10px; }
+}

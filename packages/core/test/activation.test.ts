@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { activationFromState, deriveActivation, type ActivationSignals, type ActivationStateInput } from "../src/activation.js";
 
 const ALL_BUT_AGENT: ActivationSignals = {
+  accountSignedIn: true,
   machineOnline: true,
   agentInstalled: true,
   credentialValid: true,
@@ -13,10 +14,10 @@ function stateOf(a: ReturnType<typeof deriveActivation>, id: string) {
 }
 
 describe("deriveActivation", () => {
-  it("exposes the five distinct checks in order", () => {
+  it("exposes the six distinct checks in order", () => {
     const a = deriveActivation({});
     expect(a.checks.map((c) => c.id)).toEqual([
-      "machine_online", "agent_installed", "credential_valid", "repository_ready", "agent_answered",
+      "account_signed_in", "machine_online", "agent_installed", "credential_valid", "repository_ready", "agent_answered",
     ]);
   });
 
@@ -38,13 +39,13 @@ describe("deriveActivation", () => {
   it("starts not_started when nothing is known and checks the first step", () => {
     const a = deriveActivation({});
     expect(a.stage).toBe("not_started");
-    expect(stateOf(a, "machine_online")).toBe("checking");
-    expect(stateOf(a, "agent_installed")).toBe("pending");
-    expect(a.nextAction?.checkId).toBe("machine_online");
+    expect(stateOf(a, "account_signed_in")).toBe("checking");
+    expect(stateOf(a, "machine_online")).toBe("pending");
+    expect(a.nextAction?.checkId).toBe("account_signed_in");
   });
 
   it("blocks on the first failed check with exactly one remediation, downstream pending", () => {
-    const a = deriveActivation({ machineOnline: true, agentInstalled: false, credentialValid: true, repositoryReady: true, agentAnswered: true });
+    const a = deriveActivation({ accountSignedIn: true, machineOnline: true, agentInstalled: false, credentialValid: true, repositoryReady: true, agentAnswered: true });
     expect(a.stage).toBe("blocked");
     expect(a.blockingCheckId).toBe("agent_installed");
     const failed = a.checks.find((c) => c.id === "agent_installed");
@@ -60,6 +61,7 @@ describe("deriveActivation", () => {
 
   it("gives each readiness failure class its own remediation", () => {
     const cases: Array<[keyof ActivationSignals, string]> = [
+      ["accountSignedIn", "sign_in"],
       ["machineOnline", "connect_machine"],
       ["agentInstalled", "install_agent"],
       ["credentialValid", "authenticate_credential"],
@@ -79,7 +81,8 @@ describe("deriveActivation", () => {
   });
 
   it("marks the first unresolved check checking and the rest pending", () => {
-    const a = deriveActivation({ machineOnline: true });
+    const a = deriveActivation({ accountSignedIn: true, machineOnline: true });
+    expect(stateOf(a, "account_signed_in")).toBe("passed");
     expect(stateOf(a, "machine_online")).toBe("passed");
     expect(stateOf(a, "agent_installed")).toBe("checking");
     expect(stateOf(a, "credential_valid")).toBe("pending");
@@ -90,12 +93,26 @@ describe("deriveActivation", () => {
 
 describe("activationFromState", () => {
   const base: ActivationStateInput = {
+    direct: false,
+    signedIn: true,
     status: "online",
-    runtimes: [{ status: "available" }],
+    runtimes: [{ status: "available", supportTier: "supported" }],
     providers: [{ configured: true }],
     reposAuthed: true,
     transcript: [],
   };
+
+  it("resolves account_signed_in from the real sign-in state in hosted mode, but always true in direct mode", () => {
+    expect(stateOf(activationFromState({ ...base, signedIn: false }), "account_signed_in")).toBe("failed");
+    expect(stateOf(activationFromState({ ...base, direct: true, signedIn: false }), "account_signed_in")).toBe("passed");
+  });
+
+  it("requires a certified, supported agent — installed-but-unsupported does not satisfy the check", () => {
+    const uncertified = activationFromState({ ...base, runtimes: [{ status: "available", supportTier: "experimental" }] });
+    expect(uncertified.blockingCheckId).toBe("agent_installed");
+    const noTier = activationFromState({ ...base, runtimes: [{ status: "available" }] });
+    expect(noTier.blockingCheckId).toBe("agent_installed");
+  });
 
   it("does not claim readiness from an online Machine + installed agent alone", () => {
     // Everything green upstream, but no real assistant response in the transcript.

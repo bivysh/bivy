@@ -87,6 +87,7 @@ export {
 // --- The daemon credential API (ours — Pi-free) -----------------------------
 export {
   exportProviderAuth,
+  exportAccountApiKeys,
   exportProviderAuthTombstones,
   importProviderAuth,
   setProviderApiKey,

@@ -4,7 +4,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { DEFAULT_AUTOMATION_CONFIG_PATH, STARTER_AUTOMATION_CONFIG, parseAutomationConfig, parseSimulationEvent, simulateAutomation, type AutomationConfigEntry } from "./automation-config.js";
+import { DEFAULT_AUTOMATION_CONFIG_PATH, STARTER_AUTOMATION_CONFIG, parseAutomationConfig, parseSimulationEvent, simulateAutomation, type AutomationConfig, type AutomationConfigEntry } from "./automation-config.js";
+import { findOverlaps, gateFromChecks, runPreflightChecks, type PreflightSignals } from "./automation/index.js";
 import { PairingStore } from "./device-registry.js";
 import { NodeIdentity } from "./identity.js";
 import { seal } from "./e2e.js";
@@ -23,15 +24,31 @@ function usage(): never {
 Version-controlled, locally testable coding-agent automations.
 
 Commands:
+  list [--json]               List automations on the enrolled account
+  trigger <id|config-key>     Start an automation run (alias: run)
   init [path]                 Write a safe starter .bivy/automations.yaml
   validate [path]             Parse and validate without network access
   plan [path] [--json]        Show triggers, routing, and effective safety
   test [path] --event <file>  Simulate an event and explain the first match
   apply [path] [--prune]      Encrypt instructions and reconcile the control plane
 
+Run commands (normally invoked as 'bivy runs ...'):
+  start <instructions>          Queue definition-free unattended work
+  list [--limit <n>] [--json]  List recent Runs and their current status
+  status <id> [--json]         Inspect one Run's status, evidence, and outputs
+  wait <id> [options]          Poll until the Run reaches a terminal status
+
+Start flags:
+  --name <title>  --repo <owner/name>  --agent <id>  --model <id>
+  --approval <mode>  --sandbox <tier>  --max-attempts <1-10>  --json
+  Pass '-' as the instructions to read them from stdin.
+Wait flags: --interval <seconds> (default 2), --timeout <seconds> (default 3600),
+--json. Wait exits 0 for succeeded, 1 for failed/cancelled, and 2 on timeout.
+
 Default path: ${DEFAULT_AUTOMATION_CONFIG_PATH}
-Apply requires an enrolled node ('bivy setup'). Instructions are encrypted on
-this machine before upload; the control plane receives ciphertext only.`);
+List, trigger, and apply require an enrolled node ('bivy setup'). Instructions
+are encrypted on this machine before upload; the control plane receives
+ciphertext only.`);
   process.exit(0);
 }
 
@@ -55,6 +72,30 @@ function load(file: string) {
   return result.config;
 }
 
+type RunSummary = {
+  id: string;
+  title: string;
+  status: "pending" | "claimed" | "running" | "waiting" | "needs_attention" | "succeeded" | "failed" | "cancelled";
+  triggerKind?: string;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  attempt?: number;
+  maxAttempts?: number;
+  runtimeId?: string;
+  model?: string;
+  output?: { sessionId?: string; branch?: string; prUrl?: string; artifactUrl?: string; failure?: string };
+  checks?: Array<{ name: string; status: string; exitCode?: number }>;
+  events?: Array<{ at: string; kind: string; summary: string }>;
+};
+
+const TERMINAL_RUN_STATUSES = new Set<RunSummary["status"]>(["succeeded", "failed", "cancelled"]);
+
+function runLine(run: RunSummary): string {
+  const attempt = run.attempt && run.attempt > 1 ? ` · attempt ${run.attempt}` : "";
+  return `${run.status.padEnd(15)} ${run.id}  ${run.title}${attempt}`;
+}
+
 function appDataDir(): string {
   return process.env.BIVY_DATA_DIR ? path.resolve(process.env.BIVY_DATA_DIR) : path.join(process.env.HOME || "", ".bivy");
 }
@@ -63,6 +104,71 @@ function effectiveSafety(entry: AutomationConfigEntry, file: string) {
   const node = readNodeConfig(appDataDir());
   const nodeBounded = resolveProjectSafety(node?.safety, entry.safety.sandbox, entry.safety.approval);
   return resolveProjectSafety(loadProjectPolicy(path.dirname(file))?.safety, nodeBounded.sandbox, nodeBounded.approval);
+}
+
+/** Print any overlap/shadow findings across the whole config, in first-match
+ *  evaluation (file) order. Never blocks — this is informational, the same
+ *  contract the control-plane simulate endpoint and PWA Test event workflow
+ *  explain (see docs/automation-evaluator.md). */
+function printOverlapWarnings(config: AutomationConfig): void {
+  const findings = findOverlaps(config.automations);
+  if (!findings.length) return;
+  console.log("\nOverlap warnings:");
+  for (const finding of findings) {
+    const icon = finding.kind === "shadowed" ? "⚠" : "·";
+    console.log(`  ${icon} ${finding.detail}`);
+  }
+}
+
+/**
+ * Signals `bivy automation test` can gather without any network access: the
+ * effective (policy-bounded) sandbox/approval vs what the entry requested, and
+ * whether an agent/model was explicitly pinned. Source connection, repository
+ * access, the encrypted-instruction key's holder, the assigned machine's
+ * liveness, and quota all require the control plane and are reported
+ * "skipped" here — `bivy automation apply` and the PWA Test event workflow
+ * are where those show up with real signal.
+ */
+function gatherLocalPreflightSignals(entry: AutomationConfigEntry, file: string): PreflightSignals {
+  const effective = effectiveSafety(entry, file);
+  const explicit = Boolean(entry.routing.agent || entry.routing.model);
+  return {
+    sandboxPolicy: {
+      requestedApproval: entry.safety.approval,
+      requestedSandbox: entry.safety.sandbox,
+      effectiveApproval: effective.approval,
+      effectiveSandbox: effective.sandbox,
+      // parseAutomationConfig already hard-rejects this combo at load time
+      // (config would never have reached `test`), but the checklist evaluates
+      // the same unsafeCombo condition as every other caller for consistency.
+      unsafeCombo: effective.approval === "autonomous" && effective.sandbox === "danger-full-access" && !entry.safety.allowDangerous,
+    },
+    // Whether credentials are actually ready can only be answered by the node
+    // that will run this (or the control plane's record of it) — not from a
+    // config file. Report "explicit" so an unset agent/model is skipped
+    // outright rather than shown as an unresolved unknown.
+    agentModelCredentials: explicit
+      ? {
+        agent: entry.routing.agent,
+        model: entry.routing.model,
+        explicit,
+        detail: "Credential readiness can't be checked offline; run 'bivy automation apply' or check the assigned node's Models & providers screen.",
+      }
+      : undefined,
+  };
+}
+
+/** Print the preflight checklist for the automation that matched a test fixture.
+ *  Returns the save/run gate so the caller can decide the exit code. */
+function printPreflightChecklist(entry: AutomationConfigEntry, file: string): ReturnType<typeof gateFromChecks> {
+  const results = runPreflightChecks(gatherLocalPreflightSignals(entry, file));
+  console.log("\nPreflight checklist:");
+  for (const check of results) {
+    if (check.severity === "skipped") continue;
+    const icon = check.severity === "ok" ? "✓" : check.severity === "block" ? "✗" : check.severity === "warn" ? "⚠" : "·";
+    console.log(`  ${icon} ${check.label}: ${check.detail}`);
+  }
+  return gateFromChecks(results);
 }
 
 function assertAllowedRouting(entry: AutomationConfigEntry, file: string): void {
@@ -116,6 +222,7 @@ function appliedInput(entry: AutomationConfigEntry, configOrder: number, nodeId:
     ephemeral: entry.routing.ephemeral,
     approvalMode: entry.safety.approval,
     sandbox: entry.safety.sandbox,
+    allowDangerous: entry.safety.allowDangerous,
     maxAttempts: entry.safety.maxAttempts,
   };
 }
@@ -123,6 +230,144 @@ function appliedInput(entry: AutomationConfigEntry, configOrder: number, nodeId:
 async function main() {
   const [command, ...args] = process.argv.slice(2);
   if (!command || ["help", "-h", "--help"].includes(command)) usage();
+
+  if (command === "list") {
+    const relay = relayConfig(appDataDir());
+    const result = await request<{ automations: Array<{
+      id: string; name: string; configKey?: string; enabled?: boolean; trigger?: string;
+      nodeLabel?: string; nextRunAt?: string;
+    }> }>(relay, "/node/automations");
+    if (args.includes("--json")) {
+      console.log(JSON.stringify(result.automations, null, 2));
+      return;
+    }
+    if (result.automations.length === 0) {
+      console.log("No automations.");
+      return;
+    }
+    for (const automation of result.automations) {
+      const ref = automation.configKey ? ` · key ${automation.configKey}` : "";
+      console.log(`${automation.enabled === false ? "○" : "+"} ${automation.name} (${automation.trigger ?? "schedule"})`);
+      console.log(`  id ${automation.id}${ref}`);
+      if (automation.nodeLabel) console.log(`  node ${automation.nodeLabel.replace(/^bivy\//, "")}`);
+      if (automation.nextRunAt) console.log(`  next ${automation.nextRunAt}`);
+    }
+    return;
+  }
+
+  if (command === "trigger" || command === "run") {
+    const requested = args.find((arg) => !arg.startsWith("-"));
+    if (!requested) throw new Error("Usage: bivy automation trigger <id|config-key> [--json]");
+    const relay = relayConfig(appDataDir());
+    const listed = await request<{ automations: Array<{ id: string; name: string; configKey?: string }> }>(relay, "/node/automations");
+    const matches = listed.automations.filter((automation) => automation.id === requested || automation.configKey === requested);
+    if (matches.length === 0) throw new Error(`Automation not found: ${requested}. Run 'bivy automation list' to see available automations.`);
+    if (matches.length > 1) throw new Error(`Automation reference is ambiguous: ${requested}. Use its id instead.`);
+    const automation = matches[0]!;
+    const run = await request<{ id: string; status?: string }>(relay, `/node/automations/${encodeURIComponent(automation.id)}/run`, { method: "POST" });
+    if (args.includes("--json")) console.log(JSON.stringify(run, null, 2));
+    else {
+      console.log(`Started ${automation.name}`);
+      console.log(`  run ${run.id}`);
+      if (run.status) console.log(`  status ${run.status}`);
+    }
+    return;
+  }
+
+  if (command === "runs-list") {
+    const relay = relayConfig(appDataDir());
+    const rawLimit = Number(value(args, "--limit") ?? 30);
+    const limit = Number.isInteger(rawLimit) ? Math.max(1, Math.min(100, rawLimit)) : 30;
+    const result = await request<{ runs: RunSummary[] }>(relay, `/node/automation-runs?limit=${limit}`);
+    if (args.includes("--json")) console.log(JSON.stringify(result.runs, null, 2));
+    else if (!result.runs.length) console.log("No Runs.");
+    else for (const run of result.runs) console.log(runLine(run));
+    return;
+  }
+
+  if (command === "runs-status" || command === "runs-wait") {
+    const id = args.find((arg, index) => !arg.startsWith("-") && (index === 0 || !["--interval", "--timeout"].includes(args[index - 1]!)));
+    if (!id) throw new Error(`Usage: bivy runs ${command === "runs-wait" ? "wait" : "status"} <id> [--json]`);
+    const relay = relayConfig(appDataDir());
+    if (command === "runs-status") {
+      const run = await request<RunSummary>(relay, `/node/automation-runs/${encodeURIComponent(id)}`);
+      if (args.includes("--json")) console.log(JSON.stringify(run, null, 2));
+      else {
+        console.log(runLine(run));
+        if (run.output?.sessionId) console.log(`  session ${run.output.sessionId}`);
+        if (run.output?.branch) console.log(`  branch ${run.output.branch}`);
+        if (run.output?.prUrl) console.log(`  pull request ${run.output.prUrl}`);
+        if (run.output?.failure) console.log(`  failure ${run.output.failure}`);
+      }
+      return;
+    }
+    const intervalSeconds = Number(value(args, "--interval") ?? 2);
+    const timeoutSeconds = Number(value(args, "--timeout") ?? 3600);
+    if (!Number.isFinite(intervalSeconds) || intervalSeconds <= 0) throw new Error("--interval must be a positive number of seconds");
+    if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) throw new Error("--timeout must be a positive number of seconds");
+    const deadline = Date.now() + timeoutSeconds * 1_000;
+    let previous = "";
+    while (true) {
+      const run = await request<RunSummary>(relay, `/node/automation-runs/${encodeURIComponent(id)}`);
+      if (!args.includes("--json") && run.status !== previous) console.error(runLine(run));
+      previous = run.status;
+      if (TERMINAL_RUN_STATUSES.has(run.status)) {
+        if (args.includes("--json")) console.log(JSON.stringify(run, null, 2));
+        process.exitCode = run.status === "succeeded" ? 0 : 1;
+        return;
+      }
+      if (Date.now() >= deadline) {
+        if (args.includes("--json")) console.log(JSON.stringify({ id: run.id, status: run.status, timedOut: true }, null, 2));
+        else console.error(`Timed out waiting for Run ${run.id} (${run.status}).`);
+        process.exitCode = 2;
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, intervalSeconds * 1_000));
+    }
+  }
+
+  if (command === "start-run") {
+    if (args.includes("-h") || args.includes("--help")) usage();
+    const valuedFlags = new Set(["--name", "--repo", "--agent", "--model", "--approval", "--sandbox", "--max-attempts"]);
+    const positional: string[] = [];
+    for (let i = 0; i < args.length; i += 1) {
+      const arg = args[i]!;
+      if (valuedFlags.has(arg)) { i += 1; continue; }
+      if (arg.startsWith("--") && arg.includes("=")) continue;
+      if (arg === "--json") continue;
+      positional.push(arg);
+    }
+    let instructions = positional.join(" ").trim();
+    if (instructions === "-") instructions = fs.readFileSync(0, "utf8").trim();
+    if (!instructions) throw new Error("instructions are required (or pass '-' to read stdin)");
+    const appDir = appDataDir();
+    const relay = relayConfig(appDir);
+    const identity = NodeIdentity.load(appDir);
+    const pairing = PairingStore.load(appDir, relay.e2eKey);
+    const approvalMode = value(args, "--approval") ?? "risky";
+    const sandbox = value(args, "--sandbox") ?? "workspace-write";
+    const maxAttempts = Number(value(args, "--max-attempts") ?? 2);
+    const title = (value(args, "--name") ?? instructions.split(/\r?\n/, 1)[0] ?? "One-off Run").slice(0, 120);
+    const created = await request<{ id: string; status: string }>(relay, "/node/automation-runs", {
+      method: "POST",
+      body: JSON.stringify({
+        title,
+        body: `bivy-room-v1:${identity.nodeId}:${seal(pairing.roomKey(), instructions)}`,
+        repo: value(args, "--repo"),
+        runtimeId: value(args, "--agent"),
+        model: value(args, "--model"),
+        approvalMode,
+        sandbox,
+        maxAttempts,
+      }),
+    });
+    if (args.includes("--json")) console.log(JSON.stringify(created, null, 2));
+    else {
+      console.log(`Queued Run ${created.id} on ${identity.name}.`);
+      console.log(`Status: ${created.status}`);
+    }
+    return;
+  }
 
   if (command === "init") {
     const file = configPath(args);
@@ -141,6 +386,7 @@ async function main() {
   if (command === "validate") {
     for (const entry of config.automations) assertAllowedRouting(entry, file);
     console.log(`Valid: ${config.automations.length} automation(s) in ${path.relative(process.cwd(), file) || file}`);
+    printOverlapWarnings(config);
     return;
   }
 
@@ -174,6 +420,7 @@ async function main() {
     const event = parseSimulationEvent(fs.readFileSync(path.resolve(eventFile), "utf8"));
     const result = simulateAutomation(config, event);
     for (const row of result.reasons) console.log(`${row.matched ? "✓" : "·"} ${row.id}: ${row.reason}`);
+    printOverlapWarnings(config);
     if (!result.matched) { console.error("No automation matched."); process.exitCode = 2; return; }
     const a = result.matched;
     console.log(`\nWould run ${a.name}`);
@@ -183,7 +430,12 @@ async function main() {
     console.log(`  sandbox: ${safety.sandbox}${safety.sandbox !== a.safety.sandbox ? ` (requested ${a.safety.sandbox}; restricted by policy)` : ""}`);
     console.log(`  approvals: ${safety.approval}${safety.approval !== a.safety.approval ? ` (requested ${a.safety.approval}; restricted by policy)` : ""}`);
     console.log(`  attempt limit: ${a.safety.maxAttempts}`);
-    console.log("No run was created and no instructions were uploaded.");
+    const gate = printPreflightChecklist(a, file);
+    console.log("\nNo run was created and no instructions were uploaded.");
+    if (gate.blocked) {
+      console.error(`\nBlocked: ${gate.blockingChecks.map((c) => c.label).join(", ")}`);
+      process.exitCode = 2;
+    }
     return;
   }
 

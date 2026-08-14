@@ -124,3 +124,43 @@ describe("fly adapter — provision", () => {
     expect(cfg.files).toBeUndefined();
   });
 });
+
+describe("fly adapter — orphan discovery", () => {
+  it("only lists bivy- apps and filters machines by the account ownership tag", async () => {
+    const calls: ExecRequest[] = [];
+    const exec = async (req: ExecRequest): Promise<ExecResult> => {
+      calls.push(req);
+      if (req.url === "https://api.machines.dev/v1/apps") {
+        return { status: 200, body: { apps: [{ name: "bivy-abc123" }, { name: "someone-elses-app" }] } };
+      }
+      if (req.url === "https://api.machines.dev/v1/apps/bivy-abc123/machines") {
+        return {
+          status: 200,
+          body: [
+            { id: "mine", region: "fra", state: "started", config: { metadata: { bivy: "ephemeral", "bivy-account": "owner-tag-1", "bivy-attempt": "attempt-1" } }, created_at: "2026-08-01T00:00:00Z" },
+            { id: "not-mine", region: "fra", state: "started", config: { metadata: { bivy: "ephemeral", "bivy-account": "owner-tag-OTHER" } } },
+            { id: "not-bivy", region: "fra", state: "started", config: { metadata: {} } },
+          ],
+        };
+      }
+      return { status: 404, body: null };
+    };
+    const found = await ephemeralAdapter("fly")!.discover!({ exec, token: "fly-token", ownershipTag: "owner-tag-1" });
+    expect(found).toEqual([{ id: "mine", provider: "fly", app: "bivy-abc123", name: "bivy-abc123", region: "fra", status: "running", ip: null, createdAt: "2026-08-01T00:00:00Z", attemptId: "attempt-1" }]);
+    // Never touched the non-bivy- app.
+    expect(calls.some((c) => c.url.includes("someone-elses-app"))).toBe(false);
+  });
+
+  it("skips an app whose machine list fails, rather than aborting the whole scan", async () => {
+    const exec = async (req: ExecRequest): Promise<ExecResult> => {
+      if (req.url === "https://api.machines.dev/v1/apps") return { status: 200, body: { apps: [{ name: "bivy-broken" }, { name: "bivy-ok" }] } };
+      if (req.url === "https://api.machines.dev/v1/apps/bivy-broken/machines") return { status: 500, body: { error: "boom" } };
+      if (req.url === "https://api.machines.dev/v1/apps/bivy-ok/machines") {
+        return { status: 200, body: [{ id: "ok1", region: "iad", state: "started", config: { metadata: { bivy: "ephemeral", "bivy-account": "owner-tag-1" } } }] };
+      }
+      return { status: 404, body: null };
+    };
+    const found = await ephemeralAdapter("fly")!.discover!({ exec, token: "fly-token", ownershipTag: "owner-tag-1" });
+    expect(found).toEqual([{ id: "ok1", provider: "fly", app: "bivy-ok", name: "bivy-ok", region: "iad", status: "running", ip: null, createdAt: "", attemptId: undefined }]);
+  });
+});

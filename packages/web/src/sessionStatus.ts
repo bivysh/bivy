@@ -7,6 +7,7 @@ import type { SessionStatus } from "@bivy/core";
  *  row or a partial/synthetic one without extra plumbing. */
 export interface SessionStatusInput {
   status?: SessionStatus;
+  state?: { agent?: "idle" | "working" | "waiting" | "awaiting-input" };
   needsAction?: boolean;
   lastSeenAt?: number;
   finishedAt?: number;
@@ -57,6 +58,7 @@ export function attentionRank(s: SessionStatusInput): number {
  *  read by the dot's title/tooltip and screen readers. */
 export function statusLabel(s: SessionStatusInput): string {
   if (s.needsAction || s.status === "needs_action") return "Needs your response";
+  if (s.state?.agent === "waiting") return "Waiting for background tasks";
   if (s.status === "working") return "Agent working";
   if (s.status === "failed") return "Last turn failed";
   // "saved" means the node has no live record for this session (closed, not

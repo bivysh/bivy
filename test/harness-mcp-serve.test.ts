@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { BIVY_MCP_TOOLS, createBivyMcpServer, runAttachToChat } from "../src/harness/mcp-serve-cli.js";
+import { BIVY_MCP_TOOLS, createBivyMcpServer, runAttachToChat, runBivyRunTool } from "../src/harness/mcp-serve-cli.js";
 
 let failures = 0;
 async function check(name: string, fn: () => void | Promise<void>) {
@@ -25,13 +25,13 @@ async function check(name: string, fn: () => void | Promise<void>) {
 type Captured = { url: string; body: any };
 function fakeFetch(status: number, json: unknown, captured: Captured[] = []) {
   return (async (url: string, init: any) => {
-    captured.push({ url, body: JSON.parse(init.body) });
+    captured.push({ url, body: init.body ? JSON.parse(init.body) : undefined });
     return { ok: status >= 200 && status < 300, status, json: async () => json };
   }) as never;
 }
 
 await check("advertises the attach_to_chat tool with a required path", () => {
-  assert.equal(BIVY_MCP_TOOLS.length, 1);
+  assert.equal(BIVY_MCP_TOOLS.length, 4);
   assert.equal(BIVY_MCP_TOOLS[0]!.name, "attach_to_chat");
   assert.deepEqual(BIVY_MCP_TOOLS[0]!.inputSchema.required, ["path"]);
 });
@@ -75,6 +75,17 @@ await check("a transport failure is caught and reported", async () => {
   assert.match(r.text, /Could not reach the Bivy node/);
 });
 
+await check("Run tools call the parent-scoped node endpoints without exposing a transcript", async () => {
+  const cap: Captured[] = [];
+  const started = await runBivyRunTool("http://x", "parent", "start_run", { instructions: "review branch" }, fakeFetch(201, { runId: "child", status: "pending", provenance: { parentSessionId: "parent", depth: 1 } }, cap));
+  assert.equal(started.isError, false);
+  assert.equal(cap[0]!.url, "http://x/api/session/parent/delegated-runs");
+  const status = await runBivyRunTool("http://x", "parent", "get_run_status", { runId: "child" }, fakeFetch(200, { runId: "child", status: "succeeded", references: { branch: "review/result" } }, cap));
+  assert.match(status.text, /review\/result/);
+  assert.equal(cap[1]!.url, "http://x/api/session/parent/delegated-runs/child");
+  assert.equal(cap[1]!.body, undefined);
+});
+
 await check("round-trip: a real MCP client lists + calls attach_to_chat", async () => {
   const cap: Captured[] = [];
   const server = createBivyMcpServer({ endpoint: "http://127.0.0.1:4317", sessionId: "sess-9", fetchImpl: fakeFetch(200, { ok: true, name: "chart.png", kind: "image" }, cap) });
@@ -84,7 +95,7 @@ await check("round-trip: a real MCP client lists + calls attach_to_chat", async 
   await client.connect(clientT);
 
   const list = await client.listTools();
-  assert.deepEqual(list.tools.map((t) => t.name), ["attach_to_chat"]);
+  assert.deepEqual(list.tools.map((t) => t.name), ["attach_to_chat", "start_run", "get_run_status", "wait_for_run"]);
 
   const res: any = await client.callTool({ name: "attach_to_chat", arguments: { path: "out/chart.png" } });
   assert.equal(res.isError, false);

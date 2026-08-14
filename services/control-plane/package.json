@@ -5,10 +5,16 @@
   "type": "module",
   "description": "Self-hostable/Bivy Cloud control plane: accounts, node registry, entitlements, billing hooks. Data plane lives in the node daemon.",
   "scripts": {
+    "build:automation-core": "tsc -p ../../packages/automation-core/tsconfig.json",
+    "postinstall": "npm run build:automation-core",
+    "predev": "npm run build:automation-core",
+    "prestart": "npm run build:automation-core",
+    "pretypecheck": "npm run build:automation-core",
     "dev": "tsx src/index.ts",
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test:unit": "tsx test/metrics.test.ts && tsx test/store.test.ts && tsx test/ephemeral-configs.test.ts && tsx test/store-contract.test.ts && tsx test/run-evidence.test.ts && tsx test/run-cancellation.test.ts && tsx test/run-idempotency.test.ts &&tsx test/schedule.test.ts && tsx test/automation-match.test.ts && tsx test/session-index.test.ts && tsx test/session-count.test.ts && tsx test/relay-shards.test.ts && tsx test/redirect.test.ts && tsx test/webhooks.test.ts && tsx test/automation-webhook.test.ts && tsx test/case-b-targeting.test.ts && tsx test/billing-lifecycle.test.ts && tsx test/trial-sessions.test.ts && tsx test/push-entitlements.test.ts && tsx test/notification-preferences.test.ts && tsx test/ephemeral-teardown.test.ts && tsx test/ephemeral-provisioner-enable.test.ts && tsx test/ephemeral-hosted-routing.test.ts && tsx test/ephemeral-provision-lease.test.ts && tsx test/ephemeral-ready-capacity.test.ts && tsx test/hosted-github-auth.test.ts && tsx test/device-vault.test.ts && tsx test/session-snapshot.test.ts"
+    "pretest:unit": "npm run build:automation-core",
+    "test:unit": "tsx test/metrics.test.ts && tsx test/store.test.ts && tsx test/ephemeral-configs.test.ts && tsx test/store-contract.test.ts && tsx test/run-evidence.test.ts && tsx test/run-cancellation.test.ts && tsx test/run-idempotency.test.ts &&tsx test/schedule.test.ts && tsx test/automation-match.test.ts && tsx test/capability-routing.test.ts && tsx test/automation-simulate.test.ts && tsx test/session-index.test.ts && tsx test/session-count.test.ts && tsx test/relay-shards.test.ts && tsx test/redirect.test.ts && tsx test/webhooks.test.ts && tsx test/automation-webhook.test.ts && tsx test/case-b-targeting.test.ts && tsx test/billing-lifecycle.test.ts && tsx test/trial-sessions.test.ts && tsx test/push-entitlements.test.ts && tsx test/notification-preferences.test.ts && tsx test/ephemeral-teardown.test.ts && tsx test/ephemeral-provisioner-enable.test.ts && tsx test/ephemeral-hosted-routing.test.ts && tsx test/ephemeral-provision-lease.test.ts && tsx test/ephemeral-attempts.test.ts && tsx test/ephemeral-lifecycle-hardening.test.ts && tsx test/ephemeral-ready-capacity.test.ts && tsx test/hosted-github-auth.test.ts && tsx test/device-vault.test.ts && tsx test/session-snapshot.test.ts && tsx test/sign-in-funnel.test.ts"
   },
   "dependencies": {
     "@sentry/node": "^10.69.0",
@@ -20,7 +26,8 @@
     "prom-client": "^15.1.3",
     "stripe": "^22.4.0",
     "web-push": "^3.6.7",
-    "@bivy/core": "file:../../packages/core"
+    "@bivy/core": "file:../../packages/core",
+    "@bivy/automation-core": "file:../../packages/automation-core"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",

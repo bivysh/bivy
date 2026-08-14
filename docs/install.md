@@ -82,7 +82,7 @@ Override the location with `BIVY_DATA_DIR`.
 
 ## The setup wizard
 
-`bivy setup` (run by the installer, or `npm run setup` in an existing checkout)
+`bivy setup` (run by the installer, or `pnpm run setup` in an existing checkout)
 picks sensible defaults for everything and asks two questions:
 
 - **Remote access** — hosted (recommended; the hosted app shows your first 25 distinct sessions free, then requires Pro; execution and local history on your machine remain intact) or self-hosted,
@@ -140,8 +140,8 @@ or email used during setup. Advanced users can explicitly pair a device with
 ```bash
 git clone <repo>
 cd bivy
-npm install
-npm run setup     # or: npm start
+pnpm install
+pnpm run setup     # or: pnpm start
 ```
 
 The node has no local UI — `http://localhost:4317` is the data plane (API +

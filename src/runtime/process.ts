@@ -510,7 +510,7 @@ class ProcessSession implements RuntimeSession {
       // own shell resolve its session for `bivy attach <path>` (see
       // session-env.ts); spread last so it can never be shadowed by an operator-
       // configured env var of the same name.
-      env: { ...process.env, ...depCacheEnv(), ...this.runtimeOptions.env, ...credentialEnv, ...prepareEnv, ...(sessionEgressEnv(this.id) ?? egressEnv()), ...bivySessionEnv(this.id) },
+      env: { ...process.env, ...depCacheEnv(this.cwd), ...this.runtimeOptions.env, ...credentialEnv, ...prepareEnv, ...(sessionEgressEnv(this.id) ?? egressEnv()), ...bivySessionEnv(this.id) },
       stdio: "pipe",
       // Detached so the child becomes the leader of its own process group
       // (POSIX) — see killProcessGroup() / abort() below, which kill that whole

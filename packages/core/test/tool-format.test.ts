@@ -127,7 +127,37 @@ describe("formatTool", () => {
   });
 });
 
+describe("tool-result outcome (exitCode / isError / truncated)", () => {
+  it("marks a shell call that exited non-zero as an error and carries the exit code", () => {
+    const f = formatTool("bash", { command: "false" }, { kind: "shell", command: "false", result: { exitCode: 1 } });
+    expect(f.isError).toBe(true);
+    expect(f.exitCode).toBe(1);
+  });
+
+  it("marks an agent-reported error even with a zero/absent exit code", () => {
+    const f = formatTool("read", { path: "/x" }, { kind: "read", path: "/x", result: { isError: true } });
+    expect(f.isError).toBe(true);
+  });
+
+  it("does not flag a successful call, but still surfaces a truncated result", () => {
+    const ok = formatTool("bash", { command: "ls" }, { kind: "shell", command: "ls", result: { exitCode: 0 } });
+    expect(ok.isError).toBeFalsy();
+    expect(ok.exitCode).toBe(0);
+    const trunc = formatTool("bash", { command: "ls" }, { kind: "shell", command: "ls", result: { exitCode: 0, truncated: true } });
+    expect(trunc.isError).toBeFalsy();
+    expect(trunc.truncated).toBe(true);
+  });
+});
+
 describe("toolGroupSummary", () => {
+  it("appends a failure count when any call errored", () => {
+    const s = toolGroupSummary([
+      { name: "bash", input: { command: "make" }, detail: { kind: "shell", command: "make", result: { exitCode: 0 } } },
+      { name: "bash", input: { command: "test" }, detail: { kind: "shell", command: "test", result: { exitCode: 2 } } },
+    ]);
+    expect(s).toBe("Ran 2 commands · 1 failed");
+  });
+
   it("counts reads, runs, and edits into a phrase", () => {
     const s = toolGroupSummary([
       { name: "Read", input: { path: "a" } },

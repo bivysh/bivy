@@ -62,13 +62,17 @@ export class IntegrationManager {
   /** Backs the native `attach_to_chat` tool (see toolProvider); undefined = the
    *  tool isn't offered (e.g. a test harness that never wired one). */
   private readonly attachToChat?: AttachToChatFn;
+  /** Additional Bivy-owned tools (for example governed child Runs), bound to
+   * the same lazy Session id as attach_to_chat. */
+  private readonly builtInToolProvider?: (sessionIdRef: SessionIdRef) => ToolProvider;
 
-  constructor(appDir: string, registry: IntegrationDef[] = BUILT_IN_INTEGRATIONS, attachToChat?: AttachToChatFn) {
+  constructor(appDir: string, registry: IntegrationDef[] = BUILT_IN_INTEGRATIONS, attachToChat?: AttachToChatFn, builtInToolProvider?: (sessionIdRef: SessionIdRef) => ToolProvider) {
     this.store = new IntegrationStore(appDir);
     this.secrets = new SecretVault(appDir);
     this.registry = registry;
     this.riskyTools = new Set(registry.flatMap((d) => d.tools.filter((t) => t.risky).map((t) => t.name)));
     this.attachToChat = attachToChat;
+    this.builtInToolProvider = builtInToolProvider;
   }
 
   // --- helpers ------------------------------------------------------------
@@ -321,6 +325,13 @@ export class IntegrationManager {
         });
       }
     }
+    if (this.builtInToolProvider && sessionIdRef) {
+      const provider = this.builtInToolProvider(sessionIdRef);
+      for (const spec of provider.list()) {
+        specs.push(spec);
+        executors.set(spec.name, (params, signal) => provider.invoke(spec.name, `bivy-${randomUUID()}`, params, signal));
+      }
+    }
     if (this.attachToChat && sessionIdRef) {
       const attachToChat = this.attachToChat;
       specs.push({
@@ -333,11 +344,12 @@ export class IntegrationManager {
       executors.set(ATTACH_TO_CHAT_TOOL.name, async (params) => {
         const sessionId = sessionIdRef.current;
         if (!sessionId) return { content: [{ type: "text", text: "Session is not ready yet — try again in a moment." }], details: {}, isError: true };
-        const p = (params ?? {}) as { filePath?: unknown; caption?: unknown };
+        const p = (params ?? {}) as { filePath?: unknown; caption?: unknown; artifact?: unknown };
         const filePath = typeof p.filePath === "string" ? p.filePath.trim() : "";
         if (!filePath) return { content: [{ type: "text", text: "filePath is required" }], details: {}, isError: true };
         const caption = typeof p.caption === "string" ? p.caption : undefined;
-        const result = attachToChat(sessionId, { filePath, caption });
+        const artifact = p.artifact === true;
+        const result = attachToChat(sessionId, { filePath, caption, ...(artifact ? { artifact } : {}) });
         if ("error" in result) return { content: [{ type: "text", text: result.error }], details: {}, isError: true };
         return { content: [{ type: "text", text: `Attached ${result.ref.name} (${result.ref.kind}, ${result.ref.mimeType}) to the chat.` }], details: { ref: result.ref } };
       });

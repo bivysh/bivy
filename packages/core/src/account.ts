@@ -232,6 +232,10 @@ export interface AccountNode {
   name?: string;
   online?: boolean;
   providers?: NodeProviderSummary[];
+  /** Manually declared, owner-asserted capability tags (e.g. "gpu", "docker") —
+   *  never auto-detected, and not a verified security fact. See
+   *  @bivy/core's capability-routing.ts. */
+  capabilities?: string[];
   /** Non-secret provider identity of an ephemeral (`eph-*`) node, populated by
    *  the control-plane node registry at launch. Lets a *second* account device —
    *  which doesn't hold the launching device's local machine record — reconstruct
@@ -743,6 +747,20 @@ export interface HostedMachineSummary {
   purpose?: "queue-item" | "queue-default" | "ready-capacity";
   claimedAt?: string;
   milestones?: Record<string, string>;
+  /** Durable controller lifecycle phase from the attempt record (see
+   * HostedMachineAttemptState in the control plane) — distinct from the
+   * coarser `status` above, which is the provider's raw last-observed state. */
+  lifecycleState?: string;
+  /** "deleted" means the controller is actively driving this machine toward
+   * teardown (TTL/boot-deadline expiry, an abandoned create, or a force-destroy
+   * request) — surfaced so the UI can show "tearing down" rather than a stale
+   * running/claimed phase while that convergence is still in flight. */
+  desiredState?: "active" | "deleted";
+  observedState?: string;
+  /** Next moment the reconciler will force a transition (boot timeout, or TTL
+   * + grace) if nothing else happens — the deadline to show next to a phase. */
+  deadlineAt?: string;
+  lastError?: string;
 }
 
 function coerceHostedStatus(d: any): HostedProvisioningStatus {
@@ -860,13 +878,19 @@ export interface GithubQueueItem {
   checks?: Array<{ name: string; commandHash?: string; status: "passed" | "failed" | "skipped"; exitCode?: number; durationMs?: number }>;
   events?: Array<{
     at: string;
-    kind: "triggered" | "routed" | "claimed" | "attempt_started" | "checkpoint" | "approval" | "policy_denial"
-      | "retry" | "fallback" | "rate_limited" | "branch" | "pull_request" | "needs_attention" | "completed" | "cancelled";
+    kind: "trigger_received" | "trigger_matched" | "queued" | "routed" | "provisioning" | "claimed"
+      | "agent_started" | "checks_started" | "checks_completed" | "result_delivery" | "notification"
+      | "retry" | "cancel_requested" | "terminal"
+      | "triggered" | "attempt_started" | "checkpoint" | "approval" | "policy_denial"
+      | "fallback" | "rate_limited" | "branch" | "pull_request" | "needs_attention" | "completed" | "cancelled";
     summary: string;
     attempt?: number;
     ref?: string;
     url?: string;
     status?: "passed" | "failed" | "denied" | "approved";
+    reasonCode?: string;
+    evidenceRef?: string;
+    milestoneId?: string;
   }>;
   receiptEvidence?: {
     approvals: { requests: number; approved: number; denied: number };
@@ -893,6 +917,10 @@ export interface GithubQueueItem {
       }>;
     };
   };
+  usage?: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number; costUsd?: number };
+  notification?: { status: "not_requested" | "pending" | "delivered" | "failed"; channel?: "push" | "email" | "webhook"; updatedAt: string; reason?: string };
+  references?: Array<{ kind: "receipt" | "evidence" | "log"; ref: string; url?: string }>;
+  attention?: { severity: "warning" | "error" | "critical"; reason: string; since: string };
 }
 
 export type AutomationSchedule =
@@ -911,6 +939,10 @@ export interface AccountAutomation {
   nodeLabel?: string;
   approvalMode?: "never" | "risky" | "always" | "autonomous";
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
+  /** Explicit acknowledgement of autonomous + danger-full-access — without it
+   *  the server's shared preflight gate rejects save. See simulateAutomation
+   *  and docs/automation-evaluator.md. */
+  allowDangerous?: boolean;
   maxAttempts?: number;
   enabled: boolean;
   /** How this automation fires. Absent on legacy rows means "schedule".
@@ -981,6 +1013,10 @@ export interface AccountAutomationRun {
   checks?: GithubQueueItem["checks"];
   events?: GithubQueueItem["events"];
   receiptEvidence?: GithubQueueItem["receiptEvidence"];
+  usage?: GithubQueueItem["usage"];
+  notification?: GithubQueueItem["notification"];
+  references?: GithubQueueItem["references"];
+  attention?: GithubQueueItem["attention"];
   output?: GithubQueueItem["output"];
 }
 
@@ -1030,6 +1066,81 @@ export function updateAutomation(
   return automationRequest(store, `/account/automations/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(patch) }, fetchImpl);
 }
 
+/** The event-fixture vocabulary documented in docs/automations-as-code.md —
+ *  the same shape `bivy automation test` accepts, so a representative event
+ *  means the same thing everywhere. */
+export interface AutomationSimulationEvent {
+  kind: "github" | "linear" | "schedule" | "webhook" | "manual";
+  repo?: string;
+  labels?: string[];
+  mention?: boolean;
+  event?: "issues" | "issue_comment" | "pull_request" | "pull_request_review_comment" | "workflow_run";
+  action?: string;
+  conclusion?: string;
+  workflow?: string;
+}
+
+export type AutomationSimulationDraft = Partial<CreateAutomationInput> & { allowDangerous?: boolean };
+
+export interface AutomationMatchTrailEntry {
+  id: string;
+  matched: boolean;
+  reason: string;
+}
+
+export interface AutomationOverlapFinding {
+  kind: "shadowed" | "overlaps";
+  beforeId: string;
+  afterId: string;
+  detail: string;
+}
+
+export type AutomationPreflightSeverity = "ok" | "info" | "warn" | "block" | "skipped";
+
+export interface AutomationPreflightCheck {
+  id: "source_connection" | "repo_access" | "encrypted_key_ownership" | "assigned_machine" | "agent_model_credentials" | "sandbox_policy" | "quota";
+  severity: AutomationPreflightSeverity;
+  label: string;
+  detail: string;
+  blocksSave: boolean;
+}
+
+export interface AutomationPreflightGate {
+  blocked: boolean;
+  blockingChecks: AutomationPreflightCheck[];
+  requiresAck: boolean;
+  warnChecks: AutomationPreflightCheck[];
+}
+
+/** Result of POST /account/automations/simulate — explains, without running
+ *  anything, which automation a representative event would fire (and why the
+ *  rest didn't), any overlap/shadow warnings across the account's rules, and
+ *  the seven-check preflight for the tested automation. Powers the
+ *  Automations editor's "Test event" workflow. */
+export interface AutomationSimulationResult {
+  /** The tested automation's id — real for an existing automation (with or
+   *  without a draft patch), synthetic for a brand-new never-saved draft. */
+  subjectId: string;
+  matchedId?: string;
+  trail: AutomationMatchTrailEntry[];
+  overlaps: AutomationOverlapFinding[];
+  preflight: AutomationPreflightCheck[];
+  gate: AutomationPreflightGate;
+}
+
+/**
+ * Explain what a representative event would do against either an existing
+ * automation (optionally previewing an unsaved `draft` patch) or a brand-new
+ * draft that has never been saved. Creates no run and persists nothing.
+ */
+export function simulateAutomation(
+  store: LocalStore,
+  input: { automationId?: string; draft?: AutomationSimulationDraft; event?: AutomationSimulationEvent },
+  fetchImpl: typeof fetch = fetch,
+): Promise<AutomationSimulationResult> {
+  return automationRequest(store, "/account/automations/simulate", { method: "POST", body: JSON.stringify(input) }, fetchImpl);
+}
+
 export async function deleteAutomation(store: LocalStore, id: string, fetchImpl: typeof fetch = fetch): Promise<void> {
   const res = await fetchImpl(`${cpBase(store)}/account/automations/${encodeURIComponent(id)}`, {
     method: "DELETE",
@@ -1040,6 +1151,30 @@ export async function deleteAutomation(store: LocalStore, id: string, fetchImpl:
 
 export function runAutomationNow(store: LocalStore, id: string, fetchImpl: typeof fetch = fetch): Promise<AccountAutomationRun> {
   return automationRequest(store, `/account/automations/${encodeURIComponent(id)}/run`, { method: "POST" }, fetchImpl);
+}
+
+/** Queue one governed, unattended Run without creating an Automation definition.
+ * `body` must already be E2E-encrypted for the machine named by `label`. */
+export function createOneOffRun(
+  store: LocalStore,
+  input: {
+    title: string;
+    body: string;
+    label: string;
+    repo?: string;
+    runtimeId?: string;
+    model?: string;
+    approvalMode?: AccountAutomation["approvalMode"];
+    sandbox?: AccountAutomation["sandbox"];
+    maxAttempts?: number;
+    /** An ad-hoc Run may continue an existing Session instead of creating one. */
+    targetKind?: "new_session" | "existing_session";
+    targetSessionId?: string;
+    sourceKey?: string;
+  },
+  fetchImpl: typeof fetch = fetch,
+): Promise<AccountAutomationRun> {
+  return automationRequest(store, "/account/automation-runs", { method: "POST", body: JSON.stringify(input) }, fetchImpl);
 }
 
 export function fetchAutomationRuns(
@@ -1086,6 +1221,37 @@ export async function fetchAutomationRun(
   if (res.status === 401) throw new RunFetchError("Unauthorized", "unauthorized", 401);
   if (!res.ok) throw new RunFetchError(`automation run request failed: ${res.status}`, "error", res.status);
   return (await res.json()) as AccountAutomationRun;
+}
+
+export type ProductMetricEvent =
+  | "activation_ready"
+  | "first_useful_response"
+  | "remote_reconnect"
+  | "remote_intervention"
+  | "run_accepted"
+  | "receipt_reviewed"
+  // Readiness-led first-run journey: one ok/failed pair per step, closed-enum
+  // and content-free (no ids, no reasons, no free text — see recordProductMetric).
+  // Sign-in itself is tracked server-side (control-plane FunnelEvent
+  // sign_in_completed/sign_in_failed) instead of here: a sign-in FAILURE has,
+  // by definition, no authenticated account yet to attribute this
+  // account-scoped metric to.
+  | "first_run_machine_ready"
+  | "first_run_machine_failed"
+  | "first_run_provider_connected"
+  | "first_run_provider_failed"
+  | "first_run_agent_verified"
+  | "first_run_agent_failed";
+export type ProductMetricClient = "desktop" | "mobile" | "cli" | "node";
+
+/** Emit one content-free milestone. The request contains closed enums only. */
+export async function recordProductMetric(store: LocalStore, event: ProductMetricEvent, client: ProductMetricClient, fetchImpl: typeof fetch = fetch): Promise<void> {
+  const res = await fetchImpl(`${cpBase(store)}/account/product-events`, {
+    method: "POST",
+    headers: authHeaders(store),
+    body: JSON.stringify({ event, client }),
+  });
+  if (!res.ok) throw new Error(`product event request failed: ${res.status}`);
 }
 
 /** Cancel a pending or active automation run. Repeating this call after a

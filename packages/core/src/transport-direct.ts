@@ -433,6 +433,9 @@ export class DirectTransport implements Transport {
           this.emit({ type: "node.stats", stats: await this.directApi(`/api/node/stats?${q}`) });
           break;
         }
+        case "capabilities.get":
+          this.emit({ type: "capabilities", capabilities: await this.directApi("/api/capabilities") });
+          break;
         case "runtimes.list":
           this.emitMerged("runtimes.list", await this.directApi("/api/runtimes"));
           break;
@@ -487,18 +490,36 @@ export class DirectTransport implements Transport {
         case "models.custom.presets":
           this.emitMerged("models.custom.presets", await this.directApi("/api/models/catalog"));
           break;
+        case "models.custom.discover": {
+          const requestId = String(obj.requestId ?? "");
+          try {
+            const result = await this.directApi("/api/models/discover", { method: "POST", body: "{}" });
+            this.emit({ type: "models.custom.discover.ok", requestId, ...result });
+          } catch (error) {
+            this.emit({ type: "models.custom.discover.error", requestId, error: error instanceof Error ? error.message : String(error) });
+          }
+          break;
+        }
+        case "models.custom.verify": {
+          const requestId = String(obj.requestId ?? "");
+          try {
+            const result = await this.directApi("/api/models/verify", { method: "POST", body: JSON.stringify(obj) });
+            this.emit({ type: "models.custom.verify.ok", requestId, ...result });
+          } catch (error) {
+            this.emit({ type: "models.custom.verify.error", requestId, error: error instanceof Error ? error.message : String(error) });
+          }
+          break;
+        }
         case "models.custom.save": {
           const requestId = String(obj.requestId ?? "");
           try {
-            this.emitMerged(
-              "models.custom.list",
-              await this.directApi("/api/models/custom", {
-                method: "POST",
-                body: JSON.stringify((obj as any).spec ?? obj),
-              }),
-            );
+            const result = await this.directApi("/api/models/custom", {
+              method: "POST",
+              body: JSON.stringify((obj as any).spec ?? obj),
+            });
+            this.emitMerged("models.custom.list", result);
             // Dedicated per-request ack, mirroring the relay path — see #140.
-            this.emit({ type: "models.custom.save.ok", requestId });
+            this.emit({ type: "models.custom.save.ok", requestId, provider: result.provider });
           } catch (error) {
             this.emit({ type: "models.custom.save.error", requestId, error: error instanceof Error ? error.message : String(error) });
           }
@@ -672,6 +693,16 @@ export class DirectTransport implements Transport {
             await this.directApi("/api/transcribe", {
               method: "POST",
               body: JSON.stringify({ audio: obj.audio, mimeType: obj.mimeType, provider: obj.provider, language: obj.language }),
+            }),
+            { requestId: String(obj.requestId ?? "") },
+          );
+          break;
+        case "synthesize":
+          this.emitMerged(
+            "speech.audio",
+            await this.directApi("/api/speech", {
+              method: "POST",
+              body: JSON.stringify({ text: obj.text, voice: obj.voice, instructions: obj.instructions }),
             }),
             { requestId: String(obj.requestId ?? "") },
           );

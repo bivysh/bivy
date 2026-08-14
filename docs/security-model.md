@@ -43,6 +43,20 @@ For interactive terminal/browser/phone sessions, it does **not** receive prompts
 transcripts, diffs, or workspace files: those frames are end-to-end encrypted
 between the node and its paired devices.
 
+That includes attachments and the Session/Run **Artifacts** sheet (screenshots,
+reports, benchmark results, build archives an agent surfaces with `bivy attach`
+/ `attach_to_chat`, or a user uploads). Attachment bytes live only in the node's
+content-addressed `AttachmentStore` (`src/session/attachment-store.ts`); the
+Artifacts sheet's projection (`packages/core/src/artifacts.ts`) is a pure,
+client-side fold over the transcript the E2E channel already delivers — it adds
+no new server, no new wire command, and reaches the control plane not at all.
+The `artifact` marking (`bivy attach --artifact`) is carried the same way: it
+rides the same end-to-end-encrypted `attachment` event/history payload as the
+filename and caption it sits next to, never as a separate control-plane call.
+The one exception, as noted below, is a GitHub-queue run's bounded
+`output.artifactUrl` — an external link a run reports as its outcome, not a
+filename or byte.
+
 Inbound automations have a different boundary because Slack and generic webhook
 senders call the control plane directly. The exceptions are:
 

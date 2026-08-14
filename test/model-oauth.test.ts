@@ -16,6 +16,7 @@ import {
   nativeOAuthProviderIds,
   loginModelOAuth,
   refreshModelOAuth,
+  refreshModelOAuthState,
   type AuthInteraction,
 } from "../src/runtime/oauth/model-oauth.js";
 
@@ -179,6 +180,16 @@ await check("xAI refresh keeps the previous refresh token when the response omit
   await refreshModelOAuth(dir, "xai");
   const cred = await store.read("xai");
   assert.equal((cred as { refresh?: string }).refresh, "keep-me", "non-rotating provider keeps its refresh token");
+});
+
+await check("refresh state distinguishes transient failure from reconnect required", async () => {
+  const dir = tmpDir();
+  const store = createCredentialVault(dir);
+  await store.modify("anthropic", async () => ({ type: "oauth", access: "old", refresh: "rt", expires: Date.now() - 1000 }));
+  stubFetch(() => ({ ok: false, status: 503, json: { error: "temporarily_unavailable" } }));
+  assert.equal((await refreshModelOAuthState(dir, "anthropic")).state, "transient_failure");
+  stubFetch(() => ({ ok: false, status: 400, json: { error: "invalid_grant" } }));
+  assert.equal((await refreshModelOAuthState(dir, "anthropic")).state, "reconnect_required");
 });
 
 await check("concurrent refresh is single-flight — only one network exchange", async () => {

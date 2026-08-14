@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { randomUUID, randomBytes } from "node:crypto";
 import pg from "pg";
+import { anyNodeEligible } from "@bivy/core";
 import { encryptSecret, decryptSecret, isSecretEnvelope, type SecretEnvelope } from "./hosted-crypto.js";
 import {
   type Account,
@@ -33,6 +34,8 @@ import {
   DEFAULT_HOSTED_PROVISIONING,
   type HostedProvisioningStatus,
   type HostedAuditEvent,
+  type HostedMachineAttempt,
+  ConcurrentAttemptUpdateError,
   type ModelAuthVault,
   type ModelAuthWrappedKey,
   type ModelAuthKeyRequest,
@@ -195,6 +198,32 @@ export class PostgresStore implements MeshStore {
         holder      TEXT NOT NULL,
         expires_at  TIMESTAMPTZ NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS hosted_machine_attempts (
+        account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        attempt_id  TEXT NOT NULL,
+        provider    TEXT NOT NULL,
+        config_id   TEXT,
+        node_id     TEXT NOT NULL,
+        state       TEXT NOT NULL,
+        desired     JSONB NOT NULL DEFAULT '{}',
+        machine     JSONB,
+        last_error  TEXT,
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (account_id, attempt_id)
+      );
+      CREATE INDEX IF NOT EXISTS hosted_machine_attempts_active_idx
+        ON hosted_machine_attempts (account_id, state, updated_at);
+      -- Durable lifecycle hardening (docs/ephemeral-lifecycle-review.md): explicit
+      -- desired vs. observed state, a persisted next-deadline, the per-account
+      -- ownership tag applied to provider resources, and an optimistic-concurrency
+      -- version so a reconciler can fence a write against a stale read.
+      ALTER TABLE hosted_machine_attempts ADD COLUMN IF NOT EXISTS desired_state TEXT NOT NULL DEFAULT 'active';
+      ALTER TABLE hosted_machine_attempts ADD COLUMN IF NOT EXISTS observed_state TEXT;
+      ALTER TABLE hosted_machine_attempts ADD COLUMN IF NOT EXISTS deadline_at TIMESTAMPTZ;
+      ALTER TABLE hosted_machine_attempts ADD COLUMN IF NOT EXISTS ownership_tag TEXT;
+      ALTER TABLE hosted_machine_attempts ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 0;
       -- The paid single-user plan was renamed 'individual' -> 'pro' to match what
       -- it is sold as. The plan column is plain TEXT with no enum or CHECK, so the
       -- backfill is a straight UPDATE; it is idempotent (the second run matches no
@@ -276,6 +305,10 @@ export class PostgresStore implements MeshStore {
       -- tier as online/last_seen_at above: never credential material.
       ALTER TABLE nodes ADD COLUMN IF NOT EXISTS providers JSONB;
       ALTER TABLE nodes ADD COLUMN IF NOT EXISTS bootstrap_status JSONB;
+      -- Manually declared, owner-asserted capability tags (see NodeRecord.capabilities
+      -- in store.ts) — same trust tier as providers: plaintext, self-reported, never
+      -- verified. Overwritten wholesale by the owning node on every change.
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS capabilities JSONB;
 
       CREATE TABLE IF NOT EXISTS session_index (
         node_id     TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
@@ -412,17 +445,23 @@ export class PostgresStore implements MeshStore {
         account_id         TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
         ciphertext         TEXT NOT NULL,
         updated_by_device  TEXT NOT NULL,
+        generation         BIGINT NOT NULL DEFAULT 1,
+        key_generation     BIGINT NOT NULL DEFAULT 0,
         updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
       );
+      ALTER TABLE device_vaults ADD COLUMN IF NOT EXISTS generation BIGINT NOT NULL DEFAULT 1;
+      ALTER TABLE device_vaults ADD COLUMN IF NOT EXISTS key_generation BIGINT NOT NULL DEFAULT 0;
 
       CREATE TABLE IF NOT EXISTS device_vault_wrapped_keys (
         account_id             TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
         device_pub             TEXT NOT NULL,
         wrapped_key            TEXT NOT NULL,
         wrapped_by_public_key  TEXT NOT NULL,
+        generation             BIGINT NOT NULL DEFAULT 0,
         updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
         PRIMARY KEY (account_id, device_pub)
       );
+      ALTER TABLE device_vault_wrapped_keys ADD COLUMN IF NOT EXISTS generation BIGINT NOT NULL DEFAULT 0;
 
       CREATE TABLE IF NOT EXISTS device_vault_key_requests (
         account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -623,6 +662,14 @@ export class PostgresStore implements MeshStore {
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS config_key TEXT;
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS config_order INTEGER;
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS max_attempts INTEGER;
+      -- Explicit acknowledgement of autonomous + danger-full-access, checked by
+      -- the shared preflight gate on create/update (see automation-match.ts).
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS allow_dangerous BOOLEAN;
+      -- See AutomationDefinition.requiredCapabilities/preferredCapabilities in
+      -- store.ts. Bounded capability-tag lists validated by @bivy/core's
+      -- capability-routing.ts before they reach here.
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS required_capabilities JSONB;
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS preferred_capabilities JSONB;
       CREATE UNIQUE INDEX IF NOT EXISTS idx_automation_definitions_config_key
         ON automation_definitions(account_id, config_key) WHERE config_key IS NOT NULL;
       CREATE TABLE IF NOT EXISTS trigger_events (
@@ -654,6 +701,10 @@ export class PostgresStore implements MeshStore {
       -- declared-check results, and an ordered event timeline. All three are
       -- allowlisted/bounded by run-evidence.ts before they ever reach here.
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS routing_reason TEXT;
+      -- See WorkItem.requiredCapabilities/preferredCapabilities — copied from the
+      -- request or the AutomationDefinition at enqueue time.
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS required_capabilities JSONB;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS preferred_capabilities JSONB;
       -- Explicit ::jsonb cast on the default (not just relying on the column
       -- type): without it, pg-mem — the in-memory Postgres the test suite runs
       -- against — stores the literal two-character text "[]" instead of an
@@ -661,6 +712,10 @@ export class PostgresStore implements MeshStore {
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS checks JSONB NOT NULL DEFAULT '[]'::jsonb;
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS events JSONB NOT NULL DEFAULT '[]'::jsonb;
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS receipt_evidence JSONB;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS run_usage JSONB;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS notification_delivery JSONB;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS run_references JSONB NOT NULL DEFAULT '[]'::jsonb;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS attention JSONB;
       INSERT INTO trigger_events (id, account_id, kind, created_at)
         SELECT 'legacy:' || id, account_id,
           CASE WHEN source LIKE 'github:%' THEN 'github'
@@ -989,11 +1044,29 @@ export class PostgresStore implements MeshStore {
   }
 
   async removePairedDevice(accountId: string, publicKeyB64: string): Promise<boolean> {
-    const result = await this.query(
-      `DELETE FROM paired_devices WHERE account_id = $1 AND public_key_b64 = $2`,
-      [accountId, publicKeyB64],
-    );
-    return (result.rowCount ?? 0) > 0;
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query(
+        `DELETE FROM paired_devices WHERE account_id = $1 AND public_key_b64 = $2`,
+        [accountId, publicKeyB64],
+      );
+      if ((result.rowCount ?? 0) > 0) {
+        // The revoked device's old wrap must never be copied forward. Advancing
+        // the epoch asks any surviving holder to generate a new vault key and
+        // rewrap it only for the still-paired recipient list.
+        await client.query(`DELETE FROM device_vault_wrapped_keys WHERE account_id = $1 AND device_pub = $2`, [accountId, publicKeyB64]);
+        await client.query(`DELETE FROM device_vault_key_requests WHERE account_id = $1 AND device_pub = $2`, [accountId, publicKeyB64]);
+        await client.query(`UPDATE device_vaults SET key_generation = key_generation + 1, updated_at = now() WHERE account_id = $1`, [accountId]);
+      }
+      await client.query("COMMIT");
+      return (result.rowCount ?? 0) > 0;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async createRelayTicket(input: { role: RelayRole; accountId: string; nodeId: string | null; ttlMs?: number }): Promise<string> {
@@ -1149,6 +1222,13 @@ export class PostgresStore implements MeshStore {
     await this.query(
       `UPDATE nodes SET providers = $2 WHERE id = $1`,
       [nodeId, JSON.stringify(providers)],
+    );
+  }
+
+  async setNodeCapabilities(nodeId: string, capabilities: string[]): Promise<void> {
+    await this.query(
+      `UPDATE nodes SET capabilities = $2 WHERE id = $1`,
+      [nodeId, JSON.stringify(capabilities)],
     );
   }
 
@@ -1675,17 +1755,104 @@ export class PostgresStore implements MeshStore {
     return arr;
   }
 
+  private hostedAttemptFromRow(row: Record<string, any>): HostedMachineAttempt {
+    return {
+      accountId: String(row.account_id), attemptId: String(row.attempt_id),
+      provider: String(row.provider), configId: row.config_id || undefined,
+      nodeId: String(row.node_id), state: row.state,
+      desiredState: row.desired_state === "deleted" ? "deleted" : "active",
+      observedState: row.observed_state || undefined,
+      deadlineAt: row.deadline_at ? new Date(row.deadline_at).toISOString() : undefined,
+      ownershipTag: row.ownership_tag || undefined,
+      desired: row.desired && typeof row.desired === "object" ? row.desired : {},
+      machine: row.machine && typeof row.machine === "object" ? row.machine : undefined,
+      lastError: row.last_error || undefined, retryCount: Number(row.retry_count) || 0,
+      version: Number(row.version) || 0,
+      createdAt: new Date(row.created_at).toISOString(), updatedAt: new Date(row.updated_at).toISOString(),
+    };
+  }
+
+  async putHostedMachineAttempt(attempt: HostedMachineAttempt, opts?: { expectedVersion?: number }): Promise<HostedMachineAttempt> {
+    const expectedVersion = opts?.expectedVersion;
+    const params = [
+      attempt.accountId, attempt.attemptId, attempt.provider, attempt.configId ?? null, attempt.nodeId,
+      attempt.state, attempt.desiredState ?? "active", attempt.observedState ?? null,
+      attempt.deadlineAt ?? null, attempt.ownershipTag ?? null,
+      JSON.stringify(attempt.desired ?? {}), attempt.machine ? JSON.stringify(attempt.machine) : null,
+      attempt.lastError ?? null, attempt.retryCount, attempt.createdAt, attempt.updatedAt,
+    ];
+    if (expectedVersion != null) {
+      // A fenced write only ever applies to an existing row (the caller must
+      // have already read it to know its version), so this is a plain
+      // conditional UPDATE rather than an upsert. Deliberately NOT expressed
+      // as `INSERT ... ON CONFLICT DO UPDATE ... WHERE ... RETURNING`: that
+      // form does not reliably return zero rows on a WHERE mismatch under
+      // pg-mem (the in-memory Postgres this store also runs against for
+      // dev/tests — see postgres-store.test evidence in the PR), silently
+      // turning a rejected fence into an apparent success. A bare UPDATE with
+      // a WHERE clause is unambiguous under both.
+      const { rows } = await this.query(
+        `UPDATE hosted_machine_attempts SET
+           provider=$3, config_id=$4, node_id=$5, state=$6, desired_state=$7, observed_state=$8,
+           deadline_at=$9, ownership_tag=$10, desired=$11, machine=$12, last_error=$13, retry_count=$14,
+           version=version + 1, updated_at=$16
+         WHERE account_id=$1 AND attempt_id=$2 AND version=$17
+         RETURNING *`,
+        [...params, expectedVersion],
+      );
+      if (!rows[0]) throw new ConcurrentAttemptUpdateError(attempt.accountId, attempt.attemptId);
+      return this.hostedAttemptFromRow(rows[0]);
+    }
+    const { rows } = await this.query(
+      `INSERT INTO hosted_machine_attempts
+         (account_id, attempt_id, provider, config_id, node_id, state, desired_state, observed_state,
+          deadline_at, ownership_tag, desired, machine, last_error, retry_count, version, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,1,$15,$16)
+       ON CONFLICT (account_id, attempt_id) DO UPDATE SET
+         provider=EXCLUDED.provider, config_id=EXCLUDED.config_id, node_id=EXCLUDED.node_id,
+         state=EXCLUDED.state, desired_state=EXCLUDED.desired_state, observed_state=EXCLUDED.observed_state,
+         deadline_at=EXCLUDED.deadline_at, ownership_tag=EXCLUDED.ownership_tag,
+         desired=EXCLUDED.desired, machine=EXCLUDED.machine,
+         last_error=EXCLUDED.last_error, retry_count=EXCLUDED.retry_count,
+         version=hosted_machine_attempts.version + 1, updated_at=EXCLUDED.updated_at
+       RETURNING *`,
+      params,
+    );
+    return this.hostedAttemptFromRow(rows[0]);
+  }
+
+  async getHostedMachineAttempt(accountId: string, attemptId: string): Promise<HostedMachineAttempt | undefined> {
+    const { rows } = await this.query(`SELECT * FROM hosted_machine_attempts WHERE account_id=$1 AND attempt_id=$2`, [accountId, attemptId]);
+    return rows[0] ? this.hostedAttemptFromRow(rows[0]) : undefined;
+  }
+
+  async listHostedMachineAttempts(accountId: string, activeOnly = false): Promise<HostedMachineAttempt[]> {
+    const { rows } = await this.query(
+      `SELECT * FROM hosted_machine_attempts WHERE account_id=$1${activeOnly ? " AND state <> 'deleted'" : ""} ORDER BY created_at`,
+      [accountId],
+    );
+    return rows.map((row) => this.hostedAttemptFromRow(row));
+  }
+
   async listHostedMachineAccountIds(): Promise<string[]> {
     // Filter in JS: pg-mem (the dev/test backend) does not implement Postgres's
     // jsonb_typeof/jsonb_array_length functions, and this scan runs only on the
     // small account metadata rows (never session content).
     const { rows } = await this.query(`SELECT id, hosted_machines FROM accounts WHERE hosted_machines IS NOT NULL`);
-    return rows.filter((row) => Array.isArray(row.hosted_machines) && row.hosted_machines.length > 0).map((row) => String(row.id));
+    const ids = new Set(rows.filter((row) => Array.isArray(row.hosted_machines) && row.hosted_machines.length > 0).map((row) => String(row.id)));
+    const attempts = await this.query(`SELECT DISTINCT account_id FROM hosted_machine_attempts WHERE state <> 'deleted'`);
+    for (const row of attempts.rows) ids.add(String(row.account_id));
+    return [...ids];
   }
 
   async listReadyCapacityAccountIds(): Promise<string[]> {
     const { rows } = await this.query(`SELECT id, ephemeral_configs FROM accounts WHERE ephemeral_configs IS NOT NULL`);
     return rows.filter((row) => normalizeEphemeralConfigs(row.ephemeral_configs).some((config) => (config.readyCapacity ?? 0) > 0)).map((row) => String(row.id));
+  }
+
+  async listHostedEnabledAccountIds(): Promise<string[]> {
+    const { rows } = await this.query(`SELECT id, hosted_provisioning FROM accounts WHERE hosted_provisioning IS NOT NULL`);
+    return rows.filter((row) => normalizeHostedProvisioning(row.hosted_provisioning).enabled).map((row) => String(row.id));
   }
 
   async acquireHostedProvisionLease(accountId: string, holder: string, ttlSeconds: number): Promise<boolean> {
@@ -1697,6 +1864,16 @@ export class PostgresStore implements MeshStore {
        SET holder = EXCLUDED.holder, expires_at = EXCLUDED.expires_at
        WHERE hosted_provision_leases.expires_at < now()
        RETURNING holder`,
+      [accountId, holder, expiresAt],
+    );
+    return rows[0]?.holder === holder;
+  }
+
+  async renewHostedProvisionLease(accountId: string, holder: string, ttlSeconds: number): Promise<boolean> {
+    const expiresAt = new Date(Date.now() + Math.max(30, ttlSeconds) * 1000).toISOString();
+    const { rows } = await this.query(
+      `UPDATE hosted_provision_leases SET expires_at=$3
+       WHERE account_id=$1 AND holder=$2 AND expires_at >= now() RETURNING holder`,
       [accountId, holder, expiresAt],
     );
     return rows[0]?.holder === holder;
@@ -1931,25 +2108,37 @@ export class PostgresStore implements MeshStore {
     const { rows } = await this.query(`SELECT * FROM device_vaults WHERE account_id = $1`, [accountId]);
     const row = rows[0];
     if (!row) return undefined;
-    return { ciphertext: row.ciphertext, updatedByDevice: row.updated_by_device, updatedAt: new Date(row.updated_at).toISOString() };
+    return { ciphertext: row.ciphertext, updatedByDevice: row.updated_by_device, updatedAt: new Date(row.updated_at).toISOString(), generation: Number(row.generation), keyGeneration: Number(row.key_generation) };
   }
 
-  async setDeviceVault(accountId: string, byDevicePublicKey: string, ciphertext: string): Promise<DeviceVault> {
+  async setDeviceVault(accountId: string, byDevicePublicKey: string, ciphertext: string, expectedGeneration = 0, keyGeneration = 0): Promise<DeviceVault> {
+    // Give callers an immediate useful conflict (and support pg-mem, which does
+    // not fully implement ON CONFLICT ... WHERE); the SQL predicate below is the
+    // authoritative cross-replica compare-and-set.
+    const observed = await this.getDeviceVault(accountId);
+    if (observed && (observed.generation !== expectedGeneration || observed.keyGeneration !== keyGeneration)) {
+      throw Object.assign(new Error("Device vault changed concurrently"), { status: 409 });
+    }
+    // The WHERE on the conflict update makes this a real compare-and-set, not a
+    // read/check/write race across control-plane replicas.
     const { rows } = await this.query(
-      `INSERT INTO device_vaults (account_id, ciphertext, updated_by_device, updated_at)
-       VALUES ($1, $2, $3, now())
-       ON CONFLICT (account_id) DO UPDATE SET ciphertext = EXCLUDED.ciphertext, updated_by_device = EXCLUDED.updated_by_device, updated_at = now()
+      `INSERT INTO device_vaults (account_id, ciphertext, updated_by_device, generation, key_generation, updated_at)
+       VALUES ($1, $2, $3, 1, $5, now())
+       ON CONFLICT (account_id) DO UPDATE SET ciphertext = EXCLUDED.ciphertext, updated_by_device = EXCLUDED.updated_by_device, generation = device_vaults.generation + 1, updated_at = now()
+       WHERE device_vaults.generation = $4 AND device_vaults.key_generation = $5
        RETURNING *`,
-      [accountId, ciphertext, byDevicePublicKey],
+      [accountId, ciphertext, byDevicePublicKey, expectedGeneration, keyGeneration],
     );
-    return { ciphertext: rows[0].ciphertext, updatedByDevice: rows[0].updated_by_device, updatedAt: new Date(rows[0].updated_at).toISOString() };
+    const row = rows[0];
+    if (!row) throw Object.assign(new Error("Device vault changed concurrently"), { status: 409 });
+    return { ciphertext: row.ciphertext, updatedByDevice: row.updated_by_device, updatedAt: new Date(row.updated_at).toISOString(), generation: Number(row.generation), keyGeneration: Number(row.key_generation) };
   }
 
   async getDeviceVaultWrappedKey(accountId: string, devicePublicKey: string): Promise<DeviceVaultWrappedKeyRecord | undefined> {
     const { rows } = await this.query(`SELECT * FROM device_vault_wrapped_keys WHERE account_id = $1 AND device_pub = $2`, [accountId, devicePublicKey]);
     const row = rows[0];
     if (!row) return undefined;
-    return { devicePublicKey: row.device_pub, wrappedKey: row.wrapped_key, wrappedByPublicKey: row.wrapped_by_public_key, updatedAt: new Date(row.updated_at).toISOString() };
+    return { devicePublicKey: row.device_pub, wrappedKey: row.wrapped_key, wrappedByPublicKey: row.wrapped_by_public_key, generation: Number(row.generation), updatedAt: new Date(row.updated_at).toISOString() };
   }
 
   async requestDeviceVaultWrappedKey(accountId: string, devicePublicKey: string): Promise<void> {
@@ -1970,16 +2159,20 @@ export class PostgresStore implements MeshStore {
     return rows.map((row: any) => ({ devicePublicKey: row.device_pub, createdAt: new Date(row.created_at).toISOString() }));
   }
 
-  async setDeviceVaultWrappedKey(accountId: string, targetDevicePublicKey: string, wrappedByPublicKey: string, wrappedKey: string): Promise<DeviceVaultWrappedKeyRecord> {
+  async setDeviceVaultWrappedKey(accountId: string, targetDevicePublicKey: string, wrappedByPublicKey: string, wrappedKey: string, generation = 0): Promise<DeviceVaultWrappedKeyRecord> {
+    const current = await this.getDeviceVault(accountId);
+    if (current && generation !== current.keyGeneration) throw Object.assign(new Error("Device vault key generation is stale"), { status: 409 });
+    const paired = await this.query(`SELECT 1 FROM paired_devices WHERE account_id = $1 AND public_key_b64 = $2`, [accountId, targetDevicePublicKey]);
+    if (!paired.rows[0]) throw Object.assign(new Error("Vault recipient is not a paired device"), { status: 403 });
     const { rows } = await this.query(
-      `INSERT INTO device_vault_wrapped_keys (account_id, device_pub, wrapped_key, wrapped_by_public_key, updated_at)
-       VALUES ($1, $2, $3, $4, now())
-       ON CONFLICT (account_id, device_pub) DO UPDATE SET wrapped_key = EXCLUDED.wrapped_key, wrapped_by_public_key = EXCLUDED.wrapped_by_public_key, updated_at = now()
+      `INSERT INTO device_vault_wrapped_keys (account_id, device_pub, wrapped_key, wrapped_by_public_key, generation, updated_at)
+       VALUES ($1, $2, $3, $4, $5, now())
+       ON CONFLICT (account_id, device_pub) DO UPDATE SET wrapped_key = EXCLUDED.wrapped_key, wrapped_by_public_key = EXCLUDED.wrapped_by_public_key, generation = EXCLUDED.generation, updated_at = now()
        RETURNING *`,
-      [accountId, targetDevicePublicKey, wrappedKey, wrappedByPublicKey],
+      [accountId, targetDevicePublicKey, wrappedKey, wrappedByPublicKey, generation],
     );
     await this.query(`DELETE FROM device_vault_key_requests WHERE account_id = $1 AND device_pub = $2`, [accountId, targetDevicePublicKey]);
-    return { devicePublicKey: rows[0].device_pub, wrappedKey: rows[0].wrapped_key, wrappedByPublicKey: rows[0].wrapped_by_public_key, updatedAt: new Date(rows[0].updated_at).toISOString() };
+    return { devicePublicKey: rows[0].device_pub, wrappedKey: rows[0].wrapped_key, wrappedByPublicKey: rows[0].wrapped_by_public_key, generation: Number(rows[0].generation), updatedAt: new Date(rows[0].updated_at).toISOString() };
   }
 
   // --- Durable E2E session snapshots (Gap B) ---------------------------
@@ -2287,8 +2480,8 @@ export class PostgresStore implements MeshStore {
       `INSERT INTO automation_definitions
       (id, account_id, name, template_ciphertext, runtime_id, model, node_label, ephemeral,
        approval_mode, sandbox, enabled, schedule, next_run_at, trigger, webhook_secret, repo,
-       labels, repos, template_id, on_events, target_kind, target_session_id, message, config_key, config_order, max_attempts)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26) RETURNING *`,
+       labels, repos, template_id, on_events, target_kind, target_session_id, message, config_key, config_order, max_attempts, allow_dangerous, required_capabilities, preferred_capabilities)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29) RETURNING *`,
       [`automation_${randomUUID()}`, accountId, input.name, input.templateCiphertext ?? null,
         input.runtimeId ?? null, input.model ?? null, input.nodeLabel ?? null, input.ephemeral ?? null,
         input.approvalMode ?? null, input.sandbox ?? null, input.enabled ?? false,
@@ -2303,7 +2496,10 @@ export class PostgresStore implements MeshStore {
         input.message ?? false,
         input.configKey ?? null,
         input.configOrder ?? null,
-        input.maxAttempts ?? null],
+        input.maxAttempts ?? null,
+        input.allowDangerous ?? null,
+        input.requiredCapabilities ? JSON.stringify(input.requiredCapabilities) : null,
+        input.preferredCapabilities ? JSON.stringify(input.preferredCapabilities) : null],
     );
     return mapAutomationDefinition(rows[0]);
   }
@@ -2338,7 +2534,7 @@ export class PostgresStore implements MeshStore {
        enabled=$11, schedule=$12, next_run_at=$13, trigger=$14, webhook_secret=$15,
        repo=$16, labels=$17, repos=$18, template_id=$19, on_events=$20,
        target_kind=$21, target_session_id=$22, message=$23, config_key=$24,
-       config_order=$25, max_attempts=$26, updated_at=now()
+       config_order=$25, max_attempts=$26, allow_dangerous=$27, required_capabilities=$28, preferred_capabilities=$29, updated_at=now()
        WHERE account_id=$1 AND id=$2 RETURNING *`,
       [accountId, id, next.name, next.templateCiphertext ?? null, next.runtimeId ?? null,
         next.model ?? null, next.nodeLabel ?? null, next.ephemeral ?? null,
@@ -2354,7 +2550,10 @@ export class PostgresStore implements MeshStore {
         next.message ?? false,
         next.configKey ?? null,
         next.configOrder ?? null,
-        next.maxAttempts ?? null],
+        next.maxAttempts ?? null,
+        next.allowDangerous ?? null,
+        next.requiredCapabilities ? JSON.stringify(next.requiredCapabilities) : null,
+        next.preferredCapabilities ? JSON.stringify(next.preferredCapabilities) : null],
     );
     return rows[0] ? mapAutomationDefinition(rows[0]) : undefined;
   }
@@ -2491,19 +2690,39 @@ export class PostgresStore implements MeshStore {
     }
     canonicalTriggerId ??= triggerId;
     const target = input.target ?? { kind: "new_session" as const };
+    // Capability gate: a required tag must fail/park HONESTLY when literally no
+    // machine in the account has ever declared it — rather than queuing forever
+    // for a capability nothing claims to have. A machine that declared the tag
+    // but is currently offline still counts (it may come back online), so this
+    // only parks the genuinely unfulfillable case. See capability-routing.ts.
+    const requiredCapabilities = input.requiredCapabilities ?? definition?.requiredCapabilities;
+    const preferredCapabilities = input.preferredCapabilities ?? definition?.preferredCapabilities;
+    let status: "pending" | "needs_attention" = "pending";
+    let routingReason: string | undefined;
+    if (requiredCapabilities?.length) {
+      const { rows: nodeRows } = await this.query(`SELECT capabilities FROM nodes WHERE account_id = $1`, [accountId]);
+      const declared = nodeRows.map((row) => mapStringList(row.capabilities) ?? []);
+      if (!anyNodeEligible(declared, requiredCapabilities)) {
+        status = "needs_attention";
+        routingReason = `no machine declares required capability: ${requiredCapabilities.join(", ")}`;
+      }
+    }
     // Two partial-unique constraints can fire: the per-delivery dedupe key and the
     // per-issue collapse key (only against the still-pending row). ON CONFLICT DO
     // NOTHING covers both; on either conflict we return the existing item.
-    const triggeredEvent: RunEvidenceEvent = {
-      at: new Date().toISOString(),
-      kind: "triggered",
-      summary: "Automation run created.",
-      ref: repo && input.issueNumber !== undefined ? `${repo}#${input.issueNumber}` : repo,
-      url: input.url,
-    };
+    const observedAt = new Date().toISOString();
+    const sourceRefText = repo && input.issueNumber !== undefined ? `${repo}#${input.issueNumber}` : repo;
+    const initialEvents: RunEvidenceEvent[] = [
+      { at: observedAt, kind: "trigger_received", summary: "Trigger received.", ref: sourceRefText, url: input.url, milestoneId: `${canonicalTriggerId}:received` },
+      { at: observedAt, kind: "trigger_matched", summary: definition ? "Trigger matched an Automation." : "Trigger accepted as a one-off Run.", ref: definition?.id, milestoneId: `${canonicalTriggerId}:matched` },
+      { at: observedAt, kind: "queued", summary: "Run persisted in the durable queue.", milestoneId: `${canonicalTriggerId}:queued` },
+      status === "needs_attention"
+        ? { at: observedAt, kind: "needs_attention", summary: routingReason!, milestoneId: `${canonicalTriggerId}:routed` }
+        : { at: observedAt, kind: "routed", summary: "Run routed to an eligible Machine label.", ref: normalizeWorkLabel(input.label ?? definition?.nodeLabel), milestoneId: `${canonicalTriggerId}:routed` },
+    ];
     const { rows } = await this.query(
-      `INSERT INTO work_items (id, account_id, label, source, status, title, body, repo, issue_number, url, external_id, dedupe_key, collapse_key, default_routed, runtime_id, model, installation_id, app_id, definition_id, trigger_id, trigger_kind, target_kind, target_session_id, message, ephemeral, approval_mode, sandbox, max_attempts, events, event_context)
-       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28::jsonb, $29)
+      `INSERT INTO work_items (id, account_id, label, source, status, title, body, repo, issue_number, url, external_id, dedupe_key, collapse_key, default_routed, runtime_id, model, installation_id, app_id, definition_id, trigger_id, trigger_kind, target_kind, target_session_id, message, ephemeral, approval_mode, sandbox, max_attempts, events, event_context, required_capabilities, preferred_capabilities, routing_reason)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29::jsonb, $30, $31, $32, $33)
        ON CONFLICT DO NOTHING
        RETURNING *`,
       [
@@ -2511,6 +2730,7 @@ export class PostgresStore implements MeshStore {
         accountId,
         normalizeWorkLabel(input.label ?? definition?.nodeLabel),
         input.source,
+        status,
         input.title,
         input.body ?? null,
         repo ?? null,
@@ -2534,8 +2754,11 @@ export class PostgresStore implements MeshStore {
         input.approvalMode ?? definition?.approvalMode ?? null,
         input.sandbox ?? definition?.sandbox ?? null,
         input.maxAttempts ?? definition?.maxAttempts ?? null,
-        JSON.stringify([triggeredEvent]),
+        JSON.stringify(initialEvents),
         input.eventContext ?? null,
+        requiredCapabilities ? JSON.stringify(requiredCapabilities) : null,
+        preferredCapabilities ? JSON.stringify(preferredCapabilities) : null,
+        routingReason ?? null,
       ],
     );
     if (rows[0]) return { run: mapAutomationRun(rows[0]), created: true };
@@ -2591,13 +2814,15 @@ export class PostgresStore implements MeshStore {
         await client.query("COMMIT");
         return { run: mapAutomationRun(current), previousStatus, transitioned: false };
       }
-      if (!["pending", "claimed", "running", "needs_attention"].includes(previousStatus)) {
+      if (!["pending", "claimed", "running", "waiting", "needs_attention"].includes(previousStatus)) {
         await client.query("COMMIT");
         return { run: mapAutomationRun(current), previousStatus, transitioned: false };
       }
+      const at = new Date().toISOString();
       const events = [
         ...(current.events ?? []),
-        { at: new Date().toISOString(), kind: "cancelled", summary: "Automation run cancelled." },
+        { at, kind: "cancel_requested", summary: "Cancellation requested by an operator.", milestoneId: `${id}:cancel-requested` },
+        { at, kind: "terminal", summary: "Run reached the cancelled terminal outcome.", status: "denied", milestoneId: `${id}:terminal` },
       ].slice(-100);
       const updated = await client.query(
         `UPDATE work_items SET status = 'cancelled', completed_at = COALESCE(completed_at, now()),
@@ -2680,8 +2905,9 @@ export class PostgresStore implements MeshStore {
     const from: Record<AutomationRunStatus, AutomationRunStatus[]> = {
       pending: [],
       claimed: [],
-      running: ["claimed"],
-      needs_attention: ["running"],
+      running: ["claimed", "waiting"],
+      waiting: ["claimed", "running"],
+      needs_attention: ["running", "waiting"],
       succeeded: ["running", "needs_attention"],
       // Allow failure straight from "claimed": a node can throw before the
       // best-effort /running transition lands, and the run must still terminate
@@ -2695,11 +2921,12 @@ export class PostgresStore implements MeshStore {
     // even when the node never calls the dedicated evidence endpoint, so every
     // run has at least a baseline trigger→claim→attempt→outcome timeline.
     const eventForStatus: Partial<Record<AutomationRunStatus, { kind: RunEvidenceEvent["kind"]; summary: string }>> = {
-      running: { kind: "attempt_started", summary: "Execution started on the assigned node." },
-      needs_attention: { kind: "needs_attention", summary: "Run needs manual attention." },
-      succeeded: { kind: "completed", summary: "Automation run completed successfully." },
-      failed: { kind: "completed", summary: "Automation run failed. Detailed diagnostics remain on the node." },
-      cancelled: { kind: "cancelled", summary: "Automation run cancelled." },
+      running: { kind: "agent_started", summary: "Agent execution started on the assigned Machine." },
+      waiting: { kind: "needs_attention", summary: "Run parked while waiting on an external dependency." },
+      needs_attention: { kind: "needs_attention", summary: "Run parked for operator attention." },
+      succeeded: { kind: "terminal", summary: "Run reached the succeeded terminal outcome." },
+      failed: { kind: "terminal", summary: "Run reached the failed terminal outcome; detailed diagnostics remain on the Machine." },
+      cancelled: { kind: "terminal", summary: "Run reached the cancelled terminal outcome." },
     };
     const event = eventForStatus[status];
     // No jsonb `||` concatenation here (deliberately): pg-mem — the in-memory
@@ -2717,7 +2944,7 @@ export class PostgresStore implements MeshStore {
        started_at = CASE WHEN $3 = 'running' THEN COALESCE(started_at, now()) ELSE started_at END,
        completed_at = CASE WHEN $4 THEN COALESCE(completed_at, now()) ELSE completed_at END,
        lease_expires_at = CASE
-         WHEN $4 OR $3 = 'needs_attention' THEN NULL
+         WHEN $4 OR $3 IN ('waiting', 'needs_attention') THEN NULL
          WHEN $3 = 'running' THEN $7
          ELSE lease_expires_at END,
        output = COALESCE($5, output)
@@ -2727,7 +2954,11 @@ export class PostgresStore implements MeshStore {
     );
     if (!rows[0]) return undefined;
     if (!event) return mapAutomationRun(rows[0]);
-    const events = [...(rows[0].events ?? []), { at: new Date().toISOString(), ...event }].slice(-100);
+    const at = new Date().toISOString();
+    const delivery = terminal ? [{ at, kind: "result_delivery" as const, summary: "Durable result metadata delivered to the control plane.", milestoneId: `${id}:result-delivery` }] : [];
+    const events = [...(rows[0].events ?? []), ...delivery, { at, ...event, attempt: Number(rows[0].attempt ?? 1), milestoneId: `${id}:${status}:${Number(rows[0].attempt ?? 1)}` }]
+      .filter((candidate, index, all) => !candidate.milestoneId || all.findIndex((other) => other.milestoneId === candidate.milestoneId) === index)
+      .slice(-100);
     const { rows: withEvent } = await this.query(
       `UPDATE work_items SET events = $3::jsonb WHERE account_id = $1 AND id = $2 RETURNING *`,
       [accountId, id, JSON.stringify(events)],
@@ -2741,8 +2972,12 @@ export class PostgresStore implements MeshStore {
    *  Read-then-write (not an atomic jsonb `||` UPDATE) — see the comment in
    *  transitionAutomationRun for why; a lost update here just drops one
    *  low-frequency evidence report, never the run's actual status. */
-  async appendRunEvidence(accountId: string, id: string, patch: RunEvidencePatch): Promise<AutomationRun | undefined> {
-    const { rows } = await this.query(`SELECT * FROM work_items WHERE account_id = $1 AND id = $2`, [accountId, id]);
+  async appendRunEvidence(accountId: string, id: string, patch: RunEvidencePatch, expectedNodeId?: string): Promise<AutomationRun | undefined> {
+    const { rows } = await this.query(
+      `SELECT * FROM work_items WHERE account_id = $1 AND id = $2
+       AND ($3::text IS NULL OR (claimed_by_node_id = $3 AND status IN ('claimed', 'running', 'waiting', 'needs_attention')))`,
+      [accountId, id, expectedNodeId ?? null],
+    );
     if (!rows[0]) return undefined;
     const current = rows[0];
     const routingReason = patch.routingReason ?? current.routing_reason ?? undefined;
@@ -2750,10 +2985,34 @@ export class PostgresStore implements MeshStore {
     const checks = patch.checks ? [...(current.checks ?? []), ...patch.checks].slice(-50) : (current.checks ?? []);
     const events = patch.events ? [...(current.events ?? []), ...patch.events].slice(-100) : (current.events ?? []);
     const receiptEvidence = patch.receiptEvidence ?? current.receipt_evidence ?? null;
+    const usage = patch.usage ? { ...(current.run_usage ?? {}), ...patch.usage } : current.run_usage ?? null;
+    const notification = patch.notification ?? current.notification_delivery ?? null;
+    const references = patch.references ? [...(current.run_references ?? []), ...patch.references].slice(-20) : current.run_references ?? [];
+    const attention = patch.attention === null ? null : patch.attention ?? current.attention ?? null;
+    // Check reporting implies an observed checks phase even when an older node
+    // did not send explicit milestones. Stable ids make repeated reports safe.
+    const derivedEvents: RunEvidenceEvent[] = [
+      ...(patch.checks?.length ? [
+        { at: new Date().toISOString(), kind: "checks_started" as const, summary: "Required checks started.", attempt: Number(current.attempt ?? 1), milestoneId: `${id}:checks-started:${Number(current.attempt ?? 1)}` },
+        { at: new Date().toISOString(), kind: "checks_completed" as const, summary: patch.checks.some((check) => check.status === "failed") ? "Required checks completed with failures." : "Required checks completed.", attempt: Number(current.attempt ?? 1), status: patch.checks.some((check) => check.status === "failed") ? "failed" as const : "passed" as const, milestoneId: `${id}:checks-completed:${Number(current.attempt ?? 1)}` },
+      ] : []),
+      ...(patch.notification ? [{
+        at: patch.notification.updatedAt, kind: "notification" as const,
+        summary: `Operator notification ${patch.notification.status.replace("_", " ")}.`,
+        attempt: Number(current.attempt ?? 1), reasonCode: patch.notification.status,
+        milestoneId: `${id}:notification:${patch.notification.status}:${patch.notification.updatedAt}`,
+      }] : []),
+    ];
+    const dedupedEvents = [...events, ...derivedEvents]
+      .filter((candidate, index, all) => !candidate.milestoneId || all.findIndex((other) => other.milestoneId === candidate.milestoneId) === index)
+      .slice(-100);
     const { rows: updated } = await this.query(
-      `UPDATE work_items SET routing_reason = $3, output = $4::jsonb, checks = $5::jsonb, events = $6::jsonb, receipt_evidence = $7::jsonb
-       WHERE account_id = $1 AND id = $2 RETURNING *`,
-      [accountId, id, routingReason ?? null, JSON.stringify(output), JSON.stringify(checks), JSON.stringify(events), JSON.stringify(receiptEvidence)],
+      `UPDATE work_items SET routing_reason = $3, output = $4::jsonb, checks = $5::jsonb, events = $6::jsonb, receipt_evidence = $7::jsonb,
+       run_usage = $8::jsonb, notification_delivery = $9::jsonb, run_references = $10::jsonb, attention = $11::jsonb
+       WHERE account_id = $1 AND id = $2
+         AND ($12::text IS NULL OR (claimed_by_node_id = $12 AND status IN ('claimed', 'running', 'waiting', 'needs_attention')))
+       RETURNING *`,
+      [accountId, id, routingReason ?? null, JSON.stringify(output), JSON.stringify(checks), JSON.stringify(dedupedEvents), JSON.stringify(receiptEvidence), JSON.stringify(usage), JSON.stringify(notification), JSON.stringify(references), JSON.stringify(attention), expectedNodeId ?? null],
     );
     return updated[0] ? mapAutomationRun(updated[0]) : undefined;
   }
@@ -2774,12 +3033,19 @@ export class PostgresStore implements MeshStore {
     id: string,
     input: { label: string; runtimeId?: string; model?: string; ephemeral?: boolean },
   ): Promise<WorkItem | undefined> {
+    const current = await this.getAutomationRun(accountId, id);
+    const at = new Date().toISOString();
+    const routeEvents: RunEvidenceEvent[] = current ? [
+      ...(current.events ?? []),
+      ...(input.ephemeral ? [{ at, kind: "provisioning" as const, summary: "Provisioning an isolated Machine for this Run.", ref: normalizeWorkLabel(input.label), milestoneId: `${id}:provisioning:${current.attempt}` }] : []),
+      { at, kind: "routed" as const, summary: "Run routing was updated by an operator.", ref: normalizeWorkLabel(input.label), attempt: current.attempt, milestoneId: `${id}:routed:${current.attempt}:${normalizeWorkLabel(input.label)}` },
+    ].slice(-100) : [];
     const { rows } = await this.query(
       `UPDATE work_items
-       SET label = $3, runtime_id = $4, model = $5, default_routed = false, ephemeral = $6
+       SET label = $3, runtime_id = $4, model = $5, default_routed = false, ephemeral = $6, events = $7::jsonb
        WHERE id = $2 AND account_id = $1 AND status = 'pending'
        RETURNING *`,
-      [accountId, id, normalizeWorkLabel(input.label), input.runtimeId?.trim() || null, input.model?.trim() || null, Boolean(input.ephemeral)],
+      [accountId, id, normalizeWorkLabel(input.label), input.runtimeId?.trim() || null, input.model?.trim() || null, Boolean(input.ephemeral), JSON.stringify(routeEvents)],
     );
     return rows[0] ? mapWorkItem(rows[0]) : undefined;
   }
@@ -2793,7 +3059,7 @@ export class PostgresStore implements MeshStore {
        ORDER BY created_at ASC`,
       [accountId, labels],
     );
-    return rows.map(mapWorkItem);
+    return rows.map(mapWorkItem).map(withResumeTarget);
   }
 
   async listWorkItems(accountId: string, limit = 50): Promise<WorkItem[]> {
@@ -2821,13 +3087,16 @@ export class PostgresStore implements MeshStore {
     // Best-effort timeline entry (issue #153) — read-then-write, same rationale
     // as transitionAutomationRun; the claim's atomicity is already guaranteed
     // above and does not depend on this second query.
-    const claimedEvent: RunEvidenceEvent = { at: new Date().toISOString(), kind: "claimed", summary: "Run claimed by an eligible node.", ref: nodeId };
+    const claimedEvent: RunEvidenceEvent = {
+      at: new Date().toISOString(), kind: "claimed", summary: "Run claimed by an eligible Machine.", ref: nodeId,
+      attempt: Number(rows[0].attempt ?? 1), milestoneId: `${id}:claimed:${Number(rows[0].attempt ?? 1)}`,
+    };
     const events = [...(rows[0].events ?? []), claimedEvent].slice(-100);
     const { rows: withEvent } = await this.query(
       `UPDATE work_items SET events = $3::jsonb WHERE account_id = $1 AND id = $2 RETURNING *`,
       [accountId, id, JSON.stringify(events)],
     );
-    return mapWorkItem(withEvent[0] ?? rows[0]);
+    return withResumeTarget(mapWorkItem(withEvent[0] ?? rows[0]));
   }
 
   async renewWorkItemLease(accountId: string, nodeId: string, id: string): Promise<WorkItem | undefined> {
@@ -2980,12 +3249,16 @@ function mapHook(row: any): InboundHook {
  *  mapAutomationRun. Defensively re-bounds on read (in addition to the bounds
  *  already enforced at write time by run-evidence.ts) so a row written by an
  *  older/looser server version can never balloon a response unbounded. */
-function mapEvidenceFields(row: any): { routingReason?: string; checks: RunCheck[]; events: RunEvidenceEvent[]; receiptEvidence?: AutomationRun["receiptEvidence"] } {
+function mapEvidenceFields(row: any): Pick<AutomationRun, "routingReason" | "checks" | "events" | "receiptEvidence" | "usage" | "notification" | "references" | "attention"> {
   return {
     routingReason: row.routing_reason ?? undefined,
     checks: Array.isArray(row.checks) ? row.checks.slice(-50) : [],
     events: Array.isArray(row.events) ? row.events.slice(-100) : [],
     receiptEvidence: row.receipt_evidence && typeof row.receipt_evidence === "object" ? row.receipt_evidence : undefined,
+    usage: row.run_usage && typeof row.run_usage === "object" ? row.run_usage : undefined,
+    notification: row.notification_delivery && typeof row.notification_delivery === "object" ? row.notification_delivery : undefined,
+    references: Array.isArray(row.run_references) ? row.run_references.slice(-20) : [],
+    attention: row.attention && typeof row.attention === "object" ? row.attention : undefined,
   };
 }
 
@@ -3019,6 +3292,8 @@ function mapWorkItem(row: any): WorkItem {
     approvalMode: row.approval_mode ?? undefined,
     sandbox: row.sandbox ?? undefined,
     maxAttempts: row.max_attempts == null ? undefined : Number(row.max_attempts),
+    requiredCapabilities: mapStringList(row.required_capabilities),
+    preferredCapabilities: mapStringList(row.preferred_capabilities),
     definitionId: row.definition_id ?? undefined,
     triggerId: row.trigger_id ?? undefined,
     triggerKind: row.trigger_kind ?? undefined,
@@ -3030,6 +3305,28 @@ function mapWorkItem(row: any): WorkItem {
     output: row.output ?? undefined,
     ...mapEvidenceFields(row),
   };
+}
+
+/**
+ * Re-dispatch continuity ("resume, don't restart"). When a work item is served to
+ * a node for a *repeat* attempt whose prior attempt already stood up a session —
+ * its id survives in `output.sessionId` — the node must CONTINUE that session
+ * rather than cold-start a new one. The canonical case: a node/machine restart
+ * drops the lease mid-run, so a stale-lease reclaim re-dispatches the same row
+ * with its output intact; without this the reclaimed attempt would ignore the
+ * live session and open a fresh one.
+ *
+ * Only applied on the node-dispatch paths (list-pending / claim). An explicit
+ * retry (`startAutomationRunAttempt`) deliberately NULLs `output`, so a
+ * genuinely-fresh attempt has no `output.sessionId` and correctly falls back to
+ * the stored (`new_session`) target. An item already targeted at an existing
+ * session keeps its explicit target.
+ */
+function withResumeTarget(item: WorkItem): WorkItem {
+  if (item.targetKind === "existing_session") return item;
+  const sessionId = item.output?.sessionId;
+  if (typeof sessionId !== "string" || !sessionId) return item;
+  return { ...item, targetKind: "existing_session", targetSessionId: sessionId };
 }
 
 function triggerKindForSource(explicit: AutomationTriggerKind | undefined, source: string): AutomationTriggerKind {
@@ -3070,9 +3367,12 @@ function mapAutomationDefinition(row: any): AutomationDefinition {
     approvalMode: row.approval_mode ?? undefined,
     sandbox: row.sandbox ?? undefined,
     maxAttempts: row.max_attempts == null ? undefined : Number(row.max_attempts),
+    requiredCapabilities: mapStringList(row.required_capabilities),
+    preferredCapabilities: mapStringList(row.preferred_capabilities),
     enabled: Boolean(row.enabled),
     trigger: row.trigger ?? undefined,
     webhookSecret: row.webhook_secret ?? undefined,
+    allowDangerous: row.allow_dangerous ?? undefined,
     repo: row.repo ?? undefined,
     labels: mapStringList(row.labels),
     repos: mapStringList(row.repos),
@@ -3136,6 +3436,8 @@ function mapAutomationRun(row: any): AutomationRun {
       ephemeral: row.ephemeral ?? undefined,
       approvalMode: row.approval_mode ?? undefined,
       sandbox: row.sandbox ?? undefined,
+      requiredCapabilities: mapStringList(row.required_capabilities),
+      preferredCapabilities: mapStringList(row.preferred_capabilities),
     },
     output: row.output ?? undefined,
     title: row.title,
@@ -3178,6 +3480,7 @@ function mapNode(row: any): NodeRecord {
     createdAt: new Date(row.created_at).toISOString(),
     providers: row.providers ?? undefined,
     bootstrapStatus: row.bootstrap_status ?? undefined,
+    capabilities: mapStringList(row.capabilities),
   };
 }
 

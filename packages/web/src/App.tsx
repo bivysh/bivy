@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { cancelAutomationRun, fetchAutomationRun, retryAutomationRun, type AccountAutomationRun, type GithubQueueItem } from "@bivy/core";
+import { deriveActivation, cancelAutomationRun, deriveArtifacts, fetchAutomationRun, recordProductMetric, retryAutomationRun, type AccountAutomationRun, type GithubQueueItem } from "@bivy/core";
 import { useAppState } from "./store/useStore.js";
 import { SessionList } from "./components/SessionList.js";
 import { ChatView } from "./components/ChatView.js";
@@ -25,6 +25,7 @@ import { RunPill } from "./components/RunPill.js";
 import { classifySource } from "./sessionSource.js";
 import { indexRunEvidence, failingCheckNames } from "./runEvidence.js";
 import { SessionChangesSheet, countUniqueEditedFiles } from "./components/SessionChangesSheet.js";
+import { ArtifactsSheet } from "./components/ArtifactsSheet.js";
 import { ErrorToast } from "./components/ErrorToast.js";
 import { NoticeToast } from "./components/NoticeToast.js";
 import { Settings } from "./components/Settings.js";
@@ -34,11 +35,16 @@ import { NodePicker } from "./components/Pickers.js";
 import { ConnectRunner } from "./components/ConnectRunner.js";
 import { buildInboxItems } from "./components/Inbox.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "./flags.js";
+import { PwaLifecycleNotice } from "./components/PwaLifecycleNotice.js";
+import { clearQueuedPrompts, markPromptQueued, setFollowupQueuedPrompts, setTurnActive } from "./pwaLifecycle.js";
 // The terminal pulls in xterm + its GPU/search/link addons (~a third of the JS
 // bundle). It's an on-demand overlay, so load it lazily to keep the initial app
 // paint fast; the chunk is fetched the first time the user opens a terminal.
 const TerminalOverlay = lazy(() =>
   import("./components/Terminal.js").then((m) => ({ default: m.TerminalOverlay })),
+);
+const ReadinessChecklist = lazy(() =>
+  import("./components/ReadinessChecklist.js").then((m) => ({ default: m.ReadinessChecklist })),
 );
 import { useEdgeSwipe } from "./useEdgeSwipe.js";
 import { controller } from "./store/useStore.js";
@@ -68,6 +74,12 @@ export function App() {
   // Full-session file changes sheet — opened from the run pill / summary sheet
   // ("N files edited"), not a card stacked above the composer.
   const [changesSheetOpen, setChangesSheetOpen] = useState(false);
+  // Session/Run artifacts sheet — opened from the run pill ("N artifacts"),
+  // mirroring the changes sheet above. The projection itself is a pure fold
+  // over the transcript the store already holds (see deriveArtifacts) — no
+  // extra round trip to the node.
+  const [artifactsSheetOpen, setArtifactsSheetOpen] = useState(false);
+  const artifacts = useMemo(() => deriveArtifacts(state.transcript), [state.transcript]);
   const [terminalOpen, setTerminalOpen] = useState(false);
   /** A live `bivy run` PTY selected from the sidebar; null means open the
    * ordinary shell terminal for the active chat/node. */
@@ -177,6 +189,20 @@ export function App() {
     });
   }, []);
   const online = state.status === "online";
+  useEffect(() => setTurnActive(state.working), [state.working]);
+  useEffect(() => { if (online) clearQueuedPrompts(); }, [online]);
+  const queuedFollowupCount = Object.values(state.followupsBySession).reduce((total, items) => total + items.length, 0);
+  useEffect(() => setFollowupQueuedPrompts(queuedFollowupCount), [queuedFollowupCount]);
+  const activation = useMemo(() => deriveActivation({
+    accountSignedIn: controller.direct ? true : state.signedIn,
+    machineOnline: state.status === "online" ? true : state.status === "offline" ? false : undefined,
+    agentInstalled: state.runtimes.length
+      ? state.runtimes.some((runtime) => String(runtime.status ?? "available") === "available" && runtime.supportTier === "supported")
+      : undefined,
+    credentialValid: state.activationReadiness ? state.activationReadiness.credential.ok : undefined,
+    repositoryReady: state.activationReadiness ? state.activationReadiness.repository.ok : undefined,
+    agentAnswered: state.transcript.some((entry) => entry.role === "assistant" && Boolean(entry.text) && !entry.tool) ? true : undefined,
+  }), [state.activationReadiness, state.runtimes, state.signedIn, state.status, state.transcript]);
   // Latch: has this client ever had a live connection this run? Once true, we
   // treat the WHOLE transient reconnect window as still-composable — not just the
   // brief "reconnecting" beat, but the redial's "connecting" and any re-pair
@@ -420,6 +446,11 @@ export function App() {
     | { interactiveTui?: boolean }
     | undefined;
   const canContinueInTerminal = online && Boolean(activeRuntimeCaps?.interactiveTui);
+  const activeRuntime = state.runtimes.find((r) => r.id === activeSession?.runtimeId);
+  const executionProfile = activeSession?.executionProfile === "isolated_customer_cloud" ? "Isolated customer-cloud"
+    : activeSession?.executionProfile === "trusted_workstation" ? "Trusted workstation"
+      : activeSession?.executionProfile === "restricted" ? "Restricted" : undefined;
+  const trustMode = controller.direct ? "Direct to Machine" : "E2E relay-blind";
 
   // Approval/question cards render inline in the active session's chat scroll, so
   // only show the ones that belong to that session. Items are still kept globally
@@ -492,6 +523,7 @@ export function App() {
             <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M13 2 3 14h9l-1 8 10-12h-9z" />
             </svg>
+            <span>Automations</span>
           </button>
           <button
             className="settings-gear"
@@ -506,6 +538,7 @@ export function App() {
               <circle cx="12" cy="12" r="3" />
               <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
             </svg>
+            <span>Settings</span>
           </button>
         </div>
       </aside>
@@ -579,6 +612,11 @@ export function App() {
                 worktree={activeSession?.worktree}
                 branch={activeSession?.branch}
                 sessionFile={activeSession?.path}
+                executionProfile={executionProfile}
+                effectiveProtection={[activeSession?.sandbox, activeSession?.approvalMode, activeRuntime?.protectionLabel].filter(Boolean).join(" · ") || undefined}
+                trustMode={trustMode}
+                auditHealth={activeSession?.auditHealth}
+                eventLogHealth={activeSession?.eventLogHealth}
                 onContinueInTerminal={canContinueInTerminal ? continueInTerminal : undefined}
               />
             )}
@@ -614,6 +652,21 @@ export function App() {
               {state.nodeUpdating ? "Updating…" : "Update this machine"}
             </button>
           </div>
+        )}
+
+        {!state.activeSessionId && state.transcript.length === 0 && state.sessions.length === 0 && (
+          <Suspense fallback={null}>
+            <ReadinessChecklist
+              activation={activation}
+              onRemediate={{
+                connect_machine: () => openSettings("nodes"),
+                install_agent: () => (document.querySelector(".agent-pill") as HTMLButtonElement | null)?.click(),
+                authenticate_credential: () => openSettings("providers"),
+                grant_repository: () => (document.querySelector(".repo-pill") as HTMLButtonElement | null)?.click(),
+                run_starter_task: () => (document.querySelector(".composer-input") as HTMLTextAreaElement | null)?.focus(),
+              }}
+            />
+          </Suspense>
         )}
 
         {needsNode && (
@@ -696,6 +749,10 @@ export function App() {
               />
             )}
 
+            {artifactsSheetOpen && (
+              <ArtifactsSheet artifacts={artifacts} onClose={() => setArtifactsSheetOpen(false)} />
+            )}
+
             <div className="composer-gh">
               {/* The run card now stands for every active session — an automation
                   trigger, a fork, or a plain hand-opened one — carrying whatever
@@ -715,6 +772,8 @@ export function App() {
                   forkedFrom={activeForkedFrom}
                   filesEdited={countUniqueEditedFiles(state.changesHistory)}
                   onOpenChanges={() => setChangesSheetOpen(true)}
+                  artifactsCount={artifacts.length}
+                  onOpenArtifacts={() => setArtifactsSheetOpen(true)}
                   onOpenRun={(runId) => openRun(runId)}
                   onRecover={(kind) => {
                     // C2: recover a terminal run using existing capabilities. fix/retry
@@ -762,12 +821,17 @@ export function App() {
               )}
             </div>
 
+            <PwaLifecycleNotice status={state.status} hasCachedTranscript={state.transcript.length > 0} />
             <Composer
               state={state}
               disabled={!canCompose}
               disabledHint={state.status === "offline" ? "Not connected" : "Connecting…"}
               working={state.working}
-              onSend={(text, attachments) => controller.sendPrompt(text, attachments)}
+              onSend={(text, attachments) => {
+                if (state.status !== "online") markPromptQueued();
+                setTurnActive(true); // close the pre-`working` update-activation race
+                controller.sendPrompt(text, attachments);
+              }}
               onAbort={() => controller.abort()}
               onError={(message) => controller.store.setError(message)}
             />
@@ -821,6 +885,7 @@ export function App() {
           }}
           resolveMachineName={(machineId) => state.nodes.find((n) => n.id === machineId)?.name || undefined}
           isSessionResolvable={(sessionId) => state.sessions.some((s) => s.sessionId === sessionId)}
+          onReceiptReviewed={() => { void recordProductMetric(controller.local, "receipt_reviewed", matchMedia("(max-width: 700px)").matches ? "mobile" : "desktop").catch(() => {}); }}
           onOpenSession={(sessionId) => {
             const s = state.sessions.find((x) => x.sessionId === sessionId);
             controller.openSessionOnNode(sessionId, s?.path, s?.nodeId);

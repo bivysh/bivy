@@ -40,7 +40,7 @@ export function FirstRunModelAuthSheet({ state }: { state: AppState }) {
         <p className="muted settings-intro">
           {reauth
             ? `Your agent couldn't reach ${name} — its credential is missing or expired. Sign in again to keep going.`
-            : `This temporary machine needs a model to run your task. Sign in once with ${name} — it stays on the runner, and every future runner you launch inherits it automatically, so you won't be asked again.`}
+            : `This temporary Machine needs a model before it can run your task. Sign in once with ${name}. The credential is encrypted for reuse by future isolated Machines; on Bivy Cloud this optional unattended path uses hosted credential custody.`}
         </p>
         <ProviderConnectForm state={state} providerId={req.provider} apiKeyProvider={modelAuthApiKeyProvider(req.provider)} />
       </div>

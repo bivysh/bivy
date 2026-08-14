@@ -25,6 +25,7 @@ export type RuntimeEventType =
   | "turn_start"
   | "message_start"
   | "message_update"
+  | "message_boundary"
   | "turn_end"
   | "tool_call"
   | "tool_execution_start"
@@ -246,7 +247,7 @@ export interface AttachToChatRef {
  */
 export type AttachToChatFn = (
   sessionId: string,
-  opts: { filePath: string; caption?: string; mimeType?: string; name?: string },
+  opts: { filePath: string; caption?: string; mimeType?: string; name?: string; artifact?: boolean },
 ) => { ref: AttachToChatRef } | { error: string };
 
 /** Lightweight session listing (maps to Pi's SessionManager.listAll). */
@@ -824,5 +825,4 @@ export interface CatalogProvider {
 // now live in the pure credentials domain so the resolver (credentials/resolver.ts)
 // no longer points up here for them. Re-exported so runtime consumers
 // (process.ts, protocol.ts, agents/claude-code/runtime.ts) are unchanged.
-// See docs/internal/platform-modularization-plan.md (two-layer pilot).
 export type { ProviderCredential, AgentCredentialStore } from "../credentials/types.js";

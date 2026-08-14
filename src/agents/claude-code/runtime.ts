@@ -36,6 +36,7 @@ import type {
   RuntimeSession,
   SessionSummary,
   ToolInterceptor,
+  ToolProvider,
   TuiLaunchSpec,
   UsageSnapshot,
   UsageWindow,
@@ -196,9 +197,16 @@ function buildAttachMcpServer(sdk: any, sessionId: string, attachToChat: AttachT
     {
       filePath: z.string().describe("Path to the file, absolute or relative to the session workspace."),
       caption: z.string().optional().describe("Short caption shown next to the attachment in the chat."),
+      artifact: z
+        .boolean()
+        .optional()
+        .describe(
+          "Mark this as a named artifact — a durable output worth surfacing in the session's Artifacts list " +
+            "(a report, benchmark result, coverage output, or build archive) — rather than an incidental inline image.",
+        ),
     },
-    async (args: { filePath: string; caption?: string }) => {
-      const result = attachToChat(sessionId, { filePath: args.filePath, caption: args.caption });
+    async (args: { filePath: string; caption?: string; artifact?: boolean }) => {
+      const result = attachToChat(sessionId, { filePath: args.filePath, caption: args.caption, ...(args.artifact ? { artifact: true } : {}) });
       if ("error" in result) return { content: [{ type: "text", text: result.error }], isError: true };
       return {
         content: [{ type: "text", text: `Attached ${result.ref.name} (${result.ref.kind}, ${result.ref.mimeType}) to the chat.` }],
@@ -206,6 +214,35 @@ function buildAttachMcpServer(sdk: any, sessionId: string, attachToChat: AttachT
     },
   );
   return sdk.createSdkMcpServer({ name: BIVY_ATTACH_MCP_SERVER_NAME, tools: [attachTool] });
+}
+
+/** Adapt Bivy's runtime-agnostic ToolProvider to Claude SDK's in-process MCP
+ * builder. Credentials and execution remain on the daemon. */
+function buildToolProviderMcpServer(sdk: any, provider: ToolProvider): unknown {
+  if (typeof sdk?.tool !== "function" || typeof sdk?.createSdkMcpServer !== "function") return undefined;
+  const toShape = (schema: unknown): Record<string, z.ZodTypeAny> => {
+    const object = schema && typeof schema === "object" ? schema as Record<string, unknown> : {};
+    const properties = object.properties && typeof object.properties === "object" ? object.properties as Record<string, unknown> : {};
+    const required = new Set(Array.isArray(object.required) ? object.required.filter((v): v is string => typeof v === "string") : []);
+    const shape: Record<string, z.ZodTypeAny> = {};
+    for (const [name, raw] of Object.entries(properties)) {
+      const field = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+      let value: z.ZodTypeAny = field.type === "string" ? z.string()
+        : field.type === "integer" ? z.number().int()
+          : field.type === "number" ? z.number()
+            : field.type === "boolean" ? z.boolean()
+              : field.type === "object" ? z.object(toShape(field)).passthrough()
+                : z.unknown();
+      if (Array.isArray(field.enum) && field.enum.every((v) => typeof v === "string") && field.enum.length > 0) value = z.enum(field.enum as [string, ...string[]]);
+      shape[name] = required.has(name) ? value : value.optional();
+    }
+    return shape;
+  };
+  const tools = provider.list().map((spec) => sdk.tool(spec.name, spec.description, toShape(spec.parameters), async (args: unknown) => {
+    const result = await provider.invoke(spec.name, `claude-${randomUUID()}`, args);
+    return { content: result.content, ...(result.isError ? { isError: true } : {}) };
+  }));
+  return sdk.createSdkMcpServer({ name: BIVY_ATTACH_MCP_SERVER_NAME, tools });
 }
 
 export function claudeRuntimeFromEnv(): ClaudeCodeRuntimeOptions {
@@ -753,6 +790,7 @@ class ClaudeSession implements RuntimeSession {
     private readonly runtimeOptions: ClaudeCodeRuntimeOptions,
     public readonly cwd: string,
     private readonly toolInterceptor: ToolInterceptor | undefined,
+    private readonly toolProvider: ToolProvider | undefined,
     resumeId?: string,
   ) {
     this.resumeId = resumeId;
@@ -864,7 +902,7 @@ class ClaudeSession implements RuntimeSession {
     // Start from the process env (the SDK's `env` replaces, not merges), layer in
     // any configured extras, then the shared-vault credential so one login at the
     // Bivy level serves this agent too. The vault wins over an ambient key.
-    const env: Record<string, string> = { ...process.env, ...depCacheEnv(), ...this.runtimeOptions.env } as Record<string, string>;
+    const env: Record<string, string> = { ...process.env, ...depCacheEnv(this.cwd), ...this.runtimeOptions.env } as Record<string, string>;
     const credEnv = await this.resolveCredentialEnv();
     Object.assign(env, credEnv);
     // Let the agent's own shell surface a file into the chat via `bivy attach`
@@ -902,10 +940,12 @@ class ClaudeSession implements RuntimeSession {
     // callback (see ClaudeCodeRuntimeOptions.attachToChat); absent in a few
     // deliberately minimal test harnesses, and gracefully degrades to the prompt
     // hint alone if this SDK build lacks the MCP builder helpers.
-    if (this.runtimeOptions.attachToChat) {
-      const attachServer = buildAttachMcpServer(sdk, this.id, this.runtimeOptions.attachToChat);
-      if (attachServer) options.mcpServers = { [BIVY_ATTACH_MCP_SERVER_NAME]: attachServer };
-    }
+    const bivyServer = this.toolProvider
+      ? buildToolProviderMcpServer(sdk, this.toolProvider)
+      : this.runtimeOptions.attachToChat
+        ? buildAttachMcpServer(sdk, this.id, this.runtimeOptions.attachToChat)
+        : undefined;
+    if (bivyServer) options.mcpServers = { [BIVY_ATTACH_MCP_SERVER_NAME]: bivyServer };
 
     const q = sdk.query({ prompt: this.input, options });
     this.query = q;
@@ -1253,7 +1293,7 @@ class ClaudeSession implements RuntimeSession {
     // reach the SDK, surface an actionable message instead of letting it spawn
     // and fail its first request with an opaque `401 Unauthorized`.
     if (!this.query) {
-      const env = { ...process.env, ...depCacheEnv(), ...this.runtimeOptions.env, ...(await this.resolveCredentialEnv().catch(() => ({}))) } as Record<string, string>;
+      const env = { ...process.env, ...depCacheEnv(this.cwd), ...this.runtimeOptions.env, ...(await this.resolveCredentialEnv().catch(() => ({}))) } as Record<string, string>;
       const preflightError = anthropicCredentialPreflight(env);
       if (preflightError) {
         this.messages.push({ role: "user", content: hasImages ? content : prompt, timestamp: Date.now() });
@@ -1363,7 +1403,7 @@ class ClaudeSession implements RuntimeSession {
     const prompt = firstPrompt.trim();
     if (!prompt) return undefined;
 
-    const env = { ...process.env, ...depCacheEnv(), ...this.runtimeOptions.env, ...(await this.resolveCredentialEnv()) } as Record<string, string>;
+    const env = { ...process.env, ...depCacheEnv(this.cwd), ...this.runtimeOptions.env, ...(await this.resolveCredentialEnv()) } as Record<string, string>;
     const apiKey = env.ANTHROPIC_API_KEY || env.CLAUDE_CODE_OAUTH_TOKEN;
     if (!apiKey) return undefined;
 
@@ -1445,13 +1485,13 @@ export class ClaudeCodeRuntime implements AgentRuntime {
   }
 
   async createSession(options: OpenSessionOptions): Promise<OpenSessionResult> {
-    const session = new ClaudeSession(this.options, options.workspace, options.toolInterceptor);
+    const session = new ClaudeSession(this.options, options.workspace, options.toolInterceptor, options.toolProvider);
     this.sessions.push(session);
     return { session };
   }
 
   async openSession(options: OpenSessionOptions & { sessionFile: string }): Promise<OpenSessionResult> {
-    const session = new ClaudeSession(this.options, options.workspace, options.toolInterceptor, options.sessionFile);
+    const session = new ClaudeSession(this.options, options.workspace, options.toolInterceptor, options.toolProvider, options.sessionFile);
     this.sessions.push(session);
     return {
       session,

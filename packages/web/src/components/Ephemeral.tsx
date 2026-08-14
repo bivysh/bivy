@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useState } from "react";
-import { EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint, type EphemeralNodeConfig, type ProviderKeyInfo } from "@bivy/core";
+import { EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint, type DeviceVaultSyncState, type EphemeralNodeConfig, type ProviderKeyInfo } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { Sheet, PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
@@ -18,7 +18,11 @@ import { ConfirmDialog } from "./AppDialog.js";
 export function EphemeralSheet({ onClose, firstRun = false }: { onClose: () => void; firstRun?: boolean }) {
   const [keys, setKeys] = useState<ProviderKeyInfo[]>([]);
   const [provider, setProvider] = useState<string | null>(null);
+  const [showMore, setShowMore] = useState(false);
   const refreshKeys = () => controller.listEphemeralKeys().then(setKeys).catch(() => {});
+  const recommended = EPHEMERAL_PROVIDERS.find((p) => p.id === "fly" && p.maturity === "stable")
+    ?? EPHEMERAL_PROVIDERS.find((p) => p.maturity === "stable");
+  const alternatives = EPHEMERAL_PROVIDERS.filter((p) => p.id !== recommended?.id);
   useEffect(() => { refreshKeys(); }, []);
 
   const catalog = EPHEMERAL_PROVIDERS.find((p) => p.id === provider);
@@ -37,14 +41,33 @@ export function EphemeralSheet({ onClose, firstRun = false }: { onClose: () => v
               ? "Connect your own cloud account to run agents on temporary servers. Pick a provider, paste a token, and you're ready — your first message launches the machine."
               : "Pick a provider and paste a token. Connecting one adds an isolated machine profile you can pick in the machine menu."}
           </p>
-          {EPHEMERAL_PROVIDERS.map((p) => {
+          {recommended && (() => {
+            const k = keys.find((x) => x.id === recommended.id);
+            return (
+              <PickerItem
+                key={recommended.id}
+                title={`${recommended.name} · Recommended`}
+                meta={recommended.blurb}
+                right={k?.configured ? <span className="chip ok">Connected</span> : <span className="chip">Stable</span>}
+                onClick={() => setProvider(recommended.id)}
+              />
+            );
+          })()}
+          <button type="button" className="btn ghost block" aria-expanded={showMore} onClick={() => setShowMore((value) => !value)}>
+            {showMore ? "Hide other cloud providers" : "Other cloud providers"}
+          </button>
+          {showMore && alternatives.map((p) => {
             const k = keys.find((x) => x.id === p.id);
             return (
               <PickerItem
                 key={p.id}
                 title={p.name}
                 meta={p.blurb}
-                right={k?.configured ? <span className="chip ok">Connected</span> : undefined}
+                right={k?.configured
+                  ? <span className="chip ok">Connected</span>
+                  : p.hostedOnly
+                    ? <span className="chip warn">Hosted only</span>
+                    : <span className={`chip${p.maturity === "experimental" ? " warn" : ""}`}>{p.maturity === "experimental" ? "Experimental" : "Stable"}</span>}
                 onClick={() => setProvider(p.id)}
               />
             );
@@ -66,9 +89,11 @@ function ProviderConnectPanel({ providerId, onKeysChanged, onDone }: { providerI
   const [err, setErr] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<null | { title: string; message: string; action: () => void }>(null);
   const [pendingRunner, setPendingRunner] = useState<EphemeralNodeConfig | null>(null);
+  const [syncState, setSyncState] = useState<DeviceVaultSyncState>(() => controller.getDeviceVaultSyncState());
 
   useEffect(() => {
     controller.getEphemeralToken(providerId).then((t) => setHasToken(Boolean(t))).catch(() => {});
+    setSyncState(controller.getDeviceVaultSyncState());
   }, [providerId]);
 
   // Connect the token, then pick the provider's (auto-created) default runner for
@@ -82,6 +107,7 @@ function ProviderConnectPanel({ providerId, onKeysChanged, onDone }: { providerI
       setToken("");
       setHasToken(true);
       onKeysChanged();
+      setSyncState(controller.getDeviceVaultSyncState());
       if (runner) setPendingRunner(runner);
     } catch (e) {
       setErr(String((e as Error).message || e));
@@ -107,6 +133,15 @@ function ProviderConnectPanel({ providerId, onKeysChanged, onDone }: { providerI
 
   return (
     <div className="settings-form">
+      {catalog.hostedOnly && (
+        <p className="muted small warn-text">
+          {catalog.name} can't be launched from this device: powering off its guest doesn't stop billing, so a
+          browser-held token isn't enough — only hosted (control-plane) provisioning, which keeps independent
+          deletion authority, can launch it. You can still connect a token below to validate it, but "Use this
+          profile" will refuse to launch. Turn on hosted execution in Settings → Automations to actually run on
+          {" "}{catalog.name}.
+        </p>
+      )}
       {!hasToken ? (
         <>
           <p className="muted">{catalog.blurb}</p>
@@ -123,14 +158,22 @@ function ProviderConnectPanel({ providerId, onKeysChanged, onDone }: { providerI
           <button className="btn primary" disabled={!token.trim() || saving} onClick={connect}>
             {saving ? "Connecting…" : "Connect"}
           </button>
-          <p className="muted small">The token stays on this device — Bivy never stores it. You can fine-tune region, size, and auto-destroy later in Settings → Isolated machine profiles.</p>
+          <p className="muted small">For this interactive profile, the token stays on this device and is sent only to the selected provider. Unattended Automations require a separate, explicit hosted-custody opt-in. You can fine-tune region, size, and auto-destroy later in Settings → Isolated machine profiles.</p>
         </>
       ) : (
         <>
           <p className="chip ok">✓ {catalog.name} connected</p>
           <p className="muted small">A default isolated machine profile is ready. Pick it and send your first message to launch a machine — no launch button. Adjust its region / size / TTL anytime in Settings → Isolated machine profiles.</p>
+          {controller.getDeviceTokenSync() && syncState.phase !== "idle" && (
+            <div role="status" className={`chip ${syncState.phase === "failed" ? "err" : syncState.phase === "synced" ? "ok" : ""}`}>
+              {syncState.phase === "failed" ? `Credential sync pending: ${syncState.failure ?? "retry needed"}` : syncState.phase === "synced" ? "Credentials synced" : "Credential sync pending"}
+              {syncState.phase === "failed" && <button className="btn ghost" onClick={() => controller.syncDeviceVault().then(() => setSyncState(controller.getDeviceVaultSyncState())).catch(() => setSyncState(controller.getDeviceVaultSyncState()))}>Retry</button>}
+            </div>
+          )}
           <div className="row-actions">
-            <button className="btn primary" disabled={busy} onClick={useRunner}>{busy ? "…" : "Use this profile"}</button>
+            <button className="btn primary" disabled={busy || catalog.hostedOnly} onClick={useRunner}>
+              {busy ? "…" : catalog.hostedOnly ? "Device launch unavailable" : "Use this profile"}
+            </button>
             <button
               className="btn danger-ghost"
               onClick={() => setConfirm({

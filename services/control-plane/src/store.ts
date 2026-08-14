@@ -109,6 +109,12 @@ export interface NodeRecord {
   providers?: NodeProviderSummary[];
   /** Non-secret, fixed-vocabulary cloud-init progress from an ephemeral node. */
   bootstrapStatus?: { phase: string; updatedAt: string };
+  /** Manually declared, owner-asserted capability tags (e.g. "gpu", "docker") —
+   * pushed by the owning node from its local config.yaml, overwritten wholesale
+   * on every change, same trust tier as `providers`. Never auto-detected or
+   * verified; a stale/offline declaration is not re-checked. See
+   * @bivy/core's capability-routing.ts. */
+  capabilities?: string[];
 }
 
 export interface ResolvedClient {
@@ -419,10 +425,78 @@ export function redactHostedProvisioning(h: HostedProvisioning): HostedProvision
   };
 }
 
+/** Durable control-plane intent for one paid machine creation. Written before
+ * enrollment/provider calls and retained through confirmed deletion so a crash
+ * cannot make a provider resource invisible to reconciliation. */
+export type HostedMachineAttemptState =
+  | "requested" | "enrolled" | "provider-accepted" | "tracked"
+  | "ready" | "claimed" | "working" | "deleting" | "deleted" | "failed";
+
+/** What the controller wants for this attempt, independent of `state` (what has
+ * actually been observed). "deleted" is set by TTL/boot-deadline expiry, a user
+ * force-destroy, or the reconciler abandoning a hopeless create — and, once set,
+ * is never reverted; the reconciler's only remaining job for that attempt is to
+ * drive `state` to "deleted" and stop retrying creation. */
+export type HostedMachineAttemptDesiredState = "active" | "deleted";
+
+export interface HostedMachineAttempt {
+  accountId: string;
+  attemptId: string;
+  provider: string;
+  configId?: string;
+  nodeId: string;
+  state: HostedMachineAttemptState;
+  /** Controller intent — see `HostedMachineAttemptDesiredState`. Optional on
+   * write (defaults to "active"); always present on read. */
+  desiredState?: HostedMachineAttemptDesiredState;
+  /** Last raw status string the provider reported for this resource (e.g.
+   * Hetzner "running"/"off"), distinct from the coarse controller `state`. */
+  observedState?: string;
+  /** Next moment the reconciler should force a transition for this attempt
+   * (boot timeout, TTL+grace, etc.) — persisted so it survives a controller
+   * restart and can be shown verbatim in the UI/audit trail. */
+  deadlineAt?: string;
+  /** Opaque per-account tag applied to every provider resource this attempt
+   * creates (see `ownershipTagFor`), so an orphan sweep can discover resources
+   * belonging to this account without ever tagging providers with a raw id. */
+  ownershipTag?: string;
+  desired: Record<string, unknown>;
+  machine?: Record<string, unknown>;
+  lastError?: string;
+  retryCount: number;
+  /** Optimistic-concurrency counter. Incremented by the store on every write
+   * (the input value is ignored — always read back from the row); callers
+   * that read-modify-write under contention (the reconciler) may pass
+   * `expectedVersion` to `putHostedMachineAttempt` to fence a stale write. */
+  version?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Thrown by `putHostedMachineAttempt` when `expectedVersion` no longer matches
+ * the stored row — another writer (a second reconciler pass, a concurrent
+ * replica) has already moved this attempt forward. Callers should re-read and
+ * decide whether their update still applies rather than blindly retrying. */
+export class ConcurrentAttemptUpdateError extends Error {
+  constructor(accountId: string, attemptId: string) {
+    super(`hosted machine attempt ${accountId}/${attemptId} was updated concurrently`);
+    this.name = "ConcurrentAttemptUpdateError";
+  }
+}
+
+/** Stable, non-reversible per-account tag applied to every provider resource a
+ * hosted launch creates (Hetzner label, Fly metadata, EC2 tag). Never the raw
+ * account id — a provider account/API console may be shared or visible to
+ * support staff, and the tag's only job is to scope an orphan-discovery scan to
+ * "resources this Bivy account is responsible for", not to identify the account. */
+export function ownershipTagFor(accountId: string): string {
+  return createHash("sha256").update(`bivy-ownership:${accountId}`).digest("hex").slice(0, 24);
+}
+
 /** An audit event recording a use of hosted credentials (never contains a secret). */
 export interface HostedAuditEvent {
   at: string;
-  action: "credential_updated" | "credential_rotated" | "credential_validation_failed" | "github_app_connected" | "github_app_disconnected" | "provision_attempt" | "provision_launched" | "provision_failed" | "token_minted" | "machine_reaped" | "machine_milestone" | "reconcile_failed" | "room_key_escrowed" | "room_key_reused" | "work_routed" | "capacity_ready" | "capacity_claimed";
+  action: "credential_updated" | "credential_rotated" | "credential_validation_failed" | "github_app_connected" | "github_app_disconnected" | "provision_attempt" | "provision_launched" | "provision_failed" | "token_minted" | "machine_reaped" | "machine_milestone" | "reconcile_failed" | "room_key_escrowed" | "room_key_reused" | "work_routed" | "capacity_ready" | "capacity_claimed" | "orphan_reaped" | "orphan_detected" | "attempt_abandoned" | "force_destroy_requested";
   provider?: string;
   configId?: string;
   nodeId?: string;
@@ -463,12 +537,17 @@ export interface DeviceVault {
   ciphertext: string;
   updatedByDevice: string;
   updatedAt: string;
+  /** Optimistic ciphertext revision. */
+  generation: number;
+  /** Vault-key epoch, advanced whenever a paired device is revoked. */
+  keyGeneration: number;
 }
 
 export interface DeviceVaultWrappedKeyRecord {
   devicePublicKey: string;
   wrappedKey: string;
   wrappedByPublicKey: string;
+  generation: number;
   updatedAt: string;
 }
 
@@ -556,6 +635,7 @@ export type AutomationRunStatus =
   | "pending"
   | "claimed"
   | "running"
+  | "waiting"
   | "needs_attention"
   | "succeeded"
   | "failed"
@@ -585,20 +665,16 @@ export type AutomationTriggerKind = "github" | "slack" | "manual" | "webhook" | 
 // before it ever reaches storage — no prompt, transcript, diff, file content,
 // secret, token, or raw command/tool output is ever accepted.
 export type RunEvidenceEventKind =
-  | "triggered"
-  | "routed"
-  | "claimed"
-  | "attempt_started"
-  | "checkpoint"
-  | "approval"
-  | "policy_denial"
-  | "retry"
-  | "fallback"
-  | "branch"
-  | "pull_request"
-  | "needs_attention"
-  | "completed"
-  | "cancelled";
+  // Canonical causal lifecycle. Legacy names below remain readable during the
+  // additive rollout; new control-plane milestones use these exact stages.
+  | "trigger_received" | "trigger_matched" | "queued" | "routed"
+  | "provisioning" | "claimed" | "agent_started"
+  | "checks_started" | "checks_completed" | "result_delivery"
+  | "notification" | "retry" | "cancel_requested" | "terminal"
+  // Evidence/detail and legacy lifecycle vocabulary.
+  | "triggered" | "attempt_started" | "checkpoint" | "approval"
+  | "policy_denial" | "fallback" | "branch" | "pull_request"
+  | "needs_attention" | "completed" | "cancelled";
 export interface RunEvidenceEvent {
   at: string;
   kind: RunEvidenceEventKind;
@@ -609,6 +685,12 @@ export interface RunEvidenceEvent {
   ref?: string;
   url?: string;
   status?: "passed" | "failed" | "denied" | "approved";
+  /** Closed, machine-readable reason; bounded free-text stays in summary. */
+  reasonCode?: string;
+  /** Receipt/evidence/log identifier or URL; never log content. */
+  evidenceRef?: string;
+  /** Stable id makes retried reports idempotent. */
+  milestoneId?: string;
 }
 export interface RunCheck {
   name: string;
@@ -642,12 +724,39 @@ export interface RunReceiptEvidence {
 /** Sanitized, allowlisted patch a node may report against its own claimed run.
  *  `checks`/`events` are treated as INCREMENTAL — appended to, never replacing,
  *  the run's existing history. */
+export interface RunUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  costUsd?: number;
+}
+export interface RunNotificationDelivery {
+  status: "not_requested" | "pending" | "delivered" | "failed";
+  channel?: "push" | "email" | "webhook";
+  updatedAt: string;
+  reason?: string;
+}
+export interface RunReference {
+  kind: "receipt" | "evidence" | "log";
+  ref: string;
+  url?: string;
+}
+export interface RunAttention {
+  severity: "warning" | "error" | "critical";
+  reason: string;
+  since: string;
+}
 export interface RunEvidencePatch {
   routingReason?: string;
   output?: Partial<NonNullable<AutomationRun["output"]>>;
   checks?: RunCheck[];
   events?: RunEvidenceEvent[];
   receiptEvidence?: RunReceiptEvidence;
+  usage?: RunUsage;
+  notification?: RunNotificationDelivery;
+  references?: RunReference[];
+  attention?: RunAttention | null;
 }
 export interface AutomationDefinition {
   id: string;
@@ -667,6 +776,12 @@ export interface AutomationDefinition {
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
   /** Hard per-run attempt ceiling, independent of the active retry/fallback ruleset. */
   maxAttempts?: number;
+  /** Capability tags a run of this automation needs. Hard block: a node/machine
+   * missing any of these must not claim it. See @bivy/core's capability-routing. */
+  requiredCapabilities?: string[];
+  /** Capability tags a run of this automation prefers. Soft rank only — never
+   * gates eligibility, and never fabricates a match that isn't there. */
+  preferredCapabilities?: string[];
   enabled?: boolean;
   /** How this automation fires. Defaults to "schedule" for legacy rows (any row
    *  with a `schedule` is schedule-triggered). A "webhook" automation is fired by
@@ -679,6 +794,12 @@ export interface AutomationDefinition {
    *  server-side, returned to the client only at create/rotate time, and never
    *  echoed by list/get responses. */
   webhookSecret?: string;
+  /** Explicit save-time acknowledgement of the autonomous + danger-full-access
+   *  combo (mirrors config-as-code's safety.allowDangerous). Without this, the
+   *  shared preflight checklist's sandbox_policy check blocks create/update —
+   *  see runPreflightChecks in src/automation/preflight.ts. Has no effect on
+   *  any other combo. */
+  allowDangerous?: boolean;
   /** Optional GitHub repo workspace target (`owner/name`). Used when the trigger
    *  does not carry a repo of its own (schedule, many webhooks). The node clones
    *  this repo before starting the session — the agent does not pick the repo. */
@@ -745,6 +866,8 @@ export interface AutomationRun {
     ephemeral?: boolean;
     approvalMode?: AutomationDefinition["approvalMode"];
     sandbox?: AutomationDefinition["sandbox"];
+    requiredCapabilities?: string[];
+    preferredCapabilities?: string[];
   };
   output?: {
     sessionId?: string;
@@ -767,6 +890,12 @@ export interface AutomationRun {
   events?: RunEvidenceEvent[];
   /** Bounded governance metadata correlated from the node audit stream. */
   receiptEvidence?: RunReceiptEvidence;
+  /** Optional provider-reported usage/cost, sanitized operational references,
+   *  delivery state, and explicit operator attention. */
+  usage?: RunUsage;
+  notification?: RunNotificationDelivery;
+  references?: RunReference[];
+  attention?: RunAttention;
   title: string;
   body?: string;
   /** Plain chat message (no automation boilerplate/push/checks). */
@@ -820,6 +949,10 @@ export interface WorkItem {
   approvalMode?: AutomationDefinition["approvalMode"];
   sandbox?: AutomationDefinition["sandbox"];
   maxAttempts?: number;
+  /** See AutomationDefinition.requiredCapabilities/preferredCapabilities — copied
+   * onto the item at enqueue time (explicit override, else the definition's). */
+  requiredCapabilities?: string[];
+  preferredCapabilities?: string[];
   installationId?: string; // GitHub App installation id — the node mints a token for it
   appId?: string; // which GitHub App that installation belongs to (a node may serve several)
   // True when a device dispatched this item to a freshly-provisioned ephemeral
@@ -841,6 +974,10 @@ export interface WorkItem {
   checks?: RunCheck[];
   events?: RunEvidenceEvent[];
   receiptEvidence?: RunReceiptEvidence;
+  usage?: RunUsage;
+  notification?: RunNotificationDelivery;
+  references?: RunReference[];
+  attention?: RunAttention;
   /** Plain chat message (no automation boilerplate/push/checks). */
   message?: boolean;
 }
@@ -877,6 +1014,8 @@ export type WorkItemInput = {
   target?: AutomationRun["target"];
   /** Plain chat message (no automation boilerplate/push/checks). */
   message?: boolean;
+  requiredCapabilities?: string[];
+  preferredCapabilities?: string[];
 };
 
 // Per-account inbound hook: a stable id + secret a user configures in GitHub /
@@ -1129,6 +1268,10 @@ export interface MeshStore {
   // overwritten wholesale by the owning node on every credential change.
   setNodeProviders(nodeId: string, providers: NodeProviderSummary[]): Promise<void>;
   setNodeBootstrapStatus(nodeId: string, phase: string): Promise<void>;
+  // Owner-declared capability tags (see NodeRecord.capabilities) — overwritten
+  // wholesale by the owning node on every config change, same trust tier as
+  // setNodeProviders. Never verified; a stale/offline declaration is kept as-is.
+  setNodeCapabilities(nodeId: string, capabilities: string[]): Promise<void>;
 
   // Session index (cross-node unified view). A node replaces its full current
   // session list; clients read the merged list for the account.
@@ -1213,15 +1356,30 @@ export interface MeshStore {
   setHostedProvisioning(accountId: string, patch: Partial<HostedProvisioning>): Promise<HostedProvisioning>;
   getHostedMachines(accountId: string): Promise<Array<Record<string, unknown>>>;
   setHostedMachines(accountId: string, machines: Array<Record<string, unknown>>): Promise<Array<Record<string, unknown>>>;
+  /** Upsert an attempt row. When `opts.expectedVersion` is given, the write is
+   * fenced: it only applies if the stored row's `version` still matches, else
+   * throws `ConcurrentAttemptUpdateError`. Omitted, this is last-write-wins
+   * (the shape every pre-existing call site relies on). */
+  putHostedMachineAttempt(attempt: HostedMachineAttempt, opts?: { expectedVersion?: number }): Promise<HostedMachineAttempt>;
+  getHostedMachineAttempt(accountId: string, attemptId: string): Promise<HostedMachineAttempt | undefined>;
+  listHostedMachineAttempts(accountId: string, activeOnly?: boolean): Promise<HostedMachineAttempt[]>;
   /** Cross-replica mutex around the read/decide/provider-launch sequence. The
    * lease expires so a crashed control-plane process cannot wedge the account. */
   acquireHostedProvisionLease(accountId: string, holder: string, ttlSeconds: number): Promise<boolean>;
+  /** Extend only a lease still owned by `holder`; false means ownership was lost. */
+  renewHostedProvisionLease(accountId: string, holder: string, ttlSeconds: number): Promise<boolean>;
   releaseHostedProvisionLease(accountId: string, holder: string): Promise<void>;
   /** Accounts that currently track at least one control-plane-provisioned
    * machine. Used by the global lifecycle reconciler; returns ids only. */
   listHostedMachineAccountIds(): Promise<string[]>;
   /** Accounts with at least one config requesting ready capacity. */
   listReadyCapacityAccountIds(): Promise<string[]>;
+  /** Accounts with hosted provisioning enabled — a superset of
+   * `listHostedMachineAccountIds()` that includes accounts with NO currently
+   * tracked machine/attempt. Used by the orphan-discovery sweep: the one
+   * failure mode it exists to catch is exactly "tracking itself was lost", so
+   * it cannot rely on tracking to know which accounts to check. */
+  listHostedEnabledAccountIds(): Promise<string[]>;
   // Append-only audit trail of hosted-credential use (capped, newest-first read).
   appendHostedAudit(accountId: string, event: HostedAuditEvent): Promise<void>;
   listHostedAudit(accountId: string, limit?: number): Promise<HostedAuditEvent[]>;
@@ -1246,11 +1404,12 @@ export interface MeshStore {
 
   // Device→device provider-token vault (P2 / Gap A) — recipients are paired devices.
   getDeviceVault(accountId: string): Promise<DeviceVault | undefined>;
-  setDeviceVault(accountId: string, byDevicePublicKey: string, ciphertext: string): Promise<DeviceVault>;
+  /** Compare-and-set ciphertext. A stale expected generation fails with 409. */
+  setDeviceVault(accountId: string, byDevicePublicKey: string, ciphertext: string, expectedGeneration?: number, keyGeneration?: number): Promise<DeviceVault>;
   getDeviceVaultWrappedKey(accountId: string, devicePublicKey: string): Promise<DeviceVaultWrappedKeyRecord | undefined>;
   requestDeviceVaultWrappedKey(accountId: string, devicePublicKey: string): Promise<void>;
   listDeviceVaultKeyRequests(accountId: string, exceptDevicePublicKey: string): Promise<DeviceVaultKeyRequest[]>;
-  setDeviceVaultWrappedKey(accountId: string, targetDevicePublicKey: string, wrappedByPublicKey: string, wrappedKey: string): Promise<DeviceVaultWrappedKeyRecord>;
+  setDeviceVaultWrappedKey(accountId: string, targetDevicePublicKey: string, wrappedByPublicKey: string, wrappedKey: string, generation?: number): Promise<DeviceVaultWrappedKeyRecord>;
 
   // Durable E2E session snapshots for rebuild-resume (Gap B) — opaque ciphertext.
   getSessionSnapshot(accountId: string, sessionId: string): Promise<SessionSnapshotRecord | undefined>;
@@ -1400,7 +1559,7 @@ export interface MeshStore {
   // declared-check results, and new timeline events. `checks`/`events` in the
   // patch are appended to the run's existing history (bounded), never replacing
   // it. Returns undefined for an unknown run.
-  appendRunEvidence(accountId: string, id: string, patch: RunEvidencePatch): Promise<AutomationRun | undefined>;
+  appendRunEvidence(accountId: string, id: string, patch: RunEvidencePatch, expectedNodeId?: string): Promise<AutomationRun | undefined>;
   // Pending items a node may run: the account's items whose label the node serves
   // (a node serving "bivy" also serves "bivy/<self>"; pass the labels it accepts).
   listPendingWorkItems(accountId: string, labels: string[]): Promise<WorkItem[]>;

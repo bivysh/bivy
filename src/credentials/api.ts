@@ -13,7 +13,8 @@
 // docs/credentials-service-plan.md §3.1.
 
 import type { StoredCredential } from "./types.js";
-import { createCredentialVault } from "./store.js";
+import { createCredentialVault, type CredentialVerification } from "./store.js";
+export type { CredentialVerification };
 import {
   inferReferenceBackend,
   normalizeLabel,
@@ -31,6 +32,7 @@ import {
   setIngestPolicy as setIngestPolicyFile,
   type IngestPolicy,
 } from "./presets.js";
+import type { OAuthRefresher } from "./ports.js";
 
 /** A model provider and whether the node currently holds a credential for it. */
 export interface ProviderAuthInfo {
@@ -106,6 +108,22 @@ export async function exportSyncableProviderAuth(credsDir: string): Promise<Reco
  */
 export async function exportSyncableRecords(credsDir: string): Promise<Record<string, CredentialRecord>> {
   return createCredentialVault(credsDir).exportSyncableRecords();
+}
+
+/**
+ * Browser-safe account API-key projection. Used to converge a node-less PWA's
+ * E2E account vault with an enrolled node. OAuth refresh tokens, references,
+ * non-default labels, and node-local records are deliberately excluded.
+ */
+export async function exportAccountApiKeys(credsDir: string): Promise<Array<{ provider: string; key: string; updatedAt?: number }>> {
+  return (await createCredentialVault(credsDir).listRecords())
+    .flatMap((record) => {
+      if (record.label !== DEFAULT_LABEL || record.sync !== "account" || record.source.kind !== "stored") return [];
+      const credential = record.source.cred;
+      return credential.type === "api_key" && typeof credential.key === "string"
+        ? [{ provider: record.provider, key: credential.key, updatedAt: record.updatedAt }]
+        : [];
+    });
 }
 
 /** Record-keyed tombstones for record-shaped cross-node convergence. */
@@ -227,21 +245,37 @@ export interface CredentialRecordSummary {
   expiresAt?: number;
   /** The non-secret pointer, when `kind === "reference"`. */
   ref?: string;
+  /** Whether "Test connection" (see `testCredential`) supports this provider/kind. */
+  testable: boolean;
+  /** The most recent "Test connection" result for this record, if any run. */
+  lastVerifiedAt?: number;
+  lastVerifiedOk?: boolean;
 }
 
 /** Every stored credential as a non-secret summary (never exposes key material). */
 export async function listCredentialRecords(credsDir: string): Promise<CredentialRecordSummary[]> {
-  const records = await createCredentialVault(credsDir).listRecords();
-  return records.map((record): CredentialRecordSummary => {
+  const vault = createCredentialVault(credsDir);
+  const records = await vault.listRecords();
+  return Promise.all(records.map(async (record): Promise<CredentialRecordSummary> => {
     const source = record.source;
+    const verification = await vault.readVerification(record.provider, record.label).catch(() => undefined);
+    const verified = verification ? { lastVerifiedAt: verification.at, lastVerifiedOk: verification.ok } : {};
     if (source.kind === "reference") {
-      return { provider: record.provider, label: record.label, kind: "reference", sync: record.sync, origin: record.origin, ref: source.ref };
+      return { provider: record.provider, label: record.label, kind: "reference", sync: record.sync, origin: record.origin, ref: source.ref, testable: false, ...verified };
     }
     const cred = source.cred;
-    const summary: CredentialRecordSummary = { provider: record.provider, label: record.label, kind: cred.type, sync: record.sync, origin: record.origin };
+    const summary: CredentialRecordSummary = {
+      provider: record.provider,
+      label: record.label,
+      kind: cred.type,
+      sync: record.sync,
+      origin: record.origin,
+      testable: isTestableProvider(record.provider),
+      ...verified,
+    };
     if (cred.type === "oauth") summary.expiresAt = cred.expires;
     return summary;
-  });
+  }));
 }
 
 /**
@@ -290,6 +324,86 @@ export async function removeProviderCredential(credsDir: string, provider: strin
   const id = provider.trim().toLowerCase();
   if (!id) throw new Error("Provider is required");
   await createCredentialVault(credsDir).deleteRecord(id, label);
+}
+
+// --- test connection ---------------------------------------------------------
+// A bounded, read-only-where-possible liveness probe for one credential record.
+// It NEVER sends the secret anywhere but the provider's own API, and the caller
+// (the relay command in server.ts) only ever forwards the returned
+// CredentialVerification back to the client — ok/at/reason, never the token.
+
+/** A minimal authenticated GET each supported provider accepts as a liveness
+ *  check — chosen for being cheap (no completion/generation billed) and not
+ *  mutating anything provider-side. A provider absent here is honestly
+ *  reported as `testable: false` rather than guessing at a result. */
+const PROVIDER_PING: Record<string, (token: string) => { url: string; headers: Record<string, string> }> = {
+  anthropic: (token) => ({ url: "https://api.anthropic.com/v1/models", headers: { "x-api-key": token, "anthropic-version": "2023-06-01" } }),
+  openai: (token) => ({ url: "https://api.openai.com/v1/models", headers: { authorization: `Bearer ${token}` } }),
+};
+
+function isTestableProvider(provider: string): boolean {
+  return provider.trim().toLowerCase() in PROVIDER_PING;
+}
+
+/**
+ * Probe whether a stored credential actually works, and persist the result
+ * (see `BivyCredentialStore.writeVerification` — node-local, never synced).
+ * OAuth credentials are refreshed first via the injected `oauth` port (the
+ * same refresh path the agent runtime uses), so an expired-but-refreshable
+ * token counts as working; a reference credential (`op://…`) is not testable
+ * here since resolving it needs the secrets port this module doesn't have.
+ */
+export async function testCredential(
+  credsDir: string,
+  provider: string,
+  label: string,
+  oauth: OAuthRefresher,
+  fetchImpl: typeof fetch = fetch,
+): Promise<CredentialVerification> {
+  const vault = createCredentialVault(credsDir);
+  const id = provider.trim().toLowerCase();
+  const result = await probe();
+  await vault.writeVerification(id, label, result).catch(() => {});
+  return result;
+
+  async function probe(): Promise<CredentialVerification> {
+    const at = Date.now();
+    if (!id) return { ok: false, at, reason: "not_found" };
+    const record = await vault.readRecord(id, label);
+    if (!record) return { ok: false, at, reason: "not_found" };
+    if (record.source.kind === "reference") return { ok: false, at, reason: "not_supported" };
+
+    const cred = record.source.cred;
+    let token: string;
+    if (cred.type === "oauth") {
+      token = typeof cred.access === "string" ? cred.access : "";
+      if (!token || (Number(cred.expires) || 0) <= Date.now() + 60_000) {
+        const refreshed = await oauth.refresh(id, label).catch(() => undefined);
+        if (!refreshed) return { ok: false, at, reason: "refresh_failed" };
+        token = refreshed;
+      }
+    } else {
+      token = typeof cred.key === "string" ? cred.key : "";
+      if (!token) return { ok: false, at, reason: "not_found" };
+    }
+
+    const ping = PROVIDER_PING[id];
+    if (!ping) return { ok: false, at, reason: "not_supported" };
+    const { url, headers } = ping(token);
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8_000);
+      try {
+        const res = await fetchImpl(url, { headers, signal: controller.signal });
+        if (res.status === 401 || res.status === 403) return { ok: false, at, reason: "unauthorized" };
+        return { ok: res.ok, at, ...(res.ok ? {} : { reason: "network_error" as const }) };
+      } finally {
+        clearTimeout(timeout);
+      }
+    } catch {
+      return { ok: false, at, reason: "network_error" };
+    }
+  }
 }
 
 // --- selection presets (config-as-code, edited from the Models UI) ----------

@@ -97,7 +97,8 @@ try {
   assert.equal(cancelled.status, 200);
   assert.equal(cancelled.body.run.status, "cancelled");
   assert.equal(cancelled.body.run.leaseExpiresAt, undefined);
-  assert.equal(cancelled.body.run.events.at(-1).kind, "cancelled");
+  assert.equal(cancelled.body.run.events.at(-1).kind, "terminal");
+  assert.equal(cancelled.body.run.events.at(-2).kind, "cancel_requested");
   const completedAt = cancelled.body.run.completedAt;
   const eventCount = cancelled.body.run.events.length;
 

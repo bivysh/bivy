@@ -4,6 +4,7 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { formatTool, toHtml, toolGroupSummary, toolRowLabel, type ToolActivity, type ToolFormat, type ToolGlyph } from "@bivy/core";
 import { DiffView } from "./DiffView.js";
 import { Sheet } from "./Sheet.js";
+import { ChevronRightIcon } from "./UiIcons.js";
 
 function GlyphIcon({ glyph }: { glyph: ToolGlyph }) {
   const common = { width: 16, height: 16, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
@@ -73,15 +74,16 @@ function ToolListRow({ tool, f, onSelect }: { tool: ToolActivity; f: ToolFormat;
   const label = elapsed ? `${baseLabel || "Sub-agent"} · ${elapsed}` : baseLabel;
   const running = tool.status === "running";
   return (
-    <div className={`activity${running ? " is-running" : ""}`}>
+    <div className={`activity${running ? " is-running" : ""}${f.isError ? " is-error" : ""}`}>
       <button className="activity-row" onClick={() => onSelect(tool.callId)}>
         <span className="activity-ic">
           <GlyphIcon glyph={f.glyph} />
         </span>
         <span className="activity-verb">{f.verb}</span>
         <span className="activity-desc">{label}</span>
+        {f.isError && <span className="tool-fail" title={typeof f.exitCode === "number" ? `exit ${f.exitCode}` : "failed"}>Failed</span>}
         <DiffStat added={f.added} removed={f.removed} />
-        <span className="tool-chevron">›</span>
+        <span className="tool-chevron"><ChevronRightIcon size={14} /></span>
       </button>
     </div>
   );
@@ -102,6 +104,16 @@ function ToolDetail({ tool, f }: { tool: ToolActivity; f: ToolFormat }) {
         <div className="tool-detail-block">
           <div className="tool-detail-label">Status</div>
           <div className="tool-detail-value">Sub-agent active{elapsed ? ` · ${elapsed} elapsed` : ""}</div>
+        </div>
+      )}
+      {(f.isError || f.truncated) && (
+        <div className="tool-detail-block">
+          <div className="tool-detail-label">Outcome</div>
+          <div className={`tool-detail-value${f.isError ? " is-error" : ""}`}>
+            {f.isError ? "Failed" : "Completed"}
+            {typeof f.exitCode === "number" ? ` · exit ${f.exitCode}` : ""}
+            {f.truncated ? " · output truncated" : ""}
+          </div>
         </div>
       )}
       {f.path && (
@@ -229,6 +241,7 @@ export const ToolGroup = memo(function ToolGroup({ tools }: { tools: ToolActivit
   // yanking focus back to the top of the sheet while a tool call streams.
   const close = useCallback(() => setOpen(false), []);
   const running = tools.some((t) => t.status === "running");
+  const hasError = tools.some((t) => formatTool(t.name, t.input, t.detail).isError);
   const runningDelegations = tools.filter((t) => t.status === "running" && t.detail?.kind === "delegation");
   const summary = runningDelegations.length > 1
     ? `${runningDelegations.length} sub-agents working…`
@@ -239,10 +252,10 @@ export const ToolGroup = memo(function ToolGroup({ tools }: { tools: ToolActivit
         : toolGroupSummary(tools);
   return (
     <div className="tool-group">
-      <button className={`tool-group-line${running ? " is-running" : ""}`} onClick={() => setOpen(true)}>
+      <button className={`tool-group-line${running ? " is-running" : ""}${hasError ? " is-error" : ""}`} onClick={() => setOpen(true)}>
         <span className="tool-group-state" aria-hidden />
         <span className="tool-group-summary">{summary}</span>
-        <span className="tool-chevron">›</span>
+        <span className="tool-chevron"><ChevronRightIcon size={14} /></span>
       </button>
       {open && <ToolActivitySheet tools={tools} summary={summary} onClose={close} />}
     </div>

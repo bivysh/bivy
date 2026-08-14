@@ -16,7 +16,9 @@
 
 import type { AttachmentRef, ConnectionStatus, CredentialPresetsView, CredentialRecordSummary, PromptAttachment, ServerEvent } from "./protocol.js";
 import type { AccountNode, EphemeralNodeConfig } from "./account.js";
+import type { MachineCapabilities } from "./capabilities.js";
 import type { InboxAdvert } from "./inbox.js";
+import type { SessionContract } from "./session-contract.js";
 import { type SlashCommand } from "./slash.js";
 import { toHtml, extractRemoteImageUrls } from "./markdown.js";
 import { eventKind, normalizeEventType, toolCallId, toolDetail, toolInput, toolName } from "./tool-activity.js";
@@ -29,6 +31,7 @@ import {
   githubContext,
   githubFromSummary,
   normalizeAgentCommands,
+  normalizeCapabilitiesSnapshot,
   normalizeModels,
   normalizeNodeStats,
   normalizePrs,
@@ -63,7 +66,7 @@ export type SessionStatus = "idle" | "working" | "needs_action" | "failed" | "sa
 export interface SessionState {
   transport: "reachable" | "unreachable";
   process: "alive" | "exited" | "none";
-  agent: "idle" | "working" | "awaiting-input";
+  agent: "idle" | "working" | "waiting" | "awaiting-input";
   workspace: "clean" | "dirty" | "checkpointing";
   displayStatus: "idle" | "working" | "needs_attention" | "failed";
 }
@@ -129,6 +132,24 @@ export interface SessionSummary {
    *  = the node default. Baked in at creation and read-only for the session's life
    *  — surfaced so a running session can show its sandbox mode read-only. */
   sandbox?: SandboxTier;
+  approvalMode?: "never" | "risky" | "always" | "autonomous";
+  ephemeral?: boolean;
+  executionProfile?: "trusted_workstation" | "isolated_customer_cloud" | "restricted";
+  auditHealth?: {
+    storage: "healthy" | "missing" | "corrupt" | "unreadable";
+    writes: "healthy" | "unknown" | "degraded";
+    failedWrites: number;
+    corruptLines: number;
+  };
+  eventLogHealth?: { state: "healthy" | "degraded"; operation?: "read" | "parse" | "append" | "rewrite"; at?: number };
+  /** The Effective Session Contract resolved once at session creation from
+   *  real launch facts (not live-recomputed on every refresh — see
+   *  session-contract.ts) — what this specific session actually got, as
+   *  distinct from the catalog-level `RuntimeInfo` promise. Absent for a
+   *  session that predates this field (an older node, or a session opened
+   *  before the daemon started stamping one) or one that hasn't been
+   *  reopened since. */
+  contract?: SessionContract;
   /** Pull request opened for this session's branch, if any (the live open one). */
   prUrl?: string;
   /** Every PR seen for this session's branch (open, merged, closed). */
@@ -411,6 +432,29 @@ export interface LocalModelProvider {
   hasKey: boolean;
   modelCount: number;
   models: Array<{ id: string; name: string }>;
+  scope: "machine" | "network";
+  machineId?: string;
+  machineName?: string;
+  availableOnThisMachine: boolean;
+}
+
+export interface LocalModelEndpointResult {
+  candidateId?: string;
+  name?: string;
+  baseUrl: string;
+  api: "openai-completions";
+  status: "ready" | "offline" | "timeout" | "auth_required" | "malformed" | "unsupported";
+  models: Array<{ id: string; name: string }>;
+  detail?: string;
+  machineId: string;
+  machineName: string;
+}
+
+export interface LocalModelDiscoveryResult {
+  machineId: string;
+  machineName: string;
+  endpoints: LocalModelEndpointResult[];
+  readiness: { ready: boolean; readyEndpointCount: number; modelCount: number; state: "ready" | "auth_required" | "unavailable" | "unknown" };
 }
 
 /** A quick-add preset for a common local inference server. */
@@ -723,6 +767,13 @@ export interface AppState {
   draftBranch: string | null;
   /** Sandbox tier chosen for the next new session (draft only); null = node default. */
   draftSandbox: SandboxTier | null;
+  /** Whether the user explicitly confirmed launching the next new session on
+   *  `selectedAgentId` despite its Effective Session Contract preview reporting
+   *  `requiresAcknowledgement` (a "supported" profile whose live protection
+   *  would be degraded) — see AgentPicker's confirm-to-continue step. Reset
+   *  whenever the selected agent changes; a prior agent's acknowledgement must
+   *  never silently carry over to a different one. */
+  draftAcknowledgeReducedProtections: boolean;
   /** An ephemeral runner (saved config) chosen as the target for the next new
    *  session, before any machine exists. Null = run on the currently-connected
    *  node. When set, the first message launches a fresh machine from this config
@@ -732,6 +783,10 @@ export interface AppState {
   /** Current node's settings (Settings → Nodes), or null until fetched. */
   nodeSettings: NodeSettings | null;
   providers: ProviderInfo[];
+  activationReadiness: {
+    credential: { configured: boolean; probed: boolean; ok: boolean; reason?: string };
+    repository: { chosen: boolean; probed: boolean; ok: boolean; authed: boolean; reason?: string };
+  } | null;
   providerAuth: ProviderAuth | null;
   /** Labeled credentials per provider (Settings → Keys & OAuth), from `credentials.records`. */
   credentialRecords: CredentialRecordSummary[];
@@ -760,6 +815,11 @@ export interface AppState {
   /** Latest node-resource snapshot (memory/CPU/storage) for the header "Node
    *  stats" panel, or null until first requested. Polled while the panel is open. */
   nodeStats: NodeStats | null;
+  /** Machine capability inventory (OS/arch, agents, providers, Docker/GPU,
+   *  plugins, workspace count) for the Settings → Nodes panel, or null until
+   *  first requested. Fetched on demand, not polled — capabilities change
+   *  rarely, unlike live resource stats. */
+  capabilities: MachineCapabilities | null;
   /** Sessions currently paused (every action asks for approval until resumed). */
   pausedSessionIds: string[];
   /** Transient result of an Open-PR action, for the UI to toast. */
@@ -905,9 +965,11 @@ export function initialState(): AppState {
     branchesLoading: false,
     draftBranch: null,
     draftSandbox: null,
+    draftAcknowledgeReducedProtections: false,
     draftEphemeralConfig: null,
     nodeSettings: null,
     providers: [],
+    activationReadiness: null,
     providerAuth: null,
     credentialRecords: [],
     credentialPresets: null,
@@ -920,6 +982,7 @@ export function initialState(): AppState {
     githubApp: null,
     usage: null,
     nodeStats: null,
+    capabilities: null,
     pausedSessionIds: [],
     prResult: null,
     prRefreshAllResult: null,
@@ -1994,6 +2057,12 @@ export class SessionStore {
     this.set({ draftSandbox: tier });
   }
 
+  /** Record (or clear) the user's confirm-to-continue acknowledgement for the
+   *  next new session's Effective Session Contract preview. */
+  setDraftAcknowledgeReducedProtections(value: boolean): void {
+    this.set({ draftAcknowledgeReducedProtections: value });
+  }
+
   /** Remember the user's last-used model so the next fresh draft defaults to it
    *  (see the draftModel field). Purely a preference — the models.list reducer
    *  resolves it against what the runtime actually supports before it ever
@@ -2068,7 +2137,13 @@ export class SessionStore {
   /** Optimistically reflect an agent pick before runtime.updated arrives. */
   setSelectedAgentLocal(id: string): void {
     const rt = this.state.runtimes.find((a) => a.id === id);
-    const next: Partial<AppState> = { selectedAgentId: id, currentAgentName: agentLabel(rt) || this.state.currentAgentName };
+    // A prior agent's reduced-protections acknowledgement must never silently
+    // carry over to a different one — always re-confirm on switch.
+    const next: Partial<AppState> = {
+      selectedAgentId: id,
+      currentAgentName: agentLabel(rt) || this.state.currentAgentName,
+      draftAcknowledgeReducedProtections: false,
+    };
     // Only touch the model list when the held one belongs to a *different*
     // runtime; a null (unknown) id is left for the refresh to overwrite so we
     // don't needlessly blank a still-valid pill.
@@ -2872,6 +2947,11 @@ export class SessionStore {
         });
         return;
       }
+      case "activation.readiness": {
+        const e = event as any;
+        if (e.credential && e.repository) this.set({ activationReadiness: { credential: e.credential, repository: e.repository } });
+        return;
+      }
       case "github.connect.status": {
         const e = event as any;
         const known = ["waiting", "connected", "expired", "denied", "error", "unconfigured", "idle"] as const;
@@ -3129,6 +3209,11 @@ export class SessionStore {
       case "node.stats": {
         const stats = normalizeNodeStats((event as any).stats);
         if (stats) this.set({ nodeStats: stats });
+        return;
+      }
+      case "capabilities": {
+        const capabilities = normalizeCapabilitiesSnapshot((event as any).capabilities);
+        if (capabilities) this.set({ capabilities });
         return;
       }
       case "session.warning": {
@@ -3598,7 +3683,8 @@ export class SessionStore {
         const ref = (event as any).ref;
         if (!ref || typeof ref.hash !== "string" || (ref.kind !== "image" && ref.kind !== "file")) return;
         const caption = typeof (event as any).caption === "string" ? (event as any).caption : "";
-        this.pendingAgentAttachments.push({ attachment: attachmentFromRef(ref), caption });
+        const artifact = Boolean((event as any).artifact);
+        this.pendingAgentAttachments.push({ attachment: attachmentFromRef(ref, { createdAt: Date.now(), artifact }), caption });
         return;
       }
       case "inlineImage": {
@@ -3624,6 +3710,7 @@ export class SessionStore {
         return;
       }
       case "message_update":
+      case "message_boundary":
       case "message_end": {
         const msg = (event as any).message;
         if (msg?.role !== "assistant") return;
@@ -3632,7 +3719,11 @@ export class SessionStore {
         // on `text` so a reasoning-only update (content:[{thinking}] → text:"")
         // can't wipe prose the model already produced this turn.
         if (text) this.draft.pendingText = text;
-        const finalize = kind === "message_end";
+        // `message_boundary` seals one discrete prose item without ending the
+        // turn (Codex commentary commonly alternates these with tool calls).
+        // Treat it like message_end for bubble placement while leaving the
+        // runtime/server's actual turn-final semantics to message_end.
+        const finalize = kind === "message_end" || kind === "message_boundary";
         // Reasoning can arrive two ways: as an accumulated `thinking` block on
         // the message, or (for runtimes that only stream reasoning) as
         // incremental `thinking_delta` / `thinking_end` on the event itself. Keep
@@ -3710,6 +3801,11 @@ export class SessionStore {
           input: {},
           status: "done",
           result: typeof (event as any).result === "string" ? (event as any).result : contentToText((event as any).result),
+          // Carry the result-time detail (it merges the call classification with
+          // the tool's outcome: exitCode / isError / truncated) so the card can
+          // show a command that FAILED as failed. Without this the reducer kept
+          // only the call-time detail and the outcome was invisible.
+          detail: toolDetail(event as any),
         });
         return;
       case "turn_end":
