@@ -389,8 +389,10 @@ export class PostgresStore implements MeshStore {
       CREATE TABLE IF NOT EXISTS hosted_model_auth_keys (
         account_id  TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
         key_enc     JSONB NOT NULL,
+        ciphertext TEXT,
         updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
       );
+      ALTER TABLE hosted_model_auth_keys ADD COLUMN IF NOT EXISTS ciphertext TEXT;
 
       CREATE TABLE IF NOT EXISTS model_auth_key_requests (
         account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -1916,6 +1918,20 @@ export class PostgresStore implements MeshStore {
        VALUES ($1, $2, now())
        ON CONFLICT (account_id) DO UPDATE SET key_enc = EXCLUDED.key_enc, updated_at = now()`,
       [accountId, JSON.stringify(enc)],
+    );
+  }
+
+  async getHostedModelAuthVault(accountId: string): Promise<string | undefined> {
+    const { rows } = await this.query(`SELECT ciphertext FROM hosted_model_auth_keys WHERE account_id = $1`, [accountId]);
+    return typeof rows[0]?.ciphertext === "string" && rows[0].ciphertext ? rows[0].ciphertext : undefined;
+  }
+
+  async setHostedModelAuthVault(accountId: string, ciphertext: string, enc: SecretEnvelope): Promise<void> {
+    await this.query(
+      `INSERT INTO hosted_model_auth_keys (account_id, key_enc, ciphertext, updated_at)
+       VALUES ($1, $2, $3, now())
+       ON CONFLICT (account_id) DO UPDATE SET key_enc = EXCLUDED.key_enc, ciphertext = EXCLUDED.ciphertext, updated_at = now()`,
+      [accountId, JSON.stringify(enc), ciphertext],
     );
   }
 

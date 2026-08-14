@@ -11,6 +11,7 @@ import path from "node:path";
 
 import { createCredentialVault } from "../src/runtime/credential-store.js";
 import type { CredentialRecord } from "../src/credentials/records.js";
+import { exportUnattendedRecords, setCredentialUnattended } from "../src/credentials/api.js";
 
 function freshCredsDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-sync-pol-"));
@@ -50,6 +51,23 @@ function oauthRecord(provider: string, label: string, access: string, expires: n
     // A reference default carries no syncable secret → never in either provider-keyed export.
     await store.setReference("google", "env://SOME_KEY", "env");
     assert.ok(!("google" in (await store.exportSyncable())), "reference secret never syncs");
+  } finally {
+    fs.rmSync(path.dirname(credsDir), { recursive: true, force: true });
+  }
+}
+
+// --- unattended custody is explicit and exports only granted stored items ---
+{
+  const credsDir = freshCredsDir();
+  try {
+    const store = createCredentialVault(credsDir);
+    await store.setApiKey("anthropic", "personal-key");
+    await store.putRecord({ provider: "anthropic", label: "work", origin: "bivy", sync: "account", source: { kind: "stored", cred: { type: "api_key", key: "work-key" } } });
+    await setCredentialUnattended(credsDir, "anthropic", "work", true);
+    const hosted = await exportUnattendedRecords(credsDir);
+    assert.deepEqual(Object.keys(hosted), ["anthropic:work"]);
+    assert.equal(hosted["anthropic:work"]?.unattended, true);
+    assert.equal((await store.readRecord("anthropic", "default"))?.unattended, undefined, "account sync never implies hosted custody");
   } finally {
     fs.rmSync(path.dirname(credsDir), { recursive: true, force: true });
   }

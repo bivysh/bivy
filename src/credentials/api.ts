@@ -113,7 +113,8 @@ export async function exportSyncableRecords(credsDir: string): Promise<Record<st
 /**
  * Browser-safe account API-key projection. Used to converge a node-less PWA's
  * E2E account vault with an enrolled node. OAuth refresh tokens, references,
- * non-default labels, and node-local records are deliberately excluded.
+ * and node-local records are deliberately excluded; labeled API-key accounts
+ * are included as distinct vault items.
  */
 export async function exportAccountApiKeys(credsDir: string): Promise<Array<{ provider: string; label: string; key: string; updatedAt?: number }>> {
   return (await createCredentialVault(credsDir).listRecords())
@@ -245,6 +246,8 @@ export interface CredentialRecordSummary {
   expiresAt?: number;
   /** The non-secret pointer, when `kind === "reference"`. */
   ref?: string;
+  /** Explicitly allowed in the separately escrowed unattended-run vault. */
+  unattended: boolean;
   /** Whether "Test connection" (see `testCredential`) supports this provider/kind. */
   testable: boolean;
   /** The most recent "Test connection" result for this record, if any run. */
@@ -261,7 +264,7 @@ export async function listCredentialRecords(credsDir: string): Promise<Credentia
     const verification = await vault.readVerification(record.provider, record.label).catch(() => undefined);
     const verified = verification ? { lastVerifiedAt: verification.at, lastVerifiedOk: verification.ok } : {};
     if (source.kind === "reference") {
-      return { provider: record.provider, label: record.label, kind: "reference", sync: record.sync, origin: record.origin, ref: source.ref, testable: false, ...verified };
+      return { provider: record.provider, label: record.label, kind: "reference", sync: record.sync, origin: record.origin, unattended: record.unattended === true, ref: source.ref, testable: false, ...verified };
     }
     const cred = source.cred;
     const summary: CredentialRecordSummary = {
@@ -270,6 +273,7 @@ export async function listCredentialRecords(credsDir: string): Promise<Credentia
       kind: cred.type,
       sync: record.sync,
       origin: record.origin,
+      unattended: record.unattended === true,
       testable: isTestableProvider(record.provider),
       ...verified,
     };
@@ -431,6 +435,24 @@ export function getCredentialIngestPolicy(credsDir: string): IngestPolicy {
 /** Set the agent-native ingest policy. */
 export function setCredentialIngestPolicy(credsDir: string, policy: IngestPolicy): void {
   setIngestPolicyFile(defaultPresetsPath(credsDir), policy);
+}
+
+/** Explicitly grant/revoke use by separately escrowed unattended runners. */
+export async function setCredentialUnattended(credsDir: string, provider: string, label: string, unattended: boolean): Promise<void> {
+  const id = provider.trim().toLowerCase();
+  if (!id) throw new Error("Provider is required");
+  const store = createCredentialVault(credsDir);
+  const existing = await store.readRecord(id, label);
+  if (!existing) throw new Error(`No credential for ${id}:${normalizeLabel(label)}`);
+  if (existing.sync !== "account" && unattended) throw new Error("A machine-only credential cannot be granted to unattended runners");
+  if (existing.source.kind === "reference" && unattended) throw new Error("Password-manager references cannot be resolved by unattended runners");
+  await store.putRecord({ ...existing, unattended });
+}
+
+/** Credentials included in the explicit hosted custody snapshot. */
+export async function exportUnattendedRecords(credsDir: string): Promise<Record<string, CredentialRecord>> {
+  const records = await createCredentialVault(credsDir).exportSyncableRecords();
+  return Object.fromEntries(Object.entries(records).filter(([, record]) => record.unattended === true && record.source.kind === "stored"));
 }
 
 /** Set a labeled credential's sync tier — the per-credential opt-out toggle. */

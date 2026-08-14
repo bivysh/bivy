@@ -496,7 +496,7 @@ export function ownershipTagFor(accountId: string): string {
 /** An audit event recording a use of hosted credentials (never contains a secret). */
 export interface HostedAuditEvent {
   at: string;
-  action: "credential_updated" | "credential_rotated" | "credential_validation_failed" | "github_app_connected" | "github_app_disconnected" | "provision_attempt" | "provision_launched" | "provision_failed" | "token_minted" | "machine_reaped" | "machine_milestone" | "reconcile_failed" | "room_key_escrowed" | "room_key_reused" | "work_routed" | "capacity_ready" | "capacity_claimed" | "orphan_reaped" | "orphan_detected" | "attempt_abandoned" | "force_destroy_requested";
+  action: "credential_updated" | "credential_rotated" | "credential_validation_failed" | "github_app_connected" | "github_app_disconnected" | "provision_attempt" | "provision_launched" | "provision_failed" | "token_minted" | "machine_reaped" | "machine_milestone" | "reconcile_failed" | "room_key_escrowed" | "room_key_reused" | "work_routed" | "capacity_ready" | "capacity_claimed" | "orphan_reaped" | "orphan_detected" | "attempt_abandoned" | "force_destroy_requested" | "model_credential_escrowed" | "model_credential_used";
   provider?: string;
   configId?: string;
   nodeId?: string;
@@ -1401,6 +1401,9 @@ export interface MeshStore {
   // fully peer-wrapped (E2E, CP-blind).
   getHostedModelAuthVaultKey(accountId: string): Promise<SecretEnvelope | undefined>;
   setHostedModelAuthVaultKey(accountId: string, enc: SecretEnvelope): Promise<void>;
+  /** Separately encrypted snapshot containing only explicitly granted records. */
+  getHostedModelAuthVault(accountId: string): Promise<string | undefined>;
+  setHostedModelAuthVault(accountId: string, ciphertext: string, enc: SecretEnvelope): Promise<void>;
 
   // Device→device provider-token vault (P2 / Gap A) — recipients are paired devices.
   getDeviceVault(accountId: string): Promise<DeviceVault | undefined>;

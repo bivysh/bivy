@@ -2535,6 +2535,10 @@ export class AppController {
   setCredentialSync(provider: string, label: string, sync: "account" | "node"): Promise<void> {
     return this.awaitAck({ kind: "credential.sync.set", provider, label, sync }).then(() => undefined);
   }
+  /** Explicitly grant or revoke separately escrowed unattended-run access. */
+  setCredentialUnattended(provider: string, label: string, unattended: boolean): Promise<void> {
+    return this.awaitAck({ kind: "credential.unattended.set", provider, label, unattended }).then(() => undefined);
+  }
   /** "Test connection": a bounded, non-secret liveness probe for one credential.
    *  Relay and direct transports implement the same item-addressed command. */
   async testCredential(provider: string, label: string): Promise<{ ok: boolean; at: number; reason?: string }> {

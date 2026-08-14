@@ -539,6 +539,22 @@ export class DirectTransport implements Transport {
           }
           break;
         }
+        case "credential.unattended.set": {
+          const requestId = String(obj.requestId ?? "");
+          try {
+            const provider = encodeURIComponent(String(obj.provider ?? ""));
+            const label = encodeURIComponent(String(obj.label ?? "default"));
+            const result = await this.directApi(`/api/auth/credentials/${provider}/${label}/unattended`, {
+              method: "POST",
+              body: JSON.stringify({ unattended: obj.unattended === true }),
+            });
+            this.emitMerged("credentials.records", result);
+            this.emit({ type: "credential.unattended.set.ok", requestId });
+          } catch (error) {
+            this.emit({ type: "credential.unattended.set.error", requestId, error: error instanceof Error ? error.message : String(error) });
+          }
+          break;
+        }
         case "credential.test": {
           const requestId = String(obj.requestId ?? "");
           const provider = encodeURIComponent(String(obj.provider ?? ""));

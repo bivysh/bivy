@@ -67,6 +67,7 @@ export interface Command extends CommandBase {
     | "credential.set"
     | "credential.remove"
     | "credential.sync.set"
+    | "credential.unattended.set"
     // Selection presets (which labeled credential a project uses).
     // `credentials.presets.get` replies with `credentials.presets`.
     | "credentials.presets.get"
@@ -140,6 +141,8 @@ export interface CredentialRecordSummary {
   expiresAt?: number;
   /** The non-secret pointer, when `kind === "reference"`. */
   ref?: string;
+  /** Explicit grant for separately escrowed unattended runs. */
+  unattended: boolean;
   /** Whether "Test connection" supports this provider/kind. */
   testable: boolean;
   /** The most recent "Test connection" result for this record, if any run. */

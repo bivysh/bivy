@@ -34,6 +34,14 @@ await test("escrowed vault key seals at rest and decrypts back", async () => {
   assert.equal(decryptSecret(acct.id, enc!), VAULT_KEY, "must decrypt back to the vault key");
 });
 
+await test("separate hosted ciphertext is stored with its escrow key", async () => {
+  const store = await makeStore();
+  const acct = await store.findOrCreateAccount("snapshot@example.com");
+  await store.setHostedModelAuthVault(acct.id, "filtered-ciphertext", encryptSecret(acct.id, VAULT_KEY));
+  assert.equal(await store.getHostedModelAuthVault(acct.id), "filtered-ciphertext");
+  assert.equal(decryptSecret(acct.id, (await store.getHostedModelAuthVaultKey(acct.id))!), VAULT_KEY);
+});
+
 await test("upsert overwrites; account-scoped", async () => {
   const store = await makeStore();
   const a = await store.findOrCreateAccount("b@example.com");

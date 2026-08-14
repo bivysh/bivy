@@ -212,6 +212,7 @@ export function CredentialVault({ state }: { state: AppState }) {
         <span className="muted">Available on</span><strong>{availabilityLabel(selected.availability)}</strong>
         <span className="muted">Used by default</span><strong>{isDefault ? "Yes" : "No"}</strong>
         {state.draftRepo && <><span className="muted">Current project</span><strong>{usedByProject ? state.draftRepo : projectLabel ? `Uses ${projectLabel}` : "Uses provider default"}</strong></>}
+        {selected.record && <><span className="muted">Unattended runs</span><strong>{selected.record.unattended ? "Allowed (separate hosted custody)" : "Not allowed"}</strong></>}
         {selected.record?.origin === "agent-native" && <><span className="muted">Added by</span><strong>Agent sign-in</strong></>}
         {selected.record?.ref && <><span className="muted">Reference</span><code>{selected.record.ref}</code></>}
       </div>
@@ -220,6 +221,7 @@ export function CredentialVault({ state }: { state: AppState }) {
         {count > 1 && !isDefault && <button className="btn" onClick={() => { controller.setPresetMapping("default", selected.provider, selected.label); setMessage("Now used by default."); setTimeout(() => controller.getCredentialPresets(), 150); }}>Use by default</button>}
         {count > 1 && projectPreset && !usedByProject && <button className="btn" onClick={() => { controller.setPresetMapping(projectPreset, selected.provider, selected.label); setMessage(`Assigned to ${state.draftRepo}.`); setTimeout(() => controller.getCredentialPresets(), 150); }}>Use for {state.draftRepo}</button>}
         {projectPreset && usedByProject && <button className="btn" onClick={() => { controller.setPresetMapping(projectPreset, selected.provider, ""); setMessage(`${state.draftRepo} now uses the provider default.`); setTimeout(() => controller.getCredentialPresets(), 150); }}>Clear project assignment</button>}
+        {selected.record.sync === "account" && selected.record.kind !== "reference" && <button className="btn" disabled={busy} onClick={async () => { setBusy(true); setError(null); try { await controller.setCredentialUnattended(selected.provider, selected.label, !selected.record!.unattended); setMessage(selected.record!.unattended ? "Unattended access revoked." : "Unattended access granted with separate hosted custody."); refresh(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); } }}>{selected.record.unattended ? "Revoke unattended access" : "Allow unattended runs"}</button>}
       </div>}
       {!selected.ambient && <>
         <details className="vault-advanced"><summary>Replace or change availability</summary>
