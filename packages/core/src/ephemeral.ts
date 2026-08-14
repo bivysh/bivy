@@ -8,11 +8,11 @@ import type { LocalStore } from "./local-store.js";
 import {
   buildBootstrapUserData,
   ephemeralAdapter,
-  type BootstrapOpts,
   type ExecFn,
   type ProviderSize,
 } from "./ephemeral-provider-adapters.js";
 import type { EphemeralMachine } from "./ephemeral-machine.js";
+import { planEphemeralLaunch, trackProvisionedMachine } from "./ephemeral-launch-plan.js";
 import type { EphemeralKeyStore, MachineStore } from "./ephemeral-storage.js";
 
 export * from "./ephemeral-catalog.js";
@@ -28,6 +28,7 @@ export {
   type PricedMachineSize,
 } from "./ephemeral-lifecycle.js";
 export * from "./ephemeral-machine.js";
+export * from "./ephemeral-launch-plan.js";
 export * from "./ephemeral-storage.js";
 export * from "./ephemeral-provider-adapters.js";
 
@@ -130,15 +131,6 @@ export interface LaunchOpts {
   reuseNodeId?: string;
   reuseRoomKeyB64?: string;
   restoreSessionId?: string;
-}
-
-/** The routing-label suffix a hosted-tasks ephemeral node serves, derived from
- *  its `eph-<hex>` node id (e.g. "eph-ab12cd34" → "ab12cd34"). Deterministic
- *  and known as soon as the machine is provisioned — no need to wait for it to
- *  actually boot — so the queue "Run on ephemeral server" action can assign
- *  the item to `bivy/<label>` right after launching. */
-export function ephemeralNodeLabel(nodeId: string): string {
-  return nodeId.replace(/^eph-/, "");
 }
 
 /**
@@ -291,42 +283,30 @@ export async function launchEphemeralMachine(
   const roomBytes = opts.reuseRoomKeyB64 ? unb64url(opts.reuseRoomKeyB64) : crypto.getRandomValues(new Uint8Array(32));
   deps.store.addKey(nodeId, b64url(roomBytes));
 
-  const bootstrap: BootstrapOpts = {
+  const plan = planEphemeralLaunch({
+    ...opts,
+    attemptId,
+    nodeId,
+    requestedAt,
+    enrollmentToken: enroll.enrollmentToken,
+    roomKeyB64: b64(roomBytes),
     relayUrl: deps.store.relay,
     controlPlaneUrl: cpBase(deps.store),
-    enrollmentToken: enroll.enrollmentToken,
-    e2eKeyB64: b64(roomBytes),
-    ttlMinutes: opts.ttlMinutes,
-    repo: opts.repo,
-    hostedTasks: opts.hostedTasks,
-    nodeLabel: opts.hostedTasks ? ephemeralNodeLabel(nodeId) : undefined,
-    githubToken: opts.githubToken,
-    hostedMint: opts.hostedMint,
-    provider: opts.provider,
-    teardownOnAgentFinish: opts.teardownOnAgentFinish,
-    debugKeepMachine: opts.debugKeepMachine,
-    restoreSessionId: opts.restoreSessionId,
-  };
-  // Both forms of the same boot intent: `userData` is the cloud-init payload VM
-  // providers run as-is; `bootstrap` lets a provider that can't run cloud-init
-  // (Fly) assemble its own boot config. Each adapter uses whichever it needs.
-  const userData = buildBootstrapUserData(bootstrap);
-
-  // The picker offers the provider's live catalog, which can be broader than
-  // the static `sizes` fallback, so pass the chosen size through and only
-  // substitute the default when nothing was picked. An invalid value surfaces
-  // as a clear provider error rather than being silently swapped out.
-  const size = opts.size || adapter.defaultSize;
-  const region = opts.region || adapter.defaultRegion;
-  progress(`Creating the machine in ${region} (${size})…`);
+    defaultRegion: adapter.defaultRegion,
+    defaultSize: adapter.defaultSize,
+  });
+  // The plan is inspectable data. Only this shell interprets it into provider
+  // user-data and effects.
+  const userData = buildBootstrapUserData(plan.bootstrap);
+  progress(`Creating the machine in ${plan.region} (${plan.size})…`);
   let machine: EphemeralMachine;
   try {
     machine = await adapter.provision({
       exec: deps.exec,
       token,
       userData,
-      bootstrap,
-      config: { slug: ephemeralNodeLabel(nodeId), region, size, image: opts.image, ttlMinutes: opts.ttlMinutes, attemptId, ownershipTag: opts.ownershipTag },
+      bootstrap: plan.bootstrap,
+      config: plan.providerConfig,
     });
   } catch (error) {
     await opts.onLifecycle?.({
@@ -337,24 +317,10 @@ export async function launchEphemeralMachine(
     });
     throw error;
   }
-  machine.attemptId = attemptId;
-  await opts.onLifecycle?.({ attemptId, nodeId, phase: "provider-accepted", machine });
+  const accepted = { ...machine, attemptId };
+  await opts.onLifecycle?.({ attemptId, nodeId, phase: "provider-accepted", machine: accepted });
   progress("Machine created. Boot setup is installing and starting Bivy…");
-  machine.size = size;
-  machine.milestones = { ...(machine.milestones ?? {}), requestedAt, providerAcceptedAt: nowIso() };
-  machine.nodeId = nodeId;
-  // Persist the user-chosen name (from a saved setup) onto the machine record.
-  // Without this the record kept the provider-generated name (e.g. Fly's
-  // `bivy-<slug>`), so a machine launched from a setup called "EU node" showed
-  // up as `bivy-…` in every machine list — the configured name was silently
-  // dropped even though the enrolled node itself carried it.
-  const chosenName = String(opts.name || "").trim();
-  if (chosenName) machine.name = chosenName;
-  if (opts.setupId) machine.setupId = opts.setupId;
-  if (opts.repo) machine.repo = opts.repo;
-  if (opts.teardownOnAgentFinish) machine.teardownOnAgentFinish = true;
-  if (opts.workItemId) machine.workItemId = opts.workItemId;
-  if (opts.purpose) machine.purpose = opts.purpose;
+  machine = trackProvisionedMachine(accepted, plan, nowIso());
   await deps.machines.add(machine);
   await opts.onLifecycle?.({ attemptId, nodeId, phase: "tracked", machine });
   return machine;

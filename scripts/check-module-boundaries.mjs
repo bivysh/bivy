@@ -105,6 +105,13 @@ const RULES = [
     note: "provider-neutral machine facts depend only on other value projections.",
   },
   {
+    name: "ephemeral-launch-plan-is-a-pure-decision",
+    dir: "packages/core/src/ephemeral-launch-plan.ts",
+    forbid: ["./ephemeral-storage", "./ephemeral-provider-adapters", "./ephemeral.js", "./transport", "./local-store", "node:", "react"],
+    enforce: true,
+    note: "launch planning combines supplied facts into intent data; orchestration interprets the plan at the effect edge.",
+  },
+  {
     name: "ephemeral-provider-ports-dont-import-effects",
     dir: "packages/core/src/ephemeral-provider-ports.ts",
     forbid: ["./ephemeral-storage", "./ephemeral-provider-adapters", "./ephemeral.js", "./transport", "./local-store"],
