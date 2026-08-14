@@ -130,6 +130,7 @@ import { IntegrationManager, type SessionIdRef } from "./integrations/index.js";
 import { listInstalledPlugins } from "./plugins/store.js";
 import { createCapabilitiesController } from "./controllers/capabilities.js";
 import { createAccessDeviceController, createLinkedDeviceController } from "./controllers/devices.js";
+import { createSessionControlCommands } from "./controllers/session-control.js";
 import { historyDelta, type HistoryCursor } from "./history-sync.js";
 import { MetadataStore, type MetadataSession } from "./metadata.js";
 import { resolveResumeRef, resumeRefFor } from "./session-ref.js";
@@ -2106,25 +2107,12 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     const meta = attachmentStore.readMeta(hash);
     ctx.reply({ type: "attachment.data", requestId, hash, mimeType: meta?.mimeType ?? "application/octet-stream", name: meta?.name, data: bytes.toString("base64") });
   },
-  "session.pause"(msg, ctx) {
-    const record = resolveSession(msg.sessionId);
-    if (!record) return ctx.reply({ type: "session.pause.error", httpStatus: 404, error: "No active session" });
-    pauseSession(record);
-    ctx.reply({ type: "session.pause.result", ok: true });
-  },
-  "session.resume"(msg, ctx) {
-    const record = resolveSession(msg.sessionId);
-    if (!record) return ctx.reply({ type: "session.resume.error", httpStatus: 404, error: "No active session" });
-    resumeSession(record);
-    ctx.reply({ type: "session.resume.result", ok: true });
-  },
-  "session.question.answer"(msg, ctx) {
-    const record = resolveSession(msg.sessionId);
-    const requestId = String(msg.requestId ?? "");
-    if (!record || !requestId) return ctx.reply({ type: "session.question.answer.error", httpStatus: 404, error: "No matching session/question" });
-    answerSessionQuestion(record, requestId, msg);
-    ctx.reply({ type: "session.question.answer.result", ok: true, requestId });
-  },
+  ...createSessionControlCommands({
+    resolve: (sessionId) => resolveSession(sessionId),
+    pause: pauseSession,
+    resume: resumeSession,
+    answer: (record, requestId, input) => answerSessionQuestion(record, requestId, input),
+  }),
   // Live-stream gap recovery: replay the session.events a client missed after the
   // last seq it holds, or tell it to full-resync (mode:"reset") when the ring has
   // evicted past that point. Answers only the caller (ctx.reply); other clients

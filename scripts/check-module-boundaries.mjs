@@ -78,6 +78,13 @@ const RULES = [
     note: "device resource semantics depend on injected ports; Express, persistence, relay, and metadata effects stay in the composition root.",
   },
   {
+    name: "session-control-controller-uses-ports",
+    dir: "src/controllers/session-control.ts",
+    forbid: ["express", "../runtime", "../agents", "../session/", "../server", "node:"],
+    enforce: true,
+    note: "session control operations depend on protocol contracts and injected effects, not daemon/runtime implementation.",
+  },
+  {
     name: "http-command-adapter-is-transport-only",
     dir: "src/http/client-command-routes.ts",
     forbid: ["../server", "../runtime/", "../agents/", "../session/", "../credentials/", "../controllers/"],
