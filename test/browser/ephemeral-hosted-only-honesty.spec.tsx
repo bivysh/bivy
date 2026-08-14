@@ -10,7 +10,7 @@ const read = (rel: string) => readFile(new URL(rel, import.meta.url), "utf8");
 // these tests lock in that the onboarding UI says so up front, instead of
 // only surfacing the refusal as a generic error after connect → pick → send.
 test("the Hetzner catalog entry is flagged hostedOnly and its blurb says so", async () => {
-  const model = await read("../../packages/core/src/ephemeral.ts");
+  const model = await read("../../packages/core/src/ephemeral-catalog.ts");
   expect(model).toContain('hostedOnly?: boolean;');
   const hetznerEntryStart = model.indexOf('id: "hetzner"');
   expect(hetznerEntryStart).toBeGreaterThan(-1);
@@ -20,7 +20,7 @@ test("the Hetzner catalog entry is flagged hostedOnly and its blurb says so", as
 });
 
 test("Fly/AWS/Sprites/E2B are not flagged hostedOnly (they have a real device-launch backstop)", async () => {
-  const model = await read("../../packages/core/src/ephemeral.ts");
+  const model = await read("../../packages/core/src/ephemeral-catalog.ts");
   for (const id of ['id: "fly"', 'id: "sprites"', 'id: "e2b"', 'id: "aws"']) {
     const start = model.indexOf(id);
     expect(start, `${id} not found in catalog`).toBeGreaterThan(-1);
