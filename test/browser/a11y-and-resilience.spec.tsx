@@ -60,9 +60,11 @@ test("keyboard/focus: Tab moves through controls and Escape closes the topmost l
 });
 
 test("visual: light and dark themes resolve to different backgrounds, both driven by one token set", async ({ page }) => {
-  const css = await readFile(new URL("../../packages/web/src/styles.css", import.meta.url), "utf8");
-  // The theming contract: a light default, an explicit [data-theme="dark"] override,
-  // and a prefers-color-scheme fallback — so both themes ship from one token set.
+  // The theming contract lives in the design-system source of truth, which the
+  // app imports before styles.css: a light default, an explicit [data-theme="dark"]
+  // override, and a prefers-color-scheme fallback — so both themes ship from one
+  // token set.
+  const css = await readFile(new URL("../../packages/ui/tokens.css", import.meta.url), "utf8");
   expect(css).toContain(':root[data-theme="dark"]');
   expect(css).toContain("prefers-color-scheme: dark");
   await page.setContent(`<style>

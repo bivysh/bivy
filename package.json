@@ -53,6 +53,7 @@
     "check:pins": "node scripts/check-security-pins.mjs",
     "check:secrets": "node scripts/secret-scan.mjs",
     "check:boundaries": "node scripts/check-module-boundaries.mjs --enforce",
+    "check:design": "node scripts/check-design-tokens.mjs",
     "gen:agent-manifest": "tsx scripts/generate-agent-manifest.ts",
     "certification:generate": "node scripts/certification.mjs --generate",
     "certification:check": "node scripts/certification.mjs --check",

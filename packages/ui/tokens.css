@@ -1,35 +1,79 @@
+/*
+ * Bivy design tokens — the SINGLE SOURCE OF TRUTH for color, type, spacing,
+ * radius, elevation, motion and z-index across every Bivy surface.
+ *
+ * Consumed directly by the web PWA: packages/web/src/main.tsx imports this file
+ * *before* styles.css, and styles.css no longer declares its own :root palette.
+ * It is also mirrored (inlined) into styleguide.html for standalone viewing —
+ * keep that copy in sync when these values change.
+ *
+ * THE RULE: every raw color / size value lives here, once. App CSS and
+ * components reference these custom properties via var(--…) and never hardcode a
+ * hex or px. `pnpm run check:design` enforces that no other stylesheet redeclares
+ * a palette token. See packages/web/CLAUDE.md for the design rules agents follow.
+ *
+ * Palette: warm "paper" light theme + "alpine slate" dark theme — the shipping
+ * Bivy look. Toggle dark with <html data-theme="dark">; with no attribute it
+ * follows the OS. prefers-reduced-motion collapses the motion tokens.
+ *
+ * Naming: the canonical vocabulary is --bg / --surface* / --ink / --muted /
+ * --line* / --accent* / --ok / --danger / --merged / --unseen / --s-* (source
+ * hues). A compat-alias block at the end maps the older --text / --border /
+ * --success / --warning / --info names onto this palette so styleguide.html and
+ * components.css keep working; prefer the canonical names in new code.
+ */
+
 :root {
   color-scheme: light;
 
-  --accent: #005a2b;
-  --accent-contrast: #ffffff;
-  --accent-hover: color-mix(in srgb, var(--accent), #000 12%);
+  /* ---- Core surfaces & text (paper) ---- */
+  --bg: #f5f3ee;
+  --surface: #faf8f3;
+  --surface-2: #efece4;
+  --surface-3: #e7e3d9;
+  --ink: #191a16;
+  --muted: #74766c;
+  --line: #e4e1d8;
+  --line-strong: #d3cfc4;
+  --overlay: rgba(25, 26, 22, 0.42);
+
+  /* ---- Accent (alpine slate) ---- */
+  --accent: #3f6377;
+  /* Text on the accent fill (.btn.primary, badges, composer send…). The slate
+     accent is dark, so paper-light text clears ~5.3:1 (WCAG AA). Dark theme's
+     glacier accent is light, so it pairs with a near-black contrast text. */
+  --accent-contrast: #f5f3ee;
+  --accent-hover: #324f60;
   --accent-active: color-mix(in srgb, var(--accent), #000 22%);
   --accent-soft: color-mix(in srgb, var(--accent) 16%, var(--surface));
 
-  --bg: #eef2f7;
-  --surface: #ffffff;
-  --surface-2: #f8fafc;
-  --surface-3: #f1f5f9;
-  --overlay: rgba(15, 23, 42, 0.45);
+  /* ---- Status ---- */
+  --danger: #b0473d;   --danger-soft: #f3e3df;
+  --ok: #4f7a5c;
+  --merged: #7a6a9e;   /* GitHub merged-PR purple, desaturated to sit in-palette */
+  /* A run that finished while you weren't looking — its own signal, deliberately
+     not accent (working) / danger (needs input) / ok / merged, so
+     "something's ready" reads at a glance. */
+  --unseen: #a8823f;
 
-  --text: #0f172a;
-  --text-muted: #475569;
-  --text-subtle: #94a3b8;
-  --text-inverse: #ffffff;
+  /* ---- Per-source hues for session/run marks (see packages/web sessionSource).
+     Kept clear of the status palette above so a source is never mistaken for an
+     outcome; app/cli stay quiet so hand-opened sessions don't shout. ---- */
+  --s-github: #24292f; --s-slack: #7c2d92; --s-linear: #5e6ad2; --s-schedule: #0e7490;
+  --s-webhook: #6d28d9; --s-manual: #b45309; --s-cli: #3f6212; --s-app: #64748b;
 
-  --border: #e2e8f0;
-  --border-strong: #cbd5e1;
+  /* ---- Terminal text selection ---- */
+  --term-selection: rgba(63, 99, 119, 0.30);
+  --term-selection-inactive: rgba(63, 99, 119, 0.20);
 
-  --success: #16a34a;  --success-soft: #dcfce7;
-  --warning: #d97706;  --warning-soft: #fef3c7;
-  --danger:  #dc2626;  --danger-soft:  #fee2e2;
-  --info:    #2563eb;  --info-soft:    #dbeafe;
-
+  /* ---- Focus ---- */
   --focus-ring: color-mix(in srgb, var(--accent) 45%, transparent);
 
-  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  /* ---- Type ---- */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  /* Editorial serif for session/display titles (self-hosted @font-face in styles.css). */
+  --font-serif: "Newsreader", Georgia, "Iowan Old Style", "Palatino Linotype", "Times New Roman", serif;
 
   --text-xs: 12px;   --lh-xs: 16px;
   --text-sm: 13px;   --lh-sm: 18px;
@@ -46,62 +90,78 @@
   --weight-bold: 700;
   --weight-heavy: 800;
 
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 24px;
-  --space-6: 32px;
-  --space-7: 48px;
-  --space-8: 64px;
+  /* ---- Spacing (4px rhythm) ---- */
+  --space-1: 4px;  --space-2: 8px;  --space-3: 12px; --space-4: 16px;
+  --space-5: 24px; --space-6: 32px; --space-7: 48px; --space-8: 64px;
 
+  /* ---- Radius ---- */
+  --radius: 12px;        /* app default — same value as --radius-md */
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 16px;
   --radius-xl: 20px;
   --radius-full: 999px;
 
-  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06), 0 1px 3px rgba(15, 23, 42, 0.08);
-  --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.08);
-  --shadow-lg: 0 12px 32px rgba(15, 23, 42, 0.12);
-  --shadow-xl: 0 24px 70px rgba(15, 23, 42, 0.16);
+  /* ---- Elevation ---- */
+  --shadow-sm: 0 1px 2px rgba(25, 26, 22, 0.06), 0 1px 3px rgba(25, 26, 22, 0.08);
+  --shadow-md: 0 4px 12px rgba(25, 26, 22, 0.08);
+  --shadow-lg: 0 12px 32px rgba(25, 26, 22, 0.12);
+  --shadow-xl: 0 24px 70px rgba(25, 26, 22, 0.16);
 
+  /* ---- Motion ---- */
   --dur-fast: 120ms;
   --dur: 200ms;
   --dur-slow: 320ms;
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --ease-emphasized: cubic-bezier(0.2, 0, 0, 1.2);
 
-  --z-base: 0;
-  --z-dropdown: 100;
-  --z-sticky: 200;
-  --z-sheet: 300;
-  --z-modal: 400;
-  --z-toast: 500;
+  /* ---- Z-index scale ---- */
+  --z-base: 0; --z-dropdown: 100; --z-sticky: 200; --z-sheet: 300; --z-modal: 400; --z-toast: 500;
 
   --sidebar-width: 320px;
+
+  /* ==== Compat aliases — the older --text / --border / --success vocabulary
+     mapped onto the canonical palette. Prefer the canonical names above in new
+     code. These keep styleguide.html + components.css working during the
+     migration and follow the theme automatically, because they reference tokens
+     that change per theme. ==== */
+  --text: var(--ink);
+  --text-muted: var(--muted);
+  --text-subtle: var(--muted);
+  --text-inverse: var(--accent-contrast);
+  --border: var(--line);
+  --border-strong: var(--line-strong);
+  --success: var(--ok);       --success-soft: color-mix(in srgb, var(--ok) 16%, var(--surface));
+  --warning: var(--unseen);   --warning-soft: color-mix(in srgb, var(--unseen) 16%, var(--surface));
+  --info: var(--accent);      --info-soft: var(--accent-soft);
+
+  /* ==== Gap tokens — names that app CSS references but that historically had no
+     definition (they only "worked" via an inline var(--x, #fallback)). Defined
+     here so the fallback is never load-bearing and the value is consistent
+     everywhere the name appears. Prefer the canonical name on the right. ==== */
+  --warn: #b8862f;            --warn-soft: color-mix(in srgb, #b8862f 16%, var(--surface));
+  --err: var(--danger);
+  --add: var(--ok);           /* diff addition */
+  --del: var(--danger);       /* diff deletion */
+  --fg: var(--ink);
+  --surface-1: var(--surface);
+  --mono: var(--font-mono);
 }
+
+:root[data-theme="light"] { color-scheme: light; }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --accent: #005a2b;
-  --accent-contrast: #ffffff;
-  --bg: #0b1220;
-  --surface: #111827;
-  --surface-2: #161f30;
-  --surface-3: #1e293b;
+  --bg: #14171a; --surface: #191d21; --surface-2: #1f242a; --surface-3: #252b31;
+  --ink: #e6ebee; --muted: #838b91; --line: #262c31; --line-strong: #384049;
   --overlay: rgba(0, 0, 0, 0.6);
-  --text: #e5e9f0;
-  --text-muted: #9aa6b8;
-  --text-subtle: #64748b;
-  --text-inverse: #0b1220;
-  --border: #243044;
-  --border-strong: #334155;
-  --success: #34d399;  --success-soft: #064e3b;
-  --warning: #fbbf24;  --warning-soft: #4a2f08;
-  --danger:  #f87171;  --danger-soft:  #4c1d1d;
-  --info:    #60a5fa;  --info-soft:    #1e3a5f;
-  --focus-ring: color-mix(in srgb, var(--accent) 50%, transparent);
+  --accent: #8fb6cd; --accent-contrast: #14171a; --accent-hover: #a7cadd;
+  --danger: #c08a83; --danger-soft: #3a2420; --ok: #86a99f; --merged: #a99bc4;
+  --unseen: #cba96a;
+  --warn: #d9a441;
+  --s-github: #d7dde3; --s-slack: #d68ce6; --s-linear: #a5adf5; --s-schedule: #4bc4de;
+  --s-webhook: #b79bf7; --s-manual: #f0a45a; --s-cli: #a3c987; --s-app: #9aa4b2;
+  --term-selection: rgba(143, 182, 205, 0.36); --term-selection-inactive: rgba(143, 182, 205, 0.24);
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.5);
@@ -109,26 +169,18 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
+  :root:not([data-theme]) {
     color-scheme: dark;
-    --accent: #005a2b;
-    --accent-contrast: #ffffff;
-    --bg: #0b1220;
-    --surface: #111827;
-    --surface-2: #161f30;
-    --surface-3: #1e293b;
+    --bg: #14171a; --surface: #191d21; --surface-2: #1f242a; --surface-3: #252b31;
+    --ink: #e6ebee; --muted: #838b91; --line: #262c31; --line-strong: #384049;
     --overlay: rgba(0, 0, 0, 0.6);
-    --text: #e5e9f0;
-    --text-muted: #9aa6b8;
-    --text-subtle: #64748b;
-    --text-inverse: #0b1220;
-    --border: #243044;
-    --border-strong: #334155;
-    --success: #34d399;  --success-soft: #064e3b;
-    --warning: #fbbf24;  --warning-soft: #4a2f08;
-    --danger:  #f87171;  --danger-soft:  #4c1d1d;
-    --info:    #60a5fa;  --info-soft:    #1e3a5f;
-    --focus-ring: color-mix(in srgb, var(--accent) 50%, transparent);
+    --accent: #8fb6cd; --accent-contrast: #14171a; --accent-hover: #a7cadd;
+    --danger: #c08a83; --danger-soft: #3a2420; --ok: #86a99f; --merged: #a99bc4;
+    --unseen: #cba96a;
+    --warn: #d9a441;
+    --s-github: #d7dde3; --s-slack: #d68ce6; --s-linear: #a5adf5; --s-schedule: #4bc4de;
+    --s-webhook: #b79bf7; --s-manual: #f0a45a; --s-cli: #a3c987; --s-app: #9aa4b2;
+    --term-selection: rgba(143, 182, 205, 0.36); --term-selection-inactive: rgba(143, 182, 205, 0.24);
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
     --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
     --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.5);
@@ -137,17 +189,5 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  :root {
-    --dur-fast: 0ms;
-    --dur: 0ms;
-    --dur-slow: 0ms;
-  }
+  :root { --dur-fast: 0ms; --dur: 0ms; --dur-slow: 0ms; }
 }
-
-html {
-  accent-color: var(--accent);
-  -webkit-tap-highlight-color: transparent;
-}
-
-::selection { background: color-mix(in srgb, var(--accent) 28%, transparent); }
-* { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }

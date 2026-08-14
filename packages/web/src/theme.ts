@@ -5,10 +5,19 @@
 
 export type ThemeSetting = "system" | "light" | "dark";
 const KEY = "bivy_theme";
-// Browser-chrome / status-bar color per theme. MUST match `--bg` in styles.css
-// (and the static <meta name="theme-color"> tags in index.html) so the chrome
-// blends into the app background instead of showing a pure white/black band.
-const THEME_COLORS: Record<"light" | "dark", string> = { light: "#f5f3ee", dark: "#14171a" };
+// Browser-chrome / status-bar color, read from the live `--bg` design token
+// (packages/ui/tokens.css is the single source of truth) so the chrome always
+// tracks the app background instead of showing a pure white/black band — and
+// there is no hardcoded hex here to drift out of sync when the palette changes.
+function themeColor(): string {
+  try {
+    const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
+    if (bg) return bg;
+  } catch {
+    /* getComputedStyle can throw if called before styles load; fall through */
+  }
+  return "#f5f3ee"; // paper-light --bg fallback; matches the static <meta> in index.html
+}
 
 export function currentThemeSetting(): ThemeSetting {
   try {
@@ -38,7 +47,7 @@ export function applyTheme(setting: ThemeSetting = currentThemeSetting()): void 
   // onto every theme-color tag — whichever one the browser's media query
   // currently has "active" will show that content either way, so this
   // doesn't need to know (or care) which one that is.
-  const color = THEME_COLORS[resolvedTheme(setting)];
+  const color = themeColor();
   document.querySelectorAll('meta[name="theme-color"]').forEach((el) => el.setAttribute("content", color));
 }
 
