@@ -45,6 +45,12 @@ export const BIVY_MCP_TOOLS = [
       properties: {
         path: { type: "string", description: "Path to the file to send, inside the session workspace (absolute, or relative to it)." },
         caption: { type: "string", description: "Optional short note shown with the attachment." },
+        artifact: {
+          type: "boolean",
+          description:
+            "Mark this as a named artifact — a durable output worth surfacing in the session's Artifacts list " +
+            "(a report, benchmark result, coverage output, or build archive) — rather than an incidental inline image.",
+        },
       },
       required: ["path"],
       additionalProperties: false,
@@ -66,7 +72,7 @@ export interface AttachResult {
 export async function runAttachToChat(
   endpoint: string,
   sessionId: string,
-  args: { path?: unknown; caption?: unknown },
+  args: { path?: unknown; caption?: unknown; artifact?: unknown },
   fetchImpl: FetchLike,
   token?: string,
 ): Promise<AttachResult> {
@@ -74,6 +80,7 @@ export async function runAttachToChat(
   const filePath = typeof args.path === "string" ? args.path.trim() : "";
   if (!filePath) return { isError: true, text: "Provide a `path` to a file inside the session workspace." };
   const caption = typeof args.caption === "string" ? args.caption : undefined;
+  const artifact = args.artifact === true;
   const base = endpoint.replace(/\/+$/, "");
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (token) headers.authorization = `Bearer ${token}`;
@@ -83,7 +90,7 @@ export async function runAttachToChat(
     res = await fetchImpl(`${base}/api/session/${encodeURIComponent(sessionId)}/attach`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ path: filePath, caption }),
+      body: JSON.stringify({ path: filePath, caption, ...(artifact ? { artifact } : {}) }),
     });
   } catch (error) {
     return { isError: true, text: `Could not reach the Bivy node to attach the file: ${error instanceof Error ? error.message : String(error)}` };

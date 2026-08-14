@@ -299,7 +299,7 @@ the same client `bivy exec` uses, with `--session <id>`.
 bivy send 3f1c9a02-… "now add a test for that"
 ```
 
-### `bivy attach <file> [--caption "…"] [--session <id>]`
+### `bivy attach <file> [--caption "…"] [--artifact] [--session <id>]`
 
 Surfaces a file the agent produced into the chat as an attachment — an image
 renders inline as a thumbnail, anything else as a downloadable file chip (the
@@ -313,9 +313,16 @@ workspace** — a path (or symlink) that escapes the workspace is refused, so th
 can't be turned into a file-exfiltration primitive. On a single-user host the
 loopback auth bypass means no token is needed.
 
+Pass `--artifact` to mark the attachment as a named artifact — a durable output
+worth surfacing in the session's **Artifacts** sheet (a report, benchmark
+result, coverage output, or build archive) — rather than an incidental inline
+image. Ordinary attachments (no flag) still show up in the chat exactly as
+before; the flag only adds a badge in the Artifacts sheet.
+
 ```bash
 bivy attach ./out/chart.png --caption "Revenue by month"
 bivy attach report.pdf
+bivy attach coverage/index.html --artifact --caption "Coverage report"
 ```
 
 ### `bivy takeover <termId|session-id>`

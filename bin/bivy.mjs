@@ -2232,16 +2232,18 @@ async function cmdSend(args = []) {
   process.exit(code);
 }
 
-// `bivy attach <file> [--caption "…"] [--session <id>]` — surface a file the
-// agent produced into the chat as an image/file attachment (the reverse of the
-// composer paperclip). The universal path: any agent that can run a shell command
-// can call this. The session id defaults to $BIVY_SESSION_ID, which every
+// `bivy attach <file> [--caption "…"] [--artifact] [--session <id>]` — surface a
+// file the agent produced into the chat as an image/file attachment (the reverse
+// of the composer paperclip). The universal path: any agent that can run a shell
+// command can call this. The session id defaults to $BIVY_SESSION_ID, which every
 // runtime adapter injects into the agent's subprocess env (see
 // src/runtime/session-env.ts) — except pi, whose SDK exposes its own
 // $PI_SESSION_ID instead (same id, different var name; see
 // resolveAttachSessionId). The file is resolved to an absolute path here (the
 // CLI's cwd is the agent's workdir) and confined to the session workspace
-// server-side.
+// server-side. `--artifact` marks it as a named artifact (a durable output worth
+// surfacing in the session's Artifacts list) rather than an incidental inline
+// image — see packages/core/src/artifacts.ts.
 async function cmdAttach(args = []) {
   const flag = (name) => {
     const i = args.indexOf(name);
@@ -2251,6 +2253,7 @@ async function cmdAttach(args = []) {
   const caption = flag("--caption");
   const name = flag("--name");
   const mimeType = flag("--mime") || flag("--mimeType");
+  const artifact = args.includes("--artifact");
   const flagsWithValue = new Set(["--session", "--caption", "--name", "--mime", "--mimeType"]);
   // First positional that isn't a flag or a flag's value.
   let file;
@@ -2261,7 +2264,7 @@ async function cmdAttach(args = []) {
     file = a;
     break;
   }
-  if (!file) { console.error(c.red('Usage: bivy attach <file> [--caption "…"] [--session <id>]')); process.exit(1); return; }
+  if (!file) { console.error(c.red('Usage: bivy attach <file> [--caption "…"] [--artifact] [--session <id>]')); process.exit(1); return; }
   if (!sessionId) { console.error(c.red("No session id. Set --session <id> or run inside an agent session ($BIVY_SESSION_ID).")); process.exit(1); return; }
   const absPath = path.resolve(process.cwd(), file);
   if (!fs.existsSync(absPath)) { console.error(c.red(`File not found: ${file}`)); process.exit(1); return; }
@@ -2279,7 +2282,7 @@ async function cmdAttach(args = []) {
     res = await fetch(`${url(config)}/api/session/${encodeURIComponent(sessionId)}/attach`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ path: absPath, caption, name, mimeType }),
+      body: JSON.stringify({ path: absPath, caption, name, mimeType, artifact }),
     });
   } catch (error) {
     console.error(c.red(`Could not reach the Bivy node: ${error?.message || String(error)}`));

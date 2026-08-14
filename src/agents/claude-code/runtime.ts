@@ -196,9 +196,16 @@ function buildAttachMcpServer(sdk: any, sessionId: string, attachToChat: AttachT
     {
       filePath: z.string().describe("Path to the file, absolute or relative to the session workspace."),
       caption: z.string().optional().describe("Short caption shown next to the attachment in the chat."),
+      artifact: z
+        .boolean()
+        .optional()
+        .describe(
+          "Mark this as a named artifact — a durable output worth surfacing in the session's Artifacts list " +
+            "(a report, benchmark result, coverage output, or build archive) — rather than an incidental inline image.",
+        ),
     },
-    async (args: { filePath: string; caption?: string }) => {
-      const result = attachToChat(sessionId, { filePath: args.filePath, caption: args.caption });
+    async (args: { filePath: string; caption?: string; artifact?: boolean }) => {
+      const result = attachToChat(sessionId, { filePath: args.filePath, caption: args.caption, ...(args.artifact ? { artifact: true } : {}) });
       if ("error" in result) return { content: [{ type: "text", text: result.error }], isError: true };
       return {
         content: [{ type: "text", text: `Attached ${result.ref.name} (${result.ref.kind}, ${result.ref.mimeType}) to the chat.` }],

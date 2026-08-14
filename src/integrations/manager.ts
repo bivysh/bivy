@@ -333,11 +333,12 @@ export class IntegrationManager {
       executors.set(ATTACH_TO_CHAT_TOOL.name, async (params) => {
         const sessionId = sessionIdRef.current;
         if (!sessionId) return { content: [{ type: "text", text: "Session is not ready yet — try again in a moment." }], details: {}, isError: true };
-        const p = (params ?? {}) as { filePath?: unknown; caption?: unknown };
+        const p = (params ?? {}) as { filePath?: unknown; caption?: unknown; artifact?: unknown };
         const filePath = typeof p.filePath === "string" ? p.filePath.trim() : "";
         if (!filePath) return { content: [{ type: "text", text: "filePath is required" }], details: {}, isError: true };
         const caption = typeof p.caption === "string" ? p.caption : undefined;
-        const result = attachToChat(sessionId, { filePath, caption });
+        const artifact = p.artifact === true;
+        const result = attachToChat(sessionId, { filePath, caption, ...(artifact ? { artifact } : {}) });
         if ("error" in result) return { content: [{ type: "text", text: result.error }], details: {}, isError: true };
         return { content: [{ type: "text", text: `Attached ${result.ref.name} (${result.ref.kind}, ${result.ref.mimeType}) to the chat.` }], details: { ref: result.ref } };
       });
