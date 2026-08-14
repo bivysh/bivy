@@ -14,6 +14,9 @@ export interface CredentialsModelsDependencies {
   selectModelLocally(model: ModelInfo): void;
   isDirect(): boolean;
   now(): number;
+  isOnline(): boolean;
+  importModelKeys(entries: Array<{ provider: string; key: string }>): Promise<void>;
+  accountModelKeys(): Promise<Array<{ provider: string; key: string }>>;
 }
 
 export type CredentialsModelsResult =
@@ -22,6 +25,8 @@ export type CredentialsModelsResult =
 
 /** Owns credential, provider-auth and custom-model protocol decisions. */
 export class CredentialsModelsCoordinator {
+  private accountSyncInFlight: Promise<void> | null = null;
+
   constructor(private readonly deps: CredentialsModelsDependencies) {}
 
   request(command: Command, catalog: "providers" | "credentials" | "models"): CredentialsModelsResult {
@@ -48,6 +53,26 @@ export class CredentialsModelsCoordinator {
   submitOauthCode(id: string, code: string): void { this.deps.send({ kind: "provider.oauth.code", id, code }); }
 
   listCredentials(): void { this.request({ kind: "credentials.list" }, "credentials"); }
+  syncAccountCredentials(): Promise<void> {
+    if (this.deps.isDirect() || !this.deps.isOnline()) return Promise.resolve();
+    if (this.accountSyncInFlight) return this.accountSyncInFlight;
+    this.accountSyncInFlight = (async () => {
+      const event = await this.deps.awaitAck({ kind: "credentials.account.export" });
+      const rawEntries = (event as unknown as { entries?: unknown }).entries;
+      const entries = Array.isArray(rawEntries)
+        ? rawEntries.filter((entry): entry is { provider: string; key: string } => Boolean(entry)
+          && typeof (entry as { provider?: unknown }).provider === "string"
+          && typeof (entry as { key?: unknown }).key === "string")
+        : [];
+      await this.deps.importModelKeys(entries);
+      for (const { provider, key } of await this.deps.accountModelKeys()) {
+        await this.deps.awaitAck({ kind: "credential.set", provider, label: "default", key });
+      }
+      this.listCredentials();
+      this.listProviders();
+    })().catch(() => {}).finally(() => { this.accountSyncInFlight = null; });
+    return this.accountSyncInFlight;
+  }
   setCredential(provider: string, label: string, value: { key?: string; ref?: string }): Promise<void> {
     return this.ack({ kind: "credential.set", provider, label, ...value });
   }
