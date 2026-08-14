@@ -233,13 +233,13 @@ for (const id of ["opencode", "cursor", "gemini"]) {
 if (priorMcpProxy === undefined) delete process.env.BIVY_MCP_PROXY;
 else process.env.BIVY_MCP_PROXY = priorMcpProxy;
 
-// The Supported tier is the paid-support promise, so its membership is pinned here
-// rather than left to drift: an agent may only join it by earning the capabilities
-// the tier implies. Pi and Claude Code are the native runtimes; Codex and OpenCode
-// both run over a bidirectional protocol with per-tool Approve/Deny and real resume.
-const SUPPORTED = ["pi", "claude-code-sdk", "codex-approvals", "opencode"].sort();
+// The Supported tier is the paid-support promise. This file pins OpenCode to its
+// non-ACP fallback, so certification must downgrade that configured path even
+// though its static profile says supported. The governed ACP path is checked below.
+const SUPPORTED_IN_CURRENT_MODES = ["pi", "claude-code-sdk", "codex-approvals"].sort();
 const listedSupported = listRuntimes().filter((r) => r.supportTier === "supported").map((r) => r.id).sort();
-assert.deepEqual(listedSupported, SUPPORTED, `Supported tier membership changed: ${listedSupported.join(", ")}`);
+assert.deepEqual(listedSupported, SUPPORTED_IN_CURRENT_MODES, `Supported tier membership changed: ${listedSupported.join(", ")}`);
+assert.equal(listRuntimes().find((r) => r.id === "opencode")!.certification, "adapter-tested");
 
 // Codex earns the tier on the pipe-free app-server path: approvals, model
 // selection, resume, and native discovery — the same surface as Claude Code.
@@ -257,6 +257,8 @@ try {
   const opencode = listRuntimes().find((r) => r.id === "opencode")!;
   const caps = opencode.capabilities as Record<string, unknown>;
   assert.equal(opencode.executionMode, "protocol", "OpenCode must run over ACP to be Supported");
+  assert.equal(opencode.supportTier, "supported", "active ACP certification must confer Supported status");
+  assert.equal(opencode.certification, "release-tested");
   assert.equal(caps.toolInterception, true, "OpenCode must gate each tool call to be Supported");
   assert.equal(caps.resume, true, "OpenCode must resume via session/load to be Supported");
   assert.equal(opencode.protectionLevel, "tool-controls", "promoted OpenCode is governed by Bivy tool controls, not bare user permissions");
@@ -264,13 +266,11 @@ try {
   process.env.BIVY_OPENCODE_ACP = "0";
 }
 
-// Both pin the exact external CLI release the adapter was certified against. These
-// are real binaries rather than lockfile dependencies, so nothing but this
-// assertion stops the tier from outliving the version it was validated on.
-for (const id of ["codex-approvals", "opencode"]) {
-  const info = listRuntimes().find((r) => r.id === id)!;
-  assert.equal(info.certification, "release-tested", `${id} must be release-tested to sit in the Supported tier`);
-  assert.match(info.testedVersion ?? "", /^\d+\.\d+\.\d+/, `${id} must name the exact CLI version it was certified against`);
-}
+// Codex pins the exact external CLI release certified for the governed path.
+// OpenCode's pin is asserted inside the ACP block above; its fallback is no longer
+// entitled to release-tested status merely because the profile carries a pin.
+const certifiedCodex = listRuntimes().find((r) => r.id === "codex-approvals")!;
+assert.equal(certifiedCodex.certification, "release-tested", "governed Codex must be release-tested to sit in the Supported tier");
+assert.match(certifiedCodex.testedVersion ?? "", /^\d+\.\d+\.\d+/, "governed Codex must name the exact CLI version it was certified against");
 
 console.log("runtime-catalog: all tests passed");

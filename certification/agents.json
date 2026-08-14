@@ -1,0 +1,68 @@
+{
+  "$schema": "./schema.json",
+  "schemaVersion": 1,
+  "requiredScenarios": [
+    "probe-install",
+    "auth-handoff",
+    "first-turn",
+    "structured-streaming",
+    "approval",
+    "denial",
+    "cancellation",
+    "resume",
+    "attachments",
+    "token-refresh",
+    "malformed-output",
+    "version-drift"
+  ],
+  "agents": [
+    {
+      "id": "claude-code-sdk",
+      "name": "Claude Code",
+      "status": "active",
+      "upstream": { "package": "@anthropic-ai/claude-agent-sdk", "pinnedVersion": "0.3.220", "supportedRange": ">=0.3.220 <=0.3.220" },
+      "platforms": ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"],
+      "executionMode": "protocol",
+      "probe": { "command": "claude", "args": ["--version"] },
+      "install": { "command": "npm", "args": ["install", "--global", "@anthropic-ai/claude-code"] },
+      "auth": { "owner": "agent", "allowedEnvironment": ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"] },
+      "capabilities": ["toolInterception", "modelSelection", "resume", "attachments", "cancellation", "structuredStreaming", "tokenRefresh"]
+    },
+    {
+      "id": "codex-approvals",
+      "name": "Codex (governed)",
+      "status": "active",
+      "upstream": { "package": "@openai/codex", "pinnedVersion": "0.147.0", "supportedRange": ">=0.147.0 <=0.147.0" },
+      "platforms": ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"],
+      "executionMode": "protocol",
+      "probe": { "command": "codex", "args": ["--version"] },
+      "install": { "command": "npm", "args": ["install", "--global", "@openai/codex@0.147.0"] },
+      "auth": { "owner": "agent", "allowedEnvironment": ["OPENAI_API_KEY"] },
+      "capabilities": ["toolInterception", "modelSelection", "resume", "attachments", "cancellation", "structuredStreaming", "tokenRefresh"]
+    },
+    {
+      "id": "pi",
+      "name": "Pi",
+      "status": "active",
+      "upstream": { "package": "@earendil-works/pi-coding-agent", "pinnedVersion": "0.83.0", "supportedRange": ">=0.83.0 <=0.83.0" },
+      "platforms": ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"],
+      "executionMode": "protocol",
+      "probe": { "command": "pi", "args": ["--version"] },
+      "install": { "command": "npm", "args": ["install", "--global", "@earendil-works/pi-coding-agent@0.83.0"] },
+      "auth": { "owner": "agent", "allowedEnvironment": ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY"] },
+      "capabilities": ["toolInterception", "modelSelection", "resume", "attachments", "cancellation", "structuredStreaming", "tokenRefresh"]
+    },
+    {
+      "id": "opencode",
+      "name": "OpenCode ACP",
+      "status": "active",
+      "upstream": { "package": "opencode-ai", "pinnedVersion": "1.18.13", "supportedRange": ">=1.18.13 <=1.18.13" },
+      "platforms": ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"],
+      "executionMode": "protocol",
+      "probe": { "command": "opencode", "args": ["--version"] },
+      "install": { "command": "npm", "args": ["install", "--global", "opencode-ai@1.18.13"] },
+      "auth": { "owner": "agent", "allowedEnvironment": [] },
+      "capabilities": ["toolInterception", "modelSelection", "resume", "attachments", "cancellation", "structuredStreaming", "tokenRefresh"]
+    }
+  ]
+}

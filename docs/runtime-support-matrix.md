@@ -1,6 +1,6 @@
 # Runtime support matrix
 
-Bivy supports multiple agents, but they are not all equally production-ready. The app exposes the same tiers in the agent picker.
+Bivy supports multiple agents, but they are not all equally production-ready. The app exposes the same tiers in the agent picker. The **Supported** rows are derived and release-gated by the machine-readable certification matrix; see the generated [Certified Supported agents](supported-agents.md) page. Static profile metadata alone cannot confer Supported status.
 
 The agent **picker** shows the most-used coding agents (the rows below with a
 non-italic tier). Everything else stays in the catalog and is runnable via
@@ -166,7 +166,7 @@ Four general, opt-in levers move an agent up that ladder without per-agent code:
 
 Definitions:
 
-- **Supported** — intended for paying-user support once the rest of production gates are green.
+- **Supported** — covered by the paid product promise only while the configured execution path matches an active, pinned [agent certification](supported-agents.md).
 - **Beta** — useful and visible, but has known capability gaps.
 - **Experimental** — available for advanced users; not part of the paid support promise.
 - **Boundary only** — Bivy can constrain workspace/sandbox/terminal channels, but cannot yet intercept every structured tool call from the agent.
