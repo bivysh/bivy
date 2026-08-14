@@ -25,12 +25,12 @@ overrides:
   "@hono/node-server": 2.0.12
   "@modelcontextprotocol/sdk": 1.30.0
   brace-expansion: 5.0.9
-  undici: 8.9.0
+  undici: 8.10.0
   # npm expresses these as a nested object under the parent package; pnpm uses a
   # `parent>child` selector. Same intent: pi-coding-agent ships an npm-shrinkwrap
   # pinning vulnerable copies below its own node_modules.
   "@earendil-works/pi-coding-agent>brace-expansion": 5.0.9
-  "@earendil-works/pi-coding-agent>undici": 8.9.0
+  "@earendil-works/pi-coding-agent>undici": 8.10.0
 
 # pnpm does not run a dependency's install scripts unless it is listed here.
 # Each `true` is arbitrary code we let run at install time, so every entry is a

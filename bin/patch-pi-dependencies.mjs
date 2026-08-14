@@ -38,7 +38,7 @@ if (!piPackage) process.exit(0);
 
 const patches = [
   { name: "brace-expansion", version: "5.0.9" },
-  { name: "undici", version: "8.9.0" },
+  { name: "undici", version: "8.10.0" },
 ];
 
 for (const patch of patches) {
