@@ -56,6 +56,13 @@ const disallowedPattern = /\b(AGPL|GPL|LGPL|SSPL|BUSL|Commercial|Proprietary)\b/
 const exemptScopes = ["@anthropic-ai/"];
 const isExemptPackage = (pkgPath) => exemptScopes.some((scope) => pkgPath.includes(scope));
 
+// khroma 2.1.0 accidentally omits the package.json `license` field, but ships a
+// complete MIT `license` file and identifies itself as MIT in its README. Keep
+// this exception version-specific so a future package release is audited again.
+const knownManifestLicenseOmissions = ["node_modules/.pnpm/khroma@2.1.0/node_modules/khroma/package.json"];
+const isKnownManifestLicenseOmission = (pkgPath, license) =>
+  !license && knownManifestLicenseOmissions.some((suffix) => pkgPath.replaceAll("\\", "/").endsWith(suffix));
+
 const problems = [];
 
 function normalizeLicense(value) {
@@ -75,7 +82,10 @@ function licenseLooksAllowed(license) {
 }
 
 function check(source, name, pkgPath, license) {
-  if (disallowedPattern.test(license) || (!isExemptPackage(pkgPath) && !licenseLooksAllowed(license))) {
+  if (
+    disallowedPattern.test(license) ||
+    (!isExemptPackage(pkgPath) && !isKnownManifestLicenseOmission(pkgPath, license) && !licenseLooksAllowed(license))
+  ) {
     problems.push(`${source}: ${name} (${pkgPath}) has unsupported or unknown license: ${license || "<missing>"}`);
   }
 }
