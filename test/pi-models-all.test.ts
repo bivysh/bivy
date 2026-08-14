@@ -20,7 +20,9 @@ fs.mkdirSync(sessionsDir, { recursive: true });
 const store = createCredentialVault(piDir);
 await store.modify("anthropic", async () => ({ type: "oauth", access: "a", refresh: "r", expires: Date.now() + 3_600_000 }));
 
-const runtime = new PiRuntime({ credsDir: piDir, piDir, sessionsDir });
+// Catalog-network behavior is covered by the upstream runtime; this unit test
+// only exercises local auth/config reloads and must not depend on the network.
+const runtime = new PiRuntime({ credsDir: piDir, piDir, sessionsDir, allowModelNetwork: false });
 const { session } = await runtime.createSession({ workspace: piDir });
 
 assert.equal(typeof session.getAllModels, "function", "PiSession must implement the optional getAllModels() capability");

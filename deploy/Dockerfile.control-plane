@@ -4,38 +4,53 @@
 # skips native builds (e.g. node-pty) we don't need just to bundle the client.
 FROM node:22-slim AS webbuild
 WORKDIR /repo
-# Ephemeral-machines UI flag, baked into the web bundle at build time (Vite reads
-# VITE_*-prefixed env; see packages/web/src/flags.ts). OFF by default: pass
-# --build-arg VITE_EPHEMERAL_MACHINES_ENABLED=1 to expose the surface (staging
-# does; production omits it). Pairs with the runtime EPHEMERAL_MACHINES_ENABLED
-# the control-plane service reads for server-side enforcement.
-ARG VITE_EPHEMERAL_MACHINES_ENABLED
-ENV VITE_EPHEMERAL_MACHINES_ENABLED=$VITE_EPHEMERAL_MACHINES_ENABLED
 # The monorepo root installs with pnpm; corepack ships with the node image and
 # resolves the version pinned in package.json's `packageManager`.
 RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+# Dependency installation depends on manifests, not workspace source. Keeping
+# source out of this layer lets BuildKit reuse the expensive pnpm install when a
+# normal web/core code change is deployed.
+COPY packages/core/package.json ./packages/core/package.json
+COPY packages/automation-core/package.json ./packages/automation-core/package.json
+COPY packages/plugin-sdk/package.json ./packages/plugin-sdk/package.json
+COPY packages/web/package.json ./packages/web/package.json
+RUN pnpm install --filter @bivy/web... --frozen-lockfile --ignore-scripts
 COPY packages/ ./packages/
-RUN pnpm install --frozen-lockfile --ignore-scripts
+# Ephemeral-machines UI flag, baked into the web bundle at build time (Vite reads
+# VITE_*-prefixed env; see packages/web/src/flags.ts). Declare it only after the
+# dependency layer so staging's value and production's default share that cache.
+# Pass 1 to expose the surface (staging does; production omits it). Pairs with
+# the runtime EPHEMERAL_MACHINES_ENABLED server-side enforcement flag.
+ARG VITE_EPHEMERAL_MACHINES_ENABLED
+ENV VITE_EPHEMERAL_MACHINES_ENABLED=$VITE_EPHEMERAL_MACHINES_ENABLED
 RUN pnpm --filter @bivy/web run build
 
 # Stage 2 — the control plane service.
 FROM node:22-slim
 WORKDIR /app
+# automation-core compiles canonical files under /src with NodeNext semantics;
+# the root module marker ensures TypeScript emits ESM for those files.
+COPY package.json /package.json
 # The control plane imports monorepo siblings through `file:../../packages/*`
-# dependencies. Copy them before install so those paths resolve: from /app the
-# `../../packages` prefix clamps at the container root. automation-core's
-# tsconfig also compiles the canonical sources from ../../src/automation.
+# dependencies. Their manifests must exist for npm ci, but source is copied
+# afterwards so ordinary code changes do not invalidate the dependency layer.
+# From /app the `../../packages` prefix clamps at the container root.
+COPY packages/core/package.json /packages/core/package.json
+COPY packages/automation-core/package.json /packages/automation-core/package.json
+COPY services/control-plane/package.json services/control-plane/package-lock.json ./
+# postinstall builds automation-core, whose source is intentionally in the next
+# layer; prestart performs that same build before the service boots.
+RUN npm ci --ignore-scripts
 COPY packages/core /packages/core
 COPY packages/automation-core /packages/automation-core
+# automation-core's tsconfig compiles canonical sources from ../../src/automation.
 COPY src/automation /src/automation
-COPY services/control-plane/package.json ./
-# Keep the local package linked to its source directory. The package's dist is
-# built during postinstall (and again at prestart); copying it into node_modules
-# before that build would leave the runtime import pointed at stale output.
-RUN npm install \
-    && rm -rf node_modules/@bivy/automation-core \
+# Keep the local package linked to its source directory. Build and verify it now
+# that its canonical source is present; prestart rebuilds it again on boot.
+RUN rm -rf node_modules/@bivy/automation-core \
     && ln -s /packages/automation-core node_modules/@bivy/automation-core \
+    && npm run build:automation-core \
     && node --input-type=module -e \
       "import('@bivy/automation-core').then((m) => { if (typeof m.evaluateAutomation !== 'function') process.exit(1) })"
 COPY services/control-plane/ ./
