@@ -2772,8 +2772,11 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
       const provider = String(msg.provider ?? "").trim().toLowerCase();
       const label = String(msg.label ?? "");
       const ref = typeof msg.ref === "string" ? msg.ref.trim() : "";
-      if (ref) await setProviderReferenceLabeled(credsDir, provider, label, ref);
-      else await setProviderApiKeyLabeled(credsDir, provider, label, String(msg.key ?? ""));
+      const requestedSync = msg.sync === "account" || msg.sync === "node" ? msg.sync : undefined;
+      // Persist the secret and its requested tier atomically. Creating a
+      // machine-only credential must never leave an account-tier crash window.
+      if (ref) await setProviderReferenceLabeled(credsDir, provider, label, ref, requestedSync);
+      else await setProviderApiKeyLabeled(credsDir, provider, label, String(msg.key ?? ""), requestedSync);
       await pushModelAuthToControlPlane();
       await refreshSessionAfterAuth();
       relay?.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
@@ -9733,8 +9736,9 @@ app.post("/api/auth/credentials", async (req, res, next) => {
     const provider = String(req.body?.provider ?? "").trim().toLowerCase();
     const label = String(req.body?.label ?? "default");
     const ref = typeof req.body?.ref === "string" ? req.body.ref.trim() : "";
-    if (ref) await setProviderReferenceLabeled(credsDir, provider, label, ref);
-    else await setProviderApiKeyLabeled(credsDir, provider, label, String(req.body?.key ?? ""));
+    const requestedSync = req.body?.sync === "account" || req.body?.sync === "node" ? req.body.sync : undefined;
+    if (ref) await setProviderReferenceLabeled(credsDir, provider, label, ref, requestedSync);
+    else await setProviderApiKeyLabeled(credsDir, provider, label, String(req.body?.key ?? ""), requestedSync);
     await pushModelAuthToControlPlane();
     await refreshSessionAfterAuth();
     res.json({ ok: true, records: await listCredentialRecords(credsDir), providers: await listProvidersUnified() });

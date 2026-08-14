@@ -159,14 +159,12 @@ export function CredentialVault({ state }: { state: AppState }) {
         } else if (state.status !== "online") {
           if (availability === "node") throw new Error("Connect to the machine where this key should be stored.");
         } else {
-          await controller.setCredential(id, account, { key: secret.trim() });
-          if (availability === "node") await controller.setCredentialSync(id, account, "node");
+          await controller.setCredential(id, account, { key: secret.trim(), sync: availability === "node" ? "node" : "account" });
         }
       } else {
         if (state.status !== "online") throw new Error("Connect a machine to add a password-manager reference.");
         if (deviceKeys.some((record) => record.provider === id && record.label === account)) await controller.removeEphemeralModelKey(id, account);
-        await controller.setCredential(id, account, { ref: secret.trim() });
-        await controller.setCredentialSync(id, account, availability === "account" ? "account" : "node");
+        await controller.setCredential(id, account, { ref: secret.trim(), sync: availability === "account" ? "account" : "node" });
       }
       setMessage("Credential saved.");
       setSecret("");

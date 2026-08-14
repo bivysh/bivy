@@ -56,6 +56,19 @@ function oauthRecord(provider: string, label: string, access: string, expires: n
   }
 }
 
+// --- creation persists a requested machine-only tier atomically ------------
+{
+  const credsDir = freshCredsDir();
+  try {
+    const store = createCredentialVault(credsDir);
+    await setProviderApiKeyLabeled(credsDir, "openai", "work", "node-secret", "node");
+    assert.equal((await store.readRecord("openai", "work"))?.sync, "node");
+    assert.deepEqual(await store.exportSyncableRecords(), {}, "a newly created machine-only secret is never account-exportable");
+  } finally {
+    fs.rmSync(path.dirname(credsDir), { recursive: true, force: true });
+  }
+}
+
 // --- unattended custody is explicit and exports only granted stored items ---
 {
   const credsDir = freshCredsDir();

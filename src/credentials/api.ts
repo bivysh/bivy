@@ -297,7 +297,7 @@ async function labeledMeta(credsDir: string, provider: string, label: string): P
 }
 
 /** Store an API key under a specific label (multi-account). */
-export async function setProviderApiKeyLabeled(credsDir: string, provider: string, label: string, key: string): Promise<void> {
+export async function setProviderApiKeyLabeled(credsDir: string, provider: string, label: string, key: string, sync?: "account" | "node"): Promise<void> {
   const id = provider.trim().toLowerCase();
   if (!id) throw new Error("Provider is required");
   const apiKey = String(key ?? "").trim();
@@ -308,11 +308,12 @@ export async function setProviderApiKeyLabeled(credsDir: string, provider: strin
     label: normalizeLabel(label),
     source: { kind: "stored", cred: { type: "api_key", key: apiKey } },
     ...meta,
+    ...(sync ? { sync } : {}),
   });
 }
 
 /** Store a reference (op:// / env://) under a specific label (multi-account). */
-export async function setProviderReferenceLabeled(credsDir: string, provider: string, label: string, ref: string): Promise<void> {
+export async function setProviderReferenceLabeled(credsDir: string, provider: string, label: string, ref: string, sync?: "account" | "node"): Promise<void> {
   const id = provider.trim().toLowerCase();
   if (!id) throw new Error("Provider is required");
   const pointer = String(ref ?? "").trim();
@@ -324,6 +325,7 @@ export async function setProviderReferenceLabeled(credsDir: string, provider: st
     label: normalizeLabel(label),
     source: { kind: "reference", ref: pointer, backend },
     ...meta,
+    ...(sync ? { sync } : {}),
   });
 }
 

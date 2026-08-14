@@ -2537,7 +2537,7 @@ export class AppController {
     return this.credentialSyncInFlight;
   }
   /** Add/replace a labeled credential — an API key, or an op://…/env://… reference. */
-  setCredential(provider: string, label: string, value: { key?: string; ref?: string }): Promise<void> {
+  setCredential(provider: string, label: string, value: { key?: string; ref?: string; sync?: "account" | "node" }): Promise<void> {
     return this.awaitAck({ kind: "credential.set", provider, label, ...value }).then(() => undefined);
   }
   /** Forget one labeled credential (`provider:label`) after the node confirms it. */
