@@ -12,10 +12,12 @@ test("settings exposes one credential vault rather than device and machine forms
   expect(settings).not.toContain("PresetBar");
 });
 
-test("vault has saved-items, catalog add, detail, assignment and custody flows", async () => {
+test("vault unifies saved providers, custom endpoints, assignment and unattended flows", async () => {
   const vault = await read("../../packages/web/src/components/CredentialVault.tsx");
   expect(vault).toContain("BIVY_PROVIDER_CATALOG");
-  expect(vault).toContain("No credentials yet");
+  expect(vault).toContain("No providers yet");
+  expect(vault).toContain("Local server or custom endpoint");
+  expect(vault).toContain("Test endpoint & find models");
   expect(vault).toContain("Search providers");
   expect(vault).toContain("All my machines — end-to-end encrypted");
   expect(vault).toContain("Use for {projectId}");

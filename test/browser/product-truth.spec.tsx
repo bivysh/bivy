@@ -20,7 +20,7 @@ test("full computer access requires an informed second action", async () => {
 
 test("settings use task-oriented groups and search panel concepts", async () => {
   const source = await readFile(new URL("../../packages/web/src/components/Settings.tsx", import.meta.url), "utf8");
-  for (const group of ["Models & agents", "Machines", "App", "Account"]) {
+  for (const group of ["Models & keys", "Machines", "App", "Account"]) {
     expect(source).toContain(`label: "${group}"`);
   }
   // Integrations (GitHub/Linear/Slack) and automation & policy (Runs,
