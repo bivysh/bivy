@@ -427,6 +427,7 @@ type OAuthLoginState = {
   abort: AbortController;
   createdAt: number;
   manualCodeResolve?: (code: string) => void;
+  openedOnNode?: boolean;
 };
 
 // Per-process secret gating the loopback bootstrap endpoint. Published to a
@@ -3041,7 +3042,13 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
   // general remote-browser-launch primitive.
   "provider.oauth.open_on_node"(msg, ctx) {
     const requestId = String(msg.requestId ?? "");
-    const result = openOAuthLoginOnNode(oauthLogins.get(String(msg.id ?? "")), openBrowser);
+    const state = oauthLogins.get(String(msg.id ?? ""));
+    if (state?.openedOnNode) {
+      ctx.reply({ type: "provider.oauth.open_on_node.result", requestId, opened: true, alreadyOpened: true });
+      return;
+    }
+    const result = openOAuthLoginOnNode(state, openBrowser);
+    if (result.opened && state) state.openedOnNode = true;
     ctx.reply({ type: "provider.oauth.open_on_node.result", requestId, ...result });
   },
   // Paste-back step for providers that return a redirect URL/code instead of a
@@ -9731,7 +9738,10 @@ app.post("/api/auth/oauth/start", async (req, res, next) => {
 });
 
 app.post("/api/auth/oauth/:id/open-on-node", (req, res) => {
-  const result = openOAuthLoginOnNode(oauthLogins.get(req.params.id), openBrowser);
+  const state = oauthLogins.get(req.params.id);
+  if (state?.openedOnNode) return res.json({ opened: true, alreadyOpened: true });
+  const result = openOAuthLoginOnNode(state, openBrowser);
+  if (result.opened && state) state.openedOnNode = true;
   res.status(result.opened ? 200 : 409).json(result);
 });
 

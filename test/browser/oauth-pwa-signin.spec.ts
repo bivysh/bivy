@@ -27,4 +27,5 @@ test("relay and direct transports share the safe node-open command", async () =>
   expect(direct).toContain('case "provider.oauth.open_on_node"');
   expect(server).toContain('"provider.oauth.open_on_node"(msg, ctx)');
   expect(server).toContain("openOAuthLoginOnNode");
+  expect(server).toContain("state?.openedOnNode");
 });
