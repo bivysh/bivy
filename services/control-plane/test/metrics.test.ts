@@ -24,7 +24,20 @@ test("durable Run results record each fixed outcome exactly once", () => {
 });
 
 test("product metric dimensions are closed low-cardinality enums", () => {
-  assert.deepEqual(PRODUCT_EVENT_VALUES, ["activation_ready", "first_useful_response", "remote_reconnect", "remote_intervention", "run_accepted", "receipt_reviewed"]);
+  assert.deepEqual(PRODUCT_EVENT_VALUES, [
+    "activation_ready",
+    "first_useful_response",
+    "remote_reconnect",
+    "remote_intervention",
+    "run_accepted",
+    "receipt_reviewed",
+    "first_run_machine_ready",
+    "first_run_machine_failed",
+    "first_run_provider_connected",
+    "first_run_provider_failed",
+    "first_run_agent_verified",
+    "first_run_agent_failed",
+  ]);
   assert.deepEqual(PRODUCT_CLIENT_VALUES, ["desktop", "mobile", "cli", "node"]);
 });
 

@@ -23,6 +23,7 @@ import {
   recordProductMetric,
   activationFromState,
   type ProductMetricEvent,
+  type ActivationCheckId,
   assignWorkItem,
   deleteWorkItem,
   clearWorkQueue,
@@ -289,6 +290,9 @@ export class AppController {
   private pendingRouteNode: string | null = null;
   /** Session selected from another node in the all-node sidebar; opened after reconnecting to its owner node. */
   private pendingCrossNodeOpen: { sessionId: string; path?: string } | null = null;
+  /** Subscribers for content-free control-plane Run-change hints. The relay
+   *  never carries the Run body/evidence here; subscribers refetch canonically. */
+  private runUpdateListeners = new Set<(runId: string, revision?: string) => void>();
   /** Subscribers that want the composer input focused (e.g. after "New"). */
   private composerFocusListeners = new Set<() => void>();
   /** Subscribers that accept editable text drafted by contextual UI actions. */
@@ -525,6 +529,15 @@ export class AppController {
           for (const fn of this.terminalListeners) fn(event);
           return;
         }
+        // Content-free control-plane hint delivered over the existing relay.
+        // Keep it out of the Session reducer; feature subscribers refetch the
+        // canonical account-scoped Run and polling remains their recovery path.
+        if (type === "run.updated") {
+          const runId = typeof event.runId === "string" ? event.runId : "";
+          const revision = typeof event.revision === "string" ? event.revision : undefined;
+          if (runId) for (const listener of this.runUpdateListeners) listener(runId, revision);
+          return;
+        }
         // One-shot transcription result — resolve the awaiting caller and stop;
         // it never touches the session reducer.
         if (type === "transcription") {
@@ -609,15 +622,36 @@ export class AppController {
       .finally(() => this.productMetricsInFlight.delete(event));
   }
 
+  /** One ok/failed product-metric pair per readiness-led first-run step,
+   *  keyed by the activation check it tracks. `agent_answered` and
+   *  `account_signed_in` are excluded: the former already has its own
+   *  dedicated `first_useful_response` milestone below, and the latter is
+   *  always resolved by the time this model runs (see activation.ts) so a
+   *  transition into it is never observed. */
+  private static readonly FIRST_RUN_STEP_EVENTS: Partial<Record<ActivationCheckId, { ok: ProductMetricEvent; failed: ProductMetricEvent }>> = {
+    machine_online: { ok: "first_run_machine_ready", failed: "first_run_machine_failed" },
+    agent_installed: { ok: "first_run_agent_verified", failed: "first_run_agent_failed" },
+    credential_valid: { ok: "first_run_provider_connected", failed: "first_run_provider_failed" },
+  };
+
   /** Observe only concrete state transitions. History snapshots are excluded
    *  from first response: opening an old Session must not look like activation. */
   private observeActivationMilestones(before: ReturnType<SessionStore["getState"]>, event: { type?: unknown }): void {
     const after = this.store.getState();
-    const beforeActivation = activationFromState(before);
-    const afterActivation = activationFromState(after);
-    const readyBefore = beforeActivation.checks.slice(0, 4).every((check) => check.state === "passed");
-    const readyAfter = afterActivation.checks.slice(0, 4).every((check) => check.state === "passed");
+    const beforeActivation = activationFromState({ ...before, direct: this.direct });
+    const afterActivation = activationFromState({ ...after, direct: this.direct });
+    // Every check but the final agent-answered one — robust to the chain
+    // growing (e.g. the leading sign-in step) without re-deriving the cutoff.
+    const readyBefore = beforeActivation.checks.slice(0, -1).every((check) => check.state === "passed");
+    const readyAfter = afterActivation.checks.slice(0, -1).every((check) => check.state === "passed");
     if (!readyBefore && readyAfter) this.recordProductMilestone("activation_ready", true);
+
+    for (const [id, events] of Object.entries(AppController.FIRST_RUN_STEP_EVENTS) as Array<[ActivationCheckId, { ok: ProductMetricEvent; failed: ProductMetricEvent }]>) {
+      const b = beforeActivation.checks.find((c) => c.id === id)?.state;
+      const a = afterActivation.checks.find((c) => c.id === id)?.state;
+      if (b !== "passed" && a === "passed") this.recordProductMilestone(events.ok, true);
+      if (b !== "failed" && a === "failed") this.recordProductMilestone(events.failed, true);
+    }
 
     if (event.type === "session.history") return;
     const assistantCount = (state: typeof after) => state.transcript.filter((entry) => entry.role === "assistant" && Boolean(entry.text) && !entry.tool).length;
@@ -719,6 +753,13 @@ export class AppController {
     // Back/forward navigation between sessions: sync the app to the URL the user
     // landed on, without writing history back (the browser already did).
     window.addEventListener("popstate", () => this.applyRoute(parseRoute(), { navigate: false }));
+  }
+
+  /** Subscribe to account Run changes pushed over the relay. The callback is a
+   *  cache-invalidation hint only; callers must fetch durable state. */
+  onRunUpdated(fn: (runId: string, revision?: string) => void): () => void {
+    this.runUpdateListeners.add(fn);
+    return () => this.runUpdateListeners.delete(fn);
   }
 
   /** Subscribe to composer-focus requests (the Composer wires its textarea here).
@@ -1672,6 +1713,7 @@ export class AppController {
    * turn that streamed during the outage appears and any stuck "working" clears.
    */
   private onReconnected(): void {
+    this.send({ kind: "activation.readiness" });
     let openedAfterNodeSwitch = false;
     if (this.pendingCrossNodeOpen) {
       const pending = this.pendingCrossNodeOpen;
@@ -2471,6 +2513,17 @@ export class AppController {
   /** Toggle whether a credential syncs across your nodes or stays on this one. */
   setCredentialSync(provider: string, label: string, sync: "account" | "node"): void {
     this.send({ kind: "credential.sync.set", provider, label, sync });
+  }
+  /** "Test connection": a bounded, non-secret liveness probe for one credential
+   *  (see credential.test in server.ts). Resolves with the redacted result even
+   *  when the probe itself reports failure — only a transport-level problem
+   *  rejects. Direct/self-host mode has no handler for this command yet (same
+   *  gap as the rest of the labeled-credentials surface), so it always reports
+   *  "not supported" there rather than hanging. */
+  async testCredential(provider: string, label: string): Promise<{ ok: boolean; at: number; reason?: string }> {
+    if (this.direct) return { ok: false, at: Date.now(), reason: "not_supported" };
+    const event = (await this.awaitAck({ kind: "credential.test", provider, label }, 15000)) as { ok?: boolean; at?: number; reason?: string };
+    return { ok: Boolean(event.ok), at: Number(event.at) || Date.now(), ...(event.reason ? { reason: event.reason } : {}) };
   }
   /** Ask for the selection presets; the node replies with `credentials.presets`. */
   getCredentialPresets(): void {

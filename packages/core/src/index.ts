@@ -15,6 +15,7 @@ export * from "./inbox.js";
 export * from "./outcome.js";
 export * from "./run.js";
 export * from "./activation.js";
+export * from "./credentialReadiness.js";
 export * from "./receipt-v1.js";
 export * from "./linking.js";
 export * from "./protocol.js";

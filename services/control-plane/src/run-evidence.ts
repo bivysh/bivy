@@ -9,9 +9,11 @@ import type { RunEvidenceEvent, RunEvidenceEventKind, RunCheck, RunEvidencePatch
 // node fails loudly during development rather than quietly leaking data later.
 const FORBIDDEN = /prompt|transcript|content|diff|secret|token|command|output|stdout|stderr|tool/i;
 const EVENT_KINDS = new Set<RunEvidenceEventKind>([
-  "triggered", "routed", "claimed", "attempt_started", "checkpoint", "approval",
-  "policy_denial", "retry", "fallback", "branch", "pull_request", "needs_attention",
-  "completed", "cancelled",
+  "trigger_received", "trigger_matched", "queued", "routed", "provisioning", "claimed",
+  "agent_started", "checks_started", "checks_completed", "result_delivery", "notification",
+  "retry", "cancel_requested", "terminal",
+  "triggered", "attempt_started", "checkpoint", "approval", "policy_denial", "fallback",
+  "branch", "pull_request", "needs_attention", "completed", "cancelled",
 ]);
 const CHECK_STATUSES = new Set(["passed", "failed", "skipped"]);
 const EVENT_STATUSES = new Set(["passed", "failed", "denied", "approved"]);
@@ -94,9 +96,60 @@ export function sanitizeEvidencePatch(value: unknown): RunEvidencePatch {
         ref: text(event.ref, 200),
         url: text(event.url, 500),
         status: status && EVENT_STATUSES.has(status) ? (status as RunEvidenceEvent["status"]) : undefined,
+        reasonCode: text(event.reasonCode, 80),
+        evidenceRef: text(event.evidenceRef, 500),
+        milestoneId: text(event.milestoneId, 120),
       }];
     });
     if (events.length) patch.events = events;
+  }
+
+  if (input.usage && typeof input.usage === "object" && !Array.isArray(input.usage)) {
+    const raw = input.usage as Record<string, unknown>;
+    // Token COUNTS are allowlisted aggregate usage, never token strings. Reject
+    // any other sensitive-looking key while benign unknown keys are dropped.
+    const usageFields = new Set(["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "costUsd"]);
+    if (Object.keys(raw).some((key) => !usageFields.has(key) && FORBIDDEN.test(key))) throw new Error("sensitive evidence field rejected");
+    const count = (value: unknown): number | undefined => typeof value === "number" && Number.isFinite(value)
+      ? Math.max(0, Math.min(1_000_000_000, Math.trunc(value))) : undefined;
+    const costUsd = typeof raw.costUsd === "number" && Number.isFinite(raw.costUsd)
+      ? Math.max(0, Math.min(1_000_000, Math.round(raw.costUsd * 1_000_000) / 1_000_000)) : undefined;
+    patch.usage = {
+      inputTokens: count(raw.inputTokens), outputTokens: count(raw.outputTokens),
+      cacheReadTokens: count(raw.cacheReadTokens), cacheWriteTokens: count(raw.cacheWriteTokens), costUsd,
+    };
+  }
+
+  if (input.notification && typeof input.notification === "object" && !Array.isArray(input.notification)) {
+    const raw = input.notification as Record<string, unknown>;
+    assertNoForbiddenKeys(raw);
+    const status = ["not_requested", "pending", "delivered", "failed"].includes(String(raw.status))
+      ? String(raw.status) as NonNullable<RunEvidencePatch["notification"]>["status"] : undefined;
+    const channel = ["push", "email", "webhook"].includes(String(raw.channel))
+      ? String(raw.channel) as NonNullable<RunEvidencePatch["notification"]>["channel"] : undefined;
+    if (status) patch.notification = { status, channel, updatedAt: text(raw.updatedAt, 40) ?? new Date().toISOString(), reason: text(raw.reason, 200) };
+  }
+
+  if (Array.isArray(input.references)) {
+    const refs = input.references.slice(0, 20).flatMap((value): NonNullable<RunEvidencePatch["references"]> => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+      const raw = value as Record<string, unknown>;
+      assertNoForbiddenKeys(raw);
+      const kind = ["receipt", "evidence", "log"].includes(String(raw.kind)) ? String(raw.kind) as "receipt" | "evidence" | "log" : undefined;
+      const ref = text(raw.ref, 500);
+      return kind && ref ? [{ kind, ref, url: text(raw.url, 500) }] : [];
+    });
+    if (refs.length) patch.references = refs;
+  }
+
+  if (input.attention === null) patch.attention = null;
+  else if (input.attention && typeof input.attention === "object" && !Array.isArray(input.attention)) {
+    const raw = input.attention as Record<string, unknown>;
+    assertNoForbiddenKeys(raw);
+    const severity = ["warning", "error", "critical"].includes(String(raw.severity))
+      ? String(raw.severity) as "warning" | "error" | "critical" : undefined;
+    const reason = text(raw.reason, 240);
+    if (severity && reason) patch.attention = { severity, reason, since: text(raw.since, 40) ?? new Date().toISOString() };
   }
 
   if (input.receiptEvidence && typeof input.receiptEvidence === "object" && !Array.isArray(input.receiptEvidence)) {

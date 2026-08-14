@@ -29,7 +29,7 @@ import { InMemorySessionLocationRegistry, type SessionLocation, type SessionLoca
 import { InMemoryLocationRegistry } from "./runtime/location-registry.js";
 import { ControlPlaneSessionLocationRegistry, LayeredSessionLocationRegistry, type NodeSessionRow } from "./runtime/control-plane-location.js";
 import { attachAdoptedSessions, classifyAttachFailure } from "./runtime/adoption.js";
-import { createCredentialStore } from "./runtime/credentials.js";
+import { createCredentialStore, testProviderCredential } from "./runtime/credentials.js";
 import { isModelAuthError, authProviderForSession } from "./runtime/auth-errors.js";
 import { createCredentialVault, migrateVaultDir } from "./runtime/credential-store.js";
 import { probeAnthropicAccess } from "./runtime/anthropic-preflight.js";
@@ -2168,6 +2168,9 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
   async "repos.list"() {
     relay?.sendEvent({ type: "repos.list", ...(await listAccessibleRepos()) });
   },
+  async "activation.readiness"(_msg, ctx) {
+    ctx.broadcast({ type: "activation.readiness", ...(await activationReadinessSnapshot()) });
+  },
   // Web-driven "Connect GitHub" for the repo picker: start the node's device
   // flow, then poll it on GitHub's interval. Both answer with the same
   // `github.connect.status` event so the client has one shape to handle.
@@ -2685,6 +2688,21 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
       await pushModelAuthToControlPlane();
       relay?.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
     } catch (error) {
+      relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
+    }
+  },
+  // "Test connection": a bounded, non-secret liveness probe for one credential
+  // record (see credentials/api.ts testCredential). The reply carries only
+  // ok/at/reason — the credential's own token never leaves this handler.
+  async "credential.test"(msg, ctx) {
+    const provider = String(msg.provider ?? "").trim().toLowerCase();
+    const label = String(msg.label ?? "");
+    try {
+      const result = await testProviderCredential(credsDir, provider, label);
+      ctx.reply({ type: "credential.test.result", requestId: msg.requestId, provider, label, ...result });
+      relay?.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
+    } catch (error) {
+      ctx.reply({ type: "credential.test.result", requestId: msg.requestId, provider, label, ok: false, at: Date.now(), reason: "network_error" });
       relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
     }
   },
@@ -10422,7 +10440,7 @@ app.get("/api/repos", async (_req, res) => {
 // flags, these checks run where the credential and repository access actually
 // live. Inconclusive provider/network failures remain "unknown" instead of
 // falsely blocking activation.
-app.get("/api/activation/readiness", async (_req, res) => {
+async function activationReadinessSnapshot() {
   const vault = createCredentialVault(credsDir, piDir);
   const configured = await vault.list();
   const anthropic = configured.some((entry) => entry.providerId === "anthropic")
@@ -10433,7 +10451,7 @@ app.get("/api/activation/readiness", async (_req, res) => {
     : undefined;
   const repos = await listAccessibleRepos();
   const repositoryChosen = Boolean(await gitRepoRoot(defaultWorkspace));
-  res.json({
+  return {
     credential: {
       configured: configured.length > 0,
       providers: configured.map((entry) => entry.providerId),
@@ -10450,7 +10468,11 @@ app.get("/api/activation/readiness", async (_req, res) => {
       authed: repos.authed,
       ...(repos.error ? { reason: repos.error } : {}),
     },
-  });
+  };
+}
+
+app.get("/api/activation/readiness", async (_req, res) => {
+  res.json(await activationReadinessSnapshot());
 });
 
 // Direct-transport (local PWA) equivalents of the github.connect.* commands.

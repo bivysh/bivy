@@ -166,6 +166,19 @@ function relayHttpUrl(relayUrl: string): string {
   return relayUrl;
 }
 
+async function notifyRelaysRunUpdated(accountId: string, run: Pick<AutomationRun, "id" | "events" | "completedAt" | "startedAt" | "claimedAt" | "createdAt">) {
+  const revision = run.events?.at(-1)?.at ?? run.completedAt ?? run.startedAt ?? run.claimedAt ?? run.createdAt;
+  await Promise.allSettled(
+    relayShardUrls.map(async (url) => {
+      await fetch(`${relayHttpUrl(url).replace(/\/$/, "")}/internal/run-updated`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${process.env.RELAY_SECRET ?? "dev-relay-secret"}` },
+        body: JSON.stringify({ accountId, id: run.id, revision }),
+      });
+    }),
+  );
+}
+
 async function notifyRelaysWorkAvailable(
   accountId: string,
   item: { id: string; label: string },
@@ -183,6 +196,10 @@ async function notifyRelaysWorkAvailable(
       });
     }),
   );
+  // The same relay is also the active operator update channel. Enqueue callers
+  // have only routing metadata here, so use the id as a content-free revision;
+  // later lifecycle mutations publish their durable event timestamp.
+  void notifyRelaysRunUpdated(accountId, { id: item.id, createdAt: item.id });
   // Cancelling must never start a machine. Normal enqueue notifications retain
   // the unattended-provisioning check.
   if (options.autoProvision !== false) void maybeAutoProvision(store, accountId, provisionEnv());
@@ -748,7 +765,12 @@ h1{font-size:20px;margin:0 0 8px}p{color:#9aa6cf;margin:6px 0;line-height:1.45}
 // Send the device sign-in failure page, relaxing this one response's CSP just
 // enough to run the close-button snippet (whitelisted by hash) and its inline
 // styles; the global script-src stays 'self'-only for every other route.
-function sendSignInFailed(res: Response, status: number, detail: string): void {
+function sendSignInFailed(res: Response, status: number, detail: string, source: string): void {
+  // No account exists yet at a sign-in failure (that's the failure), so this
+  // uses the unauthenticated, low-cardinality funnel counter (see
+  // recordFunnelEvent) rather than the authenticated per-account product
+  // metrics — the same reason `sign_in_completed` below isn't tracked there.
+  recordFunnelEvent("sign_in_failed", source, "unknown");
   res.setHeader(
     "Content-Security-Policy",
     [
@@ -970,7 +992,10 @@ app.post("/auth/magic-link/start", asyncHandler(async (req, res) => {
 app.post("/auth/magic-link/consume", asyncHandler(async (req, res) => {
   const loginToken = String(req.body?.token ?? "").trim();
   const account = await store.consumeLoginToken(loginToken);
-  if (!account) return res.status(401).json({ error: "Invalid or expired login token" });
+  if (!account) {
+    recordFunnelEvent("sign_in_failed", "email_api", "unknown");
+    return res.status(401).json({ error: "Invalid or expired login token" });
+  }
   const token = await store.createSession(account.id);
   recordFunnelEvent("sign_in_completed", "email_api", account.plan);
   res.json({ ok: true, token, account: { id: account.id, email: account.email, plan: account.plan } });
@@ -980,7 +1005,7 @@ app.get("/auth/magic-link/consume", asyncHandler(async (req, res) => {
   const loginToken = String(req.query?.token ?? "").trim();
   const deviceId = String(req.query?.device ?? "").trim();
   const account = await store.consumeLoginToken(loginToken);
-  if (!account) return sendSignInFailed(res, 401, "This sign-in link is invalid or has expired. Request a new one from the sign-in screen.");
+  if (!account) return sendSignInFailed(res, 401, "This sign-in link is invalid or has expired. Request a new one from the sign-in screen.", deviceId ? "email_device" : "email_browser");
   // Device-login flow (hands-free CLI sign-in): mark the pending device login
   // complete and tell the user to return to their terminal. No session is
   // embedded here — the CLI mints it when it polls.
@@ -1088,8 +1113,9 @@ app.get("/auth/github/callback", asyncHandler(async (req, res) => {
         reason === "token-exchange"
           ? "Couldn't complete GitHub sign-in — the authorization code could not be exchanged. This is a server configuration issue; please try again in a moment."
           : "GitHub didn't return a verified email. Make sure your GitHub account has a verified email address and that you granted the email permission, then try again.";
-      return sendSignInFailed(res, 400, detail);
+      return sendSignInFailed(res, 400, detail, "github_device");
     }
+    recordFunnelEvent("sign_in_failed", "github_browser", "unknown");
     const path = safeReturnPath(stored.returnPath, "/");
     return res.redirect(`${path}${path.includes("?") ? "&" : "?"}authError=${errCode}`);
   }
@@ -3033,6 +3059,7 @@ app.post("/account/automation-runs/:id/cancel", asyncHandler(async (req, res) =>
   }
   if (result.transitioned) {
     recordDurableRunLifecycleResult(result.run, "cancelled");
+    void notifyRelaysRunUpdated(client.accountId, result.run);
     const owner = result.run.claimedByNodeId;
     if (owner) {
       void notifyRelaysWorkAvailable(client.accountId, { id: result.run.id, label: result.run.routing.nodeLabel }, {
@@ -3857,6 +3884,10 @@ app.post("/node/work/:id/claim", requireNode, asyncHandler(async (req, res) => {
   }
   const item = await store.claimWorkItem(node.accountId, node.id, String(req.params.id));
   if (!item) return res.status(409).json({ error: "Already claimed or unknown" });
+  void notifyRelaysRunUpdated(node.accountId, {
+    id: item.id, events: item.events, completedAt: item.completedAt,
+    startedAt: item.startedAt, claimedAt: item.claimedAt, createdAt: item.createdAt,
+  });
   res.json({ ok: true, item });
 }));
 
@@ -3899,6 +3930,7 @@ app.post("/node/work/:id/complete", requireNode, asyncHandler(async (req, res) =
   // Compatibility for older nodes that skip the explicit /running transition.
   const started = await store.recordRunStart(node.accountId, `automation:${id}`);
   if (started) recordFunnelEvent("run_started", "automation", (await store.entitlements(node.accountId)).plan);
+  void notifyRelaysRunUpdated(node.accountId, run);
   res.json({ ok: true, run });
 }));
 
@@ -3913,6 +3945,7 @@ app.post("/node/work/:id/running", requireNode, asyncHandler(async (req, res) =>
   if (!run) return res.status(409).json({ error: "Run is no longer claimed by this node" });
   const started = await store.recordRunStart(node.accountId, `automation:${id}`);
   if (started) recordFunnelEvent("run_started", "automation", (await store.entitlements(node.accountId)).plan);
+  void notifyRelaysRunUpdated(node.accountId, run);
   res.json({ ok: true, run });
 }));
 
@@ -3929,6 +3962,7 @@ app.post("/node/work/:id/fail", requireNode, asyncHandler(async (req, res) => {
   if (!run) return res.status(409).json({ error: "Run already reached a terminal outcome or was reclaimed" });
   recordDurableRunLifecycleResult(run, "failed");
   recordRunFailureStage(classifyRunFailureStage(run));
+  void notifyRelaysRunUpdated(node.accountId, run);
   res.json({ ok: true, run });
 }));
 
@@ -3949,6 +3983,7 @@ app.post("/node/work/:id/needs-attention", requireNode, asyncHandler(async (req,
   if (!run) return res.status(409).json({ error: "Run already reached a terminal outcome or was reclaimed" });
   recordDurableRunLifecycleResult(run, "needs_attention");
   recordRunFailureStage(classifyRunFailureStage(run, true));
+  void notifyRelaysRunUpdated(node.accountId, run);
   res.json({ ok: true, run });
 }));
 
@@ -3973,8 +4008,9 @@ app.post("/node/work/:id/evidence", requireNode, asyncHandler(async (req, res) =
   } catch (error) {
     return res.status(400).json({ error: (error as Error).message });
   }
-  const run = await store.appendRunEvidence(node.accountId, id, patch);
-  if (!run) return res.status(404).json({ error: "Unknown run" });
+  const run = await store.appendRunEvidence(node.accountId, id, patch, node.id);
+  if (!run) return res.status(409).json({ error: "Run ownership changed before evidence was persisted" });
+  void notifyRelaysRunUpdated(node.accountId, run);
   res.json({ ok: true, run });
 }));
 

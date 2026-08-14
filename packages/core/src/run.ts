@@ -60,6 +60,21 @@ export interface RunTimestamps {
   leaseExpiresAt?: string;
 }
 
+export type RunMilestoneStage =
+  | "trigger_received" | "trigger_matched" | "queued" | "routed" | "provisioning"
+  | "claimed" | "agent_started" | "checks_started" | "checks_completed"
+  | "result_delivery" | "notification" | "retry" | "cancel_requested" | "terminal";
+export interface RunMilestone {
+  stage: RunMilestoneStage;
+  at: string;
+  summary: string;
+  attempt?: number;
+  reasonCode?: string;
+  evidenceRef?: string;
+  status?: RunEvent["status"];
+}
+export type RunOperationalState = "active" | "parked" | "dead_letter" | "terminal";
+
 /** The requested (not necessarily effective) execution knobs, kept for the Run
  *  detail view. Effective/enforced protection is a Receipt-v1 concern. */
 export interface RunRequested {
@@ -97,9 +112,19 @@ export interface Run {
   references: RunReferences;
   /** Bounded failure summary; present only when the record carries one. */
   failureSummary?: string;
+  /** Persisted causal milestones normalized from current and legacy records. */
+  timeline: RunMilestone[];
+  operationalState: RunOperationalState;
+  attemptReason?: string;
+  usage?: GithubQueueItem["usage"];
+  notification?: GithubQueueItem["notification"];
+  operationalReferences: NonNullable<GithubQueueItem["references"]>;
+  attention?: GithubQueueItem["attention"];
   /** Recovery and cancellation actions available for the Run's current durable
    *  state. Only genuinely available actions appear — no inert buttons. */
   actions: RunAction[];
+  /** Exactly the highest-priority currently valid operator action. */
+  nextAction?: RunAction;
 }
 
 const MAX_FAILURE_SUMMARY = 240;
@@ -130,11 +155,16 @@ interface RunRecord {
   claimedByNodeId?: string;
   runtimeId?: string;
   model?: string;
+  routingReason?: string;
   approvalMode?: GithubQueueItem["approvalMode"];
   sandbox?: GithubQueueItem["sandbox"];
   checks?: GithubQueueItem["checks"];
   events?: GithubQueueItem["events"];
   receiptEvidence?: GithubQueueItem["receiptEvidence"];
+  usage?: GithubQueueItem["usage"];
+  notification?: GithubQueueItem["notification"];
+  references?: GithubQueueItem["references"];
+  attention?: GithubQueueItem["attention"];
   output?: GithubQueueItem["output"];
   targetSessionId?: string;
 }
@@ -181,6 +211,40 @@ function authProviderForFailure(runtimeId: string | undefined, failure: string |
   return undefined;
 }
 
+const MILESTONE_STAGE = new Set<RunMilestoneStage>([
+  "trigger_received", "trigger_matched", "queued", "routed", "provisioning", "claimed",
+  "agent_started", "checks_started", "checks_completed", "result_delivery", "notification",
+  "retry", "cancel_requested", "terminal",
+]);
+const LEGACY_STAGE: Partial<Record<RunEvent["kind"], RunMilestoneStage>> = {
+  triggered: "trigger_received", attempt_started: "agent_started", completed: "terminal", cancelled: "terminal",
+};
+
+function timelineFor(record: RunRecord): RunMilestone[] {
+  const timeline = (record.events ?? []).flatMap((event): RunMilestone[] => {
+    const stage = MILESTONE_STAGE.has(event.kind as RunMilestoneStage)
+      ? event.kind as RunMilestoneStage
+      : LEGACY_STAGE[event.kind];
+    if (!stage || !event.at) return [];
+    return [{ stage, at: event.at, summary: event.summary, attempt: event.attempt, reasonCode: event.reasonCode, evidenceRef: event.evidenceRef, status: event.status }];
+  });
+  const has = (stage: RunMilestoneStage) => timeline.some((event) => event.stage === stage);
+  // Legacy rows get only milestones supported by durable timestamps. Never
+  // synthesize a timestamp for an unobserved match/routing/check/delivery stage.
+  if (!has("trigger_received") && record.createdAt) timeline.unshift({ stage: "trigger_received", at: record.createdAt, summary: "Run record created." });
+  if (!has("claimed") && record.claimedAt) timeline.push({ stage: "claimed", at: record.claimedAt, summary: "Run claimed." });
+  if (!has("agent_started") && record.startedAt) timeline.push({ stage: "agent_started", at: record.startedAt, summary: "Agent execution started." });
+  if (!has("terminal") && record.completedAt) timeline.push({ stage: "terminal", at: record.completedAt, summary: `Run reached the ${record.status} outcome.` });
+  return timeline.slice(-200);
+}
+
+function operationalStateOf(record: RunRecord): RunOperationalState {
+  if (record.status === "needs_attention" || record.status === "waiting") return "parked";
+  if (record.status === "failed") return "dead_letter";
+  if (record.status === "succeeded" || record.status === "cancelled" || record.status === "done") return "terminal";
+  return "active";
+}
+
 function actionsFor(record: RunRecord, outcome: RunOutcome, sessionId: string | undefined): RunAction[] {
   const actions: RunAction[] = [];
   const attempt = Math.max(1, Math.trunc(record.attempt ?? 1));
@@ -216,6 +280,10 @@ function projectRun(record: RunRecord, projection: RunProjectionSource, ctx?: Ru
     ...(record.output?.checkpoint ? { checkpoint: record.output.checkpoint } : {}),
     ...(record.output?.artifactUrl ? { artifact: record.output.artifactUrl } : {}),
   };
+  const actions = actionsFor(record, outcome, sessionId);
+  const timeline = timelineFor(record);
+  const attemptReason = [...(record.events ?? [])].reverse().find((event) => event.kind === "fallback" || event.kind === "retry")?.summary
+    ?? record.routingReason;
   return {
     id: record.id,
     origin: { projection, status: record.status },
@@ -246,7 +314,15 @@ function projectRun(record: RunRecord, projection: RunProjectionSource, ctx?: Ru
     ...(record.receiptEvidence ? { receiptEvidence: record.receiptEvidence } : {}),
     references,
     ...(failure ? { failureSummary: failure.slice(0, MAX_FAILURE_SUMMARY) } : {}),
-    actions: actionsFor(record, outcome, sessionId),
+    timeline,
+    operationalState: operationalStateOf(record),
+    ...(attemptReason ? { attemptReason } : {}),
+    ...(record.usage ? { usage: record.usage } : {}),
+    ...(record.notification ? { notification: record.notification } : {}),
+    operationalReferences: (record.references ?? []).slice(-20),
+    ...(record.attention ? { attention: record.attention } : {}),
+    actions,
+    ...(actions[0] ? { nextAction: actions[0] } : {}),
   };
 }
 
