@@ -22,10 +22,10 @@ test("Run cancellation is confirmed and only offered for nonterminal durable Run
 });
 
 test("controller waits for cancellation and refreshes both durable Run feeds", async () => {
-  const source = await readFile(new URL("../../packages/web/src/store/controller.ts", import.meta.url), "utf8");
-  const method = source.slice(source.indexOf("async cancelAutomationRun"), source.indexOf("/** Set (empty string clears)", source.indexOf("async cancelAutomationRun")));
-  expect(method).toContain("await apiCancelAutomationRun(this.local, id)");
-  expect(method).toContain("fetchAutomationRuns(this.local, 50)");
-  expect(method).toContain("fetchGithubQueue(this.local, 30)");
-  expect(method.indexOf("await apiCancelAutomationRun")).toBeLessThan(method.indexOf("Promise.all"));
+  const source = await readFile(new URL("../../packages/web/src/store/coordinators/automations-account-coordinator.ts", import.meta.url), "utf8");
+  const method = source.slice(source.indexOf("async cancelAutomationRun"), source.indexOf("async startRun", source.indexOf("async cancelAutomationRun")));
+  expect(method).toContain("await this.deps.api.cancelAutomationRun(this.deps.local, id)");
+  expect(method).toContain("this.fetchAutomationRuns(50)");
+  expect(method).toContain("this.fetchGithubQueue(30)");
+  expect(method.indexOf("await this.deps.api.cancelAutomationRun")).toBeLessThan(method.indexOf("Promise.all"));
 });

@@ -54,7 +54,7 @@ test("every failed readiness check maps to exactly one wired, real remediation â
 });
 
 test("provider readiness ('Test connection') is wired end to end: web action -> relay command -> node handler", async () => {
-  const controller = await read("../../packages/web/src/store/controller.ts");
+  const controller = await read("../../packages/web/src/store/coordinators/credentials-models-coordinator.ts");
   const settings = await read("../../packages/web/src/components/Settings.tsx");
   const server = await read("../../src/server.ts");
   expect(controller).toContain("async testCredential(provider: string, label: string)");
