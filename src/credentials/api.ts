@@ -344,13 +344,21 @@ export async function removeProviderCredential(credsDir: string, provider: strin
  *  check — chosen for being cheap (no completion/generation billed) and not
  *  mutating anything provider-side. A provider absent here is honestly
  *  reported as `testable: false` rather than guessing at a result. */
-const PROVIDER_PING: Record<string, (token: string) => { url: string; headers: Record<string, string> }> = {
-  anthropic: (token) => ({ url: "https://api.anthropic.com/v1/models", headers: { "x-api-key": token, "anthropic-version": "2023-06-01" } }),
-  openai: (token) => ({ url: "https://api.openai.com/v1/models", headers: { authorization: `Bearer ${token}` } }),
-};
+function providerPing(provider: string, token: string): { url: string; headers: Record<string, string> } | undefined {
+  // Keep dispatch explicit: provider ids originate at the API boundary and
+  // must never select an arbitrary callable property.
+  switch (provider) {
+    case "anthropic":
+      return { url: "https://api.anthropic.com/v1/models", headers: { "x-api-key": token, "anthropic-version": "2023-06-01" } };
+    case "openai":
+      return { url: "https://api.openai.com/v1/models", headers: { authorization: `Bearer ${token}` } };
+    default:
+      return undefined;
+  }
+}
 
 function isTestableProvider(provider: string): boolean {
-  return provider.trim().toLowerCase() in PROVIDER_PING;
+  return providerPing(provider.trim().toLowerCase(), "") !== undefined;
 }
 
 /**
@@ -395,9 +403,9 @@ export async function testCredential(
       if (!token) return { ok: false, at, reason: "not_found" };
     }
 
-    const ping = PROVIDER_PING[id];
+    const ping = providerPing(id, token);
     if (!ping) return { ok: false, at, reason: "not_supported" };
-    const { url, headers } = ping(token);
+    const { url, headers } = ping;
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 8_000);
