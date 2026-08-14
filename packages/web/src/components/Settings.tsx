@@ -794,99 +794,115 @@ function LocalModelsPanel({ state, onStartWork }: { state: AppState; onStartWork
         />
       )}
 
-      <p className="muted settings-intro">
-        Discover checks a short, fixed list of common localhost ports on the connected Machine only. It never scans
-        your LAN. Localhost models stay tied to the Machine that hosts them; explicit network endpoints remain available.
+      <h3>Model endpoints</h3>
+      <p className="muted">
+        Connect OpenAI-compatible servers (Ollama, LM Studio, vLLM, SGLang, Azure…) and import the models
+        they report. Localhost endpoints stay tied to the Machine that hosts them.
       </p>
 
-      <button
-        className="btn primary block"
-        disabled={discovering}
-        onClick={async () => {
-          setDiscovering(true); setDiscoveryError(null);
-          try {
-            const result = await controller.discoverLocalModels();
-            setDiscovered(result.endpoints);
-            setDiscoveryMachine(result.machineName);
-          } catch (error) { setDiscoveryError(String((error as Error)?.message || error)); }
-          finally { setDiscovering(false); }
-        }}
-      >
-        {discovering ? "Discovering on this Machine…" : "Discover on this Machine"}
-      </button>
-      {discoveryMachine && <p className="muted small">Results from <strong>{discoveryMachine}</strong>. They do not describe other Machines.</p>}
-      {discoveryError && <div className="banner error inline">{discoveryError}</div>}
-      {discovered && (
-        <div className="picker-list">
-          {discovered.map((endpoint) => (
-            <PickerItem
-              key={endpoint.candidateId || endpoint.baseUrl}
-              title={endpoint.name || endpoint.baseUrl}
-              meta={endpoint.status === "ready"
-                ? `${endpoint.models.length} model${endpoint.models.length === 1 ? "" : "s"} available on ${endpoint.machineName}`
-                : `${endpoint.status.replace("_", " ")} · ${endpoint.detail || "No compatible response"}`}
-              right={endpoint.status === "ready" ? <span className="chip ok">Import</span> : endpoint.status === "auth_required" ? <span className="chip warn">Add key</span> : <span className="chip warn">{endpoint.status.replace("_", " ")}</span>}
-              onClick={endpoint.status === "ready" || endpoint.status === "auth_required" ? () => openDraft({
-                ...draftFromPreset({ id: endpoint.candidateId || "local", name: endpoint.name || "Local models", baseUrl: endpoint.baseUrl, api: endpoint.api }),
-                models: endpoint.models.map((model) => model.name !== model.id ? `${model.id} | ${model.name}` : model.id).join("\n"),
-              }) : undefined}
-            />
-          ))}
+      {/* Primary: the endpoints you've configured. */}
+      {state.settings.localModels.length === 0 ? (
+        <div className="vault-empty">
+          <h4>No endpoints yet</h4>
+          <p className="muted">Add an OpenAI-compatible server, or discover one running on this Machine below.</p>
+          <button className="btn primary" onClick={() => openDraft({ ...EMPTY_DRAFT })}>Add endpoint</button>
         </div>
-      )}
-
-      <label className="field-label">Configured for this account</label>
-      <div className="picker-list">
-        {state.settings.localModels.length === 0 && <div className="picker-empty">No local or custom endpoints yet.</div>}
-        {state.settings.localModels.map((p) => (
-          <PickerItem
-            key={p.id}
-            title={p.name || p.id}
-            meta={`${p.baseUrl} · ${p.modelCount} model${p.modelCount === 1 ? "" : "s"}${p.hasKey ? " · key" : ""} · ${p.scope === "machine" ? `hosted by ${p.machineName || "one Machine"}` : "network endpoint"}${p.availableOnThisMachine ? "" : " · unavailable on this Machine"}`}
-            right={
-              <div className="row-actions">
-                {p.availableOnThisMachine && p.models[0] && (
-                  <button className="btn sm" onClick={(e) => { e.stopPropagation(); startWithModel(p.id, p.models[0]!); }}>
-                    Use
-                  </button>
-                )}
-                <button
-                  className="btn danger-ghost sm"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setConfirm({
-                      title: "Remove endpoint?",
-                      message: `Remove ${p.name || p.id}? This also removes its models.`,
-                      action: () => {
-                        controller.removeLocalModel(p.id);
-                        setTimeout(() => controller.listLocalModels(), 400);
-                      },
-                    });
-                  }}
-                >
-                  Remove
-                </button>
-              </div>
-            }
-            onClick={() => openDraft(draftFromProvider(p))}
-          />
-        ))}
-      </div>
-
-      <button className="btn primary block" onClick={() => openDraft({ ...EMPTY_DRAFT })}>+ Add endpoint</button>
-
-      {state.settings.localModelPresets.length > 0 && (
+      ) : (
         <>
-          <label className="field-label">Quick add</label>
-          <div className="row-actions" style={{ flexWrap: "wrap" }}>
-            {state.settings.localModelPresets.map((preset) => (
-              <button key={preset.id} className="btn" title={preset.note} onClick={() => openDraft(draftFromPreset(preset))}>
-                {preset.name}
-              </button>
+          <div className="picker-list vault-items">
+            {state.settings.localModels.map((p) => (
+              <PickerItem
+                key={p.id}
+                title={p.name || p.id}
+                meta={`${p.baseUrl} · ${p.modelCount} model${p.modelCount === 1 ? "" : "s"}${p.hasKey ? " · key" : ""} · ${p.scope === "machine" ? `hosted by ${p.machineName || "one Machine"}` : "network endpoint"}${p.availableOnThisMachine ? "" : " · unavailable on this Machine"}`}
+                right={
+                  <div className="row-actions">
+                    {p.availableOnThisMachine && p.models[0] && (
+                      <button className="btn sm" onClick={(e) => { e.stopPropagation(); startWithModel(p.id, p.models[0]!); }}>
+                        Use
+                      </button>
+                    )}
+                    <button
+                      className="btn danger-ghost sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setConfirm({
+                          title: "Remove endpoint?",
+                          message: `Remove ${p.name || p.id}? This also removes its models.`,
+                          action: () => {
+                            controller.removeLocalModel(p.id);
+                            setTimeout(() => controller.listLocalModels(), 400);
+                          },
+                        });
+                      }}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                }
+                onClick={() => openDraft(draftFromProvider(p))}
+              />
             ))}
           </div>
+          <button className="btn primary block" onClick={() => openDraft({ ...EMPTY_DRAFT })}>+ Add endpoint</button>
         </>
       )}
+
+      {/* Secondary: find or quick-add endpoints, clearly separated from your list. */}
+      <div className="settings-section">
+        <h4 className="settings-subhead">Find models on this Machine</h4>
+        <p className="muted small">
+          Discover checks a short, fixed list of common localhost ports on the connected Machine
+          only — it never scans your LAN. Localhost models stay tied to the Machine that hosts them.
+        </p>
+        <button
+          className="btn block"
+          disabled={discovering}
+          onClick={async () => {
+            setDiscovering(true); setDiscoveryError(null);
+            try {
+              const result = await controller.discoverLocalModels();
+              setDiscovered(result.endpoints);
+              setDiscoveryMachine(result.machineName);
+            } catch (error) { setDiscoveryError(String((error as Error)?.message || error)); }
+            finally { setDiscovering(false); }
+          }}
+        >
+          {discovering ? "Discovering on this Machine…" : "Discover on this Machine"}
+        </button>
+        {discoveryMachine && <p className="muted small">Results from <strong>{discoveryMachine}</strong>. They do not describe other Machines.</p>}
+        {discoveryError && <div className="banner error inline">{discoveryError}</div>}
+        {discovered && (
+          <div className="picker-list">
+            {discovered.map((endpoint) => (
+              <PickerItem
+                key={endpoint.candidateId || endpoint.baseUrl}
+                title={endpoint.name || endpoint.baseUrl}
+                meta={endpoint.status === "ready"
+                  ? `${endpoint.models.length} model${endpoint.models.length === 1 ? "" : "s"} available on ${endpoint.machineName}`
+                  : `${endpoint.status.replace("_", " ")} · ${endpoint.detail || "No compatible response"}`}
+                right={endpoint.status === "ready" ? <span className="chip ok">Import</span> : endpoint.status === "auth_required" ? <span className="chip warn">Add key</span> : <span className="chip warn">{endpoint.status.replace("_", " ")}</span>}
+                onClick={endpoint.status === "ready" || endpoint.status === "auth_required" ? () => openDraft({
+                  ...draftFromPreset({ id: endpoint.candidateId || "local", name: endpoint.name || "Local models", baseUrl: endpoint.baseUrl, api: endpoint.api }),
+                  models: endpoint.models.map((model) => model.name !== model.id ? `${model.id} | ${model.name}` : model.id).join("\n"),
+                }) : undefined}
+              />
+            ))}
+          </div>
+        )}
+        {state.settings.localModelPresets.length > 0 && (
+          <>
+            <h4 className="settings-subhead">Quick add</h4>
+            <div className="row-actions" style={{ flexWrap: "wrap" }}>
+              {state.settings.localModelPresets.map((preset) => (
+                <button key={preset.id} className="btn" title={preset.note} onClick={() => openDraft(draftFromPreset(preset))}>
+                  {preset.name}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }
