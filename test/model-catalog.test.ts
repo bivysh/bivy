@@ -8,6 +8,8 @@ import os from "node:os";
 import path from "node:path";
 import { createCredentialVault } from "../src/runtime/credential-store.js";
 import { aggregateModelCatalog, mergeProviderCatalog } from "../src/runtime/model-catalog.js";
+import { BIVY_PROVIDER_CATALOG as nodeProviderCatalog } from "../src/runtime/bivy-provider-catalog.js";
+import { BIVY_PROVIDER_CATALOG as webProviderCatalog } from "../packages/core/src/provider-catalog.js";
 import { ProcessRuntime } from "../src/runtime/process.js";
 import type { AgentRuntime, CatalogProvider } from "../src/runtime/types.js";
 
@@ -21,6 +23,8 @@ async function check(name: string, fn: () => Promise<void>) {
     console.error(`FAIL  ${name}\n      ${(error as Error).stack ?? (error as Error).message}`);
   }
 }
+
+assert.deepEqual(nodeProviderCatalog, webProviderCatalog, "node and browser provider-catalog projections stay identical");
 
 function fakeRuntime(id: string, catalog: CatalogProvider[] | (() => Promise<CatalogProvider[]>)): AgentRuntime {
   return { id, listCatalog: typeof catalog === "function" ? catalog : () => catalog } as unknown as AgentRuntime;
@@ -43,7 +47,8 @@ await check("unions providers across agents, dedupes models, records contributin
   const catalog = await aggregateModelCatalog([claude, pi], dir);
   const anthropic = catalog.find((p) => p.id === "anthropic")!;
   assert.deepEqual(anthropic.agents.sort(), ["claude-code-sdk", "pi"], "both agents recorded for anthropic");
-  assert.equal(anthropic.models.length, 2, "overlapping model deduped by id");
+  assert.equal(anthropic.models.filter((model) => model.id === "claude-opus-4-8").length, 1, "overlapping live model deduped by id");
+  assert.ok(anthropic.models.some((model) => model.id === "claude-sonnet-5"), "live models extend the Bivy baseline");
   assert.ok(anthropic.oauth, "anthropic is an OAuth provider");
   assert.ok(catalog.find((p) => p.id === "openai"), "a provider only one agent offers still appears");
 });
@@ -70,8 +75,9 @@ await check("a runtime with no listCatalog (or that throws) is skipped, not fata
   const thrower = fakeRuntime("broken", async () => { throw new Error("offline"); });
   const ok = fakeRuntime("pi", [{ id: "openai", name: "OpenAI", models: [] }]);
   const catalog = await aggregateModelCatalog([noCatalog, thrower, ok], dir);
-  assert.equal(catalog.length, 1);
-  assert.equal(catalog[0]!.id, "openai");
+  assert.ok(catalog.length > 1, "the Bivy baseline remains available when runtimes fail");
+  assert.ok(catalog.some((provider) => provider.id === "openai"));
+  assert.deepEqual(catalog.find((provider) => provider.id === "openai")?.agents, ["pi"], "the healthy runtime still overlays the baseline");
 });
 
 await check("mergeProviderCatalog keeps base auth status, attaches agents/models, appends extra providers", async () => {

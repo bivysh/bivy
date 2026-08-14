@@ -8,7 +8,7 @@
 // point — it fetches Pi's catalog and hands it in. Swapping Pi for a Bivy-owned
 // catalog later is a change here and nowhere else.
 
-import { BIVY_PROVIDER_CATALOG } from "../../packages/core/src/provider-catalog.js";
+import { BIVY_PROVIDER_CATALOG } from "./bivy-provider-catalog.js";
 import { listPiProviders } from "./pi-oauth.js";
 import { joinProviderCatalog, type ProviderAuthInfo, type ProviderCatalogEntry } from "../credentials/api.js";
 

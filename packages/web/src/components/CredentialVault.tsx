@@ -52,7 +52,12 @@ export function CredentialVault({ state }: { state: AppState }) {
     controller.getCredentialPresets();
     void refreshDevice();
   };
-  useEffect(() => { refresh(); }, [state.currentNodeId]);
+  useEffect(() => {
+    controller.listProviders();
+    controller.listCredentialRecords();
+    controller.getCredentialPresets();
+    void controller.listEphemeralModelKeys().then(setDeviceKeys).catch(() => setDeviceKeys([]));
+  }, [state.currentNodeId]);
 
   const catalog = useMemo(() => {
     const by = new Map(BASE_PROVIDERS.map((p) => [p.id, p]));

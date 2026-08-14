@@ -10,7 +10,7 @@
 // supported dynamically (the provider→env mapping is generic); OAuth providers
 // are those in Bivy's native registry.
 
-import { BIVY_PROVIDER_CATALOG } from "../../packages/core/src/provider-catalog.js";
+import { BIVY_PROVIDER_CATALOG } from "./bivy-provider-catalog.js";
 import type { AgentRuntime, CatalogProvider, ModelInfo } from "./types.js";
 import { createCredentialVault } from "./credential-store.js";
 import { isNativeOAuthProvider } from "./oauth/model-oauth-providers.js";
