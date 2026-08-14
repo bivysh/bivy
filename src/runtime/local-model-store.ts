@@ -197,18 +197,19 @@ export function listLocalProviderSummaries(
     .map((p) => {
       const scope = p.scope ?? (p.machineId ? "machine" : "network");
       return {
-      id: p.id,
-      name: p.name,
-      baseUrl: p.baseUrl,
-      api: p.api,
-      hasKey: hasKey(p.id),
-      modelCount: p.models.length,
-      models: p.models.map((m) => ({ id: m.id, name: m.name || m.id })),
-      scope,
-      machineId: p.machineId,
-      machineName: p.machineName,
-      availableOnThisMachine: scope === "network" || !p.machineId || p.machineId === currentMachineId,
-    }; })
+        id: p.id,
+        name: p.name,
+        baseUrl: p.baseUrl,
+        api: p.api,
+        hasKey: hasKey(p.id),
+        modelCount: p.models.length,
+        models: p.models.map((m) => ({ id: m.id, name: m.name || m.id })),
+        scope,
+        machineId: p.machineId,
+        machineName: p.machineName,
+        availableOnThisMachine: scope === "network" || !p.machineId || p.machineId === currentMachineId,
+      };
+    })
     .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
 }
 

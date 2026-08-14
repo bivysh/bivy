@@ -27,6 +27,7 @@ import { exportProviderAuth, setProviderCredential, removeProvider } from "../cr
 import {
   discoverLocalModels,
   getLocalModelReadiness,
+  isLoopbackHostname,
   verifyLocalModelEndpoint,
   type LocalEndpointResult,
 } from "../runtime/local-model-discovery.js";
@@ -55,8 +56,7 @@ export function createModelController(deps: ModelControllerDeps) {
 
   function isLoopbackEndpoint(baseUrl: string): boolean {
     try {
-      const hostname = new URL(baseUrl).hostname.replace(/^\[|\]$/g, "").toLowerCase();
-      return hostname === "localhost" || hostname === "::1" || hostname.startsWith("127.");
+      return isLoopbackHostname(new URL(baseUrl).hostname);
     } catch {
       return false;
     }

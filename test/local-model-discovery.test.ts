@@ -5,6 +5,7 @@ import {
   LOCAL_DISCOVERY_CANDIDATES,
   discoverLocalModels,
   getLocalModelReadiness,
+  isLoopbackHostname,
   normalizeCatalog,
   validateLocalEndpointUrl,
   verifyLocalModelEndpoint,
@@ -20,6 +21,7 @@ describe("local model discovery security", () => {
       "127.0.0.1", "127.0.0.1", "127.0.0.1", "127.0.0.1",
     ]);
     assert.deepEqual(LOCAL_DISCOVERY_CANDIDATES.map((candidate) => new URL(candidate.catalogUrl).port), ["11434", "1234", "8000", "30000"]);
+    assert.equal(isLoopbackHostname("::ffff:7f00:1"), true);
   });
 
   it("never expands discovery from response data", async () => {
@@ -38,7 +40,7 @@ describe("local model discovery security", () => {
     await assert.rejects(validateLocalEndpointUrl("http://169.254.169.254/v1", { allowNonLoopback: true }), /blocked/);
     await assert.rejects(validateLocalEndpointUrl("https://models.example/v1", {
       allowNonLoopback: true,
-      lookup: async () => [{ address: "::ffff:169.254.169.254", family: 6 }],
+      lookup: async () => [{ address: "::ffff:a9fe:a9fe", family: 6 }],
     }), /blocked/);
     await assert.rejects(validateLocalEndpointUrl("https://models.example/v1", {
       allowNonLoopback: true,
@@ -89,6 +91,19 @@ describe("local model endpoint health", () => {
     assert.equal(ready.status, "ready");
     assert.equal(ready.authenticated, true);
     assert.deepEqual(ready.models, [{ id: "coder", name: "coder" }]);
+  });
+
+  it("distinguishes offline and unsupported catalogs", async () => {
+    const offline = await verifyLocalModelEndpoint({
+      baseUrl: "http://localhost:8000/v1",
+      fetchImpl: (async () => { throw new Error("ECONNREFUSED"); }) as typeof fetch,
+    });
+    assert.equal(offline.status, "offline");
+    const unsupported = await verifyLocalModelEndpoint({
+      baseUrl: "http://localhost:8000/v1",
+      fetchImpl: (async () => new Response("", { status: 404 })) as typeof fetch,
+    });
+    assert.equal(unsupported.status, "unsupported");
   });
 
   it("enforces the timeout when a fetch implementation ignores abort", async () => {

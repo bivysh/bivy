@@ -66,14 +66,25 @@ export interface VerifyLocalEndpointOptions {
   lookup?: Lookup;
 }
 
-function isLoopback(hostname: string): boolean {
+function mappedIpv4(address: string): string | undefined {
+  const dotted = address.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/)?.[1];
+  if (dotted) return dotted;
+  const hex = address.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (!hex) return undefined;
+  const high = Number.parseInt(hex[1], 16);
+  const low = Number.parseInt(hex[2], 16);
+  return `${high >>> 8}.${high & 255}.${low >>> 8}.${low & 255}`;
+}
+
+export function isLoopbackHostname(hostname: string): boolean {
   const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
-  return host === "localhost" || host === "127.0.0.1" || host === "::1" || host.startsWith("127.");
+  const mapped = mappedIpv4(host);
+  return host === "localhost" || host === "127.0.0.1" || host === "::1" || host.startsWith("127.") || !!mapped?.startsWith("127.");
 }
 
 function unsafeAddress(address: string): boolean {
   const value = address.toLowerCase().split("%")[0];
-  const mappedV4 = value.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/)?.[1];
+  const mappedV4 = mappedIpv4(value);
   if (mappedV4) return unsafeAddress(mappedV4);
   if (net.isIPv4(value)) {
     const octets = value.split(".").map(Number);
@@ -110,7 +121,7 @@ async function resolveLocalEndpointUrl(
   if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("Endpoint must use http:// or https://.");
   if (url.username || url.password) throw new Error("Endpoint URLs cannot contain credentials; use the API key field.");
   if (!url.hostname) throw new Error("Endpoint hostname is required.");
-  if (isLoopback(url.hostname)) {
+  if (isLoopbackHostname(url.hostname)) {
     const address = url.hostname.replace(/^\[|\]$/g, "") === "::1" ? "::1" : "127.0.0.1";
     return { url, addresses: [{ address, family: net.isIP(address) }] };
   }
