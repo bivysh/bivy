@@ -3,9 +3,9 @@
 export const CERTIFICATION_MATRIX = {
   schemaVersion: 1,
   agents: [
-    { id: "claude-code-sdk", status: "active", executionMode: "protocol", pinnedVersion: "0.3.220", capabilities: ["toolInterception","modelSelection","resume"] },
+    { id: "claude-code-sdk", status: "active", executionMode: "protocol", pinnedVersion: "0.3.232", capabilities: ["toolInterception","modelSelection","resume"] },
     { id: "codex-approvals", status: "active", executionMode: "protocol", pinnedVersion: "0.147.0", capabilities: ["toolInterception","modelSelection","resume"] },
-    { id: "pi", status: "active", executionMode: "protocol", pinnedVersion: "0.83.0", capabilities: ["toolInterception","modelSelection","resume"] },
-    { id: "opencode", status: "active", executionMode: "protocol", pinnedVersion: "1.18.13", capabilities: ["toolInterception","modelSelection","resume"] },
+    { id: "pi", status: "active", executionMode: "protocol", pinnedVersion: "0.84.1", capabilities: ["toolInterception","modelSelection","resume"] },
+    { id: "opencode", status: "active", executionMode: "protocol", pinnedVersion: "1.18.18", capabilities: ["toolInterception","modelSelection","resume"] },
   ]
 } as const;

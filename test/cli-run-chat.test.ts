@@ -81,16 +81,27 @@ test("bivy run --chat creates an app-style governed session without launching th
   assert.equal(result.code, 0, result.stderr || result.stdout);
   assert.match(result.stdout, /Started chat session chat-session-123 \(Claude Code\)/);
   assert.match(result.stdout, /https:\/\/app\.example\.test\/sessions\/chat-session-123/);
+
+  const codexResult = await runCli([
+    "run", "codex", "--chat", "--no-open", "--workspace", workspace,
+  ], { BIVY_DATA_DIR: dataDir, DISPLAY: "", WAYLAND_DISPLAY: "" });
+  assert.equal(codexResult.code, 0, codexResult.stderr || codexResult.stdout);
+
   assert.deepEqual(requests, [
     {
       path: "/api/session",
       authorization: "Bearer test-device-token",
-      body: { agent: "claude", model: { provider: "", id: "opus" }, workspace },
+      body: { agent: "claude-code-sdk", model: { provider: "", id: "opus" }, workspace },
     },
     {
       path: "/api/sessions/rename",
       authorization: "Bearer test-device-token",
       body: { sessionId: "chat-session-123", name: "Review auth" },
+    },
+    {
+      path: "/api/session",
+      authorization: "Bearer test-device-token",
+      body: { agent: "codex-approvals", workspace },
     },
   ]);
 });
