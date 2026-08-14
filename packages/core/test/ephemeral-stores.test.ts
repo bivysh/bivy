@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import "fake-indexeddb/auto";
 import { describe, expect, it } from "vitest";
-import { createEphemeralKeyStore, createEphemeralPrefsStore, createEphemeralSetupStore, createMachineStore, memoryBackend, type EphemeralMachine } from "../src/index.js";
+import { createEphemeralKeyStore, createEphemeralPrefsStore, createEphemeralSetupStore, createMachineStore, memoryBackend, type EphemeralMachine } from "../src/ephemeral-storage.js";
 
 // Regression: the provider-key store and the machine store used to share one
 // IndexedDB database opened at a fixed version, so `onupgradeneeded` only ran

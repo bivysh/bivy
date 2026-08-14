@@ -13,10 +13,16 @@
 // write must never fail a session advert. Isolated + store-injected so it's
 // unit-testable without the server entrypoint.
 
-import type { MeshStore } from "./store.js";
+import type { SessionCorrelation, SessionCorrelationInput } from "./store.js";
+
+export interface HostedCorrelationStore {
+  getHostedMachines(accountId: string): Promise<Array<Record<string, unknown>>>;
+  getSessionCorrelation(accountId: string, sessionId: string): Promise<SessionCorrelation | undefined>;
+  setSessionCorrelation(accountId: string, input: SessionCorrelationInput): Promise<SessionCorrelation>;
+}
 
 export async function correlateHostedSessions(
-  store: MeshStore,
+  store: HostedCorrelationStore,
   node: { accountId: string; id: string },
   sessions: Array<{ sessionId?: unknown }>,
 ): Promise<void> {

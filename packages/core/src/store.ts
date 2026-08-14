@@ -25,6 +25,13 @@ import { eventKind, normalizeEventType, toolCallId, toolDetail, toolInput, toolN
 import { SeqReassembler } from "./seq-reassembler.js";
 import type { ToolCallDetail } from "./tool-format.js";
 import { humanizeError, looksLikeAgentError } from "./store-errors.js";
+import {
+  reduceFollowupQueue,
+  type FollowupEditResult,
+  type FollowupQueueCommand,
+  type FollowupQueueTransition,
+  type PendingFollowup,
+} from "./followup-queue.js";
 import { attachmentFromRef, contentThinking, contentToText, mergeToolInto, nextId, renderHistory, toolEntriesFromContent } from "./store-render.js";
 import {
   agentLabel,
@@ -49,6 +56,14 @@ import {
 // Re-export the helpers that moved out of this file so the package's public
 // surface (index.ts `export * from "./store.js"`) is unchanged.
 export { humanizeError, looksLikeAgentError } from "./store-errors.js";
+export {
+  reduceFollowupQueue,
+  type FollowupEditResult,
+  type FollowupQueueCommand,
+  type FollowupQueueTransition,
+  type FollowupStatus,
+  type PendingFollowup,
+} from "./followup-queue.js";
 export { renderHistory, stripAttachmentPlaceholders } from "./store-render.js";
 export {
   githubIssueRefFromSource,
@@ -255,44 +270,6 @@ export interface RuntimeInfo {
   testedVersion?: string;
   [k: string]: unknown;
 }
-
-export type FollowupStatus = "queued" | "scheduled" | "sending" | "sent" | "failed";
-
-/**
- * A follow-up prompt visible in the composer's queue for a session — see
- * AppState.followupsBySession. `id` is the same clientMessageId the prompt is
- * eventually sent with, so the node's `session.user_message` echo (the
- * protocol acknowledgement) can be matched back to it and retire it from the
- * queue. `version` is bumped on every content edit; a caller editing against a
- * stale version (e.g. a second browser tab, or a UI racing the item's own
- * delivery) is rejected rather than silently overwriting newer state — see
- * SessionStore.editFollowup.
- */
-export interface PendingFollowup {
-  id: string;
-  text: string;
-  attachments?: PromptAttachment[];
-  status: FollowupStatus;
-  createdAt: number;
-  updatedAt: number;
-  version: number;
-  /** A message scheduled for later (long-press Send): the epoch-ms time the
-   *  control-plane automation will deliver it. Presence of this field marks the
-   *  row as "scheduled" — rendered in the queue with its fire time and skipped
-   *  by the turn-end drain (it's not a queued follow-up waiting to send now). */
-  scheduledAt?: number;
-  /** Account/relay mode: the one-off scheduled-message automation that mirrors
-   *  this queued item on the control plane, so it still sends if the app closes
-   *  or the node was offline at turn-end (the node dedupes against the live
-   *  transcript so the in-app dispatch and this backstop can't double-send).
-   *  Cleared once delivered/cancelled. Client-local bookkeeping — the node and
-   *  control plane don't see it. */
-  scheduledAutomationId?: string;
-}
-
-export type FollowupEditResult =
-  | { ok: true; item: PendingFollowup }
-  | { ok: false; reason: "not_found" | "stale" | "not_queued" };
 
 export interface ApprovalRequest {
   id: string;
@@ -1637,95 +1614,38 @@ export class SessionStore {
   }
 
   // --- Queued follow-ups (issue #154) -------------------------------------
-  // A small CRUD surface over AppState.followupsBySession. These methods only
-  // touch that map's data shape and invariants (ordering, status, version);
-  // AppController owns *when* to call them (busy-gating, dispatch, retry,
-  // drain-on-turn-end) — see its sendPrompt/drainFollowups/dispatchFollowup.
+  // The queue is immutable data reduced by followup-queue.ts. This store is
+  // only the identity/subscription shell that installs the returned value.
 
-  /** The queued follow-ups for a session, in delivery order. */
   getFollowups(sessionId: string): PendingFollowup[] {
     return this.state.followupsBySession[sessionId] ?? [];
   }
 
-  private setFollowupsFor(sessionId: string, list: PendingFollowup[]): void {
+  private setFollowupsFor(sessionId: string, list: readonly PendingFollowup[]): void {
     const next = { ...this.state.followupsBySession };
-    if (list.length) next[sessionId] = list;
+    if (list.length) next[sessionId] = [...list];
     else delete next[sessionId];
     this.set({ followupsBySession: next });
   }
 
-  /** Append a new queued follow-up. `id` becomes its clientMessageId once sent.
-   *  A duplicate id (e.g. a doubled dispatch racing itself) is ignored rather
-   *  than creating a second entry. */
+  private transitionFollowups(sessionId: string, command: FollowupQueueCommand): FollowupQueueTransition {
+    const transition = reduceFollowupQueue(this.getFollowups(sessionId), command);
+    if (transition.changed) this.setFollowupsFor(sessionId, transition.queue);
+    return transition;
+  }
+
   enqueueFollowup(sessionId: string, item: { id: string; text: string; attachments?: PromptAttachment[]; scheduledAutomationId?: string }, now: number): PendingFollowup {
-    const list = this.getFollowups(sessionId);
-    const existing = list.find((f) => f.id === item.id);
-    if (existing) return existing;
-    const created: PendingFollowup = {
-      id: item.id,
-      text: item.text,
-      attachments: item.attachments,
-      status: "queued",
-      createdAt: now,
-      updatedAt: now,
-      version: 1,
-      scheduledAutomationId: item.scheduledAutomationId,
-    };
-    this.setFollowupsFor(sessionId, [...list, created]);
-    return created;
+    return this.transitionFollowups(sessionId, { type: "enqueue", item, now }).item!;
   }
 
-  /** Record a message scheduled for later (long-press Send → ScheduleSheet) as
-   *  a queue row so it's visible next to the composer with its fire time. The
-   *  control-plane automation does the actual delivering; the row is purely
-   *  informational + cancellable (status "scheduled" is never picked up by the
-   *  turn-end drain). The automation id doubles as the row id, so cancelling the
-   *  row cancels the automation and pruneScheduledFollowups can drop rows whose
-   *  automation has fired/gone. A duplicate id is ignored, matching
-   *  enqueueFollowup. */
   enqueueScheduledFollowup(sessionId: string, item: { id: string; text: string; scheduledAt: number; scheduledAutomationId: string }, now: number): PendingFollowup {
-    const list = this.getFollowups(sessionId);
-    const existing = list.find((f) => f.id === item.id);
-    if (existing) return existing;
-    const created: PendingFollowup = {
-      id: item.id,
-      text: item.text,
-      status: "scheduled",
-      createdAt: now,
-      updatedAt: now,
-      version: 1,
-      scheduledAt: item.scheduledAt,
-      scheduledAutomationId: item.scheduledAutomationId,
-    };
-    this.setFollowupsFor(sessionId, [...list, created]);
-    return created;
+    return this.transitionFollowups(sessionId, { type: "schedule", item, now }).item!;
   }
 
-  /** Record the control-plane automation that mirrors a queued follow-up (the
-   *  persistence backstop). Only applies while the item is still queued — an
-   *  item already dispatched/sent no longer needs the backstop, so the caller
-   *  (AppController) cancels the automation when this returns false. */
   attachFollowupAutomation(sessionId: string, id: string, automationId: string): boolean {
-    const list = this.getFollowups(sessionId);
-    const idx = list.findIndex((f) => f.id === id);
-    if (idx < 0 || list[idx]!.status !== "queued") return false;
-    const updated: PendingFollowup = { ...list[idx]!, scheduledAutomationId: automationId };
-    const next = list.slice();
-    next[idx] = updated;
-    this.setFollowupsFor(sessionId, next);
-    return true;
+    return this.transitionFollowups(sessionId, { type: "attach-automation", id, automationId }).accepted === true;
   }
 
-  /**
-   * Edit a still-queued item's text/attachments. Rejects rather than
-   * overwriting when: the item is gone (`not_found`), already dispatched
-   * (`not_queued` — editing something already in flight would not change what
-   * the agent receives), or `expectedVersion` no longer matches the item's
-   * current version (`stale` — someone else changed it since the caller last
-   * read it; at minimum, a second controller/tab editing concurrently). The
-   * caller (composer edit UI) should re-read the current item and let the user
-   * retry rather than silently reapplying their edit over newer state.
-   */
   editFollowup(
     sessionId: string,
     id: string,
@@ -1733,125 +1653,45 @@ export class SessionStore {
     expectedVersion: number,
     now: number,
   ): FollowupEditResult {
-    const list = this.getFollowups(sessionId);
-    const idx = list.findIndex((f) => f.id === id);
-    if (idx < 0) return { ok: false, reason: "not_found" };
-    const item = list[idx]!;
-    if (item.status !== "queued") return { ok: false, reason: "not_queued" };
-    if (item.version !== expectedVersion) return { ok: false, reason: "stale" };
-    const updated: PendingFollowup = { ...item, text: patch.text, attachments: patch.attachments, version: item.version + 1, updatedAt: now, scheduledAutomationId: undefined };
-    const next = list.slice();
-    next[idx] = updated;
-    this.setFollowupsFor(sessionId, next);
-    return { ok: true, item: updated };
+    return this.transitionFollowups(sessionId, { type: "edit", id, patch, expectedVersion, now }).edit!;
   }
 
-  /** Remove a still-queued item — or a scheduled-message row (its automation
-   *  gets cancelled by the caller). No-op (returns false) once it's dispatched —
-   *  removing something already sending/sent can't change what the agent
-   *  receives, and would desync the visible queue from reality. */
   removeFollowup(sessionId: string, id: string): boolean {
-    const list = this.getFollowups(sessionId);
-    const item = list.find((f) => f.id === id);
-    if (!item || (item.status !== "queued" && item.status !== "scheduled")) return false;
-    this.setFollowupsFor(sessionId, list.filter((f) => f.id !== id));
-    return true;
+    return this.transitionFollowups(sessionId, { type: "remove", id }).accepted === true;
   }
 
-  /** Drop scheduled-message rows whose control-plane automation no longer
-   *  exists — it fired (and is being/been delivered), was cancelled from
-   *  another device, or the run failed. Keeps the queue's "scheduled" entries
-   *  honest once the message is no longer pending. Only touches rows with status
-   *  "scheduled"; queued follow-ups are left alone. */
   pruneScheduledFollowups(sessionId: string, keepIds: ReadonlySet<string>): void {
-    const list = this.getFollowups(sessionId);
-    const next = list.filter((f) => f.status !== "scheduled" || (f.scheduledAutomationId ? keepIds.has(f.scheduledAutomationId) : false));
-    if (next.length === list.length) return;
-    this.setFollowupsFor(sessionId, next);
+    this.transitionFollowups(sessionId, { type: "prune-scheduled", keepIds: [...keepIds] });
   }
 
-  /** Move a scheduled-message row to a new fire time. The caller keeps the
-   *  control-plane automation in sync; this only updates the row's timestamp.
-   *  No-op once the row is no longer "scheduled" (the automation already fired,
-   *  or was cancelled). */
   rescheduleFollowup(sessionId: string, id: string, scheduledAt: number, now: number): boolean {
-    const list = this.getFollowups(sessionId);
-    const idx = list.findIndex((f) => f.id === id);
-    if (idx < 0 || list[idx]!.status !== "scheduled") return false;
-    const updated: PendingFollowup = { ...list[idx]!, scheduledAt, updatedAt: now, version: list[idx]!.version + 1 };
-    const next = list.slice();
-    next[idx] = updated;
-    this.setFollowupsFor(sessionId, next);
-    return true;
+    return this.transitionFollowups(sessionId, { type: "reschedule", id, scheduledAt, now }).accepted === true;
   }
 
-  /** Move a still-queued item to `toIndex` among the queued items (clamped).
-   *  No-op once it's dispatched, for the same reason removeFollowup guards it. */
   reorderFollowup(sessionId: string, id: string, toIndex: number): boolean {
-    const list = this.getFollowups(sessionId);
-    const idx = list.findIndex((f) => f.id === id);
-    if (idx < 0 || list[idx]!.status !== "queued") return false;
-    const clamped = Math.max(0, Math.min(toIndex, list.length - 1));
-    if (clamped === idx) return true;
-    const next = list.slice();
-    const [moved] = next.splice(idx, 1);
-    next.splice(clamped, 0, moved!);
-    this.setFollowupsFor(sessionId, next);
-    return true;
+    return this.transitionFollowups(sessionId, { type: "reorder", id, toIndex }).accepted === true;
   }
 
-  /** Mark an item as actually being sent (about to go over the wire). Kept
-   *  distinct from removal so a lost ack (e.g. the socket drops mid-send) can
-   *  be told apart from "never attempted" — see revertFollowupToQueued. */
   markFollowupSending(sessionId: string, id: string, now: number): PendingFollowup | undefined {
-    const list = this.getFollowups(sessionId);
-    const idx = list.findIndex((f) => f.id === id);
-    if (idx < 0) return undefined;
-    const updated: PendingFollowup = { ...list[idx]!, status: "sending", updatedAt: now };
-    const next = list.slice();
-    next[idx] = updated;
-    this.setFollowupsFor(sessionId, next);
-    return updated;
+    return this.transitionFollowups(sessionId, { type: "mark-sending", id, now }).item;
   }
 
-  /** Delivery is confirmed (the node's session.user_message echo, or a turn
-   *  actually completing — see AppController) — drop it from the visible
-   *  queue; it's an ordinary transcript message now, not something pending. */
   confirmFollowupSent(sessionId: string, id: string): void {
-    const list = this.getFollowups(sessionId);
-    if (!list.some((f) => f.id === id)) return;
-    this.setFollowupsFor(sessionId, list.filter((f) => f.id !== id));
+    this.transitionFollowups(sessionId, { type: "confirm-sent", id });
   }
 
-  /** A dispatched send could not be confirmed (e.g. the socket dropped before
-   *  any ack arrived) — put it back at the FRONT of the queue, queued again, so
-   *  a retry preserves delivery order instead of racing behind newer items. */
   revertFollowupToQueued(sessionId: string, id: string, now: number): void {
-    const list = this.getFollowups(sessionId);
-    const idx = list.findIndex((f) => f.id === id);
-    if (idx < 0 || list[idx]!.status !== "sending") return;
-    const item: PendingFollowup = { ...list[idx]!, status: "queued", updatedAt: now };
-    this.setFollowupsFor(sessionId, [item, ...list.filter((f) => f.id !== id)]);
+    this.transitionFollowups(sessionId, { type: "revert-to-queued", id, now });
   }
 
-  /** Drop any items still marked "sending" for a session whose turn just
-   *  settled (agent_end). Reaching agent_end proves the runtime received
-   *  whatever prompt started that turn, so this is the "durable equivalent" to
-   *  an explicit ack for the rare case the node's session.user_message echo
-   *  itself never arrived (e.g. a reconnect raced it) — without this a
-   *  followup could show "sending" forever even though it plainly succeeded. */
   settleSendingFollowups(sessionId: string): void {
-    const list = this.getFollowups(sessionId);
-    if (!list.some((f) => f.status === "sending")) return;
-    this.setFollowupsFor(sessionId, list.filter((f) => f.status !== "sending"));
+    this.transitionFollowups(sessionId, { type: "settle-sending" });
   }
 
-  /** Forget a session's queue entirely (on delete). */
   dropFollowups(sessionId: string): void {
-    if (!(sessionId in this.state.followupsBySession)) return;
-    const next = { ...this.state.followupsBySession };
-    delete next[sessionId];
-    this.set({ followupsBySession: next });
+    if (sessionId in this.state.followupsBySession) {
+      this.transitionFollowups(sessionId, { type: "clear" });
+    }
   }
 
   setStatus(status: ConnectionStatus): void {

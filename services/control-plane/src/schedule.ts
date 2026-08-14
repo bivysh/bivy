@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { CronExpressionParser } from "cron-parser";
-import type { AutomationDefinition, AutomationRun, MeshStore } from "./store.js";
+import type { AutomationDefinition, AutomationRun } from "./store.js";
+
+export interface ScheduleStore {
+  listDueAutomationDefinitions(nowIso: string, limit?: number): Promise<AutomationDefinition[]>;
+  enqueueScheduledOccurrence(accountId: string, definitionId: string, occurrenceIso: string, nextRunAt?: string): Promise<AutomationRun | undefined>;
+}
 
 export type ScheduleSpec = NonNullable<AutomationDefinition["schedule"]>;
 
@@ -58,7 +63,7 @@ export function nextOccurrence(schedule: ScheduleSpec, after = new Date()): stri
  * near-instant pickup instead of waiting for the node's poll interval.
  */
 export async function processDueSchedules(
-  store: MeshStore,
+  store: ScheduleStore,
   now = new Date(),
   onEnqueued?: (accountId: string, run: AutomationRun) => void,
 ): Promise<number> {
@@ -81,7 +86,7 @@ export class AutomationScheduler {
   private ticking = false;
 
   constructor(
-    private readonly store: MeshStore,
+    private readonly store: ScheduleStore,
     private readonly intervalMs = 15_000,
     private readonly onEnqueued?: (accountId: string, run: AutomationRun) => void,
   ) {}

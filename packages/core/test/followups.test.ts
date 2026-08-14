@@ -8,7 +8,37 @@
 // its edge cases (stale edits, attachment survival, duplicate-ack safety) all
 // live here, where they're directly testable.
 import { describe, expect, it } from "vitest";
-import { SessionStore, mustQueueFollowup, nextQueuedFollowup, supportsSteering, type PendingFollowup, type PromptAttachment } from "../src/index.js";
+import { SessionStore, mustQueueFollowup, nextQueuedFollowup, reduceFollowupQueue, supportsSteering, type PendingFollowup, type PromptAttachment } from "../src/index.js";
+
+
+describe("follow-up queue value reducer", () => {
+  it("returns new queue data without mutating its input", () => {
+    const before: readonly PendingFollowup[] = [];
+    const transition = reduceFollowupQueue(before, {
+      type: "enqueue",
+      item: { id: "f1", text: "one" },
+      now: 1000,
+    });
+    expect(before).toEqual([]);
+    expect(transition.queue).toEqual([
+      expect.objectContaining({ id: "f1", status: "queued", version: 1 }),
+    ]);
+    expect(transition.changed).toBe(true);
+  });
+
+  it("accepts commands as replayable data", () => {
+    const commands = [
+      { type: "enqueue" as const, item: { id: "f1", text: "one" }, now: 1000 },
+      { type: "mark-sending" as const, id: "f1", now: 1001 },
+      { type: "confirm-sent" as const, id: "f1" },
+    ];
+    const result = commands.reduce<readonly PendingFollowup[]>(
+      (queue, command) => reduceFollowupQueue(queue, command).queue,
+      [],
+    );
+    expect(result).toEqual([]);
+  });
+});
 
 describe("mustQueueFollowup", () => {
   it("does not queue an idle session with nothing already waiting", () => {
