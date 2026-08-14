@@ -1163,6 +1163,9 @@ export function createOneOffRun(
     approvalMode?: AccountAutomation["approvalMode"];
     sandbox?: AccountAutomation["sandbox"];
     maxAttempts?: number;
+    /** An ad-hoc Run may continue an existing Session instead of creating one. */
+    targetKind?: "new_session" | "existing_session";
+    targetSessionId?: string;
     sourceKey?: string;
   },
   fetchImpl: typeof fetch = fetch,

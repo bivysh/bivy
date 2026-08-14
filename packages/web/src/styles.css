@@ -995,14 +995,27 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .composer-btn.send:not(:disabled):hover { background: var(--accent-hover); }
 .composer-btn.send:not(:disabled):active { transform: scale(0.92); }
 .composer-btn.send:disabled { opacity: 0.35; cursor: default; }
-/* Long-press Send opens the schedule sheet, so the hold must never select the
-   button text or pop the iOS callout — same suppression as .term-out. */
-.composer-btn.send {
-  -webkit-touch-callout: none;
-  -webkit-user-select: none;
-  user-select: none;
-  touch-action: manipulation;
+/* Send is a compound control in account mode: the primary segment keeps the
+   one-tap message path while the narrow segment exposes Run and Schedule. */
+.split-send { position: relative; flex: none; display: flex; height: 40px; border-radius: 20px; background: var(--accent); }
+.split-send .composer-btn.send { border-radius: 20px 0 0 20px; }
+.split-send-toggle {
+  width: 34px; height: 40px; padding: 0 3px 1px 0; border: 0; border-left: 1px solid color-mix(in srgb, var(--accent-contrast) 28%, transparent);
+  border-radius: 0 20px 20px 0; background: var(--accent); color: var(--accent-contrast); font-size: 13px; cursor: pointer;
 }
+.split-send-toggle:not(:disabled):hover { background: var(--accent-hover); }
+.split-send-toggle:disabled { opacity: 0.35; cursor: default; }
+.send-options-menu {
+  position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 35; width: min(300px, calc(100vw - 28px));
+  padding: 6px; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--surface);
+  box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+}
+.send-option { width: 100%; display: flex; flex-direction: column; gap: 2px; padding: 9px 10px; border: 0; border-radius: 9px; background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
+.send-option:hover:not(:disabled) { background: var(--surface-2); }
+.send-option:disabled { opacity: 0.52; cursor: default; }
+.send-option strong { font-size: 14px; }
+.send-option span { color: var(--muted); font-size: 12px; line-height: 1.35; }
+.send-options-divider { height: 1px; margin: 4px 8px; background: var(--line); }
 .composer-btn.stop { background: var(--danger); color: #fff; }
 .composer-btn.stop:active { transform: scale(0.92); }
 /* "Steer current turn": an explicit interrupt, distinct from the default Send
@@ -1142,7 +1155,7 @@ button.action-sheet-item:last-child { border-bottom: 0; }
   min-width: 32px; min-height: 32px;
 }
 
-/* "Schedule this message for later" sheet (long-press Send — ScheduleSheet.tsx).
+/* "Schedule this message for later" sheet (split Send — ScheduleSheet.tsx).
    A one-off scheduled message is sealed for the session's node and written to
    the account's control plane, so the always-on node delivers it on time even
    with the app closed. */
@@ -1172,6 +1185,10 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .schedule-ok { margin: 0; color: var(--accent); font-size: 12.5px; }
 .schedule-send { align-self: flex-end; padding: 8px 18px; font-size: 13px; }
 .schedule-send:disabled { opacity: 0.55; cursor: default; }
+.run-task-sheet { display: flex; flex-direction: column; gap: 10px; padding: 4px 2px 8px; }
+.run-task-intro { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+.run-task-danger { display: flex; align-items: flex-start; gap: 8px; color: var(--danger); font-size: 12.5px; line-height: 1.4; }
+.run-task-danger input { margin-top: 2px; accent-color: var(--danger); }
 .schedule-pending { display: flex; flex-direction: column; gap: 6px; }
 .schedule-pending-head { font-size: 12px; font-weight: 600; color: var(--muted); }
 .schedule-pending-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }

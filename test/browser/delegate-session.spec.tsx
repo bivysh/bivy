@@ -4,22 +4,24 @@ import { readFile } from "node:fs/promises";
 
 const read = (rel: string) => readFile(new URL(rel, import.meta.url), "utf8");
 
-test("Delegate this Session creates a Run targeting the exact encrypted Session context", async () => {
-  const [menu, controller] = await Promise.all([
-    read("../../packages/web/src/components/SessionMenu.tsx"),
+test("the composer starts a Run from one message without turning the Session into a Run", async () => {
+  const [composer, sheet, controller, menu] = await Promise.all([
+    read("../../packages/web/src/components/Composer.tsx"),
+    read("../../packages/web/src/components/RunTaskSheet.tsx"),
     read("../../packages/web/src/store/controller.ts"),
+    read("../../packages/web/src/components/SessionMenu.tsx"),
   ]);
-  expect(menu).toContain("Delegate this Session…");
-  expect(menu).toContain("controller.delegateSession(sessionId, instruction)");
-  expect(menu).toContain("openRun(result.runId)");
-  expect(controller).toContain("async delegateSession(sessionId: string, instruction: string)");
-  expect(controller).toContain("templateCiphertext: `${TEMPLATE_PREFIX}:${nodeId}:${encrypted}`");
-  expect(controller).toContain('targetKind: "existing_session"');
+  expect(composer).toContain('className="split-send"');
+  expect(composer).toContain("Start a Run");
+  expect(composer).toContain("Schedule for later");
+  expect(sheet).toContain("You can continue to follow and steer the Session");
+  expect(controller).toContain("async startRun(");
+  expect(controller).toContain('targetKind: sessionId ? "existing_session" : "new_session"');
   expect(controller).toContain("targetSessionId: sessionId");
-  expect(controller).toContain("const run = await runAutomationNow(this.local, created.id)");
+  expect(menu).not.toContain("Delegate this Session");
 });
 
-test("a delegated Run resumes or fails visibly and never cold-starts without context", async () => {
+test("a Run targeting an existing Session resumes or fails visibly and never cold-starts without context", async () => {
   const server = await read("../../src/server.ts");
   expect(server).toContain('resumeOnMissing: item.source === "schedule" || item.targetKind === "existing_session"');
   expect(server).toContain("the session is not available on this Machine");

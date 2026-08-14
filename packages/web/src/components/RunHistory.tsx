@@ -23,7 +23,6 @@ export function RunHistory({
   definitions,
   cancelBusyId,
   onRefresh,
-  onNewRun,
   onCancel,
   onOpenRun,
   onOpenSession,
@@ -32,7 +31,6 @@ export function RunHistory({
   definitions: AccountAutomation[];
   cancelBusyId?: string | null;
   onRefresh: () => void;
-  onNewRun: () => void;
   onCancel: (run: AccountAutomationRun) => void;
   onOpenRun?: (runId: string) => void;
   onOpenSession: (sessionId: string) => void;
@@ -59,7 +57,6 @@ export function RunHistory({
         </div>
         <div className="autom-section-actions">
           <button type="button" className="btn sm" onClick={onRefresh}>Refresh</button>
-          <button type="button" className="btn sm primary" onClick={onNewRun}>New run</button>
         </div>
       </div>
       {attentionCount > 0 && <div className="autom-notice warn" role="alert"><div className="autom-notice-text"><strong>{attentionCount} Run{attentionCount === 1 ? "" : "s"} need attention</strong><span>Review parked work, failed notification delivery, or terminal failures before retrying.</span></div></div>}
