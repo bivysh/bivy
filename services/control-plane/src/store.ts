@@ -782,6 +782,12 @@ export interface AutomationDefinition {
    *  server-side, returned to the client only at create/rotate time, and never
    *  echoed by list/get responses. */
   webhookSecret?: string;
+  /** Explicit save-time acknowledgement of the autonomous + danger-full-access
+   *  combo (mirrors config-as-code's safety.allowDangerous). Without this, the
+   *  shared preflight checklist's sandbox_policy check blocks create/update —
+   *  see runPreflightChecks in src/automation/preflight.ts. Has no effect on
+   *  any other combo. */
+  allowDangerous?: boolean;
   /** Optional GitHub repo workspace target (`owner/name`). Used when the trigger
    *  does not carry a repo of its own (schedule, many webhooks). The node clones
    *  this repo before starting the session — the agent does not pick the repo. */

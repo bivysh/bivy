@@ -101,7 +101,14 @@ bivy automation test --event .bivy/events/failed-ci.yaml
 
 The command explains each definition considered, prints the first match and its
 effective routing/safety, and exits without creating a run or uploading
-instructions. Exit status is `2` when nothing matches.
+instructions. It also prints overlap/shadow warnings across the whole file (an
+earlier automation whose scope is a superset of a later one makes the later one
+unreachable) and a preflight checklist for the matched automation — see
+[automation-evaluator.md](automation-evaluator.md) for what each check means and
+which of them require the control plane (and so report "skipped" here; `apply`
+and the app's Test event workflow see the real signal). Exit status is `2` when
+nothing matches, or when the checklist blocks. `validate` prints the overlap
+warnings too, without needing a fixture.
 
 Fixture fields:
 
@@ -116,8 +123,9 @@ Fixture fields:
 | `conclusion` | Workflow-run conclusion |
 | `workflow` | Workflow name |
 
-Simulation uses the same first-match contract as live intake: enabled definitions
-in file order, repository filters, then event predicates.
+Simulation uses the same first-match contract as live intake — literally the same
+code, not just the same rules (see [automation-evaluator.md](automation-evaluator.md)):
+enabled definitions in file order, repository filters, then event predicates.
 
 ## Apply
 

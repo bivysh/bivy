@@ -4,7 +4,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { DEFAULT_AUTOMATION_CONFIG_PATH, STARTER_AUTOMATION_CONFIG, parseAutomationConfig, parseSimulationEvent, simulateAutomation, type AutomationConfigEntry } from "./automation-config.js";
+import { DEFAULT_AUTOMATION_CONFIG_PATH, STARTER_AUTOMATION_CONFIG, parseAutomationConfig, parseSimulationEvent, simulateAutomation, type AutomationConfig, type AutomationConfigEntry } from "./automation-config.js";
+import { findOverlaps, gateFromChecks, runPreflightChecks, type PreflightSignals } from "./automation/index.js";
 import { PairingStore } from "./device-registry.js";
 import { NodeIdentity } from "./identity.js";
 import { seal } from "./e2e.js";
@@ -105,6 +106,71 @@ function effectiveSafety(entry: AutomationConfigEntry, file: string) {
   return resolveProjectSafety(loadProjectPolicy(path.dirname(file))?.safety, nodeBounded.sandbox, nodeBounded.approval);
 }
 
+/** Print any overlap/shadow findings across the whole config, in first-match
+ *  evaluation (file) order. Never blocks — this is informational, the same
+ *  contract the control-plane simulate endpoint and PWA Test event workflow
+ *  explain (see docs/automation-evaluator.md). */
+function printOverlapWarnings(config: AutomationConfig): void {
+  const findings = findOverlaps(config.automations);
+  if (!findings.length) return;
+  console.log("\nOverlap warnings:");
+  for (const finding of findings) {
+    const icon = finding.kind === "shadowed" ? "⚠" : "·";
+    console.log(`  ${icon} ${finding.detail}`);
+  }
+}
+
+/**
+ * Signals `bivy automation test` can gather without any network access: the
+ * effective (policy-bounded) sandbox/approval vs what the entry requested, and
+ * whether an agent/model was explicitly pinned. Source connection, repository
+ * access, the encrypted-instruction key's holder, the assigned machine's
+ * liveness, and quota all require the control plane and are reported
+ * "skipped" here — `bivy automation apply` and the PWA Test event workflow
+ * are where those show up with real signal.
+ */
+function gatherLocalPreflightSignals(entry: AutomationConfigEntry, file: string): PreflightSignals {
+  const effective = effectiveSafety(entry, file);
+  const explicit = Boolean(entry.routing.agent || entry.routing.model);
+  return {
+    sandboxPolicy: {
+      requestedApproval: entry.safety.approval,
+      requestedSandbox: entry.safety.sandbox,
+      effectiveApproval: effective.approval,
+      effectiveSandbox: effective.sandbox,
+      // parseAutomationConfig already hard-rejects this combo at load time
+      // (config would never have reached `test`), but the checklist evaluates
+      // the same unsafeCombo condition as every other caller for consistency.
+      unsafeCombo: effective.approval === "autonomous" && effective.sandbox === "danger-full-access" && !entry.safety.allowDangerous,
+    },
+    // Whether credentials are actually ready can only be answered by the node
+    // that will run this (or the control plane's record of it) — not from a
+    // config file. Report "explicit" so an unset agent/model is skipped
+    // outright rather than shown as an unresolved unknown.
+    agentModelCredentials: explicit
+      ? {
+        agent: entry.routing.agent,
+        model: entry.routing.model,
+        explicit,
+        detail: "Credential readiness can't be checked offline; run 'bivy automation apply' or check the assigned node's Models & providers screen.",
+      }
+      : undefined,
+  };
+}
+
+/** Print the preflight checklist for the automation that matched a test fixture.
+ *  Returns the save/run gate so the caller can decide the exit code. */
+function printPreflightChecklist(entry: AutomationConfigEntry, file: string): ReturnType<typeof gateFromChecks> {
+  const results = runPreflightChecks(gatherLocalPreflightSignals(entry, file));
+  console.log("\nPreflight checklist:");
+  for (const check of results) {
+    if (check.severity === "skipped") continue;
+    const icon = check.severity === "ok" ? "✓" : check.severity === "block" ? "✗" : check.severity === "warn" ? "⚠" : "·";
+    console.log(`  ${icon} ${check.label}: ${check.detail}`);
+  }
+  return gateFromChecks(results);
+}
+
 function assertAllowedRouting(entry: AutomationConfigEntry, file: string): void {
   const node = readNodeConfig(appDataDir());
   const allowed = loadProjectPolicy(path.dirname(file))?.routing;
@@ -156,6 +222,7 @@ function appliedInput(entry: AutomationConfigEntry, configOrder: number, nodeId:
     ephemeral: entry.routing.ephemeral,
     approvalMode: entry.safety.approval,
     sandbox: entry.safety.sandbox,
+    allowDangerous: entry.safety.allowDangerous,
     maxAttempts: entry.safety.maxAttempts,
   };
 }
@@ -319,6 +386,7 @@ async function main() {
   if (command === "validate") {
     for (const entry of config.automations) assertAllowedRouting(entry, file);
     console.log(`Valid: ${config.automations.length} automation(s) in ${path.relative(process.cwd(), file) || file}`);
+    printOverlapWarnings(config);
     return;
   }
 
@@ -352,6 +420,7 @@ async function main() {
     const event = parseSimulationEvent(fs.readFileSync(path.resolve(eventFile), "utf8"));
     const result = simulateAutomation(config, event);
     for (const row of result.reasons) console.log(`${row.matched ? "✓" : "·"} ${row.id}: ${row.reason}`);
+    printOverlapWarnings(config);
     if (!result.matched) { console.error("No automation matched."); process.exitCode = 2; return; }
     const a = result.matched;
     console.log(`\nWould run ${a.name}`);
@@ -361,7 +430,12 @@ async function main() {
     console.log(`  sandbox: ${safety.sandbox}${safety.sandbox !== a.safety.sandbox ? ` (requested ${a.safety.sandbox}; restricted by policy)` : ""}`);
     console.log(`  approvals: ${safety.approval}${safety.approval !== a.safety.approval ? ` (requested ${a.safety.approval}; restricted by policy)` : ""}`);
     console.log(`  attempt limit: ${a.safety.maxAttempts}`);
-    console.log("No run was created and no instructions were uploaded.");
+    const gate = printPreflightChecklist(a, file);
+    console.log("\nNo run was created and no instructions were uploaded.");
+    if (gate.blocked) {
+      console.error(`\nBlocked: ${gate.blockingChecks.map((c) => c.label).join(", ")}`);
+      process.exitCode = 2;
+    }
     return;
   }
 

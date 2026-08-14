@@ -10,7 +10,22 @@
 //     instructions say (comment, PR, fix, …) — nothing special-cased for PRs.
 //   - `on: EventRule[]` describes which deliveries match. Legacy rows without
 //     `on` (and legacy trigger=github_ci) expand to equivalent default rules.
-import type { AutomationDefinition } from "./store.js";
+import {
+  effectiveEventRules as sharedEffectiveEventRules,
+  eventRuleMatches as sharedEventRuleMatches,
+  evaluateAutomation,
+  findOverlaps as sharedFindOverlaps,
+  labelsMatch as sharedLabelsMatch,
+  matchFirst,
+  repoAllowed as sharedRepoAllowed,
+  type AutomationEvaluation,
+  type EvaluableAutomation,
+  type EvaluationEvent,
+  type MatchTrailEntry,
+  type OverlapFinding,
+  type PreflightSignals,
+} from "@bivy/automation-core";
+import type { AutomationDefinition, InboundHook, NodeRecord } from "./store.js";
 
 /** GitHub delivery families Bivy understands today. Grow this list; don't add
  *  new top-level trigger enums. */
@@ -129,90 +144,83 @@ export function isGithubEventName(value: string): value is GithubEventName {
 }
 
 /**
- * Expand a definition to the rules that gate intake. Explicit `on` wins.
- * Legacy rows without `on` keep historical defaults so behavior doesn't flip.
+ * Adapt a stored definition to the shape the shared evaluator understands.
+ * `github_ci` is a control-plane-only legacy alias (config-as-code never had
+ * it) that expands to an explicit workflow_run rule here, at the boundary,
+ * rather than teaching the shared matcher a control-plane-specific trigger.
  */
-export function effectiveEventRules(def: AutomationDefinition): AutomationEventRule[] {
-  if (def.on && def.on.length > 0) return def.on;
-
-  if (def.trigger === "github_ci") {
-    return [
-      {
+function toEvaluable(def: AutomationDefinition): EvaluableAutomation & { createdAt: string; configOrder?: number; configKey?: string } {
+  const legacyCiOn: AutomationEventRule[] | undefined = def.trigger === "github_ci" && !(def.on && def.on.length > 0)
+    ? [{
         event: "workflow_run",
         actions: ["completed"],
         conclusions: ["failure", "timed_out", "startup_failure"],
         // Historical: labels[] on github_ci meant workflow name allowlist.
         workflows: def.labels?.length ? def.labels : undefined,
-      },
-    ];
-  }
-
-  if (def.trigger === "github") {
-    // Pre-`on` github automations: issues + issue comments only (no silent PR enable).
-    return [
-      { event: "issues", labels: def.labels },
-      { event: "issue_comment", mention: true },
-    ];
-  }
-
-  return [];
+      }]
+    : undefined;
+  return {
+    id: def.id,
+    enabled: def.enabled !== false,
+    trigger: def.trigger === "github_ci" ? "github" : (def.trigger ?? "schedule"),
+    repo: def.repo,
+    repos: def.repos,
+    labels: def.labels,
+    on: legacyCiOn ?? def.on,
+    createdAt: def.createdAt,
+    configOrder: def.configOrder,
+    configKey: def.configKey,
+  };
 }
 
-function actionAllowed(rule: AutomationEventRule, action: string | undefined): boolean {
-  if (!rule.actions?.length) return true;
-  if (!action) return false;
-  const want = action.toLowerCase();
-  return rule.actions.some((a) => a.trim().toLowerCase() === want);
+function toEvaluationEvent(event: SourceTriggerEvent): EvaluationEvent {
+  return {
+    kind: event.kind,
+    repo: event.repo,
+    labels: event.labels,
+    mention: event.mention,
+    event: event.githubEvent,
+    action: event.action,
+    conclusion: event.conclusion,
+    workflow: event.workflowName,
+  };
 }
 
-function conclusionAllowed(rule: AutomationEventRule, conclusion: string | undefined): boolean {
-  const allowed = (rule.conclusions?.length
-    ? rule.conclusions
-    : ["failure", "timed_out", "startup_failure"])
-    .map((c) => c.trim().toLowerCase());
-  if (!conclusion) return false;
-  return allowed.includes(conclusion.trim().toLowerCase());
-}
-
-function workflowAllowed(rule: AutomationEventRule, workflowName: string | undefined): boolean {
-  if (!rule.workflows?.length) return true;
-  if (!workflowName) return false;
-  const want = workflowName.trim().toLowerCase();
-  return rule.workflows.some((w) => w.trim().toLowerCase() === want);
+/**
+ * Expand a definition to the rules that gate intake. Explicit `on` wins.
+ * Legacy rows without `on` keep historical defaults so behavior doesn't flip.
+ */
+export function effectiveEventRules(def: AutomationDefinition): AutomationEventRule[] {
+  return sharedEffectiveEventRules(toEvaluable(def));
 }
 
 /** Whether one rule matches a normalized GitHub delivery. */
 export function eventRuleMatches(rule: AutomationEventRule, event: SourceTriggerEvent): boolean {
-  if (event.kind !== "github") return false;
-  if (event.githubEvent !== rule.event) return false;
-  if (!actionAllowed(rule, event.action)) return false;
-
-  if (rule.event === "workflow_run") {
-    if (!conclusionAllowed(rule, event.conclusion)) return false;
-    if (!workflowAllowed(rule, event.workflowName)) return false;
-    return true;
-  }
-
-  // Actor-driven surfaces: mention and/or labels.
-  if (rule.mention) {
-    if (!event.mention) return false;
-    // Mention is sufficient intent; optional extra label constraint if both set.
-    if (rule.labels?.length && !labelsMatch(rule.labels, event.labels)) return false;
-    return true;
-  }
-
-  // Label-gated (default bivy* when labels omitted).
-  return labelsMatch(rule.labels, event.labels);
+  return sharedEventRuleMatches(rule, toEvaluationEvent(event));
 }
 
 /**
- * First matching enabled source automation wins (stable: createdAt ascending).
- * Empty `repos` on the definition means "all repos".
+ * First matching enabled source automation wins (stable: createdAt ascending,
+ * with config-as-code file order preserved for source-controlled rows). Empty
+ * `repos` on the definition means "all repos". Delegates the actual first-
+ * match walk to the shared evaluator (src/automation) — see
+ * docs/automation-evaluator.md — so this is the same contract config-as-code
+ * `test` and the PWA Test event workflow explain.
  */
 export function matchSourceAutomation(
   definitions: AutomationDefinition[],
   event: SourceTriggerEvent,
 ): AutomationDefinition | undefined {
+  return explainSourceAutomationMatch(definitions, event).matched;
+}
+
+/** Same first-match walk as matchSourceAutomation, but returns the full
+ *  per-candidate explanation trail. Powers the simulate endpoint. */
+export function explainSourceAutomationMatch(
+  definitions: AutomationDefinition[],
+  event: SourceTriggerEvent,
+): { matched?: AutomationDefinition; trail: MatchTrailEntry[] } {
+  const byId = new Map(definitions.map((d) => [d.id, d]));
   const candidates = definitions
     .filter((d) => {
       if (d.enabled === false) return false;
@@ -220,7 +228,7 @@ export function matchSourceAutomation(
       // GitHub deliveries match both modern github and legacy github_ci rows.
       return d.trigger === "github" || d.trigger === "github_ci";
     })
-    .slice()
+    .map(toEvaluable)
     .sort((a, b) => {
       // Definitions from one automations-as-code file preserve file order even
       // after an update (createdAt cannot represent a reorder). UI-managed and
@@ -231,28 +239,174 @@ export function matchSourceAutomation(
       return a.createdAt.localeCompare(b.createdAt);
     });
 
-  for (const def of candidates) {
-    if (!repoAllowed(def.repos, event.repo)) continue;
+  const { matched, trail } = matchFirst(candidates, toEvaluationEvent(event));
+  return { matched: matched ? byId.get(matched.id) : undefined, trail };
+}
 
-    if (event.kind === "linear") {
-      // Linear keeps the simple label contract (no `on` rules yet).
-      if (!event.mention && !labelsMatch(def.labels, event.labels)) continue;
-      return def;
+/** Overlap/shadow findings across an account's enabled github/linear
+ *  automations, in the order matchSourceAutomation evaluates them. */
+export function findAutomationOverlaps(definitions: AutomationDefinition[]): OverlapFinding[] {
+  const candidates = definitions
+    .filter((d) => d.enabled !== false && (d.trigger === "github" || d.trigger === "linear" || d.trigger === "github_ci"))
+    .map(toEvaluable)
+    .sort((a, b) => {
+      if (a.configKey && b.configKey && a.configOrder !== undefined && b.configOrder !== undefined) {
+        return a.configOrder - b.configOrder || a.createdAt.localeCompare(b.createdAt);
+      }
+      return a.createdAt.localeCompare(b.createdAt);
+    });
+  return sharedFindOverlaps(candidates);
+}
+
+/** `bivy/<name>` -> `<name>`; the bare shared queue label (`bivy` or unset) -> undefined. */
+function nodeLabelSuffix(nodeLabel: string | undefined): string | undefined {
+  if (!nodeLabel) return undefined;
+  const suffix = nodeLabel.startsWith("bivy/") ? nodeLabel.slice("bivy/".length) : nodeLabel;
+  return suffix && suffix !== "bivy" ? suffix : undefined;
+}
+
+/** Already-fetched store data the preflight signal adapter below needs. Kept
+ *  I/O-free like preflight.ts itself — the route handler does the fetching. */
+export interface PreflightSignalContext {
+  hooks: InboundHook[];
+  nodes: NodeRecord[];
+  allowance: { limit?: number; used: number; warn: boolean; exhausted: boolean };
+}
+
+type SignalDefinitionInput = Pick<
+  AutomationDefinition,
+  "trigger" | "repo" | "repos" | "templateCiphertext" | "nodeLabel" | "runtimeId" | "model" | "approvalMode" | "sandbox" | "allowDangerous"
+>;
+
+/**
+ * Adapt control-plane store data into the shared PreflightSignals shape (see
+ * docs/automation-evaluator.md). Powers both the create/update save gate and
+ * the simulate endpoint, so a draft and an already-saved automation see the
+ * exact same checklist.
+ *
+ * Known simplifications (no durable per-label routing table exists to check
+ * against): a `bivy/<name>` assignment has no automatic fallback — only the
+ * shared `bivy` queue does, so an offline named node reports "no machine
+ * online" rather than a false "a fallback will pick this up." The encrypted
+ * instructions' key-holder is approximated as the assigned node (accurate for
+ * the common single-target case; the shared queue reports unknown since any
+ * paired node can hold the room key).
+ */
+export function gatherPreflightSignals(def: SignalDefinitionInput, ctx: PreflightSignalContext): PreflightSignals {
+  const sourceRequired = def.trigger === "github" || def.trigger === "github_ci" || def.trigger === "linear";
+  const hookKind: "github" | "linear" = def.trigger === "linear" ? "linear" : "github";
+  const hook = ctx.hooks.find((h) => (hookKind === "linear" ? h.kind === "linear" : h.kind === "github" || h.kind === "github_app"));
+
+  const configuredRepos = def.repos?.length ? def.repos : def.repo ? [def.repo] : [];
+  const knownInstalled = hookKind === "linear" || hook?.installCount === undefined ? undefined : hook.installCount > 0;
+
+  const onlineNodes = ctx.nodes.filter((n) => n.online);
+  const suffix = nodeLabelSuffix(def.nodeLabel);
+  const assignedNode = suffix ? ctx.nodes.find((n) => n.name === suffix) : undefined;
+
+  const requestedApproval = def.approvalMode ?? "risky";
+  const requestedSandbox = def.sandbox ?? "workspace-write";
+
+  return {
+    sourceConnection: {
+      required: sourceRequired,
+      connected: Boolean(hook),
+      detail: sourceRequired && !hook ? `No ${hookKind === "linear" ? "Linear" : "GitHub"} source is connected yet.` : undefined,
+    },
+    repoAccess: {
+      required: sourceRequired && configuredRepos.length > 0,
+      configuredRepos,
+      knownInstalled,
+    },
+    encryptedKeyOwnership: {
+      // Legacy github_ci rows run on a server-known plaintext default
+      // (DEFAULT_FIX_CI_PROMPT, see dispatchAutomationDefinition) when no
+      // ciphertext is set — the only trigger with that fallback, so it's the
+      // only one exempt from requiring one.
+      required: def.trigger !== "github_ci",
+      hasCiphertext: Boolean(def.templateCiphertext),
+      ownerNodeOnline: suffix ? assignedNode?.online : undefined,
+    },
+    assignedMachine: suffix
+      ? {
+        nodeLabel: def.nodeLabel,
+        primaryOnline: Boolean(assignedNode?.online),
+        hasFallback: false,
+        fallbackAvailable: false,
+        // Explicitly node-targeted work has no other server for that label —
+        // an offline named node genuinely has no fallback today.
+        sharedQueueHasOnlineNode: false,
+      }
+      : {
+        nodeLabel: def.nodeLabel ?? "bivy",
+        primaryOnline: onlineNodes.length > 0,
+        sharedQueueHasOnlineNode: onlineNodes.length > 0,
+      },
+    agentModelCredentials: def.runtimeId || def.model
+      ? {
+        agent: def.runtimeId,
+        model: def.model,
+        explicit: true,
+        detail: "The control plane cannot see a node's local credential vault; the assigned node confirms this at run time.",
+      }
+      : undefined,
+    sandboxPolicy: {
+      requestedApproval,
+      requestedSandbox,
+      effectiveApproval: requestedApproval,
+      effectiveSandbox: requestedSandbox,
+      unsafeCombo: requestedApproval === "autonomous" && requestedSandbox === "danger-full-access" && !def.allowDangerous,
+    },
+    quota: ctx.allowance,
+  };
+}
+
+/**
+ * Full evaluation (match + overlaps + preflight + gate) for one automation —
+ * an existing definition, or a not-yet-saved draft — against the account's
+ * other definitions. `subject` replaces the definition sharing its id in
+ * `definitions` (an edit) or is appended (a create/simulate-only draft) so
+ * overlap detection and first-match ordering see the draft in its real
+ * position. Powers the simulate endpoint and the create/update save gate.
+ * Match/overlap only apply to source triggers (github/linear/github_ci) —
+ * schedule/webhook/manual subjects still get a real preflight + gate, just an
+ * empty match trail and no overlap findings, matching findOverlaps' scope.
+ */
+export function evaluateAccountAutomation(
+  subject: AutomationDefinition,
+  definitions: AutomationDefinition[],
+  // The public, documented fixture vocabulary (docs/automations-as-code.md) —
+  // the same shape `bivy automation test` and config-as-code's
+  // parseSimulationEvent accept — not the webhook-ingress-internal
+  // SourceTriggerEvent. Keeps "what event am I testing against" identical
+  // across all three call sites.
+  event: EvaluationEvent | undefined,
+  signalContext: PreflightSignalContext,
+): AutomationEvaluation<EvaluableAutomation> {
+  const others = definitions.filter((d) => d.id !== subject.id);
+  const merged = [...others, subject].sort((a, b) => {
+    if (a.configKey && b.configKey && a.configOrder !== undefined && b.configOrder !== undefined) {
+      return a.configOrder - b.configOrder || a.createdAt.localeCompare(b.createdAt);
     }
-
-    const rules = effectiveEventRules(def);
-    if (rules.length === 0) continue;
-    if (rules.some((rule) => eventRuleMatches(rule, event))) return def;
-  }
-  return undefined;
+    return a.createdAt.localeCompare(b.createdAt);
+  });
+  const candidates = merged
+    .filter((d) => {
+      if (d.enabled === false) return false;
+      if (!isSourceTrigger(d.trigger)) return false;
+      return true;
+    })
+    .map(toEvaluable);
+  return evaluateAutomation({
+    candidates,
+    event,
+    signals: gatherPreflightSignals(subject, signalContext),
+  });
 }
 
 /** Repo allowlist: undefined/empty = all; otherwise exact owner/name match. */
 export function repoAllowed(allowlist: string[] | undefined, repo: string | undefined): boolean {
-  if (!allowlist || allowlist.length === 0) return true;
-  if (!repo) return false;
-  const want = repo.trim().toLowerCase();
-  return allowlist.some((r) => r.trim().toLowerCase() === want);
+  return sharedRepoAllowed(allowlist, repo);
 }
 
 /**
@@ -261,12 +415,7 @@ export function repoAllowed(allowlist: string[] | undefined, repo: string | unde
  * match exactly or as a `label/<node>` prefix form.
  */
 export function labelsMatch(filter: string[] | undefined, eventLabels: string[]): boolean {
-  const normalized = eventLabels.map((l) => l.trim().toLowerCase()).filter(Boolean);
-  const filters = (filter && filter.length > 0 ? filter : ["bivy"]).map((l) => l.trim().toLowerCase()).filter(Boolean);
-  if (filters.length === 0) return true;
-  return normalized.some((label) =>
-    filters.some((f) => label === f || label.startsWith(`${f}/`)),
-  );
+  return sharedLabelsMatch(filter, eventLabels);
 }
 
 /** Normalize optional string arrays from API bodies. */

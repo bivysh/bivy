@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import path from "node:path";
 import fs from "node:fs";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import express, { type Request, type Response, type NextFunction } from "express";
 import Stripe from "stripe";
@@ -50,8 +50,12 @@ import {
   sourceAutomationSeedInput,
   DEFAULT_FIX_CI_PROMPT,
   normalizeEventRules,
+  evaluateAccountAutomation,
+  gatherPreflightSignals,
+  type PreflightSignalContext,
   type SourceTriggerKind,
 } from "./automation-match.js";
+import { gateFromChecks, runPreflightChecks, type EvaluationEvent, type GithubEventName as EvaluationGithubEventName } from "@bivy/automation-core";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -276,6 +280,50 @@ async function runAllowance(accountId: string): Promise<{ limit?: number; used: 
   if (!enforceRunLimit) return { limit, used, warn: false, exhausted: false };
   return { limit, used, warn: used >= limit && used < limit + RUN_GRACE, exhausted: used >= limit + RUN_GRACE };
 }
+
+// Fetch every signal the shared preflight checklist (src/automation/preflight.ts,
+// via gatherPreflightSignals) needs, for one account. Shared by the create/update
+// save gate and the simulate endpoint so a draft and an already-saved automation
+// see identical checks.
+async function preflightSignalContext(accountId: string): Promise<PreflightSignalContext> {
+  const [hooks, nodes, allowance] = await Promise.all([
+    store.listInboundHooks(accountId),
+    store.listNodes(accountId),
+    runAllowance(accountId),
+  ]);
+  return { hooks, nodes, allowance };
+}
+
+// The event-fixture vocabulary documented in docs/automations-as-code.md and
+// accepted by `bivy automation test` — validated the same way config-as-code's
+// parseSimulationEvent validates it, so the simulate endpoint rejects the same
+// malformed fixtures the CLI would.
+function parseSimulationEventBody(value: unknown): EvaluationEvent {
+  if (!value || typeof value !== "object") throw new Error("event must be an object");
+  const o = value as Record<string, unknown>;
+  const kind = o.kind;
+  if (kind !== "github" && kind !== "linear" && kind !== "schedule" && kind !== "webhook" && kind !== "manual") {
+    throw new Error("event.kind must be github, linear, schedule, webhook, or manual");
+  }
+  const labels = o.labels === undefined ? undefined : normalizeStringList(o.labels, 50);
+  const repo = typeof o.repo === "string" ? normalizeAutomationRepo(o.repo) : undefined;
+  const githubEvents: EvaluationGithubEventName[] = ["issues", "issue_comment", "pull_request", "pull_request_review_comment", "workflow_run"];
+  const event = o.event === undefined ? undefined : String(o.event) as EvaluationGithubEventName;
+  if (kind === "github" && (!event || !githubEvents.includes(event))) {
+    throw new Error(`event.event is required for github fixtures and must be one of ${githubEvents.join(", ")}`);
+  }
+  return {
+    kind,
+    repo,
+    labels,
+    mention: o.mention === true,
+    event,
+    action: typeof o.action === "string" ? o.action : undefined,
+    conclusion: typeof o.conclusion === "string" ? o.conclusion : undefined,
+    workflow: typeof o.workflow === "string" ? o.workflow : undefined,
+  };
+}
+
 // The account's LIFETIME hosted-session trial status. On Bivy Cloud "free" is the
 // pre-subscription trial: the first `limit` distinct sessions surface through the
 // hosted app, then new ones are withheld and Pro is prompted. `enforced` is false
@@ -2736,7 +2784,7 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
     return res.status(400).json({ error: (error as Error).message });
   }
   const templateId = typeof req.body?.templateId === "string" ? req.body.templateId.trim() || undefined : undefined;
-  const definition = await store.createAutomationDefinition(client.accountId, {
+  const input: Omit<AutomationDefinition, "id" | "accountId" | "createdAt" | "updatedAt"> = {
     name,
     templateCiphertext: typeof req.body?.templateCiphertext === "string" ? req.body.templateCiphertext : undefined,
     runtimeId: typeof req.body?.runtimeId === "string" ? req.body.runtimeId : undefined,
@@ -2745,6 +2793,7 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
     ephemeral: typeof req.body?.ephemeral === "boolean" ? req.body.ephemeral : undefined,
     approvalMode: ["never", "risky", "always", "autonomous"].includes(req.body?.approvalMode) ? req.body.approvalMode : undefined,
     sandbox: ["read-only", "workspace-write", "danger-full-access"].includes(req.body?.sandbox) ? req.body.sandbox : undefined,
+    allowDangerous: req.body?.allowDangerous === true,
     maxAttempts: Number.isInteger(req.body?.maxAttempts) && req.body.maxAttempts >= 1 && req.body.maxAttempts <= 10 ? req.body.maxAttempts : undefined,
     enabled,
     trigger,
@@ -2758,7 +2807,15 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
     schedule,
     nextRunAt,
     message: req.body?.message === true,
-  });
+  };
+  // Close the gap where autonomous+danger-full-access was only hard-blocked by
+  // config-as-code parsing: every save path now runs the same shared preflight
+  // gate (see docs/automation-evaluator.md).
+  const gate = gateFromChecks(runPreflightChecks(gatherPreflightSignals(input, await preflightSignalContext(client.accountId))));
+  if (gate.blocked) {
+    return res.status(400).json({ error: gate.blockingChecks.map((c) => `${c.label}: ${c.detail}`).join("; "), preflight: gate.blockingChecks });
+  }
+  const definition = await store.createAutomationDefinition(client.accountId, input);
   // Return the signing secret exactly once (create). It's never echoed again.
   res.status(201).json({ ...publicAutomation(definition, req), ...(webhookSecret ? { webhookSecret } : {}) });
 }));
@@ -2837,6 +2894,7 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
     nodeLabel: typeof req.body?.nodeLabel === "string" ? req.body.nodeLabel.trim() || undefined : current.nodeLabel,
     approvalMode: ["never", "risky", "always", "autonomous"].includes(req.body?.approvalMode) ? req.body.approvalMode : current.approvalMode,
     sandbox: ["read-only", "workspace-write", "danger-full-access"].includes(req.body?.sandbox) ? req.body.sandbox : current.sandbox,
+    allowDangerous: typeof req.body?.allowDangerous === "boolean" ? req.body.allowDangerous : current.allowDangerous,
     maxAttempts: Number.isInteger(req.body?.maxAttempts) && req.body.maxAttempts >= 1 && req.body.maxAttempts <= 10 ? req.body.maxAttempts : current.maxAttempts,
     enabled,
     schedule,
@@ -2849,6 +2907,13 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
     templateId: typeof req.body?.templateId === "string" ? req.body.templateId.trim() || undefined : current.templateId,
     message: typeof req.body?.message === "boolean" ? req.body.message : current.message,
   };
+  // Same save gate as create (see docs/automation-evaluator.md) — evaluated
+  // against the patched definition, not the stored one, so tightening (e.g.
+  // switching to autonomous + danger-full-access) is caught before it saves.
+  const gate = gateFromChecks(runPreflightChecks(gatherPreflightSignals({ ...current, ...patch }, await preflightSignalContext(client.accountId))));
+  if (gate.blocked) {
+    return res.status(400).json({ error: gate.blockingChecks.map((c) => `${c.label}: ${c.detail}`).join("; "), preflight: gate.blockingChecks });
+  }
   const updated = await store.updateAutomationDefinition(client.accountId, current.id, patch);
   res.json(updated ? publicAutomation(updated, req) : updated);
 }));
@@ -2875,6 +2940,105 @@ app.delete("/account/automations/:id", asyncHandler(async (req, res) => {
   if (current.configKey) return res.status(409).json({ error: `Automation is managed by .bivy/automations.yaml (${current.configKey})` });
   await store.deleteAutomationDefinition(client.accountId, current.id);
   res.status(204).end();
+}));
+
+// Fields the simulate endpoint accepts as a draft/patch — the same vocabulary
+// POST/PUT /account/automations accept, minus anything that only make sense
+// once a row exists (webhookSecret, configKey, ...). Shared by both simulate
+// branches: patching an existing automation to preview an edit, and
+// evaluating a brand-new draft that hasn't been saved yet.
+function draftAutomationPatch(body: Record<string, unknown>): Partial<AutomationDefinition> {
+  const patch: Partial<AutomationDefinition> = {};
+  if (typeof body.name === "string") patch.name = body.name.trim();
+  if (typeof body.trigger === "string") {
+    const t = body.trigger;
+    if (t !== "schedule" && t !== "webhook" && t !== "manual" && t !== "github" && t !== "linear" && t !== "github_ci") {
+      throw new Error("draft.trigger must be one of schedule, webhook, manual, github, linear, github_ci");
+    }
+    patch.trigger = t;
+  }
+  if (body.enabled !== undefined) patch.enabled = body.enabled !== false;
+  if (body.repo !== undefined) patch.repo = body.repo === null || body.repo === "" ? undefined : normalizeAutomationRepo(body.repo);
+  if (body.repos !== undefined) {
+    patch.repos = body.repos === null ? undefined : normalizeStringList(body.repos);
+    if (patch.repos) for (const r of patch.repos) normalizeAutomationRepo(r);
+  }
+  if (body.labels !== undefined) patch.labels = body.labels === null ? undefined : normalizeStringList(body.labels);
+  if (body.on !== undefined) patch.on = body.on === null ? undefined : normalizeEventRules(body.on);
+  if (typeof body.templateCiphertext === "string") patch.templateCiphertext = body.templateCiphertext;
+  if (typeof body.runtimeId === "string") patch.runtimeId = body.runtimeId.trim() || undefined;
+  if (typeof body.model === "string") patch.model = body.model.trim() || undefined;
+  if (typeof body.nodeLabel === "string") patch.nodeLabel = body.nodeLabel.trim() || undefined;
+  if (["never", "risky", "always", "autonomous"].includes(body.approvalMode as string)) patch.approvalMode = body.approvalMode as AutomationDefinition["approvalMode"];
+  if (["read-only", "workspace-write", "danger-full-access"].includes(body.sandbox as string)) patch.sandbox = body.sandbox as AutomationDefinition["sandbox"];
+  if (typeof body.allowDangerous === "boolean") patch.allowDangerous = body.allowDangerous;
+  return patch;
+}
+
+function buildSimulateDraft(accountId: string, body: Record<string, unknown>): AutomationDefinition {
+  const patch = draftAutomationPatch(body);
+  if (!patch.trigger) throw new Error("draft.trigger is required for a not-yet-saved automation");
+  const now = new Date().toISOString();
+  return {
+    id: `draft_${randomUUID()}`,
+    accountId,
+    name: patch.name || "Untitled automation",
+    enabled: patch.enabled ?? true,
+    trigger: patch.trigger,
+    schedule: SENTINEL_SCHEDULE,
+    createdAt: now,
+    updatedAt: now,
+    ...patch,
+  };
+}
+
+// Explain what would happen for a representative event WITHOUT creating a run
+// — the control-plane half of "Test event" (see docs/automation-evaluator.md
+// and packages/web/src/components/AutomationsView.tsx). Accepts either an
+// existing automation (optionally previewing an unsaved edit via `draft`) or a
+// brand-new draft that has never been saved.
+app.post("/account/automations/simulate", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const definitions = await store.listAutomationDefinitions(client.accountId);
+  const draftBody = req.body?.draft && typeof req.body.draft === "object" && !Array.isArray(req.body.draft)
+    ? req.body.draft as Record<string, unknown>
+    : undefined;
+  let subject: AutomationDefinition;
+  try {
+    if (typeof req.body?.automationId === "string") {
+      const existing = definitions.find((d) => d.id === req.body.automationId);
+      if (!existing) return res.status(404).json({ error: "Automation not found" });
+      subject = draftBody ? { ...existing, ...draftAutomationPatch(draftBody) } : existing;
+    } else {
+      if (!draftBody) return res.status(400).json({ error: "automationId or draft is required" });
+      subject = buildSimulateDraft(client.accountId, draftBody);
+    }
+  } catch (error) {
+    return res.status(400).json({ error: (error as Error).message });
+  }
+  let event: EvaluationEvent | undefined;
+  if (req.body?.event !== undefined) {
+    try {
+      event = parseSimulationEventBody(req.body.event);
+    } catch (error) {
+      return res.status(400).json({ error: (error as Error).message });
+    }
+  }
+  const ctx = await preflightSignalContext(client.accountId);
+  const result = evaluateAccountAutomation(subject, definitions, event, ctx);
+  res.json({
+    // The subject's id — a real id when previewing an existing automation
+    // (with or without a draft patch), or a synthetic never-persisted one for
+    // a brand-new draft. Lets the client identify "which row is mine" in
+    // `trail`/`overlaps` without needing to already know a not-yet-saved id.
+    subjectId: subject.id,
+    matchedId: result.match?.matched?.id,
+    trail: result.match?.trail ?? [],
+    overlaps: result.overlaps,
+    preflight: result.preflight,
+    gate: result.gate,
+  });
 }));
 
 app.post("/account/automations/:id/run", asyncHandler(async (req, res) => {
