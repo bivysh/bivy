@@ -484,6 +484,79 @@ export class DirectTransport implements Transport {
             await this.directApi(`/api/auth/providers/${encodeURIComponent(String(obj.provider || ""))}`, { method: "DELETE" }),
           );
           break;
+        case "credentials.list":
+          this.emitMerged("credentials.records", await this.directApi("/api/auth/credentials"));
+          break;
+        case "credentials.account.export": {
+          const requestId = String(obj.requestId ?? "");
+          try {
+            const result = await this.directApi("/api/auth/credentials/account-export");
+            this.emit({ type: "credentials.account.export", requestId, ...result });
+          } catch (error) {
+            this.emit({ type: "credentials.account.export.error", requestId, error: error instanceof Error ? error.message : String(error) });
+          }
+          break;
+        }
+        case "credential.set": {
+          const requestId = String(obj.requestId ?? "");
+          try {
+            const result = await this.directApi("/api/auth/credentials", { method: "POST", body: JSON.stringify(obj) });
+            this.emitMerged("credentials.records", result);
+            this.emitMerged("providers.list", result);
+            this.emit({ type: "credential.set.ok", requestId });
+          } catch (error) {
+            this.emit({ type: "credential.set.error", requestId, error: error instanceof Error ? error.message : String(error) });
+          }
+          break;
+        }
+        case "credential.remove": {
+          const provider = encodeURIComponent(String(obj.provider ?? ""));
+          const label = encodeURIComponent(String(obj.label ?? "default"));
+          const result = await this.directApi(`/api/auth/credentials/${provider}/${label}`, { method: "DELETE" });
+          this.emitMerged("credentials.records", result);
+          this.emitMerged("providers.list", result);
+          break;
+        }
+        case "credential.sync.set": {
+          const provider = encodeURIComponent(String(obj.provider ?? ""));
+          const label = encodeURIComponent(String(obj.label ?? "default"));
+          const result = await this.directApi(`/api/auth/credentials/${provider}/${label}/availability`, {
+            method: "POST",
+            body: JSON.stringify({ sync: obj.sync }),
+          });
+          this.emitMerged("credentials.records", result);
+          break;
+        }
+        case "credential.test": {
+          const requestId = String(obj.requestId ?? "");
+          const provider = encodeURIComponent(String(obj.provider ?? ""));
+          const label = encodeURIComponent(String(obj.label ?? "default"));
+          try {
+            const result = await this.directApi(`/api/auth/credentials/${provider}/${label}/test`, { method: "POST", body: "{}" });
+            this.emitMerged("credentials.records", result);
+            this.emit({ type: "credential.test.result", requestId, ...result });
+          } catch (error) {
+            this.emit({ type: "credential.test.result", requestId, provider: obj.provider, label: obj.label, ok: false, at: Date.now(), reason: "network_error", error: error instanceof Error ? error.message : String(error) });
+          }
+          break;
+        }
+        case "credentials.presets.get":
+          this.emitMerged("credentials.presets", await this.directApi("/api/auth/credential-assignments"));
+          break;
+        case "credentials.presets.setMapping":
+          this.emitMerged(
+            "credentials.presets",
+            await this.directApi("/api/auth/credential-assignments/default", {
+              method: "POST",
+              body: JSON.stringify({ provider: obj.provider, label: obj.label }),
+            }),
+          );
+          break;
+        case "credentials.presets.setActive":
+          // The vault UI uses explicit provider defaults rather than a global
+          // active mode. Keep legacy callers deterministic in direct mode.
+          this.emitMerged("credentials.presets", await this.directApi("/api/auth/credential-assignments"));
+          break;
         case "models.custom.list":
           this.emitMerged("models.custom.list", await this.directApi("/api/models/custom"));
           break;

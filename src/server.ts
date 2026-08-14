@@ -9638,6 +9638,86 @@ app.post("/api/auth/api-key", async (req, res, next) => {
   }
 });
 
+// Item-addressed credential-vault REST API. This mirrors the relay commands so
+// direct/self-hosted and hosted clients use the same records and behavior.
+app.get("/api/auth/credentials", async (_req, res, next) => {
+  try {
+    res.json({ records: await listCredentialRecords(credsDir) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/auth/credentials/account-export", async (_req, res, next) => {
+  try {
+    res.json({ entries: await exportAccountApiKeys(credsDir) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/auth/credentials", async (req, res, next) => {
+  try {
+    const provider = String(req.body?.provider ?? "").trim().toLowerCase();
+    const label = String(req.body?.label ?? "default");
+    const ref = typeof req.body?.ref === "string" ? req.body.ref.trim() : "";
+    if (ref) await setProviderReferenceLabeled(credsDir, provider, label, ref);
+    else await setProviderApiKeyLabeled(credsDir, provider, label, String(req.body?.key ?? ""));
+    await pushModelAuthToControlPlane();
+    await refreshSessionAfterAuth();
+    res.json({ ok: true, records: await listCredentialRecords(credsDir), providers: await listProvidersUnified() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/auth/credentials/:provider/:label", async (req, res, next) => {
+  try {
+    await removeProviderCredential(credsDir, String(req.params.provider), String(req.params.label));
+    await pushModelAuthToControlPlane();
+    await refreshSessionAfterAuth();
+    res.json({ ok: true, records: await listCredentialRecords(credsDir), providers: await listProvidersUnified() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/auth/credentials/:provider/:label/availability", async (req, res, next) => {
+  try {
+    const sync = req.body?.sync === "node" ? "node" : "account";
+    await setCredentialSync(credsDir, String(req.params.provider), String(req.params.label), sync);
+    await pushModelAuthToControlPlane();
+    res.json({ ok: true, records: await listCredentialRecords(credsDir) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/auth/credentials/:provider/:label/test", async (req, res, next) => {
+  try {
+    const provider = String(req.params.provider).trim().toLowerCase();
+    const label = String(req.params.label);
+    const result = await testProviderCredential(credsDir, provider, label);
+    res.json({ provider, label, ...result, records: await listCredentialRecords(credsDir) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/auth/credential-assignments", (_req, res) => {
+  res.json({ presets: getCredentialPresets(credsDir) });
+});
+
+app.post("/api/auth/credential-assignments/default", async (req, res, next) => {
+  try {
+    setCredentialPresetMapping(credsDir, "default", String(req.body?.provider ?? ""), String(req.body?.label ?? ""));
+    await refreshSessionAfterAuth();
+    res.json({ ok: true, presets: getCredentialPresets(credsDir) });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // List model providers + auth status (the "Models & providers" screen). Shared by
 // every agent runtime via the credential vault, so one login here serves all.
 app.get("/api/auth/providers", async (_req, res, next) => {

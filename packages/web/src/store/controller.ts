@@ -2535,14 +2535,9 @@ export class AppController {
   setCredentialSync(provider: string, label: string, sync: "account" | "node"): void {
     this.send({ kind: "credential.sync.set", provider, label, sync });
   }
-  /** "Test connection": a bounded, non-secret liveness probe for one credential
-   *  (see credential.test in server.ts). Resolves with the redacted result even
-   *  when the probe itself reports failure — only a transport-level problem
-   *  rejects. Direct/self-host mode has no handler for this command yet (same
-   *  gap as the rest of the labeled-credentials surface), so it always reports
-   *  "not supported" there rather than hanging. */
+  /** "Test connection": a bounded, non-secret liveness probe for one credential.
+   *  Relay and direct transports implement the same item-addressed command. */
   async testCredential(provider: string, label: string): Promise<{ ok: boolean; at: number; reason?: string }> {
-    if (this.direct) return { ok: false, at: Date.now(), reason: "not_supported" };
     const event = (await this.awaitAck({ kind: "credential.test", provider, label }, 15000)) as { ok?: boolean; at?: number; reason?: string };
     return { ok: Boolean(event.ok), at: Number(event.at) || Date.now(), ...(event.reason ? { reason: event.reason } : {}) };
   }
