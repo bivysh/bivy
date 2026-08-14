@@ -9,6 +9,7 @@ import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { ImportSessionContent } from "./ImportSessionSheet.js";
 import { MachineCapabilitiesSection } from "./MachineCapabilities.js";
+import { Segmented } from "./Segmented.js";
 import { currentThemeSetting, setTheme, type ThemeSetting } from "../theme.js";
 import { useModalEscape } from "../modalStack.js";
 import type { SettingsView } from "../router.js";
@@ -382,24 +383,15 @@ function AppearancePanel() {
   return (
     <div className="settings-form">
       <label className="field-label">Theme</label>
-      <div className="theme-seg" role="radiogroup" aria-label="Theme">
-        {options.map((o) => (
-          <button
-            key={o.id}
-            type="button"
-            role="radio"
-            aria-checked={setting === o.id}
-            className={`theme-seg-btn${setting === o.id ? " active" : ""}`}
-            onClick={() => {
-              setTheme(o.id);
-              setSetting(o.id);
-            }}
-          >
-            <span className="theme-seg-icon">{o.icon}</span>
-            <span className="theme-seg-label">{o.label}</span>
-          </button>
-        ))}
-      </div>
+      <Segmented
+        ariaLabel="Theme"
+        value={setting}
+        options={options}
+        onChange={(id) => {
+          setTheme(id);
+          setSetting(id);
+        }}
+      />
       <p className="muted">Choose how Bivy looks. <strong>System</strong> follows your device's light/dark setting.</p>
     </div>
   );
