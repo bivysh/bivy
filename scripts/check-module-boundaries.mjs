@@ -71,6 +71,13 @@ const RULES = [
     note: "controllers are imported BY server.ts; the dependency direction is server -> controller only (Phase 2).",
   },
   {
+    name: "device-controller-uses-ports",
+    dir: "src/controllers/devices.ts",
+    forbid: ["express", "../identity", "../device-registry", "../metadata", "../remote", "../server", "node:"],
+    enforce: true,
+    note: "device resource semantics depend on injected ports; Express, persistence, relay, and metadata effects stay in the composition root.",
+  },
+  {
     name: "protocol-is-a-pure-contract",
     dir: "src/protocol",
     forbid: ["../server", "../runtime/", "../agents/", "../session/", "../credentials/", "../controllers/"],
