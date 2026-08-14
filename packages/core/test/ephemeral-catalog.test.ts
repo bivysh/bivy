@@ -16,6 +16,10 @@ describe("ephemeral provider positioning", () => {
     expect(ephemeralCatalogEntry("hetzner")).toMatchObject({ hostedOnly: true });
   });
 
+  it.each(["sprites", "e2b"])("records %s idle suspension as catalog data", (id) => {
+    expect(ephemeralCatalogEntry(id)).toMatchObject({ suspendsWhenIdle: true });
+  });
+
   it.each(["aws", "fly", "sprites", "e2b"])("%s is not flagged hostedOnly", (id) => {
     expect(ephemeralCatalogEntry(id)?.hostedOnly).toBeFalsy();
   });

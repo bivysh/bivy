@@ -23,6 +23,24 @@ import { b64, b64url, unb64url } from "./base64.js";
 import type { LocalStore } from "./local-store.js";
 import type { EphemeralNodeConfig } from "./account.js";
 import type { Command, PromptAttachment } from "./protocol.js";
+import {
+  clampTtlMinutes,
+  ephemeralCostEstimate as deriveEphemeralCostEstimate,
+  type EphemeralLifecycleMilestones,
+  type PricedMachineSize,
+} from "./ephemeral-lifecycle.js";
+
+export {
+  clampTtlMinutes,
+  ephemeralColdStartMs,
+  ephemeralCostHint,
+  ephemeralLifecyclePhase,
+  formatEphemeralPrice,
+  type EphemeralLifecycleFacts,
+  type EphemeralLifecycleMilestones,
+  type EphemeralLifecyclePhase,
+  type PricedMachineSize,
+} from "./ephemeral-lifecycle.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -44,6 +62,9 @@ export interface EphemeralProviderCatalog {
    * it. Onboarding surfaces should say so up front rather than let the user
    * connect a token and hit the launch-time refusal cold. */
   hostedOnly?: boolean;
+  /** Provider-owned idle suspension preserves machine state at approximately
+   * zero compute cost. Lifecycle policy consumes this catalog fact. */
+  suspendsWhenIdle?: boolean;
 }
 
 export const EPHEMERAL_PROVIDERS: EphemeralProviderCatalog[] = [
@@ -98,6 +119,7 @@ export const EPHEMERAL_PROVIDERS: EphemeralProviderCatalog[] = [
       { label: "Sprites account & tokens", url: "https://sprites.dev/account" },
       { label: "Sprites docs", url: "https://docs.sprites.dev/" },
     ],
+    suspendsWhenIdle: true,
   },
   {
     id: "e2b",
@@ -115,6 +137,7 @@ export const EPHEMERAL_PROVIDERS: EphemeralProviderCatalog[] = [
       { label: "E2B dashboard & API keys", url: "https://e2b.dev/dashboard" },
       { label: "E2B docs", url: "https://e2b.dev/docs" },
     ],
+    suspendsWhenIdle: true,
   },
   {
     id: "aws",
@@ -663,20 +686,7 @@ export interface EphemeralMachine {
   purpose?: "queue-item" | "queue-default" | "ready-capacity";
 }
 
-export interface EphemeralMilestones {
-  requestedAt?: string;
-  providerAcceptedAt?: string;
-  nodeReadyAt?: string;
-  credentialsReadyAt?: string;
-  snapshotReadyAt?: string;
-  firstAgentEventAt?: string;
-}
-
-export function ephemeralColdStartMs(machine: Pick<EphemeralMachine, "milestones">): number | undefined {
-  const start = Date.parse(String(machine.milestones?.requestedAt || ""));
-  const ready = Date.parse(String(machine.milestones?.firstAgentEventAt || ""));
-  return Number.isFinite(start) && Number.isFinite(ready) && ready >= start ? ready - start : undefined;
-}
+export type EphemeralMilestones = EphemeralLifecycleMilestones;
 
 export interface MachineStore {
   list(): Promise<EphemeralMachine[]>;
@@ -835,13 +845,6 @@ export interface BootstrapOpts {
   restoreSessionId?: string;
 }
 
-/** Clamp a requested TTL into a sane 5-minute…24-hour window (default 60). A
- *  forgotten machine can't bill forever, and a too-short TTL can't kill a node
- *  before it finishes booting. */
-export function clampTtlMinutes(ttlMinutes?: number): number {
-  return Math.max(5, Math.min(24 * 60, Number(ttlMinutes) || 60));
-}
-
 /** The relay enrollment blob written to `/etc/bivy/relay.json`. The daemon reads
  *  it on boot (`startRelayIfConfigured` in src/server.ts) and dials the relay
  *  with no interactive `bivy setup` — the node was already enrolled by the
@@ -943,7 +946,7 @@ export function buildBootstrapUserData(opts: BootstrapOpts): string {
 
 /** A pickable machine size. `id` is the provider-native identifier that gets
  *  passed back as `config.size` at provision time. */
-export interface ProviderSize {
+export interface ProviderSize extends PricedMachineSize {
   id: string;
   label: string;
   /** Approximate on-demand compute price per hour in the provider's currency
@@ -953,64 +956,15 @@ export interface ProviderSize {
   pricePerHour?: number;
 }
 
-/** Currency symbol for the small cost hints. Kept tiny on purpose — these are
- *  indicative estimates, not an invoice. */
-function currencySymbol(currency: string): string {
-  return currency === "EUR" ? "€" : "$";
-}
-
-/** Format one price, e.g. `$0.0136` or `€0.007`. Sub-10-cent prices get more
- *  decimals so a cheap machine doesn't collapse to `$0.01` or `$0.00`. */
-export function formatEphemeralPrice(amount: number, currency = "USD"): string {
-  const sym = currencySymbol(currency);
-  const digits = amount < 0.1 ? 4 : 2;
-  return `${sym}${amount.toFixed(digits)}`;
-}
-
-/** The one-line cost hint shown next to a chosen size: the hourly rate plus the
- *  estimated ceiling for the selected TTL. Returns "" when we have no price for
- *  the size, so callers can render it unconditionally. */
-export function ephemeralCostHint(
-  size: ProviderSize | undefined,
-  ttlMinutes: number | undefined,
-  currency = "USD",
-): string {
-  const rate = size?.pricePerHour;
-  if (!rate || rate <= 0) return "";
-  const perHour = `≈ ${formatEphemeralPrice(rate, currency)}/hr`;
-  if (!ttlMinutes || ttlMinutes <= 0) return perHour;
-  const hours = clampTtlMinutes(ttlMinutes) / 60;
-  return `${perHour} · up to ${formatEphemeralPrice(rate * hours, currency)} before it self-destructs`;
-}
-
-export type EphemeralLifecyclePhase = "provisioning" | "node-ready" | "hydrating" | "ready" | "claimed" | "working" | "teardown-failed";
-
-/** User-facing lifecycle derived only from durable, server-stamped facts. */
-export function ephemeralLifecyclePhase(
-  machine: Pick<EphemeralMachine, "milestones" | "purpose"> & { claimedAt?: string },
-  teardownFailed = false,
-): EphemeralLifecyclePhase {
-  if (teardownFailed) return "teardown-failed";
-  if (machine.milestones?.firstAgentEventAt) return "working";
-  if (machine.claimedAt || machine.purpose === "queue-default" || machine.purpose === "queue-item") return "claimed";
-  if (machine.purpose === "ready-capacity" && machine.milestones?.credentialsReadyAt) return "ready";
-  if (machine.milestones?.nodeReadyAt && !machine.milestones?.credentialsReadyAt) return "hydrating";
-  if (machine.milestones?.nodeReadyAt) return "node-ready";
-  return "provisioning";
-}
-
+/** Compatibility shell: the pure projection takes `nowMs` explicitly; callers
+ *  using the historical API may omit it and read the clock at this effect edge. */
 export function ephemeralCostEstimate(
   size: ProviderSize | undefined,
   createdAt: string,
   ttlMinutes?: number,
   nowMs = Date.now(),
 ): { accrued: number; maximum: number } | null {
-  const rate = size?.pricePerHour;
-  const start = Date.parse(createdAt);
-  if (!rate || rate <= 0 || !Number.isFinite(start)) return null;
-  const ttl = clampTtlMinutes(ttlMinutes);
-  const elapsedHours = Math.max(0, Math.min(nowMs - start, ttl * 60_000)) / 3_600_000;
-  return { accrued: rate * elapsedHours, maximum: rate * ttl / 60 };
+  return deriveEphemeralCostEstimate(size, createdAt, ttlMinutes, nowMs);
 }
 
 export interface ProviderAdapter {
@@ -1052,13 +1006,11 @@ export interface ProviderAdapter {
    *  (Hetzner/Fly/EC2) — a suspend-when-idle managed sandbox (Sprites/E2B)
    *  doesn't carry the same cost risk and is intentionally left without one. */
   discover?(args: { exec: ExecFn; token: string; ownershipTag: string }): Promise<EphemeralMachine[]>;
-  /** True when the provider's machines suspend themselves to ~zero cost while
-   *  idle and resume with full state (Fly Sprites). Such a machine is kept —
-   *  never TTL-destroyed on finish — and is woken via `wake` before reconnect.
-   *  Absent/false for the destroy-when-done providers (Fly Machines/Hetzner/AWS). */
+  /** Compatibility projection of the catalog fact. Lifecycle policy reads the
+   * catalog directly; retained for adapter consumers during migration. */
   suspendsWhenIdle?: boolean;
   /** Resume a suspended machine so it rejoins the relay and becomes reachable.
-   *  Only meaningful when `suspendsWhenIdle` — one allowlisted request that
+   *  Only meaningful when the provider catalog declares `suspendsWhenIdle` — one allowlisted request that
    *  forces the machine warm (for Sprites, starting its supervised `bivy`
    *  service). Idempotent: safe to call on an already-running machine. */
   wake?(args: { exec: ExecFn; token: string; machine: EphemeralMachine }): Promise<void>;
@@ -2202,7 +2154,7 @@ const sprites: ProviderAdapter = {
   id: "sprites",
   name: "Fly Sprites",
   currency: "USD",
-  suspendsWhenIdle: true,
+  suspendsWhenIdle: ephemeralCatalogEntry("sprites")?.suspendsWhenIdle,
   regions: SPRITES_REGIONS,
   defaultRegion: "iad",
   sizes: SPRITES_SIZES,
@@ -2350,7 +2302,7 @@ const e2b: ProviderAdapter = {
   id: "e2b",
   name: "E2B",
   currency: "USD",
-  suspendsWhenIdle: true,
+  suspendsWhenIdle: ephemeralCatalogEntry("e2b")?.suspendsWhenIdle,
   regions: [{ id: "us", label: "United States" }],
   defaultRegion: "us",
   sizes: E2B_SIZES,
@@ -2789,7 +2741,7 @@ export async function destroyEphemeralMachine(
  *  instead of TTL-destroying it, and wakes it via `wakeEphemeralMachine` before
  *  reconnecting. */
 export function ephemeralProviderSuspendsWhenIdle(provider: string): boolean {
-  return ephemeralAdapter(provider)?.suspendsWhenIdle === true;
+  return ephemeralCatalogEntry(provider)?.suspendsWhenIdle === true;
 }
 
 /** Reconstruct a minimal `EphemeralMachine` from the non-secret provider

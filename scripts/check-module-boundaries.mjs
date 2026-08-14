@@ -76,6 +76,13 @@ const RULES = [
     enforce: true,
     note: "the audit trail is a pure fs leaf; the daemon hands it decisions to record. It imports no kernel implementation (moat #1).",
   },
+  {
+    name: "ephemeral-lifecycle-is-pure-data",
+    dir: "packages/core/src/ephemeral-lifecycle.ts",
+    forbid: ["./", "../", "node:", "@"],
+    enforce: true,
+    note: "ephemeral lifecycle projections are data-in/data-out and import no storage, provider, transport, browser, or clock implementation.",
+  },
 ];
 
 // Match the `from "spec"` clause of any import/export (including multi-line
@@ -88,6 +95,7 @@ function walk(dir) {
   const out = [];
   const abs = path.join(repoRoot, dir);
   if (!fs.existsSync(abs)) return out;
+  if (fs.statSync(abs).isFile()) return /\.(ts|tsx|mts|mjs|js)$/.test(abs) ? [dir] : out;
   for (const entry of fs.readdirSync(abs, { withFileTypes: true })) {
     const rel = path.join(dir, entry.name);
     if (entry.isDirectory()) out.push(...walk(rel));
