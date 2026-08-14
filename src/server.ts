@@ -9742,7 +9742,7 @@ app.post("/api/auth/oauth/:id/open-on-node", (req, res) => {
   if (state?.openedOnNode) return res.json({ opened: true, alreadyOpened: true });
   const result = openOAuthLoginOnNode(state, openBrowser);
   if (result.opened && state) state.openedOnNode = true;
-  res.status(result.opened ? 200 : 409).json(result);
+  res.json(result);
 });
 
 app.post("/api/auth/oauth/:id/manual-code", (req, res) => {
