@@ -1750,6 +1750,35 @@ export class PostgresStore implements MeshStore {
 
   async putHostedMachineAttempt(attempt: HostedMachineAttempt, opts?: { expectedVersion?: number }): Promise<HostedMachineAttempt> {
     const expectedVersion = opts?.expectedVersion;
+    const params = [
+      attempt.accountId, attempt.attemptId, attempt.provider, attempt.configId ?? null, attempt.nodeId,
+      attempt.state, attempt.desiredState ?? "active", attempt.observedState ?? null,
+      attempt.deadlineAt ?? null, attempt.ownershipTag ?? null,
+      JSON.stringify(attempt.desired ?? {}), attempt.machine ? JSON.stringify(attempt.machine) : null,
+      attempt.lastError ?? null, attempt.retryCount, attempt.createdAt, attempt.updatedAt,
+    ];
+    if (expectedVersion != null) {
+      // A fenced write only ever applies to an existing row (the caller must
+      // have already read it to know its version), so this is a plain
+      // conditional UPDATE rather than an upsert. Deliberately NOT expressed
+      // as `INSERT ... ON CONFLICT DO UPDATE ... WHERE ... RETURNING`: that
+      // form does not reliably return zero rows on a WHERE mismatch under
+      // pg-mem (the in-memory Postgres this store also runs against for
+      // dev/tests — see postgres-store.test evidence in the PR), silently
+      // turning a rejected fence into an apparent success. A bare UPDATE with
+      // a WHERE clause is unambiguous under both.
+      const { rows } = await this.query(
+        `UPDATE hosted_machine_attempts SET
+           provider=$3, config_id=$4, node_id=$5, state=$6, desired_state=$7, observed_state=$8,
+           deadline_at=$9, ownership_tag=$10, desired=$11, machine=$12, last_error=$13, retry_count=$14,
+           version=version + 1, updated_at=$16
+         WHERE account_id=$1 AND attempt_id=$2 AND version=$17
+         RETURNING *`,
+        [...params, expectedVersion],
+      );
+      if (!rows[0]) throw new ConcurrentAttemptUpdateError(attempt.accountId, attempt.attemptId);
+      return this.hostedAttemptFromRow(rows[0]);
+    }
     const { rows } = await this.query(
       `INSERT INTO hosted_machine_attempts
          (account_id, attempt_id, provider, config_id, node_id, state, desired_state, observed_state,
@@ -1762,22 +1791,9 @@ export class PostgresStore implements MeshStore {
          desired=EXCLUDED.desired, machine=EXCLUDED.machine,
          last_error=EXCLUDED.last_error, retry_count=EXCLUDED.retry_count,
          version=hosted_machine_attempts.version + 1, updated_at=EXCLUDED.updated_at
-       WHERE $17::int IS NULL OR hosted_machine_attempts.version = $17
        RETURNING *`,
-      [attempt.accountId, attempt.attemptId, attempt.provider, attempt.configId ?? null, attempt.nodeId,
-       attempt.state, attempt.desiredState ?? "active", attempt.observedState ?? null,
-       attempt.deadlineAt ?? null, attempt.ownershipTag ?? null,
-       JSON.stringify(attempt.desired ?? {}), attempt.machine ? JSON.stringify(attempt.machine) : null,
-       attempt.lastError ?? null, attempt.retryCount, attempt.createdAt, attempt.updatedAt,
-       expectedVersion ?? null],
+      params,
     );
-    if (!rows[0]) {
-      if (expectedVersion != null) throw new ConcurrentAttemptUpdateError(attempt.accountId, attempt.attemptId);
-      // No row and no fence requested: the conflict target existed but the
-      // (always-true) WHERE still filtered it out only when a fence was set —
-      // this branch is otherwise unreachable, kept as a defensive fallback.
-      throw new Error(`failed to write hosted machine attempt ${attempt.accountId}/${attempt.attemptId}`);
-    }
     return this.hostedAttemptFromRow(rows[0]);
   }
 
