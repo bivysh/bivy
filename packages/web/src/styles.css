@@ -1325,9 +1325,14 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .settings-form .muted { color: var(--muted); font-size: 13px; margin: 0; }
 /* Password-manager-style provider credential vault. Saved items are the primary
    list; the provider catalog appears only inside Add. */
-.credential-vault { gap: 14px; max-width: 680px; width: 100%; }
+/* Wide settings panels that read as a shallow "vault": the credential vault and
+   the isolated-machine-profiles panel share this container + header layout. */
+.credential-vault, .machine-profiles { gap: 14px; max-width: 680px; width: 100%; }
 .vault-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
 .vault-title-row > div { min-width: 0; }
+/* The header action (e.g. "+ Add profile") never shrinks or wraps — the title
+   text yields first, so the button stays a clean single line on narrow screens. */
+.vault-title-row .btn { flex: none; white-space: nowrap; }
 .vault-title-row h3 { margin: 0 0 4px; }
 .vault-empty { display: flex; min-height: 220px; flex-direction: column; align-items: center; justify-content: center; gap: 10px; border: 1px dashed var(--line-strong); border-radius: 14px; text-align: center; padding: 24px; }
 .vault-empty h4 { margin: 0; }
