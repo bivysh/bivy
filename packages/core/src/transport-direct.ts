@@ -433,6 +433,9 @@ export class DirectTransport implements Transport {
           this.emit({ type: "node.stats", stats: await this.directApi(`/api/node/stats?${q}`) });
           break;
         }
+        case "capabilities.get":
+          this.emit({ type: "capabilities", capabilities: await this.directApi("/api/capabilities") });
+          break;
         case "runtimes.list":
           this.emitMerged("runtimes.list", await this.directApi("/api/runtimes"));
           break;

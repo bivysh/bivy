@@ -5,6 +5,7 @@
 // wire payloads into the clean shapes the reducer stores; they hold no state.
 
 import { isValidAgentCommand, type SlashCommand } from "./slash.js";
+import type { MachineCapabilities } from "./capabilities.js";
 import type {
   ApprovalRequest,
   GithubContext,
@@ -206,6 +207,17 @@ export function normalizeNodeStats(stats: any): NodeStats | null {
   const hasStorage = stats.storage?.node && typeof stats.storage.node.total === "number";
   if (!hasMem && !hasCpu && !hasStorage) return null;
   return stats as NodeStats;
+}
+
+/** Accept a capabilities snapshot only if it has the minimal shape the node
+ *  always sends (an `os` block and a `generatedAt` timestamp), so a garbled/
+ *  empty frame doesn't blank a good panel. Everything else is passed through
+ *  as-is — the node already bounded/redacted it (see src/capabilities.ts). */
+export function normalizeCapabilitiesSnapshot(value: any): MachineCapabilities | null {
+  if (!value || typeof value !== "object") return null;
+  if (!value.os || typeof value.os.platform !== "string") return null;
+  if (typeof value.generatedAt !== "string") return null;
+  return value as MachineCapabilities;
 }
 
 /** Defensive shape-check mirroring src/runtime/claude-code.ts's own

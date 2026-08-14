@@ -15,6 +15,7 @@ export * from "./inbox.js";
 export * from "./outcome.js";
 export * from "./run.js";
 export * from "./activation.js";
+export * from "./capabilities.js";
 export * from "./credentialReadiness.js";
 export * from "./receipt-v1.js";
 export * from "./session-contract.js";

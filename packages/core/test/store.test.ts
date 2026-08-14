@@ -81,6 +81,40 @@ describe("SessionStore", () => {
     expect(store.getState().activationReadiness).toEqual({ credential: { configured: true, probed: true, ok: true }, repository: { chosen: false, probed: true, ok: false, authed: true } });
   });
 
+  it("stores a valid Machine capability inventory snapshot", () => {
+    const store = new SessionStore();
+    const capabilities = {
+      generatedAt: "2026-01-01T00:00:00.000Z",
+      os: { platform: "linux", arch: "x64", release: "6.1.0", type: "Linux" },
+      agents: { maintained: [{ id: "pi", label: "Pi", kind: "maintained", installed: true }], custom: [] },
+      providers: { configured: ["anthropic"], localEndpoints: { count: 0, withModels: 0 } },
+      docker: { state: "unknown" },
+      gpu: { state: "unknown" },
+      plugins: [],
+      workspaces: { count: 1 },
+    };
+    store.apply({ type: "capabilities", capabilities } as never);
+    expect(store.getState().capabilities).toEqual(capabilities);
+  });
+
+  it("ignores a garbled capabilities frame instead of blanking a good panel", () => {
+    const store = new SessionStore();
+    const capabilities = {
+      generatedAt: "2026-01-01T00:00:00.000Z",
+      os: { platform: "linux", arch: "x64", release: "6.1.0", type: "Linux" },
+      agents: { maintained: [], custom: [] },
+      providers: { configured: [], localEndpoints: { count: 0, withModels: 0 } },
+      docker: { state: "unknown" },
+      gpu: { state: "unknown" },
+      plugins: [],
+      workspaces: { count: 0 },
+    };
+    store.apply({ type: "capabilities", capabilities } as never);
+    // A later, malformed frame (missing `os`) must not clobber the good snapshot.
+    store.apply({ type: "capabilities", capabilities: { generatedAt: "2026-01-01T00:00:01.000Z" } } as never);
+    expect(store.getState().capabilities).toEqual(capabilities);
+  });
+
   it("retains a credential's testable/verification fields, feeding the redacted readiness projection", () => {
     const store = new SessionStore();
     store.apply({
