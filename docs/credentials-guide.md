@@ -30,20 +30,20 @@ credential is available; unattended use is a separate, explicit opt-in.
                   You choose availability
              ┌─────────────┼─────────────┐
              ▼             ▼             ▼
-        This device   One machine   All machines
-                                           │
-                                           │ Optional
-                                           ▼
-                               ┌──────────────────────┐
-                               │ Unattended runs      │
-                               │ Separate encrypted   │
-                               │ cloud copy           │
-                               └──────────────────────┘
+        This device   One machine   All machines ─── Optional ──┐
+             └─────────────┼─────────────┘                       │
+                           ▼                                     ▼
+                Supplied to the agent                 ┌──────────────────────┐
+                    you run there                     │ Unattended runs      │
+             Claude Code · Codex · Pi · …             │ Separate encrypted   │
+                                                      │ cloud copy           │
+                                                      └──────────────────────┘
 ```
 
-The unattended copy exists only when you enable unattended runs for that
-credential. Disabling access removes it; ordinary account sync does not enable
-unattended use.
+At an allowed location, Bivy resolves the selected credential for the agent you
+run; you do not maintain a separate copy for each agent. The unattended copy
+exists only when you enable unattended runs for that credential. Disabling
+access removes it; ordinary account sync does not enable unattended use.
 
 Every model credential is a **record** with a natural identity: **`provider:label`**.
 
