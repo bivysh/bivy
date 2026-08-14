@@ -87,6 +87,7 @@ import {
   ephemeralMachineFromCorrelation,
   type SessionCorrelation,
   createDeviceVaultKeyStore,
+  DeviceVaultConflictError,
   deviceKeypair,
   listEphemeralSizes,
   ephemeralNodeLabel,
@@ -675,7 +676,7 @@ export class AppController {
     // Reconcile the device vault once on sign-in: a producer device satisfies any
     // pending wrapped-key requests from the account's other devices; a consumer
     // device pulls its wrapped key so a synced token is ready to wake a machine.
-    void this.syncDeviceVault();
+    void this.syncDeviceVault().catch(() => { /* durable sync state exposes retry */ });
     this.connect();
   }
 
@@ -2750,6 +2751,12 @@ export class AppController {
     // Compute-provider token widening remains a separate explicit opt-in.
     enabled: () => !this.direct && Boolean(this.local.s),
     providerTokenSyncEnabled: () => this.deviceTokenSyncEnabled(),
+    state: {
+      load: async () => {
+        try { return JSON.parse(localStorage.getItem("bivy_device_vault_state") || "null") ?? undefined; } catch { return undefined; }
+      },
+      save: async (value) => { try { localStorage.setItem("bivy_device_vault_state", JSON.stringify(value)); } catch { /* status remains in memory */ } },
+    },
   });
   private ephemeralPrefs: EphemeralPrefsStore = createEphemeralPrefsStore();
   private ephemeralSetups: EphemeralSetupStore = createEphemeralSetupStore();
@@ -2848,12 +2855,16 @@ export class AppController {
     } catch {
       /* noop */
     }
-    if (enabled) void this.syncDeviceVault();
+    if (enabled) void this.syncDeviceVault().catch(() => { /* surfaced by getDeviceVaultSyncState */ });
   }
-  /** Reconcile the device vault (consume a wrapped key, or publish + satisfy
-   *  peers' requests). Safe/no-op when disabled. */
+  /** Reconcile the device vault. Failures remain observable through
+   * `getDeviceVaultSyncState()` and reject explicit callers instead of being
+   * silently swallowed. */
   syncDeviceVault(): Promise<void> {
-    return this.ephemeralKeys.sync().catch(() => {});
+    return this.ephemeralKeys.sync();
+  }
+  getDeviceVaultSyncState() {
+    return this.ephemeralKeys.getSyncState();
   }
   /** Fetch-backed control-plane transport for the device vault. Ciphertext +
    *  wrapped keys only — never a token. */
@@ -2865,19 +2876,24 @@ export class AppController {
         const dev = await deviceKeypair(this.local);
         const res = await fetch(`${base()}/device-vault?device=${encodeURIComponent(dev.pub)}`, { headers: { authorization: `Bearer ${this.local.s}` } });
         if (!res.ok) throw new Error(`device-vault get failed (${res.status})`);
-        const data = (await res.json()) as { vault?: string | null; wrappedKey?: { wrappedKey: string; wrappedByPublicKeyB64: string } | null; requests?: string[] };
-        return { vault: data.vault ?? null, wrappedKey: data.wrappedKey ?? null, requests: Array.isArray(data.requests) ? data.requests : [] };
+        const data = (await res.json()) as { vault?: string | null; wrappedKey?: { wrappedKey: string; wrappedByPublicKeyB64: string; generation?: number } | null; requests?: string[]; generation?: number; keyGeneration?: number; recipients?: string[] };
+        return { vault: data.vault ?? null, wrappedKey: data.wrappedKey ?? null, requests: Array.isArray(data.requests) ? data.requests : [], generation: data.generation ?? 0, keyGeneration: data.keyGeneration ?? 0, recipients: Array.isArray(data.recipients) ? data.recipients : [] };
       },
-      putVault: async (ciphertext: string) => {
+      putVault: async (ciphertext: string, expectedGeneration?: number, keyGeneration?: number) => {
         const dev = await deviceKeypair(this.local);
-        await fetch(`${base()}/device-vault`, { method: "PUT", headers: jsonAuth(), body: JSON.stringify({ devicePublicKeyB64: dev.pub, ciphertext }) });
+        const res = await fetch(`${base()}/device-vault`, { method: "PUT", headers: jsonAuth(), body: JSON.stringify({ devicePublicKeyB64: dev.pub, ciphertext, expectedGeneration, keyGeneration }) });
+        if (res.status === 409) throw new DeviceVaultConflictError();
+        if (!res.ok) throw new Error(`device-vault put failed (${res.status})`);
+        const data = await res.json() as { generation?: number };
+        return { generation: data.generation ?? (expectedGeneration ?? 0) + 1 };
       },
       requestKey: async () => {
         const dev = await deviceKeypair(this.local);
         await fetch(`${base()}/device-vault/key/request`, { method: "POST", headers: jsonAuth(), body: JSON.stringify({ devicePublicKeyB64: dev.pub }) });
       },
-      putWrapped: async (target: string, wrappedKey: string, wrappedByPublicKeyB64: string) => {
-        await fetch(`${base()}/device-vault/key/wrapped`, { method: "PUT", headers: jsonAuth(), body: JSON.stringify({ targetDevicePublicKeyB64: target, wrappedKey, wrappedByPublicKeyB64 }) });
+      putWrapped: async (target: string, wrappedKey: string, wrappedByPublicKeyB64: string, generation?: number) => {
+        const res = await fetch(`${base()}/device-vault/key/wrapped`, { method: "PUT", headers: jsonAuth(), body: JSON.stringify({ targetDevicePublicKeyB64: target, wrappedKey, wrappedByPublicKeyB64, generation }) });
+        if (!res.ok) throw new Error(`device-vault wrapped-key put failed (${res.status})`);
       },
     };
   }

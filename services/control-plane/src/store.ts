@@ -485,12 +485,17 @@ export interface DeviceVault {
   ciphertext: string;
   updatedByDevice: string;
   updatedAt: string;
+  /** Optimistic ciphertext revision. */
+  generation: number;
+  /** Vault-key epoch, advanced whenever a paired device is revoked. */
+  keyGeneration: number;
 }
 
 export interface DeviceVaultWrappedKeyRecord {
   devicePublicKey: string;
   wrappedKey: string;
   wrappedByPublicKey: string;
+  generation: number;
   updatedAt: string;
 }
 
@@ -1279,11 +1284,12 @@ export interface MeshStore {
 
   // Device→device provider-token vault (P2 / Gap A) — recipients are paired devices.
   getDeviceVault(accountId: string): Promise<DeviceVault | undefined>;
-  setDeviceVault(accountId: string, byDevicePublicKey: string, ciphertext: string): Promise<DeviceVault>;
+  /** Compare-and-set ciphertext. A stale expected generation fails with 409. */
+  setDeviceVault(accountId: string, byDevicePublicKey: string, ciphertext: string, expectedGeneration?: number, keyGeneration?: number): Promise<DeviceVault>;
   getDeviceVaultWrappedKey(accountId: string, devicePublicKey: string): Promise<DeviceVaultWrappedKeyRecord | undefined>;
   requestDeviceVaultWrappedKey(accountId: string, devicePublicKey: string): Promise<void>;
   listDeviceVaultKeyRequests(accountId: string, exceptDevicePublicKey: string): Promise<DeviceVaultKeyRequest[]>;
-  setDeviceVaultWrappedKey(accountId: string, targetDevicePublicKey: string, wrappedByPublicKey: string, wrappedKey: string): Promise<DeviceVaultWrappedKeyRecord>;
+  setDeviceVaultWrappedKey(accountId: string, targetDevicePublicKey: string, wrappedByPublicKey: string, wrappedKey: string, generation?: number): Promise<DeviceVaultWrappedKeyRecord>;
 
   // Durable E2E session snapshots for rebuild-resume (Gap B) — opaque ciphertext.
   getSessionSnapshot(accountId: string, sessionId: string): Promise<SessionSnapshotRecord | undefined>;

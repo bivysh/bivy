@@ -62,6 +62,8 @@ import type { AutomationsSection } from "../router.js";
 import type { GithubQueueItem } from "@bivy/core";
 import { isTerminalRun, projectRunDetail } from "../runDetail.js";
 import { ConfirmDialog } from "./AppDialog.js";
+import { CloseIcon, PlusIcon } from "./UiIcons.js";
+import { AutomationSourcesPanel } from "./AutomationSourcesPanel.js";
 import { compactCronSummary, formatAutomationMoment, formatNextAutomationRun } from "../automationPresentation.js";
 
 const TEMPLATE_PREFIX = "bivy-room-v1";
@@ -897,10 +899,10 @@ export function AutomationsView({
         </div>
         <div className="automations-view-head-actions">
           <button type="button" className="autom-new-btn" onClick={openChooser} aria-label="New automation">
-            <IconPlus />
+            <PlusIcon size={18} />
             <span className="autom-new-btn-label">New automation</span>
           </button>
-          <button type="button" className="icon-btn autom-close-btn" onClick={onClose} title="Close" aria-label="Close automations"><IconClose /></button>
+          <button type="button" className="icon-btn autom-close-btn" onClick={onClose} title="Close" aria-label="Close automations"><CloseIcon /></button>
         </div>
       </header>
 
@@ -946,7 +948,7 @@ export function AutomationsView({
         <>
         {/* Sources collapse to one overview row. Connection details stay nearby
             without making three setup cards the first thing on every visit. */}
-        <SourcesPanel
+        <AutomationSourcesPanel
           sources={[
             { name: "GitHub", status: ghStatus, onClick: () => openSetup(ghStatus.tone === "on" ? "github" : "work-queue") },
             { name: "Linear", status: linStatus, onClick: () => openSetup("linear") },
@@ -1408,53 +1410,6 @@ function NewAutomationPicker({
         </>
       )}
     </div>
-  );
-}
-
-// ── Sources overview ─────────────────────────────────────────────────────────
-
-type SourceOverview = {
-  name: string;
-  status: { tone: "on" | "off" | "warn"; label: string };
-  onClick: () => void;
-};
-
-function SourcesPanel({ sources }: { sources: SourceOverview[] }) {
-  const connected = sources.filter((source) => source.status.tone === "on");
-  const attention = sources.filter((source) => source.status.tone === "warn");
-  const summary = attention.length
-    ? `${attention.length} ${attention.length === 1 ? "source needs" : "sources need"} attention`
-    : connected.length === sources.length
-      ? `${connected.length} sources connected`
-      : connected.length
-        ? `${connected.map((source) => source.name).join(", ")} connected · ${sources.length - connected.length} more`
-        : "Connect GitHub, Linear, and Slack";
-
-  return (
-    <details className="autom-sources-panel">
-      <summary className="autom-sources-summary">
-        <span className="autom-sources-summary-copy">
-          <strong>Sources</strong>
-          <span>{summary}</span>
-        </span>
-        <span className="autom-sources-chevron"><IconChevron /></span>
-      </summary>
-      <div className="autom-sources-list">
-        {sources.map((source) => {
-          const cta = source.status.tone === "off" ? "Connect" : source.status.tone === "warn" ? "Fix" : "Manage";
-          return (
-            <button type="button" className="autom-source-row" onClick={source.onClick} key={source.name}>
-              <span className="autom-source-row-copy">
-                <strong>{source.name}</strong>
-                <span>{source.status.tone === "on" ? "Connected" : source.status.label}</span>
-              </span>
-              <span className="autom-source-row-cta">{cta}</span>
-              <span aria-hidden="true">›</span>
-            </button>
-          );
-        })}
-      </div>
-    </details>
   );
 }
 
@@ -2645,27 +2600,6 @@ function AutomationEditor({
 
 // ── Icons (inline SVG, 18–20px) ─────────────────────────────────────────────
 
-function IconPlus() {
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
-      <path d="M12 5v14M5 12h14" />
-    </svg>
-  );
-}
-function IconClose() {
-  return (
-    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
-      <path d="m6 6 12 12M18 6 6 18" />
-    </svg>
-  );
-}
-function IconChevron() {
-  return (
-    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="m9 18 6-6-6-6" />
-    </svg>
-  );
-}
 function IconBolt() {
   return (
     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

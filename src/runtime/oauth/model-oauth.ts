@@ -57,6 +57,9 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  *  code separate from the human `error_description`. The device poll matches on
  *  the code (e.g. `authorization_pending`) — providers like xAI return a friendly
  *  description ("User has not yet authorized") that would otherwise mask it. */
+export type OAuthRefreshState = "fresh" | "expired" | "transient_failure" | "reconnect_required";
+export interface OAuthRefreshResult { state: OAuthRefreshState; access?: string; error?: string; }
+
 class OAuthTokenError extends Error {
   constructor(readonly status: number, readonly code: string, readonly description: string) {
     super(`OAuth token request failed (${status}): ${description || code || "unknown error"}`);
@@ -378,21 +381,39 @@ async function refreshTokens(provider: ModelOAuthProvider, current: OAuthCredent
  * token — the single-flight guarantee. Returns undefined if the provider has no
  * stored OAuth credential or isn't natively supported.
  */
+export async function refreshModelOAuthState(
+  credsDir: string,
+  providerId: string,
+  label: string = DEFAULT_LABEL,
+): Promise<OAuthRefreshResult> {
+  const provider = getModelOAuthProvider(providerId);
+  if (!provider) return { state: "reconnect_required", error: "Provider does not support OAuth refresh" };
+  try {
+    let found = false;
+    let wasExpired = false;
+    const result = await createCredentialVault(credsDir).modifyRecord(providerId, label, async (current) => {
+      if (!current || current.type !== "oauth") return current;
+      found = true;
+      if (Number(current.expires) > Date.now()) return current;
+      wasExpired = true;
+      const fresh = await refreshTokens(provider, current);
+      return { type: "oauth", access: fresh.access, refresh: fresh.refresh, expires: fresh.expires, refreshedAt: fresh.refreshedAt, ...(fresh.accountId ? { accountId: fresh.accountId } : {}) };
+    });
+    if (!found || !result || result.type !== "oauth") return { state: "reconnect_required", error: "No OAuth credential is stored" };
+    return { state: wasExpired ? "expired" : "fresh", access: result.access };
+  } catch (error) {
+    const reconnect = error instanceof OAuthTokenError && (error.code === "invalid_grant" || error.code === "invalid_token" || error.status === 401);
+    return { state: reconnect ? "reconnect_required" : "transient_failure", error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 export async function refreshModelOAuth(
   credsDir: string,
   providerId: string,
   label: string = DEFAULT_LABEL,
 ): Promise<string | undefined> {
-  const provider = getModelOAuthProvider(providerId);
-  if (!provider) return undefined;
-  // Record-addressed: refresh the SELECTED account's record, so a second account
-  // on the same provider (a different label) is never touched by this rotation.
-  const result = await createCredentialVault(credsDir).modifyRecord(providerId, label, async (current) => {
-    if (!current || current.type !== "oauth") return current;
-    // Someone else already refreshed while we waited for the lock — use theirs.
-    if (Number(current.expires) > Date.now()) return current;
-    const fresh = await refreshTokens(provider, current);
-    return { type: "oauth", access: fresh.access, refresh: fresh.refresh, expires: fresh.expires, refreshedAt: fresh.refreshedAt, ...(fresh.accountId ? { accountId: fresh.accountId } : {}) };
-  });
-  return result?.type === "oauth" ? result.access : undefined;
+  const result = await refreshModelOAuthState(credsDir, providerId, label);
+  if (result.state === "transient_failure") throw new Error(result.error ?? "OAuth refresh temporarily failed");
+  if (result.state === "reconnect_required" && result.error !== "No OAuth credential is stored") throw new Error(result.error ?? "OAuth reconnect required");
+  return result.access;
 }
