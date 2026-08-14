@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
 // Single append-only per-session event log (docs/dramatic-simplification-plan.md,
@@ -28,10 +28,35 @@
 // interleaved in any order on disk; each replay reads only its own kind.
 
 import fs from "node:fs";
+import path from "node:path";
 
 import { normalizedIntermediateText, thinkingTextFromContent, mergeTranscript, type SidecarMessage } from "./transcript-merge.js";
 import type { RuntimeMessage } from "../runtime/types.js";
 import type { AttachmentRef } from "./attachment-store.js";
+
+/**
+ * Union of a persisted base and a runtime's live transcript, such that the result
+ * is never shorter than either input alone. A live session's runtime transcript
+ * extends the persisted base, so the union is just the runtime's (no duplication).
+ * A resumed runtime that reconnected blank and only re-saw post-resume turns
+ * reports a strict prefix of the persisted base, so the union keeps the persisted
+ * copy. Disjoint inputs (a resumed runtime whose new turns aren't in the log yet)
+ * concatenate in log-then-runtime order. Duplicates are collapsed by message
+ * identity, so the same conversation serialized twice never double-appears.
+ */
+export function mergeBases(logged: RuntimeMessage[], runtime: readonly RuntimeMessage[]): RuntimeMessage[] {
+  if (!logged.length) return runtime as RuntimeMessage[];
+  const known = new Set(logged.map((m) => JSON.stringify(m)));
+  const merged = [...logged];
+  for (const m of runtime) {
+    const key = JSON.stringify(m);
+    if (!known.has(key)) {
+      known.add(key);
+      merged.push(m);
+    }
+  }
+  return merged;
+}
 
 /** One appended overlay record: an intermediate-reasoning or tool-activity entry. */
 export interface EventLogEntry extends SidecarMessage {
@@ -68,8 +93,60 @@ export interface AttachmentLogEntry {
   refs: AttachmentRef[];
 }
 
+/**
+ * One appended OUTBOUND attachment record: an attachment an AGENT sent into the
+ * chat (the reverse of a user's composer upload). Unlike `AttachmentLogEntry`
+ * — keyed by user-message text — an agent attachment has no message text to key
+ * on, so it is position/time-anchored like an overlay: `afterMessageCount` +
+ * `createdAt` let `mergeTranscript` interleave it into the transcript at the
+ * point it was emitted, and `replayOutboundAttachments` folds it into a synthetic
+ * assistant message carrying the `bivy_attachment` block the client renders. `id`
+ * is the shared transcript-entry id (also on the live `attachment` event) so the
+ * live entry and its replayed twin don't double up. Bytes live in the
+ * content-addressed AttachmentStore; only the ref travels — same re-findability
+ * guarantee as inbound attachments.
+ */
+export interface OutboundAttachmentLogEntry {
+  bivyKind: "outbound-attachment";
+  createdAt: number;
+  afterMessageCount: number;
+  id: string;
+  ref: AttachmentRef;
+  caption?: string;
+  /** Whether the sender (agent-side `bivy attach --artifact` / `attach_to_chat({
+   *  artifact: true })`) explicitly marked this as a named artifact rather than
+   *  an incidental inline image — see AGENT_ATTACHMENT_BLOCK's `artifact` field.
+   *  Absent = an ordinary attachment; existing callers are unaffected. */
+  artifact?: boolean;
+}
+
+/**
+ * One appended INLINE-IMAGE record: the durable result of the node fetching a
+ * remote `https://` image an agent referenced with markdown syntax
+ * (`![alt](url)`) and storing it in the content-addressed AttachmentStore (see
+ * src/session/inline-image-fetch.ts). A fourth, independent projection — like
+ * `AttachmentLogEntry` it is a lookup table (here url→ref, one entry per URL
+ * rather than text→refs[]) that `mergeTranscript` never sees; the client folds
+ * it in to resolve a `data-remote-src` placeholder (see
+ * packages/core/src/markdown.ts) into a fetchable attachment hash. Persisting
+ * this is what makes a resolved inline image survive a reload instead of
+ * re-fetching (or re-showing unresolved) every time.
+ */
+export interface InlineImageLogEntry {
+  bivyKind: "inline-image";
+  createdAt: number;
+  /** The `https://` URL the markdown referenced. */
+  url: string;
+  ref: AttachmentRef;
+}
+
 /** Any record the log can hold. */
-export type LogRecord = EventLogEntry | BaseLogEntry | AttachmentLogEntry;
+export type LogRecord = EventLogEntry | BaseLogEntry | AttachmentLogEntry | OutboundAttachmentLogEntry | InlineImageLogEntry;
+
+/** Content-block type carried by a folded outbound attachment. MUST match
+ *  `AGENT_ATTACHMENT_BLOCK` in packages/core/src/store-render.ts — the client's
+ *  renderHistory keys on this exact string to render the chip. */
+const AGENT_ATTACHMENT_BLOCK = "bivy_attachment";
 
 function isOverlay(value: unknown): value is EventLogEntry {
   if (!value || typeof value !== "object") return false;
@@ -89,8 +166,33 @@ function isAttachment(value: unknown): value is AttachmentLogEntry {
   return record.bivyKind === "attachment" && typeof record.text === "string" && Array.isArray(record.refs);
 }
 
+function isOutboundAttachment(value: unknown): value is OutboundAttachmentLogEntry {
+  if (!value || typeof value !== "object") return false;
+  const record = value as { bivyKind?: unknown; ref?: unknown; afterMessageCount?: unknown; id?: unknown };
+  return (
+    record.bivyKind === "outbound-attachment" &&
+    typeof record.afterMessageCount === "number" &&
+    typeof record.id === "string" &&
+    !!record.ref &&
+    typeof record.ref === "object" &&
+    typeof (record.ref as { hash?: unknown }).hash === "string"
+  );
+}
+
+function isInlineImage(value: unknown): value is InlineImageLogEntry {
+  if (!value || typeof value !== "object") return false;
+  const record = value as { bivyKind?: unknown; url?: unknown; ref?: unknown };
+  return (
+    record.bivyKind === "inline-image" &&
+    typeof record.url === "string" &&
+    !!record.ref &&
+    typeof record.ref === "object" &&
+    typeof (record.ref as { hash?: unknown }).hash === "string"
+  );
+}
+
 function isRecord(value: unknown): value is LogRecord {
-  return isOverlay(value) || isBase(value) || isAttachment(value);
+  return isOverlay(value) || isBase(value) || isAttachment(value) || isOutboundAttachment(value) || isInlineImage(value);
 }
 
 /**
@@ -111,6 +213,23 @@ export function replayAttachments(entries: readonly LogRecord[]): Array<[string,
     byText.set(entry.text, entry.refs);
   }
   return [...byText.entries()];
+}
+
+/**
+ * Fold inline-image records into a url→ref list: last write wins per URL
+ * (a re-resolved URL — e.g. after a retry — re-keys onto the newest ref),
+ * preserving first-seen order. Mirrors replayAttachments' shape exactly, one
+ * level simpler (a single ref instead of an array) since one URL is one image.
+ */
+export function replayInlineImages(entries: readonly LogRecord[]): Array<[string, AttachmentRef]> {
+  const byUrl = new Map<string, AttachmentRef>();
+  for (const entry of entries) {
+    if (entry.bivyKind !== "inline-image") continue;
+    if (!entry.url) continue;
+    byUrl.delete(entry.url);
+    byUrl.set(entry.url, entry.ref);
+  }
+  return [...byUrl.entries()];
 }
 
 /**
@@ -170,7 +289,32 @@ export function replayExtras(entries: readonly LogRecord[]): SidecarMessage[] {
     if (entry.bivyKind === "intermediate") intermediate.push(entry);
     else if (entry.bivyKind === "tool") tool.push(entry);
   }
-  return [...foldIntermediate(intermediate), ...foldTool(tool)];
+  return [...foldIntermediate(intermediate), ...foldTool(tool), ...replayOutboundAttachments(entries)];
+}
+
+/**
+ * Fold the outbound (agent-sent) attachment records into time-anchored synthetic
+ * assistant messages `mergeTranscript` interleaves into the transcript. Last write
+ * wins per id (a re-emitted id updates in place, matching the log's coalescing),
+ * preserving first-seen order. Each becomes one `bivy_attachment` block the client
+ * renders as a chip/thumbnail.
+ */
+export function replayOutboundAttachments(entries: readonly LogRecord[]): SidecarMessage[] {
+  const byId = new Map<string, OutboundAttachmentLogEntry>();
+  for (const entry of entries) {
+    if (entry.bivyKind !== "outbound-attachment") continue;
+    // set() on an existing key updates the value in place (Map keeps first-seen
+    // insertion order), so last write wins while position is stable. Final
+    // placement is by time in mergeTranscript regardless.
+    byId.set(entry.id, entry);
+  }
+  return [...byId.values()].map((entry) => ({
+    role: "assistant",
+    content: [{ type: AGENT_ATTACHMENT_BLOCK, ref: entry.ref, caption: entry.caption, ...(entry.artifact ? { artifact: true } : {}) }],
+    afterMessageCount: entry.afterMessageCount,
+    createdAt: entry.createdAt,
+    id: entry.id,
+  }));
 }
 
 /**
@@ -188,18 +332,34 @@ export function baseReplay(entries: readonly LogRecord[]): RuntimeMessage[] {
   return base;
 }
 
-/** Parse a JSONL log body into valid records, skipping malformed/blank lines. */
-export function parseLog(body: string): LogRecord[] {
-  const out: LogRecord[] = [];
+export interface EventLogIssue {
+  sessionId: string;
+  operation: "read" | "parse" | "append" | "rewrite";
+  message: string;
+  at: number;
+}
+
+function parseLogDetailed(body: string): { records: LogRecord[]; malformedLines: number } {
+  const records: LogRecord[] = [];
+  let malformedLines = 0;
   for (const line of body.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed) continue;
     try {
       const value = JSON.parse(trimmed);
-      if (isRecord(value)) out.push(value);
-    } catch {}
+      if (isRecord(value)) records.push(value);
+      else malformedLines += 1;
+    } catch {
+      malformedLines += 1;
+    }
   }
-  return out;
+  return { records, malformedLines };
+}
+
+/** Parse a JSONL log body into valid records. Callers that need corruption
+ * diagnostics use EventLog.load, which reports malformed lines via onIssue. */
+export function parseLog(body: string): LogRecord[] {
+  return parseLogDetailed(body).records;
 }
 
 /**
@@ -220,21 +380,62 @@ export class EventLog {
   // snapshot can be diffed (prefix-compared) into a bounded delta. Seeded from disk
   // on first use of a session after a restart.
   private baseKeys = new Map<string, string[]>();
+  private lastIssue?: EventLogIssue;
 
   constructor(
     private dir: string,
     private pathFor: (id: string) => string,
     private redact: (text: string) => string = (t) => t,
     private throttleMs = 500,
+    private onIssue: (issue: EventLogIssue) => void = (issue) => console.error(`[event-log] ${issue.operation} failed for ${issue.sessionId}: ${issue.message}`),
   ) {}
+
+  private report(id: string, operation: EventLogIssue["operation"], error: unknown): void {
+    const issue: EventLogIssue = {
+      sessionId: id,
+      operation,
+      message: error instanceof Error ? error.message : String(error),
+      at: Date.now(),
+    };
+    this.lastIssue = issue;
+    this.onIssue(issue);
+  }
+
+  health(): { ok: boolean; lastIssue?: EventLogIssue; pendingSessions: number } {
+    return { ok: !this.lastIssue, ...(this.lastIssue ? { lastIssue: { ...this.lastIssue } } : {}), pendingSessions: this.pending.size };
+  }
+
+  diskUsage(): { files: number; bytes: number } {
+    if (!fs.existsSync(this.dir)) return { files: 0, bytes: 0 };
+    let files = 0;
+    let bytes = 0;
+    const walk = (dir: string) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.isFile()) {
+          try {
+            files += 1;
+            bytes += fs.statSync(full).size;
+          } catch { /* raced cleanup */ }
+        }
+      }
+    };
+    try { walk(this.dir); } catch (error) { this.report("*", "read", error); }
+    return { files, bytes };
+  }
 
   private load(id: string): LogRecord[] {
     const cached = this.disk.get(id);
     if (cached) return cached;
     let data: LogRecord[] = [];
     try {
-      data = parseLog(fs.readFileSync(this.pathFor(id), "utf8"));
-    } catch {}
+      const parsed = parseLogDetailed(fs.readFileSync(this.pathFor(id), "utf8"));
+      data = parsed.records;
+      if (parsed.malformedLines > 0) this.report(id, "parse", new Error(`${parsed.malformedLines} malformed record(s); valid history was recovered`));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") this.report(id, "read", error);
+    }
     this.disk.set(id, data);
     return data;
   }
@@ -316,6 +517,42 @@ export class EventLog {
     return replayAttachments(this.entries(id));
   }
 
+  /**
+   * Record an agent-sent (outbound) attachment, anchored at the current base
+   * length so history replay interleaves it where it was emitted. Coalesces on
+   * the transcript-entry id so a re-emit of the same attachment updates in place.
+   */
+  appendOutboundAttachment(id: string, entry: { afterMessageCount: number; id: string; ref: AttachmentRef; caption?: string; artifact?: boolean }): void {
+    this.load(id);
+    const record: OutboundAttachmentLogEntry = {
+      bivyKind: "outbound-attachment",
+      createdAt: Date.now(),
+      afterMessageCount: entry.afterMessageCount,
+      id: entry.id,
+      ref: { ...entry.ref },
+      ...(entry.caption ? { caption: entry.caption } : {}),
+      ...(entry.artifact ? { artifact: true } : {}),
+    };
+    this.enqueue(id, `oa:${entry.id}`, record);
+  }
+
+  /**
+   * Record the durable ref for a fetched inline (remote markdown) image,
+   * keyed by its source URL. Coalesces on the URL so a re-resolve (retry after
+   * a transient failure) updates in place rather than appending a duplicate line.
+   */
+  appendInlineImage(id: string, entry: { url: string; ref: AttachmentRef }): void {
+    if (!entry.url) return;
+    this.load(id);
+    const record: InlineImageLogEntry = { bivyKind: "inline-image", createdAt: Date.now(), url: entry.url, ref: { ...entry.ref } };
+    this.enqueue(id, `ii:${entry.url}`, record);
+  }
+
+  /** Replay the inline-image records (disk + pending) into a url→ref list. */
+  readInlineImages(id: string): Array<[string, AttachmentRef]> {
+    return replayInlineImages(this.entries(id));
+  }
+
   /** Replay the overlay entries (disk + pending) into the flat `extras` list. */
   read(id: string): SidecarMessage[] {
     return replayExtras(this.entries(id));
@@ -328,12 +565,21 @@ export class EventLog {
 
   /**
    * The full derived conversation: overlay detail merged into the base transcript.
-   * Prefers the runtime's own live transcript when it has one; otherwise replays the
-   * base persisted in the log (a reopened session on a runtime that can't rebuild it).
-   * This is the single read path — it absorbs the former `mergeConversation` helper.
+   * The base is the UNION of the runtime's live transcript and the base persisted
+   * in the log — never one at the other's expense. A live session's runtime
+   * transcript extends the log (both are the same conversation, the runtime one
+   * message newer), so the union is just the runtime's. But a runtime that resumes
+   * via a blank reconnect (e.g. opencode through the ACP shim: session/load
+   * returns no message history) reports only the turns that ran AFTER the resume —
+   * a truncation of the same conversation, not the whole story. Preferring the
+   * runtime base there would mask every prior turn from every history read, so the
+   * union keeps the log's fuller copy while still surfacing whatever the runtime
+   * alone knows. This is the single read path — it absorbs the former
+   * `mergeConversation` helper.
    */
   deriveHistory(id: string, runtimeBase?: readonly RuntimeMessage[]): RuntimeMessage[] {
-    const base = runtimeBase && runtimeBase.length ? runtimeBase : this.readBase(id);
+    const logged = this.readBase(id);
+    const base = runtimeBase && runtimeBase.length ? mergeBases(logged, runtimeBase) : logged;
     return mergeTranscript(base, this.read(id));
   }
 
@@ -367,7 +613,10 @@ export class EventLog {
       disk.push(...lines);
       batch.clear();
       this.lastFlush.set(id, Date.now());
-    } catch {}
+    } catch (error) {
+      // Do not clear the batch: a later explicit/timer flush can retry it.
+      this.report(id, "append", error);
+    }
   }
 
   /**
@@ -389,7 +638,9 @@ export class EventLog {
       const body = copy.length ? copy.map((e) => JSON.stringify(e)).join("\n") + "\n" : "";
       fs.writeFileSync(this.pathFor(id), this.redact(body));
       this.lastFlush.set(id, Date.now());
-    } catch {}
+    } catch (error) {
+      this.report(id, "rewrite", error);
+    }
   }
 
   /** Cancel any pending write and forget the session (used when it's deleted). */

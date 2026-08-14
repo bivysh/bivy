@@ -1,10 +1,11 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { fileURLToPath } from "node:url";
 import { createCredentialVault } from "./runtime/credential-store.js";
+import { probeAnthropicAccess } from "./runtime/anthropic-preflight.js";
 import { listPiProviders } from "./runtime/pi-oauth.js";
 import { loginModelOAuth, type AuthInteraction, type AuthPrompt, type AuthEvent } from "./runtime/oauth/model-oauth.js";
 import { openBrowser } from "./browser-open.js";
@@ -97,6 +98,17 @@ async function loginApiKey(provider: AuthProvider) {
   if (!apiKey) throw new Error("API key cannot be empty.");
   await createCredentialVault(credsDir).setApiKey(provider.id, apiKey);
   console.log(`Saved API key for ${provider.name} to Bivy's credential vault.`);
+  // B1: validate real access, not just that a key was typed, where a safe probe
+  // exists. A rejected key is reported now instead of surfacing later as an
+  // opaque 401 on the user's first task.
+  if (provider.id === "anthropic") {
+    const probe = await probeAnthropicAccess(apiKey);
+    if (probe.probed && !probe.ok) {
+      console.log(`⚠ ${probe.reason || "The key was saved but Anthropic rejected it."} Double-check the key; re-run 'bivy login' to replace it.`);
+    } else if (probe.probed) {
+      console.log("✓ Verified: the key can reach the Anthropic API.");
+    }
+  }
 }
 
 /** Bridge Pi's AuthInteraction to the terminal (prompt/notify). */

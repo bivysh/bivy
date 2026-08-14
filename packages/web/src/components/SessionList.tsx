@@ -1,14 +1,17 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { githubIssueRefFromSource, primaryPr, repoFromSource, type GithubQueueItem, type PrRef, type RunTerminalSummary } from "@bivy/core";
 import { useAppState } from "../store/useStore.js";
 import { controller } from "../store/useStore.js";
 import { ConfirmDialog, RenameDialog } from "./AppDialog.js";
-import { isUnseen, statusClass, statusLabel } from "../sessionStatus.js";
+import { attentionRank, isUnseen, statusClass, statusLabel } from "../sessionStatus.js";
 import { SourceGlyph } from "./SourceMark.js";
 import { classifySource, CLI_SOURCE, type SourceKind } from "../sessionSource.js";
 import { rowHint } from "../runEvidence.js";
+import { sessionDateGroup } from "../sessionPresentation.js";
+import { CheckIcon, CloseIcon, MoreIcon } from "./UiIcons.js";
 
 /** The leading indicator on a session row: a tinted source tile carrying the
  *  trigger's glyph, with the live status as a small dot badge on its corner.
@@ -207,7 +210,7 @@ function RowMenu({ sessionId, name, isRepo, prs }: { sessionId: string; name: st
           setOpen((v) => !v);
         }}
       >
-        ⋯
+        <MoreIcon />
       </button>
       {renaming && (
         <RenameDialog
@@ -227,14 +230,17 @@ function RowMenu({ sessionId, name, isRepo, prs }: { sessionId: string; name: st
           onConfirm={() => { controller.deleteSession(sessionId); setDeleting(false); }}
         />
       )}
-      {open && (
-        <div className="action-sheet" role="dialog" aria-label={`Actions for ${name}`} onClick={(e) => e.stopPropagation()}>
+      {/* The mobile sidebar is transformed into an off-canvas drawer. A fixed
+          descendant of a transformed element is fixed to that element, not the
+          viewport, so keep the full-screen sheet at the document root. */}
+      {open && createPortal(
+        <div className="action-sheet" role="dialog" aria-modal="true" aria-label={`Actions for ${name}`} onClick={(e) => e.stopPropagation()}>
           <div className="action-sheet-backdrop" onClick={close} />
           <div className="action-sheet-body">
             <div className="action-sheet-head">
               <span className="action-sheet-title">{name}</span>
               <button className="action-sheet-close" onClick={close} aria-label="Close">
-                ×
+                <CloseIcon />
               </button>
             </div>
             <button className="action-sheet-item" onClick={rename} disabled={prBusy}>
@@ -265,7 +271,8 @@ function RowMenu({ sessionId, name, isRepo, prs }: { sessionId: string; name: st
               Delete
             </button>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
@@ -314,6 +321,13 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
     return () => clearInterval(id);
   }, []);
 
+  // Live `bivy run` rows only arrive via terminal.list on the connected node.
+  // Pull them once on mount (and whenever the user lands back on the list) so a
+  // currently-running agent appears without requiring a manual node re-click.
+  useEffect(() => {
+    controller.refreshSessions();
+  }, []);
+
   // Mirrors NodeSwitcher's own visibility rule (App.tsx: `!controller.direct`)
   // rather than gating on node count — even a single-node relay account still
   // benefits from seeing which (possibly ephemeral) node a session lives on.
@@ -352,10 +366,27 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
       if (repoFilter && repo !== repoFilter) return false;
       return !q || `${s.name} ${s.source ?? ""} ${s.agentName ?? ""} ${repo}`.toLowerCase().includes(q);
     });
-    // Newest activity first (parity with the legacy drawer), stable within ties.
-    // Sort a copy so the store's array identity is untouched.
-    return [...matched].sort((a, b) => toMs(b.updatedAt) - toMs(a.updatedAt));
+    // Sessions that need a human float to the top (an agent blocked on an
+    // approval/question, then a finished run you haven't seen) — the old
+    // separate "inbox" is gone, so the list itself has to surface what needs
+    // you. Within the same attention rank it's newest-activity-first, so the
+    // calm majority still reads like the legacy drawer. Sort a copy so the
+    // store's array identity is untouched.
+    return [...matched].sort(
+      // Trial-locked stubs sink to the bottom — they can't be opened, so they
+      // shouldn't crowd the sessions that need attention. Otherwise: needs-you
+      // first, then newest activity.
+      (a, b) =>
+        (a.locked ? 1 : 0) - (b.locked ? 1 : 0) ||
+        attentionRank(b) - attentionRank(a) ||
+        toMs(b.updatedAt) - toMs(a.updatedAt),
+    );
   }, [sessions, query, repoFilter, nodeFilter]);
+
+  // Sessions the control plane withheld because the account is past its free
+  // lifetime-session trial (see listClientSessions). Their presence drives the
+  // paywall banner and per-row lock treatment below.
+  const lockedCount = useMemo(() => sessions.filter((s) => s.locked).length, [sessions]);
 
   // Search spans every session; pagination only bounds the unfiltered list, so a
   // query always reveals all of its matches, never just the first page.
@@ -371,7 +402,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
   }, [query, repoFilter, nodeFilter]);
 
   const activeFilterCount = (repoFilter ? 1 : 0) + (nodeFilter ? 1 : 0);
-  const filterSummary = [nodeFilter ? nodeName(nodeFilter) : !controller.direct ? "All nodes" : null, repoFilter || null].filter(Boolean).join(" · ");
+  const filterSummary = [nodeFilter ? nodeName(nodeFilter) : !controller.direct ? "All machines" : null, repoFilter || null].filter(Boolean).join(" · ");
   const emptyText = query.trim() || repoFilter || nodeFilter
     ? "No matching sessions."
     : "No sessions yet. Use ＋ New to start one.";
@@ -413,7 +444,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
             <div className="session-filter-menu" role="menu">
               {!controller.direct && (
                 <div className="session-filter-section">
-                  <div className="session-filter-head">Node</div>
+                  <div className="session-filter-head">Machine</div>
                   <button
                     className="session-filter-item"
                     role="menuitemradio"
@@ -423,11 +454,11 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
                       setFilterOpen(false);
                     }}
                   >
-                    <span>All nodes</span>
-                    {!nodeFilter && <span className="session-filter-check">✓</span>}
+                    <span>All machines</span>
+                    {!nodeFilter && <span className="session-filter-check"><CheckIcon size={15} /></span>}
                   </button>
                   {nodes.length === 0 ? (
-                    <div className="session-filter-empty">No nodes</div>
+                    <div className="session-filter-empty">No machines</div>
                   ) : (
                     nodes.map((n) => (
                       <button
@@ -441,7 +472,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
                         }}
                       >
                         <span>{n.name || n.id}</span>
-                        {n.id === nodeFilter && <span className="session-filter-check">✓</span>}
+                        {n.id === nodeFilter && <span className="session-filter-check"><CheckIcon size={15} /></span>}
                       </button>
                     ))
                   )}
@@ -459,7 +490,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
                   }}
                 >
                   <span>All repositories</span>
-                  {!repoFilter && <span className="session-filter-check">✓</span>}
+                  {!repoFilter && <span className="session-filter-check"><CheckIcon size={15} /></span>}
                 </button>
                 {repoOptions.length === 0 && <div className="session-filter-empty">No GitHub repos</div>}
                 {repoOptions.map((repo) => (
@@ -474,7 +505,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
                     }}
                   >
                     <span>{repo}</span>
-                    {repo === repoFilter && <span className="session-filter-check">✓</span>}
+                    {repo === repoFilter && <span className="session-filter-check"><CheckIcon size={15} /></span>}
                   </button>
                 ))}
               </div>
@@ -486,8 +517,24 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
           )}
         </div>
       </div>
+      {lockedCount > 0 && (
+        <div className="trial-wall" role="note">
+          <div className="trial-wall-text">
+            <strong>{lockedCount} session{lockedCount === 1 ? "" : "s"} hidden</strong>
+            <span>
+              You've reached the free Bivy Cloud limit. Subscribe to Pro to view and
+              control every session from anywhere — or run your own self-hosted Bivy
+              server to keep everything free.
+            </span>
+          </div>
+          <button className="trial-wall-cta" type="button" onClick={() => void controller.startCheckout()}>
+            Upgrade to Pro
+          </button>
+        </div>
+      )}
       {filtered.length === 0 && filteredRuns.length === 0 && <div className="session-empty">{emptyText}</div>}
       <ul>
+        {filteredRuns.length > 0 && <li className="session-group-label" role="separator">Running</li>}
         {filteredRuns.map((t) => {
           const title = t.name || t.label || t.agent || "Terminal session";
           const meta = runMeta(t);
@@ -510,16 +557,62 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
             </li>
           );
         })}
-        {visible.map((s) => {
+        {visible.map((s, index) => {
+          const group = attentionRank(s) > 0 ? "Needs attention" : sessionDateGroup(s.updatedAt);
+          const previous = index > 0 ? visible[index - 1] : undefined;
+          const previousGroup = previous
+            ? attentionRank(previous) > 0 ? "Needs attention" : sessionDateGroup(previous.updatedAt)
+            : null;
+          const groupHeading = group !== previousGroup
+            ? <li className="session-group-label" role="separator">{group}</li>
+            : null;
+          // Trial-locked stub: no content to show and not openable. Render a muted
+          // lock row that routes to checkout instead of opening the session.
+          if (s.locked) {
+            return (
+              <Fragment key={s.sessionId}>
+                {groupHeading}
+                <li className="session-row">
+                <button
+                  className="session-item locked"
+                  type="button"
+                  aria-label="Locked session — upgrade to view"
+                  onClick={() => void controller.startCheckout()}
+                >
+                  <span className="session-lock" aria-hidden>🔒</span>
+                  <span className="session-body">
+                    <span className="session-title-row">
+                      <span className="session-name">Locked session</span>
+                      {relTime(s.updatedAt) && <span className="session-age">{relTime(s.updatedAt)}</span>}
+                    </span>
+                    <span className="session-meta">
+                      <span className="row-hint warn">Subscribe to Pro to view</span>
+                      {nodeName(s.nodeId) ? ` · ${nodeName(s.nodeId)}` : ""}
+                    </span>
+                  </span>
+                </button>
+                </li>
+              </Fragment>
+            );
+          }
           const meta = sessionMeta(s, nodeName(s.nodeId));
           const unseen = isUnseen(s);
           const label = statusLabel(s);
           const src = classifySource(s.source);
           // A one-word exception hint on failed / waiting-on-you runs, so those
           // rows pop in a long list; null (no extra text) for the calm majority.
-          const hint = rowHint(runEvidence?.get(s.sessionId));
+          // A run-evidence hint (the specific "what": e.g. an approval prompt or
+          // a failed check) wins; otherwise, since a needs-action or unseen row
+          // has floated to the top, spell out why with its status label so the
+          // list itself says what needs you — no separate inbox required.
+          const hint =
+            rowHint(runEvidence?.get(s.sessionId)) ??
+            (attentionRank(s) > 0 ? { text: statusLabel(s), tone: "warn" as const } : null);
+          const failedLaunch = s.pendingLaunch && s.status === "failed";
           return (
-            <li key={s.sessionId} className="session-row">
+            <Fragment key={s.sessionId}>
+              {groupHeading}
+              <li className="session-row">
               <button
                 className={`session-item${s.sessionId === activeSessionId ? " active" : ""}`}
                 onClick={() => onPick(s.sessionId, s.path, s.nodeId)}
@@ -544,10 +637,16 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
                   )}
                 </span>
               </button>
-              {(controller.direct || !s.nodeId || s.nodeId === currentNodeId) && (
+              {failedLaunch ? (
+                <span className="pending-launch-actions">
+                  <button type="button" onClick={() => void controller.retryPendingLaunch(s.sessionId)}>Retry</button>
+                  <button type="button" onClick={() => void controller.dismissPendingLaunch(s.sessionId)}>Dismiss</button>
+                </span>
+              ) : (controller.direct || !s.nodeId || s.nodeId === currentNodeId) && (
                 <RowMenu sessionId={s.sessionId} name={s.name} isRepo={Boolean(repoFromSource(s.source))} prs={s.prs} />
               )}
-            </li>
+              </li>
+            </Fragment>
           );
         })}
       </ul>

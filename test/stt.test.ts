@@ -34,11 +34,12 @@ const settings = JSON.parse(fs.readFileSync(path.join(dir, "settings.json"), "ut
 assert.equal(settings.approvalMode, "autonomous", "unrelated settings must be preserved");
 assert.equal(settings.sttProvider, "openai");
 
-// Keys are stored encrypted in the vault (not plaintext) and resolve back
-setSttKey(dir, "groq", "gsk_test_key");
+// Keys use the unified encrypted model credential vault and resolve back.
+await setSttKey(dir, "groq", "gsk_test_key");
 assert.equal(await resolveSttKey(dir, "groq"), "gsk_test_key");
-const secretsRaw = fs.readFileSync(path.join(dir, "secrets.json"), "utf8");
-assert.ok(!secretsRaw.includes("gsk_test_key"), "STT key must not be written in plaintext");
+const credentialsRaw = fs.readFileSync(path.join(dir, "credentials", "auth.enc"), "utf8");
+assert.ok(!credentialsRaw.includes("gsk_test_key"), "STT key must not be written in plaintext");
+assert.ok(!fs.existsSync(path.join(dir, "secrets.json")), "new voice keys must not create a second secret vault entry");
 assert.equal(sttKeyId("groq"), "stt.groq");
 
 // Config status reflects which keys exist and the preferred provider
@@ -53,7 +54,7 @@ assert.equal(await resolveSttKey(dir, "openai"), "sk-env-fallback");
 delete process.env.OPENAI_API_KEY;
 
 // Removing a key clears it
-assert.equal(removeSttKey(dir, "groq"), true);
+assert.equal(await removeSttKey(dir, "groq"), true);
 assert.equal(await resolveSttKey(dir, "groq"), undefined);
 
 // transcribeAudio surfaces a clear, actionable error when no key is available

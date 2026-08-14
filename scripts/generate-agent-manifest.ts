@@ -1,8 +1,8 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// Regenerate bin/agent-manifest.json from CLI_AGENT_SPECS (the single source of
-// truth in src/runtime/index.ts). The plain-JS terminal CLI (bin/bivy.mjs) can't
+// Regenerate bin/agent-manifest.json from AGENT_PROFILES (the single source of
+// truth in src/agents/profiles.ts). The plain-JS terminal CLI (bin/bivy.mjs) can't
 // import the TypeScript runtime, so it reads this committed JSON instead. A unit
 // test (test/agent-manifest-sync.test.ts) asserts the file matches the specs, so
 // forgetting to run this after editing a spec fails CI rather than shipping drift.

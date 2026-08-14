@@ -1,14 +1,74 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { controller, useAppState } from "../store/useStore.js";
 import { ConfirmDialog, RenameDialog } from "./AppDialog.js";
 import { ForkSheet } from "./ForkSheet.js";
 import { sessionReferenceText, writeClipboard } from "../clipboard.js";
 import { routePath } from "../router.js";
+import { useModalEscape } from "../modalStack.js";
 
 // See SessionList's identical constant/rationale.
 const PR_BUSY_TIMEOUT_MS = 20000;
+
+// Copyable `bivy resume <id>` command surfaced by "Continue in terminal
+// locally". Run on any machine with the bivy CLI (same account), it relaunches
+// the session through the agent's native resume (`claude --resume`, `codex
+// resume`) or points back at the web app — the "take this conversation with
+// you" sibling of "Continue in terminal" (which attaches the live TUI here).
+function ResumeCommandDialog({
+  sessionId,
+  name,
+  onCancel,
+}: {
+  sessionId: string;
+  name: string;
+  onCancel: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useModalEscape(onCancel);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  const titleId = useId();
+  const copy = async () => {
+    if (!(await writeClipboard(`bivy resume ${sessionId}`))) return;
+    setCopied(true);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setCopied(false), 1800);
+  };
+  return createPortal(
+    <div className="app-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="app-dialog-backdrop" onClick={onCancel} />
+      <div className="app-dialog-body">
+        <h3 id={titleId}>Continue in terminal locally</h3>
+        <p>
+          Run this in a terminal on any machine with the bivy CLI to pick up “{name}”
+          outside the web app:
+        </p>
+        <div className="repo-connect-command resume-command">
+          <code>{`bivy resume ${sessionId}`}</code>
+          <button
+            type="button"
+            className={`repo-connect-copy${copied ? " is-copied" : ""}`}
+            onClick={copy}
+            aria-label={copied ? "Command copied" : "Copy resume command"}
+          >
+            {copied ? "Copied" : "Copy"}
+          </button>
+        </div>
+        <p className="repo-connect-alt">
+          It resumes the same conversation — saved sessions relaunch via the agent&rsquo;s native
+          resume where supported, otherwise it opens the session here in the web app.
+        </p>
+        <div className="app-dialog-actions">
+          <button className="btn" onClick={onCancel}>Close</button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
 
 /**
  * Header dot-menu for the active session. Rendered as an inline popover
@@ -25,7 +85,11 @@ export function SessionMenu({
   worktree,
   branch,
   sessionFile,
-  onOpenTerminal,
+  executionProfile,
+  effectiveProtection,
+  trustMode,
+  auditHealth,
+  eventLogHealth,
   onContinueInTerminal,
 }: {
   sessionId: string;
@@ -37,9 +101,16 @@ export function SessionMenu({
   worktree?: string;
   branch?: string;
   sessionFile?: string;
-  /** Open a terminal attached to this session. Undefined (item hidden) when the
-   *  node is offline. */
-  onOpenTerminal?: () => void;
+  executionProfile?: string;
+  effectiveProtection?: string;
+  trustMode?: string;
+  auditHealth?: {
+    storage: "healthy" | "missing" | "corrupt" | "unreadable";
+    writes: "healthy" | "unknown" | "degraded";
+    failedWrites: number;
+    corruptLines: number;
+  };
+  eventLogHealth?: { state: "healthy" | "degraded"; operation?: "read" | "parse" | "append" | "rewrite"; at?: number };
   /** "Continue in terminal": hand this session to the runtime's interactive TUI.
    *  Undefined (item hidden) when the runtime lacks `interactiveTui` or the node
    *  is offline — the reverse of the terminal's "continue in chat". */
@@ -49,6 +120,7 @@ export function SessionMenu({
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [forkOpen, setForkOpen] = useState(false);
+  const [resumeOpen, setResumeOpen] = useState(false);
   const [prBusy, setPrBusy] = useState(false);
   const { prResult, error } = useAppState();
   const prBusyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -134,6 +206,7 @@ export function SessionMenu({
         />
       )}
       {forkOpen && <ForkSheet sessionId={sessionId} onClose={() => setForkOpen(false)} />}
+      {resumeOpen && <ResumeCommandDialog sessionId={sessionId} name={name} onCancel={() => setResumeOpen(false)} />}
       {deleting && (
         <ConfirmDialog
           title="Delete session?"
@@ -146,19 +219,22 @@ export function SessionMenu({
       )}
       {open && (
         <div className="session-actions-menu" role="menu">
-          {onOpenTerminal && (
-            <button
-              className="session-actions-item"
-              role="menuitem"
-              onClick={() => { close(); onOpenTerminal(); }}
-            >
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <rect x="3" y="4" width="18" height="16" rx="2" />
-                <path d="m7 9 3 3-3 3" />
-                <path d="M13 15h4" />
-              </svg>
-              Terminal
-            </button>
+          <div className="session-actions-context" aria-label="Session protection context">
+            {executionProfile && <span><strong>Execution</strong>{executionProfile}</span>}
+            {effectiveProtection && <span><strong>Protection</strong>{effectiveProtection}</span>}
+            {trustMode && <span><strong>Connection</strong>{trustMode}</span>}
+          </div>
+          {auditHealth && (["corrupt", "unreadable"].includes(auditHealth.storage) || auditHealth.writes === "degraded") && (
+            <div className="session-actions-audit-warning" role="status">
+              <strong>Audit evidence degraded</strong>
+              <span>{auditHealth.writes === "degraded" ? `${auditHealth.failedWrites} audit write${auditHealth.failedWrites === 1 ? "" : "s"} failed.` : `Audit storage is ${auditHealth.storage}.`}</span>
+            </div>
+          )}
+          {eventLogHealth?.state === "degraded" && (
+            <div className="session-actions-audit-warning" role="status">
+              <strong>Session history persistence degraded</strong>
+              <span>The last {eventLogHealth.operation ?? "storage"} operation failed. History may be incomplete.</span>
+            </div>
           )}
           <button className="session-actions-item" role="menuitem" onClick={copyReference} disabled={prBusy}>
             Copy session reference
@@ -179,6 +255,15 @@ export function SessionMenu({
               Continue in terminal
             </button>
           )}
+          <button
+            className="session-actions-item"
+            role="menuitem"
+            onClick={() => { close(); setResumeOpen(true); }}
+            disabled={prBusy}
+            title="Copy a `bivy resume` command to run on your own machine"
+          >
+            Continue in terminal locally…
+          </button>
           {isRepo && (
             <button className="session-actions-item" role="menuitem" onClick={refreshPrStatus} disabled={prBusy}>
               {prBusy ? "Checking GitHub status…" : "Update GitHub status"}

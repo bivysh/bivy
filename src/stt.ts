@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // Speech-to-text (voice input) — shared logic for the node server and the CLI.
 //
@@ -14,6 +14,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { SecretVault } from "./secrets.js";
+import { createCredentialStore } from "./runtime/credentials.js";
+import { createCredentialVault } from "./credentials/store.js";
 
 export type SttProvider = "groq" | "openai";
 
@@ -95,24 +97,35 @@ export function setSttProvider(appDir: string, provider: SttProvider): SttProvid
   return provider;
 }
 
-/** Resolve a provider key: stored vault secret first, then env-var fallback. */
+/** Resolve voice through the same provider credential used by agents/models. */
 export async function resolveSttKey(appDir: string, provider: SttProvider): Promise<string | undefined> {
-  const fromVault = await new SecretVault(appDir).resolve(sttKeyId(provider)).catch(() => undefined);
-  if (fromVault) return fromVault;
+  const credential = await createCredentialStore(path.join(appDir, "credentials")).getCredential(provider).catch(() => undefined);
+  if (credential?.kind === "api_key" && credential.token.trim()) return credential.token.trim();
+  // Migration fallback: old releases wrote a separate stt.<provider> secret.
+  // New writes never use it; retaining this read prevents an abrupt voice outage.
+  const legacy = await new SecretVault(appDir).resolve(sttKeyId(provider)).catch(() => undefined);
+  if (legacy) return legacy;
   const env = process.env[STT_PROVIDERS[provider].keyEnv];
   return env && env.trim() ? env.trim() : undefined;
 }
 
-export function setSttKey(appDir: string, provider: SttProvider, key: string): void {
+/** Compatibility API for `bivy voice key`: writes the unified default key. */
+export async function setSttKey(appDir: string, provider: SttProvider, key: string): Promise<void> {
   if (!isSttProvider(provider)) throw new Error(`Unknown speech provider: ${provider}`);
   const value = String(key || "").trim();
   if (!value) throw new Error("API key cannot be empty.");
-  new SecretVault(appDir).setLocal(sttKeyId(provider), value, `${STT_PROVIDERS[provider].label} speech-to-text key`);
+  await createCredentialVault(path.join(appDir, "credentials")).setApiKey(provider, value);
 }
 
-export function removeSttKey(appDir: string, provider: SttProvider): boolean {
+/** Compatibility API: removing a voice key removes that provider's unified key. */
+export async function removeSttKey(appDir: string, provider: SttProvider): Promise<boolean> {
   if (!isSttProvider(provider)) throw new Error(`Unknown speech provider: ${provider}`);
-  return new SecretVault(appDir).delete(sttKeyId(provider));
+  const vault = createCredentialVault(path.join(appDir, "credentials"));
+  const existed = Boolean(await vault.read(provider));
+  await vault.delete(provider);
+  // Also remove a legacy duplicate if one exists.
+  const legacy = new SecretVault(appDir).delete(sttKeyId(provider));
+  return existed || legacy;
 }
 
 export interface SttProviderStatus {

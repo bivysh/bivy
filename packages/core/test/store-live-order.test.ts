@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { describe, expect, it } from "vitest";
 import { SessionStore } from "../src/index.js";
@@ -52,6 +52,30 @@ describe("live-stream reasoning/tool order (reducer)", () => {
       { role: "assistant", text: "I'll create the file." },
       { role: "tool", tool: "t1" },
       { role: "assistant", text: "Done." },
+    ]);
+  });
+
+  it("Codex item boundary seals commentary before the following tool", () => {
+    // The app-server exposes each completed agentMessage item as a boundary.
+    // Codex can emit many of these in one turn, so there is deliberately no new
+    // message_start between them; the cumulative prefix still has to produce
+    // separate bubbles around tool activity.
+    const store = play([
+      { type: "message_start", message: { role: "assistant", content: "" } },
+      { type: "message_update", message: { role: "assistant", content: "First note." } },
+      { type: "message_boundary", message: { role: "assistant", content: "First note." } },
+      { type: "tool_call", toolName: "bash", input: {}, toolCallId: "t1" },
+      { type: "message_update", message: { role: "assistant", content: "First note.\n\nSecond note." } },
+      { type: "message_boundary", message: { role: "assistant", content: "First note.\n\nSecond note." } },
+      { type: "tool_call", toolName: "bash", input: {}, toolCallId: "t2" },
+      { type: "message_end", message: { role: "assistant", content: "First note.\n\nSecond note." } },
+      { type: "agent_end" },
+    ]);
+    expect(shape(store)).toEqual([
+      { role: "assistant", text: "First note." },
+      { role: "tool", tool: "t1" },
+      { role: "assistant", text: "Second note." },
+      { role: "tool", tool: "t2" },
     ]);
   });
 

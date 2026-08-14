@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -158,6 +158,18 @@ async function main() {
   const clientSaw: string[] = [];
   client.on("message", (d) => clientSaw.push(d.toString()));
   await delay(300);
+
+  // Active Run updates use the same relay connection as content-free control
+  // hints. Clients receive only id/revision and then fetch canonical state.
+  const hintRes = await fetch(`http://localhost:${RELAY_PORT}/internal/run-updated`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${SECRET}` },
+    body: JSON.stringify({ accountId: loginA.json.account.id, id: "work_1", revision: "rev_1" }),
+  });
+  expect(hintRes.ok, "control plane published a Run update hint");
+  await delay(200);
+  const hint = clientSaw.map((text) => JSON.parse(text)).find((message) => message.t === "run.updated");
+  expect(hint?.id === "work_1" && hint?.revision === "rev_1", "account client received the content-free Run update");
 
   // 1. Client -> node encrypted frame.
   const clientPlaintext = JSON.stringify({ kind: "prompt", text: "summarize my repo" });

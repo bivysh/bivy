@@ -1,35 +1,50 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { type GithubQueueItem } from "@bivy/core";
+import { deriveActivation, cancelAutomationRun, deriveArtifacts, fetchAutomationRun, recordProductMetric, retryAutomationRun, type AccountAutomationRun, type GithubQueueItem } from "@bivy/core";
 import { useAppState } from "./store/useStore.js";
 import { SessionList } from "./components/SessionList.js";
 import { ChatView } from "./components/ChatView.js";
 import { Composer } from "./components/Composer.js";
 import { ApprovalStack } from "./components/ApprovalCard.js";
 import { QuestionStack } from "./components/QuestionCard.js";
+import { TurnAttentionCard } from "./components/TurnAttentionCard.js";
 import { UpdatePrompt } from "./components/UpdatePrompt.js";
 import { SetupNotice } from "./components/SetupNotice.js";
 import { NodeSwitcher } from "./components/NodeSwitcher.js";
 import { closeSettings, getSettingsRoute, openSettings, setSettingsView, subscribeSettingsRoute } from "./settingsRoute.js";
+import { closeAutomations, getAutomationsRoute, openAutomations, setAutomationsSection, subscribeAutomationsRoute } from "./automationsRoute.js";
+// openAutomations({ setup }) is the sole entry for source connection lifecycle.
+import { closeRun, getRunRoute, openRun, subscribeRunRoute } from "./runRoute.js";
+import { AutomationsView } from "./components/AutomationsView.js";
+import { RunDetails } from "./components/RunDetails.js";
 import { SessionMenu } from "./components/SessionMenu.js";
+import { TuiLockedView } from "./components/TuiLockedView.js";
 import { GithubPill } from "./components/GithubPill.js";
 import { RunPill } from "./components/RunPill.js";
 import { classifySource } from "./sessionSource.js";
-import { indexRunEvidence } from "./runEvidence.js";
-import { ChangesCard } from "./components/ChangesCard.js";
+import { indexRunEvidence, failingCheckNames } from "./runEvidence.js";
+import { SessionChangesSheet, countUniqueEditedFiles } from "./components/SessionChangesSheet.js";
+import { ArtifactsSheet } from "./components/ArtifactsSheet.js";
 import { ErrorToast } from "./components/ErrorToast.js";
 import { NoticeToast } from "./components/NoticeToast.js";
 import { Settings } from "./components/Settings.js";
 import { EphemeralSheet } from "./components/Ephemeral.js";
+import { FirstRunModelAuthSheet } from "./components/FirstRunModelAuth.js";
 import { NodePicker } from "./components/Pickers.js";
 import { ConnectRunner } from "./components/ConnectRunner.js";
+import { buildInboxItems } from "./components/Inbox.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "./flags.js";
+import { PwaLifecycleNotice } from "./components/PwaLifecycleNotice.js";
+import { clearQueuedPrompts, markPromptQueued, setFollowupQueuedPrompts, setTurnActive } from "./pwaLifecycle.js";
 // The terminal pulls in xterm + its GPU/search/link addons (~a third of the JS
 // bundle). It's an on-demand overlay, so load it lazily to keep the initial app
 // paint fast; the chunk is fetched the first time the user opens a terminal.
 const TerminalOverlay = lazy(() =>
   import("./components/Terminal.js").then((m) => ({ default: m.TerminalOverlay })),
+);
+const ReadinessChecklist = lazy(() =>
+  import("./components/ReadinessChecklist.js").then((m) => ({ default: m.ReadinessChecklist })),
 );
 import { useEdgeSwipe } from "./useEdgeSwipe.js";
 import { controller } from "./store/useStore.js";
@@ -42,13 +57,29 @@ export function App() {
   // `/settings/:view` route the same way useAppState mirrors the session
   // store, and is null whenever the URL is on anything else (Settings closed).
   const settingsRoute = useSyncExternalStore(subscribeSettingsRoute, getSettingsRoute);
-  // Returning from a GitHub App redirect reloads the SPA — re-open Settings on
-  // the GitHub view so the user sees the flow finish.
+  // Automations is a first-class destination reached from the sidebar foot,
+  // URL-backed the same overlay way Settings is (see automationsRoute.ts).
+  const automationsOpen = useSyncExternalStore(subscribeAutomationsRoute, getAutomationsRoute);
+  // The routable Run detail screen (/runs/:runId), URL-backed the same overlay
+  // way Settings and Automations are (see runRoute.ts). Null whenever the URL is
+  // on anything else. A copied Run URL restores this directly on cold load.
+  const runRoute = useSyncExternalStore(subscribeRunRoute, getRunRoute);
+  // Returning from a GitHub App redirect reloads the SPA — finish in Automations
+  // (the sole place for source connections), not Settings.
   const githubAppReturning = state.githubApp?.returning;
   useEffect(() => {
-    if (githubAppReturning) openSettings("github");
+    if (githubAppReturning) openAutomations({ setup: "github" });
   }, [githubAppReturning]);
   const [ephemeralOpen, setEphemeralOpen] = useState(false);
+  // Full-session file changes sheet — opened from the run pill / summary sheet
+  // ("N files edited"), not a card stacked above the composer.
+  const [changesSheetOpen, setChangesSheetOpen] = useState(false);
+  // Session/Run artifacts sheet — opened from the run pill ("N artifacts"),
+  // mirroring the changes sheet above. The projection itself is a pure fold
+  // over the transcript the store already holds (see deriveArtifacts) — no
+  // extra round trip to the node.
+  const [artifactsSheetOpen, setArtifactsSheetOpen] = useState(false);
+  const artifacts = useMemo(() => deriveArtifacts(state.transcript), [state.transcript]);
   const [terminalOpen, setTerminalOpen] = useState(false);
   /** A live `bivy run` PTY selected from the sidebar; null means open the
    * ordinary shell terminal for the active chat/node. */
@@ -60,6 +91,10 @@ export function App() {
   /** "Continue in terminal": the overlay hands the active chat session off to
    *  the runtime's interactive TUI (the reverse of "continue in chat"). */
   const [terminalTui, setTerminalTui] = useState(false);
+  /** A live run-terminal the user picked from the sidebar, before they choose
+   *  Open terminal vs Use chat. The first screen for an in-terminal session —
+   *  mirrors TuiLockedView for chat sessions that already have a TUI open. */
+  const [pendingRunTerm, setPendingRunTerm] = useState<{ termId: string; nodeId?: string } | null>(null);
   // Node picker for the standalone terminal button — only shown when there's
   // more than one node to choose from (see openStandaloneTerminal).
   const [terminalNodePicker, setTerminalNodePicker] = useState(false);
@@ -67,22 +102,69 @@ export function App() {
   // the moment it opens — see #388. Hosted-only: the queue is account-level
   // control-plane state, unavailable in direct mode.
   const [githubQueue, setGithubQueue] = useState<GithubQueueItem[] | null>(null);
+  // Automation runs feed the Inbox's authoritative automation items (runs that
+  // need attention or failed). Same account-level, hosted-only, polled-at-shell
+  // shape as the GitHub queue above.
+  const [automationRuns, setAutomationRuns] = useState<AccountAutomationRun[] | null>(null);
+  // Ids of attention items the user has already looked at (opened the mobile
+  // session drawer since they arrived). Drives the red dot on the ☰ burger:
+  // it lights only for attention that appeared while the list was out of view.
+  // In-memory by design — a reload re-surfaces current attention, which is the
+  // safe default (better to re-show than to silently swallow a blocked agent).
+  const [seenAttn, setSeenAttn] = useState<Set<string>>(() => new Set());
   const refreshGithubQueue = useCallback(() => {
     if (controller.direct || !state.signedIn) return;
     controller.fetchGithubQueue().then(setGithubQueue).catch(() => {});
   }, [state.signedIn]);
+  const refreshAutomationRuns = useCallback(() => {
+    if (controller.direct || !state.signedIn) return;
+    controller.fetchAutomationRuns().then(setAutomationRuns).catch(() => {});
+  }, [state.signedIn]);
   useEffect(() => {
     if (controller.direct || !state.signedIn) return;
     refreshGithubQueue();
+    refreshAutomationRuns();
     const id = setInterval(() => {
-      if (document.visibilityState !== "hidden") refreshGithubQueue();
+      if (document.visibilityState !== "hidden") { refreshGithubQueue(); refreshAutomationRuns(); }
     }, 30000);
     return () => clearInterval(id);
-  }, [refreshGithubQueue]);
+  }, [refreshGithubQueue, refreshAutomationRuns, state.signedIn]);
   // sessionId → the run that produced it, joined from the queue's evidence.
   // Feeds the sidebar's exception hints and the run pill's outcome. Declared up
   // here (not by activeSession below) so the hook stays above any early return.
   const runEvidence = useMemo(() => indexRunEvidence(githubQueue), [githubQueue]);
+  const inboxItems = useMemo(() => buildInboxItems({
+    sessions: state.sessions,
+    approvals: state.approvals,
+    questions: state.questions,
+    nodes: state.nodes,
+    queue: githubQueue ?? [],
+    runs: automationRuns ?? [],
+  }), [state.sessions, state.approvals, state.questions, state.nodes, githubQueue, automationRuns]);
+  // Something needs the user that they haven't seen yet → the ☰ burger wears a
+  // red dot. Opening the session drawer (openDrawer) marks the current set seen.
+  const attnUnseen = inboxItems.some((it) => !seenAttn.has(it.id));
+  const openDrawer = useCallback(() => {
+    setDrawerOpen(true);
+    setSeenAttn(new Set(inboxItems.map((it) => it.id)));
+  }, [inboxItems]);
+  // Attention must remain visible when Bivy is a background tab or installed
+  // PWA. The Inbox is authoritative; mirror only its content-free count into
+  // browser chrome and the OS app badge.
+  useEffect(() => {
+    const count = inboxItems.length;
+    document.title = count > 0 ? `(${count}) Bivy` : "Bivy";
+    const badge = navigator as Navigator & {
+      setAppBadge?: (contents?: number) => Promise<void>;
+      clearAppBadge?: () => Promise<void>;
+    };
+    const update = count > 0 ? badge.setAppBadge?.(count) : badge.clearAppBadge?.();
+    void update?.catch(() => {}); // unsupported/blocked badge APIs are non-fatal
+    return () => {
+      document.title = "Bivy";
+      void badge.clearAppBadge?.().catch(() => {});
+    };
+  }, [inboxItems.length]);
   // Signed in on the hosted app but no node yet: poll for a newly-installed
   // machine so the empty state advances to the live app the moment the node
   // dials in — the user shouldn't have to hit "Refresh nodes" after running the
@@ -107,6 +189,20 @@ export function App() {
     });
   }, []);
   const online = state.status === "online";
+  useEffect(() => setTurnActive(state.working), [state.working]);
+  useEffect(() => { if (online) clearQueuedPrompts(); }, [online]);
+  const queuedFollowupCount = Object.values(state.followupsBySession).reduce((total, items) => total + items.length, 0);
+  useEffect(() => setFollowupQueuedPrompts(queuedFollowupCount), [queuedFollowupCount]);
+  const activation = useMemo(() => deriveActivation({
+    accountSignedIn: controller.direct ? true : state.signedIn,
+    machineOnline: state.status === "online" ? true : state.status === "offline" ? false : undefined,
+    agentInstalled: state.runtimes.length
+      ? state.runtimes.some((runtime) => String(runtime.status ?? "available") === "available" && runtime.supportTier === "supported")
+      : undefined,
+    credentialValid: state.activationReadiness ? state.activationReadiness.credential.ok : undefined,
+    repositoryReady: state.activationReadiness ? state.activationReadiness.repository.ok : undefined,
+    agentAnswered: state.transcript.some((entry) => entry.role === "assistant" && Boolean(entry.text) && !entry.tool) ? true : undefined,
+  }), [state.activationReadiness, state.runtimes, state.signedIn, state.status, state.transcript]);
   // Latch: has this client ever had a live connection this run? Once true, we
   // treat the WHOLE transient reconnect window as still-composable — not just the
   // brief "reconnecting" beat, but the redial's "connecting" and any re-pair
@@ -143,10 +239,16 @@ export function App() {
   // send fail with an error, lock the composer and show a banner offering to
   // jump to the terminal or take the session back into chat.
   const activeTuiLocked = Boolean(state.activeSessionId && state.tuiSessions.includes(state.activeSessionId));
-  const canCompose = (online || transientReconnect) && !activeTuiLocked;
+  // When the node is an offline-but-resumable ephemeral machine (a suspended
+  // Sprite we hold the key for), keep the composer usable: sending IS the resume
+  // gesture — controller.sendPrompt wakes the machine and replays the message.
+  // A picked-but-unlaunched ephemeral runner also keeps the composer usable:
+  // sending IS the launch — controller.sendPrompt provisions the machine, binds
+  // the session, and replays the message once it's online (no launch button).
+  const canCompose = (online || transientReconnect || controller.isCurrentNodeResumable() || Boolean(state.draftEphemeralConfig)) && !activeTuiLocked;
 
   // Left-edge swipe opens the sidebar drawer; swipe-left closes it (mobile).
-  useEdgeSwipe({ isOpen: drawerOpen, onOpen: () => setDrawerOpen(true), onClose: () => setDrawerOpen(false) });
+  useEdgeSwipe({ isOpen: drawerOpen, onOpen: openDrawer, onClose: () => setDrawerOpen(false) });
 
   // Run an inline notice action button (e.g. a node-emitted "/new"). Declared
   // before any early return so hook order stays stable across renders (stable
@@ -208,25 +310,59 @@ export function App() {
   // transport, so a cross-node pick must switch (and wait for the new node to
   // come online) before opening the overlay, the same way openSessionOnNode
   // does for chat sessions.
+  //
+  // We do NOT open the terminal overlay immediately: a live run is a
+  // single-writer conversation, so the first screen is the same choice the
+  // TUI-locked chat path shows — Open terminal / Use chat (when takeover is
+  // supported). Auto-opening the PTY was the regression that skipped that
+  // handoff and hid "Continue in chat".
   const pickTerminal = useCallback(
     (termId: string, nodeId?: string) => {
-      const open = () => {
-        setTerminalTarget(termId);
+      const select = () => {
+        setPendingRunTerm({ termId, nodeId });
+        setTerminalOpen(false);
+        setTerminalTarget(null);
         setTerminalStandalone(false);
         setTerminalTui(false);
-        setTerminalOpen(true);
       };
       setDrawerOpen(false);
       if (!controller.direct && nodeId && nodeId !== state.currentNodeId) {
-        void controller.connectToNode(nodeId).then(open).catch((err) => {
+        void controller.connectToNode(nodeId).then(select).catch((err) => {
           controller.store.setError(err instanceof Error ? err.message : String(err));
         });
         return;
       }
-      open();
+      select();
     },
     [state.currentNodeId],
   );
+
+  const openPendingRunTerminal = useCallback(() => {
+    if (!pendingRunTerm) return;
+    setTerminalTarget(pendingRunTerm.termId);
+    setTerminalStandalone(false);
+    setTerminalTui(false);
+    setTerminalOpen(true);
+    // Keep pendingRunTerm so closing the overlay returns to the handoff screen
+    // rather than dumping the user on an empty chat.
+  }, [pendingRunTerm]);
+
+  const takeoverPendingRun = useCallback(() => {
+    if (!pendingRunTerm) return;
+    // Clear the handoff immediately so the next openSession (from
+    // terminal.takeover.result) paints the chat rather than this screen.
+    const termId = pendingRunTerm.termId;
+    setPendingRunTerm(null);
+    controller.sendTerminal({ kind: "terminal.takeover", termId });
+  }, [pendingRunTerm]);
+
+  // Drop the run-terminal handoff if its live PTY disappears (exited/takeover).
+  useEffect(() => {
+    if (!pendingRunTerm) return;
+    if (!state.runTerminals.some((t) => t.termId === pendingRunTerm.termId)) {
+      setPendingRunTerm(null);
+    }
+  }, [pendingRunTerm, state.runTerminals]);
 
   // "Continue in terminal": open the overlay bound to the active chat session in
   // interactive-TUI mode. The overlay sends `terminal.open.tui`, which resumes
@@ -247,12 +383,26 @@ export function App() {
     if (state.activeSessionId) controller.closeSessionTui(state.activeSessionId);
   }, [state.activeSessionId]);
 
+  // Push taps and copied inbox links use the same `attention` target. Wait until
+  // the owning session's live card has arrived, then reveal and focus it.
+  useEffect(() => {
+    const attention = new URLSearchParams(location.search).get("attention");
+    if (!attention || !state.activeSessionId) return;
+    const target = document.getElementById(`attention-${encodeURIComponent(attention)}`);
+    if (!target) return;
+    target.scrollIntoView({ block: "center" });
+    target.setAttribute("tabindex", "-1");
+    target.focus({ preventScroll: true });
+  }, [state.activeSessionId, state.approvals, state.questions, state.turnAttentions]);
+
   // Auth/setup gates, derived from reactive store fields (not read live off
   // localStorage) so signing in swaps the sign-in screen for the app shell the
   // instant the token lands — no page reload needed. `direct` (local/loopback
   // mode) never gates on a control-plane session.
-  const needsAuth = !controller.direct && !state.signedIn;
-  const needsNode = !controller.direct && state.signedIn && !state.currentNodeId;
+  const needsAuth = !controller.direct && !controller.solo && !state.signedIn;
+  // Picking an ephemeral runner counts as having chosen where to run, even
+  // before its machine exists — show the composer, not the onboarding screen.
+  const needsNode = !controller.direct && state.signedIn && !state.currentNodeId && !state.draftEphemeralConfig;
 
   // Hosted control plane, not signed in yet: show the sign-in screen instead of a
   // dead shell. Once signed in we always render the normal app — a node is picked
@@ -296,6 +446,11 @@ export function App() {
     | { interactiveTui?: boolean }
     | undefined;
   const canContinueInTerminal = online && Boolean(activeRuntimeCaps?.interactiveTui);
+  const activeRuntime = state.runtimes.find((r) => r.id === activeSession?.runtimeId);
+  const executionProfile = activeSession?.executionProfile === "isolated_customer_cloud" ? "Isolated customer-cloud"
+    : activeSession?.executionProfile === "trusted_workstation" ? "Trusted workstation"
+      : activeSession?.executionProfile === "restricted" ? "Restricted" : undefined;
+  const trustMode = controller.direct ? "Direct to Machine" : "E2E relay-blind";
 
   // Approval/question cards render inline in the active session's chat scroll, so
   // only show the ones that belong to that session. Items are still kept globally
@@ -304,7 +459,7 @@ export function App() {
   // no sessionId are treated as global and shown everywhere.
   const activeApprovals = state.approvals.filter((a) => !a.sessionId || a.sessionId === state.activeSessionId);
   const activeQuestions = state.questions.filter((q) => !q.sessionId || q.sessionId === state.activeSessionId);
-
+  const activeTurnAttention = state.turnAttentions.find((a) => a.sessionId === state.activeSessionId);
   return (
     <div className="app">
       <aside className={`sidebar${drawerOpen ? " open" : ""}`}>
@@ -334,6 +489,7 @@ export function App() {
             <button
               className="ghost-btn"
               onClick={() => {
+                setPendingRunTerm(null);
                 controller.newSession();
                 closeDrawer();
               }}
@@ -346,6 +502,7 @@ export function App() {
         <SessionList
           runEvidence={runEvidence}
           onPick={(id, path, nodeId) => {
+            setPendingRunTerm(null);
             controller.openSessionOnNode(id, path, nodeId);
             closeDrawer();
           }}
@@ -354,6 +511,20 @@ export function App() {
         {/* One entry point now — a ChatGPT-style gear. Theme, GitHub Queue, and
             everything else moved inside the Settings modal. */}
         <div className="sidebar-foot">
+          <button
+            className="settings-gear automations-launch"
+            onClick={() => {
+              openAutomations();
+              closeDrawer();
+            }}
+            title="Automations"
+            aria-label="Automations"
+          >
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M13 2 3 14h9l-1 8 10-12h-9z" />
+            </svg>
+            <span>Automations</span>
+          </button>
           <button
             className="settings-gear"
             onClick={() => {
@@ -367,7 +538,7 @@ export function App() {
               <circle cx="12" cy="12" r="3" />
               <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
             </svg>
-            <span className="settings-gear-label">Settings</span>
+            <span>Settings</span>
           </button>
         </div>
       </aside>
@@ -376,8 +547,13 @@ export function App() {
 
       <main className={`main${needsNode ? " needs-node" : ""}`}>
         <header className="topbar">
-          <button className="icon-btn only-mobile" onClick={() => setDrawerOpen(true)} aria-label="Open sessions">
+          <button
+            className="icon-btn only-mobile burger-btn"
+            onClick={openDrawer}
+            aria-label={attnUnseen ? "Open sessions — something needs your attention" : "Open sessions"}
+          >
             ☰
+            {attnUnseen && <span className="attn-dot" aria-hidden />}
           </button>
           <div className="topbar-title">
             <div className="topbar-title-row">
@@ -399,7 +575,7 @@ export function App() {
             {/* Node stays below the title as a plain subtitle line — but it's
                 still the real switcher button underneath, so it's selectable
                 on a brand-new/draft session exactly as it is on a live one. */}
-            {!controller.direct && <NodeSwitcher />}
+            {!controller.direct && !controller.solo && <NodeSwitcher />}
           </div>
           <div className="topbar-actions">
             {state.activeSessionId && (
@@ -436,7 +612,11 @@ export function App() {
                 worktree={activeSession?.worktree}
                 branch={activeSession?.branch}
                 sessionFile={activeSession?.path}
-                onOpenTerminal={online ? () => { setTerminalTarget(null); setTerminalStandalone(false); setTerminalTui(false); setTerminalOpen(true); } : undefined}
+                executionProfile={executionProfile}
+                effectiveProtection={[activeSession?.sandbox, activeSession?.approvalMode, activeRuntime?.protectionLabel].filter(Boolean).join(" · ") || undefined}
+                trustMode={trustMode}
+                auditHealth={activeSession?.auditHealth}
+                eventLogHealth={activeSession?.eventLogHealth}
                 onContinueInTerminal={canContinueInTerminal ? continueInTerminal : undefined}
               />
             )}
@@ -456,6 +636,39 @@ export function App() {
           </div>
         )}
 
+        {/* The connected node is running an older Bivy than the latest release.
+            One tap runs `bivy update` on the node (it restarts on the new build;
+            this banner clears itself once the socket reconnects up to date). */}
+        {state.nodeUpdate && (
+          <div className="banner update" role="status">
+            <span className="banner-text">
+              This machine runs Bivy {state.nodeUpdate.current} — {state.nodeUpdate.latest} is available.
+            </span>
+            <button
+              className="banner-action"
+              onClick={() => controller.updateNode()}
+              disabled={state.nodeUpdating}
+            >
+              {state.nodeUpdating ? "Updating…" : "Update this machine"}
+            </button>
+          </div>
+        )}
+
+        {!state.activeSessionId && state.transcript.length === 0 && state.sessions.length === 0 && (
+          <Suspense fallback={null}>
+            <ReadinessChecklist
+              activation={activation}
+              onRemediate={{
+                connect_machine: () => openSettings("nodes"),
+                install_agent: () => (document.querySelector(".agent-pill") as HTMLButtonElement | null)?.click(),
+                authenticate_credential: () => openSettings("providers"),
+                grant_repository: () => (document.querySelector(".repo-pill") as HTMLButtonElement | null)?.click(),
+                run_starter_task: () => (document.querySelector(".composer-input") as HTMLTextAreaElement | null)?.focus(),
+              }}
+            />
+          </Suspense>
+        )}
+
         {needsNode && (
           <div className="connect-runner-scroll">
             <ConnectRunner
@@ -468,116 +681,251 @@ export function App() {
           </div>
         )}
 
-        <ChatView
-          entries={state.transcript}
-          working={state.working}
-          workingLabel={state.workingLabel}
-          // Whether there's no real session behind the current view — driven by
-          // the session store rather than the URL, since the URL now moves to
-          // `/settings/*` while Settings is open without changing (or clearing)
-          // whatever session is open behind it.
-          draftRoute={!state.activeSessionId}
-          sessionKey={state.activeSessionId}
-          collapsed={collapsed}
-          onAction={runCommand}
-          footer={
-            <>
-              <ApprovalStack approvals={activeApprovals} onResolve={(id, ok) => controller.resolveApproval(id, ok)} />
-              <QuestionStack
-                questions={activeQuestions}
-                onAnswer={(id, sessionId, answers) => controller.answerQuestion(id, sessionId, answers)}
-                onCancel={(id, sessionId) => controller.cancelQuestion(id, sessionId)}
+        {pendingRunTerm && !terminalOpen ? (
+          (() => {
+            const run = state.runTerminals.find((t) => t.termId === pendingRunTerm.termId);
+            const runName = run?.name || run?.label || run?.agent || "Terminal session";
+            const runNode = state.nodes.find((n) => n.id === (run?.nodeId || pendingRunTerm.nodeId));
+            // Same capability gate the Terminal overlay uses for "Continue in chat".
+            const runtime = state.runtimes.find((r) => r.id === String(run?.agent || ""));
+            const caps = runtime?.capabilities as { sessionDiscovery?: boolean } | undefined;
+            const canTakeover = Boolean(run?.sessionId) || Boolean(caps?.sessionDiscovery);
+            return (
+              <TuiLockedView
+                sessionName={runName}
+                nodeLabel={runNode?.name}
+                online={state.status !== "offline"}
+                onOpenTerminal={openPendingRunTerminal}
+                onUseChat={canTakeover ? takeoverPendingRun : undefined}
               />
-            </>
+            );
+          })()
+        ) : activeTuiLocked ? (
+          <TuiLockedView
+            sessionName={state.activeTitle}
+            nodeLabel={activeSessionNode?.name}
+            online={state.status !== "offline"}
+            onOpenTerminal={continueInTerminal}
+            onUseChat={takeoverInChat}
+          />
+        ) : (
+          <>
+            <ChatView
+              entries={state.transcript}
+              working={state.working}
+              workingLabel={state.workingLabel}
+              // Whether there's no real session behind the current view — driven by
+              // the session store rather than the URL, since the URL now moves to
+              // `/settings/*` while Settings is open without changing (or clearing)
+              // whatever session is open behind it.
+              draftRoute={!state.activeSessionId}
+              opening={state.opening}
+              sessionKey={state.activeSessionId}
+              collapsed={collapsed}
+              onAction={runCommand}
+              footer={
+                <>
+                  <ApprovalStack approvals={activeApprovals} onResolve={(id, ok) => controller.resolveApproval(id, ok)} />
+                  <QuestionStack
+                    questions={activeQuestions}
+                    onAnswer={(id, sessionId, answers) => controller.answerQuestion(id, sessionId, answers)}
+                    onCancel={(id, sessionId) => controller.cancelQuestion(id, sessionId)}
+                  />
+                  {activeTurnAttention && (
+                    <TurnAttentionCard
+                      attention={activeTurnAttention}
+                      onResolve={(sessionId, action) => controller.resolveTurnAttention(sessionId, action)}
+                    />
+                  )}
+                </>
+              }
+            />
+
+            {changesSheetOpen && (
+              <SessionChangesSheet
+                history={state.changesHistory}
+                checks={activeSession ? runEvidence.get(activeSession.sessionId)?.checks?.map((c) => ({ name: c.name, status: c.status })) : undefined}
+                onClose={() => setChangesSheetOpen(false)}
+              />
+            )}
+
+            {artifactsSheetOpen && (
+              <ArtifactsSheet artifacts={artifacts} onClose={() => setArtifactsSheetOpen(false)} />
+            )}
+
+            <div className="composer-gh">
+              {/* The run card now stands for every active session — an automation
+                  trigger, a fork, or a plain hand-opened one — carrying whatever
+                  applies: source, live status, token usage, fork lineage, file
+                  edits, and (in its sheet) the run evidence and GitHub links.
+                  Only a draft (no session yet) falls back to the bare GithubPill. */}
+              {activeSession && activeRunSource ? (
+                <RunPill
+                  anchorId={`attention-${activeSession.sessionId}`}
+                  source={activeRunSource}
+                  statusClass={statusClass(activeSession)}
+                  statusLabel={statusLabel(activeSession)}
+                  gh={state.github}
+                  evidence={runEvidence.get(activeSession.sessionId)}
+                  finishedAt={activeSession.finishedAt}
+                  usage={state.usage}
+                  forkedFrom={activeForkedFrom}
+                  filesEdited={countUniqueEditedFiles(state.changesHistory)}
+                  onOpenChanges={() => setChangesSheetOpen(true)}
+                  artifactsCount={artifacts.length}
+                  onOpenArtifacts={() => setArtifactsSheetOpen(true)}
+                  onOpenRun={(runId) => openRun(runId)}
+                  onRecover={(kind) => {
+                    // C2: recover a terminal run using existing capabilities. fix/retry
+                    // send a targeted prompt to this session; fork branches it off.
+                    const sid = activeSession.sessionId;
+                    const ev = runEvidence.get(sid);
+                    const failed = ev ? failingCheckNames(ev) : [];
+                    if (kind === "fork") { void controller.forkSession(sid); return; }
+                    if (kind === "fix") {
+                      controller.sendPrompt(failed.length
+                        ? `The deterministic checks failed (${failed.join(", ")}). Please investigate the failures and fix them, then confirm the checks pass.`
+                        : "This run did not finish cleanly. Please investigate what went wrong and fix it.");
+                      return;
+                    }
+                    // retry
+                    controller.sendPrompt(failed.length
+                      ? `Please re-run the ${failed.join(", ")} check(s) and address anything that still fails.`
+                      : "Please re-run the project checks and address anything that fails.");
+                  }}
+                />
+              ) : (
+                <GithubPill gh={state.github} />
+              )}
+              {/* Slash-command pill, pushed to the right so it sits top-right over
+                  the composer on the same band as the GitHub context. Tapping it
+                  (re)initializes a closed session so its commands can be fetched,
+                  then opens the composer's "/" menu. Shown on a draft too: the
+                  selected runtime's advertised commands (folded onto its runtime
+                  row when the draft warms it) are offered there, so the menu is a
+                  real affordance rather than dead — an agent with none still gets
+                  the "no slash commands" empty state instead of a hidden button. */}
+              {(state.activeSessionId || !activeTuiLocked) && (
+                <button
+                  type="button"
+                  className="slash-pill"
+                  onClick={() => controller.openSlashCommands()}
+                  disabled={!canCompose}
+                  title="Slash commands"
+                  aria-label="Slash commands"
+                >
+                  <svg className="slash-glyph" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+                    <path d="M11 3 5 13" />
+                  </svg>
+                </button>
+              )}
+            </div>
+
+            <PwaLifecycleNotice status={state.status} hasCachedTranscript={state.transcript.length > 0} />
+            <Composer
+              state={state}
+              disabled={!canCompose}
+              disabledHint={state.status === "offline" ? "Not connected" : "Connecting…"}
+              working={state.working}
+              onSend={(text, attachments) => {
+                if (state.status !== "online") markPromptQueued();
+                setTurnActive(true); // close the pre-`working` update-activation race
+                controller.sendPrompt(text, attachments);
+              }}
+              onAbort={() => controller.abort()}
+              onError={(message) => controller.store.setError(message)}
+            />
+          </>
+        )}
+      </main>
+
+      {automationsOpen && (
+        <AutomationsView
+          state={state}
+          section={automationsOpen.section}
+          onSectionChange={setAutomationsSection}
+          githubQueue={githubQueue}
+          onRefreshGithubQueue={refreshGithubQueue}
+          onOpenRun={(runId) => {
+            // Land on the Run route: dismiss Automations onto the session behind
+            // it first (replace, no extra history), then push /runs/:runId so
+            // Back returns to that session rather than stacking two overlays.
+            closeAutomations(state.activeSessionId ? { kind: "session", id: state.activeSessionId } : { kind: "new" });
+            openRun(runId);
+          }}
+          onClose={() =>
+            closeAutomations(
+              state.activeSessionId ? { kind: "session", id: state.activeSessionId } : { kind: "new" },
+            )
+          }
+          onOpenSession={(sessionId) => {
+            // Deep-link a run into the chat session it produced. Resolve the
+            // owning node/path from the unified session list so a cross-node
+            // session opens the same way the sidebar and Settings do; then
+            // dismiss Automations onto that session's route.
+            const s = state.sessions.find((x) => x.sessionId === sessionId);
+            controller.openSessionOnNode(sessionId, s?.path, s?.nodeId);
+            closeAutomations({ kind: "session", id: sessionId });
+            closeDrawer();
+          }}
+        />
+      )}
+
+      {runRoute && (
+        <RunDetails
+          runId={runRoute.runId}
+          load={(id) => fetchAutomationRun(controller.local, id)}
+          onCancel={async (id) => { await cancelAutomationRun(controller.local, id); refreshAutomationRuns(); refreshGithubQueue(); }}
+          onRetry={async (id) => { await retryAutomationRun(controller.local, id); refreshAutomationRuns(); refreshGithubQueue(); }}
+          onReauthenticate={async (provider, machineId, reason) => {
+            const targetNode = machineId || state.currentNodeId;
+            if (!targetNode) throw new Error("The Machine for this Run is not available.");
+            await controller.connectToNode(targetNode);
+            controller.store.setNeedsModelAuth({ nodeId: targetNode, provider, reason });
+          }}
+          resolveMachineName={(machineId) => state.nodes.find((n) => n.id === machineId)?.name || undefined}
+          isSessionResolvable={(sessionId) => state.sessions.some((s) => s.sessionId === sessionId)}
+          onReceiptReviewed={() => { void recordProductMetric(controller.local, "receipt_reviewed", matchMedia("(max-width: 700px)").matches ? "mobile" : "desktop").catch(() => {}); }}
+          onOpenSession={(sessionId) => {
+            const s = state.sessions.find((x) => x.sessionId === sessionId);
+            controller.openSessionOnNode(sessionId, s?.path, s?.nodeId);
+            closeRun({ kind: "session", id: sessionId });
+            closeDrawer();
+          }}
+          onClose={() =>
+            closeRun(
+              state.activeSessionId ? { kind: "session", id: state.activeSessionId } : { kind: "new" },
+            )
           }
         />
-
-        <ChangesCard changes={state.changes} checkpoints={state.checkpoints} />
-
-        <div className="composer-gh">
-          {/* The run card now stands for every active session — an automation
-              trigger, a fork, or a plain hand-opened one — carrying whatever
-              applies: source, live status, token usage, fork lineage, and (in
-              its sheet) the run evidence and GitHub links. Only a draft (no
-              session yet) falls back to the bare GithubPill for repo context. */}
-          {activeSession && activeRunSource ? (
-            <RunPill
-              source={activeRunSource}
-              statusClass={statusClass(activeSession)}
-              statusLabel={statusLabel(activeSession)}
-              gh={state.github}
-              evidence={runEvidence.get(activeSession.sessionId)}
-              finishedAt={activeSession.finishedAt}
-              usage={state.usage}
-              forkedFrom={activeForkedFrom}
-            />
-          ) : (
-            <GithubPill gh={state.github} />
-          )}
-          {/* Slash-command pill, pushed to the right so it sits top-right over
-              the composer on the same band as the GitHub context. Tapping it
-              (re)initializes a closed session so its commands can be fetched,
-              then opens the composer's "/" menu. Hidden on a draft (new
-              session) — there's no attached session to advertise commands yet. */}
-          {state.activeSessionId && (
-            <button
-              type="button"
-              className="slash-pill"
-              onClick={() => controller.openSlashCommands()}
-              disabled={!canCompose}
-              title="Slash commands"
-              aria-label="Slash commands"
-            >
-              <svg className="slash-glyph" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
-                <path d="M11 3 5 13" />
-              </svg>
-            </button>
-          )}
-        </div>
-
-        {activeTuiLocked && (
-          <div className="composer-tui-lock" role="status">
-            <span className="composer-tui-lock-text">This session is open in the terminal (TUI).</span>
-            <div className="composer-tui-lock-actions">
-              <button type="button" className="ghost-btn" onClick={continueInTerminal}>
-                Go to terminal
-              </button>
-              <button type="button" className="btn primary" onClick={takeoverInChat}>
-                Take over in chat
-              </button>
-            </div>
-          </div>
-        )}
-
-        <Composer
-          state={state}
-          disabled={!canCompose}
-          disabledHint={activeTuiLocked ? "Open in the terminal — take over to chat here" : state.status === "offline" ? "Not connected" : "Connecting…"}
-          working={state.working}
-          onSend={(text, attachments) => controller.sendPrompt(text, attachments)}
-          onAbort={() => controller.abort()}
-          onError={(message) => controller.store.setError(message)}
-        />
-      </main>
+      )}
 
       {settingsRoute && (
         <Settings
           state={state}
           view={settingsRoute.view}
           onViewChange={setSettingsView}
-          githubQueue={githubQueue}
-          onRefreshGithubQueue={refreshGithubQueue}
-          onPickSession={(id, path, nodeId) => {
-            controller.openSessionOnNode(id, path, nodeId);
-            // openSessionOnNode already navigates to `/sessions/:id` itself;
-            // this just resolves Settings back to that same route.
-            closeSettings({ kind: "session", id });
-            closeDrawer();
-          }}
           onImported={(id) => {
             // importNativeSession already opened + navigated to the new session
             // (with its resume ref); just dismiss Settings onto that route.
             closeSettings({ kind: "session", id });
+            closeDrawer();
+          }}
+          onRedirectToAutomations={(view) => {
+            // Integrations + automation/policy sections moved to the Automations
+            // hub. A stale `/settings/:view` deep link bounces there: source
+            // connections open the connect sheet; the rest land on their tab.
+            closeSettings(
+              state.activeSessionId ? { kind: "session", id: state.activeSessionId } : { kind: "new" },
+            );
+            if (view === "github" || view === "linear" || view === "slack") {
+              openAutomations({ setup: view });
+            } else if (view === "queue" || view === "rulesets") {
+              openAutomations({ section: view });
+            } else {
+              // Other stale sections (e.g. the removed Webhooks tab) land on Overview.
+              openAutomations();
+            }
             closeDrawer();
           }}
           onClose={() =>
@@ -588,6 +936,7 @@ export function App() {
         />
       )}
       {ephemeralOpen && <EphemeralSheet onClose={() => setEphemeralOpen(false)} firstRun={needsNode} />}
+      {state.needsModelAuth && <FirstRunModelAuthSheet state={state} />}
       {terminalNodePicker && (
         <NodePicker
           state={state}
@@ -608,6 +957,9 @@ export function App() {
               setTerminalTarget(null);
               setTerminalStandalone(false);
               setTerminalTui(false);
+              // Leaving a run-terminal overlay returns to the handoff screen when
+              // that run was the selection; clear it only when the user dismisses
+              // the handoff itself (new session / other pick).
             }}
           />
         </Suspense>

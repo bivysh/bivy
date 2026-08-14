@@ -1,8 +1,9 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useModalEscape } from "../modalStack.js";
+import { CheckIcon, CloseIcon } from "./UiIcons.js";
 
 const FOCUSABLE = 'a[href],button:not(:disabled),textarea:not(:disabled),input:not(:disabled),select:not(:disabled),[tabindex]:not([tabindex="-1"])';
 
@@ -87,7 +88,7 @@ export function Sheet({
           <span className="sheet-title">{title}</span>
           {headExtra}
           <button className="sheet-close" onClick={onClose} aria-label="Close">
-            ×
+            <CloseIcon />
           </button>
         </div>
         <div className="sheet-content">{children}</div>
@@ -123,7 +124,7 @@ export function PickerItem({
   return (
     <div className={`picker-item-row${active ? " active" : ""}`}>
       <button className="picker-item" onClick={onClick} disabled={disabled}>
-        <span className="picker-check">{active ? "✓" : ""}</span>
+        <span className="picker-check">{active ? <CheckIcon size={15} /> : null}</span>
         <span className="picker-main">
           <span className="picker-name">{title}</span>
           {meta != null && <span className="picker-meta">{meta}</span>}

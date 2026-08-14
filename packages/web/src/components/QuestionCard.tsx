@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, useState } from "react";
 import type { UserQuestionRequest } from "@bivy/core";
@@ -121,7 +121,7 @@ function QuestionCard({
   };
 
   return (
-    <div className="question-card">
+    <div id={`attention-${encodeURIComponent(request.id)}`} className="question-card">
       {request.questions.map((q, qi) => {
         const picked = selected[qi] || [];
         return (

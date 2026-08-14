@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // RelayTransport — the hosted / remote path used by app.bivy.sh. Faithful port
 // of connect()/mintClientTicket()/sendFrame()/onLinkReady() and the pairing
@@ -25,6 +25,17 @@ export interface RelayTransportOptions {
 }
 
 const MAX_BACKOFF = 15000;
+// Refreshing our view of the node (sessions/models/runtimes/terminals) is worth
+// doing the first time a socket reaches the node, and again if the node keeps
+// flapping for a while — but NOT once per flap. The relay re-sends `peer.online`
+// to this client every time the node re-attaches, and a cold-starting or
+// unstable node can flap many times a minute. Re-firing the whole command burst
+// on each one piles counted frames onto this single long-lived client socket
+// until the relay's per-socket limiter (RELAY_MAX_CLIENT_MESSAGES_PER_MINUTE)
+// trips and closes it — which surfaces as "Rate limit exceeded" in the composer
+// even though the user never sent anything. Throttle the refresh to at most once
+// per this window per socket; queued user frames still flush() on every event.
+const RESYNC_THROTTLE_MS = 15000;
 // A transient reconnect (node blip, brief radio drop, a single-use ticket that
 // raced) recovers on its own via scheduleReconnect(), so surfacing every failed
 // attempt as a toast just spams the user with "ticket request failed" noise
@@ -70,6 +81,7 @@ export class RelayTransport implements Transport {
   /** Consecutive failed connect attempts, reset the moment a socket goes live.
    *  Gates the transient-vs-real error toast (see CONNECT_FAILURES_BEFORE_ALERT). */
   private connectFailures = 0;
+  private hasReachedNode = false;
   private curKey: RoomKey | null = null;
   private devicePromise: Promise<DeviceKeypair> | null = null;
   private readonly sendQueue: string[] = [];
@@ -87,6 +99,16 @@ export class RelayTransport implements Transport {
 
   private cpBase(): string {
     return (this.store.cp || (typeof location !== "undefined" ? location.origin : "")).replace(/\/$/, "");
+  }
+
+  private reportRemoteReconnect(): void {
+    if (!this.store.s) return; // account-free pairing has no hosted collector
+    const mobile = typeof navigator !== "undefined" && /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
+    void this.fetchImpl(`${this.cpBase()}/account/product-events`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${this.store.s}` },
+      body: JSON.stringify({ event: "remote_reconnect", client: mobile ? "mobile" : "desktop" }),
+    }).catch(() => {});
   }
 
   private setStatus(s: ConnectionStatus): void {
@@ -129,6 +151,14 @@ export class RelayTransport implements Transport {
     );
   }
 
+  /** Account-free ("solo") relay creds for the current node, if this device was
+   *  paired via a solo QR. Present means: skip the control-plane ticket mint and
+   *  dial `/client?room=&roomToken=` directly. */
+  private soloCreds(): { room: string; roomToken: string } | null {
+    const rec = this.store.solo()[this.store.cur];
+    return rec && rec.room && rec.roomToken ? rec : null;
+  }
+
   private async mintClientTicket(): Promise<{ ticket: string; relayUrl: string | null }> {
     const res = await this.fetchImpl(`${this.cpBase()}/client/relay-ticket`, {
       method: "POST",
@@ -145,25 +175,33 @@ export class RelayTransport implements Transport {
     this.closedByUs = false;
     this.setStatus("connecting");
     this.curKey = await this.keyFor(this.store.cur);
-    let ticket: string;
-    let relayUrl: string | null;
-    try {
-      ({ ticket, relayUrl } = await this.mintClientTicket());
-    } catch (e) {
-      // Stay quiet on a transient failure — scheduleReconnect() will retry and
-      // the "Reconnecting…" banner already communicates the state. Only surface a
-      // toast once we've failed repeatedly, i.e. it's a real outage, not a blip.
-      this.connectFailures += 1;
-      if (this.connectFailures >= CONNECT_FAILURES_BEFORE_ALERT) {
-        this.handlers.onError?.((e as Error)?.message || "ticket mint failed");
+    // Account-free ("solo") admission has no control plane to mint a ticket
+    // against: authorize onto the relay with the room id + bearer token from the
+    // pairing QR. The pairing handshake (pair.hello over the relay) is unchanged.
+    const solo = this.soloCreds();
+    let ticket = "";
+    let relayUrl: string | null = null;
+    if (!solo) {
+      try {
+        ({ ticket, relayUrl } = await this.mintClientTicket());
+      } catch (e) {
+        // Stay quiet on a transient failure — scheduleReconnect() will retry and
+        // the "Reconnecting…" banner already communicates the state. Only surface a
+        // toast once we've failed repeatedly, i.e. it's a real outage, not a blip.
+        this.connectFailures += 1;
+        if (this.connectFailures >= CONNECT_FAILURES_BEFORE_ALERT) {
+          this.handlers.onError?.((e as Error)?.message || "ticket mint failed");
+        }
+        this.scheduleReconnect();
+        return;
       }
-      this.scheduleReconnect();
-      return;
     }
     this.pairSent = false;
     const targetNodeId = this.store.cur;
     const relayBase = (relayUrl || this.store.relay).replace(/\/$/, "");
-    const url = `${relayBase}/client?ticket=${encodeURIComponent(ticket)}&nodeId=${encodeURIComponent(targetNodeId)}`;
+    const url = solo
+      ? `${relayBase}/client?room=${encodeURIComponent(solo.room)}&roomToken=${encodeURIComponent(solo.roomToken)}`
+      : `${relayBase}/client?ticket=${encodeURIComponent(ticket)}&nodeId=${encodeURIComponent(targetNodeId)}`;
     const ws = new this.WS(url);
     this.ws = ws;
     const isCurrent = () => ws === this.ws && targetNodeId === this.store.cur;
@@ -177,6 +215,12 @@ export class RelayTransport implements Transport {
         return;
       }
       if (env.t === "ready" || env.t === "peer.online") {
+        const socket = ws as WebSocket & { _productReconnectReported?: boolean };
+        if (this.hasReachedNode && !socket._productReconnectReported) {
+          socket._productReconnectReported = true;
+          this.reportRemoteReconnect();
+        }
+        this.hasReachedNode = true;
         this.connected = true;
         this.backoff = this.initialBackoff;
         this.connectFailures = 0; // a live socket clears the transient-failure streak
@@ -188,6 +232,16 @@ export class RelayTransport implements Transport {
         await this.handlePairFrame(env.p);
       } else if (env.t === "error") {
         this.handlers.onError?.(env.error || "relay error");
+      } else if (env.t === "run.updated" && typeof (env as { id?: unknown }).id === "string") {
+        // Content-free control-plane hint. The controller/UI must fetch the
+        // canonical account-scoped Run before rendering its new state.
+        this.handlers.onEvent({
+          type: "run.updated",
+          runId: (env as { id: string }).id,
+          revision: typeof (env as { revision?: unknown }).revision === "string"
+            ? (env as { revision: string }).revision
+            : undefined,
+        });
       } else if (env.t === "frame" && typeof env.p === "string") {
         if (!this.curKey) return;
         const full = this.reassemble(env);
@@ -221,10 +275,27 @@ export class RelayTransport implements Transport {
     this.backoff = Math.min(this.backoff * 2, MAX_BACKOFF);
   }
 
+  /**
+   * True at most once per RESYNC_THROTTLE_MS for the CURRENT socket. A fresh
+   * socket always refreshes on its first link-ready; a flapping node's repeated
+   * `peer.online` events on the same long-lived socket are coalesced so the
+   * refresh burst can't drain the relay's per-socket message budget. State lives
+   * on the socket itself, so a genuine reconnect (new socket) resyncs again.
+   */
+  private shouldResync(): boolean {
+    const ws = this.ws as (WebSocket & { _resyncAt?: number }) | null;
+    if (!ws) return false;
+    const now = Date.now();
+    if (ws._resyncAt !== undefined && now - ws._resyncAt < RESYNC_THROTTLE_MS) return false;
+    ws._resyncAt = now;
+    return true;
+  }
+
   /** Once the relay reports the node reachable: resume if paired, else pair. */
   private async onLinkReady(): Promise<void> {
     if (this.curKey) {
       this.flush();
+      if (!this.shouldResync()) return; // node flap re-fired peer.online; don't re-burst
       const active = this.store.sessions(); // touch to keep parity with legacy loadSessionIndex timing
       void active;
       await this.send({ kind: "sessions.list" });

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // Universal Agent Harness — MCP config writers for non-JSON formats.
 //
@@ -20,6 +20,45 @@ import { PROXY_MARKER, type ProxyLauncher } from "./mcp-config.js";
 export interface FormatInjectResult {
   content: string;
   rewritten: string[];
+}
+
+export interface FormatInsertResult {
+  content: string;
+  /** Whether a new server table was appended (false when it was already present). */
+  inserted: boolean;
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** True when a TOML config already declares `[mcp_servers.<name>]`. */
+export function hasTomlServer(content: string, name: string): boolean {
+  return new RegExp(`^\\s*\\[mcp_servers\\.${escapeRegExp(name)}\\]\\s*$`, "m").test(content);
+}
+
+/**
+ * Append a `[mcp_servers.<name>]` table to a Codex TOML config (the reverse of
+ * routeThroughProxy's rewrite — this ADDS Bivy's own server rather than wrapping
+ * the agent's). Idempotent: returns `inserted: false` untouched when a table of
+ * that name already exists. Env is written as an inline table; string values are
+ * TOML-escaped via JSON.stringify (safe for the ASCII paths/ids we stamp).
+ */
+export function insertTomlServer(
+  content: string,
+  name: string,
+  spec: { command: string; args?: string[]; env?: Record<string, string> },
+): FormatInsertResult {
+  if (hasTomlServer(content, name)) return { content, inserted: false };
+  const block: string[] = [`[mcp_servers.${name}]`, `command = ${JSON.stringify(spec.command)}`, `args = ${tomlStringArray(spec.args ?? [])}`];
+  if (spec.env && Object.keys(spec.env).length) {
+    const pairs = Object.entries(spec.env).map(([k, v]) => `${k} = ${JSON.stringify(v)}`);
+    block.push(`env = { ${pairs.join(", ")} }`);
+  }
+  // Separate from prior content with a blank line; keep a trailing newline.
+  const base = content.length === 0 || content.endsWith("\n") ? content : `${content}\n`;
+  const sep = base.length > 0 && !base.endsWith("\n\n") ? "\n" : "";
+  return { content: `${base}${sep}${block.join("\n")}\n`, inserted: true };
 }
 
 function proxyArgs(launcher: ProxyLauncher, server: string, command: string, origArgs: string[]): string[] {

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { createHmac, timingSafeEqual } from "node:crypto";
 
@@ -50,7 +50,23 @@ export interface AutomationEvent {
   sourceUrl?: string;
   externalId?: string;
   routing?: string;
+  /** Optional GitHub repo (`owner/name`). Overrides nothing on the definition when
+   *  the definition already has a repo; used when the definition left workspace
+   *  open so the event can name where to work. */
+  repo?: string;
   metadata?: Record<string, string | number | boolean>;
+}
+
+/** Accept `owner/name` only — the shape nodes pass to cloneOrUpdateRepo. */
+export function normalizeAutomationRepo(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const repo = value.trim();
+  if (!repo) return undefined;
+  // Reject path tricks (`..`, leading dots) while allowing normal GitHub slugs.
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(repo) || repo.includes("..")) {
+    throw new Error("repo must look like owner/name");
+  }
+  return repo;
 }
 
 const AUTOMATION_LIMITS = {
@@ -68,7 +84,7 @@ const AUTOMATION_LIMITS = {
 export function parseAutomationEvent(payload: unknown): AutomationEvent | undefined {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
   const o = payload as Record<string, unknown>;
-  const allowed = new Set(["version", "instruction", "title", "sourceUrl", "externalId", "routing", "metadata"]);
+  const allowed = new Set(["version", "instruction", "title", "sourceUrl", "externalId", "routing", "repo", "metadata"]);
   if (Object.keys(o).some((key) => !allowed.has(key)) || o.version !== "1") return undefined;
   if (typeof o.instruction !== "string" || !o.instruction.trim() || o.instruction.length > AUTOMATION_LIMITS.instruction) {
     return undefined;
@@ -84,6 +100,16 @@ export function parseAutomationEvent(payload: unknown): AutomationEvent | undefi
   const externalId = optionalString("externalId");
   const routing = optionalString("routing");
   if (title === null || sourceUrl === null || externalId === null || routing === null) return undefined;
+  let repo: string | undefined;
+  if (o.repo !== undefined) {
+    if (typeof o.repo !== "string" || o.repo.length > 200) return undefined;
+    try {
+      repo = normalizeAutomationRepo(o.repo);
+    } catch {
+      return undefined;
+    }
+    if (!repo) return undefined;
+  }
   if (sourceUrl) {
     try {
       const url = new URL(sourceUrl);
@@ -114,17 +140,22 @@ export function parseAutomationEvent(payload: unknown): AutomationEvent | undefi
     sourceUrl: sourceUrl ?? undefined,
     externalId: externalId ?? undefined,
     routing: routing ?? undefined,
+    repo,
     metadata,
   };
 }
 
-/** Render data into a fixed, non-executable prompt structure. */
-export function renderAutomationInstruction(templateInstruction: string, event: AutomationEvent): string {
-  const parts = [templateInstruction.trim(), event.instruction];
+/** Render ONLY the event's untrusted fields (no operator template — that stays
+ *  E2E-encrypted on the definition and is decrypted on the node). Used for a
+ *  webhook that triggers a *configured automation*: the control plane stores this
+ *  plaintext context and the node appends it, clearly framed as data, after
+ *  decrypting the operator's own instructions. */
+export function renderEventContext(event: AutomationEvent): string {
+  const parts = [event.instruction];
   if (event.externalId) parts.push(`External ID: ${event.externalId}`);
   if (event.sourceUrl) parts.push(`Source URL: ${event.sourceUrl}`);
   if (event.metadata && Object.keys(event.metadata).length) {
-    parts.push(`Metadata (untrusted context only):\n${JSON.stringify(event.metadata)}`);
+    parts.push(`Metadata:\n${JSON.stringify(event.metadata)}`);
   }
   return parts.filter(Boolean).join("\n\n");
 }
@@ -310,10 +341,9 @@ export interface ParsedCommentWork {
 
 /**
  * Pull an actionable request out of a GitHub `issue_comment` webhook payload.
- * Returns undefined unless the comment (action created/edited) is on an *issue*
- * (PR comments are deferred — they need the reply-to-PR path) and `@`-mentions
- * `triggerLogin` (the bot handle, e.g. "bivy"). The comment body is the
- * instruction; routing is applied separately via `pickCommentRoutingLabel`.
+ * Fires on issues *and* pull-request conversation comments (GitHub reuses this
+ * event for both) when the body `@`-mentions `triggerLogin`. Code-review
+ * comments use `pull_request_review_comment` instead.
  */
 export function parseGithubCommentEvent(payload: unknown, triggerLogin: string): ParsedCommentWork | undefined {
   if (!payload || typeof payload !== "object") return undefined;
@@ -321,7 +351,7 @@ export function parseGithubCommentEvent(payload: unknown, triggerLogin: string):
   if (!["created", "edited"].includes(String(o.action ?? ""))) return undefined;
   const issue = o.issue;
   const comment = o.comment;
-  if (!issue || typeof issue !== "object" || issue.pull_request) return undefined; // issues only
+  if (!issue || typeof issue !== "object") return undefined;
   if (!comment || typeof comment !== "object") return undefined;
   const instruction = String(comment.body ?? "");
   const mentions = extractMentions(instruction);
@@ -443,4 +473,150 @@ export function parseSlackCommand(text: string): ParsedSlackCommand {
   }
   out.prompt = rest;
   return out;
+}
+
+export interface ParsedWorkflowRunFailure {
+  repo: string;
+  workflowName: string;
+  runId: number;
+  runNumber: number;
+  branch?: string;
+  sha?: string;
+  conclusion: string;
+  htmlUrl: string;
+  /** Short event context for the node (untrusted). */
+  eventContext: string;
+  title: string;
+}
+
+/**
+ * Parse a `workflow_run` webhook. Only completed failures (and cancelled as
+ * optional noise skip) become work — successes are ignored. Used by the
+ * `github_ci` automation trigger ("Fix failed CI").
+ */
+export function parseGithubWorkflowRunFailure(payload: unknown): ParsedWorkflowRunFailure | undefined {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+  const o = payload as Record<string, any>;
+  if (String(o.action ?? "") !== "completed") return undefined;
+  const run = o.workflow_run;
+  if (!run || typeof run !== "object") return undefined;
+  const conclusion = String(run.conclusion ?? "");
+  // Only actionable failures — skip success/neutral/skipped.
+  if (conclusion !== "failure" && conclusion !== "timed_out" && conclusion !== "startup_failure") {
+    return undefined;
+  }
+  const repo = o.repository?.full_name ? String(o.repository.full_name) : "";
+  if (!repo) return undefined;
+  const workflowName = String(run.name || o.workflow?.name || "workflow");
+  const runId = Number(run.id);
+  const runNumber = Number(run.run_number);
+  if (!Number.isFinite(runId)) return undefined;
+  const branch = run.head_branch ? String(run.head_branch) : undefined;
+  const sha = run.head_sha ? String(run.head_sha) : undefined;
+  const htmlUrl = String(run.html_url || "");
+  const title = `CI failed: ${workflowName}${Number.isFinite(runNumber) ? ` #${runNumber}` : ""}`;
+  const lines = [
+    `Workflow: ${workflowName}`,
+    Number.isFinite(runNumber) ? `Run number: ${runNumber}` : "",
+    `Conclusion: ${conclusion}`,
+    branch ? `Branch: ${branch}` : "",
+    sha ? `Commit: ${sha}` : "",
+    htmlUrl ? `URL: ${htmlUrl}` : "",
+  ].filter(Boolean);
+  return {
+    repo,
+    workflowName,
+    runId,
+    runNumber: Number.isFinite(runNumber) ? runNumber : 0,
+    branch,
+    sha,
+    conclusion,
+    htmlUrl,
+    title,
+    eventContext: lines.join("\n"),
+  };
+}
+
+export interface ParsedPullRequestWork {
+  title: string;
+  body: string;
+  repo: string;
+  issueNumber: number; // PR number (GitHub issue number space)
+  url: string;
+  labels: string[];
+  authorAssociation?: string;
+}
+
+/**
+ * Pull-request deliveries that can carry labels or body @mentions — same
+ * routing contract as issues. Outcomes are instruction-driven (no special PR path).
+ */
+export function parseGithubPullRequestEvent(payload: unknown): ParsedPullRequestWork | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  const o = payload as Record<string, any>;
+  const action = String(o.action ?? "");
+  if (!["opened", "reopened", "edited", "labeled", "ready_for_review", "synchronize"].includes(action)) {
+    return undefined;
+  }
+  const pr = o.pull_request;
+  if (!pr || typeof pr !== "object") return undefined;
+  const labels: string[] = Array.isArray(pr.labels)
+    ? pr.labels.map((l: any) => (typeof l === "string" ? l : l?.name)).filter((n: any): n is string => Boolean(n))
+    : [];
+  const repo = o.repository?.full_name ? String(o.repository.full_name) : "";
+  const issueNumber = Number(pr.number) || 0;
+  if (!repo || !issueNumber) return undefined;
+  return {
+    title: String(pr.title ?? ""),
+    body: String(pr.body ?? ""),
+    repo,
+    issueNumber,
+    url: String(pr.html_url ?? ""),
+    labels,
+    authorAssociation: pr.author_association ? String(pr.author_association) : undefined,
+  };
+}
+
+/** Same routing as issues: bivy label or body @mention of the bot. */
+export function pickPullRequestRoutingLabel(pr: ParsedPullRequestWork, triggerLogin = "bivy"): string | undefined {
+  return pickIssueRoutingLabel(pr, triggerLogin);
+}
+
+export interface ParsedReviewCommentWork {
+  instruction: string;
+  repo: string;
+  issueNumber: number;
+  url: string;
+  mentions: string[];
+  prLabels: string[];
+  authorAssociation?: string;
+}
+
+/** Code-review thread comments that @-mention the bot. */
+export function parseGithubReviewCommentEvent(payload: unknown, triggerLogin: string): ParsedReviewCommentWork | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  const o = payload as Record<string, any>;
+  if (!["created", "edited"].includes(String(o.action ?? ""))) return undefined;
+  const pr = o.pull_request;
+  const comment = o.comment;
+  if (!pr || typeof pr !== "object" || !comment || typeof comment !== "object") return undefined;
+  const instruction = String(comment.body ?? "");
+  const mentions = extractMentions(instruction);
+  const trigger = triggerLogin.trim().replace(/^@/, "").toLowerCase();
+  if (!trigger || !mentions.some((m) => m.toLowerCase() === trigger)) return undefined;
+  const repo = o.repository?.full_name ? String(o.repository.full_name) : "";
+  const issueNumber = Number(pr.number) || 0;
+  if (!repo || !issueNumber) return undefined;
+  const prLabels: string[] = Array.isArray(pr.labels)
+    ? pr.labels.map((l: any) => (typeof l === "string" ? l : l?.name)).filter((n: any): n is string => Boolean(n))
+    : [];
+  return {
+    instruction,
+    repo,
+    issueNumber,
+    url: String(comment.html_url ?? pr.html_url ?? ""),
+    mentions,
+    prLabels,
+    authorAssociation: comment.author_association ? String(comment.author_association) : undefined,
+  };
 }

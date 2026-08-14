@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // Account / sign-in glue for the hosted control-plane path.
 //
@@ -10,6 +10,7 @@
 
 import { linkPayloadFromText } from "./linking.js";
 import type { LocalStore } from "./local-store.js";
+import type { InboxAdvert } from "./inbox.js";
 
 export interface LinkPayload {
   session?: string;
@@ -17,6 +18,13 @@ export interface LinkPayload {
   relay?: string;
   pairSecret?: string;
   node?: { id?: string; pub?: string };
+  /** Account-free ("solo") relay admission: an unguessable room id + bearer token
+   *  the phone presents to the relay INSTEAD of a control-plane-minted ticket.
+   *  Present (with no `session`/`controlPlane`) in a solo pairing QR. */
+  room?: string;
+  roomToken?: string;
+  /** Agent selected by the node setup wizard for its first app draft. */
+  defaultAgent?: string;
 }
 
 // The kinds of Web Push notification the mesh emits, and their user-facing
@@ -68,6 +76,16 @@ export function consumeLinkPayload(store: LocalStore, text: string): boolean {
     store.cur = p.node.id;
     if (p.node.pub) store.addNodePub(p.node.id, p.node.pub); // X25519 handshake
     if (p.pairSecret) store.setPairSecret(p.node.id, p.pairSecret);
+    // Account-free pairing: remember the room id + bearer token so the transport
+    // dials `/client?room=&roomToken=` for this node instead of minting a
+    // control-plane ticket. The token never leaves this device except in the
+    // relay dial itself.
+    if (p.room && p.roomToken) store.setSolo(p.node.id, { room: p.room, roomToken: p.roomToken });
+    // Setup opens the app on a browser that may carry a last-used agent from a
+    // different machine. Treat the explicit installer handoff as the newest
+    // choice so the first draft matches what the user just selected.
+    const defaultAgent = typeof p.defaultAgent === "string" ? p.defaultAgent.trim().toLowerCase() : "";
+    if (defaultAgent) store.setLastChoice({ agentId: defaultAgent });
   }
   return Boolean(p.session || p.node?.id);
 }
@@ -214,6 +232,25 @@ export interface AccountNode {
   name?: string;
   online?: boolean;
   providers?: NodeProviderSummary[];
+  /** Manually declared, owner-asserted capability tags (e.g. "gpu", "docker") —
+   *  never auto-detected, and not a verified security fact. See
+   *  @bivy/core's capability-routing.ts. */
+  capabilities?: string[];
+  /** Non-secret provider identity of an ephemeral (`eph-*`) node, populated by
+   *  the control-plane node registry at launch. Lets a *second* account device —
+   *  which doesn't hold the launching device's local machine record — reconstruct
+   *  the machine so it can wake a suspend-to-zero node (see
+   *  `ephemeralMachineFromNode` and docs/ephemeral-sessions.md "Gap A"). This is
+   *  identity only (a Fly machine id / E2B sandbox id), never a credential. */
+  bootstrapStatus?: { phase: string; updatedAt: string };
+  ephemeral?: {
+    provider: string;
+    /** The provider's machine/sandbox id (the adapter's `EphemeralMachine.id`). */
+    machineId: string;
+    /** The provider "app"/grouping handle, when the adapter uses one (Fly/Sprites). */
+    app?: string;
+    region?: string;
+  };
   [k: string]: unknown;
 }
 
@@ -225,7 +262,21 @@ export interface AccountSessionAdvert {
   titleEnc?: string;
   branch?: string;
   updatedAt?: string;
+  attention?: InboxAdvert[];
+  /** Hosted-trial gate: session is beyond the account's free lifetime allowance,
+   *  returned content-stripped. Renders as a locked "subscribe to view" row. */
+  locked?: boolean;
   [k: string]: unknown;
+}
+
+/** Lifetime hosted-session trial status (Bivy Cloud free plan). Absent on
+ *  self-host and paid plans, where nothing is metered. */
+export interface TrialStatus {
+  limit?: number;
+  used: number;
+  remaining: number;
+  over: number;
+  exhausted: boolean;
 }
 
 function cpBase(store: LocalStore): string {
@@ -279,6 +330,9 @@ export interface AccountMe {
   };
   pricing?: { pro?: PlanPrice; team?: PlanPrice };
   counts?: { nodes?: number; sessions?: number; devices?: number; runsThisWeek?: number };
+  /** Lifetime hosted-session trial (Bivy Cloud free plan). Absent on self-host and
+   *  paid plans. Drives the usage banner and the upgrade prompt. */
+  trial?: TrialStatus;
   [k: string]: unknown;
 }
 
@@ -344,6 +398,8 @@ export interface GithubAppEntry {
   // the UI should prompt to (re)connect it on a node rather than say "connected".
   servedBy?: { id: string; name?: string; online: boolean; lastSeenAt?: string } | null;
   servingNodeSeenAt?: string;
+  /** App key is held by the encrypted hosted executor, not a persistent node. */
+  hosted?: boolean;
 }
 
 export interface GithubAppInfo extends GithubAppEntry {
@@ -478,10 +534,305 @@ export async function setEphemeralQueueDefault(
   return { enabled: Boolean(data?.enabled), provider: data?.provider, region: data?.region, size: data?.size, ttlMinutes: data?.ttlMinutes };
 }
 
+// An account-level, reusable ephemeral node config — "a config = a selectable
+// node" in both the queue router and the new-session picker. Non-secret sizing
+// only; the launching device still supplies the provider token. Account-level
+// (not device-local) so queued work can route to it from any device or,
+// eventually, an unattended orchestrator.
+export interface EphemeralNodeConfig {
+  id: string;
+  name: string;
+  provider: string;
+  region?: string;
+  size?: string;
+  image?: string;
+  readyCapacity?: number;
+  ttlMinutes?: number;
+  teardownOnAgentFinish?: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type EphemeralConfigInput = {
+  name: string;
+  provider: string;
+  region?: string | null;
+  size?: string | null;
+  image?: string | null;
+  readyCapacity?: number | null;
+  ttlMinutes?: number | null;
+  teardownOnAgentFinish?: boolean;
+};
+
+// How the account routes queued work by default. `primary` names the runner;
+// only a persistent-node primary may carry an ephemeral-config `fallback` (used
+// when that node is offline) — an ephemeral-config primary is provisioned on
+// demand and needs none.
+export type QueueRunnerTarget =
+  | { kind: "shared" }
+  | { kind: "node"; node: string }
+  | { kind: "config"; configId: string };
+
+export interface QueueRouting {
+  primary: QueueRunnerTarget;
+  fallback?: { kind: "config"; configId: string };
+}
+
+function coerceConfig(v: any): EphemeralNodeConfig {
+  return {
+    id: String(v?.id ?? ""),
+    name: String(v?.name ?? ""),
+    provider: String(v?.provider ?? ""),
+    region: typeof v?.region === "string" && v.region ? v.region : undefined,
+    size: typeof v?.size === "string" && v.size ? v.size : undefined,
+    image: typeof v?.image === "string" && v.image ? v.image : undefined,
+    readyCapacity: typeof v?.readyCapacity === "number" ? Math.max(0, Math.min(1, Math.floor(v.readyCapacity))) : undefined,
+    ttlMinutes: typeof v?.ttlMinutes === "number" ? v.ttlMinutes : undefined,
+    teardownOnAgentFinish: Boolean(v?.teardownOnAgentFinish) || undefined,
+    createdAt: String(v?.createdAt ?? ""),
+    updatedAt: String(v?.updatedAt ?? ""),
+  };
+}
+
+/** The account's saved ephemeral node configs (shared across the account's devices). */
+export async function fetchEphemeralConfigs(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<EphemeralNodeConfig[]> {
+  const res = await fetchImpl(`${cpBase(store)}/account/ephemeral-configs`, { headers: authHeaders(store) });
+  if (!res.ok) throw new Error(`ephemeral-configs request failed: ${res.status}`);
+  const data: unknown = await res.json().catch(() => []);
+  return Array.isArray(data) ? data.map(coerceConfig).filter((c) => c.id) : [];
+}
+
+export async function createEphemeralConfig(store: LocalStore, input: EphemeralConfigInput, fetchImpl: typeof fetch = fetch): Promise<EphemeralNodeConfig> {
+  const res = await fetchImpl(`${cpBase(store)}/account/ephemeral-configs`, { method: "POST", headers: authHeaders(store), body: JSON.stringify(input) });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `create ephemeral config failed: ${res.status}`);
+  return coerceConfig(data);
+}
+
+export async function updateEphemeralConfig(store: LocalStore, id: string, patch: Partial<EphemeralConfigInput>, fetchImpl: typeof fetch = fetch): Promise<EphemeralNodeConfig> {
+  const res = await fetchImpl(`${cpBase(store)}/account/ephemeral-configs/${encodeURIComponent(id)}`, { method: "PUT", headers: authHeaders(store), body: JSON.stringify(patch) });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `update ephemeral config failed: ${res.status}`);
+  return coerceConfig(data);
+}
+
+export async function deleteEphemeralConfig(store: LocalStore, id: string, fetchImpl: typeof fetch = fetch): Promise<void> {
+  const res = await fetchImpl(`${cpBase(store)}/account/ephemeral-configs/${encodeURIComponent(id)}`, { method: "DELETE", headers: authHeaders(store) });
+  if (!res.ok) {
+    const data: any = await res.json().catch(() => ({}));
+    throw new Error(data?.error || `delete ephemeral config failed: ${res.status}`);
+  }
+}
+
+function coerceRouting(v: any): QueueRouting {
+  const p = v?.primary;
+  let primary: QueueRunnerTarget = { kind: "shared" };
+  if (p?.kind === "node" && typeof p.node === "string" && p.node.trim()) primary = { kind: "node", node: p.node.trim() };
+  else if (p?.kind === "config" && typeof p.configId === "string" && p.configId) primary = { kind: "config", configId: p.configId };
+  const f = v?.fallback;
+  const fallback = f?.kind === "config" && typeof f.configId === "string" && f.configId ? { kind: "config" as const, configId: f.configId } : undefined;
+  return primary.kind === "node" && fallback ? { primary, fallback } : { primary };
+}
+
+/** The account's default queue routing (primary runner + optional fallback). */
+export async function fetchQueueRouting(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<QueueRouting> {
+  const res = await fetchImpl(`${cpBase(store)}/account/queue-routing`, { headers: authHeaders(store) });
+  if (!res.ok) throw new Error(`queue-routing request failed: ${res.status}`);
+  return coerceRouting(await res.json().catch(() => ({})));
+}
+
+export async function setQueueRouting(store: LocalStore, routing: QueueRouting, fetchImpl: typeof fetch = fetch): Promise<QueueRouting> {
+  const res = await fetchImpl(`${cpBase(store)}/account/queue-routing`, { method: "PUT", headers: authHeaders(store), body: JSON.stringify(routing) });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `set queue routing failed: ${res.status}`);
+  return coerceRouting(data);
+}
+
+// --- Hosted (control-plane-orchestrated) provisioning -----------------------
+// Status is non-secret: which credentials are present, never their values.
+export interface HostedProvisioningStatus {
+  enabled: boolean;
+  credential: "app" | "pat" | "none";
+  githubAppId?: string;
+  providers: string[];
+  validatedProviders: string[];
+  /** Whether the server has an encryption key configured; secrets can't be saved without it. */
+  encryptionReady: boolean;
+  /** Active encryption key id (for rotation display). */
+  keyId?: string;
+  execution: { ready: boolean; reason: string; configId?: string };
+}
+
+export interface HostedProvisioningPatch {
+  enabled?: boolean;
+  githubToken?: string;
+  githubApp?: { appId: string; installationId: string; privateKeyPem: string } | null;
+  providerTokens?: Record<string, string>;
+}
+
+export interface HostedGithubAppConnection {
+  ok: true;
+  appId: string;
+  installation: { id: string; account: string; accountType?: string };
+  webhookUrl: string;
+  webhookSecret: string;
+}
+
+/** Connect an existing GitHub App directly to hosted execution (no node). */
+export async function connectHostedGithubApp(
+  store: LocalStore,
+  input: { appId: string; privateKeyPem: string; installationId?: string },
+  fetchImpl: typeof fetch = fetch,
+): Promise<HostedGithubAppConnection> {
+  const res = await fetchImpl(`${cpBase(store)}/account/hosted-github-app/connect`, {
+    method: "POST",
+    headers: authHeaders(store),
+    body: JSON.stringify(input),
+  });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `hosted GitHub App connection failed: ${res.status}`);
+  return data as HostedGithubAppConnection;
+}
+
+/** Repositories exposed by the hosted App installation, without a live node. */
+export async function fetchHostedGithubRepositories(
+  store: LocalStore,
+  fetchImpl: typeof fetch = fetch,
+): Promise<Array<{ slug: string; description?: string; private?: boolean; defaultBranch?: string }>> {
+  const res = await fetchImpl(`${cpBase(store)}/account/hosted-github-repositories`, { headers: authHeaders(store) });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `hosted repository request failed: ${res.status}`);
+  return Array.isArray(data?.repos) ? data.repos : [];
+}
+
+export async function validateHostedProviderCredential(
+  store: LocalStore,
+  provider: string,
+  token: string,
+  region?: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+  const res = await fetchImpl(`${cpBase(store)}/account/hosted-provisioning/validate-provider`, {
+    method: "POST",
+    headers: authHeaders(store),
+    body: JSON.stringify({ provider, token, region }),
+  });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `provider credential validation failed: ${res.status}`);
+}
+
+export interface HostedAuditEvent {
+  at: string;
+  action: string;
+  provider?: string;
+  configId?: string;
+  nodeId?: string;
+  workItemId?: string;
+  detail?: string;
+}
+
+export interface HostedProvisionPlan { willProvision: boolean; targetConfigId: string | null; reason: string; }
+
+export interface HostedMachineSummary {
+  id: string;
+  nodeId?: string;
+  name?: string;
+  provider: string;
+  region?: string;
+  size?: string;
+  status?: string;
+  createdAt: string;
+  ttlMinutes?: number;
+  setupId?: string;
+  purpose?: "queue-item" | "queue-default" | "ready-capacity";
+  claimedAt?: string;
+  milestones?: Record<string, string>;
+  /** Durable controller lifecycle phase from the attempt record (see
+   * HostedMachineAttemptState in the control plane) — distinct from the
+   * coarser `status` above, which is the provider's raw last-observed state. */
+  lifecycleState?: string;
+  /** "deleted" means the controller is actively driving this machine toward
+   * teardown (TTL/boot-deadline expiry, an abandoned create, or a force-destroy
+   * request) — surfaced so the UI can show "tearing down" rather than a stale
+   * running/claimed phase while that convergence is still in flight. */
+  desiredState?: "active" | "deleted";
+  observedState?: string;
+  /** Next moment the reconciler will force a transition (boot timeout, or TTL
+   * + grace) if nothing else happens — the deadline to show next to a phase. */
+  deadlineAt?: string;
+  lastError?: string;
+}
+
+function coerceHostedStatus(d: any): HostedProvisioningStatus {
+  return {
+    enabled: Boolean(d?.enabled),
+    credential: d?.credential === "app" || d?.credential === "pat" ? d.credential : "none",
+    githubAppId: typeof d?.githubAppId === "string" ? d.githubAppId : undefined,
+    providers: Array.isArray(d?.providers) ? d.providers : [],
+    validatedProviders: Array.isArray(d?.validatedProviders) ? d.validatedProviders : [],
+    encryptionReady: Boolean(d?.encryptionReady),
+    keyId: typeof d?.keyId === "string" ? d.keyId : undefined,
+    execution: { ready: Boolean(d?.execution?.ready), reason: String(d?.execution?.reason || "unavailable"), configId: typeof d?.execution?.configId === "string" ? d.execution.configId : undefined },
+  };
+}
+
+export async function fetchHostedProvisioning(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<HostedProvisioningStatus> {
+  const res = await fetchImpl(`${cpBase(store)}/account/hosted-provisioning`, { headers: authHeaders(store) });
+  if (!res.ok) throw new Error(`hosted-provisioning request failed: ${res.status}`);
+  return coerceHostedStatus(await res.json().catch(() => ({})));
+}
+
+export async function setHostedProvisioning(store: LocalStore, patch: HostedProvisioningPatch, fetchImpl: typeof fetch = fetch): Promise<HostedProvisioningStatus> {
+  const res = await fetchImpl(`${cpBase(store)}/account/hosted-provisioning`, { method: "PUT", headers: authHeaders(store), body: JSON.stringify(patch) });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `set hosted provisioning failed: ${res.status}`);
+  return coerceHostedStatus(data);
+}
+
+export async function rotateHostedProvisioning(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<HostedProvisioningStatus> {
+  const res = await fetchImpl(`${cpBase(store)}/account/hosted-provisioning/rotate`, { method: "POST", headers: authHeaders(store) });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `rotate hosted credentials failed: ${res.status}`);
+  return coerceHostedStatus(data);
+}
+
+export async function fetchHostedAudit(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<HostedAuditEvent[]> {
+  const res = await fetchImpl(`${cpBase(store)}/account/hosted-audit`, { headers: authHeaders(store) });
+  if (!res.ok) throw new Error(`hosted-audit request failed: ${res.status}`);
+  const d: unknown = await res.json().catch(() => []);
+  return Array.isArray(d) ? (d as HostedAuditEvent[]) : [];
+}
+
+export async function fetchHostedMachines(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<HostedMachineSummary[]> {
+  const res = await fetchImpl(`${cpBase(store)}/account/hosted-machines`, { headers: authHeaders(store) });
+  if (!res.ok) throw new Error(`hosted-machines request failed: ${res.status}`);
+  const data: unknown = await res.json().catch(() => []);
+  if (!Array.isArray(data)) return [];
+  return data.filter((m: any) => m && typeof m.id === "string" && typeof m.provider === "string") as HostedMachineSummary[];
+}
+
+export async function destroyHostedMachine(store: LocalStore, nodeId: string, fetchImpl: typeof fetch = fetch): Promise<void> {
+  const res = await fetchImpl(`${cpBase(store)}/account/hosted-machines/${encodeURIComponent(nodeId)}`, {
+    method: "DELETE",
+    headers: authHeaders(store),
+  });
+  if (!res.ok) {
+    const data: any = await res.json().catch(() => ({}));
+    throw new Error(data?.error || `hosted machine teardown failed: ${res.status}`);
+  }
+}
+
+export async function triggerHostedProvision(store: LocalStore, execute = false, fetchImpl: typeof fetch = fetch): Promise<{ plan: HostedProvisionPlan; provisioned?: { id: string; nodeId?: string } | null }> {
+  const res = await fetchImpl(`${cpBase(store)}/account/hosted-provision-now`, { method: "POST", headers: authHeaders(store), body: JSON.stringify({ execute }) });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `hosted provision failed: ${res.status}`);
+  return data;
+}
+
 export interface GithubQueueItem {
   id: string;
   source: string; // "github:issue" | "github:comment" | "linear:issue" | "slack"
-  status: "pending" | "claimed" | "running" | "needs_attention" | "succeeded" | "failed" | "cancelled" | "done";
+  status: "pending" | "claimed" | "running" | "waiting" | "needs_attention" | "succeeded" | "failed" | "cancelled" | "done";
   label: string;
   title: string;
   repo?: string;
@@ -498,12 +849,15 @@ export interface GithubQueueItem {
   createdAt: string;
   claimedAt?: string;
   claimedByNodeId?: string;
+  leaseExpiresAt?: string;
   completedAt?: string;
   triggerId?: string;
   triggerKind?: "github" | "slack" | "manual" | "webhook" | "schedule";
   definitionId?: string;
   attempt?: number;
   targetKind?: "new_session" | "existing_session";
+  targetSessionId?: string;
+  message?: boolean;
   startedAt?: string;
   approvalMode?: "never" | "risky" | "always" | "autonomous";
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
@@ -521,17 +875,52 @@ export interface GithubQueueItem {
    *  secret, token, or raw command/tool output; only bounded summaries,
    *  identifiers, and URLs. */
   routingReason?: string;
-  checks?: Array<{ name: string; commandHash?: string; status: "passed" | "failed" | "skipped"; exitCode?: number }>;
+  checks?: Array<{ name: string; commandHash?: string; status: "passed" | "failed" | "skipped"; exitCode?: number; durationMs?: number }>;
   events?: Array<{
     at: string;
-    kind: "triggered" | "routed" | "claimed" | "attempt_started" | "checkpoint" | "approval" | "policy_denial"
-      | "retry" | "fallback" | "branch" | "pull_request" | "needs_attention" | "completed" | "cancelled";
+    kind: "trigger_received" | "trigger_matched" | "queued" | "routed" | "provisioning" | "claimed"
+      | "agent_started" | "checks_started" | "checks_completed" | "result_delivery" | "notification"
+      | "retry" | "cancel_requested" | "terminal"
+      | "triggered" | "attempt_started" | "checkpoint" | "approval" | "policy_denial"
+      | "fallback" | "rate_limited" | "branch" | "pull_request" | "needs_attention" | "completed" | "cancelled";
     summary: string;
     attempt?: number;
     ref?: string;
     url?: string;
     status?: "passed" | "failed" | "denied" | "approved";
+    reasonCode?: string;
+    evidenceRef?: string;
+    milestoneId?: string;
   }>;
+  receiptEvidence?: {
+    approvals: { requests: number; approved: number; denied: number };
+    fileChanges: { files: Array<{ path: string; op?: string; added?: number; removed?: number }>; added: number; removed: number };
+    auditHealth: { correlation: "healthy" | "missing"; readableStorage: "healthy" | "missing"; successfulWrites: "healthy" | "missing" };
+    execution?: {
+      profile?: "trusted_workstation" | "isolated_customer_cloud" | "restricted";
+      controller?: "customer" | "bivy_hosted_provisioning";
+      agentVersion?: string;
+      modelVersionStatus?: "available" | "unavailable" | "unknown";
+    };
+    protection?: {
+      effective?: {
+        executionProfile?: "trusted_workstation" | "isolated_customer_cloud" | "restricted";
+        sandboxTier?: "read-only" | "workspace-write" | "danger-full-access";
+        approvalMode?: "never" | "risky" | "always" | "autonomous";
+        runtimeEnforcement?: string;
+        trustModes?: string[];
+      };
+      capabilities?: Array<{
+        capability: "sandbox" | "approval" | "tool" | "network" | "credential_custody" | "runtime_policy";
+        evidenceClass: "enforced" | "observed" | "unavailable";
+        mechanism?: string;
+      }>;
+    };
+  };
+  usage?: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number; costUsd?: number };
+  notification?: { status: "not_requested" | "pending" | "delivered" | "failed"; channel?: "push" | "email" | "webhook"; updatedAt: string; reason?: string };
+  references?: Array<{ kind: "receipt" | "evidence" | "log"; ref: string; url?: string }>;
+  attention?: { severity: "warning" | "error" | "critical"; reason: string; since: string };
 }
 
 export type AutomationSchedule =
@@ -541,30 +930,94 @@ export type AutomationSchedule =
 export interface AccountAutomation {
   id: string;
   name: string;
+  /** Stable key for definitions managed from `.bivy/automations.yaml`. */
+  configKey?: string;
+  configOrder?: number;
   templateCiphertext?: string;
   runtimeId?: string;
   model?: string;
   nodeLabel?: string;
   approvalMode?: "never" | "risky" | "always" | "autonomous";
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
+  /** Explicit acknowledgement of autonomous + danger-full-access — without it
+   *  the server's shared preflight gate rejects save. See simulateAutomation
+   *  and docs/automation-evaluator.md. */
+  allowDangerous?: boolean;
+  maxAttempts?: number;
   enabled: boolean;
+  /** How this automation fires. Absent on legacy rows means "schedule".
+   *  `github_ci` is legacy; prefer `github` + `on` rules. */
+  trigger?: "schedule" | "webhook" | "manual" | "github" | "linear" | "github_ci";
+  /** Optional GitHub workspace (`owner/name`) for triggers that do not carry a repo. */
+  repo?: string;
+  /** Label filter for github/linear source triggers. */
+  labels?: string[];
+  /** Repo allowlist for github/linear. */
+  repos?: string[];
+  /**
+   * GitHub event rules ("when any of these fire"). Outcomes are whatever the
+   * instructions say — not a special-cased PR path.
+   */
+  on?: Array<{
+    event: "issues" | "issue_comment" | "pull_request" | "pull_request_review_comment" | "workflow_run";
+    actions?: string[];
+    labels?: string[];
+    mention?: boolean;
+    conclusions?: string[];
+    workflows?: string[];
+  }>;
+  /** Built-in template id (e.g. issue-to-pr). */
+  templateId?: string;
   schedule: AutomationSchedule;
+  /** When set, schedule-triggered runs CONTINUE this existing session instead of
+   *  starting a new one (a scheduled chat message). */
+  targetKind?: "new_session" | "existing_session";
+  targetSessionId?: string;
+  /** When set, schedule-triggered runs are plain chat messages rather than
+   *  automation jobs (no boilerplate/push/checks). */
+  message?: boolean;
   nextRunAt?: string;
   lastScheduledAt?: string;
+  /** Present for a webhook-triggered automation: the signed endpoint to POST
+   *  events to. The signing secret is returned only once (create/rotate). */
+  webhookUrl?: string;
   createdAt: string;
   updatedAt: string;
 }
+
+export type CreateAutomationInput = Omit<
+  AccountAutomation,
+  "id" | "createdAt" | "updatedAt" | "lastScheduledAt" | "schedule" | "webhookUrl"
+> & { schedule?: AutomationSchedule };
 
 export interface AccountAutomationRun {
   id: string;
   definitionId?: string;
   triggerKind: string;
-  status: "pending" | "claimed" | "running" | "needs_attention" | "succeeded" | "failed" | "cancelled";
+  status: "pending" | "claimed" | "running" | "waiting" | "needs_attention" | "succeeded" | "failed" | "cancelled";
   title: string;
+  message?: boolean;
+  targetKind?: "new_session" | "existing_session";
+  targetSessionId?: string;
   createdAt: string;
   startedAt?: string;
   completedAt?: string;
-  output?: { sessionId?: string; branch?: string; prUrl?: string; artifactUrl?: string; failure?: string };
+  leaseExpiresAt?: string;
+  attempt?: number;
+  maxAttempts?: number;
+  runtimeId?: string;
+  model?: string;
+  routingReason?: string;
+  approvalMode?: "never" | "risky" | "always" | "autonomous";
+  sandbox?: "read-only" | "workspace-write" | "danger-full-access";
+  checks?: GithubQueueItem["checks"];
+  events?: GithubQueueItem["events"];
+  receiptEvidence?: GithubQueueItem["receiptEvidence"];
+  usage?: GithubQueueItem["usage"];
+  notification?: GithubQueueItem["notification"];
+  references?: GithubQueueItem["references"];
+  attention?: GithubQueueItem["attention"];
+  output?: GithubQueueItem["output"];
 }
 
 async function automationRequest<T>(
@@ -588,10 +1041,20 @@ export function fetchAutomations(store: LocalStore, fetchImpl: typeof fetch = fe
 
 export function createAutomation(
   store: LocalStore,
-  input: Omit<AccountAutomation, "id" | "createdAt" | "updatedAt" | "lastScheduledAt">,
+  input: CreateAutomationInput,
   fetchImpl: typeof fetch = fetch,
-): Promise<AccountAutomation> {
+): Promise<AccountAutomation & { webhookSecret?: string }> {
   return automationRequest(store, "/account/automations", { method: "POST", body: JSON.stringify(input) }, fetchImpl);
+}
+
+/** Rotate a webhook automation's signing secret. The new secret is returned
+ *  once; the old one stops working immediately. */
+export function rotateAutomationWebhook(
+  store: LocalStore,
+  id: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<AccountAutomation & { webhookSecret: string }> {
+  return automationRequest(store, `/account/automations/${encodeURIComponent(id)}/webhook/rotate`, { method: "POST" }, fetchImpl);
 }
 
 export function updateAutomation(
@@ -601,6 +1064,81 @@ export function updateAutomation(
   fetchImpl: typeof fetch = fetch,
 ): Promise<AccountAutomation> {
   return automationRequest(store, `/account/automations/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(patch) }, fetchImpl);
+}
+
+/** The event-fixture vocabulary documented in docs/automations-as-code.md —
+ *  the same shape `bivy automation test` accepts, so a representative event
+ *  means the same thing everywhere. */
+export interface AutomationSimulationEvent {
+  kind: "github" | "linear" | "schedule" | "webhook" | "manual";
+  repo?: string;
+  labels?: string[];
+  mention?: boolean;
+  event?: "issues" | "issue_comment" | "pull_request" | "pull_request_review_comment" | "workflow_run";
+  action?: string;
+  conclusion?: string;
+  workflow?: string;
+}
+
+export type AutomationSimulationDraft = Partial<CreateAutomationInput> & { allowDangerous?: boolean };
+
+export interface AutomationMatchTrailEntry {
+  id: string;
+  matched: boolean;
+  reason: string;
+}
+
+export interface AutomationOverlapFinding {
+  kind: "shadowed" | "overlaps";
+  beforeId: string;
+  afterId: string;
+  detail: string;
+}
+
+export type AutomationPreflightSeverity = "ok" | "info" | "warn" | "block" | "skipped";
+
+export interface AutomationPreflightCheck {
+  id: "source_connection" | "repo_access" | "encrypted_key_ownership" | "assigned_machine" | "agent_model_credentials" | "sandbox_policy" | "quota";
+  severity: AutomationPreflightSeverity;
+  label: string;
+  detail: string;
+  blocksSave: boolean;
+}
+
+export interface AutomationPreflightGate {
+  blocked: boolean;
+  blockingChecks: AutomationPreflightCheck[];
+  requiresAck: boolean;
+  warnChecks: AutomationPreflightCheck[];
+}
+
+/** Result of POST /account/automations/simulate — explains, without running
+ *  anything, which automation a representative event would fire (and why the
+ *  rest didn't), any overlap/shadow warnings across the account's rules, and
+ *  the seven-check preflight for the tested automation. Powers the
+ *  Automations editor's "Test event" workflow. */
+export interface AutomationSimulationResult {
+  /** The tested automation's id — real for an existing automation (with or
+   *  without a draft patch), synthetic for a brand-new never-saved draft. */
+  subjectId: string;
+  matchedId?: string;
+  trail: AutomationMatchTrailEntry[];
+  overlaps: AutomationOverlapFinding[];
+  preflight: AutomationPreflightCheck[];
+  gate: AutomationPreflightGate;
+}
+
+/**
+ * Explain what a representative event would do against either an existing
+ * automation (optionally previewing an unsaved `draft` patch) or a brand-new
+ * draft that has never been saved. Creates no run and persists nothing.
+ */
+export function simulateAutomation(
+  store: LocalStore,
+  input: { automationId?: string; draft?: AutomationSimulationDraft; event?: AutomationSimulationEvent },
+  fetchImpl: typeof fetch = fetch,
+): Promise<AutomationSimulationResult> {
+  return automationRequest(store, "/account/automations/simulate", { method: "POST", body: JSON.stringify(input) }, fetchImpl);
 }
 
 export async function deleteAutomation(store: LocalStore, id: string, fetchImpl: typeof fetch = fetch): Promise<void> {
@@ -615,12 +1153,135 @@ export function runAutomationNow(store: LocalStore, id: string, fetchImpl: typeo
   return automationRequest(store, `/account/automations/${encodeURIComponent(id)}/run`, { method: "POST" }, fetchImpl);
 }
 
+/** Queue one governed, unattended Run without creating an Automation definition.
+ * `body` must already be E2E-encrypted for the machine named by `label`. */
+export function createOneOffRun(
+  store: LocalStore,
+  input: {
+    title: string;
+    body: string;
+    label: string;
+    repo?: string;
+    runtimeId?: string;
+    model?: string;
+    approvalMode?: AccountAutomation["approvalMode"];
+    sandbox?: AccountAutomation["sandbox"];
+    maxAttempts?: number;
+    /** An ad-hoc Run may continue an existing Session instead of creating one. */
+    targetKind?: "new_session" | "existing_session";
+    targetSessionId?: string;
+    sourceKey?: string;
+  },
+  fetchImpl: typeof fetch = fetch,
+): Promise<AccountAutomationRun> {
+  return automationRequest(store, "/account/automation-runs", { method: "POST", body: JSON.stringify(input) }, fetchImpl);
+}
+
 export function fetchAutomationRuns(
   store: LocalStore,
   limit = 50,
   fetchImpl: typeof fetch = fetch,
 ): Promise<AccountAutomationRun[]> {
   return automationRequest(store, `/account/automation-runs?limit=${encodeURIComponent(String(limit))}`, {}, fetchImpl);
+}
+
+/** A failed Run fetch that still tells the caller which explicit state to show:
+ *  `unauthorized`, `not_found`, or an `error` (offline/unknown). Lets the
+ *  routable Run screen render distinct states without string-matching. */
+export class RunFetchError extends Error {
+  constructor(
+    message: string,
+    readonly reason: "unauthorized" | "not_found" | "error",
+    readonly status?: number,
+  ) {
+    super(message);
+    this.name = "RunFetchError";
+  }
+}
+
+/** Fetch one Run by id for the routable /runs/:runId screen. Returns `null` when
+ *  the Run does not exist for this account (a non-leaking 404 — an id owned by
+ *  another account is indistinguishable from an unknown one). Throws a
+ *  {@link RunFetchError} for unauthorized, offline, and other failures so the UI
+ *  can distinguish loading/offline/not-found/unauthorized explicitly. */
+export async function fetchAutomationRun(
+  store: LocalStore,
+  id: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<AccountAutomationRun | null> {
+  let res: Response;
+  try {
+    res = await fetchImpl(`${cpBase(store)}/account/automation-runs/${encodeURIComponent(id)}`, {
+      headers: authHeaders(store),
+    });
+  } catch (cause) {
+    throw new RunFetchError("Could not reach the control plane", "error");
+  }
+  if (res.status === 404) return null;
+  if (res.status === 401) throw new RunFetchError("Unauthorized", "unauthorized", 401);
+  if (!res.ok) throw new RunFetchError(`automation run request failed: ${res.status}`, "error", res.status);
+  return (await res.json()) as AccountAutomationRun;
+}
+
+export type ProductMetricEvent =
+  | "activation_ready"
+  | "first_useful_response"
+  | "remote_reconnect"
+  | "remote_intervention"
+  | "run_accepted"
+  | "receipt_reviewed"
+  // Readiness-led first-run journey: one ok/failed pair per step, closed-enum
+  // and content-free (no ids, no reasons, no free text — see recordProductMetric).
+  // Sign-in itself is tracked server-side (control-plane FunnelEvent
+  // sign_in_completed/sign_in_failed) instead of here: a sign-in FAILURE has,
+  // by definition, no authenticated account yet to attribute this
+  // account-scoped metric to.
+  | "first_run_machine_ready"
+  | "first_run_machine_failed"
+  | "first_run_provider_connected"
+  | "first_run_provider_failed"
+  | "first_run_agent_verified"
+  | "first_run_agent_failed";
+export type ProductMetricClient = "desktop" | "mobile" | "cli" | "node";
+
+/** Emit one content-free milestone. The request contains closed enums only. */
+export async function recordProductMetric(store: LocalStore, event: ProductMetricEvent, client: ProductMetricClient, fetchImpl: typeof fetch = fetch): Promise<void> {
+  const res = await fetchImpl(`${cpBase(store)}/account/product-events`, {
+    method: "POST",
+    headers: authHeaders(store),
+    body: JSON.stringify({ event, client }),
+  });
+  if (!res.ok) throw new Error(`product event request failed: ${res.status}`);
+}
+
+/** Cancel a pending or active automation run. Repeating this call after a
+ * successful cancellation is idempotent; completed/failed runs are rejected. */
+export function cancelAutomationRun(
+  store: LocalStore,
+  id: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<AccountAutomationRun> {
+  return automationRequest<{ ok: true; run: AccountAutomationRun }>(
+    store,
+    `/account/automation-runs/${encodeURIComponent(id)}/cancel`,
+    { method: "POST" },
+    fetchImpl,
+  ).then((result) => result.run);
+}
+
+/** Start another durable attempt of the same Run. The control plane rejects
+ * successful/non-retryable Runs and exhausted attempt budgets. */
+export function retryAutomationRun(
+  store: LocalStore,
+  id: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<AccountAutomationRun> {
+  return automationRequest<{ ok: true; run: AccountAutomationRun }>(
+    store,
+    `/account/automation-runs/${encodeURIComponent(id)}/retry`,
+    { method: "POST" },
+    fetchImpl,
+  ).then((result) => result.run);
 }
 
 /** Recent incoming work items for the account, newest first (queue UI). */
@@ -757,94 +1418,6 @@ export async function connectLinearHook(
 export async function disconnectLinearHook(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<void> {
   const res = await fetchImpl(`${cpBase(store)}/account/linear-hook`, { method: "DELETE", headers: authHeaders(store) });
   if (!res.ok) throw new Error(`Disconnect Linear failed: ${res.status}`);
-}
-
-export interface AutomationHook {
-  id: string;
-  endpoint: string;
-  enabled: boolean;
-  templateInstruction: string;
-  routingDefault: string;
-  createdAt: string;
-  updatedAt?: string;
-}
-
-export interface AutomationOutcome {
-  id: string;
-  hookId: string;
-  status: "pending" | "claimed" | "running" | "needs_attention" | "succeeded" | "failed" | "cancelled" | "done";
-  title: string;
-  createdAt: string;
-  claimedAt?: string;
-  completedAt?: string;
-}
-
-export interface AutomationHooksInfo {
-  hooks: AutomationHook[];
-  outcomes: AutomationOutcome[];
-}
-
-export async function fetchAutomationHooks(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<AutomationHooksInfo> {
-  const res = await fetchImpl(`${cpBase(store)}/account/automation-hooks`, { headers: authHeaders(store) });
-  if (!res.ok) throw new Error(`automation hooks request failed: ${res.status}`);
-  const data: any = await res.json();
-  return {
-    hooks: Array.isArray(data?.hooks) ? data.hooks : [],
-    outcomes: Array.isArray(data?.outcomes) ? data.outcomes : [],
-  };
-}
-
-export async function createAutomationHook(
-  store: LocalStore,
-  input: { templateInstruction: string; routingDefault?: string },
-  fetchImpl: typeof fetch = fetch,
-): Promise<AutomationHook & { secret: string }> {
-  const res = await fetchImpl(`${cpBase(store)}/account/automation-hooks`, {
-    method: "POST",
-    headers: authHeaders(store),
-    body: JSON.stringify(input),
-  });
-  const data: any = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data?.error || `create automation hook failed: ${res.status}`);
-  return data;
-}
-
-export async function updateAutomationHook(
-  store: LocalStore,
-  id: string,
-  patch: Partial<Pick<AutomationHook, "enabled" | "templateInstruction" | "routingDefault">>,
-  fetchImpl: typeof fetch = fetch,
-): Promise<AutomationHook> {
-  const res = await fetchImpl(`${cpBase(store)}/account/automation-hooks/${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    headers: authHeaders(store),
-    body: JSON.stringify(patch),
-  });
-  const data: any = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data?.error || `update automation hook failed: ${res.status}`);
-  return data;
-}
-
-export async function rotateAutomationHookSecret(
-  store: LocalStore,
-  id: string,
-  fetchImpl: typeof fetch = fetch,
-): Promise<AutomationHook & { secret: string }> {
-  const res = await fetchImpl(`${cpBase(store)}/account/automation-hooks/${encodeURIComponent(id)}/rotate`, {
-    method: "POST",
-    headers: authHeaders(store),
-  });
-  const data: any = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data?.error || `rotate automation secret failed: ${res.status}`);
-  return data;
-}
-
-export async function revokeAutomationHook(store: LocalStore, id: string, fetchImpl: typeof fetch = fetch): Promise<void> {
-  const res = await fetchImpl(`${cpBase(store)}/account/automation-hooks/${encodeURIComponent(id)}`, {
-    method: "DELETE",
-    headers: authHeaders(store),
-  });
-  if (!res.ok) throw new Error(`revoke automation hook failed: ${res.status}`);
 }
 
 /** List the account's paired devices (for the device manager). */

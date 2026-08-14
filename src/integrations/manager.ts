@@ -1,9 +1,9 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { randomUUID } from "node:crypto";
-import type { ToolProvider, ToolResult, ToolSpec } from "../runtime/types.js";
+import type { AttachToChatFn, ToolProvider, ToolResult, ToolSpec } from "../runtime/types.js";
 import { IntegrationStore } from "./store.js";
-import { BUILT_IN_INTEGRATIONS } from "./registry.js";
+import { ATTACH_TO_CHAT_TOOL, BUILT_IN_INTEGRATIONS } from "./registry.js";
 import {
   buildAuthorizeUrl,
   createPkce,
@@ -31,13 +31,26 @@ type PendingOAuth = {
 };
 
 /**
+ * A settable box for a session id that isn't known yet when toolProvider() is
+ * called — the runtime/tool set is built before the specific session it will
+ * serve exists (see AttachToChatFn's doc in runtime/types.ts). The caller fills
+ * `current` in as soon as it knows it (immediately, if resuming an existing
+ * record; shortly after, once a fresh session's own id comes back).
+ */
+export interface SessionIdRef {
+  current?: string;
+}
+
+/**
  * Owns integration connections and exposes them to any agent as tools.
  *
  * - REST handlers in server.ts call `list / connectApiKey / startOAuth /
  *   completeOAuth / disconnect`.
- * - `toolProvider()` exposes the connected integrations' tools as a
- *   runtime-agnostic ToolProvider handed to each session; the tools execute here
- *   on the daemon (where credentials live) for in-process AND remote agents alike.
+ * - `toolProvider()` exposes the connected integrations' tools — plus the
+ *   always-on `attach_to_chat` tool (issue #291), when the daemon wired an
+ *   `attachToChat` callback — as a runtime-agnostic ToolProvider handed to each
+ *   session; the tools execute here on the daemon (where credentials live) for
+ *   in-process AND remote agents alike.
  */
 export class IntegrationManager {
   private readonly store: IntegrationStore;
@@ -46,12 +59,20 @@ export class IntegrationManager {
   private readonly pending = new Map<string, PendingOAuth>();
   /** Names of tools flagged risky (approval-gated), regardless of connection. */
   private readonly riskyTools: Set<string>;
+  /** Backs the native `attach_to_chat` tool (see toolProvider); undefined = the
+   *  tool isn't offered (e.g. a test harness that never wired one). */
+  private readonly attachToChat?: AttachToChatFn;
+  /** Additional Bivy-owned tools (for example governed child Runs), bound to
+   * the same lazy Session id as attach_to_chat. */
+  private readonly builtInToolProvider?: (sessionIdRef: SessionIdRef) => ToolProvider;
 
-  constructor(appDir: string, registry: IntegrationDef[] = BUILT_IN_INTEGRATIONS) {
+  constructor(appDir: string, registry: IntegrationDef[] = BUILT_IN_INTEGRATIONS, attachToChat?: AttachToChatFn, builtInToolProvider?: (sessionIdRef: SessionIdRef) => ToolProvider) {
     this.store = new IntegrationStore(appDir);
     this.secrets = new SecretVault(appDir);
     this.registry = registry;
     this.riskyTools = new Set(registry.flatMap((d) => d.tools.filter((t) => t.risky).map((t) => t.name)));
+    this.attachToChat = attachToChat;
+    this.builtInToolProvider = builtInToolProvider;
   }
 
   // --- helpers ------------------------------------------------------------
@@ -268,15 +289,23 @@ export class IntegrationManager {
   // --- agent-agnostic tool provider ---------------------------------------
 
   /**
-   * A runtime-agnostic ToolProvider exposing every connected integration's tools.
-   * This is the seam the daemon hands to a session (in-process OR remote) so any
-   * agent can use the tools without the IntegrationManager knowing which agent it
-   * is — the tools execute HERE, on the daemon, where the credentials/HTTP clients
-   * live. A snapshot of the connected set is taken per call (at session start),
-   * mirroring the previous per-session behavior; disconnected integrations
-   * contribute nothing, so the tool surface and system prompt stay clean.
+   * A runtime-agnostic ToolProvider exposing every connected integration's tools,
+   * plus the always-on `attach_to_chat` tool (issue #291) when this manager was
+   * built with an `attachToChat` callback. This is the seam the daemon hands to a
+   * session (in-process OR remote) so any agent can use the tools without the
+   * IntegrationManager knowing which agent it is — the tools execute HERE, on the
+   * daemon, where the credentials/HTTP clients live. A snapshot of the connected
+   * set is taken per call (at session start), mirroring the previous per-session
+   * behavior; disconnected integrations contribute nothing, so the tool surface
+   * and system prompt stay clean.
+   *
+   * `sessionIdRef` resolves the calling session for `attach_to_chat`: the
+   * provider is built before the session it will serve exists (see
+   * AttachToChatFn's doc), so the caller passes a box and fills `.current` in
+   * once the id is known rather than a plain string. Ignored (and the tool
+   * omitted) when either it or the attachToChat callback is absent.
    */
-  toolProvider(): ToolProvider {
+  toolProvider(sessionIdRef?: SessionIdRef): ToolProvider {
     const specs: ToolSpec[] = [];
     const executors = new Map<string, (params: unknown, signal?: AbortSignal) => Promise<ToolResult>>();
     for (const def of this.registry) {
@@ -295,6 +324,35 @@ export class IntegrationManager {
           }
         });
       }
+    }
+    if (this.builtInToolProvider && sessionIdRef) {
+      const provider = this.builtInToolProvider(sessionIdRef);
+      for (const spec of provider.list()) {
+        specs.push(spec);
+        executors.set(spec.name, (params, signal) => provider.invoke(spec.name, `bivy-${randomUUID()}`, params, signal));
+      }
+    }
+    if (this.attachToChat && sessionIdRef) {
+      const attachToChat = this.attachToChat;
+      specs.push({
+        name: ATTACH_TO_CHAT_TOOL.name,
+        label: ATTACH_TO_CHAT_TOOL.label,
+        description: ATTACH_TO_CHAT_TOOL.description,
+        promptSnippet: ATTACH_TO_CHAT_TOOL.description,
+        parameters: ATTACH_TO_CHAT_TOOL.parameters,
+      });
+      executors.set(ATTACH_TO_CHAT_TOOL.name, async (params) => {
+        const sessionId = sessionIdRef.current;
+        if (!sessionId) return { content: [{ type: "text", text: "Session is not ready yet — try again in a moment." }], details: {}, isError: true };
+        const p = (params ?? {}) as { filePath?: unknown; caption?: unknown; artifact?: unknown };
+        const filePath = typeof p.filePath === "string" ? p.filePath.trim() : "";
+        if (!filePath) return { content: [{ type: "text", text: "filePath is required" }], details: {}, isError: true };
+        const caption = typeof p.caption === "string" ? p.caption : undefined;
+        const artifact = p.artifact === true;
+        const result = attachToChat(sessionId, { filePath, caption, ...(artifact ? { artifact } : {}) });
+        if ("error" in result) return { content: [{ type: "text", text: result.error }], details: {}, isError: true };
+        return { content: [{ type: "text", text: `Attached ${result.ref.name} (${result.ref.kind}, ${result.ref.mimeType}) to the chat.` }], details: { ref: result.ref } };
+      });
     }
     return {
       list: () => specs,

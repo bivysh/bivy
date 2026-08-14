@@ -15,7 +15,9 @@ get shell completion.
 | See what's running and rejoin it | `bivy sessions` |
 | Rejoin the last session | `bivy resume` |
 | Ask one question and get one answer | `bivy exec "…"` |
+| Delegate one-off unattended work with checks and a Receipt | `bivy runs start "…"` |
 | Continue an existing session non-interactively | `bivy send <id> "…"` |
+| Send a file/image from the agent into the chat | `bivy attach <file>` |
 | Stop a session | `bivy kill <id>` |
 | Use the web/PWA app | `bivy relay:setup` then `bivy open` |
 | Pair my phone | `bivy link` |
@@ -24,8 +26,12 @@ get shell completion.
 | Keep the node running in the background | `bivy service install` |
 | See why something is broken | `bivy doctor`, then `bivy logs -f` |
 | Store an API token safely | `bivy secrets set <id>` |
+| Inspect or edit typed node configuration | `bivy config show`, `bivy config set …`, `bivy config explain …` |
+| Create repository safety/check policy | `bivy config init --project` |
 | Turn on voice input | `bivy voice key groq` |
 | Connect GitHub issue pickup | `bivy github:app-create` |
+| Manage version-controlled automations | `bivy automation init`, then `validate`, `test`, and `apply` |
+| List or manually trigger automations | `bivy automation list`, `bivy automation trigger <id-or-key>` |
 | Reclaim disk | `bivy prune` |
 | Upgrade | `bivy update` |
 | Remove Bivy | `bivy uninstall` |
@@ -71,8 +77,8 @@ bivy setup
 
 ### `bivy` (no arguments)
 
-If `<data-dir>/cli.json` exists, this is the same as `bivy run` with no agent —
-it launches the default agent. If it does not exist, it runs `bivy setup`.
+Prints the short command overview. Use `bivy setup` for first-run configuration
+and `bivy run <agent>` to launch an agent.
 
 ### `bivy completions <bash|zsh|fish>`
 
@@ -91,10 +97,14 @@ bivy completions fish > ~/.config/fish/completions/bivy.fish
 
 ### `bivy run [agent] [flags] [-- command…]`
 
-Launches an agent inside a PTY owned by the node. The agent's real TUI runs in
-your terminal, but because the node owns the PTY the same live session is
-visible and drivable from the web/PWA app, and resumable later with
+By default, launches an agent inside a PTY owned by the node. The agent's real
+TUI runs in your terminal, but because the node owns the PTY the same live
+session is visible and drivable from the web/PWA app, and resumable later with
 `bivy resume`.
+
+With `--chat`, creates a governed chat session through the same runtime path as
+the web/PWA app and opens that session in the app. It does not launch the
+agent's native TUI.
 
 Built-in runnable agent ids: `pi`, `claude`, `openclaw`, `codex`, `opencode`,
 `aider`, `hermes`, `goose`, `gemini`, `qwen`, `cline`, `crush`, `cursor`,
@@ -110,8 +120,10 @@ Flags (consumed by Bivy; everything else is forwarded to the agent):
 
 | Flag | Meaning |
 | --- | --- |
+| `--chat` | Start a governed app/chat session instead of a native PTY |
+| `--no-open` | With `--chat`, create the session and print its app URL without launching a browser |
 | `--name <label>` | Session label shown in `bivy sessions` and the app |
-| `--model <model>` | Recorded as run-terminal metadata **and** prepended to the agent's args as `--model <model>`. Not injected for the `-- <command>` form |
+| `--model <model>` | Select the governed session model with `--chat`; otherwise record run-terminal metadata and prepend `--model <model>` to the agent's args. Not injected for the `-- <command>` form |
 | `--node <name>` | Start the session on another registered node instead (see `bivy nodes`) |
 | `--workspace <dir>` | Start in an existing directory. Must exist |
 | `--clone` | Clone the current folder's `origin` remote (or the local checkout if there is no remote) into `<data-dir>/workspaces/<repo>-<rand>` and start there |
@@ -120,7 +132,10 @@ Flags (consumed by Bivy; everything else is forwarded to the agent):
 Everything after a bare `--` is passed through untouched.
 
 `--clone` and `--workspace` cannot be combined with `--node` — the checkout
-would only exist on the local machine.
+would only exist on the local machine. `--chat` currently targets the local node
+and cannot be combined with `--node`. Native agent arguments and the raw
+`-- <command>` form are not accepted with `--chat`, because governed runtimes
+select their own protocol or headless launch arguments.
 
 For `claude`, Bivy pins a session UUID at launch (`--session-id`) unless you
 already passed `--session-id`, `--resume`, `-r`, `-c`, or `--continue`. It
@@ -128,6 +143,8 @@ prints the pinned id so you can resume in a plain terminal later.
 
 ```bash
 bivy run claude
+bivy run claude --chat
+bivy run codex --chat --no-open --name "auth refactor"
 bivy run codex --name "auth refactor"
 bivy run gemini --model gemini-2.5-pro
 bivy run claude --clone git@github.com:acme/api.git
@@ -136,23 +153,109 @@ bivy run claude --node work
 bivy run -- npm run my-agent
 ```
 
+### `bivy runs start "<instructions>" [flags]`
+
+Queues a one-off unattended **Run** without saving an Automation definition. The
+instruction is end-to-end encrypted for this node. Unlike `bivy run <agent>`,
+which opens an interactive Session, this command returns after queueing governed
+background work with checks, evidence, and a Receipt.
+
+```bash
+bivy runs start "Fix the flaky auth test and open a PR" --repo acme/api
+bivy runs start "Audit dependency licenses" --agent claude --sandbox read-only
+cat task.md | bivy runs start - --name "Dependency cleanup" --json
+```
+
+Flags: `--name`, `--repo owner/name`, `--agent`, `--model`, `--approval`,
+`--sandbox`, `--max-attempts`, and `--json`. The Run targets the node where the
+command is executed. Remote-machine selection is available in the React app.
+
+### `bivy runs <list|status|wait>`
+
+Inspect Runs from a terminal or another agent without exposing instructions or
+transcripts:
+
+```bash
+bivy runs list --json
+bivy runs status <run-id> --json
+bivy runs wait <run-id> --timeout 1800 --json
+```
+
+`list` returns recent account Runs and accepts `--limit 1..100`. `status` returns
+the lifecycle, attempt, bounded check/evidence metadata, and output references
+such as session, branch, or pull request. `wait` polls until `succeeded`,
+`failed`, or `cancelled`; it exits 0 for success, 1 for failed/cancelled, and 2
+on timeout. `--interval` and `--timeout` are seconds, defaulting to 2 and 3600.
+This makes a machine-readable handoff straightforward:
+
+```bash
+run_id=$(bivy runs start "Implement the parser" --repo acme/api --json | jq -r .id)
+if result=$(bivy runs wait "$run_id" --json); then
+  pr=$(jq -r '.output.prUrl // empty' <<<"$result")
+fi
+```
+
+These APIs return the bounded Run title and metadata, but intentionally omit the
+encrypted instruction body, inbound event context, transcript, diff, file
+content, and raw tool/check output.
+
 ### `bivy agents [--json]`
 
-Lists the built-in agent ids, their display names, whether the CLI is installed,
-and its resolved path. `--json` prints a machine-readable object.
+Lists known agent integrations, whether each upstream CLI is installed, and its
+resolved path. `--json` prints a machine-readable object.
 
 ```bash
 bivy agents
 bivy agents --json
 ```
 
+### `bivy agent <add|list|remove>`
+
+Connect an existing user-owned agent using the ordinary declarative package
+contract:
+
+```bash
+bivy agent add company-agent --command company-agent --transport acp --args '["serve","--acp"]'
+bivy agent add script-agent --command script-agent --transport process --prompt-mode stdin
+bivy agent list --json
+bivy agent remove company-agent
+```
+
+`add` never imports agent code into the daemon. ACP and custom protocol logic run
+out of process; process adapters receive only the capabilities they explicitly
+declare and validate. Restart Bivy after add/remove.
+
+### `bivy plugin <init|validate|doctor|test|install|list|remove>`
+
+Develop and manage node-local declarative agent plugins:
+
+```bash
+bivy plugin init ./company-agent --adapter acp
+bivy plugin validate ./company-agent
+bivy plugin doctor ./company-agent
+bivy plugin test ./company-agent
+bivy plugin install ./company-agent
+bivy plugin list --json
+bivy plugin remove company-agent
+```
+
+`doctor` checks the declared Bivy compatibility range and executable resolution.
+`test` additionally performs a live ACP initialize/session handshake; process
+adapters remain static-only so the test cannot spend money or mutate a workspace.
+`install` accepts `--force` to replace the same plugin id and rejects an
+incompatible `requires.bivy` range. Install/remove require `bivy restart`. Plugin
+installation validates and copies a manifest; it never downloads a package or
+runs an installer. See [plugins.md](plugins.md).
+
 ### `bivy agents:install`
 
 Alias: `bivy runtimes:install`.
 
-Installs the bundled agent runtimes: the Claude Agent SDK (into the Bivy
-install), and — as user-global npm/pip installs under `~/.local` — Claude Code,
-Codex, OpenCode, Aider, Hermes and Gemini CLI. Failures are non-fatal.
+Installs known upstream agent CLIs under the user's `~/.local` prefix: Pi,
+Claude Code, Codex, OpenCode, Aider, Hermes, and Gemini CLI. It also ensures any
+Bivy-side protocol bridge dependency is present. The agents remain upstream-owned
+commands with their own authentication, configuration, and sessions. Failures
+are non-fatal.
 
 Skipped entirely when `BIVY_SKIP_AGENT_PREINSTALL=1`.
 
@@ -196,6 +299,32 @@ the same client `bivy exec` uses, with `--session <id>`.
 bivy send 3f1c9a02-… "now add a test for that"
 ```
 
+### `bivy attach <file> [--caption "…"] [--artifact] [--session <id>]`
+
+Surfaces a file the agent produced into the chat as an attachment — an image
+renders inline as a thumbnail, anything else as a downloadable file chip (the
+reverse of the composer paperclip). Meant to be run **by the agent itself**: any
+agent that can run a shell command can call it, so it works across runtimes. The
+session id defaults to `$BIVY_SESSION_ID`, which the daemon injects into the
+agent's subprocess environment; pass `--session` to target another session.
+
+The file is resolved against the current directory and **confined to the session
+workspace** — a path (or symlink) that escapes the workspace is refused, so this
+can't be turned into a file-exfiltration primitive. On a single-user host the
+loopback auth bypass means no token is needed.
+
+Pass `--artifact` to mark the attachment as a named artifact — a durable output
+worth surfacing in the session's **Artifacts** sheet (a report, benchmark
+result, coverage output, or build archive) — rather than an incidental inline
+image. Ordinary attachments (no flag) still show up in the chat exactly as
+before; the flag only adds a badge in the Artifacts sheet.
+
+```bash
+bivy attach ./out/chart.png --caption "Revenue by month"
+bivy attach report.pdf
+bivy attach coverage/index.html --artifact --caption "Coverage report"
+```
+
 ### `bivy takeover <termId|session-id>`
 
 "Continue as chat." Stops the native TUI running in a pinned run-terminal
@@ -206,6 +335,89 @@ id; anything else as a run-terminal id.
 ```bash
 bivy takeover 3f1c9a02-6b41-4a0f-9c2e-5d7f1b0a8e33
 ```
+
+## Configuration as code
+
+### `bivy config <init|validate|show|get|set|unset|explain|path|edit>`
+
+Manages the typed `<data-dir>/config.yaml`. `init` migrates existing `cli.json`
+and `settings.json`; those files then remain generated compatibility
+projections. The web Settings screen edits the same canonical YAML. `edit` opens
+the file in `$EDITOR` (`$VISUAL`/`$EDITOR`, else `nano`).
+
+```bash
+bivy config init
+bivy config validate
+bivy config show
+bivy config get defaults.agent
+bivy config set defaults.agent codex
+bivy config explain defaults.sandbox
+bivy config edit
+bivy config init --project
+bivy config validate --project
+```
+
+The project form creates/validates `.bivy/policy.yaml`: repository-owned sandbox
+and approval bounds, deterministic checks, and retry/fallback rules. See
+[config-as-code.md](config-as-code.md).
+
+### `bivy credentials <list|add|remove|sync|preset|ingest|config>`
+
+CLI parity with the web **Keys & OAuth** screen: manage multiple labeled
+credentials per provider, per-credential sync, selection presets, and the
+agent-native ingest policy. Operates directly on the node's vault +
+`credentials.config.json` (no running daemon required). `bivy login` still adds a
+provider's default OAuth/API-key login. See
+[key-management.md](key-management.md).
+
+```bash
+bivy credentials list                                   # never prints secrets
+bivy credentials add anthropic work                     # prompts for the key
+bivy credentials add anthropic personal op://Vault/Anthropic/key   # or a reference
+bivy credentials remove anthropic personal
+bivy credentials sync anthropic work node               # keep on this node only
+
+bivy credentials preset set project:acme anthropic work # for a preset, pick the key
+bivy credentials preset use project:acme                # activate a preset
+bivy credentials preset list
+
+bivy credentials ingest separate                        # merge | separate
+bivy credentials config path|show|edit                  # the config file
+```
+
+`add` takes an API key or a reference (`op://…` / `env://NAME` / `cmd://<command>`);
+the secret is stored in the encrypted vault (or, for a reference, only the pointer).
+
+## Automations as code
+
+### `bivy automation <list|trigger|init|validate|plan|test|apply>`
+
+Lists and manually triggers account automations, or defines automations in
+`.bivy/automations.yaml` and reconciles them to the enrolled control plane.
+Validation, planning, and event simulation run locally and do not create runs
+or upload instructions.
+
+```bash
+bivy automation list
+bivy automation list --json
+bivy automation trigger <automation-id>
+bivy automation trigger <config-key> --json
+bivy automation init
+bivy automation validate
+bivy automation plan --json
+bivy automation test --event .bivy/events/failed-ci.yaml
+bivy automation apply
+bivy automation apply --prune
+```
+
+`trigger` (alias `run`) accepts the immutable automation id or, for an automation
+managed as code, its `configKey`. It prints the new run id; `--json` prints the
+complete run record. `list`, `trigger`, and `apply` require an enrolled node.
+
+`apply` encrypts instructions for the applying node before upload. `--prune`
+removes only source-controlled definitions absent from the file, never
+app-created definitions. See [automations-as-code.md](automations-as-code.md) for
+the schema, fixture fields, and safety behavior.
 
 ## Sessions
 
@@ -277,7 +489,7 @@ success it prints the new epoch and the `bivy resume` command to continue. See
 bivy promote 3f1c9a02-6b41-4a0f-9c2e-5d7f1b0a8e33
 ```
 
-## Nodes and remote access
+## Machines and remote access
 
 ### `bivy relay:setup [flags]`
 
@@ -410,8 +622,8 @@ carry the Bivy shim marker, then reconciles the managed `PATH` block.
 With no subcommand, prints the installed shims and whether each one currently
 wins on `PATH`.
 
-`pi` cannot be shimmed — it is Bivy's own built-in runtime, not a standalone
-binary.
+Pi is treated like every other upstream agent: `bivy shim install pi` wraps the
+operator-installed `pi` command and preserves non-TTY/headless passthrough.
 
 ```bash
 bivy shim install claude
@@ -645,7 +857,7 @@ bivy logs --lines 500
 
 ### `bivy update [--force|--no-wait] [--staging|--stable|--channel <name>]`
 
-Updates Bivy, reinstalls dependencies, installs bundled agents, and restarts the
+Updates Bivy, reinstalls dependencies, installs known upstream agents, and restarts the
 service. Waits for busy sessions first unless `--force`/`--no-wait`.
 
 **Release channel.** Update follows the channel recorded at install time — the
@@ -659,7 +871,7 @@ not.)
 
 What it actually does depends on how Bivy was installed (`<ch>` = the channel):
 
-- **git checkout** — `git pull --ff-only`, then `npm ci`/`npm install`.
+- **git checkout** — `git pull --ff-only`, then `pnpm install --frozen-lockfile`.
 - **`npm i -g @bivy/bivy`** — `npm install -g @bivy/bivy@<ch>`.
 - **`npx bivy`** — nothing; explains that npx always fetches the latest.
 - **installer tarball** — re-runs `curl -fsSL https://bivy.sh/install.sh | bash`

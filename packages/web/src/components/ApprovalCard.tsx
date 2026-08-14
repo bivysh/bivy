@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, useState } from "react";
 import { formatApproval, type ApprovalRequest } from "@bivy/core";
@@ -50,7 +50,7 @@ function ApprovalCard({
   };
   const badgeText = f.severity === "critical" ? "Permanent" : f.severity === "high" ? "High risk" : f.severity === "medium" ? "Medium risk" : "Low risk";
   return (
-    <div className={`approval-card sev-${f.severity}${pending ? " pending" : ""}`}>
+    <div id={`attention-${encodeURIComponent(approval.id)}`} className={`approval-card sev-${f.severity}${pending ? " pending" : ""}`}>
       <div className="approval-head">
         <span className="approval-title">{f.title}</span>
         <span className={`approval-badge tone-${f.severity}`}>{badgeText}</span>
@@ -74,7 +74,7 @@ function ApprovalCard({
       {showRaw && <pre className="approval-summary">{f.rawInput}</pre>}
       {pending ? (
         <div className="approval-waiting">
-          Waiting for the node to apply your choice…
+          Waiting for the machine to apply your choice…
           {stalled && (
             <div className="approval-stalled">
               <span>This is taking longer than expected.</span>

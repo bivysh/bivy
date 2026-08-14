@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -9,10 +9,9 @@ import { WebSocket } from "ws";
 /**
  * Entitlement-gate test for the relay.
  *
- * Launch policy gives Free accounts one hosted-relay node. This covers the
- * entitlement enforcement path with ENFORCE_ENTITLEMENTS=1 so a fresh free
- * account can connect to the relay, and the dev billing webhook can still move
- * the account to Individual without breaking relay access.
+ * Free-trial and paid accounts may enroll unlimited nodes and use the hosted
+ * relay. This covers the relay entitlement path with ENFORCE_ENTITLEMENTS=1 so
+ * a fresh free account can connect, and a billing upgrade keeps relay access.
  */
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));

@@ -1,7 +1,23 @@
 # Bivy documentation
 
-**Start here:** [Quickstart](quickstart.md) — install Bivy, start a node, and
-run your first agent session.
+**Start here:** [Quickstart](quickstart.md) — install Bivy, start a Machine, and
+run your first agent Session.
+
+## Choose an outcome
+
+| I want to… | Start here | Then use |
+| --- | --- | --- |
+| Give an agent my real repo, services, database, private network, or GPU | [Capability recipes](capability-recipes.md#work-in-the-real-environment) | [Runtime support matrix](runtime-support-matrix.md) |
+| Continue work from my phone with voice and files | [Capability recipes](capability-recipes.md#continue-from-a-phone-with-voice-and-files) | [Remote access](remote-access.md) |
+| Hand work between terminal and chat, or import an existing agent Session | [Capability recipes](capability-recipes.md#switch-surfaces-and-import-native-sessions) | [Agent shims](agent-shim.md) |
+| Fork work to another agent, model, or Machine | [Capability recipes](capability-recipes.md#fork-or-move-a-session) | [Runtime support matrix](runtime-support-matrix.md) |
+| Use a fleet of workstations, servers, and GPU Machines | [Capability recipes](capability-recipes.md#use-multiple-machines) | [CLI reference](cli-reference.md#machines-and-remote-access) |
+| Start checked work from failed CI, an issue, a schedule, or a webhook | [Capability recipes](capability-recipes.md#let-events-start-runs) | [Automations as code](automations-as-code.md) |
+| Bring an ACP or headless process agent | [Capability recipes](capability-recipes.md#bring-a-custom-agent) | [Plugins](plugins.md) |
+| Understand what leaves my Machine | [Why Bivy](why-bivy.md#a-precise-trust-boundary) | [Security model](security-model.md) |
+
+The reference organization below remains the fastest path when you already know
+which subsystem or command you need.
 
 ## Getting started
 
@@ -14,7 +30,11 @@ run your first agent session.
 
 | Doc | Who it's for |
 | --- | --- |
-| [agent-shim.md](agent-shim.md) | Users running an agent Bivy doesn't ship with, and anyone adding a new one. |
+| [capability-recipes.md](capability-recipes.md) | Developers applying Bivy to real environments, remote continuity, Machine fleets, and event-driven work. |
+| [agent-shim.md](agent-shim.md) | Users wrapping an agent's native terminal session with Bivy. |
+| [plugins.md](plugins.md) | Developers adding an external process or ACP agent through a declarative plugin manifest. |
+| [automations-as-code.md](automations-as-code.md) | Developers defining, validating, simulating, and applying automations from YAML. |
+| [automation-evaluator.md](automation-evaluator.md) | Contributors touching automation matching/preflight — the shared first-match, overlap, and checklist logic behind config-as-code, the control plane, and the PWA. |
 | [agents/](agents/README.md) | Per-agent setup: install command, how to authenticate it, model picker, resume support, and known gaps — one short page per agent in the picker. |
 | [troubleshooting.md](troubleshooting.md) | Anyone whose node won't start, won't connect, or won't behave. |
 
@@ -28,9 +48,12 @@ run your first agent session.
 
 | Doc | Who it's for |
 | --- | --- |
-| [configuration.md](configuration.md) | Users tuning node settings, environment variables, and defaults. |
+| [config-as-code.md](config-as-code.md) | Developers managing typed node configuration and repository policy in YAML. |
+| [configuration.md](configuration.md) | Complete environment-variable and internal state reference. |
 | [cli-reference.md](cli-reference.md) | Anyone looking up a `bivy` command, flag, or subcommand. |
 | [runtime-support-matrix.md](runtime-support-matrix.md) | Users deciding which agent to run and what works with it today. |
+| [agent-execution-modes.md](agent-execution-modes.md) | Design and implementation plan for choosing protocols, pipes, or PTYs per agent. |
+| [session-reliability-plan.md](session-reliability-plan.md) | Standing plan for making live sessions solid: event delivery, status, turn-end, surfacing. |
 
 ## Security
 

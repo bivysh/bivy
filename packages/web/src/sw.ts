@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 /// <reference lib="webworker" />
 //
@@ -30,9 +30,12 @@ precacheAndRoute(self.__WB_MANIFEST);
 //  - /auth: full-page sign-in navigations (OAuth start/callback, magic-link
 //    consume) that must reach the server so it can 302 to GitHub / redirect
 //    back with the session. Mirrors the old `navigateFallbackDenylist`.
+//  - /janitor: a separately-built product surface served through the control
+//    plane. Returning Bivy's cached index here would leave /janitor in the URL
+//    while rendering the ordinary Bivy start screen.
 registerRoute(
   new NavigationRoute(createHandlerBoundToURL("index.html"), {
-    denylist: [/^\/api/, /^\/ws/, /^\/auth/],
+    denylist: [/^\/api/, /^\/ws/, /^\/auth/, /^\/janitor(?:\/|$)/],
   }),
 );
 

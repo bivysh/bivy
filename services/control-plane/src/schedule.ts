@@ -1,6 +1,6 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 import { CronExpressionParser } from "cron-parser";
-import type { AutomationDefinition, MeshStore } from "./store.js";
+import type { AutomationDefinition, AutomationRun, MeshStore } from "./store.js";
 
 export type ScheduleSpec = NonNullable<AutomationDefinition["schedule"]>;
 
@@ -53,15 +53,25 @@ export function nextOccurrence(schedule: ScheduleSpec, after = new Date()): stri
  * Catch-up policy: enqueue only the earliest missed occurrence, then advance
  * from "now". This avoids a restart storm while retaining one durable run for
  * work that became due while the control plane was offline.
+ *
+ * `onEnqueued` fires per created run so callers can poke connected relays for
+ * near-instant pickup instead of waiting for the node's poll interval.
  */
-export async function processDueSchedules(store: MeshStore, now = new Date()): Promise<number> {
+export async function processDueSchedules(
+  store: MeshStore,
+  now = new Date(),
+  onEnqueued?: (accountId: string, run: AutomationRun) => void,
+): Promise<number> {
   const due = await store.listDueAutomationDefinitions(now.toISOString());
   let enqueued = 0;
   for (const definition of due) {
     if (!definition.enabled || !definition.nextRunAt || !definition.schedule) continue;
     const next = definition.schedule.kind === "cron" ? nextOccurrence(definition.schedule, now) : undefined;
     const run = await store.enqueueScheduledOccurrence(definition.accountId, definition.id, definition.nextRunAt, next);
-    if (run) enqueued += 1;
+    if (run) {
+      enqueued += 1;
+      onEnqueued?.(definition.accountId, run);
+    }
   }
   return enqueued;
 }
@@ -70,7 +80,11 @@ export class AutomationScheduler {
   private timer?: NodeJS.Timeout;
   private ticking = false;
 
-  constructor(private readonly store: MeshStore, private readonly intervalMs = 15_000) {}
+  constructor(
+    private readonly store: MeshStore,
+    private readonly intervalMs = 15_000,
+    private readonly onEnqueued?: (accountId: string, run: AutomationRun) => void,
+  ) {}
 
   start(): void {
     void this.tick();
@@ -86,7 +100,7 @@ export class AutomationScheduler {
     if (this.ticking) return 0;
     this.ticking = true;
     try {
-      return await processDueSchedules(this.store, now);
+      return await processDueSchedules(this.store, now, this.onEnqueued);
     } finally {
       this.ticking = false;
     }

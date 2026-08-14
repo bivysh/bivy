@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
 // Node-side mirror of the shared E2E wire-format constants. The spec's home is
@@ -30,6 +30,10 @@ export const HKDF_INFO = {
   modelAuthVault: "bivy-model-auth-vault-v1",
   /** GitHub App private-key vault delivery (node-only, opt-in — issue #88). */
   githubAppVault: "bivy-github-app-vault-v1",
+  /** Device→device ephemeral-provider-token vault delivery (opt-in). Unlike the
+   *  node vaults above, the recipients are the account's paired DEVICES, so a
+   *  second device can wake/reach a machine the first launched. */
+  deviceVault: "bivy-device-vault-v1",
 } as const;
 
 /** Version byte stamped into every sealed frame's authenticated plaintext. */

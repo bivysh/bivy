@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
 // Smoke tests for the top-level `bivy` CLI dispatcher (bin/bivy.mjs): the
@@ -48,9 +48,18 @@ test("`bivy --help` exits 0 and lists core commands", () => {
   const r = runCli(["--help"]);
   assert.equal(r.status, 0, `expected exit 0, got ${r.status}: ${r.stderr}`);
   const out = r.stdout + r.stderr;
-  for (const cmd of ["bivy run", "bivy setup", "bivy sessions", "bivy doctor", "bivy version"]) {
+  for (const cmd of ["bivy run", "bivy setup", "bivy sessions", "bivy automation", "bivy config", "bivy doctor", "bivy version"]) {
     assert.ok(out.includes(cmd), `help should mention "${cmd}"`);
   }
+});
+
+test("bare `bivy` shows the command overview without starting setup or an agent", () => {
+  const r = runCli([]);
+  assert.equal(r.status, 0, `expected exit 0, got ${r.status}: ${r.stderr}`);
+  const out = r.stdout + r.stderr;
+  assert.match(out, /bivy — Bivy node CLI/);
+  assert.match(out, /bivy run claude/);
+  assert.doesNotMatch(out, /Which agent do you want to try first|Installing dependencies/);
 });
 
 test("redirected help output contains no ANSI control sequences", () => {
@@ -65,13 +74,27 @@ test("NO_COLOR wins even when FORCE_COLOR is set", () => {
   assert.ok(!(r.stdout + r.stderr).includes("\u001b["), "NO_COLOR output should not contain ANSI escapes");
 });
 
+test("`bivy config --help` exposes typed config and precedence inspection", () => {
+  const r = runCli(["config", "--help"]);
+  assert.equal(r.status, 0, `expected exit 0, got ${r.status}: ${r.stderr}`);
+  const out = r.stdout + r.stderr;
+  for (const command of ["init", "validate", "show", "set", "explain"]) assert.ok(out.includes(command));
+});
+
+test("`bivy automation --help` exposes management and dispatch commands", () => {
+  const r = runCli(["automation", "--help"]);
+  assert.equal(r.status, 0, `expected exit 0, got ${r.status}: ${r.stderr}`);
+  const out = r.stdout + r.stderr;
+  for (const command of ["list", "trigger", "init", "validate", "plan", "test", "apply"]) assert.ok(out.includes(command));
+});
+
 test("`bivy setup --help` describes remote enrollment", () => {
   const r = runCli(["setup", "--help"]);
   assert.equal(r.status, 0, `expected exit 0, got ${r.status}: ${r.stderr}`);
   assert.match(r.stdout + r.stderr, /remote access \+ sign-in/i);
 });
 
-test("`bivy --help` lists every built-in 'bivy run' agent, not a stale subset", () => {
+test("`bivy --help` lists every known 'bivy run' integration, not a stale subset", () => {
   // Regression test for #113: this line used to be a hand-maintained string
   // that fell out of sync with BUILTIN_TERMINAL_AGENTS as agents were added.
   const r = runCli(["--help"]);
@@ -121,7 +144,7 @@ test("`bivy agents:install --help` exits 0 and does not install anything", () =>
   assert.equal(r.status, 0, `expected exit 0, got ${r.status}: ${r.stderr}`);
   const out = r.stdout + r.stderr;
   assert.match(out, /Usage: bivy agents:install/);
-  assert.doesNotMatch(out, /Ensuring bundled agent runtimes/, "--help must not install agent runtimes");
+  assert.doesNotMatch(out, /Ensuring known agent integrations/, "--help must not install agent integrations");
 });
 
 test("`bivy run --help` (no agent) shows bivy's own help, not an agent's", () => {

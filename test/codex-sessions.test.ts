@@ -167,6 +167,20 @@ check("writeCodexRollout synthesises a rollout that reads back as the full trans
     "/work/ported",
   );
   assert.equal(sessionFile, id, "the resume ref is the rollout id");
+  // Codex itself requires `originator` on SessionMeta. Its current parser can
+  // backfill session_id from id for old rollouts, but newly synthesised history
+  // should carry both; otherwise thread/resume skips this malformed first record
+  // and reports that the rollout does not start with session metadata.
+  const written = listCodexSessions().find((session) => session.id === id);
+  assert.ok(written, "the synthesised rollout is listed");
+  const firstRecord = JSON.parse(fs.readFileSync(written!.file, "utf8").split(/\r?\n/, 1)[0]!) as {
+    type?: string;
+    payload?: Record<string, unknown>;
+  };
+  assert.equal(firstRecord.type, "session_meta");
+  assert.equal(firstRecord.payload?.session_id, id);
+  assert.equal(firstRecord.payload?.id, id);
+  assert.equal(firstRecord.payload?.originator, "bivy");
   // Reads back through the ordinary reader as an in-order user/assistant turn pair.
   const msgs = loadCodexTranscript(id) as Array<{ role: string; content: string }>;
   assert.deepEqual(msgs.map((m) => [m.role, m.content]), [["user", "port the parser to rust"], ["assistant", "Starting the port."]]);

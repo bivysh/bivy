@@ -1,12 +1,14 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AppState, ModelInfo, RuntimeInfo } from "@bivy/core";
+import type { AppState, ModelInfo, RuntimeInfo, SessionContract } from "@bivy/core";
+import { resolveSessionContract } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { Sheet, PickerItem } from "./Sheet.js";
 import { useModalEscape } from "../modalStack.js";
 import { ProviderConnectForm } from "./ProviderConnect.js";
 import { SANDBOX_TIERS } from "./Settings.js";
+import { writeClipboard } from "../clipboard.js";
 
 function agentLabel(a: RuntimeInfo): string {
   return String(a.displayName || a.name || a.id || "Agent");
@@ -22,18 +24,55 @@ const THINKING_LABELS: Record<string, string> = {
 
 function runtimeCapabilityChips(a: RuntimeInfo): Array<{ label: string; ok: boolean }> {
   const caps = (a.capabilities || {}) as Record<string, unknown>;
+  const mode = String((a as { executionMode?: unknown }).executionMode || "");
+  const modeLabel = mode === "protocol" ? "Protocol" : mode === "structured-pipe" ? "Structured" : mode === "pipe" ? "Chat pipe" : mode === "pty" ? "Terminal" : "";
   // "Approvals" is on for native per-tool interception OR the MCP-proxy gate
   // (which governs the agent's MCP tool calls through the same Approve/Deny flow).
   return [
+    ...(modeLabel ? [{ label: modeLabel, ok: true }] : []),
     { label: "Approvals", ok: Boolean(caps.toolInterception) || Boolean(caps.mcpToolApprovals) },
     { label: "Resume", ok: Boolean(caps.resume) },
     { label: "Models", ok: Boolean(caps.modelSelection) },
-    { label: "Fork", ok: Boolean(caps.fork) },
+    // Forking is a Bivy session-layer feature. Every agent can at least receive
+    // the portable seeded continuation; native capabilities only improve its
+    // fidelity and must not make the picker claim other agents cannot fork.
+    { label: "Fork", ok: true },
   ];
 }
 
 function runtimeTier(runtime: RuntimeInfo): string {
   return String((runtime as { supportTier?: unknown }).supportTier || "experimental");
+}
+
+/**
+ * Preview an Effective Session Contract for a runtime BEFORE a session
+ * exists, from the same `RuntimeInfo` the picker already renders — no extra
+ * round trip. Mirrors the node's `computeSessionContract` (src/session/
+ * session-contract.ts): same field mapping, `preview: true` instead of a
+ * live-resolved agent version/credential kind. Used to decide whether the
+ * picker must gate the pick behind a confirm-to-continue step, and the node
+ * re-checks this itself on session.new — this preview is UX, not the floor.
+ */
+function previewContractForRuntime(a: RuntimeInfo): SessionContract {
+  const caps = (a.capabilities || {}) as { resume?: boolean; sessionRefIsPath?: boolean; toolInterception?: boolean; mcpToolApprovals?: boolean };
+  const authOwner = (a as { authOwner?: string }).authOwner;
+  return resolveSessionContract({
+    now: new Date().toISOString(),
+    preview: true,
+    agentId: a.id,
+    agentDisplayName: agentLabel(a),
+    detectedVersion: a.testedVersion,
+    versionSource: a.testedVersion ? "tested-pin" : undefined,
+    supportTier: a.supportTier,
+    certification: a.certification,
+    executionMode: a.executionMode,
+    authOrigin: authOwner === "bivy" ? "bivy" : authOwner === "agent" ? "agent-native" : "unknown",
+    resumeAdvertised: caps.resume === true,
+    resumeRefIsPath: caps.sessionRefIsPath === true,
+    toolInterceptionEnforced: caps.toolInterception === true,
+    mcpToolApprovalsOnly: caps.mcpToolApprovals === true,
+    runtimeEnforcement: a.protectionLevel,
+  });
 }
 
 function tierLabel(tier: string): string {
@@ -45,11 +84,37 @@ function tierLabel(tier: string): string {
 
 function RuntimeMeta({ runtime, text }: { runtime: RuntimeInfo; text?: string }) {
   const tier = runtimeTier(runtime);
+  const protectionLevel = runtime.protectionLevel || "user-permissions";
+  const protectionLabel = runtime.protectionLabel || "Protection unknown";
   return (
     <span className="runtime-meta">
       {text && <span className="runtime-meta-text">{text}</span>}
-      <span className="runtime-capabilities" aria-label="Runtime support tier and capabilities">
-        <span className={`runtime-tier ${tier}`}>{tierLabel(tier)}</span>
+      <span className="runtime-capabilities" aria-label="Agent support tier, protection, and capabilities">
+        <span
+          className={`runtime-tier ${tier}`}
+          title={runtime.certification === "release-tested"
+            ? `Release-tested${runtime.testedVersion ? ` with version ${runtime.testedVersion}` : ""}`
+            : runtime.certification === "adapter-tested" ? "Adapter tests pass; live CLI compatibility is not release-certified" : "Not release-certified"}
+        >
+          {tierLabel(tier)}{runtime.testedVersion ? ` · ${runtime.testedVersion}` : ""}
+        </span>
+        {runtime.source?.kind === "package" && (
+          <span
+            className={`runtime-cap ${runtime.source.verified ? "ok" : "limited"}`}
+            title={`${runtime.source.publisher ? `${runtime.source.publisher} · ` : ""}${runtime.source.packageId}@${runtime.source.packageVersion}`}
+          >
+            {runtime.source.verified ? "Verified" : "Package"} · {runtime.source.packageId}
+          </span>
+        )}
+        {runtime.source?.kind === "config" && (
+          <span className="runtime-cap limited" title="Configured explicitly on this node">Local integration</span>
+        )}
+        <span
+          className={`runtime-protection ${protectionLevel}`}
+          title={runtime.protectionDetail || "This machine did not report a protection description."}
+        >
+          {protectionLabel}
+        </span>
         {runtimeCapabilityChips(runtime).map((chip) => (
           <span key={chip.label} className={`runtime-cap ${chip.ok ? "ok" : "limited"}`} title={chip.ok ? `${chip.label} supported` : `${chip.label} not supported by this runtime`}>
             {chip.ok ? "✓" : "–"} {chip.label}
@@ -57,6 +122,129 @@ function RuntimeMeta({ runtime, text }: { runtime: RuntimeInfo; text?: string })
         ))}
       </span>
     </span>
+  );
+}
+
+// A small copy-command row (mirrors ConnectRunner's install-command block) for
+// the connect prompt below.
+function ConnectCommand({ cmd, label }: { cmd: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  const copy = async () => {
+    if (!(await writeClipboard(cmd))) return;
+    setCopied(true);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setCopied(false), 1800);
+  };
+  return (
+    <div className="repo-connect-command">
+      <code>{cmd}</code>
+      <button
+        type="button"
+        className={`repo-connect-copy${copied ? " is-copied" : ""}`}
+        onClick={copy}
+        aria-label={copied ? "Command copied" : label}
+      >
+        {copied ? "Copied" : "Copy"}
+      </button>
+    </div>
+  );
+}
+
+// Actionable empty state for the repo picker when GitHub isn't connected on the
+// node. `gh` is NOT required — the primary path is Bivy's own device flow, run
+// ON THE NODE straight from this button (no terminal): tap Connect → authorize
+// on GitHub → the token lands in the node vault and the list fills in. We only
+// mention `gh auth login` as an extra when the CLI is installed-but-logged-out
+// (reason === "gh-unauthed"). If the node has no device-flow client id
+// (status "unconfigured"), we fall back to the `bivy github:connect` command.
+function RepoConnectPrompt({ state }: { state: AppState }) {
+  const gc = state.githubConnect;
+
+  // While the user authorizes on GitHub, poll the node on the interval it gave
+  // us (never faster) until it flips to connected/expired/denied/error.
+  useEffect(() => {
+    if (gc.status !== "waiting") return;
+    const ms = gc.intervalMs && gc.intervalMs > 0 ? gc.intervalMs : 5000;
+    const id = setInterval(() => controller.githubConnectPoll(), ms);
+    return () => clearInterval(id);
+  }, [gc.status, gc.intervalMs]);
+
+  // On success, refresh the repo list — the picker re-renders with the repos and
+  // this prompt unmounts.
+  useEffect(() => {
+    if (gc.status === "connected") controller.listRepos();
+  }, [gc.status]);
+
+  // Drop flow state when the prompt goes away (sheet closed, or list arrived) so
+  // a later reopen starts clean.
+  useEffect(() => () => controller.githubConnectReset(), []);
+
+  const errorText =
+    gc.status === "denied"
+      ? "Authorization was denied. Try again."
+      : gc.status === "expired"
+        ? "That code expired before you authorized. Try again."
+        : gc.status === "error"
+          ? gc.error || "Couldn't connect. Try again."
+          : null;
+
+  return (
+    <div className="repo-connect">
+      <p className="repo-connect-lead">Connect GitHub to list your repos.</p>
+
+      {gc.status === "waiting" ? (
+        <>
+          <p className="repo-connect-sub">
+            Open{" "}
+            <a href={gc.verificationUri || "https://github.com/login/device"} target="_blank" rel="noopener">
+              {(gc.verificationUri || "github.com/login/device").replace(/^https?:\/\//, "")}
+            </a>{" "}
+            and enter this code:
+          </p>
+          <div className="repo-connect-code" aria-label="Device code">{gc.userCode || "…"}</div>
+          <p className="repo-connect-waiting muted">Waiting for you to authorize on GitHub…</p>
+          <button type="button" className="link-btn" onClick={() => controller.githubConnectReset()}>
+            Cancel
+          </button>
+        </>
+      ) : gc.status === "connected" ? (
+        <p className="repo-connect-sub">Connected — loading your repos…</p>
+      ) : gc.status === "unconfigured" ? (
+        <>
+          <p className="repo-connect-sub">Run this on the machine your agent runs on:</p>
+          <ConnectCommand cmd="bivy github:connect" label="Copy connect command" />
+          {state.reposReason === "gh-unauthed" && (
+            <p className="repo-connect-alt">
+              The GitHub CLI is installed but signed out — you can also run <code>gh auth login</code>.
+            </p>
+          )}
+        </>
+      ) : (
+        <>
+          <p className="repo-connect-sub">One tap authorizes Bivy on this machine — no CLI needed.</p>
+          <button
+            type="button"
+            className="btn primary block"
+            disabled={gc.status === "starting"}
+            onClick={() => controller.githubConnectStart()}
+          >
+            {gc.status === "starting" ? "Starting…" : "Connect GitHub"}
+          </button>
+          {errorText && <p className="repo-connect-alt">{errorText}</p>}
+          {state.reposReason === "gh-unauthed" && (
+            <p className="repo-connect-alt">
+              The GitHub CLI is installed but signed out — you can also run <code>gh auth login</code>.
+            </p>
+          )}
+        </>
+      )}
+
+      <p className="repo-connect-note muted">
+        You don't need a repo to start — pick <strong>No repo</strong> above to work in the machine's default workspace.
+      </p>
+    </div>
   );
 }
 
@@ -94,15 +282,15 @@ export function RepoPicker({ state, onClose }: { state: AppState; onClose: () =>
         <PickerItem
           active={!state.draftRepo}
           title="No repo"
-          meta="Work in the node's default workspace"
+          meta="Work in the machine's default workspace"
           onClick={() => {
             controller.chooseRepo(null);
             onClose();
           }}
         />
         {state.reposLoading && <div className="picker-empty">Loading repos…</div>}
-        {!state.reposLoading && !state.reposAuthed && (
-          <div className="picker-empty">Connect GitHub on this node to list repos.</div>
+        {!state.reposLoading && !state.reposAuthed && !state.reposError && (
+          <RepoConnectPrompt state={state} />
         )}
         {!state.reposLoading && state.reposError && <div className="picker-empty">{state.reposError}</div>}
         {repos.map((r) => {
@@ -243,30 +431,41 @@ function RepoBranchPicker({
 // node default (Settings → Nodes).
 export function SandboxPicker({ state, onClose }: { state: AppState; onClose: () => void }) {
   const nodeDefault = state.nodeSettings?.defaultSandbox;
+  const [confirmFullAccess, setConfirmFullAccess] = useState(false);
   return (
     <Sheet title="Sandbox mode" onClose={onClose} autoFocusSearch={false}>
       <div className="picker-list">
         <PickerItem
           active={!state.draftSandbox}
-          title={`Node default${nodeDefault ? ` (${nodeDefault})` : ""}`}
-          meta="Use this node's configured sandbox mode"
+          title={`Machine default${nodeDefault ? ` (${nodeDefault})` : ""}`}
+          meta="Use this machine's configured sandbox mode"
           onClick={() => {
             controller.setSessionSandbox(null);
             onClose();
           }}
         />
-        {SANDBOX_TIERS.map((t) => (
-          <PickerItem
-            key={t.id}
-            active={state.draftSandbox === t.id}
-            title={t.label}
-            meta={t.hint}
-            onClick={() => {
-              controller.setSessionSandbox(t.id);
-              onClose();
-            }}
-          />
-        ))}
+        {SANDBOX_TIERS.map((t) => {
+          const fullAccess = t.id === "danger-full-access";
+          const awaitingConfirmation = fullAccess && confirmFullAccess;
+          return (
+            <PickerItem
+              key={t.id}
+              active={state.draftSandbox === t.id}
+              title={awaitingConfirmation ? "Confirm full computer access" : t.label}
+              meta={awaitingConfirmation
+                ? "This agent can access anything your OS user can. Bivy is not an isolation boundary. Select again to continue."
+                : t.hint}
+              onClick={() => {
+                if (fullAccess && !confirmFullAccess) {
+                  setConfirmFullAccess(true);
+                  return;
+                }
+                controller.setSessionSandbox(t.id);
+                onClose();
+              }}
+            />
+          );
+        })}
       </div>
     </Sheet>
   );
@@ -290,7 +489,7 @@ export function NodePicker({
   return (
     <Sheet title="Open terminal on" onClose={onClose} autoFocusSearch={false}>
       <div className="picker-list">
-        {state.nodes.length === 0 && <div className="picker-empty">No nodes available.</div>}
+        {state.nodes.length === 0 && <div className="picker-empty">No machines available.</div>}
         {state.nodes.map((n) => (
           <PickerItem
             key={n.id}
@@ -308,20 +507,26 @@ export function NodePicker({
 // ---- Agent picker ----
 export function AgentPicker({ state, onClose }: { state: AppState; onClose: () => void }) {
   const [q, setQ] = useState("");
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
   useEffect(() => {
     controller.listRuntimes();
+    // Warm each agent's model list in the background so the first switch lists
+    // models instantly instead of waiting on a runtime spin-up (no-op on a live
+    // session, whose agent is fixed).
+    controller.prefetchModels();
   }, []);
   const runtimes = useMemo(() => {
     const query = q.trim().toLowerCase();
     const matched = !query
       ? state.runtimes
       : state.runtimes.filter((a) =>
-          `${a.id} ${a.name || ""} ${a.displayName || ""} ${(a as any).description || ""} ${(a as any).language || ""}`.toLowerCase().includes(query),
+          `${a.id} ${a.name || ""} ${a.displayName || ""} ${(a as any).description || ""} ${(a as any).language || ""} ${a.protectionLabel || ""}`.toLowerCase().includes(query),
         );
-    // Sort the selector by display name, ascending (A→Z, case-insensitive), so the
-    // agent list is predictable regardless of catalog insertion order.
     return [...matched].sort((a, b) => agentLabel(a).localeCompare(agentLabel(b), undefined, { sensitivity: "base" }));
   }, [state.runtimes, q]);
+  const recommended = runtimes.filter((runtime) => runtimeTier(runtime) === "supported");
+  const more = runtimes.filter((runtime) => runtimeTier(runtime) !== "supported");
 
   const cloningActiveSession = Boolean(state.activeSessionId);
   // For an active session, "current" means the runtime that owns that session,
@@ -330,6 +535,83 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
     ? state.activeRuntimeId ?? state.sessions.find((s) => s.sessionId === state.activeSessionId)?.runtimeId ?? null
     : state.selectedAgentId ?? (state.runtimes.find((r) => (r as any).current)?.id || null);
 
+  const renderRuntime = (a: RuntimeInfo) => {
+    const status = String((a as any).status || "available");
+    const available = status === "available";
+    const installable = !available && Boolean((a as any).install);
+    const installing = state.installingRuntimeId === a.id;
+    const active = a.id === selectedAgentId;
+    // The Effective Session Contract preview (see previewContractForRuntime):
+    // requiresAcknowledgement fires ONLY for a "supported" (certified) profile
+    // whose live protection would be degraded — a broken promise, not merely
+    // an unprotected experimental agent. Union it with the existing raw
+    // protection-level check (which already covers any tier's zero-isolation
+    // case) so a certified agent degraded in a DIFFERENT area (auth/resume/
+    // tool interception, not just sandbox) still gets caught.
+    const previewContract = !cloningActiveSession ? previewContractForRuntime(a) : undefined;
+    const needsProtectionConfirmation = !cloningActiveSession
+      && (a.protectionLevel === "user-permissions" || Boolean(previewContract?.requiresAcknowledgement));
+    const confirming = needsProtectionConfirmation && confirmingId === a.id;
+    const confirmText = previewContract?.degradedReasons.length
+      ? `${previewContract.degradedReasons.map((r) => r.message).join(" ")} Select again to continue.`
+      : "Runs with your OS user permissions and no Bivy-owned isolation. Use a container/VM for unattended or untrusted work. Select again to continue.";
+    const chips = [
+      installing ? "setting up…" : null,
+      !available ? status : null,
+      (a as any).language,
+      (a as { authOwner?: string }).authOwner ? `auth: ${(a as { authOwner?: string }).authOwner}` : null,
+    ].filter(Boolean).join(" · ");
+    return (
+      <PickerItem
+        key={a.id}
+        active={active}
+        title={confirming ? `Confirm ${agentLabel(a)}` : agentLabel(a)}
+        meta={
+          <RuntimeMeta
+            runtime={a}
+            text={confirming
+              ? confirmText
+              : cloningActiveSession
+                ? ["Fork + handoff", chips || (a as any).description].filter(Boolean).join(" · ")
+                : chips || (a as any).description}
+          />
+        }
+        disabled={installing || (!available && !installable)}
+        right={
+          installable && !installing ? (
+            <button
+              type="button"
+              className="picker-action"
+              onClick={(e) => {
+                e.stopPropagation();
+                controller.installAgent(a.id);
+              }}
+            >
+              Install
+            </button>
+          ) : undefined
+        }
+        onClick={() => {
+          if (installable) {
+            controller.installAgent(a.id);
+            return;
+          }
+          if (!available) return;
+          if (needsProtectionConfirmation && !confirming) {
+            setConfirmingId(a.id);
+            return;
+          }
+          // Certified-profile downgrades need a durable acknowledgement (the
+          // node re-checks it on session.new); the raw user-permissions warning
+          // above is UX-only and doesn't set it.
+          if (previewContract?.requiresAcknowledgement) controller.acknowledgeSessionAgentReducedProtections(true);
+          controller.chooseAgent(a);
+          onClose();
+        }}
+      />
+    );
+  };
+
   return (
     <Sheet title={cloningActiveSession ? "Hand off to agent" : "Agent"} onClose={onClose} autoFocusSearch={false}>
       {cloningActiveSession && (
@@ -337,62 +619,17 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
           Choosing an agent forks this session with its transcript and working files, then opens the fork in that agent.
         </div>
       )}
-      <input className="picker-search" placeholder="Search agents…" value={q} onChange={(e) => setQ(e.target.value)} />
+      <input className="picker-search" placeholder="Search agents…" value={q} onChange={(e) => { setQ(e.target.value); setConfirmingId(null); }} />
       <div className="picker-list">
         {runtimes.length === 0 && <div className="picker-empty">No agents available.</div>}
-        {runtimes.map((a) => {
-          const status = String((a as any).status || "available");
-          const available = status === "available";
-          const installable = !available && Boolean((a as any).install);
-          const installing = state.installingRuntimeId === a.id;
-          const active = a.id === selectedAgentId;
-          const chips = [
-            installing ? "setting up…" : null,
-            !available ? status : null,
-            (a as any).language,
-            (a as { authOwner?: string }).authOwner ? `auth: ${(a as { authOwner?: string }).authOwner}` : null,
-          ].filter(Boolean).join(" · ");
-          return (
-            <PickerItem
-              key={a.id}
-              active={active}
-              title={agentLabel(a)}
-              meta={
-                <RuntimeMeta
-                  runtime={a}
-                  text={cloningActiveSession
-                    ? ["Fork + handoff", chips || (a as any).description].filter(Boolean).join(" · ")
-                    : chips || (a as any).description}
-                />
-              }
-              disabled={installing || (!available && !installable)}
-              right={
-                installable && !installing ? (
-                  <button
-                    type="button"
-                    className="picker-action"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      controller.installAgent(a.id);
-                    }}
-                  >
-                    Install
-                  </button>
-                ) : undefined
-              }
-              onClick={() => {
-                if (installable) {
-                  controller.installAgent(a.id);
-                  return;
-                }
-                if (available) {
-                  controller.chooseAgent(a);
-                  onClose();
-                }
-              }}
-            />
-          );
-        })}
+        {recommended.length > 0 && <div className="picker-section-label">Recommended</div>}
+        {recommended.map(renderRuntime)}
+        {more.length > 0 && (
+          <button type="button" className="picker-section-toggle" onClick={() => setMoreOpen((open) => !open)} aria-expanded={moreOpen || Boolean(q.trim())}>
+            More agents <span aria-hidden>{moreOpen || q.trim() ? "▾" : "▸"}</span>
+          </button>
+        )}
+        {(moreOpen || Boolean(q.trim())) && more.map(renderRuntime)}
       </div>
     </Sheet>
   );

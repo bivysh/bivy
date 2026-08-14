@@ -21,6 +21,14 @@ Current model:
 - When hosted model-auth sync is enabled, the node encrypts a model-auth vault snapshot locally before uploading it to the control plane.
 - The control plane stores ciphertext plus node public-key wrapping metadata.
 - Another enrolled node requests a wrapped vault key; an existing node wraps the key to the requesting node public key.
+- Removing a node that received a wrapped model-auth key flags the vault for
+  rotation. One surviving node atomically publishes a fresh encrypted generation;
+  old wraps are discarded and the new key is wrapped only to nodes that remain
+  enrolled. A peer that cached the prior key discards it and requests the new wrap.
+- Provider sign-out is represented by a timestamped tombstone in the encrypted
+  envelope. Tombstones remove older credentials on every node and prevent a stale
+  snapshot from resurrecting them; signing in again later supersedes the tombstone.
+- That request now **wakes the account's peer nodes over the relay** (the same `work.available` signal used for queued work), so a peer answers the wrapped-key request within seconds rather than on its 30s poll. The requesting node fast-retries (bounded) until the key lands, then falls back to the steady poll. This makes the vault — including supported subscription-OAuth logins — usable almost immediately on a short-lived ephemeral runner, while staying **peer-only**: the key is always wrapped node→node and never transits the device or control plane in the clear.
 - Bivy Cloud never receives plaintext model credentials.
 
 If you lose every node and device that can unwrap the vault, the stored
@@ -76,7 +84,7 @@ Examples:
 
 These are **not automatically synced across all nodes** unless Bivy explicitly imports and re-emits them as Bivy-managed credentials. Treat them as per-node native logins.
 
-In short: Bivy syncs Bivy-managed provider credentials end-to-end for supported runtimes. Agent-native CLI logins may need to be performed once per node.
+In short: Bivy syncs Bivy-managed provider credentials end-to-end for supported runtimes, including revocation. Agent-native CLI logins may need to be performed once per node.
 
 ## Runtime mapping
 

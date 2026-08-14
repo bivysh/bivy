@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // Lightweight, dependency-free client routing for the session shell.
 //
@@ -7,6 +7,8 @@
 //   /sessions/:id         — an open session
 //   /settings             — the Settings overlay, root menu
 //   /settings/:view       — the Settings overlay, on a specific section
+//   /automations          — the Automations overlay, Overview tab
+//   /automations/:section — the Automations overlay, on a specific tab
 // Anything else (notably `/`) is treated as the "root" home, which renders the
 // same empty/first-run shell a fresh draft does. Keeping this in one small
 // module means the controller owns *when* to navigate while the URL parsing and
@@ -15,6 +17,8 @@
 // Settings is an overlay, not a replacement for the session behind it — see
 // settingsRoute.ts, which layers Settings' open/closed/section state on top of
 // this module without disturbing which session is open underneath.
+
+import { parseRunRoute, runRoutePath } from "@bivy/core";
 
 /** Settings' navigable top-level sections — the mobile drill-in list / desktop
  *  nav. Kept here (rather than in Settings.tsx) so the router can validate a
@@ -30,7 +34,6 @@ export type SettingsView =
   | "linear"
   | "slack"
   | "queue"
-  | "automations"
   | "webhooks"
   | "rulesets"
   | "nodes"
@@ -49,7 +52,6 @@ const SETTINGS_VIEWS: readonly SettingsView[] = [
   "linear",
   "slack",
   "queue",
-  "automations",
   "webhooks",
   "rulesets",
   "nodes",
@@ -62,14 +64,28 @@ function isSettingsView(v: string): v is SettingsView {
   return (SETTINGS_VIEWS as readonly string[]).includes(v);
 }
 
+/** Automations' navigable tabs. `null` (bare `/automations`) is the Overview
+ *  tab. Kept here (like `SettingsView`) so the router can validate an
+ *  `/automations/:section` path without importing the component module. */
+export type AutomationsSection = "queue" | "rulesets";
+
+const AUTOMATIONS_SECTIONS: readonly AutomationsSection[] = ["queue", "rulesets"];
+
+function isAutomationsSection(v: string): v is AutomationsSection {
+  return (AUTOMATIONS_SECTIONS as readonly string[]).includes(v);
+}
+
 export type Route =
   | { kind: "session"; id: string }
+  | { kind: "run"; id: string }
   | { kind: "new" }
   | { kind: "settings"; view: SettingsView | null }
+  | { kind: "automations"; section: AutomationsSection | null }
   | { kind: "root" };
 
 const SESSION_PATH = /^\/sessions\/([^/]+)\/?$/;
 const SETTINGS_PATH = /^\/settings(?:\/([^/]+))?\/?$/;
+const AUTOMATIONS_PATH = /^\/automations(?:\/([^/]+))?\/?$/;
 
 /** Parse the current (or a given) pathname into a Route. */
 export function parseRoute(pathname: string = location.pathname): Route {
@@ -80,10 +96,19 @@ export function parseRoute(pathname: string = location.pathname): Route {
     if (id === "new") return { kind: "new" };
     return { kind: "session", id };
   }
+  // /runs/:runId — id parsing/serialization lives in @bivy/core so the route is
+  // identical across clients and independently tested.
+  const runId = parseRunRoute(pathname);
+  if (runId) return { kind: "run", id: runId };
   const settingsMatch = SETTINGS_PATH.exec(pathname);
   if (settingsMatch) {
     const raw = settingsMatch[1] ? decodeURIComponent(settingsMatch[1]) : "";
     return { kind: "settings", view: isSettingsView(raw) ? raw : null };
+  }
+  const automationsMatch = AUTOMATIONS_PATH.exec(pathname);
+  if (automationsMatch) {
+    const raw = automationsMatch[1] ? decodeURIComponent(automationsMatch[1]) : "";
+    return { kind: "automations", section: isAutomationsSection(raw) ? raw : null };
   }
   return { kind: "root" };
 }
@@ -98,13 +123,19 @@ export function routePath(route: Route): string {
   const base =
     route.kind === "session"
       ? `/sessions/${encodeURIComponent(route.id)}`
+      : route.kind === "run"
+        ? runRoutePath(route.id)
       : route.kind === "new"
         ? "/sessions/new"
         : route.kind === "settings"
           ? route.view
             ? `/settings/${route.view}`
             : "/settings"
-          : "/";
+          : route.kind === "automations"
+            ? route.section
+              ? `/automations/${route.section}`
+              : "/automations"
+            : "/";
   return base + location.search + location.hash;
 }
 

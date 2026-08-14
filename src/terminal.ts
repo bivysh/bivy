@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -163,7 +163,11 @@ interface TerminalEntry {
  * that by an order of magnitude while adding latency well below the threshold of
  * perception for interactive echo.
  */
-const OUTPUT_FLUSH_MS = 8;
+// 16ms keeps a single chatty TUI under the relay's default node message budget
+// (6000/min ≈ 10ms/frame). At 8ms a fullscreen redraw stream could exceed that
+// and the relay closed the socket with "Rate limit exceeded" the moment a
+// phone/app attached to a live `bivy run` terminal.
+const OUTPUT_FLUSH_MS = 16;
 
 /**
  * How much recent output to retain per terminal for scrollback replay on
@@ -295,7 +299,7 @@ export class TerminalManager {
     const env = {
       ...localeDefaults,
       ...process.env,
-      ...depCacheEnv(),
+      ...depCacheEnv(options.workspace),
       ...options.env,
       TERM: "xterm-256color",
       // Make it obvious in the shell that this is a Bivy terminal.

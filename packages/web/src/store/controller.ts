@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // AppController — the single seam between the React view and @bivy/core.
 //
@@ -18,6 +18,13 @@ import {
   fetchMe,
   fetchGithubApp,
   fetchGithubQueue,
+  fetchAutomationRuns,
+  createOneOffRun,
+  cancelAutomationRun as apiCancelAutomationRun,
+  recordProductMetric,
+  activationFromState,
+  type ProductMetricEvent,
+  type ActivationCheckId,
   assignWorkItem,
   deleteWorkItem,
   clearWorkQueue,
@@ -26,6 +33,30 @@ import {
   setGithubAppTriggerAccess,
   fetchEphemeralQueueDefault,
   setEphemeralQueueDefault,
+  fetchEphemeralConfigs,
+  createEphemeralConfig as apiCreateEphemeralConfig,
+  updateEphemeralConfig as apiUpdateEphemeralConfig,
+  deleteEphemeralConfig as apiDeleteEphemeralConfig,
+  fetchQueueRouting,
+  setQueueRouting as apiSetQueueRouting,
+  fetchHostedProvisioning,
+  setHostedProvisioning as apiSetHostedProvisioning,
+  fetchHostedAudit,
+  fetchHostedMachines,
+  destroyHostedMachine as apiDestroyHostedMachine,
+  validateHostedProviderCredential as apiValidateHostedProviderCredential,
+  rotateHostedProvisioning as apiRotateHostedProvisioning,
+  connectHostedGithubApp as apiConnectHostedGithubApp,
+  fetchHostedGithubRepositories,
+  type HostedGithubAppConnection,
+  triggerHostedProvision as apiTriggerHostedProvision,
+  type EphemeralNodeConfig,
+  type EphemeralConfigInput,
+  type QueueRouting,
+  type HostedProvisioningStatus,
+  type HostedProvisioningPatch,
+  type HostedAuditEvent,
+  type HostedMachineSummary,
   removeAccountNode,
   fetchPairedDevices,
   removePairedDevice,
@@ -42,17 +73,29 @@ import {
   createEphemeralPrefsStore,
   createEphemeralSetupStore,
   createMachineStore,
+  createPendingEphemeralLaunchStore,
   createGithubTaskTokenStore,
   createTranscriptCache,
   cloudExec,
+  validateEphemeralProviderToken,
   launchEphemeralMachine,
   destroyEphemeralMachine,
   wakeEphemeralMachine,
   ephemeralProviderSuspendsWhenIdle,
+  ephemeralAdapter,
+  ephemeralCatalogEntry,
+  ephemeralMachineFromNode,
+  isEphemeralNode,
+  ephemeralMachineFromCorrelation,
+  type SessionCorrelation,
+  createDeviceVaultKeyStore,
+  DeviceVaultConflictError,
+  deviceKeypair,
   listEphemeralSizes,
   ephemeralNodeLabel,
   type TranscriptCache,
-  type EphemeralKeyStore,
+  type DeviceVaultKeyStore,
+  type DeviceVaultRemote,
   type EphemeralModelKeyStore,
   type EphemeralModelKeyInfo,
   type EphemeralPrefsStore,
@@ -60,6 +103,8 @@ import {
   type EphemeralSetupStore,
   type EphemeralSetup,
   type EphemeralMachine,
+  type PendingEphemeralLaunch,
+  type PendingEphemeralLaunchStore,
   type GithubTaskTokenStore,
   type EphemeralQueueDefault,
   type LaunchOpts,
@@ -85,12 +130,22 @@ import {
   type StreamingBehavior,
   supportsSteering as runtimeSupportsSteering,
   type Transport,
+  type LocalStore,
+  type LocalModelDiscoveryResult,
+  type LocalModelEndpointResult,
   importRoomKey,
   open as openSealed,
   unb64url,
+  seal,
+  createAutomation,
+  deleteAutomation,
+  fetchAutomations,
+  updateAutomation,
+  type AccountAutomation,
 } from "@bivy/core";
 import { navigate, parseRoute, routePath, type Route } from "../router.js";
-import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
+import { EPHEMERAL_MACHINES_ENABLED, EPHEMERAL_KEEP_FAILED_MACHINES } from "../flags.js";
+import { markFirstSuccessfulResponse } from "../pwaLifecycle.js";
 
 /**
  * Bounded discovery metadata for a provider-native session Bivy did not start
@@ -130,18 +185,33 @@ export class NeedsDisclosureError extends Error {
 }
 
 function requestId(): string {
-  return `r${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  return `r-${crypto.randomUUID()}`;
 }
 
 function clientMessageId(): string {
-  try {
-    return crypto.randomUUID();
-  } catch {
-    return `m${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  }
+  return crypto.randomUUID();
 }
 
 const LOOPBACK = /^(localhost|127\.0\.0\.1|\[?::1\]?)$/;
+
+// E2E template envelope for scheduled chat messages (mirrors AutomationsView).
+const TEMPLATE_PREFIX = "bivy-room-v1";
+
+/** How long to wait after a launched ephemeral runner comes online before
+ *  concluding it has no model credentials and raising the first-run sign-in
+ *  prompt — long enough for hosted-escrow / peer-vault sync to land first. */
+const FIRST_RUN_MODEL_AUTH_GRACE_MS = 8000;
+
+/** How long to wait for a freshly-launched ephemeral runner to come online before
+ *  telling the user it likely failed to boot — generous, since a bare VM installs
+ *  from scratch (1–3 min), but bounded so a self-destructed machine doesn't leave
+ *  the session spinning "Reconnecting…" forever. */
+const RUNNER_BOOT_TIMEOUT_MS = 4 * 60 * 1000;
+// A fork IMPORT can clone a fresh repo on the destination node, and the node's
+// clone step allows up to 600s (repo-workspace.ts). The client timeout must sit
+// ABOVE that, or it rejects "Fork request timed out" while the node is still
+// cloning — orphaning a session that then materializes with no client waiting.
+const FORK_IMPORT_TIMEOUT_MS = 11 * 60 * 1000; // 660s > server's 600s clone cap
 
 /**
  * Same rule as the legacy client: a same-origin/loopback node (or explicit
@@ -158,21 +228,46 @@ export class AppController {
   readonly store = new SessionStore();
   readonly local = createLocalStore(localStorage);
   readonly direct: boolean;
+  /** Account-free ("solo") mode: paired to a node over the relay via a room
+   *  token from the QR, with NO control plane. Not signed in (no `local.s`), so
+   *  every CP-coupled path stays off, yet the app shell renders and dials. */
+  readonly solo: boolean;
   private transport: Transport;
   /** A first prompt queued while a brand-new session is being created. `frame` is
    *  the exact `session.new` command we sent; it's re-fired verbatim after a
    *  reconnect (mobile Safari can drop the reply while backgrounded) — the node
    *  dedupes by requestId, so the retry adopts the same session rather than
    *  creating a duplicate. See retryPendingSessionNew / maybeFlushPendingPrompt. */
-  private pendingPrompt: { text: string; requestId: string; clientMessageId: string; attachments?: PromptAttachment[]; frame: Command } | null = null;
+  private pendingPrompt: { text: string; requestId: string; clientMessageId: string; attachments?: PromptAttachment[]; frame: Command; provisionalId?: string } | null = null;
+  /** Ephemeral cold starts outlive the pane that launched them. Each first
+   *  message gets a sidebar placeholder immediately, and its launch continues
+   *  here even if the user presses New and starts another session. */
+  private pendingLaunches = new Map<string, PendingEphemeralLaunch & { transport?: Transport }>();
+  /** Timed, factual boot updates. Provider creation returning only means the VM
+   *  exists; these heartbeats make the otherwise silent cloud-init wait visible. */
+  private bootProgressTimers = new Map<string, ReturnType<typeof setTimeout>[]>();
+  private bootstrapPhaseByNode = new Map<string, string>();
   /** Further prompts sent by the user *while* that session is still being
    *  created — queued instead of firing their own `session.new`, then drained
    *  into the one real session by maybeFlushPendingPrompt. See sendPrompt. */
   private pendingFollowups: Array<{ text: string; clientMessageId: string; attachments?: PromptAttachment[] }> = [];
+  /** Prompts sent into a session whose ephemeral node is offline (a suspended
+   *  Sprite or a torn-down machine). Sending IS the resume gesture: the message
+   *  is buffered here, the machine is woken/rebuilt, and these replay once it's
+   *  back online (drainPendingResume in onReconnected). No "resume" button. */
+  private pendingResume: Array<{ sessionId: string; text: string; clientMessageId: string; attachments?: PromptAttachment[] }> = [];
+  /** Guards a resume/rebuild already in flight so repeated sends don't re-launch. */
+  private resumingNode = new Set<string>();
+  // Durable session↔machine correlations fetched from the control plane (Gap 1),
+  // so a torn-down destroy-lane session stays rebuildable after its node drops
+  // from the registry. Refreshed on reconnect; written (deduped) before teardown.
+  private ephemeralCorrelations: SessionCorrelation[] = [];
+  private correlatedSessions = new Set<string>();
   /** Subscribers for terminal / multiplexer events (the terminal overlay). */
   private terminalListeners = new Set<(e: ServerEvent) => void>();
-  /** In-flight transcription requests, resolved when the node returns text. */
+  /** In-flight transcription and speech requests, correlated with node replies. */
   private pendingTranscriptions = new Map<string, { resolve: (text: string) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  private pendingSpeech = new Map<string, { resolve: (audio: { audio: string; mimeType: string }) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   /** In-flight session-fork requests (export → bundle, import → done), by requestId. */
   private pendingForks = new Map<string, { resolve: (event: ServerEvent) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   /** In-flight saves awaiting a node ack (node.settings, provider.apiKey,
@@ -198,10 +293,19 @@ export class AppController {
   private pendingRouteNode: string | null = null;
   /** Session selected from another node in the all-node sidebar; opened after reconnecting to its owner node. */
   private pendingCrossNodeOpen: { sessionId: string; path?: string } | null = null;
+  /** Subscribers for content-free control-plane Run-change hints. The relay
+   *  never carries the Run body/evidence here; subscribers refetch canonically. */
+  private runUpdateListeners = new Set<(runId: string, revision?: string) => void>();
   /** Subscribers that want the composer input focused (e.g. after "New"). */
   private composerFocusListeners = new Set<() => void>();
+  /** Subscribers that accept editable text drafted by contextual UI actions. */
+  private composerPrefillListeners = new Set<(text: string) => void>();
   /** Subscribers that want the composer's slash-command menu opened (the "/" pill). */
   private slashOpenListeners = new Set<() => void>();
+  /** Product milestones are aggregate and content-free. Once-only activation
+   *  events are latched in this browser so reconnect/history replay cannot
+   *  inflate them; the in-flight guard also closes double-emission races. */
+  private productMetricsInFlight = new Set<ProductMetricEvent>();
 
   constructor() {
     // Persist each applied history snapshot + cursor, and re-request canonical
@@ -213,6 +317,13 @@ export class AppController {
     this.store.requestFreshHistory = () => {
       const sid = this.store.getState().activeSessionId;
       if (sid) this.requestHistory(sid);
+    };
+    // The reassembler detected a live-stream gap (a frame lost on an uplink blip)
+    // — ask the node to replay the events after the last seq we hold. The node
+    // answers with the missed tail, or mode:"reset" (→ requestFreshHistory) when
+    // its ring has already evicted past our cursor (Phase 2).
+    this.store.requestReplay = (sessionId, afterSeq) => {
+      void this.send({ kind: "session.replay", sessionId, afterSeq });
     };
     // A brand-new session's first turn can finish naming/persisting it on the
     // node after the one-shot refresh in maybeFlushPendingPrompt already ran —
@@ -252,15 +363,24 @@ export class AppController {
     this.seedDraftDefaults();
     this.detectGithubAppReturn();
     this.direct = isDirectMode(this.local);
+    // Solo: not on the hosted CP (no session) but the QR left room-token creds
+    // for the selected node. Distinct from `direct` (loopback) and hosted.
+    this.solo = !this.direct && !this.local.s && Boolean(this.local.solo()[this.local.cur]);
     // The hosted client remembers this origin as its control plane.
     if (!this.direct && !this.local.cp) this.local.cp = location.origin;
     this.transport = this.buildTransport();
     this.store.setCurrentNode(this.direct ? null : this.local.cur || null);
+    // Restore delete guards before painting the cached sidebar. A service-worker
+    // update reload can otherwise forget an in-flight deletion and immediately
+    // resurrect the stale cached/control-plane row.
+    this.restoreDeletedSessionTombstones();
     // Instant sidebar: paint the last known session list for this node from a
     // synchronous localStorage cache before the socket connects and the
     // authoritative sessions.list arrives. Also start persisting live updates.
     this.seedSessionsFromCache();
     this.installSessionCachePersist();
+    this.installFollowupAutoDrain();
+    void this.restorePendingLaunches();
     if (!this.direct && this.local.s) void this.refreshAccountSessions();
     // Seed the reactive auth flag from the token we may have just consumed above,
     // so the very first render lands on the right surface (sign-in vs. shell).
@@ -396,14 +516,39 @@ export class AppController {
             // Composer single-writer lock — keyed by (raw) session id, so no node
             // scoping needed; the store folds it into `tuiSessions`.
             this.store.apply(event);
+          } else if (type === "terminal.takeover.result") {
+            // "Continue as chat" can be fired from the Terminal overlay OR from
+            // the run-terminal handoff screen (TuiLockedView) before any PTY is
+            // attached. Handle it here so the handoff path still switches to the
+            // new governed session when the node acks — the overlay path also
+            // listens and closes itself.
+            const p = event as { ok?: boolean; sessionId?: string; error?: string };
+            if (p.ok && p.sessionId) {
+              this.openSession(String(p.sessionId));
+            } else if (p.error) {
+              this.store.setError(String(p.error));
+            }
           }
           for (const fn of this.terminalListeners) fn(event);
+          return;
+        }
+        // Content-free control-plane hint delivered over the existing relay.
+        // Keep it out of the Session reducer; feature subscribers refetch the
+        // canonical account-scoped Run and polling remains their recovery path.
+        if (type === "run.updated") {
+          const runId = typeof event.runId === "string" ? event.runId : "";
+          const revision = typeof event.revision === "string" ? event.revision : undefined;
+          if (runId) for (const listener of this.runUpdateListeners) listener(runId, revision);
           return;
         }
         // One-shot transcription result — resolve the awaiting caller and stop;
         // it never touches the session reducer.
         if (type === "transcription") {
           this.resolveTranscription(event);
+          return;
+        }
+        if (type === "speech.audio") {
+          this.resolveSpeech(event);
           return;
         }
         // One-shot session-fork replies (bundle / done / error) resolve the
@@ -419,8 +564,11 @@ export class AppController {
           this.resolveFork(event);
           return;
         }
+        const before = this.store.getState();
         const appliedEvent = this.eventWithNodeScope(event);
         this.store.apply(appliedEvent);
+        this.observeActivationMilestones(before, appliedEvent);
+        if (appliedEvent.type === "session.deleted") this.persistDeletedSessionTombstones();
         this.maybeFlushPendingPrompt(appliedEvent);
         this.maybeConfirmFollowup(appliedEvent);
         this.maybeRestoreDraftAgent(appliedEvent);
@@ -428,10 +576,13 @@ export class AppController {
         this.reconcileSessionList(appliedEvent);
       },
       onStatus: (status: ConnectionStatus) => {
-        const prev = this.store.getState().status;
+        const before = this.store.getState();
+        const prev = before.status;
         this.store.setStatus(status);
-        if (status === "online" && prev !== "online") this.onReconnected();
-        else if (status === "reconnecting" || status === "offline") {
+        this.observeActivationMilestones(before, { type: "connection.status" });
+        if (status === "online" && prev !== "online") {
+          this.onReconnected();
+        } else if (status === "reconnecting" || status === "offline") {
           this.store.markStreamInterrupted();
           // Re-pull the node list on the *transition* into a dropped state so the
           // header's online dot reflects the node's real presence instead of a
@@ -441,16 +592,81 @@ export class AppController {
           if (prev !== "reconnecting" && prev !== "offline") this.refreshNodesThrottled();
         }
       },
-      onError: (message: string) => this.store.setError(message),
+      onError: (message: string) => {
+        this.store.setError(message);
+      },
     };
     return this.direct
       ? new DirectTransport({ bootstrap: new URLSearchParams(location.search).get("bootstrap") || "", handlers })
       : new RelayTransport({ store: this.local, handlers });
   }
 
+  private productMetricClient(): "desktop" | "mobile" {
+    return matchMedia("(max-width: 700px)").matches ? "mobile" : "desktop";
+  }
+
+  /** Emit a content-free milestone. Once-only events are persisted only after
+   *  the authenticated endpoint accepts them, so an offline attempt can retry. */
+  recordProductMilestone(event: ProductMetricEvent, once = false): void {
+    if (this.direct || this.solo || !this.local.s) return;
+    const key = `bivy.product-metric.${event}`;
+    if (once) {
+      try { if (localStorage.getItem(key) === "1") return; } catch { /* best effort */ }
+      if (this.productMetricsInFlight.has(event)) return;
+      this.productMetricsInFlight.add(event);
+    }
+    void recordProductMetric(this.local, event, this.productMetricClient())
+      .then(() => {
+        if (once) {
+          try { localStorage.setItem(key, "1"); } catch { /* best effort */ }
+        }
+      })
+      .catch(() => {})
+      .finally(() => this.productMetricsInFlight.delete(event));
+  }
+
+  /** One ok/failed product-metric pair per readiness-led first-run step,
+   *  keyed by the activation check it tracks. `agent_answered` and
+   *  `account_signed_in` are excluded: the former already has its own
+   *  dedicated `first_useful_response` milestone below, and the latter is
+   *  always resolved by the time this model runs (see activation.ts) so a
+   *  transition into it is never observed. */
+  private static readonly FIRST_RUN_STEP_EVENTS: Partial<Record<ActivationCheckId, { ok: ProductMetricEvent; failed: ProductMetricEvent }>> = {
+    machine_online: { ok: "first_run_machine_ready", failed: "first_run_machine_failed" },
+    agent_installed: { ok: "first_run_agent_verified", failed: "first_run_agent_failed" },
+    credential_valid: { ok: "first_run_provider_connected", failed: "first_run_provider_failed" },
+  };
+
+  /** Observe only concrete state transitions. History snapshots are excluded
+   *  from first response: opening an old Session must not look like activation. */
+  private observeActivationMilestones(before: ReturnType<SessionStore["getState"]>, event: { type?: unknown }): void {
+    const after = this.store.getState();
+    const beforeActivation = activationFromState({ ...before, direct: this.direct });
+    const afterActivation = activationFromState({ ...after, direct: this.direct });
+    // Every check but the final agent-answered one — robust to the chain
+    // growing (e.g. the leading sign-in step) without re-deriving the cutoff.
+    const readyBefore = beforeActivation.checks.slice(0, -1).every((check) => check.state === "passed");
+    const readyAfter = afterActivation.checks.slice(0, -1).every((check) => check.state === "passed");
+    if (!readyBefore && readyAfter) this.recordProductMilestone("activation_ready", true);
+
+    for (const [id, events] of Object.entries(AppController.FIRST_RUN_STEP_EVENTS) as Array<[ActivationCheckId, { ok: ProductMetricEvent; failed: ProductMetricEvent }]>) {
+      const b = beforeActivation.checks.find((c) => c.id === id)?.state;
+      const a = afterActivation.checks.find((c) => c.id === id)?.state;
+      if (b !== "passed" && a === "passed") this.recordProductMilestone(events.ok, true);
+      if (b !== "failed" && a === "failed") this.recordProductMilestone(events.failed, true);
+    }
+
+    if (event.type === "session.history") return;
+    const assistantCount = (state: typeof after) => state.transcript.filter((entry) => entry.role === "assistant" && Boolean(entry.text) && !entry.tool).length;
+    if (assistantCount(before) === 0 && assistantCount(after) > 0) {
+      markFirstSuccessfulResponse();
+      this.recordProductMilestone("first_useful_response", true);
+    }
+  }
+
   /** Hosted control plane, not signed in yet. */
   needsAuth(): boolean {
-    return !this.direct && !this.local.s;
+    return !this.direct && !this.solo && !this.local.s;
   }
 
   /** Signed in on the hosted control plane, but no node picked yet. */
@@ -495,6 +711,10 @@ export class AppController {
     this.local.s = token;
     if (!this.local.cp) this.local.cp = location.origin;
     this.store.setSignedIn(true);
+    // Reconcile the device vault once on sign-in: a producer device satisfies any
+    // pending wrapped-key requests from the account's other devices; a consumer
+    // device pulls its wrapped key so a synced token is ready to wake a machine.
+    void this.syncDeviceVault().catch(() => { /* durable sync state exposes retry */ });
     this.connect();
   }
 
@@ -539,6 +759,13 @@ export class AppController {
     window.addEventListener("popstate", () => this.applyRoute(parseRoute(), { navigate: false }));
   }
 
+  /** Subscribe to account Run changes pushed over the relay. The callback is a
+   *  cache-invalidation hint only; callers must fetch durable state. */
+  onRunUpdated(fn: (runId: string, revision?: string) => void): () => void {
+    this.runUpdateListeners.add(fn);
+    return () => this.runUpdateListeners.delete(fn);
+  }
+
   /** Subscribe to composer-focus requests (the Composer wires its textarea here).
    *  Returns an unsubscribe fn. */
   onComposerFocus(fn: () => void): () => void {
@@ -550,6 +777,18 @@ export class AppController {
    *  so the user can type immediately. */
   focusComposer(): void {
     for (const fn of this.composerFocusListeners) fn();
+  }
+
+  /** Subscribe to contextual prompt drafts (for example, review a changed file). */
+  onComposerPrefill(fn: (text: string) => void): () => void {
+    this.composerPrefillListeners.add(fn);
+    return () => this.composerPrefillListeners.delete(fn);
+  }
+
+  /** Put a contextual prompt in the composer without sending an agent turn. */
+  prefillComposer(text: string): void {
+    for (const fn of this.composerPrefillListeners) fn(text);
+    this.focusComposer();
   }
 
   /** Subscribe to slash-menu-open requests (the Composer wires its "/" popover
@@ -576,6 +815,15 @@ export class AppController {
     if (sid) {
       const row = s.sessions.find((r) => r.sessionId === sid);
       if (row?.status === "saved") this.openSession(sid);
+    } else {
+      // A draft has no attached session, so its runtime may not have advertised
+      // its commands yet. Warming the selected runtime (the node stands up a
+      // model-query scratch session and re-broadcasts its capabilities) folds any
+      // agent-advertised commands onto the runtime row, which the composer offers
+      // as the draft's command set. The menu renders reactively, so it fills in as
+      // they arrive. (Agents that only learn their commands on the first turn — e.g.
+      // Claude Code — still surface them once a turn has run.)
+      this.listModels();
     }
     for (const fn of this.slashOpenListeners) fn();
   }
@@ -595,7 +843,11 @@ export class AppController {
    */
   private applyRoute(route: Route, opts: { navigate?: boolean } = {}): void {
     if (route.kind === "session") this.openSession(route.id, undefined, opts);
-    else if (route.kind !== "settings") this.newSession(opts);
+    // Settings, Automations, and a Run detail (/runs/:runId) are overlays layered
+    // on top of whichever session is open behind them — none should reset the
+    // active session to a draft, so a deep link / reload / Back onto them keeps
+    // the underlying session intact.
+    else if (route.kind !== "settings" && route.kind !== "automations" && route.kind !== "run") this.newSession(opts);
   }
 
   /** Replay the boot route once we're first online (session.open et al. need a
@@ -696,7 +948,13 @@ export class AppController {
       // merely offline node still appears in the list, so this only clears nodes
       // that are genuinely gone.
       if (this.local.cur && !nodes.some((n) => n.id === this.local.cur)) {
-        this.clearCurrentNode();
+        // A torn-down destroy-lane node is gone from the registry, but if it's
+        // REBUILDABLE (durable correlation + the room key we still hold) we keep it
+        // selected — offline, not dialing — so its session stays open and a send
+        // rebuilds it (Gap 1). Only a genuinely-gone node falls back to the empty
+        // state.
+        if (this.currentNodeIsRebuildable()) this.markCurrentNodeAwaitingRebuild();
+        else this.clearCurrentNode();
       }
       void this.refreshAccountSessions();
     } catch {
@@ -722,6 +980,36 @@ export class AppController {
     this.store.setStatus("offline");
   }
 
+  /** True when the current node is gone from the registry but this device can
+   *  rebuild it: a durable session↔machine correlation names it and we still hold
+   *  its room key. Distinguishes a torn-down-but-rebuildable node from one that is
+   *  genuinely gone (which should clear to the empty state). */
+  private currentNodeIsRebuildable(): boolean {
+    const nodeId = this.local.cur;
+    if (!nodeId) return false;
+    try {
+      if (!this.local.keys()[nodeId]) return false;
+    } catch {
+      return false;
+    }
+    return this.ephemeralCorrelations.some((c) => c.nodeId === nodeId);
+  }
+
+  /** Keep a torn-down-but-rebuildable node SELECTED without dialing it: stop the
+   *  transport (so the header doesn't spin forever on a gone node / a Forbidden
+   *  pairing reject), but retain `local.cur` + the session pane so the composer
+   *  stays enabled (isCurrentNodeResumable) and a send fires reprovisionEphemeral.
+   *  Idempotent — a repeated refreshNodes while offline just no-ops. */
+  private markCurrentNodeAwaitingRebuild(): void {
+    if (this.store.getState().status === "offline") return; // already parked
+    try {
+      this.transport.close();
+    } catch {
+      /* noop */
+    }
+    this.store.setStatus("offline");
+  }
+
   private lastNodeRefreshAt = 0;
 
   /** Re-pull /nodes at most once every 10s. Used on a connection drop so the
@@ -731,6 +1019,17 @@ export class AppController {
     if (this.direct || !this.signedIn) return;
     if (Date.now() - this.lastNodeRefreshAt < 10_000) return;
     void this.refreshNodes();
+  }
+
+  /**
+   * Pick a saved ephemeral runner as the target for the next new session. No
+   * machine is created and nothing on the current pane is torn down — the draft
+   * simply remembers this runner, and the first `sendPrompt` launches it and
+   * binds the session (see `launchDraftRunnerAndBind`). Selecting an actual node
+   * (switchNode) clears this.
+   */
+  pickDraftEphemeralRunner(config: EphemeralNodeConfig): void {
+    this.store.setDraftEphemeralConfig(config);
   }
 
   /** Switch to another node without a full reload. */
@@ -816,6 +1115,17 @@ export class AppController {
     void this.transport.send(command);
   }
 
+  /** Trigger `bivy update` on the connected node from the version-mismatch
+   *  banner. Optimistically marks the node updating so the button can't be
+   *  double-tapped; on success the node restarts and the socket reconnects on
+   *  the new build (the banner clears itself — see the store's node.update
+   *  handler), and a start failure comes back as node.update.result. */
+  updateNode(): void {
+    if (this.store.getState().nodeUpdating) return;
+    this.store.setNodeUpdating(true);
+    this.send({ kind: "node.update" });
+  }
+
   /**
    * Send a command and await its correlated reply instead of assuming success
    * the moment it was handed to the transport. A handful of node-settings-style
@@ -830,7 +1140,7 @@ export class AppController {
     return new Promise<ServerEvent>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingAcks.delete(rid);
-        reject(new Error("Timed out waiting for the node to respond."));
+        reject(new Error("Timed out waiting for the machine to respond."));
       }, timeoutMs);
       this.pendingAcks.set(rid, { resolve, reject, timer });
       void this.transport.send({ ...command, requestId: rid });
@@ -996,7 +1306,7 @@ export class AppController {
   private waitForOnline(timeoutMs = 20000): Promise<void> {
     if (this.store.getState().status === "online") return Promise.resolve();
     return new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => { unsub(); reject(new Error("Destination node did not come online")); }, timeoutMs);
+      const timer = setTimeout(() => { unsub(); reject(new Error("Destination machine did not come online")); }, timeoutMs);
       const unsub = this.store.subscribe(() => {
         if (this.store.getState().status === "online") { clearTimeout(timer); unsub(); resolve(); }
       });
@@ -1031,7 +1341,7 @@ export class AppController {
     if (!crossNode && !crossAgent) {
       const doneEvent = await this.forkRequest(
         { kind: "session.fork.local", sessionId: sourceSessionId, ...(opts.model ? { model: opts.model } : {}) },
-        180000,
+        FORK_IMPORT_TIMEOUT_MS,
       );
       const newSessionId = String((doneEvent as { sessionId?: unknown }).sessionId || "");
       if (!newSessionId) throw new Error("Local fork returned no session id");
@@ -1046,9 +1356,11 @@ export class AppController {
 
     // 1. Export the bundle from the source node (current transport). Pass the
     //    chosen agent so the source can drop the native transcript payload when
-    //    the fork targets a different runtime that could never replay it.
+    //    the fork targets a different runtime that could never replay it, and
+    //    flag a cross-node fork so the source publishes its branch (a same-node
+    //    cross-agent fork adopts the local branch and needs no push).
     const exportEvent = await this.forkRequest(
-      { kind: "session.fork.export", sessionId: sourceSessionId, ...(targetAgentId ? { agent: targetAgentId } : {}) },
+      { kind: "session.fork.export", sessionId: sourceSessionId, ...(targetAgentId ? { agent: targetAgentId } : {}), ...(crossNode ? { crossNode: true } : {}) },
       60000,
     );
     const bundle = (exportEvent as { bundle?: unknown }).bundle;
@@ -1072,7 +1384,7 @@ export class AppController {
       sameNode: !crossNode,
       ...(targetAgentId ? { agent: targetAgentId } : {}),
       ...(opts.model ? { model: opts.model } : {}),
-    }, 180000);
+    }, FORK_IMPORT_TIMEOUT_MS);
     const newSessionId = String((doneEvent as { sessionId?: unknown }).sessionId || "");
     const actualAgentId = String((doneEvent as { runtimeId?: unknown }).runtimeId || "");
     if (targetAgentId && actualAgentId && actualAgentId !== targetAgentId) {
@@ -1152,6 +1464,11 @@ export class AppController {
         const sessionId = String(s.sessionId || s.id || "");
         const nodeId = String(s.nodeId || "");
         const previous = existing.find((row) => row.sessionId === sessionId && (!row.nodeId || row.nodeId === nodeId));
+        // A trial-locked session arrives content-stripped (no titleEnc/source): don't
+        // try to decrypt it or carry stale cached content — show it as a locked stub.
+        if (s.locked) {
+          return { sessionId, nodeId, name: "Locked session", status: s.status, updatedAt: s.updatedAt, locked: true as const };
+        }
         const decryptedName = await this.decryptSessionTitle(s);
         return {
           ...previous,
@@ -1161,10 +1478,35 @@ export class AppController {
           source: s.source || previous?.source,
           branch: s.branch || previous?.branch,
           status: s.status,
-          updatedAt: previous?.updatedAt || s.updatedAt,
+          attention: Array.isArray(s.attention) ? s.attention : previous?.attention,
+          updatedAt: s.updatedAt || previous?.updatedAt,
+          locked: false as const,
         };
       }));
-      this.store.setSessions(sessions.filter((s) => s.sessionId && s.nodeId));
+      const live = sessions.filter((s) => s.sessionId && s.nodeId);
+      // Gap 1 visibility: a torn-down destroy-lane session cascades out of the
+      // control-plane session index when its node is unenrolled, so it would vanish
+      // from the sidebar — with nothing to open and send into to trigger a rebuild.
+      // Re-add it from the durable correlation (offline, rebuildable), keeping any
+      // name/branch we cached before teardown.
+      const liveIds = new Set(live.map((s) => s.sessionId));
+      const previous = this.store.getState().sessions;
+      const ghosts = this.ephemeralCorrelations
+        .filter((c) => !liveIds.has(c.sessionId) && !!this.local.keys()[c.nodeId])
+        .map((c) => {
+          const prior = previous.find((s) => s.sessionId === c.sessionId);
+          return {
+            ...prior,
+            sessionId: c.sessionId,
+            nodeId: c.nodeId,
+            name: prior?.name || (c.repo ? `${c.repo}` : "Rebuildable session"),
+            source: prior?.source,
+            status: "saved" as const,
+            rebuildable: true,
+            updatedAt: prior?.updatedAt,
+          };
+        });
+      this.store.setSessions([...live, ...ghosts]);
     } catch {
       // Best-effort; the connected node's E2E sessions.list still keeps the app usable.
     }
@@ -1216,6 +1558,31 @@ export class AppController {
   // localStorage (small metadata; synchronous, so it seeds before first paint)
   // and reconcile against the live list the instant it lands.
 
+  private static readonly DELETED_SESSIONS_KEY = "bivy.deleted-sessions";
+
+  private restoreDeletedSessionTombstones(): void {
+    try {
+      const raw = localStorage.getItem(AppController.DELETED_SESSIONS_KEY);
+      if (raw) this.store.seedDeletedSessionTombstones(JSON.parse(raw));
+      this.persistDeletedSessionTombstones(); // also drops expired entries
+    } catch {
+      /* corrupt/unavailable localStorage — live reconciliation still works */
+    }
+  }
+
+  private persistDeletedSessionTombstones(): void {
+    try {
+      const tombstones = this.store.deletedSessionTombstones();
+      if (Object.keys(tombstones).length) {
+        localStorage.setItem(AppController.DELETED_SESSIONS_KEY, JSON.stringify(tombstones));
+      } else {
+        localStorage.removeItem(AppController.DELETED_SESSIONS_KEY);
+      }
+    } catch {
+      /* best-effort */
+    }
+  }
+
   /** localStorage key for the current node's cached list (per-node so switching
    *  nodes never shows the wrong node's sessions). */
   private sessionCacheKey(): string {
@@ -1238,8 +1605,9 @@ export class AppController {
   /** Persist the session list whenever it changes. The store swaps in a new
    *  immutable state on every change, but the `sessions` array reference only
    *  changes when the list itself does, so this writes rarely. Empty lists are
-   *  never persisted, so a transient reset (e.g. switching nodes) can't wipe a
-   *  good cache before the new node's list arrives. */
+   *  significant: deleting the final session must overwrite the old cache or a
+   *  PWA reload paints that deleted row again. Node switches no longer clear the
+   *  unified list, so there is no transient-empty case to protect here. */
   private installSessionCachePersist(): void {
     if (typeof localStorage === "undefined") return;
     let last = this.store.getState().sessions;
@@ -1247,7 +1615,6 @@ export class AppController {
       const sessions = this.store.getState().sessions;
       if (sessions === last) return;
       last = sessions;
-      if (sessions.length === 0) return;
       try {
         // Cap the cached rows so a node with a very long history can't bloat
         // localStorage; the node's list is newest-first, so keep the head.
@@ -1258,7 +1625,35 @@ export class AppController {
     });
   }
 
+  /** Auto-send the next queued follow-up the instant the active session's turn
+   *  ends — regardless of *how* it ended. `onSessionSettled` already drains on a
+   *  live `agent_end`, but that event never arrives when a turn finishes while
+   *  the socket is down: the reconnect reconciles `working` back to false from
+   *  history, not from a fresh agent_end, so the queue would otherwise wedge
+   *  until the user sends manually. Watching the `working` true→false edge on the
+   *  active session covers every such path with one rule (and is a harmless
+   *  no-op double when agent_end already drained). Deliberately only the *same*
+   *  active session's edge — never a session-switch, since `beginOpen` paints
+   *  `working:false` optimistically before history reconciles, which would risk
+   *  firing a queued message into a background session that's actually mid-turn. */
+  private installFollowupAutoDrain(): void {
+    let wasWorking = this.store.getState().working;
+    let lastActive = this.store.getState().activeSessionId;
+    this.store.subscribe(() => {
+      const active = this.store.getState().activeSessionId;
+      const working = this.store.getState().working;
+      const settledNow = active != null && active === lastActive && wasWorking && !working;
+      wasWorking = working;
+      lastActive = active;
+      if (settledNow) this.drainFollowups(active);
+    });
+  }
+
   openSessionOnNode(sessionId: string, path?: string, nodeId?: string): void {
+    if (this.pendingLaunches.has(sessionId)) {
+      this.openPendingLaunch(sessionId);
+      return;
+    }
     if (!this.direct && nodeId && nodeId !== this.local.cur) {
       this.pendingCrossNodeOpen = { sessionId, path };
       navigate({ kind: "session", id: sessionId });
@@ -1275,6 +1670,10 @@ export class AppController {
   }
 
   openSession(sessionId: string, path?: string, opts: { navigate?: boolean } = {}): void {
+    if (this.pendingLaunches.has(sessionId)) {
+      this.openPendingLaunch(sessionId, opts);
+      return;
+    }
     // Reflect the open session in the URL (/sessions/:id) so it's copyable and
     // survives a reload. Skipped when the change *came from* the URL (initial
     // deep link / popstate); navigate() also no-ops on an identical path.
@@ -1285,6 +1684,11 @@ export class AppController {
     // pane blanks) until the network answers.
     this.store.beginOpen(sessionId);
     this.send({ kind: "session.open", sessionId, path });
+    // beginOpen deliberately clears the New-session draft model. Resolve the
+    // opened session's actual model in session scope immediately, rather than
+    // leaving the draft selection in the shared composer (or waiting for the
+    // user to open the model picker to trigger a refresh).
+    this.listModels();
     // Seed from the persistent cache first (paints even before the node answers),
     // then request history with the cursor so the node sends only the new tail.
     void this.seedAndRequestHistory(sessionId);
@@ -1313,6 +1717,7 @@ export class AppController {
    * turn that streamed during the outage appears and any stuck "working" clears.
    */
   private onReconnected(): void {
+    this.send({ kind: "activation.readiness" });
     let openedAfterNodeSwitch = false;
     if (this.pendingCrossNodeOpen) {
       const pending = this.pendingCrossNodeOpen;
@@ -1321,9 +1726,23 @@ export class AppController {
       openedAfterNodeSwitch = true;
     }
     void this.refreshAccountSessions();
+    // Converge account API keys in both directions. This also handles the
+    // node-less-first flow: keys added in the PWA are installed when the user's
+    // first persistent or ephemeral node appears.
+    void this.syncAccountCredentialsWithNode();
+    // A scheduled message may have delivered while this device was offline —
+    // drop its queue row so it stops showing as "scheduled" (see the method doc).
+    void this.resyncScheduledFollowups();
     // If this is a machine we just launched, seed its vault with the model API
     // keys held on this device (closes the cold-start gap — see the method doc).
     void this.seedEphemeralNodeIfNeeded();
+    // First-run subscription-OAuth: a launched runner that ends up with no model
+    // credentials at all (nothing seeded, no peer vault, no hosted escrow) needs
+    // the user to sign in once. See the method doc.
+    void this.maybePromptFirstRunModelAuth();
+    // Pull durable session↔machine correlations so a torn-down session stays
+    // rebuildable (Gap 1); then record one for the machine we're on, if owned.
+    void this.refreshEphemeralCorrelations();
     // Replay a `/sessions/:id` deep link now that a live transport exists — must
     // run before the requestHistory below so the session it opens is the one we
     // refresh. A cross-node selection was already opened just above.
@@ -1332,6 +1751,8 @@ export class AppController {
     if (sid && !openedAfterNodeSwitch) {
       this.requestHistory(sid);
       this.retryStuckFollowups(sid);
+      // Deliver anything the user typed while the node was offline/resuming.
+      this.drainPendingResume(sid);
     }
     // No active session but a session.new is still pending → its session.history
     // was lost to the drop. Re-fire it (idempotent on the node by requestId) so the
@@ -1403,6 +1824,7 @@ export class AppController {
       branch: s.draftRepo ? s.draftBranch || undefined : undefined,
       agent: s.selectedAgentId || undefined,
       sandbox: s.draftSandbox || undefined,
+      acknowledgeReducedProtections: s.draftAcknowledgeReducedProtections || undefined,
       model,
     };
   }
@@ -1422,6 +1844,14 @@ export class AppController {
     this.store.setDraftSandbox(tier);
   }
 
+  /** Record the confirm-to-continue acknowledgement for the currently selected
+   *  agent's Effective Session Contract preview (see AgentPicker) so the next
+   *  session.new carries it — the node re-checks server-side and would
+   *  otherwise reject a "supported" profile whose live protection is degraded. */
+  acknowledgeSessionAgentReducedProtections(value: boolean): void {
+    this.store.setDraftAcknowledgeReducedProtections(value);
+  }
+
   /**
    * Start a new session as a pure local draft. Nothing is created on the node
    * yet — the user can still change node/agent/model/repo — and the real
@@ -1434,6 +1864,9 @@ export class AppController {
     if (opts.navigate !== false) navigate({ kind: "new" });
     // Autofocus the composer so the user can start typing right away.
     this.focusComposer();
+    // Detach from an in-flight cold start, but do not cancel it. Its prompt and
+    // setup log live in pendingLaunches and its placeholder remains in the
+    // sidebar, so this pane is immediately free for another new session.
     this.pendingPrompt = null;
     this.pendingFollowups = [];
     this.store.resetActiveSession();
@@ -1491,11 +1924,28 @@ export class AppController {
     const s = this.store.getState();
     if (s.activeSessionId) return; // only a fresh draft, never a live session
     const wanted = this.local.lastChoice().agentId;
-    if (!wanted || wanted === s.selectedAgentId) return;
-    const target = s.runtimes.find((r) => r.id === wanted);
-    if (!target) return; // not offered on this node — keep the node default
-    if (String((target as any).status || "available") !== "available") return;
-    this.chooseAgent(target);
+    const target = wanted ? s.runtimes.find((r) => r.id === wanted) : undefined;
+    if (
+      target &&
+      wanted !== s.selectedAgentId &&
+      String((target as any).status || "available") === "available"
+    ) {
+      // Switching to the remembered agent runtime-selects it, and the resulting
+      // runtime.updated drives a fresh, runtime-tagged models.list (see
+      // maybeRefreshModelsForRuntime) — nothing more to do here.
+      this.chooseAgent(target);
+      return;
+    }
+    // The draft's agent is already the one we'd pick (remembered == node default,
+    // or nothing remembered). The connect-time burst's models.list carries no
+    // runtime hint, so the node may have answered it for its global-active
+    // session on a *different* agent — leaving `state.models` tagged for the
+    // wrong runtime (or empty). That's the "no models on the new-session screen
+    // until I send the first message" bug: only session.new ever re-listed for
+    // the draft's real agent. Re-list explicitly for the selected runtime so its
+    // models resolve up front. Guarded on a mismatch so a correct list isn't
+    // needlessly refetched on every runtimes.list.
+    if (s.selectedAgentId && s.modelsRuntimeId !== s.selectedAgentId) this.listModels();
   }
 
   /**
@@ -1512,9 +1962,34 @@ export class AppController {
     if (!trimmed && !files) return;
     const cmid = clientMessageId();
     const active = this.store.getState().activeSessionId;
+    // A cold-start placeholder is a persisted session intent, not a node
+    // session id. Keep extra messages queued locally until its session.new
+    // resolves instead of accidentally sending `prompt` with the placeholder.
+    if (active && this.pendingLaunches.has(active)) {
+      this.store.addUserMessage(trimmed, cmid, files);
+      this.pendingLaunches.get(active)!.followups.push({ text: trimmed, clientMessageId: cmid, attachments: files });
+      return;
+    }
     if (active) {
       if (this.mustQueue(active)) {
         this.store.enqueueFollowup(active, { id: cmid, text: trimmed, attachments: files }, Date.now());
+        // Account/relay mode: mirror this queued item as a one-off scheduled
+        // message so it still sends if the app closes or the node was offline at
+        // turn-end (see persistScheduledFollowup).
+        void this.persistScheduledFollowup(active, cmid, trimmed);
+        // If the turn happened to settle between the mustQueue check and here,
+        // send it straight away rather than waiting for the next settle edge.
+        this.drainFollowups(active);
+        return;
+      }
+      // The node is offline but this is an ephemeral machine we can bring back
+      // (a suspended Sprite, or a torn-down destroy-lane machine we hold the key
+      // to rebuild). Sending IS the resume: show the bubble, buffer the prompt,
+      // wake/rebuild the machine, and replay on reconnect — no separate button.
+      if (this.shouldAutoResume()) {
+        this.store.addUserMessage(trimmed, cmid, files);
+        this.pendingResume.push({ sessionId: active, text: trimmed, clientMessageId: cmid, attachments: files });
+        void this.resumeNodeForSession(active);
         return;
       }
       this.store.addUserMessage(trimmed, cmid, files);
@@ -1542,8 +2017,272 @@ export class AppController {
     // Keep the exact frame so a post-reconnect retry re-sends it byte-identically.
     const frame: Command = { kind: "session.new", requestId: rid, title: trimmed || undefined, ...this.draftSessionFields() };
     this.pendingPrompt = { text: trimmed, requestId: rid, clientMessageId: cmid, attachments: files, frame };
+    // The draft targets a saved ephemeral runner that has no machine yet: sending
+    // IS the launch. Persist a sidebar row, provision the machine, and use a
+    // background relay connection to create and start the real session once the
+    // node is online — no launch modal, and the main pane is immediately free.
+    const runner = this.store.getState().draftEphemeralConfig;
+    if (runner) {
+      const provisionalId = `starting-${rid}`;
+      this.pendingPrompt.provisionalId = provisionalId;
+      const now = new Date().toISOString();
+      const task: PendingEphemeralLaunch = {
+        id: provisionalId,
+        prompt: this.pendingPrompt,
+        config: runner,
+        logs: [],
+        followups: [],
+        phase: "provisioning",
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.pendingLaunches.set(provisionalId, task);
+      void this.pendingLaunchStore.put(task);
+      this.store.addUserMessage(trimmed, cmid, files);
+      this.store.persistPendingSession(provisionalId, trimmed);
+      // Persisting the placeholder before the first provider request is the key
+      // UX invariant: New is now safe immediately, not only after cloud-init and
+      // session.new eventually finish.
+      void this.launchDraftRunnerAndBind(provisionalId);
+      return;
+    }
     this.store.addUserMessage(trimmed, cmid, files);
     this.send(frame);
+  }
+
+  /** Provision the selected runner while its local sidebar row remains usable. */
+  private async launchDraftRunnerAndBind(provisionalId: string): Promise<void> {
+    const task = this.pendingLaunches.get(provisionalId);
+    if (!task) return;
+    const { config } = task;
+    const logSetup = (message: string) => {
+      task.logs.push(message);
+      task.updatedAt = new Date().toISOString();
+      void this.pendingLaunchStore.put(task);
+      if (this.store.getState().activeSessionId === provisionalId || this.pendingPrompt?.provisionalId === provisionalId) {
+        this.store.pushSystemMessage(`Setup · ${message}`);
+      }
+    };
+    try {
+      const machine = await this.launchEphemeral({
+        provider: config.provider,
+        region: config.region ?? undefined,
+        size: config.size ?? undefined,
+        image: config.image ?? undefined,
+        ttlMinutes: config.ttlMinutes ?? undefined,
+        teardownOnAgentFinish: config.teardownOnAgentFinish === true,
+        name: config.name,
+        setupId: config.id,
+        onProgress: logSetup,
+      });
+      if (!machine.nodeId) throw new Error("machine launched without a node id");
+      task.machine = machine;
+      task.phase = "booting";
+      task.updatedAt = new Date().toISOString();
+      await this.pendingLaunchStore.put(task);
+      this.store.bindPendingSessionNode(provisionalId, machine.nodeId);
+      this.startPendingRunner(provisionalId);
+    } catch (e) {
+      const message = `Launch failed: ${(e as Error)?.message || e}`;
+      task.logs.push(message);
+      task.phase = "failed";
+      task.updatedAt = new Date().toISOString();
+      void this.pendingLaunchStore.put(task);
+      if (this.pendingPrompt?.provisionalId === provisionalId) this.pendingPrompt = null;
+      this.store.failPendingSession(provisionalId);
+      if (this.store.getState().activeSessionId === provisionalId) this.store.pushSystemMessage(`Setup · ${message}`);
+      this.store.setError(`Couldn't start ${config.name}: ${(e as Error)?.message || e}`);
+    }
+  }
+
+  private openPendingLaunch(provisionalId: string, opts: { navigate?: boolean } = {}): void {
+    const task = this.pendingLaunches.get(provisionalId);
+    if (!task) return;
+    if (opts.navigate !== false) navigate({ kind: "session", id: provisionalId });
+    this.store.beginOpen(provisionalId);
+    this.store.addUserMessage(task.prompt.text, task.prompt.clientMessageId, task.prompt.attachments);
+    for (const line of task.logs) this.store.pushSystemMessage(`Setup · ${line}`);
+    this.pendingPrompt = task.prompt;
+  }
+
+  /** Connect a freshly-created runner on its own small transport. This is what
+   *  makes the placeholder genuinely independent: pressing New can switch the
+   *  main pane anywhere while this node finishes booting and starts its prompt. */
+  private startPendingRunner(provisionalId: string): void {
+    const task = this.pendingLaunches.get(provisionalId);
+    const nodeId = task?.machine?.nodeId;
+    if (!task || !nodeId || task.transport) return;
+    const log = (message: string) => {
+      task.logs.push(message);
+      task.updatedAt = new Date().toISOString();
+      void this.pendingLaunchStore.put(task);
+      if (this.store.getState().activeSessionId === provisionalId) this.store.pushSystemMessage(`Setup · ${message}`);
+    };
+    log("Machine accepted. Waiting for its secure Bivy service to come online…");
+    this.startBootProgress(nodeId, provisionalId, log);
+    this.pollBootstrapStatus(nodeId, provisionalId, log);
+
+    // RelayTransport reads `cur` from its store. Scope only that property to the
+    // new node; credentials and room keys still come from the normal local store.
+    const scopedStore = new Proxy(this.local, {
+      get: (target, property, receiver) => property === "cur" ? nodeId : Reflect.get(target, property, receiver),
+      set: (target, property, value, receiver) => property === "cur" ? true : Reflect.set(target, property, value, receiver),
+    }) as LocalStore;
+    let transport: Transport;
+    transport = new RelayTransport({
+      store: scopedStore,
+      handlers: {
+        onStatus: (status) => {
+          if (status !== "online") return;
+          log(`${task.config.name} is online. Creating the session…`);
+          this.clearBootProgress(nodeId);
+          void transport.send(task.prompt.frame);
+        },
+        onEvent: (event) => {
+          if (event.type === "session.error") {
+            this.failPendingLaunch(provisionalId, String(event.error || "Session creation failed."));
+            return;
+          }
+          if (event.type !== "session.history" || event.requestId !== task.prompt.requestId || !event.sessionId) return;
+          void this.finishPendingLaunch(provisionalId, String(event.sessionId), transport);
+        },
+        onError: (message) => {
+          if (!/^node offline$/i.test(message.trim())) log(`Connection retry: ${message}`);
+        },
+      },
+    });
+    task.transport = transport;
+    void transport.connect();
+  }
+
+  private async finishPendingLaunch(provisionalId: string, sessionId: string, transport: Transport): Promise<void> {
+    const task = this.pendingLaunches.get(provisionalId);
+    const nodeId = task?.machine?.nodeId;
+    if (!task || !nodeId) return;
+    await transport.send({ kind: "prompt", sessionId, text: task.prompt.text, clientMessageId: task.prompt.clientMessageId, attachments: task.prompt.attachments });
+    for (const followup of task.followups) {
+      await transport.send({ kind: "prompt", sessionId, ...followup });
+    }
+    this.clearBootProgress(nodeId);
+    this.pendingLaunches.delete(provisionalId);
+    await this.pendingLaunchStore.remove(provisionalId);
+    if (this.pendingPrompt?.provisionalId === provisionalId) this.pendingPrompt = null;
+    this.store.completePendingSession(provisionalId, sessionId, nodeId);
+    const wasOpen = this.store.getState().activeSessionId === sessionId;
+    if (wasOpen) this.openSessionOnNode(sessionId, undefined, nodeId);
+    // Keep the transport alive long enough to flush its sealed frames, then let
+    // the normal account index/main connection own the now-real session.
+    setTimeout(() => transport.close(), 1000);
+    setTimeout(() => this.refreshSessions(), 1500);
+  }
+
+  private failPendingLaunch(provisionalId: string, message: string): void {
+    const task = this.pendingLaunches.get(provisionalId);
+    if (!task) return;
+    if (task.machine?.nodeId) this.clearBootProgress(task.machine.nodeId);
+    task.transport?.close();
+    task.logs.push(`Startup failed: ${message}`);
+    task.phase = "failed";
+    task.updatedAt = new Date().toISOString();
+    void this.pendingLaunchStore.put(task);
+    this.store.failPendingSession(provisionalId);
+    if (this.store.getState().activeSessionId === provisionalId) this.store.pushSystemMessage(`Setup · Startup failed: ${message}`);
+    this.store.setError(`Couldn't start ${task.config.name}: ${message}`);
+  }
+
+  private startBootProgress(nodeId: string, provisionalId: string, log: (message: string) => void): void {
+    this.clearBootProgress(nodeId);
+    const updates = [
+      [15_000, "Booting the machine and installing Bivy…"],
+      [45_000, "Still installing Bivy (45s elapsed). A first boot can take a few minutes…"],
+      [90_000, "Still waiting for Bivy to join the secure relay (90s elapsed)…"],
+      [180_000, "Boot is taking longer than usual (3 min elapsed). Still retrying…"],
+      [RUNNER_BOOT_TIMEOUT_MS, `Still offline after ${Math.round(RUNNER_BOOT_TIMEOUT_MS / 60000)} min. Check the provider's machine logs for a failed install.`],
+    ] as const;
+    const timers = updates.map(([delay, message]) => setTimeout(() => {
+      if (this.pendingLaunches.has(provisionalId)) log(message);
+    }, delay));
+    this.bootProgressTimers.set(nodeId, timers);
+  }
+
+  private clearBootProgress(nodeId: string): void {
+    for (const timer of this.bootProgressTimers.get(nodeId) ?? []) clearTimeout(timer);
+    this.bootProgressTimers.delete(nodeId);
+    this.bootstrapPhaseByNode.delete(nodeId);
+  }
+
+  private pollBootstrapStatus(nodeId: string, provisionalId: string, log: (message: string) => void): void {
+    const labels: Record<string, string> = {
+      booting: "The machine booted and cloud-init started.",
+      installing: "Cloud-init is installing Bivy…",
+      starting: "Bivy is installed. Starting its secure service…",
+      ready: "Bivy reported ready.",
+      failed: "Cloud-init reported that the Bivy install failed.",
+    };
+    const poll = async () => {
+      const task = this.pendingLaunches.get(provisionalId);
+      if (!task || task.machine?.nodeId !== nodeId) return;
+      try {
+        const nodes = await fetchAccountNodes(this.local);
+        const phase = nodes.find((n) => n.id === nodeId)?.bootstrapStatus?.phase;
+        if (phase && phase !== this.bootstrapPhaseByNode.get(nodeId)) {
+          this.bootstrapPhaseByNode.set(nodeId, phase);
+          log(labels[phase] || `Bootstrap: ${phase}`);
+          if (phase === "failed") this.failPendingLaunch(provisionalId, labels.failed!);
+        }
+      } catch {
+        // The relay connection remains authoritative; status polling is additive.
+      }
+      if (this.pendingLaunches.has(provisionalId)) setTimeout(poll, 3000);
+    };
+    void poll();
+  }
+
+  /** Restore pending first messages after a reload. A machine record means the
+   *  provider already accepted it, so reconnect without provisioning twice.
+   *  An interrupted provider request is marked failed and offered as a retry. */
+  private async restorePendingLaunches(): Promise<void> {
+    const launches = await this.pendingLaunchStore.list();
+    for (const launch of launches) {
+      this.pendingLaunches.set(launch.id, launch);
+      this.store.persistPendingSession(launch.id, launch.prompt.text, false);
+      if (launch.machine?.nodeId && launch.phase !== "failed") {
+        this.store.bindPendingSessionNode(launch.id, launch.machine.nodeId);
+        this.startPendingRunner(launch.id);
+      } else if (launch.phase === "provisioning") {
+        launch.phase = "failed";
+        launch.logs.push("Startup was interrupted before the cloud provider confirmed the machine.");
+        launch.updatedAt = new Date().toISOString();
+        await this.pendingLaunchStore.put(launch);
+        this.store.failPendingSession(launch.id);
+      } else if (launch.phase === "failed") {
+        this.store.failPendingSession(launch.id);
+      }
+    }
+  }
+
+  async retryPendingLaunch(id: string): Promise<void> {
+    const task = this.pendingLaunches.get(id);
+    if (!task) return;
+    task.transport?.close();
+    task.transport = undefined;
+    task.logs.push("Retrying startup…");
+    task.phase = task.machine?.nodeId ? "booting" : "provisioning";
+    task.updatedAt = new Date().toISOString();
+    this.store.retryPendingSession(id);
+    await this.pendingLaunchStore.put(task);
+    if (task.machine?.nodeId) this.startPendingRunner(id);
+    else await this.launchDraftRunnerAndBind(id);
+  }
+
+  async dismissPendingLaunch(id: string): Promise<void> {
+    const task = this.pendingLaunches.get(id);
+    task?.transport?.close();
+    if (task?.machine?.nodeId) this.clearBootProgress(task.machine.nodeId);
+    this.pendingLaunches.delete(id);
+    await this.pendingLaunchStore.remove(id);
+    this.store.dismissPendingSession(id);
+    if (this.store.getState().activeSessionId == null) this.newSession();
   }
 
   /**
@@ -1566,7 +2305,34 @@ export class AppController {
    *  refreshes it in the background instead of flashing a spinner. */
   listRepos(): void {
     if (this.store.getState().repos.length === 0) this.store.setReposLoading(true);
+    if (!this.direct && this.signedIn && !this.local.cur) {
+      void fetchHostedGithubRepositories(this.local)
+        .then((repos) => this.store.apply({ type: "repos.list", repos, authed: true } as never))
+        .catch((error) => this.store.apply({ type: "repos.list", repos: [], authed: false, error: String((error as Error)?.message || error) } as never));
+      return;
+    }
     this.send({ kind: "repos.list" });
+  }
+
+  /** Begin the repo-picker "Connect GitHub" device flow on the node. The node
+   *  replies with a github.connect.status ("waiting" + a user code, or
+   *  "unconfigured" if it has no device-flow client id). Optimistically flips to
+   *  "starting" so the button shows progress before the round trip. */
+  githubConnectStart(): void {
+    this.store.setGithubConnect({ status: "starting" });
+    this.send({ kind: "github.connect.start" });
+  }
+
+  /** Ask the node whether the user has authorized yet (drives the flow forward).
+   *  The picker calls this on the node-provided interval while status is "waiting". */
+  githubConnectPoll(): void {
+    this.send({ kind: "github.connect.poll" });
+  }
+
+  /** Drop any Connect-GitHub flow state (e.g. on cancel, or after success once
+   *  the repo list has refreshed) so reopening the picker starts clean. */
+  githubConnectReset(): void {
+    this.store.setGithubConnect({ status: "idle" });
   }
 
   /** Choose a repo for the next new session (persisted for next time). A plain
@@ -1612,9 +2378,35 @@ export class AppController {
     this.send({ kind: "node.stats", sessionId });
   }
 
+  /** Ask the node for a fresh Machine capability inventory. The reply arrives
+   *  as a `capabilities` event and lands in `state.capabilities`. Fetched on
+   *  demand (panel open / explicit refresh) — capabilities change rarely,
+   *  unlike live resource stats, so this is not polled. */
+  requestCapabilities(): void {
+    this.send({ kind: "capabilities.get" });
+  }
+
   listModels(): void {
-    const sessionId = this.store.getState().activeSessionId ?? undefined;
-    this.send({ kind: "models.list", sessionId });
+    const s = this.store.getState();
+    const sessionId = s.activeSessionId ?? undefined;
+    // On a draft, hint the agent we're previewing so the node answers for THAT
+    // runtime (and tags the reply for the per-runtime cache) even if its default
+    // runtime hasn't flipped yet. A live session answers for itself — no hint.
+    const runtimeId = sessionId ? undefined : (s.selectedAgentId ?? undefined);
+    this.send({ kind: "models.list", sessionId, runtimeId });
+  }
+
+  /** Warm the node's per-runtime model scratch for every installed agent when the
+   *  agent picker opens, so the first switch to any of them lists models instantly
+   *  instead of paying the runtime spin-up on the critical path. No-op once a
+   *  session is live (its agent is fixed) or when no runtimes are known yet. */
+  prefetchModels(): void {
+    if (this.store.getState().activeSessionId) return;
+    const runtimeIds = this.store
+      .getState()
+      .runtimes.filter((r) => String((r as any).status || "available") === "available")
+      .map((r) => r.id);
+    if (runtimeIds.length) this.send({ kind: "models.prefetch", runtimeIds });
   }
 
   /** Pick a model. Live session → select now; draft → keep local for session.new. */
@@ -1700,6 +2492,73 @@ export class AppController {
     this.send({ kind: "provider.oauth.code", id, code });
   }
 
+  // --- Settings: multiple credentials per provider (labeled) --------------
+  /** Ask for every labeled credential; the node replies with `credentials.records`. */
+  listCredentialRecords(): void {
+    this.send({ kind: "credentials.list" });
+  }
+  private credentialSyncInFlight: Promise<void> | null = null;
+  /** Bidirectional API-key convergence between the PWA account vault and node. */
+  private syncAccountCredentialsWithNode(): Promise<void> {
+    if (this.direct || this.store.getState().status !== "online") return Promise.resolve();
+    if (this.credentialSyncInFlight) return this.credentialSyncInFlight;
+    this.credentialSyncInFlight = (async () => {
+      // Pull first so an existing node seeds a new device. Then push the merged
+      // account set so a node-less-created key reaches the newly enrolled node.
+      const event = await this.awaitAck({ kind: "credentials.account.export" });
+      const incoming = Array.isArray(event.entries)
+        ? event.entries.filter((entry): entry is { provider: string; key: string } => Boolean(entry)
+          && typeof (entry as { provider?: unknown }).provider === "string"
+          && typeof (entry as { key?: unknown }).key === "string")
+        : [];
+      await this.ephemeralKeys.importModelKeys(incoming);
+      const accountKeys = (await this.ephemeralKeys.modelKeyEntries()).filter((entry) => entry.scope === "account");
+      for (const { provider, key } of accountKeys) {
+        await this.awaitAck({ kind: "credential.set", provider, label: "default", key });
+      }
+      this.listCredentialRecords();
+      this.listProviders();
+    })().catch(() => {
+      // Best effort during reconnect; the next reconnect/settings open retries.
+    }).finally(() => { this.credentialSyncInFlight = null; });
+    return this.credentialSyncInFlight;
+  }
+  /** Add/replace a labeled credential — an API key, or an op://…/env://… reference. */
+  setCredential(provider: string, label: string, value: { key?: string; ref?: string }): Promise<void> {
+    return this.awaitAck({ kind: "credential.set", provider, label, ...value }).then(() => undefined);
+  }
+  /** Forget one labeled credential (`provider:label`). */
+  removeCredential(provider: string, label: string): void {
+    this.send({ kind: "credential.remove", provider, label });
+  }
+  /** Toggle whether a credential syncs across your nodes or stays on this one. */
+  setCredentialSync(provider: string, label: string, sync: "account" | "node"): void {
+    this.send({ kind: "credential.sync.set", provider, label, sync });
+  }
+  /** "Test connection": a bounded, non-secret liveness probe for one credential
+   *  (see credential.test in server.ts). Resolves with the redacted result even
+   *  when the probe itself reports failure — only a transport-level problem
+   *  rejects. Direct/self-host mode has no handler for this command yet (same
+   *  gap as the rest of the labeled-credentials surface), so it always reports
+   *  "not supported" there rather than hanging. */
+  async testCredential(provider: string, label: string): Promise<{ ok: boolean; at: number; reason?: string }> {
+    if (this.direct) return { ok: false, at: Date.now(), reason: "not_supported" };
+    const event = (await this.awaitAck({ kind: "credential.test", provider, label }, 15000)) as { ok?: boolean; at?: number; reason?: string };
+    return { ok: Boolean(event.ok), at: Number(event.at) || Date.now(), ...(event.reason ? { reason: event.reason } : {}) };
+  }
+  /** Ask for the selection presets; the node replies with `credentials.presets`. */
+  getCredentialPresets(): void {
+    this.send({ kind: "credentials.presets.get" });
+  }
+  /** Choose which preset selection resolves against (empty clears it). */
+  setActivePreset(active: string): void {
+    this.send({ kind: "credentials.presets.setActive", active });
+  }
+  /** Point a provider at a label within a preset (empty label clears the mapping). */
+  setPresetMapping(preset: string, provider: string, label: string): void {
+    this.send({ kind: "credentials.presets.setMapping", preset, provider, label });
+  }
+
   // --- Settings: local / custom model endpoints ---------------------------
 
   listLocalModels(): void {
@@ -1708,12 +2567,22 @@ export class AppController {
   listLocalModelPresets(): void {
     this.send({ kind: "models.custom.presets" });
   }
+  /** Explicitly probe only the node's fixed localhost allowlist. */
+  async discoverLocalModels(): Promise<LocalModelDiscoveryResult> {
+    return await this.awaitAck({ kind: "models.custom.discover" }, 10_000) as unknown as LocalModelDiscoveryResult;
+  }
+  /** Verify one user-entered endpoint and return its normalized catalog health. */
+  async verifyLocalModel(baseUrl: string, apiKey?: string): Promise<LocalModelEndpointResult> {
+    const event = await this.awaitAck({ kind: "models.custom.verify", baseUrl, ...(apiKey ? { apiKey } : {}) }, 10_000) as any;
+    return event.result as LocalModelEndpointResult;
+  }
   /** Save (create or update) a local/custom provider. `spec` matches the node's
    *  save shape: { providerId, name?, baseUrl, api?, apiKey?, compat?, models[] }.
    *  Resolves once the node acks the save (or rejects with its error) instead
    *  of assuming success the moment it was sent. */
-  saveLocalModel(spec: Record<string, unknown>): Promise<void> {
-    return this.awaitAck({ kind: "models.custom.save", spec }).then(() => undefined);
+  async saveLocalModel(spec: Record<string, unknown>): Promise<string> {
+    const event = await this.awaitAck({ kind: "models.custom.save", spec }) as { provider?: unknown };
+    return String(event.provider ?? spec.providerId ?? "local");
   }
   removeLocalModel(id: string): void {
     this.send({ kind: "models.custom.remove", id });
@@ -1781,6 +2650,30 @@ export class AppController {
     else pending.resolve(String((event as any).text ?? "").trim());
   }
 
+  /** Generate neural read-aloud audio on the node using its OpenAI key. */
+  synthesize(text: string, voice: string, instructions: string): Promise<{ audio: string; mimeType: string }> {
+    const rid = requestId();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingSpeech.delete(rid);
+        reject(new Error("Speech generation timed out. Check your connection and try again."));
+      }, 60_000);
+      this.pendingSpeech.set(rid, { resolve, reject, timer });
+      void this.transport.send({ kind: "synthesize", requestId: rid, text, voice, instructions });
+    });
+  }
+
+  private resolveSpeech(event: ServerEvent): void {
+    const rid = String(event.requestId || "");
+    const pending = rid ? this.pendingSpeech.get(rid) : undefined;
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.pendingSpeech.delete(rid);
+    const error = (event as any).error;
+    if (error) pending.reject(new Error(String(error)));
+    else pending.resolve({ audio: String((event as any).audio ?? ""), mimeType: String((event as any).mimeType ?? "audio/mpeg") });
+  }
+
   // --- Settings: GitHub App one-click (manifest) flow --------------------
   // Works on a headless/remote node: we hand the node *this browser's* origin
   // as the redirect base, so GitHub sends the code back to wherever the user
@@ -1804,15 +2697,30 @@ export class AppController {
    * app's webhook keeps working. Reuses the manifest flow's done/error events, so
    * the phase machine surfaces success/failure just like the create flow.
    */
-  githubAppConnectExisting(input: { appId: string; privateKeyPem: string; nodeLabel?: string }): void {
+  async githubAppConnectExisting(input: { appId: string; privateKeyPem: string; nodeLabel?: string }): Promise<void> {
     this.store.setGithubAppPhase("completing");
-    this.send({
-      kind: "github.app.connect-existing",
-      requestId: requestId(),
-      appId: input.appId,
-      privateKeyPem: input.privateKeyPem,
-      nodeLabel: input.nodeLabel || undefined,
-    });
+    try {
+      // This used to be fire-and-forget. A dropped relay command, offline node,
+      // or validation failure therefore left the form looking unchanged (or
+      // stuck on “Connecting…”) with no actionable result for the user.
+      await this.awaitAck({
+        kind: "github.app.connect-existing",
+        appId: input.appId,
+        privateKeyPem: input.privateKeyPem,
+        nodeLabel: input.nodeLabel || undefined,
+      }, 60_000);
+    } catch (error) {
+      this.store.setGithubAppPhase("error", {
+        error: error instanceof Error ? error.message : String(error),
+        returning: false,
+      });
+      throw error;
+    }
+  }
+
+  /** Store and validate an App for unattended execution without a node. */
+  connectHostedGithubApp(input: { appId: string; privateKeyPem: string; installationId?: string }): Promise<HostedGithubAppConnection> {
+    return apiConnectHostedGithubApp(this.local, input);
   }
 
   // --- Settings: account / billing / push --------------------------------
@@ -1827,6 +2735,25 @@ export class AppController {
   /** Recent incoming work items (the GitHub queue), newest first. */
   fetchGithubQueue(limit = 30): ReturnType<typeof fetchGithubQueue> {
     return fetchGithubQueue(this.local, limit);
+  }
+  /** Recent automation runs (account-wide), newest first. The Inbox reads these
+   *  to surface runs that need attention or failed their final attempt. */
+  fetchAutomationRuns(limit = 50): ReturnType<typeof fetchAutomationRuns> {
+    return fetchAutomationRuns(this.local, limit);
+  }
+  /** Request cancellation, then re-read both durable Run projections. The UI
+   *  must render these records rather than treating an accepted request as a
+   *  terminal result. */
+  async cancelAutomationRun(id: string): Promise<{
+    runs: Awaited<ReturnType<typeof fetchAutomationRuns>>;
+    queue: Awaited<ReturnType<typeof fetchGithubQueue>>;
+  }> {
+    await apiCancelAutomationRun(this.local, id);
+    const [runs, queue] = await Promise.all([
+      fetchAutomationRuns(this.local, 50),
+      fetchGithubQueue(this.local, 30),
+    ]);
+    return { runs, queue };
   }
   /** Set (empty string clears) the default node for untagged GitHub work. Without
    *  an appId it covers every connected app — it's an account-level preference. */
@@ -1894,15 +2821,38 @@ export class AppController {
 
   // --- Ephemeral machines ------------------------------------------------
 
-  private ephemeralKeys: EphemeralKeyStore = createEphemeralKeyStore();
+  // Provider tokens are device-local by default. When cross-device sync is opted
+  // in (Settings), they're additionally synced to the account's other devices
+  // through an E2E device vault so a second device can wake/reach a machine the
+  // first launched (P2 / Gap A) — the control plane only ever sees ciphertext.
   private ephemeralModelKeys: EphemeralModelKeyStore = createEphemeralModelKeyStore();
+  private ephemeralKeys: DeviceVaultKeyStore = createDeviceVaultKeyStore({
+    local: createEphemeralKeyStore(),
+    modelKeys: this.ephemeralModelKeys,
+    remote: this.deviceVaultRemote(),
+    device: () => deviceKeypair(this.local),
+    // The account credential vault is available before the first node exists.
+    // Compute-provider token widening remains a separate explicit opt-in.
+    enabled: () => !this.direct && Boolean(this.local.s),
+    providerTokenSyncEnabled: () => this.deviceTokenSyncEnabled(),
+    state: {
+      load: async () => {
+        try { return JSON.parse(localStorage.getItem("bivy_device_vault_state") || "null") ?? undefined; } catch { return undefined; }
+      },
+      save: async (value) => { try { localStorage.setItem("bivy_device_vault_state", JSON.stringify(value)); } catch { /* status remains in memory */ } },
+    },
+  });
   private ephemeralPrefs: EphemeralPrefsStore = createEphemeralPrefsStore();
   private ephemeralSetups: EphemeralSetupStore = createEphemeralSetupStore();
   private ephemeralMachines: MachineStore = createMachineStore();
+  private pendingLaunchStore: PendingEphemeralLaunchStore = createPendingEphemeralLaunchStore();
   /** Ephemeral node ids we've already seeded with device-held model keys this
    *  session, so a reconnect doesn't re-push (the node write is idempotent
    *  regardless). See `seedEphemeralNodeIfNeeded`. */
   private seededEphemeralNodes = new Set<string>();
+  /** Launched ephemeral node ids we've already run the first-run model-auth
+   *  check for this session, so a reconnect doesn't re-schedule it. */
+  private firstRunAuthNodes = new Set<string>();
   /** Machines already scheduled for finish-triggered teardown. */
   private finishingEphemeralMachines = new Set<string>();
 
@@ -1913,22 +2863,123 @@ export class AppController {
    *  vault over the E2E channel (closes the cold-start gap — see
    *  docs/ephemeral-sessions.md, "Closing the cold-start gap"). API keys only. */
   listEphemeralModelKeys(): Promise<EphemeralModelKeyInfo[]> {
-    return this.ephemeralModelKeys.list();
+    return this.ephemeralKeys.listModelKeys();
   }
-  setEphemeralModelKey(provider: string, key: string): Promise<void> {
-    return this.ephemeralModelKeys.set(provider, key);
+  setEphemeralModelKey(provider: string, key: string, scope: "account" | "device" = "account"): Promise<void> {
+    return this.ephemeralKeys.setModelKey(provider, key, scope);
   }
   removeEphemeralModelKey(provider: string): Promise<void> {
-    return this.ephemeralModelKeys.remove(provider);
+    return this.ephemeralKeys.removeModelKey(provider);
   }
   getEphemeralToken(id: string): Promise<string> {
     return this.ephemeralKeys.getToken(id);
   }
-  setEphemeralToken(id: string, token: string): Promise<void> {
-    return this.ephemeralKeys.setToken(id, token);
+  async setEphemeralToken(id: string, token: string): Promise<void> {
+    await validateEphemeralProviderToken(id, token, cloudExec(this.local));
+    await this.ephemeralKeys.setToken(id, token);
+    // Connecting a provider should be enough to start — auto-create one sensible
+    // default runner so it appears in the node picker immediately, without a
+    // separate "define a machine" step. No-op if the provider already has one.
+    void this.ensureDefaultRunner(id);
+  }
+  /** Save a provider token and return the provider's default runner (creating one
+   *  if needed), so the connect UI can immediately pick it for the draft session. */
+  async connectEphemeralProvider(providerId: string, token: string): Promise<EphemeralNodeConfig | null> {
+    await validateEphemeralProviderToken(providerId, token, cloudExec(this.local));
+    await this.ephemeralKeys.setToken(providerId, token);
+    return this.ensureDefaultRunner(providerId);
+  }
+  /** The provider's default runner (creating one if needed) — for the connect
+   *  UI's "use this runner" action on an already-connected provider. */
+  defaultEphemeralRunner(providerId: string): Promise<EphemeralNodeConfig | null> {
+    return this.ensureDefaultRunner(providerId);
+  }
+  /** The provider's default ephemeral runner (account config), creating one if it
+   *  has none yet — so a freshly-connected provider is immediately pickable. */
+  private async ensureDefaultRunner(providerId: string): Promise<EphemeralNodeConfig | null> {
+    try {
+      const configs = await this.listEphemeralConfigs();
+      const existing = configs.find((c) => c.provider === providerId);
+      if (existing) return existing;
+      const adapter = ephemeralAdapter(providerId);
+      const name = ephemeralCatalogEntry(providerId)?.name ?? providerId;
+      return await this.createEphemeralConfig({
+        provider: providerId,
+        name: `${name} runner`,
+        region: adapter?.defaultRegion ?? null,
+        size: adapter?.defaultSize ?? null,
+        // Suspend-to-zero providers keep the machine; destroy-lane providers get
+        // a 1h TTL + teardown-on-finish so a forgotten machine can't bill on.
+        ttlMinutes: adapter?.suspendsWhenIdle ? null : 60,
+        teardownOnAgentFinish: !adapter?.suspendsWhenIdle,
+      });
+    } catch { /* best effort — the user can still create one in Settings */ return null; }
   }
   removeEphemeralToken(id: string): Promise<void> {
     return this.ephemeralKeys.remove(id);
+  }
+
+  // --- Cross-device provider-token sync (P2 / Gap A) ---------------------
+  // Opt-in, off by default (per the CLOUD.md credential-widening precedent). When
+  // on, ephemeral provider tokens are E2E-synced to the account's other devices
+  // so a second device can wake/reach a machine the first launched.
+  private deviceTokenSyncEnabled(): boolean {
+    try {
+      return !this.direct && !!this.local.s && localStorage.getItem("bivy_device_token_sync") === "1";
+    } catch {
+      return false;
+    }
+  }
+  getDeviceTokenSync(): boolean {
+    return this.deviceTokenSyncEnabled();
+  }
+  setDeviceTokenSync(enabled: boolean): void {
+    try {
+      localStorage.setItem("bivy_device_token_sync", enabled ? "1" : "0");
+    } catch {
+      /* noop */
+    }
+    if (enabled) void this.syncDeviceVault().catch(() => { /* surfaced by getDeviceVaultSyncState */ });
+  }
+  /** Reconcile the device vault. Failures remain observable through
+   * `getDeviceVaultSyncState()` and reject explicit callers instead of being
+   * silently swallowed. */
+  syncDeviceVault(): Promise<void> {
+    return this.ephemeralKeys.sync();
+  }
+  getDeviceVaultSyncState() {
+    return this.ephemeralKeys.getSyncState();
+  }
+  /** Fetch-backed control-plane transport for the device vault. Ciphertext +
+   *  wrapped keys only — never a token. */
+  private deviceVaultRemote(): DeviceVaultRemote {
+    const base = () => (this.local.cp || (typeof location !== "undefined" ? location.origin : "")).replace(/\/$/, "");
+    const jsonAuth = () => ({ authorization: `Bearer ${this.local.s}`, "content-type": "application/json" });
+    return {
+      get: async () => {
+        const dev = await deviceKeypair(this.local);
+        const res = await fetch(`${base()}/device-vault?device=${encodeURIComponent(dev.pub)}`, { headers: { authorization: `Bearer ${this.local.s}` } });
+        if (!res.ok) throw new Error(`device-vault get failed (${res.status})`);
+        const data = (await res.json()) as { vault?: string | null; wrappedKey?: { wrappedKey: string; wrappedByPublicKeyB64: string; generation?: number } | null; requests?: string[]; generation?: number; keyGeneration?: number; recipients?: string[] };
+        return { vault: data.vault ?? null, wrappedKey: data.wrappedKey ?? null, requests: Array.isArray(data.requests) ? data.requests : [], generation: data.generation ?? 0, keyGeneration: data.keyGeneration ?? 0, recipients: Array.isArray(data.recipients) ? data.recipients : [] };
+      },
+      putVault: async (ciphertext: string, expectedGeneration?: number, keyGeneration?: number) => {
+        const dev = await deviceKeypair(this.local);
+        const res = await fetch(`${base()}/device-vault`, { method: "PUT", headers: jsonAuth(), body: JSON.stringify({ devicePublicKeyB64: dev.pub, ciphertext, expectedGeneration, keyGeneration }) });
+        if (res.status === 409) throw new DeviceVaultConflictError();
+        if (!res.ok) throw new Error(`device-vault put failed (${res.status})`);
+        const data = await res.json() as { generation?: number };
+        return { generation: data.generation ?? (expectedGeneration ?? 0) + 1 };
+      },
+      requestKey: async () => {
+        const dev = await deviceKeypair(this.local);
+        await fetch(`${base()}/device-vault/key/request`, { method: "POST", headers: jsonAuth(), body: JSON.stringify({ devicePublicKeyB64: dev.pub }) });
+      },
+      putWrapped: async (target: string, wrappedKey: string, wrappedByPublicKeyB64: string, generation?: number) => {
+        const res = await fetch(`${base()}/device-vault/key/wrapped`, { method: "PUT", headers: jsonAuth(), body: JSON.stringify({ targetDevicePublicKeyB64: target, wrappedKey, wrappedByPublicKeyB64, generation }) });
+        if (!res.ok) throw new Error(`device-vault wrapped-key put failed (${res.status})`);
+      },
+    };
   }
   /** Per-provider saved launch preferences (region/size/TTL/repo) configured in
    *  Settings → Ephemeral machines; used to pre-fill the launch flow. */
@@ -1980,7 +3031,7 @@ export class AppController {
     if (!machines.some((m) => m.nodeId === nodeId)) return;
     let entries: { provider: string; key: string }[];
     try {
-      entries = await this.ephemeralModelKeys.entries();
+      entries = await this.ephemeralKeys.modelKeyEntries();
     } catch {
       return;
     }
@@ -1998,11 +3049,69 @@ export class AppController {
       this.send({ kind: "provider.apiKey", provider, key });
     }
   }
+  /**
+   * First-run model access for a launched ephemeral runner.
+   *
+   * The vault-sync paths (device API-key seed, peer node→node wrap, hosted
+   * escrow) cover every case where the account *already has* a model login
+   * somewhere. The one they can't cover is the genuine first run — a phone-only
+   * account whose very first runner has no device key to seed, no peer online,
+   * and nothing escrowed yet. That runner boots with no model credentials and
+   * would silently fail on the first turn. Here we detect that and raise the
+   * `needsModelAuth` prompt so the user signs in once (over the existing
+   * `provider.oauth.start` paste-back on this same node); the node then escrows
+   * the login so every future runner inherits it with no prompt.
+   *
+   * Timing: model-auth can arrive a beat after connect (escrow/peer sync), so we
+   * wait a grace before concluding "no creds", and the store auto-dismisses the
+   * prompt the moment any provider becomes configured — so a slow sync that
+   * lands during the grace just means the prompt never shows (or briefly shows
+   * then clears), never a wrong dead-end.
+   */
+  private async maybePromptFirstRunModelAuth(): Promise<void> {
+    if (!EPHEMERAL_MACHINES_ENABLED || this.direct) return;
+    const nodeId = this.local.cur;
+    if (!nodeId || this.firstRunAuthNodes.has(nodeId)) return;
+    // Only a machine THIS device launched — never a normal persistent node,
+    // which manages its own logins through Settings.
+    const machines = await this.ephemeralMachines.list().catch(() => [] as EphemeralMachine[]);
+    if (!machines.some((m) => m.nodeId === nodeId)) return;
+    this.firstRunAuthNodes.add(nodeId);
+    // Ask the node for its provider status now; the freshest list will have
+    // arrived well before the grace elapses.
+    this.listProviders();
+    setTimeout(() => {
+      const st = this.store.getState();
+      // Bail if we've moved on, a login is already in flight, the prompt is
+      // already up, or creds have since landed.
+      if (st.status !== "online" || this.local.cur !== nodeId) return;
+      if (st.needsModelAuth || st.oauth) return;
+      if (st.providers.some((p) => p.configured)) return;
+      // Prefer an OAuth-capable provider (Anthropic first — subscription login
+      // is the whole point here), falling back to anthropic by id.
+      const provider =
+        st.providers.find((p) => p.oauth && p.id === "anthropic")?.id ??
+        st.providers.find((p) => p.oauth)?.id ??
+        "anthropic";
+      this.store.setNeedsModelAuth({ nodeId, provider });
+    }, FIRST_RUN_MODEL_AUTH_GRACE_MS);
+  }
+
+  /** Dismiss the first-run model-auth prompt (user chose to handle it later). */
+  dismissModelAuthPrompt(): void {
+    this.store.setNeedsModelAuth(null);
+  }
+
   /** Destroy a configured ephemeral machine shortly after agent_end. The short
    * grace period lets final transcript/PR metadata flush first. A queued
-   * follow-up suppresses teardown; its eventual agent_end will try again. This
-   * is device-driven, so the machine's TTL remains the safety fallback when the
-   * browser goes offline. */
+   * follow-up suppresses teardown; its eventual agent_end will try again.
+   *
+   * This is the device-driven FAST PATH, kept for snappy teardown while a device
+   * is watching. It is no longer the sole authority: the machine's own daemon now
+   * self-terminates once idle (BIVY_EPHEMERAL — see src/ephemeral-teardown.ts) and
+   * the control-plane reconciler reaps leak-prone providers, so teardown happens
+   * even with no device online. Provider destroy is idempotent/404-tolerant, so
+   * these paths race harmlessly; TTL remains the final backstop. */
   private async maybeTeardownFinishedEphemeral(sessionId: string): Promise<void> {
     if (this.direct || this.store.getFollowups(sessionId).length > 0) return;
     const nodeId = this.local.cur;
@@ -2013,6 +3122,9 @@ export class AppController {
       // the whole point; destroying one would throw away its memory.
       .find((m) => m.nodeId === nodeId && m.teardownOnAgentFinish && !ephemeralProviderSuspendsWhenIdle(m.provider));
     if (!machine || this.finishingEphemeralMachines.has(machine.id)) return;
+    // Persist the session↔machine correlation BEFORE teardown so this session can
+    // be rebuilt after the node is unenrolled and drops from the registry (Gap 1).
+    void this.recordSessionCorrelation(sessionId, machine);
     this.finishingEphemeralMachines.add(machine.id);
     setTimeout(() => {
       // A follow-up may have been queued during the grace period.
@@ -2041,7 +3153,7 @@ export class AppController {
     // device-local GitHub token during bootstrap so its very first repo picker,
     // clone, push, and PR work instead of failing after the machine boots.
     const githubToken = opts.githubToken ?? await this.githubTaskToken.get();
-    const machine = await launchEphemeralMachine({ ...opts, repo, githubToken: githubToken || undefined }, {
+    const machine = await launchEphemeralMachine({ ...opts, repo, githubToken: githubToken || undefined, debugKeepMachine: EPHEMERAL_KEEP_FAILED_MACHINES }, {
       store: this.local,
       exec: cloudExec(this.local),
       keys: this.ephemeralKeys,
@@ -2076,7 +3188,14 @@ export class AppController {
    */
   async resumeAndConnectNode(nodeId: string, timeoutMs = 90_000): Promise<void> {
     try {
-      const machine = (await this.ephemeralMachines.list().catch(() => [])).find((m) => m.nodeId === nodeId);
+      // The launching device holds the machine record locally; a second account
+      // device doesn't, so fall back to the non-secret machine identity carried
+      // on the account node registry entry (cross-device resume — Gap A in
+      // docs/ephemeral-sessions.md). Reconstructing it lets this device wake a
+      // suspended node instead of hanging while connecting to it off-relay.
+      const machine =
+        (await this.ephemeralMachines.list().catch(() => [])).find((m) => m.nodeId === nodeId) ??
+        ephemeralMachineFromNode(this.store.getState().nodes.find((n) => n.id === nodeId) ?? { id: nodeId });
       if (machine && ephemeralProviderSuspendsWhenIdle(machine.provider)) {
         await this.wakeEphemeral(machine);
       }
@@ -2085,6 +3204,155 @@ export class AppController {
       // Surface a wake/connect failure (bad token, provider hiccup, slow resume)
       // to the error toast rather than leaving the UI silently at "connecting".
       this.store.setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  /**
+   * Rebuild-resume (Gap B): re-provision a torn-down destroy-lane session onto a
+   * NEW machine and restore it from its control-plane snapshot. Reuses the old
+   * node id + room key (this device holds it) so the new machine can decrypt the
+   * snapshot, and the old session id so its daemon knows what to restore. The
+   * machine's shape comes from its device-local record (or the node registry).
+   */
+  /** Base control-plane URL + bearer for the account-authenticated (`requireUser`)
+   *  session-correlation endpoints. */
+  private correlationApi() {
+    const base = (this.local.cp || (typeof location !== "undefined" ? location.origin : "")).replace(/\/$/, "");
+    return { base, auth: { authorization: `Bearer ${this.local.s}`, "content-type": "application/json" } };
+  }
+
+  /** Pull the account's durable session↔machine correlations so a torn-down
+   *  session stays rebuildable (Gap 1). Best-effort; failures leave the cache. */
+  private async refreshEphemeralCorrelations(): Promise<void> {
+    if (this.direct || !this.local.s) return;
+    try {
+      const { base, auth } = this.correlationApi();
+      const res = await fetch(`${base}/session-correlation`, { headers: { authorization: auth.authorization } });
+      if (!res.ok) return;
+      const data = (await res.json()) as { correlations?: SessionCorrelation[] };
+      if (Array.isArray(data.correlations)) this.ephemeralCorrelations = data.correlations;
+    } catch {
+      // best-effort — keep whatever we had
+    }
+  }
+
+  /** Persist (upsert) the session↔machine correlation for a machine this device
+   *  launched, so it survives the node's teardown/unenroll (Gap 1). Deduped per
+   *  (node, session); updates the local cache so an immediate rebuild sees it. */
+  private async recordSessionCorrelation(sessionId: string, machine: EphemeralMachine): Promise<void> {
+    if (this.direct || !this.local.s || !machine.nodeId || !sessionId) return;
+    const dedupe = `${machine.nodeId}:${sessionId}`;
+    if (this.correlatedSessions.has(dedupe)) return;
+    this.correlatedSessions.add(dedupe);
+    const body: SessionCorrelation = {
+      sessionId,
+      nodeId: machine.nodeId,
+      provider: machine.provider,
+      region: machine.region || undefined,
+      ttlMinutes: machine.ttlMinutes,
+      repo: machine.repo,
+      setupId: machine.setupId,
+      machineId: machine.id,
+      app: machine.app,
+    };
+    try {
+      const { base, auth } = this.correlationApi();
+      await fetch(`${base}/session-correlation/${encodeURIComponent(sessionId)}`, { method: "PUT", headers: auth, body: JSON.stringify(body) });
+      this.ephemeralCorrelations = [body, ...this.ephemeralCorrelations.filter((c) => c.sessionId !== sessionId)];
+    } catch {
+      this.correlatedSessions.delete(dedupe); // let a later attempt retry
+    }
+  }
+
+  async reprovisionEphemeral(nodeId: string, sessionId: string): Promise<void> {
+    try {
+      const roomKeyB64 = this.local.keys()[nodeId];
+      if (!roomKeyB64) throw new Error("This device no longer holds this session's key, so it can't rebuild it.");
+      // Prefer the device-local record; fall back to the registry node; finally,
+      // for a torn-down machine (record + node both gone) fall back to the durable
+      // server-side correlation (Gap 1) matched by node or session.
+      const corr = this.ephemeralCorrelations.find((c) => c.nodeId === nodeId || c.sessionId === sessionId);
+      const machine =
+        (await this.ephemeralMachines.list().catch(() => [])).find((m) => m.nodeId === nodeId) ??
+        ephemeralMachineFromNode(this.store.getState().nodes.find((n) => n.id === nodeId) ?? { id: nodeId }) ??
+        (corr ? ephemeralMachineFromCorrelation(corr) : null);
+      if (!machine) throw new Error("No record of the machine to rebuild — re-launch it from Ephemeral settings.");
+      if (ephemeralProviderSuspendsWhenIdle(machine.provider)) {
+        // A suspend provider is never destroyed — just wake it.
+        await this.resumeAndConnectNode(nodeId);
+        return;
+      }
+      await this.launchEphemeral({
+        provider: machine.provider,
+        region: machine.region || undefined,
+        ttlMinutes: machine.ttlMinutes,
+        repo: machine.repo,
+        setupId: machine.setupId,
+        teardownOnAgentFinish: machine.teardownOnAgentFinish,
+        reuseNodeId: nodeId,
+        reuseRoomKeyB64: roomKeyB64,
+        restoreSessionId: sessionId,
+      });
+      await this.connectToNode(nodeId, 120_000);
+    } catch (e) {
+      this.store.setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  /**
+   * True when the current node is an ephemeral machine this device can bring back
+   * with a send, so it should auto-resume rather than being blocked (drives both
+   * `shouldAutoResume` and the composer's enabled state). Two cases, both requiring
+   * that we still hold the node's room key:
+   *  - a suspended/offline enrolled node (Sprite/E2B) — wake it; or
+   *  - a torn-down destroy-lane node that dropped from the registry but has a
+   *    durable session↔machine correlation (Gap 1) — rebuild it.
+   */
+  isCurrentNodeResumable(): boolean {
+    if (this.direct) return false;
+    const nodeId = this.local.cur;
+    if (!nodeId) return false;
+    let hasKey = false;
+    try {
+      hasKey = !!this.local.keys()[nodeId];
+    } catch {
+      return false;
+    }
+    if (!hasKey) return false;
+    const node = this.store.getState().nodes.find((n) => n.id === nodeId);
+    // Enrolled but offline → resumable ONLY when it's actually an ephemeral machine
+    // we can wake. A persistent node that's merely offline is NOT resumable from this
+    // device: it reconnects on its own when its daemon rejoins the relay, and sweeping
+    // it into the ephemeral wake/rebuild path throws a misleading "no record of the
+    // machine to rebuild" error (reprovisionEphemeral). Absent from the registry →
+    // resumable only if a durable correlation lets us rebuild it.
+    if (node) return !node.online && isEphemeralNode(node);
+    return this.ephemeralCorrelations.some((c) => c.nodeId === nodeId);
+  }
+  private shouldAutoResume(): boolean {
+    return this.isCurrentNodeResumable() && !this.resumingNode.has(this.local.cur);
+  }
+  /** Bring the current session's node back: `reprovisionEphemeral` self-selects
+   *  wake (suspend providers) vs rebuild (destroy providers). Guarded so repeated
+   *  sends while it's coming up don't re-trigger it. */
+  private async resumeNodeForSession(sessionId: string): Promise<void> {
+    const nodeId = this.local.cur;
+    if (!nodeId || this.resumingNode.has(nodeId)) return;
+    this.resumingNode.add(nodeId);
+    try {
+      await this.reprovisionEphemeral(nodeId, sessionId);
+    } finally {
+      this.resumingNode.delete(nodeId);
+    }
+  }
+  /** Replay prompts buffered while the node was offline/resuming, once it's back
+   *  online — the deferred half of the "sending is the resume gesture" flow. */
+  private drainPendingResume(sessionId: string): void {
+    const mine = this.pendingResume.filter((p) => p.sessionId === sessionId);
+    if (!mine.length) return;
+    this.pendingResume = this.pendingResume.filter((p) => p.sessionId !== sessionId);
+    for (const p of mine) {
+      this.send({ kind: "prompt", sessionId, text: p.text, clientMessageId: p.clientMessageId, attachments: p.attachments });
     }
   }
 
@@ -2117,12 +3385,12 @@ export class AppController {
    */
   async runWorkItemOnEphemeral(
     id: string,
-    opts: { provider: string; region?: string; size?: string; ttlMinutes?: number; runtimeId?: string; model?: string },
+    opts: { provider: string; region?: string; size?: string; ttlMinutes?: number; runtimeId?: string; model?: string; configId?: string },
   ): Promise<EphemeralMachine> {
     if (!this.signedIn) throw new Error("Sign in to launch an ephemeral machine.");
     const githubToken = await this.githubTaskToken.get();
     const machine = await launchEphemeralMachine(
-      { ...opts, hostedTasks: true, githubToken: githubToken || undefined, workItemId: id, purpose: "queue-item", name: "Ephemeral queue runner" },
+      { ...opts, setupId: opts.configId, hostedTasks: true, githubToken: githubToken || undefined, workItemId: id, purpose: "queue-item", name: "Ephemeral queue runner" },
       { store: this.local, exec: cloudExec(this.local), keys: this.ephemeralKeys, machines: this.ephemeralMachines },
     );
     try {
@@ -2143,11 +3411,11 @@ export class AppController {
    * (no specific item), so incoming work can run without a persistent node —
    * the queue-level "auto-provision" default's manual/triggered form.
    */
-  async launchEphemeralQueueWorker(opts: { provider: string; region?: string; size?: string; ttlMinutes?: number }): Promise<EphemeralMachine> {
+  async launchEphemeralQueueWorker(opts: { provider: string; region?: string; size?: string; ttlMinutes?: number; configId?: string }): Promise<EphemeralMachine> {
     if (!this.signedIn) throw new Error("Sign in to launch an ephemeral machine.");
     const githubToken = await this.githubTaskToken.get();
     const machine = await launchEphemeralMachine(
-      { ...opts, hostedTasks: true, githubToken: githubToken || undefined, purpose: "queue-default", name: "Ephemeral queue worker" },
+      { ...opts, setupId: opts.configId, hostedTasks: true, githubToken: githubToken || undefined, purpose: "queue-default", name: "Ephemeral queue worker" },
       { store: this.local, exec: cloudExec(this.local), keys: this.ephemeralKeys, machines: this.ephemeralMachines },
     );
     void this.refreshNodes();
@@ -2161,6 +3429,51 @@ export class AppController {
   }
   setEphemeralQueueDefault(patch: Partial<EphemeralQueueDefault>): Promise<EphemeralQueueDefault> {
     return setEphemeralQueueDefault(this.local, patch);
+  }
+  /** Account-level ephemeral node configs (shared across the account's devices). */
+  listEphemeralConfigs(): Promise<EphemeralNodeConfig[]> {
+    return fetchEphemeralConfigs(this.local);
+  }
+  createEphemeralConfig(input: EphemeralConfigInput): Promise<EphemeralNodeConfig> {
+    return apiCreateEphemeralConfig(this.local, input);
+  }
+  updateEphemeralConfig(id: string, patch: Partial<EphemeralConfigInput>): Promise<EphemeralNodeConfig> {
+    return apiUpdateEphemeralConfig(this.local, id, patch);
+  }
+  removeEphemeralConfig(id: string): Promise<void> {
+    return apiDeleteEphemeralConfig(this.local, id);
+  }
+  /** The account's default queue routing (primary runner + optional fallback). */
+  getQueueRouting(): Promise<QueueRouting> {
+    return fetchQueueRouting(this.local);
+  }
+  setQueueRouting(routing: QueueRouting): Promise<QueueRouting> {
+    return apiSetQueueRouting(this.local, routing);
+  }
+  /** Hosted (control-plane-orchestrated) provisioning: status, credentials, audit. */
+  getHostedProvisioning(): Promise<HostedProvisioningStatus> {
+    return fetchHostedProvisioning(this.local);
+  }
+  setHostedProvisioning(patch: HostedProvisioningPatch): Promise<HostedProvisioningStatus> {
+    return apiSetHostedProvisioning(this.local, patch);
+  }
+  listHostedAudit(): Promise<HostedAuditEvent[]> {
+    return fetchHostedAudit(this.local);
+  }
+  listHostedMachines(): Promise<HostedMachineSummary[]> {
+    return fetchHostedMachines(this.local);
+  }
+  destroyHostedMachine(nodeId: string): Promise<void> {
+    return apiDestroyHostedMachine(this.local, nodeId);
+  }
+  validateHostedProviderCredential(provider: string, token: string, region?: string): Promise<void> {
+    return apiValidateHostedProviderCredential(this.local, provider, token, region);
+  }
+  rotateHostedProvisioning(): Promise<HostedProvisioningStatus> {
+    return apiRotateHostedProvisioning(this.local);
+  }
+  triggerHostedProvision(execute = false) {
+    return apiTriggerHostedProvision(this.local, execute);
   }
 
   // --- Terminal ----------------------------------------------------------
@@ -2286,6 +3599,10 @@ export class AppController {
     if (active) this.send({ kind: "abort", sessionId: active });
   }
 
+  resolveTurnAttention(sessionId: string, action: "stop" | "continue"): void {
+    this.send({ kind: "session.turn_attention.resolve", sessionId, action });
+  }
+
   // --- Queued follow-ups (issue #154) -------------------------------------
   //
   // A prompt sent to an already-busy session used to go straight over the
@@ -2298,6 +3615,23 @@ export class AppController {
   // steerNow). See SessionStore's queued-follow-ups CRUD for the data-shape
   // invariants; everything here is about *when* to call it.
 
+  /** Whether this device is signed in to a control plane (account/relay mode),
+   *  so scheduled-message persistence has somewhere durable to land. */
+  private accountMode(): boolean {
+    return Boolean(this.local.s && this.local.cp);
+  }
+
+  /** The node that owns a session (SessionSummary.nodeId), when known. */
+  private resolveSessionNodeId(sessionId: string): string | undefined {
+    return this.store.getState().sessions.find((s) => s.sessionId === sessionId)?.nodeId;
+  }
+
+  /** The routing label a node serves, from its enrolled name (`bivy/<name>`). */
+  private resolveNodeLabel(nodeId: string): string | undefined {
+    const node = this.store.getState().nodes.find((n) => n.id === nodeId);
+    return node?.name ? `bivy/${node.name}` : undefined;
+  }
+
   /** A new prompt for this session must be held in the visible queue rather
    *  than sent immediately: the session is mid-turn, or earlier queued items
    *  are still waiting (sending straight through would silently jump the
@@ -2305,7 +3639,203 @@ export class AppController {
    *  See packages/core/src/followups.ts's mustQueueFollowup for the (unit
    *  tested) decision itself. */
   private mustQueue(sessionId: string): boolean {
-    return mustQueueFollowup(this.store.getFollowups(sessionId).length, this.store.getState().working);
+    // Only items actually waiting to send NOW gate a fresh prompt: a message
+    // scheduled for later (status "scheduled") is on its own timer and isn't
+    // blocking, so it never forces a send into the queue.
+    const waiting = this.store.getFollowups(sessionId).filter((f) => f.status === "queued").length;
+    return mustQueueFollowup(waiting, this.store.getState().working);
+  }
+
+  /**
+   * "Send when the turn ends, even if I close the app": mirror a queued
+   * follow-up as a one-off scheduled message on the control plane (kind "once",
+   * ~60s out, message:true → plain chat turn, targeting this existing session),
+   * E2E-sealed with this session's node room key. The node waits for the session
+   * to go idle and dedupes against the transcript, so this backstop can never
+   * double-send a follow-up the app already delivered in-app — it only fires if
+   * the app never got to deliver it. Non-fatal everywhere: failure just means
+   * the in-memory queue is the only delivery path.
+   */
+  private async persistScheduledFollowup(sessionId: string, id: string, text: string): Promise<void> {
+    if (!this.accountMode() || !text) return;
+    const nodeId = this.resolveSessionNodeId(sessionId);
+    if (!nodeId) return;
+    const roomKeyB64 = this.local.keys()[nodeId];
+    if (!roomKeyB64) return;
+    try {
+      const roomKey = await importRoomKey(unb64url(roomKeyB64));
+      const encrypted = await seal(roomKey, text);
+      const at = new Date(Date.now() + 60_000).toISOString();
+      const created = await createAutomation(this.local, {
+        name: "Follow-up",
+        templateCiphertext: `${TEMPLATE_PREFIX}:${nodeId}:${encrypted}`,
+        trigger: "schedule",
+        schedule: { kind: "once", at },
+        nodeLabel: this.resolveNodeLabel(nodeId),
+        targetKind: "existing_session",
+        targetSessionId: sessionId,
+        message: true,
+        enabled: true,
+      });
+      // If the item already dispatched/confirmed while the create round-trip was
+      // in flight, it no longer needs the backstop — cancel it.
+      if (!this.store.attachFollowupAutomation(sessionId, id, created.id)) {
+        this.cancelScheduledFollowup(created.id);
+      }
+    } catch {
+      // Best-effort: keep the in-memory queue path as the only delivery.
+    }
+  }
+
+  /** Start a durable Run from the message currently in the composer. A draft
+   * creates a fresh Session; an active Session is referenced as execution
+   * context. The message is the Run objective, not a permanent Session mode. */
+  async startRun(
+    instruction: string,
+    options: { approvalMode: "risky" | "autonomous"; maxAttempts: number },
+  ): Promise<{ runId?: string; error?: string }> {
+    const text = instruction.trim();
+    if (!text) return { error: "Describe the task this Run should complete." };
+    if (!this.accountMode()) return { error: "Sign in to start a Run." };
+
+    const state = this.store.getState();
+    const sessionId = state.activeSessionId ?? undefined;
+    const active = sessionId ? state.sessions.find((session) => session.sessionId === sessionId) : undefined;
+    const nodeId = sessionId ? this.resolveSessionNodeId(sessionId) : state.currentNodeId ?? undefined;
+    if (!nodeId) return { error: sessionId ? "This Session has no owning Machine." : "Choose a Machine before starting a Run." };
+    const roomKeyB64 = this.local.keys()[nodeId];
+    if (!roomKeyB64) return { error: "This Machine isn't paired on this device—open it first so the instruction can be encrypted." };
+    const label = this.resolveNodeLabel(nodeId);
+    if (!label) return { error: "This Machine has no routing name. Reconnect it before starting a Run." };
+
+    try {
+      const roomKey = await importRoomKey(unb64url(roomKeyB64));
+      const encrypted = await seal(roomKey, text);
+      const run = await createOneOffRun(this.local, {
+        title: (text.split(/\r?\n/, 1)[0] || "Run").slice(0, 120),
+        body: `${TEMPLATE_PREFIX}:${nodeId}:${encrypted}`,
+        label,
+        repo: sessionId ? undefined : state.draftRepo ?? undefined,
+        runtimeId: sessionId ? undefined : state.selectedAgentId ?? undefined,
+        model: sessionId ? undefined : state.currentModel?.id,
+        approvalMode: options.approvalMode,
+        sandbox: active?.sandbox ?? (!sessionId ? state.draftSandbox ?? state.nodeSettings?.defaultSandbox : undefined),
+        maxAttempts: options.maxAttempts,
+        targetKind: sessionId ? "existing_session" : "new_session",
+        targetSessionId: sessionId,
+      });
+      this.recordProductMilestone("run_accepted");
+      return { runId: run.id };
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : "Could not start this Run." };
+    }
+  }
+
+  /** Drop the control-plane backstop for a follow-up (user cancelled it, or it
+   *  was delivered in-app). */
+  private cancelScheduledFollowup(automationId?: string): void {
+    if (!automationId) return;
+    void deleteAutomation(this.local, automationId).catch(() => {});
+  }
+
+  /**
+   * "Schedule this message for later" (split Send → ScheduleSheet): write a
+   * one-off scheduled message to the account's control plane (`message: true`,
+   * E2E-sealed for the owning node) so the always-on node delivers it on time
+   * even when this app is closed, and — for an existing session — surface it as
+   * a timestamped "scheduled" row in the session's follow-up queue, where it's
+   * cancellable next to the composer (it stays out of the turn-end drain; the
+   * automation does the delivering). A new-session draft targets the machine
+   * picked on the draft and has no queue yet, so no row is created. The target
+   * is inferred from the current screen by the caller (SessionSheet only offers
+   * scheduling from an existing session; the draft composer infers new_session)
+   * — see ScheduleSheet. Returns an error message on failure, null on success.
+   */
+  async scheduleMessage(opts: {
+    text: string;
+    at: Date;
+    target: "existing_session" | "new_session";
+    sessionId?: string;
+  }): Promise<string | null> {
+    const { text, at, target, sessionId } = opts;
+    const trimmed = text.trim();
+    if (!trimmed) return "There's nothing to send.";
+    if (!this.accountMode()) return "Sign in to schedule messages for later.";
+    if (!Number.isFinite(at.getTime()) || at.getTime() <= Date.now()) return "Pick a time in the future.";
+    const nodeId =
+      target === "existing_session"
+        ? (sessionId ? this.resolveSessionNodeId(sessionId) : undefined)
+        : this.store.getState().currentNodeId;
+    if (!nodeId) return "No machine selected for this message.";
+    const roomKeyB64 = this.local.keys()[nodeId];
+    if (!roomKeyB64) return "This machine isn't paired on this device — open it first so the message can be encrypted.";
+    try {
+      const roomKey = await importRoomKey(unb64url(roomKeyB64));
+      const encrypted = await seal(roomKey, trimmed);
+      const created = await createAutomation(this.local, {
+        name: "Scheduled message",
+        templateCiphertext: `${TEMPLATE_PREFIX}:${nodeId}:${encrypted}`,
+        trigger: "schedule",
+        schedule: { kind: "once", at: at.toISOString() },
+        nodeLabel: this.resolveNodeLabel(nodeId),
+        targetKind: target,
+        targetSessionId: target === "existing_session" ? sessionId ?? undefined : undefined,
+        repo: target === "new_session" ? this.store.getState().draftRepo ?? undefined : undefined,
+        message: true,
+        enabled: true,
+      });
+      // The row id IS the automation id, so cancelling the row cancels the
+      // automation and resyncScheduledFollowups drops the row once it fires.
+      if (target === "existing_session" && sessionId) {
+        this.store.enqueueScheduledFollowup(
+          sessionId,
+          { id: created.id, text: trimmed, scheduledAt: at.getTime(), scheduledAutomationId: created.id },
+          Date.now(),
+        );
+      }
+      return null;
+    } catch (e) {
+      return e instanceof Error ? e.message : "Could not schedule the message.";
+    }
+  }
+
+  /** Reschedule a pending scheduled-message row (the queue's "edit schedule"
+   *  action): move the control-plane automation to the new time and update the
+   *  row's fire time in place. The automation keeps its id, so the row id still
+   *  matches it and cancel/resync keep working. Returns an error message on
+   *  failure, null on success. */
+  async editScheduledFollowup(sessionId: string, id: string, at: Date): Promise<string | null> {
+    const item = this.store.getFollowups(sessionId).find((f) => f.id === id);
+    if (!item || item.status !== "scheduled") return "This message is no longer pending.";
+    if (!item.scheduledAutomationId) return "This message has no automation to update.";
+    if (!Number.isFinite(at.getTime()) || at.getTime() <= Date.now()) return "Pick a time in the future.";
+    try {
+      await updateAutomation(this.local, item.scheduledAutomationId, { schedule: { kind: "once", at: at.toISOString() } });
+    } catch (e) {
+      return e instanceof Error ? e.message : "Could not reschedule the message.";
+    }
+    this.store.rescheduleFollowup(sessionId, id, at.getTime(), Date.now());
+    return null;
+  }
+
+  /** Reconcile the queue's "scheduled" rows against the control plane: drop any
+   *  whose automation is gone or no longer pending — it fired (a one-off
+   *  scheduled message flips `enabled` off and clears `nextRunAt` the moment
+   *  it's enqueued for delivery), was cancelled from another device, or was
+   *  deleted. Runs on reconnect so a message that delivered while this app was
+   *  closed stops showing as "scheduled" in the queue. Non-fatal everywhere. */
+  private async resyncScheduledFollowups(): Promise<void> {
+    if (!this.accountMode()) return;
+    let all: AccountAutomation[];
+    try {
+      all = await fetchAutomations(this.local);
+    } catch {
+      return; // offline / control plane unreachable — leave rows in place
+    }
+    const pending = new Set(all.filter((a) => a.enabled && a.nextRunAt != null).map((a) => a.id));
+    for (const sessionId of Object.keys(this.store.getState().followupsBySession)) {
+      this.store.pruneScheduledFollowups(sessionId, pending);
+    }
   }
 
   /** Whether the active runtime has advertised it can safely accept an
@@ -2336,12 +3866,23 @@ export class AppController {
    *  caller should show the current (already-reactive) state and let the user
    *  retry instead of reapplying their edit over it. */
   editFollowup(sessionId: string, id: string, patch: { text: string; attachments?: PromptAttachment[] }, expectedVersion: number): FollowupEditResult {
-    return this.store.editFollowup(sessionId, id, patch, expectedVersion, Date.now());
+    const item = this.store.getFollowups(sessionId).find((f) => f.id === id);
+    const result = this.store.editFollowup(sessionId, id, patch, expectedVersion, Date.now());
+    // Keep the persisted backstop in sync: drop the automation mirroring the old
+    // text, then re-create it for the edited text (see persistScheduledFollowup).
+    if (result.ok) {
+      this.cancelScheduledFollowup(item?.scheduledAutomationId);
+      void this.persistScheduledFollowup(sessionId, id, result.item.text);
+    }
+    return result;
   }
 
   /** Remove a still-queued item. No-op once it's already dispatched. */
   removeFollowup(sessionId: string, id: string): boolean {
-    return this.store.removeFollowup(sessionId, id);
+    const item = this.store.getFollowups(sessionId).find((f) => f.id === id);
+    const ok = this.store.removeFollowup(sessionId, id);
+    if (ok) this.cancelScheduledFollowup(item?.scheduledAutomationId);
+    return ok;
   }
 
   /** Reorder a still-queued item to `toIndex` among the queue. No-op once it's
@@ -2435,6 +3976,9 @@ export class AppController {
     const sid = event.sessionId || this.store.getState().activeSessionId;
     const cmid = typeof event.clientMessageId === "string" ? event.clientMessageId : undefined;
     if (!sid || !cmid) return;
+    // Delivered in-app — retire the control-plane backstop so it can't fire.
+    const item = this.store.getFollowups(sid).find((f) => f.id === cmid);
+    if (item) this.cancelScheduledFollowup(item.scheduledAutomationId);
     this.store.confirmFollowupSent(sid, cmid);
   }
 
@@ -2473,6 +4017,7 @@ export class AppController {
       navigate({ kind: "new" });
     }
     this.store.removeSessionLocal(sessionId);
+    this.persistDeletedSessionTombstones();
     void this.transcriptCache.delete(sessionId);
     this.refreshSessions();
   }
@@ -2510,6 +4055,14 @@ export class AppController {
     if (id && checkpointId) this.send({ kind: "session.rewind", sessionId: id, checkpointId });
   }
 
+  /** Revert one changed file to its pre-turn content (C3d) — a per-file undo that
+   *  doesn't rewind the whole turn. `content` is the file's pre-turn text, or null
+   *  when the turn added the file (revert = remove it). */
+  revertFile(path: string, content: string | null, sessionId?: string): void {
+    const id = sessionId || this.store.getState().activeSessionId;
+    if (id && path) this.send({ kind: "session.revert_file", sessionId: id, path, content });
+  }
+
   /** Ask the node for this session's checkpoint list (rewind targets). */
   listCheckpoints(sessionId?: string): void {
     const id = sessionId || this.store.getState().activeSessionId;
@@ -2518,6 +4071,7 @@ export class AppController {
 
   resolveApproval(id: string, approved: boolean): void {
     this.send({ kind: "approval", id, approved });
+    if (!this.direct) void recordProductMetric(this.local, "remote_intervention", matchMedia("(max-width: 700px)").matches ? "mobile" : "desktop").catch(() => {});
   }
 
   /** Answer a pending clarifying question (see UserQuestionRequest). Unlike
@@ -2525,10 +4079,12 @@ export class AppController {
    *  approvals are looked up in a single global list keyed by id alone. */
   answerQuestion(requestId: string, sessionId: string | undefined, answers: Record<string, string>): void {
     this.send({ kind: "session.question.answer", requestId, sessionId, answers });
+    if (!this.direct) void recordProductMetric(this.local, "remote_intervention", matchMedia("(max-width: 700px)").matches ? "mobile" : "desktop").catch(() => {});
   }
 
   cancelQuestion(requestId: string, sessionId: string | undefined): void {
     this.send({ kind: "session.question.answer", requestId, sessionId, cancelled: true });
+    if (!this.direct) void recordProductMetric(this.local, "remote_intervention", matchMedia("(max-width: 700px)").matches ? "mobile" : "desktop").catch(() => {});
   }
 }
 

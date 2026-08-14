@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { describe, expect, it, vi } from "vitest";
 import { SessionStore, githubIssueRefFromSource, isGithubQueueSource, repoFromSource, stripAttachmentPlaceholders, toHtml } from "../src/index.js";
@@ -75,6 +75,72 @@ describe("stripAttachmentPlaceholders", () => {
 });
 
 describe("SessionStore", () => {
+  it("retains authoritative activation readiness probes", () => {
+    const store = new SessionStore();
+    store.apply({ type: "activation.readiness", credential: { configured: true, probed: true, ok: true }, repository: { chosen: false, probed: true, ok: false, authed: true } } as never);
+    expect(store.getState().activationReadiness).toEqual({ credential: { configured: true, probed: true, ok: true }, repository: { chosen: false, probed: true, ok: false, authed: true } });
+  });
+
+  it("stores a valid Machine capability inventory snapshot", () => {
+    const store = new SessionStore();
+    const capabilities = {
+      generatedAt: "2026-01-01T00:00:00.000Z",
+      os: { platform: "linux", arch: "x64", release: "6.1.0", type: "Linux" },
+      agents: { maintained: [{ id: "pi", label: "Pi", kind: "maintained", installed: true }], custom: [] },
+      providers: { configured: ["anthropic"], localEndpoints: { count: 0, withModels: 0 } },
+      docker: { state: "unknown" },
+      gpu: { state: "unknown" },
+      plugins: [],
+      workspaces: { count: 1 },
+    };
+    store.apply({ type: "capabilities", capabilities } as never);
+    expect(store.getState().capabilities).toEqual(capabilities);
+  });
+
+  it("ignores a garbled capabilities frame instead of blanking a good panel", () => {
+    const store = new SessionStore();
+    const capabilities = {
+      generatedAt: "2026-01-01T00:00:00.000Z",
+      os: { platform: "linux", arch: "x64", release: "6.1.0", type: "Linux" },
+      agents: { maintained: [], custom: [] },
+      providers: { configured: [], localEndpoints: { count: 0, withModels: 0 } },
+      docker: { state: "unknown" },
+      gpu: { state: "unknown" },
+      plugins: [],
+      workspaces: { count: 0 },
+    };
+    store.apply({ type: "capabilities", capabilities } as never);
+    // A later, malformed frame (missing `os`) must not clobber the good snapshot.
+    store.apply({ type: "capabilities", capabilities: { generatedAt: "2026-01-01T00:00:01.000Z" } } as never);
+    expect(store.getState().capabilities).toEqual(capabilities);
+  });
+
+  it("retains a credential's testable/verification fields, feeding the redacted readiness projection", () => {
+    const store = new SessionStore();
+    store.apply({
+      type: "credentials.records",
+      records: [
+        { provider: "anthropic", label: "default", kind: "api_key", sync: "node", origin: "bivy", testable: true, lastVerifiedAt: 1700000000000, lastVerifiedOk: true },
+      ],
+    } as never);
+    expect(store.getState().credentialRecords).toEqual([
+      { provider: "anthropic", label: "default", kind: "api_key", sync: "node", origin: "bivy", testable: true, lastVerifiedAt: 1700000000000, lastVerifiedOk: true },
+    ]);
+  });
+
+  it("retains node audit degradation in Session context", () => {
+    const store = new SessionStore();
+    store.apply({ type: "sessions.list", sessions: [{ id: "s1", name: "One", auditHealth: { storage: "corrupt", writes: "degraded", failedWrites: 2, corruptLines: 1 }, eventLogHealth: { state: "degraded", operation: "append", at: 42 } }] } as never);
+    expect(store.getState().sessions[0].auditHealth).toEqual({ storage: "corrupt", writes: "degraded", failedWrites: 2, corruptLines: 1 });
+    expect(store.getState().sessions[0].eventLogHealth).toEqual({ state: "degraded", operation: "append", at: 42 });
+  });
+
+  it("retains observed Session protection context from the node", () => {
+    const store = new SessionStore();
+    store.apply({ type: "sessions.list", sessions: [{ id: "s1", name: "One", sandbox: "workspace-write", approvalMode: "risky", ephemeral: true, executionProfile: "isolated_customer_cloud" }] } as never);
+    expect(store.getState().sessions[0]).toMatchObject({ sandbox: "workspace-write", approvalMode: "risky", ephemeral: true, executionProfile: "isolated_customer_cloud" });
+  });
+
   it("notifies subscribers and exposes immutable snapshots", () => {
     const store = new SessionStore();
     const seen: number = 0;
@@ -230,6 +296,80 @@ describe("SessionStore", () => {
     store.apply({ type: "session.created", sessionId: "s2", runtimeId: "pi", capabilities: { commands: [{ name: "/two" }] } });
     store.resetSession();
     expect(store.getState().commandsBySession).toEqual({});
+  });
+
+  it("carries the repo-list unauthed reason so the picker can prompt to connect GitHub", () => {
+    const store = new SessionStore();
+    // Nothing connected and no gh CLI: steer to `bivy github:connect`.
+    store.apply({ type: "repos.list", authed: false, repos: [], reason: "no-token" } as never);
+    expect(store.getState().reposAuthed).toBe(false);
+    expect(store.getState().reposReason).toBe("no-token");
+    // gh installed but logged out: the picker additionally offers `gh auth login`.
+    store.apply({ type: "repos.list", authed: false, repos: [], reason: "gh-unauthed" } as never);
+    expect(store.getState().reposReason).toBe("gh-unauthed");
+    // A successful listing clears the reason and marks authed.
+    store.apply({ type: "repos.list", authed: true, repos: [{ slug: "acme/app" }] } as never);
+    expect(store.getState().reposAuthed).toBe(true);
+    expect(store.getState().reposReason).toBeNull();
+    // An unknown/absent reason never leaks through as a truthy value.
+    store.apply({ type: "repos.list", authed: false, repos: [] } as never);
+    expect(store.getState().reposReason).toBeNull();
+  });
+
+  it("tracks the Connect-GitHub device flow so the repo picker can drive it", () => {
+    const store = new SessionStore();
+    expect(store.getState().githubConnect).toEqual({ status: "idle" });
+    // Optimistic local state before the node answers.
+    store.setGithubConnect({ status: "starting" });
+    expect(store.getState().githubConnect.status).toBe("starting");
+    // Node hands back a device code to show the user.
+    store.apply({
+      type: "github.connect.status",
+      status: "waiting",
+      userCode: "ABCD-1234",
+      verificationUri: "https://github.com/login/device",
+      intervalMs: 5000,
+    } as never);
+    expect(store.getState().githubConnect).toMatchObject({ status: "waiting", userCode: "ABCD-1234", intervalMs: 5000 });
+    // Success clears back to a terminal state the picker reacts to.
+    store.apply({ type: "github.connect.status", status: "connected" } as never);
+    expect(store.getState().githubConnect.status).toBe("connected");
+    // A node with no device-flow client id tells the UI to fall back to the CLI.
+    store.apply({ type: "github.connect.status", status: "unconfigured" } as never);
+    expect(store.getState().githubConnect.status).toBe("unconfigured");
+    // An unknown status never leaks through — it collapses to idle.
+    store.apply({ type: "github.connect.status", status: "bogus" } as never);
+    expect(store.getState().githubConnect.status).toBe("idle");
+    // Error carries its message.
+    store.apply({ type: "github.connect.status", status: "error", error: "nope" } as never);
+    expect(store.getState().githubConnect).toMatchObject({ status: "error", error: "nope" });
+  });
+
+  it("keeps the current node online when a stale registry snapshot races the live transport", () => {
+    const store = new SessionStore();
+    store.setCurrentNode("new-node");
+    store.setNodes([
+      { id: "new-node", name: "New node", online: false },
+      { id: "other", name: "Other", online: false },
+    ]);
+
+    // The relay connection is direct evidence that this selected node is live.
+    store.setStatus("online");
+    expect(store.getState().nodes.find((n) => n.id === "new-node")?.online).toBe(true);
+
+    // The relay's fire-and-forget control-plane write may still be in flight;
+    // that late list must not turn the dot grey again.
+    store.setNodes([
+      { id: "new-node", name: "New node", online: false },
+      { id: "other", name: "Other", online: false },
+    ]);
+    expect(store.getState().nodes.find((n) => n.id === "new-node")?.online).toBe(true);
+    expect(store.getState().nodes.find((n) => n.id === "other")?.online).toBe(false);
+
+    // Closing this browser transport (for example, to switch nodes) is not proof
+    // that the daemon went offline, so it must not undo account presence.
+    store.setStatus("offline");
+    expect(store.getState().nodes.find((n) => n.id === "new-node")?.online).toBe(true);
   });
 
   it("clears nodeSettings on node switch so a new node's panel never shows the previous node's settings (issue #75)", () => {
@@ -546,6 +686,43 @@ describe("SessionStore", () => {
     expect(tools).toHaveLength(1);
     expect(tools[0]!.tool!.status).toBe("done");
     expect(tools[0]!.tool!.result).toBe("file.txt");
+  });
+
+  it("surfaces a running delegated tool as active sub-agent work", () => {
+    const store = new SessionStore();
+    store.apply({
+      type: "tool_call",
+      toolCallId: "sub-1",
+      name: "Task",
+      input: { description: "trace auth" },
+      detail: { kind: "delegation", label: "Explore", description: "trace auth" },
+    });
+    expect(store.getState().workingLabel).toBe("Explore sub-agent is working…");
+    const tool = store.getState().transcript.find((entry) => entry.tool)?.tool;
+    expect(tool?.detail).toEqual({ kind: "delegation", label: "Explore", description: "trace auth" });
+
+    // Long-running agent tools emit elapsed-time progress with no repeated
+    // detail. The card must retain its sub-agent identity while accepting the
+    // fresh activity payload, rather than degrading back to an opaque tool. The
+    // progress ping is MERGED onto the original input, so the delegation's task
+    // description survives alongside the new elapsed marker instead of being
+    // clobbered away.
+    store.apply({ type: "tool_execution_update", toolCallId: "sub-1", name: "Task", input: { elapsedSeconds: 42 } });
+    const updated = store.getState().transcript.find((entry) => entry.tool)?.tool;
+    expect(updated?.detail?.kind).toBe("delegation");
+    expect(updated?.input).toEqual({ description: "trace auth", elapsedSeconds: 42 });
+    expect(store.getState().workingLabel).toBe("Explore sub-agent is working…");
+  });
+
+  it("carries a tool call's failure outcome (exitCode/isError) onto the done card", () => {
+    const store = new SessionStore();
+    store.apply({ type: "tool_call", toolCallId: "c1", name: "bash", input: { command: "make" }, detail: { kind: "shell", command: "make" } });
+    store.apply({ type: "tool_result", toolCallId: "c1", name: "bash", result: "boom", detail: { kind: "shell", command: "make", result: { exitCode: 2, isError: true } } });
+    const tool = store.getState().transcript.find((e) => e.tool?.callId === "c1")?.tool;
+    expect(tool?.status).toBe("done");
+    // The result-time detail (call classification + outcome) replaced the
+    // call-time detail, so the UI can render this command as failed.
+    expect(tool?.detail).toMatchObject({ kind: "shell", result: { exitCode: 2, isError: true } });
   });
 
   it("coalesces unnamed agent output updates into one live card", () => {
@@ -995,6 +1172,48 @@ describe("SessionStore", () => {
     expect(store.getState().activeTitle).toBe("Ship the PR");
   });
 
+  it("beginOpen replaces the New-session agent/model pills with session-scoped metadata", () => {
+    const store = new SessionStore();
+    store.apply({
+      type: "runtimes.list",
+      current: { id: "claude", displayName: "Claude Code" },
+      runtimes: [
+        { id: "claude", displayName: "Claude Code" },
+        { id: "codex", displayName: "Codex" },
+      ],
+    });
+    store.apply({
+      type: "models.list",
+      runtimeId: "claude",
+      current: { id: "sonnet", provider: "anthropic" },
+      models: [{ id: "sonnet", provider: "anthropic" }],
+    });
+    store.apply({
+      type: "sessions.list",
+      sessions: [{ id: "s2", name: "Codex session", runtimeId: "codex", agentName: "Codex" }],
+    });
+
+    // These are the selections visible on the New session screen.
+    expect(store.getState().currentAgentName).toBe("Claude Code");
+    expect(store.getState().currentModel?.id).toBe("sonnet");
+
+    store.beginOpen("s2");
+    expect(store.getState().currentAgentName).toBe("Codex");
+    expect(store.getState().activeRuntimeId).toBe("codex");
+    expect(store.getState().currentModel).toBeNull();
+    expect(store.getState().models).toEqual([]);
+
+    // The session-scoped refresh fills in that session's actual model.
+    store.apply({
+      type: "models.list",
+      sessionId: "s2",
+      runtimeId: "codex",
+      current: { id: "gpt-5.4", provider: "openai" },
+      models: [{ id: "gpt-5.4", provider: "openai" }],
+    });
+    expect(store.getState().currentModel?.id).toBe("gpt-5.4");
+  });
+
   it("tracks the active session runtime independently from the global agent selection", () => {
     const store = new SessionStore();
     store.setSelectedAgentLocal("pi");
@@ -1009,6 +1228,39 @@ describe("SessionStore", () => {
 
     store.resetActiveSession();
     expect(store.getState().activeRuntimeId).toBeNull();
+  });
+
+  it("keeps the agent pill and picker on the active session when runtimes refresh", () => {
+    const store = new SessionStore();
+    store.apply({
+      type: "session.history",
+      requestId: "r1",
+      sessionId: "s1",
+      runtimeId: "opencode",
+      agentName: "OpenCode",
+      messages: [],
+    });
+
+    // Opening the agent sheet requests runtimes.list. `current` is the default
+    // for new sessions (Pi), while activeRuntimeId is the agent this session
+    // actually uses (OpenCode). The refresh must not change the pill to Pi while
+    // the sheet correctly keeps its checkmark on OpenCode.
+    store.apply({
+      type: "runtimes.list",
+      current: { id: "pi", displayName: "Pi" },
+      activeAgent: "opencode",
+      runtimes: [
+        { id: "opencode", displayName: "OpenCode" },
+        { id: "pi", displayName: "Pi" },
+      ],
+    });
+
+    const state = store.getState();
+    expect(state.activeRuntimeId).toBe("opencode");
+    expect(state.currentAgentName).toBe("OpenCode");
+    // The node default may still be remembered for a future draft without
+    // leaking into the active session's display.
+    expect(state.selectedAgentId).toBe("pi");
   });
 
   it("beginOpen primes the GitHub pill from the known row so it shows without waiting on history", () => {
@@ -1837,5 +2089,90 @@ describe("SessionStore", () => {
     expect(store.getState().selectedAgentId).toBe("claude");
     expect(store.getState().currentModel).toBeNull();
     expect(store.getState().models).toEqual([]);
+  });
+
+  it("repaints a previously-viewed agent's models instantly on switch back (per-runtime cache)", () => {
+    // Faster model switch (Phase 3): switching back to an agent already listed
+    // this session must NOT blank to a loading state — the store repaints that
+    // runtime's last-known models immediately while the node's fresh list
+    // refreshes in the background.
+    const store = new SessionStore();
+    store.apply({
+      type: "runtimes.list",
+      current: { id: "codex", displayName: "Codex", current: true },
+      runtimes: [
+        { id: "codex", displayName: "Codex", current: true },
+        { id: "claude", displayName: "Claude Code" },
+      ],
+    });
+    // View Claude first so its list is cached.
+    store.setSelectedAgentLocal("claude");
+    store.apply({
+      type: "models.list",
+      runtimeId: "claude",
+      current: { id: "sonnet", provider: "anthropic" },
+      models: [{ id: "opus", provider: "anthropic" }, { id: "sonnet", provider: "anthropic" }],
+    });
+    // Switch to Codex (never viewed) → blanks, as before.
+    store.setSelectedAgentLocal("codex");
+    expect(store.getState().models).toEqual([]);
+    expect(store.getState().currentModel).toBeNull();
+    store.apply({
+      type: "models.list",
+      runtimeId: "codex",
+      current: { id: "gpt-5", provider: "openai" },
+      models: [{ id: "gpt-5", provider: "openai", current: true }],
+    });
+    // Switch back to Claude → its cached list repaints at once (no blank), with
+    // the runtime tag flipped and the remembered current model restored.
+    store.setSelectedAgentLocal("claude");
+    expect(store.getState().modelsRuntimeId).toBe("claude");
+    expect(store.getState().models.map((m) => m.id)).toEqual(["opus", "sonnet"]);
+    expect(store.getState().currentModel?.id).toBe("sonnet");
+  });
+});
+
+describe("session.auth_required → sign-in prompt", () => {
+  function focusedStore(): SessionStore {
+    const store = new SessionStore();
+    store.setCurrentNode("node-1");
+    store.beginOpen("s1");
+    return store;
+  }
+
+  it("raises needsModelAuth targeted at the failing provider", () => {
+    const store = focusedStore();
+    store.apply({ type: "session.auth_required", sessionId: "s1", provider: "openai-codex", reason: "401 Unauthorized" } as never);
+    expect(store.getState().needsModelAuth).toEqual({ nodeId: "node-1", provider: "openai-codex", reason: "401 Unauthorized" });
+  });
+
+  it("ignores an auth_required for a background (non-active) session", () => {
+    const store = focusedStore();
+    store.apply({ type: "session.auth_required", sessionId: "other", provider: "openai-codex" } as never);
+    expect(store.getState().needsModelAuth).toBeNull();
+  });
+
+  it("does not dismiss a targeted prompt when a DIFFERENT provider connects", () => {
+    const store = focusedStore();
+    store.apply({ type: "session.auth_required", sessionId: "s1", provider: "openai-codex" } as never);
+    // Anthropic connecting must not satisfy an openai-codex prompt.
+    store.apply({ type: "providers.list", providers: [{ id: "anthropic", configured: true }, { id: "openai-codex", configured: false }] } as never);
+    expect(store.getState().needsModelAuth?.provider).toBe("openai-codex");
+  });
+
+  it("dismisses when the targeted provider connects", () => {
+    const store = focusedStore();
+    store.apply({ type: "session.auth_required", sessionId: "s1", provider: "openai-codex" } as never);
+    store.apply({ type: "providers.list", providers: [{ id: "openai-codex", configured: true }] } as never);
+    expect(store.getState().needsModelAuth).toBeNull();
+  });
+
+  it("dismisses when the api-key alias (openai) connects for a codex prompt", () => {
+    const store = focusedStore();
+    store.apply({ type: "session.auth_required", sessionId: "s1", provider: "openai-codex" } as never);
+    // A pasted OpenAI key lands under `openai` (OPENAI_API_KEY), which Codex
+    // reads — that satisfies the openai-codex prompt too.
+    store.apply({ type: "providers.list", providers: [{ id: "openai", configured: true }] } as never);
+    expect(store.getState().needsModelAuth).toBeNull();
   });
 });

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // Base64 / base64url helpers shared by crypto, linking, and push.
 // Ported verbatim in behaviour from public/app/e2e.js and linking.js so the

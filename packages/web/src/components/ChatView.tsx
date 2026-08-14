@@ -1,11 +1,13 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { stripAttachmentPlaceholders, toHtml, type PromptAttachment, type ToolActivity, type TranscriptEntry } from "@bivy/core";
 import { ToolGroup } from "./ToolGroup.js";
 import { decorateCodeBlocks, highlightCode } from "../highlight.js";
 import { writeClipboard } from "../clipboard.js";
+import { getSpeechPreferences, markdownToSpeech, readAloudSupported, speechSynthesisSupported, speechToneInstructions } from "../speech.js";
 import { controller } from "../store/useStore.js";
+import { captureChatScroll, restoredChatScrollTop, type ChatScrollMemory } from "../chatScroll.js";
 
 function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -46,7 +48,6 @@ function AttachmentChip({ attachment }: { attachment: PromptAttachment }) {
       }
     }
     return null;
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-derive only when the attachment identity changes
   }, [attachment]);
 
   useEffect(() => {
@@ -160,6 +161,112 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+/** Speaker glyph (cone + sound waves) — the resting state of the read-aloud
+ *  affordance, styled to match CopyGlyph (stroked line-art, size 15). */
+function SpeakGlyph() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+      <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+      <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+    </svg>
+  );
+}
+
+/** Stop glyph shown while a reply is being read aloud — tap to stop early. */
+function StopGlyph() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <rect x="6" y="6" width="12" height="12" rx="1.5" />
+    </svg>
+  );
+}
+
+/** The one active reader across all message rows (browser or cloud audio). */
+let stopActiveReader: (() => void) | null = null;
+
+/** Icon-only read-aloud affordance for a final assistant reply. */
+function SpeakButton({ text }: { text: string }) {
+  const [speaking, setSpeaking] = useState(false);
+  const utterRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const audioRef = useRef<{ audio: HTMLAudioElement; url: string } | null>(null);
+  const generationRef = useRef(0);
+
+  const stop = useCallback(() => {
+    generationRef.current += 1; // invalidate an in-flight OpenAI request
+    const utter = utterRef.current;
+    if (utter) { utter.onend = null; utter.onerror = null; utterRef.current = null; }
+    window.speechSynthesis.cancel();
+    const cloud = audioRef.current;
+    if (cloud) { cloud.audio.pause(); URL.revokeObjectURL(cloud.url); audioRef.current = null; }
+    setSpeaking(false);
+    if (stopActiveReader === stop) stopActiveReader = null;
+  }, []);
+
+  useEffect(() => stop, [stop]);
+
+  const onClick = useCallback(async () => {
+    if (speaking) { stop(); return; }
+    const spoken = markdownToSpeech(text);
+    if (!spoken) return;
+    stopActiveReader?.();
+    stopActiveReader = stop;
+    setSpeaking(true);
+    const prefs = getSpeechPreferences();
+
+    if (prefs.reader === "openai") {
+      const generation = ++generationRef.current;
+      try {
+        const result = await controller.synthesize(spoken, prefs.openaiVoice, speechToneInstructions(prefs.tone));
+        if (generationRef.current !== generation) return;
+        const url = base64ToBlobUrl(result.audio, result.mimeType);
+        if (!url) throw new Error("The generated speech audio was invalid.");
+        const audio = new Audio(url);
+        audioRef.current = { audio, url };
+        audio.onended = stop;
+        audio.onerror = () => { controller.store.setError("Could not play the generated speech."); stop(); };
+        await audio.play();
+      } catch (error) {
+        if (generationRef.current === generation) {
+          controller.store.setError(error instanceof Error ? error.message : String(error));
+          stop();
+        }
+      }
+      return;
+    }
+
+    if (!speechSynthesisSupported()) {
+      controller.store.setError("Browser speech is not supported on this device. Choose OpenAI under Settings → Voice.");
+      stop();
+      return;
+    }
+    const synth = window.speechSynthesis;
+    synth.cancel();
+    const utter = new SpeechSynthesisUtterance(spoken);
+    utter.rate = prefs.rate;
+    if (prefs.browserVoice) {
+      utter.voice = synth.getVoices().find((voice) => voice.voiceURI === prefs.browserVoice || voice.name === prefs.browserVoice) ?? null;
+    }
+    const done = () => { if (utterRef.current === utter) stop(); };
+    utter.onend = done;
+    utter.onerror = done;
+    utterRef.current = utter;
+    synth.speak(utter);
+  }, [speaking, stop, text]);
+
+  return (
+    <button
+      type="button"
+      className={`msg-speak-btn${speaking ? " speaking" : ""}`}
+      onClick={onClick}
+      title={speaking ? "Stop" : "Read aloud"}
+      aria-label={speaking ? "Stop reading" : "Read message aloud"}
+    >
+      {speaking ? <StopGlyph /> : <SpeakGlyph />}
+    </button>
+  );
+}
+
 // Memoized so a streaming token that produces a new transcript array only
 // re-renders the entries whose object identity actually changed. The store
 // preserves references for untouched entries (map/spread keep them), so with a
@@ -187,15 +294,44 @@ const EntryView = memo(function EntryView({
     () => (entry.role === "assistant" && !entry.streaming ? entry.html ?? toHtml(entry.text) : ""),
     [entry.role, entry.streaming, entry.html, entry.text],
   );
-  // Syntax-highlight fenced code blocks once the assistant HTML is in the DOM.
-  // Re-runs as streaming replaces the markup; hooks stay above the role branches.
+  // Syntax-highlight fenced code blocks once the assistant HTML is in the DOM,
+  // and hydrate any remote markdown images this entry now has a resolved ref
+  // for (see TranscriptEntry.imageRefs / packages/core/src/markdown.ts). Re-runs
+  // as streaming replaces the markup, AND when imageRefs grows live (a node
+  // "inlineImage" event patches a new ref onto this entry with no text/html
+  // change — see store.ts) so a just-resolved image hydrates without a reload.
+  // All three helpers are idempotent against re-running on already-processed
+  // DOM, so bundling them in one effect is safe either way.
   const bodyRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (entry.role === "assistant") {
-      highlightCode(bodyRef.current);
-      decorateCodeBlocks(bodyRef.current);
-    }
-  }, [entry.role, html]);
+    if (entry.role !== "assistant") return;
+    highlightCode(bodyRef.current);
+    decorateCodeBlocks(bodyRef.current);
+    const container = bodyRef.current;
+    if (!container || !entry.imageRefs) return;
+    let cancelled = false;
+    const created: string[] = [];
+    const imgs = container.querySelectorAll<HTMLImageElement>("img.md-image[data-remote-src]");
+    imgs.forEach((img) => {
+      const url = img.dataset.remoteSrc;
+      if (!url || img.dataset.hydrated === "1") return;
+      const ref = entry.imageRefs?.[url];
+      if (!ref) return; // not resolved yet — stays a placeholder until it is
+      img.dataset.hydrated = "1";
+      void controller.fetchAttachment(ref.hash).then((res) => {
+        if (cancelled || !res) return;
+        const blobUrl = base64ToBlobUrl(res.data, res.mimeType || ref.mimeType);
+        if (blobUrl) {
+          img.src = blobUrl;
+          created.push(blobUrl);
+        }
+      });
+    });
+    return () => {
+      cancelled = true;
+      created.forEach((u) => URL.revokeObjectURL(u));
+    };
+  }, [entry.role, html, entry.imageRefs]);
   if (entry.role === "system")
     return (
       <div className="msg system">
@@ -227,7 +363,7 @@ const EntryView = memo(function EntryView({
     // still sees that something was attached.
     const text = hasAttachments ? stripAttachmentPlaceholders(entry.text) : entry.text;
     return (
-      <div className="msg user">
+      <div className="msg user" id={hasAttachments ? `msg-${entry.id}` : undefined}>
         {hasAttachments && (
           <div className="msg-attachments">
             {entry.attachments!.map((a, i) => (
@@ -249,10 +385,29 @@ const EntryView = memo(function EntryView({
         </div>
       </div>
     );
+  // An agent-sent attachment (image/file) lands as an assistant entry carrying
+  // `attachments` (and an optional caption in `text`). Render the chip(s) the same
+  // way user uploads render, above any caption bubble. Reuses AttachmentChip, so
+  // hash-only refs rehydrate their bytes on demand exactly like inbound ones.
+  const hasAttachments = !!entry.attachments && entry.attachments.length > 0;
   return (
-    <div className="assistant-row">
-      <div ref={bodyRef} className="msg assistant" dangerouslySetInnerHTML={{ __html: html }} />
-      {entry.text && <CopyButton text={entry.text} />}
+    <div className="assistant-row" id={hasAttachments ? `msg-${entry.id}` : undefined}>
+      {hasAttachments && (
+        <div className="msg-attachments">
+          {entry.attachments!.map((a, i) => (
+            <AttachmentChip key={`${a.name}-${i}`} attachment={a} />
+          ))}
+        </div>
+      )}
+      {(entry.text || !hasAttachments) && (
+        <div ref={bodyRef} className="msg assistant" dangerouslySetInnerHTML={{ __html: html }} />
+      )}
+      {entry.text && (
+        <div className="msg-actions">
+          <CopyButton text={entry.text} />
+          {readAloudSupported() && <SpeakButton text={entry.text} />}
+        </div>
+      )}
     </div>
   );
 });
@@ -339,6 +494,7 @@ export function ChatView({
   working,
   workingLabel,
   draftRoute,
+  opening,
   sessionKey,
   collapsed,
   onAction,
@@ -351,7 +507,12 @@ export function ChatView({
    *  `/sessions/new` may show the start prompt; `/sessions/:id` always represents
    *  a real session whose empty transcript is still being fetched. */
   draftRoute: boolean;
-  /** Identity of the open session; switching it re-pins to latest + resets the window. */
+  /** True while the store is waiting on the first history snapshot for the
+   *  active session. Drives the "Fetching transcript…" spinner — must NOT be
+   *  inferred from an empty entries array, or a legitimately empty session (or
+   *  one whose history never arrives) spins forever. */
+  opening?: boolean;
+  /** Identity of the open session; used to preserve its window and reading position. */
   sessionKey: string | null;
   /** Focus view: hide thinking, tool cards, and interim assistant messages —
    *  leaving user prompts, each turn's final answer, and system notices. */
@@ -369,6 +530,8 @@ export function ChatView({
   const contentRef = useRef<HTMLDivElement>(null);
   const [pinned, setPinned] = useState(true);
   const [limit, setLimit] = useState(INITIAL_WINDOW);
+  const scrollMemory = useRef(new Map<string, ChatScrollMemory>());
+  const limitRef = useRef(limit);
   // Mirror `pinned` into a ref so the layout-effect and ResizeObserver below —
   // which run outside React's render cycle — can read the current value without
   // being re-subscribed on every scroll tick.
@@ -408,14 +571,41 @@ export function ChatView({
   // filtered list so the counts and the visible rows stay in agreement.
   const source = useMemo(() => (collapsed ? collapseInterim(entries) : entries), [collapsed, entries]);
 
-  // Switching sessions must start pinned to that session's latest message with a
-  // fresh window — not inherit the previous session's scroll position or an
-  // expanded "show earlier" limit (which would mount far more rows than intended).
+  // Remember a session's distance from the bottom rather than its absolute
+  // scrollTop. If content grows while it is in the background, returning still
+  // lands on the same passage. A first visit starts at the latest message.
   const total = source.length;
-  useEffect(() => {
-    setLimit(INITIAL_WINDOW);
-    setPinnedState(true);
+  useLayoutEffect(() => {
+    const remembered = scrollMemory.current.get(sessionKey ?? "new");
+    const nextLimit = remembered?.limit ?? INITIAL_WINDOW;
+    limitRef.current = nextLimit;
+    setLimit(nextLimit);
+    setPinnedState(remembered?.pinned ?? true);
+    const frame = requestAnimationFrame(() => {
+      const el = scrollRef.current;
+      if (el) el.scrollTop = restoredChatScrollTop(el, remembered);
+    });
+    return () => cancelAnimationFrame(frame);
   }, [sessionKey, setPinnedState]);
+
+  const rememberScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const isPinned = atBottom();
+    setPinnedState(isPinned);
+    scrollMemory.current.set(
+      sessionKey ?? "new",
+      captureChatScroll(el, isPinned, limitRef.current),
+    );
+  }, [atBottom, sessionKey, setPinnedState]);
+
+  const showEarlier = useCallback(() => {
+    setLimit((current) => {
+      const next = current + WINDOW_STEP;
+      limitRef.current = next;
+      return next;
+    });
+  }, []);
 
   // Keep the view pinned to the newest line as content grows — streamed tool
   // cards, the working row, an assistant reply landing, an inline approval card.
@@ -448,19 +638,28 @@ export function ChatView({
 
   return (
     <div className="chat-wrap">
-      <div className="chat" ref={scrollRef} onScroll={() => setPinnedState(atBottom())}>
+      <div className="chat" ref={scrollRef} onScroll={rememberScroll}>
         <div className="chat-inner" ref={contentRef}>
-          {total === 0 && !draftRoute && (
+          {total === 0 && !draftRoute && opening && (
             <div className="chat-loading" role="status" aria-live="polite">
               <span className="chat-loading-spinner" aria-hidden />
               <p>Fetching transcript…</p>
+            </div>
+          )}
+          {total === 0 && !draftRoute && !opening && (
+            <div className="chat-empty">
+              <p className="chat-empty-title">No messages yet</p>
+              <p className="chat-empty-sub">
+                This session has no transcript so far. Send a message below to
+                continue, or open the terminal if it is running there.
+              </p>
             </div>
           )}
           {total === 0 && draftRoute && (
             <div className="chat-empty">
               <p className="chat-empty-title">Start a new session</p>
               <p className="chat-empty-sub">
-                Choose the <b>node</b> to run on in the header, then the{" "}
+                Choose the <b>machine</b> to run on in the header, then the{" "}
                 <b>agent</b> and <b>model</b> below. Describe your task to
                 begin.
               </p>
@@ -473,7 +672,7 @@ export function ChatView({
           {start > 0 && (
             <button
               className="load-earlier"
-              onClick={() => setLimit((n) => n + WINDOW_STEP)}
+              onClick={showEarlier}
             >
               ↑ Show earlier messages ({start} more)
             </button>

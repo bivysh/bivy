@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
 // Classify a session's `source` tag into the trigger that started it, so every
@@ -66,7 +66,10 @@ export function classifySource(source: string | undefined): SourceInfo {
   if (s === "queue:schedule" || s === "schedule") {
     return { kind: "schedule", label: "Scheduled run", automation: true };
   }
-  if (s === "queue:webhook" || s === "webhook") {
+  // A signed webhook — the generic `automation:<hookId>` hook and a
+  // webhook-triggered automation definition both carry an `automation:` source
+  // (bare, or `queue:automation:` for a non-repo run).
+  if (s === "queue:webhook" || s === "webhook" || s.startsWith("automation:") || s.startsWith("queue:automation:")) {
     return { kind: "webhook", label: "Webhook", automation: true };
   }
   if (s === "queue:manual" || s === "manual") {
@@ -94,6 +97,6 @@ export function shortSourceLabel(kind: SourceKind): string {
     case "cli":
       return "CLI";
     case "app":
-      return "Session";
+      return "App";
   }
 }

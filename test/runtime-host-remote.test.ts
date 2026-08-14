@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { strict as assert } from "node:assert";
 import test from "node:test";
@@ -10,7 +10,10 @@ function makeHost() {
   return new RuntimeHost({ credsDir: "/tmp/bivy-test-pi", piDir: "/tmp/bivy-test-pi", sessionsDir: "/tmp/bivy-test-pi/sessions" });
 }
 
-function withEnv(env: Record<string, string | undefined>, fn: () => void) {
+function withEnv(overrides: Record<string, string | undefined>, fn: () => void) {
+  // In-process cases exercise routing, not upstream discovery. Pin the operator
+  // command to a known executable so the test is independent of the CI image.
+  const env = { BIVY_CLAUDE_COMMAND: process.execPath, ...overrides };
   const saved: Record<string, string | undefined> = {};
   for (const k of Object.keys(env)) {
     saved[k] = process.env[k];
@@ -41,7 +44,7 @@ test("flag on (all) + addr → get() returns a RemoteRuntime with registry capab
     const rt = host.get("claude-code-sdk", "pi");
     assert.ok(rt instanceof RemoteRuntime, "remote path when the flag is on");
     assert.equal(rt.id, "claude-code-sdk");
-    assert.equal(rt.displayName, "Claude Code SDK");
+    assert.equal(rt.displayName, "Claude Code");
     // Capabilities come from the registry (CLAUDE_CAPABILITIES), not a connection.
     assert.equal(rt.capabilities.toolInterception, true);
     assert.equal(rt.capabilities.resume, true);

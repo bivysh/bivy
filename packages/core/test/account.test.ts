@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { describe, expect, it } from "vitest";
 import {
@@ -18,7 +18,27 @@ import {
   assignWorkItem,
   fetchEphemeralQueueDefault,
   setEphemeralQueueDefault,
+  cancelAutomationRun,
+  retryAutomationRun,
+  fetchAutomationRun,
+  RunFetchError,
+  recordProductMetric,
 } from "../src/index.js";
+
+describe("recordProductMetric", () => {
+  it("sends only fixed content-free event and client fields", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.s = "tok";
+    store.cp = "https://cp.test";
+    let request: { url?: string; init?: RequestInit } = {};
+    await recordProductMetric(store, "receipt_reviewed", "mobile", (async (url, init) => {
+      request = { url: String(url), init };
+      return new Response(null, { status: 204 });
+    }) as typeof fetch);
+    expect(request.url).toBe("https://cp.test/account/product-events");
+    expect(JSON.parse(String(request.init?.body))).toEqual({ event: "receipt_reviewed", client: "mobile" });
+  });
+});
 
 function mem(): Storage {
   const m = new Map<string, string>();
@@ -54,6 +74,33 @@ describe("consumeLinkPayload", () => {
     expect(store.cur).toBe("n1");
     expect(store.nodePubs().n1).toBe("PUB");
     expect(store.pairSecrets().n1).toBe("SEC");
+  });
+
+  it("captures account-free (solo) room creds and no session from a solo QR", () => {
+    const store = createLocalStore(mem(), mem());
+    const ok = consumeLinkPayload(
+      store,
+      encode({ relay: "wss://relay.self", node: { id: "n2", pub: "PUB2" }, pairSecret: "SEC2", room: "room_abc", roomToken: "a".repeat(43) }),
+    );
+    expect(ok).toBe(true);
+    expect(store.s).toBe(""); // no control-plane session in solo mode
+    expect(store.cur).toBe("n2");
+    expect(store.relay).toBe("wss://relay.self");
+    expect(store.nodePubs().n2).toBe("PUB2");
+    expect(store.pairSecrets().n2).toBe("SEC2");
+    expect(store.solo().n2).toEqual({ room: "room_abc", roomToken: "a".repeat(43) });
+  });
+
+  it("makes the setup wizard's agent the first app draft choice", () => {
+    const store = createLocalStore(mem(), mem());
+    store.setLastChoice({ agentId: "pi" }); // stale choice from another node
+    consumeLinkPayload(store, encode({
+      session: "tok123",
+      node: { id: "new-node" },
+      defaultAgent: " Claude-Code-SDK ",
+    }));
+    expect(store.cur).toBe("new-node");
+    expect(store.lastChoice().agentId).toBe("claude-code-sdk");
   });
 
   it("returns false for empty/garbage input", () => {
@@ -399,6 +446,105 @@ describe("paired devices", () => {
     }) as unknown as typeof fetch;
     await logout(store, undefined, fakeFetch);
     expect(JSON.parse(seenBody)).toEqual({});
+  });
+});
+
+describe("cancelAutomationRun", () => {
+  it("POSTs the encoded account cancellation path and returns the run", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.s = "tok";
+    store.cp = "https://app.bivy.sh";
+    let seenUrl = "";
+    let seenMethod = "";
+    let seenAuth = "";
+    const run = { id: "run/a b", status: "cancelled" };
+    const fakeFetch = (async (url: string, init?: RequestInit) => {
+      seenUrl = String(url);
+      seenMethod = String(init?.method);
+      seenAuth = String((init?.headers as Record<string, string>)?.authorization);
+      return { ok: true, json: async () => ({ ok: true, run }) } as Response;
+    }) as unknown as typeof fetch;
+
+    await expect(cancelAutomationRun(store, "run/a b", fakeFetch)).resolves.toEqual(run);
+    expect(seenUrl).toBe("https://app.bivy.sh/account/automation-runs/run%2Fa%20b/cancel");
+    expect(seenMethod).toBe("POST");
+    expect(seenAuth).toBe("Bearer tok");
+  });
+
+  it("surfaces terminal conflicts from the control plane", async () => {
+    const store = createLocalStore(mem(), mem());
+    const fakeFetch = (async () => ({
+      ok: false,
+      status: 409,
+      json: async () => ({ error: "Cannot cancel a succeeded automation run" }),
+    }) as Response) as unknown as typeof fetch;
+    await expect(cancelAutomationRun(store, "run-1", fakeFetch)).rejects.toThrow("Cannot cancel a succeeded automation run");
+  });
+});
+
+describe("retryAutomationRun", () => {
+  it("POSTs the encoded retry path and returns the same durable Run", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.s = "tok";
+    store.cp = "https://app.bivy.sh";
+    let seenUrl = "";
+    let seenMethod = "";
+    const run = { id: "run/a b", status: "pending", attempt: 2 };
+    const fakeFetch = (async (url: string, init?: RequestInit) => {
+      seenUrl = String(url);
+      seenMethod = String(init?.method);
+      return { ok: true, json: async () => ({ ok: true, run }) } as Response;
+    }) as unknown as typeof fetch;
+    await expect(retryAutomationRun(store, "run/a b", fakeFetch)).resolves.toEqual(run);
+    expect(seenUrl).toBe("https://app.bivy.sh/account/automation-runs/run%2Fa%20b/retry");
+    expect(seenMethod).toBe("POST");
+  });
+
+  it("surfaces attempt-limit conflicts", async () => {
+    const store = createLocalStore(mem(), mem());
+    const fakeFetch = (async () => ({ ok: false, status: 409, json: async () => ({ error: "This Run has reached its attempt limit." }) }) as Response) as unknown as typeof fetch;
+    await expect(retryAutomationRun(store, "run-1", fakeFetch)).rejects.toThrow("attempt limit");
+  });
+});
+
+describe("fetchAutomationRun", () => {
+  it("GETs the encoded single-run path and returns the run", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.s = "tok";
+    store.cp = "https://app.bivy.sh";
+    let seenUrl = "";
+    let seenAuth = "";
+    const run = { id: "run/a b", status: "running", title: "t", triggerKind: "manual", createdAt: "2026-08-12T00:00:00.000Z" };
+    const fakeFetch = (async (url: string, init?: RequestInit) => {
+      seenUrl = String(url);
+      seenAuth = String((init?.headers as Record<string, string>)?.authorization);
+      return { ok: true, status: 200, json: async () => run } as Response;
+    }) as unknown as typeof fetch;
+
+    await expect(fetchAutomationRun(store, "run/a b", fakeFetch)).resolves.toEqual(run);
+    expect(seenUrl).toBe("https://app.bivy.sh/account/automation-runs/run%2Fa%20b");
+    expect(seenAuth).toBe("Bearer tok");
+  });
+
+  it("returns null for a non-leaking 404 (unknown or cross-account id)", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.cp = "https://app.bivy.sh";
+    const fakeFetch = (async () => ({ ok: false, status: 404, json: async () => ({ error: "Automation run not found" }) }) as Response) as unknown as typeof fetch;
+    await expect(fetchAutomationRun(store, "nope", fakeFetch)).resolves.toBeNull();
+  });
+
+  it("distinguishes unauthorized, offline, and other errors", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.cp = "https://app.bivy.sh";
+    const unauth = (async () => ({ ok: false, status: 401, json: async () => ({}) }) as Response) as unknown as typeof fetch;
+    await expect(fetchAutomationRun(store, "r", unauth)).rejects.toMatchObject({ reason: "unauthorized" });
+
+    const offline = (async () => { throw new TypeError("Failed to fetch"); }) as unknown as typeof fetch;
+    await expect(fetchAutomationRun(store, "r", offline)).rejects.toBeInstanceOf(RunFetchError);
+    await expect(fetchAutomationRun(store, "r", offline)).rejects.toMatchObject({ reason: "error" });
+
+    const boom = (async () => ({ ok: false, status: 500, json: async () => ({}) }) as Response) as unknown as typeof fetch;
+    await expect(fetchAutomationRun(store, "r", boom)).rejects.toMatchObject({ reason: "error", status: 500 });
   });
 });
 

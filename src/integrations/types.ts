@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import type { TSchema } from "typebox";
 
@@ -73,6 +73,22 @@ export interface IntegrationDef {
   baseUrl?: string;
   auth: IntegrationAuthSpec;
   tools: IntegrationToolDef[];
+}
+
+/**
+ * Declarative shape for a built-in tool that (unlike an IntegrationToolDef)
+ * needs neither auth nor an `http` client — e.g. `attach_to_chat` (issue #291),
+ * which needs the CALLING SESSION's id instead. Kept as data alongside the
+ * integrations here for the same reason those are: name/description/schema in
+ * one place; IntegrationManager.toolProvider wires the actual execution, where
+ * the session-id context this tool needs (but a plain integration tool
+ * doesn't) is available.
+ */
+export interface StandaloneToolDef {
+  name: string;
+  label: string;
+  description: string;
+  parameters: TSchema;
 }
 
 /** Persisted, per-integration connection state. Stored 0600 on disk. */

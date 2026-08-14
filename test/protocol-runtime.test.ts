@@ -52,16 +52,38 @@ await waitFor(events, (event) => event.type === "agent_end");
 assert.equal(decisions.length, 1);
 assert.equal((decisions[0] as { toolName: string }).toolName, "shell");
 
+// A discrete assistant item is sealed before the following tool. Codex emits
+// this shape for commentary throughout a turn; losing the boundary makes every
+// message grow into one bubble while all tool cards collect below it.
+const firstMessageBoundary = events.findIndex((event) => event.type === "message_boundary");
+const firstToolCall = events.findIndex((event) => event.type === "tool_call");
+assert.ok(firstMessageBoundary >= 0 && firstMessageBoundary < firstToolCall, "assistant item ends before its following tool call");
+assert.equal(
+  ((events[firstMessageBoundary] as { message?: { content?: unknown } }).message?.content),
+  "hello ",
+  "the item boundary seals only the prose streamed so far",
+);
+
 // History keeps the whole turn: the user prompt, an assistant message whose
-// content blocks pair the reply text with the tool_use, and a trailing user
-// message carrying the tool_result — so re-opening the session shows what the
-// agent did, not just its final sentence.
+// content blocks interleave the reply text with the tool_use in the order they
+// actually streamed (the fixture sends "hello " before the tool call and
+// "world" after it resolves — collapsing those into one merged text block
+// ahead of every tool is exactly the "interim messages disappear/bundle at the
+// end" bug this preserves against), and a trailing user message carrying the
+// tool_result — so re-opening the session shows what the agent did, not just
+// its final sentence.
 const history = session.getMessages() as Array<{ role?: string; content?: unknown }>;
 assert.deepEqual(history.map((m) => m.role), ["user", "assistant", "user"]);
 
 const assistantBlocks = history[1].content as Array<Record<string, unknown>>;
 assert.ok(Array.isArray(assistantBlocks));
-assert.equal(assistantBlocks.find((b) => b.type === "text")?.text, "hello world");
+assert.deepEqual(
+  assistantBlocks.map((b) => b.type),
+  ["text", "bivy_message_boundary", "tool_use", "text"],
+  "assistant-item boundaries, text, and tool_use blocks persist in streamed order",
+);
+assert.equal(assistantBlocks[0]?.text, "hello ");
+assert.equal(assistantBlocks[3]?.text, "world");
 const toolUse = assistantBlocks.find((b) => b.type === "tool_use");
 assert.equal(toolUse?.name, "shell");
 assert.equal(toolUse?.id, "tc_fixture");
@@ -115,6 +137,43 @@ assert.equal((invoked as { name?: string }).name, "/deploy", "protocol command r
 assert.equal((invoked as { args?: string }).args, "staging --force", "command args forwarded verbatim");
 
 session.dispose();
+
+// --- Late assistant delta after session.done (the ACP end_turn race) ---------
+// opencode's session/prompt reply resolves before its final agent_message_chunk
+// frames are flushed, so a chunk can land AFTER the turn was sealed. The host must
+// fold it onto the already-persisted assistant message (and re-emit message_end so
+// the daemon re-snapshots the base) rather than opening a fresh draft that never
+// reaches getMessages() — otherwise the tail streams live but vanishes on reopen.
+const lateDeltaRuntime = new ProtocolRuntime({
+  command: process.execPath,
+  args: [fixture],
+  displayName: "Fixture Protocol (late delta)",
+  env: { FIXTURE_LATE_DELTA: "1" },
+});
+const { session: lateSession } = await lateDeltaRuntime.createSession({ workspace: process.cwd(), toolInterceptor: async () => undefined });
+const lateEvents: RuntimeEvent[] = [];
+lateSession.subscribe((event) => lateEvents.push(event));
+await lateSession.prompt("say hello");
+await waitFor(lateEvents, (event) => event.type === "agent_end");
+// The 20ms-late chunk arrives after agent_end; the fold re-streams it and re-seals
+// the message so the daemon's message_end re-snapshots the base transcript.
+await waitFor(
+  lateEvents,
+  (event) =>
+    event.type === "message_update" &&
+    JSON.stringify((event as { message?: { content?: unknown } }).message?.content ?? "").includes("late tail"),
+);
+const lateAssistant = lateSession.getMessages().find((m) => (m as { role?: string }).role === "assistant") as
+  | { content?: Array<{ type?: string; text?: string }> }
+  | undefined;
+const lateText = (lateAssistant?.content ?? []).filter((b) => b.type === "text").map((b) => b.text ?? "").join("");
+assert.equal(lateText, "hello world late tail", "the late delta is folded into the sealed assistant message, not lost");
+assert.equal(
+  lateEvents.filter((e) => e.type === "message_end").length,
+  2,
+  "the fold re-emits message_end so the daemon re-persists the corrected transcript",
+);
+lateSession.dispose();
 
 // A concrete protocol adapter can delegate naming to its own authenticated
 // agent. Codex uses this seam to run an ephemeral title-only Codex turn.
@@ -314,9 +373,53 @@ const historyImport = new ProtocolRuntime({
 assert.equal(historyImport.capabilities.forkHistoryImport, true, "writeHistory => capability on");
 const imported = await historyImport.importHistoryForFork(
   [{ role: "user", text: "port to rust" }, { role: "assistant", text: "on it" }],
-  { workspace: "/w", cwd: "/w/fork" },
+  { workspace: "/w", cwd: "/w/fork", model: { provider: "provider", id: "model" } },
 );
 assert.deepEqual(imported, { sessionFile: "roll-1", id: "roll-1" }, "delegates to writeHistory's result");
 assert.deepEqual((seen as { history: unknown }).history, [{ role: "user", text: "port to rust" }, { role: "assistant", text: "on it" }]);
+assert.deepEqual((seen as { ctx: unknown }).ctx, {
+  workspace: "/w",
+  cwd: "/w/fork",
+  model: { provider: "provider", id: "model" },
+}, "the generic protocol seam forwards destination context without agent-specific branching");
+
+// --- Credential preflight ---------------------------------------------------
+// A runtime whose preflight reports no usable credential must surface an
+// actionable session.error and end the turn WITHOUT forwarding the prompt to the
+// agent (mirroring ProcessRuntime), so the daemon can raise the sign-in sheet
+// instead of letting the shim's first upstream call 401.
+const preflightRuntime = new ProtocolRuntime({
+  command: process.execPath,
+  args: [fixture],
+  displayName: "Fixture Protocol (preflight)",
+  preflight: () => "no usable credential",
+});
+const { session: pfSession } = await preflightRuntime.createSession({ workspace: process.cwd(), toolInterceptor: async () => undefined });
+const pfEvents: RuntimeEvent[] = [];
+pfSession.subscribe((event) => pfEvents.push(event));
+await pfSession.prompt("do the thing");
+const pfError = await waitFor(pfEvents, (event) => event.type === "session.error");
+assert.equal((pfError as { error?: string }).error, "no usable credential", "preflight message surfaced as session.error");
+await waitFor(pfEvents, (event) => event.type === "agent_end");
+assert.equal(pfSession.isStreaming, false, "streaming cleared after a preflight block");
+// The prompt never reached the shim: no chat.send → no prompt.received echo.
+assert.ok(!pfEvents.some((event) => event.type === "prompt.received"), "prompt not forwarded when preflight blocks");
+pfSession.dispose();
+
+// A preflight that returns undefined lets the turn proceed normally.
+const okPreflightRuntime = new ProtocolRuntime({
+  command: process.execPath,
+  args: [fixture],
+  displayName: "Fixture Protocol (preflight ok)",
+  preflight: () => undefined,
+});
+const { session: okSession } = await okPreflightRuntime.createSession({ workspace: process.cwd(), toolInterceptor: async () => undefined });
+const okEvents: RuntimeEvent[] = [];
+okSession.subscribe((event) => okEvents.push(event));
+await okSession.prompt("say hello");
+await waitFor(okEvents, (event) => event.type === "prompt.received");
+await waitFor(okEvents, (event) => event.type === "agent_end");
+assert.ok(!okEvents.some((event) => event.type === "session.error"), "no error when the credential preflight passes");
+okSession.dispose();
 
 console.log("protocol-runtime: all tests passed");

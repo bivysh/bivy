@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // Reactive session store — a framework-agnostic reducer + subscribe/getState.
 //
@@ -14,26 +14,34 @@
 // reproduced here yet — see packages/web/STATUS.md. They are refinements over
 // this correct baseline, not prerequisites for it.
 
-import type { AttachmentRef, ConnectionStatus, PromptAttachment, ServerEvent } from "./protocol.js";
-import type { AccountNode } from "./account.js";
+import type { AttachmentRef, ConnectionStatus, CredentialPresetsView, CredentialRecordSummary, PromptAttachment, ServerEvent } from "./protocol.js";
+import type { AccountNode, EphemeralNodeConfig } from "./account.js";
+import type { MachineCapabilities } from "./capabilities.js";
+import type { InboxAdvert } from "./inbox.js";
+import type { SessionContract } from "./session-contract.js";
 import { type SlashCommand } from "./slash.js";
-import { toHtml } from "./markdown.js";
-import { eventKind, normalizeEventType, toolCallId, toolInput, toolName } from "./tool-activity.js";
+import { toHtml, extractRemoteImageUrls } from "./markdown.js";
+import { eventKind, normalizeEventType, toolCallId, toolDetail, toolInput, toolName } from "./tool-activity.js";
+import { SeqReassembler } from "./seq-reassembler.js";
+import type { ToolCallDetail } from "./tool-format.js";
 import { humanizeError, looksLikeAgentError } from "./store-errors.js";
-import { contentThinking, contentToText, mergeToolInto, nextId, renderHistory, toolEntriesFromContent } from "./store-render.js";
+import { attachmentFromRef, contentThinking, contentToText, mergeToolInto, nextId, renderHistory, toolEntriesFromContent } from "./store-render.js";
 import {
   agentLabel,
   githubContext,
   githubFromSummary,
   normalizeAgentCommands,
+  normalizeCapabilitiesSnapshot,
   normalizeModels,
   normalizeNodeStats,
   normalizePrs,
   normalizeSessions,
+  normalizeSessionState,
   normalizeThinking,
   normalizeUsage,
   sameCommandList,
   sameModel,
+  sessionStatusFromState,
   upsertApproval,
   validUserQuestions,
 } from "./store-normalize.js";
@@ -51,7 +59,17 @@ export {
   repoFromSource,
 } from "./store-normalize.js";
 
-export type SessionStatus = "idle" | "working" | "needs_action" | "saved";
+export type SessionStatus = "idle" | "working" | "needs_action" | "failed" | "saved";
+
+/** Explicit live-session axes supplied by Phase 3 nodes. Optional on summaries
+ * for compatibility with older nodes and persisted account-index rows. */
+export interface SessionState {
+  transport: "reachable" | "unreachable";
+  process: "alive" | "exited" | "none";
+  agent: "idle" | "working" | "waiting" | "awaiting-input";
+  workspace: "clean" | "dirty" | "checkpointing";
+  displayStatus: "idle" | "working" | "needs_attention" | "failed";
+}
 
 /** A live native-agent PTY started by `bivy run`. These are node-owned terminal
  * sessions rather than structured chat sessions, but they belong in the same
@@ -96,14 +114,42 @@ export interface SessionSummary {
   updatedAt?: number;
   needsAction?: boolean;
   status?: SessionStatus;
+  sessionState?: SessionState;
   /** Repo-backed session's worktree branch, when known (sessions.list already
    *  carries this from the node — see src/server.ts — it was previously dropped
    *  here, which is why the sidebar had no branch/PR context per row). */
   branch?: string;
+  /** Device-local placeholder while an ephemeral runner is provisioning. It is
+   *  preserved across authoritative session-list refreshes until the controller
+   *  replaces it with the node's canonical session id. */
+  pendingLaunch?: boolean;
+  /** This session's ephemeral node was torn down (unenrolled, gone from the
+   *  registry) but is REBUILDABLE from a durable correlation + the room key this
+   *  device still holds — so the row stays in the sidebar as offline-but-rebuildable
+   *  and a send rebuilds it (Gap 1). Client-local; the node has no concept of it. */
+  rebuildable?: boolean;
   /** Per-session sandbox tier this session was created with (the override); absent
    *  = the node default. Baked in at creation and read-only for the session's life
    *  — surfaced so a running session can show its sandbox mode read-only. */
   sandbox?: SandboxTier;
+  approvalMode?: "never" | "risky" | "always" | "autonomous";
+  ephemeral?: boolean;
+  executionProfile?: "trusted_workstation" | "isolated_customer_cloud" | "restricted";
+  auditHealth?: {
+    storage: "healthy" | "missing" | "corrupt" | "unreadable";
+    writes: "healthy" | "unknown" | "degraded";
+    failedWrites: number;
+    corruptLines: number;
+  };
+  eventLogHealth?: { state: "healthy" | "degraded"; operation?: "read" | "parse" | "append" | "rewrite"; at?: number };
+  /** The Effective Session Contract resolved once at session creation from
+   *  real launch facts (not live-recomputed on every refresh — see
+   *  session-contract.ts) — what this specific session actually got, as
+   *  distinct from the catalog-level `RuntimeInfo` promise. Absent for a
+   *  session that predates this field (an older node, or a session opened
+   *  before the daemon started stamping one) or one that hasn't been
+   *  reopened since. */
+  contract?: SessionContract;
   /** Pull request opened for this session's branch, if any (the live open one). */
   prUrl?: string;
   /** Every PR seen for this session's branch (open, merged, closed). */
@@ -121,6 +167,16 @@ export interface SessionSummary {
    *  session or a cold sessions.list snapshot never reads as a finished run
    *  someone hasn't looked at yet. */
   finishedAt?: number;
+  /** Client-local timestamp of the latest terminal failed turn. */
+  failedAt?: number;
+  /** Content-free unresolved conditions from the account session index. */
+  attention?: InboxAdvert[];
+  /** Hosted-trial gate: this session is beyond the account's free lifetime session
+   *  allowance, so the control plane returned it as a content-stripped stub (no
+   *  title/branch/source). The sidebar renders it as a locked "subscribe to view"
+   *  row; it cannot be opened until the account upgrades (or self-hosts). Only ever
+   *  set in relay/hosted mode on a free account past its trial. */
+  locked?: boolean;
 }
 
 export type ToolStatus = "running" | "done";
@@ -131,6 +187,9 @@ export interface ToolActivity {
   input: unknown;
   status: ToolStatus;
   result?: string;
+  /** Node-computed normalized classification (see ToolCallDetail); when present,
+   *  formatTool renders from it instead of re-deriving from `input`. */
+  detail?: ToolCallDetail;
 }
 
 export type TranscriptRole = "user" | "assistant" | "system" | "thinking" | "error";
@@ -155,6 +214,15 @@ export interface TranscriptEntry {
    *  as an inline action button on a system entry so the suggestion is tappable
    *  instead of just describing a command the user would have to type. */
   action?: string;
+  /** Resolved AttachmentRefs for this (assistant) entry's remote markdown images
+   *  (`![alt](https://…)`), keyed by the exact URL the markdown referenced — see
+   *  inlineImagesByUrl / withInlineImageRefs below. ChatView's hydrate effect
+   *  looks up each `<img data-remote-src>` here to fetch its bytes and swap in a
+   *  `blob:` URL (the deployed CSP blocks a literal remote `src`). Populated at
+   *  render time from durable history (`foldInlineImageRefs`) and patched in
+   *  live as the node resolves more (see the "inlineImage" case below) — a new
+   *  object identity on that patch is what makes the hydrate effect re-run. */
+  imageRefs?: Record<string, AttachmentRef>;
 }
 
 export interface ModelInfo {
@@ -165,12 +233,30 @@ export interface ModelInfo {
 
 export interface RuntimeInfo {
   id: string;
+  /** Default communication path: structured protocol/SDK, JSON pipe, plain pipe, or native terminal. */
+  executionMode?: "protocol" | "structured-pipe" | "pipe" | "pty";
   displayName?: string;
   name?: string;
+  supportTier?: "supported" | "beta" | "experimental" | "planned";
+  protectionLevel?: "native-sandbox" | "tool-controls" | "mcp-controls" | "user-permissions";
+  protectionLabel?: string;
+  protectionDetail?: string;
+  certification?: "release-tested" | "adapter-tested" | "unverified";
+  source?:
+    | { kind: "config" }
+    | {
+        kind: "package";
+        packageId: string;
+        packageVersion: string;
+        publisher?: string;
+        location: "distribution" | "installed";
+        verified: boolean;
+      };
+  testedVersion?: string;
   [k: string]: unknown;
 }
 
-export type FollowupStatus = "queued" | "sending" | "sent" | "failed";
+export type FollowupStatus = "queued" | "scheduled" | "sending" | "sent" | "failed";
 
 /**
  * A follow-up prompt visible in the composer's queue for a session — see
@@ -190,6 +276,18 @@ export interface PendingFollowup {
   createdAt: number;
   updatedAt: number;
   version: number;
+  /** A message scheduled for later (long-press Send): the epoch-ms time the
+   *  control-plane automation will deliver it. Presence of this field marks the
+   *  row as "scheduled" — rendered in the queue with its fire time and skipped
+   *  by the turn-end drain (it's not a queued follow-up waiting to send now). */
+  scheduledAt?: number;
+  /** Account/relay mode: the one-off scheduled-message automation that mirrors
+   *  this queued item on the control plane, so it still sends if the app closes
+   *  or the node was offline at turn-end (the node dedupes against the live
+   *  transcript so the in-app dispatch and this backstop can't double-send).
+   *  Cleared once delivered/cancelled. Client-local bookkeeping — the node and
+   *  control plane don't see it. */
+  scheduledAutomationId?: string;
 }
 
 export type FollowupEditResult =
@@ -232,6 +330,17 @@ export interface UserQuestionRequest {
   id: string;
   sessionId?: string;
   questions: UserQuestionItem[];
+  createdAt?: number;
+}
+
+/** A soft watchdog warning that asks the user whether to stop a possibly stuck
+ * turn or keep waiting. One may be pending per session. */
+export interface TurnAttentionRequest {
+  sessionId: string;
+  trigger: "stalled" | "wedged";
+  idleMs: number;
+  at: number;
+  message: string;
 }
 
 /** Reasoning/thinking capability of the current model. */
@@ -239,6 +348,26 @@ export interface ThinkingState {
   supportsThinking: boolean;
   thinkingLevel: string;
   availableThinkingLevels: string[];
+}
+
+/** Why the repo listing came back empty & unauthed. `null` = connected/ok.
+ *  "no-token": nothing connected — steer to `bivy github:connect`.
+ *  "gh-unauthed": the `gh` CLI is installed but logged out — also offer `gh auth login`. */
+export type RepoAuthReason = "no-token" | "gh-unauthed" | null;
+
+/** The repo-picker "Connect GitHub" device flow (Tier 2). `starting` is a local
+ *  optimistic state; the rest come from the node's github.connect.status event.
+ *  `unconfigured` means the node has no device-flow client id — the UI falls
+ *  back to the `bivy github:connect` instructions. */
+export interface GithubConnectState {
+  status: "idle" | "starting" | "waiting" | "connected" | "expired" | "denied" | "error" | "unconfigured";
+  /** Device code the user enters at github.com/login/device (status "waiting"). */
+  userCode?: string;
+  /** Where to enter it. */
+  verificationUri?: string;
+  /** GitHub's poll interval, so the client doesn't hammer the endpoint. */
+  intervalMs?: number;
+  error?: string;
 }
 
 export interface RepoInfo {
@@ -256,6 +385,19 @@ export interface RepoInfo {
 export interface BranchInfo {
   name: string;
   [k: string]: unknown;
+}
+
+/**
+ * The provider id an *API key* for `provider` should be stored under. A few
+ * providers sign in via OAuth under one id but read a pasted key from another
+ * provider's env var: Codex authenticates as `openai-codex` (the ChatGPT
+ * subscription) yet reads a plain key from `openai`'s OPENAI_API_KEY. Used by the
+ * sign-in sheet (where to save the key) and the auto-dismiss (which provider
+ * becoming configured satisfies the prompt). OAuth sign-in still uses the
+ * original id.
+ */
+export function modelAuthApiKeyProvider(provider: string): string {
+  return provider === "openai-codex" ? "openai" : provider;
 }
 
 export interface ProviderInfo {
@@ -290,6 +432,29 @@ export interface LocalModelProvider {
   hasKey: boolean;
   modelCount: number;
   models: Array<{ id: string; name: string }>;
+  scope: "machine" | "network";
+  machineId?: string;
+  machineName?: string;
+  availableOnThisMachine: boolean;
+}
+
+export interface LocalModelEndpointResult {
+  candidateId?: string;
+  name?: string;
+  baseUrl: string;
+  api: "openai-completions";
+  status: "ready" | "offline" | "timeout" | "auth_required" | "malformed" | "unsupported";
+  models: Array<{ id: string; name: string }>;
+  detail?: string;
+  machineId: string;
+  machineName: string;
+}
+
+export interface LocalModelDiscoveryResult {
+  machineId: string;
+  machineName: string;
+  endpoints: LocalModelEndpointResult[];
+  readiness: { ready: boolean; readyEndpointCount: number; modelCount: number; state: "ready" | "auth_required" | "unavailable" | "unknown" };
 }
 
 /** A quick-add preset for a common local inference server. */
@@ -517,6 +682,10 @@ export interface NodeSettings {
    *  re-drives the interrupted turn on boot, "manual" waits for a one-tap Resume.
    *  Governs interactive sessions only — issue automation always auto-resumes. */
   sessionResumeMode: "auto" | "manual";
+  /** Passively surface images a tool produces (e.g. a screenshot MCP tool's
+   *  output) into the chat as attachments, with no explicit "attach" call
+   *  (issue #292). Off by default; bounded per-turn regardless once enabled. */
+  autoAttachToolImages: boolean;
 }
 
 export interface AppState {
@@ -554,6 +723,8 @@ export interface AppState {
   approvals: ApprovalRequest[];
   /** Pending clarifying questions (see UserQuestionRequest) across every session. */
   questions: UserQuestionRequest[];
+  /** Soft watchdog decisions pending across sessions. */
+  turnAttentions: TurnAttentionRequest[];
   models: ModelInfo[];
   /** The runtime the current `models`/`currentModel` were resolved for (the
    *  node tags each models.list with its runtime). Null when unknown — e.g. the
@@ -572,6 +743,12 @@ export interface AppState {
   reposAuthed: boolean;
   reposError: string | null;
   reposLoading: boolean;
+  /** When the repo list is empty because GitHub isn't connected, WHY — so the
+   *  picker can show an actionable prompt (connect flow, plus a `gh auth login`
+   *  hint when gh is installed-but-logged-out). Null once authed. */
+  reposReason: RepoAuthReason;
+  /** State of the repo-picker "Connect GitHub" device flow (Tier 2). */
+  githubConnect: GithubConnectState;
   /** Repo chosen for the next new session (draft only). */
   draftRepo: string | null;
   /** Remote branches of `draftRepo` (for the adjacent branch pill), and which
@@ -590,10 +767,31 @@ export interface AppState {
   draftBranch: string | null;
   /** Sandbox tier chosen for the next new session (draft only); null = node default. */
   draftSandbox: SandboxTier | null;
+  /** Whether the user explicitly confirmed launching the next new session on
+   *  `selectedAgentId` despite its Effective Session Contract preview reporting
+   *  `requiresAcknowledgement` (a "supported" profile whose live protection
+   *  would be degraded) — see AgentPicker's confirm-to-continue step. Reset
+   *  whenever the selected agent changes; a prior agent's acknowledgement must
+   *  never silently carry over to a different one. */
+  draftAcknowledgeReducedProtections: boolean;
+  /** An ephemeral runner (saved config) chosen as the target for the next new
+   *  session, before any machine exists. Null = run on the currently-connected
+   *  node. When set, the first message launches a fresh machine from this config
+   *  and binds the session to it — no explicit "launch" step. Cleared once the
+   *  machine is launched (the draft then targets a real node) or the draft resets. */
+  draftEphemeralConfig: EphemeralNodeConfig | null;
   /** Current node's settings (Settings → Nodes), or null until fetched. */
   nodeSettings: NodeSettings | null;
   providers: ProviderInfo[];
+  activationReadiness: {
+    credential: { configured: boolean; probed: boolean; ok: boolean; reason?: string };
+    repository: { chosen: boolean; probed: boolean; ok: boolean; authed: boolean; reason?: string };
+  } | null;
   providerAuth: ProviderAuth | null;
+  /** Labeled credentials per provider (Settings → Keys & OAuth), from `credentials.records`. */
+  credentialRecords: CredentialRecordSummary[];
+  /** Selection presets (which labeled credential a project uses), from `credentials.presets`. */
+  credentialPresets: CredentialPresetsView | null;
   /** User-provided / local model endpoints (Settings → Local models). */
   localModels: LocalModelProvider[];
   /** Quick-add presets for common local inference servers. */
@@ -603,12 +801,25 @@ export interface AppState {
   /** Voice-input config (preferred provider + stored keys), or null until fetched. */
   sttConfig: SttConfig | null;
   oauth: OauthState | null;
+  /** A launched ephemeral runner came online with no usable model credentials
+   *  (nothing to seed from this device, no peer vault, no hosted escrow) — the
+   *  first-run subscription-OAuth prompt. Also raised mid-session when a running
+   *  agent's credential is missing/expired and it 401s (`reason` carries the
+   *  failure text so the sheet can explain a re-auth vs a first sign-in). `nodeId`
+   *  scopes it to the runner that needs it; cleared once the *targeted* provider
+   *  becomes configured. Null otherwise. */
+  needsModelAuth: { nodeId: string; provider: string; reason?: string } | null;
   githubApp: GithubAppState | null;
   /** Cost/token/plan-quota for the active session (display-only), or null. */
   usage: Usage | null;
   /** Latest node-resource snapshot (memory/CPU/storage) for the header "Node
    *  stats" panel, or null until first requested. Polled while the panel is open. */
   nodeStats: NodeStats | null;
+  /** Machine capability inventory (OS/arch, agents, providers, Docker/GPU,
+   *  plugins, workspace count) for the Settings → Nodes panel, or null until
+   *  first requested. Fetched on demand, not polled — capabilities change
+   *  rarely, unlike live resource stats. */
+  capabilities: MachineCapabilities | null;
   /** Sessions currently paused (every action asks for approval until resumed). */
   pausedSessionIds: string[];
   /** Transient result of an Open-PR action, for the UI to toast. */
@@ -620,6 +831,15 @@ export interface AppState {
    *  null. Drives the "files changed / undo this turn" card. Cleared on session
    *  switch, when a new turn starts, and after a rewind. */
   changes: TurnChanges | null;
+  /** Every turn's file changes for the active session, oldest first — the
+   *  durable record `changes` above doesn't keep (that field is retired the
+   *  instant the next turn starts, so it can only ever show the most recent
+   *  turn). Appended to on every `session.changes` that touched files; NOT
+   *  cleared when `changes` is retired or on rewind, only on session switch —
+   *  it backs the "session changes" sheet, which the user can open at any
+   *  point to see every turn's diff, not just whichever one happened to be
+   *  live when they looked. */
+  changesHistory: SessionChangeEntry[];
   /** The active session's harness checkpoints (newest first), for the rewind
    *  timeline. Populated on demand via `session.checkpoints`; [] until fetched. */
   checkpoints: Checkpoint[];
@@ -653,6 +873,14 @@ export interface AppState {
    *  a success toast and auto-dismissed by the UI. Distinct from `error` so the
    *  two can coexist and are styled differently. */
   notice: string | null;
+  /** Set when the connected node reports it's running an older Bivy than the
+   *  latest release — drives the version-mismatch banner and its one-tap
+   *  "Update this node" button (controller.updateNode). Null when up to date. */
+  nodeUpdate: { current: string; latest: string } | null;
+  /** True from the moment the user taps "Update this node" until the node
+   *  restarts on the new build (the socket reconnects) or reports it couldn't
+   *  start the update. Keeps the button from being tapped twice. */
+  nodeUpdating: boolean;
 }
 
 /** A harness checkpoint (rewind target) for the active session. */
@@ -685,6 +913,15 @@ export interface TurnChanges {
   files: HarnessFileChange[];
 }
 
+/** One entry in the session's changes history (see AppState.changesHistory) —
+ *  a TurnChanges plus the bookkeeping the sheet needs to list many of them. */
+export interface SessionChangeEntry extends TurnChanges {
+  /** Stable id for this entry — a React key and the sheet's rewind target. */
+  id: string;
+  /** When this turn's changes were reported, for the sheet's "X ago" label. */
+  at: number;
+}
+
 export function initialState(): AppState {
   return {
     status: "offline",
@@ -704,6 +941,7 @@ export function initialState(): AppState {
     opening: false,
     approvals: [],
     questions: [],
+    turnAttentions: [],
     models: [],
     modelsRuntimeId: null,
     currentModelId: null,
@@ -717,6 +955,8 @@ export function initialState(): AppState {
     reposAuthed: true,
     reposError: null,
     reposLoading: false,
+    reposReason: null,
+    githubConnect: { status: "idle" },
     draftRepo: null,
     branches: [],
     branchesRepo: null,
@@ -725,26 +965,36 @@ export function initialState(): AppState {
     branchesLoading: false,
     draftBranch: null,
     draftSandbox: null,
+    draftAcknowledgeReducedProtections: false,
+    draftEphemeralConfig: null,
     nodeSettings: null,
     providers: [],
+    activationReadiness: null,
     providerAuth: null,
+    credentialRecords: [],
+    credentialPresets: null,
     localModels: [],
     localModelPresets: [],
     rulesets: [],
     sttConfig: null,
     oauth: null,
+    needsModelAuth: null,
     githubApp: null,
     usage: null,
     nodeStats: null,
+    capabilities: null,
     pausedSessionIds: [],
     prResult: null,
     prRefreshAllResult: null,
     changes: null,
+    changesHistory: [],
     checkpoints: [],
     commandsBySession: {},
     followupsBySession: {},
     error: null,
     notice: null,
+    nodeUpdate: null,
+    nodeUpdating: false,
   };
 }
 
@@ -826,7 +1076,23 @@ function eventThinkingDelta(event: any): { kind: "full" | "delta" | "none"; text
 export class SessionStore {
   private state: AppState = initialState();
   private listeners = new Set<() => void>();
+  /** Coalesce high-frequency streaming state notifications to one browser paint. */
+  private notifyPending = false;
+  private notifyHandle: number | ReturnType<typeof setTimeout> | null = null;
   private draft: Draft = freshDraft();
+  /** Agent-sent attachments buffered during the current turn. Flushed at the
+   *  turn boundary onto the turn's final assistant bubble (see
+   *  flushPendingAgentAttachments) so a chip reads as part of the reply, not as a
+   *  standalone entry stranded mid-turn where `bivy attach` happened to run. */
+  private pendingAgentAttachments: Array<{ attachment: PromptAttachment; caption: string }> = [];
+  /** Every agent-sent attachment ever shown for a session, keyed by content hash
+   *  (append-only — an agent can't "unsend" one). A later history snapshot that
+   *  omits one — a resume-race reconcile, or any transcript built from raw runtime
+   *  messages without the durable outbound-attachment overlay — is therefore
+   *  lossy, and must not be allowed to erase the chip. withStickyAgentAttachments
+   *  re-applies any missing ones; keying by hash also de-dupes a re-broadcast of a
+   *  live `attachment` event the transcript already carries. */
+  private knownAgentAttachmentsBySession = new Map<string, Map<string, { attachment: PromptAttachment; caption: string }>>();
   /** The user's last-used model, remembered across sessions and reloads. Honored
    *  by the models.list reducer *only* while no session is active (a fresh
    *  draft), so a new session opens on the same model the user last picked. The
@@ -835,6 +1101,12 @@ export class SessionStore {
    *  last-used *agent* is restored imperatively by the controller, since that
    *  requires a runtime.select round-trip — see maybeRestoreDraftAgent.) */
   private draftModel: { provider?: string; id: string } | null = null;
+  /** Last model list seen per runtime, so switching an agent back to one already
+   *  viewed this session repaints its models instantly instead of blanking to a
+   *  loading state while the node's fresh models.list round-trips. Populated by
+   *  the models.list reducer; read by setSelectedAgentLocal. A pure client-side
+   *  cache — the node's fresh list still overwrites it (stale-while-revalidate). */
+  private modelsByRuntime = new Map<string, { models: ModelInfo[]; currentModel: ModelInfo | null }>();
   /**
    * The single source of truth for optimistic user sends, keyed by
    * clientMessageId (cmid). One entry per prompt the user sent from this client,
@@ -879,9 +1151,28 @@ export class SessionStore {
    *  Bounded like HTML_CACHE so a long session can't grow it without limit. */
   private attachmentsByText = new Map<string, PromptAttachment[]>();
   private static readonly ATTACHMENTS_CACHE_MAX = 100;
+  /** Resolved AttachmentRefs for remote markdown images, keyed by the exact
+   *  `https://` URL the markdown referenced — the client-side twin of the
+   *  node's inline-image event log (src/session/inline-image-fetch.ts). Filled
+   *  from durable history (`foldInlineImageRefs`) and grown live as the node
+   *  resolves more (the "inlineImage" case in applyStreamEvent below). Unbounded
+   *  like the durable log itself is per-session already bounded by how many
+   *  distinct remote images a session's messages actually reference. */
+  private inlineImagesByUrl = new Map<string, AttachmentRef>();
   /** Per-session rendered transcript, so switching back paints instantly. */
   private transcriptCache = new Map<string, TranscriptEntry[]>();
   private static readonly CACHE_MAX = 30;
+  /** Session ids the user just deleted, kept briefly so an authoritative
+   *  full-list refresh that still predates the deletion can't resurrect the row.
+   *  In hosted mode `deleteSession` optimistically drops the row but then
+   *  immediately re-fetches the control-plane session index, which lags the
+   *  node's debounced, best-effort advert — so without this the just-deleted
+   *  session reappears and looks like the delete silently failed. Bounded by TTL
+   *  so a delete that genuinely failed on the node can't hide a row forever. */
+  private recentlyDeleted = new Map<string, number>();
+  // Long enough to survive a PWA reload and the node's 60s control-plane
+  // reconciliation. A failed delete still self-heals instead of hiding forever.
+  private static readonly DELETE_TOMBSTONE_MS = 5 * 60_000;
   /** Per-session raw node messages + history cursor (count + hash), so we can
    *  apply append deltas and echo the cursor for incremental backfill. */
   private historyRaw = new Map<string, { messages: any[]; count: number; historyHash: string }>();
@@ -898,6 +1189,28 @@ export class SessionStore {
   private awaitingOpenHistory = false;
   /** Persist a session's raw transcript + cursor (wired to IndexedDB by the controller). */
   onHistoryPersist?: (sessionId: string, messages: any[], count: number, historyHash: string) => void;
+  /** Ask the controller to replay the live events this client missed for a
+   *  session, starting after `afterSeq` — wired to a `session.replay` request.
+   *  Ordered live delivery: reassembles the active session's `session.event`
+   *  stream and asks for a replay on a detected gap (Phase 2). */
+  requestReplay?: (sessionId: string, afterSeq: number) => void;
+  // Ordered-reassembly state for the ACTIVE session's live stream. Only the
+  // focused session is tracked (its events are the only ones applied); switching
+  // focus or crossing a stream epoch (daemon restart) resets it.
+  private seqReassembler = new SeqReassembler();
+  private seqSessionId?: string;
+  private seqEpoch?: string;
+
+  /** (Re)point the reassembler at a session/epoch, resetting on any change. Returns
+   *  true when it now tracks (sessionId, epoch). */
+  private trackSeqStream(sessionId: string, epoch: unknown): void {
+    const ep = typeof epoch === "string" ? epoch : undefined;
+    if (this.seqSessionId !== sessionId || this.seqEpoch !== ep) {
+      this.seqReassembler.reset();
+      this.seqSessionId = sessionId;
+      this.seqEpoch = ep;
+    }
+  }
   /** Ask the controller to re-request canonical history once a live turn settles. */
   requestFreshHistory?: () => void;
   /** A live turn just finished. Wired to refresh the session list — a brand new
@@ -920,6 +1233,11 @@ export class SessionStore {
     this.set({ githubApp: { ...(this.state.githubApp || { phase: "idle" }), phase, ...patch } });
   }
 
+  /** Set the repo-picker Connect-GitHub flow state (optimistic "starting", reset). */
+  setGithubConnect(state: GithubConnectState): void {
+    this.set({ githubConnect: state });
+  }
+
   /** The append cursor to echo for a session (empty if we have nothing cached). */
   getHistoryCursor(sessionId: string): { have?: number; haveToken?: string } {
     const raw = this.historyRaw.get(sessionId);
@@ -935,7 +1253,7 @@ export class SessionStore {
   seedHistory(sessionId: string, messages: any[], count: number, historyHash: string): void {
     if (!sessionId || !historyHash || !Array.isArray(messages)) return;
     this.historyRaw.set(sessionId, { messages, count, historyHash });
-    const transcript = this.withCachedAttachments(renderHistory(messages));
+    const transcript = this.withInlineImageRefs(this.withCachedAttachments(renderHistory(messages)));
     this.cacheTranscript(sessionId, transcript);
     if (this.state.activeSessionId === sessionId && this.state.transcript.length === 0) {
       this.set({ transcript, opening: false });
@@ -1094,6 +1412,44 @@ export class SessionStore {
     return changed ? next : transcript;
   }
 
+  /** Fold the durable url→ref map a `session.history` event carries
+   *  (`inlineImageRefs`, persisted by the node's inline-image event log — see
+   *  src/session/inline-image-fetch.ts) into the in-memory cache, so a reload
+   *  resolves a remote markdown image from the log instead of waiting on a fresh
+   *  fetch. Mirrors foldAttachmentRefs; last entry per URL wins (matches the
+   *  log's own last-write-wins replay). */
+  foldInlineImageRefs(entries: Array<[string, AttachmentRef]> | undefined): void {
+    if (!entries || !entries.length) return;
+    for (const [url, ref] of entries) {
+      if (!url || !ref) continue;
+      this.inlineImagesByUrl.set(url, ref);
+    }
+  }
+
+  /** Attach resolved inline-image refs onto assistant entries whose markdown
+   *  references a now-cached URL — see TranscriptEntry.imageRefs. A no-op for a
+   *  URL not yet resolved (the placeholder just stays unhydrated until it is). */
+  private withInlineImageRefs(transcript: TranscriptEntry[]): TranscriptEntry[] {
+    if (this.inlineImagesByUrl.size === 0) return transcript;
+    let changed = false;
+    const next = transcript.map((e) => {
+      if (e.role !== "assistant" || !e.text) return e;
+      const urls = extractRemoteImageUrls(e.text);
+      if (!urls.length) return e;
+      let patch: Record<string, AttachmentRef> | undefined;
+      for (const url of urls) {
+        const ref = this.inlineImagesByUrl.get(url);
+        if (!ref || e.imageRefs?.[url]) continue;
+        patch ??= { ...(e.imageRefs ?? {}) };
+        patch[url] = ref;
+      }
+      if (!patch) return e;
+      changed = true;
+      return { ...e, imageRefs: patch };
+    });
+    return changed ? next : transcript;
+  }
+
   private cacheTranscript(sessionId: string, transcript: TranscriptEntry[]): void {
     if (!sessionId) return;
     // Re-insert to refresh recency (insertion-ordered Map → oldest evicted).
@@ -1125,6 +1481,21 @@ export class SessionStore {
     this.set({
       activeSessionId: sessionId,
       activeRuntimeId: known?.runtimeId ?? null,
+      // The composer is shared by drafts and live sessions. Replace the draft's
+      // agent/model paint as soon as an existing row is opened; otherwise the
+      // pills keep claiming that this session uses whatever was last selected
+      // on the New session screen until the history/models round-trips arrive.
+      // The row already has authoritative agent metadata. Model metadata is not
+      // part of sessions.list, so show the neutral loading/default state until
+      // the session-scoped models.list response supplies the real selection.
+      currentAgentName:
+        known?.agentName ||
+        agentLabel(this.state.runtimes.find((r) => r.id === known?.runtimeId)) ||
+        "",
+      currentModel: null,
+      currentModelId: null,
+      models: [],
+      modelsRuntimeId: known?.runtimeId ?? null,
       // Opening a row is how the user "sees" it — stamp lastSeenAt right away
       // so a finished-but-unseen row's indicator clears the instant they look,
       // rather than waiting on a node round-trip to confirm anything.
@@ -1152,6 +1523,7 @@ export class SessionStore {
       usage: null,
       // Changes are per-session and per-turn; clear until this session reports.
       changes: null,
+      changesHistory: [],
       // Checkpoints are per-session; clear until re-fetched for the new session.
       checkpoints: [],
     });
@@ -1164,7 +1536,45 @@ export class SessionStore {
 
   private set(next: Partial<AppState>): void {
     this.state = { ...this.state, ...next };
-    for (const l of this.listeners) l();
+    // Streaming events can update the store several times in one transport
+    // tick (draft text, tool state, working label). Delay only while a turn is
+    // active so React subscribers repaint at most once per frame; lifecycle and
+    // completed-turn updates remain synchronous.
+    if (this.state.working) {
+      this.scheduleNotify();
+      return;
+    }
+    this.flushNotify();
+  }
+
+  private scheduleNotify(): void {
+    if (this.notifyPending) return;
+    this.notifyPending = true;
+    const callback = () => {
+      this.notifyPending = false;
+      this.notifyHandle = null;
+      for (const listener of this.listeners) listener();
+    };
+    if (typeof globalThis.requestAnimationFrame === "function") {
+      this.notifyHandle = globalThis.requestAnimationFrame(callback);
+    } else {
+      this.notifyHandle = setTimeout(callback, 16);
+    }
+  }
+
+  private flushNotify(): void {
+    if (!this.notifyPending) {
+      for (const listener of this.listeners) listener();
+      return;
+    }
+    const handle = this.notifyHandle;
+    this.notifyPending = false;
+    this.notifyHandle = null;
+    if (handle !== null) {
+      if (typeof globalThis.cancelAnimationFrame === "function" && typeof handle === "number") globalThis.cancelAnimationFrame(handle);
+      else clearTimeout(handle as ReturnType<typeof setTimeout>);
+    }
+    for (const listener of this.listeners) listener();
   }
 
   /**
@@ -1247,7 +1657,7 @@ export class SessionStore {
   /** Append a new queued follow-up. `id` becomes its clientMessageId once sent.
    *  A duplicate id (e.g. a doubled dispatch racing itself) is ignored rather
    *  than creating a second entry. */
-  enqueueFollowup(sessionId: string, item: { id: string; text: string; attachments?: PromptAttachment[] }, now: number): PendingFollowup {
+  enqueueFollowup(sessionId: string, item: { id: string; text: string; attachments?: PromptAttachment[]; scheduledAutomationId?: string }, now: number): PendingFollowup {
     const list = this.getFollowups(sessionId);
     const existing = list.find((f) => f.id === item.id);
     if (existing) return existing;
@@ -1259,9 +1669,51 @@ export class SessionStore {
       createdAt: now,
       updatedAt: now,
       version: 1,
+      scheduledAutomationId: item.scheduledAutomationId,
     };
     this.setFollowupsFor(sessionId, [...list, created]);
     return created;
+  }
+
+  /** Record a message scheduled for later (long-press Send → ScheduleSheet) as
+   *  a queue row so it's visible next to the composer with its fire time. The
+   *  control-plane automation does the actual delivering; the row is purely
+   *  informational + cancellable (status "scheduled" is never picked up by the
+   *  turn-end drain). The automation id doubles as the row id, so cancelling the
+   *  row cancels the automation and pruneScheduledFollowups can drop rows whose
+   *  automation has fired/gone. A duplicate id is ignored, matching
+   *  enqueueFollowup. */
+  enqueueScheduledFollowup(sessionId: string, item: { id: string; text: string; scheduledAt: number; scheduledAutomationId: string }, now: number): PendingFollowup {
+    const list = this.getFollowups(sessionId);
+    const existing = list.find((f) => f.id === item.id);
+    if (existing) return existing;
+    const created: PendingFollowup = {
+      id: item.id,
+      text: item.text,
+      status: "scheduled",
+      createdAt: now,
+      updatedAt: now,
+      version: 1,
+      scheduledAt: item.scheduledAt,
+      scheduledAutomationId: item.scheduledAutomationId,
+    };
+    this.setFollowupsFor(sessionId, [...list, created]);
+    return created;
+  }
+
+  /** Record the control-plane automation that mirrors a queued follow-up (the
+   *  persistence backstop). Only applies while the item is still queued — an
+   *  item already dispatched/sent no longer needs the backstop, so the caller
+   *  (AppController) cancels the automation when this returns false. */
+  attachFollowupAutomation(sessionId: string, id: string, automationId: string): boolean {
+    const list = this.getFollowups(sessionId);
+    const idx = list.findIndex((f) => f.id === id);
+    if (idx < 0 || list[idx]!.status !== "queued") return false;
+    const updated: PendingFollowup = { ...list[idx]!, scheduledAutomationId: automationId };
+    const next = list.slice();
+    next[idx] = updated;
+    this.setFollowupsFor(sessionId, next);
+    return true;
   }
 
   /**
@@ -1287,21 +1739,49 @@ export class SessionStore {
     const item = list[idx]!;
     if (item.status !== "queued") return { ok: false, reason: "not_queued" };
     if (item.version !== expectedVersion) return { ok: false, reason: "stale" };
-    const updated: PendingFollowup = { ...item, text: patch.text, attachments: patch.attachments, version: item.version + 1, updatedAt: now };
+    const updated: PendingFollowup = { ...item, text: patch.text, attachments: patch.attachments, version: item.version + 1, updatedAt: now, scheduledAutomationId: undefined };
     const next = list.slice();
     next[idx] = updated;
     this.setFollowupsFor(sessionId, next);
     return { ok: true, item: updated };
   }
 
-  /** Remove a still-queued item. No-op (returns false) once it's dispatched —
+  /** Remove a still-queued item — or a scheduled-message row (its automation
+   *  gets cancelled by the caller). No-op (returns false) once it's dispatched —
    *  removing something already sending/sent can't change what the agent
    *  receives, and would desync the visible queue from reality. */
   removeFollowup(sessionId: string, id: string): boolean {
     const list = this.getFollowups(sessionId);
     const item = list.find((f) => f.id === id);
-    if (!item || item.status !== "queued") return false;
+    if (!item || (item.status !== "queued" && item.status !== "scheduled")) return false;
     this.setFollowupsFor(sessionId, list.filter((f) => f.id !== id));
+    return true;
+  }
+
+  /** Drop scheduled-message rows whose control-plane automation no longer
+   *  exists — it fired (and is being/been delivered), was cancelled from
+   *  another device, or the run failed. Keeps the queue's "scheduled" entries
+   *  honest once the message is no longer pending. Only touches rows with status
+   *  "scheduled"; queued follow-ups are left alone. */
+  pruneScheduledFollowups(sessionId: string, keepIds: ReadonlySet<string>): void {
+    const list = this.getFollowups(sessionId);
+    const next = list.filter((f) => f.status !== "scheduled" || (f.scheduledAutomationId ? keepIds.has(f.scheduledAutomationId) : false));
+    if (next.length === list.length) return;
+    this.setFollowupsFor(sessionId, next);
+  }
+
+  /** Move a scheduled-message row to a new fire time. The caller keeps the
+   *  control-plane automation in sync; this only updates the row's timestamp.
+   *  No-op once the row is no longer "scheduled" (the automation already fired,
+   *  or was cancelled). */
+  rescheduleFollowup(sessionId: string, id: string, scheduledAt: number, now: number): boolean {
+    const list = this.getFollowups(sessionId);
+    const idx = list.findIndex((f) => f.id === id);
+    if (idx < 0 || list[idx]!.status !== "scheduled") return false;
+    const updated: PendingFollowup = { ...list[idx]!, scheduledAt, updatedAt: now, version: list[idx]!.version + 1 };
+    const next = list.slice();
+    next[idx] = updated;
+    this.setFollowupsFor(sessionId, next);
     return true;
   }
 
@@ -1375,7 +1855,22 @@ export class SessionStore {
   }
 
   setStatus(status: ConnectionStatus): void {
-    if (status !== this.state.status) this.set({ status });
+    if (status === this.state.status) return;
+    const currentNodeId = this.state.currentNodeId;
+    // The live transport is more authoritative for the selected node than a
+    // possibly-racing /nodes snapshot. In particular, first install can fetch
+    // the registry while the relay's online write is still in flight; once this
+    // socket reaches online, paint the node online immediately rather than
+    // leaving it grey until the user manually re-selects it.
+    // Only the positive signal is authoritative: `offline` can also mean this
+    // browser intentionally closed its transport while switching nodes, which
+    // says nothing about whether the old node daemon is still connected.
+    this.set({
+      status,
+      ...(currentNodeId && status === "online"
+        ? { nodes: this.state.nodes.map((node) => node.id === currentNodeId ? { ...node, online: true } : node) }
+        : {}),
+    });
   }
 
   /** Reflect whether a control-plane session token is held. Drives the reactive
@@ -1386,7 +1881,15 @@ export class SessionStore {
   }
 
   setNodes(nodes: AccountNode[]): void {
-    this.set({ nodes });
+    // A control-plane list can race just behind the relay connection that made
+    // the current transport online. Preserve the stronger live signal so a late
+    // `{ online:false }` response cannot regress the selected node's dot.
+    const currentNodeId = this.state.currentNodeId;
+    this.set({
+      nodes: currentNodeId && this.state.status === "online"
+        ? nodes.map((node) => node.id === currentNodeId ? { ...node, online: true } : node)
+        : nodes,
+    });
   }
 
   /**
@@ -1401,12 +1904,15 @@ export class SessionStore {
    * just because the row object was rebuilt from scratch.
    */
   setSessions(list: unknown): void {
-    const sessions = normalizeSessions(list, this.state.sessions);
+    const sessions = this.withoutRecentlyDeleted(normalizeSessions(list, this.state.sessions));
+    const ids = new Set(sessions.map((s) => s.sessionId));
+    const pending = this.state.sessions.filter((s) => s.pendingLaunch && !ids.has(s.sessionId));
+    const merged = [...pending, ...sessions];
     const activeId = this.state.activeSessionId;
     this.set({
       sessions: activeId
-        ? sessions.map((s) => (s.sessionId === activeId ? { ...s, lastSeenAt: Date.now() } : s))
-        : sessions,
+        ? merged.map((s) => (s.sessionId === activeId ? { ...s, lastSeenAt: Date.now() } : s))
+        : merged,
     });
   }
 
@@ -1419,7 +1925,7 @@ export class SessionStore {
    */
   seedSessions(list: unknown): void {
     if (this.state.sessions.length > 0) return;
-    const sessions = normalizeSessions(list, this.state.sessions);
+    const sessions = this.withoutRecentlyDeleted(normalizeSessions(list, this.state.sessions));
     if (sessions.length === 0) return;
     this.set({ sessions });
   }
@@ -1449,9 +1955,11 @@ export class SessionStore {
       opening: false,
       approvals: [],
       questions: [],
+      turnAttentions: [],
       // Per-session display state must not blend across nodes either.
       usage: null,
       changes: null,
+      changesHistory: [],
       checkpoints: [],
       // Advertised commands are per session on the previous node; never carry
       // them across a node switch.
@@ -1462,6 +1970,12 @@ export class SessionStore {
       followupsBySession: {},
       error: null,
       notice: null,
+      // First-run model-auth prompt is scoped to a specific runner; a node
+      // switch means it no longer applies to whatever we're now looking at.
+      needsModelAuth: null,
+      // A node switch (incl. binding a freshly-launched ephemeral runner) means
+      // the "launch this runner on first send" intent is spent/irrelevant.
+      draftEphemeralConfig: null,
       // Per-node settings (name, default agent/model, GitHub prompt, sync
       // config, …) must never survive a switch — otherwise a still-editable
       // form can keep showing the *previous* node's settings under the
@@ -1478,6 +1992,18 @@ export class SessionStore {
   /** Show (or clear, with "") a transient success/confirmation banner. */
   setNotice(message: string): void {
     this.set({ notice: message });
+  }
+
+  /** Optimistically mark the node as updating the moment the user taps the
+   *  banner button, so it can't be tapped twice while the request is in flight. */
+  setNodeUpdating(value: boolean): void {
+    this.set({ nodeUpdating: value });
+  }
+
+  /** Set (or clear, with null) the first-run "sign in to your model" prompt for a
+   *  freshly-launched ephemeral runner. See `AppState.needsModelAuth`. */
+  setNeedsModelAuth(v: { nodeId: string; provider: string; reason?: string } | null): void {
+    this.set({ needsModelAuth: v });
   }
 
   /** Append a local system message to the active transcript (client-only, not
@@ -1501,6 +2027,11 @@ export class SessionStore {
   }
 
   /** Repo chosen for the next new session (cleared once the session is created). */
+  /** Pick (or clear, with null) the ephemeral runner the next new session will
+   *  launch on its first message. See `AppState.draftEphemeralConfig`. */
+  setDraftEphemeralConfig(config: EphemeralNodeConfig | null): void {
+    this.set({ draftEphemeralConfig: config });
+  }
   setDraftRepo(slug: string | null): void {
     this.set({ draftRepo: slug });
   }
@@ -1524,6 +2055,12 @@ export class SessionStore {
   /** Sandbox tier chosen for the next new session (null = use the node default). */
   setDraftSandbox(tier: SandboxTier | null): void {
     this.set({ draftSandbox: tier });
+  }
+
+  /** Record (or clear) the user's confirm-to-continue acknowledgement for the
+   *  next new session's Effective Session Contract preview. */
+  setDraftAcknowledgeReducedProtections(value: boolean): void {
+    this.set({ draftAcknowledgeReducedProtections: value });
   }
 
   /** Remember the user's last-used model so the next fresh draft defaults to it
@@ -1600,18 +2137,35 @@ export class SessionStore {
   /** Optimistically reflect an agent pick before runtime.updated arrives. */
   setSelectedAgentLocal(id: string): void {
     const rt = this.state.runtimes.find((a) => a.id === id);
-    const next: Partial<AppState> = { selectedAgentId: id, currentAgentName: agentLabel(rt) || this.state.currentAgentName };
-    // Drop the outgoing agent's models the instant the pick is made — otherwise
-    // the model pill/picker keep showing that agent's models (e.g. Codex's GPT)
-    // in the window before this agent's models.list refresh (driven by the
-    // node's runtime.updated → listModels) lands. Only when we *know* the held
-    // list is for a different runtime; a null (unknown) id is left for the
-    // refresh to overwrite so we don't needlessly blank a still-valid pill.
+    // A prior agent's reduced-protections acknowledgement must never silently
+    // carry over to a different one — always re-confirm on switch.
+    const next: Partial<AppState> = {
+      selectedAgentId: id,
+      currentAgentName: agentLabel(rt) || this.state.currentAgentName,
+      draftAcknowledgeReducedProtections: false,
+    };
+    // Only touch the model list when the held one belongs to a *different*
+    // runtime; a null (unknown) id is left for the refresh to overwrite so we
+    // don't needlessly blank a still-valid pill.
     if (this.state.modelsRuntimeId != null && this.state.modelsRuntimeId !== id) {
-      next.models = [];
-      next.modelsRuntimeId = null;
-      next.currentModel = null;
-      next.currentModelId = null;
+      const cached = this.modelsByRuntime.get(id);
+      if (cached) {
+        // Switching back to an agent already viewed this session: repaint its
+        // last-known models instantly so the pill/picker never flash empty. The
+        // node's fresh models.list still refines this (stale-while-revalidate).
+        next.models = cached.models;
+        next.modelsRuntimeId = id;
+        next.currentModel = cached.currentModel;
+        next.currentModelId = cached.currentModel?.id ?? null;
+      } else {
+        // First switch to this agent — drop the outgoing agent's models so the
+        // pill/picker don't keep showing them (e.g. Codex's GPT under Claude) in
+        // the window before this agent's models.list refresh lands.
+        next.models = [];
+        next.modelsRuntimeId = null;
+        next.currentModel = null;
+        next.currentModelId = null;
+      }
     }
     this.set(next);
   }
@@ -1642,6 +2196,7 @@ export class SessionStore {
       opening: false,
       approvals: [],
       questions: [],
+      turnAttentions: [],
       // A fresh draft must not keep showing whichever agent the *previously
       // viewed* session happened to be running — currentAgentName/selectedAgentId
       // otherwise just carry over from that session's applyHistory (or a stale
@@ -1656,8 +2211,72 @@ export class SessionStore {
       // session has done anything at all.
       usage: null,
       changes: null,
+      changesHistory: [],
       checkpoints: [],
+      // A brand-new draft hasn't picked an ephemeral runner yet.
+      draftEphemeralConfig: null,
     });
+  }
+
+  /** Materialize a first-message draft in the sidebar before its node is ready.
+   *  Ephemeral cold starts can take minutes; giving the draft a stable local id
+   *  lets the user leave it running and start another session without discarding
+   *  the launch. The controller replaces this row with the node's canonical id
+   *  as soon as session.new completes. */
+  persistPendingSession(sessionId: string, name: string, activate = true): void {
+    const existing = this.state.sessions.find((s) => s.sessionId === sessionId);
+    const row: SessionSummary = {
+      ...existing,
+      sessionId,
+      name: name.trim() || existing?.name || "New session",
+      status: existing?.status === "failed" ? "failed" : "working",
+      pendingLaunch: true,
+      updatedAt: existing?.updatedAt || Date.now(),
+    };
+    this.set({
+      ...(activate ? { activeSessionId: sessionId, activeTitle: row.name } : {}),
+      sessions: [row, ...this.state.sessions.filter((s) => s.sessionId !== sessionId)],
+    });
+  }
+
+  retryPendingSession(sessionId: string): void {
+    this.set({ sessions: this.state.sessions.map((s) => s.sessionId === sessionId ? { ...s, status: "working", updatedAt: Date.now() } : s) });
+  }
+
+  dismissPendingSession(sessionId: string): void {
+    this.set({
+      activeSessionId: this.state.activeSessionId === sessionId ? null : this.state.activeSessionId,
+      sessions: this.state.sessions.filter((s) => s.sessionId !== sessionId),
+    });
+  }
+
+  /** Add provider routing to a pending row once provisioning returns a node id. */
+  bindPendingSessionNode(sessionId: string, nodeId: string): void {
+    this.set({ sessions: this.state.sessions.map((s) => s.sessionId === sessionId ? { ...s, nodeId } : s) });
+  }
+
+  /** Replace a cold-start placeholder with the node's canonical session. */
+  completePendingSession(pendingId: string, sessionId: string, nodeId: string): void {
+    const pending = this.state.sessions.find((s) => s.sessionId === pendingId);
+    const row: SessionSummary = {
+      ...pending,
+      sessionId,
+      nodeId,
+      name: pending?.name || "New session",
+      status: "working",
+      pendingLaunch: false,
+      updatedAt: Date.now(),
+    };
+    this.set({
+      activeSessionId: this.state.activeSessionId === pendingId ? sessionId : this.state.activeSessionId,
+      sessions: [row, ...this.state.sessions.filter((s) => s.sessionId !== pendingId && s.sessionId !== sessionId)],
+    });
+  }
+
+  /** Keep a failed cold start visible and clearly settled so its setup log can
+   *  still be opened, instead of leaving an endless working spinner. */
+  failPendingSession(sessionId: string): void {
+    this.set({ sessions: this.state.sessions.map((s) => s.sessionId === sessionId ? { ...s, status: "failed" } : s) });
   }
 
   setActiveTitle(name: string): void {
@@ -1669,9 +2288,45 @@ export class SessionStore {
     this.set({ sessions: this.state.sessions.map((s) => (s.sessionId === sessionId ? { ...s, name } : s)) });
   }
 
+  /** Restore deletion guards persisted by a view layer across a PWA reload. */
+  seedDeletedSessionTombstones(value: unknown): void {
+    if (!value || typeof value !== "object") return;
+    for (const [id, rawAt] of Object.entries(value as Record<string, unknown>)) {
+      const at = Number(rawAt);
+      if (id && Number.isFinite(at)) this.recentlyDeleted.set(id, at);
+    }
+    this.pruneDeletedSessionTombstones();
+  }
+
+  /** Serializable deletion guards for the view layer's local durable cache. */
+  deletedSessionTombstones(): Record<string, number> {
+    this.pruneDeletedSessionTombstones();
+    return Object.fromEntries(this.recentlyDeleted);
+  }
+
   /** Optimistically drop a session-list row before the node's fresh list arrives. */
   removeSessionLocal(sessionId: string): void {
+    // Tombstone the id so a full-list refresh that still predates the deletion
+    // (the control-plane index lags the node's debounced advert) can't add it
+    // back — see setSessions / recentlyDeleted.
+    this.recentlyDeleted.set(sessionId, Date.now());
     this.set({ sessions: this.state.sessions.filter((s) => s.sessionId !== sessionId) });
+  }
+
+  private pruneDeletedSessionTombstones(): void {
+    const now = Date.now();
+    for (const [id, at] of this.recentlyDeleted) {
+      if (now - at > SessionStore.DELETE_TOMBSTONE_MS) this.recentlyDeleted.delete(id);
+    }
+  }
+
+  /** Drop rows the user just deleted, pruning expired tombstones as we go, so a
+   *  stale authoritative list can't resurrect a just-deleted session. */
+  private withoutRecentlyDeleted(sessions: SessionSummary[]): SessionSummary[] {
+    if (this.recentlyDeleted.size === 0) return sessions;
+    this.pruneDeletedSessionTombstones();
+    if (this.recentlyDeleted.size === 0) return sessions;
+    return sessions.filter((s) => !this.recentlyDeleted.has(s.sessionId));
   }
 
   /** Insert or merge a single session-list row (from a `session.created`
@@ -1787,6 +2442,7 @@ export class SessionStore {
         const sid = String(e.sessionId || e.id || "");
         if (sid) {
           const known = this.state.sessions.find((s) => s.sessionId === sid);
+          const sessionState = normalizeSessionState(e.sessionState ?? e.bivySession?.state);
           this.upsertSession({
             sessionId: sid,
             path: e.sessionFile || e.path,
@@ -1810,8 +2466,9 @@ export class SessionStore {
             // very bottom of the sidebar (0 < every real timestamp) until the next
             // full sessions.list refresh caught up (see SessionList's toMs/sort).
             updatedAt: e.updatedAt || e.modified || (known ? undefined : Date.now()),
-            status: "idle",
-            needsAction: false,
+            status: sessionStatusFromState(sessionState) ?? "idle",
+            sessionState,
+            needsAction: sessionState?.displayStatus === "needs_attention" ? true : false,
           });
         }
         // Fold the live runtime's refined capabilities (e.g. modelSelection from
@@ -1821,6 +2478,21 @@ export class SessionStore {
         this.mergeRuntimeCapabilities(e.runtimeId, e.capabilities);
         if (sid) this.setSessionCommands(sid, e.capabilities);
         this.onSessionCreatedElsewhere?.();
+        return;
+      }
+      case "session.state": {
+        const e = event as any;
+        const sid = String(e.sessionId || "");
+        const sessionState = normalizeSessionState(e.state ?? e.sessionState);
+        if (!sid || !sessionState) return;
+        this.updateSessionRow(sid, {
+          sessionState,
+          status: sessionStatusFromState(sessionState),
+          needsAction: sessionState.displayStatus === "needs_attention",
+        });
+        if (sid === this.state.activeSessionId) {
+          this.set({ working: sessionState.agent === "working", ...(sessionState.agent !== "working" ? { workingLabel: "" } : {}) });
+        }
         return;
       }
       case "session.capabilities": {
@@ -1878,6 +2550,9 @@ export class SessionStore {
         const e = event as any;
         const sid = String(e.sessionId || "");
         const file = e.sessionFile as string | undefined;
+        // Deletions initiated by another client/prune need the same stale-list
+        // protection as this client's optimistic delete.
+        if (sid) this.recentlyDeleted.set(sid, Date.now());
         this.set({
           sessions: this.state.sessions.filter(
             (s) => s.sessionId !== sid && (!file || s.path !== file),
@@ -1885,6 +2560,7 @@ export class SessionStore {
         });
         if (sid) this.dropSessionCommands(sid);
         if (sid) this.dropFollowups(sid);
+        if (sid) this.knownAgentAttachmentsBySession.delete(sid);
         if (sid && sid === this.state.activeSessionId) this.resetActiveSession();
         return;
       }
@@ -1897,6 +2573,26 @@ export class SessionStore {
             ),
           });
         }
+        return;
+      }
+      case "node.update": {
+        // Authoritative: `latest` present → node is behind (show banner);
+        // absent → up to date, so clear the banner and any "Updating…" state
+        // (this is how it clears after an update lands and the socket reconnects).
+        const e = event as any;
+        const current = typeof e.current === "string" ? e.current : "";
+        const latest = typeof e.latest === "string" ? e.latest : "";
+        if (current && latest) this.set({ nodeUpdate: { current, latest } });
+        else this.set({ nodeUpdate: null, nodeUpdating: false });
+        return;
+      }
+      case "node.update.result": {
+        // The update kicked off (node is restarting) → keep the "Updating…"
+        // state; the banner clears when the new build reconnects and no longer
+        // reports an update. A failure to even start → surface it and re-enable
+        // the button so the user can retry or update manually.
+        const e = event as any;
+        if (e.ok === false) this.set({ nodeUpdating: false, error: typeof e.error === "string" ? e.error : "Couldn't start the update on this node." });
         return;
       }
       case "session.notice": {
@@ -2023,6 +2719,25 @@ export class SessionStore {
         }
         return;
       }
+      case "session.failed": {
+        const e = event as any;
+        if (e.sessionId) this.updateSessionRow(e.sessionId, { status: "failed", needsAction: false, failedAt: Number(e.failedAt) || Date.now(), updatedAt: Date.now() });
+        return;
+      }
+      case "session.auth_required": {
+        // The node reported an auth failure for `provider` (no credential, or an
+        // expired/invalid one that 401'd). Raise the "Sign in to your model" sheet
+        // targeted at that provider — the same one the inline error bubble above
+        // describes — so the user can re-authenticate in place. Focus-gated like
+        // session.error so a background session doesn't hijack the sheet.
+        const e = event as any;
+        if (this.isForeignSessionEvent(e.sessionId)) return;
+        const provider = String(e.provider || "");
+        if (provider && this.state.currentNodeId) {
+          this.setNeedsModelAuth({ nodeId: this.state.currentNodeId, provider, reason: String(e.reason || "") });
+        }
+        return;
+      }
       case "approval.created": {
         const approval = (event as any).approval || event;
         // Needing a response is one of the few things worth reordering the
@@ -2061,7 +2776,7 @@ export class SessionStore {
         // Same reasoning as approval.created above: a clarifying question is a
         // "needs your response" moment worth surfacing at the top of the list.
         this.updateSessionRow(e.sessionId, { status: "needs_action", needsAction: true, updatedAt: Date.now() });
-        const request: UserQuestionRequest = { id, sessionId: e.sessionId ? String(e.sessionId) : undefined, questions };
+        const request: UserQuestionRequest = { id, sessionId: e.sessionId ? String(e.sessionId) : undefined, questions, createdAt: Number(e.createdAt) || Date.now() };
         this.set({ questions: [...this.state.questions.filter((q) => q.id !== id), request] });
         return;
       }
@@ -2074,6 +2789,29 @@ export class SessionStore {
         if (resolved?.sessionId && !this.sessionStillNeedsAction(resolved.sessionId)) {
           this.updateSessionRow(resolved.sessionId, { status: "idle", needsAction: false });
         }
+        return;
+      }
+      case "session.turn_attention": {
+        const e = event as any;
+        const sessionId = String(e.sessionId || "");
+        const trigger = e.trigger === "wedged" ? "wedged" : e.trigger === "stalled" ? "stalled" : undefined;
+        if (!sessionId || !trigger) return;
+        const request: TurnAttentionRequest = {
+          sessionId,
+          trigger,
+          idleMs: Math.max(0, Number(e.idleMs) || 0),
+          at: Number(e.at) || Date.now(),
+          message: String(e.message || "This turn may be stuck. Stop it or keep waiting?"),
+        };
+        this.set({ turnAttentions: [...this.state.turnAttentions.filter((a) => a.sessionId !== sessionId), request] });
+        this.updateSessionRow(sessionId, { status: "needs_action", needsAction: true, updatedAt: Date.now() });
+        return;
+      }
+      case "session.turn_attention.resolved": {
+        const sessionId = String((event as any).sessionId || "");
+        if (!sessionId) return;
+        this.set({ turnAttentions: this.state.turnAttentions.filter((a) => a.sessionId !== sessionId) });
+        if (!this.sessionStillNeedsAction(sessionId)) this.updateSessionRow(sessionId, { status: "working", needsAction: false });
         return;
       }
       case "models.list": {
@@ -2117,11 +2855,16 @@ export class SessionStore {
           const stillValid = configuredModels.find((m) => sameModel(m, this.state.currentModel));
           current = flagged ?? stillValid ?? configuredModels[0]!;
         }
+        const listRuntimeId = e.runtimeId != null ? String(e.runtimeId) : null;
+        // Remember this runtime's list so a later switch back to it repaints
+        // instantly (see setSelectedAgentLocal). Keyed by the runtime the node
+        // resolved the list for, never the app's currently-selected agent.
+        if (listRuntimeId) this.modelsByRuntime.set(listRuntimeId, { models, currentModel: current });
         this.set({
           models,
           // The runtime this list was resolved for (undefined from an older node
           // → null "unknown", which seedDraftAgentModel treats as "trust it").
-          modelsRuntimeId: e.runtimeId != null ? String(e.runtimeId) : null,
+          modelsRuntimeId: listRuntimeId,
           currentModel: current,
           currentModelId: current?.id ?? null,
           ...(e.thinking ? { thinking: normalizeThinking(e.thinking) } : {}),
@@ -2161,10 +2904,17 @@ export class SessionStore {
         // not here — see AppController.maybeRestoreDraftAgent.
         const cur = e.current || runtimes.find((a) => a.id === (this.state.selectedAgentId || e.activeAgent));
         const selectedAgentId = cur?.id || e.activeAgent || this.state.selectedAgentId;
+        // runtimes.list is also requested whenever the agent sheet opens. Its
+        // `current` runtime is the default for the *next* session, not the owner
+        // of the session on screen. Keep the pill tied to activeRuntimeId just
+        // like the sheet checkmark; on a draft both use selectedAgentId instead.
+        const displayedRuntime = this.state.activeSessionId
+          ? runtimes.find((a) => a.id === this.state.activeRuntimeId)
+          : runtimes.find((a) => a.id === selectedAgentId) || cur;
         this.set({
           runtimes,
           selectedAgentId,
-          currentAgentName: agentLabel(runtimes.find((a) => a.id === selectedAgentId) || cur) || this.state.currentAgentName,
+          currentAgentName: agentLabel(displayedRuntime) || this.state.currentAgentName,
           ...(e.type === "runtime.updated" ? { installingRuntimeId: null } : {}),
         });
         return;
@@ -2192,7 +2942,28 @@ export class SessionStore {
           repos: Array.isArray(e.repos) ? (e.repos as RepoInfo[]) : [],
           reposAuthed: e.authed !== false,
           reposError: e.error || null,
+          reposReason: e.reason === "gh-unauthed" || e.reason === "no-token" ? e.reason : null,
           reposLoading: false,
+        });
+        return;
+      }
+      case "activation.readiness": {
+        const e = event as any;
+        if (e.credential && e.repository) this.set({ activationReadiness: { credential: e.credential, repository: e.repository } });
+        return;
+      }
+      case "github.connect.status": {
+        const e = event as any;
+        const known = ["waiting", "connected", "expired", "denied", "error", "unconfigured", "idle"] as const;
+        const status = (known as readonly string[]).includes(e.status) ? (e.status as GithubConnectState["status"]) : "idle";
+        this.set({
+          githubConnect: {
+            status,
+            userCode: typeof e.userCode === "string" ? e.userCode : undefined,
+            verificationUri: typeof e.verificationUri === "string" ? e.verificationUri : undefined,
+            intervalMs: typeof e.intervalMs === "number" ? e.intervalMs : undefined,
+            error: typeof e.error === "string" ? e.error : undefined,
+          },
         });
         return;
       }
@@ -2212,10 +2983,32 @@ export class SessionStore {
         const providers = Array.isArray(e.providers) ? (e.providers as ProviderInfo[]) : [];
         // A configured provider we were managing → refresh its auth detail too.
         this.set({ providers });
+        // The prompt is satisfied once the *targeted* provider becomes configured
+        // (login completed here, or a peer/hosted-escrow sync landed the vault).
+        // Check the specific provider, not just "any provider configured": a
+        // mid-session prompt for e.g. openai-codex must not be dismissed just
+        // because anthropic is already connected.
+        const pendingAuth = this.state.needsModelAuth;
+        if (pendingAuth) {
+          const alias = modelAuthApiKeyProvider(pendingAuth.provider);
+          if (providers.some((p) => (p.id === pendingAuth.provider || p.id === alias) && p.configured)) {
+            this.set({ needsModelAuth: null });
+          }
+        }
         return;
       }
       case "provider.auth": {
         this.set({ providerAuth: event as unknown as ProviderAuth });
+        return;
+      }
+      case "credentials.records": {
+        const e = event as any;
+        this.set({ credentialRecords: Array.isArray(e.records) ? (e.records as CredentialRecordSummary[]) : [] });
+        return;
+      }
+      case "credentials.presets": {
+        const e = event as any;
+        this.set({ credentialPresets: (e.presets ?? {}) as CredentialPresetsView });
         return;
       }
       case "models.custom.list": {
@@ -2355,9 +3148,13 @@ export class SessionStore {
           // (see closeRunningTools' comment), so it doubles as "posed its final
           // message" even for a turn that ended in an error with no reply.
           const justFinished = innerKind === "agent_end";
+          const sessionState = normalizeSessionState(e.state ?? e.sessionState);
           this.updateSessionRow(sid, {
-            status: justFinished ? "idle" : "working",
-            needsAction: false,
+            // Phase-3 nodes own this projection. Fall back to the inner-event
+            // heuristic only for older nodes that don't send explicit axes.
+            status: sessionStatusFromState(sessionState) ?? (justFinished ? "idle" : "working"),
+            sessionState,
+            needsAction: sessionState ? sessionState.agent === "awaiting-input" : false,
             ...(justFinished ? { updatedAt: Date.now(), finishedAt: Date.now() } : {}),
           });
         }
@@ -2370,8 +3167,36 @@ export class SessionStore {
           // session.error case attributes it to *this* chat and renders it inline
           // rather than as a disconnected global toast.
           const innerWithSid = sid && !(inner as { sessionId?: unknown }).sessionId ? { ...inner, sessionId: sid } : inner;
-          this.apply(innerWithSid);
+          const seq = (e as { seq?: unknown }).seq;
+          // Sequenced stream (Phase 2): reassemble in order for the active session
+          // so a frame lost on an uplink blip is detected (a seq gap) and replayed
+          // instead of silently dropped. An unsequenced event (older node) has no
+          // `seq` and passes straight through.
+          if (typeof seq === "number" && sid) {
+            this.trackSeqStream(sid, (e as { epoch?: unknown }).epoch);
+            const res = this.seqReassembler.accept(seq, innerWithSid);
+            for (const ready of res.ready) this.apply(ready as ServerEvent);
+            if (res.overflow) this.requestFreshHistory?.();
+            else if (res.gapFrom !== undefined) this.requestReplay?.(sid, res.gapFrom);
+          } else {
+            this.apply(innerWithSid);
+          }
         }
+        return;
+      }
+      case "session.replay": {
+        // The node's answer to requestReplay: the missed session.event envelopes
+        // (re-fed through this reducer so the reassembler orders + dedups them), or
+        // mode:"reset" when the ring evicted past our cursor → full history resync.
+        const e = event as any;
+        const sid = e.sessionId as string | undefined;
+        if (sid && this.state.activeSessionId && sid !== this.state.activeSessionId) return;
+        if (e.mode === "reset") {
+          this.requestFreshHistory?.();
+          return;
+        }
+        const events: any[] = Array.isArray(e.events) ? e.events : [];
+        for (const ev of events) this.apply(ev as ServerEvent);
         return;
       }
       case "session.usage": {
@@ -2384,6 +3209,11 @@ export class SessionStore {
       case "node.stats": {
         const stats = normalizeNodeStats((event as any).stats);
         if (stats) this.set({ nodeStats: stats });
+        return;
+      }
+      case "capabilities": {
+        const capabilities = normalizeCapabilitiesSnapshot((event as any).capabilities);
+        if (capabilities) this.set({ capabilities });
         return;
       }
       case "session.warning": {
@@ -2399,7 +3229,12 @@ export class SessionStore {
         if (this.isForeignSessionEvent(e.sessionId)) return;
         const files: HarnessFileChange[] = Array.isArray(e.changes) ? e.changes : [];
         if (files.length === 0) { this.set({ changes: null }); return; }
-        this.set({ changes: { before: e.before ? String(e.before) : undefined, after: String(e.after ?? ""), files } });
+        const turn: TurnChanges = { before: e.before ? String(e.before) : undefined, after: String(e.after ?? ""), files };
+        // Also append to the durable per-session history the sheet reads —
+        // `changes` itself is retired the instant the next turn starts (see the
+        // "new turn starting" handler above), so it can't back a "see every
+        // turn's changes" view on its own.
+        this.set({ changes: turn, changesHistory: [...this.state.changesHistory, { ...turn, id: nextId(), at: Date.now() }] });
         return;
       }
       case "session.rewound": {
@@ -2477,6 +3312,10 @@ export class SessionStore {
     // so a reload / another device rehydrates thumbnails by hash instead of a bare
     // "[Image attachment: …]" placeholder. Must precede withCachedAttachments.
     if (Array.isArray(e.attachmentRefs)) this.foldAttachmentRefs(e.attachmentRefs as Array<[string, AttachmentRef[]]>);
+    // Durable url→ref map for remote markdown images the node has already
+    // resolved (see resolveInlineImages on the node) — must also precede the
+    // render below so a reload shows resolved images immediately.
+    if (Array.isArray(e.inlineImageRefs)) this.foldInlineImageRefs(e.inlineImageRefs as Array<[string, AttachmentRef]>);
     const incoming: any[] = Array.isArray(e.messages) ? e.messages : [];
     const prev = sessionId ? this.historyRaw.get(sessionId) : undefined;
     const isAppend = e.mode === "append" && prev && (e.baseCount === undefined || e.baseCount === prev.count);
@@ -2504,7 +3343,14 @@ export class SessionStore {
       if (historyHash) this.onHistoryPersist?.(sessionId, full, count, historyHash);
     }
     const rendered = this.withCachedAttachments(renderHistory(full));
-    if (sessionId) this.cacheTranscript(sessionId, rendered);
+    // Record the agent attachments this snapshot carries, then re-apply any it
+    // dropped: agent attachments are append-only, so a snapshot missing one the
+    // session already showed (a resume-race reconcile, or a transcript built from
+    // raw runtime messages without the outbound-attachment overlay) is lossy and
+    // must not erase the chip.
+    this.rememberAgentAttachments(sessionId, rendered);
+    const withAttachments = this.withInlineImageRefs(this.withStickyAgentAttachments(sessionId, rendered));
+    if (sessionId) this.cacheTranscript(sessionId, withAttachments);
     // A history snapshot can arrive for a session the user has already switched
     // away from (slow radio + fast taps): its request was in flight when they
     // opened another. Refresh that session's caches above, but never let it
@@ -2528,6 +3374,14 @@ export class SessionStore {
     if (!adopt) return;
     this.draft = freshDraft();
     this.deferredHistory = null;
+    const sessionState = normalizeSessionState(e.sessionState ?? e.bivySession?.state);
+    if (sessionId && sessionState) {
+      this.updateSessionRow(sessionId, {
+        sessionState,
+        status: sessionStatusFromState(sessionState),
+        needsAction: sessionState.agent === "awaiting-input",
+      });
+    }
     // Open-paint delivered; subsequent unsolicited mid-turn snapshots defer again.
     this.awaitingOpenHistory = false;
     // Keep optimistic prompts the node hasn't confirmed yet: a new session's
@@ -2539,11 +3393,20 @@ export class SessionStore {
       activeTitle: e.name || this.state.activeTitle,
       currentAgentName: e.agentName || this.state.currentAgentName,
       github: githubContext(e),
-      transcript: this.withPendingUserEntries(rendered),
-      working: Boolean(e.isStreaming),
+      transcript: this.withPendingUserEntries(withAttachments),
+      working: sessionState ? sessionState.agent === "working" : Boolean(e.isStreaming),
       opening: false,
       usage: normalizeUsage(e.usage),
     });
+    // Baseline the live-stream reassembler now that this session is focused: the
+    // transcript reflects everything through `headSeq`, so the next live event we
+    // expect is headSeq+1. Reset first when the stream epoch changed (a daemon
+    // restart) so its seq counter starting over doesn't read as a flood of
+    // duplicates (docs/session-reliability-plan.md, Phase 2).
+    if (sessionId && typeof e.headSeq === "number") {
+      this.trackSeqStream(sessionId, e.streamEpoch);
+      this.seqReassembler.baseline(e.headSeq);
+    }
   }
 
   /**
@@ -2557,6 +3420,8 @@ export class SessionStore {
     // A connection drop mid-open will never deliver the history it was waiting
     // on, so stop the spinner rather than leaving the pane blank indefinitely.
     if (this.state.opening) this.set({ opening: false });
+    // A turn cut short still shows any attachments it managed to emit.
+    this.flushPendingAgentAttachments();
     if (this.draft.finalized) return;
     this.finishDrafts();
     this.draft.finalized = true;
@@ -2578,6 +3443,101 @@ export class SessionStore {
     this.set({ transcript: [...this.state.transcript, entry] });
   }
 
+  /**
+   * Flush this turn's buffered agent attachments (see pendingAgentAttachments)
+   * onto the turn's FINAL assistant prose bubble — the last assistant text entry
+   * since the most recent user message — so the chips read as part of the reply.
+   * Falls back to a standalone entry (carrying the caption) when the turn has no
+   * prose bubble to hang them on. Idempotent: a no-op once the buffer is drained,
+   * so it's safe to call at both turn_end and agent_end. Mirrors the durable
+   * grouping renderHistory applies on reload (groupAgentAttachments).
+   */
+  private flushPendingAgentAttachments(): void {
+    const buffered = this.pendingAgentAttachments;
+    if (!buffered.length) return;
+    this.pendingAgentAttachments = [];
+    const transcript = this.state.transcript;
+    // Skip any whose bytes the transcript already carries (a reconnect/resume that
+    // re-broadcasts a live `attachment` event history already grouped in) so a
+    // replay never doubles the chip.
+    const present = this.attachmentHashesIn(transcript);
+    const fresh = buffered.filter((b) => !b.attachment.hash || !present.has(b.attachment.hash));
+    const next = this.placeAgentAttachments(transcript, fresh);
+    if (next !== transcript) this.set({ transcript: next });
+    this.rememberAgentAttachments(this.state.activeSessionId, this.state.transcript);
+  }
+
+  /** The set of attachment content hashes present anywhere in a transcript. */
+  private attachmentHashesIn(transcript: TranscriptEntry[]): Set<string> {
+    const hashes = new Set<string>();
+    for (const e of transcript) for (const a of e.attachments ?? []) if (a.hash) hashes.add(a.hash);
+    return hashes;
+  }
+
+  /** Index of the assistant prose bubble agent attachments hang on: the last
+   *  attachment-free assistant text entry since the most recent user message (the
+   *  turn's final reply). -1 when the turn has no such bubble. */
+  private agentAttachmentTarget(transcript: TranscriptEntry[]): number {
+    let turnStart = -1;
+    for (let i = transcript.length - 1; i >= 0; i--) {
+      if (transcript[i]!.role === "user") { turnStart = i; break; }
+    }
+    for (let i = transcript.length - 1; i > turnStart; i--) {
+      const e = transcript[i]!;
+      if (e.role === "assistant" && !e.tool && e.text && !(e.attachments && e.attachments.length)) return i;
+    }
+    return -1;
+  }
+
+  /** Group `items` onto the turn's final assistant bubble, or append them as their
+   *  own caption-carrying entries when the turn has no prose bubble. Returns the
+   *  same array reference unchanged when there is nothing to place. */
+  private placeAgentAttachments(
+    transcript: TranscriptEntry[],
+    items: Array<{ attachment: PromptAttachment; caption: string }>,
+  ): TranscriptEntry[] {
+    if (!items.length) return transcript;
+    const chips = items.map((b) => b.attachment);
+    const target = this.agentAttachmentTarget(transcript);
+    if (target >= 0) {
+      return transcript.map((e, i) => (i === target ? { ...e, attachments: [...(e.attachments ?? []), ...chips] } : e));
+    }
+    // No prose this turn — keep each attachment as its own entry (with caption),
+    // preserving the pre-grouping behaviour for the caption-only case.
+    return [...transcript, ...items.map((b) => ({ id: nextId(), role: "assistant" as const, text: b.caption, attachments: [b.attachment] }))];
+  }
+
+  /** Record every agent-sent attachment in a rendered transcript into the durable
+   *  per-session map, keyed by hash (append-only). Only assistant entries carry
+   *  agent attachments; user uploads live on user entries and are ignored. */
+  private rememberAgentAttachments(sessionId: string | null, transcript: TranscriptEntry[]): void {
+    if (!sessionId) return;
+    let map = this.knownAgentAttachmentsBySession.get(sessionId);
+    for (const e of transcript) {
+      if (e.role !== "assistant" || !e.attachments) continue;
+      for (const a of e.attachments) {
+        if (!a.hash) continue;
+        if (!map) { map = new Map(); this.knownAgentAttachmentsBySession.set(sessionId, map); }
+        // Caption only matters for the standalone (no-prose-in-turn) fallback; a
+        // grouped chip's entry text is the reply prose, not a caption, so default
+        // to empty rather than risk re-adding prose as a caption.
+        if (!map.has(a.hash)) map.set(a.hash, { attachment: a, caption: "" });
+      }
+    }
+  }
+
+  /** Re-apply any known agent attachment a (possibly lossy) snapshot dropped, so a
+   *  reconcile that lacks the outbound-attachment overlay can't erase a chip the
+   *  session already showed. No-op once every known hash is present. */
+  private withStickyAgentAttachments(sessionId: string | null, transcript: TranscriptEntry[]): TranscriptEntry[] {
+    if (!sessionId) return transcript;
+    const known = this.knownAgentAttachmentsBySession.get(sessionId);
+    if (!known || known.size === 0) return transcript;
+    const present = this.attachmentHashesIn(transcript);
+    const missing = [...known.values()].filter((k) => k.attachment.hash && !present.has(k.attachment.hash));
+    return this.placeAgentAttachments(transcript, missing);
+  }
+
   /** Fold a live field update (status, branch, PR link, …) onto a session-list
    *  row — drives the drawer status dot and its node/branch/PR meta line for
    *  *every* session, not just the focused one (see call sites below: status
@@ -2587,11 +3547,13 @@ export class SessionStore {
     patch: {
       status?: SessionStatus;
       needsAction?: boolean;
+      sessionState?: SessionState;
       branch?: string;
       prUrl?: string;
       prs?: PrRef[];
       updatedAt?: number;
       finishedAt?: number;
+      failedAt?: number;
     },
   ): void {
     if (!sessionId) return;
@@ -2607,12 +3569,14 @@ export class SessionStore {
       if (
         next.status !== s.status ||
         next.needsAction !== s.needsAction ||
+        JSON.stringify(next.sessionState) !== JSON.stringify(s.sessionState) ||
         next.branch !== s.branch ||
         next.prUrl !== s.prUrl ||
         JSON.stringify(next.prs) !== JSON.stringify(s.prs) ||
         next.updatedAt !== s.updatedAt ||
         next.lastSeenAt !== s.lastSeenAt ||
         next.finishedAt !== s.finishedAt
+        || next.failedAt !== s.failedAt
       ) changed = true;
       return next;
     });
@@ -2635,13 +3599,13 @@ export class SessionStore {
   }
 
   /** Whether a session still has anything outstanding that should keep its
-   *  sidebar dot on "needs your response" — a pending approval OR a pending
-   *  clarifying question. Shared by approval.resolved/removed and
-   *  session.question.resolved so resolving one kind can't clear the dot out
-   *  from under the other kind still pending on the same session (see the
-   *  regression test covering exactly that ordering in store.test.ts). */
+   *  sidebar dot on "needs your response" — a pending approval, clarifying
+   *  question, or watchdog decision. Shared by resolution handlers so resolving
+   *  one kind can't clear the dot out from under another still-pending kind. */
   private sessionStillNeedsAction(sessionId: string): boolean {
-    return this.state.approvals.some((a) => a.sessionId === sessionId) || this.state.questions.some((q) => q.sessionId === sessionId);
+    return this.state.approvals.some((a) => a.sessionId === sessionId)
+      || this.state.questions.some((q) => q.sessionId === sessionId)
+      || this.state.turnAttentions.some((a) => a.sessionId === sessionId);
   }
 
   /**
@@ -2684,6 +3648,13 @@ export class SessionStore {
   private workingLabelForTool(event: ServerEvent): string {
     const name = toolName(event as any);
     if (name === "agent_output" || name === "stderr" || name === "stdout") return "Reading agent output…";
+    const callId = toolCallId(event as any);
+    const detail = toolDetail(event as any) ?? (callId
+      ? this.state.transcript.find((entry) => entry.tool?.callId === callId)?.tool?.detail
+      : undefined);
+    if (detail?.kind === "delegation") {
+      return detail.label ? `${detail.label} sub-agent is working…` : "Sub-agent is working…";
+    }
     return `Running ${name}…`;
   }
 
@@ -2702,7 +3673,44 @@ export class SessionStore {
           this.setWorking("Drafting response…");
         }
         return;
+      case "attachment": {
+        // An agent-sent attachment (image or file). Buffer it and render it at the
+        // turn boundary under the turn's final assistant bubble, rather than as a
+        // standalone entry at the moment `bivy attach` ran — which lands mid-turn,
+        // between tool cards and the reply, reading as detached. Grouping matches
+        // how user uploads render under their own message. Durable history
+        // reproduces the same grouping (see groupAgentAttachments in renderHistory).
+        const ref = (event as any).ref;
+        if (!ref || typeof ref.hash !== "string" || (ref.kind !== "image" && ref.kind !== "file")) return;
+        const caption = typeof (event as any).caption === "string" ? (event as any).caption : "";
+        const artifact = Boolean((event as any).artifact);
+        this.pendingAgentAttachments.push({ attachment: attachmentFromRef(ref, { createdAt: Date.now(), artifact }), caption });
+        return;
+      }
+      case "inlineImage": {
+        // The node finished fetching a remote markdown image (#293). Cache the
+        // ref, then patch it onto any already-rendered assistant entry whose raw
+        // markdown references this exact URL — a new object identity for that
+        // entry is what makes ChatView's hydrate effect notice and swap in a
+        // blob: URL. A URL nobody's current transcript mentions yet (already
+        // scrolled past the initial window, or a race with the render) still
+        // ends up correct once withInlineImageRefs runs on the next full render,
+        // since the cache itself was updated either way.
+        const url = (event as any).url;
+        const ref = (event as any).ref;
+        if (typeof url !== "string" || !url || !ref || typeof ref.hash !== "string") return;
+        this.inlineImagesByUrl.set(url, ref);
+        let changed = false;
+        const transcript = this.state.transcript.map((e) => {
+          if (e.role !== "assistant" || !e.text || e.imageRefs?.[url] || !e.text.includes(url)) return e;
+          changed = true;
+          return { ...e, imageRefs: { ...(e.imageRefs ?? {}), [url]: ref } };
+        });
+        if (changed) this.set({ transcript });
+        return;
+      }
       case "message_update":
+      case "message_boundary":
       case "message_end": {
         const msg = (event as any).message;
         if (msg?.role !== "assistant") return;
@@ -2711,7 +3719,11 @@ export class SessionStore {
         // on `text` so a reasoning-only update (content:[{thinking}] → text:"")
         // can't wipe prose the model already produced this turn.
         if (text) this.draft.pendingText = text;
-        const finalize = kind === "message_end";
+        // `message_boundary` seals one discrete prose item without ending the
+        // turn (Codex commentary commonly alternates these with tool calls).
+        // Treat it like message_end for bubble placement while leaving the
+        // runtime/server's actual turn-final semantics to message_end.
+        const finalize = kind === "message_end" || kind === "message_boundary";
         // Reasoning can arrive two ways: as an accumulated `thinking` block on
         // the message, or (for runtimes that only stream reasoning) as
         // incremental `thinking_delta` / `thinking_end` on the event itself. Keep
@@ -2768,6 +3780,7 @@ export class SessionStore {
           name: toolName(event as any),
           input: toolInput(event as any),
           status: "running",
+          detail: toolDetail(event as any),
         });
         this.setWorking(this.workingLabelForTool(event));
         return;
@@ -2777,6 +3790,7 @@ export class SessionStore {
           name: toolName(event as any),
           input: toolInput(event as any),
           status: "running",
+          detail: toolDetail(event as any),
         });
         this.setWorking(this.workingLabelForTool(event));
         return;
@@ -2787,13 +3801,23 @@ export class SessionStore {
           input: {},
           status: "done",
           result: typeof (event as any).result === "string" ? (event as any).result : contentToText((event as any).result),
+          // Carry the result-time detail (it merges the call classification with
+          // the tool's outcome: exitCode / isError / truncated) so the card can
+          // show a command that FAILED as failed. Without this the reducer kept
+          // only the call-time detail and the outcome was invisible.
+          detail: toolDetail(event as any),
         });
         return;
       case "turn_end":
+        // Land any attachments emitted this turn under its final assistant bubble.
+        this.flushPendingAgentAttachments();
         this.setWorking("Planning next step…");
         return;
       case "agent_end":
         this.finishDrafts();
+        // finishDrafts sealed the final prose bubble; now group this turn's
+        // attachments onto it (no-op if turn_end already flushed them).
+        this.flushPendingAgentAttachments();
         this.closeRunningTools();
         // Clear the prose accumulator so a next turn that opens straight into a
         // tool (no message_start first) can't re-commit this turn's prose above

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // Bivy's app-owned local/custom model registry — the source of truth for
 // user-provided model endpoints (Ollama, LM Studio, vLLM, SGLang, and any
@@ -40,6 +40,11 @@ export interface LocalProvider {
   api: string;
   compat?: Record<string, unknown>;
   models: LocalModel[];
+  /** Loopback endpoints belong to one Machine. Network endpoints remain explicit
+   * custom endpoints and may be usable from multiple Machines. */
+  scope?: "machine" | "network";
+  machineId?: string;
+  machineName?: string;
 }
 
 export interface LocalModelsConfig {
@@ -55,6 +60,11 @@ export interface LocalProviderSummary {
   hasKey: boolean;
   modelCount: number;
   models: Array<{ id: string; name: string }>;
+  scope: "machine" | "network";
+  machineId?: string;
+  machineName?: string;
+  /** Honest availability on the Machine serving this response. */
+  availableOnThisMachine: boolean;
 }
 
 const FILE_NAME = "local-models.json";
@@ -67,14 +77,19 @@ function configPath(dir: string): string {
 
 /** Normalize a provider id the way every path expects (slug-safe). */
 export function normalizeProviderId(id: string): string {
-  return (
-    String(id ?? "")
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9-]+/g, "-") // non-slug runs collapse to a single dash
-      .replace(/^-+|-+$/g, "") // no leading/trailing dashes
-      || "local"
-  );
+  let normalized = "";
+  let pendingDash = false;
+  for (const character of String(id ?? "").trim().toLowerCase()) {
+    const isSlugCharacter = (character >= "a" && character <= "z") || (character >= "0" && character <= "9");
+    if (isSlugCharacter) {
+      if (pendingDash && normalized) normalized += "-";
+      normalized += character;
+      pendingDash = false;
+    } else {
+      pendingDash = true;
+    }
+  }
+  return normalized || "local";
 }
 
 function normalizeModel(raw: any): LocalModel | null {
@@ -112,6 +127,9 @@ export function normalizeProvider(id: string, raw: any): LocalProvider {
   };
   if (raw?.name) provider.name = String(raw.name);
   if (raw?.compat && typeof raw.compat === "object") provider.compat = raw.compat as Record<string, unknown>;
+  if (raw?.scope === "machine" || raw?.scope === "network") provider.scope = raw.scope;
+  if (raw?.machineId) provider.machineId = String(raw.machineId);
+  if (raw?.machineName) provider.machineName = String(raw.machineName);
   // Any incoming `apiKey` is intentionally dropped — keys live in the vault.
   return provider;
 }
@@ -172,18 +190,26 @@ export function removeLocalProviderEntry(dir: string, id: string): LocalModelsCo
 export function listLocalProviderSummaries(
   dir: string,
   hasKey: (id: string) => boolean = () => false,
+  currentMachineId?: string,
 ): LocalProviderSummary[] {
   const cfg = loadLocalModels(dir);
   return Object.values(cfg.providers)
-    .map((p) => ({
-      id: p.id,
-      name: p.name,
-      baseUrl: p.baseUrl,
-      api: p.api,
-      hasKey: hasKey(p.id),
-      modelCount: p.models.length,
-      models: p.models.map((m) => ({ id: m.id, name: m.name || m.id })),
-    }))
+    .map((p) => {
+      const scope = p.scope ?? (p.machineId ? "machine" : "network");
+      return {
+        id: p.id,
+        name: p.name,
+        baseUrl: p.baseUrl,
+        api: p.api,
+        hasKey: hasKey(p.id),
+        modelCount: p.models.length,
+        models: p.models.map((m) => ({ id: m.id, name: m.name || m.id })),
+        scope,
+        machineId: p.machineId,
+        machineName: p.machineName,
+        availableOnThisMachine: scope === "network" || !p.machineId || p.machineId === currentMachineId,
+      };
+    })
     .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
 }
 
@@ -223,9 +249,12 @@ export function importLocalModels(dir: string, incoming: Record<string, unknown>
 export function toPiModelsConfig(
   cfg: LocalModelsConfig,
   resolveKey: (id: string) => string | undefined = () => undefined,
+  currentMachineId?: string,
 ): { providers: Record<string, unknown> } {
   const providers: Record<string, unknown> = {};
   for (const [id, p] of Object.entries(cfg.providers)) {
+    // A synced localhost entry must never appear in another Machine's picker.
+    if (p.scope === "machine" && p.machineId && p.machineId !== currentMachineId) continue;
     providers[id] = {
       name: p.name,
       baseUrl: p.baseUrl,

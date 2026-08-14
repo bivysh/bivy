@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 /**
  * GitHub OAuth Device Flow for STAGED repo scope (C3).
@@ -95,6 +95,23 @@ export function interpretTokenResponse(data: Record<string, unknown>): TokenPoll
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * A SINGLE access-token poll (no internal waiting) — for a caller that drives
+ * its own cadence. The web-driven connect flow uses this: the node holds the
+ * device code and the browser polls it on GitHub's interval, so the node never
+ * blocks a request thread in a poll loop. `pollForAccessToken` is the CLI's
+ * self-driving loop built on the same interpretation.
+ */
+export async function pollAccessTokenOnce(clientId: string, deviceCode: string): Promise<TokenPoll> {
+  const res = await fetch(ACCESS_TOKEN_URL, {
+    method: "POST",
+    headers: { accept: "application/json", "content-type": "application/json" },
+    body: JSON.stringify({ client_id: clientId, device_code: deviceCode, grant_type: "urn:ietf:params:oauth:grant-type:device_code" }),
+  });
+  const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  return interpretTokenResponse(data);
+}
 
 /** Step 2: poll until the user authorizes (or the code expires). */
 export async function pollForAccessToken(clientId: string, device: DeviceCode, signal?: AbortSignal): Promise<string> {

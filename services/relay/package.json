@@ -1,6 +1,6 @@
 {
   "name": "bivy-relay",
-  "version": "0.2.1",
+  "version": "0.10.1",
   "private": true,
   "type": "module",
   "description": "Self-hostable/Bivy Cloud relay: routes opaque, E2E-encrypted frames between clients and nodes through NAT. Cannot read session content.",
@@ -10,16 +10,17 @@
     "typecheck": "tsc --noEmit",
     "test:e2e": "tsx test/e2e.ts",
     "test:entitlements": "tsx test/entitlements.test.ts",
-    "test:unit": "npm run test:e2e && npm run test:entitlements"
+    "test:solo": "tsx test/solo-admission.test.ts",
+    "test:unit": "npm run test:e2e && npm run test:entitlements && npm run test:solo"
   },
   "dependencies": {
-    "@sentry/node": "^10.67.0",
+    "@sentry/node": "^10.69.0",
     "ws": "^8.21.1"
   },
   "devDependencies": {
-    "@types/node": "^26.1.1",
+    "@types/node": "^26.1.2",
     "@types/ws": "^8.18.1",
-    "tsx": "^4.22.4",
+    "tsx": "^4.23.1",
     "typescript": "^7.0.2"
   }
 }

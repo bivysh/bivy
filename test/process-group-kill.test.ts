@@ -41,6 +41,17 @@ function alive(pid: number): boolean {
   }
 }
 
+function readPid(file: string): number | undefined {
+  try {
+    const value = fs.readFileSync(file, "utf8").trim();
+    if (!/^[1-9]\d*$/.test(value)) return undefined;
+    const pid = Number(value);
+    return Number.isSafeInteger(pid) ? pid : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function waitUntil(pred: () => boolean, timeoutMs: number, intervalMs = 20): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!pred() && Date.now() < deadline) await new Promise((r) => setTimeout(r, intervalMs));
@@ -86,10 +97,12 @@ await check("abort() kills the whole process group, not just the direct child", 
   const ended = waitForEvent(session, (e) => e.type === "agent_end", 10_000);
   void session.prompt("go");
 
-  await waitUntil(() => fs.existsSync(pidFile), 5000);
-  assert.ok(fs.existsSync(pidFile), "stub never recorded its grandchild pid");
-  const grandchildPid = Number(fs.readFileSync(pidFile, "utf8").trim());
-  assert.ok(Number.isInteger(grandchildPid) && grandchildPid > 0, `bad grandchild pid: ${grandchildPid}`);
+  // Waiting for existence alone races with the shell redirection opening the
+  // file before `echo` writes the pid. Under CI load that can expose a transient
+  // empty file (Number("") === 0), so synchronize on a complete, valid value.
+  await waitUntil(() => readPid(pidFile) !== undefined, 5000);
+  const grandchildPid = readPid(pidFile);
+  assert.ok(grandchildPid !== undefined, "stub never recorded a valid grandchild pid");
   assert.ok(alive(grandchildPid), "grandchild should be running before abort");
 
   await session.abort();

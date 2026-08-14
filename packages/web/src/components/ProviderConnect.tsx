@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { useState } from "react";
 import type { AppState } from "@bivy/core";
@@ -63,11 +63,24 @@ export function OauthStep() {
  * Settings-only action) since here the only goal is getting the model
  * selectable, not managing the credential long-term.
  */
-export function ProviderConnectForm({ state, providerId }: { state: AppState; providerId: string }) {
+export function ProviderConnectForm({
+  state,
+  providerId,
+  apiKeyProvider,
+}: {
+  state: AppState;
+  providerId: string;
+  /** Where a pasted API key is saved, when it differs from the OAuth id — e.g.
+   *  Codex signs in as `openai-codex` but its key lives under `openai`
+   *  (OPENAI_API_KEY). Defaults to `providerId`. */
+  apiKeyProvider?: string;
+}) {
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const provider = state.providers.find((p) => p.id === providerId);
   const name = provider?.name || providerId;
+  const keyProvider = apiKeyProvider || providerId;
 
   if (provider?.configured) {
     // A "Connect" tap can race a connection that already landed (e.g. the
@@ -86,6 +99,7 @@ export function ProviderConnectForm({ state, providerId }: { state: AppState; pr
 
   return (
     <div className="settings-form">
+      {error && <div className="banner error inline" role="alert">{error}</div>}
       {provider?.oauth && (
         <button className="btn primary block" onClick={() => controller.startOauth(providerId)}>
           Sign in with {name}
@@ -103,17 +117,21 @@ export function ProviderConnectForm({ state, providerId }: { state: AppState; pr
         <button
           className="btn primary"
           disabled={!key.trim() || busy}
-          onClick={() => {
+          onClick={async () => {
             setBusy(true);
-            controller.saveApiKey(providerId, key.trim());
-            setKey("");
-            // provider.apiKey has no direct ack — re-list so `provider.configured`
-            // above (and the model picker's own providers watch) reflect the
-            // node's real outcome instead of a blind timer either way.
-            setTimeout(() => {
+            setError(null);
+            try {
+              // Await the node's authoritative ack. A timer/re-list can make a
+              // failed save look successful and is especially harmful in the
+              // first-run auth path.
+              await controller.saveApiKey(keyProvider, key.trim());
+              setKey("");
               controller.listProviders();
+            } catch (e) {
+              setError(e instanceof Error ? e.message : String(e));
+            } finally {
               setBusy(false);
-            }, 500);
+            }
           }}
         >
           Save key

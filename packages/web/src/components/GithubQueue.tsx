@@ -1,17 +1,14 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   githubIssueRefFromSource,
   isGithubQueueSource,
-  ephemeralAdapter,
-  ephemeralCostHint,
   type AccountNode,
-  type EphemeralQueueDefault,
+  type EphemeralNodeConfig,
   type GithubAppInfo,
   type GithubQueueItem,
   type ProviderKeyInfo,
-  type ProviderSize,
 } from "@bivy/core";
 import { useAppState } from "../store/useStore.js";
 import { controller } from "../store/useStore.js";
@@ -21,6 +18,7 @@ import { classifySource } from "../sessionSource.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import { writeClipboard } from "../clipboard.js";
+import { isTerminalRun, projectRunDetail } from "../runDetail.js";
 
 // Issue #153: a queue item is worth an "Outcome report" once it has left
 // "pending" and picked up at least one timeline event (the control plane
@@ -32,12 +30,6 @@ type EvidenceQueueItem = GithubQueueItem & { events: NonNullable<GithubQueueItem
 // (issue #531) — with many queue sessions the list otherwise grows unbounded
 // and dominates the panel.
 const MAX_VISIBLE_SESSIONS = 5;
-
-const EPHEMERAL_TTL_OPTIONS = [
-  { v: 30, label: "30 min" },
-  { v: 60, label: "1 hour" },
-  { v: 180, label: "3 hours" },
-];
 
 /** Human-facing repo/issue (or source) line for a queue-spawned session row —
  *  mirrors SessionList's `sessionMeta`, but for sources that carry no branch
@@ -78,12 +70,20 @@ export function GithubQueuePanel({
   queue,
   onRefresh,
   onPick,
+  onOpenRun,
   onOpenGithubSettings,
+  showHistory = true,
 }: {
   queue: GithubQueueItem[] | null;
   onRefresh: () => void;
   onPick: (sessionId: string, path?: string, nodeId?: string) => void;
+  /** Open the routable Run detail screen (/runs/:runId). A queue item's id is
+   *  the Run id (both are the same work_items record). */
+  onOpenRun?: (runId: string) => void;
   onOpenGithubSettings: () => void;
+  /** The Runs destination already has canonical RunHistory. Keep the legacy
+   * session/report projections available for standalone queue consumers only. */
+  showHistory?: boolean;
 }) {
   const { sessions, activeSessionId, prRefreshAllResult, runtimes } = useAppState();
   const canQuery = !controller.direct;
@@ -94,7 +94,7 @@ export function GithubQueuePanel({
   // to the node's default.
   const agentOptions = useMemo(
     () => [
-      { id: "", label: "Node default" },
+      { id: "", label: "Machine default" },
       ...runtimes.map((r) => ({ id: r.id, label: String(r.displayName || r.name || r.id) })),
     ],
     [runtimes],
@@ -111,10 +111,14 @@ export function GithubQueuePanel({
   const [nodes, setNodes] = useState<AccountNode[]>([]);
   // The queue item whose "Run…" picker is open, plus its in-progress selections.
   const [assignOpenId, setAssignOpenId] = useState<string | null>(null);
-  // "node" = dispatch to an already-running node (the pre-#532 behavior);
-  // "ephemeral" = provision a short-lived server from saved provider settings.
-  const [assignTarget, setAssignTarget] = useState<"node" | "ephemeral">("node");
-  const [assignNode, setAssignNode] = useState("");
+  // Unified runner selection for the item: "shared" (any online node),
+  // "node:<name>" (a specific persistent node), or "config:<setupId>" (an
+  // ephemeral config — a node template provisioned on demand). A persistent
+  // node can carry an ephemeral-config fallback for when it's offline; an
+  // ephemeral-config primary needs none (it's always provisionable).
+  const [assignPrimary, setAssignPrimary] = useState("shared");
+  const [assignFallback, setAssignFallback] = useState(""); // "" = none, else "config:<id>"
+  const [ephemeralConfigs, setEphemeralConfigs] = useState<EphemeralNodeConfig[]>([]);
   const [assignAgent, setAssignAgent] = useState("");
   const [assignModel, setAssignModel] = useState("");
   const [assignBusy, setAssignBusy] = useState(false);
@@ -124,6 +128,8 @@ export function GithubQueuePanel({
   const [clearing, setClearing] = useState(false);
   const [queueActionErr, setQueueActionErr] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [cancelRun, setCancelRun] = useState<EvidenceQueueItem | null>(null);
+  const [cancelBusyId, setCancelBusyId] = useState<string | null>(null);
   // Global "refresh GitHub status" scan (issue #530): reconciles every session
   // this node has tracked that carries PR state, not just the ones listed here
   // — a session that finished or was never reattached keeps whatever PR state
@@ -142,6 +148,22 @@ export function GithubQueuePanel({
     const t = setTimeout(() => controller.store.clearPrRefreshAllResult(), 8000);
     return () => clearTimeout(t);
   }, [prRefreshAllResult]);
+
+  const cancelConfirmedRun = async () => {
+    const run = cancelRun;
+    if (!run) return;
+    setCancelRun(null);
+    setQueueActionErr(null);
+    setCancelBusyId(run.id);
+    try {
+      await controller.cancelAutomationRun(run.id);
+      onRefresh();
+    } catch (e) {
+      setQueueActionErr(String((e as Error)?.message || e));
+    } finally {
+      setCancelBusyId(null);
+    }
+  };
 
   const refreshAllStatus = () => {
     setRefreshingAll(true);
@@ -197,28 +219,14 @@ export function GithubQueuePanel({
     controller.listRuntimes();
   }, []);
 
-  // Ephemeral-server assign target: which provider/region/size/TTL to provision
-  // with, plus the (optional, saved-on-device) GitHub token the fresh node needs
-  // to actually do the work — see controller.runWorkItemOnEphemeral.
+  // Provider tokens saved on THIS device — used to tell whether a chosen
+  // ephemeral config can actually be launched here, and to gate the queue-level
+  // auto-provision default below. The fresh node also needs a GitHub token
+  // (saved on-device) to clone/push/open PRs — see runWorkItemOnEphemeral.
   const [ephemeralKeys, setEphemeralKeys] = useState<ProviderKeyInfo[]>([]);
-  const [ephemeralProvider, setEphemeralProvider] = useState("");
-  const [ephemeralRegion, setEphemeralRegion] = useState("");
-  const [ephemeralSizes, setEphemeralSizes] = useState<ProviderSize[]>([]);
-  const [ephemeralSize, setEphemeralSize] = useState("");
-  const [ephemeralTtl, setEphemeralTtl] = useState(60);
   const [githubTaskToken, setGithubTaskTokenInput] = useState("");
   const [hasGithubTaskToken, setHasGithubTaskToken] = useState(false);
   const [savingToken, setSavingToken] = useState(false);
-
-  // The account's queue-level "auto-provision an ephemeral runner" default. It's
-  // configured over in GitHub App settings (GithubPanel); here we only read it to
-  // drive the auto-launch behavior below.
-  const [ephemeralDefault, setEphemeralDefaultState] = useState<EphemeralQueueDefault | null>(null);
-  // Guards a single auto-launch attempt per mount, so a slow/failed launch (or a
-  // re-render while one is in flight) can't fire it twice.
-  const autoLaunchTried = useRef(false);
-  const [autoLaunching, setAutoLaunching] = useState(false);
-  const [autoLaunchErr, setAutoLaunchErr] = useState<string | null>(null);
 
   useEffect(() => {
     if (!canQuery) return;
@@ -234,66 +242,70 @@ export function GithubQueuePanel({
       })
       .catch(() => setWorkQueueEnabled(null));
     controller.listEphemeralKeys().then(setEphemeralKeys).catch(() => {});
+    if (EPHEMERAL_MACHINES_ENABLED) controller.listEphemeralConfigs().then(setEphemeralConfigs).catch(() => {});
     controller.getGithubTaskToken().then((t) => setHasGithubTaskToken(Boolean(t))).catch(() => {});
-    controller.getEphemeralQueueDefault().then(setEphemeralDefaultState).catch(() => setEphemeralDefaultState(null));
   }, [canQuery]);
 
   const configuredProviders = useMemo(() => ephemeralKeys.filter((k) => k.configured), [ephemeralKeys]);
+  // Persistent nodes only — a booted ephemeral machine enrolls as an `eph-…`
+  // node, but it's managed by its config/session and is never a manual routing
+  // target here (matches ConnectRunner/NodeSwitcher).
+  const persistentNodes = useMemo(() => nodes.filter((n) => !n.id.startsWith("eph-")), [nodes]);
+  const configById = useMemo(() => new Map(ephemeralConfigs.map((s) => [s.id, s])), [ephemeralConfigs]);
+  // Decode the unified runner value into a target the dispatch can act on.
+  const parseTarget = (v: string): { kind: "shared" } | { kind: "node"; node: string } | { kind: "config"; id: string } =>
+    v.startsWith("config:") ? { kind: "config", id: v.slice("config:".length) }
+      : v.startsWith("node:") ? { kind: "node", node: v.slice("node:".length) }
+        : { kind: "shared" };
+  const primarySel = parseTarget(assignPrimary);
+  const primaryNode = primarySel.kind === "node" ? primarySel.node : "";
+  const selectedConfig = primarySel.kind === "config" ? configById.get(primarySel.id) : undefined;
+  const fallbackConfig = assignFallback.startsWith("config:") ? configById.get(assignFallback.slice("config:".length)) : undefined;
+  const ephemeralInvolved = Boolean(selectedConfig) || Boolean(fallbackConfig);
 
   const openAssign = (item: GithubQueueItem) => {
     setAssignErr(null);
     setAssignOpenId(item.id);
-    setAssignTarget("node");
-    // Seed from the label (bivy/<node>) and any existing overrides.
-    setAssignNode(item.label && item.label.startsWith("bivy/") ? item.label.slice("bivy/".length) : "");
+    // Seed the primary runner from the item's label (bivy/<node> → that node,
+    // else the shared queue) and carry over any existing agent/model overrides.
+    const node = item.label && item.label.startsWith("bivy/") ? item.label.slice("bivy/".length) : "";
+    setAssignPrimary(node ? `node:${node}` : "shared");
+    setAssignFallback("");
     setAssignAgent(item.runtimeId ?? "");
     setAssignModel(item.model ?? "");
-    if (!ephemeralProvider && configuredProviders[0]) {
-      const adapter = ephemeralAdapter(configuredProviders[0].id);
-      setEphemeralProvider(configuredProviders[0].id);
-      if (adapter) {
-        setEphemeralRegion(adapter.defaultRegion);
-        setEphemeralSizes(adapter.sizes);
-        setEphemeralSize(adapter.defaultSize);
-      }
-    }
   };
-
-  // Live provider catalog for the chosen provider/region, same pattern as the
-  // Ephemeral sheet (Ephemeral.tsx) — a saved token unlocks the provider's real,
-  // non-deprecated sizes; without one it stays on the static fallback list.
-  useEffect(() => {
-    if (assignTarget !== "ephemeral" || !ephemeralProvider) return;
-    let active = true;
-    controller
-      .listEphemeralSizes(ephemeralProvider, ephemeralRegion || undefined)
-      .then((list) => {
-        if (!active || !list.length) return;
-        setEphemeralSizes(list);
-        setEphemeralSize((cur) => (list.some((s) => s.id === cur) ? cur : (list[0]?.id ?? cur)));
-      })
-      .catch(() => {});
-    return () => {
-      active = false;
-    };
-  }, [assignTarget, ephemeralProvider, ephemeralRegion]);
 
   const submitAssign = async (id: string) => {
     setAssignErr(null);
     setAssignBusy(true);
     try {
-      if (assignTarget === "ephemeral") {
-        if (!ephemeralProvider) throw new Error("Choose a provider (add a token in the Ephemeral settings first)");
-        await controller.runWorkItemOnEphemeral(id, {
-          provider: ephemeralProvider,
-          region: ephemeralRegion || undefined,
-          size: ephemeralSize || undefined,
-          ttlMinutes: ephemeralTtl,
+      const runFromConfig = (setup: EphemeralNodeConfig) =>
+        controller.runWorkItemOnEphemeral(id, {
+          provider: setup.provider,
+          region: setup.region || undefined,
+          size: setup.size || undefined,
+          ttlMinutes: setup.ttlMinutes || undefined,
           runtimeId: assignAgent || undefined,
           model: assignModel || undefined,
+          configId: setup.id,
         });
+      if (primarySel.kind === "config") {
+        const setup = configById.get(primarySel.id);
+        if (!setup) throw new Error("That isolated machine profile is no longer available");
+        await runFromConfig(setup);
+      } else if (primarySel.kind === "node") {
+        // Fallback (prototype): if the chosen node is offline right now and a
+        // fallback config is set, provision that config instead of parking the
+        // item on a dark node. Continuous reroute (node goes offline AFTER
+        // dispatch) is the follow-up — it needs server-side liveness + relaunch.
+        const node = persistentNodes.find((n) => (n.name || n.id) === primarySel.node);
+        if (node && !node.online && fallbackConfig) {
+          await runFromConfig(fallbackConfig);
+        } else {
+          await controller.assignWorkItem(id, { node: primarySel.node, runtimeId: assignAgent, model: assignModel });
+        }
       } else {
-        await controller.assignWorkItem(id, { node: assignNode, runtimeId: assignAgent, model: assignModel });
+        await controller.assignWorkItem(id, { node: "", runtimeId: assignAgent, model: assignModel });
       }
       setAssignOpenId(null);
       onRefresh();
@@ -391,41 +403,10 @@ export function GithubQueuePanel({
   // served independently, so this counts rather than tests a single flag.
   const apps = appInfo?.apps ?? [];
   const unservedApps = apps.filter((a) => a.servedBy === null);
-  // No persistent node online at all (any hosted-queue setup, not just GitHub
-  // App) — the signal the ephemeral-queue-default watches for.
-  const anyNodeOnline = useMemo(() => nodes.some((n) => n.online), [nodes]);
-  const defaultProviderConfigured = Boolean(
-    ephemeralDefault?.provider && ephemeralKeys.find((k) => k.id === ephemeralDefault.provider)?.configured,
-  );
-
-  // Issue #532: when the account's ephemeral-queue-default is enabled, this
-  // device has a saved token for the chosen provider, nothing persistent is
-  // online, and items are actually waiting, offer to help by provisioning a
-  // general-purpose ephemeral runner. Tries once per mount; a failure clears
-  // the guard so a later render (e.g. after the user fixes a missing token)
-  // can retry rather than wedging silently for the rest of the session.
-  useEffect(() => {
-    if (!EPHEMERAL_MACHINES_ENABLED) return;
-    if (!canQuery || !workQueueEnabled) return;
-    if (!ephemeralDefault || !ephemeralDefault.enabled || !ephemeralDefault.provider || !defaultProviderConfigured) return;
-    if (anyNodeOnline || !waiting || waiting.length === 0) return;
-    if (autoLaunchTried.current || autoLaunching) return;
-    autoLaunchTried.current = true;
-    setAutoLaunching(true);
-    setAutoLaunchErr(null);
-    controller
-      .launchEphemeralQueueWorker({
-        provider: ephemeralDefault.provider,
-        region: ephemeralDefault.region,
-        size: ephemeralDefault.size,
-        ttlMinutes: ephemeralDefault.ttlMinutes,
-      })
-      .catch((e) => {
-        autoLaunchTried.current = false;
-        setAutoLaunchErr(`Couldn't auto-provision a runner: ${e instanceof Error ? e.message : String(e)}`);
-      })
-      .finally(() => setAutoLaunching(false));
-  }, [canQuery, workQueueEnabled, ephemeralDefault, defaultProviderConfigured, anyNodeOnline, waiting, autoLaunching]);
+  // Automatic queue provisioning is deliberately absent from this component.
+  // Once the user enables hosted provisioning and queue routing, the control
+  // plane's maybeAutoProvision policy owns launch/dedupe/rate-cap/teardown. A UI
+  // render must never be the causal trigger for a billable machine.
 
   return (
       <div className="settings-form">
@@ -465,14 +446,15 @@ export function GithubQueuePanel({
         {canQuery && workQueueEnabled !== false && unservedApps.length > 0 && (
           <div className="banner warn inline">
             {unservedApps.length === apps.length
-              ? `${apps.length === 1 ? "Your GitHub App is" : "Your GitHub Apps are"} set up, but no online node is running ${apps.length === 1 ? "it" : "them"} — nothing will pick these up.`
-              : `${unservedApps.length} of your ${apps.length} GitHub Apps (${unservedApps.map((a) => a.name || a.mention || a.appId).join(", ")}) aren't running on any node — work for those won't be picked up.`}{" "}
+              ? `${apps.length === 1 ? "Your GitHub App is" : "Your GitHub Apps are"} set up, but no online machine is running ${apps.length === 1 ? "it" : "them"} — nothing will pick these up.`
+              : `${unservedApps.length} of your ${apps.length} GitHub Apps (${unservedApps.map((a) => a.name || a.mention || a.appId).join(", ")}) aren't running on any machine — work for those won't be picked up.`}{" "}
             <button className="link-btn" onClick={onOpenGithubSettings}>
-              {unservedApps.length === 1 ? "Connect it on a node →" : "Connect them on a node →"}
+              {unservedApps.length === 1 ? "Connect it on a machine →" : "Connect them on a machine →"}
             </button>
           </div>
         )}
 
+        {showHistory && <>
         <div className="queue-head">
           <h4 className="settings-subhead">Sessions</h4>
           <div className="queue-head-actions">
@@ -532,6 +514,8 @@ export function GithubQueuePanel({
           </>
         )}
 
+        </>}
+
         {canQuery && workQueueEnabled !== false && (
           <>
             <div className="queue-head">
@@ -564,12 +548,6 @@ export function GithubQueuePanel({
 
             {queueActionErr && <div className="banner error inline">{queueActionErr}</div>}
 
-            {EPHEMERAL_MACHINES_ENABLED && autoLaunching && (
-              <p className="muted" style={{ marginBottom: 10 }}>⚡ Provisioning an ephemeral runner to pick these up…</p>
-            )}
-            {EPHEMERAL_MACHINES_ENABLED && !autoLaunching && autoLaunchErr && (
-              <div className="banner warn inline">{autoLaunchErr}</div>
-            )}
 
             {waiting === null ? (
               <p className="muted">—</p>
@@ -605,7 +583,7 @@ export function GithubQueuePanel({
                           <button
                             className={`queue-action-btn${open ? " active" : ""}`}
                             onClick={() => (open ? setAssignOpenId(null) : openAssign(w))}
-                            title="Dispatch to a node + agent"
+                            title="Dispatch to a machine + agent"
                           >
                             {open ? "Cancel" : "Run…"}
                           </button>
@@ -622,85 +600,72 @@ export function GithubQueuePanel({
                       </div>
                       {open && (
                         <div className="queue-run">
-                          {EPHEMERAL_MACHINES_ENABLED && (
+                          <label className="queue-run-field">
+                            <span>Machine</span>
+                            <select value={assignPrimary} onChange={(e) => setAssignPrimary(e.target.value)}>
+                              <option value="shared">Shared queue (any online machine)</option>
+                              {persistentNodes.length > 0 && (
+                                <optgroup label="Persistent machines">
+                                  {persistentNodes.map((n) => (
+                                    <option key={n.id} value={`node:${n.name || n.id}`}>
+                                      {n.name || n.id}{n.online ? "" : " (offline)"}
+                                    </option>
+                                  ))}
+                                </optgroup>
+                              )}
+                              {EPHEMERAL_MACHINES_ENABLED && ephemeralConfigs.length > 0 && (
+                                <optgroup label="Isolated machine profiles">
+                                  {ephemeralConfigs.map((s) => (
+                                    <option key={s.id} value={`config:${s.id}`}>{s.name} · {s.provider}</option>
+                                  ))}
+                                </optgroup>
+                              )}
+                              {primarySel.kind === "node" && !persistentNodes.some((n) => (n.name || n.id) === primaryNode) && (
+                                <option value={assignPrimary}>{primaryNode}</option>
+                              )}
+                            </select>
+                          </label>
+                          {/* Only a persistent-node primary can go offline; an ephemeral
+                              config is provisioned on demand, so it needs no fallback. */}
+                          {EPHEMERAL_MACHINES_ENABLED && primarySel.kind === "node" && ephemeralConfigs.length > 0 && (
                             <label className="queue-run-field">
-                              <span>Target</span>
-                              <select value={assignTarget} onChange={(e) => setAssignTarget(e.target.value as "node" | "ephemeral")}>
-                                <option value="node">A running node</option>
-                                <option value="ephemeral" disabled={configuredProviders.length === 0}>
-                                  Ephemeral server{configuredProviders.length === 0 ? " (add a provider token first)" : ""}
-                                </option>
-                              </select>
-                            </label>
-                          )}
-                          {assignTarget === "node" || !EPHEMERAL_MACHINES_ENABLED ? (
-                            <label className="queue-run-field">
-                              <span>Node</span>
-                              <select value={assignNode} onChange={(e) => setAssignNode(e.target.value)}>
-                                <option value="">Shared queue (any online node)</option>
-                                {nodes.map((n) => (
-                                  <option key={n.id} value={n.name || n.id}>{n.name || n.id}</option>
+                              <span>Fallback if machine is offline</span>
+                              <select value={assignFallback} onChange={(e) => setAssignFallback(e.target.value)}>
+                                <option value="">None — wait for the machine</option>
+                                {ephemeralConfigs.map((s) => (
+                                  <option key={s.id} value={`config:${s.id}`}>{s.name} · {s.provider}</option>
                                 ))}
-                                {assignNode && !nodes.some((n) => (n.name || n.id) === assignNode) && (
-                                  <option value={assignNode}>{assignNode}</option>
-                                )}
                               </select>
                             </label>
-                          ) : (
-                            <>
-                              <label className="queue-run-field">
-                                <span>Provider</span>
-                                <select value={ephemeralProvider} onChange={(e) => setEphemeralProvider(e.target.value)}>
-                                  {configuredProviders.map((p) => (
-                                    <option key={p.id} value={p.id}>{p.name}</option>
-                                  ))}
-                                </select>
-                              </label>
-                              <label className="queue-run-field">
-                                <span>Region</span>
-                                <select value={ephemeralRegion} onChange={(e) => setEphemeralRegion(e.target.value)}>
-                                  {(ephemeralAdapter(ephemeralProvider)?.regions ?? []).map((r) => (
-                                    <option key={r.id} value={r.id}>{r.label}</option>
-                                  ))}
-                                </select>
-                              </label>
-                              <label className="queue-run-field">
-                                <span>Server type</span>
-                                <select value={ephemeralSize} onChange={(e) => setEphemeralSize(e.target.value)}>
-                                  {ephemeralSizes.map((s) => (
-                                    <option key={s.id} value={s.id}>{s.label}</option>
-                                  ))}
-                                </select>
-                              </label>
-                              <label className="queue-run-field">
-                                <span>Auto-destroy after</span>
-                                <select value={ephemeralTtl} onChange={(e) => setEphemeralTtl(Number(e.target.value))}>
-                                  {EPHEMERAL_TTL_OPTIONS.map((o) => (
-                                    <option key={o.v} value={o.v}>{o.label}</option>
-                                  ))}
-                                </select>
-                              </label>
-                              {(() => {
-                                const adapter = ephemeralAdapter(ephemeralProvider);
-                                const hint = adapter && ephemeralCostHint(ephemeralSizes.find((s) => s.id === ephemeralSize), ephemeralTtl, adapter.currency);
-                                return hint ? <p className="muted small">{hint} · billed by {adapter?.name}, not Bivy</p> : null;
-                              })()}
-                              <label className="queue-run-field">
-                                <span>GitHub token {hasGithubTaskToken ? "(saved on this device — leave blank to reuse it)" : "(needed to clone/push/open PRs)"}</span>
-                                <div className="row-actions">
-                                  <input
-                                    type="password"
-                                    value={githubTaskToken}
-                                    placeholder={hasGithubTaskToken ? "•••• saved" : "paste a token"}
-                                    onChange={(e) => setGithubTaskTokenInput(e.target.value)}
-                                  />
-                                  <button className="link-btn" disabled={!githubTaskToken.trim() || savingToken} onClick={saveGithubTaskToken}>
-                                    {savingToken ? "Saving…" : "Save"}
-                                  </button>
-                                </div>
-                              </label>
-                            </>
                           )}
+                          {ephemeralInvolved && (() => {
+                            const cfg = selectedConfig ?? fallbackConfig!;
+                            const provConfigured = configuredProviders.some((p) => p.id === cfg.provider);
+                            return (
+                              <>
+                                <p className="muted small">
+                                  {selectedConfig ? "Runs on" : "Falls back to"} a fresh {cfg.provider} machine
+                                  {cfg.region ? ` · ${cfg.region}` : ""}{cfg.size ? ` · ${cfg.size}` : ""}
+                                  {cfg.ttlMinutes ? ` · auto-destroy ${cfg.ttlMinutes}m` : ""}.
+                                  {!provConfigured && ` Add a ${cfg.provider} token on this device to launch it.`}
+                                </p>
+                                <label className="queue-run-field">
+                                  <span>GitHub token {hasGithubTaskToken ? "(saved on this device — leave blank to reuse it)" : "(needed to clone/push/open PRs)"}</span>
+                                  <div className="row-actions">
+                                    <input
+                                      type="password"
+                                      value={githubTaskToken}
+                                      placeholder={hasGithubTaskToken ? "•••• saved" : "paste a token"}
+                                      onChange={(e) => setGithubTaskTokenInput(e.target.value)}
+                                    />
+                                    <button className="link-btn" disabled={!githubTaskToken.trim() || savingToken} onClick={saveGithubTaskToken}>
+                                      {savingToken ? "Saving…" : "Save"}
+                                    </button>
+                                  </div>
+                                </label>
+                              </>
+                            );
+                          })()}
                           <label className="queue-run-field">
                             <span>Agent</span>
                             <select value={assignAgent} onChange={(e) => setAssignAgent(e.target.value)}>
@@ -718,8 +683,8 @@ export function GithubQueuePanel({
                             />
                           </label>
                           <div className="queue-run-actions">
-                            <button className="btn" disabled={assignBusy || (assignTarget === "ephemeral" && !ephemeralProvider)} onClick={() => submitAssign(w.id)}>
-                              {assignBusy ? "Dispatching…" : assignTarget === "ephemeral" ? "Provision & run" : "Run on node"}
+                            <button className="btn" disabled={assignBusy || (primarySel.kind === "config" && !selectedConfig)} onClick={() => submitAssign(w.id)}>
+                              {assignBusy ? "Dispatching…" : primarySel.kind === "config" ? "Provision & run" : "Run"}
                             </button>
                             {assignErr && <span className="chip err">{assignErr}</span>}
                           </div>
@@ -733,23 +698,34 @@ export function GithubQueuePanel({
           </>
         )}
 
-        {canQuery && reports.length > 0 && (
+        {showHistory && canQuery && reports.length > 0 && (
           <>
-            <div className="queue-head"><h4 className="settings-subhead">Outcome reports</h4></div>
+            <div className="queue-head"><h4 className="settings-subhead">Run details</h4></div>
+            {cancelRun && (
+              <ConfirmDialog
+                title="Cancel Run?"
+                message="Request cancellation of this Run? It will remain active until the refreshed durable record reports a terminal result."
+                confirmLabel="Cancel Run"
+                danger
+                onCancel={() => setCancelRun(null)}
+                onConfirm={() => void cancelConfirmedRun()}
+              />
+            )}
             <div className="evidence-list">
               {reports.map((item) => {
-                const outcomeClass = item.status === "failed" ? "err" : item.status === "succeeded" ? "ok" : item.status === "needs_attention" ? "warn" : "";
+                const detail = projectRunDetail(item);
+                const outcomeClass = detail.outcome.tone === "danger" ? "err" : detail.outcome.tone === "success" ? "ok" : detail.outcome.tone === "warning" ? "warn" : "";
                 return (
                   <details className="evidence-report" key={item.id}>
                     <summary>
                       <span>{item.repo}{item.issueNumber ? ` #${item.issueNumber}` : ""} · {queueItemSourceLabel(item.source)}</span>
-                      <span className={`chip ${outcomeClass}`}>{item.status.replace(/_/g, " ")}</span>
+                      <span className={`chip ${outcomeClass}`}>{detail.outcome.label}</span>
                     </summary>
                     <div className="evidence-meta">
                       <span>Trigger: {item.triggerKind ?? item.source}</span>
-                      {item.attempt !== undefined && item.attempt > 1 && <span>Attempt {item.attempt}</span>}
-                      {item.runtimeId && <span>Agent: {item.runtimeId}</span>}
-                      {item.model && <span>Model: {item.model}</span>}
+                      {detail.attempt > 1 && <span>Attempt {detail.attempt}</span>}
+                      {detail.agent && <span>Agent: {detail.agent}</span>}
+                      {detail.checksSummary && <span>Checks: {detail.checksSummary}</span>}
                       {item.routingReason && <span>Routing: {item.routingReason}</span>}
                       {item.sandbox && <span>Sandbox: {item.sandbox}</span>}
                       {item.approvalMode && <span>Approval: {item.approvalMode}</span>}
@@ -758,7 +734,7 @@ export function GithubQueuePanel({
                       {item.output?.prUrl && <a href={item.output.prUrl} target="_blank" rel="noreferrer">Pull request</a>}
                       {item.output?.artifactUrl && <a href={item.output.artifactUrl} target="_blank" rel="noreferrer">Artifact</a>}
                     </div>
-                    {item.output?.failure && <p className="muted">{item.output.failure}</p>}
+                    {detail.failure && <p className="muted">{detail.failure}</p>}
                     <ol className="evidence-timeline">
                       {item.events.map((event, index) => (
                         <li key={`${event.at}-${index}`}>
@@ -771,13 +747,29 @@ export function GithubQueuePanel({
                     {item.checks && item.checks.length > 0 && (
                       <ul className="evidence-checks">
                         {item.checks.map((check, index) => (
-                          <li key={`${check.name}-${index}`}>{check.name}: {check.status}{check.exitCode !== undefined ? ` (exit ${check.exitCode})` : ""}</li>
+                          <li key={`${check.name}-${index}`}>{check.name}: {check.status}{check.exitCode !== undefined ? ` (exit ${check.exitCode})` : ""}{check.durationMs !== undefined ? ` · ${(check.durationMs / 1000).toFixed(1)}s` : ""}</li>
                         ))}
                       </ul>
                     )}
-                    <button className="link-btn" onClick={() => void copyReport(item)}>
-                      {copiedReportId === item.id ? "Copied!" : "Copy sanitized report"}
-                    </button>
+                    <div className="row-actions">
+                      {onOpenRun && (
+                        <button className="link-btn" onClick={() => onOpenRun(item.id)}>
+                          Open Run details
+                        </button>
+                      )}
+                      {!isTerminalRun(item) && (
+                        <button
+                          className="link-btn danger"
+                          disabled={cancelBusyId === item.id}
+                          onClick={() => { setQueueActionErr(null); setCancelRun(item); }}
+                        >
+                          {cancelBusyId === item.id ? "Cancelling…" : "Cancel Run"}
+                        </button>
+                      )}
+                      <button className="link-btn" onClick={() => void copyReport(item)}>
+                        {copiedReportId === item.id ? "Copied!" : "Copy sanitized Run JSON"}
+                      </button>
+                    </div>
                   </details>
                 );
               })}
@@ -787,7 +779,7 @@ export function GithubQueuePanel({
 
         {!canQuery && (
           <p className="muted">
-            Direct/local mode has no shared account queue — sessions a labelled issue starts on this node still show above.
+            Direct/local mode has no shared account queue — sessions a labelled issue starts on this machine still show above.
           </p>
         )}
       </div>

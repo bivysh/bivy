@@ -1,11 +1,14 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // Theme handling, matching the legacy tokens (bivy_theme in localStorage) so an
 // existing install keeps its choice when it moves to the new client.
 
 export type ThemeSetting = "system" | "light" | "dark";
 const KEY = "bivy_theme";
-const THEME_COLORS: Record<"light" | "dark", string> = { light: "#ffffff", dark: "#111111" };
+// Browser-chrome / status-bar color per theme. MUST match `--bg` in styles.css
+// (and the static <meta name="theme-color"> tags in index.html) so the chrome
+// blends into the app background instead of showing a pure white/black band.
+const THEME_COLORS: Record<"light" | "dark", string> = { light: "#f5f3ee", dark: "#14171a" };
 
 export function currentThemeSetting(): ThemeSetting {
   try {

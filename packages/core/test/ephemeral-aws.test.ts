@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { describe, expect, it } from "vitest";
 import {
@@ -292,7 +292,7 @@ describe("aws ProviderAdapter", () => {
     const machine = await adapter.provision({
       exec,
       token: TOKEN,
-      config: { slug: "abc123", region: "us-east-1", size: "t3.medium", ttlMinutes: 60 },
+      config: { slug: "abc123", region: "us-east-1", size: "t3.medium", ttlMinutes: 60, attemptId: "attempt-abc123" },
       userData: "#cloud-config\nruncmd: []\n",
     });
 
@@ -323,11 +323,28 @@ describe("aws ProviderAdapter", () => {
     expect(params.get("InstanceInitiatedShutdownBehavior")).toBe("terminate");
     expect(params.get("TagSpecification.1.Tag.1.Key")).toBe("Name");
     expect(params.get("TagSpecification.1.Tag.2.Value")).toBe("ephemeral");
+    expect(params.get("ClientToken")).toBe("attempt-abc123");
+    expect(params.get("TagSpecification.1.Tag.3.Key")).toBe("bivy-attempt");
+    expect(params.get("TagSpecification.1.Tag.3.Value")).toBe("attempt-abc123");
     // UserData must be base64-encoded, not sent as raw cloud-config text.
     const userData = params.get("UserData")!;
     expect(userData).not.toContain("#cloud-config");
     expect(Buffer.from(userData, "base64").toString("utf8")).toContain("#cloud-config");
     expect(runCall!.headers?.authorization).toMatch(/^AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE\/\d{8}\/us-east-1\/ec2\/aws4_request/);
+  });
+
+  it("uses a prebuilt AMI directly without paying the SSM lookup", async () => {
+    const { exec, calls } = fakeAwsExec();
+    const adapter = ephemeralAdapter("aws")!;
+    await adapter.provision({
+      exec,
+      token: TOKEN,
+      config: { slug: "fast", region: "us-west-2", size: "t3.medium", image: "ami-prebuilt123" },
+      userData: "#cloud-config\n",
+    });
+    expect(calls.some((c) => new URL(c.url).host.startsWith("ssm."))).toBe(false);
+    const run = calls.find((c) => String(c.body ?? "").includes("Action=RunInstances"))!;
+    expect(new URLSearchParams(String(run.body)).get("ImageId")).toBe("ami-prebuilt123");
   });
 
   it("reports status from DescribeInstances", async () => {
@@ -411,5 +428,52 @@ describe("aws ProviderAdapter", () => {
     };
     const fallback = await adapter.listSizes!({ exec: failing, token: TOKEN, region: "us-east-1" });
     expect(fallback).toEqual(adapter.sizes);
+  });
+});
+
+const DESCRIBE_INSTANCES_WITH_TAGS_XML = `<DescribeInstancesResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
+  <requestId>req-tags</requestId>
+  <reservationSet>
+    <item>
+      <instancesSet>
+        <item>
+          <instanceId>${INSTANCE_ID}</instanceId>
+          <instanceState><code>16</code><name>running</name></instanceState>
+          <ipAddress>203.0.113.9</ipAddress>
+          <launchTime>2026-08-01T00:00:00.000Z</launchTime>
+          <tagSet>
+            <item><key>bivy</key><value>ephemeral</value></item>
+            <item><key>bivy-attempt</key><value>attempt-lost</value></item>
+          </tagSet>
+        </item>
+      </instancesSet>
+    </item>
+  </reservationSet>
+</DescribeInstancesResponse>`;
+
+describe("aws adapter — orphan discovery", () => {
+  it("scans the curated region list and maps a tagged, untracked instance", async () => {
+    const exec: ExecFn = async (request) => {
+      const host = new URL(request.url).host;
+      if (host === "ec2.eu-west-1.amazonaws.com") return { status: 200, body: DESCRIBE_INSTANCES_WITH_TAGS_XML };
+      return { status: 200, body: DESCRIBE_INSTANCES_EMPTY_XML };
+    };
+    const found = await ephemeralAdapter("aws")!.discover!({ exec, token: TOKEN, ownershipTag: "owner-tag-1" });
+    expect(found).toEqual([{
+      id: INSTANCE_ID, provider: "aws", name: INSTANCE_ID, region: "eu-west-1", status: "running",
+      ip: "203.0.113.9", createdAt: "2026-08-01T00:00:00.000Z", attemptId: "attempt-lost",
+    }]);
+  });
+
+  it("skips a region whose call fails rather than aborting the whole scan", async () => {
+    const exec: ExecFn = async (request) => {
+      const host = new URL(request.url).host;
+      if (host === "ec2.us-east-1.amazonaws.com") throw new Error("region not opted in");
+      if (host === "ec2.eu-west-1.amazonaws.com") return { status: 200, body: DESCRIBE_INSTANCES_WITH_TAGS_XML };
+      return { status: 200, body: DESCRIBE_INSTANCES_EMPTY_XML };
+    };
+    const found = await ephemeralAdapter("aws")!.discover!({ exec, token: TOKEN, ownershipTag: "owner-tag-1" });
+    expect(found).toHaveLength(1);
+    expect(found[0]!.region).toBe("eu-west-1");
   });
 });

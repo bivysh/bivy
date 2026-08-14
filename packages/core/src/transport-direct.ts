@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // DirectTransport — the local / same-origin path used by the installed PWA when
 // it points straight at a node (`?local=1`, manifest start_url). Faithful port
@@ -226,6 +226,18 @@ export class DirectTransport implements Transport {
           this.emit(await this.directApi(`/api/session/history?${params}`));
           break;
         }
+        case "session.replay": {
+          // Live-stream gap recovery (Phase 2): fetch the session.events we missed
+          // after `afterSeq`; the node returns them (or mode:"reset") and the store
+          // reassembles/dedups them. Mirrors the relay transport's session.replay
+          // RELAY_COMMAND.
+          const params = new URLSearchParams({
+            ...(obj.sessionId ? { sessionId: String(obj.sessionId) } : {}),
+            afterSeq: String((obj as { afterSeq?: unknown }).afterSeq ?? 0),
+          });
+          this.emit(await this.directApi(`/api/session/replay?${params}`));
+          break;
+        }
         case "sessions.list":
           this.emit({ type: "sessions.list", sessions: await this.directApi("/api/sessions") });
           break;
@@ -244,6 +256,7 @@ export class DirectTransport implements Transport {
             agentName: p.agentName,
             name: p.name,
             messages: p.messages || [],
+            sessionState: p.sessionState ?? p.bivySession?.state,
             branch: p.branch,
             prUrl: p.prUrl,
           });
@@ -262,6 +275,7 @@ export class DirectTransport implements Transport {
             agentName: p.agentName,
             name: p.name,
             messages: [],
+            sessionState: p.sessionState ?? p.bivySession?.state,
             branch: p.branch,
             prUrl: p.prUrl,
           });
@@ -345,6 +359,12 @@ export class DirectTransport implements Transport {
         case "abort":
           await this.directApi("/api/session/abort", { method: "POST", body: JSON.stringify({ sessionId: obj.sessionId }) });
           break;
+        case "session.turn_attention.resolve":
+          await this.directApi("/api/session/turn-attention", {
+            method: "POST",
+            body: JSON.stringify({ sessionId: obj.sessionId, action: obj.action }),
+          });
+          break;
         case "session.command.invoke":
           // Protocol-mode agent command. Any output rides back over the live WS
           // (session.status / message / session.done), so no synthetic event here.
@@ -391,8 +411,16 @@ export class DirectTransport implements Transport {
         case "models.list":
           this.emitMerged(
             "models.list",
-            await this.directApi(`/api/models?${new URLSearchParams(obj.sessionId ? { sessionId: String(obj.sessionId) } : {})}`),
+            await this.directApi(`/api/models?${new URLSearchParams({
+              ...(obj.sessionId ? { sessionId: String(obj.sessionId) } : {}),
+              ...(obj.runtimeId ? { runtimeId: String(obj.runtimeId) } : {}),
+            })}`),
           );
+          break;
+        case "models.prefetch":
+          // Fire-and-forget: warm the node's per-runtime scratch so the first
+          // agent switch lists models instantly. No event to emit.
+          await this.directApi("/api/models/prefetch", { method: "POST", body: JSON.stringify({ runtimeIds: obj.runtimeIds }) });
           break;
         case "model.select":
           await this.directApi("/api/models/select", { method: "POST", body: JSON.stringify(obj) });
@@ -405,6 +433,9 @@ export class DirectTransport implements Transport {
           this.emit({ type: "node.stats", stats: await this.directApi(`/api/node/stats?${q}`) });
           break;
         }
+        case "capabilities.get":
+          this.emit({ type: "capabilities", capabilities: await this.directApi("/api/capabilities") });
+          break;
         case "runtimes.list":
           this.emitMerged("runtimes.list", await this.directApi("/api/runtimes"));
           break;
@@ -459,18 +490,36 @@ export class DirectTransport implements Transport {
         case "models.custom.presets":
           this.emitMerged("models.custom.presets", await this.directApi("/api/models/catalog"));
           break;
+        case "models.custom.discover": {
+          const requestId = String(obj.requestId ?? "");
+          try {
+            const result = await this.directApi("/api/models/discover", { method: "POST", body: "{}" });
+            this.emit({ type: "models.custom.discover.ok", requestId, ...result });
+          } catch (error) {
+            this.emit({ type: "models.custom.discover.error", requestId, error: error instanceof Error ? error.message : String(error) });
+          }
+          break;
+        }
+        case "models.custom.verify": {
+          const requestId = String(obj.requestId ?? "");
+          try {
+            const result = await this.directApi("/api/models/verify", { method: "POST", body: JSON.stringify(obj) });
+            this.emit({ type: "models.custom.verify.ok", requestId, ...result });
+          } catch (error) {
+            this.emit({ type: "models.custom.verify.error", requestId, error: error instanceof Error ? error.message : String(error) });
+          }
+          break;
+        }
         case "models.custom.save": {
           const requestId = String(obj.requestId ?? "");
           try {
-            this.emitMerged(
-              "models.custom.list",
-              await this.directApi("/api/models/custom", {
-                method: "POST",
-                body: JSON.stringify((obj as any).spec ?? obj),
-              }),
-            );
+            const result = await this.directApi("/api/models/custom", {
+              method: "POST",
+              body: JSON.stringify((obj as any).spec ?? obj),
+            });
+            this.emitMerged("models.custom.list", result);
             // Dedicated per-request ack, mirroring the relay path — see #140.
-            this.emit({ type: "models.custom.save.ok", requestId });
+            this.emit({ type: "models.custom.save.ok", requestId, provider: result.provider });
           } catch (error) {
             this.emit({ type: "models.custom.save.error", requestId, error: error instanceof Error ? error.message : String(error) });
           }
@@ -604,6 +653,12 @@ export class DirectTransport implements Transport {
           await this.directApi("/api/github/app/disconnect", { method: "POST", body: JSON.stringify({ appId: obj.appId }) });
           this.emit({ type: "github.app.disconnected", requestId: String(obj.requestId ?? ""), ok: true });
           break;
+        case "github.connect.start":
+          this.emitMerged("github.connect.status", await this.directApi("/api/github/connect/start", { method: "POST" }));
+          break;
+        case "github.connect.poll":
+          this.emitMerged("github.connect.status", await this.directApi("/api/github/connect/poll"));
+          break;
         case "approval":
           await this.directApi(
             `/api/approvals/${encodeURIComponent(String(obj.id))}/${obj.approved ? "approve" : "reject"}`,
@@ -642,6 +697,25 @@ export class DirectTransport implements Transport {
             { requestId: String(obj.requestId ?? "") },
           );
           break;
+        case "synthesize":
+          this.emitMerged(
+            "speech.audio",
+            await this.directApi("/api/speech", {
+              method: "POST",
+              body: JSON.stringify({ text: obj.text, voice: obj.voice, instructions: obj.instructions }),
+            }),
+            { requestId: String(obj.requestId ?? "") },
+          );
+          break;
+        case "node.update": {
+          try {
+            await this.directApi("/api/node/update", { method: "POST", body: "{}" });
+            this.emit({ type: "node.update.result", ok: true });
+          } catch (e) {
+            this.emit({ type: "node.update.result", ok: false, error: (e as Error)?.message || String(e) });
+          }
+          break;
+        }
         default:
           // Terminal I/O rides the raw WS in direct mode.
           if (String(obj.kind || "").startsWith("terminal.") && this.connected && this.ws?.readyState === 1) {

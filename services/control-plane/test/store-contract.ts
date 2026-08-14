@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import assert from "node:assert/strict";
 import type { MeshStore } from "../src/store.js";
@@ -190,6 +190,30 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.equal(await store.setInboundHookSecret(other.id, hook.id, "nope"), undefined);
   });
 
+  // --- Model-auth vault re-key on node removal --------------------------------
+  await test("model auth vault: removing a key holder requires rotation and re-wraps only survivors", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-model-auth-rotate@example.com");
+    const { node: a } = await store.enrollNode(acct.id, "node-mar-a", "A");
+    const { node: b } = await store.enrollNode(acct.id, "node-mar-b", "B");
+    const { node: c } = await store.enrollNode(acct.id, "node-mar-c", "C");
+    await store.setModelAuthNodePublicKey(acct.id, a.id, "a-pub");
+    await store.setModelAuthNodePublicKey(acct.id, b.id, "b-pub");
+    await store.setModelAuthNodePublicKey(acct.id, c.id, "c-pub");
+    await store.setModelAuthVault(acct.id, a.id, "ciphertext-old");
+    await store.setModelAuthWrappedKey(acct.id, b.id, a.id, "a-pub", "wrapped-old-b");
+    await store.setModelAuthWrappedKey(acct.id, c.id, a.id, "a-pub", "wrapped-old-c");
+
+    assert.equal(await store.removeNode(acct.id, b.id), true);
+    assert.equal((await store.getModelAuthVault(acct.id))?.needsRotation, true);
+    await assert.rejects(() => store.setModelAuthVault(acct.id, c.id, "unsafe-same-key"), /rotation is required/);
+
+    const rotated = await store.setModelAuthVault(acct.id, c.id, "ciphertext-new", true);
+    assert.equal(rotated.needsRotation, false);
+    assert.equal(await store.getModelAuthWrappedKey(acct.id, c.id), undefined, "old survivor wraps are cleared");
+    const requests = await store.listModelAuthKeyRequests(acct.id, c.id);
+    assert.deepEqual(requests.map((request) => request.nodeId), [a.id], "only another currently-enrolled survivor is queued for the new key");
+  });
+
   // --- GitHub App private-key vault (issue #88) -------------------------------
   await test("github app vault: push, request, and wrap round-trip per app", async (store) => {
     const acct = await store.findOrCreateAccount("contract-ghvault@example.com");
@@ -282,9 +306,15 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.equal(canonical?.routing.nodeLabel, "bivy");
     assert.equal(canonical?.title, "A");
     assert.equal(claimed?.status, "claimed");
-    assert.equal(await store.claimWorkItem(acct.id, node.id, a.id), undefined); // second claim loses
+    assert.ok(claimed?.leaseExpiresAt && Date.parse(claimed.leaseExpiresAt) > Date.now(), "claim has a finite future lease");
+    const renewed = await store.renewWorkItemLease(acct.id, node.id, a.id);
+    assert.ok(renewed?.leaseExpiresAt, "the owning node can renew its lease");
+    assert.equal(await store.renewWorkItemLease(acct.id, "other-node", a.id), undefined, "a non-owner cannot renew");
+    assert.equal(await store.claimWorkItem(acct.id, node.id, a.id), undefined); // second live claim loses
     await store.completeWorkItem(acct.id, a.id);
-    assert.equal((await store.listWorkItems(acct.id)).find((w) => w.id === a.id)?.status, "succeeded");
+    const completed = (await store.listWorkItems(acct.id)).find((w) => w.id === a.id);
+    assert.equal(completed?.status, "succeeded");
+    assert.equal(completed?.leaseExpiresAt, undefined, "terminal work releases its lease");
   });
 
   // Issue #153: every run gets a readable trigger→claim→attempt→outcome
@@ -295,11 +325,11 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     const acct = await store.findOrCreateAccount("contract-evidence@example.com");
     const { node } = await store.enrollNode(acct.id, "node-evidence", "Laptop");
     const run = await store.enqueueWorkItem(acct.id, { label: "bivy", source: "github:issue", title: "Flaky", repo: "o/r", issueNumber: 42, url: "https://github.com/o/r/issues/42" });
-    assert.equal(run.events?.[0]?.kind, "triggered");
+    assert.deepEqual(run.events?.map((event) => event.kind), ["trigger_received", "trigger_matched", "queued", "routed"]);
 
     assert.ok(await store.claimWorkItem(acct.id, node.id, run.id));
     const afterClaim = await store.getAutomationRun(acct.id, run.id);
-    assert.deepEqual(afterClaim?.events?.map((e) => e.kind), ["triggered", "claimed"]);
+    assert.deepEqual(afterClaim?.events?.map((e) => e.kind), ["trigger_received", "trigger_matched", "queued", "routed", "claimed"]);
 
     // The node reports why it chose this runtime, then hits a transient error
     // and falls back to a different one (attempt 1 -> 2), each with its reason.
@@ -331,7 +361,7 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.equal(final?.output?.commit, "def456");
     assert.deepEqual(final?.checks?.map((c) => c.status), ["passed"]);
     const kinds = final?.events?.map((e) => e.kind);
-    assert.deepEqual(kinds, ["triggered", "claimed", "retry", "fallback", "pull_request", "attempt_started", "completed"]);
+    assert.deepEqual(kinds, ["trigger_received", "trigger_matched", "queued", "routed", "claimed", "retry", "fallback", "pull_request", "checks_started", "checks_completed", "agent_started", "result_delivery", "terminal"]);
     const retryEvent = final?.events?.find((e) => e.kind === "retry");
     assert.equal(retryEvent?.attempt, 1);
     assert.match(retryEvent?.summary ?? "", /rate-limit/);
@@ -410,6 +440,165 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     const triggers = await store.listTriggerEvents(acct.id);
     assert.equal(triggers.some((event) => event.id === slack.triggerId && event.sourceKey === "slack:event:1"), true);
     assert.equal((await store.listTriggerEvents((await store.findOrCreateAccount("contract-automation-other@example.com")).id)).length, 0);
+  });
+
+  await test("automation runs: cancellation is scoped, bounded, and idempotent", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-cancel@example.com");
+    const other = await store.findOrCreateAccount("contract-cancel-other@example.com");
+    const { node } = await store.enrollNode(acct.id, "cancel-owner", "Cancel owner");
+    const run = await store.enqueueAutomationRun(acct.id, {
+      source: "manual",
+      triggerKind: "manual",
+      title: "Cancel me",
+    });
+    assert.ok(await store.claimWorkItem(acct.id, node.id, run.id));
+    assert.ok(await store.transitionAutomationRun(acct.id, run.id, "running"));
+    for (let i = 0; i < 105; i++) {
+      await store.appendRunEvidence(acct.id, run.id, {
+        events: [{ at: new Date().toISOString(), kind: "retry", summary: `Retry ${i}` }],
+      });
+    }
+
+    assert.equal(await store.cancelAutomationRun(other.id, run.id), undefined, "cross-account ids look unknown");
+    const cancelled = await store.cancelAutomationRun(acct.id, run.id);
+    assert.equal(cancelled?.transitioned, true);
+    assert.equal(cancelled?.previousStatus, "running");
+    assert.equal(cancelled?.run.status, "cancelled");
+    assert.equal(cancelled?.run.leaseExpiresAt, undefined, "cancellation clears the renewable lease");
+    assert.equal(cancelled?.run.claimedByNodeId, node.id, "owner tombstone remains for cancellation acknowledgement");
+    assert.ok(cancelled?.run.completedAt);
+    assert.equal(cancelled?.run.events?.length, 100);
+    assert.equal(cancelled?.run.events?.at(-1)?.kind, "terminal");
+
+    const repeated = await store.cancelAutomationRun(acct.id, run.id);
+    assert.equal(repeated?.transitioned, false);
+    assert.equal(repeated?.previousStatus, "cancelled");
+    assert.equal(repeated?.run.events?.filter((event) => event.kind === "cancel_requested").length, 1);
+    assert.equal(repeated?.run.completedAt, cancelled?.run.completedAt);
+
+    for (const status of ["pending", "claimed", "needs_attention"] as const) {
+      const candidate = await store.enqueueAutomationRun(acct.id, { source: "manual", title: `Cancel ${status}` });
+      if (status !== "pending") assert.ok(await store.claimWorkItem(acct.id, node.id, candidate.id));
+      if (status === "needs_attention") {
+        assert.ok(await store.transitionAutomationRun(acct.id, candidate.id, "running"));
+        assert.ok(await store.transitionAutomationRun(acct.id, candidate.id, "needs_attention"));
+      }
+      const result = await store.cancelAutomationRun(acct.id, candidate.id);
+      assert.equal(result?.previousStatus, status);
+      assert.equal(result?.run.status, "cancelled");
+    }
+
+    const finished = await store.enqueueAutomationRun(acct.id, { source: "manual", title: "Already done" });
+    assert.ok(await store.claimWorkItem(acct.id, node.id, finished.id));
+    assert.ok(await store.transitionAutomationRun(acct.id, finished.id, "running"));
+    assert.ok(await store.transitionAutomationRun(acct.id, finished.id, "succeeded"));
+    const conflict = await store.cancelAutomationRun(acct.id, finished.id);
+    assert.equal(conflict?.transitioned, false);
+    assert.equal(conflict?.previousStatus, "succeeded");
+    assert.equal(conflict?.run.status, "succeeded");
+  });
+
+  await test("automation runs: outcome finality, node-scoped completion, and immutable terminals", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-finality@example.com");
+    const { node: a } = await store.enrollNode(acct.id, "finality-a", "A");
+    const { node: b } = await store.enrollNode(acct.id, "finality-b", "B");
+
+    // A Machine that lost its lease to a reclaim cannot complete the new attempt:
+    // a node-scoped transition no-ops when the Run is claimed by someone else.
+    const run = await store.enqueueAutomationRun(acct.id, { source: "manual", triggerKind: "manual", title: "Node scoped" });
+    assert.ok(await store.claimWorkItem(acct.id, a.id, run.id));
+    assert.equal(await store.transitionAutomationRun(acct.id, run.id, "running", undefined, b.id), undefined, "a non-owner node cannot advance the Run");
+    assert.equal(await store.completeWorkItem(acct.id, run.id, b.id), undefined, "a non-owner node cannot complete the Run");
+    assert.equal(await store.appendRunEvidence(acct.id, run.id, { events: [{ at: new Date().toISOString(), kind: "checkpoint", summary: "stale write" }] }, b.id), undefined, "a non-owner node cannot append evidence");
+    assert.equal((await store.getAutomationRun(acct.id, run.id))?.events?.some((event) => event.summary === "stale write"), false);
+    assert.equal((await store.getAutomationRun(acct.id, run.id))?.status, "claimed", "the losing node's writes never landed");
+    assert.equal((await store.transitionAutomationRun(acct.id, run.id, "running", undefined, a.id))?.status, "running", "the true owner still advances");
+    assert.equal((await store.completeWorkItem(acct.id, run.id, a.id))?.status, "succeeded");
+
+    // A terminal outcome is immutable: no other terminal (or any) transition rewrites it.
+    assert.equal(await store.transitionAutomationRun(acct.id, run.id, "failed"), undefined, "succeeded cannot become failed");
+    assert.equal(await store.transitionAutomationRun(acct.id, run.id, "needs_attention"), undefined, "succeeded cannot re-open");
+    const reCancel = await store.cancelAutomationRun(acct.id, run.id);
+    assert.equal(reCancel?.transitioned, false, "a finished Run cannot be cancelled");
+    assert.equal(reCancel?.run.status, "succeeded");
+
+    // Cancellation beats a stale completion racing behind it: once cancelled, even
+    // the owning node's complete is a no-op, so the outcome stays Cancelled.
+    const raced = await store.enqueueAutomationRun(acct.id, { source: "manual", triggerKind: "manual", title: "Cancel then complete" });
+    assert.ok(await store.claimWorkItem(acct.id, a.id, raced.id));
+    assert.ok(await store.transitionAutomationRun(acct.id, raced.id, "running", undefined, a.id));
+    assert.equal((await store.cancelAutomationRun(acct.id, raced.id))?.transitioned, true);
+    assert.equal(await store.completeWorkItem(acct.id, raced.id, a.id), undefined, "the owner's late completion cannot un-cancel");
+    assert.equal((await store.getAutomationRun(acct.id, raced.id))?.status, "cancelled");
+  });
+
+  await test("automation runs: retry is one durable Run with fenced attempts", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-retry@example.com");
+    const { node } = await store.enrollNode(acct.id, "retry-node", "Retry node");
+    const run = await store.enqueueAutomationRun(acct.id, { source: "manual", title: "Retry me", maxAttempts: 3 });
+    assert.ok(await store.claimWorkItem(acct.id, node.id, run.id));
+    assert.ok(await store.transitionAutomationRun(acct.id, run.id, "running", undefined, node.id));
+    assert.ok(await store.transitionAutomationRun(acct.id, run.id, "failed", { failure: "runtime failed", sessionId: "old-session" }, node.id));
+    const retried = await store.retryAutomationRun(acct.id, run.id);
+    assert.equal(retried?.transitioned, true);
+    assert.equal(retried?.run.id, run.id, "retry preserves the customer-visible Run id");
+    assert.equal(retried?.run.attempt, 2);
+    assert.equal(retried?.run.status, "pending");
+    assert.equal(retried?.run.claimedByNodeId, undefined);
+    assert.equal(retried?.run.output, undefined);
+    assert.equal(retried?.run.checks?.length, 0);
+    assert.equal(retried?.run.events?.at(-1)?.kind, "retry");
+
+    assert.ok(await store.claimWorkItem(acct.id, node.id, run.id));
+    assert.ok(await store.transitionAutomationRun(acct.id, run.id, "running", undefined, node.id));
+    assert.ok(await store.transitionAutomationRun(acct.id, run.id, "failed", { failure: "failed again" }, node.id));
+    assert.equal((await store.retryAutomationRun(acct.id, run.id))?.run.attempt, 3);
+    assert.ok(await store.claimWorkItem(acct.id, node.id, run.id));
+    assert.ok(await store.transitionAutomationRun(acct.id, run.id, "running", undefined, node.id));
+    assert.ok(await store.transitionAutomationRun(acct.id, run.id, "failed", { failure: "last failure" }, node.id));
+    const exhausted = await store.retryAutomationRun(acct.id, run.id);
+    assert.equal(exhausted?.transitioned, false);
+    assert.equal(exhausted?.reason, "attempt_limit");
+    assert.equal(exhausted?.run.status, "failed");
+  });
+
+  await test("automation definitions: webhook trigger fields and event context round-trip", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-webhook-def@example.com");
+    const def = await store.createAutomationDefinition(acct.id, {
+      name: "Fix CI",
+      trigger: "webhook",
+      webhookSecret: "s3cr3t",
+      templateCiphertext: "bivy-room-v1:node-x:opaque",
+      nodeLabel: "bivy/runner",
+      sandbox: "workspace-write",
+      enabled: true,
+    });
+    assert.equal(def.trigger, "webhook");
+    assert.equal(def.webhookSecret, "s3cr3t");
+    // Resolvable by id alone (the public webhook endpoint has no account scope).
+    const byId = await store.getAutomationDefinitionById(def.id);
+    assert.equal(byId?.accountId, acct.id);
+    assert.equal(byId?.webhookSecret, "s3cr3t");
+    assert.equal(await store.getAutomationDefinitionById("automation_does-not-exist"), undefined);
+    // A webhook-triggered run carries the untrusted event context and inherits
+    // the definition's routing/sandbox.
+    const run = await store.enqueueAutomationRun(acct.id, {
+      source: `automation:${def.id}`,
+      triggerKind: "webhook",
+      definitionId: def.id,
+      title: "CI failed",
+      body: def.templateCiphertext,
+      eventContext: "Build 8841 failed",
+      dedupeKey: `automation:${def.id}:evt-1`,
+    });
+    assert.equal(run.eventContext, "Build 8841 failed");
+    assert.equal(run.triggerKind, "webhook");
+    assert.equal(run.routing.sandbox, "workspace-write");
+    assert.ok(run.routing.nodeLabel.includes("runner"));
+    // Rotating the secret persists; the sentinel-scheduled webhook def is never due.
+    const rotated = await store.updateAutomationDefinition(acct.id, def.id, { webhookSecret: "rotated" });
+    assert.equal(rotated?.webhookSecret, "rotated");
+    assert.equal((await store.listDueAutomationDefinitions(new Date().toISOString())).some((d) => d.id === def.id), false);
   });
 
   await test("work queue: dedupeKey is idempotent per account", async (store) => {

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { classifyFailure, parseRetryAfterMs, parseResetsAt } from "../src/policy/conditions.js";
+import { classifyFailure, parseRetryAfterMs, parseResetsAt, parseResetClock } from "../src/policy/conditions.js";
 
 let failures = 0;
 function check(name: string, fn: () => void) {
@@ -18,6 +18,10 @@ const cases: [string, string][] = [
   ["Your credit balance is too low to run this request", "credits_exhausted"],
   ["402 Payment Required: quota exceeded for this month", "credits_exhausted"],
   ["You've hit your limit · resets later today", "credits_exhausted"],
+  // A Claude subscription usage cap — the window qualifier must not defeat the match.
+  ["You've hit your weekly limit · resets 12am (UTC)", "credits_exhausted"],
+  ["You've hit your 5-hour limit", "credits_exhausted"],
+  ["7-day limit reached for this account", "credits_exhausted"],
   ["Session limit reached; try later", "credits_exhausted"],
   ["This model's maximum context length is 200000 tokens", "context_overflow"],
   ["prompt is too long: 250000 tokens", "context_overflow"],
@@ -78,6 +82,43 @@ check("attaches a reset timestamp to a session-limit classification", () => {
 check("does not invent recovery hints for unknown failures", () => {
   const c = classifyFailure("kaboom");
   assert.equal(c.retryAfterMs, undefined);
+  assert.equal(c.resetsAt, undefined);
+});
+
+const NOON_UTC = Date.parse("2026-08-05T22:40:00Z");
+
+check("parses a bare wall-clock reset to the next occurrence (UTC)", () => {
+  assert.equal(parseResetClock("resets 12am (UTC)", NOON_UTC), "2026-08-06T00:00:00.000Z");
+  assert.equal(parseResetClock("resets 3pm UTC", NOON_UTC), "2026-08-06T15:00:00.000Z");
+  assert.equal(parseResetClock("resets at 09:00 UTC", NOON_UTC), "2026-08-06T09:00:00.000Z");
+  // Earlier today's 11pm hasn't passed yet at 22:40 → today, not tomorrow.
+  assert.equal(parseResetClock("resets at 11pm", NOON_UTC), "2026-08-05T23:00:00.000Z");
+});
+
+check("wall-clock parser ignores relative phrases and bare numbers", () => {
+  assert.equal(parseResetClock("please try again in 2 minutes", NOON_UTC), undefined);
+  assert.equal(parseResetClock("resets in 2 hours", NOON_UTC), undefined);
+  assert.equal(parseResetClock("scaled to 5 nodes", NOON_UTC), undefined);
+});
+
+check("attaches a wall-clock reset to a weekly-limit classification", () => {
+  const c = classifyFailure("You've hit your weekly limit · resets 12am (UTC)", { now: NOON_UTC });
+  assert.equal(c.condition, "credits_exhausted");
+  assert.equal(c.resetsAt, "2026-08-06T00:00:00.000Z");
+});
+
+check("a structured resetsAtHint wins over anything scraped from the text", () => {
+  const c = classifyFailure("You've hit your weekly limit · resets 12am (UTC)", {
+    now: NOON_UTC,
+    resetsAtHint: "2026-08-11T00:00:00.000Z", // the true 7-day reset, days away
+  });
+  assert.equal(c.condition, "credits_exhausted");
+  assert.equal(c.resetsAt, "2026-08-11T00:00:00.000Z");
+});
+
+check("resetsAtHint is ignored for non-limit conditions", () => {
+  const c = classifyFailure("socket hang up", { resetsAtHint: "2026-08-11T00:00:00.000Z" });
+  assert.equal(c.condition, "transport_error");
   assert.equal(c.resetsAt, undefined);
 });
 

@@ -11,7 +11,12 @@ Bivy can turn a Slack slash command into an unattended agent run on one of your 
 5. In the Slack app, open **Slash Commands**, create `/bivy`, and paste that Request URL.
 6. Install or reinstall the app to your workspace.
 
-Bivy stores the signing secret only to verify Slack's request signatures. Requests older than five minutes and requests with invalid signatures are rejected.
+Bivy stores the signing secret only to verify Slack's request signatures.
+Requests older than five minutes and requests with invalid signatures are
+rejected. The slash-command text necessarily reaches Bivy Cloud in plaintext
+and is retained as the queued run's title until that run is deleted, so do not
+put credentials or other secrets in `/bivy` commands. Repository contents,
+agent transcripts, and model credentials still stay on the node.
 
 ## Commands
 
@@ -26,7 +31,7 @@ Bivy stores the signing secret only to verify Slack's request signatures. Reques
 - `in <owner/repo>` clones or refreshes that GitHub repository, creates an isolated worktree, and instructs the agent to test, commit, push, and open a pull request. The node must have access to the repository through its connected GitHub App or GitHub token.
 - With neither clause, the request runs in the node's configured default workspace. If that workspace is a GitHub checkout, Bivy still creates an isolated worktree.
 
-Slack receives an immediate private acknowledgement. Progress and outcomes appear in **Settings → Work Queue**; completed repository runs include the pull-request URL when one was opened.
+Slack receives an immediate private acknowledgement. Progress and outcomes appear in **Runs**; completed repository Runs include the pull-request URL when one was opened.
 
 ## Troubleshooting
 

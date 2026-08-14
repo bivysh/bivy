@@ -1,6 +1,6 @@
-// Issue #389: migrate the built-in CLI agents onto the generic resume primitive
+// Issue #389: migrate maintained CLI profiles onto the generic resume primitive
 // (the same data-driven `resume.template` mechanism Codex already used — see
-// CLI_AGENT_SPECS in src/runtime/index.ts). This exercises the FULL dispatch
+// AGENT_PROFILES in src/agents/profiles.ts). This exercises the FULL dispatch
 // (makeRuntime → ProcessRuntime.resumeArgs) with stub binaries standing in for
 // real CLIs, so it runs in CI with no gemini/goose installed — plus the
 // escape-hatch `generic-cli` runtime's BIVY_AGENT_RESUME_TEMPLATE env var.
@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { makeRuntime } from "../src/runtime/index.js";
+import { makeRuntime, invalidateCliProbeCache } from "../src/runtime/index.js";
 import { processRuntimeFromEnv } from "../src/runtime/process.js";
 import type { RuntimeEvent } from "../src/runtime/types.js";
 
@@ -45,6 +45,11 @@ function writeStub(name: string, argsFile: string, stdoutLines: string[]) {
     ].join("\n"),
     { mode: 0o755 },
   );
+  // CLI presence is probed once and memoized for the process lifetime (cleared on
+  // install). Writing a stub is that install, so drop the cache — otherwise a
+  // catalog build that probed this name before the stub existed keeps reporting it
+  // "not found".
+  invalidateCliProbeCache();
 }
 
 function runToEnd(session: { subscribe: (l: (e: RuntimeEvent) => void) => () => void; prompt: (t: string) => Promise<void> }): Promise<RuntimeEvent[]> {
@@ -138,7 +143,7 @@ delete process.env.BIVY_SANDBOX;
 const SECOND_WAVE = [
   { id: "cursor", bin: "cursor-agent", resumable: true, expect: ["--force", "--resume=SID", "-p"] },
   { id: "copilot", bin: "copilot", resumable: false, expect: ["--allow-all-tools", "-p"] },
-  { id: "grok", bin: "grok", resumable: false, expect: ["-p"] },
+  { id: "grok", bin: "grok", resumable: true, expect: ["--resume", "SID", "-p"] },
   { id: "amp", bin: "amp", resumable: true, expect: ["threads", "continue", "SID", "-x"] },
   { id: "auggie", bin: "auggie", resumable: false, expect: ["--quiet", "--print"] },
   { id: "droid", bin: "droid", resumable: false, expect: ["exec", "--auto", "high"] },
@@ -154,20 +159,39 @@ for (const agent of SECOND_WAVE) {
     const argsFile = path.join(tmp, `${agent.id}-args.txt`);
     writeStub(agent.bin, argsFile, ["done"]);
 
-    const runtime = makeRuntime({ runtime: agent.id, credsDir: tmp, piDir: tmp, sessionsDir: tmp });
-    assert.equal(runtime.capabilities.resume, agent.resumable, `${agent.id} resume capability should be ${agent.resumable}`);
-
-    const sessionId = `sess-${agent.id}`;
-    const { session } = await runtime.openSession({ workspace: tmp, sessionFile: sessionId });
-    await runToEnd(session);
-
-    const launched = fs.readFileSync(argsFile, "utf8");
-    for (const token of agent.expect) {
-      const needle = token.replace(/SID/g, sessionId);
-      assert.ok(launched.includes(needle), `${agent.id}: expected argv to include '${needle}', got: ${launched}`);
+    // Grok's process path runs a credential preflight that short-circuits with
+    // agent_end (no spawn) when neither an API key nor auth.json is present.
+    // CI runners are clean, so mint a dummy key for the duration of this case
+    // so we exercise the actual argv template rather than the preflight path.
+    const prevXai = process.env.XAI_API_KEY;
+    const prevGrokKey = process.env.GROK_API_KEY;
+    if (agent.id === "grok") {
+      process.env.XAI_API_KEY = "test-xai-key-for-cli-resume";
+      delete process.env.GROK_API_KEY;
     }
-    // The prompt ("hello", from runToEnd) is passed as the trailing argv argument.
-    assert.ok(/(^|\s)hello(\s|$)/.test(launched), `${agent.id}: prompt should be the trailing arg, got: ${launched}`);
+    try {
+      const runtime = makeRuntime({ runtime: agent.id, credsDir: tmp, piDir: tmp, sessionsDir: tmp });
+      assert.equal(runtime.capabilities.resume, agent.resumable, `${agent.id} resume capability should be ${agent.resumable}`);
+
+      const sessionId = `sess-${agent.id}`;
+      const { session } = await runtime.openSession({ workspace: tmp, sessionFile: sessionId });
+      await runToEnd(session);
+
+      const launched = fs.readFileSync(argsFile, "utf8");
+      for (const token of agent.expect) {
+        const needle = token.replace(/SID/g, sessionId);
+        assert.ok(launched.includes(needle), `${agent.id}: expected argv to include '${needle}', got: ${launched}`);
+      }
+      // The prompt ("hello", from runToEnd) is passed as the trailing argv argument.
+      assert.ok(/(^|\s)hello(\s|$)/.test(launched), `${agent.id}: prompt should be the trailing arg, got: ${launched}`);
+    } finally {
+      if (agent.id === "grok") {
+        if (prevXai === undefined) delete process.env.XAI_API_KEY;
+        else process.env.XAI_API_KEY = prevXai;
+        if (prevGrokKey === undefined) delete process.env.GROK_API_KEY;
+        else process.env.GROK_API_KEY = prevGrokKey;
+      }
+    }
   });
 }
 

@@ -1,5 +1,14 @@
 import assert from "node:assert/strict";
-import { listRuntimes, RUNTIME_CATALOG } from "../src/runtime/index.js";
+import fs from "node:fs";
+import { listRegisteredAgents, listRuntimes } from "../src/runtime/index.js";
+
+// OpenCode is promoted to the governed ACP path by default, but only when the
+// binary on THIS machine evidences the `acp` subcommand — so its advertised
+// capabilities would otherwise differ between a dev box with opencode installed
+// and CI without it. Pin the pipe path for the effect-level assertions below
+// (they describe what the plain ProcessRuntime adapters deliver); the promoted
+// path is asserted at the end of this file, and end-to-end in acp-adapter.test.ts.
+process.env.BIVY_OPENCODE_ACP = "0";
 
 // The agent picker must offer exactly the most-used coding agents, all driven
 // through Bivy's general paths (native runtimes, the Codex app-server shim, and
@@ -36,16 +45,39 @@ assert.equal(listed.length, EXPECTED_PICKER.length, `the picker should show ${EX
 // from the picker: it has no verified non-TTY headless mode upstream yet, so a
 // picker entry would hang on a pipe. It must be in the catalog but NOT the picker
 // — the same honest treatment as hermes/openclaw.
-assert.ok(RUNTIME_CATALOG.some((r) => r.id === "codebuff"), "codebuff must exist in the catalog");
+assert.ok(listRegisteredAgents().some((r) => r.id === "codebuff"), "codebuff must exist in the registry");
 assert.ok(!listed.includes("codebuff"), "codebuff must stay hidden from the picker (no verified headless mode)");
 assert.ok(!listed.includes("hermes") && !listed.includes("openclaw"), "hermes/openclaw stay hidden");
 
 // Every listed agent must carry a support tier and a description the UI renders.
 for (const runtime of listRuntimes()) {
+  assert.equal(runtime.source?.kind, "package", `${runtime.id} must carry explicit integration-package provenance`);
+  assert.equal(runtime.source?.kind === "package" ? runtime.source.packageId : "", "bivy-agent-integrations");
   assert.ok(runtime.supportTier, `${runtime.id} must declare a supportTier`);
   assert.ok(runtime.description && runtime.description.length > 0, `${runtime.id} must have a description`);
   assert.ok(runtime.capabilities, `${runtime.id} must declare capabilities`);
+  assert.ok(runtime.protectionLevel, `${runtime.id} must declare its effective protection mechanism`);
+  assert.ok(runtime.protectionLabel && runtime.protectionDetail, `${runtime.id} must explain its protection in customer language`);
+  assert.ok(runtime.certification, `${runtime.id} must report certification confidence`);
+  if (runtime.supportTier === "supported") {
+    assert.equal(runtime.certification, "release-tested", `${runtime.id} cannot be Recommended without release certification`);
+    assert.ok(runtime.testedVersion, `${runtime.id} must name the exact release-tested dependency version`);
+  }
 }
+// A "release-tested" runtime must name the version we actually ship against.
+// Read it from the INSTALLED package rather than a lockfile: pnpm-lock.yaml
+// keys entries by resolved peer set, so there is no single stable path to look
+// up, and the installed manifest is the thing the tests actually exercised.
+function installedVersion(pkg: string): string {
+  const manifest = new URL(`../node_modules/${pkg}/package.json`, import.meta.url);
+  return JSON.parse(fs.readFileSync(manifest, "utf8")).version;
+}
+assert.equal(listRuntimes().find((r) => r.id === "pi")!.testedVersion, installedVersion("@earendil-works/pi-coding-agent"));
+assert.equal(listRuntimes().find((r) => r.id === "claude-code-sdk")!.testedVersion, installedVersion("@anthropic-ai/claude-agent-sdk"));
+assert.equal(listRuntimes().find((r) => r.id === "pi")!.protectionLevel, "tool-controls");
+assert.equal(listRuntimes().find((r) => r.id === "claude-code-sdk")!.protectionLevel, "native-sandbox");
+assert.equal(listRuntimes().find((r) => r.id === "gemini")!.protectionLevel, "native-sandbox");
+assert.equal(listRuntimes().find((r) => r.id === "opencode")!.protectionLevel, "user-permissions");
 
 // Honesty invariant (docs/agents-not-fully-supported.md): the CLI ProcessRuntime
 // adapters govern at the effect level and stream stdout — they must NOT advertise
@@ -63,11 +95,11 @@ for (const id of CLI_ADAPTERS) {
 
 // resume is on only for the CLI agents with a genuine native "continue session
 // <id>" flag (opencode -s, gemini/qwen -r|--resume, goose --resume --session-id,
-// cline --id) — wired as a spec.resume template (see CLI_AGENT_SPECS in
-// src/runtime/index.ts). Aider and Crush have no such upstream flag, so they stay
+// cline --id) — wired as a spec.resume template (see AGENT_PROFILES in
+// src/agents/profiles.ts). Aider and Crush have no such upstream flag, so they stay
 // off until one exists (see the per-agent comments there).
-const RESUME_CAPABLE = ["opencode", "gemini", "qwen", "goose", "cline", "cursor", "amp", "kilocode", "rovodev"];
-const RESUME_INCAPABLE = ["aider", "crush", "copilot", "grok", "auggie", "droid", "continue"];
+const RESUME_CAPABLE = ["opencode", "gemini", "qwen", "goose", "cline", "cursor", "amp", "kilocode", "rovodev", "grok"];
+const RESUME_INCAPABLE = ["aider", "crush", "copilot", "auggie", "droid", "continue"];
 for (const id of RESUME_CAPABLE) {
   const caps = listRuntimes().find((r) => r.id === id)!.capabilities as Record<string, unknown>;
   assert.equal(caps.resume, true, `${id} should advertise resume (it has a built-in resume template)`);
@@ -125,17 +157,24 @@ assert.equal(
 // so if the catalog constant drifts from the live runtime instance the client
 // never learns steering is available and force-queues every mid-turn message.
 // Guards against the two catalog constants (CLAUDE_CAPABILITIES / PI_CAPABILITIES
-// in src/runtime/index.ts) silently dropping what the runtimes actually advertise.
+// in src/agents/profiles.ts) silently dropping what the runtimes actually advertise.
 const claudeCaps = listRuntimes().find((r) => r.id === "claude-code-sdk")!.capabilities as Record<string, unknown>;
 assert.deepEqual(claudeCaps.streamingBehaviors, ["steer"], "claude-code-sdk must advertise steer in the catalog");
 const piCaps = listRuntimes().find((r) => r.id === "pi")!.capabilities as Record<string, unknown>;
 assert.deepEqual(piCaps.streamingBehaviors, ["steer", "followUp"], "pi must advertise steer + followUp in the catalog");
+assert.deepEqual(piCaps.inputModes, { queued: true, steer: true, outOfBand: false });
+assert.deepEqual((claudeCaps.sessionActions as Record<string, unknown>).forkConversation, true);
+const aiderCaps = listRuntimes().find((r) => r.id === "aider")!.capabilities as Record<string, unknown>;
+assert.deepEqual(aiderCaps.inputModes, { queued: true, steer: false, outOfBand: false });
+assert.equal((aiderCaps.sessionActions as Record<string, unknown>).resume, false);
 
 // Newly promoted agents are present with their display names.
-const byId = Object.fromEntries(RUNTIME_CATALOG.map((r) => [r.id, r]));
+const byId = Object.fromEntries(listRegisteredAgents().map((r) => [r.id, r]));
 assert.equal(byId.qwen.displayName, "Qwen Code");
 assert.equal(byId.cline.displayName, "Cline");
 assert.equal(byId.crush.displayName, "Crush");
+assert.equal(byId.pi.authOwner, "agent", "Pi must retain its upstream credential store");
+assert.equal(byId["claude-code-sdk"].authOwner, "agent", "Claude Code must retain its upstream credential store");
 assert.equal(byId.cursor.displayName, "Cursor");
 assert.equal(byId.copilot.displayName, "GitHub Copilot");
 assert.equal(byId.grok.displayName, "Grok");
@@ -193,5 +232,45 @@ for (const id of ["opencode", "cursor", "gemini"]) {
 }
 if (priorMcpProxy === undefined) delete process.env.BIVY_MCP_PROXY;
 else process.env.BIVY_MCP_PROXY = priorMcpProxy;
+
+// The Supported tier is the paid-support promise, so its membership is pinned here
+// rather than left to drift: an agent may only join it by earning the capabilities
+// the tier implies. Pi and Claude Code are the native runtimes; Codex and OpenCode
+// both run over a bidirectional protocol with per-tool Approve/Deny and real resume.
+const SUPPORTED = ["pi", "claude-code-sdk", "codex-approvals", "opencode"].sort();
+const listedSupported = listRuntimes().filter((r) => r.supportTier === "supported").map((r) => r.id).sort();
+assert.deepEqual(listedSupported, SUPPORTED, `Supported tier membership changed: ${listedSupported.join(", ")}`);
+
+// Codex earns the tier on the pipe-free app-server path: approvals, model
+// selection, resume, and native discovery — the same surface as Claude Code.
+const codex = listRuntimes().find((r) => r.id === "codex-approvals")!;
+const codexCaps = codex.capabilities as Record<string, unknown>;
+assert.equal(codexCaps.toolInterception, true, "Codex must gate each tool call to be Supported");
+assert.equal(codexCaps.resume, true, "Codex must resume its thread to be Supported");
+assert.equal(codexCaps.modelSelection, true, "Codex must drive a real model picker to be Supported");
+assert.equal(codex.protectionLevel, "native-sandbox", "Codex keeps its native sandbox containment");
+
+// OpenCode earns it through its ACP server. Assert the promoted path directly —
+// the file-level pin above holds it on the pipe for the effect-level assertions.
+process.env.BIVY_OPENCODE_ACP = "1";
+try {
+  const opencode = listRuntimes().find((r) => r.id === "opencode")!;
+  const caps = opencode.capabilities as Record<string, unknown>;
+  assert.equal(opencode.executionMode, "protocol", "OpenCode must run over ACP to be Supported");
+  assert.equal(caps.toolInterception, true, "OpenCode must gate each tool call to be Supported");
+  assert.equal(caps.resume, true, "OpenCode must resume via session/load to be Supported");
+  assert.equal(opencode.protectionLevel, "tool-controls", "promoted OpenCode is governed by Bivy tool controls, not bare user permissions");
+} finally {
+  process.env.BIVY_OPENCODE_ACP = "0";
+}
+
+// Both pin the exact external CLI release the adapter was certified against. These
+// are real binaries rather than lockfile dependencies, so nothing but this
+// assertion stops the tier from outliving the version it was validated on.
+for (const id of ["codex-approvals", "opencode"]) {
+  const info = listRuntimes().find((r) => r.id === id)!;
+  assert.equal(info.certification, "release-tested", `${id} must be release-tested to sit in the Supported tier`);
+  assert.match(info.testedVersion ?? "", /^\d+\.\d+\.\d+/, `${id} must name the exact CLI version it was certified against`);
+}
 
 console.log("runtime-catalog: all tests passed");

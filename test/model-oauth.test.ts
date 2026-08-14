@@ -11,10 +11,12 @@ import path from "node:path";
 import { createCredentialVault } from "../src/runtime/credential-store.js";
 import {
   extractAuthCode,
+  escapeOAuthHtml,
   isNativeOAuthProvider,
   nativeOAuthProviderIds,
   loginModelOAuth,
   refreshModelOAuth,
+  refreshModelOAuthState,
   type AuthInteraction,
 } from "../src/runtime/oauth/model-oauth.js";
 
@@ -71,6 +73,13 @@ await check("extractAuthCode handles a redirect URL, code#state, and a raw code"
   assert.equal(extractAuthCode("  plaincode  "), "plaincode");
 });
 
+await check("OAuth callback HTML escapes provider-controlled text", async () => {
+  assert.equal(
+    escapeOAuthHtml(`<script>alert("x")</script> & 'quoted'`),
+    "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; &#39;quoted&#39;",
+  );
+});
+
 await check("Anthropic auth-code login (manual paste) exchanges + persists an oauth credential", async () => {
   const dir = tmpDir();
   const calls = stubFetch((call) => {
@@ -124,6 +133,26 @@ await check("xAI device-code login requests a code, polls, and persists", async 
   assert.equal((cred as { access?: string }).access, "xai-at");
 });
 
+await check("xAI device poll treats a friendly \"not yet authorized\" 400 as pending, not a fatal error", async () => {
+  // xAI returns a human error_description ("User has not yet authorized") with
+  // HTTP 400 for the still-pending state instead of the RFC-8628
+  // `authorization_pending` code — the poll must keep waiting, not abort.
+  const dir = tmpDir();
+  let polls = 0;
+  stubFetch((call) => {
+    if (call.url === "https://auth.x.ai/oauth2/device/code") {
+      return { json: { device_code: "dev", user_code: "USER-CODE", verification_uri: "https://x.ai/device", interval: 0, expires_in: 300 } };
+    }
+    polls += 1;
+    if (polls < 3) return { ok: false, status: 400, json: { error_description: "User has not yet authorized" } };
+    return { json: { access_token: "xai-at", refresh_token: "xai-rt", expires_in: 3600 } };
+  });
+  await loginModelOAuth(dir, "xai", { notify: () => {}, prompt: async () => "" });
+  assert.ok(polls >= 3, "polled through the friendly pending responses instead of throwing");
+  const cred = await createCredentialVault(dir).read("xai");
+  assert.equal((cred as { access?: string }).access, "xai-at");
+});
+
 await check("refresh rotates the token, persists it, and returns the fresh access token", async () => {
   const dir = tmpDir();
   const store = createCredentialVault(dir);
@@ -151,6 +180,16 @@ await check("xAI refresh keeps the previous refresh token when the response omit
   await refreshModelOAuth(dir, "xai");
   const cred = await store.read("xai");
   assert.equal((cred as { refresh?: string }).refresh, "keep-me", "non-rotating provider keeps its refresh token");
+});
+
+await check("refresh state distinguishes transient failure from reconnect required", async () => {
+  const dir = tmpDir();
+  const store = createCredentialVault(dir);
+  await store.modify("anthropic", async () => ({ type: "oauth", access: "old", refresh: "rt", expires: Date.now() - 1000 }));
+  stubFetch(() => ({ ok: false, status: 503, json: { error: "temporarily_unavailable" } }));
+  assert.equal((await refreshModelOAuthState(dir, "anthropic")).state, "transient_failure");
+  stubFetch(() => ({ ok: false, status: 400, json: { error: "invalid_grant" } }));
+  assert.equal((await refreshModelOAuthState(dir, "anthropic")).state, "reconnect_required");
 });
 
 await check("concurrent refresh is single-flight — only one network exchange", async () => {

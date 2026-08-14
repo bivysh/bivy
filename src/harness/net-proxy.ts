@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // Universal Agent Harness — network effect boundary (egress broker).
 //
@@ -27,6 +27,36 @@ export interface NetDecision {
 
 /** Consulted before any outbound connection. `port` is the destination port. */
 export type NetDecider = (host: string, port: number) => NetDecision | Promise<NetDecision>;
+
+/** Allow every destination (the proxy's default — pure observe-and-log). */
+export const allowAllDecider: NetDecider = () => ({ allow: true });
+
+/**
+ * Deny every destination. Used for a per-session egress proxy that enforces the
+ * `read-only` sandbox tier's "no network" contract for agents whose own sandbox
+ * doesn't (see egress.ts). Node-local traffic never reaches here — the proxy env's
+ * NO_PROXY exempts localhost — so the agent can still reach the daemon's own MCP/API.
+ */
+export function denyAllDecider(reason = "read-only sandbox: outbound network is disabled"): NetDecider {
+  return () => ({ allow: false, reason });
+}
+
+/**
+ * Allow only hosts in `hosts` (exact, or a subdomain of a listed apex — "api.x.com"
+ * matches an entry "x.com"), denying everything else. The building block for a
+ * per-workflow egress allowlist that never touches the node-global decider. Host
+ * matching is case-insensitive; an empty list denies all.
+ */
+export function allowlistDecider(hosts: string[], reason = "not on this session's egress allowlist"): NetDecider {
+  const allow = new Set(hosts.map((h) => h.trim().toLowerCase()).filter(Boolean));
+  return (host: string) => {
+    const h = host.trim().toLowerCase();
+    for (const entry of allow) {
+      if (h === entry || h.endsWith(`.${entry}`)) return { allow: true };
+    }
+    return { allow: false, reason };
+  };
+}
 
 export type NetEvent =
   | { type: "http"; host: string; port: number; method: string; url: string; allowed: boolean; reason?: string }

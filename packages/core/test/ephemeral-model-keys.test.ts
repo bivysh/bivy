@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import "fake-indexeddb/auto";
 import { describe, expect, it } from "vitest";
@@ -21,8 +21,8 @@ describe("ephemeral model-key store (device-held seeds)", () => {
     // list() is UI-facing metadata only — no key material, sorted by provider.
     const listed = await store.list();
     expect(listed).toEqual([
-      { provider: "anthropic", configured: true, updatedAt: expect.any(String) },
-      { provider: "openai", configured: true, updatedAt: expect.any(String) },
+      { provider: "anthropic", configured: true, updatedAt: expect.any(String), scope: "account" },
+      { provider: "openai", configured: true, updatedAt: expect.any(String), scope: "account" },
     ]);
     expect(JSON.stringify(listed)).not.toContain("sk-ant-123");
 
@@ -30,8 +30,8 @@ describe("ephemeral model-key store (device-held seeds)", () => {
     const entries = await store.entries();
     expect(entries).toEqual(
       expect.arrayContaining([
-        { provider: "anthropic", key: "sk-ant-123" },
-        { provider: "openai", key: "sk-oai-456" },
+        { provider: "anthropic", key: "sk-ant-123", updatedAt: expect.any(String), scope: "account" },
+        { provider: "openai", key: "sk-oai-456", updatedAt: expect.any(String), scope: "account" },
       ]),
     );
   });

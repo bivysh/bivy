@@ -1,4 +1,4 @@
-import type { AgentRuntime, ForkNativePayload, RuntimeMessage } from "../runtime/types.js";
+import type { AgentRuntime, ForkImportContext, ForkNativePayload, RuntimeMessage } from "../runtime/types.js";
 import {
   normalizeMessages,
   buildSeedPrompt,
@@ -46,6 +46,16 @@ export interface ForkRecord {
   source?: string;
   title?: string;
   model?: string;
+  /** Provider/id pair for preserving the model on a same-runtime fork. */
+  modelRef?: { provider: string; id: string };
+  /**
+   * The source session's sandbox tier (a `SandboxTier` string). Carried so a
+   * fork of a sandboxed session lands sandboxed too, rather than silently
+   * defaulting to the destination node's tier. Typed loosely to keep this
+   * runtime-agnostic module free of the harness dependency; the server
+   * normalizes it back to a `SandboxTier` before use.
+   */
+  sandbox?: string;
 }
 
 /** Uncommitted working-tree changes carried alongside the transcript. */
@@ -69,8 +79,8 @@ export interface ForkBundle {
 
 export interface BuildForkBundleOptions {
   runtime: AgentRuntime;
-  /** The runtime resume ref the node holds (a path for pi, an id for Claude). */
-  sessionFile: string;
+  /** Runtime resume ref when one exists. Non-resumable/live-only agents omit it. */
+  sessionFile?: string;
   record: ForkRecord;
   dirtyPatch?: ForkDirtyPatch;
   /**
@@ -108,7 +118,16 @@ export function buildForkBundle(opts: BuildForkBundleOptions): ForkBundle {
   // Prefer the build-free readMessages fast path (pi/Claude); fall back to the
   // live session's transcript for runtimes without one (the generic CLI runtime),
   // so a fork *from* any agent still carries its real history.
-  const messages = runtime.readMessages?.(sessionFile) ?? opts.liveMessages;
+  let messages = opts.liveMessages;
+  if (sessionFile && runtime.readMessages) {
+    try {
+      messages = runtime.readMessages(sessionFile) ?? messages;
+    } catch {
+      // Runtime-native readers are best-effort. The live transcript is the
+      // universal source fallback and keeps one broken adapter from blocking a
+      // fork out to every other agent.
+    }
+  }
   const normalized = normalizeMessages(messages, {
     sourceRuntimeId: runtime.id,
     model: record.model,
@@ -117,10 +136,15 @@ export function buildForkBundle(opts: BuildForkBundleOptions): ForkBundle {
   });
   // Only worth capturing when the target is the same runtime (or not yet known).
   const nativeCouldReplay = !opts.targetRuntimeId || opts.targetRuntimeId === runtime.id;
-  const native =
-    nativeCouldReplay && runtime.capabilities.forkTransport && runtime.exportForFork
-      ? runtime.exportForFork(sessionFile)
-      : undefined;
+  let native: ForkNativePayload | undefined;
+  if (sessionFile && nativeCouldReplay && runtime.capabilities.forkTransport && runtime.exportForFork) {
+    try {
+      native = runtime.exportForFork(sessionFile);
+    } catch {
+      // A native export is an optimization, never the only route. The portable
+      // transcript below still supports replay or a seeded continuation.
+    }
+  }
   return { record, normalized, ...(native ? { native } : {}), ...(opts.dirtyPatch ? { dirtyPatch: opts.dirtyPatch } : {}) };
 }
 
@@ -146,6 +170,7 @@ export function resolveForkFidelity(bundle: ForkBundle, targetRuntime: AgentRunt
   const canReplayHistory =
     !!targetRuntime.capabilities.forkHistoryImport &&
     typeof targetRuntime.importHistoryForFork === "function" &&
+    Array.isArray(bundle.normalized?.turns) &&
     bundle.normalized.turns.length > 0;
   return canReplayHistory ? "replayed" : "seeded";
 }
@@ -176,7 +201,7 @@ export type ForkPlan = ForkResume | ForkSeed;
 export interface MaterializeForkOptions {
   bundle: ForkBundle;
   targetRuntime: AgentRuntime;
-  ctx: { workspace: string; cwd: string };
+  ctx: ForkImportContext;
   /** Seed prompt shaping for the cross-runtime path (transcript URL, target name…). */
   seed?: SeedPromptOptions;
 }
@@ -191,26 +216,41 @@ export interface MaterializeForkOptions {
  */
 export async function materializeFork(opts: MaterializeForkOptions): Promise<ForkPlan> {
   const { bundle, targetRuntime, ctx } = opts;
-  const fidelity = resolveForkFidelity(bundle, targetRuntime);
-  if (fidelity === "full" && bundle.native && targetRuntime.importForFork) {
-    const { sessionFile, id } = await targetRuntime.importForFork(bundle.native, ctx);
-    return { kind: "resume", fidelity: "full", sessionFile, id };
+  const intended = resolveForkFidelity(bundle, targetRuntime);
+  const validImport = (result: { sessionFile?: unknown; id?: unknown } | undefined): result is { sessionFile: string; id: string } =>
+    typeof result?.sessionFile === "string" && result.sessionFile.trim().length > 0 &&
+    typeof result.id === "string" && result.id.trim().length > 0;
+
+  // Native transport is the preferred same-runtime route, but never a single
+  // point of failure. An adapter upgrade, stale native store, or malformed
+  // payload degrades through the exact same portable path all agents share.
+  if (intended === "full" && bundle.native && targetRuntime.importForFork) {
+    try {
+      const imported = await targetRuntime.importForFork(bundle.native, ctx);
+      if (validImport(imported)) return { kind: "resume", fidelity: "full", ...imported };
+    } catch {
+      // Continue to portable replay (if supported), then the universal seed.
+    }
   }
-  // True cross-runtime fork: write the whole transcript as real prior turns into
-  // the target runtime's own store and resume it. Best-effort — if the runtime's
-  // history import throws (a malformed store, an unwritable dir), fall through to
-  // a seeded prompt so the fork still succeeds rather than erroring outright.
-  if (fidelity === "replayed" && targetRuntime.importHistoryForFork) {
+
+  // Write the runtime-neutral conversation into any destination that advertises
+  // a native history serializer. This path also rescues a failed same-runtime
+  // native import, so Pi/Claude/Codex all share one degradation ladder.
+  const canReplay =
+    !!targetRuntime.capabilities.forkHistoryImport &&
+    typeof targetRuntime.importHistoryForFork === "function";
+  if (canReplay) {
     try {
       const history = buildForkHistory(bundle.normalized);
       if (history.length > 0) {
-        const { sessionFile, id } = await targetRuntime.importHistoryForFork(history, ctx);
-        return { kind: "resume", fidelity: "replayed", sessionFile, id };
+        const imported = await targetRuntime.importHistoryForFork!(history, ctx);
+        if (validImport(imported)) return { kind: "resume", fidelity: "replayed", ...imported };
       }
     } catch {
-      // fall through to the seeded continuation below
+      // Fall through to the agent-independent seeded continuation below.
     }
   }
+
   const seedPrompt = buildSeedPrompt(bundle.normalized, {
     targetAgent: targetRuntime.displayName,
     context: { repoSlug: bundle.record.repoSlug, branch: bundle.record.branch, prUrl: bundle.record.prUrl },

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // Universal Agent Harness — Phase 4: structured chat fidelity for CLI agents.
 //
@@ -22,6 +22,8 @@
 // Unit-tested with fixtures in test/runtime-cli-parsers.test.ts.
 
 import type { RuntimeEvent, RuntimeMessage, UsageSnapshot } from "./types.js";
+import { mapToolCall, mapToolResult, type ToolCallMapContext } from "./tool-call-map.js";
+import { traceToolPayload } from "./tool-trace.js";
 
 export interface CliParser {
   /** Feed one complete stdout line; return normalized events to emit. */
@@ -81,9 +83,27 @@ class TurnAccumulator {
   ended = false;
   reasoning = "";
   usageSnapshot: UsageSnapshot | undefined;
-  readonly toolUses: Array<Record<string, unknown>> = [];
   readonly toolResults: Array<Record<string, unknown>> = [];
+  // Ordered content blocks (text + tool_use, interleaved exactly as they
+  // streamed) for the assistant turn. A prior version tracked `text` and tool
+  // uses separately and always emitted the whole turn's text ahead of every
+  // tool call on finish() — collapsing a turn like "Let me check." → tool →
+  // "Now editing." → tool into one merged text block followed by both tools.
+  // That read as interim messages "disappearing"/bundling at the end once
+  // history reconciled against it. `textFlushed` is the prefix of `text`
+  // already sealed into `content` as its own block.
+  private readonly content: Array<Record<string, unknown>> = [];
+  private textFlushed = "";
   private readonly out: RuntimeMessage[] = [];
+  private readonly details = new Map<string, ReturnType<typeof mapToolCall>>();
+
+  private flushPendingText() {
+    const pending = this.text.slice(this.textFlushed.length);
+    this.textFlushed = this.text;
+    if (pending) this.content.push({ type: "text", text: pending });
+  }
+
+  constructor(private readonly toolContext: ToolCallMapContext) {}
 
   ensureStart(events: RuntimeEvent[]) {
     if (!this.started) {
@@ -118,25 +138,39 @@ class TurnAccumulator {
   }
 
   addToolUse(id: string, name: string, input: unknown, events: RuntimeEvent[]) {
-    this.toolUses.push({ type: "tool_use", id, name, input: input ?? {} });
-    events.push({ type: "tool_call", toolName: name, input, toolCallId: id });
+    traceToolPayload({ phase: "call", context: this.toolContext, name, callId: id, payload: input });
+    // Attach a normalized ToolCallDetail (display-only) so the PWA renders this
+    // call the same way it renders every other agent's equivalent call. Absent
+    // when unrecognized — the block stays opaque and renders as before.
+    const detail = mapToolCall(name, input, this.toolContext);
+    if (detail && id) this.details.set(id, detail);
+    this.flushPendingText();
+    this.content.push({ type: "tool_use", id, name, input: input ?? {}, ...(detail ? { detail } : {}) });
+    events.push({ type: "tool_call", toolName: name, input, toolCallId: id, ...(detail ? { detail } : {}) });
   }
 
-  addToolResult(toolUseId: string, name: string, content: unknown, events: RuntimeEvent[]) {
-    this.toolResults.push({ type: "tool_result", tool_use_id: toolUseId, content: content ?? "" });
-    events.push({ type: "tool_result", toolName: name, result: { toolCallId: toolUseId, content } });
+  addToolResult(toolUseId: string, name: string, content: unknown, events: RuntimeEvent[], isError = false) {
+    traceToolPayload({ phase: "result", context: this.toolContext, name, callId: toolUseId, payload: content });
+    const prior = this.details.get(toolUseId);
+    const detail = prior ? { ...prior, result: mapToolResult(content, isError) } : undefined;
+    if (detail) this.details.set(toolUseId, detail);
+    this.toolResults.push({ type: "tool_result", tool_use_id: toolUseId, content: content ?? "", ...(detail ? { detail } : {}) });
+    events.push({ type: "tool_result", toolName: name, result: { toolCallId: toolUseId, content }, ...(detail ? { detail } : {}) });
   }
 
   /** Finalize the turn: emit message_end/turn_end/agent_end and record history. */
   finish(events: RuntimeEvent[]) {
     if (this.ended) return;
     this.ended = true;
+    // Whether this turn ever used a tool — checked BEFORE flushing trailing
+    // text, so a tool-free turn (content still empty at this point) keeps the
+    // plain-text message shape it always had instead of gaining a pointless
+    // single-text-block wrapper.
+    const hadTools = this.content.length > 0 || this.toolResults.length > 0;
     const message = { role: "assistant", content: this.text };
-    if (this.toolUses.length || this.toolResults.length) {
-      const content: Array<Record<string, unknown>> = [];
-      if (this.text) content.push({ type: "text", text: this.text });
-      content.push(...this.toolUses);
-      if (content.length) this.out.push({ role: "assistant", content });
+    if (hadTools) {
+      this.flushPendingText();
+      if (this.content.length) this.out.push({ role: "assistant", content: this.content });
       if (this.toolResults.length) this.out.push({ role: "user", content: this.toolResults });
     } else if (this.text) {
       this.out.push(message);
@@ -153,7 +187,7 @@ class TurnAccumulator {
 
 /** Parser for the bivy-agent-protocol JSONL event vocabulary (the universal path). */
 export function bivyProtocolParser(): CliParser {
-  const acc = new TurnAccumulator();
+  const acc = new TurnAccumulator({ provider: "bivy-protocol", protocol: "protocol" });
   return {
     onLine(line) {
       const events: RuntimeEvent[] = [];
@@ -197,7 +231,7 @@ export function bivyProtocolParser(): CliParser {
 
 /** Parser for Claude Code CLI `--output-format stream-json`. */
 export function claudeStreamJsonParser(): CliParser {
-  const acc = new TurnAccumulator();
+  const acc = new TurnAccumulator({ provider: "claude", protocol: "structured-pipe" });
   return {
     onLine(line) {
       const events: RuntimeEvent[] = [];
@@ -257,7 +291,7 @@ export function claudeStreamJsonParser(): CliParser {
  *   {"type":"error","message":…}   ← transient reconnect noise (non-fatal)
  */
 export function codexJsonParser(): CliParser {
-  const acc = new TurnAccumulator();
+  const acc = new TurnAccumulator({ provider: "codex", protocol: "structured-pipe" });
   const handleItem = (item: Record<string, unknown>, events: RuntimeEvent[]) => {
     const id = String(item.id ?? "");
     switch (String(item.type ?? "")) {
@@ -267,7 +301,7 @@ export function codexJsonParser(): CliParser {
       case "command_execution":
         acc.addToolUse(id, "shell", { command: item.command ?? "" }, events);
         if (item.aggregated_output != null || item.exit_code != null) {
-          acc.addToolResult(id, "shell", item.aggregated_output ?? "", events);
+          acc.addToolResult(id, "shell", { content: item.aggregated_output ?? "", exitCode: item.exit_code }, events, Number(item.exit_code) !== 0);
         }
         break;
       case "mcp_tool_call":
@@ -352,7 +386,7 @@ export function codexJsonParser(): CliParser {
  *   {"type":"complete","total_tokens":…}
  */
 export function gooseStreamJsonParser(): CliParser {
-  const acc = new TurnAccumulator();
+  const acc = new TurnAccumulator({ provider: "goose", protocol: "structured-pipe" });
   return {
     onLine(line) {
       const events: RuntimeEvent[] = [];
@@ -409,7 +443,7 @@ export function gooseStreamJsonParser(): CliParser {
  * We accumulate all stdout and parse it once at close.
  */
 export function geminiJsonParser(): CliParser {
-  const acc = new TurnAccumulator();
+  const acc = new TurnAccumulator({ provider: "gemini", protocol: "structured-pipe" });
   let raw = "";
   return {
     onLine(line) {
@@ -488,7 +522,7 @@ const STREAM_TERMINALS = new Set(["result", "done", "complete", "completed", "tu
  * it can never LOSE the reply (worst case it degrades to the dumb-pipe view).
  */
 export function genericStreamJsonParser(): CliParser {
-  const acc = new TurnAccumulator();
+  const acc = new TurnAccumulator({ provider: "generic", protocol: "structured-pipe" });
   let sawText = false;
   let rawBuffer = "";
   return {
@@ -548,7 +582,7 @@ export function genericStreamJsonParser(): CliParser {
  * reply guarantee as the streaming parser.
  */
 export function genericJsonParser(): CliParser {
-  const acc = new TurnAccumulator();
+  const acc = new TurnAccumulator({ provider: "generic", protocol: "structured-pipe" });
   let raw = "";
   return {
     onLine(line) {
@@ -597,7 +631,7 @@ export const CLI_PARSERS: Record<string, CliParserFactory> = {
   "goose-stream-json": gooseStreamJsonParser,
   "gemini-json": geminiJsonParser,
   // Tolerant, format-agnostic parsers for CLIs whose JSON vocabularies we haven't
-  // pinned exactly yet (opt-in per agent via a spec parserId; see CLI_AGENT_SPECS).
+  // pinned exactly yet (opt-in per agent via a spec parserId; see AGENT_PROFILES).
   "generic-stream-json": genericStreamJsonParser,
   "generic-json": genericJsonParser,
 };

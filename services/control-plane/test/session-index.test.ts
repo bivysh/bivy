@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import assert from "node:assert/strict";
 import { createPgMemStore } from "../src/pg-mem-store.js";
@@ -27,7 +27,8 @@ async function setup() {
 await test("replace + list round-trips metadata, never plaintext titles", async () => {
   const { store, accountId, nodeId } = await setup();
   await store.replaceNodeSessions(accountId, nodeId, [
-    { sessionId: "s1", status: "working", source: "issue:#12", titleEnc: "OPAQUE_BLOB", branch: "bivy/issue-12" },
+    { sessionId: "s1", status: "working", source: "issue:#12", titleEnc: "OPAQUE_BLOB", branch: "bivy/issue-12",
+      attention: [{ id: "approval-1", kind: "approval", severity: "warning", createdAt: "2026-01-01T00:00:00.000Z" }] },
   ]);
   const list = await store.listAccountSessions(accountId);
   assert.equal(list.length, 1);
@@ -36,7 +37,20 @@ await test("replace + list round-trips metadata, never plaintext titles", async 
   assert.equal(list[0].status, "working");
   assert.equal(list[0].source, "issue:#12");
   assert.equal(list[0].titleEnc, "OPAQUE_BLOB"); // stored verbatim, never decrypted
+  assert.deepEqual(list[0].attention, [{ id: "approval-1", kind: "approval", severity: "warning", createdAt: "2026-01-01T00:00:00.000Z" }]);
   assert.ok(list[0].updatedAt, "stamped with updatedAt");
+});
+
+await test("replace preserves node activity timestamps instead of restamping every row now", async () => {
+  const { store, accountId, nodeId } = await setup();
+  const old = "2025-06-01T12:00:00.000Z";
+  const recent = "2026-01-01T12:00:00.000Z";
+  await store.replaceNodeSessions(accountId, nodeId, [
+    { sessionId: "old", status: "saved", updatedAt: old },
+    { sessionId: "recent", status: "idle", updatedAt: recent },
+  ]);
+  const list = await store.listAccountSessions(accountId);
+  assert.deepEqual(list.map((s) => [s.sessionId, s.updatedAt]), [["recent", recent], ["old", old]]);
 });
 
 await test("replace is full-replace (handles removals)", async () => {
@@ -82,12 +96,16 @@ await test("upsert updates one session in place without touching the rest", asyn
   ]);
   // Flip s1's status incrementally — s2 must survive untouched (the old code
   // read + rewrote the whole index; the upsert path must preserve it).
-  await store.upsertNodeSession(accountId, nodeId, { sessionId: "s1", status: "working", titleEnc: "T1" });
+  const activityAt = "2026-02-03T04:05:06.000Z";
+  const attention = [{ id: "q1", kind: "question" as const, severity: "warning" as const, createdAt: activityAt }];
+  await store.upsertNodeSession(accountId, nodeId, { sessionId: "s1", status: "working", titleEnc: "T1", updatedAt: activityAt, attention });
   const list = await store.listAccountSessions(accountId);
   assert.deepEqual([...list.map((s) => s.sessionId)].sort(), ["s1", "s2"]);
   const s1 = list.find((s) => s.sessionId === "s1")!;
   const s2 = list.find((s) => s.sessionId === "s2")!;
   assert.equal(s1.status, "working");
+  assert.equal(s1.updatedAt, activityAt);
+  assert.deepEqual(s1.attention, attention);
   assert.equal(s2.status, "idle", "sibling session is left untouched");
   assert.equal(s2.titleEnc, "T2");
 });

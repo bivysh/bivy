@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // A minimal STUB Agent Client Protocol (ACP) agent for testing bin/acp-shim.mjs.
 // Speaks newline-delimited JSON-RPC 2.0 over stdio, implementing just enough of
 // ACP to exercise the shim end-to-end: initialize, session/new, session/load, and
@@ -55,6 +55,16 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         const granted = outcome?.outcome?.outcome === "selected" && outcome.outcome.optionId === "ok";
         notify("session/update", { sessionId, update: { sessionUpdate: "tool_call_update", toolCallId: "tc1", status: granted ? "completed" : "failed", content: { type: "text", text: granted ? "file.txt" : "denied" } } });
         reply(id, { stopReason: "end_turn" });
+        // Simulate the opencode ACP end_turn race (opencode#17505): the LAST
+        // agent_message_chunk frames are emitted AFTER the session/prompt reply —
+        // the reply resolves, and the tail lands a moment later. The shim must
+        // hold session.done until this tail is drained, or the interim message
+        // streams live but never persists to history.
+        if (process.env.ACP_TRAILING_CHUNK === "1") {
+          setTimeout(() => {
+            notify("session/update", { sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: " — trailing tail that must survive reopen" } } });
+          }, 30);
+        }
       });
       return;
     }

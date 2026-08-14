@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 /**
  * GitHub App **manifest** flow (M2, one-click create).
@@ -35,8 +35,19 @@ export function buildAppManifest(input: AppManifestInput): Record<string, unknow
       contents: "write",
       pull_requests: "write",
       metadata: "read",
+      // workflow_run failures → Fix failed CI automations (read-only on Actions).
+      actions: "read",
+      checks: "read",
     },
-    default_events: ["issues", "issue_comment"],
+    // Curated capability set — automations pick subsets via `on` rules.
+    // Labels + @mentions on issues/PRs/comments; failed workflow runs for CI.
+    default_events: [
+      "issues",
+      "issue_comment",
+      "pull_request",
+      "pull_request_review_comment",
+      "workflow_run",
+    ],
   };
 }
 

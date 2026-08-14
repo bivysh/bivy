@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { strict as assert } from "node:assert";
 import test from "node:test";
@@ -382,7 +382,31 @@ test("appendBaseSnapshot round-trips through disk and seeds prevKeys from disk a
   }
 });
 
-test("deriveHistory prefers the runtime base and falls back to the log's base", () => {
+test("missing logs are empty, but malformed logs and append failures are reported", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-eventlog-"));
+  try {
+    const issues: Array<{ operation: string; message: string }> = [];
+    const missing = new EventLog(dir, (id) => path.join(dir, `${id}.jsonl`), (t) => t, 0, (issue) => issues.push(issue));
+    assert.deepEqual(missing.read("missing"), []);
+    assert.equal(issues.length, 0, "ENOENT is the only normal empty-log state");
+
+    fs.writeFileSync(path.join(dir, "corrupt.jsonl"), "{not-json}\n");
+    assert.deepEqual(missing.diskUsage(), { files: 1, bytes: Buffer.byteLength("{not-json}\n") });
+    assert.deepEqual(missing.read("corrupt"), []);
+    assert.equal(issues.at(-1)?.operation, "parse");
+    assert.equal(missing.health().ok, false);
+
+    const appendIssues: Array<{ operation: string }> = [];
+    const unwritable = new EventLog(dir, (id) => path.join(dir, "missing-parent", `${id}.jsonl`), (t) => t, 0, (issue) => appendIssues.push(issue));
+    unwritable.append("s1", STREAMS["streaming reasoning (same id refined per delta)"]![0]!);
+    assert.equal(appendIssues.at(-1)?.operation, "append");
+    assert.equal(unwritable.health().pendingSessions, 1, "failed appends stay queued for retry");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("deriveHistory unions the runtime base with the log's base and never shrinks", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-eventlog-"));
   try {
     const pathFor = (id: string) => path.join(dir, `${encodeURIComponent(id)}.jsonl`);
@@ -390,11 +414,45 @@ test("deriveHistory prefers the runtime base and falls back to the log's base", 
     for (const e of STREAMS["tool call then result, interleaved with a later turn"]!) log.append("s1", e);
     log.appendBaseSnapshot("s1", BASE);
     log.flush("s1");
-    // Runtime base present → merged onto it (same as mergeConversation did live).
+    // Runtime base present and matching → merged onto it (same as mergeConversation did live).
     assert.deepEqual(log.deriveHistory("s1", BASE), mergeTranscript(BASE, log.read("s1")));
     // Runtime base empty (reopened process-agent session) → replay the persisted base.
     assert.deepEqual(log.deriveHistory("s1", []), mergeTranscript(BASE, log.read("s1")));
     assert.deepEqual(log.deriveHistory("s1"), mergeTranscript(BASE, log.read("s1")));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("deriveHistory: a resumed blank runtime reporting a strict prefix keeps the persisted base", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-eventlog-"));
+  try {
+    const pathFor = (id: string) => path.join(dir, `${encodeURIComponent(id)}.jsonl`);
+    const log = new EventLog(dir, pathFor, (t) => t, 0);
+    log.appendBaseSnapshot("s1", BASE);
+    log.flush("s1");
+    // opencode resume: session/load returns no history, so the runtime only ever
+    // reports the post-resume tail. The union must keep the full persisted base.
+    const tail = [baseMsg("assistant", "a1", 200)];
+    assert.deepEqual(log.deriveHistory("s1", tail), mergeTranscript(BASE, log.read("s1")));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("deriveHistory: a resumed blank runtime's disjoint new turns concatenate after the persisted base", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-eventlog-"));
+  try {
+    const pathFor = (id: string) => path.join(dir, `${encodeURIComponent(id)}.jsonl`);
+    const log = new EventLog(dir, pathFor, (t) => t, 0);
+    log.appendBaseSnapshot("s1", BASE);
+    log.flush("s1");
+    // The runtime has no history of q1/final, only the brand-new turn 2, so its
+    // base is disjoint from (and shorter than) the log's. Both must survive, in
+    // log-then-runtime order.
+    const newTurn = [baseMsg("user", "q2b", 500), baseMsg("assistant", "a2b", 600)];
+    const derived = log.deriveHistory("s1", newTurn);
+    assert.deepEqual(derived, mergeTranscript([...BASE, ...newTurn], log.read("s1")));
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

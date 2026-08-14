@@ -1,6 +1,7 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { createServer, type IncomingMessage } from "node:http";
+import { timingSafeEqual } from "node:crypto";
 import { WebSocketServer, WebSocket } from "ws";
 import { forwardOrEvict } from "./backpressure.js";
 import { renderRelayMetrics, PROMETHEUS_CONTENT_TYPE } from "./metrics.js";
@@ -47,6 +48,50 @@ if ((process.env.NODE_ENV === "production" || !isLocalControlPlane) && (!process
 // is purely observational and has no effect on behavior.
 const shardId = process.env.RELAY_SHARD_ID ?? null;
 const enforceEntitlements = process.env.ENFORCE_ENTITLEMENTS === "1";
+
+// Account-free ("solo") admission. OFF by default and only honoured when the
+// operator explicitly opts in — the hosted relay leaves this unset, so its
+// control-plane-introspected admission path is provably unchanged (Gap 1).
+//
+// In this mode a node/client presents a `room` (an unguessable id from the
+// pairing QR) plus a bearer `roomToken` (the pairing secret) instead of a
+// control-plane ticket. The FIRST node to claim a room fixes its token (TOFU);
+// a client is admitted iff it presents the same token. Security rests on three
+// legs: (1) the room id is unguessable so an attacker cannot pre-claim a room
+// it doesn't know; (2) the token is a high-entropy bearer matched in constant
+// time; (3) session content stays E2E-encrypted — the relay never sees it. The
+// relay stays blind either way. Suitable for a self-hosted, single-user relay.
+const allowRoomTokens = process.env.RELAY_ALLOW_ROOM_TOKENS === "1";
+// Fail fast on a dangerous misconfiguration: a relay reaching a real (non-local)
+// control plane is an account-gated deployment, and enabling account-free room
+// tokens there would open an admission path that BYPASSES the control plane's
+// entitlement/ownership checks — anyone with a room id + token gets on. Solo
+// mode is for a self-hosted, control-plane-free relay only, so we refuse rather
+// than silently run a relay that is account-gated on one door and open on the
+// other. (A localhost control plane — i.e. no real CP — is still fine.)
+if (allowRoomTokens && !isLocalControlPlane) {
+  console.error(
+    "Refusing to start: RELAY_ALLOW_ROOM_TOKENS=1 (account-free admission) must not be combined with a non-local control plane. " +
+      "Solo mode is for a self-hosted relay with no control plane; point CONTROL_PLANE_URL at localhost or unset the room-token flag.",
+  );
+  process.exit(1);
+}
+// The minimum entropy floor we can enforce relay-side: reject a room token
+// shorter than a 128-bit secret (32 hex / ~22 base64url chars).
+const MIN_ROOM_TOKEN_LEN = 22;
+// room id -> the token that first claimed it (solo mode only). Cleared when the
+// room is torn down, so it never grows unbounded.
+const roomTokens = new Map<string, string>();
+
+// Constant-time bearer comparison. Different lengths can't be compared by
+// timingSafeEqual (it throws), so we short-circuit — that leaks only length,
+// negligible for a high-entropy secret.
+function tokenMatch(a: string, b: string): boolean {
+  const ba = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ba.length !== bb.length) return false;
+  return timingSafeEqual(ba, bb);
+}
 const maxFrameBytes = Number(process.env.RELAY_MAX_FRAME_BYTES ?? 256 * 1024);
 // Agent sessions can legitimately stream hundreds/thousands of small events
 // per minute. A too-low node-side rate limit makes the relay terminate the
@@ -205,6 +250,42 @@ const httpServer = createServer((req, res) => {
     res.end(JSON.stringify({ ok: true, shardId, rooms: rooms.size, ...metrics }));
     return;
   }
+  if (req.method === "POST" && req.url === "/internal/run-updated") {
+    void (async () => {
+      if (!authOk(req)) {
+        res.writeHead(401, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "Unauthorized" }));
+        return;
+      }
+      const body = await readJsonBody(req);
+      const accountId = typeof body?.accountId === "string" ? body.accountId : "";
+      const id = typeof body?.id === "string" ? body.id : "";
+      const revision = typeof body?.revision === "string" ? body.revision : undefined;
+      if (!accountId || !id) {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "accountId and id required" }));
+        return;
+      }
+      // A client is attached to one node room, but the hint is account-wide: an
+      // operator watching machine A must still see a Run advance on machine B.
+      // De-duplicate sockets defensively if room topology ever permits a client
+      // to appear more than once. The hint is content-free; clients fetch the
+      // canonical account-scoped record before rendering anything.
+      const recipients = new Set<WebSocket>();
+      for (const r of rooms.values()) {
+        if (r.nodeAccountId !== accountId) continue;
+        for (const client of r.clients) if (client.readyState === WebSocket.OPEN) recipients.add(client);
+      }
+      for (const client of recipients) send(client, { t: "run.updated", id, revision });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true, delivered: recipients.size }));
+    })().catch((error) => {
+      Sentry.captureException(error);
+      res.writeHead(500, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "Internal error" }));
+    });
+    return;
+  }
   if (req.method === "POST" && req.url === "/internal/work-available") {
     void (async () => {
       if (!authOk(req)) {
@@ -216,14 +297,15 @@ const httpServer = createServer((req, res) => {
       const accountId = typeof body?.accountId === "string" ? body.accountId : "";
       const id = typeof body?.id === "string" ? body.id : undefined;
       const label = typeof body?.label === "string" ? body.label : undefined;
+      const nodeId = typeof body?.nodeId === "string" ? body.nodeId : undefined;
       if (!accountId) {
         res.writeHead(400, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "accountId required" }));
         return;
       }
       let delivered = 0;
-      for (const r of rooms.values()) {
-        if (r.nodeAccountId === accountId && r.node?.readyState === WebSocket.OPEN) {
+      for (const [roomNodeId, r] of rooms) {
+        if ((!nodeId || roomNodeId === nodeId) && r.nodeAccountId === accountId && r.node?.readyState === WebSocket.OPEN) {
           send(r.node, { t: "work.available", id, label });
           delivered += 1;
         }
@@ -319,6 +401,51 @@ const heartbeat = setInterval(() => {
 heartbeat.unref();
 
 async function handleConnection(role: "node" | "client", ws: WebSocket, url: URL) {
+  // Account-free admission (opt-in, no control plane). See allowRoomTokens.
+  const roomToken = url.searchParams.get("roomToken");
+  if (allowRoomTokens && roomToken) {
+    const roomId = url.searchParams.get("room") ?? url.searchParams.get("nodeId");
+    if (!roomId) {
+      send(ws, { t: "error", error: "Missing room" });
+      ws.close(1008, "Missing room");
+      return;
+    }
+    if (roomToken.length < MIN_ROOM_TOKEN_LEN) {
+      metrics.rejectedAuth += 1;
+      send(ws, { t: "error", error: "Weak room token" });
+      ws.close(1008, "Weak room token");
+      return;
+    }
+    // A synthetic per-room account so attachClient's same-account ownership
+    // check passes for this room and never collides with a real CP accountId.
+    const soloAccount = `solo:${roomId}`;
+    if (role === "node") {
+      // TOFU: the first node fixes the room's token; a mismatching claim on a
+      // live room is rejected (prevents hijacking a room whose id leaked).
+      const claimed = roomTokens.get(roomId);
+      if (claimed !== undefined && !tokenMatch(claimed, roomToken)) {
+        metrics.rejectedAuth += 1;
+        send(ws, { t: "error", error: "Room already claimed" });
+        ws.close(1008, "Room already claimed");
+        return;
+      }
+      roomTokens.set(roomId, roomToken);
+      attachNode(ws, roomId, soloAccount);
+    } else {
+      const expected = roomTokens.get(roomId);
+      if (expected === undefined || !tokenMatch(expected, roomToken)) {
+        metrics.rejectedAuth += 1;
+        // "Node offline" when the room was never claimed vs "Forbidden" on a
+        // token mismatch — same distinction the CP client path draws.
+        send(ws, { t: "error", error: expected === undefined ? "Node offline" : "Forbidden" });
+        ws.close(1008, "Not available");
+        return;
+      }
+      attachClient(ws, roomId, soloAccount);
+    }
+    return;
+  }
+
   // The connecting party presents a single-use ticket (minted directly against
   // the control plane), never its reusable bearer. The relay forwards it to the
   // control plane for a one-shot introspection and never stores it.
@@ -437,7 +564,10 @@ function attachNode(ws: WebSocket, nodeId: string, accountId: string) {
       void setNodeStatus(nodeId, false);
       for (const client of r.clients) send(client, { t: "peer.offline" });
     }
-    if (!r.node && r.clients.size === 0) rooms.delete(nodeId);
+    if (!r.node && r.clients.size === 0) {
+      rooms.delete(nodeId);
+      roomTokens.delete(nodeId);
+    }
   });
 }
 
@@ -450,7 +580,10 @@ function attachClient(ws: WebSocket, nodeId: string, accountId: string) {
   if (!r.node || r.nodeAccountId !== accountId) {
     send(ws, { t: "error", error: r.node ? "Forbidden" : "Node offline" });
     ws.close(1008, "Not available");
-    if (!r.node && r.clients.size === 0) rooms.delete(nodeId);
+    if (!r.node && r.clients.size === 0) {
+      rooms.delete(nodeId);
+      roomTokens.delete(nodeId);
+    }
     return;
   }
 
@@ -471,7 +604,10 @@ function attachClient(ws: WebSocket, nodeId: string, accountId: string) {
   ws.on("close", () => {
     r.clients.delete(ws);
     if (r.node) send(r.node, { t: "peer.offline", clients: r.clients.size });
-    if (!r.node && r.clients.size === 0) rooms.delete(nodeId);
+    if (!r.node && r.clients.size === 0) {
+      rooms.delete(nodeId);
+      roomTokens.delete(nodeId);
+    }
   });
 }
 

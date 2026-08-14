@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // `bivy voice` — configure speech-to-text (voice input) from the terminal.
 //
@@ -127,13 +127,13 @@ async function main() {
     case "key": {
       const provider = parseProvider(arg);
       const value = rest.join(" ").trim() || (await askHidden(`${STT_PROVIDERS[provider].label} API key: `));
-      setSttKey(appDir, provider, value);
+      await setSttKey(appDir, provider, value);
       console.log(`Saved ${provider} key.`);
       return;
     }
     case "remove": {
       const provider = parseProvider(arg);
-      console.log(removeSttKey(appDir, provider) ? `Removed ${provider} key.` : `No ${provider} key was stored.`);
+      console.log(await removeSttKey(appDir, provider) ? `Removed ${provider} key.` : `No ${provider} key was stored.`);
       return;
     }
     default:

@@ -1,9 +1,9 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { listRuntimes, makeRuntime, type AgentRuntime, type RuntimeFactoryOptions, type RuntimeInfo } from "./index.js";
 import { RemoteRuntime, connectSocketTransport } from "./remote.js";
 import type { SandboxTier } from "../harness/sandbox.js";
-import type { DiscoveredNativeSession, OpenSessionOptions, OpenSessionResult, RuntimeCapabilities, RuntimeMessage, SessionSummary } from "./types.js";
+import { withExactCapabilitySurface, type DiscoveredNativeSession, type OpenSessionOptions, type OpenSessionResult, type RuntimeCapabilities, type RuntimeMessage, type SessionSummary } from "./types.js";
 
 export type EnforcementLevel = "strong" | "boundary" | "observe_only";
 
@@ -41,7 +41,7 @@ export function remoteRuntimeEnabled(): boolean {
 
 /** Fill a RuntimeInfo's partial capabilities into a full, default-false surface. */
 function fullCapabilities(partial: Partial<RuntimeCapabilities>): RuntimeCapabilities {
-  return { toolInterception: false, modelSelection: false, packages: false, resume: false, fork: false, ...partial };
+  return withExactCapabilitySurface({ toolInterception: false, modelSelection: false, packages: false, resume: false, fork: false, ...partial });
 }
 
 export interface RuntimeSummary {

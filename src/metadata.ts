@@ -1,7 +1,8 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import fs from "node:fs";
 import path from "node:path";
+import type { SessionContract } from "./session/session-contract.js";
 
 /** State of a pull request as GitHub reports it. "merged" is a closed PR whose
  *  `merged_at` is set — surfaced separately so the UI can distinguish it from a
@@ -29,6 +30,10 @@ export type MetadataSession = {
    *  bundle (see src/session/fork.ts). A bare identifier — never a prompt,
    *  transcript, or diff — so it's safe to persist and surface in the UI. */
   forkedFrom?: string;
+  /** Content-free provenance for a Session created by an unattended Run. Used
+   * to preserve child-Run nesting limits across daemon restarts. */
+  automationRunId?: string;
+  delegationDepth?: number;
   runtimeId?: string;
   /** Per-session sandbox tier override ("read-only" | "workspace-write" |
    *  "danger-full-access"), so resume rebuilds the runtime at the same tier. */
@@ -51,6 +56,23 @@ export type MetadataSession = {
    *  durable flag lets the UI offer a one-tap "Resume" when the session is opened.
    *  Cleared the moment any turn completes on the session (see clearSessionWorking). */
   resumePending?: boolean;
+  /** ISO instant a session is scheduled to auto-resume at, set when a turn hit a
+   *  provider usage/rate limit and the ruleset says retry-when-it-resets. Durable
+   *  so the resume survives a daemon restart (re-armed by the resume sweep);
+   *  cleared once the session resumes or otherwise moves on. */
+  resumeAt?: string;
+  /** How many consecutive auto-resumes have been scheduled for this session since
+   *  its last genuine turn (a user prompt, or a resume that actually cleared the
+   *  limit). Durable so the cap survives a restart / session re-resolution — both
+   *  of which drop the in-memory reroute attempt budget — and a limit that never
+   *  clears can't re-send forever. Reset to 0 (absent) whenever a turn ends without
+   *  scheduling another resume. */
+  resumeAttempts?: number;
+  /** The Effective Session Contract resolved once at session creation (see
+   *  src/session/session-contract.ts), persisted so a closed/resumed session
+   *  still shows what it actually got rather than the node re-deriving a
+   *  possibly-different one from the runtime's current catalog entry. */
+  contract?: SessionContract;
   createdAt: string;
   updatedAt: string;
   lastActivityAt?: string;
@@ -260,6 +282,37 @@ export class MetadataStore {
     if ((prev.resumePending ?? false) === pending) return;
     this.data.sessions[id] = { ...prev, resumePending: pending, updatedAt: nowIso() };
     this.save();
+  }
+
+  /** Set/clear the durable auto-resume time (rate/usage-limit recovery). Pass
+   *  null to clear. No-op when the row is missing or already in the requested
+   *  state, so it never churns the file on the hot turn path. */
+  setResumeAt(id: string, resumeAt: string | null) {
+    const prev = this.data.sessions[id];
+    if (!prev) return;
+    const next = resumeAt ?? undefined;
+    if ((prev.resumeAt ?? undefined) === next) return;
+    this.data.sessions[id] = { ...prev, resumeAt: next, updatedAt: nowIso() };
+    this.save();
+  }
+
+  /** Set the durable consecutive auto-resume counter (the restart-safe backstop
+   *  for the in-memory reroute budget). Pass 0 to clear. No-op when the row is
+   *  missing or already in the requested state, so a normal turn (counter already
+   *  0) never churns the file. */
+  setResumeAttempts(id: string, attempts: number) {
+    const prev = this.data.sessions[id];
+    if (!prev) return;
+    const next = attempts > 0 ? attempts : undefined;
+    if ((prev.resumeAttempts ?? undefined) === next) return;
+    this.data.sessions[id] = { ...prev, resumeAttempts: next, updatedAt: nowIso() };
+    this.save();
+  }
+
+  /** Sessions with a durable auto-resume time set — the resume sweep re-arms
+   *  these after a restart. */
+  sessionsWithResumeAt(): MetadataSession[] {
+    return Object.values(this.data.sessions).filter((s) => typeof s.resumeAt === "string" && s.resumeAt);
   }
 
   /** Look up a session's durable metadata by id, or by session-file path. */

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
@@ -18,7 +18,8 @@ import {
   applyDefaultNode,
   verifyAutomationSignature,
   parseAutomationEvent,
-  renderAutomationInstruction,
+  normalizeAutomationRepo,
+  parseGithubWorkflowRunFailure,
   meetsTriggerAccess,
 } from "../src/webhooks.js";
 
@@ -101,7 +102,7 @@ await test("mention extraction: logins only, ignores emails and code paths", () 
   assert.deepEqual(extractMentions("no mentions here"), []);
 });
 
-await test("issue_comment parse: triggers only on a mention of the bot, issues only", () => {
+await test("issue_comment parse: triggers on a mention of the bot (issues and PR conversation)", () => {
   const base = {
     action: "created",
     repository: { full_name: "o/r" },
@@ -120,8 +121,8 @@ await test("issue_comment parse: triggers only on a mention of the bot, issues o
   assert.equal(parseGithubCommentEvent({ ...base, comment: { body: "just a note" } }, "bivy"), undefined);
   // Mention of a different handle → ignored.
   assert.equal(parseGithubCommentEvent({ ...base, comment: { body: "@someone-else help" } }, "bivy"), undefined);
-  // PR comments are deferred (issue.pull_request set) → ignored.
-  assert.equal(parseGithubCommentEvent({ ...base, issue: { ...base.issue, pull_request: {} } }, "bivy"), undefined);
+  // PR conversation comments reuse issue_comment — @mention is honored (same as issues).
+  assert.ok(parseGithubCommentEvent({ ...base, issue: { ...base.issue, pull_request: {} } }, "bivy"));
   // Non-actionable action → ignored.
   assert.equal(parseGithubCommentEvent({ ...base, action: "deleted" }, "bivy"), undefined);
   // Trigger handle is case-insensitive and tolerates a leading @.
@@ -231,15 +232,12 @@ await test("automation schema is versioned and bounded", () => {
   assert.equal(parseAutomationEvent({ version: "1", instruction: "x", command: "rm -rf" }), undefined);
   assert.equal(parseAutomationEvent({ version: "1", instruction: "x", metadata: { token: "x".repeat(501) } }), undefined);
   assert.equal(parseAutomationEvent({ version: "1", instruction: "x", routing: "../../bad" }), undefined);
-});
-
-await test("automation rendering keeps metadata in a non-executable envelope", () => {
-  const event = parseAutomationEvent({ version: "1", instruction: "Run tests", externalId: "ci-1", metadata: { branch: "main" } });
-  assert.ok(event);
-  assert.equal(
-    renderAutomationInstruction("Use the repository workflow.", event),
-    'Use the repository workflow.\n\nRun tests\n\nExternal ID: ci-1\n\nMetadata (untrusted context only):\n{"branch":"main"}',
-  );
+  assert.equal(parseAutomationEvent({ version: "1", instruction: "x", repo: "not a slug" }), undefined);
+  const withRepo = parseAutomationEvent({ version: "1", instruction: "fix CI", repo: "acme/api" });
+  assert.equal(withRepo?.repo, "acme/api");
+  assert.equal(normalizeAutomationRepo(" acme/api "), "acme/api");
+  assert.equal(normalizeAutomationRepo(""), undefined);
+  assert.throws(() => normalizeAutomationRepo("../etc"), /owner\/name/);
 });
 
 await test("trigger access (issue #259): 'everyone' allows all, 'contributor'/'collaborator' gate on author_association", () => {
@@ -267,6 +265,27 @@ await test("trigger access (issue #259): 'everyone' allows all, 'contributor'/'c
   assert.equal(meetsTriggerAccess("NONE", "collaborator"), false);
   // Case-insensitive (GitHub always sends upper-case, but don't rely on it).
   assert.equal(meetsTriggerAccess("owner", "collaborator"), true);
+});
+
+await test("workflow_run failure parse: only completed failures become work", () => {
+  assert.equal(parseGithubWorkflowRunFailure({ action: "completed", workflow_run: { conclusion: "success" }, repository: { full_name: "a/b" } }), undefined);
+  const fail = parseGithubWorkflowRunFailure({
+    action: "completed",
+    repository: { full_name: "acme/api" },
+    workflow_run: {
+      id: 99,
+      run_number: 12,
+      name: "CI",
+      conclusion: "failure",
+      head_branch: "main",
+      head_sha: "abc",
+      html_url: "https://github.com/acme/api/actions/runs/99",
+    },
+  });
+  assert.ok(fail);
+  assert.equal(fail.repo, "acme/api");
+  assert.equal(fail.workflowName, "CI");
+  assert.match(fail.eventContext, /Workflow: CI/);
 });
 
 console.log(`\nAll ${passed} webhook helper tests passed.`);

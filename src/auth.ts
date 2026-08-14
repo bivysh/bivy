@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import fs from "node:fs";
 import os from "node:os";
@@ -193,8 +193,13 @@ export function isAuthorized(ctx: AuthContext): boolean {
  * local/private hostnames and reject a public Host (rebinding) or public Origin
  * (cross-site). Escape hatches: BIVY_ALLOWED_HOSTS (comma-separated extra
  * hostnames, e.g. a reverse-proxy domain) and BIVY_ALLOW_ANY_ORIGIN=1.
+ *
+ * Exported: also reused as the private/local-address check for the inline
+ * markdown-image SSRF guard (src/session/inline-image-fetch.ts) — same
+ * "must not be a private/loopback/link-local address" question, just asked
+ * about an *outbound* fetch target instead of an *inbound* request's Host.
  */
-function hostnameIsLocal(hostname: string): boolean {
+export function hostnameIsLocal(hostname: string): boolean {
   const h = hostname.toLowerCase().replace(/^\[/, "").replace(/\]$/, "").replace(/^::ffff:/, "");
   if (h === "localhost" || h === "127.0.0.1" || h === "::1" || h === "0.0.0.0") return true;
   if (h.endsWith(".localhost") || h.endsWith(".local") || h.endsWith(".ts.net") || h.endsWith(".internal")) return true;

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
 // Settings → Rulesets. Create, view, and edit run-orchestration rulesets
@@ -33,7 +33,7 @@ const CONDITIONS: Array<{ id: RuleCondition; label: string; hint: string }> = [
   { id: "credits_exhausted", label: "Session / credits", hint: "quota, credit balance, or session usage limit; Retry waits for a supplied reset time" },
   { id: "context_overflow", label: "Context overflow", hint: "prompt exceeds the context window" },
   { id: "auth_failed", label: "Auth failed", hint: "401 / invalid key" },
-  { id: "node_offline", label: "Node offline", hint: "connection refused / unreachable" },
+  { id: "node_offline", label: "Machine offline", hint: "connection refused / unreachable" },
   { id: "transport_error", label: "Transport error", hint: "socket hang up / timeout / 502" },
   { id: "task_failed", label: "Task failed", hint: "tests failed / made no changes" },
   { id: "unknown", label: "Unknown", hint: "anything unclassified" },
@@ -47,7 +47,7 @@ const ACTIONS: Array<{ id: RulesetRule["action"]; label: string; hint: string }>
 
 const CONTEXTS: Array<{ id: RuleContext; label: string; hint: string }> = [
   { id: "queue", label: "Work queue", hint: "Unattended runs (GitHub / webhooks)." },
-  { id: "session", label: "Session", hint: "Interactive sessions (model reroute only)." },
+  { id: "session", label: "Session", hint: "Interactive chats — resume when a usage/rate limit resets, or reroute to a fallback model." },
 ];
 
 const DEFAULT_BACKOFF: RulesetBackoff = { baseMs: 2000, factor: 2, capMs: 60_000, jitter: 0.3 };
@@ -169,10 +169,11 @@ export function RulesetsPanel({ state }: { state: AppState }) {
       )}
 
       <p className="muted settings-intro">
-        A ruleset is policy for what happens when a run fails — a rate limit, an exhausted quota, an offline node.
+        A ruleset is policy for what happens when a run fails — a rate limit, an exhausted quota, an offline machine.
         Each rule matches one or more failure conditions and decides whether to retry, reroute through a fallback
-        chain, or park the run for a human. The <strong>active</strong> ruleset steers this node's work queue; with
-        none active, a safe built-in default applies. Rulesets are stored on this node.
+        chain, or park the run for a human. The <strong>active</strong> ruleset steers this machine's work queue and
+        interactive sessions (per the contexts it applies to); with none active, a safe built-in default applies.
+        Rulesets are stored on this machine.
       </p>
 
       <div className="picker-list">
@@ -246,6 +247,10 @@ function RulesetEditor({
   };
 
   const appliesToQueue = draft.appliesTo.includes("queue");
+  const appliesToSession = draft.appliesTo.includes("session");
+  // The active ruleset drives whichever contexts it applies to (the node reads it
+  // per-context), so it's activatable as soon as it covers queue and/or session.
+  const activatable = appliesToQueue || appliesToSession;
   // Client-side gate mirroring the schema's hard requirements, so Save is only
   // enabled when the node will actually accept it (name, ≥1 context, ≥1 rule,
   // and every rule matching ≥1 condition).
@@ -285,14 +290,14 @@ function RulesetEditor({
 
       <div className="settings-toggle-row" style={{ marginTop: 8 }}>
         <div className="settings-toggle-text">
-          <span className="settings-toggle-title">Active for the work queue</span>
+          <span className="settings-toggle-title">Active on this machine</span>
           <span className="muted small">
-            {appliesToQueue
-              ? "Use this ruleset for unattended queue runs on this node. Only one ruleset is active at a time."
-              : "Add the “Work queue” context above to make this ruleset selectable as active."}
+            {activatable
+              ? `Use this ruleset for ${appliesToQueue && appliesToSession ? "queue runs and interactive sessions" : appliesToQueue ? "unattended queue runs" : "interactive sessions"} on this machine. Only one ruleset is active at a time.`
+              : "Add a context above (Work queue or Session) to make this ruleset selectable as active."}
           </span>
         </div>
-        <SmallToggle checked={active && appliesToQueue} disabled={!appliesToQueue} onChange={setActive} label="Active for the work queue" />
+        <SmallToggle checked={active && activatable} disabled={!activatable} onChange={setActive} label="Active on this machine" />
       </div>
 
       <label className="field-label" style={{ marginTop: 8 }}>Rules</label>
@@ -433,7 +438,7 @@ function ChainEditor({ chain, onChange }: { chain: RulesetRoutingCandidate[]; on
     <div className="ruleset-chain">
       <label className="field-label">Fallback chain</label>
       <p className="muted small">
-        Tried in order; the first candidate with valid credentials on the node wins. Leave a field blank to keep the
+        Tried in order; the first candidate with valid credentials on the machine wins. Leave a field blank to keep the
         failed run's current value.
       </p>
       {chain.map((cand, i) => (
@@ -444,7 +449,7 @@ function ChainEditor({ chain, onChange }: { chain: RulesetRoutingCandidate[]; on
               <input className="picker-search" placeholder="e.g. claude-sonnet" value={cand.model ?? ""} onChange={(e) => setAt(i, { model: e.target.value })} />
             </label>
             <label className="ruleset-chain-field">
-              <span>Runtime</span>
+              <span>Agent</span>
               <input className="picker-search" placeholder="e.g. codex" value={cand.runtimeId ?? ""} onChange={(e) => setAt(i, { runtimeId: e.target.value })} />
             </label>
             <label className="ruleset-chain-field">

@@ -178,11 +178,13 @@ routing metadata — node and account ids, frame sizes, counts and timing, your 
 — and nothing else; it keeps no persistent state. The control plane sees account
 and node metadata: node names, online status, and a session index (session id,
 status, source, branch). Session titles are stored encrypted. Your model keys,
-repo tokens, prompts, agent output, terminal I/O, and file contents never leave
-the node in the clear. The notable exception is **push notifications**: to render
-a phone notification the control plane receives its title and body in plaintext,
-which can include a session or terminal name. Removing a paired device rotates
-the room key and re-wraps it for the devices that remain.
+repo tokens, interactive prompts, agent output, terminal I/O, and file contents
+never leave the node in the clear. Two separate inbound features are not session
+traffic: Slack commands and generic webhook instructions arrive at the control
+plane in plaintext and are retained with their queue items. Push notifications
+are another exception: to render one, the control plane receives its title and
+body in plaintext, which can include a session or terminal name. Removing a
+paired device rotates the room key and re-wraps it for the devices that remain.
 
 Full details, including known limitations: [security-model.md](security-model.md).
 To report a vulnerability, follow [SECURITY.md](../SECURITY.md).

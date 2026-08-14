@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
 // The in-session run card. It sits in the band above the composer for *every*
@@ -14,11 +14,14 @@
 // usage) — the card is the same, the information applies.
 
 import { useState } from "react";
-import { primaryPr, type GithubContext, type GithubQueueItem, type PrRef, type Usage } from "@bivy/core";
+import { deriveRunOutcome, type GithubContext, type GithubQueueItem, type PrRef, type Usage } from "@bivy/core";
 import { useModalEscape } from "../modalStack.js";
 import { SourceGlyph } from "./SourceMark.js";
+import { PrBadge, GhMark } from "./SessionList.js";
 import { shortSourceLabel, type SourceInfo } from "../sessionSource.js";
-import { checkCounts, retryReason, runDuration } from "../runEvidence.js";
+import { checkCounts, retryReason, runDuration, artifactRef, recoveryActions, type RecoveryKind } from "../runEvidence.js";
+
+const RECOVERY_LABEL: Record<RecoveryKind, string> = { fix: "Fix", retry: "Retry checks", fork: "Fork" };
 
 interface Action {
   label: string;
@@ -60,12 +63,16 @@ function prActionLabel(pr: PrRef): string {
   return `Pull request${num} (${state})`;
 }
 
+// The sheet's GitHub links (issue / PR / branch) — one row anatomy, each led by
+// the GitHub mark, so they read as one group. `gh.repo` is "owner/name"; lead
+// the branch link with it so it reads "org/repo · branch" — the repo is the
+// context, the branch the detail.
 function actionsFor(gh: GithubContext): Action[] {
   const actions: Action[] = [];
-  if (gh.issueUrl) actions.push({ label: "Open issue on GitHub", url: gh.issueUrl });
+  if (gh.issueUrl) actions.push({ label: "Open issue", url: gh.issueUrl });
   for (const pr of gh.prs) actions.push({ label: prActionLabel(pr), url: pr.url });
   if (gh.branch && gh.repo)
-    actions.push({ label: `View branch ${gh.branch}`, url: `https://github.com/${gh.repo}/tree/${encodeURIComponent(gh.branch)}` });
+    actions.push({ label: `${gh.repo} · ${gh.branch}`, url: `https://github.com/${gh.repo}/tree/${encodeURIComponent(gh.branch)}` });
   return actions;
 }
 
@@ -104,6 +111,13 @@ export function RunPill({
   finishedAt,
   usage,
   forkedFrom,
+  filesEdited,
+  onOpenChanges,
+  artifactsCount,
+  onOpenArtifacts,
+  onRecover,
+  onOpenRun,
+  anchorId,
 }: {
   source: SourceInfo;
   /** The row's status class (`working` / `needs-action` / `saved` / `idle`)
@@ -126,18 +140,49 @@ export function RunPill({
    *  local session list — the parent may live on another node or be gone by
    *  now, so it's best-effort and falls back to a shortened id. */
   forkedFrom?: { sessionId: string; name?: string };
+  /** Unique files touched this session (across turns). Shown on the pill and as
+   *  a sheet row that opens the full changes view — replaces the bulky
+   *  above-composer ChangesCard. */
+  filesEdited?: number;
+  /** Open the full session-changes sheet (diff tree, undo, review). */
+  onOpenChanges?: () => void;
+  /** Count of distinct artifacts (agent-sent attachments, user uploads,
+   *  resolved inline images) this session's transcript carries — from
+   *  deriveArtifacts(state.transcript), computed in App. */
+  artifactsCount?: number;
+  /** Open the Artifacts sheet. */
+  onOpenArtifacts?: () => void;
+  /** Invoked when the user taps a recovery action on a terminal run (C2). The
+   *  parent (App) maps each kind onto a real capability: fix → send a "fix the
+   *  failing checks" prompt, retry → re-run the checks, fork → fork the session.
+   *  Omitted where no session is in scope, hiding the buttons. */
+  onRecover?: (kind: RecoveryKind) => void;
+  /** Open the routable Run detail screen (/runs/:runId) for this session's Run.
+   *  Wired only when the session has a correlated Run record (evidence.id). This
+   *  is the Session → Run half of the correlation: a retry keeps the same Run id,
+   *  so this always points at the one customer-visible Run. */
+  onOpenRun?: (runId: string) => void;
+  /** DOM id (`attention-<sessionId>`) so an outcome deep-link from the Inbox or a
+   *  push tap scrolls to this pill — the exact outcome — not just the session (B3). */
+  anchorId?: string;
 }) {
   const [open, setOpen] = useState(false);
   useModalEscape(() => setOpen(false), open);
   const actions = actionsFor(gh);
-  const pr = primaryPr(gh.prs);
   const short = shortSourceLabel(source.kind);
+  // The plain "Open" state means the session is still live on its node and can
+  // be resumed instantly (the counterpart to "Saved" — no live record). Spell
+  // that out in the sheet, where there's room; the terse pill/sidebar keep "Open".
+  const sheetStatus = statusLabel === "Open" ? "Open on machine" : statusLabel;
 
+  const outcome = evidence ? deriveRunOutcome(evidence) : null;
   const counts = evidence ? checkCounts(evidence) : null;
   const duration = evidence ? runDuration(evidence) : null;
   const finished = typeof finishedAt === "number" ? formatWhen(finishedAt) : "";
   const attempt = evidence?.attempt ?? 0;
   const reason = evidence ? retryReason(evidence) : null;
+  const artifact = evidence ? artifactRef(evidence) : null;
+  const recovery = evidence && onRecover ? recoveryActions(evidence) : [];
   const agentLine = [evidence?.runtimeId, evidence?.model].filter(Boolean).join(" · ");
   const failure = evidence?.output?.failure;
   const forkedFromLabel = forkedFrom ? forkedFrom.name || `session ${forkedFrom.sessionId.slice(0, 8)}` : null;
@@ -151,17 +196,26 @@ export function RunPill({
   );
   const hasUsage = hasCost || tokenTotal > 0 || planWindows.length > 0;
 
+  const filesLabel = filesEdited && filesEdited > 0
+    ? `${filesEdited} file${filesEdited === 1 ? "" : "s"} edited`
+    : null;
+  const artifactsLabel = artifactsCount && artifactsCount > 0
+    ? `${artifactsCount} artifact${artifactsCount === 1 ? "" : "s"}`
+    : null;
+
   return (
     <>
       <button
+        id={anchorId}
         className={`run-pill src-${source.kind} ${statusClass}`}
         onClick={() => setOpen(true)}
-        title={`${source.label} · ${statusLabel}`}
+        title={[source.label, statusLabel, filesLabel].filter(Boolean).join(" · ")}
       >
         <span className="run-pill-glyph"><SourceGlyph kind={source.kind} /></span>
         <span className="run-pill-label">{short}</span>
         <span className="run-pill-stat"><span className="run-dot" />{statusLabel}</span>
-        {pr && <span className={`session-pr ${pr.state}`} aria-hidden><span className="session-pr-text">{pr.state === "merged" ? "Merged" : pr.state === "closed" ? "Closed" : "Open PR"}</span></span>}
+        <PrBadge prs={gh.prs} />
+        {filesLabel && <span className="run-pill-files">{filesLabel}</span>}
       </button>
       {open && (
         <div className="action-sheet open" role="dialog" aria-label={source.label}>
@@ -178,8 +232,7 @@ export function RunPill({
             </div>
             <div className="run-sheet-status">
               <span className={`run-dot ${statusClass}`} aria-hidden />
-              {statusLabel}
-              {pr && <span className={`session-pr ${pr.state}`} aria-hidden><span className="session-pr-text">{pr.state === "merged" ? "Merged" : pr.state === "closed" ? "Closed" : "Open PR"}</span></span>}
+              {sheetStatus}
             </div>
 
             {failure && <div className="run-sheet-failure">{failure}</div>}
@@ -200,6 +253,12 @@ export function RunPill({
 
             {evidence && (
               <div className="run-sheet-rows">
+                {outcome && <Row k="Outcome"><span className={`chip outcome-${outcome.tone} outcome-kind-${outcome.kind}`}>{outcome.label}</span></Row>}
+                {artifact?.url && (
+                  <Row k="Artifact">
+                    <a href={artifact.url} target="_blank" rel="noopener">{artifact.label}</a>
+                  </Row>
+                )}
                 {counts && (
                   <Row k="Checks">
                     <Checks item={evidence} />
@@ -238,16 +297,41 @@ export function RunPill({
               </div>
             )}
 
+            {filesLabel && onOpenChanges && (
+              <button
+                type="button"
+                className="action-sheet-item run-sheet-changes"
+                onClick={() => { setOpen(false); onOpenChanges(); }}
+              >
+                <span className="run-sheet-changes-icon" aria-hidden>◈</span>
+                <span>{filesLabel}</span>
+                <span className="run-sheet-changes-hint">View diffs</span>
+              </button>
+            )}
+
+            {artifactsLabel && onOpenArtifacts && (
+              <button
+                type="button"
+                className="action-sheet-item run-sheet-changes"
+                onClick={() => { setOpen(false); onOpenArtifacts(); }}
+              >
+                <span className="run-sheet-changes-icon" aria-hidden>📎</span>
+                <span>{artifactsLabel}</span>
+                <span className="run-sheet-changes-hint">View artifacts</span>
+              </button>
+            )}
+
             {actions.map((a) => (
               <a
                 key={a.url}
-                className="action-sheet-item"
+                className="action-sheet-item gh-link"
                 href={a.url}
                 target="_blank"
                 rel="noopener"
                 onClick={() => setOpen(false)}
               >
-                {a.label}
+                <GhMark />
+                <span>{a.label}</span>
               </a>
             ))}
             {evidence?.output?.artifactUrl && (
@@ -255,7 +339,31 @@ export function RunPill({
                 View artifact
               </a>
             )}
-            {actions.length === 0 && !evidence && !hasUsage && !forkedFrom && (
+            {evidence?.id && onOpenRun && (
+              <button
+                type="button"
+                className="action-sheet-item run-sheet-open-run"
+                onClick={() => { setOpen(false); onOpenRun(evidence.id); }}
+              >
+                <span aria-hidden>▸</span>
+                <span>Run details</span>
+              </button>
+            )}
+            {recovery.length > 0 && onRecover && (
+              <div className="run-sheet-recovery" role="group" aria-label="Recover this run">
+                {recovery.map((kind) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    className={`btn small recover-${kind}`}
+                    onClick={() => { onRecover(kind); setOpen(false); }}
+                  >
+                    {RECOVERY_LABEL[kind]}
+                  </button>
+                ))}
+              </div>
+            )}
+            {actions.length === 0 && !evidence && !hasUsage && !forkedFrom && !filesLabel && (
               <div className="action-sheet-empty">This session has nothing to report yet.</div>
             )}
           </div>

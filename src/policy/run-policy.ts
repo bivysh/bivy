@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
 // Run policy: the pure decision layer the queue effector drives.
@@ -39,10 +39,22 @@ export interface RunFailureContext {
   attempt: number;
   /** How many reroutes have already been applied to this run. */
   rerouteCount: number;
+  /** An authoritative reset timestamp the effector already knows (e.g. from the
+   *  provider's structured usage snapshot), preferred over anything scraped from
+   *  the error text. See ClassifyOptions.resetsAtHint. */
+  resetsAtHint?: string;
 }
 
 export type RunDecision =
-  | { action: "retry"; delayMs: number; condition: RuntimeCondition; summary: string }
+  | {
+      action: "retry";
+      delayMs: number;
+      condition: RuntimeCondition;
+      summary: string;
+      /** ISO reset time the delay is honoring, when one was known — lets an
+       *  effector present/persist "resuming at X" rather than a bare delay. */
+      resetsAt?: string;
+    }
   | {
       action: "reroute";
       delayMs: number;
@@ -101,7 +113,7 @@ export function createRunPolicy(deps: RunPolicyDeps = {}): RunPolicy {
 
   return {
     decide(ctx: RunFailureContext): RunDecision {
-      const classified = classifyFailure(ctx.error);
+      const classified = classifyFailure(ctx.error, { now: now(), resetsAtHint: ctx.resetsAtHint });
       const { condition } = classified;
       const rule = findRule(ruleset, condition, context);
       if (!rule) return { action: "give_up", condition };
@@ -143,6 +155,7 @@ export function createRunPolicy(deps: RunPolicyDeps = {}): RunPolicy {
           delayMs,
           condition,
           summary: `${condition}: transient — retrying (attempt ${nextAttempt}/${rule.maxAttempts})${timing}.`,
+          ...(resetDelayMs !== undefined && classified.resetsAt ? { resetsAt: classified.resetsAt } : {}),
         };
       }
 

@@ -5,10 +5,21 @@ Thanks for helping improve Bivy.
 ## Development
 
 ```bash
-npm install
-npm run typecheck
-npm run test:unit
+pnpm install
+pnpm run typecheck
+pnpm run test:unit
 ```
+
+During development, pass filename substrings to run only the relevant suites:
+
+```bash
+pnpm run test:unit -- config-cli plugin-cli
+pnpm run test:unit -- --list config-cli
+```
+
+CI splits the complete root suite across machines with `TEST_SHARD=1/2` and
+`TEST_SHARD=2/2`. Set `TEST_CONCURRENCY=1` when debugging ordering or port
+issues locally.
 
 UI/UX work for the hosted/mobile PWA should target the React client in `packages/web/` (`@bivy/web`), which is served by the control plane. The node daemon hosts no web UI.
 
@@ -21,10 +32,10 @@ touches. There is no local pre-push gate; run the checks yourself before
 pushing when you want a fast local signal:
 
 ```bash
-npm run lint
-npm run typecheck
-npm run test:unit
-npm run check:links
+pnpm run lint
+pnpm run typecheck
+pnpm run test:unit
+pnpm run check:links
 ```
 
 ## Pull requests

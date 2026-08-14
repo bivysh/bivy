@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 /**
  * Copy text to the clipboard. Prefers the async Clipboard API but falls back to
@@ -29,7 +29,7 @@ export function sessionReferenceText(ref: SessionReference): string {
     "Bivy session reference",
     `URL: ${ref.url}`,
     `Session ID: ${ref.sessionId}`,
-    ref.node ? `Node: ${ref.node}` : "",
+    ref.node ? `Machine: ${ref.node}` : "",
     ref.agent ? `Agent: ${ref.agent}` : "",
     ref.worktree ? `Worktree: ${ref.worktree}` : "",
     ref.workspace ? `Workspace: ${ref.workspace}` : "",

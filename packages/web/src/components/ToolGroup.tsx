@@ -1,9 +1,10 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { formatTool, toHtml, toolGroupSummary, toolRowLabel, type ToolActivity, type ToolFormat, type ToolGlyph } from "@bivy/core";
 import { DiffView } from "./DiffView.js";
 import { Sheet } from "./Sheet.js";
+import { ChevronRightIcon } from "./UiIcons.js";
 
 function GlyphIcon({ glyph }: { glyph: ToolGlyph }) {
   const common = { width: 16, height: 16, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
@@ -29,6 +30,11 @@ function GlyphIcon({ glyph }: { glyph: ToolGlyph }) {
       return (
         <svg {...common}><circle cx="12" cy="12" r="9" /><line x1="3" y1="12" x2="21" y2="12" /><path d="M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18Z" /></svg>
       );
+    case "agent":
+      // Delegated sub-agent work: two overlapping figures (a hand-off).
+      return (
+        <svg {...common}><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></svg>
+      );
     default:
       return (
         <svg {...common}><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" /></svg>
@@ -53,19 +59,31 @@ function DiffStat({ added, removed }: { added: number; removed: number }) {
  *  already-computed ToolFormat (the sheet computes one per tool for the list
  *  regardless, via toolGroupSummary) rather than recomputing formatTool here
  *  — for an Edit/Write call that's a real LCS diff pass, not free. */
+function elapsedLabel(tool: ToolActivity): string {
+  if (tool.detail?.kind !== "delegation") return "";
+  const seconds = Number((tool.input as { elapsedSeconds?: unknown } | undefined)?.elapsedSeconds);
+  if (!Number.isFinite(seconds) || seconds < 1) return "";
+  if (seconds < 60) return `${Math.floor(seconds)}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${Math.floor(seconds % 60)}s`;
+}
+
 function ToolListRow({ tool, f, onSelect }: { tool: ToolActivity; f: ToolFormat; onSelect: (callId: string) => void }) {
-  const label = toolRowLabel(f);
+  const elapsed = elapsedLabel(tool);
+  const baseLabel = toolRowLabel(f);
+  const label = elapsed ? `${baseLabel || "Sub-agent"} · ${elapsed}` : baseLabel;
   const running = tool.status === "running";
   return (
-    <div className={`activity${running ? " is-running" : ""}`}>
+    <div className={`activity${running ? " is-running" : ""}${f.isError ? " is-error" : ""}`}>
       <button className="activity-row" onClick={() => onSelect(tool.callId)}>
         <span className="activity-ic">
           <GlyphIcon glyph={f.glyph} />
         </span>
         <span className="activity-verb">{f.verb}</span>
         <span className="activity-desc">{label}</span>
+        {f.isError && <span className="tool-fail" title={typeof f.exitCode === "number" ? `exit ${f.exitCode}` : "failed"}>Failed</span>}
         <DiffStat added={f.added} removed={f.removed} />
-        <span className="tool-chevron">›</span>
+        <span className="tool-chevron"><ChevronRightIcon size={14} /></span>
       </button>
     </div>
   );
@@ -79,8 +97,25 @@ function ToolListRow({ tool, f, onSelect }: { tool: ToolActivity; f: ToolFormat;
 function ToolDetail({ tool, f }: { tool: ToolActivity; f: ToolFormat }) {
   const output = tool.result || f.output || "";
   const showOutput = output && (f.diffs.length === 0 || f.command || f.verb === "Agent output");
+  const elapsed = elapsedLabel(tool);
   return (
     <div className="activity-detail">
+      {tool.detail?.kind === "delegation" && tool.status === "running" && (
+        <div className="tool-detail-block">
+          <div className="tool-detail-label">Status</div>
+          <div className="tool-detail-value">Sub-agent active{elapsed ? ` · ${elapsed} elapsed` : ""}</div>
+        </div>
+      )}
+      {(f.isError || f.truncated) && (
+        <div className="tool-detail-block">
+          <div className="tool-detail-label">Outcome</div>
+          <div className={`tool-detail-value${f.isError ? " is-error" : ""}`}>
+            {f.isError ? "Failed" : "Completed"}
+            {typeof f.exitCode === "number" ? ` · exit ${f.exitCode}` : ""}
+            {f.truncated ? " · output truncated" : ""}
+          </div>
+        </div>
+      )}
       {f.path && (
         <div className="tool-detail-block">
           <div className="tool-detail-label">File</div>
@@ -124,8 +159,13 @@ function ToolDetail({ tool, f }: { tool: ToolActivity; f: ToolFormat }) {
 }
 
 function runningSummary(tool: ToolActivity): string {
-  const f = formatTool(tool.name, tool.input);
+  const f = formatTool(tool.name, tool.input, tool.detail);
   if (f.verb === "Agent output") return "Reading agent output…";
+  if (tool.detail?.kind === "delegation") {
+    const agent = tool.detail.label ? `${tool.detail.label} sub-agent` : "Sub-agent";
+    const elapsed = elapsedLabel(tool);
+    return `${agent} working${elapsed ? ` · ${elapsed}` : ""}…`;
+  }
   const label = toolRowLabel(f);
   if (f.command) return `Running ${label || "command"}…`;
   if (label) return `${f.verb} ${label}…`;
@@ -149,7 +189,7 @@ function ToolActivitySheet({ tools, summary, onClose }: { tools: ToolActivity[];
   // for an Edit/Write call formatTool runs a real LCS diff, so recomputing it
   // separately for the list row, the sheet title, and the detail view would
   // triple that work for no reason.
-  const formatted = selected ? formatTool(selected.name, selected.input) : undefined;
+  const formatted = selected ? formatTool(selected.name, selected.input, selected.detail) : undefined;
 
   // The sheet's scrollable body is a single persistent DOM node (Sheet.tsx's
   // .sheet-content) that this component swaps between the list and a detail
@@ -177,7 +217,7 @@ function ToolActivitySheet({ tools, summary, onClose }: { tools: ToolActivity[];
         {selected && formatted ? (
           <ToolDetail tool={selected} f={formatted} />
         ) : tools.length ? (
-          tools.map((t) => <ToolListRow key={t.callId} tool={t} f={formatTool(t.name, t.input)} onSelect={setSelectedId} />)
+          tools.map((t) => <ToolListRow key={t.callId} tool={t} f={formatTool(t.name, t.input, t.detail)} onSelect={setSelectedId} />)
         ) : (
           <div className="tool-detail-value output">No tool activity.</div>
         )}
@@ -201,13 +241,21 @@ export const ToolGroup = memo(function ToolGroup({ tools }: { tools: ToolActivit
   // yanking focus back to the top of the sheet while a tool call streams.
   const close = useCallback(() => setOpen(false), []);
   const running = tools.some((t) => t.status === "running");
-  const summary = running && tools.every((t) => t.status === "running") && tools.length === 1 ? runningSummary(tools[0]!) : toolGroupSummary(tools);
+  const hasError = tools.some((t) => formatTool(t.name, t.input, t.detail).isError);
+  const runningDelegations = tools.filter((t) => t.status === "running" && t.detail?.kind === "delegation");
+  const summary = runningDelegations.length > 1
+    ? `${runningDelegations.length} sub-agents working…`
+    : runningDelegations.length === 1
+      ? runningSummary(runningDelegations[0]!)
+      : running && tools.every((t) => t.status === "running") && tools.length === 1
+        ? runningSummary(tools[0]!)
+        : toolGroupSummary(tools);
   return (
     <div className="tool-group">
-      <button className={`tool-group-line${running ? " is-running" : ""}`} onClick={() => setOpen(true)}>
+      <button className={`tool-group-line${running ? " is-running" : ""}${hasError ? " is-error" : ""}`} onClick={() => setOpen(true)}>
         <span className="tool-group-state" aria-hidden />
         <span className="tool-group-summary">{summary}</span>
-        <span className="tool-chevron">›</span>
+        <span className="tool-chevron"><ChevronRightIcon size={14} /></span>
       </button>
       {open && <ToolActivitySheet tools={tools} summary={summary} onClose={close} />}
     </div>

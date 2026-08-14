@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { describe, expect, it } from "vitest";
 import { ephemeralAdapter, unb64, type BootstrapOpts, type ExecRequest, type ExecResult } from "../src/index.js";
@@ -25,6 +25,7 @@ type FlyFile = { guest_path: string; raw_value: string };
 type FlyMachineBody = {
   region: string;
   config: {
+    image?: string;
     auto_destroy: boolean;
     restart: { policy: string };
     init: { exec?: string[]; user_data?: string };
@@ -55,7 +56,7 @@ describe("fly adapter — provision", () => {
       token: "fly-token",
       userData: "#cloud-config\nruncmd: []\n",
       bootstrap: BOOTSTRAP,
-      config: { slug: "abc123", region: "fra", size: "shared-2x-4gb", ttlMinutes: 90 },
+      config: { slug: "abc123", region: "fra", size: "shared-2x-4gb", image: "ghcr.io/bivysh/bivy-ephemeral-runner:sha-test", ttlMinutes: 90 },
     });
 
     expect(machine).toMatchObject({ id: "abc123", provider: "fly", app: "bivy-abc123", region: "fra" });
@@ -67,6 +68,7 @@ describe("fly adapter — provision", () => {
     // the daemon finishing, not a bare shell exiting on boot.
     expect(cfg.auto_destroy).toBe(true);
     expect(cfg.restart).toEqual({ policy: "no" });
+    expect(cfg.image).toBe("ghcr.io/bivysh/bivy-ephemeral-runner:sha-test");
 
     // The broken cloud-init path must be gone.
     expect(cfg.init.user_data).toBeUndefined();
@@ -92,7 +94,8 @@ describe("fly adapter — provision", () => {
     expect(startScript).toContain("export BIVY_REPO='owner/repo'");
     expect(startScript).toContain("exec bivy start");
 
-    // init.exec installs curl (absent from Fly's bare image), then Bivy, then
+    // init.exec uses preinstalled Bivy when present, falls back to installing
+    // curl+Bivy for a generic image, then
     // hands the foreground to start.sh under a TTL timeout (90 min → 5400s), the
     // backstop that replaces the VM shutdown. `pipefail` makes a failed install
     // abort loudly instead of limping on to a doomed `bivy start`.
@@ -100,6 +103,7 @@ describe("fly adapter — provision", () => {
     expect(cfg.init.exec[0]).toBe("/bin/bash");
     expect(cfg.init.exec[1]).toBe("-lc");
     expect(script).toContain("set -euo pipefail");
+    expect(script).toContain("command -v bivy");
     expect(script).toContain("apt-get install -y -qq curl ca-certificates");
     expect(script).toContain("curl -fsSL");
     expect(script).toContain("exec timeout 5400 bash /etc/bivy/start.sh");
@@ -118,5 +122,45 @@ describe("fly adapter — provision", () => {
     const cfg = machineConfig(create);
     expect(cfg.init).toEqual({ user_data: "#cloud-config\nruncmd: []\n" });
     expect(cfg.files).toBeUndefined();
+  });
+});
+
+describe("fly adapter — orphan discovery", () => {
+  it("only lists bivy- apps and filters machines by the account ownership tag", async () => {
+    const calls: ExecRequest[] = [];
+    const exec = async (req: ExecRequest): Promise<ExecResult> => {
+      calls.push(req);
+      if (req.url === "https://api.machines.dev/v1/apps") {
+        return { status: 200, body: { apps: [{ name: "bivy-abc123" }, { name: "someone-elses-app" }] } };
+      }
+      if (req.url === "https://api.machines.dev/v1/apps/bivy-abc123/machines") {
+        return {
+          status: 200,
+          body: [
+            { id: "mine", region: "fra", state: "started", config: { metadata: { bivy: "ephemeral", "bivy-account": "owner-tag-1", "bivy-attempt": "attempt-1" } }, created_at: "2026-08-01T00:00:00Z" },
+            { id: "not-mine", region: "fra", state: "started", config: { metadata: { bivy: "ephemeral", "bivy-account": "owner-tag-OTHER" } } },
+            { id: "not-bivy", region: "fra", state: "started", config: { metadata: {} } },
+          ],
+        };
+      }
+      return { status: 404, body: null };
+    };
+    const found = await ephemeralAdapter("fly")!.discover!({ exec, token: "fly-token", ownershipTag: "owner-tag-1" });
+    expect(found).toEqual([{ id: "mine", provider: "fly", app: "bivy-abc123", name: "bivy-abc123", region: "fra", status: "running", ip: null, createdAt: "2026-08-01T00:00:00Z", attemptId: "attempt-1" }]);
+    // Never touched the non-bivy- app.
+    expect(calls.some((c) => c.url.includes("someone-elses-app"))).toBe(false);
+  });
+
+  it("skips an app whose machine list fails, rather than aborting the whole scan", async () => {
+    const exec = async (req: ExecRequest): Promise<ExecResult> => {
+      if (req.url === "https://api.machines.dev/v1/apps") return { status: 200, body: { apps: [{ name: "bivy-broken" }, { name: "bivy-ok" }] } };
+      if (req.url === "https://api.machines.dev/v1/apps/bivy-broken/machines") return { status: 500, body: { error: "boom" } };
+      if (req.url === "https://api.machines.dev/v1/apps/bivy-ok/machines") {
+        return { status: 200, body: [{ id: "ok1", region: "iad", state: "started", config: { metadata: { bivy: "ephemeral", "bivy-account": "owner-tag-1" } } }] };
+      }
+      return { status: 404, body: null };
+    };
+    const found = await ephemeralAdapter("fly")!.discover!({ exec, token: "fly-token", ownershipTag: "owner-tag-1" });
+    expect(found).toEqual([{ id: "ok1", provider: "fly", app: "bivy-ok", name: "bivy-ok", region: "iad", status: "running", ip: null, createdAt: "", attemptId: undefined }]);
   });
 });

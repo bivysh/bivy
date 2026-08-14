@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 /**
  * Build the `bivy` release artifact.
@@ -16,9 +16,9 @@
  * emits that tarball. Keeping the download channel current is what lets the
  * every-merge staging build reach existing packaged nodes via `bivy update`.
  *
- *   npm run build:release          stage the package, don't publish
- *   npm run publish:npm            stage and publish to npm
- *   npm run publish:npm:dry        stage and dry-run publish
+ *   pnpm run build:release         stage the package, don't publish
+ *   pnpm run publish:npm           stage and publish to npm
+ *   pnpm run publish:npm:dry       stage and dry-run publish
  *   node scripts/build-release.mjs --pack <dir>
  *                                  stage and write <dir>/bivy-latest.tar.gz +
  *                                  bivy-latest.json (self-hosted download channel)
@@ -100,7 +100,9 @@ for (const item of [
 // stray root publish — this staged dir is the sanctioned publish path.
 const pkgPath = path.join(app, "package.json");
 const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-fs.writeFileSync(pkgPath, `${JSON.stringify(curateManifest(pkg), null, 2)}\n`);
+const releaseReadme = fs.readFileSync(path.join(app, "README.md"), "utf8");
+const curatedPkg = curateManifest(pkg, releaseReadme);
+fs.writeFileSync(pkgPath, `${JSON.stringify(curatedPkg, null, 2)}\n`);
 run("npm", ["install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: app });
 
 const releasePkg = JSON.parse(fs.readFileSync(path.join(app, "package.json"), "utf8"));
@@ -182,7 +184,7 @@ if (packDir) {
 
 console.log(`Built ${releasePkg.name}@${releasePkg.version}`);
 if (!doPublish && !packDir) {
-  console.log("Not published. Use `npm run publish:npm` (or --dry-run) to publish.");
+  console.log("Not published. Use `pnpm run publish:npm` (or --dry-run) to publish.");
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });

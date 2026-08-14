@@ -1,15 +1,13 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useAppState } from "../store/useStore.js";
 import { controller } from "../store/useStore.js";
-import { EphemeralSheet } from "./Ephemeral.js";
 import { AddNodeSheet } from "./AddNodeSheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { useModalEscape } from "../modalStack.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
-import { ephemeralProviderSuspendsWhenIdle } from "@bivy/core";
-import type { EphemeralSetup, EphemeralMachine } from "@bivy/core";
+import type { EphemeralNodeConfig, EphemeralMachine } from "@bivy/core";
 
 /**
  * Header control (relay mode): shows the current node and a menu to switch nodes,
@@ -17,11 +15,9 @@ import type { EphemeralSetup, EphemeralMachine } from "@bivy/core";
  * there is only one node.
  */
 export function NodeSwitcher() {
-  const { nodes, currentNodeId, status, activeSessionId, sessions } = useAppState();
+  const { nodes, currentNodeId, status, activeSessionId, sessions, draftEphemeralConfig } = useAppState();
   const [open, setOpen] = useState(false);
-  const [ephemeralOpen, setEphemeralOpen] = useState(false);
-  const [ephemeralSetupId, setEphemeralSetupId] = useState<string | undefined>();
-  const [ephemeralSetups, setEphemeralSetups] = useState<EphemeralSetup[]>([]);
+  const [ephemeralConfigs, setEphemeralConfigs] = useState<EphemeralNodeConfig[]>([]);
   const [ephemeralMachines, setEphemeralMachines] = useState<EphemeralMachine[]>([]);
   const [addNodeOpen, setAddNodeOpen] = useState(false);
   const [confirmSignOut, setConfirmSignOut] = useState(false);
@@ -39,7 +35,7 @@ export function NodeSwitcher() {
   useEffect(() => {
     if (!open) return;
     if (EPHEMERAL_MACHINES_ENABLED) {
-      controller.listEphemeralSetups().then(setEphemeralSetups).catch(() => {});
+      controller.listEphemeralConfigs().then(setEphemeralConfigs).catch(() => {});
       controller.listEphemeralMachines().then(setEphemeralMachines).catch(() => {});
     }
     const onDoc = (e: MouseEvent) => {
@@ -52,21 +48,29 @@ export function NodeSwitcher() {
   const activeSession = sessions.find((s) => s.sessionId === activeSessionId);
   const sessionNodeId = activeSession?.nodeId || currentNodeId;
   const current = nodes.find((n) => n.id === sessionNodeId);
-  const label = current?.name || sessionNodeId || "Node";
+  // A runner picked for the (not-yet-created) draft session shows as the current
+  // selection — offline/pending until the first message launches it.
+  const draftRunner = !activeSessionId ? draftEphemeralConfig : null;
+  const label = draftRunner ? draftRunner.name : current?.name || sessionNodeId || "Machine";
+  const showOnline = draftRunner ? false : current?.online;
   // Ephemeral machines enroll as real account nodes (id `eph-…`) once they boot,
   // so they'd otherwise show up twice: here under "Your nodes" AND under the
   // ephemeral section for their configured setup. Keep them out of the
   // persistent list — the ephemeral section is their only home. Applies to every
   // provider (Fly/Hetzner/AWS), which all mint `eph-` node ids at launch.
   const persistentNodes = nodes.filter((n) => !n.id.startsWith("eph-"));
-  // The live node backing a configured setup, if one is currently running — lets
-  // a setup row act as a switch-to-node when its machine is up, and a launcher
-  // when it isn't. Machines are newest-first, so the first match is the latest.
-  const runningNodeForSetup = (setupId: string) => {
-    const machine = ephemeralMachines.find((m) => m.setupId === setupId && m.nodeId);
-    if (!machine?.nodeId) return undefined;
-    return nodes.find((n) => n.id === machine.nodeId);
-  };
+  // An ephemeral config is a node *template*: picking it for a new session
+  // launches a fresh machine bound to that session. A config whose machine is
+  // already initialized and owned by a session is "in use" and unavailable to
+  // another session until that machine is torn down — one machine per session,
+  // so a running machine is never offered to a second session. Reconnecting to a
+  // running ephemeral session happens from the session list, not here.
+  const sessionBoundNodeIds = useMemo(
+    () => new Set(sessions.map((s) => s.nodeId).filter((id): id is string => Boolean(id))),
+    [sessions],
+  );
+  const configInUse = (setupId: string) =>
+    ephemeralMachines.some((m) => m.setupId === setupId && m.nodeId && sessionBoundNodeIds.has(m.nodeId));
   // A draft may choose its node. Once the session exists, its owning node is
   // immutable: this control becomes a label rather than a global node switcher.
   const locked = Boolean(activeSessionId);
@@ -83,16 +87,16 @@ export function NodeSwitcher() {
         }}
         aria-haspopup={locked ? undefined : "menu"}
         aria-expanded={locked ? undefined : open}
-        aria-label={locked ? `Session node: ${label}` : undefined}
+        aria-label={locked ? `Session machine: ${label}` : undefined}
       >
         {/* Online/offline/reconnecting is otherwise color/shape-only (a 9px
             dot, sometimes a spinner) with no text — invisible to screen
             readers and easy to miss for colorblind users. */}
         <span
-          className={`node-dot${reconnecting ? " connecting" : current?.online ? " online" : ""}`}
+          className={`node-dot${reconnecting ? " connecting" : showOnline ? " online" : ""}`}
           aria-hidden
         />
-        <span className="sr-only">{reconnecting ? "Reconnecting" : current?.online ? "Online" : "Offline"} — </span>
+        <span className="sr-only">{reconnecting ? "Reconnecting" : showOnline ? "Online" : "Offline"} — </span>
         <span className="node-switcher-name">{label}</span>
         {!locked && <span className="node-switcher-caret">▾</span>}
       </button>
@@ -104,8 +108,8 @@ export function NodeSwitcher() {
               Reconnecting…
             </div>
           )}
-          <div className="node-menu-head">Your nodes</div>
-          {persistentNodes.length === 0 && <div className="node-menu-empty">No other nodes</div>}
+          <div className="node-menu-head">Your machines</div>
+          {persistentNodes.length === 0 && <div className="node-menu-empty">No other machines</div>}
           {persistentNodes.map((n) => (
             <div className="node-menu-row" key={n.id}>
               <button
@@ -123,44 +127,36 @@ export function NodeSwitcher() {
               </button>
             </div>
           ))}
-          {EPHEMERAL_MACHINES_ENABLED && ephemeralSetups.length > 0 && (
+          {EPHEMERAL_MACHINES_ENABLED && ephemeralConfigs.length > 0 && (
             <>
-              <div className="node-menu-head">Ephemeral machines</div>
-              {ephemeralSetups.map((setup) => {
-                // A setup whose machine is up switches straight to that node;
-                // otherwise the row opens its launch sheet. Either way the setup
-                // is the only entry point — no ad-hoc "configure a new machine"
-                // placeholder, and no separate persistent-node row.
-                const runningNode = runningNodeForSetup(setup.id);
-                const online = Boolean(runningNode?.online);
-                // A Fly Sprite suspends to ~$0 when idle: its node stays enrolled
-                // but drops off the relay, so it shows as a running-but-offline
-                // node. Clicking it must WAKE it first (a suspended machine would
-                // hang plain switchNode forever), then connect.
-                const suspendable = ephemeralProviderSuspendsWhenIdle(setup.provider);
-                const suspended = Boolean(runningNode) && !online && suspendable;
+              <div className="node-menu-head">Isolated machine profiles</div>
+              {ephemeralConfigs.map((config) => {
+                // Each runner is a template. Picking it just targets the draft at
+                // it — the first message launches a fresh machine bound to the new
+                // session (no "launch" button). If its machine is already owned by
+                // a session, it's "in use" and can't be picked for another.
+                const inUse = configInUse(config.id);
+                const picked = config.id === draftRunner?.id;
                 return (
                   <button
-                    key={setup.id}
-                    className={`node-menu-item${runningNode && runningNode.id === currentNodeId ? " active" : ""}`}
+                    key={config.id}
+                    className={`node-menu-item${picked ? " active" : ""}`}
                     role="menuitem"
+                    disabled={inUse}
+                    title={inUse ? "In use by another session — each profile runs one machine per session" : undefined}
                     onClick={() => {
+                      if (inUse) return;
                       setOpen(false);
-                      if (runningNode) {
-                        if (suspendable && !online) void controller.resumeAndConnectNode(runningNode.id);
-                        else controller.switchNode(runningNode.id);
-                      }
-                      else { setEphemeralSetupId(setup.id); setEphemeralOpen(true); }
+                      controller.pickDraftEphemeralRunner(config);
                     }}
                   >
-                    <span className={`node-dot${online ? " online" : ""}`} aria-hidden />
-                    <span className="sr-only">{online ? "Online" : suspended ? "Suspended — tap to resume" : "Offline"} — </span>
-                    <span className="node-menu-name">{setup.name}</span>
-                    {runningNode && runningNode.id === currentNodeId
-                      ? <span className="node-menu-check">✓</span>
-                      : suspended
-                        ? <span className="chip" title="Suspended to ~$0 — tap to resume with its state intact">Suspended</span>
-                        : <span className="chip">{setup.provider}</span>}
+                    <span className="node-dot" aria-hidden />
+                    <span className="sr-only">{inUse ? "In use — " : picked ? "Selected — " : "Available — "}</span>
+                    <span className="node-menu-name">{config.name}</span>
+                    {inUse
+                      ? <span className="chip" title="This machine belongs to another session">In use</span>
+                      : <span className="chip">{config.provider}</span>}
+                    {picked && <span className="node-menu-check">✓</span>}
                   </button>
                 );
               })}
@@ -176,7 +172,7 @@ export function NodeSwitcher() {
             }}
           >
             <span className="node-menu-glyph">+</span>
-            <span className="node-menu-name">Add a node…</span>
+            <span className="node-menu-name">Add a machine…</span>
           </button>
           <div className="node-menu-sep" />
           {/* Confirm first — signing out here used to be a single tap with no
@@ -197,7 +193,6 @@ export function NodeSwitcher() {
           onConfirm={() => { setConfirmSignOut(false); controller.signOut(); }}
         />
       )}
-      {ephemeralOpen && <EphemeralSheet setupId={ephemeralSetupId} onClose={() => setEphemeralOpen(false)} />}
       {addNodeOpen && <AddNodeSheet onClose={() => setAddNodeOpen(false)} />}
     </div>
   );

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // Bivy-owned OAuth engine for subscription model providers.
 //
@@ -14,6 +14,7 @@ import http from "node:http";
 import { randomBytes } from "node:crypto";
 import { createPkce } from "../../integrations/oauth.js";
 import { createCredentialVault, type OAuthCredential } from "../credential-store.js";
+import { DEFAULT_LABEL } from "../../credentials/records.js";
 import { getModelOAuthProvider, type ModelOAuthProvider } from "./model-oauth-providers.js";
 
 // --- Bivy-owned login interaction (same shape Pi used, now ours) -------------
@@ -42,12 +43,29 @@ interface OAuthTokens {
   refresh: string;
   /** Absolute expiry, epoch ms (skew already applied). */
   expires: number;
+  /** Wall-clock epoch ms this set was minted — the monotonic tiebreak used by the
+   *  cross-node merge (see credential-store `preferIncomingCredential`). */
+  refreshedAt: number;
   accountId?: string;
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // --- HTTP helpers ------------------------------------------------------------
+
+/** A failed token/device response that keeps the machine-readable OAuth `error`
+ *  code separate from the human `error_description`. The device poll matches on
+ *  the code (e.g. `authorization_pending`) — providers like xAI return a friendly
+ *  description ("User has not yet authorized") that would otherwise mask it. */
+export type OAuthRefreshState = "fresh" | "expired" | "transient_failure" | "reconnect_required";
+export interface OAuthRefreshResult { state: OAuthRefreshState; access?: string; error?: string; }
+
+class OAuthTokenError extends Error {
+  constructor(readonly status: number, readonly code: string, readonly description: string) {
+    super(`OAuth token request failed (${status}): ${description || code || "unknown error"}`);
+    this.name = "OAuthTokenError";
+  }
+}
 
 async function postToken(url: string, encoding: "json" | "form", body: Record<string, string>): Promise<Record<string, unknown>> {
   const res = await fetch(url, {
@@ -66,8 +84,9 @@ async function postToken(url: string, encoding: "json" | "form", body: Record<st
     throw new Error(`Token endpoint returned non-JSON (${res.status}): ${text.slice(0, 200)}`);
   }
   if (!res.ok) {
-    const err = (payload.error_description || payload.error || text.slice(0, 200)) as string;
-    throw new Error(`OAuth token request failed (${res.status}): ${err}`);
+    const code = typeof payload.error === "string" ? payload.error : "";
+    const description = (typeof payload.error_description === "string" ? payload.error_description : "") || text.slice(0, 200);
+    throw new OAuthTokenError(res.status, code, description);
   }
   return payload;
 }
@@ -99,14 +118,15 @@ function tokensFrom(
   const rotated = typeof payload.refresh_token === "string" ? payload.refresh_token : "";
   const refresh = rotated || prev?.refresh || "";
   const expiresIn = Number(payload.expires_in) || 3600;
-  const expires = Date.now() + expiresIn * 1000 - provider.refreshSkewMs;
+  const now = Date.now();
+  const expires = now + expiresIn * 1000 - provider.refreshSkewMs;
 
   let accountId: string | undefined = prev?.accountId;
   if (provider.accountIdClaim) {
     accountId = jwtClaim(access, provider.accountIdClaim.path, provider.accountIdClaim.field) ?? accountId;
     if (!accountId) throw new Error(`Could not extract account id for "${provider.id}" from the OAuth token`);
   }
-  return { access, refresh, expires, ...(accountId ? { accountId } : {}) };
+  return { access, refresh, expires, refreshedAt: now, ...(accountId ? { accountId } : {}) };
 }
 
 // --- Authorization-code flow (browser + callback server + manual paste) ------
@@ -140,10 +160,24 @@ export function extractAuthCode(value: string): string {
   return hash > 0 ? v.slice(0, hash) : v;
 }
 
+export function escapeOAuthHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  })[character]!);
+}
+
 function respondHtml(res: http.ServerResponse, status: number, title: string, body: string) {
+  const safeTitle = escapeOAuthHtml(title);
+  const safeBody = escapeOAuthHtml(body);
   res.statusCode = status;
   res.setHeader("content-type", "text/html; charset=utf-8");
-  res.end(`<!doctype html><meta charset="utf-8"><title>${title}</title><body style="font:16px system-ui;margin:3rem;max-width:32rem"><h2>${title}</h2><p>${body}</p><p>You can close this tab and return to Bivy.</p></body>`);
+  res.setHeader("content-security-policy", "default-src 'none'; style-src 'unsafe-inline'");
+  res.setHeader("x-content-type-options", "nosniff");
+  res.end(`<!doctype html><meta charset="utf-8"><title>${safeTitle}</title><body style="font:16px system-ui;margin:3rem;max-width:32rem"><h2>${safeTitle}</h2><p>${safeBody}</p><p>You can close this tab and return to Bivy.</p></body>`);
 }
 
 /** Local HTTP listener that resolves the authorization code from the provider redirect. */
@@ -287,12 +321,16 @@ async function loginDeviceCode(provider: ModelOAuthProvider, interaction: AuthIn
         device_code: deviceCode,
       });
     } catch (error) {
+      // Prefer the machine-readable OAuth `error` code; fall back to the message
+      // for providers (xAI) that return a friendly description like "User has not
+      // yet authorized" instead of the RFC-8628 `authorization_pending` code.
+      const code = error instanceof OAuthTokenError ? error.code : "";
       const message = error instanceof Error ? error.message : String(error);
-      if (/authorization_pending/i.test(message)) {
+      if (code === "authorization_pending" || /authorization_pending|not yet authorized/i.test(message)) {
         await sleep(interval);
         continue;
       }
-      if (/slow_down/i.test(message)) {
+      if (code === "slow_down" || /slow_down/i.test(message)) {
         interval += 5000;
         await sleep(interval);
         continue;
@@ -317,7 +355,7 @@ export async function loginModelOAuth(credsDir: string, providerId: string, inte
   const provider = getModelOAuthProvider(providerId);
   if (!provider) throw new Error(`Provider "${providerId}" does not support subscription login`);
   const tokens = provider.flow === "device_code" ? await loginDeviceCode(provider, interaction) : await loginAuthCode(provider, interaction);
-  const credential: OAuthCredential = { type: "oauth", access: tokens.access, refresh: tokens.refresh, expires: tokens.expires, ...(tokens.accountId ? { accountId: tokens.accountId } : {}) };
+  const credential: OAuthCredential = { type: "oauth", access: tokens.access, refresh: tokens.refresh, expires: tokens.expires, refreshedAt: tokens.refreshedAt, ...(tokens.accountId ? { accountId: tokens.accountId } : {}) };
   await createCredentialVault(credsDir).modify(providerId, async () => credential);
 }
 
@@ -343,15 +381,39 @@ async function refreshTokens(provider: ModelOAuthProvider, current: OAuthCredent
  * token — the single-flight guarantee. Returns undefined if the provider has no
  * stored OAuth credential or isn't natively supported.
  */
-export async function refreshModelOAuth(credsDir: string, providerId: string): Promise<string | undefined> {
+export async function refreshModelOAuthState(
+  credsDir: string,
+  providerId: string,
+  label: string = DEFAULT_LABEL,
+): Promise<OAuthRefreshResult> {
   const provider = getModelOAuthProvider(providerId);
-  if (!provider) return undefined;
-  const result = await createCredentialVault(credsDir).modify(providerId, async (current) => {
-    if (!current || current.type !== "oauth") return current;
-    // Someone else already refreshed while we waited for the lock — use theirs.
-    if (Number(current.expires) > Date.now()) return current;
-    const fresh = await refreshTokens(provider, current);
-    return { type: "oauth", access: fresh.access, refresh: fresh.refresh, expires: fresh.expires, ...(fresh.accountId ? { accountId: fresh.accountId } : {}) };
-  });
-  return result?.type === "oauth" ? result.access : undefined;
+  if (!provider) return { state: "reconnect_required", error: "Provider does not support OAuth refresh" };
+  try {
+    let found = false;
+    let wasExpired = false;
+    const result = await createCredentialVault(credsDir).modifyRecord(providerId, label, async (current) => {
+      if (!current || current.type !== "oauth") return current;
+      found = true;
+      if (Number(current.expires) > Date.now()) return current;
+      wasExpired = true;
+      const fresh = await refreshTokens(provider, current);
+      return { type: "oauth", access: fresh.access, refresh: fresh.refresh, expires: fresh.expires, refreshedAt: fresh.refreshedAt, ...(fresh.accountId ? { accountId: fresh.accountId } : {}) };
+    });
+    if (!found || !result || result.type !== "oauth") return { state: "reconnect_required", error: "No OAuth credential is stored" };
+    return { state: wasExpired ? "expired" : "fresh", access: result.access };
+  } catch (error) {
+    const reconnect = error instanceof OAuthTokenError && (error.code === "invalid_grant" || error.code === "invalid_token" || error.status === 401);
+    return { state: reconnect ? "reconnect_required" : "transient_failure", error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+export async function refreshModelOAuth(
+  credsDir: string,
+  providerId: string,
+  label: string = DEFAULT_LABEL,
+): Promise<string | undefined> {
+  const result = await refreshModelOAuthState(credsDir, providerId, label);
+  if (result.state === "transient_failure") throw new Error(result.error ?? "OAuth refresh temporarily failed");
+  if (result.state === "reconnect_required" && result.error !== "No OAuth credential is stored") throw new Error(result.error ?? "OAuth reconnect required");
+  return result.access;
 }

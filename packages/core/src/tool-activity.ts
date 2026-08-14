@@ -1,10 +1,12 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // Classification of streamed agent events into tool start/result/update, plus
 // extraction of tool name/input/id across the many shapes different CLI adapters
 // emit. Ported from public/app/tool-activity.js.
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import type { ToolCallDetail } from "./tool-format.js";
+
 type AnyEvent = Record<string, any> | null | undefined;
 
 export function normalizeEventType(value: unknown): string {
@@ -79,6 +81,24 @@ export function toolInput(ev: AnyEvent): unknown {
     ev?.call?.input ||
     {}
   );
+}
+
+const DETAIL_KINDS = new Set(["shell", "read", "write", "edit", "search", "fetch", "plan", "delegation"]);
+
+/**
+ * Read the node's normalized ToolCallDetail off a tool block/event, if present.
+ * Returned untyped-but-validated (kind is one we know) so the caller can hand it
+ * to formatTool; a missing or unrecognized shape returns undefined and the UI
+ * falls back to its heuristic parse of the raw input. Keep this allowlist in sync
+ * with ToolCallDetail: dropping a kind here makes a valid node-side detail
+ * invisible to the client (most notably a running sub-agent delegation).
+ */
+export function toolDetail(ev: AnyEvent): ToolCallDetail | undefined {
+  const d = ev?.detail;
+  if (d && typeof d === "object" && typeof d.kind === "string" && DETAIL_KINDS.has(d.kind)) {
+    return d as ToolCallDetail;
+  }
+  return undefined;
 }
 
 export function toolCallId(ev: AnyEvent): string {

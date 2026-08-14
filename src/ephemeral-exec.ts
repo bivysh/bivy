@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // Ephemeral provisioning proxy (node-broker path).
 //
@@ -17,6 +17,7 @@ export const EPHEMERAL_ALLOWED_HOSTS = new Set([
   "api.machines.dev",
   "api.fly.io",
   "api.sprites.dev",
+  "api.e2b.app",
   "ec2.us-east-1.amazonaws.com",
   "ec2.us-west-2.amazonaws.com",
   "ec2.eu-west-1.amazonaws.com",

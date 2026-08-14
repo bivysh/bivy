@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { describe, expect, it } from "vitest";
 import {
@@ -33,14 +33,76 @@ const flyExec: ExecFn = async (req) => {
   return { status: 200, body: { id: "flymachine123", state: "created" } };
 };
 
+describe("launchEphemeralMachine — durable lifecycle", () => {
+  it("awaits durable intent before enrollment and records provider identity before tracking", async () => {
+    const keys = createEphemeralKeyStore(memoryBackend());
+    await keys.setToken("fly", "fly-tok");
+    const machines = createMachineStore(memoryBackend());
+    const order: string[] = [];
+    const attemptId = "attempt-001";
+    const machine = await launchEphemeralMachine(
+      {
+        provider: "fly", attemptId,
+        onLifecycle: async (event) => { order.push(event.phase); },
+      },
+      {
+        store: fakeStore(), exec: flyExec, keys, machines,
+        fetchImpl: (async () => {
+          expect(order).toEqual(["requested"]);
+          return { ok: true, json: async () => ({ enrollmentToken: "enroll-tok" }) };
+        }) as unknown as typeof fetch,
+      },
+    );
+    expect(machine.attemptId).toBe(attemptId);
+    expect(order).toEqual(["requested", "enrolled", "provider-accepted", "tracked"]);
+  });
+
+  it("refuses device-only providers whose guest shutdown cannot stop billing", async () => {
+    const keys = createEphemeralKeyStore(memoryBackend());
+    await keys.setToken("hetzner", "hz-token");
+    let fetched = false;
+    await expect(launchEphemeralMachine(
+      { provider: "hetzner" },
+      {
+        store: fakeStore(), exec: flyExec, keys, machines: createMachineStore(memoryBackend()),
+        fetchImpl: (async () => { fetched = true; return {} as Response; }) as typeof fetch,
+      },
+    )).rejects.toThrow(/requires hosted provisioning/);
+    expect(fetched).toBe(false);
+  });
+
+  it("does not enroll if durable intent persistence fails", async () => {
+    const keys = createEphemeralKeyStore(memoryBackend());
+    await keys.setToken("fly", "fly-tok");
+    let fetched = false;
+    await expect(launchEphemeralMachine(
+      { provider: "fly", onLifecycle: async () => { throw new Error("database unavailable"); } },
+      {
+        store: fakeStore(), exec: flyExec, keys, machines: createMachineStore(memoryBackend()),
+        fetchImpl: (async () => { fetched = true; return {} as Response; }) as typeof fetch,
+      },
+    )).rejects.toThrow("database unavailable");
+    expect(fetched).toBe(false);
+  });
+});
+
 describe("launchEphemeralMachine — machine record naming", () => {
   it("persists the setup's chosen name and setupId onto the stored machine", async () => {
     const keys = createEphemeralKeyStore(memoryBackend());
     await keys.setToken("fly", "fly-tok");
     const machines = createMachineStore(memoryBackend());
+    const progress: string[] = [];
 
     const machine = await launchEphemeralMachine(
-      { provider: "fly", region: "lhr", size: "shared-1x-2gb", name: "EU coding node", setupId: "setup-abc", ttlMinutes: 60 },
+      {
+        provider: "fly",
+        region: "lhr",
+        size: "shared-1x-2gb",
+        name: "EU coding node",
+        setupId: "setup-abc",
+        ttlMinutes: 60,
+        onProgress: (message) => progress.push(message),
+      },
       {
         store: fakeStore(),
         exec: flyExec,
@@ -58,6 +120,13 @@ describe("launchEphemeralMachine — machine record naming", () => {
     expect(machine.name).toBe("EU coding node");
     expect(machine.setupId).toBe("setup-abc");
     expect(machine.nodeId).toMatch(/^eph-/);
+    expect(progress).toEqual([
+      "Preparing Fly.io launch…",
+      "Enrolling a secure Bivy node…",
+      "Node enrolled. Building its secure bootstrap…",
+      "Creating the machine in lhr (shared-1x-2gb)…",
+      "Machine created. Boot setup is installing and starting Bivy…",
+    ]);
 
     const stored = await machines.list();
     expect(stored[0]?.name).toBe("EU coding node");

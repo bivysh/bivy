@@ -1,27 +1,36 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { AccountMe, AccountNode, AppState, AutomationHook, AutomationOutcome, EphemeralQueueDefault, LocalModelPreset, LocalModelProvider, PairedDevice, GithubAppEntry, GithubAppInfo, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, SlackHook, LinearHook, EphemeralMachine, EphemeralModelKeyInfo, EphemeralSetup, ProviderKeyInfo, ProviderSize } from "@bivy/core";
-import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint, connectSlackHook, disconnectSlackHook, fetchSlackHook, connectLinearHook, disconnectLinearHook, fetchLinearHook, createAutomationHook, fetchAutomationHooks, revokeAutomationHook, rotateAutomationHookSecret, updateAutomationHook } from "@bivy/core";
+import type { AccountMe, AccountNode, AppState, CredentialPresetsView, CredentialRecordSummary, EphemeralNodeConfig, LocalModelEndpointResult, LocalModelPreset, LocalModelProvider, PairedDevice, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralModelKeyInfo, ProviderKeyInfo, ProviderSize, HostedAuditEvent, HostedMachineSummary, HostedProvisioningStatus } from "@bivy/core";
+import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint, ephemeralCostEstimate, ephemeralLifecyclePhase, formatEphemeralPrice, deriveCredentialReadiness } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { OauthStep } from "./ProviderConnect.js";
-import { GithubQueuePanel } from "./GithubQueue.js";
-import { AutomationsPanel } from "./Automations.js";
-import { RulesetsPanel } from "./Rulesets.js";
 import { ImportSessionContent } from "./ImportSessionSheet.js";
+import { MachineCapabilitiesSection } from "./MachineCapabilities.js";
 import { currentThemeSetting, setTheme, type ThemeSetting } from "../theme.js";
 import { useModalEscape } from "../modalStack.js";
 import type { SettingsView } from "../router.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
-import { SourceGlyph } from "./SourceMark.js";
+import { ChevronRightIcon, CloseIcon } from "./UiIcons.js";
+
+const VoiceSettings = lazy(() => import("./VoiceSettings.js").then((module) => ({ default: module.VoiceSettings })));
 
 // The view enumeration lives in router.ts (as `SettingsView`) so the router can
 // validate a `/settings/:view` path without importing this component module;
 // aliased back to `View` here since it's used throughout as local vocabulary.
 type View = SettingsView;
+
+/** Views that moved out of Settings into the Automations hub. They remain valid
+ *  `SettingsView` values only so stale `/settings/:view` deep links parse and can
+ *  be redirected — they are never listed in the Settings nav. */
+type MovedView = "github" | "linear" | "slack" | "queue" | "webhooks" | "rulesets";
+const MOVED_TO_AUTOMATIONS: readonly MovedView[] = ["github", "linear", "slack", "queue", "webhooks", "rulesets"];
+function isMovedView(v: View | null): v is MovedView {
+  return v !== null && (MOVED_TO_AUTOMATIONS as readonly string[]).includes(v);
+}
 
 /** Sandbox tiers (Codex's vocabulary), shared by the node default + per-session picker. */
 export const SANDBOX_TIERS: Array<{ id: SandboxTier; label: string; hint: string }> = [
@@ -48,21 +57,11 @@ const IconKey = () => (
 const IconMic = () => (
   <Glyph><rect x="9" y="2" width="6" height="12" rx="3" /><path d="M5 10a7 7 0 0 0 14 0" /><path d="M12 19v3" /></Glyph>
 );
-const IconGithub = () => (
-  <Glyph><path d="M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12 12 0 0 0-6.2 0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21" /></Glyph>
-);
-// Reuse the official brand geometry used by run-source marks instead of
-// maintaining approximate line-art versions in Settings.
-const IconSlack = () => <SourceGlyph kind="slack" />;
-const IconLinear = () => <SourceGlyph kind="linear" />;
 const IconUser = () => (
   <Glyph><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></Glyph>
 );
 const IconLink = () => (
   <Glyph><path d="M9 17H7A5 5 0 0 1 7 7h2" /><path d="M15 7h2a5 5 0 0 1 0 10h-2" /><line x1="8" y1="12" x2="16" y2="12" /></Glyph>
-);
-const IconQueue = () => (
-  <Glyph><path d="M4 13h4l2 3h4l2-3h4" /><path d="M5.5 5h13l1.5 8v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-4z" /></Glyph>
 );
 const IconMonitor = () => (
   <Glyph><rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8M12 17v4" /></Glyph>
@@ -72,14 +71,6 @@ const IconServer = () => (
 );
 const IconBolt = () => (
   <Glyph><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z" /></Glyph>
-);
-// Webhook glyph — three linked nodes, the conventional inbound-hook mark.
-const IconWebhook = () => (
-  <Glyph><circle cx="6" cy="16" r="2.5" /><circle cx="18" cy="16" r="2.5" /><circle cx="12" cy="5" r="2.5" /><path d="m10.7 7.1-3 5.2M13.3 7.1l3 5.2M8.5 16h7" /></Glyph>
-);
-// Branch/policy glyph for Rulesets — a decision splitting into fallback routes.
-const IconRules = () => (
-  <Glyph><circle cx="6" cy="6" r="2" /><circle cx="6" cy="18" r="2" /><circle cx="18" cy="12" r="2" /><path d="M8 6h4a4 4 0 0 1 4 4M8 18h4a4 4 0 0 0 4-4" /></Glyph>
 );
 const IconCpu = () => (
   <Glyph><rect x="6" y="6" width="12" height="12" rx="2" /><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3" /></Glyph>
@@ -115,21 +106,13 @@ function planLabel(plan: string | null | undefined): string {
   return PLAN_LABELS[plan] ?? plan;
 }
 
-/**
- * POST the GitHub App manifest to GitHub. The manifest is too large/nested for a
- * query string, so it must ride as a form field — we build a form and submit it,
- * navigating the tab to GitHub's app-creation confirm page. GitHub then redirects
- * back to our origin (`?bivy_github_app=1&code=…&state=…`), which the controller
- * detects on the next load and relays to the node.
- */
-// Set just before the browser leaves for GitHub, so the return handler
-// recognises the redirect even if GitHub drops our query marker.
-function markGithubAppPending(): void {
-  try {
-    sessionStorage.setItem("bivy.githubAppPending", "1");
-  } catch {
-    /* ignore */
-  }
+/** Render the baked-in PWA build timestamp (see __APP_BUILD_TIME__) as a short
+ *  local date+time, or "" when it isn't a parseable ISO string. */
+function formatBuildTime(iso: string | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
 /** Reactive matchMedia — drives the responsive split (mobile drill-in vs.
@@ -158,18 +141,38 @@ const TITLES: Record<View, string> = {
   import: "Import session",
   providers: "Keys & OAuth",
   models: "Local models",
-  voice: "Voice input",
+  voice: "Voice",
   github: "GitHub App",
   linear: "Linear",
   slack: "Slack",
-  queue: "Work Queue",
-  automations: "Automations",
+  queue: "Runs",
   webhooks: "Webhooks",
   rulesets: "Rulesets",
-  nodes: "Nodes",
-  ephemeral: "Ephemeral machines",
+  nodes: "Machines",
+  ephemeral: "Isolated machine profiles",
   account: "Account & billing",
   link: "Link a device",
+};
+
+// Search the concepts and controls inside each panel, not just its title. This
+// remains intentionally compact: selecting a result opens the owning panel.
+const SEARCH_TERMS: Record<View, string> = {
+  appearance: "theme system light dark",
+  notifications: "push alerts attention approval permission idle completed",
+  import: "session transcript file upload migrate",
+  providers: "api key oauth openai anthropic google login credentials",
+  models: "ollama local model endpoint",
+  voice: "microphone speech transcription read aloud reader text to speech voice tone speed",
+  github: "github app repository installation issue pull request",
+  linear: "linear workspace issue integration",
+  slack: "slack workspace channel integration",
+  queue: "work queue issue run evidence outcome retry lease checks",
+  webhooks: "webhook trigger secret event",
+  rulesets: "rules policy routing agent runtime model sandbox",
+  nodes: "node daemon online offline diagnostics version update storage disk",
+  ephemeral: "ephemeral hosted machine provisioning billing teardown retention",
+  account: "account billing subscription plan usage",
+  link: "device qr code phone mobile pair",
 };
 
 export function Settings({
@@ -177,10 +180,8 @@ export function Settings({
   onClose,
   view,
   onViewChange,
-  githubQueue,
-  onRefreshGithubQueue,
-  onPickSession,
   onImported,
+  onRedirectToAutomations,
 }: {
   state: AppState;
   onClose: () => void;
@@ -188,14 +189,12 @@ export function Settings({
    *  mobile root menu (`/settings`). See settingsRoute.ts (#78). */
   view: View | null;
   onViewChange: (view: View | null) => void;
-  /** GitHub Queue data + handlers — the queue is now a Settings panel (#388),
-   *  not a separate modal. */
-  githubQueue?: GithubQueueItem[] | null;
-  onRefreshGithubQueue?: () => void;
-  onPickSession?: (sessionId: string, path?: string, nodeId?: string) => void;
   /** Fired when the Import-session panel adopts a session — the controller has
    *  already opened/navigated to it, so the caller just dismisses Settings. */
   onImported?: (sessionId: string) => void;
+  /** Integrations + automation/policy moved to the Automations hub. A stale deep
+   *  link to one of those `/settings/:view` URLs redirects there instead. */
+  onRedirectToAutomations?: (view: MovedView) => void;
 }) {
   const hosted = !controller.direct;
   // Below the CSS breakpoint we behave like the Claude mobile settings: a root
@@ -214,6 +213,14 @@ export function Settings({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isDesktop, view]);
 
+  // Integrations + automation/policy sections moved to the Automations hub. A
+  // stale deep link (bookmark / OAuth return) to one of those `/settings/:view`
+  // URLs bounces there instead of showing an empty panel.
+  useEffect(() => {
+    if (isMovedView(view)) onRedirectToAutomations?.(view);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view]);
+
   // Escape closes; focus starts inside the panel and restores to the opener on
   // close (parity with the Sheet primitive this replaced).
   const onCloseRef = useRef(onClose);
@@ -231,42 +238,31 @@ export function Settings({
 
   const groups: NavGroup[] = [
     {
-      label: "General",
+      label: "Models & agents",
+      items: [
+        { id: "providers", label: "Keys & OAuth", icon: <IconKey /> },
+        { id: "models", label: "Local models", icon: <IconCpu /> },
+      ],
+    },
+    {
+      label: "Machines",
+      items: [
+        { id: "nodes", label: "Machines", icon: <IconServer /> },
+        ...(EPHEMERAL_MACHINES_ENABLED
+          ? [{ id: "ephemeral" as View, label: "Isolated machine profiles", icon: <IconBolt /> }]
+          : []),
+      ],
+    },
+    // Integrations (GitHub / Linear / Slack) and automation & policy (Work Queue,
+    // Webhooks, Rulesets) now live in the Automations hub — reachable from the
+    // sidebar bolt — so Settings no longer lists them.
+    {
+      label: "App",
       items: [
         { id: "appearance", label: "Appearance", icon: <IconAppearance /> },
         { id: "notifications", label: "Notifications", icon: <IconBell /> },
+        { id: "voice", label: "Voice", icon: <IconMic /> },
         { id: "import", label: "Import session", icon: <IconImport /> },
-        { id: "providers", label: "Keys & OAuth", icon: <IconKey /> },
-        { id: "models", label: "Local models", icon: <IconCpu /> },
-        { id: "voice", label: "Voice input", icon: <IconMic /> },
-      ],
-    },
-    {
-      label: "Integrations",
-      items: [
-        { id: "github", label: "GitHub App", icon: <IconGithub /> },
-        ...(hosted ? [
-          { id: "linear" as View, label: "Linear", icon: <IconLinear /> },
-          { id: "slack" as View, label: "Slack", icon: <IconSlack /> },
-        ] : []),
-        { id: "queue", label: "Work Queue", icon: <IconQueue /> },
-      ],
-    },
-    {
-      label: "Automation",
-      items: [
-        { id: "automations", label: "Automations", icon: <IconBolt /> },
-        { id: "webhooks", label: "Webhooks", icon: <IconWebhook /> },
-        { id: "rulesets", label: "Rulesets", icon: <IconRules /> },
-      ],
-    },
-    {
-      label: "Infrastructure",
-      items: [
-        { id: "nodes", label: "Nodes", icon: <IconServer /> },
-        ...(EPHEMERAL_MACHINES_ENABLED
-          ? [{ id: "ephemeral" as View, label: "Ephemeral machines", icon: <IconBolt /> }]
-          : []),
       ],
     },
   ];
@@ -281,10 +277,10 @@ export function Settings({
   }
 
   const q = query.trim().toLowerCase();
-  const matches = (label: string) => !q || label.toLowerCase().includes(q);
+  const matches = (item: NavItem) => !q || `${item.label} ${SEARCH_TERMS[item.id]}`.toLowerCase().includes(q);
   // A query matching nothing used to hide every group and leave the sidebar
   // blank — looked broken rather than "no results" (#140).
-  const hasVisibleNavItem = groups.some((group) => group.items.some((it) => matches(it.label)));
+  const hasVisibleNavItem = groups.some((group) => group.items.some(matches));
 
   const title = activeView ? TITLES[activeView] : "Settings";
 
@@ -295,7 +291,7 @@ export function Settings({
         <aside className="settings-nav">
           <div className="settings-nav-top">
             <span className="settings-nav-heading">Settings</span>
-            <button className="settings-x" onClick={onClose} aria-label="Close settings">×</button>
+            <button className="settings-x" onClick={onClose} aria-label="Close settings"><CloseIcon /></button>
           </div>
           <div className="settings-search-wrap">
             <svg className="settings-search-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
@@ -312,7 +308,7 @@ export function Settings({
           <nav className="settings-nav-groups">
             {!hasVisibleNavItem && <div className="picker-empty">No settings match "{query.trim()}"</div>}
             {groups.map((group) => {
-              const visible = group.items.filter((it) => matches(it.label));
+              const visible = group.items.filter(matches);
               if (visible.length === 0) return null;
               return (
                 <div className="settings-nav-group" key={group.label}>
@@ -325,13 +321,19 @@ export function Settings({
                     >
                       <span className="settings-nav-icon">{it.icon}</span>
                       <span className="settings-nav-label">{it.label}</span>
-                      <span className="settings-nav-chevron" aria-hidden>›</span>
+                      <span className="settings-nav-chevron"><ChevronRightIcon size={18} /></span>
                     </button>
                   ))}
                 </div>
               );
             })}
           </nav>
+          <div className="settings-nav-version" title="The version of the Bivy app running on this device">
+            <span>Bivy v{__APP_VERSION__}</span>
+            {formatBuildTime(__APP_BUILD_TIME__) && (
+              <span className="settings-nav-version-updated">Updated {formatBuildTime(__APP_BUILD_TIME__)}</span>
+            )}
+          </div>
         </aside>
 
         <section className="settings-content">
@@ -342,29 +344,22 @@ export function Settings({
               </button>
             )}
             <h2 className="settings-head-title">{title}</h2>
-            <button className="settings-x settings-x-content" onClick={onClose} aria-label="Close settings">×</button>
+            <button className="settings-x settings-x-content" onClick={onClose} aria-label="Close settings"><CloseIcon /></button>
           </header>
           <div className="settings-body">
             {activeView === "appearance" && <AppearancePanel />}
             {activeView === "notifications" && <NotificationsPanel />}
             {activeView === "import" && <ImportPanel onImported={(id) => onImported?.(id)} />}
             {activeView === "providers" && <ProvidersPanel state={state} />}
-            {activeView === "models" && <LocalModelsPanel state={state} />}
-            {activeView === "voice" && <VoicePanel state={state} />}
-            {activeView === "github" && <GithubPanel state={state} onOpenGithubQueue={() => onViewChange("queue")} />}
-            {activeView === "linear" && <LinearPanel />}
-            {activeView === "slack" && <SlackPanel />}
-            {activeView === "queue" && (
-              <GithubQueuePanel
-                queue={githubQueue ?? null}
-                onRefresh={() => onRefreshGithubQueue?.()}
-                onPick={(id, path, nodeId) => onPickSession?.(id, path, nodeId)}
-                onOpenGithubSettings={() => onViewChange("github")}
-              />
+            {activeView === "models" && <LocalModelsPanel state={state} onStartWork={onClose} />}
+            {activeView === "voice" && (
+              <Suspense fallback={<div className="muted">Loading voice settings…</div>}>
+                <VoiceSettings state={state} />
+              </Suspense>
             )}
-            {activeView === "automations" && <AutomationsPanel state={state} />}
-            {activeView === "webhooks" && <WebhookTriggersPanel />}
-            {activeView === "rulesets" && <RulesetsPanel state={state} />}
+            {/* github / linear / slack / queue / webhooks / rulesets moved to the
+                Automations hub — a deep link to any of them redirects there (see
+                the redirect effect above), so they render nothing here. */}
             {activeView === "nodes" && <NodesPanel state={state} />}
             {activeView === "ephemeral" && EPHEMERAL_MACHINES_ENABLED && <EphemeralPanel />}
             {activeView === "account" && <AccountPanel />}
@@ -417,7 +412,7 @@ function ImportPanel({ onImported }: { onImported: (sessionId: string) => void }
     <div className="settings-form">
       <p className="muted">
         Adopt a Claude Code or Codex session that was started outside Bivy. Only
-        sessions this node (or another one you pick) can see and safely take over
+        sessions this machine (or another one you pick) can see and safely take over
         are listed.
       </p>
       <ImportSessionContent onDone={onImported} />
@@ -537,7 +532,7 @@ function NotificationsPanel() {
 
 /** Human label for a node, falling back to its id. */
 function nodeLabel(nodes: AccountNode[], nodeId: string | null): string {
-  if (!nodeId) return "this node";
+  if (!nodeId) return "this machine";
   return nodes.find((n) => n.id === nodeId)?.name || nodeId;
 }
 
@@ -556,6 +551,203 @@ function nodeProviderSummary(n: AccountNode): { text: string; expired: boolean }
   const parts = [`${provs.length} sign-in${provs.length === 1 ? "" : "s"}`];
   if (expired.length) parts.push(`${expired.length} expired`);
   return { text: parts.join(" · "), expired: expired.length > 0 };
+}
+
+// Multiple labeled credentials for one provider — work / personal / per-project
+// keys, plus password-manager references. The single "API key" field above is the
+// provider's `default` credential; this manages the extra labeled ones and each
+// one's cross-node sync (the per-credential opt-out).
+function ProviderCredentials({ providerId, records, presets, accountEmail }: { providerId: string; records: CredentialRecordSummary[]; presets: CredentialPresetsView | null; accountEmail?: string }) {
+  const [label, setLabel] = useState("");
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const mine = records.filter((r) => r.provider === providerId);
+  // The "default" credential is managed by the API-key/OAuth controls above; this
+  // section is for the additional labeled accounts.
+  const extra = mine.filter((r) => r.label !== "default");
+  const activePreset = presets?.active ?? "";
+  const mappedLabel = activePreset ? presets?.presets?.[activePreset]?.[providerId] ?? "" : "";
+  const extraLabels = extra.map((r) => r.label);
+
+  const add = async () => {
+    const l = label.trim();
+    const v = value.trim();
+    if (!l || !v) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const isRef = v.startsWith("op://") || v.startsWith("env://") || v.startsWith("cmd://");
+      await controller.setCredential(providerId, l, isRef ? { ref: v } : { key: v });
+      setLabel("");
+      setValue("");
+      controller.listCredentialRecords();
+    } catch (e) {
+      setErr(String((e as Error)?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="cred-section" style={{ marginTop: 20, borderTop: "1px solid var(--border, #333)", paddingTop: 16 }}>
+      <label className="field-label">Additional accounts</label>
+      <p className="muted small">Add work / personal or per-project keys. Paste an API key, or a reference — <code>op://…</code>, <code>env://NAME</code>, or <code>cmd://&lt;command&gt;</code> (any password-manager CLI). References resolve on this machine; the secret never leaves your manager. <code>cmd://</code> refs stay on this machine.</p>
+      {extra.length > 0 && (
+        <div className="picker-list">
+          {extra.map((r) => (
+            <div key={r.label} className="cred-row-group" style={{ padding: "6px 0" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontWeight: 600 }}>{r.label}</span>
+                <span className="chip">{r.kind === "reference" ? "reference" : r.kind === "oauth" ? "OAuth" : "API key"}</span>
+                {r.origin === "agent-native" && <span className="chip">from agent</span>}
+                <span style={{ flex: 1 }} />
+                <button
+                  className="link-btn"
+                  title={r.sync === "account" ? "Syncs to your other machines — tap to keep on this machine only" : "Stays on this machine — tap to sync across your machines"}
+                  onClick={() => controller.setCredentialSync(providerId, r.label, r.sync === "account" ? "node" : "account")}
+                >
+                  {r.sync === "account" ? "Syncing" : "This machine only"}
+                </button>
+                <button className="link-btn danger" onClick={() => { controller.removeCredential(providerId, r.label); setTimeout(() => controller.listCredentialRecords(), 400); }}>
+                  Remove
+                </button>
+              </div>
+              <CredentialReadinessRow providerId={providerId} record={r} accountEmail={accountEmail} />
+            </div>
+          ))}
+        </div>
+      )}
+      <input className="picker-search" placeholder="Label (e.g. work)" value={label} onChange={(e) => setLabel(e.target.value)} />
+      <input className="picker-search" type="password" placeholder="API key, or op:// / env://NAME / cmd://…" value={value} onChange={(e) => setValue(e.target.value)} />
+      <div className="row-actions">
+        <button className="btn" disabled={!label.trim() || !value.trim() || busy} onClick={add}>
+          {busy ? "Adding…" : "Add account"}
+        </button>
+      </div>
+      {err && <div className="banner error inline">{err}</div>}
+      {activePreset && extraLabels.length > 0 && (
+        <div style={{ marginTop: 14 }}>
+          <label className="field-label">In preset “{activePreset}”, use</label>
+          <select
+            className="picker-search"
+            value={mappedLabel}
+            onChange={(e) => controller.setPresetMapping(activePreset, providerId, e.target.value)}
+          >
+            <option value="">Default key</option>
+            {extraLabels.map((l) => (
+              <option key={l} value={l}>{l}</option>
+            ))}
+          </select>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** One credential's redacted provider × machine × agent readiness — who it
+ *  belongs to, whether it syncs across your machines, and whether it's been
+ *  verified to actually work — replacing a plain "Connected" boolean. Derived
+ *  by packages/core/src/credentialReadiness.ts, which never fabricates an
+ *  owner or a verification result it doesn't have. */
+function CredentialReadinessRow({ providerId, record, accountEmail }: { providerId: string; record: CredentialRecordSummary; accountEmail?: string }) {
+  const [testing, setTesting] = useState(false);
+  const [testErr, setTestErr] = useState<string | null>(null);
+  const readiness = deriveCredentialReadiness(record, accountEmail);
+  const verifiedLabel =
+    readiness.verified === "verified" ? `Verified ${relativeTime(readiness.lastVerifiedAt)}`
+    : readiness.verified === "failed" ? `Verification failed ${relativeTime(readiness.lastVerifiedAt)}`
+    : "Not yet verified";
+  return (
+    <div className="cred-readiness" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 4 }}>
+      <span className="muted small">{readiness.ownerLabel}</span>
+      <span className="muted small" aria-hidden>·</span>
+      <span className={`chip small ${readiness.verified === "verified" ? "ok" : readiness.verified === "failed" ? "warn" : ""}`}>{verifiedLabel}</span>
+      {readiness.testable && (
+        <button
+          type="button"
+          className="link-btn"
+          disabled={testing}
+          onClick={async () => {
+            setTesting(true);
+            setTestErr(null);
+            try {
+              const result = await controller.testCredential(providerId, record.label);
+              if (!result.ok) setTestErr(testFailureReason(result.reason));
+              controller.listCredentialRecords();
+            } catch {
+              setTestErr("Couldn't reach your machine to test this connection.");
+            } finally {
+              setTesting(false);
+            }
+          }}
+        >
+          {testing ? "Testing…" : "Test connection"}
+        </button>
+      )}
+      {testErr && <span className="muted small">{testErr}</span>}
+    </div>
+  );
+}
+
+function testFailureReason(reason?: string): string {
+  switch (reason) {
+    case "unauthorized": return "The provider rejected this credential.";
+    case "refresh_failed": return "Couldn't refresh the OAuth session.";
+    case "not_supported": return "This provider isn't testable yet.";
+    case "not_found": return "No credential to test.";
+    default: return "Couldn't reach the provider.";
+  }
+}
+
+function relativeTime(at?: number): string {
+  if (!at) return "";
+  const deltaSec = Math.max(0, Math.round((Date.now() - at) / 1000));
+  if (deltaSec < 60) return "just now";
+  const minutes = Math.round(deltaSec / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  return `${days}d ago`;
+}
+
+// The active-preset chooser at the top of Keys & OAuth. A preset picks which
+// labeled key each provider uses; per-provider mappings are set in each
+// provider's detail view (ProviderCredentials).
+function PresetBar({ presets }: { presets: CredentialPresetsView | null }) {
+  const [newName, setNewName] = useState("");
+  const names = Object.keys(presets?.presets ?? {});
+  const active = presets?.active ?? "";
+  // Nothing to choose from yet and no active preset → keep the screen simple.
+  if (names.length === 0 && !active) {
+    return (
+      <div className="preset-bar" style={{ marginBottom: 12 }}>
+        <label className="field-label">Preset (optional)</label>
+        <p className="muted small">Create a preset (e.g. “work”) to point providers at specific keys per project. Each provider’s default key is used until you do.</p>
+        <div className="row-actions" style={{ gap: 8 }}>
+          <input className="picker-search" placeholder="New preset name" value={newName} onChange={(e) => setNewName(e.target.value)} />
+          <button className="btn" disabled={!newName.trim()} onClick={() => { controller.setActivePreset(newName.trim()); setNewName(""); }}>Create</button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="preset-bar" style={{ marginBottom: 12 }}>
+      <label className="field-label">Active preset</label>
+      <p className="muted small">Sessions resolve credentials against the active preset; a provider with no mapping uses its default key.</p>
+      <select className="picker-search" value={active} onChange={(e) => controller.setActivePreset(e.target.value)}>
+        <option value="">Default (each provider’s default key)</option>
+        {names.map((n) => (
+          <option key={n} value={n}>{n}</option>
+        ))}
+      </select>
+      <div className="row-actions" style={{ gap: 8, marginTop: 8 }}>
+        <input className="picker-search" placeholder="New preset name" value={newName} onChange={(e) => setNewName(e.target.value)} />
+        <button className="btn" disabled={!newName.trim()} onClick={() => { controller.setActivePreset(newName.trim()); setNewName(""); }}>Create &amp; activate</button>
+      </div>
+    </div>
+  );
 }
 
 function ProvidersPanel({ state }: { state: AppState }) {
@@ -580,17 +772,26 @@ function ProvidersPanel({ state }: { state: AppState }) {
   const [busy, setBusy] = useState(false);
   const [keyErr, setKeyErr] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<null | { title: string; message: string; label?: string; action: () => void }>(null);
+  // The signed-in account's own email, fetched once — used only to label an
+  // account-synced credential's redacted owner (see CredentialReadinessRow).
+  // Never fetched/shown in direct/self-host mode, which has no account.
+  const [accountEmail, setAccountEmail] = useState<string | undefined>(undefined);
   useEffect(() => {
     controller.listProviders();
+    controller.listCredentialRecords();
+    controller.getCredentialPresets();
     // Pull the node list (with each node's plaintext OAuth summary) so the
     // switcher can describe every node's login state up front.
     if (hosted) void controller.refreshNodes();
+    if (hosted) controller.fetchMe().then((me) => setAccountEmail(me?.account?.email)).catch(() => {});
   }, [hosted]);
   // Switching node reconnects the transport to a different daemon, so the
   // provider list open before the switch belongs to the old node — drop back to
   // the list rather than leaving a stale provider's detail on screen.
   useEffect(() => {
     setManagingId(null);
+    controller.listCredentialRecords();
+    controller.getCredentialPresets();
   }, [currentNodeId]);
 
   const pickNode = (id: string) => {
@@ -622,7 +823,7 @@ function ProvidersPanel({ state }: { state: AppState }) {
           ‹ All providers
         </button>
         <h3>{managing.name || managing.id}</h3>
-        {showNodePicker && <p className="muted small">On node {nodeLabel(nodes, currentNodeId)}.</p>}
+        {showNodePicker && <p className="muted small">On machine {nodeLabel(nodes, currentNodeId)}.</p>}
         {confirm && (
           <ConfirmDialog
             title={confirm.title}
@@ -708,19 +909,25 @@ function ProvidersPanel({ state }: { state: AppState }) {
             )}
           </>
         )}
+        {(() => {
+          const defaultRecord = state.credentialRecords.find((r) => r.provider === managing.id && r.label === "default");
+          return defaultRecord ? <CredentialReadinessRow providerId={managing.id} record={defaultRecord} accountEmail={accountEmail} /> : null;
+        })()}
+        <ProviderCredentials providerId={managing.id} records={state.credentialRecords} presets={state.credentialPresets} accountEmail={accountEmail} />
       </div>
     );
   }
 
   return (
     <div className="settings-form">
+      <AccountApiKeys />
       {showNodePicker && (
         <>
           <p className="muted settings-intro">
-            Keys &amp; OAuth are stored on each node. Pick a node to view and manage its sign-ins — you don't
+            Keys &amp; OAuth are stored on each machine. Pick a machine to view and manage its sign-ins — you don't
             need an open session on it.
           </p>
-          <label className="field-label">Node</label>
+          <label className="field-label">Machine</label>
           <div className="picker-list">
             {nodes.map((n) => {
               const summary = nodeProviderSummary(n);
@@ -750,6 +957,7 @@ function ProvidersPanel({ state }: { state: AppState }) {
           <label className="field-label">Keys &amp; OAuth on {nodeLabel(nodes, currentNodeId)}</label>
         </>
       )}
+      {!switchingTo && <PresetBar presets={state.credentialPresets} />}
       {switchingTo ? (
         <p className="muted">Connecting to {nodeLabel(nodes, switchingTo)}…</p>
       ) : (
@@ -760,7 +968,18 @@ function ProvidersPanel({ state }: { state: AppState }) {
               key={p.id}
               title={p.name || p.id}
               meta={p.configured ? (p.kind === "oauth" ? "OAuth token" : `API key${p.source ? ` · ${p.source}` : ""}`) : "Not connected"}
-              right={p.configured ? <span className="chip ok">Connected</span> : undefined}
+              right={(() => {
+                if (!p.configured) return undefined;
+                // A record in the vault gets the honest, never-overclaiming
+                // readiness label (only "Verified" once an actual test ran);
+                // an env-sourced credential has no record to test, so it keeps
+                // the plain "Connected" chip it always had.
+                const record = state.credentialRecords.find((r) => r.provider === p.id && r.label === "default");
+                const verified = record ? deriveCredentialReadiness(record, accountEmail).verified : undefined;
+                if (verified === "verified") return <span className="chip ok">Verified</span>;
+                if (verified === "failed") return <span className="chip warn">Verification failed</span>;
+                return <span className="chip ok">Connected</span>;
+              })()}
               onClick={() => setManagingId(p.id)}
             />
           ))}
@@ -781,6 +1000,7 @@ type LocalModelDraft = {
   baseUrl: string;
   api: string;
   apiKey: string;
+  hasSavedApiKey: boolean;
   models: string;
   editing: boolean;
 };
@@ -791,6 +1011,7 @@ const EMPTY_DRAFT: LocalModelDraft = {
   baseUrl: "",
   api: "openai-completions",
   apiKey: "",
+  hasSavedApiKey: false,
   models: "",
   editing: false,
 };
@@ -825,6 +1046,7 @@ function draftFromProvider(p: LocalModelProvider): LocalModelDraft {
     baseUrl: p.baseUrl,
     api: p.api || "openai-completions",
     apiKey: "",
+    hasSavedApiKey: p.hasKey,
     models: p.models.map((m) => (m.name && m.name !== m.id ? `${m.id} | ${m.name}` : m.id)).join("\n"),
     editing: true,
   };
@@ -839,15 +1061,21 @@ function draftFromPreset(p: LocalModelPreset): LocalModelDraft {
     // Local servers accept any token, so we don't prefill a dummy key — only a
     // real key the user types is stored (in the encrypted vault).
     apiKey: "",
+    hasSavedApiKey: false,
     models: "",
     editing: false,
   };
 }
 
-function LocalModelsPanel({ state }: { state: AppState }) {
+function LocalModelsPanel({ state, onStartWork }: { state: AppState; onStartWork: () => void }) {
   const [draft, setDraft] = useState<LocalModelDraft | null>(null);
   const [busy, setBusy] = useState(false);
   const [saveErr, setSaveErr] = useState<string | null>(null);
+  const [verification, setVerification] = useState<LocalModelEndpointResult | null>(null);
+  const [discovered, setDiscovered] = useState<LocalModelEndpointResult[] | null>(null);
+  const [discovering, setDiscovering] = useState(false);
+  const [discoveryError, setDiscoveryError] = useState<string | null>(null);
+  const [discoveryMachine, setDiscoveryMachine] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<null | { title: string; message: string; action: () => void }>(null);
 
   useEffect(() => {
@@ -860,20 +1088,26 @@ function LocalModelsPanel({ state }: { state: AppState }) {
   // previous attempt, so it can't linger on an unrelated endpoint.
   const openDraft = (d: LocalModelDraft | null) => {
     setSaveErr(null);
+    setVerification(null);
     setDraft(d);
+  };
+  const startWithModel = (provider: string, model: { id: string; name?: string }) => {
+    controller.newSession();
+    controller.chooseModel({ id: model.id, label: model.name || model.id, provider });
+    onStartWork();
   };
 
   if (draft) {
     const canSave = draft.baseUrl.trim().length > 0 && !busy;
     const apiIsKnown = KNOWN_APIS.some((o) => o.value === draft.api);
     const isAzure = draft.api.toLowerCase().startsWith("azure");
-    const save = async () => {
+    const save = async (startWork = false) => {
       setBusy(true);
       setSaveErr(null);
       try {
         // Awaits the node's real ack instead of a blind timer that closed the
         // form (looking saved) even when the node rejected it — see #140.
-        await controller.saveLocalModel({
+        const provider = await controller.saveLocalModel({
           providerId: (draft.providerId || draft.name || "local").trim(),
           name: draft.name.trim() || undefined,
           baseUrl: draft.baseUrl.trim(),
@@ -884,6 +1118,8 @@ function LocalModelsPanel({ state }: { state: AppState }) {
           models: parseModelLines(draft.models),
         });
         controller.listLocalModels();
+        const imported = parseModelLines(draft.models);
+        if (startWork && imported[0]) startWithModel(provider, imported[0]);
         setDraft(null);
       } catch (e) {
         setSaveErr(String((e as Error)?.message || e));
@@ -896,13 +1132,12 @@ function LocalModelsPanel({ state }: { state: AppState }) {
         <button className="link-btn" onClick={() => openDraft(null)}>‹ All endpoints</button>
         <h3>{draft.editing ? draft.name || draft.providerId : "Add endpoint"}</h3>
         <p className="muted">
-          Any OpenAI-compatible server — Ollama, LM Studio, vLLM, SGLang, or a self-hosted / Azure endpoint.
+          Verify an OpenAI-compatible server, then import the models it actually reports. Ollama, LM Studio, vLLM,
+          SGLang, and custom endpoints are supported.
         </p>
         <p className="muted small">
-          This endpoint is account-wide, not just this node: it syncs (encrypted) to every node signed in to your
-          account, the same way provider keys do. A <code>localhost</code> base URL only resolves on the machine
-          that has it — another node can use it only if it also runs the same server at that address locally. If
-          the server is reachable over the network, point the base URL at that machine's address instead.
+          A localhost endpoint is bound to this connected Machine and will not appear as usable on another Machine.
+          An explicitly entered network endpoint can be shared only where that URL is really reachable.
         </p>
 
         <label className="field-label">Display name</label>
@@ -926,7 +1161,7 @@ function LocalModelsPanel({ state }: { state: AppState }) {
         />
         {/localhost|127\.0\.0\.1/i.test(draft.baseUrl) && (
           <p className="muted small">
-            ⚠ This points at the current node's own machine. Once synced, other nodes will only reach it if they
+            ⚠ This points at the current machine. Once synced, other machines will only reach it if they
             also run a server at <code>{draft.baseUrl.match(/localhost|127\.0\.0\.1/i)?.[0] ?? "localhost"}</code>
             {" "}themselves.
           </p>
@@ -946,7 +1181,43 @@ function LocalModelsPanel({ state }: { state: AppState }) {
         )}
 
         <label className="field-label">API key {draft.editing ? "(leave blank to keep)" : isAzure ? "(Azure API key)" : "(optional)"}</label>
-        <input className="picker-search" type="password" value={draft.apiKey} placeholder={isAzure ? "Azure OpenAI key" : "local"} onChange={(e) => set({ apiKey: e.target.value })} />
+        <input
+          className="picker-search"
+          type="password"
+          value={draft.apiKey}
+          placeholder={draft.hasSavedApiKey ? "•••••••• (saved — leave blank to keep)" : isAzure ? "Azure OpenAI key" : "local"}
+          onChange={(e) => set({ apiKey: e.target.value })}
+        />
+        {draft.hasSavedApiKey && !draft.apiKey && <p className="muted small">An API key is saved. Leave this blank to keep it, or enter a new key to replace it.</p>}
+
+        <div className="row-actions">
+          <button
+            className="btn"
+            disabled={!draft.baseUrl.trim() || busy}
+            onClick={async () => {
+              setBusy(true); setSaveErr(null); setVerification(null);
+              try {
+                const result = await controller.verifyLocalModel(draft.baseUrl.trim(), draft.apiKey.trim() || undefined);
+                setVerification(result);
+                if (result.status === "ready") {
+                  const existing = parseModelLines(draft.models);
+                  const merged = [...existing, ...result.models].filter((model, index, all) => all.findIndex((candidate) => candidate.id === model.id) === index);
+                  set({ models: merged.map((model) => model.name && model.name !== model.id ? `${model.id} | ${model.name}` : model.id).join("\n") });
+                }
+              } catch (error) { setSaveErr(String((error as Error)?.message || error)); }
+              finally { setBusy(false); }
+            }}
+          >
+            {busy ? "Verifying…" : "Verify endpoint & list models"}
+          </button>
+        </div>
+        {verification && (
+          <div className={`banner inline ${verification.status === "ready" ? "success" : "error"}`}>
+            {verification.status === "ready"
+              ? `Verified on ${verification.machineName}: ${verification.models.length} model${verification.models.length === 1 ? "" : "s"} available.`
+              : `${verification.status.replace("_", " ")}: ${verification.detail || "No compatible catalog was returned."}`}
+          </div>
+        )}
 
         <label className="field-label">Models — one per line (<code>id</code> or <code>id | Name</code>)</label>
         <textarea
@@ -964,9 +1235,12 @@ function LocalModelsPanel({ state }: { state: AppState }) {
         )}
 
         <div className="row-actions">
-          <button className="btn primary" disabled={!canSave} onClick={save}>
-            {busy ? "Saving…" : draft.editing ? "Save changes" : "Add endpoint"}
+          <button className="btn primary" disabled={!canSave} onClick={() => void save(false)}>
+            {busy ? "Saving…" : draft.editing ? "Save changes" : "Import models"}
           </button>
+          {parseModelLines(draft.models).length > 0 && (
+            <button className="btn" disabled={!canSave} onClick={() => void save(true)}>Import & use in new session</button>
+          )}
           <button className="btn" onClick={() => openDraft(null)}>Cancel</button>
         </div>
         {saveErr && <div className="banner error inline">{saveErr}</div>}
@@ -988,35 +1262,78 @@ function LocalModelsPanel({ state }: { state: AppState }) {
       )}
 
       <p className="muted settings-intro">
-        Endpoints here sync to every node signed in to your account, the same as provider keys — they aren't scoped
-        to just this node. A <code>localhost</code> base URL is only reachable from the machine that has it, so an
-        endpoint like Ollama's default needs that same server running on each node that should use it.
+        Discover checks a short, fixed list of common localhost ports on the connected Machine only. It never scans
+        your LAN. Localhost models stay tied to the Machine that hosts them; explicit network endpoints remain available.
       </p>
 
+      <button
+        className="btn primary block"
+        disabled={discovering}
+        onClick={async () => {
+          setDiscovering(true); setDiscoveryError(null);
+          try {
+            const result = await controller.discoverLocalModels();
+            setDiscovered(result.endpoints);
+            setDiscoveryMachine(result.machineName);
+          } catch (error) { setDiscoveryError(String((error as Error)?.message || error)); }
+          finally { setDiscovering(false); }
+        }}
+      >
+        {discovering ? "Discovering on this Machine…" : "Discover on this Machine"}
+      </button>
+      {discoveryMachine && <p className="muted small">Results from <strong>{discoveryMachine}</strong>. They do not describe other Machines.</p>}
+      {discoveryError && <div className="banner error inline">{discoveryError}</div>}
+      {discovered && (
+        <div className="picker-list">
+          {discovered.map((endpoint) => (
+            <PickerItem
+              key={endpoint.candidateId || endpoint.baseUrl}
+              title={endpoint.name || endpoint.baseUrl}
+              meta={endpoint.status === "ready"
+                ? `${endpoint.models.length} model${endpoint.models.length === 1 ? "" : "s"} available on ${endpoint.machineName}`
+                : `${endpoint.status.replace("_", " ")} · ${endpoint.detail || "No compatible response"}`}
+              right={endpoint.status === "ready" ? <span className="chip ok">Import</span> : endpoint.status === "auth_required" ? <span className="chip warn">Add key</span> : <span className="chip warn">{endpoint.status.replace("_", " ")}</span>}
+              onClick={endpoint.status === "ready" || endpoint.status === "auth_required" ? () => openDraft({
+                ...draftFromPreset({ id: endpoint.candidateId || "local", name: endpoint.name || "Local models", baseUrl: endpoint.baseUrl, api: endpoint.api }),
+                models: endpoint.models.map((model) => model.name !== model.id ? `${model.id} | ${model.name}` : model.id).join("\n"),
+              }) : undefined}
+            />
+          ))}
+        </div>
+      )}
+
+      <label className="field-label">Configured for this account</label>
       <div className="picker-list">
         {state.localModels.length === 0 && <div className="picker-empty">No local or custom endpoints yet.</div>}
         {state.localModels.map((p) => (
           <PickerItem
             key={p.id}
             title={p.name || p.id}
-            meta={`${p.baseUrl} · ${p.modelCount} model${p.modelCount === 1 ? "" : "s"}${p.hasKey ? " · key" : ""}`}
+            meta={`${p.baseUrl} · ${p.modelCount} model${p.modelCount === 1 ? "" : "s"}${p.hasKey ? " · key" : ""} · ${p.scope === "machine" ? `hosted by ${p.machineName || "one Machine"}` : "network endpoint"}${p.availableOnThisMachine ? "" : " · unavailable on this Machine"}`}
             right={
-              <button
-                className="btn danger-ghost sm"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setConfirm({
-                    title: "Remove endpoint?",
-                    message: `Remove ${p.name || p.id}? This also removes its models.`,
-                    action: () => {
-                      controller.removeLocalModel(p.id);
-                      setTimeout(() => controller.listLocalModels(), 400);
-                    },
-                  });
-                }}
-              >
-                Remove
-              </button>
+              <div className="row-actions">
+                {p.availableOnThisMachine && p.models[0] && (
+                  <button className="btn sm" onClick={(e) => { e.stopPropagation(); startWithModel(p.id, p.models[0]!); }}>
+                    Use
+                  </button>
+                )}
+                <button
+                  className="btn danger-ghost sm"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setConfirm({
+                      title: "Remove endpoint?",
+                      message: `Remove ${p.name || p.id}? This also removes its models.`,
+                      action: () => {
+                        controller.removeLocalModel(p.id);
+                        setTimeout(() => controller.listLocalModels(), 400);
+                      },
+                    });
+                  }}
+                >
+                  Remove
+                </button>
+              </div>
             }
             onClick={() => openDraft(draftFromProvider(p))}
           />
@@ -1041,927 +1358,6 @@ function LocalModelsPanel({ state }: { state: AppState }) {
   );
 }
 
-// ---- Voice input (speech-to-text) ----
-function VoicePanel({ state }: { state: AppState }) {
-  const [keys, setKeys] = useState<Record<string, string>>({});
-  // Keyed by provider id, not a single shared flag — saving one provider's key
-  // used to disable Save for every other row too (#140).
-  const [busyId, setBusyId] = useState<string | null>(null);
-  const [errById, setErrById] = useState<Record<string, string>>({});
-  const [confirm, setConfirm] = useState<null | { title: string; message: string; action: () => void }>(null);
-  useEffect(() => {
-    controller.getSttConfig();
-  }, []);
-  const config = state.sttConfig;
-  const providers = config?.providers ?? [];
-
-  return (
-    <div className="settings-form">
-      {confirm && (
-        <ConfirmDialog
-          title={confirm.title}
-          message={confirm.message}
-          confirmLabel="Remove"
-          danger
-          onCancel={() => setConfirm(null)}
-          onConfirm={() => { confirm.action(); setConfirm(null); }}
-        />
-      )}
-      <p className="muted settings-intro">
-        Dictate into the composer with the mic button. With a key set, recordings are transcribed by your chosen
-        provider using the key stored on this node. With no key, voice falls back to your browser's built-in dictation
-        (no key needed, but lower accuracy). Note: <strong>Groq</strong> (fast Whisper hosting, key from console.groq.com)
-        is a different company from <strong>xAI / Grok</strong> — an xAI key won't work here, and xAI has no speech API.
-      </p>
-
-      <label className="field-label">Preferred provider</label>
-      <div className="seg-row">
-        {providers.map((p) => (
-          <button
-            key={p.id}
-            type="button"
-            className={`seg-btn${config?.provider === p.id ? " active" : ""}`}
-            onClick={() => controller.setSttProvider(p.id)}
-          >
-            {p.label}
-          </button>
-        ))}
-        {providers.length === 0 && <span className="muted">Loading…</span>}
-      </div>
-
-      {providers.map((p) => (
-        <div key={p.id} className="voice-provider">
-          <div className="voice-provider-head">
-            <span className="field-label">{p.label}</span>
-            {p.configured ? <span className="chip ok">Key set</span> : <span className="chip">No key</span>}
-          </div>
-          <div className="muted small">{p.model}</div>
-          <div className="row-actions">
-            <input
-              className="picker-search"
-              type="password"
-              value={keys[p.id] || ""}
-              placeholder={p.configured ? "Replace API key" : "Paste API key"}
-              onChange={(e) => setKeys((k) => ({ ...k, [p.id]: e.target.value }))}
-            />
-          </div>
-          <div className="row-actions">
-            <button
-              className="btn primary"
-              disabled={!(keys[p.id] || "").trim() || busyId === p.id}
-              onClick={async () => {
-                setBusyId(p.id);
-                setErrById((e) => ({ ...e, [p.id]: "" }));
-                try {
-                  // Awaits the node's real ack instead of a blind timer — see #140.
-                  await controller.saveSttKey(p.id, (keys[p.id] || "").trim());
-                  setKeys((k) => ({ ...k, [p.id]: "" }));
-                  // "Key set" chip is reactive off state.sttConfig — refresh it.
-                  controller.getSttConfig();
-                } catch (e) {
-                  setErrById((cur) => ({ ...cur, [p.id]: String((e as Error)?.message || e) }));
-                } finally {
-                  setBusyId(null);
-                }
-              }}
-            >
-              {busyId === p.id ? "Saving…" : "Save key"}
-            </button>
-            {p.configured && (
-              <button
-                className="btn danger-ghost"
-                onClick={() => setConfirm({
-                  title: "Remove speech key?",
-                  message: `Remove the stored ${p.label} key?`,
-                  action: () => {
-                    controller.removeSttKey(p.id);
-                    // stt.config.set (remove) has no direct ack — re-fetch so
-                    // the "Key set" chip reflects the node's real outcome.
-                    setTimeout(() => controller.getSttConfig(), 500);
-                  },
-                })}
-              >
-                Remove
-              </button>
-            )}
-          </div>
-          {errById[p.id] && <div className="banner error inline">{errById[p.id]}</div>}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// Node-label selector shared by the GitHub App "Default node" field and the
-// generic Automations webhook routing default (issue #166): a dropdown of the
-// account's known nodes, exactly like the GitHub issues flow, so a routing
-// default is picked rather than typed blind. Only falls back to free text when
-// the account has no known nodes yet (nothing to pick from).
-function NodeRouteSelect({
-  nodes,
-  value,
-  onChange,
-  disabled,
-}: {
-  nodes: AccountNode[];
-  value: string;
-  onChange: (v: string) => void;
-  disabled?: boolean;
-}) {
-  if (nodes.length === 0) {
-    return (
-      <input
-        className="picker-search"
-        value={value}
-        placeholder="node label, e.g. macbook"
-        disabled={disabled}
-        onChange={(e) => onChange(e.target.value)}
-      />
-    );
-  }
-  return (
-    <select className="picker-search" value={value} disabled={disabled} onChange={(e) => onChange(e.target.value)}>
-      <option value="">Shared queue (any online node)</option>
-      {nodes.map((n) => (
-        <option key={n.id} value={n.name || n.id}>{n.name || n.id}</option>
-      ))}
-      {value && !nodes.some((n) => (n.name || n.id) === value) && <option value={value}>{value}</option>}
-    </select>
-  );
-}
-
-// Account-level "auto-provision an ephemeral server when nothing's online"
-// preference (issue #532), self-contained so both the GitHub App panel and the
-// generic Automations panel can offer it (issue #166) without each keeping a
-// separate copy of the fetch/save plumbing — it's one account setting either
-// way, and (per the trigger-neutral automation-run queue) already covers
-// webhook-triggered runs alongside GitHub ones once enabled.
-function EphemeralQueueDefaultSection({ hint }: { hint?: string }) {
-  const [ephemeralKeys, setEphemeralKeys] = useState<ProviderKeyInfo[]>([]);
-  const [ephemeralDefault, setEphemeralDefault] = useState<EphemeralQueueDefault | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  useEffect(() => {
-    controller.listEphemeralKeys().then(setEphemeralKeys).catch(() => {});
-    controller.getEphemeralQueueDefault().then(setEphemeralDefault).catch(() => setEphemeralDefault(null));
-  }, []);
-  const configuredProviders = ephemeralKeys.filter((k) => k.configured);
-  const defaultProviderConfigured = Boolean(
-    ephemeralDefault?.provider && ephemeralKeys.find((k) => k.id === ephemeralDefault.provider)?.configured,
-  );
-  const save = async (patch: Partial<EphemeralQueueDefault>) => {
-    setErr(null);
-    setBusy(true);
-    try {
-      setEphemeralDefault(await controller.setEphemeralQueueDefault(patch));
-    } catch (e) {
-      setErr(String((e as Error)?.message || e));
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <>
-      <div className="settings-toggle-row">
-        <div className="settings-toggle-text">
-          <span className="settings-toggle-title">Auto-provision when nothing's online</span>
-          <span className="muted small">
-            {hint ||
-              "Spin up a short-lived server from your saved provider token to pick up queued work when nothing persistent is online, then tear it down."}
-          </span>
-        </div>
-        <Toggle
-          checked={Boolean(ephemeralDefault?.enabled)}
-          disabled={busy || configuredProviders.length === 0}
-          onChange={(v) => save({ enabled: v, provider: ephemeralDefault?.provider || configuredProviders[0]?.id })}
-          label="Auto-provision an ephemeral server when nothing's online"
-        />
-      </div>
-      {configuredProviders.length === 0 ? (
-        <p className="muted">Add a provider token (Fly.io, Hetzner, or AWS) in Ephemeral settings to enable this.</p>
-      ) : (
-        ephemeralDefault?.enabled && (
-          <>
-            <select className="picker-search" value={ephemeralDefault.provider ?? ""} onChange={(e) => save({ provider: e.target.value })}>
-              {configuredProviders.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-            {!defaultProviderConfigured && (
-              <p className="muted">This device has no saved token for {ephemeralDefault.provider} — add one in Ephemeral settings to actually help out.</p>
-            )}
-            {err && <span className="chip err">{err}</span>}
-          </>
-        )
-      )}
-    </>
-  );
-}
-
-// ---- Linear issue integration ----
-function LinearPanel() {
-  const [hook, setHook] = useState<LinearHook | null>(null);
-  const [secret, setSecret] = useState("");
-  const [route, setRoute] = useState("");
-  const [nodes, setNodes] = useState<AccountNode[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  useEffect(() => {
-    fetchLinearHook(controller.local).then((next) => {
-      setHook(next);
-      if (next?.defaultNode) setRoute(next.defaultNode);
-    }).catch((e) => setError(e instanceof Error ? e.message : "Could not load Linear integration."));
-    controller.listNodes().then(setNodes).catch(() => {});
-  }, []);
-  const createEndpoint = async () => {
-    setBusy(true); setError("");
-    try { setHook(await connectLinearHook(controller.local, { defaultNode: route || undefined })); }
-    catch (e) { setError(e instanceof Error ? e.message : "Could not create Linear endpoint."); }
-    finally { setBusy(false); }
-  };
-  const connect = async () => {
-    setBusy(true); setError("");
-    try {
-      setHook(await connectLinearHook(controller.local, { signingSecret: secret, defaultNode: route || undefined }));
-      setSecret("");
-    } catch (e) { setError(e instanceof Error ? e.message : "Could not connect Linear."); }
-    finally { setBusy(false); }
-  };
-  const disconnect = async () => {
-    if (!confirm("Disconnect Linear? Its webhook URL will stop accepting issues.")) return;
-    setBusy(true); setError("");
-    try { await disconnectLinearHook(controller.local); setHook(null); }
-    catch (e) { setError(e instanceof Error ? e.message : "Could not disconnect Linear."); }
-    finally { setBusy(false); }
-  };
-  return (
-    <div className="settings-form">
-      <p className="settings-lead">Turn labelled Linear issues into unattended coding sessions and GitHub pull requests.</p>
-      {error && <div className="banner error inline">{error}</div>}
-      {!hook ? (
-        <section className="settings-section">
-          <h3>Connect Linear</h3>
-          <p className="settings-hint">First create a Bivy webhook URL. You will paste it into Linear, then bring Linear's generated signing secret back here.</p>
-          <label className="field-label">Default node (optional)</label>
-          <NodeRouteSelect nodes={nodes} value={route} onChange={setRoute} disabled={busy} />
-          <button className="btn primary" disabled={busy} onClick={() => void createEndpoint()}>Create webhook URL</button>
-        </section>
-      ) : (
-        <section className="settings-section">
-          <h3>{hook.enabled ? "Connected" : "Finish connecting"}</h3>
-          <ol className="settings-hint">
-            <li>In <strong>Linear → Settings → API → Webhooks</strong>, create an <strong>Issue</strong> webhook using this URL:</li>
-          </ol>
-          <code className="settings-code">{hook.endpoint}</code>
-          <button className="btn" onClick={() => void navigator.clipboard.writeText(hook.endpoint)}>Copy webhook URL</button>
-          <ol className="settings-hint" start={2}>
-            <li>Copy the signing secret generated by Linear and paste it below.</li>
-            <li>Create Linear labels <code>bivy</code> and optionally <code>bivy/node-name</code>. Applying one dispatches the issue.</li>
-          </ol>
-          <label className="field-label">Linear signing secret</label>
-          <input className="field-input" type="password" autoComplete="off" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder={hook.enabled ? "Replace signing secret" : "Signing secret"} />
-          <label className="field-label">Default node (optional)</label>
-          <NodeRouteSelect nodes={nodes} value={route} onChange={setRoute} disabled={busy} />
-          <button className="btn primary" disabled={busy || secret.trim().length < 16} onClick={() => void connect()}>{hook.enabled ? "Update connection" : "Connect Linear"}</button>
-          <p className="settings-hint">Each runner also needs <code>BIVY_LINEAR_API_KEY</code> and a default <code>BIVY_LINEAR_REPO=owner/repo</code>. A <code>repo:owner/repo</code> issue label can override the repository.</p>
-          <button className="btn danger" disabled={busy} onClick={() => void disconnect()}>Disconnect Linear</button>
-        </section>
-      )}
-    </div>
-  );
-}
-
-// ---- Slack slash-command integration ----
-function SlackPanel() {
-  const [hook, setHook] = useState<SlackHook | null>(null);
-  const [secret, setSecret] = useState("");
-  const [route, setRoute] = useState("");
-  const [nodes, setNodes] = useState<AccountNode[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const refresh = async () => {
-    try {
-      const next = await fetchSlackHook(controller.local);
-      setHook(next);
-      if (next?.defaultNode) setRoute(next.defaultNode);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not load Slack integration.");
-    }
-  };
-  useEffect(() => {
-    void refresh();
-    controller.listNodes().then(setNodes).catch(() => {});
-  }, []);
-  const connect = async () => {
-    setBusy(true); setError("");
-    try {
-      setHook(await connectSlackHook(controller.local, { signingSecret: secret, defaultNode: route || undefined }));
-      setSecret("");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not connect Slack.");
-    } finally { setBusy(false); }
-  };
-  const disconnect = async () => {
-    if (!confirm("Disconnect Slack? The current slash-command URL will stop accepting requests.")) return;
-    setBusy(true); setError("");
-    try {
-      await disconnectSlackHook(controller.local);
-      setHook(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not disconnect Slack.");
-    } finally { setBusy(false); }
-  };
-  return (
-    <div className="settings-form">
-      <p className="settings-lead">Turn requests from a Slack slash command into unattended agent runs on your nodes.</p>
-      {error && <div className="banner error inline">{error}</div>}
-      {hook ? (
-        <section className="settings-section">
-          <h3>Connected</h3>
-          <p className="settings-hint">Use this as your Slack app's slash-command Request URL:</p>
-          <code className="settings-code">{hook.endpoint}</code>
-          <button className="btn" onClick={() => void navigator.clipboard.writeText(hook.endpoint)}>Copy Request URL</button>
-          <h4 className="settings-subhead">Commands</h4>
-          <code className="settings-code">/bivy fix the failing tests</code>
-          <code className="settings-code">/bivy on macbook fix the failing tests</code>
-          <code className="settings-code">/bivy in owner/repo fix the failing tests</code>
-          <p className="settings-hint">Add <code>in owner/repo</code> to run in an isolated checkout and bring back a pull request. Add <code>on node</code> to select a machine; the clauses can be combined.</p>
-          <button className="btn danger" disabled={busy} onClick={() => void disconnect()}>Disconnect Slack</button>
-        </section>
-      ) : (
-        <section className="settings-section">
-          <h3>Connect a Slack app</h3>
-          <ol className="settings-hint">
-            <li>Create a Slack app, then open <strong>Basic Information</strong>.</li>
-            <li>Copy its <strong>Signing Secret</strong> below.</li>
-            <li>After connecting, create a slash command named <code>/bivy</code> and paste the Request URL shown here.</li>
-          </ol>
-          <label className="field-label">Slack signing secret</label>
-          <input className="field-input" type="password" autoComplete="off" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="Signing Secret" />
-          <label className="field-label">Default node (optional)</label>
-          <NodeRouteSelect nodes={nodes} value={route} onChange={setRoute} disabled={busy} />
-          <button className="btn primary" disabled={busy || secret.trim().length < 16} onClick={() => void connect()}>Connect Slack</button>
-        </section>
-      )}
-    </div>
-  );
-}
-
-// ---- Generic signed automation webhooks ----
-// Signed inbound webhook triggers (from the automation-webhooks feature). Its
-// own "Webhooks" settings view, a sibling of the scheduled-automations panel
-// (imported from ./Automations) — the two used to share one "Automations" view
-// but were split into separate screens since they're independent features.
-function WebhookTriggersPanel() {
-  const [hooks, setHooks] = useState<AutomationHook[]>([]);
-  const [outcomes, setOutcomes] = useState<AutomationOutcome[]>([]);
-  const [template, setTemplate] = useState("Follow the incoming instruction in the current workspace.");
-  const [route, setRoute] = useState("");
-  const [nodes, setNodes] = useState<AccountNode[]>([]);
-  const [revealed, setRevealed] = useState<{ hook: AutomationHook; secret: string } | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const refresh = async () => {
-    try {
-      const data = await fetchAutomationHooks(controller.local);
-      setHooks(data.hooks);
-      setOutcomes(data.outcomes);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not load automation hooks.");
-    }
-  };
-  useEffect(() => {
-    void refresh();
-    controller.listNodes().then(setNodes).catch(() => {});
-  }, []);
-  const updateHookRoute = (hook: AutomationHook, next: string) => {
-    void updateAutomationHook(controller.local, hook.id, { routingDefault: next })
-      .then(refresh)
-      .catch((err) => setError(String(err)));
-  };
-  const create = async () => {
-    setBusy(true); setError("");
-    try {
-      const created = await createAutomationHook(controller.local, { templateInstruction: template, routingDefault: route });
-      setRevealed({ hook: created, secret: created.secret });
-      await refresh();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not create hook.");
-    } finally { setBusy(false); }
-  };
-  const rotate = async (hook: AutomationHook) => {
-    setBusy(true); setError("");
-    try {
-      const rotated = await rotateAutomationHookSecret(controller.local, hook.id);
-      setRevealed({ hook: rotated, secret: rotated.secret });
-      await refresh();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not rotate secret.");
-    } finally { setBusy(false); }
-  };
-  const curl = revealed ? `body='{"version":"1","instruction":"Run the test suite","title":"CI follow-up","sourceUrl":"https://example.com/build/123","externalId":"build-123","metadata":{"environment":"staging"}}'
-signature=$(printf %s "$body" | openssl dgst -sha256 -hmac '${revealed.secret}' -hex | sed 's/^.* //')
-curl -X POST '${revealed.hook.endpoint}' \\
-  -H 'Content-Type: application/json' \\
-  -H "X-Bivy-Signature-256: sha256=$signature" \\
-  -H 'X-Bivy-Idempotency-Key: build-123' \\
-  --data-binary "$body"` : "";
-  return (
-    <div className="settings-form">
-      <p className="settings-lead">Create signed inbound endpoints that turn events from CI, monitoring, or internal tools into ordinary Bivy runs.</p>
-      {error && <div className="banner error inline">{error}</div>}
-      {revealed && (
-        <section className="settings-section">
-          <h3>Save this secret now</h3>
-          <p className="settings-hint">It is shown only after creation or rotation. Rotating immediately invalidates the previous secret.</p>
-          <code className="settings-code">{revealed.secret}</code>
-          <h4 className="settings-subhead">Example curl</h4>
-          <pre className="settings-code" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{curl}</pre>
-          <button className="btn" onClick={() => void navigator.clipboard.writeText(curl)}>Copy example</button>
-        </section>
-      )}
-      <section className="settings-section">
-        <h3>New webhook</h3>
-        <label className="field-label">Safe instruction template</label>
-        <textarea className="field-input" rows={3} value={template} maxLength={2000} onChange={(e) => setTemplate(e.target.value)} />
-        <p className="settings-hint">This fixed instruction is prepended to each event. Payloads cannot select commands, runtimes, models, or executable templates.</p>
-        <label className="field-label">Default node (optional)</label>
-        <NodeRouteSelect nodes={nodes} value={route} onChange={setRoute} disabled={busy} />
-        <button className="btn primary" disabled={busy || !template.trim()} onClick={() => void create()}>Create webhook</button>
-      </section>
-      {EPHEMERAL_MACHINES_ENABLED && (
-        <section className="settings-section">
-          <h4 className="settings-subhead">Ephemeral fallback</h4>
-          <EphemeralQueueDefaultSection hint="Spin up a short-lived server from your saved provider token to pick up any queued run — including these webhooks — when nothing persistent is online, then tear it down. One account-wide setting; also shown in GitHub App settings." />
-        </section>
-      )}
-      {hooks.map((hook) => (
-        <section className="settings-section" key={hook.id}>
-          <div className="settings-row">
-            <div><h3>{hook.id}</h3><code className="settings-code">{hook.endpoint}</code></div>
-            <label><input type="checkbox" checked={hook.enabled} disabled={busy} onChange={(e) => {
-              void updateAutomationHook(controller.local, hook.id, { enabled: e.target.checked }).then(refresh).catch((err) => setError(String(err)));
-            }} /> Enabled</label>
-          </div>
-          <label className="field-label">Default node</label>
-          <NodeRouteSelect nodes={nodes} value={hook.routingDefault} onChange={(v) => updateHookRoute(hook, v)} disabled={busy} />
-          <p className="settings-hint">Routes to {hook.routingDefault ? `bivy/${hook.routingDefault}` : "the shared bivy queue"}.</p>
-          <div className="settings-actions">
-            <button className="btn" disabled={busy} onClick={() => void rotate(hook)}>Rotate secret</button>
-            <button className="btn danger" disabled={busy || !hook.enabled} onClick={() => {
-              if (confirm("Revoke this webhook? Its current secret will stop working immediately.")) {
-                void revokeAutomationHook(controller.local, hook.id).then(refresh).catch((err) => setError(String(err)));
-              }
-            }}>Revoke</button>
-          </div>
-        </section>
-      ))}
-      <section className="settings-section">
-        <h3>Recent trigger outcomes</h3>
-        {outcomes.length === 0
-          ? <p className="settings-hint">No accepted triggers yet.</p>
-          : outcomes.map((outcome) => <div className="settings-row" key={outcome.id}><span>{outcome.title}</span><span className="settings-hint">{outcome.status}</span></div>)}
-      </section>
-    </div>
-  );
-}
-
-// ---- GitHub App ----
-function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGithubQueue?: () => void }) {
-  const [org, setOrg] = useState("");
-  // Connected-app info comes from the control plane (account REST), so it's
-  // only available on the hosted/relay client, not direct mode.
-  const canQuery = !controller.direct;
-  const [info, setInfo] = useState<GithubAppInfo | null>(null);
-  const [confirmDisconnect, setConfirmDisconnect] = useState<GithubAppEntry | null>(null);
-  const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
-  // Keyed by app so an error stays attached to the row it belongs to.
-  const [disconnectErr, setDisconnectErr] = useState<{ id: string; message: string } | null>(null);
-  const [nodes, setNodes] = useState<AccountNode[]>([]);
-  const [defaultNode, setDefaultNode] = useState("");
-  const [savingDefaultNode, setSavingDefaultNode] = useState(false);
-  const [defaultNodeMsg, setDefaultNodeMsg] = useState<string | null>(null);
-  const [triggerAccess, setTriggerAccess] = useState<"everyone" | "contributor" | "collaborator">("everyone");
-  const [savingTriggerAccess, setSavingTriggerAccess] = useState(false);
-  const [triggerAccessMsg, setTriggerAccessMsg] = useState<string | null>(null);
-  // "Connect an existing GitHub App" (App ID + .pem) — for reconnecting an app
-  // this account already set up onto the active node, without creating a new one.
-  // `ceApp` is the connected app the form was opened for (null = a fresh app the
-  // account doesn't know yet); it decides where the form renders and what it pre-fills.
-  const [showConnectExisting, setShowConnectExisting] = useState(false);
-  const [ceApp, setCeApp] = useState<GithubAppEntry | null>(null);
-  const [ceAppId, setCeAppId] = useState("");
-  const [cePem, setCePem] = useState("");
-  const [ceNodeLabel, setCeNodeLabel] = useState("");
-  // Once at least one app is connected, "add another" is a secondary action —
-  // collapse it behind a button instead of always showing the full form, so
-  // the common case (you already have an app) isn't buried under it.
-  const [addAppOpen, setAddAppOpen] = useState(false);
-  const app = state.githubApp;
-  const phase = app?.phase ?? "idle";
-  // Identity for list keys and per-row busy/error state. Hooks created before
-  // Bivy recorded App IDs have neither appId nor slug — fall back to the hook id.
-  const appKey = (entry: GithubAppEntry) => entry.appId || entry.hookId || entry.slug || "";
-  const installHref = (entry: GithubAppEntry) =>
-    entry.installUrl || (entry.slug ? `https://github.com/apps/${entry.slug}/installations/new` : "https://github.com/settings/installations");
-  // Opening the reconnect form for a different app moves it rather than closing it.
-  const toggleConnectExisting = (entry?: GithubAppEntry) => {
-    const target = entry ?? null;
-    const sameApp = showConnectExisting && (ceApp ? appKey(ceApp) : "") === (target ? appKey(target) : "");
-    setShowConnectExisting(!sameApp);
-    setCeApp(target);
-    setCeAppId(target?.appId ?? "");
-  };
-  const submitConnectExisting = () => {
-    controller.githubAppConnectExisting({ appId: ceAppId.trim(), privateKeyPem: cePem.trim(), nodeLabel: ceNodeLabel.trim() || undefined });
-  };
-  // Read a downloaded .pem file straight into the field, so the user never has to
-  // open + copy it — the closest thing to a "flow" GitHub allows for an app that
-  // already exists (it never hands the private key back through a redirect).
-  const onPemFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => setCePem(String(reader.result || "").trim());
-    reader.readAsText(file);
-  };
-  const renderConnectExisting = () => (
-    <div className="ce-form">
-      {ceApp?.editUrl && (
-        <p className="muted">
-          Get these from your app on GitHub:{" "}
-          <a href={ceApp.editUrl} target="_blank" rel="noopener noreferrer">
-            open {ceApp.mention ? `@${ceApp.mention}` : "the app"}’s settings →
-          </a>{" "}
-          — the App ID is at the top; scroll to <em>Private keys → Generate a private key</em> to download the .pem.
-        </p>
-      )}
-      <label className="field-label">App ID</label>
-      <input className="picker-search" value={ceAppId} placeholder="e.g. 123456" onChange={(e) => setCeAppId(e.target.value)} />
-      <label className="field-label">Private key (.pem)</label>
-      <input className="ce-file" type="file" accept=".pem,application/x-pem-file,text/plain" onChange={onPemFile} />
-      <textarea
-        className="picker-search ce-pem"
-        value={cePem}
-        rows={4}
-        placeholder="…or paste it here: -----BEGIN RSA PRIVATE KEY----- … -----END RSA PRIVATE KEY-----"
-        onChange={(e) => setCePem(e.target.value)}
-      />
-      <label className="field-label">Pin to this node's label (optional)</label>
-      <input
-        className="picker-search"
-        value={ceNodeLabel}
-        placeholder="e.g. hetzner → this node serves bivy/hetzner"
-        onChange={(e) => setCeNodeLabel(e.target.value)}
-      />
-      <p className="muted">
-        The key stays on this node; the app's existing webhook keeps working (the account's hook is reused).
-      </p>
-      <div className="row-actions">
-        <button
-          className="btn primary"
-          disabled={!ceAppId.trim() || !cePem.trim() || phase === "completing"}
-          onClick={submitConnectExisting}
-        >
-          {phase === "completing" ? "Connecting…" : "Connect app to this node"}
-        </button>
-      </div>
-      {phase === "completing" && <p className="muted">Verifying the key with GitHub on the node…</p>}
-      {phase === "done" && <div className="banner info inline">✓ Connected on this node — its webhook keeps working, nothing else to do.</div>}
-      {phase === "error" && <div className="banner error inline">{app?.error || "Could not connect the app."}</div>}
-    </div>
-  );
-  // Two steps by design: the first tap fetches the manifest from the node (an
-  // async relay round-trip); the second is a **native form submit** to GitHub.
-  // A real <form> + <button type="submit"> (not a scripted form.submit()) is the
-  // most reliable top-level cross-origin POST — installed/standalone PWAs on iOS
-  // routinely drop scripted navigations but honour a genuine submit gesture.
-  const ready = phase === "submitting" && app?.action && app?.manifest;
-
-  const refresh = () => {
-    if (!canQuery) return;
-    controller.fetchGithubApp().then(setInfo).catch(() => setInfo(null));
-    controller.listNodes().then(setNodes).catch(() => {});
-  };
-  useEffect(refresh, []);
-  // Re-pull once the create flow reports success, so "connected" appears without
-  // a manual reload.
-  useEffect(() => {
-    if (phase === "done") refresh();
-  }, [phase]);
-  const apps = info?.apps ?? [];
-  // The default node is one account-level setting written to every app, so any
-  // app that has it answers for all of them.
-  const storedDefaultNode = apps.find((a) => a.defaultNode)?.defaultNode ?? "";
-  // Seed the editable field from the account's stored default whenever it
-  // changes (initial load, or after a save round-trip elsewhere).
-  useEffect(() => { setDefaultNode(storedDefaultNode); }, [storedDefaultNode]);
-  // Same account-wide-preference pattern as the default node: any app that has
-  // it set answers for all of them; "everyone" (no restriction) if none do.
-  const storedTriggerAccess = apps.find((a) => a.triggerAccess)?.triggerAccess ?? "everyone";
-  useEffect(() => { setTriggerAccess(storedTriggerAccess); }, [storedTriggerAccess]);
-
-  // The apps share the same routing copy; show the first one's handle as the example.
-  const primaryMention = apps.find((a) => a.mention)?.mention;
-  const saveDefaultNode = async () => {
-    setDefaultNodeMsg(null);
-    setSavingDefaultNode(true);
-    try {
-      const saved = await controller.setGithubAppDefaultNode(defaultNode.trim());
-      setInfo((cur) => (cur ? { ...cur, defaultNode: saved, apps: cur.apps.map((a) => ({ ...a, defaultNode: saved })) } : cur));
-      setDefaultNodeMsg("Saved");
-      setTimeout(() => setDefaultNodeMsg(null), 1500);
-    } catch (e) {
-      setDefaultNodeMsg(String((e as Error)?.message || e));
-    } finally {
-      setSavingDefaultNode(false);
-    }
-  };
-  const saveTriggerAccess = async (next: "everyone" | "contributor" | "collaborator") => {
-    setTriggerAccessMsg(null);
-    setSavingTriggerAccess(true);
-    const prev = triggerAccess;
-    setTriggerAccess(next); // optimistic — it's a plain select, not a form submit
-    try {
-      const saved = await controller.setGithubAppTriggerAccess(next);
-      setInfo((cur) => (cur ? { ...cur, triggerAccess: saved, apps: cur.apps.map((a) => ({ ...a, triggerAccess: saved })) } : cur));
-      setTriggerAccessMsg("Saved");
-      setTimeout(() => setTriggerAccessMsg(null), 1500);
-    } catch (e) {
-      setTriggerAccess(prev);
-      setTriggerAccessMsg(String((e as Error)?.message || e));
-    } finally {
-      setSavingTriggerAccess(false);
-    }
-  };
-  const disconnect = async (entry: GithubAppEntry) => {
-    const id = appKey(entry);
-    setDisconnectErr(null);
-    setDisconnectingId(id);
-    try {
-      await controller.githubAppDisconnect(entry.appId, entry.hookId);
-      // Re-read the truth rather than optimistically dropping the row: if the hook
-      // is really gone the app leaves the list; if not, say so.
-      const next = await controller.fetchGithubApp();
-      setInfo(next);
-      if (next.apps.some((a) => appKey(a) === id)) {
-        setDisconnectErr({ id, message: "Disconnect didn't take effect. The control plane may be mid-deploy — try again shortly." });
-      } else {
-        // The reconnect form may have been open for the app that just went away.
-        if (ceApp && appKey(ceApp) === id) {
-          setShowConnectExisting(false);
-          setCeApp(null);
-        }
-        refresh();
-      }
-    } catch (e) {
-      setDisconnectErr({ id, message: String((e as Error)?.message || e) });
-    } finally {
-      setDisconnectingId(null);
-    }
-  };
-  const renderApp = (entry: GithubAppEntry) => (
-    <div className="gh-connected" key={appKey(entry)}>
-      <div className="gh-connected-head">
-        <span className="gh-connected-status">✓ Connected</span>
-        <strong className="gh-connected-name">{entry.name}</strong>
-        {/* Which GitHub account this app covers. With several connected, the app
-            names alone are easy to confuse; the owner is what tells them apart. */}
-        {entry.owner ? (
-          <span className="gh-connected-owner">
-            {entry.ownerType === "Organization" ? "org" : "personal"} · {entry.owner}
-          </span>
-        ) : null}
-        {entry.editUrl ? (
-          <a className="gh-connected-edit" href={entry.editUrl} target="_blank" rel="noopener noreferrer">
-            Edit on GitHub →
-          </a>
-        ) : null}
-      </div>
-      {entry.mention ? (
-        <p className="gh-connected-hint">
-          Trigger it in an issue comment with <code>@{entry.mention}</code>
-        </p>
-      ) : null}
-      {entry.installed === false ? (
-        <p className="banner warn inline gh-connected-hint">
-          ⚠ Not installed on any repository — the app can't receive issues or comments until you install it.{" "}
-          <a href={installHref(entry)} target="_blank" rel="noopener noreferrer">
-            Install it now →
-          </a>
-        </p>
-      ) : (
-        <p className="gh-connected-hint">
-          {entry.installed
-            ? `Installed on ${entry.installCount} ${entry.installCount === 1 ? "repository/org" : "repositories/orgs"}. Nothing happening?`
-            : "Nothing happening? The app only receives events from repos it's installed on."}{" "}
-          <a href={installHref(entry)} target="_blank" rel="noopener noreferrer">
-            {entry.installed ? "Add / manage repositories →" : "Install / add repositories →"}
-          </a>
-        </p>
-      )}
-      {/* The account has the app set up, but no online node holds its key — so
-          nothing can run its queue. Offer to (re)connect it on the active node. */}
-      {entry.servedBy === null ? (
-        <div className="banner warn inline gh-serving-banner">
-          ⚠ No online node is running this app right now — queued work won't be picked up. Connect it on a node (this
-          account already has the app, so just add its key here).{" "}
-          <button className="link-btn" onClick={() => toggleConnectExisting(entry)}>
-            {showConnectExisting && ceApp && appKey(ceApp) === appKey(entry) ? "Hide" : "Connect on this node →"}
-          </button>
-        </div>
-      ) : (
-        entry.servedBy && (
-          <p className="gh-connected-hint">
-            Served by <strong>{entry.servedBy.name || entry.servedBy.id}</strong>
-            {entry.servedBy.online ? "" : " (offline)"}.
-          </p>
-        )
-      )}
-      {showConnectExisting && ceApp && appKey(ceApp) === appKey(entry) && renderConnectExisting()}
-      <div className="row-actions">
-        <button
-          className="btn danger-ghost"
-          disabled={disconnectingId !== null}
-          onClick={() => setConfirmDisconnect(entry)}
-        >
-          {disconnectingId === appKey(entry) ? "Disconnecting…" : "Disconnect"}
-        </button>
-      </div>
-      {disconnectErr?.id === appKey(entry) && <div className="banner error inline">{disconnectErr.message}</div>}
-    </div>
-  );
-  // The create + "connect an app you already have" pair. Always available: an
-  // account needs one app per GitHub owner, so "add another" is a normal action,
-  // not something reserved for the empty state.
-  const renderAddApp = () => (
-    <>
-      <label className="field-label">Organization (optional — leave blank for your personal account)</label>
-      <input
-        className="picker-search"
-        value={org}
-        placeholder="my-org"
-        disabled={phase === "starting" || phase === "submitting" || phase === "completing"}
-        onChange={(e) => setOrg(e.target.value)}
-      />
-      {ready ? (
-        <form method="post" action={app!.action} onSubmit={markGithubAppPending}>
-          <input type="hidden" name="manifest" value={JSON.stringify(app!.manifest)} />
-          <button className="btn primary block" type="submit">
-            Continue to GitHub →
-          </button>
-        </form>
-      ) : (
-        <button
-          className="btn primary"
-          disabled={phase === "starting" || phase === "completing"}
-          onClick={() => controller.githubAppManifestStart(org.trim() || undefined)}
-        >
-          {phase === "starting" ? "Preparing…" : phase === "completing" ? "Finishing…" : "Create GitHub App"}
-        </button>
-      )}
-      {/* Both flows share one phase machine, so suppress the create-flow status
-          while the reconnect form (which reports the same phases) is the one running. */}
-      {!showConnectExisting && phase === "completing" && <p className="muted">Exchanging the code on the node…</p>}
-      {!showConnectExisting && phase === "done" && (
-        <div className="banner info inline">
-          ✓ App created — the key is stored on this node. <strong>One step left:</strong> the app won't
-          receive any issues or comments until you install it on a repo.{" "}
-          <a href={app?.installUrl || "https://github.com/settings/installations"} target="_blank" rel="noopener noreferrer">
-            Install it on your repositories →
-          </a>
-        </div>
-      )}
-      {!showConnectExisting && phase === "error" && <div className="banner error inline">{app?.error || "GitHub App setup failed."}</div>}
-
-      <h4 className="settings-subhead">Already have a GitHub App?</h4>
-      <p className="muted">
-        Connect an app you already created (e.g. on another node) by adding its App ID + private key here — no need to
-        create a duplicate.{" "}
-        <button className="link-btn" onClick={() => toggleConnectExisting()}>
-          {showConnectExisting && !ceApp ? "Hide" : "Connect existing app →"}
-        </button>
-      </p>
-      {showConnectExisting && !ceApp && renderConnectExisting()}
-    </>
-  );
-  const hasApps = apps.length > 0;
-  return (
-    <div className="settings-form">
-      {confirmDisconnect && (
-        <ConfirmDialog
-          title="Disconnect GitHub App?"
-          message={
-            confirmDisconnect.appId
-              ? "This node stops handling this app and its key is wiped here. It does not delete the app on GitHub — do that from GitHub's app settings if you want it gone entirely."
-              : "This app was set up before Bivy recorded App IDs, so it can only be disconnected together with every other app on this account. Nothing is deleted on GitHub."
-          }
-          confirmLabel="Disconnect"
-          danger
-          onCancel={() => setConfirmDisconnect(null)}
-          onConfirm={() => { const entry = confirmDisconnect; setConfirmDisconnect(null); disconnect(entry); }}
-        />
-      )}
-
-      {hasApps && <section className="settings-section">{apps.map(renderApp)}</section>}
-
-      <section className="settings-section">
-        <h4 className="settings-subhead">{hasApps ? "Add another app" : "Add an app"}</h4>
-        <p className="muted">
-          {hasApps
-            ? "A GitHub App can only be installed on the account that owns it, so add one per personal account or organization you want Bivy to work in. Each gets its own webhook, and its key is created and kept on this node."
-            : "Bivy reaches GitHub through an app you own: one webhook covering every repo you install it on, with replies posting as the app. The private key is created and kept on this node; the control plane only ever sees the webhook signing secret. An app can only be installed on the account that owns it, so add one per personal account or organization."}
-        </p>
-        {hasApps && !addAppOpen ? (
-          <div className="row-actions">
-            <button className="btn" onClick={() => setAddAppOpen(true)}>+ Add another GitHub App</button>
-          </div>
-        ) : (
-          <>
-            {renderAddApp()}
-            {hasApps && (
-              <div className="row-actions">
-                <button className="link-btn" onClick={() => setAddAppOpen(false)}>Cancel</button>
-              </div>
-            )}
-          </>
-        )}
-      </section>
-
-      {hasApps && (
-        <>
-          <section className="settings-section">
-            <h4 className="settings-subhead">Default node</h4>
-            <p className="muted">
-              Untagged issues and <code>@{primaryMention || "mention"}</code> comments route to the shared <code>bivy</code> queue,
-              where any online node may claim them. Pick a default node so that work lands on one machine instead — it must
-              match the label that node serves (its name below, or whatever it was started with via <code>--node-label</code>).
-              One setting for the whole account: it applies to every app above.
-            </p>
-            <NodeRouteSelect nodes={nodes} value={defaultNode} onChange={setDefaultNode} />
-            <div className="row-actions">
-              <button className="btn primary" disabled={savingDefaultNode} onClick={saveDefaultNode}>
-                {savingDefaultNode ? "Saving…" : "Save"}
-              </button>
-              {defaultNodeMsg && <span className="chip ok">{defaultNodeMsg}</span>}
-            </div>
-          </section>
-
-          <section className="settings-section">
-            <h4 className="settings-subhead">Who can trigger runs</h4>
-            <p className="muted">
-              On a public repository, anyone can open an issue or leave a comment — by default,{" "}
-              <code>@{primaryMention || "mention"}</code>-ing the bot there queues a run for whoever wrote it. Restrict
-              this to people GitHub already trusts with the repo. One setting for the whole account: it applies to
-              every app above.
-            </p>
-            <select
-              className="picker-search"
-              value={triggerAccess}
-              disabled={savingTriggerAccess}
-              onChange={(e) => void saveTriggerAccess(e.target.value as "everyone" | "contributor" | "collaborator")}
-            >
-              <option value="everyone">Everyone — any GitHub user (default)</option>
-              <option value="contributor">Contributors — anyone with a prior merged contribution, or higher</option>
-              <option value="collaborator">Collaborators only — push access (collaborator, member, or owner)</option>
-            </select>
-            {triggerAccessMsg && <span className="chip ok">{triggerAccessMsg}</span>}
-          </section>
-
-          <section className="settings-section">
-            <h4 className="settings-subhead">Routing labels</h4>
-            <p className="muted">Label a GitHub issue (or use the directive in a comment/description) to route it:</p>
-            <ul className="settings-list">
-              <li><code>bivy</code> — shared queue: the default node above, or any online node if none is set.</li>
-              <li><code>bivy/&lt;node&gt;</code> — a specific node's label, e.g. <code>bivy/macbook</code>.</li>
-              <li><code>@{primaryMention || "bivy"} on &lt;node&gt;</code> — in a comment or the issue body, same effect as the label.</li>
-            </ul>
-          </section>
-
-          {EPHEMERAL_MACHINES_ENABLED && (
-            <section className="settings-section">
-              <h4 className="settings-subhead">Ephemeral runner</h4>
-              <EphemeralQueueDefaultSection />
-            </section>
-          )}
-        </>
-      )}
-
-      {canQuery && onOpenGithubQueue && (
-        <section className="settings-section">
-          <h4 className="settings-subhead">Incoming queue</h4>
-          <p className="muted">
-            Pending, picked-up, and finished GitHub work now has its own screen instead of a list here.
-          </p>
-          <button className="btn" onClick={onOpenGithubQueue}>
-            Open GitHub Queue →
-          </button>
-        </section>
-      )}
-    </div>
-  );
-}
-
 // ---- Nodes (per-node defaults) ----
 function NodesPanel({ state }: { state: AppState }) {
   const hosted = !controller.direct;
@@ -1971,6 +1367,13 @@ function NodesPanel({ state }: { state: AppState }) {
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const currentNodeId = controller.local.cur;
+  const selectedNode = nodes.find((node) => node.id === currentNodeId);
+  const selectedLastSeen = typeof selectedNode?.lastSeenAt === "string" ? Date.parse(selectedNode.lastSeenAt) : NaN;
+  const selectedHealth = selectedNode?.online
+    ? "Connected now."
+    : Number.isFinite(selectedLastSeen)
+      ? `Last contact ${new Date(selectedLastSeen).toLocaleString()}. The daemon may be stopped, updating, asleep, or unable to reach the control plane.`
+      : "This machine has not completed a control-plane heartbeat yet. Check that the Bivy service is running and can reach the network.";
 
   const reload = () => {
     controller.getNodeSettings();
@@ -1994,6 +1397,10 @@ function NodesPanel({ state }: { state: AppState }) {
   // Includes githubIssuePrompt so `resetIssuePrompt` (which doesn't touch the
   // rest of the form) re-seeds once the node echoes back the restored default.
   const sig = settings ? `${settings.name}|${settings.defaultAgent}|${settings.githubIssuePrompt}` : "";
+  // Intentionally keyed on `sig`, not `settings`: re-seed the form only when the
+  // signature changes (a real node/settings switch), so a new `settings` object
+  // identity from an unrelated re-render doesn't clobber an in-progress edit.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { setForm(settings); }, [sig]);
 
   const runtimes = state.runtimes.filter((r) => String((r as { status?: string }).status ?? "available") === "available");
@@ -2021,6 +1428,7 @@ function NodesPanel({ state }: { state: AppState }) {
         worktreeSync: form.worktreeSync,
         syncStandbyNodeId: form.syncStandbyNodeId ?? "",
         sessionResumeMode: form.sessionResumeMode,
+        autoAttachToolImages: form.autoAttachToolImages,
       });
       setSavedMsg("Saved");
       setTimeout(() => setSavedMsg(null), 1500);
@@ -2044,7 +1452,7 @@ function NodesPanel({ state }: { state: AppState }) {
     <div className="settings-form">
       {hosted && (
         <section className="settings-section">
-          <label className="field-label" htmlFor="node-settings-node">Node</label>
+          <label className="field-label" htmlFor="node-settings-node">Machine</label>
           <select
             id="node-settings-node"
             className="picker-search"
@@ -2062,29 +1470,33 @@ function NodesPanel({ state }: { state: AppState }) {
               setForm(null);
             }}
           >
-            {nodes.length === 0 && <option value="">No nodes found</option>}
+            {nodes.length === 0 && <option value="">No machines found</option>}
             {nodes.map((n) => (
               <option key={n.id} value={n.id}>
                 {n.name || n.id}{n.online ? "" : " (offline)"}
               </option>
             ))}
           </select>
+          {selectedNode && <p className={`muted small${selectedNode.online ? "" : " warn-text"}`}>{selectedHealth}</p>}
+          <p className="muted small">Run <code>bivy update</code> on the machine to update or repair its service, then refresh this list.</p>
         </section>
       )}
+
+      <MachineCapabilitiesSection online={nodeOnline} />
 
       {!nodeOnline ? (
         <p className="muted">
           {state.status === "offline"
-            ? "This node is offline — its settings aren't reachable until it reconnects."
-            : "Connecting to this node…"}
+            ? "This machine is offline — its settings aren't reachable until it reconnects."
+            : "Connecting to this machine…"}
         </p>
       ) : !form ? (
-        <p className="muted">Loading node settings…</p>
+        <p className="muted">Loading machine settings…</p>
       ) : (
         <>
           <section className="settings-section">
             <h4 className="settings-subhead">Identity</h4>
-            <label className="field-label">Node name</label>
+            <label className="field-label">Machine name</label>
             <input
               className="picker-search"
               value={form.name}
@@ -2151,8 +1563,9 @@ function NodesPanel({ state }: { state: AppState }) {
             <p className="muted small">{SANDBOX_TIERS.find((t) => t.id === form.defaultSandbox)?.hint}</p>
           </section>
 
-          <section className="settings-section">
-            <h4 className="settings-subhead">GitHub</h4>
+          <details className="settings-section settings-disclosure">
+            <summary className="settings-disclosure-summary">GitHub</summary>
+            <div className="settings-disclosure-body">
             <label className="field-label">GitHub session limit</label>
             <input
               className="picker-search"
@@ -2161,7 +1574,7 @@ function NodesPanel({ state }: { state: AppState }) {
               value={form.githubMaxConcurrent}
               onChange={(e) => setForm({ ...form, githubMaxConcurrent: Math.max(0, Math.floor(Number(e.target.value) || 0)) })}
             />
-            <p className="muted small">Max GitHub-triggered sessions this node runs at once; the rest queue until a slot frees. 0 = unlimited.</p>
+            <p className="muted small">Maximum GitHub-triggered Runs this machine handles at once; the rest wait until a slot frees. 0 = unlimited.</p>
 
             <label className="field-label">GitHub issue prompt</label>
             <textarea
@@ -2178,14 +1591,16 @@ function NodesPanel({ state }: { state: AppState }) {
             <div className="row-actions">
               <button className="btn" onClick={resetIssuePrompt}>Reset to default</button>
             </div>
-          </section>
+            </div>
+          </details>
 
-          <section className="settings-section">
-            <h4 className="settings-subhead">Session resume</h4>
+          <details className="settings-section settings-disclosure">
+            <summary className="settings-disclosure-summary">Session resume</summary>
+            <div className="settings-disclosure-body">
             <label className="field-label">After a restart interrupts a session</label>
             <div className="seg-row">
               {([
-                { id: "auto", label: "Auto-resume", hint: "The agent automatically continues the interrupted turn when the node restarts." },
+                { id: "auto", label: "Auto-resume", hint: "The agent automatically continues the interrupted turn when the machine restarts." },
                 { id: "manual", label: "Manual", hint: "The interrupted session waits and offers a one-tap Resume when you open it." },
               ] as const).map((o) => (
                 <button
@@ -2202,19 +1617,42 @@ function NodesPanel({ state }: { state: AppState }) {
             <p className="muted small">
               {form.sessionResumeMode === "manual"
                 ? "Interrupted sessions wait for you to tap Resume — nothing runs on its own. GitHub issue automation still resumes automatically."
-                : "The agent picks up an interrupted turn on its own after the node restarts."}
+                : "The agent picks up an interrupted turn on its own after the machine restarts."}
             </p>
-          </section>
+            </div>
+          </details>
 
-          <section className="settings-section">
-            <h4 className="settings-subhead">Session sync</h4>
+          <details className="settings-section settings-disclosure">
+            <summary className="settings-disclosure-summary">Attachments</summary>
+            <div className="settings-disclosure-body">
             <div className="settings-toggle-row">
               <div className="settings-toggle-text">
-                <span className="settings-toggle-title">Keep sessions synced to a standby node</span>
+                <span className="settings-toggle-title">Auto-attach images from tool results</span>
                 <span className="muted small">
-                  Warm-replicate each session's transcript to another of your nodes over the encrypted
-                  relay, so a session can be picked up elsewhere if this node goes offline. Data stays
-                  node-to-node; the control plane never sees it.
+                  When a tool the agent runs returns an image — a screenshot from a browser-automation tool, say —
+                  show it in the chat automatically, with no explicit attach step. Bounded per turn so a chatty tool
+                  can't flood the chat.
+                </span>
+              </div>
+              <Toggle
+                checked={form.autoAttachToolImages}
+                onChange={(v) => setForm({ ...form, autoAttachToolImages: v })}
+                label="Enable auto-attach for tool images"
+              />
+            </div>
+            </div>
+          </details>
+
+          <details className="settings-section settings-disclosure">
+            <summary className="settings-disclosure-summary">Session sync</summary>
+            <div className="settings-disclosure-body">
+            <div className="settings-toggle-row">
+              <div className="settings-toggle-text">
+                <span className="settings-toggle-title">Keep sessions synced to a standby machine</span>
+                <span className="muted small">
+                  Warm-replicate each session's transcript to another of your machines over the encrypted
+                  relay, so a session can be picked up elsewhere if this machine goes offline. Data stays
+                  machine-to-machine; the control plane never sees it.
                 </span>
               </div>
               <Toggle
@@ -2240,13 +1678,13 @@ function NodesPanel({ state }: { state: AppState }) {
             </div>
             {form.sessionSync && (
               <>
-                <label className="field-label">Standby node</label>
+                <label className="field-label">Standby machine</label>
                 <select
                   className="picker-search"
                   value={form.syncStandbyNodeId ?? ""}
                   onChange={(e) => setForm({ ...form, syncStandbyNodeId: e.target.value || undefined })}
                 >
-                  <option value="">Choose a node to replicate to…</option>
+                  <option value="">Choose a machine to replicate to…</option>
                   {nodes
                     .filter((n) => n.id !== currentNodeId)
                     .map((n) => (
@@ -2259,15 +1697,16 @@ function NodesPanel({ state }: { state: AppState }) {
                   )}
                 </select>
                 <p className="muted small">
-                  Sessions on this node warm-replicate to the standby over the encrypted relay. If this
-                  node goes offline, open the session on the standby and choose “Continue here”.
-                  {nodes.filter((n) => n.id !== currentNodeId).length === 0 && " Add a second node to enable this."}
+                  Sessions on this machine warm-replicate to the standby over the encrypted relay. If this
+                  machine goes offline, open the session on the standby and choose “Continue here”.
+                  {nodes.filter((n) => n.id !== currentNodeId).length === 0 && " Add a second machine to enable this."}
                 </p>
               </>
             )}
-          </section>
+            </div>
+          </details>
 
-          <div className="row-actions">
+          <div className="row-actions settings-save-actions">
             <button className="btn primary" disabled={saving} onClick={save}>{saving ? "Saving…" : "Save"}</button>
             {savedMsg && <span className="chip ok">{savedMsg}</span>}
             {saveErr && <span className="chip err">{saveErr}</span>}
@@ -2293,20 +1732,55 @@ const EPHEMERAL_TTL_OPTIONS = [
 
 function EphemeralPanel() {
   const [keys, setKeys] = useState<ProviderKeyInfo[]>([]);
-  const [setups, setSetups] = useState<EphemeralSetup[]>([]);
+  const [setups, setSetups] = useState<EphemeralNodeConfig[]>([]);
   // Which machine we've drilled into to edit. `setupId: null` = a fresh machine
   // for that provider; a string = editing an existing one. `null` nav = the
   // list view.
   const [nav, setNav] = useState<{ provider: string; setupId: string | null } | null>(null);
   const refreshKeys = () => controller.listEphemeralKeys().then(setKeys).catch(() => {});
-  const refreshSetups = () => controller.listEphemeralSetups().then(setSetups).catch(() => {});
-  useEffect(() => { refreshKeys(); refreshSetups(); }, []);
+  // Account-level ephemeral configs — the same records the new-session node
+  // picker lists, so a machine saved here shows up there (and syncs across the
+  // account's devices). The provider token stays device-local (below).
+  const refreshSetups = () => controller.listEphemeralConfigs().then(setSetups).catch(() => {});
+  // One-time migration: earlier builds saved machines as device-local "setups"
+  // (invisible to the node picker, which reads account-level configs). Copy any
+  // legacy setup that doesn't already have a matching config to the account,
+  // then drop the device-local copy so it can't resurrect. Idempotent and
+  // best-effort — the panel works regardless of whether this runs.
+  const migrateLegacySetups = async () => {
+    try {
+      const [legacy, configs] = await Promise.all([
+        controller.listEphemeralSetups(),
+        controller.listEphemeralConfigs(),
+      ]);
+      if (!legacy.length) return;
+      const have = new Set(configs.map((c) => `${c.provider} ${c.name}`));
+      for (const s of legacy) {
+        if (!have.has(`${s.provider} ${s.name}`)) {
+          await controller.createEphemeralConfig({
+            provider: s.provider, name: s.name,
+            region: s.region ?? null, size: s.size ?? null,
+            ttlMinutes: s.ttlMinutes ?? null,
+            teardownOnAgentFinish: s.teardownOnAgentFinish === true,
+          });
+        }
+        await controller.removeEphemeralSetup(s.id).catch(() => {});
+      }
+      refreshSetups();
+    } catch { /* best effort */ }
+  };
+  useEffect(() => {
+    refreshKeys();
+    refreshSetups();
+    void migrateLegacySetups();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const catalog = nav ? EPHEMERAL_PROVIDERS.find((p) => p.id === nav.provider) : undefined;
   if (nav && catalog) {
     return (
       <div className="settings-form">
-        <button className="link-btn" onClick={() => { setNav(null); refreshSetups(); refreshKeys(); }}>‹ Ephemeral machines</button>
+        <button className="link-btn" onClick={() => { setNav(null); refreshSetups(); refreshKeys(); }}>‹ Isolated machine profiles</button>
         <h3>{catalog.name}</h3>
         <EphemeralProviderConfig
           providerId={catalog.id}
@@ -2322,13 +1796,13 @@ function EphemeralPanel() {
   return (
     <div className="settings-form">
       <p className="muted settings-intro">
-        Bring your own cloud token to spin up temporary nodes that self-destruct at their TTL. Each configured machine
-        below is a saved setup — its provider, region, server type and auto-destroy time — that the new-session node
-        picker offers to launch. The repo it works on comes from the composer, not from here. Tap one to edit it.
+        Bring your own cloud token to spin up isolated machines that self-destruct at their TTL. Each profile
+        below saves its provider, region, server type, and auto-destroy time for the new-session machine
+        picker. The repo it works on comes from the composer, not from here. Tap one to edit it.
       </p>
       {setups.length > 0 && (
         <>
-          <label className="field-label">Configured machines</label>
+          <label className="field-label">Isolated machine profiles</label>
           <div className="picker-list">
             {setups.map((setup) => {
               const p = EPHEMERAL_PROVIDERS.find((x) => x.id === setup.provider);
@@ -2345,7 +1819,7 @@ function EphemeralPanel() {
           </div>
         </>
       )}
-      <label className="field-label">{setups.length > 0 ? "Add a machine" : "Choose a provider"}</label>
+      <label className="field-label">{setups.length > 0 ? "Add a profile" : "Choose a provider"}</label>
       <div className="picker-list">
         {EPHEMERAL_PROVIDERS.map((p) => {
           const k = keys.find((x) => x.id === p.id);
@@ -2360,7 +1834,152 @@ function EphemeralPanel() {
           );
         })}
       </div>
-      <EphemeralModelKeys />
+      <EphemeralTokenSync />
+      {!controller.direct && <HostedRunnerManagement />}
+    </div>
+  );
+}
+
+function HostedRunnerManagement() {
+  const [status, setStatus] = useState<HostedProvisioningStatus | null>(null);
+  const [machines, setMachines] = useState<HostedMachineSummary[]>([]);
+  const [audit, setAudit] = useState<HostedAuditEvent[]>([]);
+  const [provider, setProvider] = useState("hetzner");
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [confirmDestroy, setConfirmDestroy] = useState<HostedMachineSummary | null>(null);
+  const [, setClock] = useState(0);
+
+  const refresh = async () => {
+    const [nextStatus, nextMachines, nextAudit] = await Promise.all([
+      controller.getHostedProvisioning(),
+      controller.listHostedMachines(),
+      controller.listHostedAudit(),
+    ]);
+    setStatus(nextStatus);
+    setMachines(nextMachines);
+    setAudit(nextAudit);
+  };
+  useEffect(() => { void refresh().catch((e) => setErr(String((e as Error)?.message || e))); }, []);
+  useEffect(() => {
+    const timer = setInterval(() => setClock((n) => n + 1), 15_000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const act = async (fn: () => Promise<unknown>, success: string) => {
+    if (busy) return;
+    setBusy(true); setErr(null); setMsg(null);
+    try { await fn(); await refresh(); setMsg(success); }
+    catch (e) { setErr(String((e as Error)?.message || e)); }
+    finally { setBusy(false); }
+  };
+
+  const connect = () => act(async () => {
+    const value = token.trim();
+    await controller.validateHostedProviderCredential(provider, value);
+    await controller.setHostedProvisioning({ providerTokens: { [provider]: value } });
+    setToken("");
+  }, `${EPHEMERAL_PROVIDERS.find((p) => p.id === provider)?.name || provider} credential validated and stored.`);
+
+  return (
+    <section className="settings-section">
+      {confirmDestroy && <ConfirmDialog
+        title="Destroy hosted machine?"
+        message={`Destroy ${confirmDestroy.name || confirmDestroy.nodeId || confirmDestroy.id} at ${confirmDestroy.provider} now? Active work on it will stop.`}
+        confirmLabel="Destroy now"
+        danger
+        onCancel={() => setConfirmDestroy(null)}
+        onConfirm={() => {
+          const nodeId = confirmDestroy.nodeId;
+          setConfirmDestroy(null);
+          if (nodeId) void act(() => controller.destroyHostedMachine(nodeId), "Machine destroyed and removed from inventory.");
+        }}
+      />}
+      <h4 className="settings-subhead">Unattended customer-cloud machines</h4>
+      <p className="muted small">
+        Lets Bivy launch governed automation while your devices are offline. Compute is billed directly by your provider;
+        Bivy adds no compute markup. Provider credentials are encrypted on the control plane and every use is audited.
+      </p>
+      {status && !status.encryptionReady && <span className="chip err">Server credential encryption is not configured</span>}
+      <Toggle
+        checked={Boolean(status?.enabled)}
+        onChange={(enabled) => void act(() => controller.setHostedProvisioning({ enabled }), enabled ? "Unattended provisioning enabled." : "New unattended launches disabled.")}
+        label="Allow unattended machine launches"
+      />
+      <p className="muted small">Disabling stops new launches. Existing machines remain visible below until destroyed or their TTL expires.</p>
+
+      <label className="field-label">Cloud provider</label>
+      <select className="picker-search" value={provider} onChange={(e) => setProvider(e.target.value)}>
+        {EPHEMERAL_PROVIDERS.map((p) => <option key={p.id} value={p.id}>
+          {p.name}{p.id === "sprites" || p.id === "e2b" ? " — experimental managed compute" : " — BYO cloud"}
+        </option>)}
+      </select>
+      {(provider === "sprites" || provider === "e2b") && <p className="muted small">
+        Experimental managed-compute backend. Bivy keeps session durability portable; provider snapshots are an optimization, never the only copy.
+      </p>}
+      <label className="field-label">Provider credential</label>
+      <input className="picker-search" type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="Validate before storing" />
+      <button className="btn primary" disabled={busy || !token.trim() || !status?.encryptionReady} onClick={connect}>{busy ? "Working…" : "Validate and store"}</button>
+      {status && status.providers.length > 0 && (
+        <p className="muted small">Stored: {status.providers.map((p) => `${p}${status.validatedProviders.includes(p) ? " ✓" : " (validation required)"}`).join(", ")}</p>
+      )}
+
+      <label className="field-label">Hosted machines</label>
+      {machines.length === 0 ? <p className="muted small">No hosted machines are currently tracked.</p> : <div className="picker-list">
+        {machines.map((m) => {
+          const providerAdapter = ephemeralAdapter(m.provider);
+          const providerSize = providerAdapter?.sizes.find((size) => size.id === m.size);
+          const estimate = ephemeralCostEstimate(providerSize, m.createdAt, m.ttlMinutes);
+          const failure = audit.find((event) => event.nodeId === m.nodeId && (event.action === "reconcile_failed" || (event.action === "provision_failed" && /destroy|reap|teardown|settled/i.test(event.detail || ""))));
+          const phase = ephemeralLifecyclePhase(m, Boolean(failure));
+          const cost = estimate && providerAdapter
+            ? `est. ${formatEphemeralPrice(estimate.accrued, providerAdapter.currency)} accrued / ${formatEphemeralPrice(estimate.maximum, providerAdapter.currency)} max`
+            : "cost unavailable — check provider bill";
+          return <PickerItem
+            key={`${m.provider}:${m.id}`}
+            title={<>{m.name || m.nodeId || m.id} <span className={`chip ${failure ? "err" : phase === "ready" ? "ok" : ""}`}>{phase.replaceAll("-", " ")}</span></>}
+            meta={[m.provider, m.region, m.size, cost, m.ttlMinutes ? `TTL ${m.ttlMinutes}m` : null, failure?.detail].filter(Boolean).join(" · ")}
+            onClick={() => document.getElementById("hosted-machine-audit")?.scrollIntoView({ behavior: "smooth" })}
+            right={<button type="button" className="picker-action danger" disabled={!m.nodeId || busy} onClick={(e) => { e.stopPropagation(); setConfirmDestroy(m); }}>Destroy</button>}
+          />;
+        })}
+      </div>}
+
+      <label className="field-label" id="hosted-machine-audit">Recent audit evidence</label>
+      {audit.some((event) => event.action === "reconcile_failed") && <span className="chip err">A machine could not be reconciled or deleted. It remains tracked for retry; check the event below and your provider console.</span>}
+      {audit.length === 0 ? <p className="muted small">No hosted-machine events yet.</p> : <div className="picker-list">
+        {audit.slice(0, 10).map((e, i) => <PickerItem
+          key={`${e.at}:${e.action}:${i}`}
+          title={e.action.replaceAll("_", " ")}
+          meta={[e.provider, e.nodeId, e.detail, e.at ? new Date(e.at).toLocaleString() : null].filter(Boolean).join(" · ")}
+        />)}
+      </div>}
+      {err && <span className="chip err">{err}</span>}
+      {msg && <span className="chip ok">{msg}</span>}
+    </section>
+  );
+}
+
+// Opt-in: sync provider tokens to the account's OTHER devices via an E2E device
+// vault, so a second device can wake/reach a machine this one launched (P2 /
+// Gap A). Off by default; the control plane only ever stores ciphertext.
+function EphemeralTokenSync() {
+  const [on, setOn] = useState(false);
+  useEffect(() => { setOn(controller.getDeviceTokenSync()); }, []);
+  return (
+    <div className="settings-form" style={{ marginTop: "1rem" }}>
+      <Toggle
+        checked={on}
+        onChange={(v) => { controller.setDeviceTokenSync(v); setOn(v); }}
+        label="Sync provider tokens across my devices"
+      />
+      <p className="muted small">
+        End-to-end encrypted, opt-in. Lets your other signed-in devices wake and reach machines you launch here without
+        re-entering the token — the control plane only ever stores ciphertext. A brand-new device receives the token the
+        next time an existing device is opened.
+      </p>
     </div>
   );
 }
@@ -2376,10 +1995,11 @@ const COMMON_MODEL_PROVIDERS = [
   "openrouter", "deepseek", "xai", "together", "fireworks", "cohere",
 ];
 
-function EphemeralModelKeys() {
+function AccountApiKeys() {
   const [keys, setKeys] = useState<EphemeralModelKeyInfo[]>([]);
   const [provider, setProvider] = useState("");
   const [key, setKey] = useState("");
+  const [scope, setScope] = useState<"account" | "device">("account");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -2392,10 +2012,10 @@ function EphemeralModelKeys() {
     setMsg(null);
     setErr(null);
     try {
-      await controller.setEphemeralModelKey(provider, key);
+      await controller.setEphemeralModelKey(provider, key, scope);
       setProvider("");
       setKey("");
-      setMsg("Saved on this device.");
+      setMsg(scope === "account" ? "Saved to your end-to-end encrypted account vault." : "Saved on this device only.");
       refresh();
     } catch (e) {
       setErr(String((e as Error)?.message || e));
@@ -2406,11 +2026,11 @@ function EphemeralModelKeys() {
 
   return (
     <section className="settings-section">
-      <h4 className="settings-subhead">Model keys for new machines</h4>
+      <h4 className="settings-subhead">Account API keys</h4>
       <p className="muted small">
-        API keys kept on this device and pushed into a freshly-launched machine over its encrypted channel, so a
-        brand-new runner has model credentials even when it's your only node. Never sent to our servers or baked into
-        the machine image. API keys only — agent subscription logins can't be seeded this way.
+        Add model and voice API keys here even before you own a machine. Account keys synchronize end-to-end with your
+        PWAs and are installed on persistent and isolated machines when they connect. The control plane stores only
+        ciphertext. OAuth subscription logins still require a machine-assisted sign-in.
       </p>
       {keys.length > 0 && (
         <div className="picker-list">
@@ -2418,7 +2038,7 @@ function EphemeralModelKeys() {
             <PickerItem
               key={k.provider}
               title={k.provider}
-              meta={k.configured ? "Key saved on this device" : "Not set"}
+              meta={k.configured ? (k.scope === "account" ? "Account · end-to-end encrypted" : "This device only") : "Not set"}
               right={
                 <button
                   type="button"
@@ -2438,7 +2058,7 @@ function EphemeralModelKeys() {
       {confirmRemove && (
         <ConfirmDialog
           title="Remove model key?"
-          message={`Forget the ${confirmRemove} model key on this device? New machines won't be seeded with it.`}
+          message={`Forget the ${confirmRemove} API key from this device vault?`}
           confirmLabel="Remove"
           danger
           onCancel={() => setConfirmRemove(null)}
@@ -2470,6 +2090,11 @@ function EphemeralModelKeys() {
         placeholder="Paste key"
         onChange={(e) => setKey(e.target.value)}
       />
+      <label className="field-label">Scope</label>
+      <select className="picker-search" value={scope} onChange={(e) => setScope(e.target.value as "account" | "device")}>
+        <option value="account">My account — E2E sync to devices and machines</option>
+        <option value="device">This device only</option>
+      </select>
       <button className="btn primary" disabled={busy || !provider.trim() || !key.trim()} onClick={save}>
         {busy ? "Saving…" : "Save key"}
       </button>
@@ -2510,7 +2135,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
 
   const refreshMachines = () =>
     controller.listEphemeralMachines().then((all) => setMachines(all.filter((m) => m.provider === providerId))).catch(() => {});
-  const editSetup = (setup: EphemeralSetup | null) => {
+  const editSetup = (setup: EphemeralNodeConfig | null) => {
     setSetupId(setup?.id ?? null);
     setSetupName(setup?.name ?? "");
     setRegion(setup?.region || adapter.defaultRegion);
@@ -2523,7 +2148,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
   // blank form when adding).
   useEffect(() => {
     controller.getEphemeralToken(providerId).then((t) => setHasToken(Boolean(t))).catch(() => {});
-    controller.listEphemeralSetups(providerId).then((rows) => {
+    controller.listEphemeralConfigs().then((rows) => {
       editSetup(initialSetupId ? rows.find((s) => s.id === initialSetupId) ?? null : null);
     }).catch(() => {});
     refreshMachines();
@@ -2567,11 +2192,11 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
     setErr(null);
     try {
       // Repo isn't a machine setting — it comes from the new-session composer at
-      // launch time — so clear any legacy value rather than carry it here.
-      const values = { name: setupName.trim(), region, size, ttlMinutes: ttl, teardownOnAgentFinish, repo: null };
-      if (setupId) await controller.updateEphemeralSetup(setupId, values);
+      // launch time — so it's never part of a saved config.
+      const values = { name: setupName.trim(), region, size, ttlMinutes: ttl, teardownOnAgentFinish };
+      if (setupId) await controller.updateEphemeralConfig(setupId, values);
       else {
-        const created = await controller.createEphemeralSetup(providerId, values);
+        const created = await controller.createEphemeralConfig({ provider: providerId, ...values });
         setSetupId(created.id);
       }
       onSetupsChanged();
@@ -2615,11 +2240,11 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
         <>
           <p className="muted">
             {setupId
-              ? "Edit this machine. It stays in the new-session launcher like an offline node even after its machine expires."
-              : "Name this machine and set its defaults. It'll stay in the new-session launcher like an offline node even after its machine expires."}
+              ? "Edit this isolated machine profile. It remains in the new-session launcher after a launched machine expires."
+              : "Name this isolated machine profile and set its defaults. It remains in the new-session launcher after a launched machine expires."}
           </p>
           <label className="field-label">Machine name</label>
-          <input className="picker-search" value={setupName} onChange={(e) => setSetupName(e.target.value)} placeholder="e.g. EU coding node" />
+          <input className="picker-search" value={setupName} onChange={(e) => setSetupName(e.target.value)} placeholder="e.g. EU isolated machine" />
 
           <label className="field-label">Region</label>
           <select className="picker-search" value={region} onChange={(e) => setRegion(e.target.value)}>
@@ -2649,7 +2274,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
           })()}
 
           {suspendsWhenIdle ? (
-            <p className="muted small">Keeps its memory: suspends to ~$0 when idle and resumes with everything intact. Reopen its session from the node list to wake it — no TTL, no teardown-on-finish.</p>
+            <p className="muted small">Keeps its memory: suspends to ~$0 when idle and resumes with everything intact. Reopen its session from the machine list to wake it — no TTL, no teardown-on-finish.</p>
           ) : (
             <>
               <label className="field-label">Work until finished</label>
@@ -2663,14 +2288,14 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
           <p className="muted small">The repo this machine works on is whatever you pick in the new-session composer — it isn't set here.</p>
 
           <div className="row-actions">
-            <button className="btn primary" disabled={busy || !setupName.trim()} onClick={savePrefs}>{busy ? "Saving…" : setupId ? "Save machine" : "Create machine"}</button>
+            <button className="btn primary" disabled={busy || !setupName.trim()} onClick={savePrefs}>{busy ? "Saving…" : setupId ? "Save profile" : "Create profile"}</button>
             {savedMsg && <span className="chip ok">{savedMsg}</span>}
             {setupId && (
               <button className="btn danger-ghost" onClick={() => setConfirm({
                 title: "Remove machine?",
                 message: `Remove ${setupName}? Running machines are not affected.`,
                 label: "Remove",
-                action: () => controller.removeEphemeralSetup(setupId).then(() => { onSetupsChanged(); onBack(); }),
+                action: () => controller.removeEphemeralConfig(setupId).then(() => { onSetupsChanged(); onBack(); }),
               })}>Remove machine</button>
             )}
             <button
@@ -2744,8 +2369,11 @@ function AccountPanel() {
   const ent = me?.entitlements;
   const counts = me?.counts;
   const free = (ent?.plan || me?.account?.plan) === "free";
-  // Free caps unattended automation only; interactive CLI/app sessions are unlimited.
+  // Free caps unattended automation per rolling window, plus a lifetime hosted-session
+  // trial (present only on Bivy Cloud free accounts — absent when self-hosting or paid).
   const runCap = ent ? (ent.weeklyRunLimit ?? "∞") : "—";
+  const trial = me?.trial;
+  const sessionCap = trial ? `${trial.used} / ${trial.limit ?? "∞"}` : "∞";
   const proPrice = me?.pricing?.pro?.label;
   return (
     <div className="settings-form">
@@ -2762,9 +2390,17 @@ function AccountPanel() {
       {err && <div className="banner error inline">{err}</div>}
       <div className="stat-grid">
         <Stat label="Plan" value={planLabel(ent?.plan || me?.account?.plan)} />
+        {trial && <Stat label="Pro trial" value={sessionCap} />}
         <Stat label="Automations / week" value={`${counts?.runsThisWeek ?? "—"} / ${runCap}`} />
       </div>
-      {free && (
+      {free && trial && (
+        <p className="muted settings-intro">
+          You're on the Pro free trial — your first {trial.limit} sessions on Bivy Cloud are free
+          {typeof trial.remaining === "number" && trial.remaining !== Infinity ? ` (${trial.remaining} left)` : ""}.
+          Subscribe to Pro to keep unlimited sessions{proPrice ? ` for ${proPrice}` : ""} — or run your own self-hosted Bivy server to keep everything free.
+        </p>
+      )}
+      {free && !trial && (
         <p className="muted settings-intro">
           You're on the free plan — interactive sessions are unlimited, with {runCap} unattended automations
           per rolling 7 days across GitHub, Slack, webhooks, and schedules. Pro removes the automation cap{proPrice ? ` for ${proPrice}` : ""}.
@@ -2801,7 +2437,7 @@ function AccountPanel() {
           </button>
         )}
       </div>
-      <label className="field-label">Enrolled nodes</label>
+      <label className="field-label">Enrolled machines</label>
       <div className="picker-list">
         {nodes.map((n) => (
           <PickerItem
@@ -2816,7 +2452,7 @@ function AccountPanel() {
                 onClick={(e) => {
                   e.stopPropagation();
                   setConfirm({
-                    title: "Remove node?",
+                    title: "Remove machine?",
                     message: `Remove ${n.name || n.id} from your account?`,
                     action: () => controller.removeNode(n.id).then(() => controller.listNodes().then(setNodes)),
                   });
@@ -2906,7 +2542,7 @@ function LinkPanel({ onDone }: { onDone: () => void }) {
   const [err, setErr] = useState<string | null>(null);
   return (
     <div className="settings-form">
-      <p className="muted">Paste a device-link URL or code from another Bivy client to add its node here.</p>
+      <p className="muted">Paste a device-link URL or code from another Bivy client to add its machine here.</p>
       <textarea
         className="picker-search"
         rows={4}

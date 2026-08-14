@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
 // Prometheus metrics for the control plane. Exposed at /metrics (internal
@@ -82,6 +82,7 @@ new client.Gauge({
  */
 export type FunnelEvent =
   | "sign_in_completed"
+  | "sign_in_failed"
   | "node_enrolled"
   | "run_started"
   | "quota_blocked"
@@ -103,6 +104,95 @@ export function recordFunnelEvent(event: FunnelEvent, source: string, plan: stri
   const safePlan = /^(free|pro|team)$/.test(plan) ? plan : "unknown";
   funnelEvents.inc({ event, source: safeSource, plan: safePlan }, count);
   console.info(`[funnel] ${JSON.stringify({ event, source: safeSource, plan: safePlan, count })}`);
+}
+
+export const PRODUCT_EVENT_VALUES = [
+  "activation_ready",
+  "first_useful_response",
+  "remote_reconnect",
+  "remote_intervention",
+  "run_accepted",
+  "receipt_reviewed",
+  "first_run_machine_ready",
+  "first_run_machine_failed",
+  "first_run_provider_connected",
+  "first_run_provider_failed",
+  "first_run_agent_verified",
+  "first_run_agent_failed",
+] as const;
+export type ProductEvent = (typeof PRODUCT_EVENT_VALUES)[number];
+export const PRODUCT_CLIENT_VALUES = ["desktop", "mobile", "cli", "node"] as const;
+export type ProductClient = (typeof PRODUCT_CLIENT_VALUES)[number];
+
+const productEvents = new client.Counter({
+  name: "bivy_product_events_total",
+  help: "Privacy-safe activation, remote-continuity, Run, and Receipt milestones.",
+  labelNames: ["event", "client"],
+  registers: [register],
+});
+
+export function recordProductEvent(event: ProductEvent, productClient: ProductClient): void {
+  productEvents.inc({ event, client: productClient });
+  console.info(`[funnel] ${JSON.stringify({ event, client: productClient })}`);
+}
+
+export type RunLifecycleOutcome = "succeeded" | "failed" | "needs_attention" | "cancelled";
+export type RunLifecycleRecorder = (outcome: RunLifecycleOutcome) => void;
+
+const runLifecycleResults = new client.Counter({
+  name: "bivy_run_lifecycle_results_total",
+  help: "Durably transitioned Run lifecycle results.",
+  labelNames: ["outcome"],
+  registers: [register],
+});
+
+export const recordRunLifecycleResult: RunLifecycleRecorder = (outcome) => {
+  runLifecycleResults.inc({ outcome });
+  console.info(`[funnel] ${JSON.stringify({ event: "run_lifecycle_result", outcome })}`);
+};
+
+// Fixed, low-cardinality classification of WHERE an accepted Run stopped short of
+// success, so the failure funnel is legible without any per-run identifier. The
+// label set is a closed enum; nothing derived from free text or user input.
+export type RunFailureStage = "checks" | "timeout" | "agent" | "needs_review";
+const runFailureStages = new client.Counter({
+  name: "bivy_run_failure_stage_total",
+  help: "Durably failed or parked Runs by coarse failure stage.",
+  labelNames: ["stage"],
+  registers: [register],
+});
+export type RunFailureStageRecorder = (stage: RunFailureStage) => void;
+export const recordRunFailureStage: RunFailureStageRecorder = (stage) => {
+  runFailureStages.inc({ stage });
+  console.info(`[funnel] ${JSON.stringify({ event: "run_failure_stage", stage })}`);
+};
+
+/** Coarse, evidence-derived failure stage for a durably failed/parked Run.
+ *  A failed deterministic check dominates; then a timeout signature in the
+ *  bounded failure summary; otherwise the agent itself. `parked` marks a Run
+ *  routed to a human for review rather than failed outright. */
+export function classifyRunFailureStage(
+  run: { checks?: Array<{ status: string }>; output?: { failure?: string } } | null | undefined,
+  parked = false,
+): RunFailureStage {
+  if (parked) return "needs_review";
+  if (run?.checks?.some((c) => c.status === "failed")) return "checks";
+  const failure = (run?.output?.failure ?? "").toLowerCase();
+  if (/tim(?:e|ed)\s*-?\s*out|timeout/.test(failure)) return "timeout";
+  return "agent";
+}
+
+/**
+ * Record only a transition result known by its caller to have been persisted.
+ * Injection keeps call-placement tests independent of Prometheus global state.
+ */
+export function recordDurableRunLifecycleResult<T>(
+  durableResult: T | null | undefined,
+  outcome: RunLifecycleOutcome,
+  recorder: RunLifecycleRecorder = recordRunLifecycleResult,
+): T | null | undefined {
+  if (durableResult != null) recorder(outcome);
+  return durableResult;
 }
 
 // --- Business / usage gauges ------------------------------------------------

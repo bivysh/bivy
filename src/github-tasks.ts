@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -252,7 +252,9 @@ export function parseBivyDirectives(body: string | undefined): { runtimeId?: str
 }
 
 async function gh(cfg: GitHubTaskConfig, method: string, apiPath: string, body?: unknown): Promise<Response> {
-  return fetch(`https://api.github.com/repos/${cfg.owner}/${cfg.repo}${apiPath}`, {
+  const owner = encodeURIComponent(cfg.owner);
+  const repo = encodeURIComponent(cfg.repo);
+  return fetch(`https://api.github.com/repos/${owner}/${repo}${apiPath}`, {
     method,
     headers: {
       authorization: `Bearer ${cfg.token}`,
@@ -344,6 +346,36 @@ export async function commentIssue(cfg: GitHubTaskConfig, issueNumber: number, b
   await gh(cfg, "POST", `/issues/${issueNumber}/comments`, { body });
 }
 
+/** A hidden HTML-comment marker (invisible in rendered Markdown) that makes a
+ *  Bivy issue comment idempotent across process restarts and lease reclaims: the
+ *  same logical comment carries the same marker, so a duplicate delivery or a
+ *  reclaim on a fresh node can detect that it was already posted. */
+export function bivyCommentMarker(key: string): string {
+  return `<!-- bivy:comment:${key} -->`;
+}
+
+/** Whether the issue already carries a Bivy comment with the given key. Scans a
+ *  single bounded page (newest issues have few comments); an API failure returns
+ *  false so we prefer re-posting the signal over silently dropping it. */
+export async function issueHasCommentMarker(cfg: GitHubTaskConfig, issueNumber: number, key: string): Promise<boolean> {
+  const marker = bivyCommentMarker(key);
+  const res = await gh(cfg, "GET", `/issues/${issueNumber}/comments?per_page=100`);
+  if (!res.ok) return false;
+  const raw = (await res.json().catch(() => [])) as Array<{ body?: unknown }>;
+  return Array.isArray(raw) && raw.some((c) => typeof c?.body === "string" && c.body.includes(marker));
+}
+
+/** Post an issue comment at most once per `(issue, key)`. Returns true when it
+ *  posted, false when an identically-keyed comment already existed. This is the
+ *  external-effect idempotency guard: a retry or reclaim of the same Run does not
+ *  duplicate a pickup or outcome comment. The marker is appended to the body so
+ *  the check above can see it. */
+export async function commentIssueOnce(cfg: GitHubTaskConfig, issueNumber: number, body: string, key: string): Promise<boolean> {
+  if (await issueHasCommentMarker(cfg, issueNumber, key)) return false;
+  await commentIssue(cfg, issueNumber, `${body}\n\n${bivyCommentMarker(key)}`);
+  return true;
+}
+
 /**
  * The comment posted on an issue the moment Bivy picks it up — the "visibly
  * signal pickup" half of the on-issue lifecycle (the other half is the label
@@ -367,11 +399,18 @@ export function pickupMessage(nodeName?: string): string {
  * the control plane, not a GitHub label — touches the issue's labels at all.
  */
 export async function announcePickup(cfg: GitHubTaskConfig, issueNumber: number, nodeName?: string): Promise<void> {
-  await addLabel(cfg, issueNumber, cfg.claimLabel).catch(() => {});
+  // Best-effort and idempotent, but not silent (A4): a failed claim label can let
+  // another node pick up the same issue, and a failed comment hides the pickup
+  // from the reporter — both are worth a warning in the node log/diagnostics.
+  const warn = (what: string, error: unknown) =>
+    console.warn(`[github-tasks] issue #${issueNumber}: could not ${what}:`, error instanceof Error ? error.message : error);
+  await addLabel(cfg, issueNumber, cfg.claimLabel).catch((error) => warn(`apply claim label "${cfg.claimLabel}"`, error));
   if (cfg.label && cfg.label !== cfg.claimLabel) {
-    await removeLabel(cfg, issueNumber, cfg.label).catch(() => {});
+    await removeLabel(cfg, issueNumber, cfg.label).catch((error) => warn(`remove routing label "${cfg.label}"`, error));
   }
-  await commentIssue(cfg, issueNumber, pickupMessage(nodeName)).catch(() => {});
+  // Idempotent across reclaims: a Machine that reclaims this issue after another
+  // lost its lease must not post a second pickup comment.
+  await commentIssueOnce(cfg, issueNumber, pickupMessage(nodeName), "pickup").catch((error) => warn("post pickup comment", error));
 }
 
 export async function defaultBranch(cfg: GitHubTaskConfig): Promise<string> {
@@ -385,10 +424,26 @@ export async function openPullRequest(
   cfg: GitHubTaskConfig,
   input: { head: string; base: string; title: string; body: string },
 ): Promise<{ url: string; number: number } | undefined> {
+  // Idempotent across retry/reclaim (C4a). Creating a PR is an external effect
+  // that must not duplicate when the same item is retried on this node or
+  // reclaimed by another. A PR for this head may already exist — from a prior
+  // attempt or the agent's own `gh pr create` — so reuse it instead of POSTing
+  // blindly (GitHub 422s "a pull request already exists", which the old code
+  // reported as failure, silently losing the PR reference).
+  const branch = input.head.includes(":") ? input.head.slice(input.head.indexOf(":") + 1) : input.head;
+  const existing = await findOpenPullRequestForBranch(cfg, branch);
+  if (existing) return existing;
+
   const res = await gh(cfg, "POST", "/pulls", input);
-  if (!res.ok) return undefined;
-  const data = (await res.json().catch(() => ({}))) as { html_url?: string; number?: number };
-  return data.html_url ? { url: data.html_url, number: Number(data.number) } : undefined;
+  if (res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { html_url?: string; number?: number };
+    return data.html_url ? { url: data.html_url, number: Number(data.number) } : undefined;
+  }
+  // 422 = a PR for this head/base already exists (opened concurrently, e.g. by a
+  // node that reclaimed the item mid-flight). Recover its reference rather than
+  // reporting failure and re-attempting.
+  if (res.status === 422) return findOpenPullRequestForBranch(cfg, branch);
+  return undefined;
 }
 
 /**

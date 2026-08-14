@@ -1,9 +1,12 @@
 # OpenCode
 
-The open-source OpenCode CLI (`opencode-ai/opencode`), run non-interactively
-under Bivy (`opencode run`) with structured streaming and resume.
+The open-source OpenCode CLI (`opencode-ai/opencode`), driven under Bivy through
+its native Agent Client Protocol server (`opencode acp`): per-tool Approve/Deny,
+streaming, native resume, and a model picker populated from the providers you
+have actually signed into.
 
-- **Runtime id:** `opencode` · **Tier:** Beta · **In picker:** Yes
+- **Runtime id:** `opencode` · **Tier:** Supported · **In picker:** Yes
+- **Release-tested against:** OpenCode 1.18.13
 
 ## Install
 
@@ -32,44 +35,66 @@ Subscription (OAuth) logins other than Anthropic's aren't handed off this way
 
 ## Models
 
-Wired to OpenCode's `--model` flag with a curated default list:
+The model list comes from the ACP session itself, so it lists exactly the models
+this node can actually run — whichever providers you've authenticated in OpenCode,
+including its own OpenCode Zen catalog. Picking one sends an ACP
+`session/set_model`; if the agent rejects it, the selection fails visibly rather
+than appearing to apply.
 
-| id | name |
-| --- | --- |
-| `anthropic/claude-sonnet-4-5` | Claude Sonnet 4.5 |
-| `openai/gpt-5` | GPT-5 |
-| `google/gemini-2.5-pro` | Gemini 2.5 Pro |
-
-Override the list per node with `BIVY_OPENCODE_MODELS` (JSON
+On the fallback pipe path (see below) the picker instead offers the curated
+`--model` list, overridable per node with `BIVY_OPENCODE_MODELS` (JSON
 `[{id,name?,provider?}]`).
 
 ## Resume
 
-Yes — `opencode run -s <id> "<prompt>"` continues a prior session by
-OpenCode's own session id.
+Yes — natively, via the ACP `session/load` for the session's own id. On the
+fallback pipe path, `opencode run -s <id> "<prompt>"` does the same job.
+
+## Session fork
+
+Yes — cross-runtime forks *into* OpenCode are **replayed**, not seeded. Bivy
+writes the fork's portable `{role, text}` transcript as a real session in
+OpenCode's own store (`$XDG_DATA_HOME/opencode/opencode.db` — `session`,
+`message`, and `part` rows mirroring OpenCode's own layout), so `session/load`
+resumes it and the model opens on the full conversation instead of a summary
+prompt. Best-effort like Codex's replay: if the node's OpenCode store is missing
+or on an unknown schema, the fork degrades to the seeded continuation prompt;
+`BIVY_OPENCODE_NO_FORK_REPLAY=1` forces that fallback.
+
+## How it runs (and the version fallback)
+
+Bivy drives OpenCode through its native
+[Agent Client Protocol](https://agentclientprotocol.com) server by default:
+
+```bash
+opencode acp   # what Bivy launches, wrapped by bin/acp-shim.mjs
+```
+
+That path is what earns the Supported tier — per-tool Approve/Deny, streaming,
+`session/load` resume, and real model selection.
+
+Because ACP has no mid-session fallback, the promotion is **gated on your
+installed binary actually having the `acp` subcommand** (a cached `--help`
+probe). An OpenCode too old to offer it keeps the original one-shot pipe path
+(`opencode run`), and the picker honestly reports the reduced capabilities:
+effect-level sandbox governance instead of per-tool cards. Upgrade OpenCode to
+get the governed path.
+
+To force the pipe path back on a node:
+
+```bash
+BIVY_OPENCODE_ACP=0 bivy run opencode
+```
+
+See [acp.md](acp.md).
 
 ## Known gaps
 
-- Governance is effect-level (sandbox tier / FS-MCP-network channels), not
-  per-tool approval cards — `toolInterception` is off for this runtime.
-- No package installs or session fork through this runtime.
+- On the fallback pipe path, governance is effect-level (sandbox tier /
+  FS-MCP-network channels) rather than per-tool approval cards.
+- No package installs through this runtime.
 - Launch flags are pinned against the documented CLI; override with
   `BIVY_OPENCODE_ARGS` if a version differs.
-
-## ACP promotion (per-tool approvals)
-
-OpenCode ships a native [Agent Client Protocol](https://agentclientprotocol.com)
-server (`opencode acp`), so it can be driven through Bivy's governed
-`ProtocolRuntime` instead of the one-shot pipe — earning **per-tool Approve/Deny**
-and `session/load` resume:
-
-```bash
-BIVY_OPENCODE_ACP=1 bivy run opencode   # this agent, via ACP
-BIVY_PREFER_ACP=1 …                      # every ACP-capable agent, via ACP
-```
-
-Declared as data (`acp: { args: ["acp"] }`); off by default until validated for
-your version. See [acp.md](acp.md).
 
 ## Run it
 

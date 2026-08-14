@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // Runtime-agnostic agent interface.
 //
@@ -25,6 +25,7 @@ export type RuntimeEventType =
   | "turn_start"
   | "message_start"
   | "message_update"
+  | "message_boundary"
   | "turn_end"
   | "tool_call"
   | "tool_execution_start"
@@ -41,6 +42,58 @@ export interface RuntimeEvent {
 
 /** Opaque conversation message. The UI renders it; the daemon never inspects it. */
 export type RuntimeMessage = Record<string, unknown>;
+
+/**
+ * A normalized description of what a tool call *does*, independent of which agent
+ * emitted it. Different agents name and shape their tool calls differently (Codex
+ * `command_execution` with `{command}`, Claude `Bash` with `{command}`, `Read`
+ * with `{file_path}`, `apply_patch` with `{changes}`, …); this union collapses the
+ * common cases into one shape so the PWA can render a shell command, a diff, or a
+ * file read *identically* for every agent.
+ *
+ * It is a display aid layered on top of the still-opaque tool block, never a
+ * replacement: it rides alongside the raw `input`/`result`, and when a call can't
+ * be classified there is simply no detail (mapToolCall returns undefined) and the
+ * UI falls back to today's opaque rendering. The daemon never acts on it — like
+ * RuntimeMessage, it exists only for the UI. See src/runtime/tool-call-map.ts.
+ */
+export interface ToolCallProvenance {
+  version: 1;
+  provider: string;
+  protocol: "protocol" | "structured-pipe" | "sdk" | "unknown";
+  rawToolName: string;
+}
+
+export interface ToolResultDetail {
+  text?: string;
+  exitCode?: number;
+  isError?: boolean;
+  truncated?: boolean;
+}
+
+type ToolCallKindDetail =
+  | { kind: "shell"; command: string; cwd?: string }
+  | { kind: "read"; path: string }
+  | { kind: "write"; path: string }
+  | { kind: "edit"; path: string; oldText?: string; newText?: string }
+  | { kind: "search"; query: string; path?: string }
+  | { kind: "fetch"; url: string }
+  | { kind: "plan"; text?: string }
+  // The agent handed work to a sub-agent/delegate (Claude's `Task`,
+  // `dispatch_agent`, `spawn`, an MCP subagent call, …). `label` is the
+  // agent/role it delegated to when the call names one (e.g. a
+  // `subagent_type`); `description` is the sub-task text. Deliberately NOT a
+  // claim of ownership over the child — Bivy only reports the delegation the
+  // parent agent surfaced; it does not control the sub-agent. See
+  // docs/session-reliability-plan.md (Phase 4 adds parent/child linkage).
+  | { kind: "delegation"; label?: string; description?: string };
+
+export type ToolCallDetail = ToolCallKindDetail & {
+  meta: ToolCallProvenance;
+  /** Bounded original input for diagnostics when provider schemas drift. */
+  raw?: unknown;
+  result?: ToolResultDetail;
+};
 
 export interface PromptImage {
   type: "image";
@@ -168,6 +221,35 @@ export interface ToolProvider {
   invoke(toolName: string, toolCallId: string, params: unknown, signal?: AbortSignal): Promise<ToolResult>;
 }
 
+/** A durable reference to an outbound attachment, returned by AttachToChatFn.
+ *  Structurally identical to (and satisfied by) AttachmentRef in
+ *  src/session/attachment-store.ts — kept as its own minimal shape here so this
+ *  runtime-agnostic module never imports from src/session. */
+export interface AttachToChatRef {
+  hash: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  kind: "image" | "file";
+}
+
+/**
+ * Push a workspace file/image into the chat as an attachment for a given
+ * session id — the daemon-side implementation behind every agent-native "attach
+ * to chat" tool surface (Claude's SDK tool, Pi's ToolProvider tool; issue #291).
+ * Takes a session id rather than being bound to one session because the
+ * runtime/tool-provider is built *before* the specific session that will use it
+ * exists (see ClaudeCodeRuntimeOptions.attachToChat and
+ * IntegrationManager.toolProvider) — the daemon resolves the live session from
+ * its own registry (openSessions) when the callback actually fires, instead of
+ * closing over a session record directly, which would be a circular per-session
+ * dependency (build the tools -> need the session -> need the tools).
+ */
+export type AttachToChatFn = (
+  sessionId: string,
+  opts: { filePath: string; caption?: string; mimeType?: string; name?: string; artifact?: boolean },
+) => { ref: AttachToChatRef } | { error: string };
+
 /** Lightweight session listing (maps to Pi's SessionManager.listAll). */
 export interface SessionSummary {
   id: string;
@@ -257,6 +339,14 @@ export interface RuntimeSession {
    */
   getAllModels?(): ModelInfo[] | Promise<ModelInfo[]>;
 
+  /**
+   * Reload the runtime's model-provider configuration after an endpoint or
+   * credential change. Optional because most external agents own a fixed model
+   * catalog; Pi implements it so an already-open session sees a rewritten
+   * models.json without being replaced by a new session.
+   */
+  refreshModels?(): void | Promise<void>;
+
   // ---- Thinking / reasoning levels (optional capability for models that support it)
   getThinkingLevel?(): string | undefined;
   setThinkingLevel?(level: string): void;
@@ -338,6 +428,17 @@ export interface OpenSessionOptions {
   /** Existing session file to resume; omit to create a fresh session. */
   sessionFile?: string;
   /**
+   * The canonical Bivy session id this resume belongs to, when the daemon
+   * already knows it (a reopen of a session whose metadata row exists). A
+   * runtime whose session identity would otherwise DERIVE from the resume ref
+   * (ProtocolRuntime: an opencode/Codex session's id defaults to its own
+   * `ses_…`/rollout ref) must adopt this id instead, so reopening by the ref
+   * updates the original row rather than persisting a second, ref-keyed row for
+   * the same conversation (issue: duplicate opencode sessions after resume).
+   * Runtimes whose id is already stable across resume ignore it.
+   */
+  canonicalId?: string;
+  /**
    * Interceptor consulted before each tool call. The runtime must call it and
    * honor a `block` decision; runtimes without tool interception cannot back
    * the governance tier (see capabilities.toolInterception).
@@ -395,7 +496,11 @@ export interface RuntimeCapabilities {
    * apply — doing so is what made those sessions un-resumable. Optional; absent = false.
    */
   sessionRefIsPath?: boolean;
-  /** Supports forking a session. */
+  /**
+   * Legacy agent-native fork signal. Bivy's session-layer fork does not gate on
+   * this: every runtime can use the portable seeded route, while forkTransport
+   * and forkHistoryImport advertise higher-fidelity native routes.
+   */
   fork: boolean;
   /**
    * The runtime can EXPORT a session's transcript and IMPORT it back into a fresh
@@ -450,13 +555,29 @@ export interface RuntimeCapabilities {
    * queued-follow-ups UI) knows whether an explicit "Steer current turn"
    * action is safe to offer at all. Absent/empty means the client should never
    * attempt a mid-turn prompt for this runtime — hold everything in its own
-   * queue and only ever send into an idle session. Advertised statically here
-   * for a built-in runtime (Pi, Claude Code); a protocol/RPC shim can instead
-   * declare it in its `hello` (see capabilitiesFromHello in
+   * queue and only ever send into an idle session. Advertised statically by an
+   * integration profile (for example Pi or Claude Code); a protocol/RPC bridge
+   * can instead declare it in its `hello` (see capabilitiesFromHello in
    * src/runtime/protocol.ts), which defaults to none when omitted — an
-   * arbitrary shim must opt in before the client will ever try to interrupt it.
+   * arbitrary integration must opt in before the client will ever interrupt it.
    */
   streamingBehaviors?: StreamingBehavior[];
+  /** Exact actions supported by this configured execution path. Missing means
+   * unsupported, not "inherit whatever the agent normally supports". */
+  sessionActions?: {
+    list?: boolean;
+    resume?: boolean;
+    forkConversation?: boolean;
+    forkFromMessage?: boolean;
+    rewindFiles?: boolean;
+    rewindConversation?: boolean;
+  };
+  /** Input lanes accepted by this configured execution path. */
+  inputModes?: {
+    queued?: boolean;
+    steer?: boolean;
+    outOfBand?: boolean;
+  };
   /**
    * The runtime can enumerate its own provider-native sessions that exist on
    * this node's filesystem but that Bivy did not start (see issue #156) —
@@ -531,6 +652,29 @@ export interface TuiLaunchSpec {
   env?: Record<string, string>;
 }
 
+/** Add the exact action/input surface implied by a concrete runtime path. This
+ * is deliberately fail-closed: no provider reputation or agent-wide feature is
+ * inferred beyond capabilities the selected adapter actually advertises. */
+export function withExactCapabilitySurface<T extends RuntimeCapabilities>(capabilities: T): T {
+  const streaming = capabilities.streamingBehaviors ?? [];
+  return {
+    ...capabilities,
+    sessionActions: capabilities.sessionActions ?? {
+      list: capabilities.nativeSessionDiscovery === true,
+      resume: capabilities.resume === true,
+      forkConversation: capabilities.fork === true,
+      forkFromMessage: false,
+      rewindFiles: false,
+      rewindConversation: false,
+    },
+    inputModes: capabilities.inputModes ?? {
+      queued: true,
+      steer: streaming.includes("steer"),
+      outOfBand: false,
+    },
+  };
+}
+
 /** A pluggable agent backend. One implementation per runtime. */
 export interface AgentRuntime {
   /** Stable identifier, e.g. "pi", "claude-agent-sdk". */
@@ -577,7 +721,7 @@ export interface AgentRuntime {
    */
   importForFork?(
     payload: ForkNativePayload,
-    ctx: { workspace: string; cwd: string },
+    ctx: ForkImportContext,
   ): Promise<{ sessionFile: string; id: string }>;
 
   /**
@@ -594,7 +738,7 @@ export interface AgentRuntime {
    */
   importHistoryForFork?(
     history: ForkHistoryMessage[],
-    ctx: { workspace: string; cwd: string },
+    ctx: ForkImportContext,
   ): Promise<{ sessionFile: string; id: string }>;
 
   /**
@@ -647,6 +791,14 @@ export interface ForkNativePayload {
   data: unknown;
 }
 
+/** Destination context supplied while a runtime materialises fork history. */
+export interface ForkImportContext {
+  workspace: string;
+  cwd: string;
+  /** Requested model for this target runtime. Omitted means use its own default. */
+  model?: { provider: string; id: string };
+}
+
 /**
  * One portable turn of a **cross-runtime** ("true fork") transcript replay,
  * produced by `buildForkHistory` and consumed by any runtime's
@@ -669,34 +821,8 @@ export interface CatalogProvider {
   models: ModelInfo[];
 }
 
-/**
- * A model-provider credential the node already holds, exposed runtime-agnostically.
- * This is the seam that lets any agent reuse a login the user did once (resolved
- * from Bivy's own credential store) instead of authenticating separately per agent.
- */
-export interface ProviderCredential {
-  /** Provider id the credential is for, e.g. "anthropic", "openai". */
-  provider: string;
-  /** Whether the token is a plain API key or an OAuth bearer (auto-refreshed). */
-  kind: "api_key" | "oauth";
-  /** A ready-to-use API key or OAuth access token for the provider. */
-  token: string;
-  /** Extra provider-scoped env (e.g. a custom base URL) to pass through. */
-  env?: Record<string, string>;
-}
-
-/**
- * Node-level credential resolver shared across agents. Backed by Bivy's own
- * credential store (credential-store.ts); an adapter resolves a provider's
- * credential and maps it to whatever an agent's SDK expects (env var, header, …)
- * so one login serves every runtime.
- *
- * Named `AgentCredentialStore` to disambiguate from pi-ai's own `CredentialStore`
- * (the storage interface Bivy's store implements for injection into Pi).
- */
-export interface AgentCredentialStore {
-  /** Resolve a usable credential for a provider, or undefined if none is configured. */
-  getCredential(provider: string): Promise<ProviderCredential | undefined>;
-  /** Provider ids the vault currently holds a credential for (for bulk env injection). */
-  listConfigured?(): Promise<string[]>;
-}
+// The credential-resolution contracts (ProviderCredential, AgentCredentialStore)
+// now live in the pure credentials domain so the resolver (credentials/resolver.ts)
+// no longer points up here for them. Re-exported so runtime consumers
+// (process.ts, protocol.ts, agents/claude-code/runtime.ts) are unchanged.
+export type { ProviderCredential, AgentCredentialStore } from "../credentials/types.js";

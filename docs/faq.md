@@ -11,7 +11,7 @@ No. Bivy is **0.x software**. The core loop (run an agent locally, reach it
 remotely) is solid and used daily, but interfaces and behavior can change
 between releases, and it has not had a third-party security audit. See the
 [README](../README.md) and [security-model.md § Known limitations for
-0.1](security-model.md#known-limitations-for-01).
+0.x](security-model.md#known-limitations-for-0x).
 
 ## Is there an Electron desktop app?
 
@@ -34,7 +34,7 @@ PWA](remote-access.md#4-install-the-pwa).
 ## Can I get support for a self-hosted deployment?
 
 No, not in the sense of an SLA or a support queue. Self-hosting the control
-plane + relay stack is **source-available under FSL-1.1-ALv2** and explicitly
+plane + relay stack is **open-source under AGPL-3.0-only** and explicitly
 unsupported: no uptime, response-time, or data-durability guarantees, and
 breaking changes between versions are likely. If you run it, you own
 operating it — TLS, backups, restores, secret rotation, monitoring, and
@@ -58,15 +58,26 @@ Repository contents, diffs, prompts, transcripts, and agent output also remain o
 the node. See [github-work-queue.md § Privacy and security
 model](github-work-queue.md#privacy-and-security-model).
 
+## Does the control plane see Slack or generic webhook instructions?
+
+Yes. Those sources call the control plane directly rather than sending an
+end-to-end-encrypted session frame. A Slack command's prompt is retained as the
+queued run title; a generic webhook's fixed template and event instruction are
+retained as the run body until the run is deleted. Do not include secrets in
+those instructions. GitHub and Linear are different: the control plane keeps
+identifiers and routing metadata, while the node fetches current issue text
+directly from the provider. Interactive terminal/browser/phone prompts remain
+end-to-end encrypted. See [security-model.md § What the control plane
+sees](security-model.md#what-the-control-plane-sees).
+
 ## Are push notification contents private from the control plane?
 
 No. To render a phone notification, the node sends the notification's
 **title and body in plaintext** to the control plane
 (`POST /internal/notifications/hints`), which relays it on to the browser's
 push service via Web Push. That text can include a session or terminal name.
-Everything else about a session — prompts, tool output, terminal I/O, file
-contents — stays end-to-end encrypted between your node and your clients; push
-notification text is the one documented exception. See
+The underlying interactive session — prompts, tool output, terminal I/O, file
+contents — stays end-to-end encrypted between your node and your clients. See
 [remote-access.md § Security model](remote-access.md#security-model).
 
 ## Does Bivy pause for my approval before risky actions by default?

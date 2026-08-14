@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { strict as assert } from "node:assert";
 import test from "node:test";
@@ -48,6 +48,38 @@ test("evictToCap removes least-recently-modified files first until under cap", (
   assert.ok(!fs.existsSync(path.join(root, "old")), "oldest evicted");
   assert.ok(!fs.existsSync(path.join(root, "mid")), "next-oldest evicted");
   assert.ok(fs.existsSync(path.join(root, "new")), "newest (MRU) kept");
+});
+
+// pnpm hardlinks its store entries into every worktree's node_modules. Unlinking
+// the store copy frees nothing (the worktree link keeps the inode alive) and
+// forces a re-download, so linked entries are counted but never evicted.
+test("evictToCap never evicts hardlinked entries, but still counts them", () => {
+  const root = tmp();
+  const worktree = tmp();
+  writeFile(path.join(root, "linked"), 100, 1000); // oldest — would be first to go
+  fs.linkSync(path.join(root, "linked"), path.join(worktree, "in-use"));
+  writeFile(path.join(root, "loose"), 100, 2000);
+
+  const res = evictToCap(root, 100);
+  assert.equal(res.before, 200, "hardlinked bytes count toward the cap");
+  assert.equal(res.removedFiles, 1);
+  assert.ok(fs.existsSync(path.join(root, "linked")), "hardlinked store entry survives");
+  assert.ok(!fs.existsSync(path.join(root, "loose")), "unreferenced entry evicted instead");
+  assert.ok(fs.existsSync(path.join(worktree, "in-use")), "the worktree link is intact");
+});
+
+// When everything left is pinned there is nothing legal to reclaim; the sweep
+// must finish quietly above the cap rather than deleting live store entries.
+test("evictToCap finishes above the cap when only hardlinked entries remain", () => {
+  const root = tmp();
+  const worktree = tmp();
+  writeFile(path.join(root, "linked"), 500, 1000);
+  fs.linkSync(path.join(root, "linked"), path.join(worktree, "in-use"));
+
+  const res = evictToCap(root, 100);
+  assert.equal(res.removedFiles, 0);
+  assert.equal(res.after, 500, "still over cap, nothing safely reclaimable");
+  assert.ok(fs.existsSync(path.join(root, "linked")));
 });
 
 test("evictToCap with maxBytes<=0 does nothing", () => {

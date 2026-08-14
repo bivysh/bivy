@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { describe, expect, it } from "vitest";
 import { RelayTransport } from "../src/transport-relay.js";
@@ -245,6 +245,44 @@ describe("RelayTransport pairing rejection recovery", () => {
     expect(statuses.at(-1)).toBe("online");
   });
 
+  it("coalesces the resync burst when a flapping node replays peer.online (rate-limit guard)", async () => {
+    // The relay re-sends peer.online to this client every time the node
+    // re-attaches. A flapping node used to make the client re-fire its whole
+    // sessions/models/runtimes/terminals refresh burst on each one, piling
+    // counted frames onto this single socket until the relay's per-socket
+    // limiter closed it with "Rate limit exceeded" — with the user never having
+    // sent anything. The refresh must fire once, then be throttled.
+    const { transport } = makeTransport();
+    const store = (transport as unknown as { store: ReturnType<typeof createLocalStore> }).store;
+    const roomKeyBytes = crypto.getRandomValues(new Uint8Array(32));
+    store.addKey("node-1", b64url(roomKeyBytes)); // seed a room key → straight to the curKey branch
+
+    await transport.connect();
+    const ws = FakeWS.instances[0];
+
+    ws.emit({ t: "ready" }); // first link-ready: refresh burst fires
+    await settle();
+    for (let i = 0; i < 5; i++) {
+      ws.emit({ t: "peer.online", clients: 1 }); // node flaps on the SAME socket
+      await settle();
+    }
+
+    // Decrypt everything the client sent and count refresh bursts by sessions.list.
+    const roomKey = await importRoomKey(roomKeyBytes);
+    const reassemble = createFrameReassembler();
+    let sessionsListCount = 0;
+    for (const raw of ws.sent) {
+      const env = JSON.parse(raw) as { t?: string; p?: string };
+      if (env.t !== "frame" || typeof env.p !== "string") continue;
+      const full = reassemble(env as never);
+      if (full === null) continue;
+      const frame = JSON.parse(await open(roomKey, full)) as { data?: { kind?: string } };
+      if (frame.data?.kind === "sessions.list") sessionsListCount++;
+    }
+
+    expect(sessionsListCount).toBe(1); // one refresh despite six link-ready events
+  });
+
   it("stops immediately (no retry) on a permanent rejection and shows the reason", async () => {
     const { transport, statuses, errors } = makeTransport();
     await transport.connect();
@@ -324,3 +362,31 @@ describe("RelayTransport transient-failure quieting", () => {
     expect(errors.some((e) => /ticket request failed/i.test(e))).toBe(true);
   });
 });
+
+describe("RelayTransport solo (account-free) dial", () => {
+  it("dials /client with room+roomToken and never mints a ticket", async () => {
+    FakeWS.instances.length = 0;
+    const store = createLocalStore(mem(), mem());
+    store.cur = "node-solo";
+    store.relay = "wss://relay.self/";
+    store.setSolo("node-solo", { room: "room_deadbeef", roomToken: "z".repeat(43) });
+    let ticketFetches = 0;
+    const fetchImpl = (async (url: string) => {
+      if (String(url).includes("relay-ticket")) ticketFetches += 1;
+      return { ok: false, status: 404, json: async () => ({}) };
+    }) as unknown as typeof fetch;
+    const transport = new RelayTransport({
+      store,
+      handlers: { onEvent: () => {}, onStatus: () => {}, onError: () => {} },
+      fetchImpl,
+      webSocketImpl: FakeWS as unknown as typeof WebSocket,
+      initialBackoffMs: 1,
+    });
+    await transport.connect();
+    await settle();
+    expect(ticketFetches).toBe(0);
+    const ws = FakeWS.instances.at(-1)!;
+    expect(ws.url).toBe("wss://relay.self/client?room=room_deadbeef&roomToken=" + "z".repeat(43));
+  });
+});
+

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // Tool-activity formatting: friendly verbs, per-tool targets, and a real
 // line-by-line diff for Edit/Write, plus the plain-language batch summary.
@@ -10,7 +10,51 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-export type ToolGlyph = "terminal" | "pencil" | "create" | "search" | "list" | "globe" | "eye";
+export type ToolGlyph = "terminal" | "pencil" | "create" | "search" | "list" | "globe" | "eye" | "agent";
+
+/**
+ * Normalized, agent-independent description of what a tool call does. Computed at
+ * the source by the node (src/runtime/tool-call-map.ts) and carried on the tool
+ * block/event, so the client can render a shell command, a diff, or a file read
+ * identically for every agent instead of re-deriving it from each agent's opaque
+ * input shape. When present, `formatTool` prefers it; when absent, formatTool
+ * falls back to its heuristic parse of `input` exactly as before.
+ *
+ * Mirror of the node-side `ToolCallDetail` in src/runtime/types.ts — kept as its
+ * own shape here so @bivy/core (shipped to the browser client) never imports
+ * daemon code, matching how the codebase already mirrors minimal wire shapes.
+ */
+type ToolCallKindDetail =
+  | { kind: "shell"; command: string; cwd?: string }
+  | { kind: "read"; path: string }
+  | { kind: "write"; path: string }
+  | { kind: "edit"; path: string; oldText?: string; newText?: string }
+  | { kind: "search"; query: string; path?: string }
+  | { kind: "fetch"; url: string }
+  | { kind: "plan"; text?: string }
+  | { kind: "delegation"; label?: string; description?: string };
+
+export type ToolCallDetail = ToolCallKindDetail & {
+  meta?: {
+    version: 1;
+    provider: string;
+    protocol: "protocol" | "structured-pipe" | "sdk" | "unknown";
+    rawToolName: string;
+  };
+  raw?: unknown;
+  result?: { text?: string; exitCode?: number; isError?: boolean; truncated?: boolean };
+};
+
+const DETAIL_VERB: Record<ToolCallDetail["kind"], string> = {
+  shell: "Ran",
+  read: "Read",
+  write: "Created",
+  edit: "Edited",
+  search: "Searched",
+  fetch: "Fetched",
+  plan: "Planned",
+  delegation: "Delegated",
+};
 
 export interface DiffHunk {
   oldText: string;
@@ -39,6 +83,12 @@ export interface ToolFormat {
   diffs: DiffHunk[];
   /** Number of edits when there are several but no rendered diff. */
   edits?: number;
+  /** The tool call finished in error (non-zero exit / agent-reported failure). */
+  isError?: boolean;
+  /** Shell exit code, when the agent reported one. */
+  exitCode?: number;
+  /** The captured output was clipped to a bound. */
+  truncated?: boolean;
 }
 
 export type DiffOp =
@@ -81,6 +131,7 @@ function glyphFor(verb: string, hasCommand: boolean): ToolGlyph {
   if (verb === "Searched") return "search";
   if (verb === "Listed") return "list";
   if (verb === "Fetched") return "globe";
+  if (verb === "Delegated") return "agent";
   return "eye";
 }
 
@@ -204,8 +255,11 @@ export function editHunks(input: any): DiffHunk[] {
   return hunks;
 }
 
-/** Full formatted view of a tool call: verb, target, and any diff. */
-export function formatTool(name: string, input: unknown): ToolFormat {
+/** Full formatted view of a tool call: verb, target, and any diff. `detail`, when
+ *  present, is the node's normalized classification and overrides the fields it
+ *  covers — so an agent whose input shape formatTool wouldn't recognize (e.g.
+ *  Codex `apply_patch`) still renders as a proper edit/command/read. */
+export function formatTool(name: string, input: unknown, detail?: ToolCallDetail): ToolFormat {
   const n = String(name || "").toLowerCase();
   const inp: any = input && typeof input === "object" ? input : {};
   const verb = friendlyVerb(n);
@@ -233,7 +287,7 @@ export function formatTool(name: string, input: unknown): ToolFormat {
     added += d.added;
     removed += d.removed;
   }
-  return {
+  const result: ToolFormat = {
     verb,
     glyph: glyphFor(verb, Boolean(command)),
     title,
@@ -248,6 +302,55 @@ export function formatTool(name: string, input: unknown): ToolFormat {
     diffs,
     edits,
   };
+
+  // Prefer the node's normalized detail for the fields it covers. Purely
+  // additive: it only overrides what it can classify, leaving output/stream and
+  // any input-derived write diff intact.
+  if (detail && !isAgentOutput) {
+    result.verb = DETAIL_VERB[detail.kind] ?? result.verb;
+    result.glyph = glyphFor(result.verb, detail.kind === "shell");
+    if (detail.kind === "shell") {
+      result.command = detail.command;
+      result.title = "Bash";
+    } else if (detail.kind === "read" || detail.kind === "write" || detail.kind === "edit") {
+      result.path = detail.path;
+      result.target = basename(detail.path);
+      result.title = result.verb;
+      if (detail.kind === "edit" && result.diffs.length === 0 && (detail.oldText || detail.newText)) {
+        const oldText = detail.oldText ?? "";
+        const newText = detail.newText ?? "";
+        const { added: a, removed: r } = countOps(diffOps(oldText, newText));
+        result.diffs = [{ oldText, newText, added: a, removed: r }];
+        result.added = a;
+        result.removed = r;
+      }
+    } else if (detail.kind === "search") {
+      result.query = detail.query;
+      result.title = "Search";
+      if (detail.path) result.path = detail.path;
+    } else if (detail.kind === "fetch") {
+      result.query = detail.url;
+      result.title = "Fetch";
+    } else if (detail.kind === "plan") {
+      result.title = "Plan";
+      if (detail.text) result.query = clip(detail.text, 120);
+    } else if (detail.kind === "delegation") {
+      result.title = detail.label ? `Delegated → ${detail.label}` : "Delegated";
+      if (detail.label) result.target = detail.label;
+      if (detail.description) result.query = clip(detail.description, 120);
+    }
+  }
+
+  // Surface the tool's OUTCOME (present once the result-time detail lands): a
+  // failed command should read as failed, not sit identical to a success. This
+  // is independent of the call classification above, so it applies to every kind.
+  if (detail?.result) {
+    if (detail.result.isError || (typeof detail.result.exitCode === "number" && detail.result.exitCode !== 0)) result.isError = true;
+    if (typeof detail.result.exitCode === "number") result.exitCode = detail.result.exitCode;
+    if (detail.result.truncated) result.truncated = true;
+  }
+
+  return result;
 }
 
 /** One-line label for a tool row: command, else path/target, else query. */
@@ -256,14 +359,18 @@ export function toolRowLabel(f: ToolFormat): string {
 }
 
 /** Plain-language summary of a batch of tools, e.g. "Read 2 files, ran a command". */
-export function toolGroupSummary(tools: Array<{ name: string; input: unknown }>): string {
+export function toolGroupSummary(tools: Array<{ name: string; input: unknown; detail?: ToolCallDetail }>): string {
   let edited = 0;
   let ran = 0;
   let read = 0;
   let output = 0;
+  let delegated = 0;
+  let failed = 0;
   for (const t of tools) {
-    const f = formatTool(t.name, t.input);
+    const f = formatTool(t.name, t.input, t.detail);
+    if (f.isError) failed++;
     if (f.verb === "Agent output") output++;
+    else if (f.verb === "Delegated") delegated++;
     else if (f.command) ran++;
     else if (f.verb === "Edited" || f.verb === "Created" || f.diffs.length) edited++;
     else read++;
@@ -273,9 +380,11 @@ export function toolGroupSummary(tools: Array<{ name: string; input: unknown }>)
   if (read) parts.push(`Read ${plural(read, "file", "files")}`);
   if (ran) parts.push(`ran ${plural(ran, "command", "commands")}`);
   if (edited) parts.push(`edited ${plural(edited, "file", "files")}`);
+  if (delegated) parts.push(`delegated ${plural(delegated, "task", "tasks")}`);
   if (output) parts.push(output === 1 ? "agent output" : `${output} agent output streams`);
-  if (!parts.length) return tools.length === 1 ? "1 tool call" : `${tools.length} tool calls`;
+  const failedSuffix = failed ? ` · ${failed} failed` : "";
+  if (!parts.length) return `${tools.length === 1 ? "1 tool call" : `${tools.length} tool calls`}${failedSuffix}`;
   // Capitalize the first fragment; join with commas.
   const joined = parts.join(", ");
-  return joined.charAt(0).toUpperCase() + joined.slice(1);
+  return `${joined.charAt(0).toUpperCase()}${joined.slice(1)}${failedSuffix}`;
 }

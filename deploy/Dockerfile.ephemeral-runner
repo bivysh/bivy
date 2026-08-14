@@ -1,0 +1,39 @@
+# syntax=docker/dockerfile:1
+# Versioned, credential-free runner image for the sub-10s ephemeral fast lane.
+# Build context is the repository root. Enrollment, room/model/provider keys,
+# repo selection, and session restore data are injected only when claimed.
+
+FROM node:22-bookworm-slim AS build
+WORKDIR /repo
+# The monorepo root installs with pnpm; corepack ships with the node image and
+# resolves the version pinned in package.json's `packageManager`. The tarball
+# this stage produces is still an npm package — build-release.mjs generates its
+# own package-lock.json — which is what `npm install -g` consumes below.
+RUN corepack enable
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY tsconfig.json ./
+COPY packages/ ./packages/
+COPY src/ ./src/
+COPY bin/ ./bin/
+COPY public/qr.js ./public/qr.js
+COPY scripts/ ./scripts/
+COPY README.md LICENSE ./
+RUN pnpm install --frozen-lockfile
+RUN node scripts/build-release.mjs --pack /out
+
+FROM node:22-bookworm-slim
+LABEL org.opencontainers.image.source="https://github.com/bivysh/bivy"
+LABEL org.opencontainers.image.description="Credential-free prebuilt Bivy ephemeral runner"
+RUN apt-get update -qq \
+  && apt-get install -y -qq --no-install-recommends ca-certificates curl git openssh-client tini \
+  && rm -rf /var/lib/apt/lists/*
+COPY --from=build /out/bivy-latest.tar.gz /tmp/bivy.tar.gz
+RUN npm install -g /tmp/bivy.tar.gz \
+  && rm /tmp/bivy.tar.gz \
+  && command -v bivy
+RUN mkdir -p /etc/bivy /workspace \
+  && chmod 700 /etc/bivy
+ENV BIVY_DATA_DIR=/etc/bivy
+WORKDIR /workspace
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["bivy", "start"]

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // Curate the repo's package.json into the manifest shipped in the npm release.
 //
@@ -22,8 +22,18 @@ export const DROP_DEPENDENCIES = ["expo", "react", "react-native"];
  * `private` flag is cleared so the staged dir remains publishable even though the
  * repo root is marked private to block a stray root `npm publish`.
  */
-export function curateManifest(pkg) {
+export function curateManifest(pkg, readme) {
   const out = { ...pkg };
+
+  // npm normally infers README.md while publishing, but trusted publishes of
+  // the curated staging directory have reached the registry with empty
+  // readme/readmeFilename metadata even though the file is in the tarball.
+  // Supplying both fields makes the npm package page deterministic. This is
+  // staging-only; the repo manifest does not carry a duplicate markdown blob.
+  if (typeof readme === "string" && readme.trim()) {
+    out.readme = readme;
+    out.readmeFilename = "README.md";
+  }
 
   // The staging dir IS the sanctioned publish path; it must not inherit the repo
   // root's `private: true` (which would make `npm publish` refuse it).
@@ -31,6 +41,13 @@ export function curateManifest(pkg) {
 
   // No packages/* workspaces ship (the web PWA is built/served by the control plane).
   delete out.workspaces;
+
+  // The repo develops with pnpm, but the published package is installed with npm
+  // (`npm i -g @bivy/bivy`, and install.sh runs `npm ci` against the lockfile
+  // build-release.mjs generates). Shipping `packageManager` would make corepack
+  // in a user's install try to fetch and run pnpm instead — a hard failure on a
+  // machine that has only npm. The dev-time package manager must not leak.
+  delete out.packageManager;
 
   // A packaged install has no dev toolchain — drop every devDependency.
   delete out.devDependencies;

@@ -23,6 +23,14 @@ const advertiseResume = !!process.env.FIXTURE_RESUME || process.env.FIXTURE_PROT
 const streamingBehaviors = process.env.FIXTURE_STREAMING_BEHAVIORS
   ? process.env.FIXTURE_STREAMING_BEHAVIORS.split(',').filter(Boolean)
   : undefined;
+// An agent that runs its own tools without a host approve/deny round-trip
+// (toolInterception:false — e.g. a third-party ACP agent). The host must still
+// stream the tool_call card live; when set, this fixture delivers the tool
+// result itself instead of waiting for a tool.decision that will never come.
+const advertiseInterception = !process.env.FIXTURE_NO_INTERCEPTION;
+// Activity already started by the upstream runtime: it must be visible without
+// triggering this otherwise interception-capable fixture's approval round-trip.
+const observedTool = process.env.FIXTURE_OBSERVED_TOOL === '1';
 let selectedModel = 'fixture-small';
 send({
   type: 'hello',
@@ -44,7 +52,7 @@ send({
     chat: true,
     streaming: true,
     abort: true,
-    toolInterception: true,
+    toolInterception: advertiseInterception,
     modelSelection: false,
     resume: advertiseResume,
     ...(streamingBehaviors ? { streamingBehaviors } : {}),
@@ -76,6 +84,13 @@ rl.on('line', (line) => {
     send({ replyTo: msg.id, ok: true, runtimeSessionRef: ref });
     if (typeof msg.resume === 'string' && msg.resume) send({ type: 'session.resumed', sessionId: msg.sessionId, runtimeSessionRef: ref });
     else send({ type: 'session.started', sessionId: msg.sessionId, runtimeSessionRef: ref });
+    // Echo what the host actually injected into this subprocess's env, so a
+    // test can prove BIVY_SESSION_ID (issue #290 — `bivy attach` resolves its
+    // session from this var) reached the protocol agent. Sent as an
+    // unrecognized event type so it rides ProtocolSession's verbatim
+    // passthrough (handleEvent's default case in src/runtime/protocol.ts)
+    // without needing a dedicated message type.
+    send({ type: 'env.info', sessionId: msg.sessionId, bivySessionId: process.env.BIVY_SESSION_ID ?? null });
     return;
   }
   if (msg.type === 'model.set') {
@@ -105,8 +120,20 @@ rl.on('line', (line) => {
     // Reasoning stream (surfaced as a thinking sidecar) before the answer text.
     send({ type: 'message.reasoning', sessionId: msg.sessionId, text: `thinking with ${selectedModel}` });
     send({ type: 'message.delta', sessionId: msg.sessionId, role: 'assistant', text: 'hello ' });
+    // Discrete assistant-item boundary (the shape Codex commentary uses): the
+    // host must seal this prose before the following tool instead of waiting for
+    // session.done and concatenating every item into one bubble.
+    send({ type: 'message.boundary', sessionId: msg.sessionId, itemId: 'msg_fixture_1' });
     pendingTool = { sessionId: msg.sessionId, toolCallId: 'tc_fixture' };
-    send({ type: 'tool.call', sessionId: msg.sessionId, toolCallId: pendingTool.toolCallId, name: 'shell', risk: 'medium', input: { cmd: 'echo ok' } });
+    send({ type: observedTool ? 'tool.observe' : 'tool.call', sessionId: msg.sessionId, toolCallId: pendingTool.toolCallId, name: observedTool ? 'spawn_agent' : 'shell', risk: 'medium', input: observedTool ? { agent: 'explorer', description: 'Inspect the workspace' } : { cmd: 'echo ok' } });
+    if (!advertiseInterception || observedTool) {
+      // No tool.decision will arrive — run the tool ourselves and finish the turn.
+      send({ type: 'tool.result', sessionId: msg.sessionId, toolCallId: pendingTool.toolCallId, status: 'ok', summary: 'auto' });
+      send({ type: 'message.delta', sessionId: msg.sessionId, role: 'assistant', text: 'world' });
+      send({ type: 'usage', sessionId: msg.sessionId, usage: { input_tokens: 11, output_tokens: 7, total_tokens: 18 } });
+      send({ type: 'session.status', sessionId: msg.sessionId, status: 'idle' });
+      send({ type: 'session.done', sessionId: msg.sessionId });
+    }
     return;
   }
   if (msg.type === 'tool.decision') {
@@ -115,6 +142,13 @@ rl.on('line', (line) => {
     send({ type: 'usage', sessionId: pendingTool?.sessionId || msg.sessionId, usage: { input_tokens: 11, output_tokens: 7, total_tokens: 18 } });
     send({ type: 'session.status', sessionId: pendingTool?.sessionId || msg.sessionId, status: 'idle' });
     send({ type: 'session.done', sessionId: pendingTool?.sessionId || msg.sessionId });
+    // opencode's ACP end_turn race: a chunk can land AFTER session.done (its
+    // session/prompt reply resolves before the final agent_message_chunk frames
+    // are flushed). The host must fold it onto the sealed assistant message so it
+    // survives a reopen instead of opening a fresh, never-persisted draft.
+    if (process.env.FIXTURE_LATE_DELTA === '1') {
+      setTimeout(() => send({ type: 'message.delta', sessionId: pendingTool?.sessionId || msg.sessionId, role: 'assistant', text: ' late tail' }), 20);
+    }
     return;
   }
   if (msg.type === 'command.invoke') {

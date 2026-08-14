@@ -1,9 +1,11 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { buildAgentCredentialEnv } from "./credentials.js";
+import { bivySessionEnv } from "./session-env.js";
+import { mergeAgentCommands, type SlashCommandProvider } from "./slash-commands.js";
 import type {
   AgentCommand,
   AgentRuntime,
@@ -11,6 +13,7 @@ import type {
   CatalogProvider,
   DiscoveredNativeSession,
   ForkHistoryMessage,
+  ForkImportContext,
   ModelInfo,
   OpenSessionOptions,
   OpenSessionResult,
@@ -22,9 +25,12 @@ import type {
   SessionSummary,
   StreamingBehavior,
   ToolInterceptor,
+  TuiLaunchSpec,
   UsageSnapshot,
 } from "./types.js";
+import { withExactCapabilitySurface } from "./types.js";
 import { extractTokenUsage } from "./cli-parsers.js";
+import { mapToolCall, mapToolResult } from "./tool-call-map.js";
 
 /** A protocol `usage` message → UsageSnapshot (reuses the CLI token-key scan). */
 function parseProtocolUsage(raw: unknown): UsageSnapshot | undefined {
@@ -61,6 +67,25 @@ export interface ProtocolRuntimeOptions {
    * vars, so one Bivy sign-in serves this agent too.
    */
   credentials?: AgentCredentialStore;
+  /**
+   * Credential preflight (mirrors ProcessRuntime). Returns a human-readable error
+   * when the agent has no usable credential, so Bivy surfaces a clear, actionable
+   * message instead of spawning a shim whose first turn dies with an opaque
+   * upstream 401. Returning undefined = proceed. Run per prompt, before the first
+   * turn opens.
+   */
+  preflight?: (
+    env: Record<string, string | undefined>,
+    ctx: { provider?: string },
+  ) => string | undefined;
+  /**
+   * Optional preparation run before the child spawns (mirrors ProcessRuntime) —
+   * e.g. Codex mints its `auth.json` from Bivy's vault and pins `CODEX_HOME`, so a
+   * subscription connected in the app satisfies the preflight and the run. Returns
+   * an env patch merged into the spawn env. Best-effort: a throw/rejection is
+   * swallowed and treated as no patch.
+   */
+  prepare?: (env: Record<string, string | undefined>) => Promise<Record<string, string> | void> | Record<string, string> | void;
   /** Session-less provider/model catalog this agent contributes to the unified picker. */
   catalog?: CatalogProvider[];
   /**
@@ -93,7 +118,7 @@ export interface ProtocolRuntimeOptions {
    * `loadHistory`. Best-effort — the fork engine falls back to a seeded prompt if
    * this throws. Absent = no history import for this agent.
    */
-  writeHistory?: (history: ForkHistoryMessage[], ctx: { workspace: string; cwd: string }) => { sessionFile: string; id: string };
+  writeHistory?: (history: ForkHistoryMessage[], ctx: ForkImportContext) => { sessionFile: string; id: string };
   /** Runtime-specific, side-effect-free title request (for example `codex exec --ephemeral`). */
   suggestName?: (firstPrompt: string, context: { cwd: string; model?: string }) => Promise<string | undefined>;
   /**
@@ -103,6 +128,25 @@ export interface ProtocolRuntimeOptions {
    * (seeded via `capabilities` above); absent = no discovery for this agent.
    */
   discoverNativeSessions?: () => Promise<DiscoveredNativeSession[]> | DiscoveredNativeSession[];
+  /**
+   * Describe how to resume this session in the agent's own interactive TUI on
+   * this node (see RuntimeSession.interactiveTuiCommand — the "Continue in
+   * terminal" hand-off). Given the agent's own session ref and the resolved launch
+   * env (the same `prepare` + credential env a turn spawns with, so the TUI
+   * authenticates identically), returns a TuiLaunchSpec or null when there's
+   * nothing to resume yet. Pair with `capabilities.interactiveTui`. For Codex this
+   * is `codex resume <rolloutId>`. Absent = no TUI hand-off for this agent.
+   */
+  interactiveTui?: (info: { sessionRef?: string; cwd: string; env: Record<string, string> }) => TuiLaunchSpec | null;
+  /**
+   * Optional on-disk slash commands (see SlashCommandProvider), merged with any
+   * the shim advertises in its hello. When set, the session's getCommands()
+   * advertises them and prompt() expands a matching `/name args` line into the
+   * command's body before `chat.send` — Codex/opencode custom prompts don't expand
+   * on the app-server/ACP path Bivy drives, so Bivy expands them itself. Absent =
+   * only the shim's hello-advertised commands (if any).
+   */
+  slashCommands?: SlashCommandProvider;
 }
 
 type Pending = { resolve: (value: Record<string, unknown>) => void; reject: (error: Error) => void; timer: NodeJS.Timeout };
@@ -170,7 +214,7 @@ function parseStreamingBehaviors(raw: unknown): StreamingBehavior[] | undefined 
 function capabilitiesFromHello(raw: unknown): RuntimeCapabilities {
   const c = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
   const streamingBehaviors = parseStreamingBehaviors(c.streamingBehaviors);
-  return {
+  return withExactCapabilitySurface({
     toolInterception: c.toolInterception === true,
     modelSelection: c.modelSelection === true,
     packages: false,
@@ -178,7 +222,7 @@ function capabilitiesFromHello(raw: unknown): RuntimeCapabilities {
     fork: false,
     commands: parseAgentCommands(c.commands),
     ...(streamingBehaviors ? { streamingBehaviors } : {}),
-  };
+  });
 }
 
 /**
@@ -244,14 +288,31 @@ class ProtocolSession implements RuntimeSession {
   private readonly resumeRef?: string;
   private started = false;
   private assistantText = "";
+  /** A protocol agent can produce several discrete assistant messages in one
+   * turn (Codex commentary items are the common case). After a
+   * `message.boundary`, separate the next item's text in the cumulative stream
+   * instead of welding `"first." + "Second"` into `"first.Second"`. */
+  private assistantItemBoundary = false;
   private reasoningText = "";
   private stderrOutput = "";
   private lastUsage?: UsageSnapshot;
-  // Accumulate the current turn's tool calls/results so getMessages() keeps them
-  // in history — re-opening a session then shows what the agent actually did, not
-  // just its final text. Cleared at the start/end of each turn.
-  private turnToolUses: Array<Record<string, unknown>> = [];
+  // Accumulate the current turn's content blocks (text + tool calls, in the order
+  // they actually happened) and tool results so getMessages() keeps them in
+  // history — re-opening a session then shows what the agent actually did,
+  // interleaved exactly as it happened, not just its final text. Cleared at the
+  // start/end of each turn. `turnTextFlushed` is the prefix of `assistantText`
+  // already sealed into `turnContent` as a text block — each tool call flushes
+  // the text since the last flush before appending its own block, so a turn like
+  // "Let me check." → tool → "Now editing." → tool persists as
+  // [text, tool_use, text, tool_use] instead of collapsing into one text block
+  // followed by every tool (which is what re-flattened on reconcile and read as
+  // interim messages "disappearing"/bundling at the end of the turn).
+  private turnContent: Array<Record<string, unknown>> = [];
+  private turnTextFlushed = "";
   private turnToolResults: Array<Record<string, unknown>> = [];
+  // toolCallId -> the node's normalized classification, so a later tool.result
+  // (or tool.update) can attach/refresh `detail` on the already-pushed block.
+  private toolDetailsByCallId = new Map<string, ReturnType<typeof mapToolCall>>();
 
   constructor(
     private readonly runtimeOptions: ProtocolRuntimeOptions,
@@ -262,8 +323,15 @@ class ProtocolSession implements RuntimeSession {
     // back to the shim via the generic session.resume primitive so it reconnects
     // instead of starting fresh; also used to preload history.
     resumeRef?: string,
+    // The canonical Bivy session id to adopt (see OpenSessionOptions.canonicalId).
+    // When the daemon reopens a session by its agent ref but already knows the
+    // original id, pass it here so this session keeps that stable id instead of
+    // taking the ref as its id — otherwise the daemon persists a SECOND metadata
+    // row keyed by the ref, duplicating the conversation. Falls back to the ref,
+    // then a fresh UUID, preserving the prior behaviour when no id is supplied.
+    canonicalId?: string,
   ) {
-    this.id = resumeRef || randomUUID();
+    this.id = canonicalId || resumeRef || randomUUID();
     this.resumeRef = resumeRef;
     if (resumeRef) {
       this.runtimeSessionRef = resumeRef;
@@ -294,6 +362,9 @@ class ProtocolSession implements RuntimeSession {
   private currentModelId?: string;
   /** Provider of the selected model — scopes custom base-URL env injection. */
   private currentModelProvider?: string;
+  /** Env patch from the last `prepare` run (e.g. Codex's minted CODEX_HOME),
+   *  applied to the spawned child and reused by the per-turn preflight. */
+  private prepareEnv: Record<string, string> = {};
   getModels(): ModelInfo[] { return this.models; }
   getCurrentModel(): ModelInfo | undefined {
     if (!this.currentModelId) return undefined;
@@ -321,6 +392,40 @@ class ProtocolSession implements RuntimeSession {
     await this.open();
     await this.command("command.invoke", { sessionId: this.id, runtimeSessionRef: this.runtimeSessionRef, name, args: args ?? "" });
   }
+  /** The session's slash commands: on-disk custom prompts (Codex/opencode) merged
+   *  with whatever the shim advertised in its hello, disk winning a collision.
+   *  Best-effort and display-only — a read failure just drops the on-disk set. */
+  getCommands(): AgentCommand[] {
+    let disk: AgentCommand[] | undefined;
+    try {
+      disk = this.runtimeOptions.slashCommands?.list(this.cwd);
+    } catch {
+      disk = undefined;
+    }
+    return mergeAgentCommands(disk, this.capabilitiesRef.commands);
+  }
+  /**
+   * Resume this session in the agent's own interactive TUI (see the runtimeOptions
+   * hook). Resolves the same launch env a turn would — `prepare` (e.g. Codex
+   * mints CODEX_HOME + auth.json) then credentials — so the TUI opens with the
+   * identical auth as chat. Returns null when the runtime has no TUI hook or there
+   * is no session ref to resume yet (the daemon then surfaces "no TUI available").
+   */
+  async interactiveTuiCommand(): Promise<TuiLaunchSpec | null> {
+    const hook = this.runtimeOptions.interactiveTui;
+    if (!hook) return null;
+    const credentialEnv = this.runtimeOptions.credentials
+      ? await buildAgentCredentialEnv(this.runtimeOptions.credentials, undefined, this.currentModelProvider).catch(() => ({}))
+      : {};
+    let prepareEnv = this.prepareEnv;
+    if (this.runtimeOptions.prepare) {
+      prepareEnv =
+        (await Promise.resolve(this.runtimeOptions.prepare({ ...process.env, ...this.runtimeOptions.env, ...credentialEnv })).catch(() => undefined)) ??
+        prepareEnv;
+    }
+    const env = { ...this.runtimeOptions.env, ...credentialEnv, ...prepareEnv };
+    return hook({ sessionRef: this.runtimeSessionRef ?? this.resumeRef, cwd: this.cwd, env });
+  }
   getName(): string | undefined { return this.name; }
   setName(name: string): void { this.name = name; }
   async suggestName(firstPrompt: string): Promise<string | undefined> {
@@ -334,9 +439,19 @@ class ProtocolSession implements RuntimeSession {
     const credentialEnv = this.runtimeOptions.credentials
       ? await buildAgentCredentialEnv(this.runtimeOptions.credentials, undefined, this.currentModelProvider).catch(() => ({}))
       : {};
+    // Optional prepare step, run before the child spawns because a shim reads its
+    // credential at launch (e.g. Codex mints ~/.codex/auth.json from the vault and
+    // pins CODEX_HOME). Stored so the per-turn preflight sees the same env. Best-
+    // effort: a throw is swallowed and treated as no patch.
+    this.prepareEnv = this.runtimeOptions.prepare
+      ? (await Promise.resolve(this.runtimeOptions.prepare({ ...process.env, ...this.runtimeOptions.env, ...credentialEnv })).catch(() => undefined)) ?? {}
+      : {};
     const child = spawn(this.runtimeOptions.command, this.runtimeOptions.args ?? [], {
       cwd: this.cwd,
-      env: { ...process.env, ...this.runtimeOptions.env, ...credentialEnv },
+      // bivySessionEnv() lets the agent's own shell resolve its session for
+      // `bivy attach <path>` (see session-env.ts); spread last so it can never
+      // be shadowed by an operator-configured env var of the same name.
+      env: { ...process.env, ...this.runtimeOptions.env, ...credentialEnv, ...this.prepareEnv, ...bivySessionEnv(this.id) },
       stdio: "pipe",
     });
     this.child = child;
@@ -352,9 +467,23 @@ class ProtocolSession implements RuntimeSession {
     // gone, so mark the turn stopped and fail any pending commands instead of
     // crashing the process over a normal teardown race.
     child.stdin.on("error", (error) => { this.streaming = false; this.failAll(error instanceof Error ? error : new Error(String(error))); });
-    child.on("error", (error) => this.failAll(error));
+    child.on("error", (error) => {
+      // Spawn/pipe failure — the child never became usable. Forget it so the next
+      // open()/prompt() respawns instead of writing to a dead pipe forever.
+      if (this.child === child) this.markChildGone();
+      this.failAll(error);
+    });
     child.on("close", (code, signal) => {
       this.streaming = false;
+      // The long-lived shim exited — a crash, the user's Stop (SIGKILL), or the
+      // turn-watchdog's abort of a wedged agent. Forget the child AND the fact
+      // that a session was opened on it, so the NEXT open()/prompt() respawns the
+      // shim and re-resumes the agent's own session (by runtimeSessionRef) instead
+      // of every later command throwing "Protocol agent is not running." at the
+      // corpse — which pinned opencode/Codex/Gemini sessions permanently
+      // unresumable after a single stall recovery. Guard on `=== child` so a late
+      // event from a prior child can't null a freshly respawned one.
+      if (this.child === child) this.markChildGone();
       this.failAll(new Error(`Protocol agent exited (${code ?? signal ?? "unknown"})`));
       this.emit({ type: "agent_end", code, signal });
     });
@@ -405,6 +534,44 @@ class ProtocolSession implements RuntimeSession {
     }
   }
 
+  /** Seal the assistant text streamed since the last flush as a text block in
+   *  `turnContent`, ahead of a tool call (or at turn end) — see turnContent's
+   *  doc comment for why this preserves interleaving on reconcile. */
+  private flushPendingTurnText(): void {
+    const pending = this.assistantText.slice(this.turnTextFlushed.length);
+    this.turnTextFlushed = this.assistantText;
+    if (pending) this.turnContent.push({ type: "text", text: pending });
+  }
+
+  /**
+   * Fold assistant text that arrives after the turn was sealed (session.done)
+   * onto the last persisted assistant message — the ACP end_turn race (see the
+   * message.delta branch). The daemon's message_end handler re-snapshots the
+   * base transcript, so the tail survives a reopen; live viewers catch up via
+   * the emitted message_update + message_end. Text with no assistant message to
+   * fold onto is dropped (there is nowhere durable for it to go).
+   */
+  private foldLateAssistantDelta(text: string): void {
+    let lastIndex = -1;
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      if (this.messages[i]?.role === "assistant") { lastIndex = i; break; }
+    }
+    if (lastIndex < 0) return;
+    const msg = this.messages[lastIndex]!;
+    const raw = msg.content;
+    const content: Array<{ type: string; text?: string }> = Array.isArray(raw)
+      ? (raw as Array<{ type: string; text?: string }>)
+      : typeof raw === "string" && raw
+        ? [{ type: "text", text: raw }]
+        : [];
+    const lastBlock = content[content.length - 1];
+    if (lastBlock && lastBlock.type === "text") lastBlock.text = `${lastBlock.text ?? ""}${text}`;
+    else content.push({ type: "text", text });
+    msg.content = content;
+    this.emit({ type: "message_update", message: { role: "assistant", content } });
+    this.emit({ type: "message_end", message: { role: "assistant", content } });
+  }
+
   private handleMessage(msg: Record<string, unknown>) {
     this.emitter.emit("protocol-message", msg);
     const replyTo = typeof msg.replyTo === "string" ? msg.replyTo : "";
@@ -425,11 +592,65 @@ class ProtocolSession implements RuntimeSession {
       if (typeof msg.runtimeSessionRef === "string") this.runtimeSessionRef = msg.runtimeSessionRef;
       return;
     }
+    // Late-arriving model registry. A shim that knows its models up front puts them
+    // in `hello`; one whose list is only knowable per session — an ACP agent's
+    // models depend on which providers the user has authenticated, and arrive with
+    // session/new — publishes them here instead. Same contract as the hello path: a
+    // picker backed by a real `model.set` the shim answers, never a claimed one.
+    if (type === "runtime.models") {
+      const models = parseModels(msg.models);
+      if (models.length) {
+        this.models = models;
+        this.capabilitiesRef.modelSelection = true;
+        if (typeof msg.currentModel === "string") this.currentModelId = msg.currentModel;
+      }
+      return;
+    }
     if (type === "message.delta") {
       const text = String(msg.text ?? "");
-      if (!this.assistantText) this.emit({ type: "message_start", message: { role: "assistant", content: "" } });
-      this.assistantText += text;
-      this.emit({ type: "message_update", message: { role: "assistant", content: this.assistantText } });
+      if (!text) return;
+      if (this.streaming) {
+        if (!this.assistantText) this.emit({ type: "message_start", message: { role: "assistant", content: "" } });
+        if (this.assistantItemBoundary && this.assistantText) {
+          // If a tool already flushed the preceding item, advance the persisted
+          // prefix over this display-only separator too; the next turnContent
+          // block should contain `Second message`, not `\n\nSecond message`.
+          const wasFullyFlushed = this.turnTextFlushed === this.assistantText;
+          this.assistantText += "\n\n";
+          if (wasFullyFlushed) this.turnTextFlushed = this.assistantText;
+        }
+        this.assistantItemBoundary = false;
+        this.assistantText += text;
+        this.emit({ type: "message_update", message: { role: "assistant", content: this.assistantText } });
+        return;
+      }
+      // The turn was already sealed (session.done) yet the agent is still
+      // streaming text — the ACP end_turn race where the final agent_message_chunk
+      // frames land after the prompt reply (opencode#17505). The shim drains the
+      // tail before declaring done, but this is the net for a chunk that outlives
+      // the drain: fold it onto the last assistant message so it survives a reopen
+      // instead of opening a fresh draft that is never persisted.
+      this.foldLateAssistantDelta(text);
+      return;
+    }
+    if (type === "message.boundary") {
+      // Codex emits multiple agentMessage items during one turn: commentary,
+      // then tools, then more commentary. Seal the prose item now so the client
+      // can place the next tool card AFTER it. Waiting for session.done flattens
+      // every item into one growing bubble and leaves all tools in a block below.
+      // Keep assistantText cumulative: SessionStore uses the committed prefix to
+      // derive each new run, and session.done still persists the complete turn.
+      if (this.streaming && this.assistantText) {
+        // Keep the boundary durable too. The marker is display-only, but it lets
+        // renderHistory split adjacent prose items after reload even when no tool
+        // happened between them.
+        this.flushPendingTurnText();
+        if (this.turnContent[this.turnContent.length - 1]?.type !== "bivy_message_boundary") {
+          this.turnContent.push({ type: "bivy_message_boundary" });
+        }
+        this.emit({ type: "message_boundary", message: { role: "assistant", content: this.assistantText } });
+        this.assistantItemBoundary = true;
+      }
       return;
     }
     if (type === "message.reasoning" || type === "reasoning.delta") {
@@ -454,17 +675,21 @@ class ProtocolSession implements RuntimeSession {
       return;
     }
     if (type === "session.done") {
+      // Whether this turn ever used a tool — checked BEFORE flushing trailing
+      // text, so a tool-free turn (turnContent still empty at this point) keeps
+      // the plain-text message shape it always had instead of gaining a
+      // pointless single-text-block wrapper.
+      const hadTools = this.turnContent.length > 0 || this.turnToolResults.length > 0;
       const message = { role: "assistant", content: this.assistantText };
-      // Persist the assistant turn. When the turn used tools, store content blocks
-      // (text + tool_use) plus a trailing user message carrying the tool_result
-      // blocks, matched by tool_use_id — the same shape the PWA renders from live
-      // streaming, so a re-opened transcript looks identical to what was on screen.
-      // A tool-free turn keeps the plain-text form it always used.
-      if (this.turnToolUses.length || this.turnToolResults.length) {
-        const assistantContent: Array<Record<string, unknown>> = [];
-        if (this.assistantText) assistantContent.push({ type: "text", text: this.assistantText });
-        assistantContent.push(...this.turnToolUses);
-        if (assistantContent.length) this.messages.push({ role: "assistant", content: assistantContent, timestamp: Date.now() });
+      // Persist the assistant turn. When the turn used tools, store the ordered
+      // content blocks (text/tool_use interleaved exactly as they streamed — see
+      // turnContent's doc comment) plus a trailing user message carrying the
+      // tool_result blocks, matched by tool_use_id — the same shape the PWA
+      // renders from live streaming, so a re-opened transcript looks identical to
+      // what was on screen. A tool-free turn keeps the plain-text form it always used.
+      if (hadTools) {
+        this.flushPendingTurnText();
+        if (this.turnContent.length) this.messages.push({ role: "assistant", content: this.turnContent, timestamp: Date.now() });
         if (this.turnToolResults.length) this.messages.push({ role: "user", content: this.turnToolResults, timestamp: Date.now() });
       } else if (this.assistantText) {
         this.messages.push(message);
@@ -472,51 +697,95 @@ class ProtocolSession implements RuntimeSession {
       this.emit({ type: "message_end", message });
       this.streaming = false;
       this.assistantText = "";
+      this.assistantItemBoundary = false;
       this.reasoningText = "";
-      this.turnToolUses = [];
+      this.turnContent = [];
+      this.turnTextFlushed = "";
       this.turnToolResults = [];
+      this.toolDetailsByCallId.clear();
       this.emit({ type: "agent_end" });
       return;
     }
     if (type === "session.error") {
       this.streaming = false;
       this.reasoningText = "";
-      this.turnToolUses = [];
+      this.turnContent = [];
+      this.turnTextFlushed = "";
       this.turnToolResults = [];
+      this.toolDetailsByCallId.clear();
       this.emit({ type: "session.error", error: String(msg.error || "Protocol agent error") });
       this.emit({ type: "agent_end" });
       return;
     }
-    if (type === "tool.call") {
-      this.turnToolUses.push({
-        type: "tool_use",
-        id: String(msg.toolCallId || msg.id || ""),
-        name: String(msg.name || "tool"),
-        input: msg.input ?? {},
-      });
-    }
-    if (type === "tool.call" && this.capabilitiesRef.toolInterception && this.toolInterceptor) {
-      const toolCallId = String(msg.toolCallId || "");
+    if (type === "tool.call" || type === "tool.observe") {
+      const toolCallId = String(msg.toolCallId || msg.id || "");
       const toolName = String(msg.name || "tool");
-      this.emit({ type: "tool_call", toolName, input: msg.input, toolCallId });
-      const decision = await this.toolInterceptor({ sessionId: this.id, toolName, input: msg.input });
-      try {
-        this.write({ id: randomUUID(), type: "tool.decision", sessionId: this.id, toolCallId, decision: decision?.block ? "deny" : "allow", reason: decision?.reason });
-      } catch {
-        // The child exited before we could answer (aborted/disposed mid-turn).
-        // There is nowhere to deliver the decision; drop it rather than throw out
-        // of this async event handler (which would surface as an unhandled rejection).
+      const detail = mapToolCall(toolName, msg.input, { provider: this.runtimeOptions.id || "acp", protocol: "protocol" });
+      if (detail) this.toolDetailsByCallId.set(toolCallId, detail);
+      // `tool.observe` is for activity an upstream runtime reports after it has
+      // already begun (Codex read-only MCP and sub-agent items, for example).
+      // It must render and persist exactly like a call, but must never open a
+      // misleading approval that can no longer stop the work. A preceding
+      // governed `tool.call` may be followed by an observed item/started update;
+      // refresh that block in place rather than duplicating it in the transcript.
+      const existing = this.turnContent.find((b) => b.type === "tool_use" && b.id === toolCallId);
+      if (existing) {
+        existing.name = toolName;
+        existing.input = msg.input ?? {};
+        if (detail) existing.detail = detail;
+      } else {
+        this.flushPendingTurnText();
+        this.turnContent.push({ type: "tool_use", id: toolCallId, name: toolName, input: msg.input ?? {}, ...(detail ? { detail } : {}) });
+      }
+      // Stream the live tool card for every protocol agent. Interception is an
+      // additional round-trip only for a real `tool.call`; observed activity is
+      // informational because the upstream runtime is already executing it.
+      this.emit({ type: existing ? "tool_execution_update" : "tool_call", toolName, input: msg.input, toolCallId, ...(detail ? { detail } : {}) });
+      if (type === "tool.call" && this.capabilitiesRef.toolInterception && this.toolInterceptor) {
+        const decision = await this.toolInterceptor({ sessionId: this.id, toolName, input: msg.input });
+        try {
+          this.write({ id: randomUUID(), type: "tool.decision", sessionId: this.id, toolCallId, decision: decision?.block ? "deny" : "allow", reason: decision?.reason });
+        } catch {
+          // The child exited before we could answer (aborted/disposed mid-turn).
+          // There is nowhere to deliver the decision; drop it rather than throw out
+          // of this async event handler (which would surface as an unhandled rejection).
+        }
       }
       return;
     }
+    if (type === "tool.update") {
+      // A tool call's structured data can arrive progressively (e.g. opencode's
+      // ACP shim often has an empty `rawInput` on the initial notification and
+      // fills in `content`/`locations` on a later update) — refresh the
+      // already-pushed turnContent block in place (never append a duplicate) and
+      // push a live update so an open tool card fills in without waiting for the
+      // turn to end and history to reconcile.
+      const toolCallId = String(msg.toolCallId || "");
+      const toolName = String(msg.name || "tool");
+      const detail = mapToolCall(toolName, msg.input, { provider: this.runtimeOptions.id || "acp", protocol: "protocol" });
+      if (detail) this.toolDetailsByCallId.set(toolCallId, detail);
+      const block = this.turnContent.find((b) => b.type === "tool_use" && b.id === toolCallId);
+      if (block) {
+        block.name = toolName;
+        block.input = msg.input ?? {};
+        if (detail) block.detail = detail;
+      }
+      this.emit({ type: "tool_execution_update", toolName, input: msg.input, toolCallId, ...(detail ? { detail } : {}) });
+      return;
+    }
     if (type === "tool.result") {
+      const toolCallId = String(msg.toolCallId || msg.tool_use_id || msg.id || "");
       const result = msg.result ?? msg.output ?? msg.content ?? msg.text ?? msg.summary ?? "";
+      const isError = Boolean(msg.isError || msg.is_error);
       this.turnToolResults.push({
         type: "tool_result",
-        tool_use_id: String(msg.toolCallId || msg.tool_use_id || msg.id || ""),
+        tool_use_id: toolCallId,
         content: result,
+        ...(isError ? { is_error: true } : {}),
       });
-      this.emit({ type: "tool_result", toolName: String(msg.name || "tool"), toolCallId: String(msg.toolCallId || msg.tool_use_id || msg.id || ""), result });
+      const priorDetail = this.toolDetailsByCallId.get(toolCallId);
+      const detail = priorDetail ? { ...priorDetail, result: mapToolResult(result, isError) } : undefined;
+      this.emit({ type: "tool_result", toolName: String(msg.name || "tool"), toolCallId, result, ...(detail ? { detail } : {}) });
       return;
     }
     this.emit({ type, ...msg });
@@ -546,11 +815,34 @@ class ProtocolSession implements RuntimeSession {
     }
   }
 
+  /**
+   * The child process is gone. Reset the spawn/session flags so the next
+   * open()/prompt() transparently respawns the shim and re-resumes (open()
+   * prefers session.resume when a runtimeSessionRef exists). The agent's own
+   * session ref, its loaded history, and the selected model are all preserved —
+   * only the dead OS process handle and the stale read buffer are dropped. This
+   * is the shared crash/abort recovery for every protocol agent.
+   */
+  private markChildGone(): void {
+    this.child = undefined;
+    this.started = false;
+    this.buffer = "";
+  }
+
   async open(): Promise<void> {
     await this.start();
     if (this.started) return;
-    const created = this.resumeRef
-      ? await this.command("session.resume", { workspace: this.cwd, sessionId: this.id, runtimeSessionRef: this.resumeRef, resumeRef: this.resumeRef })
+    // Resume by the agent's own session ref whenever we have one: either passed
+    // at construction (a resumed session) OR learned from an earlier
+    // session.create whose child has since died and been respawned (see
+    // markChildGone). Preferring resume here is what lets a crashed/aborted/
+    // watchdog-recovered turn continue the SAME agent session — keeping opencode's
+    // replayed transcript and prior context — instead of silently forking a fresh
+    // session. Falls back to create when there is no ref or the runtime can't
+    // resume.
+    const resumeRef = this.resumeRef ?? this.runtimeSessionRef;
+    const created = resumeRef && this.capabilitiesRef.resume
+      ? await this.command("session.resume", { workspace: this.cwd, sessionId: this.id, runtimeSessionRef: resumeRef, resumeRef })
       : await this.command("session.create", { workspace: this.cwd, sessionId: this.id });
     if (typeof created.runtimeSessionRef === "string") this.runtimeSessionRef = created.runtimeSessionRef;
     this.started = true;
@@ -559,6 +851,41 @@ class ProtocolSession implements RuntimeSession {
   async prompt(text: string, options?: PromptOptions): Promise<void> {
     const wasStarted = this.started;
     await this.open();
+    // Per-turn prepare + credential preflight, mirroring ProcessRuntime. Unlike a
+    // fresh-process runtime, the protocol child is long-lived, so a credential
+    // connected AFTER it spawned (a mid-session sign-in from the "Sign in to your
+    // model" sheet) would never be materialized by start()'s one-shot prepare.
+    // Re-run prepare here so e.g. Codex mints ~/.codex/auth.json from the just-
+    // completed sign-in before this turn — the app-server reads the default auth
+    // file, so it recovers on the next prompt instead of staying stuck on the
+    // initial 401. Then preflight backstops the genuinely uncredentialed case with
+    // an actionable error instead of an opaque upstream 401. ensureCodexAuth is
+    // idempotent (it no-ops once auth.json exists), so the repeat is cheap.
+    if (this.runtimeOptions.prepare || this.runtimeOptions.preflight) {
+      const credentialEnv = this.runtimeOptions.credentials
+        ? await buildAgentCredentialEnv(this.runtimeOptions.credentials, undefined, this.currentModelProvider).catch(() => ({}))
+        : {};
+      if (this.runtimeOptions.prepare) {
+        this.prepareEnv =
+          (await Promise.resolve(this.runtimeOptions.prepare({ ...process.env, ...this.runtimeOptions.env, ...credentialEnv })).catch(() => undefined)) ??
+          this.prepareEnv;
+      }
+      const preflightError = this.runtimeOptions.preflight?.(
+        { ...process.env, ...this.runtimeOptions.env, ...credentialEnv, ...this.prepareEnv },
+        { provider: this.currentModelProvider },
+      );
+      if (preflightError) {
+        this.streaming = false;
+        const message = { role: "assistant", content: "", errorMessage: preflightError };
+        this.messages.push(message);
+        this.emit({ type: "message_start", message: { role: "assistant", content: "" } });
+        this.emit({ type: "session.error", error: preflightError });
+        this.emit({ type: "message_end", message });
+        this.emit({ type: "turn_end" });
+        this.emit({ type: "agent_end", code: 1, signal: null });
+        return;
+      }
+    }
     if (!wasStarted) this.emit({ type: "agent_start" });
     const prompt = text.trim();
     // Multimodal input: the daemon hands image attachments through PromptOptions
@@ -568,17 +895,30 @@ class ProtocolSession implements RuntimeSession {
     // (empty text) is still a real turn, so don't bail when only images arrive.
     const images = (options?.images ?? []).map((img) => ({ type: "image", data: img.data, mimeType: img.mimeType }));
     if (!prompt && !images.length) return;
+    // A `/name args` line matching an on-disk custom prompt runs the command by
+    // sending its expanded body; the transcript still shows what the user typed.
+    // Non-command lines pass through untouched. Best-effort — a read failure sends
+    // the raw line.
+    let textToSend: string;
+    try {
+      textToSend = this.runtimeOptions.slashCommands?.expand(this.cwd, prompt) ?? prompt;
+    } catch {
+      textToSend = prompt;
+    }
     this.messages.push({ role: "user", content: prompt, timestamp: Date.now() });
     this.streaming = true;
     this.assistantText = "";
+    this.assistantItemBoundary = false;
     this.reasoningText = "";
     this.stderrOutput = "";
-    this.turnToolUses = [];
+    this.turnContent = [];
+    this.turnTextFlushed = "";
     this.turnToolResults = [];
+    this.toolDetailsByCallId.clear();
     await this.command("chat.send", {
       sessionId: this.id,
       runtimeSessionRef: this.runtimeSessionRef,
-      text: prompt,
+      text: textToSend,
       // Optional multimodal + streaming hints. Present only when the caller
       // supplied them, so a text-only turn keeps the exact payload it always had.
       ...(images.length ? { images } : {}),
@@ -587,9 +927,32 @@ class ProtocolSession implements RuntimeSession {
   }
 
   async abort(): Promise<void> {
-    if (!this.child) return;
-    if (this.started) await this.command("session.abort", { sessionId: this.id }, 5_000).catch(() => undefined);
-    this.child.kill("SIGTERM");
+    const child = this.child;
+    if (!child) {
+      // No live turn process. A stuck `streaming` flag (a bug, or an event we
+      // missed) would otherwise pin the session "working" forever and make it
+      // un-resumable, so settle defensively: abort must ALWAYS leave the session
+      // idle. Emitting agent_end lets the daemon clear its working state.
+      if (this.streaming) {
+        this.streaming = false;
+        this.emit({ type: "agent_end", code: null, signal: null });
+      }
+      return;
+    }
+    // Ask the shim to stop the turn cleanly, then force-kill. A wedged agent
+    // (opencode's ACP server stops responding) may ignore SIGTERM or block so
+    // its 'close' never fires; without the SIGKILL escalation the child — and
+    // therefore `isStreaming` — stays alive, leaving the turn unrecoverable.
+    // Only command a live child, and swallow BOTH a sync throw (write() to an
+    // already-dead child raises "Protocol agent is not running.") and an async
+    // reject (a 5s timeout on a wedged shim) — the SIGKILL below is the real
+    // guarantee, so an abort must never reject out of here as an unhandled error.
+    if (this.started && this.child && !this.child.killed) {
+      try { await this.command("session.abort", { sessionId: this.id }, 5_000); }
+      catch { /* child gone or shim wedged — the force-kill below is authoritative */ }
+    }
+    try { child.kill("SIGTERM"); } catch { /* already exited */ }
+    setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* already exited */ } }, 2_000).unref?.();
   }
 
   dispose(): void {
@@ -601,7 +964,7 @@ class ProtocolSession implements RuntimeSession {
 export class ProtocolRuntime implements AgentRuntime {
   readonly id: string;
   readonly displayName: string;
-  readonly capabilities: RuntimeCapabilities = { toolInterception: false, modelSelection: false, packages: false, resume: false, fork: false };
+  readonly capabilities: RuntimeCapabilities = withExactCapabilitySurface({ toolInterception: false, modelSelection: false, packages: false, resume: false, fork: false });
   private sessions: ProtocolSession[] = [];
 
   constructor(private readonly options: ProtocolRuntimeOptions) {
@@ -613,7 +976,7 @@ export class ProtocolRuntime implements AgentRuntime {
     // A runtime that can write its own resumable store from portable history
     // (Codex's rollout) supports true cross-runtime replay forks INTO it.
     if (options.writeHistory) this.capabilities.forkHistoryImport = true;
-    if (options.capabilities) Object.assign(this.capabilities, options.capabilities);
+    if (options.capabilities) Object.assign(this.capabilities, withExactCapabilitySurface({ ...this.capabilities, ...options.capabilities }));
   }
 
   listCatalog(): CatalogProvider[] {
@@ -622,20 +985,34 @@ export class ProtocolRuntime implements AgentRuntime {
 
   async createSession(options: OpenSessionOptions): Promise<OpenSessionResult> {
     const session = new ProtocolSession(this.options, options.workspace, this.capabilities, options.toolInterceptor);
-    await session.start();
-    this.sessions.push(session);
-    return { session };
+    try {
+      await session.start();
+      this.sessions.push(session);
+      return { session };
+    } catch (error) {
+      // A failed hello/handshake still owns a spawned child. Tear it down so a
+      // conformance timeout or broken adapter cannot leak a long-lived process.
+      session.dispose();
+      throw error;
+    }
   }
 
   async openSession(options: OpenSessionOptions & { sessionFile: string }): Promise<OpenSessionResult> {
-    const session = new ProtocolSession(this.options, options.workspace, this.capabilities, options.toolInterceptor, options.sessionFile);
-    await session.start();
-    if (!this.options.resumable && !this.capabilities.resume) {
+    // Adopt the caller's canonical id (a reopen of a known session) so the
+    // resumed session keeps its original id instead of taking `sessionFile` (the
+    // agent's own ref) as its id — see OpenSessionOptions.canonicalId.
+    const session = new ProtocolSession(this.options, options.workspace, this.capabilities, options.toolInterceptor, options.sessionFile, options.canonicalId);
+    try {
+      await session.start();
+      if (!this.options.resumable && !this.capabilities.resume) {
+        throw new Error(`${this.displayName} does not support resume.`);
+      }
+      this.sessions.push(session);
+      return { session };
+    } catch (error) {
       session.dispose();
-      throw new Error(`${this.displayName} does not support resume.`);
+      throw error;
     }
-    this.sessions.push(session);
-    return { session };
   }
 
   // Render a resumed session's prior turns without a live child (e.g. the daemon
@@ -653,7 +1030,7 @@ export class ProtocolRuntime implements AgentRuntime {
    */
   async importHistoryForFork(
     history: ForkHistoryMessage[],
-    ctx: { workspace: string; cwd: string },
+    ctx: ForkImportContext,
   ): Promise<{ sessionFile: string; id: string }> {
     if (!this.options.writeHistory) throw new Error(`${this.displayName} does not support history import.`);
     return this.options.writeHistory(history, ctx);

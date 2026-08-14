@@ -39,9 +39,26 @@ nodes, paired-device public keys, push subscriptions, single-use relay tickets,
 and a `session_index` of `(node_id, session_id, status, source, branch,
 title_enc, updated_at)`. Session titles are stored encrypted (`title_enc`).
 
-It does **not** receive prompts, transcripts, diffs, or workspace files.
+For interactive terminal/browser/phone sessions, it does **not** receive prompts,
+transcripts, diffs, or workspace files: those frames are end-to-end encrypted
+between the node and its paired devices.
 
-Two exceptions you should know about:
+That includes attachments and the Session/Run **Artifacts** sheet (screenshots,
+reports, benchmark results, build archives an agent surfaces with `bivy attach`
+/ `attach_to_chat`, or a user uploads). Attachment bytes live only in the node's
+content-addressed `AttachmentStore` (`src/session/attachment-store.ts`); the
+Artifacts sheet's projection (`packages/core/src/artifacts.ts`) is a pure,
+client-side fold over the transcript the E2E channel already delivers — it adds
+no new server, no new wire command, and reaches the control plane not at all.
+The `artifact` marking (`bivy attach --artifact`) is carried the same way: it
+rides the same end-to-end-encrypted `attachment` event/history payload as the
+filename and caption it sits next to, never as a separate control-plane call.
+The one exception, as noted below, is a GitHub-queue run's bounded
+`output.artifactUrl` — an external link a run reports as its outcome, not a
+filename or byte.
+
+Inbound automations have a different boundary because Slack and generic webhook
+senders call the control plane directly. The exceptions are:
 
 - **Model-auth vault.** When hosted credential sync is on, the node encrypts a
   vault snapshot locally and uploads only ciphertext, plus per-node wrapped keys
@@ -53,16 +70,19 @@ Two exceptions you should know about:
   the claiming node fetches the live text directly from GitHub with its own
   credentials, immediately before use. See
   [`github-work-queue.md`](github-work-queue.md).
-- **Generic automation webhooks.** Each account hook has a high-entropy signing
-  secret. The control plane verifies `X-Bivy-Signature-256` as an HMAC-SHA256
-  over the exact request bytes before parsing or persisting anything. Requests
-  are capped at 64 KiB, require an account-scoped idempotency key, and accept
-  only the versioned schema documented by the settings example. Metadata is
-  bounded, scalar, and explicitly treated as untrusted context. Events are
-  appended to a fixed instruction template; payloads cannot select runtimes,
-  models, shell commands, JavaScript, or executable templates. Hook secrets and
-  bodies are never logged. Rotation immediately invalidates the old secret, and
-  revocation retains only a disabled endpoint with a newly randomized secret.
+- **Slack and generic automation webhooks.** Their instruction text necessarily
+  reaches the control plane in plaintext because Slack/the webhook sender calls
+  it directly. Bivy stores the Slack prompt as the queue title and stores the
+  generic event instruction plus fixed template in the queue body until that
+  item is deleted. Do not put secrets in either. Generic hooks use a
+  high-entropy signing secret; the control plane verifies
+  `X-Bivy-Signature-256` as HMAC-SHA256 over the exact bytes before parsing or
+  persisting. Requests are capped at 64 KiB, require an account-scoped
+  idempotency key, and accept only the closed schema below. Metadata is bounded,
+  scalar, and untrusted. Payloads cannot select runtimes, models, shell commands,
+  JavaScript, or executable templates. Hook secrets and request bodies are never
+  logged. Rotation immediately invalidates the old secret, and revocation keeps
+  only a disabled endpoint with a newly randomized secret.
 
 Automation events use this closed schema (unknown fields are rejected):
 
@@ -222,22 +242,29 @@ Revoking the node itself is done from the control plane (Account → Your nodes)
 
 ## The approval gate
 
-Bivy's safety model is a **hard floor plus a configurable prompt level**
-(`src/guard.ts`, `src/policy/policy-engine.ts`).
+For runtimes that expose structured tool calls, Bivy's policy model is a
+**heuristic floor plus a configurable prompt level** (`src/guard.ts`,
+`src/policy/policy-engine.ts`). The runtime picker reports the effective
+protection mechanism for the selected path.
 
-The hard floor applies in **every** mode, including `never`:
+Within an intercepted tool path, the floor applies in **every approval mode**,
+including `never`:
 
-- Catastrophic bash commands are denied outright: `rm -rf /` (and `~`, `/*`),
-  `mkfs`, `dd of=/dev/sd*`, redirects to raw block devices, the classic fork
-  bomb, `chmod -R 777 /`, and `shutdown`/`reboot`/`halt`/`poweroff`.
-- `write` and `edit` calls whose resolved path escapes the session workspace are
-  denied outright.
+- Known catastrophic shell commands are denied outright: `rm -rf /` (and key
+  system roots), `mkfs`, `dd of=/dev/sd*`, redirects to raw block devices, the
+  classic fork bomb, `chmod -R 777 /`, and shutdown commands.
+- Structured `write` and `edit` calls whose resolved path escapes the session
+  workspace are denied outright.
+
+This floor does not apply to operations Bivy cannot observe. A process adapter
+without structured interception can shell out or write as the OS user. The
+heuristics catch common accidents; they are not an adversarial boundary.
 
 Above the floor, `approvalMode` decides how often it asks:
 
 | Mode | Behaviour |
 | --- | --- |
-| `never` | No prompting. Hard floor still applies. |
+| `never` | No prompting. Heuristic floor still applies on intercepted tool paths only. |
 | `risky` | Heuristically risky bash (`rm`, `mv`, `chmod`, `sudo`, `curl`, `git commit/push/reset`, package installs, output redirection, …) plus all `write`/`edit` calls prompt. |
 | `always` | Every `bash`/`write`/`edit` call prompts. |
 | `autonomous` | Runs unattended, but "backstop" actions still prompt: force-push, push to `main`/`master`, `npm publish`, `kubectl/terraform apply`, `docker push`, `fly/vercel/netlify deploy`, `gh release create`, sending mail from the shell, and `sudo`. |
@@ -249,8 +276,8 @@ Pending approvals expire after 5 minutes and expire **denied**
 (`src/approval.ts`).
 
 Choosing `never` grants any connected client unattended code execution on the
-node, bounded only by the hard floor. That is a real decision — make it
-deliberately.
+node. On a non-intercepted runtime that is bounded only by the runtime's own
+sandbox and OS permissions. That is a real decision—make it deliberately.
 
 ## Sandboxing
 
@@ -331,9 +358,9 @@ Slack `xox[baprs]-…`).
 
 This is pattern-based. It does not catch a secret shape Bivy has no pattern for.
 
-## Known limitations for 0.1
+## Known limitations for 0.x
 
-Bivy 0.1 is an early public release. Know these before trusting it with anything
+Bivy is early 0.x software. Know these before trusting it with anything
 sensitive.
 
 1. **No Bivy-owned OS sandbox.** As above: agents without a native sandbox run
@@ -382,7 +409,7 @@ sensitive.
     Stripe, Groq, xAI, Google, AWS access-key ids, Slack). A credential shape
     Bivy has no pattern for — including generic high-entropy secrets — will be
     persisted verbatim.
-13. **No third-party security audit.** Bivy 0.1 has not been externally audited.
+13. **No third-party security audit.** Bivy has not been externally audited.
 14. **Approvals expire denied after 5 minutes.** A long-running unattended
     session that hits an approval will stall and then fail rather than proceed.
 

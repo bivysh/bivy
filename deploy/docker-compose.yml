@@ -16,7 +16,7 @@
 #     --control-plane https://app.example.com \
 #     --relay wss://relay.example.com \
 #     --email you@example.com
-#   npm run dev   # node dials the relay; use "Link remote device" to pair a phone
+#   npm run dev   # node dials the relay; run `bivy link` to pair a phone
 #
 # NOTE: defaults to NODE_ENV=production, so the services refuse to boot with
 # insecure defaults and dev-login is disabled. For a throwaway staging box that
@@ -64,6 +64,13 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.control-plane
+      args:
+        # Bake the ephemeral-machines UI flag into the web bundle. OFF by default;
+        # set VITE_EPHEMERAL_MACHINES_ENABLED=1 in .env to expose the UI. Pairs with
+        # the runtime EPHEMERAL_MACHINES_ENABLED below. Hosted deploys that pull a
+        # prebuilt image (up --no-build) must set this build-arg when they build
+        # that image instead.
+        VITE_EPHEMERAL_MACHINES_ENABLED: "${VITE_EPHEMERAL_MACHINES_ENABLED:-}"
     logging: *default-logging
     mem_limit: 512m
     cpus: 1.0
@@ -84,6 +91,14 @@ services:
       # block. Lets a hosted deploy watch the real runs-per-window distribution before
       # turning enforcement on. No-op unless ENFORCE_ENTITLEMENTS=1. See docs/configuration.md.
       RUN_LIMIT_OBSERVE_ONLY: "${RUN_LIMIT_OBSERVE_ONLY:-0}"
+      # Ephemeral-machines flag (server-side enforcement). OFF by default: with
+      # NODE_ENV=production (the compose default) ephemeral is disabled unless you
+      # set EPHEMERAL_MACHINES_ENABLED=1 here. When off, planAutoProvision refuses
+      # server-initiated launches and the /api/ephemeral/exec provider relay 403s
+      # device-initiated ones. Pairs with the build-time VITE_EPHEMERAL_MACHINES_ENABLED
+      # above that exposes the UI. Does not touch a running machine's self-teardown,
+      # so any existing machine still reaps itself when idle.
+      EPHEMERAL_MACHINES_ENABLED: "${EPHEMERAL_MACHINES_ENABLED:-}"
       DISABLE_DEV_LOGIN: "${DISABLE_DEV_LOGIN:-0}"
       RESEND_API_KEY: "${RESEND_API_KEY:-}"
       AUTH_EMAIL_FROM: "${AUTH_EMAIL_FROM:-Bivy <login@localhost>}"
@@ -149,7 +164,11 @@ services:
       CONTROL_PLANE_URL: "${CONTROL_PLANE_URL:-http://control-plane:4400}"
       ENFORCE_ENTITLEMENTS: "${ENFORCE_ENTITLEMENTS:-0}"
       RELAY_MAX_FRAME_BYTES: "${RELAY_MAX_FRAME_BYTES:-1048576}"
-      RELAY_MAX_MESSAGES_PER_MINUTE: "${RELAY_MAX_MESSAGES_PER_MINUTE:-120}"
+      # Per-socket message-rate caps. Set the CLIENT limit explicitly: the legacy
+      # RELAY_MAX_MESSAGES_PER_MINUTE became the client limit via a fallback, and
+      # a low value (it used to default to 120 here) trips "Rate limit exceeded"
+      # in the app when a flapping node makes the relay replay peer.online bursts.
+      RELAY_MAX_CLIENT_MESSAGES_PER_MINUTE: "${RELAY_MAX_CLIENT_MESSAGES_PER_MINUTE:-600}"
       RELAY_MAX_CONNECTIONS_PER_IP: "${RELAY_MAX_CONNECTIONS_PER_IP:-50}"
       RELAY_IDLE_TIMEOUT_MS: "${RELAY_IDLE_TIMEOUT_MS:-120000}"
       # Optional Sentry error reporting (off when unset). See docs/ops/monitoring.md.

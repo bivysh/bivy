@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // Anthropic (Claude Code SDK) credential preflight + auth-error phrasing.
 //
@@ -16,6 +16,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+
+import { isModelAuthError } from "./auth-errors.js";
 
 export interface AnthropicPreflightDeps {
   /** Existence check (injectable for tests). Defaults to fs.existsSync. */
@@ -84,7 +86,60 @@ export function anthropicCredentialPreflight(env: Record<string, string | undefi
 
 /** True when a raw error string looks like an Anthropic auth failure (401 etc.). */
 export function isAnthropicAuthError(raw: string): boolean {
-  return /\b401\b|unauthorized|authentication|invalid x-api-key|(missing|invalid).*(bearer|api[\s_-]?key|token)/i.test(raw);
+  return isModelAuthError(raw);
+}
+
+/** Outcome of a live provider probe (B1). `probed: false` means access could not
+ *  be validated safely (no API key to test, or the network/endpoint was
+ *  unreachable) — the caller should fall back to presence and NOT treat this as
+ *  a rejection. `probed: true` carries an authoritative `ok`. */
+export interface ModelAccessProbe {
+  probed: boolean;
+  ok: boolean;
+  status?: number;
+  reason?: string;
+}
+
+/**
+ * Safely validate that an Anthropic API key actually grants access, rather than
+ * trusting mere presence (B1). Uses `GET /v1/models` — an authenticated, read-only,
+ * zero-token endpoint — so it never spends inference budget or mutates anything.
+ *
+ * Only API keys (`sk-…`) are probed: OAuth subscription tokens and the `claude`
+ * CLI's on-disk/Keychain login have no comparably safe check, so for those we
+ * return `{ probed: false, ok: true }` and let presence stand. Any non-auth
+ * failure (network down, 5xx, timeout) is also `probed: false` — we only report
+ * `ok: false` when the provider affirmatively rejects the credential (401/403).
+ */
+export async function probeAnthropicAccess(
+  apiKey: string | undefined,
+  deps: { fetch?: typeof fetch; timeoutMs?: number; baseUrl?: string } = {},
+): Promise<ModelAccessProbe> {
+  const key = apiKey?.trim();
+  // Subscription/OAuth tokens are not API keys; there is no safe read probe.
+  if (!key || !key.startsWith("sk-")) return { probed: false, ok: true, reason: "no API key to probe" };
+
+  const doFetch = deps.fetch ?? fetch;
+  const base = (deps.baseUrl ?? "https://api.anthropic.com").replace(/\/+$/, "");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), deps.timeoutMs ?? 4000);
+  try {
+    const res = await doFetch(`${base}/v1/models?limit=1`, {
+      method: "GET",
+      headers: { "x-api-key": key, "anthropic-version": "2023-06-01" },
+      signal: controller.signal,
+    });
+    if (res.ok) return { probed: true, ok: true, status: res.status };
+    if (res.status === 401 || res.status === 403) {
+      return { probed: true, ok: false, status: res.status, reason: `Anthropic rejected the credential (${res.status})` };
+    }
+    // 429/5xx/etc. — the key may be fine; don't falsely fail readiness.
+    return { probed: false, ok: true, status: res.status, reason: `inconclusive (${res.status})` };
+  } catch (error) {
+    return { probed: false, ok: true, reason: error instanceof Error ? error.message : "probe failed" };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -26,14 +26,22 @@ export interface ParsedRepo {
 
 /** Parse "owner/repo" (also tolerates a full github.com URL or trailing .git). */
 export function parseRepo(input: string): ParsedRepo | undefined {
-  const cleaned = String(input)
-    .trim()
-    .replace(/^https?:\/\/github\.com\//i, "")
-    .replace(/^git@github\.com:/i, "")
-    .replace(/\.git$/i, "")
-    .replace(/\/+$/, "");
-  const m = cleaned.match(/^([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)$/);
-  return m ? { owner: m[1], repo: m[2], slug: `${m[1]}/${m[2]}` } : undefined;
+  let cleaned = String(input).trim();
+  const lower = cleaned.toLowerCase();
+  if (lower.startsWith("https://github.com/")) cleaned = cleaned.slice("https://github.com/".length);
+  else if (lower.startsWith("http://github.com/")) cleaned = cleaned.slice("http://github.com/".length);
+  else if (lower.startsWith("git@github.com:")) cleaned = cleaned.slice("git@github.com:".length);
+  if (cleaned.toLowerCase().endsWith(".git")) cleaned = cleaned.slice(0, -4);
+  while (cleaned.endsWith("/")) cleaned = cleaned.slice(0, -1);
+  const parts = cleaned.split("/");
+  if (parts.length !== 2 || !parts.every(isGitHubSlugPart)) return undefined;
+  const [owner, repo] = parts;
+  return { owner, repo, slug: `${owner}/${repo}` };
+}
+
+/** GitHub owner/repository names accepted in API paths. */
+export function isGitHubSlugPart(value: string): boolean {
+  return value.length > 0 && value.length <= 100 && /^[A-Za-z0-9._-]+$/.test(value);
 }
 
 /** Parse a GitHub owner/repo slug from a git remote URL. */
@@ -46,14 +54,62 @@ export function parseGitHubRemote(input: string): ParsedRepo | undefined {
   return undefined;
 }
 
-/** Infer owner/repo from a workspace's origin remote, if it is a GitHub checkout. */
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * A git failure that DEFINITIVELY means "this workspace is not a GitHub-connected
+ * checkout" — a genuine `undefined` answer — as opposed to a transient failure we
+ * must not mistake for one. `git remote get-url origin` reports "not a git
+ * repository" (no repo) or "No such remote" (a repo with no origin); both are
+ * real, stable answers. Anything else (notably `index.lock`/`config.lock`
+ * contention when many sessions touch the same shared clone at once) is transient.
+ */
+function isDefinitiveNonGitHubError(error: unknown): boolean {
+  const e = error as { stderr?: string; message?: string } | undefined;
+  const text = `${e?.stderr ?? ""} ${e?.message ?? String(error)}`;
+  return /not a git repository|No such remote|does not appear to be a git repository/i.test(text);
+}
+
+/**
+ * Infer owner/repo from a workspace's origin remote, if it is a GitHub checkout.
+ *
+ * Retries transient git failures before giving up. Misclassifying a momentarily
+ * busy GitHub checkout as "not a repo" is what let a session skip worktree
+ * isolation and run directly in the shared clone root, where its `git
+ * checkout`/`git stash` collided with a concurrent session (the "sessions
+ * mixing" bug). So: a DEFINITIVE non-GitHub result (not a repo / no origin)
+ * resolves to `undefined` as before, but a transient error is retried and then
+ * THROWN — the caller must fail loudly rather than silently degrade to running
+ * the agent in the shared root.
+ */
 export async function inferGitHubRepoFromWorkspace(workspace: string): Promise<ParsedRepo | undefined> {
-  try {
-    const { stdout } = await exec("git", ["-C", workspace, "remote", "get-url", "origin"], { cwd: workspace });
-    return parseGitHubRemote(stdout);
-  } catch {
-    return undefined;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const { stdout } = await exec("git", ["-C", workspace, "remote", "get-url", "origin"], { cwd: workspace });
+      return parseGitHubRemote(stdout);
+    } catch (error) {
+      if (isDefinitiveNonGitHubError(error)) return undefined;
+      lastError = error;
+      if (attempt < 2) await delay(50 * (attempt + 1));
+    }
   }
+  throw new Error(
+    `Could not determine the GitHub repo for ${workspace} (the checkout may be busy): ` +
+      `${(lastError as Error)?.message ?? String(lastError)}`,
+  );
+}
+
+/**
+ * True when `dir` is a Bivy-managed shared clone root — a direct child of the
+ * repos root, i.e. `<reposRoot>/owner__repo` (see `cloneOrUpdateRepo`). Every
+ * session for a repo shares that one checkout, so an agent must NEVER run
+ * directly in it; it runs in a per-session worktree instead. Worktree paths live
+ * DEEPER (`<clone>/.bivy/worktrees/<slug>`) and are intentionally not matched, so
+ * this cleanly distinguishes "the shared root" from "an isolated worktree".
+ */
+export function isSharedCloneRoot(dir: string, reposRoot: string): boolean {
+  return path.resolve(path.dirname(path.resolve(dir))) === path.resolve(reposRoot);
 }
 
 /** A GitHub token from env or the local `gh` login, or undefined (public only). */
@@ -68,6 +124,25 @@ export async function resolveGitHubToken(env: NodeJS.ProcessEnv = process.env): 
     return stdout.trim() || undefined;
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * Whether the GitHub CLI (`gh`) is installed on this machine — used only to
+ * shade the "no GitHub token" message: when `gh` is present but `gh auth token`
+ * gave us nothing, the user is one `gh auth login` away, so the picker can say
+ * so. It never means `gh` is REQUIRED — `bivy github:connect` is the primary
+ * path and needs no CLI (see resolveGitHubToken). Mirrors the `command -v`
+ * probe in secrets.ts.
+ */
+export async function ghCliInstalled(): Promise<boolean> {
+  const which = process.platform === "win32" ? "where" : "command";
+  const args = process.platform === "win32" ? ["gh"] : ["-v", "gh"];
+  try {
+    await exec(which, args, process.platform === "win32" ? {} : ({ shell: true } as never));
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -130,6 +205,66 @@ export async function resolveBranchBaseRef(repoDir: string, branch: string): Pro
   } catch {
     throw new Error(`Branch "${branch}" was not found on the remote.`);
   }
+}
+
+/**
+ * Base ref for ADOPTING a source branch onto a fresh clone on another node (a
+ * cross-node fork). Prefers the pushed `origin/<branch>` so the source's
+ * committed work travels; falls back to the repo's default branch when the
+ * source branch was never pushed (best-effort — any uncommitted work still
+ * arrives via the fork's dirty patch). Fetches first so `origin/<branch>` is
+ * current. Contrast with `resolveBranchBaseRef`, which is user-facing and throws
+ * on a missing branch; a fork must degrade rather than fail.
+ */
+export async function resolveAdoptBaseRef(repoDir: string, branch: string): Promise<string> {
+  await fetchOrigin(repoDir);
+  try {
+    await exec("git", ["-C", repoDir, "rev-parse", "--verify", "--quiet", `origin/${branch}`], { cwd: repoDir });
+    return `origin/${branch}`;
+  } catch {
+    return resolveDefaultBaseRef(repoDir);
+  }
+}
+
+/**
+ * Resolve the best base for a same-node fork without assuming the source branch
+ * ref still exists. Prefer the live source checkout because it preserves its
+ * exact committed tip, including commits that were never pushed. Then try the
+ * local and remote branch refs before degrading to the repository default.
+ */
+export async function resolveForkBaseRef(
+  repoDir: string,
+  branch: string | undefined,
+  sourceWorktree?: string,
+): Promise<string> {
+  if (sourceWorktree) {
+    try {
+      const { stdout } = await exec("git", ["-C", sourceWorktree, "rev-parse", "--verify", "HEAD"], { cwd: sourceWorktree });
+      const head = stdout.trim();
+      if (head) return head;
+    } catch {
+      // The source checkout may have been pruned; continue through the refs.
+    }
+  }
+
+  if (branch) {
+    try {
+      await exec("git", ["-C", repoDir, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], { cwd: repoDir });
+      return branch;
+    } catch {
+      // The local branch may have been pruned or lost in a re-clone.
+    }
+
+    await fetchOrigin(repoDir);
+    try {
+      await exec("git", ["-C", repoDir, "rev-parse", "--verify", "--quiet", `refs/remotes/origin/${branch}`], { cwd: repoDir });
+      return `origin/${branch}`;
+    } catch {
+      // A never-pushed branch is expected to be absent remotely.
+    }
+  }
+
+  return resolveDefaultBaseRef(repoDir);
 }
 
 /**

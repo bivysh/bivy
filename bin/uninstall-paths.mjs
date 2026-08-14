@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // Pure(ish) filesystem helper for `bivy uninstall`, extracted so it can be
 // unit-tested without executing the CLI (bin/bivy.mjs runs main() on import).
@@ -45,4 +45,28 @@ export function removeExcept(root, keep) {
     }
   };
   walk(root);
+}
+
+function isInside(parent, candidate) {
+  const relative = path.relative(path.resolve(parent), path.resolve(candidate));
+  return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+/**
+ * Remove the state directory and, for packaged installs, the install directory.
+ * Tarball installs keep state below the install directory, while npm-global
+ * installs keep it separately (normally ~/.bivy), so both layouts must be
+ * handled without deleting paths requested by --keep-sessions.
+ */
+export function removeInstallAndState(installDir, stateDir, { keepInstall = false, keepState = [] } = {}) {
+  if (keepInstall) {
+    removeExcept(stateDir, keepState);
+    return;
+  }
+  if (isInside(installDir, stateDir)) {
+    removeExcept(installDir, keepState);
+    return;
+  }
+  removeExcept(stateDir, keepState);
+  fs.rmSync(installDir, { recursive: true, force: true });
 }

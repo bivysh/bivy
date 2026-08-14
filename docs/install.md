@@ -44,7 +44,7 @@ BIVY_VERSION=0.1.0 bash install.sh
 # Install into a user-owned prefix instead of npm's global one (no sudo).
 BIVY_NPM_PREFIX=~/.local bash install.sh
 
-# Preinstall every bundled agent runtime rather than just your default.
+# Preinstall every known upstream agent rather than just your default.
 BIVY_INSTALL_ALL_AGENTS=1 bash install.sh
 
 # Don't touch ~/.bashrc or ~/.zshrc; just print the PATH line to add yourself.
@@ -82,10 +82,10 @@ Override the location with `BIVY_DATA_DIR`.
 
 ## The setup wizard
 
-`bivy setup` (run by the installer, or `npm run setup` in an existing checkout)
+`bivy setup` (run by the installer, or `pnpm run setup` in an existing checkout)
 picks sensible defaults for everything and asks two questions:
 
-- **Remote access** — hosted (recommended; one node is free) or self-hosted,
+- **Remote access** — hosted (recommended; the hosted app shows your first 25 distinct sessions free, then requires Pro; execution and local history on your machine remain intact) or self-hosted,
   pointing this node at your own control plane + relay,
 - **Remote login** — GitHub sign-in (default) or an email magic link.
 
@@ -108,8 +108,9 @@ You can start from the hosted app first:
 1. Open the Bivy PWA and sign in with GitHub or email.
 2. If no runner is connected, the app shows how to connect one:
    - **Connect your own computer** — run `curl -fsSL https://bivy.sh/install.sh | bash` on macOS/Linux. Setup signs the node into the same account and enrolls it on the hosted relay.
-3. A free account includes one hosted-relay node; add another plan or self-host
-   when you need more.
+3. Free-trial and Pro accounts may enroll unlimited nodes and devices. The free
+   trial shows the first 25 distinct sessions through the hosted app; self-hosted
+   stacks are unlimited.
 
 ## Secure remote web/PWA access (hosted relay)
 
@@ -130,19 +131,17 @@ The hosted endpoints are baked in. To point at your own deployment, set
 subdomains), or override individually with `BIVY_CONTROL_PLANE_URL` /
 `BIVY_RELAY_URL`.
 
-To pair a remote browser/PWA, run `bivy link` and scan the QR or open the
-link — or use the **Link remote device** button in the app (`bivy open`).
-To revoke a linked device, remove it under Settings → **Signed-in devices**
-(the room key rotates for the remaining devices); remove them all to revoke
-everyone.
+Open the remote app with `bivy open`, then sign in with the same GitHub account
+or email used during setup. Advanced users can explicitly pair a device with
+`bivy link`; paired devices can be revoked under Settings → **Signed-in devices**.
 
 ## Mac development install
 
 ```bash
 git clone <repo>
 cd bivy
-npm install
-npm run setup     # or: npm start
+pnpm install
+pnpm run setup     # or: pnpm start
 ```
 
 The node has no local UI — `http://localhost:4317` is the data plane (API +

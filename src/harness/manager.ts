@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // Universal Agent Harness — per-session checkpoint lifecycle.
 //
@@ -54,6 +54,14 @@ export class HarnessManager {
 
   isTracking(sessionId: string): boolean {
     return this.stores.has(sessionId);
+  }
+
+  /** Whether the tracked worktree differs from its checked-out HEAD. Undefined
+   * for a non-git/untracked session. Used only for the session-state workspace
+   * axis; checkpoint/diff behavior never depends on this display probe. */
+  async isDirty(sessionId: string): Promise<boolean | undefined> {
+    const store = this.stores.get(sessionId);
+    return store ? await store.isDirty() : undefined;
   }
 
   /**

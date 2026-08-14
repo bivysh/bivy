@@ -1,7 +1,7 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { Type } from "typebox";
-import type { IntegrationDef, IntegrationToolResult } from "./types.js";
+import type { IntegrationDef, IntegrationToolResult, StandaloneToolDef } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Built-in integrations.
@@ -20,6 +20,40 @@ function toRfc822({ to, subject, body }: { to: string; subject: string; body: st
   const lines = [`To: ${to}`, `Subject: ${subject}`, "Content-Type: text/plain; charset=UTF-8", "", body];
   return Buffer.from(lines.join("\r\n")).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
+
+// ---------------------------------------------------------------------------
+// attach_to_chat (issue #291): the native, tool-based sibling of the CLI
+// `bivy attach <path>` / POST /api/session/:id/attach path #288 added. Unlike
+// the integrations below it needs no auth and isn't gated on a "connected"
+// account — every agent should always have it — so it's declared here as data
+// (name/description/schema, matching every other tool) but wired up by
+// IntegrationManager.toolProvider instead of BUILT_IN_INTEGRATIONS: its
+// executor needs the calling session's id (to push the attachment into the
+// right chat), which the `http`-only IntegrationToolDef.execute shape below
+// has no room for.
+// ---------------------------------------------------------------------------
+
+export const ATTACH_TO_CHAT_TOOL: StandaloneToolDef = {
+  name: "attach_to_chat",
+  label: "Attach to chat",
+  description:
+    "Push a file or image from the session workspace into the chat as an attachment, exactly like the CLI `bivy attach` " +
+    "or the composer's paperclip upload but as a direct tool call. Use this — not markdown image syntax, not describing " +
+    "where a file lives — whenever the user should see a report, screenshot, chart, or a file they asked for; they " +
+    "cannot see files you only write to disk. The path must be inside the session workspace.",
+  parameters: Type.Object({
+    filePath: Type.String({ description: "Path to the file, absolute or relative to the session workspace." }),
+    caption: Type.Optional(Type.String({ description: "Short caption shown next to the attachment in the chat." })),
+    artifact: Type.Optional(
+      Type.Boolean({
+        description:
+          "Mark this as a named artifact — a durable output worth surfacing in the session's Artifacts list " +
+          "(a report, benchmark result, coverage output, or build archive) — rather than an incidental inline " +
+          "image. Leave unset for an ordinary screenshot or chart.",
+      }),
+    ),
+  }),
+};
 
 export const BUILT_IN_INTEGRATIONS: IntegrationDef[] = [
   {

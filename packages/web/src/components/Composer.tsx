@@ -1,18 +1,28 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { AppState, PromptAttachment, SlashCommand } from "@bivy/core";
 import { isSlashInput, parseSlash, matchSlashCommands, resolveSlash } from "@bivy/core";
+import { useModalEscape } from "../modalStack.js";
 import { RepoPicker, AgentPicker, ModelPicker, SandboxPicker } from "./Pickers.js";
+import { firstSessionSummary } from "../firstSession.js";
 import { FollowupQueue } from "./FollowupQueue.js";
+import { ScheduleSheet } from "./ScheduleSheet.js";
+import { RunTaskSheet } from "./RunTaskSheet.js";
+import { openRun } from "../runRoute.js";
 import { SANDBOX_TIERS } from "./Settings.js";
 import { VoiceRecorder } from "./VoiceRecorder.js";
 import { WebSpeechRecorder, webSpeechSupported } from "./WebSpeechRecorder.js";
 import { controller } from "../store/useStore.js";
+import { clearComposerDraft, composerDraftKey, readComposerDraft, writeComposerDraft, type PendingAttachmentMetadata } from "../composerDraft.js";
+import { setComposerLifecycle } from "../pwaLifecycle.js";
 
 type Picker = "repo" | "agent" | "model" | "sandbox" | null;
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const MAX_ATTACHMENTS = 12;
+const MAX_ATTACHMENTS_BYTES = 40 * 1024 * 1024;
 const TEXT_ATTACHMENT_BYTES = 512 * 1024;
 const TEXT_EXT = /\.(md|txt|json|ya?ml|csv|ts|tsx|js|jsx|css|html|xml|py|rb|go|rs|java|c|cpp|h|hpp|sh|sql)$/i;
 
@@ -106,6 +116,22 @@ export function AttachGlyph() {
   );
 }
 
+function AgentGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <circle cx="12" cy="8" r="3" /><path d="M5.5 20a6.5 6.5 0 0 1 13 0" />
+    </svg>
+  );
+}
+
+function ModelGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="m12 3 1.4 4.1L17.5 8.5l-4.1 1.4L12 14l-1.4-4.1-4.1-1.4 4.1-1.4L12 3Z" /><path d="m18.5 14 .8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2Z" />
+    </svg>
+  );
+}
+
 export function Composer({
   state,
   disabled,
@@ -123,9 +149,12 @@ export function Composer({
   onAbort: () => void;
   onError?: (message: string) => void;
 }) {
-  const [text, setText] = useState("");
+  const initialDraft = useRef<ReturnType<typeof readComposerDraft> | null>(null);
+  if (!initialDraft.current) initialDraft.current = readComposerDraft(localStorage, state.activeSessionId);
+  const [text, setText] = useState(() => initialDraft.current?.text ?? "");
   const [picker, setPicker] = useState<Picker>(null);
   const [attachments, setAttachments] = useState<PromptAttachment[]>([]);
+  const [recoveredAttachments, setRecoveredAttachments] = useState<PendingAttachmentMetadata[]>(() => initialDraft.current?.attachments ?? []);
   const [menuIndex, setMenuIndex] = useState(0);
   const [menuDismissed, setMenuDismissed] = useState(false);
   const [recording, setRecording] = useState<null | "server" | "webspeech">(null);
@@ -138,6 +167,12 @@ export function Composer({
   const [readingCount, setReadingCount] = useState(0);
   const [viewing, setViewing] = useState<string | null>(null);
   const dragDepth = useRef(0);
+  // Alternative delivery modes live behind one compound Send control so Run
+  // and Schedule stay discoverable without adding permanent composer buttons.
+  const [sendOptionsOpen, setSendOptionsOpen] = useState(false);
+  const [scheduling, setScheduling] = useState(false);
+  const [startingRun, setStartingRun] = useState(false);
+  const sendOptionsRef = useRef<HTMLDivElement>(null);
 
   // Some runtimes (e.g. Codex / Codex approvals) own model selection themselves
   // and expose no in-app model list — advertised via
@@ -174,42 +209,49 @@ export function Composer({
   const fileRef = useRef<HTMLInputElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const isDraft = !state.activeSessionId;
-  const draftKeyFor = (sessionId: string | null | undefined) => `bivy.composer.${sessionId || "new"}`;
-  const activeDraftKey = useRef(draftKeyFor(state.activeSessionId));
+  const activeDraftKey = useRef(composerDraftKey(state.activeSessionId));
+  const activeDraftSession = useRef(state.activeSessionId);
   const textRef = useRef(text);
+  const attachmentsRef = useRef(attachments);
+  const recoveredRef = useRef(recoveredAttachments);
   useEffect(() => { textRef.current = text; }, [text]);
+  useEffect(() => { attachmentsRef.current = attachments; }, [attachments]);
+  useEffect(() => { recoveredRef.current = recoveredAttachments; }, [recoveredAttachments]);
 
-  // Persist the composer text per active session/draft. Reconnects, reloads,
-  // accidental navigation, and session switches should never eat the user's
-  // half-written prompt. Attachments are intentionally not persisted because
-  // they can be large/sensitive blobs; text drafts are local-only in this
-  // browser profile.
+  // Persist text plus byte-less attachment metadata per Session. File bytes and
+  // extracted text deliberately stay in memory; after reload the user sees what
+  // was pending and must re-select the files before sending.
   useEffect(() => {
-    const nextKey = draftKeyFor(state.activeSessionId);
+    const nextKey = composerDraftKey(state.activeSessionId);
     if (activeDraftKey.current === nextKey) return;
-    try {
-      const currentText = textRef.current;
-      if (currentText.trim()) localStorage.setItem(activeDraftKey.current, currentText);
-      else localStorage.removeItem(activeDraftKey.current);
-      const saved = localStorage.getItem(nextKey) || "";
-      setText(saved);
-      setMenuDismissed(false);
-      setMenuIndex(0);
-      requestAnimationFrame(autosize);
-    } catch {
-      // Storage may be unavailable/private; draft persistence is best-effort.
-    }
+    writeComposerDraft(localStorage, activeDraftSession.current, textRef.current, [
+      ...attachmentsRef.current,
+      ...recoveredRef.current as PromptAttachment[],
+    ]);
+    const saved = readComposerDraft(localStorage, state.activeSessionId);
+    setText(saved.text);
+    setAttachments([]);
+    setRecoveredAttachments(saved.attachments);
+    setMenuDismissed(false);
+    setMenuIndex(0);
+    requestAnimationFrame(autosize);
     activeDraftKey.current = nextKey;
+    activeDraftSession.current = state.activeSessionId;
   }, [state.activeSessionId]);
 
   useEffect(() => {
-    try {
-      if (text) localStorage.setItem(activeDraftKey.current, text);
-      else localStorage.removeItem(activeDraftKey.current);
-    } catch {
-      // best-effort only
-    }
-  }, [text]);
+    writeComposerDraft(localStorage, activeDraftSession.current, text, [
+      ...attachments,
+      ...recoveredAttachments as PromptAttachment[],
+    ]);
+    setComposerLifecycle({
+      hasDraft: Boolean(text.trim()),
+      pendingAttachments: attachments.length + recoveredAttachments.length,
+      readingAttachments: readingCount > 0,
+    });
+  }, [text, attachments, recoveredAttachments, readingCount]);
+
+  useEffect(() => () => setComposerLifecycle({ hasDraft: false, pendingAttachments: 0, readingAttachments: false }), []);
 
   // Keep the textarea height in sync with its content on EVERY text change, not
   // just keystrokes. Programmatic updates — restoring a saved draft, or the long
@@ -263,6 +305,25 @@ export function Composer({
     });
   }, []);
 
+  // Contextual actions draft text instead of silently spending an agent turn.
+  // Append rather than replace so an in-progress thought is never discarded.
+  useEffect(() => {
+    return controller.onComposerPrefill((draft) => {
+      const clean = draft.trim();
+      if (!clean) return;
+      setText((previous) => previous.trim() ? `${previous.trimEnd()}\n\n${clean}` : clean);
+      setMenuDismissed(false);
+      wantsFocusRef.current = true;
+      requestAnimationFrame(() => {
+        autosize();
+        const input = taRef.current;
+        if (!canGrabFocus(input)) return;
+        input?.focus();
+        input?.setSelectionRange(input.value.length, input.value.length);
+      });
+    });
+  }, []);
+
   // The "/" pill (top-right, above the composer) asks us to open the slash-command
   // menu. Seed a lone "/" so matchSlashCommands lists every advertised command,
   // clear any prior dismissal, and focus the input — the menu renders reactively,
@@ -281,13 +342,9 @@ export function Composer({
     });
   }, []);
 
-  // Escape closes the image viewer.
-  useEffect(() => {
-    if (!viewing) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setViewing(null); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [viewing]);
+  // Escape closes the image viewer — coordinated through the shared modal stack
+  // so only the topmost open layer responds (matches the pickers/sheets).
+  useModalEscape(() => setViewing(null), Boolean(viewing));
 
   // Pull the voice-input config once so we can point the user at Settings when
   // they try to dictate with no provider key stored, instead of prompting for
@@ -324,6 +381,16 @@ export function Composer({
   // The slash-command autocomplete list, shown while the user is still typing
   // the command word (no space yet) and hasn't dismissed it with Escape.
   const slashMenu = !disabled && !menuDismissed ? matchSlashCommands(text, agentCommands) : [];
+  // Whether the user is in the command word (typed "/" with no space yet), so we
+  // can show an empty-state instead of silence when nothing matches — otherwise
+  // an agent that advertises no commands (e.g. Codex) looks like it has no slash
+  // support at all, and a typo just vanishes with no feedback.
+  const inSlashWord = (() => {
+    if (disabled || menuDismissed) return false;
+    const p = text.trimStart();
+    return p.startsWith("/") && !/\s/.test(p);
+  })();
+  const slashEmpty = inSlashWord && slashMenu.length === 0;
 
   function autosize() {
     const ta = taRef.current;
@@ -337,11 +404,23 @@ export function Composer({
     setReadingCount((n) => n + 1);
     try {
       const next: PromptAttachment[] = [];
+      let acceptedBytes = attachments.reduce((sum, attachment) => sum + Number(attachment.size || 0), 0);
+      let acceptedCount = attachments.length;
       for (const file of Array.from(files)) {
+        if (acceptedCount >= MAX_ATTACHMENTS) {
+          onError?.(`A message can include at most ${MAX_ATTACHMENTS} attachments.`);
+          break;
+        }
         if (file.size > MAX_ATTACHMENT_BYTES) {
           onError?.(`${file.name} is larger than ${fmtBytes(MAX_ATTACHMENT_BYTES)} and was not attached.`);
           continue;
         }
+        if (acceptedBytes + file.size > MAX_ATTACHMENTS_BYTES) {
+          onError?.(`Attachments are limited to ${fmtBytes(MAX_ATTACHMENTS_BYTES)} per message.`);
+          continue;
+        }
+        acceptedBytes += file.size;
+        acceptedCount += 1;
         try {
           if (file.type.startsWith("image/")) {
             const url = await readDataUrl(file);
@@ -369,10 +448,15 @@ export function Composer({
             truncated: body.length > TEXT_ATTACHMENT_BYTES,
           });
         } catch {
+          acceptedBytes -= file.size;
+          acceptedCount -= 1;
           onError?.(`Could not read ${file.name}.`);
         }
       }
-      if (next.length) setAttachments((prev) => [...prev, ...next]);
+      if (next.length) {
+        setAttachments((prev) => [...prev, ...next]);
+        setRecoveredAttachments((previous) => previous.filter((metadata) => !next.some((attachment) => attachment.name === metadata.name)));
+      }
       if (fileRef.current) fileRef.current.value = "";
     } finally {
       setReadingCount((n) => Math.max(0, n - 1));
@@ -384,9 +468,10 @@ export function Composer({
   }
 
   function clearComposer() {
-    try { localStorage.removeItem(activeDraftKey.current); } catch {}
+    clearComposerDraft(localStorage, activeDraftSession.current);
     setText("");
     setAttachments([]);
+    setRecoveredAttachments([]);
     setMenuDismissed(false);
     setMenuIndex(0);
     requestAnimationFrame(autosize);
@@ -466,11 +551,63 @@ export function Composer({
     : nodeDefaultTier
       ? nodeDefaultTier.label
       : state.nodeSettings?.defaultSandbox ?? "";
-  const sandboxTitle = draftTier ? draftTier.hint : "Sandbox mode for this session (node default)";
+  const sandboxTitle = draftTier ? draftTier.hint : "Sandbox mode for this session (machine default)";
   const canSend = !disabled && (Boolean(text.trim()) || attachments.length > 0);
+  // Scheduled messages land on the account's control plane and are delivered by
+  // the always-on node, so the affordance only exists when signed in.
+  const accountMode = Boolean(controller.local.s && controller.local.cp);
+
+  useEffect(() => {
+    if (!sendOptionsOpen) return;
+    const close = (event: MouseEvent) => {
+      if (!sendOptionsRef.current?.contains(event.target as Node)) setSendOptionsOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSendOptionsOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [sendOptionsOpen]);
+
+  // B2 — a first session exposes exactly four decisions: machine, repo,
+  // agent/model, protection. On a draft we render a single explicit summary of
+  // them (the machine otherwise lives only in the topbar switcher), so a new user
+  // sees the whole decision set at a glance rather than inferring it from pills.
+  const machineLabel = state.nodes.find((n) => n.id === state.currentNodeId)?.name
+    || (controller.direct ? "This machine" : "Default machine");
+  const firstSessionLine = firstSessionSummary({
+    machine: machineLabel,
+    repo: state.draftRepo || "No repo",
+    agent: state.currentAgentName || "Agent",
+    model: modelLabel,
+    modelManagedByAgent: !modelSelectable,
+    protection: sandboxLabel || state.draftSandbox || undefined,
+  });
+  const firstIsolatedRun = isDraft && Boolean(state.draftEphemeralConfig);
+  const starterTask = "Inspect this repository and explain how to run its tests. Do not change files.";
 
   return (
     <>
+      {isDraft && (
+        <div className="composer-first-session" title="A first session decides just four things: machine, repository, agent/model, and protection.">
+          Starting on <span className="fs-decisions">{firstSessionLine}</span>
+        </div>
+      )}
+      {firstIsolatedRun && !text.trim() && attachments.length === 0 && (
+        <div className="composer-starter" role="note">
+          <div>
+            <strong>Start with a safe read-only task</strong>
+            <span>Verify the Machine, repository, agent, and model before asking it to edit code.</span>
+          </div>
+          <button type="button" className="btn small" onClick={() => setText(starterTask)}>
+            Use starter task
+          </button>
+        </div>
+      )}
       {isDraft && (
         <div className="composer-lead">
           <button type="button" className="pill repo-pill" onClick={() => setPicker("repo")} title={repoTitle}>
@@ -552,6 +689,19 @@ export function Composer({
               })}
             </div>
           )}
+          {slashEmpty && (
+            <div className="slash-menu slash-empty" role="status">
+              {agentCommands.length === 0
+                ? "This agent has no slash commands."
+                : "No matching command — press Esc to send as a message."}
+            </div>
+          )}
+          {recoveredAttachments.length > 0 && (
+            <div className="attachment-recovery" role="status">
+              <span>Reload preserved metadata for {recoveredAttachments.map((attachment) => attachment.name).join(", ")}, not file contents. Re-select before sending.</span>
+              <button type="button" className="btn ghost" onClick={() => setRecoveredAttachments([])}>Clear</button>
+            </div>
+          )}
           {(attachments.length > 0 || readingCount > 0) && (
             <div className="attach-chips">
               {readingCount > 0 && (
@@ -598,7 +748,7 @@ export function Composer({
           <textarea
             ref={taRef}
             className="composer-input"
-            placeholder={disabled ? disabledHint || "Connecting…" : "Message your agent…"}
+            placeholder={disabled ? disabledHint || "Connecting…" : firstIsolatedRun ? "Describe your first task…" : "Message your agent…"}
             rows={1}
             hidden={Boolean(recording)}
             value={text}
@@ -662,7 +812,7 @@ export function Composer({
                 <span className="pill-glyph"><AttachGlyph /></span>
               </button>
               <button type="button" className="pill agent-pill" onClick={() => setPicker("agent")} title="Agent">
-                <span className="pill-glyph">◎</span>
+                <span className="pill-glyph"><AgentGlyph /></span>
                 <span className="pill-label">{state.currentAgentName || "Agent"}</span>
               </button>
               <button
@@ -672,7 +822,7 @@ export function Composer({
                 disabled={!modelSelectable}
                 title={modelSelectable ? "Model" : "This agent uses its own default model"}
               >
-                <span className="pill-glyph">✦</span>
+                <span className="pill-glyph"><ModelGlyph /></span>
                 <span className="pill-label">{modelLabel}</span>
               </button>
             </div>
@@ -723,8 +873,62 @@ export function Composer({
               <button type="button" className="composer-btn stop" onClick={onAbort} title="Stop">
                 ■
               </button>
+            ) : accountMode ? (
+              <div className="split-send" ref={sendOptionsRef}>
+                <button
+                  type="submit"
+                  className="composer-btn send split-send-main"
+                  disabled={!canSend}
+                  title={working ? "Queue follow-up" : firstIsolatedRun ? "Launch Machine and send task" : "Send message"}
+                  aria-label={firstIsolatedRun ? "Launch Machine and send task" : working ? "Queue follow-up" : "Send message"}
+                >
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  className="split-send-toggle"
+                  disabled={!canSend}
+                  aria-label="More send options"
+                  aria-haspopup="menu"
+                  aria-expanded={sendOptionsOpen}
+                  onClick={() => setSendOptionsOpen((open) => !open)}
+                >
+                  ▾
+                </button>
+                {sendOptionsOpen && (
+                  <div className="send-options-menu" role="menu">
+                    <button
+                      type="button"
+                      className="send-option"
+                      role="menuitem"
+                      disabled={attachments.length > 0 || !text.trim()}
+                      onClick={() => { setSendOptionsOpen(false); setStartingRun(true); }}
+                    >
+                      <strong>Start a Run</strong>
+                      <span>{attachments.length ? "Runs currently support text instructions only." : "Checks, evidence, attempts, and recovery."}</span>
+                    </button>
+                    <div className="send-options-divider" />
+                    <button
+                      type="button"
+                      className="send-option"
+                      role="menuitem"
+                      disabled={attachments.length > 0 || !text.trim()}
+                      onClick={() => { setSendOptionsOpen(false); setScheduling(true); }}
+                    >
+                      <strong>Schedule for later</strong>
+                      <span>{attachments.length ? "Scheduled messages currently support text only." : "Send at a chosen time, even if the app is closed."}</span>
+                    </button>
+                  </div>
+                )}
+              </div>
             ) : (
-              <button type="submit" className="composer-btn send" disabled={!canSend} title={working ? "Queue follow-up" : "Send"}>
+              <button
+                type="submit"
+                className="composer-btn send"
+                disabled={!canSend}
+                title={working ? "Queue follow-up" : firstIsolatedRun ? "Launch Machine and send task" : "Send"}
+                aria-label={firstIsolatedRun ? "Launch Machine and send task" : working ? "Queue follow-up" : "Send"}
+              >
                 ↑
               </button>
             )}
@@ -735,13 +939,41 @@ export function Composer({
       {picker === "sandbox" && <SandboxPicker state={state} onClose={() => setPicker(null)} />}
       {picker === "agent" && <AgentPicker state={state} onClose={() => setPicker(null)} />}
       {picker === "model" && modelSelectable && <ModelPicker state={state} onClose={() => setPicker(null)} />}
-      {viewing && (
+      {startingRun && accountMode && (
+        <RunTaskSheet
+          state={state}
+          text={text}
+          onClose={() => setStartingRun(false)}
+          onStarted={(runId) => {
+            setStartingRun(false);
+            clearComposer();
+            openRun(runId);
+          }}
+        />
+      )}
+      {scheduling && accountMode && (
+        <ScheduleSheet
+          state={state}
+          text={text}
+          onClose={() => setScheduling(false)}
+          onScheduled={clearComposer}
+        />
+      )}
+      {/* Portal to <body>. Like the pickers' Sheet, the viewer is
+          `position: fixed` but rendered from deep inside the `.chat` scroll
+          container. On iOS a fixed element does NOT escape a scrolling ancestor
+          — it anchors to the scrolled content, and its stale compositor layer
+          keeps swallowing taps on the composer after it closes, so the
+          attachment thumbnails become unclickable ("can't reopen"). At <body>
+          it is truly viewport-fixed and tears down cleanly. */}
+      {viewing && createPortal(
         <div className="image-viewer" role="dialog" aria-modal="true" onClick={() => setViewing(null)}>
           <img className="image-viewer-img" src={viewing} alt="Attachment preview" onClick={(e) => e.stopPropagation()} />
           <button type="button" className="image-viewer-close" onClick={() => setViewing(null)} aria-label="Close preview">
             ×
           </button>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   );

@@ -1,8 +1,10 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import type { RuntimeCapabilities } from "../runtime/types.js";
 import type { SandboxTier } from "../harness/sandbox.js";
 import type { WorkspaceContext } from "./workspace-context.js";
+import type { SessionState } from "./session-state.js";
+import type { SessionContract } from "./session-contract.js";
 
 export type BivySessionSource = "manual" | "github_issue" | "api" | `repo:${string}` | string;
 
@@ -27,6 +29,9 @@ export interface BivySessionRecord {
   titleLocal?: string;
   source: BivySessionSource;
   status: BivySessionStatus;
+  /** Explicit transport/process/agent/workspace state. `status` remains as the
+   * backwards-compatible display projection. */
+  state: SessionState;
   createdAt: string;
   updatedAt: string;
   lastActivityAt: string;
@@ -39,6 +44,21 @@ export interface BivySessionRecord {
    * Baked in at creation and read-only for the life of the session.
    */
   sandbox?: SandboxTier;
+  approvalMode?: "never" | "risky" | "always" | "autonomous";
+  ephemeral?: boolean;
+  executionProfile?: "trusted_workstation" | "isolated_customer_cloud" | "restricted";
+  auditHealth?: {
+    storage: "healthy" | "missing" | "corrupt" | "unreadable";
+    writes: "healthy" | "unknown" | "degraded";
+    failedWrites: number;
+    corruptLines: number;
+  };
+  eventLogHealth?: { state: "healthy" | "degraded"; operation?: "read" | "parse" | "append" | "rewrite"; at?: number };
+  /** The Effective Session Contract resolved once at session creation (see
+   *  session-contract.ts) — what this session actually got, distinct from
+   *  the catalog-level `capabilities` promise above. Absent for a session
+   *  that predates this field until it's next opened. */
+  contract?: SessionContract;
 
   /** GitHub context for issue-driven or repo sessions (for pills + links) */
   repoSlug?: string;

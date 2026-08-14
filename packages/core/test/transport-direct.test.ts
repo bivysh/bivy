@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { describe, expect, it } from "vitest";
 import { DirectTransport } from "../src/transport-direct.js";
@@ -88,5 +88,78 @@ describe("DirectTransport", () => {
     expect(ws.sent.map((s) => JSON.parse(s))).toEqual([{ kind: "ping", requestId: "r1" }]);
     expect(events).toEqual([]);
     expect(statuses).toContain("online");
+  });
+
+  it("forwards the models.list runtime hint as a query param", async () => {
+    FakeWS.instances.length = 0;
+    const fetchCalls: string[] = [];
+    const transport = new DirectTransport({
+      origin: "http://node.local",
+      tokenStore: mem({ bivy_local_token: "token" }),
+      fetchImpl: okFetch(fetchCalls),
+      webSocketImpl: FakeWS as unknown as typeof WebSocket,
+      handlers: { onEvent: () => {}, onStatus: () => {} },
+    });
+    await transport.connect();
+    FakeWS.instances[0].open();
+    await tick();
+    fetchCalls.length = 0;
+
+    await transport.send({ kind: "models.list", runtimeId: "codex" });
+    expect(fetchCalls.some((u) => u.includes("/api/models?") && u.includes("runtimeId=codex"))).toBe(true);
+  });
+
+  it("returns Machine-scoped discovery and verification acknowledgements", async () => {
+    FakeWS.instances.length = 0;
+    const events: ServerEvent[] = [];
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      calls.push({ url: String(url), init });
+      const payload = String(url).endsWith("/api/models/discover")
+        ? { machineId: "node-a", machineName: "Studio", endpoints: [], readiness: { ready: false, readyEndpointCount: 0, modelCount: 0, state: "unavailable" } }
+        : { result: { baseUrl: "http://localhost:8000/v1", api: "openai-completions", status: "ready", models: [{ id: "coder", name: "coder" }], machineId: "node-a", machineName: "Studio" } };
+      return { ok: true, json: async () => payload } as Response;
+    }) as typeof fetch;
+    const transport = new DirectTransport({
+      origin: "http://node.local",
+      tokenStore: mem({ bivy_local_token: "token" }),
+      fetchImpl,
+      webSocketImpl: FakeWS as unknown as typeof WebSocket,
+      handlers: { onEvent: (event) => events.push(event), onStatus: () => {} },
+    });
+    await transport.connect();
+    FakeWS.instances[0].open();
+    await tick();
+    events.length = 0;
+    calls.length = 0;
+
+    await transport.send({ kind: "models.custom.discover", requestId: "discover-1" });
+    await transport.send({ kind: "models.custom.verify", requestId: "verify-1", baseUrl: "http://localhost:8000/v1", apiKey: "secret" });
+
+    expect(calls.map((call) => call.url)).toEqual(["http://node.local/api/models/discover", "http://node.local/api/models/verify"]);
+    expect(JSON.parse(String(calls[1].init?.body))).toMatchObject({ baseUrl: "http://localhost:8000/v1", apiKey: "secret" });
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "models.custom.discover.ok", requestId: "discover-1", machineId: "node-a" }),
+      expect.objectContaining({ type: "models.custom.verify.ok", requestId: "verify-1", result: expect.objectContaining({ status: "ready" }) }),
+    ]));
+  });
+
+  it("routes models.prefetch to the prefetch endpoint (no session/runtime query)", async () => {
+    FakeWS.instances.length = 0;
+    const fetchCalls: string[] = [];
+    const transport = new DirectTransport({
+      origin: "http://node.local",
+      tokenStore: mem({ bivy_local_token: "token" }),
+      fetchImpl: okFetch(fetchCalls),
+      webSocketImpl: FakeWS as unknown as typeof WebSocket,
+      handlers: { onEvent: () => {}, onStatus: () => {} },
+    });
+    await transport.connect();
+    FakeWS.instances[0].open();
+    await tick();
+    fetchCalls.length = 0;
+
+    await transport.send({ kind: "models.prefetch", runtimeIds: ["claude", "codex"] });
+    expect(fetchCalls.some((u) => u.endsWith("/api/models/prefetch"))).toBe(true);
   });
 });

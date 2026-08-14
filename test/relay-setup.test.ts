@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { strict as assert } from "node:assert";
 import { spawn } from "node:child_process";
@@ -121,6 +121,51 @@ test("relay:setup honours BIVY_DATA_DIR instead of writing under the repo", asyn
       ? fs.readFileSync(path.join(repoAppDir, "relay.json"), "utf8")
       : null;
     assert.equal(repoRelayJsonAfter, repoRelayJsonBefore, "repo .bivy/relay.json must not be written when BIVY_DATA_DIR is set");
+  } finally {
+    await controlPlane.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+/**
+ * When the user picks self-hosted, setup passes only --control-plane (and
+ * --relay) — the control-plane URL arrives via a flag, not the environment, and
+ * no --client / BIVY_CLIENT_BASE_URL is supplied. The written clientBaseUrl (the
+ * URL `bivy setup` opens at the end) must follow the chosen control plane, NOT
+ * fall back to the baked-in hosted app. Regression for self-hosted installs that
+ * finished by opening the hosted control plane instead of the configured one.
+ */
+test("relay:setup defaults clientBaseUrl to the self-hosted control plane, not the hosted app", async () => {
+  const controlPlane = await startFakeControlPlane();
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-relay-setup-selfhost-"));
+
+  try {
+    // Strip any hosted overrides so the run mirrors a clean self-hosted pick:
+    // the only signal for the control plane is the --control-plane flag.
+    const env = { ...process.env, BIVY_DATA_DIR: dataDir };
+    delete env.BIVY_CLIENT_BASE_URL;
+    delete env.BIVY_CONTROL_PLANE_URL;
+    delete env.BIVY_HOSTED_DOMAIN;
+
+    const { code, stdout, stderr } = await runRelaySetup(env, [
+      "--session-token",
+      "test-session-token",
+      "--control-plane",
+      controlPlane.url,
+      "--relay",
+      "wss://relay.example.test",
+      // deliberately no --client
+    ]);
+
+    assert.equal(code, 0, `relay-setup exited non-zero:\nstdout: ${stdout}\nstderr: ${stderr}`);
+
+    const relayConfig = JSON.parse(fs.readFileSync(path.join(dataDir, "relay.json"), "utf8"));
+    assert.equal(relayConfig.controlPlaneUrl, controlPlane.url);
+    assert.equal(
+      relayConfig.clientBaseUrl,
+      controlPlane.url,
+      "clientBaseUrl must default to the chosen (self-hosted) control plane, not the hosted app",
+    );
   } finally {
     await controlPlane.close();
     fs.rmSync(dataDir, { recursive: true, force: true });

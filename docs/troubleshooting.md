@@ -69,7 +69,7 @@ export PATH="$HOME/.local/bin:$PATH"   # add to ~/.zshrc or ~/.bashrc
 ```
 
 Or call it directly: `~/.bivy/app/bin/bivy.mjs status`. From a git checkout:
-`npm run bivy -- status`.
+`pnpm run bivy -- status`.
 
 ## Node.js too old
 
@@ -191,22 +191,26 @@ bivy doctor
 **Fix.**
 
 ```bash
-bivy agents:install         # install the bundled agents
-bivy run pi                 # the built-in agent always works
+bivy agents:install         # install known upstream agents
+bivy run pi                 # runs the operator-installed Pi CLI
 ```
 
 Bivy installs agent CLIs globally under `~/.local` (`npm install --global
 --prefix ~/.local`), so `~/.local/bin` must be on your `PATH` for them to
 resolve. Aider needs `python3` and installs with `pip --user`.
 
-For the built-in agents, Bivy resolves the command from your `PATH` (and from
+For known integrations, Bivy resolves the upstream command from your `PATH` (and from
 npm's global bin), so the fix for "installed but not found" is to get the binary
 onto `PATH`. To run something Bivy does not know about:
 
 ```bash
 bivy run -- /full/path/to/agent --some-flag
 
-# or register it under a new id (ID uppercased, non-alphanumerics become _):
+# or register it through the declarative integration contract:
+bivy agent add myagent --command /full/path/to/agent \
+  --transport process --args '["--some-flag"]'
+
+# legacy environment-only registration remains available:
 BIVY_AGENT_MYAGENT_COMMAND=/full/path/to/agent \
 BIVY_AGENT_MYAGENT_ARGS='["--some-flag"]' \
   bivy run myagent
@@ -219,15 +223,15 @@ BIVY_AGENT_MYAGENT_ARGS='["--some-flag"]' \
 
 First, work out who owns auth for your agent — `bivy doctor` prints it:
 
-- **Bivy-owned** (Pi, Aider): credentials live in Bivy's vault.
+- **Bivy-owned or mixed** (for example Aider): credentials can live in Bivy's vault.
   ```bash
   bivy login              # subscription (OAuth) or API key, then pick a provider
   bivy login <provider>   # skip the menu
   ```
-- **Agent-owned** (Claude Code, Codex, Gemini CLI, Qwen Code): run the agent's
+- **Agent-owned** (Pi, Claude Code, Codex, Gemini CLI, Qwen Code): run the agent's
   own CLI once and complete its login.
   ```bash
-  claude    # or: codex, gemini, qwen
+  pi        # or: claude, codex, gemini, qwen
   ```
 
 Notes:

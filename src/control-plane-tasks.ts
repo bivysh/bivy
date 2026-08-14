@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 /**
  * Control-plane work-queue poller (E2/E4 node side).
@@ -24,6 +24,10 @@ export interface ControlPlaneTaskConfig {
   enrollmentToken: string;
   labels: string[]; // the labels this node serves, e.g. ["bivy", "bivy/laptop"]
   pollMs: number;
+  /** This node's own owner-declared capability tags (node.capabilities in
+   * config.yaml), used to gate/rank pending items that request tags. Absent
+   * (rather than empty) for callers/tests that don't set it — treated as []. */
+  capabilities?: string[];
 }
 
 export interface WorkItem {
@@ -33,6 +37,10 @@ export interface WorkItem {
   status: string;
   title: string;
   body?: string;
+  // Untrusted, plaintext context from a webhook trigger's event payload. The node
+  // appends it to the (E2E-decrypted) operator template as data, clearly framed
+  // as not-instructions. Only present for webhook-triggered automation runs.
+  eventContext?: string;
   repo?: string; // "owner/repo"
   issueNumber?: number;
   externalId?: string; // provider-native id, e.g. Linear issue UUID
@@ -41,8 +49,50 @@ export interface WorkItem {
   model?: string; // model override chosen via the queue "Run…" action
   approvalMode?: "never" | "risky" | "always" | "autonomous";
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
+  /** Hard ceiling from the automation definition; retry rules cannot exceed it. */
+  maxAttempts?: number;
+  /** Node-local attempt currently being executed; assigned by the policy loop. */
+  attempt?: number;
   installationId?: string; // GitHub App install to mint a token for (flavor A)
   appId?: string; // which configured app that installation belongs to (a node may serve several)
+  // Case B: the control plane sets this to "existing_session" + a sessionId when an
+  // inbound issue/comment matches an already-indexed session, so the node continues
+  // that thread instead of starting fresh (see runWorkItem). Already on the wire
+  // (mapWorkItem); typed here so it isn't silently dropped.
+  targetKind?: "new_session" | "existing_session";
+  targetSessionId?: string;
+  message?: boolean;
+  leaseExpiresAt?: string;
+  /** Capability tags this run needs/prefers on the claiming Machine. See
+   * @bivy/core's capability-routing.ts (the canonical matcher; duplicated
+   * here in miniature since root src/ has no @bivy/core dependency). */
+  requiredCapabilities?: string[];
+  preferredCapabilities?: string[];
+}
+
+/** True when every required tag is among this node's declared capabilities.
+ * A node that fails this must never attempt to claim the item — the hard
+ * block happens locally, before any claim race, so an ineligible node never
+ * even contends for it. */
+export function capabilityEligible(nodeCapabilities: string[], required: string[] | undefined): boolean {
+  if (!required || required.length === 0) return true;
+  const have = new Set(nodeCapabilities);
+  return required.every((tag) => have.has(tag));
+}
+
+/** Soft, best-effort delay before this node attempts to claim an item that
+ * prefers capability tags it doesn't have — giving a better-matching Machine
+ * (shorter/zero delay) first opportunity, without ever refusing to claim it
+ * (any node, including a zero-match one, still claims it once the delay
+ * elapses — this never fabricates availability). Deterministic: no
+ * randomness, so it stays predictable in logs and tests. Mirrors
+ * @bivy/core's capabilityClaimDelayMs; duplicated for the same
+ * no-cross-package-dependency reason as capabilityEligible above. */
+export function capabilityClaimDelayMs(nodeCapabilities: string[], preferred: string[] | undefined, baseMs = 1500, maxMs = 4000): number {
+  if (!preferred || preferred.length === 0) return 0;
+  const have = new Set(nodeCapabilities);
+  const unmatched = preferred.filter((tag) => !have.has(tag)).length;
+  return Math.min(maxMs, Math.round(baseMs * (unmatched / preferred.length)));
 }
 
 /** Sanitized-on-arrival at the control plane (services/control-plane/src/run-evidence.ts);
@@ -63,6 +113,7 @@ export function resolveControlPlaneTaskConfig(
   relay: { controlPlaneUrl?: string; enrollmentToken?: string } | null | undefined,
   env: NodeJS.ProcessEnv = process.env,
   nodeName?: string,
+  capabilities: string[] = [],
 ): ControlPlaneTaskConfig | null {
   // Enrollment opts the node into the hosted work queue. This cannot be gated
   // on GitHub configuration: Slack, signed webhooks, schedules, and manually
@@ -81,6 +132,7 @@ export function resolveControlPlaneTaskConfig(
     enrollmentToken: relay.enrollmentToken,
     labels: labels.length ? labels : ["bivy"],
     pollMs: Math.max(Number(env.BIVY_GITHUB_POLL_MS) || 60_000, 10_000),
+    capabilities,
   };
 }
 
@@ -92,7 +144,18 @@ async function cp(cfg: ControlPlaneTaskConfig, method: string, path: string): Pr
 }
 
 async function transitionWork(cfg: ControlPlaneTaskConfig, id: string, action: string): Promise<void> {
-  await cp(cfg, "POST", `/node/work/${encodeURIComponent(id)}/${action}`).catch(() => {});
+  // Best-effort — a dropped transition never loses the run itself — but NOT
+  // silent: a swallowed `complete`/`fail`/`needs-attention` leaves the control
+  // plane's view of the item stale (stuck "running", or re-dispatched), so the
+  // failure must be visible in node logs/diagnostics rather than discarded (A4).
+  try {
+    const res = await cp(cfg, "POST", `/node/work/${encodeURIComponent(id)}/${action}`);
+    if (!res.ok) {
+      console.warn(`[control-plane-tasks] work ${id} "${action}" rejected by control plane (${res.status}); its status may be stale`);
+    }
+  } catch (error) {
+    console.warn(`[control-plane-tasks] work ${id} "${action}" could not reach control plane:`, error instanceof Error ? error.message : error);
+  }
 }
 
 export async function fetchPendingWork(cfg: ControlPlaneTaskConfig): Promise<WorkItem[]> {
@@ -106,6 +169,18 @@ export async function fetchPendingWork(cfg: ControlPlaneTaskConfig): Promise<Wor
 export async function claimWork(cfg: ControlPlaneTaskConfig, id: string): Promise<boolean> {
   const res = await cp(cfg, "POST", `/node/work/${encodeURIComponent(id)}/claim`);
   return res.ok;
+}
+
+export type WorkLeaseRenewal = "renewed" | "cancelled" | "lost";
+
+/** Renew ownership and retain the reason a renewal was rejected. Cancellation is
+ *  intentionally distinct from a generic lost lease so an active agent can be
+ *  stopped promptly when the account cancels its Run. */
+export async function renewWorkLease(cfg: ControlPlaneTaskConfig, id: string): Promise<WorkLeaseRenewal> {
+  const res = await cp(cfg, "POST", `/node/work/${encodeURIComponent(id)}/heartbeat`);
+  if (res.ok) return "renewed";
+  const data = (await res.json().catch(() => ({}))) as { reason?: unknown };
+  return data.reason === "cancelled" ? "cancelled" : "lost";
 }
 
 export async function completeWork(cfg: ControlPlaneTaskConfig, id: string): Promise<void> {
@@ -124,35 +199,57 @@ export async function needsAttentionWork(cfg: ControlPlaneTaskConfig, id: string
 /** Report privacy-safe run evidence (issue #153) — routing reason, output refs
  *  (branch/PR/checkpoint/commit/...), check results, and new timeline events.
  *  Best-effort: a dropped report loses one evidence update, never the run
- *  itself, so failures here are swallowed like the other transition calls. */
+ *  itself. It is not throwing, but the failure is logged (A4) so a persistently
+ *  failing evidence channel is visible in diagnostics instead of silent. */
 export async function reportEvidence(cfg: ControlPlaneTaskConfig, id: string, patch: EvidencePatch): Promise<void> {
-  await fetch(`${cfg.controlPlaneUrl}/node/work/${encodeURIComponent(id)}/evidence`, {
-    method: "POST",
-    headers: { authorization: `Bearer ${cfg.enrollmentToken}`, "content-type": "application/json" },
-    body: JSON.stringify(patch),
-  }).catch(() => {});
+  try {
+    const res = await fetch(`${cfg.controlPlaneUrl}/node/work/${encodeURIComponent(id)}/evidence`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${cfg.enrollmentToken}`, "content-type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    if (!res.ok) {
+      console.warn(`[control-plane-tasks] work ${id} evidence report rejected (${res.status})`);
+    }
+  } catch (error) {
+    console.warn(`[control-plane-tasks] work ${id} evidence report could not reach control plane:`, error instanceof Error ? error.message : error);
+  }
 }
 
 /** Optional policy hooks — when omitted the poller keeps its historical behavior
  *  (any thrown error fails the run immediately). */
 export interface ControlPlaneTaskPollerOptions {
-  /** Decides retry/reroute/park/give_up when an attempt throws. */
-  policy?: RunPolicy;
+  /** Decides retry/reroute/park/give_up when an attempt throws. A resolver
+   *  allows repository-owned policy to be selected per work item. */
+  policy?: RunPolicy | ((item: WorkItem) => RunPolicy | undefined);
   /** Injectable sleep for backoff waits (deterministic in tests). */
   sleep?: (ms: number) => Promise<void>;
+  /** Lease heartbeat cadence. Primarily useful for deterministic focused tests. */
+  leaseHeartbeatMs?: number;
 }
 
 const defaultSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+type RunState = "active" | "cancelled" | "lost";
+interface InFlightRun {
+  controller: AbortController;
+  state: RunState;
+  heartbeat?: NodeJS.Timeout;
+  leaseCheck?: Promise<void>;
+}
+
 export class ControlPlaneTaskPoller {
   private timer?: NodeJS.Timeout;
-  private inFlight = new Set<string>();
-  private readonly policy?: RunPolicy;
+  /** Keep the controller alongside the reservation: relay pokes can arrive at
+   *  any point from claim through policy retries and must address the same Run. */
+  private inFlight = new Map<string, InFlightRun>();
+  private readonly policy?: RunPolicy | ((item: WorkItem) => RunPolicy | undefined);
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly leaseHeartbeatMs: number;
 
   constructor(
     private readonly cfg: ControlPlaneTaskConfig,
-    private readonly runItem: (item: WorkItem, report: (patch: EvidencePatch) => Promise<void>) => Promise<void>,
+    private readonly runItem: (item: WorkItem, report: (patch: EvidencePatch) => Promise<void>, signal: AbortSignal) => Promise<void>,
     /** Node's cap on concurrently-running queue sessions (0/undefined = unlimited).
      *  Read fresh each tick so the Settings → Nodes value takes effect live. */
     private readonly maxConcurrent?: () => number,
@@ -160,6 +257,7 @@ export class ControlPlaneTaskPoller {
   ) {
     this.policy = options.policy;
     this.sleep = options.sleep ?? defaultSleep;
+    this.leaseHeartbeatMs = options.leaseHeartbeatMs ?? 30_000;
   }
 
   start(): void {
@@ -169,9 +267,23 @@ export class ControlPlaneTaskPoller {
     console.log(`[control-plane-tasks] watching hosted queue for labels [${this.cfg.labels.join(", ")}] (relay push + ${Math.round(this.cfg.pollMs / 1000)}s fallback poll)`);
   }
 
-  /** Trigger an immediate fetch after a relay push says work may be available. */
-  poke(): void {
+  /** React to a relay work notification. If it names a Run already executing,
+   *  check its lease immediately (the notification may be its cancellation);
+   *  otherwise fetch the queue as before. The optional id keeps old callers
+   *  that only use poke() fully compatible. */
+  poke(id?: string): void {
+    const run = id ? this.inFlight.get(id) : undefined;
+    if (id && run) {
+      void this.checkLease(id, run);
+      return;
+    }
     void this.tick();
+  }
+
+  /** Number of queue items currently running on this node. Lets an ephemeral
+   *  machine's self-teardown avoid exiting while it's mid-work. */
+  inFlightCount(): number {
+    return this.inFlight.size;
   }
 
   /**
@@ -206,6 +318,10 @@ export class ControlPlaneTaskPoller {
     const running: Promise<void>[] = [];
     for (const item of items) {
       if (this.inFlight.has(item.id)) continue;
+      // Hard block: never contend for an item requiring a capability this
+      // node hasn't declared. It stays pending for a node that has it (or
+      // parks account-wide if the control plane found none at enqueue time).
+      if (!capabilityEligible(this.cfg.capabilities ?? [], item.requiredCapabilities)) continue;
       // Honor the node's concurrency cap: leave the rest in the queue for a later
       // tick (or an idle node) to claim when a slot frees.
       if (max > 0 && this.inFlight.size >= max) break;
@@ -217,29 +333,72 @@ export class ControlPlaneTaskPoller {
       // within a single tick: items ran one at a time regardless of `max`, and
       // only overlapping `setInterval` ticks happened to run more than one
       // concurrently.
-      this.inFlight.add(item.id);
-      running.push(this.runOne(item));
+      const run: InFlightRun = { controller: new AbortController(), state: "active" };
+      this.inFlight.set(item.id, run);
+      running.push(this.runOne(item, run));
     }
     await Promise.all(running);
   }
 
-  private async runOne(item: WorkItem): Promise<void> {
+  private async runOne(item: WorkItem, reserved?: InFlightRun): Promise<void> {
+    // runOne is exercised directly by a few callers/tests, so create a control
+    // when there was no tick reservation. Never replace an existing control.
+    const run = reserved ?? this.inFlight.get(item.id) ?? { controller: new AbortController(), state: "active" };
+    if (!this.inFlight.has(item.id)) this.inFlight.set(item.id, run);
     try {
+      // Soft preference ranking: a node matching fewer of the item's preferred
+      // capability tags waits slightly longer before attempting to claim,
+      // giving a better-matching Machine first opportunity. Any node can still
+      // win the claim once its delay elapses — this never refuses to run.
+      const delayMs = capabilityClaimDelayMs(this.cfg.capabilities ?? [], item.preferredCapabilities);
+      if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+      if (run.state !== "active") return;
       // Claim first so only one node runs it; skip if another node won (no
-      // claim → not ours → don't run or complete it).
-      if (!(await claimWork(this.cfg, item.id))) return;
+      // claim → not ours → don't run or complete it). A heartbeat keeps the
+      // finite lease alive; process death stops it and makes the item reclaimable.
+      if (!(await claimWork(this.cfg, item.id)) || run.state !== "active") return;
+      run.heartbeat = setInterval(() => void this.checkLease(item.id, run), this.leaseHeartbeatMs);
+      run.heartbeat.unref?.();
       const report = (patch: EvidencePatch) => reportEvidence(this.cfg, item.id, patch);
       await transitionWork(this.cfg, item.id, "running");
+      if (run.state !== "active") return;
       console.log(`[control-plane-tasks] running ${item.source} item ${item.id}: ${item.title}`);
       // routingReason is a coarse baseline — a manual "Run…" override picked
       // this agent/model explicitly; otherwise it's whatever the queue label
       // routed to. runWorkItem/runIssueTask may layer a more specific reason
       // (e.g. a fallback after an error) on top via the same `report` hook.
       await report({ routingReason: item.runtimeId || item.model ? "manual override" : "queue label" });
-      await this.runWithPolicy(item, report);
+      if (run.state !== "active") return;
+      await this.runWithPolicy(item, report, run);
     } finally {
-      this.inFlight.delete(item.id);
+      if (run.heartbeat) clearInterval(run.heartbeat);
+      // A stale completion must not remove a newer reservation for the same id.
+      if (this.inFlight.get(item.id) === run) this.inFlight.delete(item.id);
     }
+  }
+
+  private checkLease(id: string, run: InFlightRun): Promise<void> {
+    if (run.state !== "active") return Promise.resolve();
+    if (run.leaseCheck) return run.leaseCheck;
+    run.leaseCheck = (async () => {
+      try {
+        const renewal = await renewWorkLease(this.cfg, id);
+        if (renewal === "renewed" || this.inFlight.get(id) !== run || run.state !== "active") return;
+        run.state = renewal;
+        if (run.heartbeat) {
+          clearInterval(run.heartbeat);
+          run.heartbeat = undefined;
+        }
+        run.controller.abort(new Error(renewal === "cancelled" ? "Run cancelled" : "Run lease lost"));
+      } catch (error) {
+        // A transient network error does not prove ownership was lost. Keep the
+        // Run alive and let the next heartbeat retry.
+        console.warn(`[control-plane-tasks] work ${id} heartbeat failed:`, error instanceof Error ? error.message : error);
+      } finally {
+        run.leaseCheck = undefined;
+      }
+    })();
+    return run.leaseCheck;
   }
 
   /**
@@ -251,22 +410,42 @@ export class ControlPlaneTaskPoller {
    * safe evidence event. With no policy injected this is the historical path:
    * one attempt, any throw fails the run.
    */
-  private async runWithPolicy(item: WorkItem, report: (patch: EvidencePatch) => Promise<void>): Promise<void> {
+  private async runWithPolicy(item: WorkItem, report: (patch: EvidencePatch) => Promise<void>, run: InFlightRun): Promise<void> {
     let current = item;
     let attempt = 1;
     let rerouteCount = 0;
     for (;;) {
+      if (run.state !== "active") return;
       try {
-        await this.runItem(current, report);
+        // Functions declared with the historical two arguments remain valid in
+        // TypeScript/JavaScript; cancellation-aware runners can use the third.
+        await this.runItem({ ...current, attempt }, report, run.controller.signal);
+        if (run.state !== "active") return;
         await completeWork(this.cfg, item.id);
         return;
       } catch (error) {
-        const decision: RunDecision = this.policy?.decide({
+        // Abort errors are ordinary throws to the policy layer unless guarded.
+        // A cancelled/lost Run has no node-side terminal transition or retry.
+        if (run.state !== "active") return;
+        const policy = typeof this.policy === "function" ? this.policy(current) : this.policy;
+        const decision: RunDecision = policy?.decide({
           routing: { runtimeId: current.runtimeId, model: current.model },
           error,
           attempt,
           rerouteCount,
         }) ?? { action: "give_up", condition: "unknown" };
+
+        // Per-automation hard ceiling wins over a broader node ruleset. Park
+        // rather than silently fail so a human can inspect or rerun it.
+        const maxAttempts = Math.max(1, Math.min(10, Number(current.maxAttempts) || 10));
+        if ((decision.action === "retry" || decision.action === "reroute") && attempt >= maxAttempts) {
+          const summary = `Attempt limit reached (${maxAttempts}); automation parked for review.`;
+          console.warn(`[control-plane-tasks] item ${item.id} needs attention: ${summary}`);
+          await report({ events: [{ at: new Date().toISOString(), kind: "needs_attention", summary, attempt }] });
+          if (run.state !== "active") return;
+          await needsAttentionWork(this.cfg, item.id);
+          return;
+        }
 
         if (decision.action === "retry" || decision.action === "reroute") {
           attempt += 1;
@@ -289,17 +468,20 @@ export class ControlPlaneTaskPoller {
             await report({ routingReason: `fallback: ${decision.ref}` });
           }
           if (decision.delayMs > 0) await this.sleep(decision.delayMs);
+          if (run.state !== "active") return;
           continue;
         }
 
         if (decision.action === "park") {
           console.warn(`[control-plane-tasks] item ${item.id} needs attention (${decision.condition}): ${decision.summary}`);
           await report({ events: [{ at: new Date().toISOString(), kind: "needs_attention", summary: decision.summary }] });
+          if (run.state !== "active") return;
           await needsAttentionWork(this.cfg, item.id);
           return;
         }
 
         console.warn(`[control-plane-tasks] item ${item.id} failed:`, error);
+        if (run.state !== "active") return;
         await failWork(this.cfg, item.id);
         return;
       }

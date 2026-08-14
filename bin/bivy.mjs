@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 /**
  * bivy — one-command CLI for a Bivy node.
@@ -8,7 +8,7 @@
  * relay-setup with long flags, npm run dev, hand-written launchd/systemd files)
  * into a single guided flow:
  *
- *   bivy setup     first-run wizard: deps, remote sync + sign-in, background service
+ *   bivy setup     first-run wizard: agent, model login, remote sign-in, background service
  *   bivy start     run the daemon in the foreground
  *   bivy stop      stop the background service
  *   bivy restart   restart the background service (waits for active sessions to finish; --force to skip)
@@ -36,8 +36,9 @@ import vm from "node:vm";
 import { selectStaleSessions, sessionActivityMs } from "./prune-sessions.mjs";
 import { resolveSessionsLimit, truncateSavedSessions } from "./sessions-list.mjs";
 import { renderManagedBlock, upsertManagedBlock, removeManagedBlock, rcFileForShell } from "./shim-path.mjs";
-import { removeExcept } from "./uninstall-paths.mjs";
+import { removeInstallAndState } from "./uninstall-paths.mjs";
 import { findAvailablePort, reconcilePort } from "./port-picker.mjs";
+import { resolveAttachSessionId } from "./attach-session-id.mjs";
 
 const selfScript = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(selfScript);
@@ -59,7 +60,7 @@ function resolveAppDir() {
   return path.join(os.homedir(), ".bivy");
 }
 const appDir = resolveAppDir();
-// Propagate the resolved data dir to every child process (daemon, native-pi,
+// Propagate the resolved data dir to every Bivy child process (daemon, helpers,
 // exec, …) via the environment so none of them independently fall back to
 // <repoRoot>/.bivy. The daemon reads BIVY_DATA_DIR (see src/server.ts).
 process.env.BIVY_DATA_DIR = appDir;
@@ -78,6 +79,19 @@ function detectInstallKind() {
   return "packaged";
 }
 const cliConfigPath = path.join(appDir, "cli.json");
+const canonicalConfigPath = path.join(appDir, "config.yaml");
+let canonicalConfig = null;
+async function hydrateCanonicalConfig() {
+  if (!fs.existsSync(canonicalConfigPath)) return;
+  try {
+    const { parse } = await import("yaml");
+    const value = parse(fs.readFileSync(canonicalConfigPath, "utf8"), { uniqueKeys: true });
+    if (!value || typeof value !== "object" || value.version !== 1) throw new Error("version must be 1");
+    canonicalConfig = value;
+  } catch (error) {
+    throw new Error(`Invalid ${canonicalConfigPath}: ${error?.message || String(error)}. Run 'bivy config validate'.`);
+  }
+}
 const relayConfigPath = path.join(appDir, "relay.json");
 // Short-lived handoff: relay:setup writes the account session it just obtained
 // here (0600) so `bivy setup` can open the remote app signed into the *account*
@@ -128,8 +142,12 @@ function resolveUpdateChannel(args) {
 }
 const packaged = fs.existsSync(path.join(repoRoot, "dist", "server.js"));
 const serverEntry = path.join(repoRoot, packaged ? "dist/server.js" : "src/server.ts");
-const nativePiEntry = path.join(repoRoot, packaged ? "dist/native-pi.js" : "src/native-pi.ts");
 const bivyLoginEntry = path.join(repoRoot, packaged ? "dist/bivy-login.js" : "src/bivy-login.ts");
+const automationEntry = path.join(repoRoot, packaged ? "dist/automation-cli.js" : "src/automation-cli.ts");
+const configEntry = path.join(repoRoot, packaged ? "dist/config-cli.js" : "src/config-cli.ts");
+const credentialsEntry = path.join(repoRoot, packaged ? "dist/credentials-cli.js" : "src/credentials-cli.ts");
+const pluginEntry = path.join(repoRoot, packaged ? "dist/plugin-cli.js" : "src/plugin-cli.ts");
+const agentEntry = path.join(repoRoot, packaged ? "dist/agent-cli.js" : "src/agent-cli.ts");
 const relaySetupEntry = path.join(repoRoot, packaged ? "dist/relay-setup.js" : "src/relay-setup.ts");
 // Dependency-free hosted-endpoint helper. Shipped to dist/ in the release
 // artifact (src/ is not packaged), so resolve it the same packaged-aware way as
@@ -144,6 +162,7 @@ const attachEntry = path.join(repoRoot, packaged ? "dist/attach.js" : "src/attac
 const relayAttachEntry = path.join(repoRoot, packaged ? "dist/relay-attach.js" : "src/relay-attach.ts");
 const execEntry = path.join(repoRoot, packaged ? "dist/exec.js" : "src/exec.ts");
 const mcpProxyEntry = path.join(repoRoot, packaged ? "dist/harness/mcp-proxy-cli.js" : "src/harness/mcp-proxy-cli.ts");
+const mcpServeEntry = path.join(repoRoot, packaged ? "dist/harness/mcp-serve-cli.js" : "src/harness/mcp-serve-cli.ts");
 const qrEntry = path.join(repoRoot, "public", "qr.js");
 const tsxCli = packaged ? "" : path.join(repoRoot, "node_modules", "tsx", "dist", "cli.mjs");
 const nodeBin = process.execPath;
@@ -192,17 +211,19 @@ const c = {
 // --- config -----------------------------------------------------------------
 
 function loadConfig() {
-  try {
-    const raw = JSON.parse(fs.readFileSync(cliConfigPath, "utf8"));
-    return {
-      workspace: typeof raw.workspace === "string" ? raw.workspace : repoRoot,
-      port: Number(raw.port) || 4317,
-      env: raw.env && typeof raw.env === "object" ? raw.env : {},
-      service: raw.service === true,
-    };
-  } catch {
-    return { workspace: repoRoot, port: 4317, env: {}, service: false };
-  }
+  let raw = {};
+  try { raw = JSON.parse(fs.readFileSync(cliConfigPath, "utf8")); } catch { /* first run */ }
+  const node = canonicalConfig?.node && typeof canonicalConfig.node === "object" ? canonicalConfig.node : {};
+  const advanced = canonicalConfig?.environment && typeof canonicalConfig.environment === "object" ? canonicalConfig.environment : {};
+  const agents = canonicalConfig?.agents && typeof canonicalConfig.agents === "object"
+    ? { BIVY_CUSTOM_AGENTS: JSON.stringify(Object.entries(canonicalConfig.agents).map(([id, spec]) => ({ id, ...spec }))) }
+    : {};
+  return {
+    workspace: typeof node.workspace === "string" ? node.workspace : typeof raw.workspace === "string" ? raw.workspace : repoRoot,
+    port: Number(node.port) || Number(raw.port) || 4317,
+    env: { ...(raw.env && typeof raw.env === "object" ? raw.env : {}), ...advanced, ...agents },
+    service: raw.service === true,
+  };
 }
 
 function saveConfig(config) {
@@ -215,16 +236,42 @@ function saveConfig(config) {
   }
 }
 
-// The daemon's agent-neutral settings file (<dataDir>/settings.json), written by
-// src/. We only ever read it here — never author it — so a missing/garbage file
-// is just "no settings".
+// The daemon's agent-neutral settings file (<dataDir>/settings.json). Setup
+// writes the chosen default agent here as well as cli.json's service environment:
+// settings.json is authoritative on daemon boot, so updating only BIVY_RUNTIME
+// would let an older Settings choice silently override the installer choice.
 function loadSettings() {
+  let raw = {};
   try {
-    const raw = JSON.parse(fs.readFileSync(path.join(appDir, "settings.json"), "utf8"));
-    return raw && typeof raw === "object" ? raw : {};
-  } catch {
-    return {};
-  }
+    const parsed = JSON.parse(fs.readFileSync(path.join(appDir, "settings.json"), "utf8"));
+    if (parsed && typeof parsed === "object") raw = parsed;
+  } catch { /* first run */ }
+  const defaults = canonicalConfig?.defaults && typeof canonicalConfig.defaults === "object" ? canonicalConfig.defaults : {};
+  const sessions = canonicalConfig?.sessions && typeof canonicalConfig.sessions === "object" ? canonicalConfig.sessions : {};
+  const node = canonicalConfig?.node && typeof canonicalConfig.node === "object" ? canonicalConfig.node : {};
+  const github = canonicalConfig?.github && typeof canonicalConfig.github === "object" ? canonicalConfig.github : {};
+  return {
+    ...raw,
+    ...(defaults.agent ? { defaultAgent: defaults.agent } : {}),
+    ...(Object.hasOwn(defaults, "model") ? { defaultModel: defaults.model } : {}),
+    ...(defaults.sandbox ? { defaultSandbox: defaults.sandbox } : {}),
+    ...(defaults.approval ? { approvalMode: defaults.approval } : {}),
+    ...(node.maxConcurrentAutomations !== undefined ? { githubMaxConcurrent: node.maxConcurrentAutomations } : {}),
+    ...(sessions.sync !== undefined ? { sessionSync: sessions.sync } : {}),
+    ...(sessions.worktreeSync !== undefined ? { worktreeSync: sessions.worktreeSync } : {}),
+    ...(sessions.standbyNodeId ? { syncStandbyNodeId: sessions.standbyNodeId } : {}),
+    ...(sessions.resume ? { sessionResumeMode: sessions.resume } : {}),
+    ...(sessions.autoAttachToolImages !== undefined ? { autoAttachToolImages: sessions.autoAttachToolImages } : {}),
+    ...(github.issuePrompt ? { githubIssuePrompt: github.issuePrompt } : {}),
+  };
+}
+
+function saveDefaultAgentSetting(runtimeId) {
+  fs.mkdirSync(appDir, { recursive: true });
+  const file = path.join(appDir, "settings.json");
+  const settings = { ...loadSettings(), defaultAgent: String(runtimeId).trim().toLowerCase() };
+  fs.writeFileSync(file, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
+  try { fs.chmodSync(file, 0o600); } catch { /* best effort */ }
 }
 
 // The default terminal agent when `bivy` / `bivy run` is invoked without an
@@ -366,10 +413,10 @@ function migrateGithubTokenToVault(config) {
 
 function startEnv(config) {
   return {
-    ...process.env,
-    PORT: String(config.port),
-    BIVY_WORKSPACE: config.workspace,
     ...resolveEnvSecrets(config.env),
+    ...process.env,
+    PORT: String(process.env.PORT || config.port),
+    BIVY_WORKSPACE: process.env.BIVY_WORKSPACE || config.workspace,
   };
 }
 
@@ -385,19 +432,49 @@ function hasModelConfig(config) {
 }
 
 const SETUP_AGENT_CHOICES = [
-  { key: "p", label: "Pi (default, sign in to ChatGPT/Claude/Copilot or paste a model key)", runtimeId: "pi", needsBivyModel: true },
-  { key: "c", label: "Claude Code", runtimeId: "claude-code-sdk", needsBivyModel: false, loginHint: "If Claude asks you to sign in, run: claude" },
-  { key: "x", label: "Codex", runtimeId: "codex", needsBivyModel: false, loginHint: "If Codex asks you to sign in, run: codex" },
-  { key: "o", label: "OpenCode", runtimeId: "opencode", needsBivyModel: false },
-  { key: "g", label: "Gemini CLI", runtimeId: "gemini", needsBivyModel: false, loginHint: "If Gemini asks you to sign in, run: gemini" },
-  { key: "q", label: "Qwen Code", runtimeId: "qwen", needsBivyModel: false, loginHint: "If Qwen asks you to sign in, run: qwen" },
+  { key: "c", label: "Claude Code", runtimeId: "claude-code-sdk", command: "claude", authProbe: ["auth", "status"], needsBivyModel: false, loginHint: "Sign in through Claude Code" },
+  { key: "x", label: "Codex", runtimeId: "codex-approvals", command: "codex", authProbe: ["login", "status"], needsBivyModel: false, loginHint: "Sign in through Codex" },
+  { key: "p", label: "Pi", runtimeId: "pi", command: "pi", needsBivyModel: false, loginHint: "Sign in through Pi (/login)" },
+  { key: "o", label: "OpenCode", runtimeId: "opencode", command: "opencode", needsBivyModel: false },
+  { key: "g", label: "Gemini CLI", runtimeId: "gemini", command: "gemini", needsBivyModel: false, loginHint: "Sign in through Gemini" },
+  { key: "q", label: "Qwen Code", runtimeId: "qwen", command: "qwen", needsBivyModel: false, loginHint: "Sign in through Qwen" },
   { key: "a", label: "Aider", runtimeId: "aider", needsBivyModel: true },
   { key: "l", label: "Cline", runtimeId: "cline", needsBivyModel: false },
   { key: "r", label: "Crush", runtimeId: "crush", needsBivyModel: false },
 ];
+const RECOMMENDED_SETUP_AGENT_IDS = new Set(["claude-code-sdk", "codex-approvals"]);
+const recommendedSetupAgents = () => SETUP_AGENT_CHOICES.filter((choice) => RECOMMENDED_SETUP_AGENT_IDS.has(choice.runtimeId));
+const additionalSetupAgents = () => SETUP_AGENT_CHOICES.filter((choice) => !RECOMMENDED_SETUP_AGENT_IDS.has(choice.runtimeId));
 
 function setupAgentByRuntime(runtimeId) {
+  // Migrate the former ungoverned Codex exec default into the single recommended
+  // Codex surface when setup is re-run; existing Sessions retain their own id.
+  if (runtimeId === "codex") runtimeId = "codex-approvals";
   return SETUP_AGENT_CHOICES.find((choice) => choice.runtimeId === runtimeId);
+}
+
+function setupAgentDefaultKey(config) {
+  const saved = setupAgentByRuntime(String(config?.env?.BIVY_RUNTIME || ""));
+  if (saved && RECOMMENDED_SETUP_AGENT_IDS.has(saved.runtimeId)) return saved.key;
+  if (saved) return "m";
+  const installed = recommendedSetupAgents().find((choice) => choice.command && commandExists(choice.command));
+  return installed?.key || "c";
+}
+
+function nativeAgentAuthDetected(choice) {
+  if (!choice?.command || !commandExists(choice.command)) return false;
+  if (Array.isArray(choice.authProbe)) {
+    const result = runQuiet(choice.command, choice.authProbe, { timeout: 10_000 });
+    if (result.code === 0) return true;
+  }
+  // Conservative file fallbacks for older CLI versions without a status command.
+  if (choice.command === "codex") return fs.existsSync(path.join(os.homedir(), ".codex", "auth.json"));
+  if (choice.command === "claude") return fs.existsSync(path.join(os.homedir(), ".claude", ".credentials.json"));
+  if (choice.command === "pi") {
+    const agentDir = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
+    return fs.existsSync(path.join(agentDir, "auth.json"));
+  }
+  return false;
 }
 
 function url(config) {
@@ -418,6 +495,25 @@ function run(cmd, args, opts = {}) {
     child.on("exit", (code) => resolve(code ?? 0));
     child.on("error", (error) => {
       console.error(c.red(`Failed to run ${cmd}: ${error.message}`));
+      resolve(1);
+    });
+  });
+}
+
+/** Fixed executable + fixed entry point for setup's inline model-auth stage.
+ * Keep this separate from the generic CLI forwarding helper: no user-provided
+ * command or argv value reaches this process boundary. */
+function runSetupModelLogin(config) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, nodeScriptArgs(bivyLoginEntry), {
+      stdio: "inherit",
+      cwd: repoRoot,
+      env: startEnv(config),
+      shell: false,
+    });
+    child.on("exit", (code) => resolve(code ?? 0));
+    child.on("error", (error) => {
+      console.error(c.red(`Failed to start model login: ${error.message}`));
       resolve(1);
     });
   });
@@ -469,23 +565,46 @@ async function ensureDeps() {
     ? path.join(repoRoot, "node_modules", "express", "package.json")
     : tsxCli;
   if (fs.existsSync(dependencyMarker)) return true;
-  if (!commandExists("npm")) {
-    console.error(c.red("npm is required (it ships with Node.js)."));
+  const [cmd, args] = installCommandFor(repoRoot);
+  if (!commandExists(cmd)) {
+    console.error(c.red(
+      cmd === "corepack"
+        ? "This checkout installs with pnpm. Install it (`npm i -g pnpm`) or enable corepack, then try again."
+        : `${cmd} is required (it ships with Node.js).`,
+    ));
     return false;
   }
   if (process.platform === "linux" && (!commandExists("make") || !commandExists("g++") || !commandExists("python3"))) {
     console.error(c.red("Build tools are missing. On Ubuntu/Debian run: sudo apt-get update && sudo apt-get install -y build-essential python3"));
     return false;
   }
-  const hasLockfile = fs.existsSync(path.join(repoRoot, "package-lock.json"));
-  const args = hasLockfile ? ["ci", "--no-audit", "--no-fund"] : ["install", "--no-audit", "--no-fund"];
-  console.log(c.dim(`Installing dependencies (npm ${args.join(" ")})…`));
-  const code = await run("npm", args, { cwd: repoRoot });
+  console.log(c.dim(`Installing dependencies (${cmd} ${args.join(" ")})…`));
+  const code = await run(cmd, args, { cwd: repoRoot });
   if (code !== 0 || !fs.existsSync(dependencyMarker)) {
-    console.error(c.red("npm install failed. Install Node.js 22.19+ and build tools (make/g++/python3), then try again."));
+    console.error(c.red(`${cmd} install failed. Install Node.js 22.19+ and build tools (make/g++/python3), then try again.`));
     return false;
   }
   return true;
+}
+
+/**
+ * Pick the package manager for installing `dir`'s dependencies.
+ *
+ * A git checkout of this repo is a pnpm workspace (pnpm-lock.yaml, no
+ * package-lock.json) — npm cannot install it correctly. A packaged/npm-global
+ * install ships a package-lock.json generated by scripts/build-release.mjs and
+ * stays on npm. Detect by lockfile rather than install kind so both keep working.
+ *
+ * pnpm may not be on PATH even when the repo needs it, so fall back to corepack,
+ * which ships with Node 22 and resolves the version pinned in `packageManager`.
+ */
+function installCommandFor(dir) {
+  if (fs.existsSync(path.join(dir, "pnpm-lock.yaml"))) {
+    const args = ["install", "--frozen-lockfile"];
+    return commandExists("pnpm") ? ["pnpm", args] : ["corepack", ["pnpm", ...args]];
+  }
+  const hasLockfile = fs.existsSync(path.join(dir, "package-lock.json"));
+  return ["npm", hasLockfile ? ["ci", "--no-audit", "--no-fund"] : ["install", "--no-audit", "--no-fund"]];
 }
 
 function nodePackageInstalled(packageName) {
@@ -494,12 +613,20 @@ function nodePackageInstalled(packageName) {
 
 async function ensureNodePackage(packageName) {
   if (nodePackageInstalled(packageName)) return true;
-  if (!commandExists("npm")) {
-    console.error(c.red(`npm is required to install ${packageName}.`));
+  // Add with the package manager that owns this tree. Running `npm install` in a
+  // pnpm workspace would write a competing package-lock.json and a hoisted
+  // node_modules over pnpm's symlink layout, leaving the checkout in a state
+  // neither tool resolves correctly.
+  const usesPnpm = fs.existsSync(path.join(repoRoot, "pnpm-lock.yaml"));
+  const [cmd, baseArgs] = usesPnpm
+    ? [commandExists("pnpm") ? "pnpm" : "corepack", commandExists("pnpm") ? ["add"] : ["pnpm", "add"]]
+    : ["npm", ["install", "--no-audit", "--no-fund"]];
+  if (!commandExists(cmd)) {
+    console.error(c.red(`${cmd} is required to install ${packageName}.`));
     return false;
   }
   console.log(c.dim(`Installing ${packageName}…`));
-  const code = await run("npm", ["install", packageName, "--no-audit", "--no-fund"], { cwd: repoRoot });
+  const code = await run(cmd, [...baseArgs, packageName], { cwd: repoRoot });
   return code === 0 && nodePackageInstalled(packageName);
 }
 
@@ -530,7 +657,8 @@ async function ensurePythonCommand(command, packageName, label) {
 
 // Single source of truth for what `bivy agents:install` installs, so its help
 // text (see printHelp) can never drift from what it actually does (#113).
-const BUNDLED_AGENTS = [
+const KNOWN_AGENT_INSTALLS = [
+  { command: "pi", npmPackage: "@earendil-works/pi-coding-agent", label: "Pi" },
   { command: "claude", npmPackage: "@anthropic-ai/claude-code", label: "Claude Code" },
   { command: "codex", npmPackage: "@openai/codex", label: "Codex" },
   { command: "opencode", npmPackage: "opencode-ai/opencode", label: "OpenCode" },
@@ -539,11 +667,11 @@ const BUNDLED_AGENTS = [
   { command: "gemini", npmPackage: "@google/gemini-cli", label: "Gemini CLI" },
 ];
 
-async function ensureBundledAgents() {
+async function ensureKnownAgents() {
   if (process.env.BIVY_SKIP_AGENT_PREINSTALL === "1") return true;
-  console.log(c.dim("Ensuring bundled agent runtimes are installed…"));
+  console.log(c.dim("Ensuring known agent integrations are installed…"));
   const results = [await ensureNodePackage("@anthropic-ai/claude-agent-sdk")];
-  for (const agent of BUNDLED_AGENTS) {
+  for (const agent of KNOWN_AGENT_INSTALLS) {
     results.push(
       agent.pythonPackage
         ? await ensurePythonCommand(agent.command, agent.pythonPackage, agent.label)
@@ -556,13 +684,14 @@ async function ensureBundledAgents() {
 }
 
 async function ensureSetupAgent(choice) {
-  if (!choice || choice.runtimeId === "pi") return true;
+  if (!choice) return true;
+  if (choice.runtimeId === "pi") return ensureNpmCommand("pi", "@earendil-works/pi-coding-agent", "Pi");
   if (choice.runtimeId === "claude-code-sdk") {
     const sdk = await ensureNodePackage("@anthropic-ai/claude-agent-sdk");
     const cli = await ensureNpmCommand("claude", "@anthropic-ai/claude-code", "Claude Code");
     return sdk && cli;
   }
-  if (choice.runtimeId === "codex") return ensureNpmCommand("codex", "@openai/codex", "Codex");
+  if (choice.runtimeId === "codex-approvals") return ensureNpmCommand("codex", "@openai/codex", "Codex");
   if (choice.runtimeId === "opencode") return ensureNpmCommand("opencode", "opencode-ai/opencode", "OpenCode");
   if (choice.runtimeId === "gemini") return ensureNpmCommand("gemini", "@google/gemini-cli", "Gemini CLI");
   if (choice.runtimeId === "qwen") return ensureNpmCommand("qwen", "@qwen-code/qwen-code", "Qwen Code");
@@ -573,9 +702,9 @@ async function ensureSetupAgent(choice) {
 }
 
 // The CLI-agent rows come from bin/agent-manifest.json — generated from
-// CLI_AGENT_SPECS (`npm run gen:agent-manifest`), so the terminal `bivy run`
-// agents never drift from the web picker's. A sync test guards the JSON. The two
-// native rows (Pi, Claude Code) aren't CLI specs and stay defined here.
+// AGENT_PROFILES (`npm run gen:agent-manifest`), so the terminal `bivy run`
+// agents never drift from the web picker's. A sync test guards the JSON. Agent
+// integrations that need a bridge still point at the operator's installed CLI.
 function loadAgentManifest() {
   try {
     const raw = fs.readFileSync(path.join(__dirname, "agent-manifest.json"), "utf8");
@@ -586,16 +715,84 @@ function loadAgentManifest() {
   }
 }
 
+function loadPluginAgentManifest() {
+  const root = process.env.BIVY_PLUGIN_DIR
+    ? path.resolve(process.env.BIVY_PLUGIN_DIR)
+    : path.join(appDir, "plugins");
+  let entries = [];
+  try { entries = fs.readdirSync(root, { withFileTypes: true }); }
+  catch { return []; }
+  const seen = new Set();
+  const reserved = new Set([
+    "pi", "claude", "claude-code", "claude-code-sdk", "generic-cli", "codex-approvals",
+    "openclaw", "bivy-agent-protocol", "acp", ...loadAgentManifest().map((agent) => agent.id),
+  ]);
+  return entries
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .flatMap((entry) => {
+      try {
+        const manifest = JSON.parse(fs.readFileSync(path.join(root, entry.name, "manifest.json"), "utf8"));
+        if (manifest?.apiVersion !== "bivy.sh/v1alpha1" || manifest?.kind !== "Plugin" || manifest?.metadata?.id !== entry.name || !Array.isArray(manifest?.contributes?.agents)) return [];
+        return manifest.contributes.agents.flatMap((agent) => {
+          const id = typeof agent?.id === "string" ? agent.id.trim().toLowerCase() : "";
+          const adapter = agent?.adapter;
+          const command = typeof adapter?.command === "string" ? adapter.command.trim() : "";
+          if (!/^[a-z][a-z0-9-]{1,47}$/.test(id) || reserved.has(id) || seen.has(id) || !command || !["process", "acp"].includes(adapter?.kind)) return [];
+          seen.add(id);
+          return [[id, {
+            label: typeof agent.name === "string" && agent.name.trim() ? agent.name.trim() : id,
+            type: "command",
+            command,
+            args: [],
+            plugin: entry.name,
+            headlessFlags: adapter.kind === "process" && Array.isArray(adapter.args)
+              ? adapter.args.filter((arg) => typeof arg === "string")
+              : [],
+          }]];
+        });
+      } catch {
+        return [];
+      }
+    });
+}
+
+function loadCustomAgentManifest() {
+  const raw = process.env.BIVY_CUSTOM_AGENTS || loadConfig().env?.BIVY_CUSTOM_AGENTS;
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(String(raw));
+    if (!Array.isArray(parsed)) return [];
+    const reserved = new Set(["pi", "claude", "claude-code", "claude-code-sdk", "generic-cli", "codex-approvals", "openclaw", "bivy-agent-protocol", "acp", ...loadAgentManifest().map((agent) => agent.id)]);
+    return parsed.flatMap((item) => {
+      const id = typeof item?.id === "string" ? item.id.trim().toLowerCase() : "";
+      const base = loadAgentManifest().find((agent) => agent.id === item?.extends);
+      const command = typeof item?.command === "string" && item.command.trim() ? item.command.trim() : base?.command;
+      if (!/^[a-z][a-z0-9-]{1,47}$/.test(id) || reserved.has(id) || !command) return [];
+      return [[id, {
+        label: typeof item.label === "string" && item.label.trim() ? item.label.trim() : id,
+        type: "command",
+        command,
+        args: Array.isArray(item.args) && item.args.every((a) => typeof a === "string") ? item.args : [],
+      }]];
+    });
+  } catch {
+    return [];
+  }
+}
+
 // Headless "one-shot" tokens for an agent, derived from the manifest — the
 // fallback for any spec that isn't hand-tuned in AGENT_HEADLESS_FLAGS below, so a
 // newly-added agent still gets one-shot detection with no edit here.
 function manifestHeadlessFlags(id) {
   const entry = loadAgentManifest().find((a) => a.id === id);
-  return entry && entry.headlessFlags?.length ? entry.headlessFlags : undefined;
+  if (entry?.headlessFlags?.length) return entry.headlessFlags;
+  const plugin = loadPluginAgentManifest().find(([pluginId]) => pluginId === id)?.[1];
+  return plugin?.headlessFlags?.length ? plugin.headlessFlags : undefined;
 }
 
-const BUILTIN_TERMINAL_AGENTS = new Map([
-  ["pi", { label: "Pi", type: "native-pi" }],
+const AGENT_INTEGRATIONS = new Map([
+  ["pi", { label: "Pi", type: "command", command: "pi", npmPackage: "@earendil-works/pi-coding-agent" }],
   ["claude", { label: "Claude Code", type: "command", command: "claude", npmPackage: "@anthropic-ai/claude-code" }],
   ["openclaw", { label: "OpenClaw", type: "command", command: process.env.BIVY_OPENCLAW_COMMAND || "openclaw" }],
   ...loadAgentManifest().map((a) => [
@@ -610,6 +807,8 @@ const BUILTIN_TERMINAL_AGENTS = new Map([
       ...(a.install?.kind === "npm" ? { npmPackage: a.install.pkg } : {}),
     },
   ]),
+  ...loadPluginAgentManifest(),
+  ...loadCustomAgentManifest(),
 ]);
 
 async function ensureTerminalCommand(agent) {
@@ -651,7 +850,7 @@ function customTerminalAgent(agentId) {
 
 function terminalAgent(agentId) {
   const id = (agentId || resolveDefaultAgent()).toLowerCase();
-  return { id, agent: BUILTIN_TERMINAL_AGENTS.get(id) ?? customTerminalAgent(id) };
+  return { id, agent: AGENT_INTEGRATIONS.get(id) ?? customTerminalAgent(id) };
 }
 
 async function waitForNode(config, timeoutMs = 8000) {
@@ -714,10 +913,7 @@ async function resolveRunSpec(agentId, extraArgs) {
   }
   const { id, agent } = terminalAgent(agentId);
   if (!agent) {
-    return { error: `Unknown agent: ${agentId}. Built-ins: ${[...BUILTIN_TERMINAL_AGENTS.keys()].join(", ")}. Or: bivy run -- <command>.` };
-  }
-  if (agent.type === "native-pi") {
-    return { spec: { agent: id, label: agent.label, command: nodeBin, args: [...nodeScriptArgs(nativePiEntry), ...extraArgs] } };
+    return { error: `Unknown agent: ${agentId}. Known integrations: ${[...AGENT_INTEGRATIONS.keys()].join(", ")}. Or: bivy run -- <command>.` };
   }
   const command = await ensureTerminalCommand(agent);
   if (!command) {
@@ -726,9 +922,10 @@ async function resolveRunSpec(agentId, extraArgs) {
   return { spec: { agent: id, label: agent.label, command, args: [...(agent.args ?? []), ...extraArgs] } };
 }
 
-// Pull bivy's own `--name`/`--model` flags (space or `=` form) out of the run
-// args so they aren't blindly forwarded. Only honored before a `--` separator,
-// past which everything is the raw command the user asked to run.
+// Pull bivy's own run flags out of the args so they aren't blindly forwarded.
+// Only honored before a `--` separator, past which everything is the raw command
+// the user asked to run. `--chat` selects the governed app-session path instead
+// of the native PTY path; `--no-open` keeps that path headless after creation.
 // Does a token look like a git remote (URL, scp-style, owner/repo, or a path)
 // rather than an agent id? Lets `--clone <remote>` disambiguate from bare
 // `--clone` (= current folder's repo) without a required `=`.
@@ -740,10 +937,14 @@ function looksLikeRemote(value) {
 function extractRunFlags(args) {
   const rest = [];
   let name, model, node, workspace;
+  let chat = false;
+  let noOpen = false;
   let clone; // undefined = no clone; true = current repo; string = explicit remote
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--") { rest.push(...args.slice(i)); break; }
+    if (a === "--chat") { chat = true; continue; }
+    if (a === "--no-open") { noOpen = true; continue; }
     if (a === "--name" && args[i + 1] !== undefined) { name = args[++i]; continue; }
     if (a.startsWith("--name=")) { name = a.slice("--name=".length); continue; }
     if (a === "--model" && args[i + 1] !== undefined) { model = args[++i]; continue; }
@@ -756,7 +957,7 @@ function extractRunFlags(args) {
     if (a === "--clone") { clone = looksLikeRemote(args[i + 1]) ? args[++i] : true; continue; }
     rest.push(a);
   }
-  return { name: name?.trim() || undefined, model: model?.trim() || undefined, node: node?.trim() || undefined, workspace: workspace?.trim() || undefined, clone, rest };
+  return { name: name?.trim() || undefined, model: model?.trim() || undefined, node: node?.trim() || undefined, workspace: workspace?.trim() || undefined, chat, noOpen, clone, rest };
 }
 
 // A safe-ish workspace dir name from a remote or path (basename minus .git).
@@ -822,6 +1023,19 @@ function defaultRunWorkspace(config) {
   const cwd = process.cwd();
   const res = runQuiet("git", ["-C", cwd, "rev-parse", "--is-inside-work-tree"]);
   return res.code === 0 && res.stdout.trim() === "true" ? cwd : fallback;
+}
+
+/** First setup should use the repository the developer deliberately ran it
+ * from, when there is one. Never mistake Bivy's own source/install checkout for
+ * the customer's first repository; that path keeps the safe dedicated folder. */
+function firstSetupWorkspace(config) {
+  if (config.workspace && config.workspace !== repoRoot) return config.workspace;
+  const cwd = path.resolve(process.cwd());
+  if (cwd !== repoRoot) {
+    const top = runQuiet("git", ["-C", cwd, "rev-parse", "--show-toplevel"]);
+    if (top.code === 0 && top.stdout.trim()) return path.resolve(top.stdout.trim());
+  }
+  return path.join(os.homedir(), "bivy-workspace");
 }
 
 // --- nodes registry ---------------------------------------------------------
@@ -901,6 +1115,9 @@ const AGENT_HEADLESS_FLAGS = {
 // appear here; others simply run without a pinned id.
 const AGENT_SESSION_ID_FLAG = {
   claude: "--session-id", // `claude --session-id <uuid>` (must be a valid UUID)
+  // Official Grok CLI: `grok --session-id <uuid>` pins a new session UUID under
+  // ~/.grok/sessions/<cwd>/<uuid>/ so takeover / resume has a known target.
+  grok: "--session-id",
 };
 
 // Args that mean the caller already chose a session (pin or resume), so we must
@@ -915,6 +1132,7 @@ const SESSION_ID_CONFLICTS = ["--session-id", "--resume", "-r", "-c", "--continu
 const AGENT_RESUME_ARGS = {
   claude: (id) => ["--resume", id],
   codex: (id) => ["resume", id],
+  grok: (id) => ["--resume", id],
 };
 function agentResumeArgs(agentId, sessionRef) {
   const fn = AGENT_RESUME_ARGS[(agentId || "").toLowerCase()];
@@ -1250,22 +1468,18 @@ async function cmdNodes(args = []) {
   console.log("");
 }
 
-// `bivy agents` — list the agents Bivy can launch (its built-in terminal agents),
-// showing which are installed on PATH. `bivy run <agent>` starts one; the bundled
-// ones are installed with `bivy agents:install`. `--json` for machine-readable output.
+// `bivy agents` — list integrations and the upstream agents found on PATH.
+// `bivy run <agent>` starts the user's native agent; `--json` is machine-readable.
 function cmdAgents(args = []) {
   if (args.includes("-h") || args.includes("--help")) {
-    console.log("Usage: bivy agents [--json]\n\nList the agents Bivy can launch ('bivy run <agent>') and which are installed on PATH. 'bivy agents:install' installs the bundled ones.");
+    console.log("Usage: bivy agents [--json]\n\nList the agents Bivy can launch ('bivy run <agent>') and which are installed on PATH. 'bivy agents:install' installs the known upstream agents.");
     return;
   }
   const asJson = args.includes("--json");
-  const rows = [...BUILTIN_TERMINAL_AGENTS.entries()].map(([id, meta]) => {
-    if (meta.type === "native-pi") {
-      return { id, label: meta.label, type: meta.type, command: null, installed: true, path: null };
-    }
+  const rows = [...AGENT_INTEGRATIONS.entries()].map(([id, meta]) => {
     const command = meta.command || id;
     const resolved = whichOnPath(command);
-    return { id, label: meta.label, type: meta.type, command, installed: Boolean(resolved), path: resolved || null };
+    return { id, label: meta.label, type: meta.type, command, installed: Boolean(resolved), path: resolved || null, ...(meta.plugin ? { plugin: meta.plugin } : {}) };
   });
 
   if (asJson) {
@@ -1273,13 +1487,12 @@ function cmdAgents(args = []) {
     return;
   }
 
-  console.log(c.bold("\n  Agents") + c.dim("  (bivy run <agent> — 'bivy agents:install' adds the bundled ones)\n"));
+  console.log(c.bold("\n  Agents") + c.dim("  (bivy run <agent> — 'bivy agents:install' adds the known upstream agents)\n"));
   for (const row of rows) {
-    const status = row.type === "native-pi"
-      ? c.green("● built-in")
-      : row.installed ? c.green("● installed") : c.dim("○ not installed");
+    const status = row.installed ? c.green("● installed") : c.dim("○ not installed");
     const where = row.path ? c.dim(`  ${row.path}`) : "";
-    console.log(`  ${c.cyan(row.id.padEnd(12))} ${String(row.label).padEnd(16)} ${status}${where}`);
+    const source = row.plugin ? c.dim(`  plugin:${row.plugin}`) : "";
+    console.log(`  ${c.cyan(row.id.padEnd(12))} ${String(row.label).padEnd(16)} ${status}${source}${where}`);
   }
   console.log("");
 }
@@ -1331,13 +1544,8 @@ async function cmdShim(args = []) {
       process.exit(1);
       return;
     }
-    const builtin = BUILTIN_TERMINAL_AGENTS.get(agent);
-    if (builtin && builtin.type === "native-pi") {
-      console.error(c.red(`"${agent}" is Bivy's own native runtime, not a standalone binary — nothing to shim. Just run 'bivy -a ${agent}'.`));
-      process.exit(1);
-      return;
-    }
-    const agentCmd = builtin?.command || agent;
+    const integration = AGENT_INTEGRATIONS.get(agent);
+    const agentCmd = integration?.command || agent;
     const shimDir = path.resolve(argValue(rest, "dir") || defaultShimDir());
     const force = rest.includes("--force");
     const headlessOverride = argValue(rest, "headless");
@@ -1523,16 +1731,16 @@ async function cmdExec(args = []) {
 }
 
 // `bivy completions <bash|zsh|fish>` — print a shell completion script to eval or
-// install. Covers the top-level commands and the built-in agent ids.
+// install. Covers the top-level commands and known integration ids.
 function cmdCompletions(args = []) {
   const shell = (args[0] || "").toLowerCase();
   const commands = [
-    "run", "sessions", "ls", "resume", "promote", "rename", "nodes", "agents", "agents:install", "shim", "takeover", "token", "exec",
-    "send", "kill", "setup", "start", "stop", "restart", "status", "doctor", "logs", "login",
-    "update", "update:log", "open", "service", "secrets", "voice", "link", "relay:setup",
+    "run", "runs", "sessions", "ls", "resume", "promote", "rename", "nodes", "agent", "agents", "agents:install", "shim", "takeover", "token", "exec",
+    "send", "attach", "kill", "setup", "start", "stop", "restart", "status", "doctor", "diagnostics", "capabilities", "logs", "login",
+    "update", "update:log", "audit", "automation", "config", "plugin", "open", "service", "secrets", "voice", "link", "relay:setup",
     "github:connect", "github:app-create", "github:app-connect", "github:app-sync", "prune", "uninstall", "help", "version",
   ];
-  const agents = [...BUILTIN_TERMINAL_AGENTS.keys()];
+  const agents = [...AGENT_INTEGRATIONS.keys()];
 
   if (shell === "bash") {
     console.log(`# bivy bash completion — add to ~/.bashrc:  eval "$(bivy completions bash)"
@@ -1590,11 +1798,66 @@ complete -c bivy -n '__fish_seen_subcommand_from run' -a '${agents.join(" ")}'`)
 // flag on top of it.
 async function cmdRun(args = []) {
   if (!(await ensureDeps())) process.exit(1);
-  const { name, model, node, workspace, clone, rest } = extractRunFlags(args);
+  const { name, model, node, workspace, chat, noOpen, clone, rest } = extractRunFlags(args);
   // Bare `bivy` (empty rest) resolves to the configured default agent; an
   // explicit `bivy run <agent>` keeps that agent verbatim.
   const [agentIdArg, ...extraArgs] = rest;
   const agentId = agentIdArg || resolveDefaultAgent();
+
+  if (chat) {
+    if (node) {
+      console.error(c.red("--chat currently starts a governed session on this node; it can't be combined with --node."));
+      process.exit(1);
+      return;
+    }
+    if (agentId === "--" || extraArgs.length) {
+      console.error(c.red("--chat starts a governed agent integration and does not accept native agent arguments or the raw '-- <command>' form."));
+      process.exit(1);
+      return;
+    }
+    let requestedWorkspace;
+    try { requestedWorkspace = resolveWorkspaceDir({ clone, workspace }); }
+    catch (error) { console.error(c.red(error?.message || String(error))); process.exit(1); return; }
+    const config = loadConfig();
+    // Preserve `bivy run`'s cwd contract: from inside a git checkout, a chat run
+    // targets that checkout; elsewhere it uses the node's configured workspace.
+    const sessionWorkspace = requestedWorkspace || defaultRunWorkspace(config);
+    if (!(await ensureNodeRunning(config))) {
+      console.error(c.red(`Could not start the Bivy node at ${url(config)}.`));
+      process.exit(1);
+      return;
+    }
+    try {
+      const created = await localApi(config, "/api/session", {
+        method: "POST",
+        body: JSON.stringify({ agent: agentId, ...(model ? { model: { provider: "", id: model } } : {}), ...(sessionWorkspace ? { workspace: sessionWorkspace } : {}) }),
+      });
+      if (name) {
+        await localApi(config, "/api/sessions/rename", {
+          method: "POST",
+          body: JSON.stringify({ sessionId: created.id, name }),
+        });
+      }
+      const sessionPath = `/sessions/${encodeURIComponent(created.id)}`;
+      const remote = await openRemoteApp({ open: !noOpen, remotePath: sessionPath });
+      console.log(c.green(`Started chat session ${created.id} (${created.agentName || created.runtimeId || agentId}).`));
+      if (remote && (noOpen || !canOpenBrowser())) console.log(`Open it in the Bivy app: ${c.cyan(remote.openUrl)}`);
+      else if (!remote) {
+        console.log(c.yellow("Remote app access is not configured on this node."));
+        console.log(`Run ${c.cyan("bivy relay:setup")}, then open session ${c.cyan(created.id)} in the app.`);
+      }
+      return;
+    } catch (error) {
+      console.error(c.red(`Could not start chat session: ${error?.message || String(error)}`));
+      process.exit(1);
+      return;
+    }
+  }
+  if (noOpen) {
+    console.error(c.red("--no-open is only valid together with --chat."));
+    process.exit(1);
+    return;
+  }
 
   // A cloned/explicit workspace lives on THIS machine, so it only applies to the
   // local node. For a remote --node run the checkout would need to be made there.
@@ -1635,11 +1898,6 @@ async function cmdRun(args = []) {
     // path a phone uses). The command must resolve on the REMOTE node's PATH, so
     // send the agent's bare command rather than this machine's absolute path.
     if (target.source === "relay") {
-      if (agentId !== "--" && terminalAgent(agentId).agent?.type === "native-pi") {
-        console.error(c.red("Pi runs only on the local node. For --node, pick an installed agent (e.g. claude, codex)."));
-        process.exit(1);
-        return;
-      }
       const remoteCommand = agentId === "--" ? resolved.spec.command : (terminalAgent(agentId).agent?.command || resolved.spec.command);
       const spec = { ...resolved.spec, command: remoteCommand, name, model, workspace: undefined };
       console.log(c.dim(`Starting on ${c.cyan(target.name)} over the relay…`));
@@ -1972,6 +2230,68 @@ async function cmdSend(args = []) {
     env: startEnv(config),
   });
   process.exit(code);
+}
+
+// `bivy attach <file> [--caption "…"] [--artifact] [--session <id>]` — surface a
+// file the agent produced into the chat as an image/file attachment (the reverse
+// of the composer paperclip). The universal path: any agent that can run a shell
+// command can call this. The session id defaults to $BIVY_SESSION_ID, which every
+// runtime adapter injects into the agent's subprocess env (see
+// src/runtime/session-env.ts) — except pi, whose SDK exposes its own
+// $PI_SESSION_ID instead (same id, different var name; see
+// resolveAttachSessionId). The file is resolved to an absolute path here (the
+// CLI's cwd is the agent's workdir) and confined to the session workspace
+// server-side. `--artifact` marks it as a named artifact (a durable output worth
+// surfacing in the session's Artifacts list) rather than an incidental inline
+// image — see packages/core/src/artifacts.ts.
+async function cmdAttach(args = []) {
+  const flag = (name) => {
+    const i = args.indexOf(name);
+    return i >= 0 && i + 1 < args.length ? args[i + 1] : undefined;
+  };
+  const sessionId = resolveAttachSessionId({ sessionFlag: flag("--session"), env: process.env });
+  const caption = flag("--caption");
+  const name = flag("--name");
+  const mimeType = flag("--mime") || flag("--mimeType");
+  const artifact = args.includes("--artifact");
+  const flagsWithValue = new Set(["--session", "--caption", "--name", "--mime", "--mimeType"]);
+  // First positional that isn't a flag or a flag's value.
+  let file;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a.startsWith("-")) { if (flagsWithValue.has(a)) i++; continue; }
+    if (i > 0 && flagsWithValue.has(args[i - 1])) continue;
+    file = a;
+    break;
+  }
+  if (!file) { console.error(c.red('Usage: bivy attach <file> [--caption "…"] [--artifact] [--session <id>]')); process.exit(1); return; }
+  if (!sessionId) { console.error(c.red("No session id. Set --session <id> or run inside an agent session ($BIVY_SESSION_ID).")); process.exit(1); return; }
+  const absPath = path.resolve(process.cwd(), file);
+  if (!fs.existsSync(absPath)) { console.error(c.red(`File not found: ${file}`)); process.exit(1); return; }
+
+  const config = loadConfig();
+  if (!(await ensureNodeRunning(config))) { console.error(c.red(`Could not reach the Bivy node at ${url(config)}.`)); process.exit(1); return; }
+  // A token isn't required on a single-user host (loopback bypasses auth), but
+  // include it when available so multi-user hosts work too.
+  let token;
+  try { token = await localDeviceToken(config); } catch { token = undefined; }
+  const headers = { "content-type": "application/json" };
+  if (token) headers.authorization = `Bearer ${token}`;
+  let res;
+  try {
+    res = await fetch(`${url(config)}/api/session/${encodeURIComponent(sessionId)}/attach`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ path: absPath, caption, name, mimeType, artifact }),
+    });
+  } catch (error) {
+    console.error(c.red(`Could not reach the Bivy node: ${error?.message || String(error)}`));
+    process.exit(1);
+    return;
+  }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { console.error(c.red(`Attach failed (${res.status}): ${body?.error || "unknown error"}`)); process.exit(1); return; }
+  console.log(c.green(`Attached ${body.name} (${body.kind}, ${body.size} bytes) to the chat.`));
 }
 
 // Map a saved session's runtime id to the `bivy run` agent whose native CLI can
@@ -2556,9 +2876,11 @@ function createPrompter() {
   };
 
   const askChoice = async (question, choices, fallback) => {
-    const labels = choices.map((choice) => `${choice.key}=${choice.label}`).join(", ");
     for (;;) {
-      const answer = (await ask(`${question} (${labels})`, fallback)).toLowerCase();
+      const menu = choices.map((choice) => `    ${c.cyan(choice.key)}  ${choice.label}`).join("\n");
+      const suffix = fallback ? c.dim(` [default: ${fallback}]`) : "";
+      process.stdout.write(`\n${c.cyan("›")} ${question}\n${menu}\n  >${suffix} `);
+      const answer = String(await nextLine()).trim().toLowerCase() || fallback || "";
       const match = choices.find((choice) => answer === choice.key || answer === choice.label.toLowerCase());
       if (match) return match.key;
       console.log(c.yellow(`Please choose one of: ${choices.map((choice) => choice.key).join(", ")}`));
@@ -2825,11 +3147,44 @@ async function reconcileNodePort(config) {
 // was (re)started. Used by `bivy restart` and `bivy update` — the paths that
 // previously trusted the saved port verbatim.
 async function restartServiceReconciled(config) {
-  const { file } = servicePaths();
-  if (fs.existsSync(file) && (await reconcileNodePort(config))) {
-    return await installService(config);
-  }
+  const { kind, file } = servicePaths();
+  if (!fs.existsSync(file)) return restartService();
+  const portChanged = await reconcileNodePort(config);
+  const expected = kind === "launchd" ? plistContent(config) : kind === "systemd" ? systemdContent(config) : "";
+  let configChanged = false;
+  try { configChanged = Boolean(expected) && fs.readFileSync(file, "utf8") !== expected; } catch { configChanged = true; }
+  // A typed config edit may change workspace, port, or environment without
+  // touching the old unit. Reinstall on content drift so `bivy restart` really
+  // applies the canonical file instead of reviving stale baked-in values.
+  if (portChanged || configChanged) return await installService(config);
   return restartService();
+}
+
+// After an update triggers a restart, the service manager can report the unit
+// "started" while the node immediately crash-loops — e.g. an interrupted
+// download left a half-extracted dependency, so the process exits on a missing
+// module on every restart. Poll the local API so `bivy update` tells the truth
+// (a clear, actionable failure) instead of printing "Updated and restarted"
+// over a node that never came up. Non-destructive: it only observes.
+async function verifyNodeCameUp(config, timeoutMs = 30000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const status = await localApi(config, "/api/status");
+      if (status && typeof status === "object") return true;
+    } catch {
+      /* not reachable yet — keep polling until the deadline */
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+  }
+  return false;
+}
+
+function reportNodeDidNotStart() {
+  console.log(c.red("⚠ The node did not become reachable after the update — it may be crash-looping."));
+  console.log(`  Inspect it with ${c.cyan("bivy status")} and your service log.`);
+  console.log("  A common cause is a half-downloaded dependency from an interrupted update;");
+  console.log(`  re-running ${c.cyan("bivy update")} usually re-fetches it cleanly.`);
 }
 
 // How long a restart triggered by `bivy update`/`bivy restart` will wait for
@@ -3082,7 +3437,7 @@ function terminalQr(text) {
 
 async function cmdSetup(args = []) {
   if (args.includes("-h") || args.includes("--help")) {
-    console.log("Usage: bivy setup\n\nFirst-run wizard: workspace, remote access + sign-in, and background service. Safe to re-run later to change the workspace, default agent, or remote access.");
+    console.log("Usage: bivy setup\n\nFirst-run wizard: agent choice, model login, remote access + sign-in, and background service. Workspace and port get safe defaults. Re-run later to change the default agent or remote access.");
     return;
   }
   console.log(c.bold("\n  Bivy — node setup\n"));
@@ -3096,9 +3451,9 @@ async function cmdSetup(args = []) {
   const rl = createPrompter();
   const { ask, askChoice, askYesNo } = rl;
 
-  // 1. Workspace + local port — chosen for the user, no prompts. The workspace
-  // defaults to a dedicated ~/bivy-workspace folder that won't collide with the
-  // user's own projects; the local port is for this machine only (remote access
+  // 1. Repository workspace + local port — chosen for the user, no prompts. If
+  // setup is run from a repository, that repository is the first-task workspace;
+  // otherwise use a dedicated ~/bivy-workspace folder. The local port is for this machine only (remote access
   // goes through the relay). Both are changeable later in Settings.
   //
   // Port selection auto-avoids collisions so multiple nodes on one machine (e.g.
@@ -3107,7 +3462,7 @@ async function cmdSetup(args = []) {
   // otherwise we take the first free port at or above 4317. Without this the
   // second node would default to 4317 too and silently fail to bind.
   if (!existingConfig || config.workspace === repoRoot) {
-    const workspace = config.workspace !== repoRoot ? config.workspace : path.join(os.homedir(), "bivy-workspace");
+    const workspace = firstSetupWorkspace(config);
     if (!fs.existsSync(workspace)) fs.mkdirSync(workspace, { recursive: true });
     config.workspace = workspace;
     const explicitPort = Number(process.env.PORT);
@@ -3125,19 +3480,42 @@ async function cmdSetup(args = []) {
   }
   console.log(c.dim(`Workspace: ${config.workspace}  ·  local port: ${config.port}  (change both in Settings)`));
 
-  // 2. Default agent — stays Pi unless one was already chosen. Pi is the built-in
-  // default and is changeable per-session or in Settings, so setup doesn't ask.
-  // Model/provider sign-in is left to the agent's own CLI/TUI or Settings.
-  const setupAgent = setupAgentByRuntime(String(config.env.BIVY_RUNTIME || "pi")) || setupAgentByRuntime("pi");
-  if (!config.env.BIVY_RUNTIME && setupAgent) {
+  // 2. Agent first: authentication depends on who owns the selected agent's
+  // credentials. Prefer an already-installed native agent on a fresh machine,
+  // while retaining the saved choice when setup is re-run.
+  console.log(c.bold("\n  Agent\n"));
+  const recommended = recommendedSetupAgents();
+  const initialChoice = await askChoice(
+    "Which agent do you want to try first?",
+    [...recommended.map((choice) => ({
+      key: choice.key,
+      label: `${choice.label}${choice.command && commandExists(choice.command) ? " (installed)" : ""}`,
+    })), { key: "m", label: "More agents…" }],
+    setupAgentDefaultKey(config),
+  );
+  const savedAgent = setupAgentByRuntime(String(config?.env?.BIVY_RUNTIME || ""));
+  const agentChoice = initialChoice === "m"
+    ? await askChoice(
+      "Choose another agent",
+      additionalSetupAgents().map((choice) => ({ key: choice.key, label: `${choice.label}${choice.command && commandExists(choice.command) ? " (installed)" : ""}` })),
+      savedAgent && !RECOMMENDED_SETUP_AGENT_IDS.has(savedAgent.runtimeId) ? savedAgent.key : "p",
+    )
+    : initialChoice;
+  const setupAgent = SETUP_AGENT_CHOICES.find((choice) => choice.key === agentChoice) || setupAgentByRuntime("claude-code-sdk");
+  if (setupAgent) {
     config.env = { ...config.env, BIVY_RUNTIME: setupAgent.runtimeId };
     saveConfig(config);
+    // Keep the daemon's authoritative node setting aligned with the wizard.
+    // Without this, a prior Settings choice wins over BIVY_RUNTIME at boot and
+    // the app opens a new session on a different agent than the user just chose.
+    saveDefaultAgentSetting(setupAgent.runtimeId);
   }
+  let agentReady = true;
   if (setupAgent && setupAgent.runtimeId !== "pi") {
-    const installed = await ensureSetupAgent(setupAgent);
-    if (!installed) console.log(c.yellow(`${setupAgent.label} was not fully installed. Install it later from the app or with 'bivy agents:install'.`));
+    agentReady = await ensureSetupAgent(setupAgent);
+    if (!agentReady) console.log(c.yellow(`${setupAgent.label} was not fully installed. Install it later from the app or with 'bivy agents:install'.`));
   }
-  console.log(c.dim(`Default agent: ${setupAgent?.label || "Pi"}  (change in Settings; sign into your model from the agent's CLI/TUI or Settings → Keys & OAuth)`));
+  console.log(c.dim(`Default agent: ${setupAgent?.label || "Pi"}  (change any time in Settings)`));
 
   // 3. Secure remote web/PWA access is what makes a Bivy-managed CLI useful:
   // without a relay/control plane it adds nothing over running the agent
@@ -3150,13 +3528,17 @@ async function cmdSetup(args = []) {
     console.log(c.bold("\n  Remote access\n"));
 
     console.log("Bivy uses remote access to make agent sessions visible and steerable from your other devices.");
+    // If self-host endpoints are already provided via the environment, default to
+    // self-hosted so a scripted or self-hosted install doesn't have to re-pick it
+    // (BIVY_CONTROL_PLANE_URL / BIVY_RELAY_URL then pre-fill the URL prompts below).
+    const selfHostEnv = Boolean((process.env.BIVY_CONTROL_PLANE_URL || "").trim() || (process.env.BIVY_RELAY_URL || "").trim());
     const syncChoice = await askChoice(
       "Remote access",
       [
-        { key: "h", label: "hosted (recommended — one node is free)" },
+        { key: "h", label: "hosted (recommended — first 25 remotely accessible sessions are free; nothing caps your local usage)" },
         { key: "s", label: "self-hosted (your own control plane + relay)" },
       ],
-      "h",
+      selfHostEnv ? "s" : "h",
     );
     const relayArgs = [];
     if (syncChoice === "s") {
@@ -3217,10 +3599,58 @@ async function cmdSetup(args = []) {
   // `bivy github:app-create` / `github:app-connect`. One app covers every repo,
   // and the node mints its own tokens, so there's no per-repo token to set up here.
 
+  // Model access is part of activation, not a post-success footnote. Integrations
+  // marked needsBivyModel use Bivy's provider login; offer it inline so setup cannot imply the first task
+  // is ready while the required credential is still absent. Agent-native auth is
+  // explained in the readiness checklist below because those CLIs own the flow.
+  let agentAuthReady = setupAgent?.needsBivyModel ? hasModelConfig(config) : nativeAgentAuthDetected(setupAgent);
+  if (setupAgent?.needsBivyModel && !agentAuthReady) {
+    console.log("\nBivy stores this credential encrypted on your machine, reuses it with compatible agents, and syncs it E2E-encrypted to your other Bivy nodes. Bivy Cloud never receives it in plaintext.");
+    const signInNow = await askYesNo("Sign in to a model now so your first task can run?", true);
+    if (signInNow) {
+      rl.pause();
+      const loginCode = await runSetupModelLogin(config);
+      rl.resume();
+      if (loginCode !== 0 || !hasModelConfig(loadConfig())) {
+        console.log(c.yellow("Model sign-in did not complete. The node can start, but an agent reply still requires 'bivy login'."));
+      }
+      agentAuthReady = hasModelConfig(loadConfig());
+    }
+  } else if (setupAgent && !setupAgent.needsBivyModel) {
+    if (agentAuthReady) {
+      console.log(c.green(`\n  ✓ Existing ${setupAgent.label} login detected — Bivy will connect without replacing the agent's credential store.`));
+    } else if (setupAgent.command) {
+      console.log(`\n${setupAgent.label} owns its login and configuration. Bivy connects to that existing agent state rather than copying it into a separate default credential store.`);
+      const signInNow = await askYesNo(`Open ${setupAgent.label} now to sign in? (Exit it when sign-in is complete.)`, true);
+      if (signInNow) {
+        rl.pause();
+        const loginCode = await run(setupAgent.command, [], { cwd: config.workspace, env: startEnv(config) });
+        rl.resume();
+        agentAuthReady = loginCode === 0 || nativeAgentAuthDetected(setupAgent);
+      }
+    }
+  }
+
+  // Materialize canonical typed config before starting/restarting the daemon,
+  // so this setup run's workspace/port/agent choices are effective immediately.
+  // Existing config keeps every advanced field.
+  await run(nodeBin, [...nodeScriptArgs(configEntry), "migrate", "--from-legacy", "--quiet"], {
+    cwd: repoRoot,
+    env: process.env,
+    stdio: "ignore",
+  }).catch(() => {});
+  await hydrateCanonicalConfig().catch(() => {});
+
   // 4. Background service — always installed so the node keeps running (and stays
   // reachable remotely) after you close this terminal. No prompt.
   let started = false;
-  if (config.service) {
+  if (process.env.BIVY_SETUP_SKIP_SERVICE === "1") {
+    // Isolation seam for disposable/container smoke tests: the caller starts a
+    // node with this BIVY_DATA_DIR/port and setup exercises the real wizard
+    // without installing or replacing the host user's system service.
+    started = await isReachable(config);
+    console.log(c.dim(`\nBackground-service install skipped; using the isolated node already running at ${url(config)}.`));
+  } else if (config.service) {
     console.log(c.dim("\nBackground service already configured; restarting it."));
     started = restartService();
   } else {
@@ -3235,9 +3665,26 @@ async function cmdSetup(args = []) {
     return;
   }
 
-  console.log(c.bold(c.green("\n  ✓ Your node is running.\n")));
-  printFirstRunSteps();
-  await finishSetupRemote(config, setupSession);
+  const finalConfig = loadConfig();
+  let liveReadiness = null;
+  try { liveReadiness = await localApi(finalConfig, "/api/activation/readiness"); } catch {}
+  const modelReady = setupAgent?.needsBivyModel
+    ? Boolean(liveReadiness?.credential?.ok ?? hasModelConfig(finalConfig))
+    : agentAuthReady;
+  const repoReady = Boolean(liveReadiness?.repository?.ok);
+  console.log(c.bold(c.green("\n  ✓ Node running. Check first-task readiness below.\n")));
+  console.log(`  ${c.green("✓")} node reachable at ${url(finalConfig)}`);
+  console.log(`  ${agentReady ? c.green("✓") : c.yellow("!")} runtime ${agentReady ? `${setupAgent?.label || "Pi"} available` : "not installed — run 'bivy agents:install'"}`);
+  console.log(`  ${modelReady ? c.green("✓") : c.yellow("!")} model ${modelReady ? (setupAgent?.needsBivyModel ? "credential configured" : "native agent login ready") : (setupAgent?.needsBivyModel ? "not configured — run 'bivy login'" : `${setupAgent?.loginHint || "sign in through the selected agent"}`)}`);
+  console.log(`  ${repoReady ? c.green("✓") : c.dim("○")} repository ${repoReady ? "accessible" : "choose one from the directory where you start Bivy or in the app"}`);
+  const ghReady = githubConnected(finalConfig);
+  console.log(`  ${ghReady ? c.green("✓") : c.dim("○")} GitHub ${ghReady ? "connected — your repos will list in the app" : c.dim("optional — connect later in the app under Settings → GitHub App")}`);
+  console.log(`  ${agentReady && modelReady && repoReady ? c.green("✓") : c.yellow("!")} first task ${agentReady && modelReady && repoReady ? "ready to try" : "blocked by the stage above"}`);
+  console.log(`  ${fs.existsSync(relayConfigPath) ? c.green("✓") : c.yellow("!")} remote ${fs.existsSync(relayConfigPath) ? "configured" : "not configured — run 'bivy relay:setup'"}\n`);
+  // Get the user into the product immediately; terminal commands are the
+  // fallback/next-step checklist after the remote app has been opened or linked.
+  await finishSetupRemote(finalConfig, setupSession);
+  printFirstRunSteps(modelReady, setupAgent);
 }
 
 // Read and delete the one-time account-session handoff written by relay:setup
@@ -3266,20 +3713,18 @@ function consumeSetupSession() {
 // `/nodes` return only this one node, so a user with other nodes appeared to land
 // on a different/empty account until they signed out and back in.
 //
-// The separately minted node-scoped paired link (E2E key embedded) is reserved
-// for the QR below, which is meant to be scanned by *another* device to pair it
-// with this node — there, node-scoping is the right least-privilege choice.
-// Everything is also printed as text so servers without a browser can copy it.
 // Open this node's REMOTE control-plane app in a local browser (best effort) and
-// return the URLs involved. The node no longer hosts a UI, so the web/PWA app
+// return the URL involved. The node no longer hosts a UI, so the web/PWA app
 // always comes from the hosted or self-hosted control plane. Prefers, in order:
 // an account sign-in URL (only available right after `relay:setup`, when a
-// setupSession is supplied) → a freshly minted node-scoped paired link → the
-// plain remote base URL. Prints a clean "Opening <base>" line — never the
-// tokenized fragment, so no session/pairing secret lands in terminal scrollback.
+// setupSession is supplied) → the plain remote base URL, where the user signs
+// in normally. Pairing is deliberately reserved for the explicit `bivy link`
+// command; ordinary setup/open should establish the full account experience.
+// Prints a clean "Opening <base>" line — never the tokenized fragment, so no
+// account secret lands in terminal scrollback.
 // Returns null when no relay is configured (caller should send the user to
 // `bivy relay:setup`).
-async function openRemoteApp(config, { setupSession = null, open = true } = {}) {
+async function openRemoteApp({ setupSession = null, open = true, remotePath = "" } = {}) {
   const relay = loadRelayConfig();
   if (!relay) return null;
 
@@ -3296,44 +3741,55 @@ async function openRemoteApp(config, { setupSession = null, open = true } = {}) 
       relay: relay.url,
       session: setupSession.session,
       ...(setupSession.nodeId ? { node: { id: setupSession.nodeId } } : {}),
+      // One-shot first-run preference. The browser may already remember an agent
+      // from another node; carrying the install choice prevents that stale local
+      // preference from replacing what the user selected seconds ago.
+      ...(String(loadConfig().env?.BIVY_RUNTIME || "").trim()
+        ? { defaultAgent: String(loadConfig().env.BIVY_RUNTIME).trim().toLowerCase() }
+        : {}),
     };
-    accountUrl = `${remoteBase}/#${Buffer.from(JSON.stringify(payload)).toString("base64url")}`;
+    accountUrl = `${remoteBase}${remotePath}/#${Buffer.from(JSON.stringify(payload)).toString("base64url")}`;
   }
 
-  // Try to mint a node-scoped paired link (safe to embed in a QR another device
-  // scans). Needs the node reachable, so wait briefly first.
-  let pairedUrl = "";
-  await waitForNode(config).catch(() => {});
-  try {
-    const token = await localDeviceToken(config);
-    const data = await localApi(config, "/api/relay/link", {
-      method: "POST",
-      headers: { authorization: `Bearer ${token}` },
-      body: "{}",
-    });
-    if (data?.url) pairedUrl = data.url;
-  } catch {
-    // fall back to the plain remote app URL below
-  }
-
-  const openUrl = accountUrl || pairedUrl || remoteBase;
+  const openUrl = accountUrl || `${remoteBase}${remotePath}`;
   if (open && canOpenBrowser() && openUrl) {
     console.log(`  Opening ${c.cyan(remoteBase || openUrl)} …`);
     openBrowser(openUrl);
   }
-  return { relay, remoteBase, accountUrl, pairedUrl, openUrl };
+  return { relay, remoteBase, accountUrl, openUrl };
 }
 
-function printFirstRunSteps() {
-  console.log("  Run your first task:");
-  console.log(`    1. Model access:  ${c.cyan("bivy login")}  ${c.dim("(for Pi; other agents use their own login)")}`);
-  console.log(`    2. Start chatting: ${c.cyan("bivy")}`);
-  console.log(`       One-shot task: ${c.cyan('bivy exec "explain this repository"')}\n`);
+// Whether GitHub is connected for repo listing/cloning. Bivy's own connect flow
+// (`bivy github:connect`, or the app's Connect button) writes BIVY_GITHUB_TOKEN
+// — usually a `secret://` vault reference — into cli.json's env; an explicit env
+// token counts too. A `gh auth login` session also works at runtime (the node
+// falls back to `gh auth token`), but that can't be known without shelling out,
+// so it's treated as "not connected here" — the hint is optional either way.
+function githubConnected(config = null) {
+  const token = String(
+    config?.env?.BIVY_GITHUB_TOKEN || process.env.BIVY_GITHUB_TOKEN || process.env.GITHUB_TOKEN || "",
+  ).trim();
+  return Boolean(token);
+}
+
+function printFirstRunSteps(modelReady = false, setupAgent = null) {
+  console.log("  Start your first session:");
+  if (!modelReady) {
+    const login = setupAgent?.needsBivyModel
+      ? `${c.cyan("bivy login")}  ${c.dim("(stored in Bivy's encrypted vault)")}`
+      : c.cyan(setupAgent?.command || "the selected agent's native CLI");
+    console.log(`    Model access: ${login}`);
+  }
+  const agent = setupAgent?.command || setupAgent?.runtimeId || resolveDefaultAgent();
+  const remoteApp = String(loadRelayConfig()?.clientBaseUrl || "https://app.bivy.sh").replace(/\/+$/, "");
+  console.log(`    • In the terminal: ${c.cyan(`bivy run ${agent}`)}`);
+  console.log(`      Then use the remote app to watch the session or take over in chat.`);
+  console.log(`    • Or start in chat: ${c.cyan(remoteApp)}\n`);
 }
 
 async function finishSetupRemote(config, setupSession = null) {
   const openable = canOpenBrowser();
-  const remote = await openRemoteApp(config, { setupSession });
+  const remote = await openRemoteApp({ setupSession });
 
   if (!remote) {
     console.log("\n  Almost there — enable remote access to open the Bivy app:");
@@ -3342,19 +3798,14 @@ async function finishSetupRemote(config, setupSession = null) {
     return;
   }
 
-  const { remoteBase, pairedUrl } = remote;
-  if (pairedUrl) {
-    const qr = terminalQr(pairedUrl);
-    if (qr) console.log(qr + "\n");
-  }
+  const { remoteBase } = remote;
 
   console.log("\n  Access Bivy from anywhere:");
   if (remoteBase) console.log(`    • Remote app:     ${c.cyan(remoteBase)}  (sign in with the same GitHub/email you just used)`);
-  console.log(`    • Link a device:  ${c.cyan("bivy link")}  (prints a QR to pair a phone/laptop with this node)`);
   console.log(`    • Check status:   ${c.cyan("bivy status")}`);
   if (!openable) {
     console.log(c.dim("\n  No browser on this machine (headless server)? Open the Remote app URL above"));
-    console.log(c.dim("  on your phone or laptop and sign in, or scan the QR above to pair a device with this node."));
+    console.log(c.dim("  on your phone or laptop and sign in with the same GitHub account or email."));
   }
   console.log("");
 }
@@ -3407,6 +3858,7 @@ async function cmdStatus(args = []) {
   }
   console.log(c.bold("\n  Bivy node\n"));
   console.log(`  url:       ${url(config)}  ${reachable ? c.green("● reachable") : c.dim("○ not reachable")}`);
+  if (status?.version) console.log(`  version:   ${status.version}`);
   console.log(`  workspace: ${status?.workspace || config.workspace}`);
   console.log(`  ${serviceStatusLine()}`);
   const relay = loadRelayConfig();
@@ -3444,16 +3896,109 @@ async function cmdStatus(args = []) {
     console.log(`  sessions:  ${status.sessions?.open ?? 0} open, ${status.sessions?.indexed ?? 0} indexed${status.sessions?.active ? `, active ${status.sessions.active}` : ""}`);
     console.log(`  devices:   ${status.devices?.paired ?? 0} paired remote, ${status.devices?.localTokens ?? 0} local token(s)`);
     console.log(`  approvals: ${status.approvals?.pending ?? 0} pending`);
-    console.log(`  guard:     ${status.approvalMode || "autonomous"} (${status.guardrails?.workspaceBoundary ? "workspace boundary on" : "boundary unknown"})`);
+    console.log(`  guard:     ${status.approvalMode || "autonomous"} · ${status.guardrails?.protection || (status.guardrails?.workspaceBoundary ? "structured workspace controls" : "runs with user permissions")}`);
+    if (status.updatedAt) {
+      const when = new Date(status.updatedAt);
+      console.log(`  updated:   ${Number.isNaN(when.getTime()) ? status.updatedAt : when.toLocaleString()}`);
+    }
   }
   console.log("");
 }
 
 // `bivy doctor` — one health screen: runtime deps, node reachability, model auth,
 // remote/relay, and agents on PATH.
+// `bivy diagnostics [--out <file>]` — fetch the node's redacted diagnostics
+// bundle (versions, health counters, whitelisted config, activation record — no
+// secrets/prompts/transcripts) and print it, or write it to a file to attach to a
+// support request. See src/diagnostics.ts for exactly what is (and isn't) included.
+async function cmdDiagnostics(args = []) {
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log('Usage: bivy diagnostics [--out <file>]\n\nPrint a redacted, shareable diagnostics bundle (no secrets, prompts, transcripts, or repo content). --out writes it to a file instead of stdout.');
+    return;
+  }
+  const config = loadConfig();
+  if (!(await ensureNodeRunning(config))) { console.error(c.red(`Could not reach the Bivy node at ${url(config)}.`)); process.exit(1); return; }
+  let report;
+  try { report = await localApi(config, "/api/diagnostics"); }
+  catch (error) { console.error(c.red(`Could not fetch diagnostics: ${error?.message || String(error)}`)); process.exit(1); return; }
+  const json = JSON.stringify(report, null, 2);
+  const outIdx = args.indexOf("--out");
+  const out = outIdx >= 0 && outIdx + 1 < args.length ? args[outIdx + 1] : undefined;
+  if (out) {
+    fs.writeFileSync(out, json + "\n");
+    console.log(c.green(`Wrote redacted diagnostics to ${out}`));
+  } else {
+    console.log(json);
+  }
+}
+
+// `bivy capabilities [--json]` — the Machine capability inventory: what this
+// node actually unlocks for agents (OS/architecture, installed maintained/
+// custom agents, configured model providers/local endpoints, Docker/GPU
+// availability, installed plugins, workspace count). Capability discovery,
+// not a deep scan — every probe is honestly available/not available/unknown.
+// See src/capabilities.ts for exactly what is (and isn't) included.
+async function cmdCapabilities(args = []) {
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log("Usage: bivy capabilities [--json]\n\nShow what this Machine unlocks for agents: OS/architecture, installed maintained/custom agents, configured model providers/local endpoints, Docker/GPU availability, installed plugins, and workspace count.");
+    return;
+  }
+  const json = args.includes("--json");
+  const config = loadConfig();
+  if (!(await ensureNodeRunning(config))) { console.error(c.red(`Could not reach the Bivy node at ${url(config)}.`)); process.exit(1); return; }
+  let snapshot;
+  try {
+    snapshot = await localApi(config, "/api/capabilities");
+  } catch (error) {
+    console.error(c.red(`Could not fetch capabilities: ${error?.message || String(error)}`));
+    process.exit(1);
+    return;
+  }
+  if (json) {
+    console.log(JSON.stringify(snapshot, null, 2));
+    return;
+  }
+
+  const stateLabel = (state) =>
+    state === "available" ? c.green("available") : state === "unavailable" ? c.dim("not available") : c.yellow("unknown");
+  const agentLine = (agent) =>
+    `    ${agent.installed ? c.green("●") : c.dim("○")} ${agent.label}${agent.supportTier ? c.dim(`  (${agent.supportTier})`) : ""}`;
+
+  console.log(c.bold("\n  Machine capabilities\n"));
+  console.log(`  OS:      ${snapshot.os?.platform} ${snapshot.os?.arch} (${snapshot.os?.release})`);
+  console.log(`  Docker:  ${stateLabel(snapshot.docker?.state)}${snapshot.docker?.detail ? c.dim(`  (${snapshot.docker.detail})`) : ""}`);
+  console.log(`  GPU:     ${stateLabel(snapshot.gpu?.state)}${snapshot.gpu?.detail ? c.dim(`  (${snapshot.gpu.detail})`) : ""}`);
+
+  const maintained = snapshot.agents?.maintained ?? [];
+  console.log(`\n  Maintained agents (${maintained.filter((a) => a.installed).length}/${maintained.length} installed):`);
+  for (const agent of maintained) console.log(agentLine(agent));
+  const custom = snapshot.agents?.custom ?? [];
+  if (custom.length) {
+    console.log(`\n  Custom agents (${custom.filter((a) => a.installed).length}/${custom.length} installed):`);
+    for (const agent of custom) console.log(agentLine(agent));
+  }
+
+  const configuredProviders = snapshot.providers?.configured ?? [];
+  console.log(`\n  Model providers configured: ${configuredProviders.length ? configuredProviders.join(", ") : c.dim("none")}`);
+  console.log(`  Local model endpoints:      ${snapshot.providers?.localEndpoints?.count ?? 0} configured (${snapshot.providers?.localEndpoints?.withModels ?? 0} with models)`);
+
+  const plugins = snapshot.plugins ?? [];
+  if (plugins.length) {
+    console.log(`\n  Plugins (${plugins.length}):`);
+    for (const plugin of plugins) {
+      console.log(`    ${plugin.valid ? c.green("●") : c.red("✗")} ${plugin.name || plugin.id}${plugin.version ? c.dim(`  v${plugin.version}`) : ""}${plugin.valid ? "" : c.dim("  (invalid manifest)")}`);
+    }
+  } else {
+    console.log(`\n  Plugins: ${c.dim("none installed")}`);
+  }
+
+  console.log(`\n  Workspaces configured: ${snapshot.workspaces?.count ?? 0}`);
+  console.log("");
+}
+
 async function cmdDoctor(args = []) {
   if (args.includes("-h") || args.includes("--help")) {
-    console.log("Usage: bivy doctor\n\nHealth check: runtime deps, node reachability, model auth, remote/relay, and agents on PATH. Exits non-zero if Node is unsupported or the node is unreachable, so it can gate CI/monitoring.");
+    console.log("Usage: bivy doctor\n\nHealth check: runtime deps, node reachability, model auth, remote/relay, and agents on PATH. Exits non-zero if Node is unsupported or the node is unreachable, so it can gate CI/monitoring. See also 'bivy diagnostics' for a shareable redacted bundle.");
     return;
   }
   if (!(await ensureDeps())) process.exit(1);
@@ -3462,9 +4007,11 @@ async function cmdDoctor(args = []) {
   const reachable = await isReachable(config);
   let status = null;
   let runtimes = null;
+  let readiness = null;
   if (reachable) {
     try { status = await localApi(config, "/api/status"); } catch {}
     try { runtimes = await localApi(config, "/api/runtimes"); } catch {}
+    try { readiness = await localApi(config, "/api/activation/readiness"); } catch {}
   }
 
   const ok = c.green("✓");
@@ -3475,6 +4022,17 @@ async function cmdDoctor(args = []) {
   console.log(c.bold("\n  Bivy doctor\n"));
   console.log(`  ${mark(hasSupportedNode())} Node ${process.version}${hasSupportedNode() ? "" : c.dim("  (needs >= 22.19.0)")}`);
   console.log(`  ${mark(commandExists("git"), true)} git${commandExists("git") ? "" : c.dim("  (recommended for repo-backed sessions)")}`);
+  // GitHub is optional (a "No repo" session needs none), so this only ever warns.
+  // `gh` is NOT required — it's a token fallback; the primary path is Bivy's own
+  // 'bivy github:connect' (or the app's Connect button). We surface gh only as an
+  // available shortcut when it's installed but nothing is connected yet.
+  const ghConnected = githubConnected(config);
+  const ghHint = ghConnected
+    ? c.green("connected")
+    : commandExists("gh")
+      ? c.dim("not connected — 'bivy github:connect' (or 'gh auth login')")
+      : c.dim("not connected — 'bivy github:connect' to list/clone private repos");
+  console.log(`  ${mark(ghConnected, true)} GitHub ${ghHint}`);
   console.log(`  ${mark(reachable)} node ${reachable ? c.green("reachable") : c.dim("not reachable — 'bivy start'")} at ${url(config)}`);
   console.log(`  ${mark(/running/.test(serviceStatusLine()), true)} ${serviceStatusLine()}`);
   const defaultAgent = String(config.env?.BIVY_RUNTIME || runtimes?.current?.id || "pi");
@@ -3483,7 +4041,13 @@ async function cmdDoctor(args = []) {
   const setupAgent = setupAgentByRuntime(defaultAgent);
   const authOwner = runtimeInfo?.authOwner || (setupAgent?.needsBivyModel ? "bivy" : "agent");
   console.log(`  ${mark(agentAvailable, true)} agent ${runtimeInfo?.displayName || defaultAgent}${agentAvailable ? "" : c.dim(" not available — install it or run 'bivy setup'")}`);
-  console.log(`  ${mark(hasModelConfig(config), authOwner !== "bivy")} model ${hasModelConfig(config) ? "configured" : authOwner === "bivy" ? c.dim("not configured — run 'bivy login'") : c.dim("agent-native auth — use the agent's CLI login if needed")}`);
+  const credentialReady = readiness?.credential?.ok ?? hasModelConfig(config);
+  const credentialKnown = readiness?.credential?.probed || readiness?.credential?.configured;
+  console.log(`  ${mark(credentialReady, authOwner !== "bivy" || !credentialKnown)} model ${credentialReady ? (readiness?.credential?.probed ? "access verified" : "configured") : authOwner === "bivy" ? c.dim("not ready — run 'bivy login'") : c.dim("agent-native auth — use the agent's CLI login if needed")}`);
+  const repositoryReady = Boolean(readiness?.repository?.ok);
+  console.log(`  ${mark(repositoryReady, true)} repository ${repositoryReady ? "accessible" : c.dim("not selected or access could not be verified")}`);
+  const firstTaskReady = reachable && agentAvailable && credentialReady && repositoryReady;
+  console.log(`  ${mark(firstTaskReady, true)} first task ${firstTaskReady ? c.green("ready to try") : c.dim("blocked by a stage above")}`);
   const relayConfigured = Boolean(status?.relay?.configured || fs.existsSync(relayConfigPath));
   const relayConnected = Boolean(status?.relay?.connected);
   const relayApp = status?.relay?.controlPlaneUrl;
@@ -3494,11 +4058,21 @@ async function cmdDoctor(args = []) {
       ? c.green("relay connected") + (relayApp ? c.dim(`  ${relayApp}`) : "")
       : c.yellow("configured, not connected") + (relayErr ? c.dim(`  (${relayErr})`) : "");
   console.log(`  ${relayConfigured ? (relayConnected ? ok : warn) : c.dim("○")} remote ${relayLine}`);
-  // Derived from BUILTIN_TERMINAL_AGENTS (the same list 'bivy agents'/'bivy run'
+  // Derived from AGENT_INTEGRATIONS (the same list 'bivy agents'/'bivy run'
   // use) rather than a hand-maintained list, so it can't drift out of sync (#113).
-  const agentCommands = [...BUILTIN_TERMINAL_AGENTS.values()].filter((a) => a.type === "command").map((a) => a.command);
+  const agentCommands = [...AGENT_INTEGRATIONS.values()].filter((a) => a.type === "command").map((a) => a.command);
   const agents = agentCommands.filter((a) => commandExists(a));
-  console.log(`  ${mark(agents.length > 0, true)} agents on PATH: ${agents.length ? c.cyan(agents.join(", ")) : c.dim("none (built-in Pi still works; 'bivy agents:install')")}`);
+  console.log(`  ${mark(agents.length > 0, true)} agents on PATH: ${agents.length ? c.cyan(agents.join(", ")) : c.dim("none ('bivy agents:install' can install known upstream agents)")}`);
+  if (status?.eventLog) {
+    const healthy = status.eventLog.ok !== false;
+    const mib = Number(status.eventLog.bytes || 0) / (1024 * 1024);
+    console.log(`  ${mark(healthy, true)} event log ${healthy ? "writable" : `${status.eventLog.affectedSessions ?? 0} session(s) need attention`} · ${mib.toFixed(1)} MiB`);
+  }
+  if (status?.attachments) {
+    const mib = Number(status.attachments.bytes || 0) / (1024 * 1024);
+    const over = Number(status.attachments.overCapBytes || 0);
+    console.log(`  ${over > 0 ? warn : ok} attachments ${status.attachments.blobs ?? 0} blob(s), ${mib.toFixed(1)} MiB${over > 0 ? c.dim("  (over cap; referenced history retained)") : ""}`);
+  }
   console.log("");
 
   // Fail the command when a hard check is red (unsupported Node or an
@@ -3651,11 +4225,16 @@ async function runUpdate(args = []) {
       console.log(c.yellow(`npm reported an issue (exit ${code}). Try: sudo npm i -g @bivy/bivy@${channel}`));
       process.exit(code);
     }
-    await ensureBundledAgents();
+    await ensureKnownAgents();
     const config = loadConfig();
     await waitForIdleSessions(config, { skip: skipWait });
     if (config.service && (await restartServiceReconciled(config))) {
-      console.log(c.green("Updated and restarted the background service."));
+      if (await verifyNodeCameUp(config)) {
+        console.log(c.green("Updated and restarted the background service."));
+      } else {
+        reportNodeDidNotStart();
+        process.exitCode = 1;
+      }
     } else {
       console.log(c.green("Updated. Run 'bivy start' (or restart your service) to apply."));
     }
@@ -3679,6 +4258,12 @@ async function runUpdate(args = []) {
       cwd: repoRoot,
       env: { ...process.env, BIVY_HOME: repoRoot, BIVY_CHANNEL: channel },
     });
+    // install.sh restarts the service itself; verify the node actually came up
+    // rather than trusting the installer's exit code over a crash-looping node.
+    if (code === 0 && config.service && !(await verifyNodeCameUp(config))) {
+      reportNodeDidNotStart();
+      process.exit(1);
+    }
     process.exit(code);
   }
 
@@ -3686,16 +4271,54 @@ async function runUpdate(args = []) {
   const branch = runQuiet("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: repoRoot }).stdout.trim();
   const pull = await run("git", ["pull", "--ff-only", "origin", branch || "main"], { cwd: repoRoot });
   if (pull !== 0) console.log(c.yellow("git pull reported an issue; continuing."));
-  await run("npm", [fs.existsSync(path.join(repoRoot, "package-lock.json")) ? "ci" : "install", "--no-audit", "--no-fund"], { cwd: repoRoot });
-  await ensureBundledAgents();
+  const [updateCmd, updateArgs] = installCommandFor(repoRoot);
+  await run(updateCmd, updateArgs, { cwd: repoRoot });
+  await ensureKnownAgents();
   const config = loadConfig();
   await waitForIdleSessions(config, { skip: skipWait });
   if (config.service && (await restartServiceReconciled(config))) {
-    console.log(c.green("Updated and restarted the background service."));
+    if (await verifyNodeCameUp(config)) {
+      console.log(c.green("Updated and restarted the background service."));
+    } else {
+      reportNodeDidNotStart();
+      process.exitCode = 1;
+    }
   } else {
     console.log(c.green("Updated. Run 'bivy start' (or restart your service) to apply."));
   }
   console.log(c.dim(`=== bivy update finished ${new Date().toISOString()} ===`));
+}
+
+// Show the node's governance audit trail (moat #1): the append-only record of
+// tool-call decisions (and, as it grows, network/approval events) the node made,
+// attributed per session + agent. Reads the JSONL directly — the daemon need not
+// be running. Decisions + metadata only; never tool payloads.
+function cmdAudit(args = []) {
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log("Usage: bivy audit [--session <id>] [--kind <kind>] [--limit <n>] [--json]\n\nShow the node's governance audit trail (tool-call decisions, …).");
+    return;
+  }
+  const file = path.join(appDir, "audit", "audit.jsonl");
+  let raw;
+  try { raw = fs.readFileSync(file, "utf8"); }
+  catch { console.log("No audit events recorded yet."); return; }
+  const flag = (name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
+  const session = flag("--session");
+  const kind = flag("--kind");
+  const limit = Number(flag("--limit")) || 0;
+  let events = raw.split("\n").map((l) => l.trim()).filter(Boolean)
+    .map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  if (session) events = events.filter((e) => e.session === session);
+  if (kind) events = events.filter((e) => e.kind === kind);
+  if (limit > 0) events = events.slice(-limit);
+  if (args.includes("--json")) { console.log(JSON.stringify(events, null, 2)); return; }
+  if (!events.length) { console.log("No matching audit events."); return; }
+  for (const e of events) {
+    const when = new Date(e.ts).toISOString();
+    const cols = [when, e.kind, e.agent || "-", e.session ? String(e.session).slice(0, 8) : "-", e.tool || e.host || "", e.decision || ""].filter((p) => p !== "");
+    console.log(cols.join("  "));
+    if (e.reason) console.log(`    reason: ${e.reason}`);
+  }
 }
 
 // Print the update log (default: the tail; `-f`/`--follow` streams new output).
@@ -3898,14 +4521,13 @@ async function cmdUninstall(args = []) {
       console.log(c.green(`Removed ${removed} worktree(s).`));
     }
 
-    // Delete the app + all local state. A git checkout keeps its source (only
-    // the .bivy state dir goes); a packaged install removes the whole app dir.
-    // With --keep-sessions, the pi transcripts and the session index are left
-    // in place rather than deleted (see removeExcept) — everything else in
-    // that state dir (config, credentials, relay enrollment, …) is still
-    // removed as normal.
+    // Delete all local state and, for a packaged install, the package itself.
+    // npm-global installs keep state outside repoRoot (normally ~/.bivy), while
+    // tarball installs keep it below repoRoot; removeInstallAndState handles
+    // both layouts. With --keep-sessions, the transcripts and session index
+    // remain in place while config, credentials, relay enrollment, etc. go.
     const keepPaths = keepSessions ? [sessionsDir, metadataPath].filter((p) => fs.existsSync(p)) : [];
-    removeExcept(isGitCheckout ? appDir : repoRoot, keepPaths);
+    removeInstallAndState(repoRoot, appDir, { keepInstall: isGitCheckout, keepState: keepPaths });
     fs.rmSync(symlink, { force: true });
 
     console.log(c.green("\nBivy uninstalled from this machine."));
@@ -4005,7 +4627,7 @@ function printHelp() {
 ${c.bold("bivy")} — Bivy node CLI
 
   ${c.cyan("bivy run claude")}   Run a native agent (real CLI/TUI) as a relay-visible session
-  ${c.cyan("bivy run <agent>")}  ${[...BUILTIN_TERMINAL_AGENTS.keys()].join(" | ")} | -- <command>
+  ${c.cyan("bivy run <agent>")}  ${[...AGENT_INTEGRATIONS.keys()].join(" | ")} | -- <command>
   ${c.cyan("bivy run <agent> --name <label>")}  Name the session (shown in 'bivy sessions' and the app)
   ${c.cyan("bivy run <agent> --model <model>")}  Run with a specific model (passed to the agent, shown in the cockpit)
   ${c.cyan("bivy run <agent> --node <name>")}  Start the session on another registered node
@@ -4023,19 +4645,25 @@ ${c.bold("bivy")} — Bivy node CLI
   ${c.cyan("bivy send <id>")} "..."  Send a prompt to an existing session and stream the reply
   ${c.cyan("bivy kill <id>")}    Stop a session/terminal (--delete also removes a saved session)
   ${c.cyan("bivy prune")}         Delete old sessions/workspaces/worktrees (--keep N, --older-than 7d, --dry-run)
-  ${c.cyan("bivy exec")} "<prompt>"  One-shot headless run: prints the answer to stdout (pipe-friendly)
-  ${c.cyan("bivy")}              Launch the default agent (pi) as a managed, relay-visible session
-  ${c.cyan("bivy setup")}      First-run wizard: workspace, remote access + sign-in, background service
+  ${c.cyan("bivy exec")} "<prompt>"  One-shot headless session: prints the answer to stdout (pipe-friendly)
+  ${c.cyan("bivy runs start")} "<instructions>"  Queue a one-off unattended Run with checks and a Receipt
+  ${c.cyan("bivy automation")}  list | trigger | init | validate | plan | test | apply
+  ${c.cyan("bivy config")}      init | validate | show | get | set | explain (typed node config)
+  ${c.cyan("bivy plugin")}      init | validate | doctor | test | install | list | remove
+  ${c.cyan("bivy")}              Show this help
+  ${c.cyan("bivy setup")}      First-run wizard: agent, model login, remote sign-in, background service
   ${c.cyan("bivy start")}      Run the daemon in the foreground
   ${c.cyan("bivy stop")}       Stop the background service
   ${c.cyan("bivy restart")}    Restart the background service (waits for active sessions to finish a turn; --force to skip)
   ${c.cyan("bivy status")}     Show config and whether the node is reachable
   ${c.cyan("bivy doctor")}     Health check: deps, node, model, remote, agents
+  ${c.cyan("bivy capabilities")} [--json]  What this Machine unlocks: OS, agents, providers, Docker/GPU, plugins, workspaces
   ${c.cyan("bivy logs")} [-f]   Tail the node logs (systemd journal, launchd, or background log)
   ${c.cyan("bivy login")}      Sign into a model provider (Pi /login)
   ${c.cyan("bivy update")}     Update Bivy + install deps + restart service (waits for active sessions to finish a turn; --force to skip)
   ${c.cyan("bivy update:log")} Show output of the last (or in-progress) update
-  ${c.cyan("bivy agents:install")}  Install bundled agents (${BUNDLED_AGENTS.map((a) => a.label).join(", ")})
+  ${c.cyan("bivy agent add")}        Connect an existing user-owned agent
+  ${c.cyan("bivy agents:install")}  Install known upstream agents (${KNOWN_AGENT_INSTALLS.map((a) => a.label).join(", ")})
   ${c.cyan("bivy open")}       Open the remote web/PWA app
   ${c.cyan("bivy service")}    install | uninstall | status
   ${c.cyan("bivy uninstall")}    Remove Bivy and all its data (--keep-sessions, --keep-worktrees, --dry-run)
@@ -4044,7 +4672,7 @@ ${c.bold("bivy")} — Bivy node CLI
   ${c.cyan("bivy github:app-create")}            One-click: create + connect a GitHub App
   ${c.cyan("bivy github:app-connect")}           Connect an existing GitHub App (--app-id --key)
   ${c.cyan("bivy github:app-sync")} [on|off]     Sync connected GitHub App keys to this account's other opted-in nodes
-  ${c.cyan("bivy github:connect")} [owner/repo]  Authorize repo access for the repo picker (device flow)
+  ${c.cyan("bivy github:connect")} [owner/repo]  Connect GitHub in the app (or use a configured self-hosted device flow)
   ${c.cyan("bivy secrets")}    list | set | ref | delete | doctor | resolve
   ${c.cyan("bivy voice")}      Configure speech-to-text: provider | key | remove | status
   ${c.cyan("bivy completions")} <bash|zsh|fish>  Print a shell completion script
@@ -4053,14 +4681,12 @@ ${c.bold("bivy")} — Bivy node CLI
 }
 
 async function main() {
+  await hydrateCanonicalConfig();
   const argv = process.argv.slice(2);
   const [command, ...args] = argv;
   switch (command) {
     case undefined:
-      // First run opens the guided setup; after setup, bare `bivy` launches the
-      // default agent's native CLI/TUI as a managed, relay-visible `bivy run`.
-      if (fs.existsSync(cliConfigPath)) await cmdRun([]);
-      else await cmdSetup();
+      printHelp();
       break;
     case "setup":
     case "init":
@@ -4076,10 +4702,11 @@ async function main() {
       // args (including its own --help) pass straight through to it — e.g.
       // 'bivy run claude --help' must show Claude's help, not bivy's.
       if (args[0] === "-h" || args[0] === "--help") {
-        console.log(`Usage: bivy run <agent> [--name <label>] [--model <model>] [--node <name>] [--clone [remote]] [--workspace <dir>] | -- <command>
+        console.log(`Usage: bivy run <agent> [--chat [--no-open]] [--name <label>] [--model <model>] [--node <name>] [--clone [remote]] [--workspace <dir>] | -- <command>
 
 Run a native agent (real CLI/TUI) as a relay-visible session.
-Agents: ${[...BUILTIN_TERMINAL_AGENTS.keys()].join(", ")}, or -- <command> for anything else.
+Use --chat to start the governed session used by the app instead; --no-open prints its URL without launching a browser.
+Agents: ${[...AGENT_INTEGRATIONS.keys()].join(", ")}, or -- <command> for anything else.
 An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
         break;
       }
@@ -4102,6 +4729,11 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
     case "nodes":
       await cmdNodes(args);
       break;
+    case "agent": {
+      if (!(await ensureDeps())) process.exit(1);
+      process.exit(await run(nodeBin, [...nodeScriptArgs(agentEntry), ...args], { cwd: process.cwd(), env: process.env }));
+      break;
+    }
     case "agents":
       cmdAgents(args);
       break;
@@ -4128,10 +4760,68 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
     case "send":
       await cmdSend(args);
       break;
+    case "attach":
+      await cmdAttach(args);
+      break;
     case "completions":
     case "completion":
       cmdCompletions(args);
       break;
+    case "runs": {
+      if (!(await ensureDeps())) process.exit(1);
+      const [action, ...runArgs] = args;
+      if (!action || ["-h", "--help", "help"].includes(action)) {
+        console.log(`Usage: bivy runs <command> [options]
+
+  start "<instructions>"  Queue a one-off unattended Run
+  list                    List recent Runs and current status (--limit, --json)
+  status <id>             Inspect status, evidence, and output references (--json)
+  wait <id>               Wait for completion (--interval, --timeout, --json)
+
+Unlike 'bivy run', these commands operate on governed background Runs with checks, evidence, and Receipts.`);
+        break;
+      }
+      const internalAction = action === "start" || action === "create"
+        ? "start-run"
+        : action === "list" || action === "ls"
+          ? "runs-list"
+          : action === "status" || action === "get" || action === "show"
+            ? "runs-status"
+            : action === "wait" || action === "watch"
+              ? "runs-wait"
+              : "";
+      if (!internalAction) { console.error(c.red(`Unknown runs action: ${action}`)); process.exit(1); break; }
+      process.exit(await run(nodeBin, [...nodeScriptArgs(automationEntry), internalAction, ...runArgs], { cwd: process.cwd(), env: process.env }));
+      break;
+    }
+    case "automation":
+    case "automations": {
+      if (!(await ensureDeps())) process.exit(1);
+      process.exit(await run(nodeBin, [...nodeScriptArgs(automationEntry), ...args], { cwd: process.cwd(), env: process.env }));
+      break;
+    }
+    case "config": {
+      if (!(await ensureDeps())) process.exit(1);
+      process.exit(await run(nodeBin, [...nodeScriptArgs(configEntry), ...args], { cwd: process.cwd(), env: process.env }));
+      break;
+    }
+    case "credentials":
+    case "creds": {
+      if (!(await ensureDeps())) process.exit(1);
+      // Forward a subcommand-position --help to the CLI's first-arg help (like secrets).
+      const forwardArgs = (args.includes("-h") || args.includes("--help")) ? ["--help"] : args;
+      process.exit(await run(nodeBin, [...nodeScriptArgs(credentialsEntry), ...forwardArgs], { cwd: repoRoot, env: process.env }));
+      break;
+    }
+    case "plugin":
+    case "plugins": {
+      if (!(await ensureDeps())) process.exit(1);
+      const pluginEnv = { ...process.env };
+      const configuredAgents = loadConfig().env?.BIVY_CUSTOM_AGENTS;
+      if (configuredAgents && pluginEnv.BIVY_CUSTOM_AGENTS === undefined) pluginEnv.BIVY_CUSTOM_AGENTS = String(configuredAgents);
+      process.exit(await run(nodeBin, [...nodeScriptArgs(pluginEntry), ...args], { cwd: process.cwd(), env: pluginEnv }));
+      break;
+    }
     case "stop":
       if (args.includes("-h") || args.includes("--help")) { console.log("Usage: bivy stop\n\nStop the background service."); break; }
       stopService();
@@ -4165,6 +4855,12 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
     case "doctor":
       await cmdDoctor(args);
       break;
+    case "diagnostics":
+      await cmdDiagnostics(args);
+      break;
+    case "capabilities":
+      await cmdCapabilities(args);
+      break;
     case "logs":
       await cmdLogs(args);
       break;
@@ -4177,22 +4873,24 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
     case "update:log":
       cmdUpdateLog(args);
       break;
+    case "audit":
+      cmdAudit(args);
+      break;
     case "agents:install":
     case "runtimes:install":
       if (args.includes("-h") || args.includes("--help")) {
-        console.log(`Usage: bivy agents:install\n\nInstall bundled agent runtimes (${BUNDLED_AGENTS.map((a) => a.label).join(", ")}).`);
+        console.log(`Usage: bivy agents:install\n\nInstall known agent integrations (${KNOWN_AGENT_INSTALLS.map((a) => a.label).join(", ")}).`);
         break;
       }
       if (!(await ensureDeps())) process.exit(1);
-      await ensureBundledAgents();
+      await ensureKnownAgents();
       break;
     case "open": {
       if (args.includes("-h") || args.includes("--help")) {
         console.log("Usage: bivy open\n\nOpen the remote web/PWA app in your browser (requires 'bivy relay:setup' first).");
         break;
       }
-      const config = loadConfig();
-      const remote = await openRemoteApp(config);
+      const remote = await openRemoteApp();
       if (!remote) {
         console.log("No remote access configured yet.");
         console.log(`Run ${c.cyan("bivy relay:setup")} to enable the web/PWA app, then ${c.cyan("bivy open")}.`);
@@ -4216,7 +4914,17 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
     case "github:connect":
     case "connect-repo":
       if (args.includes("-h") || args.includes("--help")) {
-        console.log("Usage: bivy github:connect [owner/repo]\n\nAuthorize repo access for the repo picker via GitHub's device flow. The resulting repo-scoped token is stored in this node's encrypted local vault.");
+        console.log("Usage: bivy github:connect [owner/repo]\n\nOpen Settings → GitHub App in the remote app. Self-hosted deployments with BIVY_GITHUB_OAUTH_CLIENT_ID configured use GitHub's device flow instead.");
+        break;
+      }
+      if (!String(process.env.BIVY_GITHUB_OAUTH_CLIENT_ID || loadConfig().env?.BIVY_GITHUB_OAUTH_CLIENT_ID || "").trim()) {
+        const remote = await openRemoteApp({ remotePath: "/settings/github" });
+        if (!remote) {
+          console.log("Remote access is not configured yet.");
+          console.log(`Run ${c.cyan("bivy relay:setup")}, then connect GitHub in the app under Settings → GitHub App.`);
+        } else if (!canOpenBrowser()) {
+          console.log(`Open GitHub setup in the Bivy app: ${c.cyan(remote.openUrl)}`);
+        }
         break;
       }
       if (!(await ensureDeps())) process.exit(1);
@@ -4296,6 +5004,13 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
       // else here (no deps banner) and inherit stdio verbatim. Run in the
       // agent's cwd so relative server commands resolve.
       await run(nodeBin, [...nodeScriptArgs(mcpProxyEntry), ...args], { cwd: process.cwd(), env: process.env });
+      break;
+    case "mcp-serve":
+      // Bivy-owned MCP server (exposes attach_to_chat and future chat tools).
+      // Injected into a non-SDK agent's MCP config so the agent discovers the
+      // tool; like mcp-proxy its stdin/stdout ARE the JSON-RPC stream, so emit
+      // nothing else here and inherit stdio verbatim.
+      await run(nodeBin, [...nodeScriptArgs(mcpServeEntry), ...args], { cwd: process.cwd(), env: process.env });
       break;
     case "help":
     case "-h":

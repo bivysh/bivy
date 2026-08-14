@@ -1,15 +1,63 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // Markdown/text/transcript-render helpers for the session store. Split out of
 // store.ts so the reducer keeps only state-folding logic. These turn raw node
 // `content`/`messages` into the TranscriptEntry[] the view renders; they hold no
 // state beyond the shared `nextId` sequence.
 
-import { isToolResultBlock, isToolUseBlock, toolCallId, toolInput, toolName } from "./tool-activity.js";
+import { isToolResultBlock, isToolUseBlock, toolCallId, toolDetail, toolInput, toolName } from "./tool-activity.js";
 import { humanizeError, looksLikeAgentError } from "./store-errors.js";
+import type { AttachmentRef, PromptAttachment } from "./protocol.js";
 import type { ToolActivity, TranscriptEntry } from "./store.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+
+/** The content-block type an agent-sent attachment is carried as inside a
+ *  synthetic assistant message. The node emits it live as an `attachment`
+ *  session event and, for durable history, folds it into the transcript as a
+ *  time-anchored overlay message carrying exactly this block (see the node's
+ *  event-log outbound-attachment projection). Renders here to a normal
+ *  attachment chip/thumbnail, reusing the same PromptAttachment path user
+ *  uploads use. */
+export const AGENT_ATTACHMENT_BLOCK = "bivy_attachment";
+
+interface AgentAttachmentBlock {
+  type: typeof AGENT_ATTACHMENT_BLOCK;
+  ref: AttachmentRef;
+  caption?: string;
+  /** See PromptAttachment.artifact — carried on the block by the node's
+   *  outbound-attachment log entry (src/session/event-log.ts). */
+  artifact?: boolean;
+}
+
+function isAgentAttachmentBlock(block: any): block is AgentAttachmentBlock {
+  return (
+    !!block &&
+    block.type === AGENT_ATTACHMENT_BLOCK &&
+    !!block.ref &&
+    typeof block.ref.hash === "string" &&
+    (block.ref.kind === "image" || block.ref.kind === "file")
+  );
+}
+
+/** A durable AttachmentRef → the (byte-less) PromptAttachment the view renders
+ *  by hash. Shared by history render and the live reducer so both produce an
+ *  identical chip. `extra` carries the fields a ref alone can't: `createdAt`
+ *  (only known to the caller — the message's own timestamp on history replay,
+ *  "now" on a live event) and `artifact` (the sender's explicit marking, not
+ *  part of the content-addressed ref itself since the same bytes can be
+ *  attached casually elsewhere too). */
+export function attachmentFromRef(ref: AttachmentRef, extra?: { createdAt?: number; artifact?: boolean }): PromptAttachment {
+  return {
+    kind: ref.kind,
+    name: ref.name,
+    size: ref.size,
+    mimeType: ref.mimeType,
+    hash: ref.hash,
+    ...(extra?.createdAt !== undefined ? { createdAt: extra.createdAt } : {}),
+    ...(extra?.artifact ? { artifact: true } : {}),
+  };
+}
 
 let idSeq = 0;
 /** Monotonic transcript-entry id. Shared by the render helpers and the reducer so
@@ -34,6 +82,13 @@ export const nextId = (): string => `e${Date.now().toString(36)}-${(idSeq++).toS
 function isTextBlock(b: any): boolean {
   const t = String(b?.type || b?.kind || "").toLowerCase();
   return t === "text" || t === "output_text" || (!t && typeof b?.text === "string");
+}
+
+/** A displayable reasoning block. Pi streams these live and Bivy persists them
+ * as intermediate sidecars, so history must render the same blocks too. */
+function isThinkingBlock(b: any): boolean {
+  const t = String(b?.type || b?.kind || "").toLowerCase();
+  return t === "thinking" || t === "reasoning";
 }
 
 /** Harness "meta" markers the Claude Code CLI writes into its transcript for the
@@ -75,11 +130,12 @@ export function toolEntriesFromContent(content: any): ToolActivity[] {
         name: toolName(block),
         input: toolInput(block),
         status: "running",
+        detail: toolDetail(block),
       });
     } else if (isToolResultBlock(block)) {
       const id = toolCallId(block);
       const result = typeof block?.content === "string" ? block.content : contentToText(block?.content);
-      out.push({ callId: id, name: toolName(block), input: {}, status: "done", result });
+      out.push({ callId: id, name: toolName(block), input: {}, status: "done", result, detail: toolDetail(block) });
     }
   }
   return out;
@@ -94,6 +150,7 @@ function toolEntryFromToolResultMessage(msg: any): ToolActivity | null {
     input: {},
     status: "done",
     result: contentToText(msg?.content),
+    detail: toolDetail(msg),
   };
 }
 
@@ -148,21 +205,48 @@ export function renderHistory(messages: any[]): TranscriptEntry[] {
             : { id: nextId(), role: "assistant", text: trimmed },
         );
       };
+      const pushThinking = (t: string) => {
+        const trimmed = t.trim();
+        if (trimmed) entries.push({ id: nextId(), role: "thinking", text: trimmed });
+      };
       if (typeof content === "string" || !Array.isArray(content)) {
         pushText(text);
       } else {
-        let buf: string[] = [];
+        let textBuf: string[] = [];
+        let thinkingBuf: string[] = [];
+        const flushText = () => { pushText(textBuf.join("\n")); textBuf = []; };
+        const flushThinking = () => { pushThinking(thinkingBuf.join("\n")); thinkingBuf = []; };
+        const flushRuns = () => { flushText(); flushThinking(); };
         for (const block of content) {
           if (isToolUseBlock(block) || isToolResultBlock(block)) {
-            pushText(buf.join("\n"));
-            buf = [];
+            flushRuns();
             for (const tool of toolEntriesFromContent([block])) mergeToolInto(entries, tool);
+          } else if (isAgentAttachmentBlock(block)) {
+            // Seal any prose/reasoning before the attachment so its source order
+            // is retained and the chip lands as its own entry.
+            flushRuns();
+            const createdAt = typeof msg?.createdAt === "number" ? msg.createdAt : undefined;
+            entries.push({
+              id: nextId(),
+              role: "assistant",
+              text: typeof block.caption === "string" ? block.caption : "",
+              attachments: [attachmentFromRef(block.ref, { createdAt, artifact: block.artifact })],
+            });
           } else if (isTextBlock(block)) {
-            buf.push(String(block?.text ?? block?.content ?? ""));
+            flushThinking();
+            textBuf.push(String(block?.text ?? block?.content ?? ""));
+          } else if (isThinkingBlock(block)) {
+            flushText();
+            thinkingBuf.push(String(block?.thinking ?? block?.reasoning ?? block?.text ?? ""));
+          } else if (String(block?.type || "").toLowerCase() === "bivy_message_boundary") {
+            // Protocol runtimes persist this display-only delimiter between
+            // discrete assistant items (notably Codex commentary). Seal the
+            // current run so a reload keeps separate messages separate, even
+            // when no tool call happened between them.
+            flushRuns();
           }
-          // thinking / other block types are skipped here, as before.
         }
-        pushText(buf.join("\n"));
+        flushRuns();
       }
       // A turn the model/provider failed is persisted as an assistant message
       // with stopReason "error" and (usually empty content +) an errorMessage.
@@ -173,7 +257,45 @@ export function renderHistory(messages: any[]): TranscriptEntry[] {
       }
     }
   }
-  return entries;
+  return groupAgentAttachments(entries);
+}
+
+/**
+ * Group agent-sent attachment entries onto the FINAL assistant prose bubble of
+ * their turn, so a chip reads as part of the reply instead of standing alone
+ * wherever `bivy attach` happened to run in the turn. An "attachment entry" is an
+ * assistant entry carrying `attachments` (only agent attachments put attachments
+ * on an assistant entry); the "final bubble" is the last assistant text entry in
+ * the same turn (turns are delimited by user messages). When a turn has no prose
+ * bubble to hang them on (the agent only attached), the attachment entries are
+ * left as-is. This is the durable-history twin of the live reducer's
+ * flushPendingAgentAttachments, so a reload matches what streamed.
+ */
+export function groupAgentAttachments(entries: TranscriptEntry[]): TranscriptEntry[] {
+  const isAttachmentEntry = (e: TranscriptEntry) => e.role === "assistant" && !e.tool && !!e.attachments && e.attachments.length > 0;
+  const isProseBubble = (e: TranscriptEntry) => e.role === "assistant" && !e.tool && !!e.text && !(e.attachments && e.attachments.length);
+  const out = entries.slice();
+  const remove = new Set<number>();
+  let i = 0;
+  while (i < out.length) {
+    if (out[i]!.role === "user") { i++; continue; }
+    // A turn is the maximal run of non-user entries starting at i.
+    let j = i;
+    while (j < out.length && out[j]!.role !== "user") j++;
+    let target = -1;
+    const attachmentIdxs: number[] = [];
+    for (let k = i; k < j; k++) {
+      if (isAttachmentEntry(out[k]!)) attachmentIdxs.push(k);
+      else if (isProseBubble(out[k]!)) target = k; // last prose bubble wins
+    }
+    if (attachmentIdxs.length && target >= 0) {
+      const chips = attachmentIdxs.flatMap((k) => out[k]!.attachments!);
+      out[target] = { ...out[target]!, attachments: [...(out[target]!.attachments ?? []), ...chips] };
+      for (const k of attachmentIdxs) remove.add(k);
+    }
+    i = j;
+  }
+  return remove.size ? out.filter((_, idx) => !remove.has(idx)) : out;
 }
 
 /**
@@ -206,6 +328,16 @@ export function stripAttachmentPlaceholders(text: string): string {
     .trim();
 }
 
+/** Shallow-merge a streaming tool call's inputs so a later partial update
+ *  (a progress ping, a late `rawInput`) augments rather than replaces what the
+ *  card already knows. Non-object inputs fall back to the newer truthy value. */
+function mergeToolInput(prev: unknown, next: unknown): unknown {
+  const prevObj = prev && typeof prev === "object" && !Array.isArray(prev);
+  const nextObj = next && typeof next === "object" && !Array.isArray(next);
+  if (prevObj && nextObj) return { ...(prev as Record<string, unknown>), ...(next as Record<string, unknown>) };
+  return next ?? prev;
+}
+
 export function mergeToolInto(entries: TranscriptEntry[], tool: ToolActivity): void {
   const existing = tool.callId ? entries.find((e) => e.tool && e.tool.callId === tool.callId) : undefined;
   if (existing && existing.tool) {
@@ -213,7 +345,14 @@ export function mergeToolInto(entries: TranscriptEntry[], tool: ToolActivity): v
       ...existing.tool,
       status: tool.status,
       result: tool.result ?? existing.tool.result,
-      input: tool.status === "running" ? tool.input : existing.tool.input,
+      detail: tool.detail ?? existing.tool.detail,
+      // Merge, don't replace, while a call streams. A progress-only ping (e.g.
+      // Claude's `tool_execution_update` carrying just `{ elapsedSeconds }`)
+      // would otherwise clobber the original call's `command`/`path`, blanking
+      // the row label for any tool the node couldn't classify into `detail`.
+      // A later enriching update (e.g. opencode's late `rawInput`) still wins
+      // per-key. On completion (`done`) the input is frozen as-is.
+      input: tool.status === "running" ? mergeToolInput(existing.tool.input, tool.input) : existing.tool.input,
     };
   } else {
     entries.push({ id: nextId(), role: "assistant", text: "", tool });

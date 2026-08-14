@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
 // Queued follow-ups (issue #154): the pure decision helpers (followups.ts)
@@ -248,5 +248,103 @@ describe("SessionStore queued follow-ups", () => {
     store.enqueueFollowup("s1", { id: "f1", text: "one" }, 1000);
     store.resetSession();
     expect(store.getFollowups("s1")).toEqual([]);
+  });
+});
+
+describe("scheduled-message backstop bookkeeping (scheduledAutomationId)", () => {
+  it("records the control-plane automation on a fresh enqueue", () => {
+    const store = new SessionStore();
+    store.enqueueFollowup("s1", { id: "f1", text: "one", scheduledAutomationId: "auto-1" }, 1000);
+    expect(store.getFollowups("s1")[0]!.scheduledAutomationId).toBe("auto-1");
+  });
+
+  it("attachFollowupAutomation links a queued item, and only a queued item", () => {
+    const store = new SessionStore();
+    store.enqueueFollowup("s1", { id: "f1", text: "one" }, 1000);
+    expect(store.attachFollowupAutomation("s1", "f1", "auto-1")).toBe(true);
+    expect(store.getFollowups("s1")[0]!.scheduledAutomationId).toBe("auto-1");
+    // A ghost id or a dispatched item is refused so the caller cancels the
+    // automation (the item no longer needs the backstop).
+    expect(store.attachFollowupAutomation("s1", "ghost", "auto-x")).toBe(false);
+    store.markFollowupSending("s1", "f1", 1001);
+    expect(store.attachFollowupAutomation("s1", "f1", "auto-2")).toBe(false);
+  });
+
+  it("dropping the item clears its backstop id", () => {
+    const store = new SessionStore();
+    store.enqueueFollowup("s1", { id: "f1", text: "one", scheduledAutomationId: "auto-1" }, 1000);
+    expect(store.removeFollowup("s1", "f1")).toBe(true);
+    expect(store.getFollowups("s1")).toEqual([]);
+  });
+
+  it("an edit clears the stale automation id so the controller re-creates it for the new text", () => {
+    const store = new SessionStore();
+    store.enqueueFollowup("s1", { id: "f1", text: "one", scheduledAutomationId: "auto-1" }, 1000);
+    const result = store.editFollowup("s1", "f1", { text: "edited" }, 1, 1001);
+    expect(result.ok).toBe(true);
+    expect(store.getFollowups("s1")[0]!.scheduledAutomationId).toBeUndefined();
+    expect(store.getFollowups("s1")[0]!.text).toBe("edited");
+  });
+
+  it("confirming delivery drops the item and its backstop id (no stale handle to cancel)", () => {
+    const store = new SessionStore();
+    store.enqueueFollowup("s1", { id: "f1", text: "one", scheduledAutomationId: "auto-1" }, 1000);
+    store.markFollowupSending("s1", "f1", 1001);
+    store.confirmFollowupSent("s1", "f1");
+    expect(store.getFollowups("s1")).toEqual([]);
+  });
+});
+
+describe("scheduled-message queue rows (long-press Send → ScheduleSheet)", () => {
+  it("enqueueScheduledFollowup records a scheduled row; the row id IS the automation id", () => {
+    const store = new SessionStore();
+    const row = store.enqueueScheduledFollowup("s1", { id: "auto-1", text: "remind me", scheduledAt: 5000, scheduledAutomationId: "auto-1" }, 1000);
+    expect(row.status).toBe("scheduled");
+    expect(row.scheduledAt).toBe(5000);
+    expect(row.scheduledAutomationId).toBe("auto-1");
+    // Duplicate id is ignored (the sheet may be re-submitted for the same
+    // automation), matching enqueueFollowup.
+    store.enqueueScheduledFollowup("s1", { id: "auto-1", text: "changed", scheduledAt: 6000, scheduledAutomationId: "auto-1" }, 1001);
+    expect(store.getFollowups("s1")).toHaveLength(1);
+    expect(store.getFollowups("s1")[0]!.text).toBe("remind me");
+  });
+
+  it("scheduled rows can be removed (cancelled) like queued rows", () => {
+    const store = new SessionStore();
+    store.enqueueScheduledFollowup("s1", { id: "auto-1", text: "remind me", scheduledAt: 5000, scheduledAutomationId: "auto-1" }, 1000);
+    expect(store.removeFollowup("s1", "auto-1")).toBe(true);
+    expect(store.getFollowups("s1")).toEqual([]);
+  });
+
+  it("rescheduleFollowup moves the fire time in place and bumps the version", () => {
+    const store = new SessionStore();
+    store.enqueueScheduledFollowup("s1", { id: "auto-1", text: "remind me", scheduledAt: 5000, scheduledAutomationId: "auto-1" }, 1000);
+    expect(store.rescheduleFollowup("s1", "auto-1", 9000, 2000)).toBe(true);
+    const row = store.getFollowups("s1")[0]!;
+    expect(row.scheduledAt).toBe(9000);
+    expect(row.version).toBe(2);
+    expect(row.scheduledAutomationId).toBe("auto-1");
+  });
+
+  it("rescheduleFollowup refuses rows that are no longer scheduled", () => {
+    const store = new SessionStore();
+    store.enqueueScheduledFollowup("s1", { id: "auto-1", text: "remind me", scheduledAt: 5000, scheduledAutomationId: "auto-1" }, 1000);
+    store.removeFollowup("s1", "auto-1");
+    expect(store.rescheduleFollowup("s1", "auto-1", 9000, 2000)).toBe(false);
+    // A queued (drain-eligible) row is not a scheduled row either.
+    store.enqueueFollowup("s1", { id: "f1", text: "one" }, 1000);
+    expect(store.rescheduleFollowup("s1", "f1", 9000, 2000)).toBe(false);
+  });
+
+  it("pruneScheduledFollowups drops only rows whose automation is gone, keeping others", () => {
+    const store = new SessionStore();
+    store.enqueueScheduledFollowup("s1", { id: "auto-1", text: "one", scheduledAt: 5000, scheduledAutomationId: "auto-1" }, 1000);
+    store.enqueueScheduledFollowup("s1", { id: "auto-2", text: "two", scheduledAt: 6000, scheduledAutomationId: "auto-2" }, 1001);
+    store.enqueueFollowup("s1", { id: "f1", text: "queued", scheduledAutomationId: "auto-q" }, 1002);
+    // auto-2 fired/gone; auto-1 still pending.
+    store.pruneScheduledFollowups("s1", new Set(["auto-1"]));
+    const rows = store.getFollowups("s1");
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.id).sort()).toEqual(["auto-1", "f1"]);
   });
 });

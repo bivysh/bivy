@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
@@ -49,7 +49,11 @@ interface MuxSession {
 // are read elsewhere (e.g. Pickers.tsx `Boolean(caps.resume)`).
 function canContinueAsChat(t: RunTerminal, runtimes: RuntimeInfo[]): boolean {
   if (t.sessionId) return true;
-  const runtime = runtimes.find((r) => r.id === String(t.agent || ""));
+  // Match by runtime id (e.g. "grok") OR by agent alias — run-terminals store
+  // the short `bivy run <agent>` name, which is usually the same as the runtime
+  // id for process agents.
+  const agent = String(t.agent || "");
+  const runtime = runtimes.find((r) => r.id === agent || r.id === `${agent}-approvals` || r.id === `${agent}-code-sdk`);
   const caps = runtime?.capabilities as { sessionDiscovery?: boolean } | undefined;
   return Boolean(caps?.sessionDiscovery);
 }

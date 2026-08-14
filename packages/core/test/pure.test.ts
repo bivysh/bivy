@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { describe, expect, it } from "vitest";
 import {
@@ -12,10 +12,12 @@ import {
   FRAME_CHUNK_BYTES,
   toHtml,
   inline,
+  extractRemoteImageUrls,
   eventKind,
   isToolUseBlock,
   isToolResultBlock,
   toolName,
+  toolDetail,
   linkPayloadFromText,
   base64UrlToJson,
 } from "../src/index.js";
@@ -128,6 +130,36 @@ describe("markdown", () => {
       '<strong><a href="https://example.com/bar" target="_blank" rel="noopener">https://example.com/bar</a></strong>'
     );
   });
+  it("renders a remote markdown image as an unresolved placeholder, not a fetchable src", () => {
+    // #293: the deployed app's CSP (img-src 'self' data: blob:) blocks a literal
+    // remote src outright, so the element must never carry one — the node
+    // resolves data-remote-src to a blob: URL out of band (see ChatView).
+    const html = inline("![a chart](https://example.com/chart.png)");
+    expect(html).toBe('<img class="md-image" data-remote-src="https://example.com/chart.png" alt="a chart" loading="lazy">');
+  });
+  it("does not treat a workspace-relative path as an image (no https scheme)", () => {
+    const html = inline("![a chart](./out/chart.png)");
+    expect(html).not.toContain("<img");
+    expect(html).toContain("![a chart]");
+  });
+  it("escapes alt text and the URL so neither can break out of the attribute", () => {
+    const html = inline('![" onerror="alert(1)](https://example.com/x.png?a="b)');
+    expect(html).not.toContain('onerror="alert(1)"');
+    expect(html).toContain("&quot;");
+  });
+});
+
+describe("extractRemoteImageUrls", () => {
+  it("finds every distinct https image URL in first-seen order", () => {
+    const text = "![a](https://x.test/a.png) some text ![b](https://x.test/b.png) ![a again](https://x.test/a.png)";
+    expect(extractRemoteImageUrls(text)).toEqual(["https://x.test/a.png", "https://x.test/b.png"]);
+  });
+  it("ignores non-https and non-image markdown links", () => {
+    expect(extractRemoteImageUrls("![a](http://x.test/a.png) [link](https://x.test/page)")).toEqual([]);
+  });
+  it("returns an empty array for text with no images", () => {
+    expect(extractRemoteImageUrls("just some **prose**")).toEqual([]);
+  });
 });
 
 describe("tool activity", () => {
@@ -140,6 +172,13 @@ describe("tool activity", () => {
     expect(isToolUseBlock({ type: "tool_use" })).toBe(true);
     expect(isToolResultBlock({ type: "tool_result" })).toBe(true);
     expect(toolName({ name: "Bash" })).toBe("bash");
+  });
+  it("preserves normalized delegation detail for sub-agent activity", () => {
+    expect(toolDetail({ detail: { kind: "delegation", label: "Explore", description: "trace auth" } })).toEqual({
+      kind: "delegation",
+      label: "Explore",
+      description: "trace auth",
+    });
   });
 });
 

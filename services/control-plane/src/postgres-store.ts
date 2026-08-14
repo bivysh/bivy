@@ -1,7 +1,9 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { randomUUID, randomBytes } from "node:crypto";
 import pg from "pg";
+import { anyNodeEligible } from "@bivy/core";
+import { encryptSecret, decryptSecret, isSecretEnvelope, type SecretEnvelope } from "./hosted-crypto.js";
 import {
   type Account,
   type DeviceLoginStatus,
@@ -22,9 +24,27 @@ import {
   normalizeNotificationPreferences,
   type EphemeralQueueDefault,
   normalizeEphemeralQueueDefault,
+  type EphemeralNodeConfig,
+  normalizeEphemeralConfigs,
+  type QueueRouting,
+  normalizeQueueRouting,
+  type HostedProvisioning,
+  providerCredentialFingerprint,
+  normalizeHostedProvisioning,
+  DEFAULT_HOSTED_PROVISIONING,
+  type HostedProvisioningStatus,
+  type HostedAuditEvent,
+  type HostedMachineAttempt,
+  ConcurrentAttemptUpdateError,
   type ModelAuthVault,
   type ModelAuthWrappedKey,
   type ModelAuthKeyRequest,
+  type DeviceVault,
+  type DeviceVaultWrappedKeyRecord,
+  type DeviceVaultKeyRequest,
+  type SessionSnapshotRecord,
+  type SessionCorrelation,
+  type SessionCorrelationInput,
   type GithubAppVault,
   type GithubAppWrappedKey,
   type GithubAppKeyRequest,
@@ -36,6 +56,8 @@ import {
   type AutomationDefinition,
   type AutomationRun,
   type AutomationRunStatus,
+  type CancelAutomationRunResult,
+  type RetryAutomationRunResult,
   type AutomationTriggerKind,
   type TriggerEvent,
   type RunEvidenceEvent,
@@ -51,16 +73,26 @@ import {
   SESSION_TTL_MS,
 } from "./store.js";
 
+// A claimed Run's renewable lease. A live node renews every ~30s; if it crashes
+// the item becomes reclaimable once this expires. Overridable via env for tuning
+// and for deterministic reclaim tests (default two minutes).
+const WORK_LEASE_MS = ((): number => {
+  const raw = Number(process.env.BIVY_WORK_LEASE_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : 2 * 60 * 1000;
+})();
+const workLeaseExpiry = (): string => new Date(Date.now() + WORK_LEASE_MS).toISOString();
+
 /**
  * The control plane's single store implementation, backed by Postgres — a durable
  * database when `DATABASE_URL` is set, or an in-memory Postgres (pg-mem) for
  * dev/tests otherwise (see pg-mem-store.ts). Both go through `createStore()`
  * (store-factory.ts), so there is no second hand-mirrored implementation.
  *
- * Same hard rule as the rest of the control plane:
- * stores ONLY metadata for sessions/work. Never session content, files, prompts,
- * or tool output. Model provider credentials are the explicit account-vault
- * exception for cross-node model auth. All bearer tokens are stored hashed
+ * Same hard rule as the rest of the control plane: never store interactive
+ * session content, files, transcripts, or tool output. Slack and generic-webhook
+ * instructions are the explicit inbound-automation exception retained in
+ * work-item title/body. Model provider credentials are stored only as encrypted
+ * account-vault ciphertext for cross-node auth. All bearer tokens are stored hashed
  * (SHA-256); raw tokens are returned to the caller exactly once at creation.
  */
 export class PostgresStore implements MeshStore {
@@ -149,6 +181,49 @@ export class PostgresStore implements MeshStore {
       -- queue when no persistent node is online. NULL = disabled (never set).
       -- Non-secret preferences only — see EphemeralQueueDefault in store.ts.
       ALTER TABLE accounts ADD COLUMN IF NOT EXISTS ephemeral_queue_default JSONB;
+      -- Account-level ephemeral node configs (reusable runner templates) and the
+      -- account's default queue routing (primary runner + optional fallback).
+      -- Non-secret; provider tokens stay device-local. See store.ts.
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS ephemeral_configs JSONB;
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS queue_routing     JSONB;
+      -- Hosted provisioning: control-plane-held credentials + enable flag, and a
+      -- tracking list of machines the control plane launched itself. Off by
+      -- default; SECURITY: encrypt these at rest in production (see store.ts).
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS hosted_provisioning JSONB;
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS hosted_machines     JSONB;
+      -- Append-only audit trail of hosted-credential use (capped in app code).
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS hosted_audit         JSONB;
+      CREATE TABLE IF NOT EXISTS hosted_provision_leases (
+        account_id  TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+        holder      TEXT NOT NULL,
+        expires_at  TIMESTAMPTZ NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS hosted_machine_attempts (
+        account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        attempt_id  TEXT NOT NULL,
+        provider    TEXT NOT NULL,
+        config_id   TEXT,
+        node_id     TEXT NOT NULL,
+        state       TEXT NOT NULL,
+        desired     JSONB NOT NULL DEFAULT '{}',
+        machine     JSONB,
+        last_error  TEXT,
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (account_id, attempt_id)
+      );
+      CREATE INDEX IF NOT EXISTS hosted_machine_attempts_active_idx
+        ON hosted_machine_attempts (account_id, state, updated_at);
+      -- Durable lifecycle hardening (docs/ephemeral-lifecycle-review.md): explicit
+      -- desired vs. observed state, a persisted next-deadline, the per-account
+      -- ownership tag applied to provider resources, and an optimistic-concurrency
+      -- version so a reconciler can fence a write against a stale read.
+      ALTER TABLE hosted_machine_attempts ADD COLUMN IF NOT EXISTS desired_state TEXT NOT NULL DEFAULT 'active';
+      ALTER TABLE hosted_machine_attempts ADD COLUMN IF NOT EXISTS observed_state TEXT;
+      ALTER TABLE hosted_machine_attempts ADD COLUMN IF NOT EXISTS deadline_at TIMESTAMPTZ;
+      ALTER TABLE hosted_machine_attempts ADD COLUMN IF NOT EXISTS ownership_tag TEXT;
+      ALTER TABLE hosted_machine_attempts ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 0;
       -- The paid single-user plan was renamed 'individual' -> 'pro' to match what
       -- it is sold as. The plan column is plain TEXT with no enum or CHECK, so the
       -- backfill is a straight UPDATE; it is idempotent (the second run matches no
@@ -229,6 +304,11 @@ export class PostgresStore implements MeshStore {
       -- the owning node alongside its encrypted model-auth vault. Same trust
       -- tier as online/last_seen_at above: never credential material.
       ALTER TABLE nodes ADD COLUMN IF NOT EXISTS providers JSONB;
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS bootstrap_status JSONB;
+      -- Manually declared, owner-asserted capability tags (see NodeRecord.capabilities
+      -- in store.ts) — same trust tier as providers: plaintext, self-reported, never
+      -- verified. Overwritten wholesale by the owning node on every change.
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS capabilities JSONB;
 
       CREATE TABLE IF NOT EXISTS session_index (
         node_id     TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
@@ -247,6 +327,7 @@ export class PostgresStore implements MeshStore {
       -- up. Routing metadata like node_id, not E2E payload. ADD COLUMN IF NOT
       -- EXISTS keeps this a safe, idempotent migration on existing databases.
       ALTER TABLE session_index ADD COLUMN IF NOT EXISTS agent_service_address TEXT;
+      ALTER TABLE session_index ADD COLUMN IF NOT EXISTS attention JSONB;
 
       -- Session replication ownership (docs/session-replication.md). Keyed by
       -- session, NOT node, so it survives the wholesale rewrite of session_index
@@ -277,8 +358,10 @@ export class PostgresStore implements MeshStore {
         account_id          TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
         ciphertext          TEXT NOT NULL,
         updated_by_node_id  TEXT NOT NULL,
-        updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+        updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+        needs_rotation      BOOLEAN NOT NULL DEFAULT false
       );
+      ALTER TABLE model_auth_vaults ADD COLUMN IF NOT EXISTS needs_rotation BOOLEAN NOT NULL DEFAULT false;
 
       CREATE TABLE IF NOT EXISTS model_auth_node_keys (
         account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -298,6 +381,16 @@ export class PostgresStore implements MeshStore {
         PRIMARY KEY (account_id, node_id)
       );
       ALTER TABLE model_auth_wrapped_keys ADD COLUMN IF NOT EXISTS wrapped_by_public_key TEXT NOT NULL DEFAULT '';
+
+      -- Hosted escrow of the model-auth vault KEY (node-less inheritance). Sealed at
+      -- rest with the per-account hosted key so a LONE hosted ephemeral can decrypt
+      -- the synced vault without a peer to wrap the key. One row per account, written
+      -- and served ONLY for hosted-provisioning accounts (gated at the endpoint).
+      CREATE TABLE IF NOT EXISTS hosted_model_auth_keys (
+        account_id  TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+        key_enc     JSONB NOT NULL,
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
 
       CREATE TABLE IF NOT EXISTS model_auth_key_requests (
         account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -339,6 +432,89 @@ export class PostgresStore implements MeshStore {
         public_key  TEXT NOT NULL,
         created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
         PRIMARY KEY (account_id, app_id, node_id)
+      );
+
+      -- Device→device ephemeral-provider-token vault (P2 / Gap A). Same E2E shape
+      -- as the model-auth vault above — the control plane holds ciphertext plus
+      -- per-recipient wrapped keys, never a plaintext token — but the recipients
+      -- are the account's paired DEVICES (identified by their X25519 public key,
+      -- the PK of paired_devices), not nodes. So a second device can wake/reach an
+      -- ephemeral machine the first launched. See createDeviceVaultKeyStore in
+      -- packages/core/src/device-vault.ts.
+      CREATE TABLE IF NOT EXISTS device_vaults (
+        account_id         TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+        ciphertext         TEXT NOT NULL,
+        updated_by_device  TEXT NOT NULL,
+        generation         BIGINT NOT NULL DEFAULT 1,
+        key_generation     BIGINT NOT NULL DEFAULT 0,
+        updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      ALTER TABLE device_vaults ADD COLUMN IF NOT EXISTS generation BIGINT NOT NULL DEFAULT 1;
+      ALTER TABLE device_vaults ADD COLUMN IF NOT EXISTS key_generation BIGINT NOT NULL DEFAULT 0;
+
+      CREATE TABLE IF NOT EXISTS device_vault_wrapped_keys (
+        account_id             TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        device_pub             TEXT NOT NULL,
+        wrapped_key            TEXT NOT NULL,
+        wrapped_by_public_key  TEXT NOT NULL,
+        generation             BIGINT NOT NULL DEFAULT 0,
+        updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (account_id, device_pub)
+      );
+      ALTER TABLE device_vault_wrapped_keys ADD COLUMN IF NOT EXISTS generation BIGINT NOT NULL DEFAULT 0;
+
+      CREATE TABLE IF NOT EXISTS device_vault_key_requests (
+        account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        device_pub  TEXT NOT NULL,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (account_id, device_pub)
+      );
+
+      -- Durable, node-independent, E2E-encrypted session snapshots (Gap B). Keyed
+      -- by SESSION (not node) so it outlives the machine's teardown, mirroring
+      -- session_ownership. Opaque ciphertext only (a sealed replication frame),
+      -- like session_index.title_enc — the control plane can't read it. Lets a
+      -- torn-down destroy-lane session be rebuilt onto a fresh machine.
+      CREATE TABLE IF NOT EXISTS session_snapshots (
+        account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        session_id  TEXT NOT NULL,
+        ciphertext  TEXT NOT NULL,
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (account_id, session_id)
+      );
+
+      -- Durable session↔machine correlation (Gap 1). Lets a torn-down destroy-lane
+      -- session be rebuilt AFTER its node is unenrolled and drops from the registry:
+      -- records the reusable eph-* node id + non-secret launch params. Keyed by
+      -- session and deliberately NOT FK-cascaded off nodes, so it outlives teardown
+      -- (like session_snapshots). Never holds a credential.
+      CREATE TABLE IF NOT EXISTS session_correlation (
+        account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        session_id  TEXT NOT NULL,
+        node_id     TEXT NOT NULL,
+        provider    TEXT NOT NULL,
+        region      TEXT,
+        ttl_minutes INTEGER,
+        repo        TEXT,
+        setup_id    TEXT,
+        machine_id  TEXT,
+        app         TEXT,
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (account_id, session_id)
+      );
+
+      -- Escrowed session ROOM KEY for HOSTED (device-offline) rebuild (Gap 3).
+      -- Sealed at rest with the per-account hosted-provisioning key (hosted-crypto),
+      -- keyed by the reusable eph-* node id and deliberately NOT FK-cascaded off
+      -- nodes so it survives teardown/unenroll. Only written for hosted-provisioning
+      -- accounts (whose provider/GitHub creds the control plane already holds); a
+      -- device-launched session keeps its room key device-only and never escrows.
+      CREATE TABLE IF NOT EXISTS node_room_keys (
+        account_id   TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        node_id      TEXT NOT NULL,
+        room_key_enc JSONB NOT NULL,
+        updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (account_id, node_id)
       );
 
       -- Inbound hooks (route a GitHub/Slack webhook to an account) + work queue
@@ -399,6 +575,7 @@ export class PostgresStore implements MeshStore {
         url                TEXT,
         claimed_by_node_id TEXT,
         claimed_at         TIMESTAMPTZ,
+        lease_expires_at   TIMESTAMPTZ,
         completed_at       TIMESTAMPTZ,
         created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
         dedupe_key         TEXT,
@@ -414,6 +591,7 @@ export class PostgresStore implements MeshStore {
       -- GitHub App installation the node should mint a token for (flavor A).
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS installation_id TEXT;
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS app_id TEXT;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
       -- Collapse the many webhook deliveries one issue emits (opened/labeled/edited)
       -- into a single PENDING item, while still allowing a fresh run after the prior
       -- one finished. default_routed marks shared-queue items re-routable when the
@@ -444,6 +622,8 @@ export class PostgresStore implements MeshStore {
         schedule JSONB NOT NULL DEFAULT '{"kind":"once","at":"9999-12-31T00:00:00.000Z"}',
         next_run_at TIMESTAMPTZ,
         last_scheduled_at TIMESTAMPTZ,
+        trigger TEXT,
+        webhook_secret TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
       );
@@ -458,6 +638,40 @@ export class PostgresStore implements MeshStore {
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS schedule JSONB NOT NULL DEFAULT '{"kind":"once","at":"9999-12-31T00:00:00.000Z"}';
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS next_run_at TIMESTAMPTZ;
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS last_scheduled_at TIMESTAMPTZ;
+      -- Webhook-triggerable automations (a definition fired by a signed POST
+      -- rather than only its schedule): trigger distinguishes the source and
+      -- webhook_secret is the HMAC key for the /webhooks/automation/run path.
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS trigger TEXT;
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS webhook_secret TEXT;
+      -- Workspace target for triggers that do not carry a repo (schedule, etc.).
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS repo TEXT;
+      -- Source-trigger filters (github/linear) + built-in template id.
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS labels JSONB;
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS repos JSONB;
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS template_id TEXT;
+      -- GitHub event rules ("when"). JSON array of { event, actions?, labels?, mention?, … }.
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS on_events JSONB;
+      -- Scheduled runs that CONTINUE an existing session (scheduled chat
+      -- messages) instead of starting a new one. Mirrors work_items.target_*.
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS target_kind TEXT;
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS target_session_id TEXT;
+      -- Scheduled/manual runs that are plain chat messages rather than automation
+      -- jobs (the node skips the boilerplate/push/checks).
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS message BOOLEAN NOT NULL DEFAULT false;
+      -- Source-controlled identity + hard attempt ceiling for automation-as-code.
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS config_key TEXT;
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS config_order INTEGER;
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS max_attempts INTEGER;
+      -- Explicit acknowledgement of autonomous + danger-full-access, checked by
+      -- the shared preflight gate on create/update (see automation-match.ts).
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS allow_dangerous BOOLEAN;
+      -- See AutomationDefinition.requiredCapabilities/preferredCapabilities in
+      -- store.ts. Bounded capability-tag lists validated by @bivy/core's
+      -- capability-routing.ts before they reach here.
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS required_capabilities JSONB;
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS preferred_capabilities JSONB;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_automation_definitions_config_key
+        ON automation_definitions(account_id, config_key) WHERE config_key IS NOT NULL;
       CREATE TABLE IF NOT EXISTS trigger_events (
         id TEXT PRIMARY KEY,
         account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -474,20 +688,34 @@ export class PostgresStore implements MeshStore {
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS attempt INTEGER NOT NULL DEFAULT 1;
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS target_kind TEXT NOT NULL DEFAULT 'new_session';
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS target_session_id TEXT;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS message BOOLEAN NOT NULL DEFAULT false;
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS output JSONB;
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS approval_mode TEXT;
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS sandbox TEXT;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS max_attempts INTEGER;
+      -- Untrusted webhook-payload context for a webhook-triggered automation run,
+      -- appended to the E2E-decrypted operator template on the node as data.
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS event_context TEXT;
       -- Privacy-safe run evidence (issue #153): why this node/runtime was chosen,
       -- declared-check results, and an ordered event timeline. All three are
       -- allowlisted/bounded by run-evidence.ts before they ever reach here.
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS routing_reason TEXT;
+      -- See WorkItem.requiredCapabilities/preferredCapabilities — copied from the
+      -- request or the AutomationDefinition at enqueue time.
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS required_capabilities JSONB;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS preferred_capabilities JSONB;
       -- Explicit ::jsonb cast on the default (not just relying on the column
       -- type): without it, pg-mem — the in-memory Postgres the test suite runs
       -- against — stores the literal two-character text "[]" instead of an
       -- empty JSON array, which then silently corrupts every array spread.
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS checks JSONB NOT NULL DEFAULT '[]'::jsonb;
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS events JSONB NOT NULL DEFAULT '[]'::jsonb;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS receipt_evidence JSONB;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS run_usage JSONB;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS notification_delivery JSONB;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS run_references JSONB NOT NULL DEFAULT '[]'::jsonb;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS attention JSONB;
       INSERT INTO trigger_events (id, account_id, kind, created_at)
         SELECT 'legacy:' || id, account_id,
           CASE WHEN source LIKE 'github:%' THEN 'github'
@@ -526,6 +754,21 @@ export class PostgresStore implements MeshStore {
         PRIMARY KEY (account_id, run_key)
       );
 
+      -- Lifetime hosted-session trial meter. One row per DISTINCT session ever
+      -- surfaced through the hosted index, deduped by PRIMARY KEY so re-advertises
+      -- never inflate it. Unlike run_starts this is NEVER pruned — it is durable
+      -- billing state, not a rolling window — so the "first N sessions are free"
+      -- trial can't be reset by ageing rows out. Which sessions fall outside the
+      -- allowance is decided at READ time (by first_seen order vs the plan limit),
+      -- so a session allowed once stays allowed and upgrading needs no backfill.
+      -- Metadata only: an account id, an opaque session id, a timestamp.
+      CREATE TABLE IF NOT EXISTS trial_sessions (
+        account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        session_id  TEXT NOT NULL,
+        first_seen  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (account_id, session_id)
+      );
+
       CREATE INDEX IF NOT EXISTS idx_nodes_account ON nodes(account_id);
       CREATE INDEX IF NOT EXISTS idx_nodes_token ON nodes(enrollment_token_hash);
       CREATE INDEX IF NOT EXISTS idx_sessions_account ON sessions(account_id);
@@ -540,6 +783,7 @@ export class PostgresStore implements MeshStore {
       -- re-label starts a fresh run rather than colliding forever.
       CREATE UNIQUE INDEX IF NOT EXISTS idx_work_items_collapse ON work_items(account_id, collapse_key) WHERE collapse_key IS NOT NULL AND status = 'pending';
       CREATE INDEX IF NOT EXISTS idx_run_starts_account_time ON run_starts(account_id, started_at);
+      CREATE INDEX IF NOT EXISTS idx_trial_sessions_account_seen ON trial_sessions(account_id, first_seen);
     `);
   }
 
@@ -800,11 +1044,29 @@ export class PostgresStore implements MeshStore {
   }
 
   async removePairedDevice(accountId: string, publicKeyB64: string): Promise<boolean> {
-    const result = await this.query(
-      `DELETE FROM paired_devices WHERE account_id = $1 AND public_key_b64 = $2`,
-      [accountId, publicKeyB64],
-    );
-    return (result.rowCount ?? 0) > 0;
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query(
+        `DELETE FROM paired_devices WHERE account_id = $1 AND public_key_b64 = $2`,
+        [accountId, publicKeyB64],
+      );
+      if ((result.rowCount ?? 0) > 0) {
+        // The revoked device's old wrap must never be copied forward. Advancing
+        // the epoch asks any surviving holder to generate a new vault key and
+        // rewrap it only for the still-paired recipient list.
+        await client.query(`DELETE FROM device_vault_wrapped_keys WHERE account_id = $1 AND device_pub = $2`, [accountId, publicKeyB64]);
+        await client.query(`DELETE FROM device_vault_key_requests WHERE account_id = $1 AND device_pub = $2`, [accountId, publicKeyB64]);
+        await client.query(`UPDATE device_vaults SET key_generation = key_generation + 1, updated_at = now() WHERE account_id = $1`, [accountId]);
+      }
+      await client.query("COMMIT");
+      return (result.rowCount ?? 0) > 0;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async createRelayTicket(input: { role: RelayRole; accountId: string; nodeId: string | null; ttlMs?: number }): Promise<string> {
@@ -935,16 +1197,45 @@ export class PostgresStore implements MeshStore {
   }
 
   async setNodeOnline(nodeId: string, online: boolean): Promise<void> {
-    await this.query(
-      `UPDATE nodes SET online = $2, last_seen_at = now() WHERE id = $1`,
-      [nodeId, online],
-    );
+    // Only bump `last_seen_at` when marking ONLINE. This makes the column mean
+    // "last time we confirmed the node online", which the read path (`GET /nodes`)
+    // uses as a TTL fallback: a stale/racing `online=false` write (fire-and-forget
+    // from a relay socket close, possibly out of order with a fresh reconnect's
+    // `true`, or from a stale replica) must NOT refresh `last_seen_at`, or it would
+    // keep a genuinely-offline node looking recently-seen. Paired with the daemon's
+    // periodic `/node/heartbeat`, a connected node's `last_seen_at` stays fresh so a
+    // lost connect/close race self-heals instead of pinning the node offline.
+    if (online) {
+      await this.query(
+        `UPDATE nodes SET online = true, last_seen_at = now() WHERE id = $1`,
+        [nodeId],
+      );
+    } else {
+      await this.query(
+        `UPDATE nodes SET online = false WHERE id = $1`,
+        [nodeId],
+      );
+    }
   }
 
   async setNodeProviders(nodeId: string, providers: NodeProviderSummary[]): Promise<void> {
     await this.query(
       `UPDATE nodes SET providers = $2 WHERE id = $1`,
       [nodeId, JSON.stringify(providers)],
+    );
+  }
+
+  async setNodeCapabilities(nodeId: string, capabilities: string[]): Promise<void> {
+    await this.query(
+      `UPDATE nodes SET capabilities = $2 WHERE id = $1`,
+      [nodeId, JSON.stringify(capabilities)],
+    );
+  }
+
+  async setNodeBootstrapStatus(nodeId: string, phase: string): Promise<void> {
+    await this.query(
+      `UPDATE nodes SET bootstrap_status = $2 WHERE id = $1`,
+      [nodeId, JSON.stringify({ phase, updatedAt: new Date().toISOString() })],
     );
   }
 
@@ -995,31 +1286,46 @@ export class PostgresStore implements MeshStore {
   }
 
   async removeNode(accountId: string, nodeId: string): Promise<boolean> {
-    // Clear any GitHub App hook this node was serving first, so a removed node
-    // never leaves a stale "connected" behind (the ghost delete/reinstall left).
-    await this.query(
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      // Clear any GitHub App hook this node was serving first, so a removed node
+      // never leaves a stale "connected" behind (the ghost delete/reinstall left).
+      await client.query(
       `UPDATE inbound_hooks SET serving_node_id = NULL, serving_node_seen_at = NULL
        WHERE account_id = $1 AND serving_node_id = $2`,
-      [accountId, nodeId],
-    );
-    // A removed node keeps whatever it already cached locally — deleting its
-    // wrapped_keys row (via the FK cascade below) only stops it from resolving
-    // a key it doesn't have YET. Flag every GitHub App vault it already had a
-    // wrapped key for so a surviving node mints a fresh vault key on its next
-    // sync tick, which is what actually invalidates the removed node's cached
-    // copy (issue #88 acceptance criterion: revocation re-wraps/rotates).
-    await this.query(
+        [accountId, nodeId],
+      );
+      // A removed node keeps whatever it already cached locally — deleting its
+      // wrapped_keys row only stops future resolution. Flag each vault it held,
+      // then delete the node in the SAME transaction so a survivor can never
+      // rotate/re-wrap while the revoked node is still eligible for a fresh key.
+      await client.query(
       `UPDATE github_app_vaults SET needs_rotation = true
        WHERE account_id = $1 AND app_id IN (
          SELECT app_id FROM github_app_wrapped_keys WHERE account_id = $1 AND node_id = $2
        )`,
-      [accountId, nodeId],
-    );
-    const { rowCount } = await this.query(
-      `DELETE FROM nodes WHERE id = $1 AND account_id = $2`,
-      [nodeId, accountId],
-    );
-    return (rowCount ?? 0) > 0;
+        [accountId, nodeId],
+      );
+      await client.query(
+      `UPDATE model_auth_vaults SET needs_rotation = true
+       WHERE account_id = $1 AND EXISTS (
+         SELECT 1 FROM model_auth_wrapped_keys WHERE account_id = $1 AND node_id = $2
+       )`,
+        [accountId, nodeId],
+      );
+      const { rowCount } = await client.query(
+        `DELETE FROM nodes WHERE id = $1 AND account_id = $2`,
+        [nodeId, accountId],
+      );
+      await client.query("COMMIT");
+      return (rowCount ?? 0) > 0;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async replaceNodeSessions(accountId: string, nodeId: string, sessions: SessionAdvert[]): Promise<number> {
@@ -1042,7 +1348,7 @@ export class PostgresStore implements MeshStore {
         // not unnest($1::text[], ...) — pg-mem, which the whole store is
         // deliberately tested against, doesn't support multi-array unnest.)
         if (sessions.length > 0) {
-          const sessionIndexCols = 8;
+          const sessionIndexCols = 10;
           const sessionIndexValues: unknown[] = [];
           const sessionIndexRows = sessions
             .map((s, i) => {
@@ -1056,12 +1362,14 @@ export class PostgresStore implements MeshStore {
                 s.titleEnc ?? null,
                 s.branch ?? null,
                 s.agentServiceAddress ?? null,
+                JSON.stringify(s.attention ?? []),
+                s.updatedAt ?? new Date(),
               );
-              return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, now())`;
+              return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9}, $${base + 10})`;
             })
             .join(", ");
           await client.query(
-            `INSERT INTO session_index (node_id, session_id, account_id, status, source, title_enc, branch, agent_service_address, updated_at)
+            `INSERT INTO session_index (node_id, session_id, account_id, status, source, title_enc, branch, agent_service_address, attention, updated_at)
              VALUES ${sessionIndexRows}`,
             sessionIndexValues,
           );
@@ -1088,6 +1396,19 @@ export class PostgresStore implements MeshStore {
             [accountId, ...sessions.map((s) => s.sessionId)],
           );
           newRunStarts = insertedRuns.rows.filter((row: { run_key: string }) => !existingKeys.has(row.run_key)).length;
+          // Mirror into the durable, never-pruned trial ledger in the same batch.
+          // Deduped by PRIMARY KEY, so a session's first_seen is pinned the day it
+          // first appears and re-advertises are no-ops — the lifetime trial count is
+          // stable regardless of how often a session is re-advertised. Limit-agnostic
+          // by design: whether a session is inside the allowance is decided at read
+          // time (overTrialSessionIds), so this path needs no plan/enforcement lookup.
+          const trialRows = sessions.map((_, i) => `($1, $${i + 2})`).join(", ");
+          await client.query(
+            `INSERT INTO trial_sessions (account_id, session_id)
+             VALUES ${trialRows}
+             ON CONFLICT (account_id, session_id) DO NOTHING`,
+            [accountId, ...sessions.map((s) => s.sessionId)],
+          );
         }
       }
       await client.query("COMMIT");
@@ -1113,16 +1434,28 @@ export class PostgresStore implements MeshStore {
         // fixed-cost write per status flip, independent of how many sessions the
         // node has — unlike the wholesale DELETE+reinsert in replaceNodeSessions.
         await client.query(
-          `INSERT INTO session_index (node_id, session_id, account_id, status, source, title_enc, branch, agent_service_address, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+          `INSERT INTO session_index (node_id, session_id, account_id, status, source, title_enc, branch, agent_service_address, attention, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
            ON CONFLICT (node_id, session_id) DO UPDATE
              SET status = EXCLUDED.status,
                  source = EXCLUDED.source,
                  title_enc = EXCLUDED.title_enc,
                  branch = EXCLUDED.branch,
                  agent_service_address = EXCLUDED.agent_service_address,
-                 updated_at = now()`,
-          [nodeId, session.sessionId, accountId, session.status, session.source ?? null, session.titleEnc ?? null, session.branch ?? null, session.agentServiceAddress ?? null],
+                 attention = EXCLUDED.attention,
+                 updated_at = EXCLUDED.updated_at`,
+          [
+            nodeId,
+            session.sessionId,
+            accountId,
+            session.status,
+            session.source ?? null,
+            session.titleEnc ?? null,
+            session.branch ?? null,
+            session.agentServiceAddress ?? null,
+            JSON.stringify(session.attention ?? []),
+            session.updatedAt ?? new Date(),
+          ],
         );
         // Count each run the first time its session is advertised — same funnel
         // as replaceNodeSessions (keyed by (account, session), DO NOTHING, so a
@@ -1139,6 +1472,13 @@ export class PostgresStore implements MeshStore {
           [accountId, session.sessionId],
         );
         runStarted = existingRun.rows.length === 0 && insertedRun.rows.length > 0;
+        // Mirror into the durable lifetime trial ledger (see replaceNodeSessions).
+        await client.query(
+          `INSERT INTO trial_sessions (account_id, session_id)
+           VALUES ($1, $2)
+           ON CONFLICT (account_id, session_id) DO NOTHING`,
+          [accountId, session.sessionId],
+        );
       }
       await client.query("COMMIT");
     } catch (error) {
@@ -1163,6 +1503,7 @@ export class PostgresStore implements MeshStore {
       titleEnc: row.title_enc ?? undefined,
       branch: row.branch ?? undefined,
       agentServiceAddress: row.agent_service_address ?? undefined,
+      attention: Array.isArray(row.attention) ? row.attention : undefined,
       updatedAt: new Date(row.updated_at).toISOString(),
     }));
   }
@@ -1180,6 +1521,7 @@ export class PostgresStore implements MeshStore {
       titleEnc: row.title_enc ?? undefined,
       branch: row.branch ?? undefined,
       agentServiceAddress: row.agent_service_address ?? undefined,
+      attention: Array.isArray(row.attention) ? row.attention : undefined,
       updatedAt: new Date(row.updated_at).toISOString(),
     }));
   }
@@ -1283,22 +1625,348 @@ export class PostgresStore implements MeshStore {
     return merged;
   }
 
+  async getEphemeralConfigs(accountId: string): Promise<EphemeralNodeConfig[]> {
+    const { rows } = await this.query(`SELECT ephemeral_configs FROM accounts WHERE id = $1`, [accountId]);
+    return normalizeEphemeralConfigs(rows[0]?.ephemeral_configs ?? null);
+  }
+
+  async setEphemeralConfigs(accountId: string, configs: EphemeralNodeConfig[]): Promise<EphemeralNodeConfig[]> {
+    const normalized = normalizeEphemeralConfigs(configs);
+    await this.query(`UPDATE accounts SET ephemeral_configs = $2 WHERE id = $1`, [accountId, JSON.stringify(normalized)]);
+    return normalized;
+  }
+
+  async getQueueRouting(accountId: string): Promise<QueueRouting> {
+    const { rows } = await this.query(`SELECT queue_routing FROM accounts WHERE id = $1`, [accountId]);
+    return normalizeQueueRouting(rows[0]?.queue_routing ?? null);
+  }
+
+  async setQueueRouting(accountId: string, routing: QueueRouting): Promise<QueueRouting> {
+    const normalized = normalizeQueueRouting(routing);
+    await this.query(`UPDATE accounts SET queue_routing = $2 WHERE id = $1`, [accountId, JSON.stringify(normalized)]);
+    return normalized;
+  }
+
+  // Seal plaintext hosted credentials into the at-rest form: every secret value
+  // is an AES-256-GCM envelope bound to the account; ids stay in the clear.
+  private sealHosted(accountId: string, h: HostedProvisioning): Record<string, unknown> {
+    const out: Record<string, unknown> = { enabled: h.enabled };
+    if (h.githubToken) out.githubToken = encryptSecret(accountId, h.githubToken);
+    if (h.githubApp) {
+      out.githubApp = {
+        appId: h.githubApp.appId,
+        installationId: h.githubApp.installationId,
+        privateKeyPem: encryptSecret(accountId, h.githubApp.privateKeyPem),
+      };
+    }
+    if (h.providerTokens && Object.keys(h.providerTokens).length) {
+      const enc: Record<string, unknown> = {};
+      for (const [p, t] of Object.entries(h.providerTokens)) enc[p] = encryptSecret(accountId, t);
+      out.providerTokens = enc;
+    }
+    if (h.validatedProviders && Object.keys(h.validatedProviders).length) out.validatedProviders = h.validatedProviders;
+    return out;
+  }
+
+  // Open the at-rest form back to plaintext. Tolerates legacy plaintext strings
+  // (pre-encryption) on read; requires the master key for sealed values.
+  private openHosted(accountId: string, stored: unknown): HostedProvisioning {
+    if (!stored || typeof stored !== "object") return { ...DEFAULT_HOSTED_PROVISIONING };
+    const s = stored as Record<string, any>;
+    const dec = (v: unknown): string | undefined => {
+      if (isSecretEnvelope(v)) return decryptSecret(accountId, v);
+      if (typeof v === "string" && v) return v;
+      return undefined;
+    };
+    const out: HostedProvisioning = { enabled: Boolean(s.enabled) };
+    const gt = dec(s.githubToken);
+    if (gt) out.githubToken = gt;
+    if (s.githubApp && typeof s.githubApp === "object") {
+      const pk = dec(s.githubApp.privateKeyPem);
+      if (typeof s.githubApp.appId === "string" && typeof s.githubApp.installationId === "string" && pk) {
+        out.githubApp = { appId: s.githubApp.appId, installationId: s.githubApp.installationId, privateKeyPem: pk };
+      }
+    }
+    if (s.providerTokens && typeof s.providerTokens === "object") {
+      const tokens: Record<string, string> = {};
+      for (const [p, v] of Object.entries(s.providerTokens)) {
+        const t = dec(v);
+        if (t) tokens[p] = t;
+      }
+      if (Object.keys(tokens).length) out.providerTokens = tokens;
+    }
+    if (s.validatedProviders && typeof s.validatedProviders === "object") {
+      const validated: Record<string, string> = {};
+      for (const [provider, fingerprint] of Object.entries(s.validatedProviders)) {
+        if (typeof fingerprint === "string") validated[provider] = fingerprint;
+      }
+      if (Object.keys(validated).length) out.validatedProviders = validated;
+    }
+    return out;
+  }
+
+  async getHostedProvisioning(accountId: string): Promise<HostedProvisioning> {
+    const { rows } = await this.query(`SELECT hosted_provisioning FROM accounts WHERE id = $1`, [accountId]);
+    return this.openHosted(accountId, rows[0]?.hosted_provisioning ?? null);
+  }
+
+  // Non-decrypting status read — reports which credentials are present without
+  // needing the master key, so the settings UI works even if the key rotates.
+  async getHostedProvisioningStatus(accountId: string): Promise<HostedProvisioningStatus> {
+    const { rows } = await this.query(`SELECT hosted_provisioning FROM accounts WHERE id = $1`, [accountId]);
+    const s = (rows[0]?.hosted_provisioning ?? {}) as Record<string, any>;
+    const hasApp = Boolean(s.githubApp && s.githubApp.appId);
+    return {
+      enabled: Boolean(s.enabled),
+      credential: hasApp ? "app" : s.githubToken ? "pat" : "none",
+      githubAppId: hasApp ? String(s.githubApp.appId) : undefined,
+      providers: s.providerTokens && typeof s.providerTokens === "object" ? Object.keys(s.providerTokens) : [],
+      validatedProviders: s.validatedProviders && typeof s.validatedProviders === "object" ? Object.keys(s.validatedProviders) : [],
+    };
+  }
+
+  async setHostedProvisioning(accountId: string, patch: Partial<HostedProvisioning>): Promise<HostedProvisioning> {
+    const current = await this.getHostedProvisioning(accountId);
+    const validatedProviders = { ...(current.validatedProviders ?? {}), ...(patch.validatedProviders ?? {}) };
+    for (const [provider, token] of Object.entries(patch.providerTokens ?? {})) {
+      if (validatedProviders[provider] !== providerCredentialFingerprint(token)) delete validatedProviders[provider];
+    }
+    // Merge provider tokens so adding one provider doesn't wipe the others.
+    const merged = normalizeHostedProvisioning({
+      ...current,
+      ...patch,
+      providerTokens: { ...(current.providerTokens ?? {}), ...(patch.providerTokens ?? {}) },
+      validatedProviders,
+    });
+    // Encrypt at rest (throws if the master key is unset — fail closed).
+    await this.query(`UPDATE accounts SET hosted_provisioning = $2 WHERE id = $1`, [accountId, JSON.stringify(this.sealHosted(accountId, merged))]);
+    return merged;
+  }
+
+  async getHostedMachines(accountId: string): Promise<Array<Record<string, unknown>>> {
+    const { rows } = await this.query(`SELECT hosted_machines FROM accounts WHERE id = $1`, [accountId]);
+    const v = rows[0]?.hosted_machines;
+    return Array.isArray(v) ? v : [];
+  }
+
+  async setHostedMachines(accountId: string, machines: Array<Record<string, unknown>>): Promise<Array<Record<string, unknown>>> {
+    const arr = Array.isArray(machines) ? machines : [];
+    await this.query(`UPDATE accounts SET hosted_machines = $2 WHERE id = $1`, [accountId, JSON.stringify(arr)]);
+    return arr;
+  }
+
+  private hostedAttemptFromRow(row: Record<string, any>): HostedMachineAttempt {
+    return {
+      accountId: String(row.account_id), attemptId: String(row.attempt_id),
+      provider: String(row.provider), configId: row.config_id || undefined,
+      nodeId: String(row.node_id), state: row.state,
+      desiredState: row.desired_state === "deleted" ? "deleted" : "active",
+      observedState: row.observed_state || undefined,
+      deadlineAt: row.deadline_at ? new Date(row.deadline_at).toISOString() : undefined,
+      ownershipTag: row.ownership_tag || undefined,
+      desired: row.desired && typeof row.desired === "object" ? row.desired : {},
+      machine: row.machine && typeof row.machine === "object" ? row.machine : undefined,
+      lastError: row.last_error || undefined, retryCount: Number(row.retry_count) || 0,
+      version: Number(row.version) || 0,
+      createdAt: new Date(row.created_at).toISOString(), updatedAt: new Date(row.updated_at).toISOString(),
+    };
+  }
+
+  async putHostedMachineAttempt(attempt: HostedMachineAttempt, opts?: { expectedVersion?: number }): Promise<HostedMachineAttempt> {
+    const expectedVersion = opts?.expectedVersion;
+    const params = [
+      attempt.accountId, attempt.attemptId, attempt.provider, attempt.configId ?? null, attempt.nodeId,
+      attempt.state, attempt.desiredState ?? "active", attempt.observedState ?? null,
+      attempt.deadlineAt ?? null, attempt.ownershipTag ?? null,
+      JSON.stringify(attempt.desired ?? {}), attempt.machine ? JSON.stringify(attempt.machine) : null,
+      attempt.lastError ?? null, attempt.retryCount, attempt.createdAt, attempt.updatedAt,
+    ];
+    if (expectedVersion != null) {
+      // A fenced write only ever applies to an existing row (the caller must
+      // have already read it to know its version), so this is a plain
+      // conditional UPDATE rather than an upsert. Deliberately NOT expressed
+      // as `INSERT ... ON CONFLICT DO UPDATE ... WHERE ... RETURNING`: that
+      // form does not reliably return zero rows on a WHERE mismatch under
+      // pg-mem (the in-memory Postgres this store also runs against for
+      // dev/tests — see postgres-store.test evidence in the PR), silently
+      // turning a rejected fence into an apparent success. A bare UPDATE with
+      // a WHERE clause is unambiguous under both.
+      const { rows } = await this.query(
+        `UPDATE hosted_machine_attempts SET
+           provider=$3, config_id=$4, node_id=$5, state=$6, desired_state=$7, observed_state=$8,
+           deadline_at=$9, ownership_tag=$10, desired=$11, machine=$12, last_error=$13, retry_count=$14,
+           version=version + 1, updated_at=$16
+         WHERE account_id=$1 AND attempt_id=$2 AND version=$17
+         RETURNING *`,
+        [...params, expectedVersion],
+      );
+      if (!rows[0]) throw new ConcurrentAttemptUpdateError(attempt.accountId, attempt.attemptId);
+      return this.hostedAttemptFromRow(rows[0]);
+    }
+    const { rows } = await this.query(
+      `INSERT INTO hosted_machine_attempts
+         (account_id, attempt_id, provider, config_id, node_id, state, desired_state, observed_state,
+          deadline_at, ownership_tag, desired, machine, last_error, retry_count, version, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,1,$15,$16)
+       ON CONFLICT (account_id, attempt_id) DO UPDATE SET
+         provider=EXCLUDED.provider, config_id=EXCLUDED.config_id, node_id=EXCLUDED.node_id,
+         state=EXCLUDED.state, desired_state=EXCLUDED.desired_state, observed_state=EXCLUDED.observed_state,
+         deadline_at=EXCLUDED.deadline_at, ownership_tag=EXCLUDED.ownership_tag,
+         desired=EXCLUDED.desired, machine=EXCLUDED.machine,
+         last_error=EXCLUDED.last_error, retry_count=EXCLUDED.retry_count,
+         version=hosted_machine_attempts.version + 1, updated_at=EXCLUDED.updated_at
+       RETURNING *`,
+      params,
+    );
+    return this.hostedAttemptFromRow(rows[0]);
+  }
+
+  async getHostedMachineAttempt(accountId: string, attemptId: string): Promise<HostedMachineAttempt | undefined> {
+    const { rows } = await this.query(`SELECT * FROM hosted_machine_attempts WHERE account_id=$1 AND attempt_id=$2`, [accountId, attemptId]);
+    return rows[0] ? this.hostedAttemptFromRow(rows[0]) : undefined;
+  }
+
+  async listHostedMachineAttempts(accountId: string, activeOnly = false): Promise<HostedMachineAttempt[]> {
+    const { rows } = await this.query(
+      `SELECT * FROM hosted_machine_attempts WHERE account_id=$1${activeOnly ? " AND state <> 'deleted'" : ""} ORDER BY created_at`,
+      [accountId],
+    );
+    return rows.map((row) => this.hostedAttemptFromRow(row));
+  }
+
+  async listHostedMachineAccountIds(): Promise<string[]> {
+    // Filter in JS: pg-mem (the dev/test backend) does not implement Postgres's
+    // jsonb_typeof/jsonb_array_length functions, and this scan runs only on the
+    // small account metadata rows (never session content).
+    const { rows } = await this.query(`SELECT id, hosted_machines FROM accounts WHERE hosted_machines IS NOT NULL`);
+    const ids = new Set(rows.filter((row) => Array.isArray(row.hosted_machines) && row.hosted_machines.length > 0).map((row) => String(row.id)));
+    const attempts = await this.query(`SELECT DISTINCT account_id FROM hosted_machine_attempts WHERE state <> 'deleted'`);
+    for (const row of attempts.rows) ids.add(String(row.account_id));
+    return [...ids];
+  }
+
+  async listReadyCapacityAccountIds(): Promise<string[]> {
+    const { rows } = await this.query(`SELECT id, ephemeral_configs FROM accounts WHERE ephemeral_configs IS NOT NULL`);
+    return rows.filter((row) => normalizeEphemeralConfigs(row.ephemeral_configs).some((config) => (config.readyCapacity ?? 0) > 0)).map((row) => String(row.id));
+  }
+
+  async listHostedEnabledAccountIds(): Promise<string[]> {
+    const { rows } = await this.query(`SELECT id, hosted_provisioning FROM accounts WHERE hosted_provisioning IS NOT NULL`);
+    return rows.filter((row) => normalizeHostedProvisioning(row.hosted_provisioning).enabled).map((row) => String(row.id));
+  }
+
+  async acquireHostedProvisionLease(accountId: string, holder: string, ttlSeconds: number): Promise<boolean> {
+    const expiresAt = new Date(Date.now() + Math.max(30, ttlSeconds) * 1000).toISOString();
+    const { rows } = await this.query(
+      `INSERT INTO hosted_provision_leases (account_id, holder, expires_at)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (account_id) DO UPDATE
+       SET holder = EXCLUDED.holder, expires_at = EXCLUDED.expires_at
+       WHERE hosted_provision_leases.expires_at < now()
+       RETURNING holder`,
+      [accountId, holder, expiresAt],
+    );
+    return rows[0]?.holder === holder;
+  }
+
+  async renewHostedProvisionLease(accountId: string, holder: string, ttlSeconds: number): Promise<boolean> {
+    const expiresAt = new Date(Date.now() + Math.max(30, ttlSeconds) * 1000).toISOString();
+    const { rows } = await this.query(
+      `UPDATE hosted_provision_leases SET expires_at=$3
+       WHERE account_id=$1 AND holder=$2 AND expires_at >= now() RETURNING holder`,
+      [accountId, holder, expiresAt],
+    );
+    return rows[0]?.holder === holder;
+  }
+
+  async releaseHostedProvisionLease(accountId: string, holder: string): Promise<void> {
+    await this.query(`DELETE FROM hosted_provision_leases WHERE account_id = $1 AND holder = $2`, [accountId, holder]);
+  }
+
+  async appendHostedAudit(accountId: string, event: HostedAuditEvent): Promise<void> {
+    const { rows } = await this.query(`SELECT hosted_audit FROM accounts WHERE id = $1`, [accountId]);
+    const cur = Array.isArray(rows[0]?.hosted_audit) ? (rows[0].hosted_audit as HostedAuditEvent[]) : [];
+    const next = [...cur, event].slice(-200); // cap the trail
+    await this.query(`UPDATE accounts SET hosted_audit = $2 WHERE id = $1`, [accountId, JSON.stringify(next)]);
+  }
+
+  async listHostedAudit(accountId: string, limit = 50): Promise<HostedAuditEvent[]> {
+    const { rows } = await this.query(`SELECT hosted_audit FROM accounts WHERE id = $1`, [accountId]);
+    const cur = Array.isArray(rows[0]?.hosted_audit) ? (rows[0].hosted_audit as HostedAuditEvent[]) : [];
+    return cur.slice(-limit).reverse();
+  }
+
   async getModelAuthVault(accountId: string): Promise<ModelAuthVault | undefined> {
     const { rows } = await this.query(`SELECT * FROM model_auth_vaults WHERE account_id = $1`, [accountId]);
     const row = rows[0];
     if (!row) return undefined;
-    return { ciphertext: row.ciphertext, updatedAt: new Date(row.updated_at).toISOString(), updatedByNodeId: row.updated_by_node_id };
+    return { ciphertext: row.ciphertext, updatedAt: new Date(row.updated_at).toISOString(), updatedByNodeId: row.updated_by_node_id, needsRotation: Boolean(row.needs_rotation) };
   }
 
-  async setModelAuthVault(accountId: string, nodeId: string, ciphertext: string): Promise<ModelAuthVault> {
-    const { rows } = await this.query(
-      `INSERT INTO model_auth_vaults (account_id, ciphertext, updated_by_node_id, updated_at)
-       VALUES ($1, $2, $3, now())
-       ON CONFLICT (account_id) DO UPDATE SET ciphertext = EXCLUDED.ciphertext, updated_by_node_id = EXCLUDED.updated_by_node_id, updated_at = now()
-       RETURNING *`,
-      [accountId, ciphertext, nodeId],
+  async getHostedModelAuthVaultKey(accountId: string): Promise<SecretEnvelope | undefined> {
+    const { rows } = await this.query(`SELECT key_enc FROM hosted_model_auth_keys WHERE account_id = $1`, [accountId]);
+    if (!rows[0]) return undefined;
+    const raw = rows[0].key_enc;
+    return (typeof raw === "string" ? JSON.parse(raw) : raw) as SecretEnvelope;
+  }
+
+  async setHostedModelAuthVaultKey(accountId: string, enc: SecretEnvelope): Promise<void> {
+    await this.query(
+      `INSERT INTO hosted_model_auth_keys (account_id, key_enc, updated_at)
+       VALUES ($1, $2, now())
+       ON CONFLICT (account_id) DO UPDATE SET key_enc = EXCLUDED.key_enc, updated_at = now()`,
+      [accountId, JSON.stringify(enc)],
     );
-    return { ciphertext: rows[0].ciphertext, updatedAt: new Date(rows[0].updated_at).toISOString(), updatedByNodeId: rows[0].updated_by_node_id };
+  }
+
+  async setModelAuthVault(accountId: string, nodeId: string, ciphertext: string, rotated = false): Promise<ModelAuthVault> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      // Serialize all generation writers on the account row. The lock makes the
+      // check + generation flip atomic: exactly one survivor can consume a
+      // rotation flag, and a stale-key writer cannot clear it accidentally.
+      const current = await client.query(
+        `SELECT needs_rotation FROM model_auth_vaults WHERE account_id = $1 FOR UPDATE`,
+        [accountId],
+      );
+      if (current.rows[0] && Boolean(current.rows[0].needs_rotation) !== rotated) {
+        throw Object.assign(new Error(rotated
+          ? "Model-auth vault was already rotated by another node"
+          : "Model-auth vault key rotation is required before this vault can be updated"), { status: 409 });
+      }
+      const { rows } = await client.query(
+        `INSERT INTO model_auth_vaults (account_id, ciphertext, updated_by_node_id, updated_at, needs_rotation)
+         VALUES ($1, $2, $3, now(), false)
+         ON CONFLICT (account_id) DO UPDATE
+         SET ciphertext = EXCLUDED.ciphertext, updated_by_node_id = EXCLUDED.updated_by_node_id, updated_at = now(), needs_rotation = false
+         RETURNING *`,
+        [accountId, ciphertext, nodeId],
+      );
+      if (rotated) {
+        // Every old wrap protects the removed node's generation. Drop them all
+        // and queue fresh wraps only for currently-enrolled nodes. Keep this in
+        // the same transaction as the generation flip: no stale-key writer can
+        // slip in after needs_rotation clears but before old wraps disappear.
+        await client.query(`DELETE FROM model_auth_wrapped_keys WHERE account_id = $1`, [accountId]);
+        await client.query(
+        `INSERT INTO model_auth_key_requests (account_id, node_id, public_key, created_at)
+         SELECT k.account_id, k.node_id, k.public_key, now()
+         FROM model_auth_node_keys k
+         JOIN nodes n ON n.id = k.node_id AND n.account_id = k.account_id
+         WHERE k.account_id = $1 AND k.node_id <> $2
+         ON CONFLICT (account_id, node_id) DO UPDATE SET public_key = EXCLUDED.public_key, created_at = now()`,
+          [accountId, nodeId],
+        );
+      }
+      await client.query("COMMIT");
+      return { ciphertext: rows[0].ciphertext, updatedAt: new Date(rows[0].updated_at).toISOString(), updatedByNodeId: rows[0].updated_by_node_id, needsRotation: Boolean(rows[0].needs_rotation) };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async setModelAuthNodePublicKey(accountId: string, nodeId: string, publicKey: string): Promise<void> {
@@ -1432,6 +2100,189 @@ export class PostgresStore implements MeshStore {
       wrappedByPublicKey: row.wrapped_by_public_key,
       updatedAt: new Date(row.updated_at).toISOString(),
     };
+  }
+
+  // --- Device→device provider-token vault (P2 / Gap A) -----------------
+
+  async getDeviceVault(accountId: string): Promise<DeviceVault | undefined> {
+    const { rows } = await this.query(`SELECT * FROM device_vaults WHERE account_id = $1`, [accountId]);
+    const row = rows[0];
+    if (!row) return undefined;
+    return { ciphertext: row.ciphertext, updatedByDevice: row.updated_by_device, updatedAt: new Date(row.updated_at).toISOString(), generation: Number(row.generation), keyGeneration: Number(row.key_generation) };
+  }
+
+  async setDeviceVault(accountId: string, byDevicePublicKey: string, ciphertext: string, expectedGeneration = 0, keyGeneration = 0): Promise<DeviceVault> {
+    // Give callers an immediate useful conflict (and support pg-mem, which does
+    // not fully implement ON CONFLICT ... WHERE); the SQL predicate below is the
+    // authoritative cross-replica compare-and-set.
+    const observed = await this.getDeviceVault(accountId);
+    if (observed && (observed.generation !== expectedGeneration || observed.keyGeneration !== keyGeneration)) {
+      throw Object.assign(new Error("Device vault changed concurrently"), { status: 409 });
+    }
+    // The WHERE on the conflict update makes this a real compare-and-set, not a
+    // read/check/write race across control-plane replicas.
+    const { rows } = await this.query(
+      `INSERT INTO device_vaults (account_id, ciphertext, updated_by_device, generation, key_generation, updated_at)
+       VALUES ($1, $2, $3, 1, $5, now())
+       ON CONFLICT (account_id) DO UPDATE SET ciphertext = EXCLUDED.ciphertext, updated_by_device = EXCLUDED.updated_by_device, generation = device_vaults.generation + 1, updated_at = now()
+       WHERE device_vaults.generation = $4 AND device_vaults.key_generation = $5
+       RETURNING *`,
+      [accountId, ciphertext, byDevicePublicKey, expectedGeneration, keyGeneration],
+    );
+    const row = rows[0];
+    if (!row) throw Object.assign(new Error("Device vault changed concurrently"), { status: 409 });
+    return { ciphertext: row.ciphertext, updatedByDevice: row.updated_by_device, updatedAt: new Date(row.updated_at).toISOString(), generation: Number(row.generation), keyGeneration: Number(row.key_generation) };
+  }
+
+  async getDeviceVaultWrappedKey(accountId: string, devicePublicKey: string): Promise<DeviceVaultWrappedKeyRecord | undefined> {
+    const { rows } = await this.query(`SELECT * FROM device_vault_wrapped_keys WHERE account_id = $1 AND device_pub = $2`, [accountId, devicePublicKey]);
+    const row = rows[0];
+    if (!row) return undefined;
+    return { devicePublicKey: row.device_pub, wrappedKey: row.wrapped_key, wrappedByPublicKey: row.wrapped_by_public_key, generation: Number(row.generation), updatedAt: new Date(row.updated_at).toISOString() };
+  }
+
+  async requestDeviceVaultWrappedKey(accountId: string, devicePublicKey: string): Promise<void> {
+    if (await this.getDeviceVaultWrappedKey(accountId, devicePublicKey)) return;
+    await this.query(
+      `INSERT INTO device_vault_key_requests (account_id, device_pub, created_at)
+       VALUES ($1, $2, now())
+       ON CONFLICT (account_id, device_pub) DO UPDATE SET created_at = now()`,
+      [accountId, devicePublicKey],
+    );
+  }
+
+  async listDeviceVaultKeyRequests(accountId: string, exceptDevicePublicKey: string): Promise<DeviceVaultKeyRequest[]> {
+    const { rows } = await this.query(
+      `SELECT device_pub, created_at FROM device_vault_key_requests WHERE account_id = $1 AND device_pub <> $2 ORDER BY created_at ASC`,
+      [accountId, exceptDevicePublicKey],
+    );
+    return rows.map((row: any) => ({ devicePublicKey: row.device_pub, createdAt: new Date(row.created_at).toISOString() }));
+  }
+
+  async setDeviceVaultWrappedKey(accountId: string, targetDevicePublicKey: string, wrappedByPublicKey: string, wrappedKey: string, generation = 0): Promise<DeviceVaultWrappedKeyRecord> {
+    const current = await this.getDeviceVault(accountId);
+    if (current && generation !== current.keyGeneration) throw Object.assign(new Error("Device vault key generation is stale"), { status: 409 });
+    const paired = await this.query(`SELECT 1 FROM paired_devices WHERE account_id = $1 AND public_key_b64 = $2`, [accountId, targetDevicePublicKey]);
+    if (!paired.rows[0]) throw Object.assign(new Error("Vault recipient is not a paired device"), { status: 403 });
+    const { rows } = await this.query(
+      `INSERT INTO device_vault_wrapped_keys (account_id, device_pub, wrapped_key, wrapped_by_public_key, generation, updated_at)
+       VALUES ($1, $2, $3, $4, $5, now())
+       ON CONFLICT (account_id, device_pub) DO UPDATE SET wrapped_key = EXCLUDED.wrapped_key, wrapped_by_public_key = EXCLUDED.wrapped_by_public_key, generation = EXCLUDED.generation, updated_at = now()
+       RETURNING *`,
+      [accountId, targetDevicePublicKey, wrappedKey, wrappedByPublicKey, generation],
+    );
+    await this.query(`DELETE FROM device_vault_key_requests WHERE account_id = $1 AND device_pub = $2`, [accountId, targetDevicePublicKey]);
+    return { devicePublicKey: rows[0].device_pub, wrappedKey: rows[0].wrapped_key, wrappedByPublicKey: rows[0].wrapped_by_public_key, generation: Number(rows[0].generation), updatedAt: new Date(rows[0].updated_at).toISOString() };
+  }
+
+  // --- Durable E2E session snapshots (Gap B) ---------------------------
+
+  async getSessionSnapshot(accountId: string, sessionId: string): Promise<SessionSnapshotRecord | undefined> {
+    const { rows } = await this.query(`SELECT * FROM session_snapshots WHERE account_id = $1 AND session_id = $2`, [accountId, sessionId]);
+    const row = rows[0];
+    if (!row) return undefined;
+    return { sessionId: row.session_id, ciphertext: row.ciphertext, updatedAt: new Date(row.updated_at).toISOString() };
+  }
+
+  async setSessionSnapshot(accountId: string, sessionId: string, ciphertext: string): Promise<SessionSnapshotRecord> {
+    const { rows } = await this.query(
+      `INSERT INTO session_snapshots (account_id, session_id, ciphertext, updated_at)
+       VALUES ($1, $2, $3, now())
+       ON CONFLICT (account_id, session_id) DO UPDATE SET ciphertext = EXCLUDED.ciphertext, updated_at = now()
+       RETURNING *`,
+      [accountId, sessionId, ciphertext],
+    );
+    return { sessionId: rows[0].session_id, ciphertext: rows[0].ciphertext, updatedAt: new Date(rows[0].updated_at).toISOString() };
+  }
+
+  async deleteSessionSnapshot(accountId: string, sessionId: string): Promise<void> {
+    await this.query(`DELETE FROM session_snapshots WHERE account_id = $1 AND session_id = $2`, [accountId, sessionId]);
+  }
+
+  // --- Session↔machine correlation for rebuild-after-teardown (Gap 1) --------
+
+  private mapSessionCorrelation(row: any): SessionCorrelation {
+    return {
+      sessionId: String(row.session_id),
+      nodeId: String(row.node_id),
+      provider: String(row.provider),
+      region: row.region ?? undefined,
+      ttlMinutes: row.ttl_minutes != null ? Number(row.ttl_minutes) : undefined,
+      repo: row.repo ?? undefined,
+      setupId: row.setup_id ?? undefined,
+      machineId: row.machine_id ?? undefined,
+      app: row.app ?? undefined,
+      updatedAt: new Date(row.updated_at).toISOString(),
+    };
+  }
+
+  async getSessionCorrelation(accountId: string, sessionId: string): Promise<SessionCorrelation | undefined> {
+    const { rows } = await this.query(`SELECT * FROM session_correlation WHERE account_id = $1 AND session_id = $2`, [accountId, sessionId]);
+    return rows[0] ? this.mapSessionCorrelation(rows[0]) : undefined;
+  }
+
+  async listSessionCorrelations(accountId: string): Promise<SessionCorrelation[]> {
+    const { rows } = await this.query(`SELECT * FROM session_correlation WHERE account_id = $1 ORDER BY updated_at DESC`, [accountId]);
+    return rows.map((r) => this.mapSessionCorrelation(r));
+  }
+
+  async setSessionCorrelation(accountId: string, input: SessionCorrelationInput): Promise<SessionCorrelation> {
+    const { rows } = await this.query(
+      `INSERT INTO session_correlation
+         (account_id, session_id, node_id, provider, region, ttl_minutes, repo, setup_id, machine_id, app, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+       ON CONFLICT (account_id, session_id) DO UPDATE SET
+         node_id = EXCLUDED.node_id, provider = EXCLUDED.provider, region = EXCLUDED.region,
+         ttl_minutes = EXCLUDED.ttl_minutes, repo = EXCLUDED.repo, setup_id = EXCLUDED.setup_id,
+         machine_id = EXCLUDED.machine_id, app = EXCLUDED.app, updated_at = now()
+       RETURNING *`,
+      [
+        accountId, input.sessionId, input.nodeId, input.provider,
+        input.region ?? null, input.ttlMinutes ?? null, input.repo ?? null,
+        input.setupId ?? null, input.machineId ?? null, input.app ?? null,
+      ],
+    );
+    return this.mapSessionCorrelation(rows[0]);
+  }
+
+  async deleteSessionCorrelation(accountId: string, sessionId: string): Promise<void> {
+    await this.query(`DELETE FROM session_correlation WHERE account_id = $1 AND session_id = $2`, [accountId, sessionId]);
+  }
+
+  async getNodeRoomKeyEnc(accountId: string, nodeId: string): Promise<SecretEnvelope | undefined> {
+    const { rows } = await this.query(`SELECT room_key_enc FROM node_room_keys WHERE account_id = $1 AND node_id = $2`, [accountId, nodeId]);
+    if (!rows[0]) return undefined;
+    const raw = rows[0].room_key_enc;
+    return (typeof raw === "string" ? JSON.parse(raw) : raw) as SecretEnvelope;
+  }
+
+  async setNodeRoomKeyEnc(accountId: string, nodeId: string, enc: SecretEnvelope): Promise<void> {
+    await this.query(
+      `INSERT INTO node_room_keys (account_id, node_id, room_key_enc, updated_at)
+       VALUES ($1, $2, $3, now())
+       ON CONFLICT (account_id, node_id) DO UPDATE SET room_key_enc = EXCLUDED.room_key_enc, updated_at = now()`,
+      [accountId, nodeId, JSON.stringify(enc)],
+    );
+  }
+
+  async findSessionByIssue(accountId: string, repo: string, issueNumber: number): Promise<{ sessionId: string; nodeId: string } | undefined> {
+    // The node advertises issue sessions with source "issue:owner/repo#N".
+    const source = `issue:${repo}#${issueNumber}`;
+    const { rows } = await this.query(
+      `SELECT session_id, node_id FROM session_index WHERE account_id = $1 AND source = $2 ORDER BY updated_at DESC LIMIT 1`,
+      [accountId, source],
+    );
+    return rows[0] ? { sessionId: String(rows[0].session_id), nodeId: String(rows[0].node_id) } : undefined;
+  }
+
+  async findSessionByExternalId(accountId: string, externalId: string): Promise<{ sessionId: string; nodeId: string } | undefined> {
+    // The node advertises a Linear-issue session with source "linear:<externalId>".
+    const source = `linear:${externalId}`;
+    const { rows } = await this.query(
+      `SELECT session_id, node_id FROM session_index WHERE account_id = $1 AND source = $2 ORDER BY updated_at DESC LIMIT 1`,
+      [accountId, source],
+    );
+    return rows[0] ? { sessionId: String(rows[0].session_id), nodeId: String(rows[0].node_id) } : undefined;
   }
 
   // --- Inbound hooks + work queue (E2/E4) ------------------------------
@@ -1628,12 +2479,27 @@ export class PostgresStore implements MeshStore {
     const { rows } = await this.query(
       `INSERT INTO automation_definitions
       (id, account_id, name, template_ciphertext, runtime_id, model, node_label, ephemeral,
-       approval_mode, sandbox, enabled, schedule, next_run_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+       approval_mode, sandbox, enabled, schedule, next_run_at, trigger, webhook_secret, repo,
+       labels, repos, template_id, on_events, target_kind, target_session_id, message, config_key, config_order, max_attempts, allow_dangerous, required_capabilities, preferred_capabilities)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29) RETURNING *`,
       [`automation_${randomUUID()}`, accountId, input.name, input.templateCiphertext ?? null,
         input.runtimeId ?? null, input.model ?? null, input.nodeLabel ?? null, input.ephemeral ?? null,
         input.approvalMode ?? null, input.sandbox ?? null, input.enabled ?? false,
-        JSON.stringify(input.schedule ?? { kind: "once", at: "9999-12-31T00:00:00.000Z" }), input.nextRunAt ?? null],
+        JSON.stringify(input.schedule ?? { kind: "once", at: "9999-12-31T00:00:00.000Z" }), input.nextRunAt ?? null,
+        input.trigger ?? null, input.webhookSecret ?? null, input.repo ?? null,
+        input.labels ? JSON.stringify(input.labels) : null,
+        input.repos ? JSON.stringify(input.repos) : null,
+        input.templateId ?? null,
+        input.on ? JSON.stringify(input.on) : null,
+        input.target?.kind === "existing_session" ? input.target.kind : null,
+        input.target?.kind === "existing_session" ? input.target.sessionId : null,
+        input.message ?? false,
+        input.configKey ?? null,
+        input.configOrder ?? null,
+        input.maxAttempts ?? null,
+        input.allowDangerous ?? null,
+        input.requiredCapabilities ? JSON.stringify(input.requiredCapabilities) : null,
+        input.preferredCapabilities ? JSON.stringify(input.preferredCapabilities) : null],
     );
     return mapAutomationDefinition(rows[0]);
   }
@@ -1642,6 +2508,14 @@ export class PostgresStore implements MeshStore {
     const { rows } = await this.query(
       `SELECT * FROM automation_definitions WHERE account_id = $1 AND id = $2`,
       [accountId, id],
+    );
+    return rows[0] ? mapAutomationDefinition(rows[0]) : undefined;
+  }
+
+  async getAutomationDefinitionById(id: string): Promise<AutomationDefinition | undefined> {
+    const { rows } = await this.query(
+      `SELECT * FROM automation_definitions WHERE id = $1`,
+      [id],
     );
     return rows[0] ? mapAutomationDefinition(rows[0]) : undefined;
   }
@@ -1657,12 +2531,29 @@ export class PostgresStore implements MeshStore {
     const { rows } = await this.query(
       `UPDATE automation_definitions SET name=$3, template_ciphertext=$4, runtime_id=$5,
        model=$6, node_label=$7, ephemeral=$8, approval_mode=$9, sandbox=$10,
-       enabled=$11, schedule=$12, next_run_at=$13, updated_at=now()
+       enabled=$11, schedule=$12, next_run_at=$13, trigger=$14, webhook_secret=$15,
+       repo=$16, labels=$17, repos=$18, template_id=$19, on_events=$20,
+       target_kind=$21, target_session_id=$22, message=$23, config_key=$24,
+       config_order=$25, max_attempts=$26, allow_dangerous=$27, required_capabilities=$28, preferred_capabilities=$29, updated_at=now()
        WHERE account_id=$1 AND id=$2 RETURNING *`,
       [accountId, id, next.name, next.templateCiphertext ?? null, next.runtimeId ?? null,
         next.model ?? null, next.nodeLabel ?? null, next.ephemeral ?? null,
         next.approvalMode ?? null, next.sandbox ?? null, next.enabled ?? false,
-        JSON.stringify(next.schedule ?? { kind: "once", at: "9999-12-31T00:00:00.000Z" }), next.nextRunAt ?? null],
+        JSON.stringify(next.schedule ?? { kind: "once", at: "9999-12-31T00:00:00.000Z" }), next.nextRunAt ?? null,
+        next.trigger ?? null, next.webhookSecret ?? null, next.repo ?? null,
+        next.labels ? JSON.stringify(next.labels) : null,
+        next.repos ? JSON.stringify(next.repos) : null,
+        next.templateId ?? null,
+        next.on ? JSON.stringify(next.on) : null,
+        next.target?.kind === "existing_session" ? next.target.kind : null,
+        next.target?.kind === "existing_session" ? next.target.sessionId : null,
+        next.message ?? false,
+        next.configKey ?? null,
+        next.configOrder ?? null,
+        next.maxAttempts ?? null,
+        next.allowDangerous ?? null,
+        next.requiredCapabilities ? JSON.stringify(next.requiredCapabilities) : null,
+        next.preferredCapabilities ? JSON.stringify(next.preferredCapabilities) : null],
     );
     return rows[0] ? mapAutomationDefinition(rows[0]) : undefined;
   }
@@ -1718,6 +2609,10 @@ export class PostgresStore implements MeshStore {
       model: definition.model,
       approvalMode: definition.approvalMode,
       sandbox: definition.sandbox,
+      target: definition.target,
+      message: definition.message,
+      // Schedule ticks do not name a repo — use the binding's workspace target.
+      repo: definition.repo,
     });
     // Optimistic advance is the scheduler lease: only one scheduler instance can
     // move this exact occurrence. The unique dedupe key separately guarantees
@@ -1771,8 +2666,11 @@ export class PostgresStore implements MeshStore {
     }
     const triggerKind = triggerKindForSource(input.triggerKind, input.source);
     const triggerId = `trigger_${randomUUID()}`;
+    // Prefer an explicit per-run repo (event / caller); fall back to the
+    // definition's workspace target so schedule/webhook/manual stay consistent.
+    const repo = input.repo ?? definition?.repo;
     const sourceRef = {
-      ...(input.repo ? { repo: input.repo } : {}),
+      ...(repo ? { repo } : {}),
       ...(input.issueNumber !== undefined ? { issueNumber: input.issueNumber } : {}),
       ...(input.url ? { url: input.url } : {}),
       ...(input.externalId ? { externalId: input.externalId } : {}),
@@ -1792,19 +2690,39 @@ export class PostgresStore implements MeshStore {
     }
     canonicalTriggerId ??= triggerId;
     const target = input.target ?? { kind: "new_session" as const };
+    // Capability gate: a required tag must fail/park HONESTLY when literally no
+    // machine in the account has ever declared it — rather than queuing forever
+    // for a capability nothing claims to have. A machine that declared the tag
+    // but is currently offline still counts (it may come back online), so this
+    // only parks the genuinely unfulfillable case. See capability-routing.ts.
+    const requiredCapabilities = input.requiredCapabilities ?? definition?.requiredCapabilities;
+    const preferredCapabilities = input.preferredCapabilities ?? definition?.preferredCapabilities;
+    let status: "pending" | "needs_attention" = "pending";
+    let routingReason: string | undefined;
+    if (requiredCapabilities?.length) {
+      const { rows: nodeRows } = await this.query(`SELECT capabilities FROM nodes WHERE account_id = $1`, [accountId]);
+      const declared = nodeRows.map((row) => mapStringList(row.capabilities) ?? []);
+      if (!anyNodeEligible(declared, requiredCapabilities)) {
+        status = "needs_attention";
+        routingReason = `no machine declares required capability: ${requiredCapabilities.join(", ")}`;
+      }
+    }
     // Two partial-unique constraints can fire: the per-delivery dedupe key and the
     // per-issue collapse key (only against the still-pending row). ON CONFLICT DO
     // NOTHING covers both; on either conflict we return the existing item.
-    const triggeredEvent: RunEvidenceEvent = {
-      at: new Date().toISOString(),
-      kind: "triggered",
-      summary: "Automation run created.",
-      ref: input.repo && input.issueNumber !== undefined ? `${input.repo}#${input.issueNumber}` : undefined,
-      url: input.url,
-    };
+    const observedAt = new Date().toISOString();
+    const sourceRefText = repo && input.issueNumber !== undefined ? `${repo}#${input.issueNumber}` : repo;
+    const initialEvents: RunEvidenceEvent[] = [
+      { at: observedAt, kind: "trigger_received", summary: "Trigger received.", ref: sourceRefText, url: input.url, milestoneId: `${canonicalTriggerId}:received` },
+      { at: observedAt, kind: "trigger_matched", summary: definition ? "Trigger matched an Automation." : "Trigger accepted as a one-off Run.", ref: definition?.id, milestoneId: `${canonicalTriggerId}:matched` },
+      { at: observedAt, kind: "queued", summary: "Run persisted in the durable queue.", milestoneId: `${canonicalTriggerId}:queued` },
+      status === "needs_attention"
+        ? { at: observedAt, kind: "needs_attention", summary: routingReason!, milestoneId: `${canonicalTriggerId}:routed` }
+        : { at: observedAt, kind: "routed", summary: "Run routed to an eligible Machine label.", ref: normalizeWorkLabel(input.label ?? definition?.nodeLabel), milestoneId: `${canonicalTriggerId}:routed` },
+    ];
     const { rows } = await this.query(
-      `INSERT INTO work_items (id, account_id, label, source, status, title, body, repo, issue_number, url, external_id, dedupe_key, collapse_key, default_routed, runtime_id, model, installation_id, app_id, definition_id, trigger_id, trigger_kind, target_kind, target_session_id, ephemeral, approval_mode, sandbox, events)
-       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26::jsonb)
+      `INSERT INTO work_items (id, account_id, label, source, status, title, body, repo, issue_number, url, external_id, dedupe_key, collapse_key, default_routed, runtime_id, model, installation_id, app_id, definition_id, trigger_id, trigger_kind, target_kind, target_session_id, message, ephemeral, approval_mode, sandbox, max_attempts, events, event_context, required_capabilities, preferred_capabilities, routing_reason)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29::jsonb, $30, $31, $32, $33)
        ON CONFLICT DO NOTHING
        RETURNING *`,
       [
@@ -1812,9 +2730,10 @@ export class PostgresStore implements MeshStore {
         accountId,
         normalizeWorkLabel(input.label ?? definition?.nodeLabel),
         input.source,
+        status,
         input.title,
         input.body ?? null,
-        input.repo ?? null,
+        repo ?? null,
         input.issueNumber ?? null,
         input.url ?? null,
         input.externalId ?? null,
@@ -1830,10 +2749,16 @@ export class PostgresStore implements MeshStore {
         triggerKind,
         target.kind,
         target.kind === "existing_session" ? target.sessionId : null,
+        input.message ?? definition?.message ?? false,
         input.ephemeral ?? definition?.ephemeral ?? null,
         input.approvalMode ?? definition?.approvalMode ?? null,
         input.sandbox ?? definition?.sandbox ?? null,
-        JSON.stringify([triggeredEvent]),
+        input.maxAttempts ?? definition?.maxAttempts ?? null,
+        JSON.stringify(initialEvents),
+        input.eventContext ?? null,
+        requiredCapabilities ? JSON.stringify(requiredCapabilities) : null,
+        preferredCapabilities ? JSON.stringify(preferredCapabilities) : null,
+        routingReason ?? null,
       ],
     );
     if (rows[0]) return { run: mapAutomationRun(rows[0]), created: true };
@@ -1867,12 +2792,122 @@ export class PostgresStore implements MeshStore {
     return rows.map(mapAutomationRun);
   }
 
-  async transitionAutomationRun(accountId: string, id: string, status: AutomationRunStatus, output?: AutomationRun["output"]): Promise<AutomationRun | undefined> {
+  async cancelAutomationRun(accountId: string, id: string): Promise<CancelAutomationRunResult | undefined> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      // The account predicate makes unknown and cross-account ids identical. The
+      // row lock serializes cancellation with another cancellation/transition,
+      // so the status, bounded event, completion timestamp, and lease release
+      // are one durable operation.
+      const selected = await client.query(
+        `SELECT * FROM work_items WHERE account_id = $1 AND id = $2 FOR UPDATE`,
+        [accountId, id],
+      );
+      const current = selected.rows[0];
+      if (!current) {
+        await client.query("COMMIT");
+        return undefined;
+      }
+      const previousStatus = current.status as AutomationRunStatus;
+      if (previousStatus === "cancelled" || previousStatus === "succeeded" || previousStatus === "failed") {
+        await client.query("COMMIT");
+        return { run: mapAutomationRun(current), previousStatus, transitioned: false };
+      }
+      if (!["pending", "claimed", "running", "waiting", "needs_attention"].includes(previousStatus)) {
+        await client.query("COMMIT");
+        return { run: mapAutomationRun(current), previousStatus, transitioned: false };
+      }
+      const at = new Date().toISOString();
+      const events = [
+        ...(current.events ?? []),
+        { at, kind: "cancel_requested", summary: "Cancellation requested by an operator.", milestoneId: `${id}:cancel-requested` },
+        { at, kind: "terminal", summary: "Run reached the cancelled terminal outcome.", status: "denied", milestoneId: `${id}:terminal` },
+      ].slice(-100);
+      const updated = await client.query(
+        `UPDATE work_items SET status = 'cancelled', completed_at = COALESCE(completed_at, now()),
+         lease_expires_at = NULL, events = $3::jsonb
+         WHERE account_id = $1 AND id = $2 RETURNING *`,
+        [accountId, id, JSON.stringify(events)],
+      );
+      // Keep claimed_by_node_id as a privacy-safe ownership tombstone. It lets
+      // only that node's heartbeat distinguish cancellation from a generic lost
+      // lease while the actual renewable lease above is always cleared.
+      await client.query("COMMIT");
+      return { run: mapAutomationRun(updated.rows[0]), previousStatus, transitioned: true };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async retryAutomationRun(accountId: string, id: string): Promise<RetryAutomationRunResult | undefined> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const selected = await client.query(
+        `SELECT * FROM work_items WHERE account_id = $1 AND id = $2 FOR UPDATE`,
+        [accountId, id],
+      );
+      const current = selected.rows[0];
+      if (!current) { await client.query("COMMIT"); return undefined; }
+      const checks = Array.isArray(current.checks) ? current.checks : [];
+      const output = current.output ?? {};
+      const events = Array.isArray(current.events) ? current.events : [];
+      const failedCheck = checks.some((check: RunCheck) => check.status === "failed");
+      const explicitNoChanges = events.some((event: RunEvidenceEvent) => /no (file )?changes/i.test(event.summary));
+      const hasArtifact = Boolean(output.branch || output.commit || output.prUrl || output.checkpoint || output.artifactUrl);
+      const ambiguousSuccess = current.status === "succeeded" && !failedCheck && !explicitNoChanges && !hasArtifact;
+      const eligible = current.status === "failed" || failedCheck || ambiguousSuccess;
+      if (!eligible) {
+        await client.query("COMMIT");
+        return { run: mapAutomationRun(current), transitioned: false, reason: "not_retryable" };
+      }
+      const attempt = Math.max(1, Number(current.attempt ?? 1));
+      const maxAttempts = Number(current.max_attempts);
+      if (Number.isFinite(maxAttempts) && maxAttempts > 0 && attempt >= maxAttempts) {
+        await client.query("COMMIT");
+        return { run: mapAutomationRun(current), transitioned: false, reason: "attempt_limit" };
+      }
+      if (current.collapse_key) {
+        const pending = await client.query(
+          `SELECT id FROM work_items WHERE account_id = $1 AND collapse_key = $2 AND status = 'pending' AND id <> $3 LIMIT 1`,
+          [accountId, current.collapse_key, id],
+        );
+        if (pending.rows[0]) {
+          await client.query("COMMIT");
+          return { run: mapAutomationRun(current), transitioned: false, reason: "not_retryable" };
+        }
+      }
+      const retryEvent: RunEvidenceEvent = {
+        at: new Date().toISOString(), kind: "retry", summary: "A new attempt was requested.", attempt: attempt + 1,
+      };
+      const updated = await client.query(
+        `UPDATE work_items SET status = 'pending', attempt = $3, claimed_by_node_id = NULL,
+         claimed_at = NULL, started_at = NULL, completed_at = NULL, lease_expires_at = NULL,
+         output = NULL, checks = '[]'::jsonb, receipt_evidence = NULL, events = $4::jsonb
+         WHERE account_id = $1 AND id = $2 RETURNING *`,
+        [accountId, id, attempt + 1, JSON.stringify([...events, retryEvent].slice(-100))],
+      );
+      await client.query("COMMIT");
+      return { run: mapAutomationRun(updated.rows[0]), transitioned: true };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async transitionAutomationRun(accountId: string, id: string, status: AutomationRunStatus, output?: AutomationRun["output"], expectedNodeId?: string): Promise<AutomationRun | undefined> {
     const from: Record<AutomationRunStatus, AutomationRunStatus[]> = {
       pending: [],
       claimed: [],
-      running: ["claimed"],
-      needs_attention: ["running"],
+      running: ["claimed", "waiting"],
+      waiting: ["claimed", "running"],
+      needs_attention: ["running", "waiting"],
       succeeded: ["running", "needs_attention"],
       // Allow failure straight from "claimed": a node can throw before the
       // best-effort /running transition lands, and the run must still terminate
@@ -1886,11 +2921,12 @@ export class PostgresStore implements MeshStore {
     // even when the node never calls the dedicated evidence endpoint, so every
     // run has at least a baseline trigger→claim→attempt→outcome timeline.
     const eventForStatus: Partial<Record<AutomationRunStatus, { kind: RunEvidenceEvent["kind"]; summary: string }>> = {
-      running: { kind: "attempt_started", summary: "Execution started on the assigned node." },
-      needs_attention: { kind: "needs_attention", summary: "Run needs manual attention." },
-      succeeded: { kind: "completed", summary: "Automation run completed successfully." },
-      failed: { kind: "completed", summary: "Automation run failed. Detailed diagnostics remain on the node." },
-      cancelled: { kind: "cancelled", summary: "Automation run cancelled." },
+      running: { kind: "agent_started", summary: "Agent execution started on the assigned Machine." },
+      waiting: { kind: "needs_attention", summary: "Run parked while waiting on an external dependency." },
+      needs_attention: { kind: "needs_attention", summary: "Run parked for operator attention." },
+      succeeded: { kind: "terminal", summary: "Run reached the succeeded terminal outcome." },
+      failed: { kind: "terminal", summary: "Run reached the failed terminal outcome; detailed diagnostics remain on the Machine." },
+      cancelled: { kind: "terminal", summary: "Run reached the cancelled terminal outcome." },
     };
     const event = eventForStatus[status];
     // No jsonb `||` concatenation here (deliberately): pg-mem — the in-memory
@@ -1900,17 +2936,29 @@ export class PostgresStore implements MeshStore {
     // is a two-query round trip instead of one atomic statement, but this event
     // append is a best-effort timeline entry, not the transition's atomicity
     // guard (the conditional `status = ANY(from[status])` above already is).
+    // $8 node guard: when set, the Run must still be claimed by that node, so a
+    // Machine that lost its lease to a reclaim (claimed_by_node_id now points at
+    // the new owner) no-ops here instead of overwriting the fresh attempt.
     const { rows } = await this.query(
       `UPDATE work_items SET status = $3,
        started_at = CASE WHEN $3 = 'running' THEN COALESCE(started_at, now()) ELSE started_at END,
        completed_at = CASE WHEN $4 THEN COALESCE(completed_at, now()) ELSE completed_at END,
+       lease_expires_at = CASE
+         WHEN $4 OR $3 IN ('waiting', 'needs_attention') THEN NULL
+         WHEN $3 = 'running' THEN $7
+         ELSE lease_expires_at END,
        output = COALESCE($5, output)
-       WHERE account_id = $1 AND id = $2 AND status = ANY($6) RETURNING *`,
-      [accountId, id, status, terminal, output ? JSON.stringify(output) : null, from[status]],
+       WHERE account_id = $1 AND id = $2 AND status = ANY($6)
+         AND ($8::text IS NULL OR claimed_by_node_id = $8) RETURNING *`,
+      [accountId, id, status, terminal, output ? JSON.stringify(output) : null, from[status], workLeaseExpiry(), expectedNodeId ?? null],
     );
     if (!rows[0]) return undefined;
     if (!event) return mapAutomationRun(rows[0]);
-    const events = [...(rows[0].events ?? []), { at: new Date().toISOString(), ...event }].slice(-100);
+    const at = new Date().toISOString();
+    const delivery = terminal ? [{ at, kind: "result_delivery" as const, summary: "Durable result metadata delivered to the control plane.", milestoneId: `${id}:result-delivery` }] : [];
+    const events = [...(rows[0].events ?? []), ...delivery, { at, ...event, attempt: Number(rows[0].attempt ?? 1), milestoneId: `${id}:${status}:${Number(rows[0].attempt ?? 1)}` }]
+      .filter((candidate, index, all) => !candidate.milestoneId || all.findIndex((other) => other.milestoneId === candidate.milestoneId) === index)
+      .slice(-100);
     const { rows: withEvent } = await this.query(
       `UPDATE work_items SET events = $3::jsonb WHERE account_id = $1 AND id = $2 RETURNING *`,
       [accountId, id, JSON.stringify(events)],
@@ -1924,18 +2972,47 @@ export class PostgresStore implements MeshStore {
    *  Read-then-write (not an atomic jsonb `||` UPDATE) — see the comment in
    *  transitionAutomationRun for why; a lost update here just drops one
    *  low-frequency evidence report, never the run's actual status. */
-  async appendRunEvidence(accountId: string, id: string, patch: RunEvidencePatch): Promise<AutomationRun | undefined> {
-    const { rows } = await this.query(`SELECT * FROM work_items WHERE account_id = $1 AND id = $2`, [accountId, id]);
+  async appendRunEvidence(accountId: string, id: string, patch: RunEvidencePatch, expectedNodeId?: string): Promise<AutomationRun | undefined> {
+    const { rows } = await this.query(
+      `SELECT * FROM work_items WHERE account_id = $1 AND id = $2
+       AND ($3::text IS NULL OR (claimed_by_node_id = $3 AND status IN ('claimed', 'running', 'waiting', 'needs_attention')))`,
+      [accountId, id, expectedNodeId ?? null],
+    );
     if (!rows[0]) return undefined;
     const current = rows[0];
     const routingReason = patch.routingReason ?? current.routing_reason ?? undefined;
     const output = patch.output ? { ...(current.output ?? {}), ...patch.output } : (current.output ?? {});
     const checks = patch.checks ? [...(current.checks ?? []), ...patch.checks].slice(-50) : (current.checks ?? []);
     const events = patch.events ? [...(current.events ?? []), ...patch.events].slice(-100) : (current.events ?? []);
+    const receiptEvidence = patch.receiptEvidence ?? current.receipt_evidence ?? null;
+    const usage = patch.usage ? { ...(current.run_usage ?? {}), ...patch.usage } : current.run_usage ?? null;
+    const notification = patch.notification ?? current.notification_delivery ?? null;
+    const references = patch.references ? [...(current.run_references ?? []), ...patch.references].slice(-20) : current.run_references ?? [];
+    const attention = patch.attention === null ? null : patch.attention ?? current.attention ?? null;
+    // Check reporting implies an observed checks phase even when an older node
+    // did not send explicit milestones. Stable ids make repeated reports safe.
+    const derivedEvents: RunEvidenceEvent[] = [
+      ...(patch.checks?.length ? [
+        { at: new Date().toISOString(), kind: "checks_started" as const, summary: "Required checks started.", attempt: Number(current.attempt ?? 1), milestoneId: `${id}:checks-started:${Number(current.attempt ?? 1)}` },
+        { at: new Date().toISOString(), kind: "checks_completed" as const, summary: patch.checks.some((check) => check.status === "failed") ? "Required checks completed with failures." : "Required checks completed.", attempt: Number(current.attempt ?? 1), status: patch.checks.some((check) => check.status === "failed") ? "failed" as const : "passed" as const, milestoneId: `${id}:checks-completed:${Number(current.attempt ?? 1)}` },
+      ] : []),
+      ...(patch.notification ? [{
+        at: patch.notification.updatedAt, kind: "notification" as const,
+        summary: `Operator notification ${patch.notification.status.replace("_", " ")}.`,
+        attempt: Number(current.attempt ?? 1), reasonCode: patch.notification.status,
+        milestoneId: `${id}:notification:${patch.notification.status}:${patch.notification.updatedAt}`,
+      }] : []),
+    ];
+    const dedupedEvents = [...events, ...derivedEvents]
+      .filter((candidate, index, all) => !candidate.milestoneId || all.findIndex((other) => other.milestoneId === candidate.milestoneId) === index)
+      .slice(-100);
     const { rows: updated } = await this.query(
-      `UPDATE work_items SET routing_reason = $3, output = $4::jsonb, checks = $5::jsonb, events = $6::jsonb
-       WHERE account_id = $1 AND id = $2 RETURNING *`,
-      [accountId, id, routingReason ?? null, JSON.stringify(output), JSON.stringify(checks), JSON.stringify(events)],
+      `UPDATE work_items SET routing_reason = $3, output = $4::jsonb, checks = $5::jsonb, events = $6::jsonb, receipt_evidence = $7::jsonb,
+       run_usage = $8::jsonb, notification_delivery = $9::jsonb, run_references = $10::jsonb, attention = $11::jsonb
+       WHERE account_id = $1 AND id = $2
+         AND ($12::text IS NULL OR (claimed_by_node_id = $12 AND status IN ('claimed', 'running', 'waiting', 'needs_attention')))
+       RETURNING *`,
+      [accountId, id, routingReason ?? null, JSON.stringify(output), JSON.stringify(checks), JSON.stringify(dedupedEvents), JSON.stringify(receiptEvidence), JSON.stringify(usage), JSON.stringify(notification), JSON.stringify(references), JSON.stringify(attention), expectedNodeId ?? null],
     );
     return updated[0] ? mapAutomationRun(updated[0]) : undefined;
   }
@@ -1956,12 +3033,19 @@ export class PostgresStore implements MeshStore {
     id: string,
     input: { label: string; runtimeId?: string; model?: string; ephemeral?: boolean },
   ): Promise<WorkItem | undefined> {
+    const current = await this.getAutomationRun(accountId, id);
+    const at = new Date().toISOString();
+    const routeEvents: RunEvidenceEvent[] = current ? [
+      ...(current.events ?? []),
+      ...(input.ephemeral ? [{ at, kind: "provisioning" as const, summary: "Provisioning an isolated Machine for this Run.", ref: normalizeWorkLabel(input.label), milestoneId: `${id}:provisioning:${current.attempt}` }] : []),
+      { at, kind: "routed" as const, summary: "Run routing was updated by an operator.", ref: normalizeWorkLabel(input.label), attempt: current.attempt, milestoneId: `${id}:routed:${current.attempt}:${normalizeWorkLabel(input.label)}` },
+    ].slice(-100) : [];
     const { rows } = await this.query(
       `UPDATE work_items
-       SET label = $3, runtime_id = $4, model = $5, default_routed = false, ephemeral = $6
+       SET label = $3, runtime_id = $4, model = $5, default_routed = false, ephemeral = $6, events = $7::jsonb
        WHERE id = $2 AND account_id = $1 AND status = 'pending'
        RETURNING *`,
-      [accountId, id, normalizeWorkLabel(input.label), input.runtimeId?.trim() || null, input.model?.trim() || null, Boolean(input.ephemeral)],
+      [accountId, id, normalizeWorkLabel(input.label), input.runtimeId?.trim() || null, input.model?.trim() || null, Boolean(input.ephemeral), JSON.stringify(routeEvents)],
     );
     return rows[0] ? mapWorkItem(rows[0]) : undefined;
   }
@@ -1970,11 +3054,12 @@ export class PostgresStore implements MeshStore {
     if (labels.length === 0) return [];
     const { rows } = await this.query(
       `SELECT * FROM work_items
-       WHERE account_id = $1 AND status = 'pending' AND label = ANY($2)
+       WHERE account_id = $1 AND label = ANY($2)
+         AND (status = 'pending' OR (status IN ('claimed', 'running') AND lease_expires_at < now()))
        ORDER BY created_at ASC`,
       [accountId, labels],
     );
-    return rows.map(mapWorkItem);
+    return rows.map(mapWorkItem).map(withResumeTarget);
   }
 
   async listWorkItems(accountId: string, limit = 50): Promise<WorkItem[]> {
@@ -1986,25 +3071,44 @@ export class PostgresStore implements MeshStore {
   }
 
   async claimWorkItem(accountId: string, nodeId: string, id: string): Promise<WorkItem | undefined> {
-    // Conditional UPDATE makes the claim atomic: only the row still pending flips.
+    // Conditional UPDATE makes both first claim and stale-lease reclaim atomic.
+    // A crashed node cannot strand work forever; a live node renews below.
     const { rows } = await this.query(
       `UPDATE work_items
-       SET status = 'claimed', claimed_by_node_id = $3, claimed_at = now()
-       WHERE id = $2 AND account_id = $1 AND status = 'pending'
+       SET status = 'claimed', claimed_by_node_id = $3, claimed_at = now(),
+           lease_expires_at = $4,
+           attempt = CASE WHEN status = 'pending' THEN COALESCE(attempt, 1) ELSE COALESCE(attempt, 1) + 1 END
+       WHERE id = $2 AND account_id = $1
+         AND (status = 'pending' OR (status IN ('claimed', 'running') AND lease_expires_at < now()))
        RETURNING *`,
-      [accountId, id, nodeId],
+      [accountId, id, nodeId, workLeaseExpiry()],
     );
     if (!rows[0]) return undefined;
     // Best-effort timeline entry (issue #153) — read-then-write, same rationale
     // as transitionAutomationRun; the claim's atomicity is already guaranteed
     // above and does not depend on this second query.
-    const claimedEvent: RunEvidenceEvent = { at: new Date().toISOString(), kind: "claimed", summary: "Run claimed by an eligible node.", ref: nodeId };
+    const claimedEvent: RunEvidenceEvent = {
+      at: new Date().toISOString(), kind: "claimed", summary: "Run claimed by an eligible Machine.", ref: nodeId,
+      attempt: Number(rows[0].attempt ?? 1), milestoneId: `${id}:claimed:${Number(rows[0].attempt ?? 1)}`,
+    };
     const events = [...(rows[0].events ?? []), claimedEvent].slice(-100);
     const { rows: withEvent } = await this.query(
       `UPDATE work_items SET events = $3::jsonb WHERE account_id = $1 AND id = $2 RETURNING *`,
       [accountId, id, JSON.stringify(events)],
     );
-    return mapWorkItem(withEvent[0] ?? rows[0]);
+    return withResumeTarget(mapWorkItem(withEvent[0] ?? rows[0]));
+  }
+
+  async renewWorkItemLease(accountId: string, nodeId: string, id: string): Promise<WorkItem | undefined> {
+    const { rows } = await this.query(
+      `UPDATE work_items
+       SET lease_expires_at = $4
+       WHERE account_id = $1 AND id = $2 AND claimed_by_node_id = $3
+         AND status IN ('claimed', 'running')
+       RETURNING *`,
+      [accountId, id, nodeId, workLeaseExpiry()],
+    );
+    return rows[0] ? mapWorkItem(rows[0]) : undefined;
   }
 
   async recordRunStart(accountId: string, runKey: string): Promise<boolean> {
@@ -2046,6 +3150,31 @@ export class PostgresStore implements MeshStore {
     return rowCount ?? 0;
   }
 
+  async countTrialSessions(accountId: string): Promise<number> {
+    const { rows } = await this.query(
+      `SELECT count(*)::int AS n FROM trial_sessions WHERE account_id = $1`,
+      [accountId],
+    );
+    return Number(rows[0]?.n ?? 0);
+  }
+
+  async overTrialSessionIds(accountId: string, limit: number): Promise<Set<string>> {
+    // Everything beyond the first `limit` sessions by first-seen order is outside
+    // the trial. OFFSET past the allowance returns exactly those rows, so the earliest
+    // `limit` sessions stay visible (a running session is never yanked when the wall
+    // is hit) and only newer ones are withheld. Ordered by (first_seen, session_id)
+    // for a stable tiebreak when timestamps collide.
+    if (!Number.isFinite(limit) || limit < 0) return new Set();
+    const { rows } = await this.query(
+      `SELECT session_id FROM trial_sessions
+       WHERE account_id = $1
+       ORDER BY first_seen ASC, session_id ASC
+       OFFSET $2`,
+      [accountId, limit],
+    );
+    return new Set(rows.map((r: { session_id: string }) => r.session_id));
+  }
+
   async pruneExpiredAuthTokens(nowIso: string): Promise<number> {
     // Each of these tables is otherwise only deleted on successful single-use
     // consumption (see consumeLoginToken, consumeRelayTicket, etc.) — an
@@ -2063,12 +3192,15 @@ export class PostgresStore implements MeshStore {
     return total;
   }
 
-  async completeWorkItem(accountId: string, id: string): Promise<void> {
+  async completeWorkItem(accountId: string, id: string, expectedNodeId?: string): Promise<AutomationRun | undefined> {
     // Older nodes only know claim → complete. Adapt that boundary onto the
     // canonical lifecycle without preserving a second legacy transition path.
+    // The node guard flows into both hops so a reclaimed-away Machine cannot
+    // complete the new attempt (returns undefined, and the caller reports a
+    // conflict rather than a spurious success).
     const current = await this.getAutomationRun(accountId, id);
-    if (current?.status === "claimed") await this.transitionAutomationRun(accountId, id, "running");
-    await this.transitionAutomationRun(accountId, id, "succeeded");
+    if (current?.status === "claimed") await this.transitionAutomationRun(accountId, id, "running", undefined, expectedNodeId);
+    return (await this.transitionAutomationRun(accountId, id, "succeeded", undefined, expectedNodeId)) ?? undefined;
   }
 
   async deleteWorkItem(accountId: string, id: string): Promise<boolean> {
@@ -2117,11 +3249,16 @@ function mapHook(row: any): InboundHook {
  *  mapAutomationRun. Defensively re-bounds on read (in addition to the bounds
  *  already enforced at write time by run-evidence.ts) so a row written by an
  *  older/looser server version can never balloon a response unbounded. */
-function mapEvidenceFields(row: any): { routingReason?: string; checks: RunCheck[]; events: RunEvidenceEvent[] } {
+function mapEvidenceFields(row: any): Pick<AutomationRun, "routingReason" | "checks" | "events" | "receiptEvidence" | "usage" | "notification" | "references" | "attention"> {
   return {
     routingReason: row.routing_reason ?? undefined,
     checks: Array.isArray(row.checks) ? row.checks.slice(-50) : [],
     events: Array.isArray(row.events) ? row.events.slice(-100) : [],
+    receiptEvidence: row.receipt_evidence && typeof row.receipt_evidence === "object" ? row.receipt_evidence : undefined,
+    usage: row.run_usage && typeof row.run_usage === "object" ? row.run_usage : undefined,
+    notification: row.notification_delivery && typeof row.notification_delivery === "object" ? row.notification_delivery : undefined,
+    references: Array.isArray(row.run_references) ? row.run_references.slice(-20) : [],
+    attention: row.attention && typeof row.attention === "object" ? row.attention : undefined,
   };
 }
 
@@ -2134,6 +3271,7 @@ function mapWorkItem(row: any): WorkItem {
     status: row.status,
     title: row.title,
     body: row.body ?? undefined,
+    eventContext: row.event_context ?? undefined,
     repo: row.repo ?? undefined,
     issueNumber: row.issue_number ?? undefined,
     externalId: row.external_id ?? undefined,
@@ -2141,6 +3279,7 @@ function mapWorkItem(row: any): WorkItem {
     createdAt: new Date(row.created_at).toISOString(),
     claimedByNodeId: row.claimed_by_node_id ?? undefined,
     claimedAt: row.claimed_at ? new Date(row.claimed_at).toISOString() : undefined,
+    leaseExpiresAt: row.lease_expires_at ? new Date(row.lease_expires_at).toISOString() : undefined,
     completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : undefined,
     dedupeKey: row.dedupe_key ?? undefined,
     collapseKey: row.collapse_key ?? undefined,
@@ -2152,16 +3291,42 @@ function mapWorkItem(row: any): WorkItem {
     ephemeral: row.ephemeral ?? undefined,
     approvalMode: row.approval_mode ?? undefined,
     sandbox: row.sandbox ?? undefined,
+    maxAttempts: row.max_attempts == null ? undefined : Number(row.max_attempts),
+    requiredCapabilities: mapStringList(row.required_capabilities),
+    preferredCapabilities: mapStringList(row.preferred_capabilities),
     definitionId: row.definition_id ?? undefined,
     triggerId: row.trigger_id ?? undefined,
     triggerKind: row.trigger_kind ?? undefined,
     attempt: Number(row.attempt ?? 1),
     targetKind: row.target_kind ?? "new_session",
     targetSessionId: row.target_session_id ?? undefined,
+    message: Boolean(row.message) || undefined,
     startedAt: row.started_at ? new Date(row.started_at).toISOString() : undefined,
     output: row.output ?? undefined,
     ...mapEvidenceFields(row),
   };
+}
+
+/**
+ * Re-dispatch continuity ("resume, don't restart"). When a work item is served to
+ * a node for a *repeat* attempt whose prior attempt already stood up a session —
+ * its id survives in `output.sessionId` — the node must CONTINUE that session
+ * rather than cold-start a new one. The canonical case: a node/machine restart
+ * drops the lease mid-run, so a stale-lease reclaim re-dispatches the same row
+ * with its output intact; without this the reclaimed attempt would ignore the
+ * live session and open a fresh one.
+ *
+ * Only applied on the node-dispatch paths (list-pending / claim). An explicit
+ * retry (`startAutomationRunAttempt`) deliberately NULLs `output`, so a
+ * genuinely-fresh attempt has no `output.sessionId` and correctly falls back to
+ * the stored (`new_session`) target. An item already targeted at an existing
+ * session keeps its explicit target.
+ */
+function withResumeTarget(item: WorkItem): WorkItem {
+  if (item.targetKind === "existing_session") return item;
+  const sessionId = item.output?.sessionId;
+  if (typeof sessionId !== "string" || !sessionId) return item;
+  return { ...item, targetKind: "existing_session", targetSessionId: sessionId };
 }
 
 function triggerKindForSource(explicit: AutomationTriggerKind | undefined, source: string): AutomationTriggerKind {
@@ -2173,11 +3338,27 @@ function triggerKindForSource(explicit: AutomationTriggerKind | undefined, sourc
   return "webhook";
 }
 
+function mapStringList(value: unknown): string[] | undefined {
+  if (value == null) return undefined;
+  if (Array.isArray(value)) return value.map(String);
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed.map(String) : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
 function mapAutomationDefinition(row: any): AutomationDefinition {
   return {
     id: row.id,
     accountId: row.account_id,
     name: row.name,
+    configKey: row.config_key ?? undefined,
+    configOrder: row.config_order == null ? undefined : Number(row.config_order),
     templateCiphertext: row.template_ciphertext ?? undefined,
     runtimeId: row.runtime_id ?? undefined,
     model: row.model ?? undefined,
@@ -2185,13 +3366,38 @@ function mapAutomationDefinition(row: any): AutomationDefinition {
     ephemeral: row.ephemeral ?? undefined,
     approvalMode: row.approval_mode ?? undefined,
     sandbox: row.sandbox ?? undefined,
+    maxAttempts: row.max_attempts == null ? undefined : Number(row.max_attempts),
+    requiredCapabilities: mapStringList(row.required_capabilities),
+    preferredCapabilities: mapStringList(row.preferred_capabilities),
     enabled: Boolean(row.enabled),
+    trigger: row.trigger ?? undefined,
+    webhookSecret: row.webhook_secret ?? undefined,
+    allowDangerous: row.allow_dangerous ?? undefined,
+    repo: row.repo ?? undefined,
+    labels: mapStringList(row.labels),
+    repos: mapStringList(row.repos),
+    on: mapEventRules(row.on_events),
+    templateId: row.template_id ?? undefined,
+    target: row.target_kind === "existing_session" && row.target_session_id
+      ? { kind: "existing_session", sessionId: row.target_session_id }
+      : undefined,
+    message: Boolean(row.message) || undefined,
     schedule: row.schedule,
     nextRunAt: row.next_run_at ? new Date(row.next_run_at).toISOString() : undefined,
     lastScheduledAt: row.last_scheduled_at ? new Date(row.last_scheduled_at).toISOString() : undefined,
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
   };
+}
+
+function mapEventRules(value: unknown): AutomationDefinition["on"] | undefined {
+  if (value == null) return undefined;
+  let parsed = value;
+  if (typeof value === "string") {
+    try { parsed = JSON.parse(value); } catch { return undefined; }
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) return undefined;
+  return parsed as AutomationDefinition["on"];
 }
 
 function mapTriggerEvent(row: any): TriggerEvent {
@@ -2219,6 +3425,7 @@ function mapAutomationRun(row: any): AutomationRun {
     triggerKind: triggerKindForSource(row.trigger_kind ?? undefined, row.source),
     status: row.status === "done" ? "succeeded" : row.status,
     attempt: Number(row.attempt ?? 1),
+    maxAttempts: row.max_attempts == null ? undefined : Number(row.max_attempts),
     target: row.target_kind === "existing_session"
       ? { kind: "existing_session", sessionId: row.target_session_id }
       : { kind: "new_session" },
@@ -2229,15 +3436,20 @@ function mapAutomationRun(row: any): AutomationRun {
       ephemeral: row.ephemeral ?? undefined,
       approvalMode: row.approval_mode ?? undefined,
       sandbox: row.sandbox ?? undefined,
+      requiredCapabilities: mapStringList(row.required_capabilities),
+      preferredCapabilities: mapStringList(row.preferred_capabilities),
     },
     output: row.output ?? undefined,
     title: row.title,
     body: row.body ?? undefined,
+    message: Boolean(row.message) || undefined,
+    eventContext: row.event_context ?? undefined,
     source: row.source,
     sourceRef: Object.keys(sourceRef).length ? sourceRef : undefined,
     createdAt: new Date(row.created_at).toISOString(),
     claimedByNodeId: row.claimed_by_node_id ?? undefined,
     claimedAt: row.claimed_at ? new Date(row.claimed_at).toISOString() : undefined,
+    leaseExpiresAt: row.lease_expires_at ? new Date(row.lease_expires_at).toISOString() : undefined,
     startedAt: row.started_at ? new Date(row.started_at).toISOString() : undefined,
     completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : undefined,
     ...mapEvidenceFields(row),
@@ -2267,6 +3479,8 @@ function mapNode(row: any): NodeRecord {
     lastSeenAt: row.last_seen_at ? new Date(row.last_seen_at).toISOString() : null,
     createdAt: new Date(row.created_at).toISOString(),
     providers: row.providers ?? undefined,
+    bootstrapStatus: row.bootstrap_status ?? undefined,
+    capabilities: mapStringList(row.capabilities),
   };
 }
 

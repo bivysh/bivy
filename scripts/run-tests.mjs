@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // Unit-test runner for the node/core suites under test/.
 //
@@ -22,6 +22,9 @@
 //
 // Concurrency defaults to the machine's parallelism; override with
 // TEST_CONCURRENCY=1 to fall back to fully serial execution for debugging.
+// Pass one or more substrings to run only matching suites during development:
+//   npm run test:unit -- config-cli plugin-cli
+// CI can distribute the suite across machines with TEST_SHARD=1/2, 2/2, etc.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { availableParallelism, cpus } from "node:os";
@@ -89,9 +92,53 @@ const shSuites = ["installer-migration.sh", "installer-path.sh"].map((f) => ({
   ports: new Set(),
 }));
 
-const suites = [...tsSuites, ...shSuites];
-const parallelSuites = tsSuites; // .test.ts suites parallelize (port-aware)
-const serialSuites = shSuites; // installer suites run serially afterward
+const allSuites = [...tsSuites, ...shSuites];
+
+const cliArgs = process.argv.slice(2);
+const listOnly = cliArgs.includes("--list");
+const selectors = cliArgs.filter((arg) => !arg.startsWith("--"));
+const shardSpec = process.env.TEST_SHARD;
+let shardIndex = 0;
+let shardCount = 1;
+if (shardSpec) {
+  const match = /^(\d+)\/(\d+)$/.exec(shardSpec);
+  if (!match || Number(match[1]) < 1 || Number(match[1]) > Number(match[2])) {
+    process.stderr.write(`Invalid TEST_SHARD=${shardSpec}; expected I/N with 1 <= I <= N.\n`);
+    process.exit(2);
+  }
+  shardIndex = Number(match[1]) - 1;
+  shardCount = Number(match[2]);
+}
+
+// FNV-1a gives every shard the same stable assignment without a coordination
+// file. Unlike contiguous chunks, it also spreads alphabetically clustered CLI
+// and integration suites, which tend to be the expensive ones.
+function shardFor(name) {
+  let hash = 0x811c9dc5;
+  for (const char of name) {
+    hash ^= char.charCodeAt(0);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0) % shardCount;
+}
+
+const selectedSuites = allSuites.filter((suite) =>
+  (selectors.length === 0 || selectors.some((selector) => suite.name.includes(selector)))
+  && shardFor(suite.name) === shardIndex,
+);
+if (selectedSuites.length === 0) {
+  process.stderr.write(`No test suites matched${selectors.length ? `: ${selectors.join(", ")}` : ""}.\n`);
+  process.exit(2);
+}
+if (listOnly) {
+  const output = selectedSuites.map((suite) => suite.name).join("\n") + "\n";
+  if (!process.stdout.write(output)) await new Promise((resolve) => process.stdout.once("drain", resolve));
+  process.exit(0);
+}
+
+const suites = selectedSuites;
+const parallelSuites = suites.filter((suite) => suite.name.endsWith(".test.ts"));
+const serialSuites = suites.filter((suite) => !suite.name.endsWith(".test.ts"));
 
 const parallelism = availableParallelism?.() ?? cpus().length ?? 1;
 const concurrency = Math.max(1, Number(process.env.TEST_CONCURRENCY) || parallelism);
@@ -110,6 +157,7 @@ process.stdout.write(
 
 function runSuite(suite) {
   return new Promise((resolve) => {
+    const suiteStart = Date.now();
     const child = spawn(suite.cmd, suite.args, { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] });
     const chunks = [];
     child.stdout.on("data", (d) => chunks.push(d));
@@ -127,7 +175,8 @@ function runSuite(suite) {
       if (!ok) failures.push(suite.name);
       done += 1;
       const tag = ok ? "✓" : "✗";
-      process.stdout.write(`\n── ${tag} ${suite.name} (${done}/${suites.length})\n`);
+      const suiteElapsed = ((Date.now() - suiteStart) / 1000).toFixed(1);
+      process.stdout.write(`\n── ${tag} ${suite.name} (${done}/${suites.length}, ${suiteElapsed}s)\n`);
       process.stdout.write(Buffer.concat(chunks).toString("utf8"));
       resolve();
     }

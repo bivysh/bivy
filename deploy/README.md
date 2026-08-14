@@ -56,17 +56,21 @@ git clone https://github.com/bivysh/bivy.git .
 
 ## 3. Deploy
 
-One command builds and starts the stack:
+Run the helper once to generate `deploy/.env`, a random `RELAY_SECRET` and
+Postgres password, and a Caddyfile using your domains:
 
 ```bash
 bash deploy/self-host.sh app.example.com relay.example.com
 ```
 
-It writes `deploy/.env` and `deploy/Caddyfile` on first run (generating a random
-`RELAY_SECRET` and Postgres password), then starts control-plane + relay + Caddy,
-plus a bundled Postgres. Caddy obtains Let's Encrypt certificates automatically,
-so you get real `https://` and `wss://` with no extra steps. Re-running the
-script rebuilds and restarts in place, keeping the existing `.env` and Caddyfile.
+A fresh production deployment then stops before Docker until you configure a
+real sign-in method in `deploy/.env`: either `RESEND_API_KEY` plus a verified
+`AUTH_EMAIL_FROM`, or both GitHub OAuth values (see
+[`../docs/github-oauth-setup.md`](../docs/github-oauth-setup.md)). Run the same
+command again to build and start control-plane, relay, Caddy, and Postgres.
+Alternatively, provide the auth values through the environment on the first run.
+Caddy obtains Let's Encrypt certificates automatically. Later runs preserve the
+existing environment and any customized Caddyfile.
 
 To use a managed/hosted Postgres (DigitalOcean, Render, Neon, Supabase, RDS, …)
 instead of the bundled container, set `DATABASE_URL` (keep the `sslmode` your
@@ -77,9 +81,8 @@ DATABASE_URL=postgres://user:pass@host:25060/db?sslmode=require \
   bash deploy/self-host.sh app.example.com relay.example.com
 ```
 
-Fill in the optional feature settings in `deploy/.env` when you want them —
-login email (`RESEND_API_KEY`), GitHub OAuth, or web push — then re-run the
-script to apply them.
+At least one sign-in method is required. Web push remains optional; fill in its
+settings later and re-run the script when you want it.
 
 Or run Compose directly if you'd rather manage `deploy/.env` and
 `deploy/Caddyfile` yourself:
@@ -104,11 +107,12 @@ shards across several servers behind an external load balancer, use
 ## 4. Connect your PC as a node
 
 ```bash
-# in the repo root, on your PC
+# in the repo root, on your PC; use --email you@example.com instead when
+# the deployment is configured for Resend rather than GitHub OAuth
 npm run relay:setup -- \
   --control-plane https://app.example.com \
   --relay wss://relay.example.com \
-  --email you@example.com
+  --github
 npm run dev
 ```
 
@@ -116,10 +120,10 @@ The daemon dials the relay on start (`[relay] connected`).
 
 ## 5. Link your phone
 
-In the PC web UI sidebar → **Link remote device** → scan the QR with your phone
-(works from anywhere afterwards, including cellular). The phone opens
-`https://app.example.com/#…`, connects through the relay, and controls the node.
-The session is end-to-end encrypted; the relay only sees ciphertext.
+The node has no local web UI. Run `bivy link` for a QR/URL, or `bivy open` to
+open the control-plane-hosted PWA and pair there. The phone connects through the
+relay from anywhere, including cellular. Session traffic is end-to-end
+encrypted; the relay only sees ciphertext.
 
 ## Zero-infra alternative: Tailscale
 

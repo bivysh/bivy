@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, type ReactNode } from "react";
 import type { NodeStats, NodeStatsTier } from "@bivy/core";
@@ -109,9 +109,9 @@ export function StatsPanel({ onClose }: { onClose: () => void }) {
   const sessionIdle = s && !s.sessionMeasurable ? "idle / in-process" : "—";
 
   return (
-    <Sheet title="Node stats" onClose={onClose} autoFocusSearch={false}>
+    <Sheet title="Machine stats" onClose={onClose} autoFocusSearch={false}>
       <div className="stats-panel">
-        {!s && <div className="stats-empty">{online ? "Loading node stats…" : "Node offline — stats unavailable."}</div>}
+        {!s && <div className="stats-empty">{online ? "Loading machine stats…" : "Machine offline — stats unavailable."}</div>}
 
         {s?.memory && (
           <ResourceCard
@@ -121,8 +121,8 @@ export function StatsPanel({ onClose }: { onClose: () => void }) {
             rows={[
               { label: "This session", value: bytesTier(s.memory.session, sessionIdle), pct: s.memory.session?.pct },
               { label: "All of Bivy", value: bytesTier(s.memory.bivy), pct: s.memory.bivy.pct },
-              { label: "Node used", value: <>{formatBytes(s.memory.node.used)} <span className="stat-dim">· {pctText(s.memory.node.usedPct)}</span></> },
-              { label: "Node free", value: <span className="stat-dim">{formatBytes(s.memory.node.free)} available</span> },
+              { label: "Machine used", value: <>{formatBytes(s.memory.node.used)} <span className="stat-dim">· {pctText(s.memory.node.usedPct)}</span></> },
+              { label: "Machine free", value: <span className="stat-dim">{formatBytes(s.memory.node.free)} available</span> },
             ]}
           />
         )}
@@ -135,7 +135,7 @@ export function StatsPanel({ onClose }: { onClose: () => void }) {
             rows={[
               { label: "This session", value: cpuTier(s.cpu.session, sessionIdle), pct: s.cpu.session?.pct },
               { label: "All of Bivy", value: cpuTier(s.cpu.bivy), pct: s.cpu.bivy.pct },
-              { label: "Node total", value: <>{pctText(s.cpu.node.usedPct)} <span className="stat-dim">busy</span></> },
+              { label: "Machine total", value: <>{pctText(s.cpu.node.usedPct)} <span className="stat-dim">busy</span></> },
             ]}
           />
         )}
@@ -150,8 +150,8 @@ export function StatsPanel({ onClose }: { onClose: () => void }) {
               { label: "All of Bivy", value: bytesTier(s.storage.bivy, "measuring…"), pct: s.storage.bivy?.pct },
               ...(s.storage.node
                 ? [
-                    { label: "Node used", value: <>{formatBytes(s.storage.node.used)} <span className="stat-dim">· {pctText(s.storage.node.usedPct)}</span></> as ReactNode },
-                    { label: "Node free", value: <span className="stat-dim">{formatBytes(s.storage.node.free)} available</span> as ReactNode },
+                    { label: "Machine used", value: <>{formatBytes(s.storage.node.used)} <span className="stat-dim">· {pctText(s.storage.node.usedPct)}</span></> as ReactNode },
+                    { label: "Machine free", value: <span className="stat-dim">{formatBytes(s.storage.node.free)} available</span> as ReactNode },
                   ]
                 : []),
             ]}
@@ -163,7 +163,7 @@ export function StatsPanel({ onClose }: { onClose: () => void }) {
             <dl className="stats-meta">
               {s.name && (
                 <div className="stats-meta-row">
-                  <dt>Node</dt>
+                  <dt>Machine</dt>
                   <dd>{s.name}</dd>
                 </div>
               )}

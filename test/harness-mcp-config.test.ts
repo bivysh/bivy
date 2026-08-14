@@ -1,5 +1,18 @@
 import assert from "node:assert/strict";
-import { routeThroughProxy, parseProxiedArgs, isProxied, PROXY_MARKER, type McpConfig } from "../src/harness/mcp-config.js";
+import {
+  routeThroughProxy,
+  routeOpenCodeThroughProxy,
+  parseProxiedArgs,
+  isProxied,
+  isOpenCodeProxied,
+  isOpenCodeConfigFile,
+  toOpenCodeLocalServer,
+  withOpenCodeBivyToolsServer,
+  bivyToolsServerSpec,
+  PROXY_MARKER,
+  type McpConfig,
+  type OpenCodeConfig,
+} from "../src/harness/mcp-config.js";
 
 let failures = 0;
 function check(name: string, fn: () => void) {
@@ -72,6 +85,65 @@ check("parseProxiedArgs recovers server name + original command", () => {
 
 check("parseProxiedArgs returns null without a -- tail", () => {
   assert.equal(parseProxiedArgs(["mcp-proxy", "--server", "fs"]), null);
+});
+
+// ---- OpenCode `mcp` shape ------------------------------------------------
+check("opencode: routes a local server through the proxy", () => {
+  const cfg: OpenCodeConfig = {
+    mcp: { fs: { type: "local", command: ["mcp-fs", "--root", "/w"], environment: { X: "1" } } },
+  };
+  const out = routeOpenCodeThroughProxy(cfg, launcher);
+  assert.deepEqual(out.rewritten, ["fs"]);
+  assert.deepEqual(out.skipped, []);
+  const fs = out.config.mcp!.fs;
+  assert.equal(fs.type, "local");
+  assert.deepEqual(fs.command, ["bivy", "mcp-proxy", PROXY_MARKER, "--server", "fs", "--", "mcp-fs", "--root", "/w"]);
+  assert.deepEqual(fs.environment, { X: "1" }, "environment is preserved");
+  assert.equal(isOpenCodeProxied(fs, launcher), true);
+});
+
+check("opencode: does not mutate the input config", () => {
+  const cfg: OpenCodeConfig = { mcp: { fs: { type: "local", command: ["mcp-fs", "--root", "/w"] } } };
+  routeOpenCodeThroughProxy(cfg, launcher);
+  assert.deepEqual(cfg.mcp!.fs.command, ["mcp-fs", "--root", "/w"], "original command untouched");
+});
+
+check("opencode: leaves remote servers untouched", () => {
+  const cfg: OpenCodeConfig = { mcp: { remote: { type: "remote", url: "https://mcp.example/sse" } } };
+  const out = routeOpenCodeThroughProxy(cfg, launcher);
+  assert.deepEqual(out.rewritten, []);
+  assert.deepEqual(out.skipped, ["remote"]);
+  assert.deepEqual(out.config.mcp!.remote, { type: "remote", url: "https://mcp.example/sse" });
+});
+
+check("opencode: is idempotent (already-proxied server is skipped)", () => {
+  const cfg: OpenCodeConfig = { mcp: { fs: { type: "local", command: ["mcp-fs"] } } };
+  const once = routeOpenCodeThroughProxy(cfg, launcher);
+  const twice = routeOpenCodeThroughProxy(once.config, launcher);
+  assert.deepEqual(twice.rewritten, []);
+  assert.deepEqual(twice.skipped, ["fs"]);
+  assert.deepEqual(twice.config.mcp!.fs.command, once.config.mcp!.fs.command);
+});
+
+check("opencode: toOpenCodeLocalServer + withOpenCodeBivyToolsServer", () => {
+  const spec = toOpenCodeLocalServer(bivyToolsServerSpec({ sessionId: "s1", endpoint: "http://127.0.0.1:4318" }));
+  assert.deepEqual(spec, {
+    type: "local",
+    command: ["bivy", "mcp-serve"],
+    environment: { BIVY_SESSION_ID: "s1", BIVY_MCP_ENDPOINT: "http://127.0.0.1:4318" },
+  });
+  const { config, added } = withOpenCodeBivyToolsServer({}, spec);
+  assert.equal(added, true);
+  assert.deepEqual(config.mcp!.bivy, spec);
+  // Idempotent
+  assert.equal(withOpenCodeBivyToolsServer(config, spec).added, false);
+});
+
+check("opencode: isOpenCodeConfigFile recognizes project configs", () => {
+  assert.equal(isOpenCodeConfigFile("/w/opencode.json"), true);
+  assert.equal(isOpenCodeConfigFile("/w/.opencode.json"), true);
+  assert.equal(isOpenCodeConfigFile("/w/opencode.jsonc"), true);
+  assert.equal(isOpenCodeConfigFile("/w/.mcp.json"), false);
 });
 
 if (failures > 0) {

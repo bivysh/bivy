@@ -24,9 +24,10 @@ control). Escape hatches can change or disappear without notice.
 | `ANTHROPIC_API_KEY` | Anthropic model key, if you are not using OAuth | unset |
 | `BIVY_HOST` | Bind address for the node's port | `127.0.0.1` |
 
-`bivy setup` sets the workspace and port for you. The sandbox tier, approval
-mode and default agent are also settable from the web app under Settings, which
-writes `settings.json` instead of environment variables.
+`bivy setup` sets the workspace and port for you. The CLI and web Settings
+screen write the canonical typed `<data-dir>/config.yaml`; see
+[config-as-code.md](config-as-code.md). Environment variables remain useful for
+deployment overrides and compatibility.
 
 ## Config files on disk
 
@@ -56,11 +57,13 @@ process, so the daemon, agents and helper scripts all agree.
 
 | Path | Contents | Written by |
 | --- | --- | --- |
-| `cli.json` | Workspace, port, `service` flag, and an `env` block of persisted environment variables. Mode `0600` | `bivy setup`, `bivy service install/uninstall`, `bivy github:connect`, `bivy github:app-connect`, and the node when you connect/disconnect a GitHub App from the web app |
-| `settings.json` | Agent-neutral node settings: `defaultAgent`, `defaultModel`, `defaultSandbox`, `approvalMode`, `githubMaxConcurrent`, `githubIssuePrompt` | The node, from the web app's Settings screen |
+| `config.yaml` | **Canonical user-authored node configuration**: workspace/port, defaults, concurrency, session behavior, checks, and advanced environment references. Mode `0600` | `bivy setup`, `bivy config`, and the web Settings screen |
+| `cli.json` | Generated compatibility projection: workspace, port, service state, and persisted environment. Do not hand-edit once `config.yaml` exists | Bivy CLI/config projection and integration connect flows |
+| `settings.json` | Generated compatibility projection of node defaults for older binaries. Do not hand-edit once `config.yaml` exists | Node/config projection |
 | `relay.json` | Relay URL, control-plane URL, client base URL, node enrollment token. Mode `0600` | `bivy relay:setup` |
 | `nodes.json` | Direct-node registry (`name` → `{url, token}`) for `bivy run --node` | `bivy nodes add/remove` |
 | `shims.json` | Installed agent shims | `bivy shim install/uninstall` |
+| `plugins/<id>/manifest.json` | Canonical declarative plugin manifests; no executable code or secrets | `bivy plugin install/remove` |
 | `secrets.json` / `secrets.key` | AES-256-GCM encrypted secret vault and its key. Both `0600` | `bivy secrets`, `bivy voice`, GitHub connect flows |
 | `bootstrap.json` | Per-process bootstrap secret the CLI uses to mint a device token | The node at startup |
 | `node.json` | Stable node identity (id, name) | The node |
@@ -76,7 +79,13 @@ process, so the daemon, agents and helper scripts all agree.
 | `git-cred/` | Git credential helper materialised on disk | The node |
 | `node.log`, `update.log` | Background start / update logs | The CLI |
 
-### `cli.json`
+### `config.yaml`
+
+The supported file format, CLI editor, migration behavior, repository
+`.bivy/policy.yaml`, and examples are documented in
+[config-as-code.md](config-as-code.md).
+
+### `cli.json` compatibility projection
 
 ```json
 {
@@ -90,16 +99,17 @@ process, so the daemon, agents and helper scripts all agree.
 }
 ```
 
-The `env` block is a general-purpose place to persist **any** variable from the
-[Node](#node-your-machine) section below. Two things consume it:
+The `env` block is retained as a generated compatibility projection. Put
+advanced overrides in `config.yaml`'s typed fields or `environment` block; Bivy
+projects them here for older binaries. Two things consume the projection:
 
 - **The CLI**, when starting the daemon or generating a service unit: it
   resolves `secret://`, `env://` and `op://` references to real values first,
   so a service unit never contains a plaintext token.
 - **The daemon itself**, at boot. It reads `cli.json` and copies each string
   value into `process.env` — but **only for keys that are not already set**. A
-  config change written to `cli.json` therefore survives a restart even when
-  the generated service unit's baked-in environment is stale.
+  projected config change therefore survives a restart even when the generated
+  service unit's baked-in environment is stale.
 
 The value `""` deletes a key when the node writes `cli.json`.
 
@@ -108,18 +118,21 @@ The value `""` deletes a key when the node writes `cli.json`.
 For a variable's raw value:
 
 1. Real process environment (your shell, or the generated systemd/launchd unit).
-2. `cli.json`'s `env` block, for keys not already set.
+2. `config.yaml`'s typed field or `environment` block.
+3. `cli.json`'s generated `env` compatibility projection, for keys not already set.
 
 `BIVY_DATA_DIR` and `BIVY_ASSET_ROOT` are read before the `cli.json` merge, so
 they cannot be set from `cli.json`.
 
-For the three settings that also exist in `settings.json`:
+For settings that also have legacy projections:
 
 | Setting | Precedence |
 | --- | --- |
-| Sandbox tier | per-session override → `BIVY_SANDBOX` → `settings.json` `defaultSandbox` → `workspace-write` |
-| Approval mode | `BIVY_APPROVAL_MODE` → `settings.json` `approvalMode` → `autonomous` |
-| Default agent | `BIVY_RUNTIME` (process env, then `cli.json`) → `settings.json` `defaultAgent` → `pi` |
+| Sandbox tier | per-session/automation request → `BIVY_SANDBOX`/`config.yaml` default → node `safety.maxSandbox` ceiling → repository safety ceiling (the most restrictive bound wins) |
+| Approval mode | per-session/automation request → `BIVY_APPROVAL_MODE`/`config.yaml` default → node `safety.approvalFloor` → repository approval floor (the most restrictive bound wins) |
+| Default agent | per-run override → `BIVY_RUNTIME` → `config.yaml` `defaults.agent` → `pi` |
+| Auto-attach tool images | `BIVY_AUTO_ATTACH_TOOL_IMAGES` → `config.yaml` `sessions.autoAttachToolImages` → off |
+| Wedged-turn recovery | `config.yaml` `sessions.wedgedTurnMinutes` → `BIVY_TURN_ACTIVITY_STALL_MS` → 15 min. A turn that keeps streaming raw tool output but makes no structural progress (no tool completion, model text, or turn boundary) for this long is recovered. `0` disables it, leaving the 5-min silence stall and 1-hour cap. |
 
 CLI flags always win over both, for the commands that have them
 (`bivy exec --agent`, `bivy relay:setup --control-plane`, `bivy prune
@@ -136,7 +149,7 @@ Value parsing is not uniform across variables:
   `BIVY_REQUIRE_LOCAL_AUTH`, `BIVY_MULTI_USER_HOST`.
 - Plain truthiness (**any** non-empty value enables, including `"0"` and
   `"false"`): `BIVY_EGRESS_PROXY`, `BIVY_MCP_PROXY`, `BIVY_WORKTREE_COW_CLONE`,
-  `BIVY_DEBUG`.
+  `BIVY_DEBUG`, `BIVY_AUTO_ATTACH_TOOL_IMAGES`.
 - Numeric knobs that honour `0` as "off/zero": `BIVY_SESSION_IDLE_CLOSE_MS`,
   `BIVY_MAX_OPEN_SESSIONS`, `BIVY_MAX_RUN_TERMINALS`,
   `BIVY_WORKTREE_RETENTION_MS`, `BIVY_WORKTREE_SOFT_CAP_BYTES`,
@@ -181,7 +194,7 @@ unless noted.
 | Variable | Type | Default | Status | Notes |
 | --- | --- | --- | --- | --- |
 | `BIVY_SANDBOX` | `read-only` \| `workspace-write` \| `danger-full-access` | `workspace-write` | Supported | Selects the tier each agent enforces in its own native sandbox (Codex `--sandbox`, Gemini `--approval-mode`, Claude `permissionMode`). Agents with no native sandbox (Goose, OpenCode, Aider) are governed by Bivy's filesystem/MCP/network channels instead. Case-insensitive; `_` is normalised to `-`; an unrecognised value is silently ignored |
-| `BIVY_APPROVAL_MODE` | `autonomous` \| `risky` \| `always` \| `never` | `autonomous` | Supported | `autonomous` runs without per-action approval; catastrophic commands and writes outside the workspace are blocked in every mode, and a backstop set (force-push, publish, deploy, sudo) still pauses. `risky`/`always` restore prompt-heavy behaviour |
+| `BIVY_APPROVAL_MODE` | `autonomous` \| `risky` \| `always` \| `never` | `autonomous` | Supported | Controls prompting where the selected runtime exposes structured tool calls. On those paths, heuristic catastrophic-command/workspace checks apply and backstop actions pause. Process runtimes without interception still run with the OS user's permissions; this setting is not an isolation boundary |
 | `BIVY_EGRESS_PROXY` | any non-empty | unset | Supported (opt-in) | Routes CLI-agent outbound traffic through a local governance broker, whose proxy env is merged into every agent subprocess |
 | `BIVY_MCP_PROXY` | any non-empty | unset | Supported (opt-in) | Rewrites the agent's on-disk MCP config so its servers launch through `bivy mcp-proxy`, restored on session close. Skipped for Pi and the Claude SDK, which govern MCP natively. Note: `BIVY_MCP_PROXY=0` **enables** it |
 
@@ -192,7 +205,8 @@ The Bivy-owned OS jail (bubblewrap / `sandbox-exec`) was removed for v1.0.
 
 | Variable | Type | Default | Status | Notes |
 | --- | --- | --- | --- | --- |
-| `BIVY_RUNTIME` | agent id | `pi` | Supported | Default agent. Valid ids: `pi`, `claude-code-sdk`, `codex`, `codex-approvals`, `opencode`, `aider`, `hermes`, `goose`, `gemini`, `qwen`, `cline`, `crush`, `openclaw`, `generic-cli`, `bivy-agent-protocol`. Lowercased |
+| `BIVY_RUNTIME` | agent id | `pi` | Supported | Default agent. Built-in and installed plugin-agent ids are accepted. Lowercased |
+| `BIVY_PLUGIN_DIR` | path | `<data-dir>/plugins` | Supported (advanced) | Override the node-local declarative plugin store; primarily for managed deployments and testing |
 | `BIVY_CLAUDE_MODEL` | model id | unset | Supported | Default model for the Claude Code SDK runtime |
 | `BIVY_CLAUDE_SESSIONS_DIR` | path | unset | Supported | Extra directory to search for Claude Code transcripts |
 | `BIVY_PI_CLI` | path | the bundled `@earendil-works/pi-coding-agent` CLI | Escape hatch (packaging) | Path to the Pi CLI entry point |
@@ -205,10 +219,30 @@ These apply to the CLI-driven agents: `codex`, `opencode`, `aider`, `hermes`,
 
 | Variable | Type | Default | Status | Notes |
 | --- | --- | --- | --- | --- |
-| `BIVY_<ID>_ARGS` | JSON string array | the built-in spec's args | Supported | Corrects a CLI's flags for a version Bivy hasn't pinned. Malformed JSON is ignored |
+| `BIVY_<ID>_ARGS` | JSON string array | the integration profile's args | Supported | Corrects a CLI's flags for a version Bivy hasn't pinned. Malformed JSON is ignored |
 | `BIVY_<ID>_RESUME_TEMPLATE` | JSON string array | the spec's template, if any | Supported | Resume args. `{id}`, `{tier}` and a whole-token `{sandbox}` are substituted |
 | `BIVY_<ID>_MODELS` | JSON array of `{id,name?,provider?}` (or bare strings) | the spec's curated list | Supported | Selectable models |
 | `BIVY_<ID>_THINKING` | JSON `{levels[],template[],insertAt?,default?}` | the spec's setting | Supported (advanced) | Reasoning-effort flags. Requires both `levels` and `template` or it is ignored |
+
+### Named custom agents
+
+`BIVY_CUSTOM_AGENTS` registers reusable agents in both the web picker and
+`bivy run`. Its value is a JSON array. Each entry requires a unique lowercase
+`id` and an `extends` value naming a maintained agent profile; it may override
+`label`, `command`, `args`, `jsonArgs`, `parserId`, `promptMode`, and `hidden`.
+Custom agents inherit the base agent's execution behavior and always appear as
+experimental/unverified. Invalid entries are ignored without affecting packaged integrations.
+
+For a new agent that does not inherit an existing profile, prefer `bivy agent
+add`: it generates the ordinary declarative integration manifest and supports
+any ACP or headless process agent without an `extends` relationship.
+
+```sh
+export BIVY_CUSTOM_AGENTS='[{"id":"company-codex","label":"Company Codex","extends":"codex","command":"company-codex","args":["exec"]}]'
+```
+
+Persist the same value in `cli.json`'s `env` object to make it available to the
+daemon and terminal CLI after restart.
 
 Codex resume is special-cased and does **not** use the generic path:
 
@@ -241,6 +275,7 @@ approvals unless the agent speaks the Bivy protocol.
 | `BIVY_AGENT_RESUME_TEMPLATE` | JSON string array with `{id}` | unset (fresh process per prompt) | Supported |
 | `BIVY_AGENT_PARSER` | `claude-stream-json` \| `codex-json` \| `goose-stream-json` \| `gemini-json` | the agent spec's parser | Supported (advanced). An unknown id means raw passthrough |
 | `BIVY_AGENT_STRUCTURED` | `0` disables | on, whenever the agent has a parser | Supported (compat) |
+| `BIVY_TOOL_TRACE_FILE` | absolute path | unset | Diagnostic, explicit opt-in | Appends bounded JSONL call/result payloads for normalization-fixture curation. May contain code, paths, and commands; never enable on sensitive sessions or commit raw traces |
 
 ### Bivy Agent Protocol (`bivy-agent-protocol`)
 
@@ -293,8 +328,8 @@ The hosted endpoints all derive from one domain, so you normally set nothing.
 | Variable | Type | Default | Status |
 | --- | --- | --- | --- |
 | `BIVY_HOSTED_DOMAIN` | domain | `bivy.sh` | Supported — re-points all three derived URLs at once (self-host/staging) |
-| `BIVY_CONTROL_PLANE_URL` | URL | `https://app.<domain>` | Supported |
-| `BIVY_RELAY_URL` | `ws(s)://` URL | `wss://relay.<domain>` | Supported. **Overrides the value in `relay.json`** |
+| `BIVY_CONTROL_PLANE_URL` | URL | `https://app.<domain>` | Supported. Setting this (or `BIVY_RELAY_URL`) makes `bivy setup` default the remote-access prompt to **self-hosted** and pre-fills this URL |
+| `BIVY_RELAY_URL` | `ws(s)://` URL | `wss://relay.<domain>` | Supported. **Overrides the value in `relay.json`**. Setting this (or `BIVY_CONTROL_PLANE_URL`) makes `bivy setup` default to **self-hosted** and pre-fills this URL |
 | `BIVY_CLIENT_BASE_URL` | URL | the resolved control-plane URL | Supported — where the web app is served |
 | `BIVY_RELAY_TOKEN` | token | `relay.json`'s `enrollmentToken` | Supported. If neither a URL nor a token resolves, the relay stays off |
 | `BIVY_EMAIL` | email | unset | Supported — non-interactive `bivy relay:setup` |
@@ -338,20 +373,60 @@ self-contained setups.
 | `BIVY_WORKTREE_SOFT_CAP_BYTES` | integer bytes | `0` (off) | Supported (opt-in) | **Advisory only** — logs oversized worktrees, never deletes |
 | `BIVY_MIN_FREE_DISK_BYTES` | integer bytes | `0` (off) | Supported (opt-in) | Refuses new disk-consuming work below this free-space threshold. An unmeasurable filesystem always admits |
 | `BIVY_WORKTREE_COW_CLONE` | any non-empty | unset | Supported (opt-in, experimental) | Copy-on-write cloning of installed dirs (`node_modules` etc.) from a sibling worktree. Requires filesystem CoW support; silently disabled otherwise |
-| `BIVY_SHARED_DEP_CACHE` | `1`/`true`, **or a path** | unset | Supported (opt-in) | Points npm/yarn/pip/cargo/go *caches* at one directory for every agent and terminal. `1`/`true` uses `<data-dir>/dep-cache`; any other value is taken as an explicit path. Cache-only — never changes a project's lockfile or install location |
-| `BIVY_SHARED_DEP_CACHE_MAX_BYTES` | integer bytes | `21474836480` (20 GiB) | Supported | LRU eviction cap for the shared cache. `0` disables eviction |
+| `BIVY_SHARED_DEP_CACHE` | `1`/`true`, **or a path** | unset | Supported (opt-in) | Points npm/pnpm/yarn/pip/cargo/go *caches* at one directory for every agent and terminal. `1`/`true` uses `<data-dir>/dep-cache`; any other value is taken as an explicit path. Cache-only — never changes a project's lockfile or install location. For pnpm this also shares its hardlink store, which dedups the installed `node_modules` too (see below) |
+| `BIVY_SHARED_DEP_CACHE_MAX_BYTES` | integer bytes | `21474836480` (20 GiB) | Supported | LRU eviction cap for the shared cache. `0` disables eviction. Entries hardlinked into a live worktree are counted but never evicted (removing them would reclaim nothing), so a cache dominated by them can sit above the cap |
+| `BIVY_ATTACHMENT_MAX_FILE_BYTES` | integer bytes | `26214400` (25 MiB) | Supported | Node-side hard limit for a durably stored attachment; composer uploads have a stricter 10 MiB limit |
+| `BIVY_ATTACHMENT_STORE_MAX_BYTES` | integer bytes | `2147483648` (2 GiB) | Supported | Global admission cap for new blobs. GC removes only unreferenced blobs; if a lowered cap is already exceeded by referenced history, it is retained and an over-cap warning is reported |
+| `BIVY_ATTACHMENT_RETENTION_MS` | integer ms | `2592000000` (30 days) | Supported | Minimum age before an unreferenced attachment is collected during the disk sweep |
+
+### pnpm and worktree disk
+
+For most ecosystems `BIVY_SHARED_DEP_CACHE` dedups *downloads* only — every
+worktree still grows its own full `node_modules`. pnpm is the exception: it
+hardlinks files out of a content-addressed store, so worktrees sharing one store
+share inodes and a second worktree costs roughly its own diff. Measured on this
+repo, a second worktree costs ~1.2 GB under npm and ~17 MB under pnpm against a
+warm store (~106 MB if the store is cold and has to materialize the packages
+pnpm copies rather than links, mostly prebuilt native binaries).
+
+This is also the one form of installed-tree dedup that works on ext4 and NTFS,
+where `BIVY_WORKTREE_COW_CLONE` correctly does nothing for lack of filesystem
+copy-on-write. The two are complementary.
+
+Two caveats worth knowing:
+
+- Hardlinks cannot cross filesystems. Bivy only points pnpm at the shared store
+  when the store and the worktree are on the same device; otherwise it leaves
+  pnpm on its own default store (`~/.local/share/pnpm/store`), which is already
+  per-user global and still dedups. Pointing a store at a different volume would
+  make pnpm silently *copy* — a full tree per worktree plus a full store.
+- Bivy sets `PNPM_CONFIG_STORE_DIR`. pnpm 10+ ignores `npm_config_store_dir`,
+  `PNPM_STORE_DIR`, and a `store-dir=` line in `.npmrc`; project-level config
+  moved to `storeDir:` in `pnpm-workspace.yaml`.
 
 ## Terminals and notifications
 
 | Variable | Type | Default | Status |
 | --- | --- | --- | --- |
-| `BIVY_EXEC_TIMEOUT_MS` | integer ms | `600000` (10 min) | Supported — `bivy exec` turn timeout. `--timeout <seconds>` wins |
+| `BIVY_EXEC_TIMEOUT_MS` | integer ms | `600000` (10 min) | Supported — `bivy exec` client wait timeout. `--timeout <seconds>` wins |
+| `BIVY_TURN_TIMEOUT_MS` | integer ms | `3600000` (60 min) | Supported — daemon-side watchdog for every agent turn. Stops the runtime, marks the session timed out, and releases ephemeral/queue progress. `0` explicitly disables it; values above 24 h are capped |
+| `BIVY_AUTOMATION_CHECKS` | JSON array or comma list of package-script names | `test,lint,typecheck` | Supported | Deterministic checks run after unattended issue work when those scripts exist. Only name/hash/status/exit are reported; command text/output stay on the node |
+| `BIVY_AUTOMATION_CHECK_TIMEOUT_MS` | integer ms | `600000` (10 min) | Supported | Per-check timeout, clamped to 1 s–30 min |
 | `BIVY_RUN_IDLE_NOTIFY_MS` | integer ms | `30000` | Internal / test tuning |
 | `BIVY_TERM_BELL_QUIET_MS` | integer ms | `8000` | Internal / test tuning — how long since your last keystroke before a terminal bell counts as "you stepped away" |
 | `BIVY_TERM_BELL_COOLDOWN_MS` | integer ms | `45000` | Internal / test tuning — collapses a bell storm into one notification |
 | `BIVY_MCP_ENDPOINT` | URL | `http://127.0.0.1:4317` | Internal — the daemon sets it to its real port for `bivy mcp-proxy` children |
 | `BIVY_MCP_SESSION` | session id | `""` | Internal — set by Bivy when spawning the MCP proxy |
 | `BIVY_TERMINAL` | `1` | — | Internal marker. Bivy sets it in every PTY so shells (and `bivy update`) can tell they are inside Bivy. Never read as input by the node |
+
+Watchdog reliability is measured against two explicit bounds. Silence/wedged
+detection occurs by its configured threshold plus the periodic sweep interval
+(15–60 seconds); the wall-clock cap uses its own timer. After detection or an
+operator Stop, the runtime abort-and-reopen path has a 10-second settlement SLO.
+`GET /api/diagnostics` reports per-runtime/trigger observations, total and maximum
+settlement milliseconds, the target, and the number within target. These counters
+are node-process-local operational measurements, not a claim about fleet-wide
+percentiles; production SLO reporting must aggregate them across restarts.
 
 Standard OS variables are also honoured: `PATH`, `SHELL` (default `/bin/bash`),
 `HOME`, `COMSPEC` and `PATHEXT` (Windows), and `LC_ALL`/`LC_CTYPE`/`LANG`. If
@@ -375,13 +450,14 @@ Off by default and inert — the in-process path is unchanged when it is off.
 | Variable | Type | Default | Status | Notes |
 | --- | --- | --- | --- | --- |
 | `BIVY_NPM_GLOBAL_PREFIX` | path | `~/.local` | Supported | Prefix for user-scoped global agent installs. `<prefix>/bin` is prepended to `PATH` for every agent and terminal child |
-| `BIVY_SKIP_AGENT_PREINSTALL` | `1` | unset | Supported | Skip installing bundled agents during setup/update. Useful in CI or offline |
+| `BIVY_SKIP_AGENT_PREINSTALL` | `1` | unset | Supported | Skip installing known upstream agents during setup/update. Useful in CI or offline |
 | `BIVY_UPDATE_WAIT_TIMEOUT_MS` | integer ms | `1800000` (30 min) | Supported | How long `bivy update`/`bivy restart` waits for busy sessions. `0` skips waiting |
 | `BIVY_SHIM_DISABLE` | `1`, or an agent name | unset | Supported | Bypass an installed agent shim for one invocation: `BIVY_SHIM_DISABLE=1 claude` |
 | `BIVY_DEBUG` | any non-empty | unset | Supported | Print stack traces from the CLI |
 | `BIVY_AGENT_<NAME>_COMMAND` / `BIVY_AGENT_<NAME>_ARGS` | command / JSON array | unset | Supported | Teaches `bivy run <name>` about an agent the CLI does not know. `<NAME>` is the agent id uppercased with non-alphanumerics replaced by `_`. A malformed `_ARGS` value is a hard error |
 | `BIVY_TSX` | path | the bundled `tsx` CLI | Escape hatch (packaging) | **Setting it to the empty string is meaningful** — packaged builds do that to drop `tsx` entirely |
-| `BIVY_NATIVE_PI` | path | `<asset-root>/src/native-pi.ts` | Escape hatch (packaging) | |
+| `BIVY_PI_COMMAND` | command/path | `pi` | Supported | Operator-installed Pi executable used for native TUI hand-off |
+| `BIVY_CLAUDE_COMMAND` | command/path | `claude` | Supported | Operator-installed Claude Code executable used by the SDK bridge |
 | `BIVY_PTY_RUNNER` | path | `<asset-root>/src/pty-runner.py`, else `dist/pty-runner.py` | Escape hatch (packaging) | |
 | `PYTHON` | command | `python3` | Supported | Interpreter for the PTY runner |
 | `BIVY_UPDATE_DETACHED` | `1` | unset | Internal | Re-exec marker set by `bivy update` when it detaches from a Bivy terminal |
@@ -425,7 +501,8 @@ unauthenticated dev login enabled.
 | `RELAY_SHARD_URLS` | comma-separated URLs | falls back to `RELAY_PUBLIC_URL`, then `ws://localhost:4500` | Node→shard mapping is by hash of the node id |
 | `DATABASE_POOL_MAX` | integer ≥ 1 | `10` | |
 | `LINK_GRANT_TTL_MS` | integer ms | `2592000000` (30 days) | TTL of the device-linking grant minted from a pairing QR |
-| `ENFORCE_ENTITLEMENTS` | `1` | **off without Stripe; always on with Stripe** | Stripe-backed hosted deployments always enforce plan gates, regardless of this flag. On no-billing/self-hosted stacks this remains opt-in. Interactive CLI/app sessions remain unlimited; free accounts get `FREE_WEEKLY_RUNS` (10) unattended automations per rolling 7-day window across GitHub, Slack, webhooks, and schedules, with one grace job before refusal. Paid plans have unlimited automation. |
+| `ENFORCE_ENTITLEMENTS` | `1` | **off without Stripe; always on with Stripe** | Stripe-backed hosted deployments always enforce plan gates, regardless of this flag. On Bivy Cloud, free accounts may surface `TRIAL_SESSIONS` (25 by default) distinct sessions through the hosted app and get `FREE_WEEKLY_RUNS` (10) unattended automations per rolling 7-day window, with one grace job before refusal. Local execution/history remains on the node when the hosted-view trial is exhausted. Paid plans omit both limits. On no-billing/self-hosted stacks enforcement remains off and all features are unlimited. |
+| `TRIAL_SESSIONS` | positive integer | `25` | Lifetime number of distinct sessions a free Bivy Cloud account may view through the hosted app. Ignored when entitlement enforcement is off. |
 | `RUN_LIMIT_OBSERVE_ONLY` | `1` | **off** | Observe-only mode for no-billing test/staging deployments with `ENFORCE_ENTITLEMENTS=1`. It is ignored when Stripe billing is configured, where the cap is always enforced. |
 
 ## Authentication
@@ -512,7 +589,7 @@ Maintainer tooling. You do not need any of these to run Bivy.
 | `BIVY_HOME` | path | `$HOME/.bivy/app` | Supported — install destination |
 | `BIVY_VERSION` | npm version or dist-tag | `latest` | Supported — install a specific version, e.g. `0.1.0` |
 | `BIVY_NPM_PREFIX` | path | npm's global prefix | Supported — install into a user-owned prefix instead of needing sudo |
-| `BIVY_INSTALL_ALL_AGENTS` | `1` | unset | Supported — preinstall every bundled agent instead of just the one setup picks |
+| `BIVY_INSTALL_ALL_AGENTS` | `1` | unset | Supported — preinstall every known upstream agent instead of just the one setup picks |
 
 What `install.sh` does: installs prerequisites (including Node 22 via
 NodeSource on apt systems), downloads the tarball and manifest, verifies the

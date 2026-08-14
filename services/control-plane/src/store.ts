@@ -1,6 +1,7 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { createHash } from "node:crypto";
+import type { SecretEnvelope } from "./hosted-crypto.js";
 
 /**
  * Control plane data store.
@@ -11,10 +12,12 @@ import { createHash } from "node:crypto";
  * (pg-mem, see pg-mem-store.ts) for dev/tests otherwise. Selected by `createStore()`
  * (store-factory.ts). This file holds the interface + shared types/helpers.
  *
- * Hard rule: the control plane stores ONLY metadata for
- * sessions/work. Never session content, files, prompts, or tool output. Model
- * provider credentials are the one explicit account-vault exception so enrolled
- * nodes can share API keys/OAuth logins across the user's runners.
+ * Hard rule: the control plane never stores interactive session content, files,
+ * transcripts, or tool output. Slack and generic-webhook instructions are the
+ * explicit inbound-automation exception: their source submits plaintext to this
+ * service and the queue retains it as title/body. Model provider credentials are
+ * the separate encrypted account-vault exception so enrolled nodes can share
+ * API keys/OAuth logins without the control plane decrypting them.
  */
 
 export type Plan = "free" | "pro" | "team";
@@ -49,6 +52,15 @@ export interface Entitlements {
   // return gradually as jobs age out. Optional means unlimited (paid plans).
   // The legacy field name stays wire-compatible with pre-release clients.
   weeklyRunLimit?: number;
+  // LIFETIME hosted-session trial. On Bivy Cloud, "free" is no longer a permanent
+  // tier — it's the pre-subscription trial: the account may surface this many
+  // DISTINCT sessions (any source) through the hosted relay/app before the hosted
+  // index stops showing new ones and prompts for Pro. Unlike weeklyRunLimit this is
+  // cumulative and never resets (a trial, not a rolling allowance); a long-running
+  // session counts once. Undefined = unlimited (paid plans, and self-host where
+  // enforcement is off). Sessions keep running on the user's own machine regardless
+  // — only hosted VISIBILITY is gated, so self-hosting stays the unlimited free path.
+  trialSessionLimit?: number;
   // Quick ephemeral cloud servers brokered from a phone (Fly/Hetzner/AWS/… with the
   // user's own token, proxied through the control-plane cold-start relay). Available
   // on every plan. A runner used by queued work consumes that automation job's run.
@@ -95,6 +107,14 @@ export interface NodeRecord {
   lastSeenAt: string | null;
   createdAt: string;
   providers?: NodeProviderSummary[];
+  /** Non-secret, fixed-vocabulary cloud-init progress from an ephemeral node. */
+  bootstrapStatus?: { phase: string; updatedAt: string };
+  /** Manually declared, owner-asserted capability tags (e.g. "gpu", "docker") —
+   * pushed by the owning node from its local config.yaml, overwritten wholesale
+   * on every change, same trust tier as `providers`. Never auto-detected or
+   * verified; a stale/offline declaration is not re-checked. See
+   * @bivy/core's capability-routing.ts. */
+  capabilities?: string[];
 }
 
 export interface ResolvedClient {
@@ -119,6 +139,14 @@ export interface SessionIndexEntry {
   source?: string; // e.g. "issue:#12"
   titleEnc?: string; // opaque ciphertext; never plaintext
   branch?: string;
+  /** Content-free unresolved-condition descriptors. Never prompt/tool bodies. */
+  attention?: Array<{
+    id: string;
+    kind: "approval" | "question" | "session" | "automation";
+    severity: "info" | "warning" | "error" | "critical";
+    createdAt: string;
+    updatedAt?: string;
+  }>;
   /**
    * Address of the agent service currently hosting this session's live runtime
    * (Stage 2 of docs/agent-node-decoupling.md), e.g. "unix:/run/bivy.sock" or
@@ -128,7 +156,10 @@ export interface SessionIndexEntry {
   agentServiceAddress?: string;
   updatedAt: string;
 }
-export type SessionAdvert = Omit<SessionIndexEntry, "nodeId" | "updatedAt">;
+/** Node-owned projection. `updatedAt` is the session's actual last activity,
+ * not the time the control plane happened to receive an advert. Older nodes may
+ * omit it, so the store still has a receive-time fallback. */
+export type SessionAdvert = Omit<SessionIndexEntry, "nodeId" | "updatedAt"> & { updatedAt?: string };
 
 /**
  * Ownership + warm-standby routing for a replicated session
@@ -226,6 +257,253 @@ export function normalizeEphemeralQueueDefault(value: unknown): EphemeralQueueDe
   return out;
 }
 
+// Account-level, reusable ephemeral node config ("a config = a selectable
+// node"). Non-secret sizing only; the launching device supplies the provider
+// token. Stored as a JSONB array on the account row.
+export interface EphemeralNodeConfig {
+  id: string;
+  name: string;
+  provider: string;
+  region?: string;
+  size?: string;
+  /** Curated provider-native runner image/snapshot for fast boot. */
+  image?: string;
+  /** Account-owned runners kept ready for immediate claim. Initially capped at
+   * one to bound idle spend while the live SLO/cost data is collected. */
+  readyCapacity?: number;
+  ttlMinutes?: number;
+  teardownOnAgentFinish?: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Normalize a stored/inbound configs array, dropping malformed entries and
+ *  clamping ttlMinutes. */
+export function normalizeEphemeralConfigs(value: unknown): EphemeralNodeConfig[] {
+  if (!Array.isArray(value)) return [];
+  const out: EphemeralNodeConfig[] = [];
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object") continue;
+    const v = raw as Record<string, unknown>;
+    const id = typeof v.id === "string" ? v.id.trim() : "";
+    const name = typeof v.name === "string" ? v.name.trim() : "";
+    const provider = typeof v.provider === "string" ? v.provider.trim() : "";
+    if (!id || !name || !provider) continue;
+    const cfg: EphemeralNodeConfig = {
+      id, name, provider,
+      createdAt: typeof v.createdAt === "string" ? v.createdAt : "",
+      updatedAt: typeof v.updatedAt === "string" ? v.updatedAt : "",
+    };
+    if (typeof v.region === "string" && v.region.trim()) cfg.region = v.region.trim();
+    if (typeof v.size === "string" && v.size.trim()) cfg.size = v.size.trim();
+    if (typeof v.image === "string" && v.image.trim()) cfg.image = v.image.trim();
+    if (typeof v.readyCapacity === "number" && Number.isFinite(v.readyCapacity)) cfg.readyCapacity = Math.max(0, Math.min(1, Math.floor(v.readyCapacity)));
+    if (typeof v.ttlMinutes === "number" && Number.isFinite(v.ttlMinutes)) cfg.ttlMinutes = Math.max(5, Math.min(24 * 60, Math.floor(v.ttlMinutes)));
+    if (v.teardownOnAgentFinish === true) cfg.teardownOnAgentFinish = true;
+    // A five-minute runner would enter the pre-claim rotation window as soon as
+    // it launched. Ready capacity needs enough useful life to accept real work.
+    if ((cfg.readyCapacity ?? 0) > 0 && (cfg.ttlMinutes ?? 60) < 15) cfg.ttlMinutes = 15;
+    out.push(cfg);
+  }
+  return out;
+}
+
+// The account's default queue routing. `primary` names the runner; only a
+// persistent-node primary may carry an ephemeral-config `fallback`.
+export type QueueRunnerTarget =
+  | { kind: "shared" }
+  | { kind: "node"; node: string }
+  | { kind: "config"; configId: string };
+
+export interface QueueRouting {
+  primary: QueueRunnerTarget;
+  fallback?: { kind: "config"; configId: string };
+}
+
+export const DEFAULT_QUEUE_ROUTING: QueueRouting = { primary: { kind: "shared" } };
+
+/** Normalize a stored/inbound routing value; unknown/invalid → shared queue,
+ *  and a fallback is only kept for a persistent-node primary. */
+export function normalizeQueueRouting(value: unknown): QueueRouting {
+  if (!value || typeof value !== "object") return { ...DEFAULT_QUEUE_ROUTING };
+  const v = value as Record<string, any>;
+  const p = v.primary;
+  let primary: QueueRunnerTarget = { kind: "shared" };
+  if (p && typeof p === "object") {
+    if (p.kind === "node" && typeof p.node === "string" && p.node.trim()) primary = { kind: "node", node: p.node.trim() };
+    else if (p.kind === "config" && typeof p.configId === "string" && p.configId.trim()) primary = { kind: "config", configId: p.configId.trim() };
+  }
+  const f = v.fallback;
+  const fallback = f && typeof f === "object" && f.kind === "config" && typeof f.configId === "string" && f.configId.trim()
+    ? { kind: "config" as const, configId: f.configId.trim() }
+    : undefined;
+  return primary.kind === "node" && fallback ? { primary, fallback } : { primary };
+}
+
+// SECURITY / TRUST-MODEL NOTE: enabling hosted provisioning stores repo-capable
+// and cloud-capable credentials on the CONTROL PLANE for the first time — a
+// deliberate departure from "the control plane holds no secrets". It's the price
+// of unattended, device-offline provisioning (the control plane launches an
+// ephemeral machine itself when a webhook arrives and nothing is online). Off by
+// default, per account. Tokens are stored as JSONB here; a production deployment
+// MUST encrypt them at rest (KMS/HSM) and audit every use.
+/** A GitHub App the control plane can mint short-lived installation tokens from
+ *  — preferred over a stored PAT (see docs/hosted-provisioning-trust-model.md). */
+export interface HostedGithubApp {
+  appId: string;
+  installationId: string;
+  privateKeyPem: string;
+}
+
+export interface HostedProvisioning {
+  enabled: boolean;
+  /** GitHub App creds — when set, a fresh installation token is minted per
+   *  launch/op instead of using a stored PAT. Strongly preferred. */
+  githubApp?: HostedGithubApp;
+  /** Fallback long-lived PAT, injected as BIVY_GITHUB_TOKEN. Used only when no
+   *  githubApp is configured. */
+  githubToken?: string;
+  /** Cloud provider tokens keyed by provider id (fly/hetzner/aws), used to launch. */
+  providerTokens?: Record<string, string>;
+  /** SHA-256 fingerprints of credentials that passed the provider's read-only
+   * validation call. A launch is allowed only while this matches the token. */
+  validatedProviders?: Record<string, string>;
+}
+
+export function providerCredentialFingerprint(token: string): string {
+  return createHash("sha256").update(String(token || "").trim()).digest("hex");
+}
+
+export const DEFAULT_HOSTED_PROVISIONING: HostedProvisioning = { enabled: false };
+
+export function normalizeHostedProvisioning(value: unknown): HostedProvisioning {
+  if (!value || typeof value !== "object") return { ...DEFAULT_HOSTED_PROVISIONING };
+  const v = value as Record<string, unknown>;
+  const out: HostedProvisioning = { enabled: Boolean(v.enabled) };
+  if (typeof v.githubToken === "string" && v.githubToken.trim()) out.githubToken = v.githubToken.trim();
+  const app = v.githubApp as Record<string, unknown> | undefined;
+  if (app && typeof app === "object"
+    && typeof app.appId === "string" && app.appId.trim()
+    && typeof app.installationId === "string" && app.installationId.trim()
+    && typeof app.privateKeyPem === "string" && app.privateKeyPem.trim()) {
+    out.githubApp = { appId: app.appId.trim(), installationId: app.installationId.trim(), privateKeyPem: app.privateKeyPem };
+  }
+  if (v.providerTokens && typeof v.providerTokens === "object") {
+    const tokens: Record<string, string> = {};
+    for (const [k, val] of Object.entries(v.providerTokens as Record<string, unknown>)) {
+      if (typeof val === "string" && val.trim()) tokens[k.trim()] = val.trim();
+    }
+    if (Object.keys(tokens).length) out.providerTokens = tokens;
+  }
+  if (v.validatedProviders && typeof v.validatedProviders === "object") {
+    const validated: Record<string, string> = {};
+    for (const [k, val] of Object.entries(v.validatedProviders as Record<string, unknown>)) {
+      if (typeof val === "string" && /^[a-f0-9]{64}$/.test(val)) validated[k.trim()] = val;
+    }
+    if (Object.keys(validated).length) out.validatedProviders = validated;
+  }
+  return out;
+}
+
+/** Non-secret view of hosted provisioning for GET responses — never leaks tokens. */
+export interface HostedProvisioningStatus {
+  enabled: boolean;
+  credential: "app" | "pat" | "none";
+  githubAppId?: string;
+  providers: string[];
+  validatedProviders: string[];
+}
+export function redactHostedProvisioning(h: HostedProvisioning): HostedProvisioningStatus {
+  return {
+    enabled: h.enabled,
+    credential: h.githubApp ? "app" : h.githubToken ? "pat" : "none",
+    githubAppId: h.githubApp?.appId,
+    providers: Object.keys(h.providerTokens ?? {}),
+    validatedProviders: Object.entries(h.providerTokens ?? {})
+      .filter(([provider, token]) => h.validatedProviders?.[provider] === providerCredentialFingerprint(token))
+      .map(([provider]) => provider),
+  };
+}
+
+/** Durable control-plane intent for one paid machine creation. Written before
+ * enrollment/provider calls and retained through confirmed deletion so a crash
+ * cannot make a provider resource invisible to reconciliation. */
+export type HostedMachineAttemptState =
+  | "requested" | "enrolled" | "provider-accepted" | "tracked"
+  | "ready" | "claimed" | "working" | "deleting" | "deleted" | "failed";
+
+/** What the controller wants for this attempt, independent of `state` (what has
+ * actually been observed). "deleted" is set by TTL/boot-deadline expiry, a user
+ * force-destroy, or the reconciler abandoning a hopeless create — and, once set,
+ * is never reverted; the reconciler's only remaining job for that attempt is to
+ * drive `state` to "deleted" and stop retrying creation. */
+export type HostedMachineAttemptDesiredState = "active" | "deleted";
+
+export interface HostedMachineAttempt {
+  accountId: string;
+  attemptId: string;
+  provider: string;
+  configId?: string;
+  nodeId: string;
+  state: HostedMachineAttemptState;
+  /** Controller intent — see `HostedMachineAttemptDesiredState`. Optional on
+   * write (defaults to "active"); always present on read. */
+  desiredState?: HostedMachineAttemptDesiredState;
+  /** Last raw status string the provider reported for this resource (e.g.
+   * Hetzner "running"/"off"), distinct from the coarse controller `state`. */
+  observedState?: string;
+  /** Next moment the reconciler should force a transition for this attempt
+   * (boot timeout, TTL+grace, etc.) — persisted so it survives a controller
+   * restart and can be shown verbatim in the UI/audit trail. */
+  deadlineAt?: string;
+  /** Opaque per-account tag applied to every provider resource this attempt
+   * creates (see `ownershipTagFor`), so an orphan sweep can discover resources
+   * belonging to this account without ever tagging providers with a raw id. */
+  ownershipTag?: string;
+  desired: Record<string, unknown>;
+  machine?: Record<string, unknown>;
+  lastError?: string;
+  retryCount: number;
+  /** Optimistic-concurrency counter. Incremented by the store on every write
+   * (the input value is ignored — always read back from the row); callers
+   * that read-modify-write under contention (the reconciler) may pass
+   * `expectedVersion` to `putHostedMachineAttempt` to fence a stale write. */
+  version?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Thrown by `putHostedMachineAttempt` when `expectedVersion` no longer matches
+ * the stored row — another writer (a second reconciler pass, a concurrent
+ * replica) has already moved this attempt forward. Callers should re-read and
+ * decide whether their update still applies rather than blindly retrying. */
+export class ConcurrentAttemptUpdateError extends Error {
+  constructor(accountId: string, attemptId: string) {
+    super(`hosted machine attempt ${accountId}/${attemptId} was updated concurrently`);
+    this.name = "ConcurrentAttemptUpdateError";
+  }
+}
+
+/** Stable, non-reversible per-account tag applied to every provider resource a
+ * hosted launch creates (Hetzner label, Fly metadata, EC2 tag). Never the raw
+ * account id — a provider account/API console may be shared or visible to
+ * support staff, and the tag's only job is to scope an orphan-discovery scan to
+ * "resources this Bivy account is responsible for", not to identify the account. */
+export function ownershipTagFor(accountId: string): string {
+  return createHash("sha256").update(`bivy-ownership:${accountId}`).digest("hex").slice(0, 24);
+}
+
+/** An audit event recording a use of hosted credentials (never contains a secret). */
+export interface HostedAuditEvent {
+  at: string;
+  action: "credential_updated" | "credential_rotated" | "credential_validation_failed" | "github_app_connected" | "github_app_disconnected" | "provision_attempt" | "provision_launched" | "provision_failed" | "token_minted" | "machine_reaped" | "machine_milestone" | "reconcile_failed" | "room_key_escrowed" | "room_key_reused" | "work_routed" | "capacity_ready" | "capacity_claimed" | "orphan_reaped" | "orphan_detected" | "attempt_abandoned" | "force_destroy_requested";
+  provider?: string;
+  configId?: string;
+  nodeId?: string;
+  workItemId?: string;
+  detail?: string;
+}
+
 // Cross-node model credential snapshot. Nodes push the exact provider auth
 // records their local credential vault uses; other nodes on the same account can pull
 // and import them so model logins/API keys are account-wide instead of per-node.
@@ -233,6 +511,8 @@ export interface ModelAuthVault {
   ciphertext: string;
   updatedAt: string;
   updatedByNodeId: string;
+  /** A removed node held this vault key; a survivor must re-key before its next push. */
+  needsRotation: boolean;
 }
 
 export interface ModelAuthWrappedKey {
@@ -248,6 +528,65 @@ export interface ModelAuthKeyRequest {
   publicKey: string;
   createdAt: string;
 }
+
+// Device→device ephemeral-provider-token vault (P2 / Gap A). Same E2E shape as
+// the model-auth vault, but recipients are the account's paired DEVICES (keyed
+// by X25519 public key), so a second device can wake/reach a machine the first
+// launched. The control plane stores only ciphertext + per-device wrapped keys.
+export interface DeviceVault {
+  ciphertext: string;
+  updatedByDevice: string;
+  updatedAt: string;
+  /** Optimistic ciphertext revision. */
+  generation: number;
+  /** Vault-key epoch, advanced whenever a paired device is revoked. */
+  keyGeneration: number;
+}
+
+export interface DeviceVaultWrappedKeyRecord {
+  devicePublicKey: string;
+  wrappedKey: string;
+  wrappedByPublicKey: string;
+  generation: number;
+  updatedAt: string;
+}
+
+export interface DeviceVaultKeyRequest {
+  devicePublicKey: string;
+  createdAt: string;
+}
+
+// A durable, node-independent, E2E-encrypted session snapshot (Gap B). Keyed by
+// session (not node) so it survives the owning machine's teardown; the control
+// plane stores only opaque ciphertext (a sealed replication frame — transcript +
+// git checkpoint + runtime resume token), never plaintext. Lets a torn-down
+// destroy-lane session be rebuilt onto a fresh machine.
+export interface SessionSnapshotRecord {
+  sessionId: string;
+  ciphertext: string;
+  updatedAt: string;
+}
+
+// Durable session↔machine correlation (Gap 1). Non-secret routing/identity that
+// lets a torn-down destroy-lane session be rebuilt AFTER its node is unenrolled
+// and drops from the node registry: it records the reusable eph-* node id plus
+// the launch params needed to re-provision the same machine. Keyed by session
+// and NOT FK-cascaded off nodes, so it outlives teardown (like session_snapshots).
+// Same trust tier as nodeId — never holds a credential (the escrowed room key for
+// hosted rebuild lives separately in node_room_keys, Gap 3).
+export interface SessionCorrelation {
+  sessionId: string;
+  nodeId: string;
+  provider: string;
+  region?: string;
+  ttlMinutes?: number;
+  repo?: string;
+  setupId?: string;
+  machineId?: string;
+  app?: string;
+  updatedAt: string;
+}
+export type SessionCorrelationInput = Omit<SessionCorrelation, "updatedAt">;
 
 // GitHub App private-key vault (issue #88). Same shape/guarantee as the model-
 // auth vault above — the control plane stores ciphertext plus per-node wrapped
@@ -296,12 +635,24 @@ export type AutomationRunStatus =
   | "pending"
   | "claimed"
   | "running"
+  | "waiting"
   | "needs_attention"
   | "succeeded"
   | "failed"
   | "cancelled";
 /** Compatibility status accepted by clients deployed before the automation model. */
 export type WorkItemStatus = AutomationRunStatus | "done";
+
+export interface CancelAutomationRunResult {
+  run: AutomationRun;
+  previousStatus: AutomationRunStatus;
+  transitioned: boolean;
+}
+export interface RetryAutomationRunResult {
+  run: AutomationRun;
+  transitioned: boolean;
+  reason?: "not_retryable" | "attempt_limit";
+}
 export type AutomationTriggerKind = "github" | "slack" | "manual" | "webhook" | "schedule";
 
 // --- Privacy-safe run evidence (issue #153) -----------------------------------
@@ -314,20 +665,16 @@ export type AutomationTriggerKind = "github" | "slack" | "manual" | "webhook" | 
 // before it ever reaches storage — no prompt, transcript, diff, file content,
 // secret, token, or raw command/tool output is ever accepted.
 export type RunEvidenceEventKind =
-  | "triggered"
-  | "routed"
-  | "claimed"
-  | "attempt_started"
-  | "checkpoint"
-  | "approval"
-  | "policy_denial"
-  | "retry"
-  | "fallback"
-  | "branch"
-  | "pull_request"
-  | "needs_attention"
-  | "completed"
-  | "cancelled";
+  // Canonical causal lifecycle. Legacy names below remain readable during the
+  // additive rollout; new control-plane milestones use these exact stages.
+  | "trigger_received" | "trigger_matched" | "queued" | "routed"
+  | "provisioning" | "claimed" | "agent_started"
+  | "checks_started" | "checks_completed" | "result_delivery"
+  | "notification" | "retry" | "cancel_requested" | "terminal"
+  // Evidence/detail and legacy lifecycle vocabulary.
+  | "triggered" | "attempt_started" | "checkpoint" | "approval"
+  | "policy_denial" | "fallback" | "branch" | "pull_request"
+  | "needs_attention" | "completed" | "cancelled";
 export interface RunEvidenceEvent {
   at: string;
   kind: RunEvidenceEventKind;
@@ -338,6 +685,12 @@ export interface RunEvidenceEvent {
   ref?: string;
   url?: string;
   status?: "passed" | "failed" | "denied" | "approved";
+  /** Closed, machine-readable reason; bounded free-text stays in summary. */
+  reasonCode?: string;
+  /** Receipt/evidence/log identifier or URL; never log content. */
+  evidenceRef?: string;
+  /** Stable id makes retried reports idempotent. */
+  milestoneId?: string;
 }
 export interface RunCheck {
   name: string;
@@ -345,20 +698,74 @@ export interface RunCheck {
   commandHash?: string;
   status: "passed" | "failed" | "skipped";
   exitCode?: number;
+  durationMs?: number;
+}
+export interface RunReceiptEvidence {
+  approvals: { requests: number; approved: number; denied: number };
+  fileChanges: { files: Array<{ path: string; op?: string; added?: number; removed?: number }>; added: number; removed: number };
+  auditHealth: { correlation: "healthy" | "missing"; readableStorage: "healthy" | "missing"; successfulWrites: "healthy" | "missing" };
+  execution?: {
+    profile?: "trusted_workstation" | "isolated_customer_cloud" | "restricted";
+    controller?: "customer" | "bivy_hosted_provisioning";
+    agentVersion?: string;
+    modelVersionStatus?: "available" | "unavailable" | "unknown";
+  };
+  protection?: {
+    effective?: {
+      executionProfile?: "trusted_workstation" | "isolated_customer_cloud" | "restricted";
+      sandboxTier?: "read-only" | "workspace-write" | "danger-full-access";
+      approvalMode?: "never" | "risky" | "always" | "autonomous";
+      runtimeEnforcement?: string;
+      trustModes?: string[];
+    };
+    capabilities?: Array<{ capability: "sandbox" | "approval" | "tool" | "network" | "credential_custody" | "runtime_policy"; evidenceClass: "enforced" | "observed" | "unavailable"; mechanism?: string }>;
+  };
 }
 /** Sanitized, allowlisted patch a node may report against its own claimed run.
  *  `checks`/`events` are treated as INCREMENTAL — appended to, never replacing,
  *  the run's existing history. */
+export interface RunUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  costUsd?: number;
+}
+export interface RunNotificationDelivery {
+  status: "not_requested" | "pending" | "delivered" | "failed";
+  channel?: "push" | "email" | "webhook";
+  updatedAt: string;
+  reason?: string;
+}
+export interface RunReference {
+  kind: "receipt" | "evidence" | "log";
+  ref: string;
+  url?: string;
+}
+export interface RunAttention {
+  severity: "warning" | "error" | "critical";
+  reason: string;
+  since: string;
+}
 export interface RunEvidencePatch {
   routingReason?: string;
   output?: Partial<NonNullable<AutomationRun["output"]>>;
   checks?: RunCheck[];
   events?: RunEvidenceEvent[];
+  receiptEvidence?: RunReceiptEvidence;
+  usage?: RunUsage;
+  notification?: RunNotificationDelivery;
+  references?: RunReference[];
+  attention?: RunAttention | null;
 }
 export interface AutomationDefinition {
   id: string;
   accountId: string;
   name: string;
+  /** Stable source-control key used by `bivy automation apply`. Undefined for UI-managed definitions. */
+  configKey?: string;
+  /** File order for source-controlled first-match semantics. */
+  configOrder?: number;
   /** End-to-end encrypted template; the control plane cannot inspect instructions. */
   templateCiphertext?: string;
   runtimeId?: string;
@@ -367,7 +774,65 @@ export interface AutomationDefinition {
   ephemeral?: boolean;
   approvalMode?: "never" | "risky" | "always" | "autonomous";
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
+  /** Hard per-run attempt ceiling, independent of the active retry/fallback ruleset. */
+  maxAttempts?: number;
+  /** Capability tags a run of this automation needs. Hard block: a node/machine
+   * missing any of these must not claim it. See @bivy/core's capability-routing. */
+  requiredCapabilities?: string[];
+  /** Capability tags a run of this automation prefers. Soft rank only — never
+   * gates eligibility, and never fabricates a match that isn't there. */
+  preferredCapabilities?: string[];
   enabled?: boolean;
+  /** How this automation fires. Defaults to "schedule" for legacy rows (any row
+   *  with a `schedule` is schedule-triggered). A "webhook" automation is fired by
+   *  a signed POST to /webhooks/automation/run/:id. "github" / "linear" are source
+   *  triggers: inbound events match this definition and start a session.
+   *  "github_ci" is a legacy alias for a GitHub job gated on workflow_run failures
+   *  — new rows should use trigger=github + `on` rules. */
+  trigger?: "schedule" | "webhook" | "manual" | "github" | "linear" | "github_ci";
+  /** HMAC signing secret for a webhook-triggered automation. Set/rotated
+   *  server-side, returned to the client only at create/rotate time, and never
+   *  echoed by list/get responses. */
+  webhookSecret?: string;
+  /** Explicit save-time acknowledgement of the autonomous + danger-full-access
+   *  combo (mirrors config-as-code's safety.allowDangerous). Without this, the
+   *  shared preflight checklist's sandbox_policy check blocks create/update —
+   *  see runPreflightChecks in src/automation/preflight.ts. Has no effect on
+   *  any other combo. */
+  allowDangerous?: boolean;
+  /** Optional GitHub repo workspace target (`owner/name`). Used when the trigger
+   *  does not carry a repo of its own (schedule, many webhooks). The node clones
+   *  this repo before starting the session — the agent does not pick the repo. */
+  repo?: string;
+  /** Label filter for github/linear source triggers. Empty/undefined → default
+   *  `bivy` / `bivy/<node>` contract. Prefer per-rule labels on `on` for GitHub. */
+  labels?: string[];
+  /** Repo allowlist for github/linear (`owner/name`). Empty/undefined → all. */
+  repos?: string[];
+  /**
+   * GitHub event rules ("when"). Any matching rule fires the job. Outcomes are
+   * whatever the instructions say — not a special PR path. Legacy rows without
+   * `on` expand via effectiveEventRules() in automation-match.ts.
+   */
+  on?: Array<{
+    event: "issues" | "issue_comment" | "pull_request" | "pull_request_review_comment" | "workflow_run";
+    actions?: string[];
+    labels?: string[];
+    mention?: boolean;
+    conclusions?: string[];
+    workflows?: string[];
+  }>;
+  /** Built-in template id (e.g. `issue-to-pr`) or custom. Display + node hints. */
+  templateId?: string;
+  /** When set, schedule/manual runs CONTINUE this existing session instead of
+   *  starting a new one (scheduled chat messages). Mirrors WorkItemInput.target;
+   *  only "existing_session" is stored — the default "new_session" is
+   *  represented by absence. */
+  target?: { kind: "existing_session"; sessionId: string };
+  /** When set, schedule/manual runs are plain chat messages rather than
+   *  automation jobs: the node skips the automation boilerplate, auto-push and
+   *  required checks (scheduled "message me later" reminders). */
+  message?: boolean;
   schedule?:
     | { kind: "once"; at: string }
     | { kind: "cron"; expression: string; timezone: string };
@@ -392,6 +857,7 @@ export interface AutomationRun {
   triggerKind: AutomationTriggerKind;
   status: AutomationRunStatus;
   attempt: number;
+  maxAttempts?: number;
   target: { kind: "new_session" } | { kind: "existing_session"; sessionId: string };
   routing: {
     nodeLabel: string;
@@ -400,6 +866,8 @@ export interface AutomationRun {
     ephemeral?: boolean;
     approvalMode?: AutomationDefinition["approvalMode"];
     sandbox?: AutomationDefinition["sandbox"];
+    requiredCapabilities?: string[];
+    preferredCapabilities?: string[];
   };
   output?: {
     sessionId?: string;
@@ -420,13 +888,28 @@ export interface AutomationRun {
   checks?: RunCheck[];
   /** Ordered, capped, privacy-safe event timeline for the run-detail/outcome report. */
   events?: RunEvidenceEvent[];
+  /** Bounded governance metadata correlated from the node audit stream. */
+  receiptEvidence?: RunReceiptEvidence;
+  /** Optional provider-reported usage/cost, sanitized operational references,
+   *  delivery state, and explicit operator attention. */
+  usage?: RunUsage;
+  notification?: RunNotificationDelivery;
+  references?: RunReference[];
+  attention?: RunAttention;
   title: string;
   body?: string;
+  /** Plain chat message (no automation boilerplate/push/checks). */
+  message?: boolean;
+  /** Untrusted, plaintext context from a webhook trigger's event payload,
+   *  appended to the (E2E-decrypted) operator template on the node as data — not
+   *  instructions. Only set for webhook-triggered automation runs. */
+  eventContext?: string;
   source: string;
   sourceRef?: TriggerEvent["sourceRef"];
   createdAt: string;
   claimedByNodeId?: string;
   claimedAt?: string;
+  leaseExpiresAt?: string;
   startedAt?: string;
   completedAt?: string;
 }
@@ -438,6 +921,8 @@ export interface WorkItem {
   status: WorkItemStatus;
   title: string;
   body?: string;
+  /** See AutomationRun.eventContext — untrusted webhook-payload context. */
+  eventContext?: string;
   repo?: string; // "owner/repo"
   issueNumber?: number;
   externalId?: string; // provider-native id (for example a Linear issue UUID)
@@ -445,6 +930,7 @@ export interface WorkItem {
   createdAt: string;
   claimedByNodeId?: string;
   claimedAt?: string;
+  leaseExpiresAt?: string;
   completedAt?: string;
   dedupeKey?: string; // idempotency key (e.g. "gh:<delivery-id>"); unique per account
   // Collapse key: while an item is still pending, a second enqueue with the same
@@ -462,6 +948,11 @@ export interface WorkItem {
   model?: string; // model override (manual trigger); node default when unset
   approvalMode?: AutomationDefinition["approvalMode"];
   sandbox?: AutomationDefinition["sandbox"];
+  maxAttempts?: number;
+  /** See AutomationDefinition.requiredCapabilities/preferredCapabilities — copied
+   * onto the item at enqueue time (explicit override, else the definition's). */
+  requiredCapabilities?: string[];
+  preferredCapabilities?: string[];
   installationId?: string; // GitHub App installation id — the node mints a token for it
   appId?: string; // which GitHub App that installation belongs to (a node may serve several)
   // True when a device dispatched this item to a freshly-provisioned ephemeral
@@ -482,12 +973,21 @@ export interface WorkItem {
   routingReason?: string;
   checks?: RunCheck[];
   events?: RunEvidenceEvent[];
+  receiptEvidence?: RunReceiptEvidence;
+  usage?: RunUsage;
+  notification?: RunNotificationDelivery;
+  references?: RunReference[];
+  attention?: RunAttention;
+  /** Plain chat message (no automation boilerplate/push/checks). */
+  message?: boolean;
 }
 export type WorkItemInput = {
   label?: string;
   source: string;
   title: string;
   body?: string;
+  /** See AutomationRun.eventContext — untrusted webhook-payload context. */
+  eventContext?: string;
   repo?: string;
   issueNumber?: number;
   url?: string;
@@ -505,12 +1005,17 @@ export type WorkItemInput = {
   model?: string;
   approvalMode?: AutomationDefinition["approvalMode"];
   sandbox?: AutomationDefinition["sandbox"];
+  maxAttempts?: number;
   ephemeral?: boolean;
   installationId?: string;
   appId?: string;
   definitionId?: string;
   triggerKind?: AutomationTriggerKind;
   target?: AutomationRun["target"];
+  /** Plain chat message (no automation boilerplate/push/checks). */
+  message?: boolean;
+  requiredCapabilities?: string[];
+  preferredCapabilities?: string[];
 };
 
 // Per-account inbound hook: a stable id + secret a user configures in GitHub /
@@ -645,11 +1150,21 @@ export interface PairedDeviceInfo {
 // Paid plans omit the limit (unlimited automation).
 export const FREE_WEEKLY_RUNS = 10;
 
+// Lifetime hosted-session trial size for the pre-subscription "free" plan. This
+// replaces "unlimited interactive sessions" as the free adoption surface: the
+// commoditized software stays free to SELF-HOST (enforcement off ⇒ unlimited), but
+// the hosted convenience layer (app.bivy.sh's relay + session index) is a
+// usage-trial — the first N sessions are free, then Pro. Env-overridable so the
+// number can be tuned without a deploy. See Entitlements.trialSessionLimit.
+export const TRIAL_SESSIONS = Number(process.env.TRIAL_SESSIONS ?? 25);
+
 export const PLAN_ENTITLEMENTS: Record<Plan, Omit<Entitlements, "plan">> = {
-  // Free is feature-complete: unlimited interactive sessions, nodes, push, and
-  // ephemeral runners. The only cap is FREE_WEEKLY_RUNS queued automation jobs per
-  // rolling 7-day window; paid plans omit it. Every plan omits `maxNodes`.
-  free: { pushEnabled: true, relayEnabled: true, workQueueEnabled: true, weeklyRunLimit: FREE_WEEKLY_RUNS, ephemeralEnabled: true },
+  // On Bivy Cloud "free" is the pre-subscription TRIAL: unlimited nodes, push, and
+  // ephemeral runners, plus FREE_WEEKLY_RUNS queued automations per rolling window,
+  // but only trialSessionLimit LIFETIME sessions visible through the hosted app
+  // before an upgrade is required. Self-hosted stacks run with enforcement off, so
+  // both caps are inert there and free stays fully unlimited. Paid plans omit both.
+  free: { pushEnabled: true, relayEnabled: true, workQueueEnabled: true, weeklyRunLimit: FREE_WEEKLY_RUNS, trialSessionLimit: TRIAL_SESSIONS, ephemeralEnabled: true },
   pro: { pushEnabled: true, relayEnabled: true, workQueueEnabled: true, ephemeralEnabled: true },
   team: { pushEnabled: true, relayEnabled: true, workQueueEnabled: true, ephemeralEnabled: true },
 };
@@ -752,6 +1267,11 @@ export interface MeshStore {
   // Plaintext per-node provider status summary (see NodeProviderSummary) —
   // overwritten wholesale by the owning node on every credential change.
   setNodeProviders(nodeId: string, providers: NodeProviderSummary[]): Promise<void>;
+  setNodeBootstrapStatus(nodeId: string, phase: string): Promise<void>;
+  // Owner-declared capability tags (see NodeRecord.capabilities) — overwritten
+  // wholesale by the owning node on every config change, same trust tier as
+  // setNodeProviders. Never verified; a stale/offline declaration is kept as-is.
+  setNodeCapabilities(nodeId: string, capabilities: string[]): Promise<void>;
 
   // Session index (cross-node unified view). A node replaces its full current
   // session list; clients read the merged list for the account.
@@ -819,14 +1339,110 @@ export interface MeshStore {
   getEphemeralQueueDefault(accountId: string): Promise<EphemeralQueueDefault>;
   setEphemeralQueueDefault(accountId: string, patch: Partial<EphemeralQueueDefault>): Promise<EphemeralQueueDefault>;
 
+  // Per-account ephemeral node configs (reusable, named runner templates) and
+  // the account's default queue routing (primary runner + optional fallback).
+  // Both are JSONB on the account row, same getter/full-set shape as above.
+  getEphemeralConfigs(accountId: string): Promise<EphemeralNodeConfig[]>;
+  setEphemeralConfigs(accountId: string, configs: EphemeralNodeConfig[]): Promise<EphemeralNodeConfig[]>;
+  getQueueRouting(accountId: string): Promise<QueueRouting>;
+  setQueueRouting(accountId: string, routing: QueueRouting): Promise<QueueRouting>;
+
+  // Hosted (control-plane-orchestrated) provisioning: per-account credentials +
+  // enable flag, and a tracking list of machines the control plane launched
+  // itself (for dedupe/teardown). Machines are stored as opaque JSONB records.
+  getHostedProvisioning(accountId: string): Promise<HostedProvisioning>;
+  /** Non-decrypting presence view for the settings UI (no master key needed). */
+  getHostedProvisioningStatus(accountId: string): Promise<HostedProvisioningStatus>;
+  setHostedProvisioning(accountId: string, patch: Partial<HostedProvisioning>): Promise<HostedProvisioning>;
+  getHostedMachines(accountId: string): Promise<Array<Record<string, unknown>>>;
+  setHostedMachines(accountId: string, machines: Array<Record<string, unknown>>): Promise<Array<Record<string, unknown>>>;
+  /** Upsert an attempt row. When `opts.expectedVersion` is given, the write is
+   * fenced: it only applies if the stored row's `version` still matches, else
+   * throws `ConcurrentAttemptUpdateError`. Omitted, this is last-write-wins
+   * (the shape every pre-existing call site relies on). */
+  putHostedMachineAttempt(attempt: HostedMachineAttempt, opts?: { expectedVersion?: number }): Promise<HostedMachineAttempt>;
+  getHostedMachineAttempt(accountId: string, attemptId: string): Promise<HostedMachineAttempt | undefined>;
+  listHostedMachineAttempts(accountId: string, activeOnly?: boolean): Promise<HostedMachineAttempt[]>;
+  /** Cross-replica mutex around the read/decide/provider-launch sequence. The
+   * lease expires so a crashed control-plane process cannot wedge the account. */
+  acquireHostedProvisionLease(accountId: string, holder: string, ttlSeconds: number): Promise<boolean>;
+  /** Extend only a lease still owned by `holder`; false means ownership was lost. */
+  renewHostedProvisionLease(accountId: string, holder: string, ttlSeconds: number): Promise<boolean>;
+  releaseHostedProvisionLease(accountId: string, holder: string): Promise<void>;
+  /** Accounts that currently track at least one control-plane-provisioned
+   * machine. Used by the global lifecycle reconciler; returns ids only. */
+  listHostedMachineAccountIds(): Promise<string[]>;
+  /** Accounts with at least one config requesting ready capacity. */
+  listReadyCapacityAccountIds(): Promise<string[]>;
+  /** Accounts with hosted provisioning enabled — a superset of
+   * `listHostedMachineAccountIds()` that includes accounts with NO currently
+   * tracked machine/attempt. Used by the orphan-discovery sweep: the one
+   * failure mode it exists to catch is exactly "tracking itself was lost", so
+   * it cannot rely on tracking to know which accounts to check. */
+  listHostedEnabledAccountIds(): Promise<string[]>;
+  // Append-only audit trail of hosted-credential use (capped, newest-first read).
+  appendHostedAudit(accountId: string, event: HostedAuditEvent): Promise<void>;
+  listHostedAudit(accountId: string, limit?: number): Promise<HostedAuditEvent[]>;
+
   // Account-wide model provider credentials, shared across enrolled nodes.
   getModelAuthVault(accountId: string): Promise<ModelAuthVault | undefined>;
-  setModelAuthVault(accountId: string, nodeId: string, ciphertext: string): Promise<ModelAuthVault>;
+  setModelAuthVault(accountId: string, nodeId: string, ciphertext: string, rotated?: boolean): Promise<ModelAuthVault>;
   setModelAuthNodePublicKey(accountId: string, nodeId: string, publicKey: string): Promise<void>;
   getModelAuthWrappedKey(accountId: string, nodeId: string): Promise<ModelAuthWrappedKey | undefined>;
   requestModelAuthWrappedKey(accountId: string, nodeId: string, publicKey: string): Promise<void>;
   listModelAuthKeyRequests(accountId: string, exceptNodeId: string): Promise<ModelAuthKeyRequest[]>;
   setModelAuthWrappedKey(accountId: string, targetNodeId: string, wrappedByNodeId: string, wrappedByPublicKey: string, wrappedKey: string): Promise<ModelAuthWrappedKey>;
+
+  // Node-less inheritance (hosted): escrow the model-auth vault KEY, sealed at rest
+  // with the per-account hosted key, so a LONE hosted ephemeral can decrypt the
+  // synced vault (incl. subscription OAuth) with no peer to wrap the key. Hosted-
+  // provisioning accounts ONLY (enforced at the endpoint) — CP-readable by design,
+  // the same posture as provider tokens / room-key escrow. Non-hosted accounts stay
+  // fully peer-wrapped (E2E, CP-blind).
+  getHostedModelAuthVaultKey(accountId: string): Promise<SecretEnvelope | undefined>;
+  setHostedModelAuthVaultKey(accountId: string, enc: SecretEnvelope): Promise<void>;
+
+  // Device→device provider-token vault (P2 / Gap A) — recipients are paired devices.
+  getDeviceVault(accountId: string): Promise<DeviceVault | undefined>;
+  /** Compare-and-set ciphertext. A stale expected generation fails with 409. */
+  setDeviceVault(accountId: string, byDevicePublicKey: string, ciphertext: string, expectedGeneration?: number, keyGeneration?: number): Promise<DeviceVault>;
+  getDeviceVaultWrappedKey(accountId: string, devicePublicKey: string): Promise<DeviceVaultWrappedKeyRecord | undefined>;
+  requestDeviceVaultWrappedKey(accountId: string, devicePublicKey: string): Promise<void>;
+  listDeviceVaultKeyRequests(accountId: string, exceptDevicePublicKey: string): Promise<DeviceVaultKeyRequest[]>;
+  setDeviceVaultWrappedKey(accountId: string, targetDevicePublicKey: string, wrappedByPublicKey: string, wrappedKey: string, generation?: number): Promise<DeviceVaultWrappedKeyRecord>;
+
+  // Durable E2E session snapshots for rebuild-resume (Gap B) — opaque ciphertext.
+  getSessionSnapshot(accountId: string, sessionId: string): Promise<SessionSnapshotRecord | undefined>;
+  setSessionSnapshot(accountId: string, sessionId: string, ciphertext: string): Promise<SessionSnapshotRecord>;
+  deleteSessionSnapshot(accountId: string, sessionId: string): Promise<void>;
+
+  // Durable session↔machine correlation for rebuild-after-teardown (Gap 1).
+  getSessionCorrelation(accountId: string, sessionId: string): Promise<SessionCorrelation | undefined>;
+  listSessionCorrelations(accountId: string): Promise<SessionCorrelation[]>;
+  setSessionCorrelation(accountId: string, input: SessionCorrelationInput): Promise<SessionCorrelation>;
+  deleteSessionCorrelation(accountId: string, sessionId: string): Promise<void>;
+
+  // Case B: find an indexed session for a GitHub issue so an inbound comment/issue
+  // CONTINUES it instead of starting a new one. Matches session_index.source
+  // ("issue:owner/repo#N"). Covers sessions on currently-enrolled nodes; a session
+  // whose node was already torn down is rebuilt via the device send path (Gap 1).
+  findSessionByIssue(accountId: string, repo: string, issueNumber: number): Promise<{ sessionId: string; nodeId: string } | undefined>;
+
+  // Case B for Linear: find an indexed session for a Linear issue (by its provider-
+  // native id, the same `externalId` the webhook enqueues) so a re-dispatch CONTINUES
+  // it instead of starting fresh — the Linear analogue of findSessionByIssue. Matches
+  // session_index.source ("linear:<externalId>"), the source the node advertises for
+  // a Linear-issue session.
+  findSessionByExternalId(accountId: string, externalId: string): Promise<{ sessionId: string; nodeId: string } | undefined>;
+
+  // Gap 3: escrowed session ROOM KEY for HOSTED (device-offline) rebuild. Sealed
+  // at rest with the per-account hosted-provisioning key (hosted-crypto), keyed by
+  // the reusable eph-* node id, NOT FK-cascaded off nodes so it survives teardown.
+  // Written ONLY for hosted-provisioning accounts (the control plane already holds
+  // their provider/GitHub creds); device-launched sessions keep the room key
+  // device-only and never escrow. Never exposed to any client.
+  getNodeRoomKeyEnc(accountId: string, nodeId: string): Promise<SecretEnvelope | undefined>;
+  setNodeRoomKeyEnc(accountId: string, nodeId: string, enc: SecretEnvelope): Promise<void>;
 
   // GitHub App private-key vault (issue #88), per-app — see GithubAppVault above.
   // A node lists every app the account has a vault for (it may not hold all of
@@ -910,6 +1526,10 @@ export interface MeshStore {
   updateAutomationDefinition(accountId: string, id: string, input: Partial<Omit<AutomationDefinition, "id" | "accountId" | "createdAt" | "updatedAt" | "lastScheduledAt">>): Promise<AutomationDefinition | undefined>;
   deleteAutomationDefinition(accountId: string, id: string): Promise<boolean>;
   getAutomationDefinition(accountId: string, id: string): Promise<AutomationDefinition | undefined>;
+  /** Resolve a definition by id alone (no account scope) — for the public,
+   *  signature-authenticated webhook endpoint, which knows only the definition
+   *  id in its URL. Callers must still verify the HMAC against webhookSecret. */
+  getAutomationDefinitionById(id: string): Promise<AutomationDefinition | undefined>;
   listAutomationDefinitions(accountId: string): Promise<AutomationDefinition[]>;
   listDueAutomationDefinitions(nowIso: string, limit?: number): Promise<AutomationDefinition[]>;
   enqueueScheduledOccurrence(accountId: string, definitionId: string, occurrenceIso: string, nextRunAt?: string): Promise<AutomationRun | undefined>;
@@ -919,19 +1539,35 @@ export interface MeshStore {
   getAutomationRunBySourceKey(accountId: string, sourceKey: string): Promise<AutomationRun | undefined>;
   listAutomationRuns(accountId: string, limit?: number): Promise<AutomationRun[]>;
   getAutomationRun(accountId: string, id: string): Promise<AutomationRun | undefined>;
-  transitionAutomationRun(accountId: string, id: string, status: AutomationRunStatus, output?: AutomationRun["output"]): Promise<AutomationRun | undefined>;
+  /** Transition a Run's durable lifecycle. Terminal targets are only reachable
+   *  from non-terminal states (the state machine makes an outcome immutable once
+   *  set — a stale or losing Machine cannot rewrite it). When `expectedNodeId` is
+   *  given the transition ALSO requires the Run to still be claimed by that node,
+   *  so a Machine that lost its lease to a reclaim cannot complete or fail the
+   *  new attempt in the read-then-write window. Returns undefined when the
+   *  transition was not applied (wrong source state or ownership lost). */
+  transitionAutomationRun(accountId: string, id: string, status: AutomationRunStatus, output?: AutomationRun["output"], expectedNodeId?: string): Promise<AutomationRun | undefined>;
+  /** Account-scoped, transactional cancellation. Already-cancelled runs are
+   *  returned idempotently; callers inspect previousStatus for terminal conflicts. */
+  cancelAutomationRun(accountId: string, id: string): Promise<CancelAutomationRunResult | undefined>;
+  /** Start another attempt of the same customer-visible Run. Only terminal
+   * failure/ambiguous outcomes are eligible; attempt ceilings are enforced
+   * transactionally with the state reset. */
+  retryAutomationRun(accountId: string, id: string): Promise<RetryAutomationRunResult | undefined>;
   // Record privacy-safe run evidence reported by the node that CLAIMED this run
   // (issue #153) — routing reason, output refs (branch/PR/checkpoint/commit/...),
   // declared-check results, and new timeline events. `checks`/`events` in the
   // patch are appended to the run's existing history (bounded), never replacing
   // it. Returns undefined for an unknown run.
-  appendRunEvidence(accountId: string, id: string, patch: RunEvidencePatch): Promise<AutomationRun | undefined>;
+  appendRunEvidence(accountId: string, id: string, patch: RunEvidencePatch, expectedNodeId?: string): Promise<AutomationRun | undefined>;
   // Pending items a node may run: the account's items whose label the node serves
   // (a node serving "bivy" also serves "bivy/<self>"; pass the labels it accepts).
   listPendingWorkItems(accountId: string, labels: string[]): Promise<WorkItem[]>;
   // Recent work items for the account (any status) — powers the incoming-queue UI.
   listWorkItems(accountId: string, limit?: number): Promise<WorkItem[]>;
   claimWorkItem(accountId: string, nodeId: string, id: string): Promise<WorkItem | undefined>;
+  /** Extend a claimed/running item's lease only when this node still owns it. */
+  renewWorkItemLease(accountId: string, nodeId: string, id: string): Promise<WorkItem | undefined>;
   // Record that a run STARTED, keyed by its session id (idempotent: recording the
   // same `(accountId, sessionId)` twice is a no-op, so reconnects and repeated
   // session advertises never double-count). `runKey` is the distinct-run identifier
@@ -947,6 +1583,16 @@ export interface MeshStore {
   // can never be counted again, so this is pure housekeeping to keep the table lean;
   // called on an interval by the control plane. Returns how many rows were removed.
   pruneRunStartsBefore(beforeIso: string): Promise<number>;
+  // How many DISTINCT sessions the account has ever surfaced through the hosted
+  // index (the lifetime trial meter). Unlike run_starts this ledger is NEVER pruned,
+  // so it survives the rolling-window cleanup and is the authority for the trial.
+  countTrialSessions(accountId: string): Promise<number>;
+  // The set of session ids that fall OUTSIDE the account's trial allowance: every
+  // session beyond the first `limit` by first-seen order. Returns an empty set when
+  // the account is within allowance. Read-time gate — recording is limit-agnostic,
+  // so raising the limit or upgrading immediately widens what's visible with no
+  // backfill, and self-host (which never calls this) is unaffected.
+  overTrialSessionIds(accountId: string, limit: number): Promise<Set<string>>;
   // Delete expired rows from every short-lived, single-use auth artifact table
   // (login_tokens, sessions, link_grants, relay_tickets, device_logins,
   // oauth_states, and expired auth_rate_limits). Each of
@@ -956,7 +1602,7 @@ export interface MeshStore {
   // an interval by the control plane, mirroring pruneRunStartsBefore. Returns
   // how many rows were removed in total.
   pruneExpiredAuthTokens(nowIso: string): Promise<number>;
-  completeWorkItem(accountId: string, id: string): Promise<void>;
+  completeWorkItem(accountId: string, id: string, expectedNodeId?: string): Promise<AutomationRun | undefined>;
   // Re-route every *pending* item that landed on the shared/default queue
   // (defaultRouted === true) to `label` — used when the account's default node
   // changes so already-queued work follows the new default. Returns the updated items.

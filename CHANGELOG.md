@@ -7,6 +7,320 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Machines can declare owner-asserted capability tags (`bivy config set
+  node.capabilities '[gpu, docker]'`); repositories can declare required/
+  preferred capability tags and named service health-check/start scripts in
+  `.bivy/environment.yaml`. One-off Runs and Automation definitions can
+  request required/preferred tags: a required tag honestly parks the Run
+  (`needs_attention`) only when no Machine anywhere has ever declared it,
+  and never fabricates availability for a preferred tag. CLI-only for now —
+  see the capability-routing PR for the PWA-editing follow-up.
+- `bivy run <agent> --chat` starts a governed session through the same runtime
+  path as the web/PWA app and opens it directly; `--no-open` creates it without
+  launching a browser and prints the session URL instead.
+- Declarative agent plugins: `bivy plugin init|validate|doctor|test|install|list|remove`
+  scaffolds and installs strict `bivy.sh/v1alpha1` manifests from local files.
+  Plugins can contribute process or ACP agents to the CLI and web runtime catalog
+  without a Bivy source change; executable code remains out of process and
+  external rows are always Experimental / Unverified.
+- Plugin developer tooling now includes the `@bivy/plugin-sdk` workspace package,
+  a generated JSON Schema, `requires.bivy` semver compatibility enforcement,
+  executable diagnostics, real ACP handshake conformance, and a runnable example.
+- Packaged and node-configured agent integrations now share one ordered registry
+  for provenance, aliases, visibility, discovery, connection, conflicts, and
+  allowlisted upstream installation. Maintained profiles and Pi/Claude/Codex bridges
+  live under `src/agents/` and connect to the operator's installed agent commands.
+- `bivy agent add|list|remove` connects a user-owned ACP or headless process agent
+  through the same strict manifest/store contract as installed plugin packages.
+- Automations is now the **sole place** to connect, add, reconnect, or
+  disconnect GitHub Apps, Linear, and Slack — full multi-app GitHub lifecycle
+  (create, connect an existing app, install, reconnect a key on this machine,
+  disconnect, default machine, who-can-trigger) lives in the Automations setup
+  sheet. Settings → GitHub App / Linear / Slack are now thin hand-offs that open
+  that same sheet instead of duplicating the flow.
+- GitHub automations use structured **event rules** (`on[]`): one GitHub App,
+  jobs pick which deliveries fire (issues/PRs labeled, @mentions on issue/PR/
+  review comments, failed workflow runs). Outcomes are whatever the instructions
+  say — not a special-cased PR path. UI collapses GitHub Actions into GitHub
+  with event toggles; labels and @mentions work on PR surfaces too.
+
+- Automations setup stays on the Automations surface end-to-end: outcome-first
+  empty hero with featured jobs, whole-card templates with trigger badges, a
+  single-page create sheet (name → trigger → instructions → machine), compact
+  live source pills, and in-sheet GitHub / Linear / Slack connect so setup never
+  dumps people into Settings. Success notices offer a clear next step (Run now /
+  Open session); rows use overflow menus; webhook create still reveals the
+  one-time signing secret.
+- Forks into OpenCode now open on a full copy of the transcript instead of a
+  seeded summary prompt: Bivy materialises the fork's conversation as a real
+  session in OpenCode's own store (`$XDG_DATA_HOME/opencode/opencode.db`), so
+  `session/load` resumes it and the model replays the whole history — the same
+  "replayed" fidelity Codex's rollout forks get.
+
+## [0.10.0] - 2026-08-07
+
+### Added
+
+- `BIVY_CUSTOM_AGENTS` registers named custom agents in both the web picker and
+  `bivy run`: each entry extends a built-in CLI agent with an overrideable
+  label, command, args, and parser, appearing as experimental/unverified while
+  inheriting the base agent's execution behavior.
+- Sessions keep a durable per-session changes history, openable at any time from
+  a new session changes sheet, instead of only the current turn's changes card.
+
+### Changed
+
+- ACP (OpenCode) tool calls now surface structured tool names and real input
+  detail (diffs, paths) as they stream, and turn history is persisted as ordered
+  text/tool blocks exactly as they streamed instead of one merged block.
+- First-run setup opens the self-hosted control plane when you pick self-hosted,
+  and preserves your selected agent and node presence when handing off to the
+  app.
+- Bivy is now licensed under AGPL-3.0.
+
+### Fixed
+
+- Wedged sessions — a runtime that stops responding or stops emitting `agent_end`
+  (opencode's ACP server, a frozen Pi) — are now force-recovered by a stall
+  watchdog and a periodic sweep, and a new prompt to a hung session runs fresh
+  instead of vanishing into the dead turn.
+- Reasoning-log growth is bounded: a length-capped head with a truncation marker
+  is persisted, so a stuck turn can no longer balloon the on-disk transcript.
+- A flapping node no longer trips the relay's rate limiter and shows clients
+  "Rate limit exceeded".
+- Forks are portable across runtimes: resuming a fork restores the correct
+  runtime and transport instead of clobbering the model and stream.
+- Global npm install no longer bundles the Pi package, which broke the published
+  `@bivy/bivy` install.
+
+## [0.9.0] - 2026-08-06
+
+### Added
+
+- TUI-locked sessions now open into a dedicated handoff view with actions to
+  attach the browser terminal or take the session back into chat. Chat sessions
+  also expose a copyable `bivy resume <id>` command for continuing locally.
+
+### Changed
+
+- First-run setup is now agent-first: it detects and imports compatible Claude
+  and Codex credentials into Bivy's encrypted vault, favors normal account
+  sign-in, presents clearer choices, and hands users directly to their selected
+  agent or the remote app. Missing-agent-auth errors now include actionable,
+  agent-specific recovery steps.
+- Hosted trial session locks are preserved across later node refreshes, and a
+  newly opened client now receives the current terminal lock state immediately.
+
+### Fixed
+
+- The agent picker now stays aligned with the active session's runtime when the
+  node's runtime list refreshes, while new-session drafts continue to use the
+  selected default.
+- Uninstalling an npm-global installation now removes its separate `~/.bivy`
+  state directory. Tarball installs and `--keep-sessions` retain their existing
+  state-preservation behavior.
+
+### Security
+
+- Removing a node now atomically rotates the model-credential sync key and wraps
+  the replacement only for surviving nodes. Provider sign-outs propagate as
+  encrypted, timestamped tombstones so stale credentials cannot be restored by
+  another device.
+
+## [0.8.2] - 2026-08-05
+
+### Changed
+
+- **Ephemeral machines are now opt-in and off by default.** The
+  bring-your-own-cloud short-lived runners (Fly.io, Hetzner, AWS EC2) are a
+  not-fully-developed Beta surface, so a deploy gets them only when it sets
+  `EPHEMERAL_MACHINES_ENABLED=1` (web build: `VITE_EPHEMERAL_MACHINES_ENABLED=1`).
+  This is fail-closed — production is off unless it explicitly opts in — while
+  local `vite dev` keeps the surface on so development isn't gated. The flag gates
+  all three layers: the web UI entry points, the control plane's server-initiated
+  auto-provision (`planAutoProvision`), and the device-launch `/api/ephemeral/exec`
+  relay. A machine's own idle self-teardown is intentionally unaffected, so any
+  already-running machine still reaps itself.
+
+### Fixed
+
+- The PWA's status bar / browser-chrome color now matches the app background
+  (`--bg`: `#f5f3ee` light, `#14171a` dark) instead of a pure white/black band —
+  the static `theme-color` tags and `theme.ts` were still `#ffffff`/`#111111`.
+
+## [0.8.0] - 2026-08-05
+
+### Changed
+
+- **Codex and OpenCode are now Supported-tier agents**, alongside Pi and Claude
+  Code. Codex already cleared the bar on the app-server shim (per-tool
+  Approve/Deny, model + reasoning-effort selection, thread resume, usage
+  reporting, native session discovery) — the catalog just hadn't said so, and the
+  support matrix wrongly listed its model picker as missing. Both now pin the
+  exact CLI release they were certified against (Codex 0.145.0, OpenCode 1.18.13).
+- **OpenCode runs over its native ACP server (`opencode acp`) by default**, which
+  is what earns it the tier: per-tool Approve/Deny instead of effect-level
+  sandbox governance only, plus `session/load` resume. Force the previous
+  one-shot pipe path with `BIVY_OPENCODE_ACP=0`.
+
+### Added
+
+- ACP agents get **real model selection**: the shim reads the session's model
+  config option, publishes it to Bivy as a post-`hello` `runtime.models` event,
+  and applies a choice with `session/set_model` (falling back to
+  `session/set_config_option`). The list comes from the live session, so it
+  reflects the providers that node has actually authenticated rather than a
+  hardcoded guess. Previously a promoted agent still advertised the pipe path's
+  model picker while the shim silently ignored `model.set`.
+- Default-on ACP promotion is **gated on a cached `--help` probe** for the
+  agent's ACP subcommand. ACP has no mid-session fallback, so a node whose CLI is
+  too old keeps the pipe path and honestly advertises the lower capabilities
+  instead of opening a session that hangs and dies. `BIVY_<ID>_ACP=1` skips the
+  probe; `=0` forces the pipe path.
+
+### Fixed
+
+- `bin/acp-shim.mjs` no longer hangs when the wrapped agent dies or never speaks
+  ACP: in-flight JSON-RPC requests are rejected on child exit, `initialize` is
+  bounded by a timeout, and the child's stdin has an error handler so an EPIPE
+  reports the cause instead of crashing the shim. A non-ACP binary now fails in
+  milliseconds with the real reason rather than timing out after 30s.
+- The CLI capability help-probe cache is keyed by the resolved binary path rather
+  than the bare command name, so upgrading or installing a CLI while the daemon
+  is running no longer serves a stale capability answer.
+
+## [0.7.0] - 2026-08-04
+
+### Added
+
+- Phase 7: connect-computer/credential-sync design doc + rotation-safe merge tiebreak (#344)
+- Phase 6: per-session egress proxy/decider for workflow/sandbox network isolation (#343)
+- Integrations as chat: Linear follow-up routing + provider-agnostic Case B (Phase 5) (#342)
+- Phase 4: Codex/opencode slash commands + Codex TUI hand-off & usage (agents) (#341)
+- Faster model switch: per-runtime scratch cache + client cache + prefetch (Phase 3) (#340)
+- Fork reliability: fix 6 stand-up bugs + add integration coverage (Phase 2) (#339)
+- Core-flow UX polish: attention list, queue auto-send, slash UI, update banner, terminal menu (#338)
+- Remove local-CLI setup direction; complete Phases 0–2 (supersedes #333) (#334)
+
+### Fixed
+
+- Fix scrolling in expanded code changes card (#346)
+- Fix Codex fork rollout metadata (#345)
+
+## [0.6.0] - 2026-08-03
+
+### Added
+
+- **`attach_to_chat` reaches every agent, not just Claude/Pi** (#290). A new
+  Bivy-owned MCP server, `bivy mcp-serve`, exposes the outbound-attachment
+  capability as a first-class tool. It's auto-injected into a non-SDK agent's
+  session-local JSON MCP config at session start (created when absent, restored
+  on close), so codex/gemini/opencode/aider/… discover `attach_to_chat` in their
+  own tool list instead of having to be told about a shell command. The tool
+  POSTs to the same `POST /api/session/:id/attach` endpoint `bivy attach` uses.
+  Injected into JSON MCP configs (claude/gemini/opencode/generic `.mcp.json`) and
+  Codex's TOML (`~/.codex/config.toml`, `[mcp_servers.bivy]`). Claude and Pi keep
+  their native in-process registration; tool-interception runtimes are skipped to
+  avoid a duplicate. Goose YAML config is a follow-up.
+
+- **Native `attach_to_chat` tool** for Claude and Pi sessions — the stronger,
+  tool-based sibling of #297's discoverability hint. Claude sees it as a real
+  MCP tool (an in-process server registered via the SDK's
+  `createSdkMcpServer`/`tool`); Pi sees it through the same node-hosted
+  `ToolProvider` mechanism connected integrations already use. Both call the
+  same `attachToChat()` helper `bivy attach`/`POST /api/session/:id/attach` use,
+  so a native tool call renders identically to the CLI path and goes through the
+  same approval governance as any other tool call. No wiring needed per agent —
+  the daemon threads one `attachToChat(sessionId, opts)` callback through both.
+
+### Changed
+
+- **Dependency updates** (batched Dependabot bumps). Production: `@anthropic-ai/claude-agent-sdk`
+  0.3.199 → 0.3.220, and `@earendil-works/pi-ai` / `@earendil-works/pi-coding-agent`
+  0.82.1 → 0.83.0. Services: control-plane `stripe` 22.2.2 → 22.4.0; relay
+  `@sentry/node` 10.67.0 → 10.69.0 (control-plane was already on 10.69.0). Tooling:
+  `@types/node` → 26.1.2 and `tsx` → 4.23.1 in both services; transitive `postcss`
+  → 8.5.25. CI actions: `actions/checkout` → v7.0.1, `actions/setup-node` → v7.0.0,
+  `dorny/paths-filter` → v4.0.2.
+
+### Security
+
+- Bumped `fast-uri` → 3.1.5 and `ip-address` → 10.4.0 to clear their high-severity
+  advisories in the production tree.
+- The production audit gate now runs through `scripts/audit-prod.mjs` (wired into
+  CI's `core` job as `npm run audit:prod`). It is `npm audit --omit=dev
+  --audit-level=high` with a small, documented allowlist: it still fails on any
+  high/critical advisory except the two `undici` advisories
+  (GHSA-8xcm-r25x-g524, GHSA-4cwx-7wf7-3272) that are shrinkwrapped inside
+  `@earendil-works/pi-coding-agent@0.83.0`, which no npm `override` or current
+  upstream release can move. Scheduled for review by 2026-09-03; remove the
+  allowlist entries once pi-coding-agent ships a patched `undici`.
+
+## [0.5.0] - 2026-08-02
+
+### Changed
+
+- Agent-sent chat attachments now render **grouped under the turn's final
+  assistant message** instead of as a standalone entry at the point `bivy attach`
+  ran (which could strand a chip mid-turn, between tool cards and the reply). Both
+  the live reducer and history replay attach the chip(s) to the final reply
+  bubble — mirroring how the composer renders your own uploads under your message
+  — falling back to a standalone entry only when a turn has no prose to hang them
+  on. Client-only change (no wire/node change).
+
+### Fixed
+
+- Claude agents can now **discover** how to send a file/image to the user. The
+  outbound attachment path (`bivy attach`) is a shell command with no tool, so
+  the agent had no way to know it existed — "send me X as an attachment" was
+  answered "I have no way to do that". The Claude Code system prompt now carries a
+  short note teaching the agent to run `bivy attach <path> [--caption "…"]`, which
+  pairs with the `BIVY_SESSION_ID` the node injects into the agent subprocess.
+
+## [0.4.0] - 2026-08-01
+
+### Added
+
+- **Agents can now send attachments into the chat.** An agent surfaces a file it
+  produced — an image renders inline as a thumbnail, anything else as a
+  downloadable chip — via `bivy attach <file> [--caption "…"]`, the reverse of
+  the composer paperclip. Works across runtimes (any agent that can run a shell
+  command), reusing the existing content-addressed AttachmentStore, relay
+  chunking, and rehydrate-by-hash rendering. The file is confined to the session
+  workspace. Assistant messages now also render inline markdown images
+  (`![alt](https://…)`, https-only). Backed by `POST /api/session/:id/attach`
+  and a durable, position-anchored outbound-attachment projection in the event
+  log so a reload or another device shows the attachment too.
+
+## [0.3.0] - 2026-07-31
+
+### Added
+
+- Ephemeral machine configs are now first-class, routable **nodes**: they appear
+  as selectable targets in the work-queue router and the new-session picker, and
+  the control plane can **provision one unattended** when work arrives and no
+  device is online — closing the device-offline path that previously required a
+  signed-in device. Adds account-level `EphemeralNodeConfig` runner templates
+  (provider/region/size/ttl/teardown), stored as JSONB on the account, with CRUD
+  endpoints. (#276)
+- The collapsed in-session run pill now shows the session's **PR badge** (open /
+  merged / closed) when the session has a primary PR, matching the badge already
+  rendered on the expanded run card — so you can see PR status without opening
+  the card. (#277)
+
+### Changed
+
+- Polished the in-session run pill and its action sheet: the pill now reuses the
+  sidebar `PrBadge` (GitHub mark + `PR`) instead of the wordy "Open PR" text,
+  status labels drop the redundant "on node" ("Open on node" → **Open**,
+  "Saved · not open on node" → **Saved**), and app sessions read **App** instead
+  of "Session". (#278)
+- Made the App-session sheet coherent — unified the GitHub link rows, aligned
+  labels and icons, and added a repo link alongside the branch link — so the
+  sheet reads as one system rather than a mix of idioms. (#279)
+
 ## [0.2.1] - 2026-07-31
 
 ### Added

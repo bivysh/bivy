@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import fs from "node:fs";
 import path from "node:path";
@@ -55,6 +55,24 @@ export interface RotateDelivery {
 }
 
 const DEFAULT_PAIR_TTL_MS = 5 * 60_000;
+const ROOM_KEY_BYTES = 32;
+
+/**
+ * Validate + canonicalize a pre-shared room-key seed. Returns the canonical
+ * base64 of a well-formed 32-byte key, or undefined for anything malformed
+ * (missing, wrong length, non-base64) so the caller falls back to a fresh key
+ * rather than adopting a bad seed that would make every device unable to decrypt.
+ */
+function normalizeSeedRoomKey(seedRoomKeyB64?: string): string | undefined {
+  if (!seedRoomKeyB64) return undefined;
+  try {
+    const buf = Buffer.from(seedRoomKeyB64, "base64");
+    if (buf.length !== ROOM_KEY_BYTES) return undefined;
+    return buf.toString("base64");
+  } catch {
+    return undefined;
+  }
+}
 
 export class PairingStore {
   private readonly filePath: string;
@@ -70,8 +88,17 @@ export class PairingStore {
    * Load (or create) the pairing state. A fresh state gets a randomly generated
    * room key; devices receive it (and every later rotation) over the X25519
    * pairing handshake, so there is no static seed to carry forward.
+   *
+   * `seedRoomKeyB64` (base64 32-byte key) is the ONE exception: an ephemeral
+   * REBUILD reuses a torn-down session's node id and must decrypt a snapshot
+   * sealed under that session's original room key. The launching device/CP bakes
+   * that key into relay.json (`e2eKey`) and the daemon passes it here, so a
+   * brand-new pairing state adopts it instead of minting a fresh one. It is used
+   * ONLY when there is no existing pairing.json — an already-paired node never
+   * has its room key overwritten. An absent/malformed seed falls back to a fresh
+   * random key (the ordinary first-run path).
    */
-  static load(appDir: string): PairingStore {
+  static load(appDir: string, seedRoomKeyB64?: string): PairingStore {
     const filePath = path.join(appDir, "pairing.json");
 
     let raw: string | undefined;
@@ -111,9 +138,12 @@ export class PairingStore {
       });
     }
 
+    // No pairing.json yet — first run. Adopt a valid pre-shared seed (ephemeral
+    // rebuild) if one was supplied; otherwise mint a fresh random room key.
+    const seededRoomKey = normalizeSeedRoomKey(seedRoomKeyB64);
     const data: PairingFile = {
       nodeKeypair: generatePairingKeypair(),
-      roomKeyB64: generateRoomKey().toString("base64"),
+      roomKeyB64: seededRoomKey ?? generateRoomKey().toString("base64"),
       devices: [],
     };
     const store = new PairingStore(filePath, data);

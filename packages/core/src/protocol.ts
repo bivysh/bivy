@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // The Bivy client<->node protocol, typed.
 //
@@ -35,6 +35,7 @@ export interface Command extends CommandBase {
     | "sessions.pr.refresh_all"
     | "prompt"
     | "abort"
+    | "session.turn_attention.resolve"
     | "session.command.invoke"
     | "session.pause"
     | "session.resume"
@@ -42,6 +43,10 @@ export interface Command extends CommandBase {
     | "session.checkpoints"
     | "session.question.answer"
     | "models.list"
+    // Warm the per-runtime model-query scratch for the given `runtimeIds` so the
+    // first agent switch to any of them lists models instantly. Fire-and-forget
+    // (no reply); sent when the agent picker opens.
+    | "models.prefetch"
     | "model.select"
     | "thinking.set_level"
     | "runtimes.list"
@@ -54,8 +59,23 @@ export interface Command extends CommandBase {
     | "provider.oauth.reset"
     | "provider.oauth.start"
     | "provider.oauth.code"
+    // Multi-credential (labeled) management. `credentials.list` replies with
+    // `credentials.records` ({ records: CredentialRecordSummary[] }). set/remove/
+    // sync.set mutate one `provider:label` slot and ack via requestId.
+    | "credentials.list"
+    | "credentials.account.export"
+    | "credential.set"
+    | "credential.remove"
+    | "credential.sync.set"
+    // Selection presets (which labeled credential a project uses).
+    // `credentials.presets.get` replies with `credentials.presets`.
+    | "credentials.presets.get"
+    | "credentials.presets.setActive"
+    | "credentials.presets.setMapping"
     | "models.custom.list"
     | "models.custom.presets"
+    | "models.custom.discover"
+    | "models.custom.verify"
     | "models.custom.save"
     | "models.custom.remove"
     | "rulesets.list"
@@ -66,20 +86,31 @@ export interface Command extends CommandBase {
     | "workspaces.list"
     | "node.settings.get"
     | "node.settings.set"
+    // Kick off `bivy update` on the node from the version-mismatch banner.
+    // Reply: `node.update.result` ({ ok, error? }).
+    | "node.update"
     | "github.app.manifest.start"
     | "github.app.manifest.code"
     | "github.app.connect-existing"
     | "github.app.disconnect"
+    // Repo-picker "Connect GitHub" device flow. start begins it; poll advances
+    // it. Both reply with `github.connect.status`.
+    | "github.connect.start"
+    | "github.connect.poll"
     | "approval"
     | "stt.config.get"
     | "stt.config.set"
     | "transcribe"
+    | "synthesize"
     | "terminal.list"
     | "terminal.multiplexers"
     | "terminal.takeover"
     | "terminal.open.tui"
     | "terminal.close.tui"
     | "node.stats"
+    // Machine capability inventory (Settings → Nodes panel). Reply/emit:
+    // `capabilities` ({ capabilities: MachineCapabilities }).
+    | "capabilities.get"
     // Fetch a stored attachment's bytes by content hash (see AttachmentStore).
     // Reply: `attachment.data` (base64) or `attachment.error`.
     | "attachment.fetch"
@@ -91,6 +122,39 @@ export interface ServerEvent {
   requestId?: string;
   sessionId?: string;
   [k: string]: unknown;
+}
+
+/**
+ * One labeled credential as the Models screen sees it (non-secret). Mirrors the
+ * node's `CredentialRecordSummary`; carried in the `credentials.records` event.
+ */
+export interface CredentialRecordSummary {
+  provider: string;
+  label: string;
+  kind: "api_key" | "oauth" | "reference";
+  /** Whether it syncs across the account's nodes, or stays on this one. */
+  sync: "account" | "node";
+  /** Where it came from — a Bivy login, or captured from an agent's own CLI. */
+  origin: "bivy" | "agent-native";
+  /** Epoch ms the OAuth access token expires, when `kind === "oauth"`. */
+  expiresAt?: number;
+  /** The non-secret pointer, when `kind === "reference"`. */
+  ref?: string;
+  /** Whether "Test connection" supports this provider/kind. */
+  testable: boolean;
+  /** The most recent "Test connection" result for this record, if any run. */
+  lastVerifiedAt?: number;
+  lastVerifiedOk?: boolean;
+}
+
+/**
+ * Selection presets as the Models screen sees them. `active` is the preset
+ * selection resolves against; `presets` maps a preset name to `provider → label`.
+ * Carried in the `credentials.presets` event.
+ */
+export interface CredentialPresetsView {
+  active?: string;
+  presets?: Record<string, Record<string, string>>;
 }
 
 /**
@@ -120,6 +184,23 @@ export interface PromptAttachment {
    * what makes attachments re-findable after a reload or on another device.
    */
   hash?: string;
+  /**
+   * Epoch ms this attachment was produced, when known. Set for an agent-sent
+   * (outbound) or resolved inline-image attachment — both carry a durable
+   * `createdAt` on the node (see OutboundAttachmentLogEntry / InlineImageLogEntry)
+   * — absent for an ordinary user upload, which has no equivalent durable
+   * timestamp today. Best-effort: a consumer (e.g. the Artifacts sheet) must
+   * treat its absence as "unknown", not as "now".
+   */
+  createdAt?: number;
+  /**
+   * Whether the sender explicitly marked this as a named artifact — a durable
+   * output worth surfacing outside the transcript (a report, a benchmark
+   * result, a build archive) — rather than an incidental inline image. Set via
+   * `attach_to_chat`'s / `bivy attach`'s `artifact` flag (see AttachmentEvent).
+   * Ordinary attachments simply omit it; existing callers need no changes.
+   */
+  artifact?: boolean;
 }
 
 /**
@@ -127,6 +208,11 @@ export interface PromptAttachment {
  * `session.history` event as `[messageText, AttachmentRef[]]` pairs so a client
  * that never sent the attachment (a reload, or a different device) can still
  * render it by hash. Mirrors the node's AttachmentRef in src/session/attachment-store.ts.
+ *
+ * Also the ref type for a resolved *inline* markdown image (`![alt](https://…)`,
+ * see InlineImageEvent below) — `session.history` carries those as
+ * `[url, AttachmentRef]` pairs on `inlineImageRefs`, one ref per URL rather than
+ * an array (a URL only ever resolves to one image).
  */
 export interface AttachmentRef {
   hash: string;
@@ -134,6 +220,44 @@ export interface AttachmentRef {
   mimeType: string;
   size: number;
   kind: "image" | "file";
+}
+
+/**
+ * The inner event of a `session.event` the node emits when an AGENT sends an
+ * attachment into the chat (image or file) — the reverse of the composer
+ * paperclip. Carried live so the client can render a chip/thumbnail immediately
+ * (via `controller.fetchAttachment(ref.hash)`); durable history reproduces the
+ * same entry from an outbound-attachment overlay folded into the transcript, so
+ * a reload or another device shows it too. `id` is a stable transcript-entry id
+ * so the live entry and its history twin don't double up.
+ */
+export interface AttachmentEvent {
+  type: "attachment";
+  id: string;
+  ref: AttachmentRef;
+  caption?: string;
+  /** See PromptAttachment.artifact — carried through unchanged from the
+   *  `bivy attach --artifact` / `attach_to_chat({ artifact: true })` call that
+   *  produced this attachment. */
+  artifact?: boolean;
+}
+
+/**
+ * The inner event of a `session.event` the node emits when it finishes fetching
+ * a remote image an agent referenced with markdown syntax (`![alt](https://…)`,
+ * see #293 / src/session/inline-image-fetch.ts). Carried live so an
+ * already-open chat can hydrate the placeholder `<img data-remote-src>`
+ * markdown.ts renders into a `blob:` URL immediately (via
+ * `controller.fetchAttachment(ref.hash)`), without waiting for a reload; durable
+ * history reproduces the same url→ref mapping via `inlineImageRefs` on
+ * `session.history`, so a reload resolves it from the log instead of re-fetching.
+ * `url` is the exact `https://` string the markdown referenced — the client
+ * matches it back onto the `data-remote-src` attribute(s) that need it.
+ */
+export interface InlineImageEvent {
+  type: "inlineImage";
+  url: string;
+  ref: AttachmentRef;
 }
 
 /**

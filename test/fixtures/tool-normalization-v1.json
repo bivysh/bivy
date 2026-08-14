@@ -1,0 +1,5 @@
+[
+  { "provider": "claude", "protocol": "structured-pipe", "name": "Read", "input": { "file_path": "src/app.ts" }, "expected": { "kind": "read", "path": "src/app.ts" } },
+  { "provider": "codex", "protocol": "structured-pipe", "name": "command_execution", "input": { "command": "npm test" }, "expected": { "kind": "shell", "command": "npm test" } },
+  { "provider": "goose", "protocol": "structured-pipe", "name": "str_replace", "input": { "path": "README.md", "old": "a", "new": "b" }, "expected": { "kind": "edit", "path": "README.md", "oldText": "a", "newText": "b" } }
+]
