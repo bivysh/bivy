@@ -1848,15 +1848,14 @@ app.post("/api/ephemeral/exec", requireUser, asyncHandler(async (req, res) => {
   }
 }));
 
-// E2E model-provider auth vault. The control plane stores only ciphertext and
-// per-node wrapped vault keys; API keys/OAuth records are encrypted/decrypted on
-// enrolled nodes with a vault key the control plane never sees.
+// E2E model-provider auth vault. Ordinary account sync stores only ciphertext
+// and per-node wrapped keys. Hosted custody is a separate, filtered ciphertext
+// whose distinct key is escrowed only after an explicit per-item grant.
 app.get("/node/model-auth-vault", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
-  // Hosted escrow (node-less inheritance): for a hosted-provisioning account, hand
-  // the vault key straight to the node so a lone hosted ephemeral can decrypt the
-  // synced vault without a peer to wrap it. Served ONLY when hosted is enabled;
-  // non-hosted accounts get null here and stay fully peer-wrapped (CP-blind).
+  // A hosted-provisioning node may receive only the distinct hosted key together
+  // with its filtered hosted ciphertext. It never receives an escrowed key that
+  // can decrypt `vault`, the ordinary peer-wrapped account snapshot.
   let hostedKey: string | null = null;
   let hostedVault: { ciphertext: string } | null = null;
   try {
@@ -1887,11 +1886,14 @@ app.put("/node/model-auth-key/hosted-escrow", requireNode, asyncHandler(async (r
   if (!vaultKeyB64 || Buffer.from(vaultKeyB64, "base64").length !== 32) {
     return res.status(400).json({ error: "Missing/invalid vaultKeyB64" });
   }
-  // Hosted-provisioning accounts only — otherwise the CP would hold a key it must
-  // not (E2E is preserved for everyone else). A non-hosted node never calls this
-  // (gated node-side on BIVY_GITHUB_HOSTED_TASKS); reject defensively regardless.
+  // Legacy endpoint retained only so pre-vault nodes fail safely during a rolling
+  // upgrade. Once a filtered hosted snapshot exists, an old node must not replace
+  // its distinct key with the ordinary account-vault key.
   if (!(await store.getHostedProvisioning(node.accountId)).enabled) {
     return res.status(403).json({ error: "hosted provisioning not enabled for this account" });
+  }
+  if (await store.getHostedModelAuthVault(node.accountId)) {
+    return res.status(409).json({ error: "filtered hosted credential vault already active" });
   }
   await store.setHostedModelAuthVaultKey(node.accountId, encryptSecret(node.accountId, vaultKeyB64));
   res.json({ ok: true });

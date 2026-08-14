@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// Node-less inheritance (hosted): the control plane escrows the model-auth vault
-// KEY, sealed at rest with the per-account hosted key, so a lone hosted ephemeral
-// can decrypt the synced vault (incl. subscription OAuth) with no peer to wrap it.
+// Explicit hosted custody: the control plane stores a separately filtered
+// ciphertext and seals its distinct key with the per-account hosted key.
 import assert from "node:assert/strict";
+import fs from "node:fs";
 process.env.HOSTED_CREDENTIAL_KEY = Buffer.alloc(32, 5).toString("base64");
 import { createPgMemStore } from "../src/pg-mem-store.js";
 import { encryptSecret, decryptSecret } from "../src/hosted-crypto.js";
@@ -40,6 +40,11 @@ await test("separate hosted ciphertext is stored with its escrow key", async () 
   await store.setHostedModelAuthVault(acct.id, "filtered-ciphertext", encryptSecret(acct.id, VAULT_KEY));
   assert.equal(await store.getHostedModelAuthVault(acct.id), "filtered-ciphertext");
   assert.equal(decryptSecret(acct.id, (await store.getHostedModelAuthVaultKey(acct.id))!), VAULT_KEY);
+});
+
+await test("legacy key-only writes cannot overwrite an active filtered snapshot", async () => {
+  const source = fs.readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
+  assert.match(source, /if \(await store\.getHostedModelAuthVault\(node\.accountId\)\) \{\s*return res\.status\(409\)/);
 });
 
 await test("upsert overwrites; account-scoped", async () => {
