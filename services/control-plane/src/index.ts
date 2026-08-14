@@ -2672,9 +2672,24 @@ app.post("/node/automation-runs", requireNode, asyncHandler(async (req, res) => 
   const title = typeof req.body?.title === "string" ? req.body.title.trim() : "";
   const body = typeof req.body?.body === "string" ? req.body.body : "";
   if (!title || title.length > 120) return res.status(400).json({ error: "title is required and must be at most 120 characters" });
-  if (!body.startsWith(`bivy-room-v1:${node.id}:`)) {
-    return res.status(400).json({ error: "instructions must be encrypted for this node" });
+  const machine = typeof req.body?.node === "string" && req.body.node.trim() ? req.body.node.trim() : node.name;
+  const targetNode = (await store.listNodes(node.accountId)).find((candidate) => candidate.name === machine);
+  if (!targetNode) return res.status(404).json({ error: "Machine not found" });
+  if (!body.startsWith(`bivy-room-v1:${targetNode.id}:`)) {
+    return res.status(400).json({ error: "instructions must be encrypted for the target Machine" });
   }
+  const parentSessionId = typeof req.body?.parentSessionId === "string" ? req.body.parentSessionId.trim() : "";
+  const parentRunId = typeof req.body?.parentRunId === "string" ? req.body.parentRunId.trim() : "";
+  const delegationDepth = Number(req.body?.delegationDepth);
+  const delegated = Boolean(parentSessionId || parentRunId || req.body?.delegationDepth !== undefined);
+  if (delegated && (!parentSessionId || parentSessionId.length > 256 || (parentRunId && parentRunId.length > 256) || !Number.isInteger(delegationDepth) || delegationDepth < 1 || delegationDepth > 3)) {
+    return res.status(400).json({ error: "invalid bounded delegation provenance" });
+  }
+  const encodeRef = (value: string) => Buffer.from(value).toString("base64url");
+  const idempotencyKey = typeof req.body?.idempotencyKey === "string" ? req.body.idempotencyKey.trim() : "";
+  if (idempotencyKey.length > 128) return res.status(400).json({ error: "idempotencyKey must be at most 128 characters" });
+  const idempotencyDigest = idempotencyKey ? createHash("sha256").update(idempotencyKey).digest("base64url").slice(0, 22) : "";
+  const source = delegated ? `agent-delegation:v1:${delegationDepth}:${encodeRef(parentSessionId)}:${parentRunId ? encodeRef(parentRunId) : "-"}${idempotencyDigest ? `:${idempotencyDigest}` : ""}` : "manual";
   let repo: string | undefined;
   try { repo = normalizeAutomationRepo(req.body?.repo); }
   catch (error) { return res.status(400).json({ error: (error as Error).message }); }
@@ -2685,13 +2700,14 @@ app.post("/node/automation-runs", requireNode, asyncHandler(async (req, res) => 
   if (!["read-only", "workspace-write", "danger-full-access"].includes(sandbox)) return res.status(400).json({ error: "unsupported sandbox" });
   if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 10) return res.status(400).json({ error: "maxAttempts must be an integer from 1 to 10" });
   const run = await store.enqueueAutomationRun(node.accountId, {
-    source: "manual", triggerKind: "manual", title, body, repo,
-    label: `bivy/${node.name}`,
+    source, triggerKind: "manual", title, body, repo,
+    label: `bivy/${targetNode.name}`,
+    dedupeKey: idempotencyKey ? `delegation:${createHash("sha256").update(`${parentSessionId}\0${idempotencyKey}`).digest("base64url")}` : undefined,
     runtimeId: typeof req.body?.runtimeId === "string" ? req.body.runtimeId.trim() || undefined : undefined,
     model: typeof req.body?.model === "string" ? req.body.model.trim() || undefined : undefined,
     approvalMode, sandbox, maxAttempts,
   });
-  void notifyRelaysWorkAvailable(node.accountId, { id: run.id, label: run.routing.nodeLabel }, { nodeId: node.id, autoProvision: false });
+  void notifyRelaysWorkAvailable(node.accountId, { id: run.id, label: run.routing.nodeLabel }, { nodeId: targetNode.id, autoProvision: false });
   res.status(201).json(run);
 }));
 

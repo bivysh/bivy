@@ -149,6 +149,33 @@ async function main() {
   const unauthorizedNodeRuns = await json(port, "GET", "/node/automation-runs");
   expect(unauthorizedNodeRuns.status === 401, "Run status probing requires node authentication");
 
+  // Agent-to-agent/Machine uses the same one-off queue. Ciphertext must target
+  // the selected sibling Machine; provenance is content-free and idempotency is
+  // scoped to the parent Session.
+  const sibling = await json(port, "POST", "/nodes/enroll", { nodeId: "node-linux", name: "linux" }, token);
+  const delegatedInput = {
+    title: "Delegated Run",
+    body: "bivy-room-v1:node-linux:opaque-review",
+    node: "linux",
+    repo: "acme/api",
+    parentSessionId: "parent-session",
+    parentRunId: "parent-run",
+    delegationDepth: 1,
+    idempotencyKey: "review-branch",
+  };
+  const delegated = await json(port, "POST", "/node/automation-runs", delegatedInput, nodeToken);
+  const duplicate = await json(port, "POST", "/node/automation-runs", delegatedInput, nodeToken);
+  expect(delegated.status === 201 && duplicate.body.id === delegated.body.id, "delegated Run creation is idempotent within its parent Session");
+  expect(delegated.body.routing.nodeLabel === "bivy/linux" && String(delegated.body.source).startsWith("agent-delegation:v1:1:"), "delegated Run carries bounded provenance and routes through the existing Machine queue");
+  const linuxWork = await json(port, "GET", "/node/work?labels=bivy%2Flinux", undefined, sibling.body.enrollmentToken);
+  expect(linuxWork.body.items.find((w: any) => w.id === delegated.body.id)?.body === delegatedInput.body, "the target Machine receives only the E2E-encrypted instruction envelope");
+  const wrongTargetCipher = await json(port, "POST", "/node/automation-runs", { ...delegatedInput, body: "bivy-room-v1:node-as-code:opaque" }, nodeToken);
+  expect(wrongTargetCipher.status === 400, "delegation rejects instructions encrypted for a different Machine");
+  const tooDeep = await json(port, "POST", "/node/automation-runs", { ...delegatedInput, idempotencyKey: "deep", delegationDepth: 4 }, nodeToken);
+  expect(tooDeep.status === 400, "control-plane ingress enforces the delegation depth ceiling");
+  const delegatedStatus = await json(port, "GET", `/node/automation-runs/${delegated.body.id}`, undefined, nodeToken);
+  expect(delegatedStatus.body.body === undefined && delegatedStatus.body.eventContext === undefined && delegatedStatus.body.source.includes("agent-delegation"), "delegated status exposes provenance but redacts encrypted bodies and inbound content");
+
   // --- Webhook-triggered automation *definition* (runs the operator's own
   //     pre-configured routing/agent/model/sandbox + E2E template) ---
   const auto = await json(port, "POST", "/account/automations", {
