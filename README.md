@@ -1,28 +1,59 @@
 # Bivy
 
-**Run agents where your environment lives. Reach, automate, and govern them from
-anywhere.**
+**Give coding agents your real environment, then reach them from anywhere.**
 
-Bivy makes coding agents on your infrastructure available from anywhere. Use
-Claude Code or Codex with the repositories, tools, services, and compute already
-in your development environment; continue the same Session from a phone, leave
-work running, and return to checked changes or a pull request with a clear
-Receipt.
+A provider sandbox starts from an approximation. A Bivy Machine can use the
+repository, local services and databases, private networks, existing tools and
+caches, and GPUs or local inference already available on your workstation or
+server. Bivy turns that local capability into Sessions you can continue remotely
+and Runs you can leave working unattended.
+
+## What Bivy lets you do
+
+- **Work where the full environment lives.** Run Claude Code, Codex, Pi, or
+  another agent beside real repos, dev servers, databases, internal APIs,
+  toolchains, package caches, and specialized compute.
+- **Continue from a phone, browser, or terminal.** Reconnect to the same Session,
+  steer or stop it, answer questions, and approve supported tool calls. The PWA
+  supports voice input and read-aloud, phone-to-agent file/image uploads, and
+  agent-to-phone attachments. Native terminal Sessions can stay remote-visible;
+  supported runtimes can hand work between terminal and structured chat.
+- **Move work without starting over.** Import existing Claude Code and Codex
+  Sessions, or fork/copy/move a Bivy Session to another agent, model, or Machine.
+  Fidelity is runtime-dependent: a fork may use a native transcript, replayed
+  history, or a bounded seeded continuation, and cross-Machine moves require the
+  destination's repo access, agent, and credentials.
+- **Operate more than one Machine.** Keep a workstation, private-network server,
+  and GPU box on one account; select the environment a Session or Run needs.
+  Optional warm Session replication is Beta, off by default, and manually
+  promoted rather than automatic failover.
+- **Let events start checked work.** Create Runs manually or from failed CI,
+  GitHub/Linear issues, Slack, schedules, and signed webhooks. Automations can
+  pin a Machine, agent, model, sandbox, approval mode, and attempt ceiling, then
+  report bounded check and outcome evidence in a Receipt.
+- **Bring your own stack.** Use provider subscriptions through supported native
+  agent logins, API keys in Bivy's vault, or local/OpenAI-compatible inference.
+  Add an existing ACP or headless process agent with `bivy agent add`; declarative
+  agent plugins are Experimental (`v1alpha1`) and run out of process.
+
+Start with the [five-minute quickstart](docs/quickstart.md), then try the
+[capability recipes](docs/capability-recipes.md) or check the exact
+[runtime support matrix](docs/runtime-support-matrix.md).
 
 Interactive Session traffic is end-to-end encrypted between a Machine and its
-paired devices. The relay cannot decrypt it. Explicitly enabled hosted
-provisioning has a different boundary: the control plane may hold encrypted
-cloud, repository, or key-escrow material that the service can technically
-access. Slack and generic webhook instructions also reach the control plane in
-plaintext. See [Why Bivy](docs/why-bivy.md) and the
-[security model](docs/security-model.md) for the complete trust model.
+paired devices, so the relay cannot decrypt it. The seatbelt has a precise edge:
+explicitly enabled hosted provisioning may give the control plane technical
+access to encrypted cloud, repository, or key-escrow material, while Slack and
+generic webhook instructions reach it in plaintext. See [Why Bivy](docs/why-bivy.md)
+and the [security model](docs/security-model.md) for the complete trust model.
 
 - **Website:** [bivy.sh](https://bivy.sh)
-- **Documentation:** [`docs/`](docs/README.md) — start with the [quickstart](docs/quickstart.md)
+- **Documentation:** [`docs/`](docs/README.md)
 - **License:** [AGPL-3.0-only](LICENSE)
 
-> Bivy is 0.x software. The core loop is solid and used daily, but interfaces
-> and behaviour can change between releases.
+> Bivy is 0.x software. The core loop is solid and used daily, but interfaces,
+> cross-runtime fidelity, and behaviour can change between releases. Check the
+> support matrix before depending on a particular agent capability.
 
 ## Install
 
