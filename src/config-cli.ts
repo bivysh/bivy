@@ -99,6 +99,7 @@ Examples:
   bivy config set defaults.sandbox read-only
   bivy config set node.maxConcurrentAutomations 2
   bivy config set automation.checks '[test, lint, typecheck]'
+  bivy config set node.capabilities '[gpu, docker]'
   bivy config explain defaults.sandbox
 
 Secrets belong in the vault; use secret://, env://, or op:// references in
