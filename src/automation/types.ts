@@ -153,6 +153,13 @@ export interface PreflightSignals {
     fallbackAvailable?: boolean;
     /** For the shared `bivy` queue: any online node at all. */
     sharedQueueHasOnlineNode?: boolean;
+    /** Required capability tags (if any) that NO known machine — online or
+     *  offline — has ever declared. Computed by the caller (which has access
+     *  to node records) using @bivy/core's anyNodeEligible; preflight.ts stays
+     *  dependency-free and only reads this plain result. Takes priority over
+     *  primaryOnline: a machine can be online yet still lack a required tag,
+     *  and reporting that honestly is the whole point of this signal. */
+    capabilityGap?: string[];
     detail?: string;
   };
   agentModelCredentials?: {

@@ -17,6 +17,10 @@ export interface NodeConfig {
     workspace?: string;
     port?: number;
     maxConcurrentAutomations?: number;
+    /** Manually declared, owner-asserted tags describing what this Machine can
+     * do (e.g. "gpu", "docker", "private-net") — never auto-detected, and not
+     * a verified security fact. Runs/Automations may require or prefer them. */
+    capabilities?: string[];
   };
   defaults?: {
     agent?: string;
@@ -72,6 +76,12 @@ const ROOT_KEYS = ["version", "node", "defaults", "safety", "sessions", "github"
 const SANDBOXES = new Set(["read-only", "workspace-write", "danger-full-access"]);
 const APPROVALS = new Set(["never", "risky", "always", "autonomous"]);
 const SCRIPT_RE = /^[\w:.-]+$/;
+// Kept identical to @bivy/core's capability-routing.ts CAPABILITY_TAG_RE —
+// root src/ stays dependency-free of @bivy/core, so this is duplicated rather
+// than imported. A capability match relies on both sides accepting the exact
+// same tag shape.
+const CAPABILITY_TAG_RE = /^[a-z][a-z0-9-]{0,63}$/;
+const MAX_CAPABILITIES = 32;
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
@@ -109,7 +119,7 @@ export function validateNodeConfig(value: unknown): NodeConfigResult {
   if (!root) return { ok: false, errors: ["configuration must be an object"], warnings };
   unknownKeys(root, ROOT_KEYS, "config", errors);
   if (root.version !== 1) errors.push("version must be 1");
-  const node = section(root, "node", ["workspace", "port", "maxConcurrentAutomations"], errors);
+  const node = section(root, "node", ["workspace", "port", "maxConcurrentAutomations", "capabilities"], errors);
   const defaults = section(root, "defaults", ["agent", "model", "sandbox", "approval"], errors);
   const safety = section(root, "safety", ["maxSandbox", "approvalFloor"], errors);
   const sessions = section(root, "sessions", ["sync", "worktreeSync", "standbyNodeId", "resume", "autoAttachToolImages", "wedgedTurnMinutes"], errors);
@@ -121,6 +131,19 @@ export function validateNodeConfig(value: unknown): NodeConfigResult {
   const workspace = optionalString(node.workspace, "node.workspace", errors);
   const port = optionalInteger(node.port, "node.port", errors, 1, 65535);
   const maxConcurrentAutomations = optionalInteger(node.maxConcurrentAutomations, "node.maxConcurrentAutomations", errors, 0, 100);
+  let capabilities: string[] | undefined;
+  if (node.capabilities !== undefined) {
+    if (!Array.isArray(node.capabilities)) errors.push("node.capabilities must be a list of lowercase capability tags");
+    else {
+      capabilities = [];
+      for (const raw of node.capabilities) {
+        if (typeof raw !== "string" || !CAPABILITY_TAG_RE.test(raw)) {
+          errors.push("node.capabilities entries must be lowercase slugs (letters, digits, '-'; up to 64 characters)");
+        } else if (!capabilities.includes(raw)) capabilities.push(raw);
+      }
+      if (capabilities.length > MAX_CAPABILITIES) errors.push(`node.capabilities may contain at most ${MAX_CAPABILITIES} tags`);
+    }
+  }
   const agent = optionalString(defaults.agent, "defaults.agent", errors, 120)?.toLowerCase();
   const sandbox = defaults.sandbox as ConfigSandbox | undefined;
   const approval = defaults.approval as ConfigApproval | undefined;
@@ -208,7 +231,7 @@ export function validateNodeConfig(value: unknown): NodeConfigResult {
 
   const config: NodeConfig = {
     version: 1,
-    ...(Object.keys(node).length ? { node: { workspace, port, maxConcurrentAutomations } } : {}),
+    ...(Object.keys(node).length ? { node: { workspace, port, maxConcurrentAutomations, capabilities } } : {}),
     ...(Object.keys(defaults).length ? { defaults: { agent, model, sandbox, approval } } : {}),
     ...(Object.keys(safety).length ? { safety: { maxSandbox, approvalFloor } } : {}),
     ...(Object.keys(sessions).length ? { sessions: { sync, worktreeSync, standbyNodeId, resume, autoAttachToolImages, wedgedTurnMinutes } } : {}),
@@ -338,7 +361,7 @@ export function mergeLegacyIntoNodeConfig(cli: Record<string, unknown>, settings
 
 export function setConfigValue(config: NodeConfig, dotted: string, value: unknown): NodeConfig {
   const allowed = new Set([
-    "node.workspace", "node.port", "node.maxConcurrentAutomations",
+    "node.workspace", "node.port", "node.maxConcurrentAutomations", "node.capabilities",
     "defaults.agent", "defaults.model", "defaults.sandbox", "defaults.approval",
     "safety.maxSandbox", "safety.approvalFloor",
     "sessions.sync", "sessions.worktreeSync", "sessions.standbyNodeId", "sessions.resume", "sessions.autoAttachToolImages", "sessions.wedgedTurnMinutes",

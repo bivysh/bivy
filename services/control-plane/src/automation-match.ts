@@ -25,6 +25,7 @@ import {
   type OverlapFinding,
   type PreflightSignals,
 } from "@bivy/automation-core";
+import { anyNodeEligible } from "@bivy/core";
 import type { AutomationDefinition, InboundHook, NodeRecord } from "./store.js";
 
 /** GitHub delivery families Bivy understands today. Grow this list; don't add
@@ -275,7 +276,7 @@ export interface PreflightSignalContext {
 
 type SignalDefinitionInput = Pick<
   AutomationDefinition,
-  "trigger" | "repo" | "repos" | "templateCiphertext" | "nodeLabel" | "runtimeId" | "model" | "approvalMode" | "sandbox" | "allowDangerous"
+  "trigger" | "repo" | "repos" | "templateCiphertext" | "nodeLabel" | "runtimeId" | "model" | "approvalMode" | "sandbox" | "allowDangerous" | "requiredCapabilities"
 >;
 
 /**
@@ -307,6 +308,15 @@ export function gatherPreflightSignals(def: SignalDefinitionInput, ctx: Prefligh
   const requestedApproval = def.approvalMode ?? "risky";
   const requestedSandbox = def.sandbox ?? "workspace-write";
 
+  // Same account-wide, online-or-offline honesty check enqueueAutomationRunWithResult
+  // uses to decide whether a required-capability run should park: a machine
+  // that has never declared the tag anywhere in the account is the genuinely
+  // unfulfillable case preflight should surface, not just "offline for now."
+  const requiredCapabilities = def.requiredCapabilities;
+  const capabilityGap = requiredCapabilities?.length && !anyNodeEligible(ctx.nodes.map((n) => n.capabilities ?? []), requiredCapabilities)
+    ? requiredCapabilities
+    : undefined;
+
   return {
     sourceConnection: {
       required: sourceRequired,
@@ -336,11 +346,13 @@ export function gatherPreflightSignals(def: SignalDefinitionInput, ctx: Prefligh
         // Explicitly node-targeted work has no other server for that label —
         // an offline named node genuinely has no fallback today.
         sharedQueueHasOnlineNode: false,
+        capabilityGap,
       }
       : {
         nodeLabel: def.nodeLabel ?? "bivy",
         primaryOnline: onlineNodes.length > 0,
         sharedQueueHasOnlineNode: onlineNodes.length > 0,
+        capabilityGap,
       },
     agentModelCredentials: def.runtimeId || def.model
       ? {

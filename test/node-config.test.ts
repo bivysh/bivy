@@ -112,6 +112,35 @@ sessions:
   assert.match(bad.errors.join("\n"), /sessions\.wedgedTurnMinutes/);
 });
 
+test("node.capabilities is a validated, deduped tag list", () => {
+  const ok = parseNodeConfig(`
+version: 1
+node:
+  capabilities: [gpu, docker, gpu]
+`);
+  assert.equal(ok.ok, true, ok.errors.join("\n"));
+  assert.deepEqual(ok.config?.node?.capabilities, ["gpu", "docker"]);
+
+  assert.deepEqual(setConfigValue(ok.config!, "node.capabilities", ["private-net"]).node?.capabilities, ["private-net"]);
+  assert.throws(() => setConfigValue(ok.config!, "node.capabilities", ["GPU"]), /capabilities/);
+
+  const bad = parseNodeConfig(`
+version: 1
+node:
+  capabilities: [GPU, "has space", ""]
+`);
+  assert.equal(bad.ok, false);
+  assert.match(bad.errors.join("\n"), /node\.capabilities/);
+
+  const tooMany = parseNodeConfig(`
+version: 1
+node:
+  capabilities: [${Array.from({ length: 33 }, (_, i) => `tag-${i}`).join(", ")}]
+`);
+  assert.equal(tooMany.ok, false);
+  assert.match(tooMany.errors.join("\n"), /at most 32/);
+});
+
 test("project policy validates safety floors, checks, and a queue ruleset", () => {
   const result = parseProjectPolicy(`
 version: 1

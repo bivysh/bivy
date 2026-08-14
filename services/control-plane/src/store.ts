@@ -109,6 +109,12 @@ export interface NodeRecord {
   providers?: NodeProviderSummary[];
   /** Non-secret, fixed-vocabulary cloud-init progress from an ephemeral node. */
   bootstrapStatus?: { phase: string; updatedAt: string };
+  /** Manually declared, owner-asserted capability tags (e.g. "gpu", "docker") —
+   * pushed by the owning node from its local config.yaml, overwritten wholesale
+   * on every change, same trust tier as `providers`. Never auto-detected or
+   * verified; a stale/offline declaration is not re-checked. See
+   * @bivy/core's capability-routing.ts. */
+  capabilities?: string[];
 }
 
 export interface ResolvedClient {
@@ -770,6 +776,12 @@ export interface AutomationDefinition {
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
   /** Hard per-run attempt ceiling, independent of the active retry/fallback ruleset. */
   maxAttempts?: number;
+  /** Capability tags a run of this automation needs. Hard block: a node/machine
+   * missing any of these must not claim it. See @bivy/core's capability-routing. */
+  requiredCapabilities?: string[];
+  /** Capability tags a run of this automation prefers. Soft rank only — never
+   * gates eligibility, and never fabricates a match that isn't there. */
+  preferredCapabilities?: string[];
   enabled?: boolean;
   /** How this automation fires. Defaults to "schedule" for legacy rows (any row
    *  with a `schedule` is schedule-triggered). A "webhook" automation is fired by
@@ -854,6 +866,8 @@ export interface AutomationRun {
     ephemeral?: boolean;
     approvalMode?: AutomationDefinition["approvalMode"];
     sandbox?: AutomationDefinition["sandbox"];
+    requiredCapabilities?: string[];
+    preferredCapabilities?: string[];
   };
   output?: {
     sessionId?: string;
@@ -935,6 +949,10 @@ export interface WorkItem {
   approvalMode?: AutomationDefinition["approvalMode"];
   sandbox?: AutomationDefinition["sandbox"];
   maxAttempts?: number;
+  /** See AutomationDefinition.requiredCapabilities/preferredCapabilities — copied
+   * onto the item at enqueue time (explicit override, else the definition's). */
+  requiredCapabilities?: string[];
+  preferredCapabilities?: string[];
   installationId?: string; // GitHub App installation id — the node mints a token for it
   appId?: string; // which GitHub App that installation belongs to (a node may serve several)
   // True when a device dispatched this item to a freshly-provisioned ephemeral
@@ -996,6 +1014,8 @@ export type WorkItemInput = {
   target?: AutomationRun["target"];
   /** Plain chat message (no automation boilerplate/push/checks). */
   message?: boolean;
+  requiredCapabilities?: string[];
+  preferredCapabilities?: string[];
 };
 
 // Per-account inbound hook: a stable id + secret a user configures in GitHub /
@@ -1248,6 +1268,10 @@ export interface MeshStore {
   // overwritten wholesale by the owning node on every credential change.
   setNodeProviders(nodeId: string, providers: NodeProviderSummary[]): Promise<void>;
   setNodeBootstrapStatus(nodeId: string, phase: string): Promise<void>;
+  // Owner-declared capability tags (see NodeRecord.capabilities) — overwritten
+  // wholesale by the owning node on every config change, same trust tier as
+  // setNodeProviders. Never verified; a stale/offline declaration is kept as-is.
+  setNodeCapabilities(nodeId: string, capabilities: string[]): Promise<void>;
 
   // Session index (cross-node unified view). A node replaces its full current
   // session list; clients read the merged list for the account.

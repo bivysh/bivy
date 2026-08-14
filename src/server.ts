@@ -3937,6 +3937,20 @@ async function pushProviderSummaryToControlPlane() {
   }
 }
 
+// Owner-declared capability tags (node.capabilities in config.yaml) — pushed
+// once when the node opts into the hosted queue. Like other node.* boot
+// settings, a change made with `bivy config set node.capabilities` reaches the
+// control plane on the node's next restart (see config-cli.ts's usage text).
+async function pushCapabilitiesToControlPlane() {
+  if (!sessionAdvertiseTarget) return;
+  try {
+    const capabilities = canonicalNodeConfig.node?.capabilities ?? [];
+    await modelAuthFetch("/node/capabilities", { method: "PUT", body: JSON.stringify({ capabilities }) });
+  } catch (error) {
+    console.warn("[auth-sync] could not push capabilities:", (error as Error).message);
+  }
+}
+
 // Re-project the vault into Pi's plaintext auth.json when it changes while a
 // native `bivy run pi` TUI is live, so a credential that lands AFTER launch
 // (e.g. a login synced from another node, or a token refresh) reaches the
@@ -5404,11 +5418,13 @@ function startControlPlaneTasksIfConfigured() {
   // it's installed on nothing (the app is inert until installed somewhere).
   // Re-run on every boot/connect so a later install is reflected.
   void reportGithubAppInstallations();
+  void pushCapabilitiesToControlPlane();
   if (controlPlanePoller) return;
   // Pass the node's own name so it auto-serves `bivy/<name>` — matching the label
   // the control plane routes to for a default node / `bivy/<node>` / `on <node>`,
-  // with no manual BIVY_NODE_LABEL needed.
-  const cfg = resolveControlPlaneTaskConfig(loadRelayConfig(appDir), process.env, identity.name);
+  // with no manual BIVY_NODE_LABEL needed. Also pass this node's own declared
+  // capabilities so the poller can gate/rank capability-requesting items.
+  const cfg = resolveControlPlaneTaskConfig(loadRelayConfig(appDir), process.env, identity.name, canonicalNodeConfig.node?.capabilities ?? []);
   if (!cfg) return;
   // Policy-driven run orchestration: classify a failed queue attempt into a
   // stable condition and decide retry / reroute / park instead of the historical

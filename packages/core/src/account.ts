@@ -232,6 +232,10 @@ export interface AccountNode {
   name?: string;
   online?: boolean;
   providers?: NodeProviderSummary[];
+  /** Manually declared, owner-asserted capability tags (e.g. "gpu", "docker") —
+   *  never auto-detected, and not a verified security fact. See
+   *  @bivy/core's capability-routing.ts. */
+  capabilities?: string[];
   /** Non-secret provider identity of an ephemeral (`eph-*`) node, populated by
    *  the control-plane node registry at launch. Lets a *second* account device —
    *  which doesn't hold the launching device's local machine record — reconstruct

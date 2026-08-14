@@ -24,6 +24,10 @@ export interface ControlPlaneTaskConfig {
   enrollmentToken: string;
   labels: string[]; // the labels this node serves, e.g. ["bivy", "bivy/laptop"]
   pollMs: number;
+  /** This node's own owner-declared capability tags (node.capabilities in
+   * config.yaml), used to gate/rank pending items that request tags. Absent
+   * (rather than empty) for callers/tests that don't set it — treated as []. */
+  capabilities?: string[];
 }
 
 export interface WorkItem {
@@ -59,6 +63,36 @@ export interface WorkItem {
   targetSessionId?: string;
   message?: boolean;
   leaseExpiresAt?: string;
+  /** Capability tags this run needs/prefers on the claiming Machine. See
+   * @bivy/core's capability-routing.ts (the canonical matcher; duplicated
+   * here in miniature since root src/ has no @bivy/core dependency). */
+  requiredCapabilities?: string[];
+  preferredCapabilities?: string[];
+}
+
+/** True when every required tag is among this node's declared capabilities.
+ * A node that fails this must never attempt to claim the item — the hard
+ * block happens locally, before any claim race, so an ineligible node never
+ * even contends for it. */
+export function capabilityEligible(nodeCapabilities: string[], required: string[] | undefined): boolean {
+  if (!required || required.length === 0) return true;
+  const have = new Set(nodeCapabilities);
+  return required.every((tag) => have.has(tag));
+}
+
+/** Soft, best-effort delay before this node attempts to claim an item that
+ * prefers capability tags it doesn't have — giving a better-matching Machine
+ * (shorter/zero delay) first opportunity, without ever refusing to claim it
+ * (any node, including a zero-match one, still claims it once the delay
+ * elapses — this never fabricates availability). Deterministic: no
+ * randomness, so it stays predictable in logs and tests. Mirrors
+ * @bivy/core's capabilityClaimDelayMs; duplicated for the same
+ * no-cross-package-dependency reason as capabilityEligible above. */
+export function capabilityClaimDelayMs(nodeCapabilities: string[], preferred: string[] | undefined, baseMs = 1500, maxMs = 4000): number {
+  if (!preferred || preferred.length === 0) return 0;
+  const have = new Set(nodeCapabilities);
+  const unmatched = preferred.filter((tag) => !have.has(tag)).length;
+  return Math.min(maxMs, Math.round(baseMs * (unmatched / preferred.length)));
 }
 
 /** Sanitized-on-arrival at the control plane (services/control-plane/src/run-evidence.ts);
@@ -79,6 +113,7 @@ export function resolveControlPlaneTaskConfig(
   relay: { controlPlaneUrl?: string; enrollmentToken?: string } | null | undefined,
   env: NodeJS.ProcessEnv = process.env,
   nodeName?: string,
+  capabilities: string[] = [],
 ): ControlPlaneTaskConfig | null {
   // Enrollment opts the node into the hosted work queue. This cannot be gated
   // on GitHub configuration: Slack, signed webhooks, schedules, and manually
@@ -97,6 +132,7 @@ export function resolveControlPlaneTaskConfig(
     enrollmentToken: relay.enrollmentToken,
     labels: labels.length ? labels : ["bivy"],
     pollMs: Math.max(Number(env.BIVY_GITHUB_POLL_MS) || 60_000, 10_000),
+    capabilities,
   };
 }
 
@@ -282,6 +318,10 @@ export class ControlPlaneTaskPoller {
     const running: Promise<void>[] = [];
     for (const item of items) {
       if (this.inFlight.has(item.id)) continue;
+      // Hard block: never contend for an item requiring a capability this
+      // node hasn't declared. It stays pending for a node that has it (or
+      // parks account-wide if the control plane found none at enqueue time).
+      if (!capabilityEligible(this.cfg.capabilities ?? [], item.requiredCapabilities)) continue;
       // Honor the node's concurrency cap: leave the rest in the queue for a later
       // tick (or an idle node) to claim when a slot frees.
       if (max > 0 && this.inFlight.size >= max) break;
@@ -306,6 +346,13 @@ export class ControlPlaneTaskPoller {
     const run = reserved ?? this.inFlight.get(item.id) ?? { controller: new AbortController(), state: "active" };
     if (!this.inFlight.has(item.id)) this.inFlight.set(item.id, run);
     try {
+      // Soft preference ranking: a node matching fewer of the item's preferred
+      // capability tags waits slightly longer before attempting to claim,
+      // giving a better-matching Machine first opportunity. Any node can still
+      // win the claim once its delay elapses — this never refuses to run.
+      const delayMs = capabilityClaimDelayMs(this.cfg.capabilities ?? [], item.preferredCapabilities);
+      if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+      if (run.state !== "active") return;
       // Claim first so only one node runs it; skip if another node won (no
       // claim → not ours → don't run or complete it). A heartbeat keeps the
       // finite lease alive; process death stops it and makes the item reclaimable.
