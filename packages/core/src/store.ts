@@ -19,6 +19,13 @@ import type { AccountNode, EphemeralNodeConfig } from "./account.js";
 import type { MachineCapabilities } from "./capabilities.js";
 import type { InboxAdvert } from "./inbox.js";
 import type { SessionContract } from "./session-contract.js";
+import {
+  EMPTY_SESSION_DRAFT,
+  reduceSessionDraft,
+  type SandboxTier,
+  type SessionDraft,
+  type SessionDraftCommand,
+} from "./session-draft.js";
 import { type SlashCommand } from "./slash.js";
 import { toHtml, extractRemoteImageUrls } from "./markdown.js";
 import { eventKind, normalizeEventType, toolCallId, toolDetail, toolInput, toolName } from "./tool-activity.js";
@@ -56,6 +63,13 @@ import {
 // Re-export the helpers that moved out of this file so the package's public
 // surface (index.ts `export * from "./store.js"`) is unchanged.
 export { humanizeError, looksLikeAgentError } from "./store-errors.js";
+export {
+  EMPTY_SESSION_DRAFT,
+  reduceSessionDraft,
+  type SandboxTier,
+  type SessionDraft,
+  type SessionDraftCommand,
+} from "./session-draft.js";
 export {
   reduceFollowupQueue,
   type FollowupEditResult,
@@ -630,9 +644,6 @@ export interface GithubContext {
   prs: PrRef[];
 }
 
-/** Agent sandbox tiers (Codex's vocabulary; see src/harness/sandbox.ts). */
-export type SandboxTier = "read-only" | "workspace-write" | "danger-full-access";
-
 /** Per-node defaults, editable from Settings → Nodes (see NodeSettings on the node). */
 export interface NodeSettings {
   name: string;
@@ -726,9 +737,9 @@ export interface AppState {
   reposReason: RepoAuthReason;
   /** State of the repo-picker "Connect GitHub" device flow (Tier 2). */
   githubConnect: GithubConnectState;
-  /** Repo chosen for the next new session (draft only). */
-  draftRepo: string | null;
-  /** Remote branches of `draftRepo` (for the adjacent branch pill), and which
+  /** Target choices whose identity lasts only until the next session starts. */
+  draft: SessionDraft;
+  /** Remote branches of `draft.repo` (for the adjacent branch pill), and which
    *  repo slug they belong to — so a still-loading/stale list from the
    *  PREVIOUS repo pick is never shown as if it were the new one's. */
   branches: BranchInfo[];
@@ -738,25 +749,6 @@ export interface AppState {
   branchesDefault: string | null;
   branchesError: string | null;
   branchesLoading: boolean;
-  /** Remote branch chosen for the next new session (draft only); null = clone
-   *  from `draftRepo`'s default branch. Cleared whenever `draftRepo` changes —
-   *  a branch pick from one repo means nothing for another. */
-  draftBranch: string | null;
-  /** Sandbox tier chosen for the next new session (draft only); null = node default. */
-  draftSandbox: SandboxTier | null;
-  /** Whether the user explicitly confirmed launching the next new session on
-   *  `selectedAgentId` despite its Effective Session Contract preview reporting
-   *  `requiresAcknowledgement` (a "supported" profile whose live protection
-   *  would be degraded) — see AgentPicker's confirm-to-continue step. Reset
-   *  whenever the selected agent changes; a prior agent's acknowledgement must
-   *  never silently carry over to a different one. */
-  draftAcknowledgeReducedProtections: boolean;
-  /** An ephemeral runner (saved config) chosen as the target for the next new
-   *  session, before any machine exists. Null = run on the currently-connected
-   *  node. When set, the first message launches a fresh machine from this config
-   *  and binds the session to it — no explicit "launch" step. Cleared once the
-   *  machine is launched (the draft then targets a real node) or the draft resets. */
-  draftEphemeralConfig: EphemeralNodeConfig | null;
   /** Current node's settings (Settings → Nodes), or null until fetched. */
   nodeSettings: NodeSettings | null;
   providers: ProviderInfo[];
@@ -934,16 +926,12 @@ export function initialState(): AppState {
     reposLoading: false,
     reposReason: null,
     githubConnect: { status: "idle" },
-    draftRepo: null,
+    draft: { ...EMPTY_SESSION_DRAFT },
     branches: [],
     branchesRepo: null,
     branchesDefault: null,
     branchesError: null,
     branchesLoading: false,
-    draftBranch: null,
-    draftSandbox: null,
-    draftAcknowledgeReducedProtections: false,
-    draftEphemeralConfig: null,
     nodeSettings: null,
     providers: [],
     activationReadiness: null,
@@ -1815,7 +1803,7 @@ export class SessionStore {
       needsModelAuth: null,
       // A node switch (incl. binding a freshly-launched ephemeral runner) means
       // the "launch this runner on first send" intent is spent/irrelevant.
-      draftEphemeralConfig: null,
+      draft: reduceSessionDraft(this.state.draft, { type: "select-ephemeral-config", config: null }),
       // Per-node settings (name, default agent/model, GitHub prompt, sync
       // config, …) must never survive a switch — otherwise a still-editable
       // form can keep showing the *previous* node's settings under the
@@ -1866,41 +1854,51 @@ export class SessionStore {
     this.set({ reposLoading: loading });
   }
 
-  /** Repo chosen for the next new session (cleared once the session is created). */
-  /** Pick (or clear, with null) the ephemeral runner the next new session will
-   *  launch on its first message. See `AppState.draftEphemeralConfig`. */
-  setDraftEphemeralConfig(config: EphemeralNodeConfig | null): void {
-    this.set({ draftEphemeralConfig: config });
+  private updateSessionDraft(command: SessionDraftCommand): SessionDraft {
+    const draft = reduceSessionDraft(this.state.draft, command);
+    this.set({ draft });
+    return draft;
   }
+
+  /** Pick (or clear) the ephemeral runner the next session launches on. */
+  setDraftEphemeralConfig(config: EphemeralNodeConfig | null): void {
+    this.updateSessionDraft({ type: "select-ephemeral-config", config });
+  }
+
   setDraftRepo(slug: string | null): void {
-    this.set({ draftRepo: slug });
+    this.updateSessionDraft({ type: "select-repository", repo: slug });
   }
 
   setBranchesLoading(loading: boolean): void {
     this.set({ branchesLoading: loading });
   }
 
-  /** Drop the branch list (and any picked branch) — called whenever `draftRepo`
+  /** Drop the branch list (and any picked branch) — called whenever `draft.repo`
    *  changes, so the branch pill never shows the previous repo's branches (or a
    *  picked branch that belongs to it) while the new repo's list loads. */
   clearBranches(): void {
-    this.set({ branches: [], branchesRepo: null, branchesDefault: null, branchesError: null, branchesLoading: false, draftBranch: null });
+    this.set({
+      branches: [],
+      branchesRepo: null,
+      branchesDefault: null,
+      branchesError: null,
+      branchesLoading: false,
+      draft: reduceSessionDraft(this.state.draft, { type: "select-branch", branch: null }),
+    });
   }
 
   /** Remote branch chosen for the next new session (null = the repo's default branch). */
   setDraftBranch(name: string | null): void {
-    this.set({ draftBranch: name });
+    this.updateSessionDraft({ type: "select-branch", branch: name });
   }
 
   /** Sandbox tier chosen for the next new session (null = use the node default). */
   setDraftSandbox(tier: SandboxTier | null): void {
-    this.set({ draftSandbox: tier });
+    this.updateSessionDraft({ type: "select-sandbox", sandbox: tier });
   }
 
-  /** Record (or clear) the user's confirm-to-continue acknowledgement for the
-   *  next new session's Effective Session Contract preview. */
   setDraftAcknowledgeReducedProtections(value: boolean): void {
-    this.set({ draftAcknowledgeReducedProtections: value });
+    this.updateSessionDraft({ type: "acknowledge-reduced-protections", acknowledged: value });
   }
 
   /** Remember the user's last-used model so the next fresh draft defaults to it
@@ -1982,7 +1980,7 @@ export class SessionStore {
     const next: Partial<AppState> = {
       selectedAgentId: id,
       currentAgentName: agentLabel(rt) || this.state.currentAgentName,
-      draftAcknowledgeReducedProtections: false,
+      draft: reduceSessionDraft(this.state.draft, { type: "acknowledge-reduced-protections", acknowledged: false }),
     };
     // Only touch the model list when the held one belongs to a *different*
     // runtime; a null (unknown) id is left for the refresh to overwrite so we
@@ -2054,7 +2052,7 @@ export class SessionStore {
       changesHistory: [],
       checkpoints: [],
       // A brand-new draft hasn't picked an ephemeral runner yet.
-      draftEphemeralConfig: null,
+      draft: reduceSessionDraft(this.state.draft, { type: "select-ephemeral-config", config: null }),
     });
   }
 

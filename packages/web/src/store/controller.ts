@@ -1817,14 +1817,14 @@ export class AppController {
     const s = this.store.getState();
     const model = s.currentModel ? { provider: (s.currentModel as any).provider, id: s.currentModel.id } : undefined;
     return {
-      repo: s.draftRepo || undefined,
+      repo: s.draft.repo || undefined,
       // Only meaningful alongside `repo` — a branch is only ever set together
       // with its repo (chooseRepoBranch) and reset when the repo changes
       // (chooseRepo), so this can never leak onto an unrelated repo/workspace.
-      branch: s.draftRepo ? s.draftBranch || undefined : undefined,
+      branch: s.draft.repo ? s.draft.branch || undefined : undefined,
       agent: s.selectedAgentId || undefined,
-      sandbox: s.draftSandbox || undefined,
-      acknowledgeReducedProtections: s.draftAcknowledgeReducedProtections || undefined,
+      sandbox: s.draft.sandbox || undefined,
+      acknowledgeReducedProtections: s.draft.acknowledgeReducedProtections || undefined,
       model,
     };
   }
@@ -1889,7 +1889,7 @@ export class AppController {
     // is cheap. If a repo is already remembered, prefetch its branches too so
     // the branch drill-in is ready as well.
     this.listRepos();
-    const repo = this.store.getState().draftRepo;
+    const repo = this.store.getState().draft.repo;
     if (repo) this.listBranches(repo);
   }
 
@@ -2021,7 +2021,7 @@ export class AppController {
     // IS the launch. Persist a sidebar row, provision the machine, and use a
     // background relay connection to create and start the real session once the
     // node is online — no launch modal, and the main pane is immediately free.
-    const runner = this.store.getState().draftEphemeralConfig;
+    const runner = this.store.getState().draft.ephemeralConfig;
     if (runner) {
       const provisionalId = `starting-${rid}`;
       this.pendingPrompt.provisionalId = provisionalId;
@@ -2341,7 +2341,7 @@ export class AppController {
    *  actually changes (or is cleared), since a branch from a different repo is
    *  meaningless here. Use chooseRepoBranch to set an explicit branch. */
   chooseRepo(slug: string | null): void {
-    const changed = slug !== this.store.getState().draftRepo;
+    const changed = slug !== this.store.getState().draft.repo;
     this.store.setDraftRepo(slug);
     if (changed) this.store.clearBranches();
     this.local.setLastChoice({ repo: slug });
@@ -3148,7 +3148,7 @@ export class AppController {
     // repo selection, not a per-machine setting — so a configured machine works
     // on whatever repo the draft targets. An explicit opts.repo (e.g. a queue
     // caller) still wins.
-    const repo = opts.repo ?? (this.store.getState().draftRepo || undefined);
+    const repo = opts.repo ?? (this.store.getState().draft.repo || undefined);
     // A first-run ephemeral node has no native GitHub login to inherit. Seed the
     // device-local GitHub token during bootstrap so its very first repo picker,
     // clone, push, and PR work instead of failing after the machine boots.
@@ -3715,11 +3715,11 @@ export class AppController {
         title: (text.split(/\r?\n/, 1)[0] || "Run").slice(0, 120),
         body: `${TEMPLATE_PREFIX}:${nodeId}:${encrypted}`,
         label,
-        repo: sessionId ? undefined : state.draftRepo ?? undefined,
+        repo: sessionId ? undefined : state.draft.repo ?? undefined,
         runtimeId: sessionId ? undefined : state.selectedAgentId ?? undefined,
         model: sessionId ? undefined : state.currentModel?.id,
         approvalMode: options.approvalMode,
-        sandbox: active?.sandbox ?? (!sessionId ? state.draftSandbox ?? state.nodeSettings?.defaultSandbox : undefined),
+        sandbox: active?.sandbox ?? (!sessionId ? state.draft.sandbox ?? state.nodeSettings?.defaultSandbox : undefined),
         maxAttempts: options.maxAttempts,
         targetKind: sessionId ? "existing_session" : "new_session",
         targetSessionId: sessionId,
@@ -3780,7 +3780,7 @@ export class AppController {
         nodeLabel: this.resolveNodeLabel(nodeId),
         targetKind: target,
         targetSessionId: target === "existing_session" ? sessionId ?? undefined : undefined,
-        repo: target === "new_session" ? this.store.getState().draftRepo ?? undefined : undefined,
+        repo: target === "new_session" ? this.store.getState().draft.repo ?? undefined : undefined,
         message: true,
         enabled: true,
       });

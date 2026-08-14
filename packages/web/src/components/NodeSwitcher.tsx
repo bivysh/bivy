@@ -15,7 +15,7 @@ import type { EphemeralNodeConfig, EphemeralMachine } from "@bivy/core";
  * there is only one node.
  */
 export function NodeSwitcher() {
-  const { nodes, currentNodeId, status, activeSessionId, sessions, draftEphemeralConfig } = useAppState();
+  const { nodes, currentNodeId, status, activeSessionId, sessions, draft } = useAppState();
   const [open, setOpen] = useState(false);
   const [ephemeralConfigs, setEphemeralConfigs] = useState<EphemeralNodeConfig[]>([]);
   const [ephemeralMachines, setEphemeralMachines] = useState<EphemeralMachine[]>([]);
@@ -50,7 +50,7 @@ export function NodeSwitcher() {
   const current = nodes.find((n) => n.id === sessionNodeId);
   // A runner picked for the (not-yet-created) draft session shows as the current
   // selection — offline/pending until the first message launches it.
-  const draftRunner = !activeSessionId ? draftEphemeralConfig : null;
+  const draftRunner = !activeSessionId ? draft.ephemeralConfig : null;
   const label = draftRunner ? draftRunner.name : current?.name || sessionNodeId || "Machine";
   const showOnline = draftRunner ? false : current?.online;
   // Ephemeral machines enroll as real account nodes (id `eph-…`) once they boot,

@@ -84,6 +84,13 @@ const RULES = [
     note: "ephemeral lifecycle projections are data-in/data-out and import no storage, provider, transport, browser, or clock implementation.",
   },
   {
+    name: "session-draft-is-a-pure-reducer",
+    dir: "packages/core/src/session-draft.ts",
+    forbid: ["./store", "./transport", "./local-store", "node:", "react"],
+    enforce: true,
+    note: "new-session target choices share one explicit value and are reduced without effects or store identity.",
+  },
+  {
     name: "followup-queue-is-a-pure-reducer",
     dir: "packages/core/src/followup-queue.ts",
     forbid: ["./store", "./transport", "./account", "./local-store", "node:", "react"],

@@ -259,7 +259,7 @@ export function RepoPicker({ state, onClose }: { state: AppState; onClose: () =>
     controller.listRepos();
     // Warm the branch list for the already-picked repo so drilling into it via
     // the arrow is instant (stale-while-revalidate — no spinner if cached).
-    const repo = state.draftRepo;
+    const repo = state.draft.repo;
     if (repo) controller.listBranches(repo);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -280,7 +280,7 @@ export function RepoPicker({ state, onClose }: { state: AppState; onClose: () =>
       <input className="picker-search" placeholder="Search repos…" value={q} onChange={(e) => setQ(e.target.value)} />
       <div className="picker-list">
         <PickerItem
-          active={!state.draftRepo}
+          active={!state.draft.repo}
           title="No repo"
           meta="Work in the machine's default workspace"
           onClick={() => {
@@ -294,7 +294,7 @@ export function RepoPicker({ state, onClose }: { state: AppState; onClose: () =>
         )}
         {!state.reposLoading && state.reposError && <div className="picker-empty">{state.reposError}</div>}
         {repos.map((r) => {
-          const picked = r.slug === state.draftRepo;
+          const picked = r.slug === state.draft.repo;
           return (
             <PickerItem
               key={r.slug}
@@ -305,7 +305,7 @@ export function RepoPicker({ state, onClose }: { state: AppState; onClose: () =>
               // without reopening the branch list.
               meta={[
                 r.private ? "private" : null,
-                picked ? (state.draftBranch ? `branch: ${state.draftBranch}` : "default branch") : null,
+                picked ? (state.draft.branch ? `branch: ${state.draft.branch}` : "default branch") : null,
                 r.description,
               ]
                 .filter(Boolean)
@@ -374,7 +374,7 @@ function RepoBranchPicker({
     state.repos.find((r) => r.slug === repo)?.defaultBranch ?? (state.branchesRepo === repo ? state.branchesDefault : null) ?? null;
   // The active tick reflects the current draft only when it's this same repo;
   // drilling into a different repo starts from "default branch".
-  const activeBranch = state.draftRepo === repo ? state.draftBranch : null;
+  const activeBranch = state.draft.repo === repo ? state.draft.branch : null;
 
   // Commit a repo+branch pick in one shot. Picking the default branch
   // normalizes to null, so the repo pill never shows a redundant "@ main".
@@ -436,7 +436,7 @@ export function SandboxPicker({ state, onClose }: { state: AppState; onClose: ()
     <Sheet title="Sandbox mode" onClose={onClose} autoFocusSearch={false}>
       <div className="picker-list">
         <PickerItem
-          active={!state.draftSandbox}
+          active={!state.draft.sandbox}
           title={`Machine default${nodeDefault ? ` (${nodeDefault})` : ""}`}
           meta="Use this machine's configured sandbox mode"
           onClick={() => {
@@ -450,7 +450,7 @@ export function SandboxPicker({ state, onClose }: { state: AppState; onClose: ()
           return (
             <PickerItem
               key={t.id}
-              active={state.draftSandbox === t.id}
+              active={state.draft.sandbox === t.id}
               title={awaitingConfirmation ? "Confirm full computer access" : t.label}
               meta={awaitingConfirmation
                 ? "This agent can access anything your OS user can. Bivy is not an isolation boundary. Select again to continue."

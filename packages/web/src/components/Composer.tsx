@@ -529,20 +529,20 @@ export function Composer({
   // the arrow on a repo row in the repo picker, not a separate pill. A blank
   // branch means "the repo's default branch", so we only append "@ <branch>"
   // when a specific one was chosen.
-  const repoLabel = state.draftRepo
-    ? state.draftBranch
-      ? `${state.draftRepo} @ ${state.draftBranch}`
-      : state.draftRepo
+  const repoLabel = state.draft.repo
+    ? state.draft.branch
+      ? `${state.draft.repo} @ ${state.draft.branch}`
+      : state.draft.repo
     : "No repo";
-  const repoTitle = state.draftRepo
-    ? state.draftBranch
-      ? `Repository ${state.draftRepo} (branch ${state.draftBranch})`
-      : `Repository ${state.draftRepo} (default branch)`
+  const repoTitle = state.draft.repo
+    ? state.draft.branch
+      ? `Repository ${state.draft.repo} (branch ${state.draft.branch})`
+      : `Repository ${state.draft.repo} (default branch)`
     : "Repository";
   // The next session's sandbox tier: an explicit draft choice, else the node
   // default (shown by name when known). Chosen up front on the draft; a running
   // session shows it read-only in Session settings.
-  const draftTier = SANDBOX_TIERS.find((t) => t.id === state.draftSandbox);
+  const draftTier = SANDBOX_TIERS.find((t) => t.id === state.draft.sandbox);
   const nodeDefaultTier = SANDBOX_TIERS.find((t) => t.id === state.nodeSettings?.defaultSandbox);
   // The ◈ glyph already reads as "sandbox", so we drop the redundant "Sandbox"
   // word: show the chosen tier, else the node default's name, else glyph only.
@@ -581,13 +581,13 @@ export function Composer({
     || (controller.direct ? "This machine" : "Default machine");
   const firstSessionLine = firstSessionSummary({
     machine: machineLabel,
-    repo: state.draftRepo || "No repo",
+    repo: state.draft.repo || "No repo",
     agent: state.currentAgentName || "Agent",
     model: modelLabel,
     modelManagedByAgent: !modelSelectable,
-    protection: sandboxLabel || state.draftSandbox || undefined,
+    protection: sandboxLabel || state.draft.sandbox || undefined,
   });
-  const firstIsolatedRun = isDraft && Boolean(state.draftEphemeralConfig);
+  const firstIsolatedRun = isDraft && Boolean(state.draft.ephemeralConfig);
   const starterTask = "Inspect this repository and explain how to run its tests. Do not change files.";
 
   return (

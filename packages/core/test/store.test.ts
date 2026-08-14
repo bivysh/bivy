@@ -1471,7 +1471,7 @@ describe("SessionStore", () => {
     const store = new SessionStore();
     store.setDraftBranch("feature/x");
     store.apply({ type: "branches.list", repo: "bivysh/bivy", branches: [{ name: "feature/x" }], defaultBranch: "main" });
-    expect(store.getState().draftBranch).toBe("feature/x");
+    expect(store.getState().draft.branch).toBe("feature/x");
     expect(store.getState().branches.length).toBe(1);
 
     // Picking a different repo must drop the previous repo's branch pick and
@@ -1480,7 +1480,7 @@ describe("SessionStore", () => {
     // repo's clone off a branch name that belongs to someone else's repo).
     store.clearBranches();
     const s = store.getState();
-    expect(s.draftBranch).toBeNull();
+    expect(s.draft.branch).toBeNull();
     expect(s.branches).toEqual([]);
     expect(s.branchesRepo).toBeNull();
     expect(s.branchesDefault).toBeNull();

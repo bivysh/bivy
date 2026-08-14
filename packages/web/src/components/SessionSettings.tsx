@@ -98,7 +98,8 @@ function SessionContractInspector({ contract }: { contract: SessionContract }) {
  */
 export function SessionSettings({ onClose }: { onClose: () => void }) {
   const state = useAppState();
-  const { draftSandbox, nodeSettings, activeSessionId, sessions } = state;
+  const { nodeSettings, activeSessionId, sessions } = state;
+  const draftSandbox = state.draft.sandbox;
   const nodeDefault = nodeSettings?.defaultSandbox;
   const running = Boolean(activeSessionId);
   const activeSession = activeSessionId ? sessions.find((s) => s.sessionId === activeSessionId) : undefined;

@@ -17,29 +17,29 @@ const RUNNER: EphemeralNodeConfig = {
 // so a stale pick can't leak onto an unrelated session.
 describe("draftEphemeralConfig (pick-a-runner-then-send)", () => {
   it("defaults to null", () => {
-    expect(new SessionStore().getState().draftEphemeralConfig).toBeNull();
+    expect(new SessionStore().getState().draft.ephemeralConfig).toBeNull();
   });
 
   it("picks and clears via setDraftEphemeralConfig", () => {
     const store = new SessionStore();
     store.setDraftEphemeralConfig(RUNNER);
-    expect(store.getState().draftEphemeralConfig).toEqual(RUNNER);
+    expect(store.getState().draft.ephemeralConfig).toEqual(RUNNER);
     store.setDraftEphemeralConfig(null);
-    expect(store.getState().draftEphemeralConfig).toBeNull();
+    expect(store.getState().draft.ephemeralConfig).toBeNull();
   });
 
   it("clears on a node switch (resetSession) — e.g. after binding the launched machine", () => {
     const store = new SessionStore();
     store.setDraftEphemeralConfig(RUNNER);
     store.resetSession();
-    expect(store.getState().draftEphemeralConfig).toBeNull();
+    expect(store.getState().draft.ephemeralConfig).toBeNull();
   });
 
   it("clears on a fresh draft (resetActiveSession)", () => {
     const store = new SessionStore();
     store.setDraftEphemeralConfig(RUNNER);
     store.resetActiveSession();
-    expect(store.getState().draftEphemeralConfig).toBeNull();
+    expect(store.getState().draft.ephemeralConfig).toBeNull();
   });
 
   it("persists a cold-start placeholder before the runner is online", () => {

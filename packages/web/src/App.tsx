@@ -245,7 +245,7 @@ export function App() {
   // A picked-but-unlaunched ephemeral runner also keeps the composer usable:
   // sending IS the launch — controller.sendPrompt provisions the machine, binds
   // the session, and replays the message once it's online (no launch button).
-  const canCompose = (online || transientReconnect || controller.isCurrentNodeResumable() || Boolean(state.draftEphemeralConfig)) && !activeTuiLocked;
+  const canCompose = (online || transientReconnect || controller.isCurrentNodeResumable() || Boolean(state.draft.ephemeralConfig)) && !activeTuiLocked;
 
   // Left-edge swipe opens the sidebar drawer; swipe-left closes it (mobile).
   useEdgeSwipe({ isOpen: drawerOpen, onOpen: openDrawer, onClose: () => setDrawerOpen(false) });
@@ -402,7 +402,7 @@ export function App() {
   const needsAuth = !controller.direct && !controller.solo && !state.signedIn;
   // Picking an ephemeral runner counts as having chosen where to run, even
   // before its machine exists — show the composer, not the onboarding screen.
-  const needsNode = !controller.direct && state.signedIn && !state.currentNodeId && !state.draftEphemeralConfig;
+  const needsNode = !controller.direct && state.signedIn && !state.currentNodeId && !state.draft.ephemeralConfig;
 
   // Hosted control plane, not signed in yet: show the sign-in screen instead of a
   // dead shell. Once signed in we always render the normal app — a node is picked

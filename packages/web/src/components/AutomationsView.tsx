@@ -393,7 +393,7 @@ function emptyDraft(nodeId: string): Draft {
 
 /** Prefer the composer's current draft repo so templates open pre-filled. */
 function rememberedRepo(state: AppState): string {
-  return state.draftRepo || "";
+  return state.draft.repo || "";
 }
 
 // Soft glyph for each suggested template card.
