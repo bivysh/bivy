@@ -2518,17 +2518,6 @@ export class SessionStore {
         });
         return;
       }
-      case "repos.list": {
-        const e = event as any;
-        this.set({
-          repos: Array.isArray(e.repos) ? (e.repos as RepoInfo[]) : [],
-          reposAuthed: e.authed !== false,
-          reposError: e.error || null,
-          reposReason: e.reason === "gh-unauthed" || e.reason === "no-token" ? e.reason : null,
-          reposLoading: false,
-        });
-        return;
-      }
       case "activation.readiness": {
         const e = event as any;
         if (e.credential && e.repository) this.set({ activationReadiness: { credential: e.credential, repository: e.repository } });
@@ -2546,17 +2535,6 @@ export class SessionStore {
             intervalMs: typeof e.intervalMs === "number" ? e.intervalMs : undefined,
             error: typeof e.error === "string" ? e.error : undefined,
           },
-        });
-        return;
-      }
-      case "branches.list": {
-        const e = event as any;
-        this.set({
-          branches: Array.isArray(e.branches) ? (e.branches as BranchInfo[]) : [],
-          branchesRepo: typeof e.repo === "string" && e.repo ? e.repo : null,
-          branchesDefault: typeof e.defaultBranch === "string" ? e.defaultBranch : null,
-          branchesError: e.error || null,
-          branchesLoading: false,
         });
         return;
       }
@@ -2583,38 +2561,6 @@ export class SessionStore {
         this.set({ providerAuth: event as unknown as ProviderAuth });
         return;
       }
-      case "credentials.records": {
-        const e = event as any;
-        this.set({ credentialRecords: Array.isArray(e.records) ? (e.records as CredentialRecordSummary[]) : [] });
-        return;
-      }
-      case "credentials.presets": {
-        const e = event as any;
-        this.set({ credentialPresets: (e.presets ?? {}) as CredentialPresetsView });
-        return;
-      }
-      case "models.custom.list": {
-        const e = event as any;
-        if (Array.isArray(e.providers)) this.set({ localModels: e.providers as LocalModelProvider[] });
-        return;
-      }
-      case "models.custom.presets": {
-        const e = event as any;
-        if (Array.isArray(e.presets)) this.set({ localModelPresets: e.presets as LocalModelPreset[] });
-        return;
-      }
-      case "rulesets.list": {
-        const e = event as any;
-        if (Array.isArray(e.rulesets)) this.set({ rulesets: e.rulesets as RulesetInfo[] });
-        return;
-      }
-      case "stt.config": {
-        const e = event as any;
-        if (Array.isArray(e.providers) && typeof e.provider === "string") {
-          this.set({ sttConfig: { provider: e.provider, providers: e.providers } as SttConfig });
-        }
-        return;
-      }
       case "provider.oauth.reset": {
         const e = event as any;
         if (Array.isArray(e.providers)) this.set({ providers: e.providers as ProviderInfo[] });
@@ -2637,11 +2583,6 @@ export class SessionStore {
             error: e.error,
           },
         });
-        return;
-      }
-      case "node.settings": {
-        const e = event as any;
-        if (e.settings && typeof e.settings === "object") this.set({ nodeSettings: e.settings as NodeSettings });
         return;
       }
       case "auth.oauth.progress": {
