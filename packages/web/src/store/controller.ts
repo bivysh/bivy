@@ -146,6 +146,18 @@ import {
 import { navigate, parseRoute, routePath, type Route } from "../router.js";
 import { EPHEMERAL_MACHINES_ENABLED, EPHEMERAL_KEEP_FAILED_MACHINES } from "../flags.js";
 import { markFirstSuccessfulResponse } from "../pwaLifecycle.js";
+import { SessionOrchestrator, type SessionOrchestrationEvent } from "./coordinators/session-orchestrator.js";
+import { NodeConnectionCoordinator, type NodeConnectionEvent } from "./coordinators/node-connection-coordinator.js";
+import { CredentialsModelsCoordinator, type CredentialsModelsEvent } from "./coordinators/credentials-models-coordinator.js";
+import { EphemeralCoordinator, type EphemeralCoordinatorEvent } from "./coordinators/ephemeral-coordinator.js";
+import { AutomationsAccountCoordinator, type AutomationsAccountEvent } from "./coordinators/automations-account-coordinator.js";
+
+export type AppCoordinatorEvent =
+  | SessionOrchestrationEvent
+  | NodeConnectionEvent
+  | CredentialsModelsEvent
+  | EphemeralCoordinatorEvent
+  | AutomationsAccountEvent;
 
 /**
  * Bounded discovery metadata for a provider-native session Bivy did not start
@@ -306,8 +318,79 @@ export class AppController {
    *  events are latched in this browser so reconnect/history replay cannot
    *  inflate them; the in-flight guard also closes double-emission races. */
   private productMetricsInFlight = new Set<ProductMetricEvent>();
+  private readonly sessions: SessionOrchestrator;
+  private readonly nodes: NodeConnectionCoordinator;
+  private readonly credentialsModels: CredentialsModelsCoordinator;
+  private readonly ephemeral: EphemeralCoordinator;
+  private readonly automationsAccount: AutomationsAccountCoordinator;
+  private readonly coordinatorListeners = new Set<(event: AppCoordinatorEvent) => void>();
 
   constructor() {
+    const emit = (event: AppCoordinatorEvent) => {
+      for (const listener of this.coordinatorListeners) listener(event);
+    };
+    this.sessions = new SessionOrchestrator({
+      send: (command) => { void this.transport.send(command); },
+      createRequestId: requestId,
+      createClientMessageId: clientMessageId,
+      emit,
+    });
+    this.nodes = new NodeConnectionCoordinator({ selectNode: (nodeId) => this.switchNode(nodeId), emit });
+    this.credentialsModels = new CredentialsModelsCoordinator({
+      send: (command) => this.send(command),
+      awaitResult: (command, timeoutMs) => this.awaitAck(command, timeoutMs),
+      now: () => Date.now(),
+      isDirect: () => this.direct,
+      emit,
+    });
+    this.ephemeral = new EphemeralCoordinator({
+      listKeys: () => this.ephemeralKeys.list(),
+      listModelKeys: () => this.ephemeralKeys.listModelKeys(),
+      setModelKey: (provider, key, scope) => this.ephemeralKeys.setModelKey(provider, key, scope),
+      removeModelKey: (provider) => this.ephemeralKeys.removeModelKey(provider),
+      getPrefs: (id) => this.ephemeralPrefs.get(id),
+      setPrefs: (id, patch) => this.ephemeralPrefs.set(id, patch),
+      listSetups: (provider) => this.ephemeralSetups.list(provider),
+      createSetup: (provider, input) => this.ephemeralSetups.create(provider, input),
+      updateSetup: (id, patch) => this.ephemeralSetups.update(id, patch),
+      removeSetup: (id) => this.ephemeralSetups.remove(id),
+      listMachines: () => this.ephemeralMachines.list(),
+      listSizes: (providerId, region) => listEphemeralSizes(providerId, { exec: cloudExec(this.local), keys: this.ephemeralKeys }, region),
+      getQueueDefault: () => fetchEphemeralQueueDefault(this.local),
+      setQueueDefault: (patch) => setEphemeralQueueDefault(this.local, patch),
+      listConfigs: () => fetchEphemeralConfigs(this.local),
+      createConfig: (input) => apiCreateEphemeralConfig(this.local, input),
+      updateConfig: (id, patch) => apiUpdateEphemeralConfig(this.local, id, patch),
+      removeConfig: (id) => apiDeleteEphemeralConfig(this.local, id),
+      emit,
+    });
+    this.automationsAccount = new AutomationsAccountCoordinator({
+      fetchMe: () => fetchMe(this.local),
+      fetchGithubApp: () => fetchGithubApp(this.local),
+      fetchGithubQueue: (limit) => fetchGithubQueue(this.local, limit),
+      fetchAutomationRuns: (limit) => fetchAutomationRuns(this.local, limit),
+      cancelAutomationRun: async (id) => { await apiCancelAutomationRun(this.local, id); },
+      setGithubAppDefaultNode: (node, appId) => setGithubAppDefaultNode(this.local, node, appId),
+      setGithubAppTriggerAccess: (access, appId) => setGithubAppTriggerAccess(this.local, access, appId),
+      assignWorkItem: (id, input) => assignWorkItem(this.local, id, input),
+      deleteWorkItem: (id) => deleteWorkItem(this.local, id),
+      clearWorkQueue: () => clearWorkQueue(this.local),
+      disconnectGithubApp: async (appId, hookId) => {
+        this.send({ kind: "github.app.disconnect", requestId: requestId(), appId: appId || undefined, hookId: hookId || undefined });
+        await disconnectGithubApp(this.local, { appId, hookId });
+      },
+      removeNode: (nodeId) => removeAccountNode(this.local, nodeId),
+      refreshNodes: () => this.refreshNodes(),
+      checkout: () => billingCheckout(this.local),
+      billingPortal: () => billingPortal(this.local),
+      navigate: (url) => location.assign(url),
+      enablePush: () => enablePushNotifications(this.local),
+      disablePush: () => disablePushNotifications(this.local),
+      pushStatus: () => getPushSubscriptionStatus(),
+      getNotificationPreferences: () => getNotificationPreferences(this.local),
+      setNotificationPreferences: (patch) => setNotificationPreferences(this.local, patch),
+      emit,
+    });
     // Persist each applied history snapshot + cursor, and re-request canonical
     // history once a live turn settles (drives the P1.1 append-only backfill).
     this.store.onHistoryPersist = (sessionId, messages, count, historyHash) => {
@@ -666,17 +749,26 @@ export class AppController {
 
   /** Hosted control plane, not signed in yet. */
   needsAuth(): boolean {
-    return !this.direct && !this.solo && !this.local.s;
+    return this.connectionRequirement().type === "authentication-required";
   }
 
   /** Signed in on the hosted control plane, but no node picked yet. */
   needsNode(): boolean {
-    return !this.direct && Boolean(this.local.s) && !this.local.cur;
+    return this.connectionRequirement().type === "node-required";
   }
 
   /** True whenever the hosted client can't reach a node yet (auth or node). */
   needsSetup(): boolean {
-    return this.needsAuth() || this.needsNode();
+    return this.connectionRequirement().type !== "ready";
+  }
+
+  private connectionRequirement() {
+    return this.nodes.requirement({
+      direct: this.direct,
+      solo: this.solo,
+      signedIn: this.signedIn,
+      currentNodeId: this.local.cur || null,
+    });
   }
 
   /** List the nodes enrolled on the signed-in account. */
@@ -686,7 +778,7 @@ export class AppController {
 
   /** Pick a node and connect to it over the relay (initial selection). */
   selectNode(nodeId: string): void {
-    this.switchNode(nodeId);
+    this.nodes.selectNode(nodeId);
   }
 
   get signedIn(): boolean {
@@ -757,6 +849,12 @@ export class AppController {
     // Back/forward navigation between sessions: sync the app to the URL the user
     // landed on, without writing history back (the browser already did).
     window.addEventListener("popstate", () => this.applyRoute(parseRoute(), { navigate: false }));
+  }
+
+  /** Subscribe to data-only coordinator command/result events. */
+  onCoordinatorEvent(fn: (event: AppCoordinatorEvent) => void): () => void {
+    this.coordinatorListeners.add(fn);
+    return () => this.coordinatorListeners.delete(fn);
   }
 
   /** Subscribe to account Run changes pushed over the relay. The callback is a
@@ -1112,7 +1210,7 @@ export class AppController {
   }
 
   private send(command: Command): void {
-    void this.transport.send(command);
+    this.sessions.send(command);
   }
 
   /** Trigger `bivy update` on the connected node from the version-mismatch
@@ -2468,35 +2566,18 @@ export class AppController {
 
   // --- Settings: providers / OAuth ---------------------------------------
 
-  listProviders(): void {
-    this.send({ kind: "providers.list" });
-  }
-  getProviderAuth(provider: string): void {
-    this.send({ kind: "provider.auth.get", provider });
-  }
-  /** Save an API key and resolve once the node acks it (or reject with its
-   *  error) instead of assuming success the moment it was sent. */
-  saveApiKey(provider: string, key: string): Promise<void> {
-    return this.awaitAck({ kind: "provider.apiKey", provider, key }).then(() => undefined);
-  }
-  removeProvider(provider: string): void {
-    this.send({ kind: "provider.remove", provider });
-  }
-  resetOauth(provider: string): void {
-    this.send({ kind: "provider.oauth.reset", provider });
-  }
-  startOauth(provider: string): void {
-    this.send({ kind: "provider.oauth.start", provider });
-  }
-  submitOauthCode(id: string, code: string): void {
-    this.send({ kind: "provider.oauth.code", id, code });
-  }
+  listProviders(): void { this.credentialsModels.listProviders(); }
+  getProviderAuth(provider: string): void { this.credentialsModels.getProviderAuth(provider); }
+  /** Save an API key and wait for the node result. */
+  saveApiKey(provider: string, key: string): Promise<void> { return this.credentialsModels.saveApiKey(provider, key); }
+  removeProvider(provider: string): void { this.credentialsModels.removeProvider(provider); }
+  resetOauth(provider: string): void { this.credentialsModels.resetOauth(provider); }
+  startOauth(provider: string): void { this.credentialsModels.startOauth(provider); }
+  submitOauthCode(id: string, code: string): void { this.credentialsModels.submitOauthCode(id, code); }
 
   // --- Settings: multiple credentials per provider (labeled) --------------
   /** Ask for every labeled credential; the node replies with `credentials.records`. */
-  listCredentialRecords(): void {
-    this.send({ kind: "credentials.list" });
-  }
+  listCredentialRecords(): void { this.credentialsModels.listCredentialRecords(); }
   private credentialSyncInFlight: Promise<void> | null = null;
   /** Bidirectional API-key convergence between the PWA account vault and node. */
   private syncAccountCredentialsWithNode(): Promise<void> {
@@ -2525,15 +2606,13 @@ export class AppController {
   }
   /** Add/replace a labeled credential — an API key, or an op://…/env://… reference. */
   setCredential(provider: string, label: string, value: { key?: string; ref?: string }): Promise<void> {
-    return this.awaitAck({ kind: "credential.set", provider, label, ...value }).then(() => undefined);
+    return this.credentialsModels.setCredential(provider, label, value);
   }
   /** Forget one labeled credential (`provider:label`). */
-  removeCredential(provider: string, label: string): void {
-    this.send({ kind: "credential.remove", provider, label });
-  }
+  removeCredential(provider: string, label: string): void { this.credentialsModels.removeCredential(provider, label); }
   /** Toggle whether a credential syncs across your nodes or stays on this one. */
   setCredentialSync(provider: string, label: string, sync: "account" | "node"): void {
-    this.send({ kind: "credential.sync.set", provider, label, sync });
+    this.credentialsModels.setCredentialSync(provider, label, sync);
   }
   /** "Test connection": a bounded, non-secret liveness probe for one credential
    *  (see credential.test in server.ts). Resolves with the redacted result even
@@ -2541,86 +2620,54 @@ export class AppController {
    *  rejects. Direct/self-host mode has no handler for this command yet (same
    *  gap as the rest of the labeled-credentials surface), so it always reports
    *  "not supported" there rather than hanging. */
-  async testCredential(provider: string, label: string): Promise<{ ok: boolean; at: number; reason?: string }> {
-    if (this.direct) return { ok: false, at: Date.now(), reason: "not_supported" };
-    const event = (await this.awaitAck({ kind: "credential.test", provider, label }, 15000)) as { ok?: boolean; at?: number; reason?: string };
-    return { ok: Boolean(event.ok), at: Number(event.at) || Date.now(), ...(event.reason ? { reason: event.reason } : {}) };
+  testCredential(provider: string, label: string): Promise<{ ok: boolean; at: number; reason?: string }> {
+    return this.credentialsModels.testCredential(provider, label);
   }
   /** Ask for the selection presets; the node replies with `credentials.presets`. */
-  getCredentialPresets(): void {
-    this.send({ kind: "credentials.presets.get" });
-  }
+  getCredentialPresets(): void { this.credentialsModels.getCredentialPresets(); }
   /** Choose which preset selection resolves against (empty clears it). */
-  setActivePreset(active: string): void {
-    this.send({ kind: "credentials.presets.setActive", active });
-  }
+  setActivePreset(active: string): void { this.credentialsModels.setActivePreset(active); }
   /** Point a provider at a label within a preset (empty label clears the mapping). */
   setPresetMapping(preset: string, provider: string, label: string): void {
-    this.send({ kind: "credentials.presets.setMapping", preset, provider, label });
+    this.credentialsModels.setPresetMapping(preset, provider, label);
   }
 
   // --- Settings: local / custom model endpoints ---------------------------
 
-  listLocalModels(): void {
-    this.send({ kind: "models.custom.list" });
-  }
-  listLocalModelPresets(): void {
-    this.send({ kind: "models.custom.presets" });
-  }
+  listLocalModels(): void { this.credentialsModels.listLocalModels(); }
+  listLocalModelPresets(): void { this.credentialsModels.listLocalModelPresets(); }
   /** Explicitly probe only the node's fixed localhost allowlist. */
-  async discoverLocalModels(): Promise<LocalModelDiscoveryResult> {
-    return await this.awaitAck({ kind: "models.custom.discover" }, 10_000) as unknown as LocalModelDiscoveryResult;
-  }
+  discoverLocalModels(): Promise<LocalModelDiscoveryResult> { return this.credentialsModels.discoverLocalModels(); }
   /** Verify one user-entered endpoint and return its normalized catalog health. */
-  async verifyLocalModel(baseUrl: string, apiKey?: string): Promise<LocalModelEndpointResult> {
-    const event = await this.awaitAck({ kind: "models.custom.verify", baseUrl, ...(apiKey ? { apiKey } : {}) }, 10_000) as any;
-    return event.result as LocalModelEndpointResult;
+  verifyLocalModel(baseUrl: string, apiKey?: string): Promise<LocalModelEndpointResult> {
+    return this.credentialsModels.verifyLocalModel(baseUrl, apiKey);
   }
   /** Save (create or update) a local/custom provider. `spec` matches the node's
    *  save shape: { providerId, name?, baseUrl, api?, apiKey?, compat?, models[] }.
    *  Resolves once the node acks the save (or rejects with its error) instead
    *  of assuming success the moment it was sent. */
-  async saveLocalModel(spec: Record<string, unknown>): Promise<string> {
-    const event = await this.awaitAck({ kind: "models.custom.save", spec }) as { provider?: unknown };
-    return String(event.provider ?? spec.providerId ?? "local");
-  }
-  removeLocalModel(id: string): void {
-    this.send({ kind: "models.custom.remove", id });
-  }
+  saveLocalModel(spec: Record<string, unknown>): Promise<string> { return this.credentialsModels.saveLocalModel(spec); }
+  removeLocalModel(id: string): void { this.credentialsModels.removeLocalModel(id); }
 
   // --- Settings: rulesets (run-orchestration policy) ----------------------
 
   /** Pull the ruleset list into state (each with its `active` flag). */
-  listRulesets(): void {
-    this.send({ kind: "rulesets.list" });
-  }
+  listRulesets(): void { this.credentialsModels.listRulesets(); }
   /** Save (create or update) a ruleset. `active` optionally (de)selects it as the
    *  queue's active ruleset. Resolves once the node acks (validation passes) or
    *  rejects with the node's validation error. */
-  saveRuleset(ruleset: Ruleset, active?: boolean): Promise<void> {
-    return this.awaitAck({ kind: "rulesets.save", ruleset, active }).then(() => undefined);
-  }
-  removeRuleset(name: string): void {
-    this.send({ kind: "rulesets.remove", name });
-  }
+  saveRuleset(ruleset: Ruleset, active?: boolean): Promise<void> { return this.credentialsModels.saveRuleset(ruleset, active); }
+  removeRuleset(name: string): void { this.credentialsModels.removeRuleset(name); }
 
   // --- Settings: voice input (speech-to-text) ----------------------------
 
   /** Pull the current voice-input config into state (provider + which keys exist). */
-  getSttConfig(): void {
-    this.send({ kind: "stt.config.get" });
-  }
-  setSttProvider(provider: string): void {
-    this.send({ kind: "stt.config.set", provider });
-  }
+  getSttConfig(): void { this.credentialsModels.getSttConfig(); }
+  setSttProvider(provider: string): void { this.credentialsModels.setSttProvider(provider); }
   /** Save a speech-to-text provider key and resolve once the node acks it (or
    *  reject with its error) instead of assuming success the moment it was sent. */
-  saveSttKey(provider: string, value: string): Promise<void> {
-    return this.awaitAck({ kind: "stt.config.set", setKey: { provider, value } }).then(() => undefined);
-  }
-  removeSttKey(provider: string): void {
-    this.send({ kind: "stt.config.set", removeKey: provider });
-  }
+  saveSttKey(provider: string, value: string): Promise<void> { return this.credentialsModels.saveSttKey(provider, value); }
+  removeSttKey(provider: string): void { this.credentialsModels.removeSttKey(provider); }
 
   /**
    * Send recorded audio to the node for transcription and resolve with the text.
@@ -2725,40 +2772,24 @@ export class AppController {
 
   // --- Settings: account / billing / push --------------------------------
 
-  fetchMe(): Promise<AccountMe> {
-    return fetchMe(this.local);
-  }
+  fetchMe(): Promise<AccountMe> { return this.automationsAccount.fetchMe(); }
   /** Connected GitHub App info (name + mention handle) for the settings UI. */
-  fetchGithubApp(): ReturnType<typeof fetchGithubApp> {
-    return fetchGithubApp(this.local);
-  }
+  fetchGithubApp(): ReturnType<typeof fetchGithubApp> { return this.automationsAccount.fetchGithubApp(); }
   /** Recent incoming work items (the GitHub queue), newest first. */
-  fetchGithubQueue(limit = 30): ReturnType<typeof fetchGithubQueue> {
-    return fetchGithubQueue(this.local, limit);
-  }
-  /** Recent automation runs (account-wide), newest first. The Inbox reads these
-   *  to surface runs that need attention or failed their final attempt. */
-  fetchAutomationRuns(limit = 50): ReturnType<typeof fetchAutomationRuns> {
-    return fetchAutomationRuns(this.local, limit);
-  }
+  fetchGithubQueue(limit = 30): ReturnType<typeof fetchGithubQueue> { return this.automationsAccount.fetchGithubQueue(limit); }
+  /** Recent automation runs (account-wide), newest first. */
+  fetchAutomationRuns(limit = 50): ReturnType<typeof fetchAutomationRuns> { return this.automationsAccount.fetchAutomationRuns(limit); }
   /** Request cancellation, then re-read both durable Run projections. The UI
    *  must render these records rather than treating an accepted request as a
    *  terminal result. */
-  async cancelAutomationRun(id: string): Promise<{
+  cancelAutomationRun(id: string): Promise<{
     runs: Awaited<ReturnType<typeof fetchAutomationRuns>>;
     queue: Awaited<ReturnType<typeof fetchGithubQueue>>;
-  }> {
-    await apiCancelAutomationRun(this.local, id);
-    const [runs, queue] = await Promise.all([
-      fetchAutomationRuns(this.local, 50),
-      fetchGithubQueue(this.local, 30),
-    ]);
-    return { runs, queue };
-  }
+  }> { return this.automationsAccount.cancelAutomationRun(id); }
   /** Set (empty string clears) the default node for untagged GitHub work. Without
    *  an appId it covers every connected app — it's an account-level preference. */
   setGithubAppDefaultNode(node: string, appId?: string): Promise<string | undefined> {
-    return setGithubAppDefaultNode(this.local, node, appId);
+    return this.automationsAccount.setGithubAppDefaultNode(node, appId);
   }
   /** Set who may @-mention-trigger a run (issue #259). Without an appId it
    *  covers every connected app — it's an account-level preference. */
@@ -2766,57 +2797,31 @@ export class AppController {
     triggerAccess: "everyone" | "contributor" | "collaborator",
     appId?: string,
   ): Promise<"everyone" | "contributor" | "collaborator"> {
-    return setGithubAppTriggerAccess(this.local, triggerAccess, appId);
+    return this.automationsAccount.setGithubAppTriggerAccess(triggerAccess, appId);
   }
   /** Manually dispatch a pending queue item to a chosen node + agent/model. */
   assignWorkItem(id: string, input: { node?: string; runtimeId?: string; model?: string; ephemeral?: boolean }): Promise<void> {
-    return assignWorkItem(this.local, id, input);
+    return this.automationsAccount.assignWorkItem(id, input);
   }
   /** Remove a single item from the GitHub queue. */
-  deleteWorkItem(id: string): Promise<void> {
-    return deleteWorkItem(this.local, id);
-  }
+  deleteWorkItem(id: string): Promise<void> { return this.automationsAccount.deleteWorkItem(id); }
   /** Clear every pending (waiting) item from the GitHub queue. */
-  clearWorkQueue(): Promise<number> {
-    return clearWorkQueue(this.local);
-  }
+  clearWorkQueue(): Promise<number> { return this.automationsAccount.clearWorkQueue(); }
   /**
    * Disconnect a GitHub App: drop the control-plane hook AND wipe the node's key.
    * `appId` scopes it to one of the account's apps; without one every app goes,
    * which is the only option for a hook old enough to have no App ID recorded.
    */
-  async githubAppDisconnect(appId?: string, hookId?: string): Promise<void> {
-    // Tell the node to clear its local key/config (over the active transport)…
-    this.send({ kind: "github.app.disconnect", requestId: requestId(), appId: appId || undefined, hookId: hookId || undefined });
-    // …and drop the account's hooks on the control plane. Errors propagate so the
-    // UI can tell the user it didn't take (e.g. control plane mid-deploy). Passing
-    // hookId lets a stale app with no App ID be removed on its own.
-    await disconnectGithubApp(this.local, { appId, hookId });
-  }
-  async removeNode(nodeId: string): Promise<void> {
-    await removeAccountNode(this.local, nodeId);
-    await this.refreshNodes();
-  }
-  async startCheckout(): Promise<void> {
-    location.assign(await billingCheckout(this.local));
-  }
-  async openBillingPortal(): Promise<void> {
-    location.assign(await billingPortal(this.local));
-  }
-  enablePush(): Promise<string> {
-    return enablePushNotifications(this.local);
-  }
-  disablePush(): Promise<string> {
-    return disablePushNotifications(this.local);
-  }
-  pushStatus(): ReturnType<typeof getPushSubscriptionStatus> {
-    return getPushSubscriptionStatus();
-  }
-  getNotificationPreferences(): Promise<NotificationPreferences> {
-    return getNotificationPreferences(this.local);
-  }
+  githubAppDisconnect(appId?: string, hookId?: string): Promise<void> { return this.automationsAccount.disconnectGithubApp(appId, hookId); }
+  removeNode(nodeId: string): Promise<void> { return this.automationsAccount.removeNode(nodeId); }
+  startCheckout(): Promise<void> { return this.automationsAccount.startCheckout(); }
+  openBillingPortal(): Promise<void> { return this.automationsAccount.openBillingPortal(); }
+  enablePush(): Promise<string> { return this.automationsAccount.enablePush(); }
+  disablePush(): Promise<string> { return this.automationsAccount.disablePush(); }
+  pushStatus(): ReturnType<typeof getPushSubscriptionStatus> { return this.automationsAccount.pushStatus(); }
+  getNotificationPreferences(): Promise<NotificationPreferences> { return this.automationsAccount.getNotificationPreferences(); }
   setNotificationPreferences(patch: Partial<NotificationPreferences>): Promise<NotificationPreferences> {
-    return setNotificationPreferences(this.local, patch);
+    return this.automationsAccount.setNotificationPreferences(patch);
   }
 
   // --- Ephemeral machines ------------------------------------------------
@@ -2856,21 +2861,15 @@ export class AppController {
   /** Machines already scheduled for finish-triggered teardown. */
   private finishingEphemeralMachines = new Set<string>();
 
-  listEphemeralKeys(): Promise<ProviderKeyInfo[]> {
-    return this.ephemeralKeys.list();
-  }
+  listEphemeralKeys(): Promise<ProviderKeyInfo[]> { return this.ephemeral.listKeys(); }
   /** Device-held model **API keys** used to seed a freshly-launched machine's
    *  vault over the E2E channel (closes the cold-start gap — see
    *  docs/ephemeral-sessions.md, "Closing the cold-start gap"). API keys only. */
-  listEphemeralModelKeys(): Promise<EphemeralModelKeyInfo[]> {
-    return this.ephemeralKeys.listModelKeys();
-  }
+  listEphemeralModelKeys(): Promise<EphemeralModelKeyInfo[]> { return this.ephemeral.listModelKeys(); }
   setEphemeralModelKey(provider: string, key: string, scope: "account" | "device" = "account"): Promise<void> {
-    return this.ephemeralKeys.setModelKey(provider, key, scope);
+    return this.ephemeral.setModelKey(provider, key, scope);
   }
-  removeEphemeralModelKey(provider: string): Promise<void> {
-    return this.ephemeralKeys.removeModelKey(provider);
-  }
+  removeEphemeralModelKey(provider: string): Promise<void> { return this.ephemeral.removeModelKey(provider); }
   getEphemeralToken(id: string): Promise<string> {
     return this.ephemeralKeys.getToken(id);
   }
@@ -2983,27 +2982,17 @@ export class AppController {
   }
   /** Per-provider saved launch preferences (region/size/TTL/repo) configured in
    *  Settings → Ephemeral machines; used to pre-fill the launch flow. */
-  getEphemeralPrefs(id: string): Promise<EphemeralPrefs> {
-    return this.ephemeralPrefs.get(id);
-  }
-  setEphemeralPrefs(id: string, patch: Partial<EphemeralPrefs>): Promise<EphemeralPrefs> {
-    return this.ephemeralPrefs.set(id, patch);
-  }
-  listEphemeralSetups(provider?: string): Promise<EphemeralSetup[]> {
-    return this.ephemeralSetups.list(provider);
-  }
+  getEphemeralPrefs(id: string): Promise<EphemeralPrefs> { return this.ephemeral.getPrefs(id); }
+  setEphemeralPrefs(id: string, patch: Partial<EphemeralPrefs>): Promise<EphemeralPrefs> { return this.ephemeral.setPrefs(id, patch); }
+  listEphemeralSetups(provider?: string): Promise<EphemeralSetup[]> { return this.ephemeral.listSetups(provider); }
   createEphemeralSetup(provider: string, input: { name: string } & Partial<EphemeralPrefs>): Promise<EphemeralSetup> {
-    return this.ephemeralSetups.create(provider, input);
+    return this.ephemeral.createSetup(provider, input);
   }
   updateEphemeralSetup(id: string, patch: Partial<Pick<EphemeralSetup, "name" | keyof EphemeralPrefs>>): Promise<EphemeralSetup> {
-    return this.ephemeralSetups.update(id, patch);
+    return this.ephemeral.updateSetup(id, patch);
   }
-  removeEphemeralSetup(id: string): Promise<void> {
-    return this.ephemeralSetups.remove(id);
-  }
-  listEphemeralMachines(): Promise<EphemeralMachine[]> {
-    return this.ephemeralMachines.list();
-  }
+  removeEphemeralSetup(id: string): Promise<void> { return this.ephemeral.removeSetup(id); }
+  listEphemeralMachines(): Promise<EphemeralMachine[]> { return this.ephemeral.listMachines(); }
   /**
    * When we come online on a node WE launched (a device-local `MachineStore`
    * record), push the model API keys held on THIS device into its vault so a
@@ -3140,7 +3129,7 @@ export class AppController {
   }
 
   listEphemeralSizes(providerId: string, region?: string): Promise<ProviderSize[]> {
-    return listEphemeralSizes(providerId, { exec: cloudExec(this.local), keys: this.ephemeralKeys }, region);
+    return this.ephemeral.listSizes(providerId, region);
   }
   async launchEphemeral(opts: LaunchOpts): Promise<EphemeralMachine> {
     if (!this.signedIn) throw new Error("Sign in to launch an ephemeral machine.");
@@ -3424,25 +3413,17 @@ export class AppController {
 
   /** The account's saved ephemeral-queue-default preference (whether/how to
    *  auto-provision), shared across the account's devices. */
-  getEphemeralQueueDefault(): Promise<EphemeralQueueDefault> {
-    return fetchEphemeralQueueDefault(this.local);
-  }
+  getEphemeralQueueDefault(): Promise<EphemeralQueueDefault> { return this.ephemeral.getQueueDefault(); }
   setEphemeralQueueDefault(patch: Partial<EphemeralQueueDefault>): Promise<EphemeralQueueDefault> {
-    return setEphemeralQueueDefault(this.local, patch);
+    return this.ephemeral.setQueueDefault(patch);
   }
   /** Account-level ephemeral node configs (shared across the account's devices). */
-  listEphemeralConfigs(): Promise<EphemeralNodeConfig[]> {
-    return fetchEphemeralConfigs(this.local);
-  }
-  createEphemeralConfig(input: EphemeralConfigInput): Promise<EphemeralNodeConfig> {
-    return apiCreateEphemeralConfig(this.local, input);
-  }
+  listEphemeralConfigs(): Promise<EphemeralNodeConfig[]> { return this.ephemeral.listConfigs(); }
+  createEphemeralConfig(input: EphemeralConfigInput): Promise<EphemeralNodeConfig> { return this.ephemeral.createConfig(input); }
   updateEphemeralConfig(id: string, patch: Partial<EphemeralConfigInput>): Promise<EphemeralNodeConfig> {
-    return apiUpdateEphemeralConfig(this.local, id, patch);
+    return this.ephemeral.updateConfig(id, patch);
   }
-  removeEphemeralConfig(id: string): Promise<void> {
-    return apiDeleteEphemeralConfig(this.local, id);
-  }
+  removeEphemeralConfig(id: string): Promise<void> { return this.ephemeral.removeConfig(id); }
   /** The account's default queue routing (primary runner + optional fallback). */
   getQueueRouting(): Promise<QueueRouting> {
     return fetchQueueRouting(this.local);
@@ -4005,7 +3986,7 @@ export class AppController {
     const s = this.store.getState();
     if (sessionId === s.activeSessionId) this.store.setActiveTitle(trimmed);
     this.store.renameSessionLocal(sessionId, trimmed);
-    this.send({ kind: "session.rename", sessionId, name: trimmed });
+    this.sessions.rename(sessionId, trimmed);
     this.refreshSessions();
   }
 
@@ -4024,12 +4005,12 @@ export class AppController {
 
   pauseSession(sessionId?: string): void {
     const id = sessionId || this.store.getState().activeSessionId;
-    if (id) this.send({ kind: "session.pause", sessionId: id });
+    if (id) this.sessions.pause(id);
   }
 
   resumeSession(sessionId?: string): void {
     const id = sessionId || this.store.getState().activeSessionId;
-    if (id) this.send({ kind: "session.resume", sessionId: id });
+    if (id) this.sessions.resume(id);
   }
 
   /** Force this session's PR status to re-sync with GitHub right now, instead
@@ -4070,7 +4051,7 @@ export class AppController {
   }
 
   resolveApproval(id: string, approved: boolean): void {
-    this.send({ kind: "approval", id, approved });
+    this.sessions.resolveApproval(id, approved);
     if (!this.direct) void recordProductMetric(this.local, "remote_intervention", matchMedia("(max-width: 700px)").matches ? "mobile" : "desktop").catch(() => {});
   }
 
@@ -4078,12 +4059,12 @@ export class AppController {
    *  resolveApproval, the node needs `sessionId` to find the right session —
    *  approvals are looked up in a single global list keyed by id alone. */
   answerQuestion(requestId: string, sessionId: string | undefined, answers: Record<string, string>): void {
-    this.send({ kind: "session.question.answer", requestId, sessionId, answers });
+    this.sessions.answerQuestion(requestId, sessionId, answers);
     if (!this.direct) void recordProductMetric(this.local, "remote_intervention", matchMedia("(max-width: 700px)").matches ? "mobile" : "desktop").catch(() => {});
   }
 
   cancelQuestion(requestId: string, sessionId: string | undefined): void {
-    this.send({ kind: "session.question.answer", requestId, sessionId, cancelled: true });
+    this.sessions.cancelQuestion(requestId, sessionId);
     if (!this.direct) void recordProductMetric(this.local, "remote_intervention", matchMedia("(max-width: 700px)").matches ? "mobile" : "desktop").catch(() => {});
   }
 }

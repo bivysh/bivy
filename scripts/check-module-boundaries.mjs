@@ -77,6 +77,13 @@ const RULES = [
     note: "the audit trail is a pure fs leaf; the daemon hands it decisions to record. It imports no kernel implementation (moat #1).",
   },
   {
+    name: "web-coordinators-are-standalone",
+    dir: "packages/web/src/store/coordinators",
+    forbid: ["../controller", "react", "ephemeral-provider-adapters", "services/control-plane", "session-contract", "agent-profile"],
+    enforce: true,
+    note: "web coordinators receive effects as explicit dependencies and cannot reach back into AppController or prohibited implementations.",
+  },
+  {
     name: "ephemeral-lifecycle-is-pure-data",
     dir: "packages/core/src/ephemeral-lifecycle.ts",
     forbid: ["./", "../", "node:", "@"],
