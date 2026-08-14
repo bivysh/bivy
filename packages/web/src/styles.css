@@ -2243,16 +2243,28 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .settings-body { flex: 1; overflow-y: auto; min-height: 0; padding: 14px 18px 28px; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
 .settings-body .settings-form { padding: 0; }
 
-/* Appearance theme picker (cards, not a cycle button) */
-.theme-seg { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 10px; }
-.theme-seg-btn {
-  flex: 1; min-width: 92px; display: flex; flex-direction: column; align-items: center; gap: 8px;
-  border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); color: var(--muted);
-  padding: 16px 10px; font-size: 13px; font-weight: 600;
+/* Canonical selectable — the shared "active-accent-tint" choice control. Its
+   selected state (accent border + soft accent fill) is the one that used to be
+   copy-pasted across the theme picker, segmented buttons and ruleset chips; new
+   choice UIs build on this. Reflects the design-system styleguide (.selectable). */
+.selectable {
+  border: 1px solid var(--line-strong); background: var(--surface-2); color: var(--ink);
+  border-radius: var(--radius-md); padding: var(--space-2) var(--space-3);
+  font: inherit; cursor: pointer;
 }
-.theme-seg-btn:hover { border-color: var(--line-strong); color: var(--ink); }
-.theme-seg-btn.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); color: var(--accent); }
-.theme-seg-icon { display: inline-flex; }
+.selectable:disabled { opacity: 0.5; cursor: default; }
+.selectable[aria-checked="true"], .selectable[aria-pressed="true"], .selectable.active {
+  border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--surface)); color: var(--accent);
+}
+
+/* Segmented control, card variant (Appearance theme picker): a row of selectable
+   cards, icon over label. Rendered by Segmented.tsx. */
+.segmented-cards { display: flex; gap: var(--space-2); flex-wrap: wrap; margin: 4px 0 10px; }
+.segmented-cards .selectable {
+  flex: 1; min-width: 92px; display: flex; flex-direction: column; align-items: center;
+  gap: var(--space-2); padding: 16px 10px; font-size: var(--text-sm); font-weight: var(--weight-semibold);
+}
+.segmented-icon { display: inline-flex; }
 
 /* Notifications: on/off + per-event switches */
 .settings-toggle-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 10px 0; }

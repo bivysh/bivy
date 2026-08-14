@@ -290,10 +290,15 @@ section > .lede { color: var(--muted); font-size: var(--text-sm); margin: 0 0 va
 .working-dots i:nth-child(3) { animation-delay: 0.4s; }
 
 /* --- Active-accent-tint: the single most-repeated modifier, extracted as a utility. --- */
-.selectable { border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink);
+.selectable { border: 1px solid var(--line-strong); background: var(--surface-2); color: var(--ink);
   border-radius: var(--radius-md); padding: 8px 12px; cursor: pointer; font: inherit; }
-.selectable[aria-pressed="true"], .selectable.active {
+.selectable[aria-checked="true"], .selectable[aria-pressed="true"], .selectable.active {
   border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--surface)); color: var(--accent); }
+/* Segmented control, card variant: a row of selectable cards, icon over label (the Appearance theme picker). */
+.segmented-cards { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+.segmented-cards .selectable { flex: 1; min-width: 92px; display: flex; flex-direction: column;
+  align-items: center; gap: var(--space-2); padding: 16px 10px; font-size: var(--text-sm); font-weight: var(--weight-semibold); }
+.segmented-icon { display: inline-flex; }
 </style>
 </head>
 <body>
@@ -599,7 +604,17 @@ section > .lede { color: var(--muted); font-size: var(--text-sm); margin: 0 0 va
           <button class="seg-btn" role="tab" aria-selected="false">Runs</button>
         </div>
       </div>
-      <div class="consolidates"><b>Consolidates 4 implementations:</b> <code>.automations-tab</code> (underline), <code>.changes-mode</code> (enclosed), <code>.seg-btn</code> (pill), <code>.theme-seg-btn</code> (card). All shared the “active-accent-tint” — now the <code>.selectable</code> utility.</div>
+      <div class="consolidates"><b>Consolidates 4 implementations:</b> <code>.automations-tab</code> (underline), <code>.changes-mode</code> (enclosed), <code>.seg-btn</code> (pill), <code>.theme-seg-btn</code> (card — now migrated to the cards variant below). All shared the “active-accent-tint” — now the <code>.selectable</code> utility.</div>
+    </div>
+    <div class="spec"><div class="spec-h"><b>Cards variant</b> <code>.segmented-cards / .selectable</code> — the Appearance theme picker</div>
+      <div class="demo">
+        <div class="segmented-cards" role="radiogroup" aria-label="Theme" style="max-width:340px">
+          <button class="selectable" role="radio" aria-checked="false"><span class="segmented-icon">🖥</span><span>System</span></button>
+          <button class="selectable" role="radio" aria-checked="true"><span class="segmented-icon">☀</span><span>Light</span></button>
+          <button class="selectable" role="radio" aria-checked="false"><span class="segmented-icon">☾</span><span>Dark</span></button>
+        </div>
+      </div>
+      <div class="consolidates"><b>Live in the app:</b> rendered by <code>Segmented.tsx</code> (Settings → Appearance). Data-driven — pass options — so no surface re-implements the markup or the selected-state styling.</div>
     </div>
   </section>
 
