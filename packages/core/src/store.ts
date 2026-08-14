@@ -28,14 +28,16 @@ import {
 } from "./session-draft.js";
 import { type SlashCommand } from "./slash.js";
 import { toHtml, extractRemoteImageUrls } from "./markdown.js";
-import { eventKind, normalizeEventType, toolCallId, toolDetail, toolInput, toolName } from "./tool-activity.js";
+import { normalizeEventType } from "./tool-activity.js";
 import { SeqReassembler } from "./seq-reassembler.js";
 import { foldConnectionEvent } from "./connection-event-fold.js";
 import { foldSessionIndexEvent } from "./session-index-event-fold.js";
 import { foldCatalogSettingsEvent } from "./catalog-settings-event-fold.js";
 import { foldPresentationEvent } from "./presentation-event-fold.js";
+import { foldAttentionEvent } from "./attention-event-fold.js";
+import { foldActiveSessionEvent } from "./active-session-event-fold.js";
+import { foldTranscriptEvent, freshTranscriptDraft, type TranscriptDraftValue } from "./transcript-event-fold.js";
 import type { ToolCallDetail } from "./tool-format.js";
-import { humanizeError, looksLikeAgentError } from "./store-errors.js";
 import {
   reduceFollowupQueue,
   type FollowupEditResult,
@@ -43,7 +45,7 @@ import {
   type FollowupQueueTransition,
   type PendingFollowup,
 } from "./followup-queue.js";
-import { attachmentFromRef, contentThinking, contentToText, mergeToolInto, nextId, renderHistory, toolEntriesFromContent } from "./store-render.js";
+import { nextId, renderHistory } from "./store-render.js";
 import {
   agentLabel,
   githubContext,
@@ -60,8 +62,6 @@ import {
   sameCommandList,
   sameModel,
   sessionStatusFromState,
-  upsertApproval,
-  validUserQuestions,
 } from "./store-normalize.js";
 
 // Re-export the helpers that moved out of this file so the package's public
@@ -879,7 +879,7 @@ export function initialState(): AppState {
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-interface Draft {
+interface Draft extends TranscriptDraftValue {
   assistantId: string | null;
   thinkingId: string | null;
   finalized: boolean;
@@ -909,7 +909,7 @@ interface Draft {
 }
 
 function freshDraft(finalized = true): Draft {
-  return { assistantId: null, thinkingId: null, finalized, thinkingText: "", sawThinking: false, pendingText: "", committedText: "", committedThinking: "" };
+  return freshTranscriptDraft(finalized);
 }
 
 /** One optimistically-sent user prompt, tracked by clientMessageId. The single
@@ -933,19 +933,6 @@ interface PendingSend {
    *  role the old standalone `sentMessageIds` set played. Retired outright once
    *  BOTH the echo (confirmed) and history (reconciled) agree it's landed. */
   reconciled?: boolean;
-}
-
-/**
- * Live reasoning text for a streamed assistant event. Prefer the accumulated
- * `thinking` block on the message; otherwise fall back to the incremental
- * `assistantMessageEvent` deltas (some runtimes stream reasoning only that way).
- * Mirrors the legacy client's `streamThinking`. The caller accumulates deltas.
- */
-function eventThinkingDelta(event: any): { kind: "full" | "delta" | "none"; text: string } {
-  const ame = event?.assistantMessageEvent;
-  if (ame?.type === "thinking_delta" && typeof ame.delta === "string") return { kind: "delta", text: ame.delta };
-  if (ame?.type === "thinking_end" && typeof ame.content === "string") return { kind: "full", text: ame.content };
-  return { kind: "none", text: "" };
 }
 
 /**
@@ -2187,6 +2174,45 @@ export class SessionStore {
       this.setValues({ presentation: presentationFold.value as PresentationState });
       return;
     }
+    const attentionFold = foldAttentionEvent({
+      approvals: this.state.activeSession.approvals,
+      questions: this.state.activeSession.questions,
+      turnAttentions: this.state.activeSession.turnAttentions,
+    }, event, Date.now());
+    if (attentionFold.handled) {
+      this.set({
+        approvals: attentionFold.value.approvals as ApprovalRequest[],
+        questions: attentionFold.value.questions as UserQuestionRequest[],
+        turnAttentions: attentionFold.value.turnAttentions as TurnAttentionRequest[],
+      });
+      if (attentionFold.row) this.updateSessionRow(attentionFold.row.sessionId, attentionFold.row);
+      return;
+    }
+    const activeFold = foldActiveSessionEvent({
+      activeSessionId: this.state.activeSession.activeSessionId,
+      working: this.state.activeSession.working,
+      workingLabel: this.state.activeSession.workingLabel,
+      opening: this.state.activeSession.opening,
+      usage: this.state.activeSession.usage,
+      changes: this.state.activeSession.changes,
+      changesHistory: this.state.activeSession.changesHistory,
+      checkpoints: this.state.activeSession.checkpoints,
+      activeTitle: this.state.activeSession.activeTitle,
+      github: this.state.activeSession.github as unknown as Record<string, unknown>,
+      ...(type === "session.changes" ? { newChangeId: nextId() } : {}),
+    }, event, Date.now());
+    if (activeFold.handled) {
+      if (activeFold.patch) this.set(activeFold.patch as AppStatePatch);
+      for (const command of activeFold.commands) {
+        if (command.kind === "row") this.updateSessionRow(command.sessionId, command.patch);
+        else if (command.kind === "entry") this.pushEntry({ id: nextId(), role: command.role, text: command.text, ...(command.action ? { action: command.action } : {}) });
+        else if (command.kind === "model-auth" && this.state.connection.currentNodeId) this.setNeedsModelAuth({ nodeId: this.state.connection.currentNodeId, provider: command.provider, reason: command.reason });
+        else if (command.kind === "rename") this.renameSessionLocal(command.sessionId, command.name);
+        else if (command.kind === "global-error") this.set({ error: command.message });
+        else if (command.kind === "reset-active") this.resetActiveSession();
+      }
+      return;
+    }
 
     this.applyStatefulEvent(event, type);
   }
@@ -2290,21 +2316,6 @@ export class SessionStore {
         this.onSessionCreatedElsewhere?.();
         return;
       }
-      case "session.state": {
-        const e = event as any;
-        const sid = String(e.sessionId || "");
-        const sessionState = normalizeSessionState(e.state ?? e.sessionState);
-        if (!sid || !sessionState) return;
-        this.updateSessionRow(sid, {
-          sessionState,
-          status: sessionStatusFromState(sessionState),
-          needsAction: sessionState.displayStatus === "needs_attention",
-        });
-        if (sid === this.state.activeSession.activeSessionId) {
-          this.set({ working: sessionState.agent === "working", ...(sessionState.agent !== "working" ? { workingLabel: "" } : {}) });
-        }
-        return;
-      }
       case "session.capabilities": {
         // A session's capabilities changed after it opened — e.g. Claude Code's
         // slash commands, which the SDK only reports once the first turn's
@@ -2314,46 +2325,6 @@ export class SessionStore {
         const e = event as any;
         this.mergeRuntimeCapabilities(e.runtimeId, e.capabilities);
         this.setSessionCommands(e.sessionId, e.capabilities);
-        return;
-      }
-      case "session.renamed": {
-        // The node names a session from its first message (maybeNameSession) and
-        // broadcasts the new name — the sidebar row + header title only learn the
-        // real name here. A repo session may also carry its renamed branch.
-        const e = event as any;
-        const sid = String(e.sessionId || "");
-        if (e.name && sid) this.renameSessionLocal(sid, String(e.name));
-        // Fold the branch onto the row regardless of focus (sidebar meta line
-        // for every session), same as the status dot above — only the active
-        // session's `github` pill additionally needs it.
-        if (e.branch && sid) this.updateSessionRow(sid, { branch: String(e.branch) });
-        if (!sid || sid === this.state.activeSession.activeSessionId) {
-          const patch: AppStatePatch = {};
-          if (e.name) patch.activeTitle = String(e.name);
-          if (e.branch) patch.github = { ...this.state.activeSession.github, branch: String(e.branch) };
-          if (Object.keys(patch).length) this.set(patch);
-        }
-        return;
-      }
-      case "session.branch_renamed": {
-        const e = event as any;
-        const sid = String(e.sessionId || "");
-        if (e.branch && sid) this.updateSessionRow(sid, { branch: String(e.branch) });
-        if ((!sid || sid === this.state.activeSession.activeSessionId) && e.branch) {
-          this.set({ github: { ...this.state.activeSession.github, branch: String(e.branch) } });
-        }
-        return;
-      }
-      case "session.closed": {
-        const e = event as any;
-        const sid = String(e.sessionId || "");
-        if (sid) this.updateSessionRow(sid, { status: "saved", needsAction: false });
-        // Closing a runtime means "saved/not live on node", not "the user chose
-        // a new draft". Do not steal focus or clear a half-written composer
-        // draft when the node reaps/flushes the active session (idle close,
-        // restart, foreground reconcile). Keep the transcript visible and simply
-        // stop live indicators; a later prompt/open will reopen the session.
-        if (sid && sid === this.state.activeSession.activeSessionId) this.set({ working: false, workingLabel: "", opening: false });
         return;
       }
       case "session.deleted": {
@@ -2403,26 +2374,6 @@ export class SessionStore {
         // the button so the user can retry or update manually.
         const e = event as any;
         if (e.ok === false) this.set({ nodeUpdating: false, error: typeof e.error === "string" ? e.error : "Couldn't start the update on this node." });
-        return;
-      }
-      case "session.notice": {
-        const e = event as any;
-        const sid = String(e.sessionId || "");
-        if ((!sid || sid === this.state.activeSession.activeSessionId) && e.message) {
-          // Carry an optional `action` (a slash command like "/new") onto the
-          // entry so the view can render it as a tappable button — e.g. a node
-          // suggestion the user can act on with one tap.
-          const action = typeof e.action === "string" ? e.action : undefined;
-          this.pushEntry({ id: nextId(), role: "system", text: String(e.message), action });
-        }
-        return;
-      }
-      case "session.cloning": {
-        // A repo-backed session clones its worktree before the first turn — show
-        // progress so the composer doesn't look idle. Mirrors legacy setWorking.
-        const e = event as any;
-        const sid = String(e.sessionId || "");
-        if (!sid || sid === this.state.activeSession.activeSessionId) this.setWorking(`Cloning ${e.repo || "repo"}…`);
         return;
       }
       case "session.history": {
@@ -2501,127 +2452,6 @@ export class SessionStore {
         // "the user wrote a message" as our own optimistic send already bumps
         // in addUserMessage — keep the sidebar ordering in sync for it too.
         if (e.sessionId) this.updateSessionRow(e.sessionId, { updatedAt: Date.now() });
-        return;
-      }
-      case "session.error":
-      case "session.errored": {
-        // Broadcast to every connected client: a background/unrelated session's
-        // error (e.g. a stale model.select against a session the user has since
-        // navigated away from) must not blow away the *active* session's working
-        // state or pop an error toast that has nothing to do with what's on
-        // screen — mirrors the sessionId guard every sibling per-session case
-        // below already applies.
-        const e = event as any;
-        if (this.isForeignSessionEvent(e.sessionId)) return;
-        const message = humanizeError(String(e.error || e.errorMessage || "error"));
-        // A session-scoped error belongs *in that chat*, not in a floating toast
-        // that reads as a disconnected system alert. When the error names a
-        // session and it's the one on screen, drop it into the transcript as an
-        // inline error bubble (and stop the working spinner). Errors with no
-        // session — connection/relay/global failures — still use the toast.
-        // Clear `opening` too: a failed resume must fall back to a usable view
-        // rather than spinning forever on a session that will never paint.
-        if (e.sessionId) {
-          this.pushEntry({ id: nextId(), role: "error", text: message });
-          this.set({ working: false, opening: false });
-        } else {
-          this.set({ error: message, working: false, opening: false });
-        }
-        return;
-      }
-      case "session.failed": {
-        const e = event as any;
-        if (e.sessionId) this.updateSessionRow(e.sessionId, { status: "failed", needsAction: false, failedAt: Number(e.failedAt) || Date.now(), updatedAt: Date.now() });
-        return;
-      }
-      case "session.auth_required": {
-        // The node reported an auth failure for `provider` (no credential, or an
-        // expired/invalid one that 401'd). Raise the "Sign in to your model" sheet
-        // targeted at that provider — the same one the inline error bubble above
-        // describes — so the user can re-authenticate in place. Focus-gated like
-        // session.error so a background session doesn't hijack the sheet.
-        const e = event as any;
-        if (this.isForeignSessionEvent(e.sessionId)) return;
-        const provider = String(e.provider || "");
-        if (provider && this.state.connection.currentNodeId) {
-          this.setNeedsModelAuth({ nodeId: this.state.connection.currentNodeId, provider, reason: String(e.reason || "") });
-        }
-        return;
-      }
-      case "approval.created": {
-        const approval = (event as any).approval || event;
-        // Needing a response is one of the few things worth reordering the
-        // sidebar for (see #479) — surface it at the top like a fresh reply.
-        this.updateSessionRow(approval?.sessionId, { status: "needs_action", needsAction: true, updatedAt: Date.now() });
-        this.set({ approvals: upsertApproval(this.state.activeSession.approvals, approval) });
-        return;
-      }
-      case "approval.resolved":
-      case "approval.removed": {
-        const e = event as any;
-        const resolved = this.state.activeSession.approvals.find((a) => a.id === e.id || a.id === e.approvalId);
-        const approvals = this.state.activeSession.approvals.filter((a) => a.id !== e.id && a.id !== e.approvalId);
-        this.set({ approvals });
-        // Clear the sidebar "needs response" dot once nothing else on that
-        // session is still pending, instead of leaving it red until an unrelated
-        // event happens to arrive.
-        const sid = resolved?.sessionId as string | undefined;
-        if (sid && !this.sessionStillNeedsAction(sid)) {
-          this.updateSessionRow(sid, { status: "idle", needsAction: false });
-        }
-        return;
-      }
-      // A blocking clarifying question (e.g. AskUserQuestion), not a tool
-      // approval — same "needs your response" treatment as approval.created
-      // above (sidebar dot + a cross-session list), answered via
-      // controller.answerQuestion instead of controller.resolveApproval.
-      case "session.question": {
-        const e = event as any;
-        const id = String(e.requestId || "");
-        // Validate defensively rather than trust the wire: a rendering crash in
-        // QuestionCard (no ErrorBoundary above it) would otherwise take down the
-        // whole chat UI, not just this card.
-        const questions = validUserQuestions(e.questions);
-        if (!id || !questions) return;
-        // Same reasoning as approval.created above: a clarifying question is a
-        // "needs your response" moment worth surfacing at the top of the list.
-        this.updateSessionRow(e.sessionId, { status: "needs_action", needsAction: true, updatedAt: Date.now() });
-        const request: UserQuestionRequest = { id, sessionId: e.sessionId ? String(e.sessionId) : undefined, questions, createdAt: Number(e.createdAt) || Date.now() };
-        this.set({ questions: [...this.state.activeSession.questions.filter((q) => q.id !== id), request] });
-        return;
-      }
-      case "session.question.resolved": {
-        const e = event as any;
-        const id = String(e.requestId || e.id || "");
-        const resolved = this.state.activeSession.questions.find((q) => q.id === id);
-        const questions = this.state.activeSession.questions.filter((q) => q.id !== id);
-        this.set({ questions });
-        if (resolved?.sessionId && !this.sessionStillNeedsAction(resolved.sessionId)) {
-          this.updateSessionRow(resolved.sessionId, { status: "idle", needsAction: false });
-        }
-        return;
-      }
-      case "session.turn_attention": {
-        const e = event as any;
-        const sessionId = String(e.sessionId || "");
-        const trigger = e.trigger === "wedged" ? "wedged" : e.trigger === "stalled" ? "stalled" : undefined;
-        if (!sessionId || !trigger) return;
-        const request: TurnAttentionRequest = {
-          sessionId,
-          trigger,
-          idleMs: Math.max(0, Number(e.idleMs) || 0),
-          at: Number(e.at) || Date.now(),
-          message: String(e.message || "This turn may be stuck. Stop it or keep waiting?"),
-        };
-        this.set({ turnAttentions: [...this.state.activeSession.turnAttentions.filter((a) => a.sessionId !== sessionId), request] });
-        this.updateSessionRow(sessionId, { status: "needs_action", needsAction: true, updatedAt: Date.now() });
-        return;
-      }
-      case "session.turn_attention.resolved": {
-        const sessionId = String((event as any).sessionId || "");
-        if (!sessionId) return;
-        this.set({ turnAttentions: this.state.activeSession.turnAttentions.filter((a) => a.sessionId !== sessionId) });
-        if (!this.sessionStillNeedsAction(sessionId)) this.updateSessionRow(sessionId, { status: "working", needsAction: false });
         return;
       }
       case "models.list": {
@@ -3009,13 +2839,6 @@ export class SessionStore {
         for (const ev of events) this.apply(ev as ServerEvent);
         return;
       }
-      case "session.usage": {
-        const e = event as any;
-        if (this.isForeignSessionEvent(e.sessionId)) return;
-        const usage = normalizeUsage(e.usage);
-        if (usage) this.set({ usage });
-        return;
-      }
       case "node.stats": {
         const stats = normalizeNodeStats((event as any).stats);
         if (stats) this.set({ nodeStats: stats });
@@ -3024,46 +2847,6 @@ export class SessionStore {
       case "capabilities": {
         const capabilities = normalizeCapabilitiesSnapshot((event as any).capabilities);
         if (capabilities) this.set({ capabilities });
-        return;
-      }
-      case "session.warning": {
-        const e = event as any;
-        if (this.isForeignSessionEvent(e.sessionId)) return;
-        if (e.warning) this.pushEntry({ id: nextId(), role: "system", text: String(e.warning) });
-        return;
-      }
-      case "session.changes": {
-        // Universal Agent Harness: the files the last turn changed, for the
-        // active session. Ignore other sessions (this is chrome, not transcript).
-        const e = event as any;
-        if (this.isForeignSessionEvent(e.sessionId)) return;
-        const files: HarnessFileChange[] = Array.isArray(e.changes) ? e.changes : [];
-        if (files.length === 0) { this.set({ changes: null }); return; }
-        const turn: TurnChanges = { before: e.before ? String(e.before) : undefined, after: String(e.after ?? ""), files };
-        // Also append to the durable per-session history the sheet reads —
-        // `changes` itself is retired the instant the next turn starts (see the
-        // "new turn starting" handler above), so it can't back a "see every
-        // turn's changes" view on its own.
-        this.set({ changes: turn, changesHistory: [...this.state.activeSession.changesHistory, { ...turn, id: nextId(), at: Date.now() }] });
-        return;
-      }
-      case "session.rewound": {
-        // Files were restored to a checkpoint — clear the "changed this turn"
-        // card and note it in the transcript for provenance.
-        const e = event as any;
-        if (this.isForeignSessionEvent(e.sessionId)) return;
-        this.set({ changes: null });
-        this.pushEntry({ id: nextId(), role: "system", text: "Rewound the workspace to an earlier checkpoint." });
-        return;
-      }
-      case "session.checkpoints": {
-        // The harness checkpoint timeline for the active session (rewind targets).
-        const e = event as any;
-        if (this.isForeignSessionEvent(e.sessionId)) return;
-        const checkpoints: Checkpoint[] = Array.isArray(e.checkpoints)
-          ? e.checkpoints.map((c: any) => ({ id: String(c.id ?? ""), label: String(c.label ?? "checkpoint"), createdAt: Number(c.createdAt ?? 0) })).filter((c: Checkpoint) => c.id)
-          : [];
-        this.set({ checkpoints });
         return;
       }
       case "session.paused": {
@@ -3106,8 +2889,27 @@ export class SessionStore {
         });
         return;
       }
-      default:
-        this.applyStreamEvent(event);
+      default: {
+        const folded = foldTranscriptEvent({
+          transcript: this.state.activeSession.transcript,
+          draft: this.draft,
+          pendingAgentAttachments: this.pendingAgentAttachments,
+          working: this.state.activeSession.working,
+          workingLabel: this.state.activeSession.workingLabel,
+        }, event, Date.now());
+        if (!folded.handled) return;
+        this.draft = folded.value.draft;
+        this.pendingAgentAttachments = folded.value.pendingAgentAttachments;
+        this.set({ transcript: folded.value.transcript as TranscriptEntry[], working: folded.value.working, workingLabel: folded.value.workingLabel });
+        for (const command of folded.commands) {
+          if (command.kind === "cache-inline-image") this.inlineImagesByUrl.set(command.url, command.ref as AttachmentRef);
+          else if (command.kind === "remember-agent-attachments") this.rememberAgentAttachments(this.state.activeSession.activeSessionId, this.state.activeSession.transcript);
+          else if (command.kind === "turn-settled") {
+            this.drainDeferredHistory();
+            this.onSessionSettled?.();
+          }
+        }
+      }
     }
   }
 
@@ -3408,393 +3210,11 @@ export class SessionStore {
     }
   }
 
-  /** Whether a session still has anything outstanding that should keep its
-   *  sidebar dot on "needs your response" — a pending approval, clarifying
-   *  question, or watchdog decision. Shared by resolution handlers so resolving
-   *  one kind can't clear the dot out from under another still-pending kind. */
-  private sessionStillNeedsAction(sessionId: string): boolean {
-    return this.state.activeSession.approvals.some((a) => a.sessionId === sessionId)
-      || this.state.activeSession.questions.some((q) => q.sessionId === sessionId)
-      || this.state.activeSession.turnAttentions.some((a) => a.sessionId === sessionId);
-  }
-
-  /**
-   * Whether a per-session "chrome" event (usage, changes, checkpoints, warnings,
-   * errors) belongs to a session other than the one on screen — and so must not
-   * be rendered into the current view.
-   *
-   * Crucially this treats a fresh *draft* (activeSessionId === null) as matching
-   * nothing: an event that names a concrete session is foreign to a draft. The
-   * older guard (`sessionId && activeSessionId && sessionId !== activeSessionId`)
-   * skipped this filter entirely while activeSessionId was null, so a late
-   * `session.changes`/`session.usage`/`session.checkpoints` broadcast from the
-   * session the user just left would leak its "files changed this turn" card,
-   * usage bar and history onto the brand-new empty draft. Global events (no
-   * sessionId — connection/relay errors) still pass, since they belong nowhere in
-   * particular and should surface wherever the user is.
-   */
-  private isForeignSessionEvent(sessionId: unknown): boolean {
-    return Boolean(sessionId) && sessionId !== this.state.activeSession.activeSessionId;
-  }
-
-  private replaceEntry(id: string, patch: Partial<TranscriptEntry>): void {
-    this.set({ transcript: this.state.activeSession.transcript.map((e) => (e.id === id ? { ...e, ...patch } : e)) });
-  }
-
-  private setWorking(label: string): void {
-    this.set({ working: true, workingLabel: label });
-  }
-
-  private toolEventId(event: ServerEvent): string {
-    const explicit = toolCallId(event as any);
-    if (explicit) return explicit;
-    const name = toolName(event as any);
-    const input = toolInput(event as any) as Record<string, unknown>;
-    const target = String(input?.command || input?.cmd || input?.path || input?.file || input?.filePath || input?.query || input?.stream || "");
-    if (!target && name !== "agent_output" && name !== "stderr" && name !== "stdout") return nextId();
-    return `${name}:${target}`;
-  }
-
-  private workingLabelForTool(event: ServerEvent): string {
-    const name = toolName(event as any);
-    if (name === "agent_output" || name === "stderr" || name === "stdout") return "Reading agent output…";
-    const callId = toolCallId(event as any);
-    const detail = toolDetail(event as any) ?? (callId
-      ? this.state.activeSession.transcript.find((entry) => entry.tool?.callId === callId)?.tool?.detail
-      : undefined);
-    if (detail?.kind === "delegation") {
-      return detail.label ? `${detail.label} sub-agent is working…` : "Sub-agent is working…";
-    }
-    return `Running ${name}…`;
-  }
-
-  /** Streaming turn events (message_start/update/end, tool start/update/result, agent_start/end). */
-  private applyStreamEvent(event: ServerEvent): void {
-    const kind = eventKind(event as any);
-    switch (kind) {
-      case "agent_start":
-      case "turn_start":
-        this.draft.finalized = false;
-        this.setWorking(kind === "agent_start" ? "Planning…" : "Thinking…");
-        return;
-      case "message_start":
-        if ((event as any).message?.role === "assistant") {
-          this.draft = freshDraft(false);
-          this.setWorking("Drafting response…");
-        }
-        return;
-      case "attachment": {
-        // An agent-sent attachment (image or file). Buffer it and render it at the
-        // turn boundary under the turn's final assistant bubble, rather than as a
-        // standalone entry at the moment `bivy attach` ran — which lands mid-turn,
-        // between tool cards and the reply, reading as detached. Grouping matches
-        // how user uploads render under their own message. Durable history
-        // reproduces the same grouping (see groupAgentAttachments in renderHistory).
-        const ref = (event as any).ref;
-        if (!ref || typeof ref.hash !== "string" || (ref.kind !== "image" && ref.kind !== "file")) return;
-        const caption = typeof (event as any).caption === "string" ? (event as any).caption : "";
-        const artifact = Boolean((event as any).artifact);
-        this.pendingAgentAttachments.push({ attachment: attachmentFromRef(ref, { createdAt: Date.now(), artifact }), caption });
-        return;
-      }
-      case "inlineImage": {
-        // The node finished fetching a remote markdown image (#293). Cache the
-        // ref, then patch it onto any already-rendered assistant entry whose raw
-        // markdown references this exact URL — a new object identity for that
-        // entry is what makes ChatView's hydrate effect notice and swap in a
-        // blob: URL. A URL nobody's current transcript mentions yet (already
-        // scrolled past the initial window, or a race with the render) still
-        // ends up correct once withInlineImageRefs runs on the next full render,
-        // since the cache itself was updated either way.
-        const url = (event as any).url;
-        const ref = (event as any).ref;
-        if (typeof url !== "string" || !url || !ref || typeof ref.hash !== "string") return;
-        this.inlineImagesByUrl.set(url, ref);
-        let changed = false;
-        const transcript = this.state.activeSession.transcript.map((e) => {
-          if (e.role !== "assistant" || !e.text || e.imageRefs?.[url] || !e.text.includes(url)) return e;
-          changed = true;
-          return { ...e, imageRefs: { ...(e.imageRefs ?? {}), [url]: ref } };
-        });
-        if (changed) this.set({ transcript });
-        return;
-      }
-      case "message_update":
-      case "message_boundary":
-      case "message_end": {
-        const msg = (event as any).message;
-        if (msg?.role !== "assistant") return;
-        const text = contentToText(msg.content).trim();
-        // Remember the latest prose so a tool boundary can seal it (below). Guard
-        // on `text` so a reasoning-only update (content:[{thinking}] → text:"")
-        // can't wipe prose the model already produced this turn.
-        if (text) this.draft.pendingText = text;
-        // `message_boundary` seals one discrete prose item without ending the
-        // turn (Codex commentary commonly alternates these with tool calls).
-        // Treat it like message_end for bubble placement while leaving the
-        // runtime/server's actual turn-final semantics to message_end.
-        const finalize = kind === "message_end" || kind === "message_boundary";
-        // Reasoning can arrive two ways: as an accumulated `thinking` block on
-        // the message, or (for runtimes that only stream reasoning) as
-        // incremental `thinking_delta` / `thinking_end` on the event itself. Keep
-        // folding the deltas in on every update so the finished block is whole —
-        // even though we only commit it to the transcript once the turn ends.
-        const blockThinking = contentThinking(msg.content).trim();
-        const thinking = this.resolveThinking(event, blockThinking);
-        if (thinking && !text) this.draft.sawThinking = true;
-        // Token-by-token rendering was too laggy in the web chat: every update
-        // re-ran the markdown pass and re-rendered the row. Show whole messages
-        // instead — commit the assistant prose / reasoning only when the message
-        // finishes. Tools are still applied live below so tool cards appear as
-        // they happen, and the "working" indicator keeps the turn feeling alive.
-        if (finalize) {
-          // Commit the trailing reasoning run (a tool boundary already sealed any
-          // reasoning that preceded a tool this segment; this is what's left).
-          this.commitPendingThinking();
-          // Commit the trailing prose run (everything since the last tool boundary
-          // sealed a run — see commitPendingProse). Classification into an error
-          // bubble happens there: the runtime can only ever hand failures to us as
-          // assistant prose (the claude CLI prints API/auth errors that way, not as
-          // a structured error), so an error-shaped run becomes a red bubble.
-          this.commitPendingProse();
-          this.draft.finalized = true;
-        } else {
-          // Keep the working label honest, and only when it actually changes so
-          // we don't notify on every update.
-          const label = text ? "Drafting response…" : "Thinking…";
-          if (this.state.activeSession.workingLabel !== label || !this.state.activeSession.working) this.setWorking(label);
-          // Show the in-flight prose as a live streaming bubble so a session the
-          // user just switched back to (or is watching continuously) reflects the
-          // agent's current answer immediately — instead of nothing until
-          // message_end, which mid-turn is several seconds away and reads as a
-          // stale, frozen transcript. Rendered as plain text (no per-update
-          // markdown/highlight pass — that O(n²) churn is the reason streaming
-          // prose was originally deferred to boundaries); commitPendingProse
-          // swaps in the rendered markdown when the run seals.
-          this.previewPendingProse();
-        }
-        for (const tool of toolEntriesFromContent(msg.content)) this.applyTool(tool);
-        return;
-      }
-      case "start":
-        // Seal any reasoning and prose the model produced BEFORE this tool call so
-        // its card lands after them, not hoisted above (matching renderHistory's
-        // block-walk). Tools stream as their own events while reasoning/prose
-        // commit at message_end, so without this the card jumps ahead of the text.
-        // Reasoning first, then prose — the source order within a segment.
-        this.commitPendingThinking();
-        this.commitPendingProse();
-        this.finishDrafts();
-        this.applyTool({
-          callId: this.toolEventId(event),
-          name: toolName(event as any),
-          input: toolInput(event as any),
-          status: "running",
-          detail: toolDetail(event as any),
-        });
-        this.setWorking(this.workingLabelForTool(event));
-        return;
-      case "update":
-        this.applyTool({
-          callId: this.toolEventId(event),
-          name: toolName(event as any),
-          input: toolInput(event as any),
-          status: "running",
-          detail: toolDetail(event as any),
-        });
-        this.setWorking(this.workingLabelForTool(event));
-        return;
-      case "result":
-        this.applyTool({
-          callId: this.toolEventId(event),
-          name: toolName(event as any),
-          input: {},
-          status: "done",
-          result: typeof (event as any).result === "string" ? (event as any).result : contentToText((event as any).result),
-          // Carry the result-time detail (it merges the call classification with
-          // the tool's outcome: exitCode / isError / truncated) so the card can
-          // show a command that FAILED as failed. Without this the reducer kept
-          // only the call-time detail and the outcome was invisible.
-          detail: toolDetail(event as any),
-        });
-        return;
-      case "turn_end":
-        // Land any attachments emitted this turn under its final assistant bubble.
-        this.flushPendingAgentAttachments();
-        this.setWorking("Planning next step…");
-        return;
-      case "agent_end":
-        this.finishDrafts();
-        // finishDrafts sealed the final prose bubble; now group this turn's
-        // attachments onto it (no-op if turn_end already flushed them).
-        this.flushPendingAgentAttachments();
-        this.closeRunningTools();
-        // Clear the prose accumulator so a next turn that opens straight into a
-        // tool (no message_start first) can't re-commit this turn's prose above
-        // that tool's card.
-        this.draft.pendingText = "";
-        this.draft.committedText = "";
-        this.draft.committedThinking = "";
-        this.set({ working: false, workingLabel: "" });
-        this.drainDeferredHistory();
-        this.onSessionSettled?.();
-        return;
-      default:
-        return;
-    }
-  }
-
-  /**
-   * The reasoning text to show for a streamed assistant event. The message's
-   * accumulated `thinking` block wins when present; otherwise fold the event's
-   * incremental `thinking_delta` chunks into the draft accumulator (and take a
-   * `thinking_end` as the final full text) so reasoning-only streams still show.
-   */
-  private resolveThinking(event: any, blockThinking: string): string {
-    if (blockThinking) {
-      this.draft.thinkingText = blockThinking;
-      return blockThinking;
-    }
-    const delta = eventThinkingDelta(event);
-    if (delta.kind === "delta") this.draft.thinkingText += delta.text;
-    else if (delta.kind === "full") this.draft.thinkingText = delta.text;
-    return this.draft.thinkingText.trim();
-  }
-
-  /**
-   * Commit the prose accumulated since the last commit as its own finished
-   * bubble. Called at each tool boundary (so a tool card can't hoist above the
-   * prose that preceded it) and at message_end (the trailing run). Only the
-   * not-yet-committed suffix is emitted: `pendingText` is the whole prose the
-   * runtime has streamed this draft (cumulative for Codex, per-segment for
-   * Claude — a fresh draft resets both fields), and `committedText` is what
-   * already landed, so a runtime that keeps growing one message and one that
-   * resets per segment both interleave correctly. Each run is a separate entry,
-   * matching renderHistory's block-walk. An error-shaped run becomes a red
-   * bubble (see the message_end note).
-   */
-  private commitPendingProse(): void {
-    const full = this.draft.pendingText;
-    const committed = this.draft.committedText;
-    const tail = (full.startsWith(committed) ? full.slice(committed.length) : full).trim();
-    if (!tail) return;
-    this.draft.committedText = full;
-    if (looksLikeAgentError(tail)) {
-      // A run that turns out to be an agent error becomes a red bubble. Drop any
-      // in-flight streaming preview for this run first so it isn't left dangling
-      // as a plain-text bubble above the error.
-      if (this.draft.assistantId) {
-        this.removeEntry(this.draft.assistantId);
-        this.draft.assistantId = null;
-      }
-      this.pushEntry({ id: nextId(), role: "error", text: humanizeError(tail) });
-      return;
-    }
-    // Seal this run's bubble as rendered markdown. When previewPendingProse
-    // already pushed a live (plain-text, streaming) preview for it, upsertDraft
-    // reuses that entry via draft.assistantId and swaps in the HTML in place;
-    // otherwise it pushes a fresh finished bubble. Either way upsertDraft clears
-    // assistantId on finalize, so the next run (after a tool boundary) starts its
-    // own bubble.
-    this.upsertDraft("assistant", tail, true);
-  }
-
-  /**
-   * Paint the not-yet-committed prose of the current draft as a live streaming
-   * bubble (plain text, no markdown pass) so an actively-streaming turn shows its
-   * progress the instant the user is looking — most visibly when they switch back
-   * to a session mid-turn. The finished, markdown-rendered bubble replaces it at
-   * the next tool boundary / message_end via commitPendingProse (which reuses the
-   * same draft.assistantId entry). Mirrors commitPendingProse's tail arithmetic so
-   * cumulative (Codex) and per-segment (Claude) runtimes both preview correctly; a
-   * run that only classifies as an error once complete is handled at commit, so a
-   * partial that merely looks error-shaped mid-stream isn't special-cased here.
-   */
-  private previewPendingProse(): void {
-    const full = this.draft.pendingText;
-    const committed = this.draft.committedText;
-    const tail = (full.startsWith(committed) ? full.slice(committed.length) : full).trim();
-    if (!tail) return;
-    this.upsertDraft("assistant", tail, false);
-  }
-
-  /**
-   * Commit the reasoning accumulated since the last commit as its own finished
-   * thinking bubble. Mirrors commitPendingProse: called at each tool boundary (so
-   * a tool card can't hoist above the reasoning that preceded it) and at
-   * message_end (the trailing run). Gated on `sawThinking` so we keep the existing
-   * rule — only reasoning that appeared before any answer text becomes a separate
-   * bubble. Only the not-yet-committed suffix is emitted, so a runtime that streams
-   * one growing thinking block and one that resets per segment both interleave.
-   */
-  private commitPendingThinking(): void {
-    if (!this.draft.sawThinking) return;
-    const full = this.draft.thinkingText;
-    const committed = this.draft.committedThinking;
-    const tail = (full.startsWith(committed) ? full.slice(committed.length) : full).trim();
-    if (!tail) return;
-    this.draft.committedThinking = full;
-    // Each committed run is its own bubble; drop the reuse handle so upsertDraft
-    // pushes a fresh entry rather than replacing the previous run.
-    this.draft.thinkingId = null;
-    this.upsertDraft("thinking", tail, true);
-  }
-
-  private upsertDraft(which: "assistant" | "thinking", text: string, finalize: boolean): void {
-    const role: TranscriptRole = which === "assistant" ? "assistant" : "thinking";
-    const idField = which === "assistant" ? "assistantId" : "thinkingId";
-    // Only render markdown once the run is finalized. A streaming assistant
-    // preview updates on every coalesced message_update, so running toHtml (plus
-    // syntax highlighting) each time is the O(n²) churn we deliberately avoid —
-    // the view renders the streaming entry's plain `text` and computes markdown
-    // only when it seals (see EntryView in ChatView).
-    const html = role === "assistant" && finalize ? toHtml(text) : undefined;
-    let id = this.draft[idField];
-    if (!id) {
-      id = nextId();
-      this.draft[idField] = id;
-      this.pushEntry({ id, role, text, html, streaming: !finalize });
-    } else {
-      this.replaceEntry(id, { text, html, streaming: !finalize });
-    }
-    if (finalize) this.draft[idField] = null;
-  }
-
-  private removeEntry(id: string): void {
-    this.set({ transcript: this.state.activeSession.transcript.filter((e) => e.id !== id) });
-  }
-
+  /** Interpreter-only interruption cleanup; normal turn decisions live in the transcript fold. */
   private finishDrafts(): void {
-    const { assistantId, thinkingId } = this.draft;
-    if (assistantId) this.replaceEntry(assistantId, { streaming: false });
-    if (thinkingId) this.replaceEntry(thinkingId, { streaming: false });
+    const ids = new Set([this.draft.assistantId, this.draft.thinkingId].filter(Boolean));
+    if (ids.size) this.set({ transcript: this.state.activeSession.transcript.map((entry) => ids.has(entry.id) ? { ...entry, streaming: false } : entry) });
     this.draft.assistantId = null;
     this.draft.thinkingId = null;
-  }
-
-  private applyTool(tool: ToolActivity): void {
-    const transcript = [...this.state.activeSession.transcript];
-    mergeToolInto(transcript, tool);
-    this.set({ transcript });
-  }
-
-  /**
-   * Force any tool activity card still marked "running" to "done" once the
-   * turn is over. A tool only ever completes today via the runtime's own
-   * tool-result echo (see src/runtime/claude-code.ts's `case "user"`) — if
-   * the turn ends without one (aborted mid-tool, the process crashed, an
-   * error subtype with no matching toolUseId), that echo never arrives and
-   * the card would otherwise spin forever even though nothing is running
-   * anymore. agent_end is the one point every turn reaches regardless of how
-   * it ended, so it's the right backstop rather than special-casing abort.
-   */
-  private closeRunningTools(): void {
-    let changed = false;
-    const transcript = this.state.activeSession.transcript.map((e) => {
-      if (!e.tool || e.tool.status !== "running") return e;
-      changed = true;
-      return { ...e, tool: { ...e.tool, status: "done" as const } };
-    });
-    if (changed) this.set({ transcript });
   }
 }

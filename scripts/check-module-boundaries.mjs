@@ -131,6 +131,17 @@ const RULES = [
     enforce: true,
     note: "event folds are standalone data transformations; SessionStore installs their returned values.",
   })),
+  ...[
+    "active-session-event-fold.ts",
+    "attention-event-fold.ts",
+    "transcript-event-fold.ts",
+  ].map((file) => ({
+    name: `${file.replace(/\\.ts$/, "")}-is-pure`,
+    dir: `packages/core/src/${file}`,
+    forbid: ["./store.js", "./transport", "./local-store", "./ephemeral", "session-contract", "agent-profile", "node:", "react"],
+    enforce: true,
+    note: "active-session folds are standalone immutable decisions; the SessionStore only interprets their patches and commands.",
+  })),
   {
     name: "ephemeral-catalog-is-pure-data",
     dir: "packages/core/src/ephemeral-catalog.ts",
