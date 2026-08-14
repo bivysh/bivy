@@ -135,6 +135,11 @@ export interface CredentialRecordSummary {
   expiresAt?: number;
   /** The non-secret pointer, when `kind === "reference"`. */
   ref?: string;
+  /** Whether "Test connection" supports this provider/kind. */
+  testable: boolean;
+  /** The most recent "Test connection" result for this record, if any run. */
+  lastVerifiedAt?: number;
+  lastVerifiedOk?: boolean;
 }
 
 /**

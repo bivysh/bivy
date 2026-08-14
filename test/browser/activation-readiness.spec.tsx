@@ -22,12 +22,14 @@ test("the readiness strip renders nothing once activated and never claims premat
   expect(view).toContain("activation.checks.map((check)");
 });
 
-test("setup readiness is scoped to a first isolated Machine and stays out of established workstation Sessions", async () => {
+test("setup readiness is wired only into a fresh draft and credential repair opens Keys & OAuth", async () => {
   const app = await read("../../packages/web/src/App.tsx");
+  expect(app).toContain("!state.activeSessionId && state.transcript.length === 0");
   expect(app).toContain("<ReadinessChecklist");
-  expect(app).toContain("activationFromState(state)");
-  expect(app).toContain('state.currentNodeId?.startsWith("eph-") && !activation.activated');
+  expect(app).toContain("deriveActivation({");
+  expect(app).toContain("state.activationReadiness ? state.activationReadiness.credential.ok : undefined");
   expect(app).toContain('authenticate_credential: () => openSettings("providers")');
+  expect(app).not.toContain('authenticate_credential: () => openSettings("models")');
 });
 
 test("the readiness UI uses only canonical customer vocabulary", async () => {

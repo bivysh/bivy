@@ -700,7 +700,12 @@ h1{font-size:20px;margin:0 0 8px}p{color:#9aa6cf;margin:6px 0;line-height:1.45}
 // Send the device sign-in failure page, relaxing this one response's CSP just
 // enough to run the close-button snippet (whitelisted by hash) and its inline
 // styles; the global script-src stays 'self'-only for every other route.
-function sendSignInFailed(res: Response, status: number, detail: string): void {
+function sendSignInFailed(res: Response, status: number, detail: string, source: string): void {
+  // No account exists yet at a sign-in failure (that's the failure), so this
+  // uses the unauthenticated, low-cardinality funnel counter (see
+  // recordFunnelEvent) rather than the authenticated per-account product
+  // metrics — the same reason `sign_in_completed` below isn't tracked there.
+  recordFunnelEvent("sign_in_failed", source, "unknown");
   res.setHeader(
     "Content-Security-Policy",
     [
@@ -922,7 +927,10 @@ app.post("/auth/magic-link/start", asyncHandler(async (req, res) => {
 app.post("/auth/magic-link/consume", asyncHandler(async (req, res) => {
   const loginToken = String(req.body?.token ?? "").trim();
   const account = await store.consumeLoginToken(loginToken);
-  if (!account) return res.status(401).json({ error: "Invalid or expired login token" });
+  if (!account) {
+    recordFunnelEvent("sign_in_failed", "email_api", "unknown");
+    return res.status(401).json({ error: "Invalid or expired login token" });
+  }
   const token = await store.createSession(account.id);
   recordFunnelEvent("sign_in_completed", "email_api", account.plan);
   res.json({ ok: true, token, account: { id: account.id, email: account.email, plan: account.plan } });
@@ -932,7 +940,7 @@ app.get("/auth/magic-link/consume", asyncHandler(async (req, res) => {
   const loginToken = String(req.query?.token ?? "").trim();
   const deviceId = String(req.query?.device ?? "").trim();
   const account = await store.consumeLoginToken(loginToken);
-  if (!account) return sendSignInFailed(res, 401, "This sign-in link is invalid or has expired. Request a new one from the sign-in screen.");
+  if (!account) return sendSignInFailed(res, 401, "This sign-in link is invalid or has expired. Request a new one from the sign-in screen.", deviceId ? "email_device" : "email_browser");
   // Device-login flow (hands-free CLI sign-in): mark the pending device login
   // complete and tell the user to return to their terminal. No session is
   // embedded here — the CLI mints it when it polls.
@@ -1040,8 +1048,9 @@ app.get("/auth/github/callback", asyncHandler(async (req, res) => {
         reason === "token-exchange"
           ? "Couldn't complete GitHub sign-in — the authorization code could not be exchanged. This is a server configuration issue; please try again in a moment."
           : "GitHub didn't return a verified email. Make sure your GitHub account has a verified email address and that you granted the email permission, then try again.";
-      return sendSignInFailed(res, 400, detail);
+      return sendSignInFailed(res, 400, detail, "github_device");
     }
+    recordFunnelEvent("sign_in_failed", "github_browser", "unknown");
     const path = safeReturnPath(stored.returnPath, "/");
     return res.redirect(`${path}${path.includes("?") ? "&" : "?"}authError=${errCode}`);
   }

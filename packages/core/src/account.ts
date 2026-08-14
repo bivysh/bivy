@@ -1109,7 +1109,25 @@ export async function fetchAutomationRun(
   return (await res.json()) as AccountAutomationRun;
 }
 
-export type ProductMetricEvent = "activation_ready" | "first_useful_response" | "remote_reconnect" | "remote_intervention" | "run_accepted" | "receipt_reviewed";
+export type ProductMetricEvent =
+  | "activation_ready"
+  | "first_useful_response"
+  | "remote_reconnect"
+  | "remote_intervention"
+  | "run_accepted"
+  | "receipt_reviewed"
+  // Readiness-led first-run journey: one ok/failed pair per step, closed-enum
+  // and content-free (no ids, no reasons, no free text — see recordProductMetric).
+  // Sign-in itself is tracked server-side (control-plane FunnelEvent
+  // sign_in_completed/sign_in_failed) instead of here: a sign-in FAILURE has,
+  // by definition, no authenticated account yet to attribute this
+  // account-scoped metric to.
+  | "first_run_machine_ready"
+  | "first_run_machine_failed"
+  | "first_run_provider_connected"
+  | "first_run_provider_failed"
+  | "first_run_agent_verified"
+  | "first_run_agent_failed";
 export type ProductMetricClient = "desktop" | "mobile" | "cli" | "node";
 
 /** Emit one content-free milestone. The request contains closed enums only. */
