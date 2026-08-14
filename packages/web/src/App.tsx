@@ -446,11 +446,6 @@ export function App() {
     | { interactiveTui?: boolean }
     | undefined;
   const canContinueInTerminal = online && Boolean(activeRuntimeCaps?.interactiveTui);
-  const activeRuntime = state.catalogs.runtimes.find((r) => r.id === activeSession?.runtimeId);
-  const executionProfile = activeSession?.executionProfile === "isolated_customer_cloud" ? "Isolated customer-cloud"
-    : activeSession?.executionProfile === "trusted_workstation" ? "Trusted workstation"
-      : activeSession?.executionProfile === "restricted" ? "Restricted" : undefined;
-  const trustMode = controller.direct ? "Direct to Machine" : "E2E relay-blind";
 
   // Approval/question cards render inline in the active session's chat scroll, so
   // only show the ones that belong to that session. Items are still kept globally
@@ -612,9 +607,6 @@ export function App() {
                 worktree={activeSession?.worktree}
                 branch={activeSession?.branch}
                 sessionFile={activeSession?.path}
-                executionProfile={executionProfile}
-                effectiveProtection={[activeSession?.sandbox, activeSession?.approvalMode, activeRuntime?.protectionLabel].filter(Boolean).join(" · ") || undefined}
-                trustMode={trustMode}
                 auditHealth={activeSession?.auditHealth}
                 eventLogHealth={activeSession?.eventLogHealth}
                 onContinueInTerminal={canContinueInTerminal ? continueInTerminal : undefined}
@@ -796,28 +788,6 @@ export function App() {
                 />
               ) : (
                 <GithubPill gh={state.activeSession.github} />
-              )}
-              {/* Slash-command pill, pushed to the right so it sits top-right over
-                  the composer on the same band as the GitHub context. Tapping it
-                  (re)initializes a closed session so its commands can be fetched,
-                  then opens the composer's "/" menu. Shown on a draft too: the
-                  selected runtime's advertised commands (folded onto its runtime
-                  row when the draft warms it) are offered there, so the menu is a
-                  real affordance rather than dead — an agent with none still gets
-                  the "no slash commands" empty state instead of a hidden button. */}
-              {(state.activeSession.activeSessionId || !activeTuiLocked) && (
-                <button
-                  type="button"
-                  className="slash-pill"
-                  onClick={() => controller.openSlashCommands()}
-                  disabled={!canCompose}
-                  title="Slash commands"
-                  aria-label="Slash commands"
-                >
-                  <svg className="slash-glyph" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
-                    <path d="M11 3 5 13" />
-                  </svg>
-                </button>
               )}
             </div>
 

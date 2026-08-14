@@ -85,9 +85,6 @@ export function SessionMenu({
   worktree,
   branch,
   sessionFile,
-  executionProfile,
-  effectiveProtection,
-  trustMode,
   auditHealth,
   eventLogHealth,
   onContinueInTerminal,
@@ -101,9 +98,6 @@ export function SessionMenu({
   worktree?: string;
   branch?: string;
   sessionFile?: string;
-  executionProfile?: string;
-  effectiveProtection?: string;
-  trustMode?: string;
   auditHealth?: {
     storage: "healthy" | "missing" | "corrupt" | "unreadable";
     writes: "healthy" | "unknown" | "degraded";
@@ -219,11 +213,6 @@ export function SessionMenu({
       )}
       {open && (
         <div className="session-actions-menu" role="menu">
-          <div className="session-actions-context" aria-label="Session protection context">
-            {executionProfile && <span><strong>Execution</strong>{executionProfile}</span>}
-            {effectiveProtection && <span><strong>Protection</strong>{effectiveProtection}</span>}
-            {trustMode && <span><strong>Connection</strong>{trustMode}</span>}
-          </div>
           {auditHealth && (["corrupt", "unreadable"].includes(auditHealth.storage) || auditHealth.writes === "degraded") && (
             <div className="session-actions-audit-warning" role="status">
               <strong>Audit evidence degraded</strong>

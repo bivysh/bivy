@@ -3,25 +3,35 @@ import { expect, test } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 
 const STYLES = new URL("../../packages/web/src/styles.css", import.meta.url);
+const APP = new URL("../../packages/web/src/App.tsx", import.meta.url);
 const COMPOSER = new URL("../../packages/web/src/components/Composer.tsx", import.meta.url);
 const SHEET = new URL("../../packages/web/src/components/ScheduleSheet.tsx", import.meta.url);
 const QUEUE = new URL("../../packages/web/src/components/FollowupQueue.tsx", import.meta.url);
 
-test("split Send keeps normal sending primary and exposes Run and Schedule alternatives", async () => {
+test("the composer uses one normal Send control without Run or Schedule alternatives", async () => {
   const source = await readFile(COMPOSER, "utf8");
-  expect(source).toContain('className="split-send"');
-  expect(source).toContain('type="submit"\n                  className="composer-btn send split-send-main"');
-  expect(source).toContain('aria-label="More send options"');
-  expect(source).toContain("Start a Run");
-  expect(source).toContain("Schedule for later");
-  expect(source).toContain("setScheduling(true)");
+  expect(source).toContain('type="submit"\n                className="composer-btn send"');
+  expect(source).not.toContain('className="split-send"');
+  expect(source).not.toContain('aria-label="More send options"');
+  expect(source).not.toContain("Start a Run");
+  expect(source).not.toContain("Schedule for later");
 });
 
-test("split Send is one compound visual control with two accessible targets", async () => {
+test("obsolete split Send styles are removed", async () => {
   const css = await readFile(STYLES, "utf8");
-  expect(css).toContain(".split-send { position: relative;");
-  expect(css).toContain(".split-send-toggle {");
-  expect(css).toContain(".send-options-menu {");
+  expect(css).not.toContain(".split-send {");
+  expect(css).not.toContain(".split-send-toggle {");
+  expect(css).not.toContain(".send-options-menu {");
+});
+
+test("slash commands remain available inline without a composer button", async () => {
+  const [app, composer] = await Promise.all([
+    readFile(APP, "utf8"),
+    readFile(COMPOSER, "utf8"),
+  ]);
+  expect(app).not.toContain('className="slash-pill"');
+  expect(composer).toContain("matchSlashCommands(text, agentCommands)");
+  expect(composer).toContain("if (isSlashInput(value))");
 });
 
 /** The declaration block of the exact CSS rule `selector { … }` — anchored at
