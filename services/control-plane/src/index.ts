@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import express, { type Request, type Response, type NextFunction } from "express";
 import Stripe from "stripe";
 import webpush from "web-push";
+import { validateCapabilityTags } from "@bivy/core";
 import { providerCredentialFingerprint, type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, type AutomationRun, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
 import { maybeAutoProvision, planAutoProvision, hostedExecutionReadiness, mintHostedInstallationToken, reapSettledHostedMachine, reconcileAllHostedMachines, reconcileAllReadyCapacity, sweepAllOrphanProviderResources, validateHostedProviderToken, markHostedMachineMilestone, EPHEMERAL_MILESTONES, ephemeralMachinesEnabled } from "./ephemeral-provisioner.js";
 import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecret } from "./hosted-crypto.js";
@@ -2005,6 +2006,18 @@ app.put("/node/provider-summary", requireNode, asyncHandler(async (req, res) => 
   res.json({ ok: true });
 }));
 
+// Owner-declared capability tags (see NodeRecord.capabilities in store.ts) —
+// pushed by the node from its local node.capabilities config, overwritten
+// wholesale on every change. Assertions, not verified facts: the control
+// plane stores exactly what the owner declared and never re-checks it.
+app.put("/node/capabilities", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const result = validateCapabilityTags(req.body?.capabilities);
+  if (!result.ok) return res.status(400).json({ error: result.errors.join("; ") });
+  await store.setNodeCapabilities(node.id, result.tags);
+  res.json({ ok: true });
+}));
+
 // --- Work queue (E2 GitHub webhook sink, E4 Slack) ----------------------
 // Inbound front doors enqueue WorkItems; the node (outbound-only) pulls them.
 // The control plane only routes metadata — the node runs the work with its own
@@ -2781,6 +2794,8 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
   let repos: string[] | undefined;
   let on: AutomationDefinition["on"] | undefined;
   let target: AutomationDefinition["target"];
+  let requiredCapabilities: string[] | undefined;
+  let preferredCapabilities: string[] | undefined;
   try {
     repo = normalizeAutomationRepo(req.body?.repo);
     labels = normalizeStringList(req.body?.labels);
@@ -2795,6 +2810,16 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
       const targetSessionId = typeof req.body?.targetSessionId === "string" ? req.body.targetSessionId.trim() : "";
       if (!targetSessionId) return res.status(400).json({ error: "targetSessionId is required when targetKind is existing_session" });
       target = { kind: "existing_session", sessionId: targetSessionId };
+    }
+    if (req.body?.requiredCapabilities !== undefined) {
+      const result = validateCapabilityTags(req.body.requiredCapabilities);
+      if (!result.ok) throw new Error(result.errors.join("; "));
+      requiredCapabilities = result.tags.length ? result.tags : undefined;
+    }
+    if (req.body?.preferredCapabilities !== undefined) {
+      const result = validateCapabilityTags(req.body.preferredCapabilities);
+      if (!result.ok) throw new Error(result.errors.join("; "));
+      preferredCapabilities = result.tags.length ? result.tags : undefined;
     }
   } catch (error) {
     return res.status(400).json({ error: (error as Error).message });
@@ -2823,6 +2848,8 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
     schedule,
     nextRunAt,
     message: req.body?.message === true,
+    requiredCapabilities,
+    preferredCapabilities,
   };
   // Close the gap where autonomous+danger-full-access was only hard-blocked by
   // config-as-code parsing: every save path now runs the same shared preflight
@@ -2873,6 +2900,8 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
   let repos = current.repos;
   let on = current.on;
   let target = current.target;
+  let requiredCapabilities = current.requiredCapabilities;
+  let preferredCapabilities = current.preferredCapabilities;
   try {
     if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "repo")) {
       // Empty string clears the workspace target.
@@ -2899,6 +2928,22 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
         target = undefined;
       }
     }
+    if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "requiredCapabilities")) {
+      if (req.body.requiredCapabilities === null) requiredCapabilities = undefined;
+      else {
+        const result = validateCapabilityTags(req.body.requiredCapabilities);
+        if (!result.ok) throw new Error(result.errors.join("; "));
+        requiredCapabilities = result.tags.length ? result.tags : undefined;
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "preferredCapabilities")) {
+      if (req.body.preferredCapabilities === null) preferredCapabilities = undefined;
+      else {
+        const result = validateCapabilityTags(req.body.preferredCapabilities);
+        if (!result.ok) throw new Error(result.errors.join("; "));
+        preferredCapabilities = result.tags.length ? result.tags : undefined;
+      }
+    }
   } catch (error) {
     return res.status(400).json({ error: (error as Error).message });
   }
@@ -2922,6 +2967,8 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
     target,
     templateId: typeof req.body?.templateId === "string" ? req.body.templateId.trim() || undefined : current.templateId,
     message: typeof req.body?.message === "boolean" ? req.body.message : current.message,
+    requiredCapabilities,
+    preferredCapabilities,
   };
   // Same save gate as create (see docs/automation-evaluator.md) — evaluated
   // against the patched definition, not the stored one, so tightening (e.g.
@@ -3146,6 +3193,18 @@ app.post("/account/automation-runs", asyncHandler(async (req, res) => {
   const targetKind = req.body?.targetKind === "existing_session" ? "existing_session" : "new_session";
   const targetSessionId = typeof req.body?.targetSessionId === "string" ? req.body.targetSessionId.trim() : "";
   if (targetKind === "existing_session" && !targetSessionId) return res.status(400).json({ error: "targetSessionId is required when targetKind is existing_session" });
+  let requiredCapabilities: string[] | undefined;
+  let preferredCapabilities: string[] | undefined;
+  if (req.body?.requiredCapabilities !== undefined) {
+    const result = validateCapabilityTags(req.body.requiredCapabilities);
+    if (!result.ok) return res.status(400).json({ error: result.errors.join("; ") });
+    requiredCapabilities = result.tags.length ? result.tags : undefined;
+  }
+  if (req.body?.preferredCapabilities !== undefined) {
+    const result = validateCapabilityTags(req.body.preferredCapabilities);
+    if (!result.ok) return res.status(400).json({ error: result.errors.join("; ") });
+    preferredCapabilities = result.tags.length ? result.tags : undefined;
+  }
   const run = await store.enqueueAutomationRun(client.accountId, {
     source: "manual",
     triggerKind: "manual",
@@ -3163,6 +3222,8 @@ app.post("/account/automation-runs", asyncHandler(async (req, res) => {
     target: targetKind === "existing_session"
       ? { kind: "existing_session", sessionId: targetSessionId }
       : { kind: "new_session" },
+    requiredCapabilities,
+    preferredCapabilities,
   });
   // Manual runs are real automation work too: wake connected nodes and, when
   // routing targets an ephemeral config, launch the unattended runner. Without

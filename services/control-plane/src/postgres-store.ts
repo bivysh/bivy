@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { randomUUID, randomBytes } from "node:crypto";
 import pg from "pg";
+import { anyNodeEligible } from "@bivy/core";
 import { encryptSecret, decryptSecret, isSecretEnvelope, type SecretEnvelope } from "./hosted-crypto.js";
 import {
   type Account,
@@ -304,6 +305,10 @@ export class PostgresStore implements MeshStore {
       -- tier as online/last_seen_at above: never credential material.
       ALTER TABLE nodes ADD COLUMN IF NOT EXISTS providers JSONB;
       ALTER TABLE nodes ADD COLUMN IF NOT EXISTS bootstrap_status JSONB;
+      -- Manually declared, owner-asserted capability tags (see NodeRecord.capabilities
+      -- in store.ts) — same trust tier as providers: plaintext, self-reported, never
+      -- verified. Overwritten wholesale by the owning node on every change.
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS capabilities JSONB;
 
       CREATE TABLE IF NOT EXISTS session_index (
         node_id     TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
@@ -660,6 +665,11 @@ export class PostgresStore implements MeshStore {
       -- Explicit acknowledgement of autonomous + danger-full-access, checked by
       -- the shared preflight gate on create/update (see automation-match.ts).
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS allow_dangerous BOOLEAN;
+      -- See AutomationDefinition.requiredCapabilities/preferredCapabilities in
+      -- store.ts. Bounded capability-tag lists validated by @bivy/core's
+      -- capability-routing.ts before they reach here.
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS required_capabilities JSONB;
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS preferred_capabilities JSONB;
       CREATE UNIQUE INDEX IF NOT EXISTS idx_automation_definitions_config_key
         ON automation_definitions(account_id, config_key) WHERE config_key IS NOT NULL;
       CREATE TABLE IF NOT EXISTS trigger_events (
@@ -691,6 +701,10 @@ export class PostgresStore implements MeshStore {
       -- declared-check results, and an ordered event timeline. All three are
       -- allowlisted/bounded by run-evidence.ts before they ever reach here.
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS routing_reason TEXT;
+      -- See WorkItem.requiredCapabilities/preferredCapabilities — copied from the
+      -- request or the AutomationDefinition at enqueue time.
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS required_capabilities JSONB;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS preferred_capabilities JSONB;
       -- Explicit ::jsonb cast on the default (not just relying on the column
       -- type): without it, pg-mem — the in-memory Postgres the test suite runs
       -- against — stores the literal two-character text "[]" instead of an
@@ -1208,6 +1222,13 @@ export class PostgresStore implements MeshStore {
     await this.query(
       `UPDATE nodes SET providers = $2 WHERE id = $1`,
       [nodeId, JSON.stringify(providers)],
+    );
+  }
+
+  async setNodeCapabilities(nodeId: string, capabilities: string[]): Promise<void> {
+    await this.query(
+      `UPDATE nodes SET capabilities = $2 WHERE id = $1`,
+      [nodeId, JSON.stringify(capabilities)],
     );
   }
 
@@ -2459,8 +2480,8 @@ export class PostgresStore implements MeshStore {
       `INSERT INTO automation_definitions
       (id, account_id, name, template_ciphertext, runtime_id, model, node_label, ephemeral,
        approval_mode, sandbox, enabled, schedule, next_run_at, trigger, webhook_secret, repo,
-       labels, repos, template_id, on_events, target_kind, target_session_id, message, config_key, config_order, max_attempts, allow_dangerous)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27) RETURNING *`,
+       labels, repos, template_id, on_events, target_kind, target_session_id, message, config_key, config_order, max_attempts, allow_dangerous, required_capabilities, preferred_capabilities)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29) RETURNING *`,
       [`automation_${randomUUID()}`, accountId, input.name, input.templateCiphertext ?? null,
         input.runtimeId ?? null, input.model ?? null, input.nodeLabel ?? null, input.ephemeral ?? null,
         input.approvalMode ?? null, input.sandbox ?? null, input.enabled ?? false,
@@ -2476,7 +2497,9 @@ export class PostgresStore implements MeshStore {
         input.configKey ?? null,
         input.configOrder ?? null,
         input.maxAttempts ?? null,
-        input.allowDangerous ?? null],
+        input.allowDangerous ?? null,
+        input.requiredCapabilities ? JSON.stringify(input.requiredCapabilities) : null,
+        input.preferredCapabilities ? JSON.stringify(input.preferredCapabilities) : null],
     );
     return mapAutomationDefinition(rows[0]);
   }
@@ -2511,7 +2534,7 @@ export class PostgresStore implements MeshStore {
        enabled=$11, schedule=$12, next_run_at=$13, trigger=$14, webhook_secret=$15,
        repo=$16, labels=$17, repos=$18, template_id=$19, on_events=$20,
        target_kind=$21, target_session_id=$22, message=$23, config_key=$24,
-       config_order=$25, max_attempts=$26, allow_dangerous=$27, updated_at=now()
+       config_order=$25, max_attempts=$26, allow_dangerous=$27, required_capabilities=$28, preferred_capabilities=$29, updated_at=now()
        WHERE account_id=$1 AND id=$2 RETURNING *`,
       [accountId, id, next.name, next.templateCiphertext ?? null, next.runtimeId ?? null,
         next.model ?? null, next.nodeLabel ?? null, next.ephemeral ?? null,
@@ -2528,7 +2551,9 @@ export class PostgresStore implements MeshStore {
         next.configKey ?? null,
         next.configOrder ?? null,
         next.maxAttempts ?? null,
-        next.allowDangerous ?? null],
+        next.allowDangerous ?? null,
+        next.requiredCapabilities ? JSON.stringify(next.requiredCapabilities) : null,
+        next.preferredCapabilities ? JSON.stringify(next.preferredCapabilities) : null],
     );
     return rows[0] ? mapAutomationDefinition(rows[0]) : undefined;
   }
@@ -2665,6 +2690,23 @@ export class PostgresStore implements MeshStore {
     }
     canonicalTriggerId ??= triggerId;
     const target = input.target ?? { kind: "new_session" as const };
+    // Capability gate: a required tag must fail/park HONESTLY when literally no
+    // machine in the account has ever declared it — rather than queuing forever
+    // for a capability nothing claims to have. A machine that declared the tag
+    // but is currently offline still counts (it may come back online), so this
+    // only parks the genuinely unfulfillable case. See capability-routing.ts.
+    const requiredCapabilities = input.requiredCapabilities ?? definition?.requiredCapabilities;
+    const preferredCapabilities = input.preferredCapabilities ?? definition?.preferredCapabilities;
+    let status: "pending" | "needs_attention" = "pending";
+    let routingReason: string | undefined;
+    if (requiredCapabilities?.length) {
+      const { rows: nodeRows } = await this.query(`SELECT capabilities FROM nodes WHERE account_id = $1`, [accountId]);
+      const declared = nodeRows.map((row) => mapStringList(row.capabilities) ?? []);
+      if (!anyNodeEligible(declared, requiredCapabilities)) {
+        status = "needs_attention";
+        routingReason = `no machine declares required capability: ${requiredCapabilities.join(", ")}`;
+      }
+    }
     // Two partial-unique constraints can fire: the per-delivery dedupe key and the
     // per-issue collapse key (only against the still-pending row). ON CONFLICT DO
     // NOTHING covers both; on either conflict we return the existing item.
@@ -2674,11 +2716,13 @@ export class PostgresStore implements MeshStore {
       { at: observedAt, kind: "trigger_received", summary: "Trigger received.", ref: sourceRefText, url: input.url, milestoneId: `${canonicalTriggerId}:received` },
       { at: observedAt, kind: "trigger_matched", summary: definition ? "Trigger matched an Automation." : "Trigger accepted as a one-off Run.", ref: definition?.id, milestoneId: `${canonicalTriggerId}:matched` },
       { at: observedAt, kind: "queued", summary: "Run persisted in the durable queue.", milestoneId: `${canonicalTriggerId}:queued` },
-      { at: observedAt, kind: "routed", summary: "Run routed to an eligible Machine label.", ref: normalizeWorkLabel(input.label ?? definition?.nodeLabel), milestoneId: `${canonicalTriggerId}:routed` },
+      status === "needs_attention"
+        ? { at: observedAt, kind: "needs_attention", summary: routingReason!, milestoneId: `${canonicalTriggerId}:routed` }
+        : { at: observedAt, kind: "routed", summary: "Run routed to an eligible Machine label.", ref: normalizeWorkLabel(input.label ?? definition?.nodeLabel), milestoneId: `${canonicalTriggerId}:routed` },
     ];
     const { rows } = await this.query(
-      `INSERT INTO work_items (id, account_id, label, source, status, title, body, repo, issue_number, url, external_id, dedupe_key, collapse_key, default_routed, runtime_id, model, installation_id, app_id, definition_id, trigger_id, trigger_kind, target_kind, target_session_id, message, ephemeral, approval_mode, sandbox, max_attempts, events, event_context)
-       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28::jsonb, $29)
+      `INSERT INTO work_items (id, account_id, label, source, status, title, body, repo, issue_number, url, external_id, dedupe_key, collapse_key, default_routed, runtime_id, model, installation_id, app_id, definition_id, trigger_id, trigger_kind, target_kind, target_session_id, message, ephemeral, approval_mode, sandbox, max_attempts, events, event_context, required_capabilities, preferred_capabilities, routing_reason)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29::jsonb, $30, $31, $32, $33)
        ON CONFLICT DO NOTHING
        RETURNING *`,
       [
@@ -2686,6 +2730,7 @@ export class PostgresStore implements MeshStore {
         accountId,
         normalizeWorkLabel(input.label ?? definition?.nodeLabel),
         input.source,
+        status,
         input.title,
         input.body ?? null,
         repo ?? null,
@@ -2711,6 +2756,9 @@ export class PostgresStore implements MeshStore {
         input.maxAttempts ?? definition?.maxAttempts ?? null,
         JSON.stringify(initialEvents),
         input.eventContext ?? null,
+        requiredCapabilities ? JSON.stringify(requiredCapabilities) : null,
+        preferredCapabilities ? JSON.stringify(preferredCapabilities) : null,
+        routingReason ?? null,
       ],
     );
     if (rows[0]) return { run: mapAutomationRun(rows[0]), created: true };
@@ -3244,6 +3292,8 @@ function mapWorkItem(row: any): WorkItem {
     approvalMode: row.approval_mode ?? undefined,
     sandbox: row.sandbox ?? undefined,
     maxAttempts: row.max_attempts == null ? undefined : Number(row.max_attempts),
+    requiredCapabilities: mapStringList(row.required_capabilities),
+    preferredCapabilities: mapStringList(row.preferred_capabilities),
     definitionId: row.definition_id ?? undefined,
     triggerId: row.trigger_id ?? undefined,
     triggerKind: row.trigger_kind ?? undefined,
@@ -3317,6 +3367,8 @@ function mapAutomationDefinition(row: any): AutomationDefinition {
     approvalMode: row.approval_mode ?? undefined,
     sandbox: row.sandbox ?? undefined,
     maxAttempts: row.max_attempts == null ? undefined : Number(row.max_attempts),
+    requiredCapabilities: mapStringList(row.required_capabilities),
+    preferredCapabilities: mapStringList(row.preferred_capabilities),
     enabled: Boolean(row.enabled),
     trigger: row.trigger ?? undefined,
     webhookSecret: row.webhook_secret ?? undefined,
@@ -3384,6 +3436,8 @@ function mapAutomationRun(row: any): AutomationRun {
       ephemeral: row.ephemeral ?? undefined,
       approvalMode: row.approval_mode ?? undefined,
       sandbox: row.sandbox ?? undefined,
+      requiredCapabilities: mapStringList(row.required_capabilities),
+      preferredCapabilities: mapStringList(row.preferred_capabilities),
     },
     output: row.output ?? undefined,
     title: row.title,
@@ -3426,6 +3480,7 @@ function mapNode(row: any): NodeRecord {
     createdAt: new Date(row.created_at).toISOString(),
     providers: row.providers ?? undefined,
     bootstrapStatus: row.bootstrap_status ?? undefined,
+    capabilities: mapStringList(row.capabilities),
   };
 }
 

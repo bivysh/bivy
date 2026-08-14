@@ -42,6 +42,9 @@ export function runPreflightChecks(signals: PreflightSignals): PreflightCheckRes
 
   const machine = signals.assignedMachine;
   if (!machine) results.push(skipped("assigned_machine", "Assigned machine"));
+  else if (machine.capabilityGap?.length) {
+    results.push(check("assigned_machine", "warn", "Assigned machine", machine.detail ?? `No machine has ever declared the required capability: ${machine.capabilityGap.join(", ")}. Runs will queue until one does.`));
+  }
   else if (machine.primaryOnline) results.push(check("assigned_machine", "ok", "Assigned machine", machine.detail ?? "The assigned machine is online."));
   else if (machine.fallbackAvailable || machine.sharedQueueHasOnlineNode) results.push(check("assigned_machine", "warn", "Assigned machine", machine.detail ?? "The assigned machine is offline, but a fallback can pick up the work."));
   else results.push(check("assigned_machine", "warn", "Assigned machine", machine.detail ?? "No machine is currently online to run this — the automation will queue until one is."));
