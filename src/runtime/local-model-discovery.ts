@@ -6,7 +6,7 @@
 
 import dns from "node:dns/promises";
 import net from "node:net";
-import { Agent } from "undici";
+import { Agent, type Dispatcher } from "undici";
 
 export type LocalEndpointStatus = "ready" | "offline" | "timeout" | "auth_required" | "malformed" | "unsupported";
 
@@ -199,6 +199,74 @@ export function normalizeCatalog(payload: unknown, kind: "openai" | "ollama"): D
   return models;
 }
 
+async function dispatchFetch(url: string, init: RequestInit, dispatcher: Agent): Promise<Response> {
+  const target = new URL(url);
+  return await new Promise<Response>((resolve, reject) => {
+    let controller: Dispatcher.DispatchController | undefined;
+    let status = 0;
+    let responseHeaders = new Headers();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    let settled = false;
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+    const abort = () => {
+      const error = new DOMException("This operation was aborted", "AbortError");
+      controller?.abort(error);
+      fail(error);
+    };
+    init.signal?.addEventListener("abort", abort, { once: true });
+    dispatcher.dispatch({
+      origin: target.origin,
+      path: `${target.pathname}${target.search}`,
+      method: "GET",
+      headers: init.headers as Record<string, string>,
+      headersTimeout: 5_000,
+      bodyTimeout: 5_000,
+    }, {
+      onRequestStart(value) {
+        controller = value;
+        if (init.signal?.aborted) abort();
+      },
+      onResponseStart(_controller, statusCode, headers) {
+        status = statusCode;
+        responseHeaders = new Headers();
+        for (const [key, raw] of Object.entries(headers)) {
+          for (const value of Array.isArray(raw) ? raw : [raw]) {
+            if (value !== undefined) responseHeaders.append(key, String(value));
+          }
+        }
+        if (Number(responseHeaders.get("content-length") || 0) > MAX_RESPONSE_BYTES) {
+          _controller.abort(new Error("catalog response is too large"));
+          fail(new Error("catalog response is too large"));
+        }
+      },
+      onResponseData(value, chunk) {
+        total += chunk.byteLength;
+        if (total > MAX_RESPONSE_BYTES) {
+          value.abort(new Error("catalog response is too large"));
+          fail(new Error("catalog response is too large"));
+          return;
+        }
+        chunks.push(chunk);
+      },
+      onResponseEnd() {
+        if (settled) return;
+        settled = true;
+        init.signal?.removeEventListener("abort", abort);
+        resolve(new Response(Buffer.concat(chunks), { status, headers: responseHeaders }));
+      },
+      onResponseError(_controller, error) {
+        init.signal?.removeEventListener("abort", abort);
+        fail(error);
+      },
+    });
+  });
+}
+
 async function probe(
   target: { baseUrl: string; catalogUrl: string; catalog: "openai" | "ollama"; candidateId?: string; name?: string },
   options: { apiKey?: string; timeoutMs?: number; fetchImpl?: FetchLike; dispatcher?: Agent },
@@ -220,20 +288,21 @@ async function probe(
     baseUrl: target.baseUrl,
     api: "openai-completions",
   };
+  const ownDispatcher = !options.fetchImpl && !options.dispatcher;
+  const dispatcher = options.dispatcher ?? (ownDispatcher ? new Agent() : undefined);
   try {
-    const response = await Promise.race([
-      // Custom URLs reach here only after scheme/credential checks, all-address
-      // DNS validation, unsafe-address rejection, DNS pinning, redirect denial,
-      // and an explicit user action; fixed discovery never accepts a URL.
-      (options.fetchImpl ?? fetch)(target.catalogUrl, { // lgtm[js/request-forgery]
-        method: "GET",
-        headers: { accept: "application/json", ...(options.apiKey ? { authorization: `Bearer ${options.apiKey}` } : {}) },
-        redirect: "error",
-        signal: controller.signal,
-        ...(options.dispatcher ? { dispatcher: options.dispatcher } : {}),
-      } as RequestInit),
-      timeout,
-    ]);
+    const requestInit: RequestInit = {
+      method: "GET",
+      headers: { accept: "application/json", ...(options.apiKey ? { authorization: `Bearer ${options.apiKey}` } : {}) },
+      redirect: "error",
+      signal: controller.signal,
+    };
+    // The injectable FetchLike is test-only. Production requests use the
+    // dispatcher after custom targets have passed URL/DNS guards and pinning.
+    const request = options.fetchImpl
+      ? options.fetchImpl(target.catalogUrl, requestInit)
+      : dispatchFetch(target.catalogUrl, requestInit, dispatcher!);
+    const response = await Promise.race([request, timeout]);
     if (response.status === 401 || response.status === 403) return { ...base, status: "auth_required", models: [], detail: "The endpoint requires an API key." };
     if (response.status === 404 || response.status === 405) return { ...base, status: "unsupported", models: [], detail: "The endpoint does not expose a compatible model catalog." };
     if (!response.ok) return { ...base, status: "offline", models: [], detail: `Endpoint returned HTTP ${response.status}.` };
@@ -248,6 +317,7 @@ async function probe(
     return { ...base, status: timeout ? "timeout" : "offline", models: [], detail: timeout ? `No response within ${timeoutMs} ms.` : "Could not connect to the endpoint." };
   } finally {
     clearTimeout(timer!);
+    if (ownDispatcher) await dispatcher?.close();
   }
 }
 

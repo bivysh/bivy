@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import { describe, it } from "node:test";
 import {
   LOCAL_DISCOVERY_CANDIDATES,
@@ -76,6 +77,24 @@ describe("local model catalog normalization", () => {
 });
 
 describe("local model endpoint health", () => {
+  it("uses the guarded production dispatcher for a real loopback catalog", async () => {
+    const server = createServer((request, response) => {
+      assert.equal(request.url, "/v1/models");
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ data: [{ id: "local-coder" }] }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address();
+      assert.ok(address && typeof address === "object");
+      const result = await verifyLocalModelEndpoint({ baseUrl: `http://127.0.0.1:${address.port}/v1` });
+      assert.equal(result.status, "ready");
+      assert.deepEqual(result.models, [{ id: "local-coder", name: "local-coder" }]);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
   it("distinguishes auth-required and authenticated readiness", async () => {
     const authRequired = await verifyLocalModelEndpoint({
       baseUrl: "http://localhost:8000/v1",
