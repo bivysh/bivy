@@ -2222,6 +2222,11 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
     const stats = await collectNodeStats(nodeStatsOptsFor(msg.sessionId));
     ctx.reply({ type: "node.stats", stats });
   },
+  async "capabilities.get"(_msg, ctx) {
+    // Machine capability inventory for the Settings → Nodes panel. Reply only
+    // to the requesting client, mirroring node.stats above.
+    ctx.reply({ type: "capabilities", capabilities: await capabilitiesController.getCapabilities() });
+  },
   "session.rename"(msg, ctx) {
     const sid = String(msg.sessionId ?? "");
     const newName = String(msg.name ?? "").trim();

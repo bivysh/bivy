@@ -2378,6 +2378,14 @@ export class AppController {
     this.send({ kind: "node.stats", sessionId });
   }
 
+  /** Ask the node for a fresh Machine capability inventory. The reply arrives
+   *  as a `capabilities` event and lands in `state.capabilities`. Fetched on
+   *  demand (panel open / explicit refresh) — capabilities change rarely,
+   *  unlike live resource stats, so this is not polled. */
+  requestCapabilities(): void {
+    this.send({ kind: "capabilities.get" });
+  }
+
   listModels(): void {
     const s = this.store.getState();
     const sessionId = s.activeSessionId ?? undefined;

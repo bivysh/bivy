@@ -108,6 +108,9 @@ export interface Command extends CommandBase {
     | "terminal.open.tui"
     | "terminal.close.tui"
     | "node.stats"
+    // Machine capability inventory (Settings → Nodes panel). Reply/emit:
+    // `capabilities` ({ capabilities: MachineCapabilities }).
+    | "capabilities.get"
     // Fetch a stored attachment's bytes by content hash (see AttachmentStore).
     // Reply: `attachment.data` (base64) or `attachment.error`.
     | "attachment.fetch"

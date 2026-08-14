@@ -9,6 +9,7 @@ import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { OauthStep } from "./ProviderConnect.js";
 import { ImportSessionContent } from "./ImportSessionSheet.js";
+import { MachineCapabilitiesSection } from "./MachineCapabilities.js";
 import { currentThemeSetting, setTheme, type ThemeSetting } from "../theme.js";
 import { useModalEscape } from "../modalStack.js";
 import type { SettingsView } from "../router.js";
@@ -1480,6 +1481,8 @@ function NodesPanel({ state }: { state: AppState }) {
           <p className="muted small">Run <code>bivy update</code> on the machine to update or repair its service, then refresh this list.</p>
         </section>
       )}
+
+      <MachineCapabilitiesSection online={nodeOnline} />
 
       {!nodeOnline ? (
         <p className="muted">

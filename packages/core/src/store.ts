@@ -16,6 +16,7 @@
 
 import type { AttachmentRef, ConnectionStatus, CredentialPresetsView, CredentialRecordSummary, PromptAttachment, ServerEvent } from "./protocol.js";
 import type { AccountNode, EphemeralNodeConfig } from "./account.js";
+import type { MachineCapabilities } from "./capabilities.js";
 import type { InboxAdvert } from "./inbox.js";
 import type { SessionContract } from "./session-contract.js";
 import { type SlashCommand } from "./slash.js";
@@ -30,6 +31,7 @@ import {
   githubContext,
   githubFromSummary,
   normalizeAgentCommands,
+  normalizeCapabilitiesSnapshot,
   normalizeModels,
   normalizeNodeStats,
   normalizePrs,
@@ -813,6 +815,11 @@ export interface AppState {
   /** Latest node-resource snapshot (memory/CPU/storage) for the header "Node
    *  stats" panel, or null until first requested. Polled while the panel is open. */
   nodeStats: NodeStats | null;
+  /** Machine capability inventory (OS/arch, agents, providers, Docker/GPU,
+   *  plugins, workspace count) for the Settings → Nodes panel, or null until
+   *  first requested. Fetched on demand, not polled — capabilities change
+   *  rarely, unlike live resource stats. */
+  capabilities: MachineCapabilities | null;
   /** Sessions currently paused (every action asks for approval until resumed). */
   pausedSessionIds: string[];
   /** Transient result of an Open-PR action, for the UI to toast. */
@@ -975,6 +982,7 @@ export function initialState(): AppState {
     githubApp: null,
     usage: null,
     nodeStats: null,
+    capabilities: null,
     pausedSessionIds: [],
     prResult: null,
     prRefreshAllResult: null,
@@ -3201,6 +3209,11 @@ export class SessionStore {
       case "node.stats": {
         const stats = normalizeNodeStats((event as any).stats);
         if (stats) this.set({ nodeStats: stats });
+        return;
+      }
+      case "capabilities": {
+        const capabilities = normalizeCapabilitiesSnapshot((event as any).capabilities);
+        if (capabilities) this.set({ capabilities });
         return;
       }
       case "session.warning": {
