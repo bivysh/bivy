@@ -4,6 +4,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { stripAttachmentPlaceholders, toHtml, type PromptAttachment, type ToolActivity, type TranscriptEntry } from "@bivy/core";
 import { ToolGroup } from "./ToolGroup.js";
 import { decorateCodeBlocks, highlightCode } from "../highlight.js";
+import { renderMermaidDiagrams } from "../mermaid.js";
 import { writeClipboard } from "../clipboard.js";
 import { getSpeechPreferences, markdownToSpeech, readAloudSupported, speechSynthesisSupported, speechToneInstructions } from "../speech.js";
 import { controller } from "../store/useStore.js";
@@ -305,6 +306,7 @@ const EntryView = memo(function EntryView({
   const bodyRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (entry.role !== "assistant") return;
+    renderMermaidDiagrams(bodyRef.current);
     highlightCode(bodyRef.current);
     decorateCodeBlocks(bodyRef.current);
     const container = bodyRef.current;
