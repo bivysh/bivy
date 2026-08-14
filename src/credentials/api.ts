@@ -344,14 +344,14 @@ export async function removeProviderCredential(credsDir: string, provider: strin
  *  check — chosen for being cheap (no completion/generation billed) and not
  *  mutating anything provider-side. A provider absent here is honestly
  *  reported as `testable: false` rather than guessing at a result. */
-function providerPing(provider: string, token: string): { url: string; headers: Record<string, string> } | undefined {
+function providerPing(provider: string, secret: string): { url: string; headers: Record<string, string> } | undefined {
   // Keep dispatch explicit: provider ids originate at the API boundary and
   // must never select an arbitrary callable property.
   switch (provider) {
     case "anthropic":
-      return { url: "https://api.anthropic.com/v1/models", headers: { "x-api-key": token, "anthropic-version": "2023-06-01" } };
+      return { url: "https://api.anthropic.com/v1/models", headers: { "x-api-key": secret, "anthropic-version": "2023-06-01" } };
     case "openai":
-      return { url: "https://api.openai.com/v1/models", headers: { authorization: `Bearer ${token}` } };
+      return { url: "https://api.openai.com/v1/models", headers: { authorization: `Bearer ${secret}` } };
     default:
       return undefined;
   }
