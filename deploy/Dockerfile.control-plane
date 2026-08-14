@@ -38,10 +38,13 @@ COPY package.json /package.json
 # From /app the `../../packages` prefix clamps at the container root.
 COPY packages/core/package.json /packages/core/package.json
 COPY packages/automation-core/package.json /packages/automation-core/package.json
-COPY services/control-plane/package.json services/control-plane/package-lock.json ./
+# Copy these separately so the lockfile is unambiguously placed at
+# /app/package-lock.json, where npm ci requires it.
+COPY services/control-plane/package.json /app/package.json
+COPY services/control-plane/package-lock.json /app/package-lock.json
 # postinstall builds automation-core, whose source is intentionally in the next
 # layer; prestart performs that same build before the service boots.
-RUN npm ci --ignore-scripts
+RUN test -f package-lock.json && npm ci --ignore-scripts
 COPY packages/core /packages/core
 COPY packages/automation-core /packages/automation-core
 # automation-core's tsconfig compiles canonical sources from ../../src/automation.
