@@ -130,6 +130,8 @@ import {
   supportsSteering as runtimeSupportsSteering,
   type Transport,
   type LocalStore,
+  type LocalModelDiscoveryResult,
+  type LocalModelEndpointResult,
   importRoomKey,
   open as openSealed,
   unb64url,
@@ -2557,12 +2559,22 @@ export class AppController {
   listLocalModelPresets(): void {
     this.send({ kind: "models.custom.presets" });
   }
+  /** Explicitly probe only the node's fixed localhost allowlist. */
+  async discoverLocalModels(): Promise<LocalModelDiscoveryResult> {
+    return await this.awaitAck({ kind: "models.custom.discover" }, 10_000) as unknown as LocalModelDiscoveryResult;
+  }
+  /** Verify one user-entered endpoint and return its normalized catalog health. */
+  async verifyLocalModel(baseUrl: string, apiKey?: string): Promise<LocalModelEndpointResult> {
+    const event = await this.awaitAck({ kind: "models.custom.verify", baseUrl, ...(apiKey ? { apiKey } : {}) }, 10_000) as any;
+    return event.result as LocalModelEndpointResult;
+  }
   /** Save (create or update) a local/custom provider. `spec` matches the node's
    *  save shape: { providerId, name?, baseUrl, api?, apiKey?, compat?, models[] }.
    *  Resolves once the node acks the save (or rejects with its error) instead
    *  of assuming success the moment it was sent. */
-  saveLocalModel(spec: Record<string, unknown>): Promise<void> {
-    return this.awaitAck({ kind: "models.custom.save", spec }).then(() => undefined);
+  async saveLocalModel(spec: Record<string, unknown>): Promise<string> {
+    const event = await this.awaitAck({ kind: "models.custom.save", spec }) as { provider?: unknown };
+    return String(event.provider ?? spec.providerId ?? "local");
   }
   removeLocalModel(id: string): void {
     this.send({ kind: "models.custom.remove", id });

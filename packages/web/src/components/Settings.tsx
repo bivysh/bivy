@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { AccountMe, AccountNode, AppState, CredentialPresetsView, CredentialRecordSummary, EphemeralNodeConfig, LocalModelPreset, LocalModelProvider, PairedDevice, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralModelKeyInfo, ProviderKeyInfo, ProviderSize, HostedAuditEvent, HostedMachineSummary, HostedProvisioningStatus } from "@bivy/core";
+import type { AccountMe, AccountNode, AppState, CredentialPresetsView, CredentialRecordSummary, EphemeralNodeConfig, LocalModelEndpointResult, LocalModelPreset, LocalModelProvider, PairedDevice, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralModelKeyInfo, ProviderKeyInfo, ProviderSize, HostedAuditEvent, HostedMachineSummary, HostedProvisioningStatus } from "@bivy/core";
 import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint, ephemeralCostEstimate, ephemeralLifecyclePhase, formatEphemeralPrice, deriveCredentialReadiness } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
@@ -350,7 +350,7 @@ export function Settings({
             {activeView === "notifications" && <NotificationsPanel />}
             {activeView === "import" && <ImportPanel onImported={(id) => onImported?.(id)} />}
             {activeView === "providers" && <ProvidersPanel state={state} />}
-            {activeView === "models" && <LocalModelsPanel state={state} />}
+            {activeView === "models" && <LocalModelsPanel state={state} onStartWork={onClose} />}
             {activeView === "voice" && (
               <Suspense fallback={<div className="muted">Loading voice settings…</div>}>
                 <VoiceSettings state={state} />
@@ -1066,10 +1066,15 @@ function draftFromPreset(p: LocalModelPreset): LocalModelDraft {
   };
 }
 
-function LocalModelsPanel({ state }: { state: AppState }) {
+function LocalModelsPanel({ state, onStartWork }: { state: AppState; onStartWork: () => void }) {
   const [draft, setDraft] = useState<LocalModelDraft | null>(null);
   const [busy, setBusy] = useState(false);
   const [saveErr, setSaveErr] = useState<string | null>(null);
+  const [verification, setVerification] = useState<LocalModelEndpointResult | null>(null);
+  const [discovered, setDiscovered] = useState<LocalModelEndpointResult[] | null>(null);
+  const [discovering, setDiscovering] = useState(false);
+  const [discoveryError, setDiscoveryError] = useState<string | null>(null);
+  const [discoveryMachine, setDiscoveryMachine] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<null | { title: string; message: string; action: () => void }>(null);
 
   useEffect(() => {
@@ -1082,20 +1087,26 @@ function LocalModelsPanel({ state }: { state: AppState }) {
   // previous attempt, so it can't linger on an unrelated endpoint.
   const openDraft = (d: LocalModelDraft | null) => {
     setSaveErr(null);
+    setVerification(null);
     setDraft(d);
+  };
+  const startWithModel = (provider: string, model: { id: string; name?: string }) => {
+    controller.newSession();
+    controller.chooseModel({ id: model.id, label: model.name || model.id, provider });
+    onStartWork();
   };
 
   if (draft) {
     const canSave = draft.baseUrl.trim().length > 0 && !busy;
     const apiIsKnown = KNOWN_APIS.some((o) => o.value === draft.api);
     const isAzure = draft.api.toLowerCase().startsWith("azure");
-    const save = async () => {
+    const save = async (startWork = false) => {
       setBusy(true);
       setSaveErr(null);
       try {
         // Awaits the node's real ack instead of a blind timer that closed the
         // form (looking saved) even when the node rejected it — see #140.
-        await controller.saveLocalModel({
+        const provider = await controller.saveLocalModel({
           providerId: (draft.providerId || draft.name || "local").trim(),
           name: draft.name.trim() || undefined,
           baseUrl: draft.baseUrl.trim(),
@@ -1106,6 +1117,8 @@ function LocalModelsPanel({ state }: { state: AppState }) {
           models: parseModelLines(draft.models),
         });
         controller.listLocalModels();
+        const imported = parseModelLines(draft.models);
+        if (startWork && imported[0]) startWithModel(provider, imported[0]);
         setDraft(null);
       } catch (e) {
         setSaveErr(String((e as Error)?.message || e));
@@ -1118,13 +1131,12 @@ function LocalModelsPanel({ state }: { state: AppState }) {
         <button className="link-btn" onClick={() => openDraft(null)}>‹ All endpoints</button>
         <h3>{draft.editing ? draft.name || draft.providerId : "Add endpoint"}</h3>
         <p className="muted">
-          Any OpenAI-compatible server — Ollama, LM Studio, vLLM, SGLang, or a self-hosted / Azure endpoint.
+          Verify an OpenAI-compatible server, then import the models it actually reports. Ollama, LM Studio, vLLM,
+          SGLang, and custom endpoints are supported.
         </p>
         <p className="muted small">
-          This endpoint is account-wide, not just this machine: it syncs (encrypted) to every machine signed in to your
-          account, the same way provider keys do. A <code>localhost</code> base URL only resolves on the machine
-          that has it — another machine can use it only if it also runs the same server at that address locally. If
-          the server is reachable over the network, point the base URL at that machine's address instead.
+          A localhost endpoint is bound to this connected Machine and will not appear as usable on another Machine.
+          An explicitly entered network endpoint can be shared only where that URL is really reachable.
         </p>
 
         <label className="field-label">Display name</label>
@@ -1177,6 +1189,35 @@ function LocalModelsPanel({ state }: { state: AppState }) {
         />
         {draft.hasSavedApiKey && !draft.apiKey && <p className="muted small">An API key is saved. Leave this blank to keep it, or enter a new key to replace it.</p>}
 
+        <div className="row-actions">
+          <button
+            className="btn"
+            disabled={!draft.baseUrl.trim() || busy}
+            onClick={async () => {
+              setBusy(true); setSaveErr(null); setVerification(null);
+              try {
+                const result = await controller.verifyLocalModel(draft.baseUrl.trim(), draft.apiKey.trim() || undefined);
+                setVerification(result);
+                if (result.status === "ready") {
+                  const existing = parseModelLines(draft.models);
+                  const merged = [...existing, ...result.models].filter((model, index, all) => all.findIndex((candidate) => candidate.id === model.id) === index);
+                  set({ models: merged.map((model) => model.name && model.name !== model.id ? `${model.id} | ${model.name}` : model.id).join("\n") });
+                }
+              } catch (error) { setSaveErr(String((error as Error)?.message || error)); }
+              finally { setBusy(false); }
+            }}
+          >
+            {busy ? "Verifying…" : "Verify endpoint & list models"}
+          </button>
+        </div>
+        {verification && (
+          <div className={`banner inline ${verification.status === "ready" ? "success" : "error"}`}>
+            {verification.status === "ready"
+              ? `Verified on ${verification.machineName}: ${verification.models.length} model${verification.models.length === 1 ? "" : "s"} available.`
+              : `${verification.status.replace("_", " ")}: ${verification.detail || "No compatible catalog was returned."}`}
+          </div>
+        )}
+
         <label className="field-label">Models — one per line (<code>id</code> or <code>id | Name</code>)</label>
         <textarea
           className="picker-search"
@@ -1193,9 +1234,12 @@ function LocalModelsPanel({ state }: { state: AppState }) {
         )}
 
         <div className="row-actions">
-          <button className="btn primary" disabled={!canSave} onClick={save}>
-            {busy ? "Saving…" : draft.editing ? "Save changes" : "Add endpoint"}
+          <button className="btn primary" disabled={!canSave} onClick={() => void save(false)}>
+            {busy ? "Saving…" : draft.editing ? "Save changes" : "Import models"}
           </button>
+          {parseModelLines(draft.models).length > 0 && (
+            <button className="btn" disabled={!canSave} onClick={() => void save(true)}>Import & use in new session</button>
+          )}
           <button className="btn" onClick={() => openDraft(null)}>Cancel</button>
         </div>
         {saveErr && <div className="banner error inline">{saveErr}</div>}
@@ -1217,35 +1261,78 @@ function LocalModelsPanel({ state }: { state: AppState }) {
       )}
 
       <p className="muted settings-intro">
-        Endpoints here sync to every machine signed in to your account, the same as provider keys — they aren't scoped
-        to just this machine. A <code>localhost</code> base URL is only reachable from the machine that has it, so an
-        endpoint like Ollama's default needs that same server running on each machine that should use it.
+        Discover checks a short, fixed list of common localhost ports on the connected Machine only. It never scans
+        your LAN. Localhost models stay tied to the Machine that hosts them; explicit network endpoints remain available.
       </p>
 
+      <button
+        className="btn primary block"
+        disabled={discovering}
+        onClick={async () => {
+          setDiscovering(true); setDiscoveryError(null);
+          try {
+            const result = await controller.discoverLocalModels();
+            setDiscovered(result.endpoints);
+            setDiscoveryMachine(result.machineName);
+          } catch (error) { setDiscoveryError(String((error as Error)?.message || error)); }
+          finally { setDiscovering(false); }
+        }}
+      >
+        {discovering ? "Discovering on this Machine…" : "Discover on this Machine"}
+      </button>
+      {discoveryMachine && <p className="muted small">Results from <strong>{discoveryMachine}</strong>. They do not describe other Machines.</p>}
+      {discoveryError && <div className="banner error inline">{discoveryError}</div>}
+      {discovered && (
+        <div className="picker-list">
+          {discovered.map((endpoint) => (
+            <PickerItem
+              key={endpoint.candidateId || endpoint.baseUrl}
+              title={endpoint.name || endpoint.baseUrl}
+              meta={endpoint.status === "ready"
+                ? `${endpoint.models.length} model${endpoint.models.length === 1 ? "" : "s"} available on ${endpoint.machineName}`
+                : `${endpoint.status.replace("_", " ")} · ${endpoint.detail || "No compatible response"}`}
+              right={endpoint.status === "ready" ? <span className="chip ok">Import</span> : endpoint.status === "auth_required" ? <span className="chip warn">Add key</span> : <span className="chip warn">{endpoint.status.replace("_", " ")}</span>}
+              onClick={endpoint.status === "ready" || endpoint.status === "auth_required" ? () => openDraft({
+                ...draftFromPreset({ id: endpoint.candidateId || "local", name: endpoint.name || "Local models", baseUrl: endpoint.baseUrl, api: endpoint.api }),
+                models: endpoint.models.map((model) => model.name !== model.id ? `${model.id} | ${model.name}` : model.id).join("\n"),
+              }) : undefined}
+            />
+          ))}
+        </div>
+      )}
+
+      <label className="field-label">Configured for this account</label>
       <div className="picker-list">
         {state.localModels.length === 0 && <div className="picker-empty">No local or custom endpoints yet.</div>}
         {state.localModels.map((p) => (
           <PickerItem
             key={p.id}
             title={p.name || p.id}
-            meta={`${p.baseUrl} · ${p.modelCount} model${p.modelCount === 1 ? "" : "s"}${p.hasKey ? " · key" : ""}`}
+            meta={`${p.baseUrl} · ${p.modelCount} model${p.modelCount === 1 ? "" : "s"}${p.hasKey ? " · key" : ""} · ${p.scope === "machine" ? `hosted by ${p.machineName || "one Machine"}` : "network endpoint"}${p.availableOnThisMachine ? "" : " · unavailable on this Machine"}`}
             right={
-              <button
-                className="btn danger-ghost sm"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setConfirm({
-                    title: "Remove endpoint?",
-                    message: `Remove ${p.name || p.id}? This also removes its models.`,
-                    action: () => {
-                      controller.removeLocalModel(p.id);
-                      setTimeout(() => controller.listLocalModels(), 400);
-                    },
-                  });
-                }}
-              >
-                Remove
-              </button>
+              <div className="row-actions">
+                {p.availableOnThisMachine && p.models[0] && (
+                  <button className="btn sm" onClick={(e) => { e.stopPropagation(); startWithModel(p.id, p.models[0]!); }}>
+                    Use
+                  </button>
+                )}
+                <button
+                  className="btn danger-ghost sm"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setConfirm({
+                      title: "Remove endpoint?",
+                      message: `Remove ${p.name || p.id}? This also removes its models.`,
+                      action: () => {
+                        controller.removeLocalModel(p.id);
+                        setTimeout(() => controller.listLocalModels(), 400);
+                      },
+                    });
+                  }}
+                >
+                  Remove
+                </button>
+              </div>
             }
             onClick={() => openDraft(draftFromProvider(p))}
           />

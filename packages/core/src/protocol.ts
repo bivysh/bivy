@@ -74,6 +74,8 @@ export interface Command extends CommandBase {
     | "credentials.presets.setMapping"
     | "models.custom.list"
     | "models.custom.presets"
+    | "models.custom.discover"
+    | "models.custom.verify"
     | "models.custom.save"
     | "models.custom.remove"
     | "rulesets.list"
