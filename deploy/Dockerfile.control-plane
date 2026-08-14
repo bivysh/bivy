@@ -28,31 +28,27 @@ RUN pnpm --filter @bivy/web run build
 
 # Stage 2 — the control plane service.
 FROM node:22-slim
-WORKDIR /app
-# automation-core compiles canonical files under /src with NodeNext semantics;
-# the root module marker ensures TypeScript emits ESM for those files.
-COPY package.json /package.json
-# The control plane imports monorepo siblings through `file:../../packages/*`
-# dependencies. Their manifests must exist for npm ci, but source is copied
-# afterwards so ordinary code changes do not invalidate the dependency layer.
-# From /app the `../../packages` prefix clamps at the container root.
-COPY packages/core/package.json /packages/core/package.json
-COPY packages/automation-core/package.json /packages/automation-core/package.json
-# Copy these separately so the lockfile is unambiguously placed at
-# /app/package-lock.json, where npm ci requires it.
-COPY services/control-plane/package.json /app/package.json
-COPY services/control-plane/package-lock.json /app/package-lock.json
+# Preserve the monorepo layout so the control-plane lockfile's
+# `file:../../packages/*` links resolve exactly as they did when it was created.
+WORKDIR /repo/services/control-plane
+# automation-core compiles canonical files under /repo/src with NodeNext
+# semantics; the root module marker ensures TypeScript emits ESM for them.
+COPY package.json /repo/package.json
+# Linked package manifests are required while npm validates the lockfile.
+COPY packages/core/package.json /repo/packages/core/package.json
+COPY packages/automation-core/package.json /repo/packages/automation-core/package.json
+COPY services/control-plane/package.json services/control-plane/package-lock.json ./
 # postinstall builds automation-core, whose source is intentionally in the next
 # layer; prestart performs that same build before the service boots.
 RUN test -f package-lock.json && npm ci --ignore-scripts
-COPY packages/core /packages/core
-COPY packages/automation-core /packages/automation-core
+COPY packages/core /repo/packages/core
+COPY packages/automation-core /repo/packages/automation-core
 # automation-core's tsconfig compiles canonical sources from ../../src/automation.
-COPY src/automation /src/automation
+COPY src/automation /repo/src/automation
 # Keep the local package linked to its source directory. Build and verify it now
 # that its canonical source is present; prestart rebuilds it again on boot.
 RUN rm -rf node_modules/@bivy/automation-core \
-    && ln -s /packages/automation-core node_modules/@bivy/automation-core \
+    && ln -s /repo/packages/automation-core node_modules/@bivy/automation-core \
     && npm run build:automation-core \
     && node --input-type=module -e \
       "import('@bivy/automation-core').then((m) => { if (typeof m.evaluateAutomation !== 'function') process.exit(1) })"
