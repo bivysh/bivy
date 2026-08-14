@@ -24,6 +24,12 @@ import {
   type LocalModelsConfig,
 } from "../runtime/local-model-store.js";
 import { exportProviderAuth, setProviderCredential, removeProvider } from "../credentials/api.js";
+import {
+  discoverLocalModels,
+  getLocalModelReadiness,
+  verifyLocalModelEndpoint,
+  type LocalEndpointResult,
+} from "../runtime/local-model-discovery.js";
 
 // Keys the projection treats as "no real key" — local servers accept anything,
 // so these never enter the encrypted vault as a real key.
@@ -41,10 +47,24 @@ export interface ModelControllerDeps {
   refreshSessionAfterAuth(): Promise<unknown>;
   /** Push the updated model-auth vault to the control plane (best-effort). */
   pushModelAuthToControlPlane(): Promise<unknown>;
+  machine: { id: string; name: string };
 }
 
 export function createModelController(deps: ModelControllerDeps) {
-  const { localModelsDir, piDir, piModelsProjectionPath, credsDir, broadcast, refreshSessionAfterAuth, pushModelAuthToControlPlane } = deps;
+  const { localModelsDir, piDir, piModelsProjectionPath, credsDir, broadcast, refreshSessionAfterAuth, pushModelAuthToControlPlane, machine } = deps;
+
+  function isLoopbackEndpoint(baseUrl: string): boolean {
+    try {
+      const hostname = new URL(baseUrl).hostname.replace(/^\[|\]$/g, "").toLowerCase();
+      return hostname === "localhost" || hostname === "::1" || hostname.startsWith("127.");
+    } catch {
+      return false;
+    }
+  }
+
+  function onThisMachine(result: LocalEndpointResult) {
+    return { ...result, machineId: machine.id, machineName: machine.name };
+  }
 
   /** The env var a generic (non-Pi) agent reads to reach this endpoint's base URL,
    *  chosen by API family. Injected only for the active provider (see credentials.ts). */
@@ -78,7 +98,7 @@ export function createModelController(deps: ModelControllerDeps) {
     };
     try {
       fs.mkdirSync(piDir, { recursive: true });
-      fs.writeFileSync(piModelsProjectionPath, `${JSON.stringify(toPiModelsConfig(registry, resolveKey), null, 2)}\n`, { mode: 0o600 });
+      fs.writeFileSync(piModelsProjectionPath, `${JSON.stringify(toPiModelsConfig(registry, resolveKey, machine.id), null, 2)}\n`, { mode: 0o600 });
       try { fs.chmodSync(piModelsProjectionPath, 0o600); } catch {}
     } catch (error) {
       console.warn("[local-models] could not write Pi projection:", (error as Error).message);
@@ -91,7 +111,7 @@ export function createModelController(deps: ModelControllerDeps) {
     return listLocalProviderSummaries(localModelsDir, (id) => {
       const c = keys[id];
       return !!c && c.type === "api_key" && !!c.key;
-    });
+    }, machine.id);
   }
 
   /** One-time migration: adopt any pre-existing pi/models.json into Bivy's store,
@@ -112,7 +132,13 @@ export function createModelController(deps: ModelControllerDeps) {
           env: agentEnvForEndpoint(String(spec?.api ?? ""), String(spec?.baseUrl ?? "")),
         }).catch(() => {});
       }
-      importLocalModels(localModelsDir, providers); // normalizeProvider drops apiKey
+      const migrated: Record<string, unknown> = {};
+      for (const [id, spec] of Object.entries<any>(providers)) {
+        migrated[id] = isLoopbackEndpoint(String(spec?.baseUrl ?? ""))
+          ? { ...spec, scope: "machine", machineId: machine.id, machineName: machine.name }
+          : { ...spec, scope: "network" };
+      }
+      importLocalModels(localModelsDir, migrated); // normalizeProvider drops apiKey
       console.log("[local-models] migrated legacy pi/models.json into Bivy registry (keys → vault)");
     } catch (error) {
       console.warn("[local-models] legacy migration skipped:", (error as Error).message);
@@ -130,12 +156,41 @@ export function createModelController(deps: ModelControllerDeps) {
   function localModelSpecFromInput(input: any): { providerId: string; spec: any; apiKey?: string } {
     const { providerId, baseUrl, api, apiKey, models, compat, name } = input || {};
     if (!baseUrl) throw new Error("baseUrl is required");
-    const spec: any = { baseUrl: String(baseUrl).trim(), api: api || "openai-completions" };
+    const normalizedBaseUrl = String(baseUrl).trim();
+    const loopback = isLoopbackEndpoint(normalizedBaseUrl);
+    const requestedId = providerId || "local";
+    // Machine-scoped ids include a stable node suffix so two Machines running
+    // Ollama do not overwrite each other when the registry syncs.
+    const suffix = `-${machine.id.slice(0, 8)}`;
+    const scopedId = loopback && !String(requestedId).endsWith(suffix) ? `${requestedId}${suffix}` : requestedId;
+    const spec: any = {
+      baseUrl: normalizedBaseUrl,
+      api: api || "openai-completions",
+      scope: loopback ? "machine" : "network",
+      ...(loopback ? { machineId: machine.id, machineName: machine.name } : {}),
+    };
     if (name) spec.name = String(name);
     if (compat && typeof compat === "object") spec.compat = compat;
     spec.models = Array.isArray(models) ? models : [];
     const key = apiKey === undefined || apiKey === null ? undefined : String(apiKey);
-    return { providerId: providerId || "ollama", spec, apiKey: key };
+    return { providerId: scopedId, spec, apiKey: key };
+  }
+
+  /** User-initiated only: probe the fixed loopback allowlist on this Machine. */
+  async function discoverModelsOnMachine() {
+    const endpoints = (await discoverLocalModels()).map(onThisMachine);
+    return { machineId: machine.id, machineName: machine.name, endpoints, readiness: getLocalModelReadiness(endpoints) };
+  }
+
+  /** Verify one explicitly entered endpoint. Non-loopback is allowed because the
+   * user supplied it, while the verifier still rejects unsafe SSRF targets. */
+  async function verifyModelEndpoint(input: any) {
+    const result = await verifyLocalModelEndpoint({
+      baseUrl: String(input?.baseUrl ?? ""),
+      apiKey: input?.apiKey ? String(input.apiKey) : undefined,
+      allowNonLoopback: true,
+    });
+    return onThisMachine(result);
   }
 
   /** Re-emit the local-model list to every connected client (relay + direct). */
@@ -182,5 +237,7 @@ export function createModelController(deps: ModelControllerDeps) {
     persistLocalModelSave,
     persistLocalModelRemove,
     initLocalModelRegistry,
+    discoverModelsOnMachine,
+    verifyModelEndpoint,
   };
 }

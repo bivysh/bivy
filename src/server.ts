@@ -299,6 +299,9 @@ const settingsPath = path.join(appDir, "settings.json");
 // source. Any mutation to the registry re-emits that projection.
 const localModelsDir = appDir;
 const piModelsProjectionPath = path.join(piDir, "models.json");
+// Machine identity is needed here so loopback model entries can be scoped before
+// they are projected into Pi. Loading is idempotent and remains part of boot.
+const identity = NodeIdentity.load(appDir);
 
 // The local-model provider domain lives in its own controller (platform
 // modularization Phase 2). server.ts wires it with the node dirs, broadcast,
@@ -313,9 +316,17 @@ const modelController = createModelController({
   broadcast,
   refreshSessionAfterAuth,
   pushModelAuthToControlPlane,
+  machine: { id: identity.nodeId, name: identity.name },
 });
-const { writePiModelsProjection, localModelSummaries, broadcastLocalModels, persistLocalModelSave, persistLocalModelRemove } =
-  modelController;
+const {
+  writePiModelsProjection,
+  localModelSummaries,
+  broadcastLocalModels,
+  persistLocalModelSave,
+  persistLocalModelRemove,
+  discoverModelsOnMachine,
+  verifyModelEndpoint,
+} = modelController;
 void modelController.initLocalModelRegistry();
 
 // --- Rulesets (run-orchestration policy; docs/rulesets.md). --------------------
@@ -351,7 +362,6 @@ fs.mkdirSync(credsDir, { recursive: true, mode: 0o700 });
 if (migrateVaultDir(piDir, credsDir)) {
   console.log(`Migrated credential vault: ${piDir} -> ${credsDir}`);
 }
-const identity = NodeIdentity.load(appDir);
 const metadata = MetadataStore.load(appDir);
 // A fresh process has no live runtimes, so any persisted "working" status is
 // stale from a prior crash/kill. Clear it at boot; otherwise those sessions'
@@ -2735,6 +2745,20 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
   },
   async "models.custom.presets"() {
     relay?.sendEvent({ type: "models.custom.presets", presets: await localModelPresets() });
+  },
+  async "models.custom.discover"(_msg, ctx) {
+    try {
+      ctx.reply({ type: "models.custom.discover.ok", ...(await discoverModelsOnMachine()) });
+    } catch (error) {
+      ctx.reply({ type: "models.custom.discover.error", error: error instanceof Error ? error.message : String(error) });
+    }
+  },
+  async "models.custom.verify"(msg, ctx) {
+    try {
+      ctx.reply({ type: "models.custom.verify.ok", result: await verifyModelEndpoint(msg) });
+    } catch (error) {
+      ctx.reply({ type: "models.custom.verify.error", error: error instanceof Error ? error.message : String(error) });
+    }
   },
   async "models.custom.save"(msg, ctx) {
     try {
@@ -9231,6 +9255,25 @@ app.get("/api/models/custom", async (_req, res, next) => {
   try {
     res.json({ providers: await localModelSummaries() });
   } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/models/discover", async (_req, res, next) => {
+  try {
+    res.json(await discoverModelsOnMachine());
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/models/verify", async (req, res, next) => {
+  try {
+    res.json({ result: await verifyModelEndpoint(req.body || {}) });
+  } catch (error) {
+    if (error instanceof Error && /endpoint|URL|hostname|http:\/\//i.test(error.message)) {
+      return res.status(400).json({ error: error.message });
+    }
     next(error);
   }
 });

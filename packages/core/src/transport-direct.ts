@@ -487,6 +487,26 @@ export class DirectTransport implements Transport {
         case "models.custom.presets":
           this.emitMerged("models.custom.presets", await this.directApi("/api/models/catalog"));
           break;
+        case "models.custom.discover": {
+          const requestId = String(obj.requestId ?? "");
+          try {
+            const result = await this.directApi("/api/models/discover", { method: "POST", body: "{}" });
+            this.emit({ type: "models.custom.discover.ok", requestId, ...result });
+          } catch (error) {
+            this.emit({ type: "models.custom.discover.error", requestId, error: error instanceof Error ? error.message : String(error) });
+          }
+          break;
+        }
+        case "models.custom.verify": {
+          const requestId = String(obj.requestId ?? "");
+          try {
+            const result = await this.directApi("/api/models/verify", { method: "POST", body: JSON.stringify(obj) });
+            this.emit({ type: "models.custom.verify.ok", requestId, ...result });
+          } catch (error) {
+            this.emit({ type: "models.custom.verify.error", requestId, error: error instanceof Error ? error.message : String(error) });
+          }
+          break;
+        }
         case "models.custom.save": {
           const requestId = String(obj.requestId ?? "");
           try {

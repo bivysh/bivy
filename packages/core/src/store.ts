@@ -430,6 +430,29 @@ export interface LocalModelProvider {
   hasKey: boolean;
   modelCount: number;
   models: Array<{ id: string; name: string }>;
+  scope: "machine" | "network";
+  machineId?: string;
+  machineName?: string;
+  availableOnThisMachine: boolean;
+}
+
+export interface LocalModelEndpointResult {
+  candidateId?: string;
+  name?: string;
+  baseUrl: string;
+  api: "openai-completions";
+  status: "ready" | "offline" | "timeout" | "auth_required" | "malformed" | "unsupported";
+  models: Array<{ id: string; name: string }>;
+  detail?: string;
+  machineId: string;
+  machineName: string;
+}
+
+export interface LocalModelDiscoveryResult {
+  machineId: string;
+  machineName: string;
+  endpoints: LocalModelEndpointResult[];
+  readiness: { ready: boolean; readyEndpointCount: number; modelCount: number; state: "ready" | "auth_required" | "unavailable" | "unknown" };
 }
 
 /** A quick-add preset for a common local inference server. */
