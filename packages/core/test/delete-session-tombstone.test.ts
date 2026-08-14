@@ -18,7 +18,7 @@ describe("delete-session tombstone", () => {
 
     // User deletes s1 — optimistic removal.
     store.removeSessionLocal("s1");
-    expect(store.getState().sessions.map((s) => s.sessionId)).toEqual(["s2"]);
+    expect(store.getState().sessionIndex.sessions.map((s) => s.sessionId)).toEqual(["s2"]);
 
     // A refresh reads the still-stale control-plane index that includes s1.
     store.setSessions([
@@ -26,7 +26,7 @@ describe("delete-session tombstone", () => {
       { sessionId: "s2", nodeId: "node-a", name: "Two" },
     ]);
     // s1 must stay gone.
-    expect(store.getState().sessions.map((s) => s.sessionId)).toEqual(["s2"]);
+    expect(store.getState().sessionIndex.sessions.map((s) => s.sessionId)).toEqual(["s2"]);
   });
 
   it("does not suppress other sessions", () => {
@@ -37,7 +37,7 @@ describe("delete-session tombstone", () => {
       { sessionId: "s2", nodeId: "node-a", name: "Two" },
       { sessionId: "s3", nodeId: "node-a", name: "Three" },
     ]);
-    expect(store.getState().sessions.map((s) => s.sessionId).sort()).toEqual(["s2", "s3"]);
+    expect(store.getState().sessionIndex.sessions.map((s) => s.sessionId).sort()).toEqual(["s2", "s3"]);
   });
 
   it("restores a tombstone across a PWA reload", () => {
@@ -48,7 +48,7 @@ describe("delete-session tombstone", () => {
     const reloaded = new SessionStore();
     reloaded.seedDeletedSessionTombstones(first.deletedSessionTombstones());
     reloaded.seedSessions([{ sessionId: "s1", nodeId: "node-a", name: "One" }]);
-    expect(reloaded.getState().sessions).toEqual([]);
+    expect(reloaded.getState().sessionIndex.sessions).toEqual([]);
   });
 
   it("tombstones a session.deleted broadcast so a stale refresh cannot resurrect a pruned session", () => {
@@ -56,7 +56,7 @@ describe("delete-session tombstone", () => {
     store.setSessions([{ sessionId: "s1", nodeId: "node-a", name: "One" }]);
     store.apply({ type: "session.deleted", sessionId: "s1" });
     store.setSessions([{ sessionId: "s1", nodeId: "node-a", name: "One" }]);
-    expect(store.getState().sessions).toEqual([]);
+    expect(store.getState().sessionIndex.sessions).toEqual([]);
   });
 
   it("lets a session return once the tombstone expires", () => {
@@ -70,7 +70,7 @@ describe("delete-session tombstone", () => {
       // Advance well past the durable tombstone TTL (5m).
       now += 10 * 60_000;
       store.setSessions([{ sessionId: "s1", nodeId: "node-a", name: "One" }]);
-      expect(store.getState().sessions.map((s) => s.sessionId)).toEqual(["s1"]);
+      expect(store.getState().sessionIndex.sessions.map((s) => s.sessionId)).toEqual(["s1"]);
     } finally {
       Date.now = realNow;
     }

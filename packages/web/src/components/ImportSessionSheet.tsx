@@ -44,7 +44,7 @@ const ALL = "__all__";
  * succeeds, so the caller can dismiss Settings onto the freshly-opened session.
  */
 export function ImportSessionContent({ onDone }: { onDone: (sessionId: string) => void }) {
-  const { nodes, currentNodeId } = useAppState();
+  const { connection: { nodes, currentNodeId } } = useAppState();
 
   const [nodeId, setNodeId] = useState(currentNodeId ?? "");
   const [providerFilter, setProviderFilter] = useState(ALL);

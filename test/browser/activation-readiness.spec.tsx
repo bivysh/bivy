@@ -24,10 +24,10 @@ test("the readiness strip renders nothing once activated and never claims premat
 
 test("setup readiness is wired only into a first-ever draft and credential repair opens Keys & OAuth", async () => {
   const app = await read("../../packages/web/src/App.tsx");
-  expect(app).toContain("!state.activeSessionId && state.transcript.length === 0 && state.sessions.length === 0");
+  expect(app).toContain("!state.activeSession.activeSessionId && state.activeSession.transcript.length === 0 && state.sessionIndex.sessions.length === 0");
   expect(app).toContain("<ReadinessChecklist");
   expect(app).toContain("deriveActivation({");
-  expect(app).toContain("state.activationReadiness ? state.activationReadiness.credential.ok : undefined");
+  expect(app).toContain("state.catalogs.activationReadiness ? state.catalogs.activationReadiness.credential.ok : undefined");
   expect(app).toContain('authenticate_credential: () => openSettings("providers")');
   expect(app).not.toContain('authenticate_credential: () => openSettings("models")');
 });

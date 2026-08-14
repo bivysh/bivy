@@ -160,7 +160,7 @@ function ConnectCommand({ cmd, label }: { cmd: string; label: string }) {
 // (reason === "gh-unauthed"). If the node has no device-flow client id
 // (status "unconfigured"), we fall back to the `bivy github:connect` command.
 function RepoConnectPrompt({ state }: { state: AppState }) {
-  const gc = state.githubConnect;
+  const gc = state.catalogs.githubConnect;
 
   // While the user authorizes on GitHub, poll the node on the interval it gave
   // us (never faster) until it flips to connected/expired/denied/error.
@@ -215,7 +215,7 @@ function RepoConnectPrompt({ state }: { state: AppState }) {
         <>
           <p className="repo-connect-sub">Run this on the machine your agent runs on:</p>
           <ConnectCommand cmd="bivy github:connect" label="Copy connect command" />
-          {state.reposReason === "gh-unauthed" && (
+          {state.catalogs.reposReason === "gh-unauthed" && (
             <p className="repo-connect-alt">
               The GitHub CLI is installed but signed out — you can also run <code>gh auth login</code>.
             </p>
@@ -233,7 +233,7 @@ function RepoConnectPrompt({ state }: { state: AppState }) {
             {gc.status === "starting" ? "Starting…" : "Connect GitHub"}
           </button>
           {errorText && <p className="repo-connect-alt">{errorText}</p>}
-          {state.reposReason === "gh-unauthed" && (
+          {state.catalogs.reposReason === "gh-unauthed" && (
             <p className="repo-connect-alt">
               The GitHub CLI is installed but signed out — you can also run <code>gh auth login</code>.
             </p>
@@ -266,10 +266,10 @@ export function RepoPicker({ state, onClose }: { state: AppState; onClose: () =>
   const { repos, repoTotal } = useMemo(() => {
     const query = q.trim().toLowerCase();
     const list = query
-      ? state.repos.filter((r) => `${r.slug} ${r.description || ""}`.toLowerCase().includes(query))
-      : state.repos;
+      ? state.catalogs.repos.filter((r) => `${r.slug} ${r.description || ""}`.toLowerCase().includes(query))
+      : state.catalogs.repos;
     return { repos: list.slice(0, 60), repoTotal: list.length };
-  }, [state.repos, q]);
+  }, [state.catalogs.repos, q]);
 
   if (branchFor) {
     return <RepoBranchPicker state={state} repo={branchFor} onBack={() => setBranchFor(null)} onClose={onClose} />;
@@ -288,11 +288,11 @@ export function RepoPicker({ state, onClose }: { state: AppState; onClose: () =>
             onClose();
           }}
         />
-        {state.reposLoading && <div className="picker-empty">Loading repos…</div>}
-        {!state.reposLoading && !state.reposAuthed && !state.reposError && (
+        {state.catalogs.reposLoading && <div className="picker-empty">Loading repos…</div>}
+        {!state.catalogs.reposLoading && !state.catalogs.reposAuthed && !state.catalogs.reposError && (
           <RepoConnectPrompt state={state} />
         )}
-        {!state.reposLoading && state.reposError && <div className="picker-empty">{state.reposError}</div>}
+        {!state.catalogs.reposLoading && state.catalogs.reposError && <div className="picker-empty">{state.catalogs.reposError}</div>}
         {repos.map((r) => {
           const picked = r.slug === state.draft.repo;
           return (
@@ -360,18 +360,18 @@ function RepoBranchPicker({
   // The store's branch fields describe whichever repo branches.list last
   // resolved for (branchesRepo); until that catches up to the repo we drilled
   // into, show the loading state rather than another repo's branches.
-  const loading = state.branchesLoading || state.branchesRepo !== repo;
+  const loading = state.catalogs.branchesLoading || state.catalogs.branchesRepo !== repo;
   const { branches, branchTotal } = useMemo(() => {
     const query = q.trim().toLowerCase();
-    const list = query ? state.branches.filter((b) => b.name.toLowerCase().includes(query)) : state.branches;
+    const list = query ? state.catalogs.branches.filter((b) => b.name.toLowerCase().includes(query)) : state.catalogs.branches;
     return { branches: list.slice(0, 200), branchTotal: list.length };
-  }, [state.branches, q]);
+  }, [state.catalogs.branches, q]);
   // Prefer the default branch from the repo listing (already loaded) so the
   // "Default branch (main)" row is labelled and pickable INSTANTLY — before the
   // branch list itself finishes loading. Falls back to whatever branches.list
   // reported for older nodes that don't carry it on RepoInfo.
   const defaultBranch =
-    state.repos.find((r) => r.slug === repo)?.defaultBranch ?? (state.branchesRepo === repo ? state.branchesDefault : null) ?? null;
+    state.catalogs.repos.find((r) => r.slug === repo)?.defaultBranch ?? (state.catalogs.branchesRepo === repo ? state.catalogs.branchesDefault : null) ?? null;
   // The active tick reflects the current draft only when it's this same repo;
   // drilling into a different repo starts from "default branch".
   const activeBranch = state.draft.repo === repo ? state.draft.branch : null;
@@ -402,8 +402,8 @@ function RepoBranchPicker({
           onClick={() => pick(null)}
         />
         {loading && <div className="picker-empty">Loading branches…</div>}
-        {!loading && state.branchesError && <div className="picker-empty">{state.branchesError}</div>}
-        {!loading && !state.branchesError && branches.length === 0 && q && (
+        {!loading && state.catalogs.branchesError && <div className="picker-empty">{state.catalogs.branchesError}</div>}
+        {!loading && !state.catalogs.branchesError && branches.length === 0 && q && (
           <div className="picker-empty">No branches match “{q}”.</div>
         )}
         {!loading &&
@@ -430,7 +430,7 @@ function RepoBranchPicker({
 // session shows it read-only in Session settings). A blank pick defers to the
 // node default (Settings → Nodes).
 export function SandboxPicker({ state, onClose }: { state: AppState; onClose: () => void }) {
-  const nodeDefault = state.nodeSettings?.defaultSandbox;
+  const nodeDefault = state.settings.nodeSettings?.defaultSandbox;
   const [confirmFullAccess, setConfirmFullAccess] = useState(false);
   return (
     <Sheet title="Sandbox mode" onClose={onClose} autoFocusSearch={false}>
@@ -489,8 +489,8 @@ export function NodePicker({
   return (
     <Sheet title="Open terminal on" onClose={onClose} autoFocusSearch={false}>
       <div className="picker-list">
-        {state.nodes.length === 0 && <div className="picker-empty">No machines available.</div>}
-        {state.nodes.map((n) => (
+        {state.connection.nodes.length === 0 && <div className="picker-empty">No machines available.</div>}
+        {state.connection.nodes.map((n) => (
           <PickerItem
             key={n.id}
             active={n.id === currentNodeId}
@@ -519,27 +519,27 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
   const runtimes = useMemo(() => {
     const query = q.trim().toLowerCase();
     const matched = !query
-      ? state.runtimes
-      : state.runtimes.filter((a) =>
+      ? state.catalogs.runtimes
+      : state.catalogs.runtimes.filter((a) =>
           `${a.id} ${a.name || ""} ${a.displayName || ""} ${(a as any).description || ""} ${(a as any).language || ""} ${a.protectionLabel || ""}`.toLowerCase().includes(query),
         );
     return [...matched].sort((a, b) => agentLabel(a).localeCompare(agentLabel(b), undefined, { sensitivity: "base" }));
-  }, [state.runtimes, q]);
+  }, [state.catalogs.runtimes, q]);
   const recommended = runtimes.filter((runtime) => runtimeTier(runtime) === "supported");
   const more = runtimes.filter((runtime) => runtimeTier(runtime) !== "supported");
 
-  const cloningActiveSession = Boolean(state.activeSessionId);
+  const cloningActiveSession = Boolean(state.activeSession.activeSessionId);
   // For an active session, "current" means the runtime that owns that session,
   // never the globally last-used/default runtime for new drafts.
   const selectedAgentId = cloningActiveSession
-    ? state.activeRuntimeId ?? state.sessions.find((s) => s.sessionId === state.activeSessionId)?.runtimeId ?? null
-    : state.selectedAgentId ?? (state.runtimes.find((r) => (r as any).current)?.id || null);
+    ? state.activeSession.activeRuntimeId ?? state.sessionIndex.sessions.find((s) => s.sessionId === state.activeSession.activeSessionId)?.runtimeId ?? null
+    : state.catalogs.selectedAgentId ?? (state.catalogs.runtimes.find((r) => (r as any).current)?.id || null);
 
   const renderRuntime = (a: RuntimeInfo) => {
     const status = String((a as any).status || "available");
     const available = status === "available";
     const installable = !available && Boolean((a as any).install);
-    const installing = state.installingRuntimeId === a.id;
+    const installing = state.catalogs.installingRuntimeId === a.id;
     const active = a.id === selectedAgentId;
     // The Effective Session Contract preview (see previewContractForRuntime):
     // requiresAcknowledgement fires ONLY for a "supported" (certified) profile
@@ -652,7 +652,7 @@ function ReasoningPill({ state }: { state: AppState }) {
     document.addEventListener("pointerdown", onDown);
     return () => document.removeEventListener("pointerdown", onDown);
   }, [open]);
-  const t = state.thinking;
+  const t = state.catalogs.thinking;
   if (!t.supportsThinking || !t.availableThinkingLevels || t.availableThinkingLevels.length <= 1) return null;
   const label = THINKING_LABELS[t.thinkingLevel] || t.thinkingLevel;
   return (
@@ -704,25 +704,25 @@ export function ModelPicker({ state, onClose }: { state: AppState; onClose: () =
   // sees the model they just unlocked, connected.
   useEffect(() => {
     if (!connecting) return;
-    const provider = state.providers.find((p) => p.id === connecting);
+    const provider = state.catalogs.providers.find((p) => p.id === connecting);
     if (provider?.configured) {
       controller.listModels();
       setConnecting(null);
     }
-  }, [connecting, state.providers]);
+  }, [connecting, state.catalogs.providers]);
 
-  const providerName = (id: string) => state.providers.find((p) => p.id === id)?.name || id;
+  const providerName = (id: string) => state.catalogs.providers.find((p) => p.id === id)?.name || id;
 
   const models = useMemo(() => {
     const query = q.trim().toLowerCase();
-    if (!query) return state.models;
-    return state.models.filter((m) =>
+    if (!query) return state.catalogs.models;
+    return state.catalogs.models.filter((m) =>
       `${m.id} ${m.label || ""} ${(m as any).provider || ""} ${providerName(String((m as any).provider || ""))}`
         .toLowerCase()
         .includes(query),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.models, state.providers, q]);
+  }, [state.catalogs.models, state.catalogs.providers, q]);
 
   // Connected models keep today's behavior (and order) unchanged; anything the
   // node flagged `configured: false` is a per-*provider* summary row (see
@@ -733,7 +733,7 @@ export function ModelPicker({ state, onClose }: { state: AppState; onClose: () =
   const otherProviders = models.filter((m) => (m as any).configured === false);
 
   const isCurrent = (m: ModelInfo) =>
-    state.currentModel != null && m.id === state.currentModel.id && (m as any).provider === (state.currentModel as any).provider;
+    state.catalogs.currentModel != null && m.id === state.catalogs.currentModel.id && (m as any).provider === (state.catalogs.currentModel as any).provider;
 
   if (connecting) {
     return (

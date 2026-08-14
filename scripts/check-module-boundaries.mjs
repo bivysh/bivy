@@ -78,6 +78,13 @@ const RULES = [
     note: "the audit trail is a pure fs leaf; the daemon hands it decisions to record. It imports no kernel implementation (moat #1).",
   },
   {
+    name: "web-coordinators-are-standalone",
+    dir: "packages/web/src/store/coordinators",
+    forbid: ["../controller", "react", "ephemeral-provider-adapters", "services/control-plane", "session-contract", "agent-profile"],
+    enforce: true,
+    note: "coordinators receive effects as explicit dependencies and never reach back into AppController or prohibited implementation modules.",
+  },
+  {
     name: "ephemeral-lifecycle-is-pure-data",
     dir: "packages/core/src/ephemeral-lifecycle.ts",
     forbid: ["./", "../", "node:", "@"],
@@ -98,6 +105,18 @@ const RULES = [
     enforce: true,
     note: "follow-up commands reduce immutable queue values; the SessionStore is only an identity/subscription shell.",
   },
+  ...[
+    "connection-event-fold.ts",
+    "session-index-event-fold.ts",
+    "catalog-settings-event-fold.ts",
+    "presentation-event-fold.ts",
+  ].map((file) => ({
+    name: `${file.replace(/\\.ts$/, "")}-is-pure`,
+    dir: `packages/core/src/${file}`,
+    forbid: ["./store", "./transport", "./local-store", "./ephemeral", "node:", "react"],
+    enforce: true,
+    note: "event folds are standalone data transformations; SessionStore installs their returned values.",
+  })),
   {
     name: "ephemeral-catalog-is-pure-data",
     dir: "packages/core/src/ephemeral-catalog.ts",

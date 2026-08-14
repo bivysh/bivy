@@ -95,7 +95,7 @@ function cpuTier(tier: NodeStatsTier | null | undefined, fallback = "—"): Reac
  * lives inside its SDK, so it's counted under Bivy, not the session).
  */
 export function StatsPanel({ onClose }: { onClose: () => void }) {
-  const { nodeStats, status, activeSessionId } = useAppState();
+  const { settings: { nodeStats }, connection: { status }, activeSession: { activeSessionId } } = useAppState();
   const online = status === "online" || status === "reconnecting";
 
   useEffect(() => {

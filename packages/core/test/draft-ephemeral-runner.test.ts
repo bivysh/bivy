@@ -46,8 +46,8 @@ describe("draftEphemeralConfig (pick-a-runner-then-send)", () => {
     const store = new SessionStore();
     store.persistPendingSession("starting-request-1", "Fix the flaky test");
 
-    expect(store.getState().activeSessionId).toBe("starting-request-1");
-    expect(store.getState().sessions[0]).toMatchObject({
+    expect(store.getState().activeSession.activeSessionId).toBe("starting-request-1");
+    expect(store.getState().sessionIndex.sessions[0]).toMatchObject({
       sessionId: "starting-request-1",
       name: "Fix the flaky test",
       status: "working",
@@ -59,9 +59,9 @@ describe("draftEphemeralConfig (pick-a-runner-then-send)", () => {
     store.persistPendingSession("starting-request-1", "Fix the flaky test");
     store.completePendingSession("starting-request-1", "session-real", "eph-node");
 
-    expect(store.getState().activeSessionId).toBe("session-real");
-    expect(store.getState().sessions).toHaveLength(1);
-    expect(store.getState().sessions[0]).toMatchObject({
+    expect(store.getState().activeSession.activeSessionId).toBe("session-real");
+    expect(store.getState().sessionIndex.sessions).toHaveLength(1);
+    expect(store.getState().sessionIndex.sessions[0]).toMatchObject({
       sessionId: "session-real",
       nodeId: "eph-node",
       name: "Fix the flaky test",
@@ -73,6 +73,6 @@ describe("draftEphemeralConfig (pick-a-runner-then-send)", () => {
     const store = new SessionStore();
     store.persistPendingSession("starting-request-1", "Fix the flaky test");
     store.failPendingSession("starting-request-1");
-    expect(store.getState().sessions[0]?.status).toBe("failed");
+    expect(store.getState().sessionIndex.sessions[0]?.status).toBe("failed");
   });
 });

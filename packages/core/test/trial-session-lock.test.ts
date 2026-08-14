@@ -10,9 +10,9 @@ describe("hosted trial session locks", () => {
 
     store.apply({ type: "sessions.list", sessions: [{ id: "s26", nodeId: "node-a", name: "private title" }] });
 
-    expect(store.getState().sessions[0]?.locked).toBe(true);
-    expect(store.getState().sessions[0]?.name).toBe("Locked session");
-    expect(store.getState().sessions[0]?.path).toBeUndefined();
+    expect(store.getState().sessionIndex.sessions[0]?.locked).toBe(true);
+    expect(store.getState().sessionIndex.sessions[0]?.name).toBe("Locked session");
+    expect(store.getState().sessionIndex.sessions[0]?.path).toBeUndefined();
   });
 
   it("clears the lock when a fresh account index explicitly unlocks it", () => {
@@ -21,7 +21,7 @@ describe("hosted trial session locks", () => {
 
     store.setSessions([{ sessionId: "s26", nodeId: "node-a", name: "Visible again", locked: false }]);
 
-    expect(store.getState().sessions[0]?.locked).toBeUndefined();
-    expect(store.getState().sessions[0]?.name).toBe("Visible again");
+    expect(store.getState().sessionIndex.sessions[0]?.locked).toBeUndefined();
+    expect(store.getState().sessionIndex.sessions[0]?.name).toBe("Visible again");
   });
 });

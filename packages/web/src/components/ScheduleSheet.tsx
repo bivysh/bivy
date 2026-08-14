@@ -51,10 +51,10 @@ export function ScheduleSheet({
   // The target is inferred from the screen we're on: an open session schedules
   // into that thread; a draft (no active session) starts a fresh one on the
   // machine picked there. No radio, no wrong pick.
-  const active = state.activeSessionId ? state.sessions.find((s) => s.sessionId === state.activeSessionId) : undefined;
+  const active = state.activeSession.activeSessionId ? state.sessionIndex.sessions.find((s) => s.sessionId === state.activeSession.activeSessionId) : undefined;
   const target: "existing_session" | "new_session" = active ? "existing_session" : "new_session";
-  const nodeId = active?.nodeId ?? state.currentNodeId;
-  const node = state.nodes.find((n) => n.id === nodeId);
+  const nodeId = active?.nodeId ?? state.connection.currentNodeId;
+  const node = state.connection.nodes.find((n) => n.id === nodeId);
   const roomKeyReady = Boolean(nodeId && controller.local.keys()[nodeId]);
 
   async function schedule() {

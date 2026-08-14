@@ -11,15 +11,15 @@ import { SessionStore } from "../src/index.js";
 // and never survives a node switch.
 describe("needsModelAuth (first-run subscription-OAuth prompt)", () => {
   it("defaults to null", () => {
-    expect(new SessionStore().getState().needsModelAuth).toBeNull();
+    expect(new SessionStore().getState().presentation.needsModelAuth).toBeNull();
   });
 
   it("sets and clears via setNeedsModelAuth", () => {
     const store = new SessionStore();
     store.setNeedsModelAuth({ nodeId: "eph-1", provider: "anthropic" });
-    expect(store.getState().needsModelAuth).toEqual({ nodeId: "eph-1", provider: "anthropic" });
+    expect(store.getState().presentation.needsModelAuth).toEqual({ nodeId: "eph-1", provider: "anthropic" });
     store.setNeedsModelAuth(null);
-    expect(store.getState().needsModelAuth).toBeNull();
+    expect(store.getState().presentation.needsModelAuth).toBeNull();
   });
 
   it("does NOT dismiss while every provider is still unconfigured", () => {
@@ -30,7 +30,7 @@ describe("needsModelAuth (first-run subscription-OAuth prompt)", () => {
       providers: [{ id: "anthropic", configured: false, oauth: true }],
     } as never);
     // Creds haven't landed yet — the prompt must stay up, not dead-end the user.
-    expect(store.getState().needsModelAuth).toEqual({ nodeId: "eph-1", provider: "anthropic" });
+    expect(store.getState().presentation.needsModelAuth).toEqual({ nodeId: "eph-1", provider: "anthropic" });
   });
 
   it("auto-dismisses once any provider becomes configured", () => {
@@ -40,13 +40,13 @@ describe("needsModelAuth (first-run subscription-OAuth prompt)", () => {
       type: "providers.list",
       providers: [{ id: "anthropic", configured: true, oauth: true }],
     } as never);
-    expect(store.getState().needsModelAuth).toBeNull();
+    expect(store.getState().presentation.needsModelAuth).toBeNull();
   });
 
   it("clears on a node switch (resetSession)", () => {
     const store = new SessionStore();
     store.setNeedsModelAuth({ nodeId: "eph-1", provider: "anthropic" });
     store.resetSession();
-    expect(store.getState().needsModelAuth).toBeNull();
+    expect(store.getState().presentation.needsModelAuth).toBeNull();
   });
 });

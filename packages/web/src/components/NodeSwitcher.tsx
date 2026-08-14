@@ -15,7 +15,7 @@ import type { EphemeralNodeConfig, EphemeralMachine } from "@bivy/core";
  * there is only one node.
  */
 export function NodeSwitcher() {
-  const { nodes, currentNodeId, status, activeSessionId, sessions, draft } = useAppState();
+  const { connection: { nodes, currentNodeId, status }, activeSession: { activeSessionId }, sessionIndex: { sessions }, draft } = useAppState();
   const [open, setOpen] = useState(false);
   const [ephemeralConfigs, setEphemeralConfigs] = useState<EphemeralNodeConfig[]>([]);
   const [ephemeralMachines, setEphemeralMachines] = useState<EphemeralMachine[]>([]);
