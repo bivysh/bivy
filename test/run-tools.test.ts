@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import assert from "node:assert/strict";
 import test from "node:test";
-import { RunDelegationService, RUN_TOOL_LIMITS, delegationSource, parseDelegationSource, runToolProvider, type RunDelegationBackend, type StartRunInput } from "../src/run-tools.js";
+import { RunDelegationService, RUN_TOOL_LIMITS, delegationSource, parseDelegationSource, type RunDelegationBackend, type StartRunInput } from "../src/run-tools.js";
 
 function fixture(options: { depth?: number } = {}) {
   let clock = 0;
@@ -77,15 +77,4 @@ test("wait reports success, failure, cancellation, and timeout without claiming 
   assert.deepEqual(timed.wait, { timedOut: true, childContinues: true });
   assert.equal(f.runs.get(child.runId)!.status, "pending");
   await assert.rejects(f.service.waitForRun("parent", child.runId, RUN_TOOL_LIMITS.maxWaitSeconds + 1), /timeoutSeconds/);
-});
-
-test("typed ToolProvider fixture asks another agent to review a branch", async () => {
-  const { service } = fixture();
-  const provider = runToolProvider(service, () => "parent");
-  assert.deepEqual(provider.list().map((tool) => tool.name), ["start_run", "get_run_status", "wait_for_run"]);
-  const result = await provider.invoke("start_run", "call-1", { instructions: "Review branch feat/auth and report a PR reference", repo: "bivysh/bivy", machine: "linux", agent: "pi", safety: { sandbox: "read-only", approval: "risky" }, idempotencyKey: "review-feat-auth" });
-  assert.equal(result.isError, undefined);
-  assert.match((result.content[0] as { text: string }).text, /child-1/);
-  const invalid = await provider.invoke("start_run", "call-2", { instructions: "x".repeat(RUN_TOOL_LIMITS.maxInstructions + 1) });
-  assert.equal(invalid.isError, true);
 });

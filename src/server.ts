@@ -184,7 +184,7 @@ import {
 } from "./stt.js";
 import { synthesizeOpenAiSpeech } from "./tts.js";
 import { seal, open } from "./e2e.js";
-import { RunDelegationService, parseDelegationSource, runToolProvider, type StartRunInput } from "./run-tools.js";
+import { RunDelegationService, parseDelegationSource, type StartRunInput } from "./run-tools.js";
 import {
   ControlPlaneTaskPoller,
   resolveControlPlaneTaskConfig,
@@ -604,7 +604,11 @@ const runDelegation = new RunDelegationService({
     });
   },
 });
-const integrations = new IntegrationManager(appDir, undefined, attachToChatForSession, (ref) => runToolProvider(runDelegation, () => ref.current));
+// Delegated Runs remain available through the explicit Session API, but are not
+// exposed as agent tools. Coding agents should use their own native sub-agent
+// facilities; advertising Runs here caused routine work to create noisy,
+// top-level Sessions in the UI.
+const integrations = new IntegrationManager(appDir, undefined, attachToChatForSession);
 const terminals = new TerminalManager();
 // Per-session agents: a node holds one AgentRuntime instance *per agent id*,
 // built lazily and cached, instead of a single global runtime. `defaultRuntimeId`
@@ -11007,8 +11011,8 @@ app.post("/api/session/:id/attach", (req, res) => {
   res.json({ ok: true, hash, name, mimeType, size, kind });
 });
 
-// Bivy-owned child Run tools for MCP agents. These use the exact same service as
-// Pi's native ToolProvider and remain behind /api authentication. The service
+// Explicit child Run API for first-party/user-directed workflows. These routes
+// are intentionally not advertised to agents as tools; the service still
 // authorizes every status lookup against this parent Session's provenance.
 app.post("/api/session/:id/delegated-runs", async (req, res) => {
   try { res.status(201).json(await runDelegation.startRun(String(req.params.id), req.body as StartRunInput)); }
