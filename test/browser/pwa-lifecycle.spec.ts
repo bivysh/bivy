@@ -114,6 +114,40 @@ test("update activation model blocks every disruptive state before reload", asyn
   await expect(page.getByRole("status")).toContainText("Draft text and attachment names");
 });
 
+test("install suggestion is compact, out of the composer flow, and permanently dismissible", async ({ page }) => {
+  await openModuleFixture(page, `<button id="dismiss" hidden>Dismiss install suggestion</button><script type="module">
+    import { dismissInstall, getPwaLifecycleState, initializeInstallLifecycle, markFirstSuccessfulResponse, subscribePwaLifecycle } from '/src/pwaLifecycle.ts';
+    const button = document.querySelector('#dismiss');
+    const render = () => { button.hidden = getPwaLifecycleState().installChoice === null; };
+    subscribePwaLifecycle(render);
+    initializeInstallLifecycle();
+    const offer = new Event('beforeinstallprompt', { cancelable: true });
+    offer.prompt = async () => {};
+    offer.userChoice = Promise.resolve({ outcome: 'dismissed', platform: 'web' });
+    dispatchEvent(offer);
+    markFirstSuccessfulResponse();
+    button.addEventListener('click', dismissInstall);
+    window.offerInstallAgain = () => dispatchEvent(offer);
+    window.installChoice = () => getPwaLifecycleState().installChoice;
+  </script>`);
+
+  const dismiss = page.getByRole("button", { name: "Dismiss install suggestion" });
+  await expect(dismiss).toBeVisible();
+  await dismiss.click();
+  await expect(dismiss).toBeHidden();
+  await page.evaluate(() => (window as unknown as { offerInstallAgain(): void }).offerInstallAgain());
+  expect(await page.evaluate(() => (window as unknown as { installChoice(): unknown }).installChoice())).toBeNull();
+  expect(await page.evaluate(() => localStorage.getItem("bivy.pwa.install-dismissed"))).toBe("1");
+
+  const [notice, styles] = await Promise.all([
+    readFile(new URL("../../packages/web/src/components/PwaLifecycleNotice.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../../packages/web/src/pwa-lifecycle.css", import.meta.url), "utf8"),
+  ]);
+  expect(notice).toContain('aria-label="Dismiss install suggestion"');
+  expect(styles).toMatch(/\.pwa-install\s*{[^}]*position: fixed;/s);
+  expect(styles).toContain("width: min(360px, calc(100vw - 32px))");
+});
+
 test("install is contextual after success with native, iOS/Safari, and standalone fallbacks", async ({ page }) => {
   await openModuleFixture(page, `<button id="install" hidden>Install Bivy</button><output></output><script type="module">
     import { fallbackInstallChoice, getPwaLifecycleState, initializeInstallLifecycle, markFirstSuccessfulResponse, requestInstall, subscribePwaLifecycle } from '/src/pwaLifecycle.ts';
