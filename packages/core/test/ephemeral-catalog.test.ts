@@ -11,4 +11,12 @@ describe("ephemeral provider positioning", () => {
   it.each(["sprites", "e2b"])("marks %s as experimental managed compute", (id) => {
     expect(ephemeralCatalogEntry(id)).toMatchObject({ computeClass: "managed-compute", maturity: "experimental" });
   });
+
+  it("flags Hetzner hostedOnly — guest shutdown does not stop billing", () => {
+    expect(ephemeralCatalogEntry("hetzner")).toMatchObject({ hostedOnly: true });
+  });
+
+  it.each(["aws", "fly", "sprites", "e2b"])("%s is not flagged hostedOnly", (id) => {
+    expect(ephemeralCatalogEntry(id)?.hostedOnly).toBeFalsy();
+  });
 });

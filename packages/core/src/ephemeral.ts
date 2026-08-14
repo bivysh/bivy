@@ -37,6 +37,13 @@ export interface EphemeralProviderCatalog {
   blurb: string;
   steps: string[];
   links: { label: string; url: string }[];
+  /** Mirrors the adapter's `guestCanEnsureDeletion === false`: this provider's
+   * guest shutdown does not stop billing, so a device-only (browser-held
+   * token) launch is refused outright — only hosted/control-plane
+   * provisioning (which retains independent deletion authority) can launch
+   * it. Onboarding surfaces should say so up front rather than let the user
+   * connect a token and hit the launch-time refusal cold. */
+  hostedOnly?: boolean;
 }
 
 export const EPHEMERAL_PROVIDERS: EphemeralProviderCatalog[] = [
@@ -63,7 +70,7 @@ export const EPHEMERAL_PROVIDERS: EphemeralProviderCatalog[] = [
     computeClass: "byo-cloud",
     maturity: "stable",
     tokenLabel: "Hetzner Cloud API token",
-    blurb: "Bivy creates a temporary server, runs the session, then deletes it.",
+    blurb: "Powering off a Hetzner server doesn't stop billing, so Bivy only launches one through hosted (control-plane) provisioning, which keeps independent deletion authority.",
     steps: [
       "Open the Hetzner Cloud Console and select or create a project for Bivy's runners.",
       "Go to Security → API Tokens and click Generate API token.",
@@ -73,6 +80,7 @@ export const EPHEMERAL_PROVIDERS: EphemeralProviderCatalog[] = [
       { label: "Hetzner Cloud Console", url: "https://console.hetzner.cloud/projects" },
       { label: "API token docs", url: "https://docs.hetzner.com/cloud/api/getting-started/generating-api-token/" },
     ],
+    hostedOnly: true,
   },
   {
     id: "sprites",

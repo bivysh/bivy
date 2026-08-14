@@ -1033,6 +1033,19 @@ function trackedResourceIds(machines: Array<Record<string, unknown>>, attempts: 
  * providers whose adapter implements `discover` (Hetzner/Fly/EC2 today; see
  * the interface doc comment for why Sprites/E2B are intentionally excluded).
  */
+/** Ask one provider for everything tagged as this account's. Returns
+ * `undefined` when the adapter has no `discover` capability (Sprites/E2B),
+ * distinct from an empty array (checked, nothing found). Injectable so tests
+ * can exercise the sweep's cross-referencing/idempotency logic without a real
+ * provider transport — mirrors `DestroyFn`/`ObserveFn` above. */
+export type DiscoverFn = (provider: string, token: string, ownershipTag: string) => Promise<EphemeralMachine[] | undefined>;
+
+const discoverProviderResources: DiscoverFn = async (provider, token, ownershipTag) => {
+  const adapter = ephemeralAdapter(provider);
+  if (!adapter?.discover) return undefined;
+  return adapter.discover({ exec: directExec(), token, ownershipTag });
+};
+
 export async function sweepOrphanProviderResources(
   store: MeshStore,
   accountId: string,
@@ -1040,6 +1053,7 @@ export async function sweepOrphanProviderResources(
   nowMs = Date.now(),
   destroy: DestroyFn = destroyEphemeralMachine,
   observe: ObserveFn = observeProviderMachine,
+  discover: DiscoverFn = discoverProviderResources,
 ): Promise<OrphanSweepResult> {
   const result: OrphanSweepResult = { found: 0, reaped: 0, failed: 0 };
   const hosted = await store.getHostedProvisioning(accountId);
@@ -1052,16 +1066,15 @@ export async function sweepOrphanProviderResources(
   const ownershipTag = ownershipTagFor(accountId);
   for (const [provider, token] of Object.entries(hosted.providerTokens ?? {})) {
     if (hosted.validatedProviders?.[provider] !== providerCredentialFingerprint(token)) continue;
-    const adapter = ephemeralAdapter(provider);
-    if (!adapter?.discover) continue;
-    let discovered: EphemeralMachine[];
+    let discovered: EphemeralMachine[] | undefined;
     try {
-      discovered = await adapter.discover({ exec: directExec(), token, ownershipTag });
+      discovered = await discover(provider, token, ownershipTag);
     } catch (error) {
       result.failed++;
       await audit(store, accountId, { action: "reconcile_failed", provider, detail: `orphan discover: ${String((error as Error)?.message || error).slice(0, 120)}` });
       continue;
     }
+    if (!discovered) continue;
     for (const orphan of discovered) {
       if (tracked.has(orphan.id)) continue;
       const createdAtMs = Date.parse(orphan.createdAt || "");
