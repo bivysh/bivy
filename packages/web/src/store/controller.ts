@@ -338,6 +338,50 @@ export class AppController {
       addUserMessage: (text, id) => this.store.addUserMessage(text, id),
       transcriptUrl: (sessionId) => `${location.origin}${routePath({ kind: "session", id: sessionId })}`,
       refreshAccountSessions: () => { void this.refreshAccountSessions(); },
+    }, {
+      navigateNew: () => navigate({ kind: "new" }),
+      focusComposer: () => this.focusComposer(),
+      clearPendingPromptAndFollowups: () => { this.pendingPrompt = null; this.pendingFollowups = []; },
+      resetActiveSession: () => this.store.resetActiveSession(),
+      seedDraftDefaults: () => this.seedDraftDefaults(),
+      listRuntimes: () => this.listRuntimes(),
+      listModels: () => this.listModels(),
+      hasNodeSettings: () => Boolean(this.store.getState().settings.nodeSettings),
+      getNodeSettings: () => this.getNodeSettings(),
+      listRepos: () => this.listRepos(),
+      draftRepo: () => this.store.getState().draft.repo,
+      listBranches: (repo) => this.listBranches(repo),
+      activeSessionId: () => this.store.getState().activeSession.activeSessionId,
+      isPendingLaunch: (id) => this.pendingLaunches.has(id),
+      appendPendingLaunchFollowup: (id, prompt) => { this.pendingLaunches.get(id)?.followups.push(prompt); },
+      addUserMessage: (text, id, attachments) => this.store.addUserMessage(text, id, attachments),
+      mustQueue: (id) => this.mustQueue(id),
+      enqueueFollowup: (id, prompt) => this.store.enqueueFollowup(id, prompt, Date.now()),
+      persistFollowup: (id, messageId, text) => { void this.persistScheduledFollowup(id, messageId, text); },
+      drainFollowups: (id) => this.drainFollowups(id),
+      shouldAutoResume: () => this.shouldAutoResume(),
+      bufferResume: (prompt) => { this.pendingResume.push(prompt); },
+      resumeNodeForSession: (id) => { void this.resumeNodeForSession(id); },
+      hasPendingPrompt: () => Boolean(this.pendingPrompt),
+      appendPendingFollowup: (prompt) => { this.pendingFollowups.push(prompt); },
+      draftSessionFields: () => this.draftSessionFields(),
+      setPendingPrompt: (prompt) => { this.pendingPrompt = prompt; },
+      draftEphemeralRunner: () => this.store.getState().draft.ephemeralConfig,
+      startEphemeralLaunch: (provisionalId, prompt, config) => {
+        const now = new Date().toISOString();
+        const task: PendingEphemeralLaunch = { id: provisionalId, prompt, config, logs: [], followups: [], phase: "provisioning", createdAt: now, updatedAt: now };
+        this.pendingLaunches.set(provisionalId, task);
+        void this.pendingLaunchStore.put(task);
+        this.store.persistPendingSession(provisionalId, prompt.text);
+        void this.launchDraftRunnerAndBind(provisionalId);
+      },
+      send: (command) => this.send(command),
+      resetDeletedActiveSession: () => { this.store.resetActiveSession(); navigate({ kind: "new" }); },
+      removeSessionLocal: (id) => this.store.removeSessionLocal(id),
+      persistDeletedSessionTombstones: () => this.persistDeletedSessionTombstones(),
+      deleteTranscriptCache: (id) => { void this.transcriptCache.delete(id); },
+      refreshSessions: () => this.refreshSessions(),
+      resolveSessionId: (id) => id || this.store.getState().activeSession.activeSessionId,
     });
     this.credentialsModelsCoordinator = new CredentialsModelsCoordinator({
       send: (command) => { void this.transport.send(command); },
@@ -349,6 +393,9 @@ export class AppController {
       rememberModel: (model) => this.local.setLastChoice({ modelProvider: (model as ModelInfo & { provider?: string }).provider, modelId: model.id }),
       isDirect: () => this.direct,
       now: () => Date.now(),
+      isOnline: () => this.store.getState().connection.status === "online",
+      importModelKeys: (entries) => this.ephemeralKeys.importModelKeys(entries),
+      accountModelKeys: async () => (await this.ephemeralKeys.modelKeyEntries()).filter((entry) => entry.scope === "account"),
     });
     this.ephemeralCoordinator = new EphemeralCoordinator({
       listConfigs: () => fetchEphemeralConfigs(this.local),
@@ -383,6 +430,15 @@ export class AppController {
           suspendsWhenIdle: Boolean(adapter?.suspendsWhenIdle),
         };
       },
+      validateProviderToken: (id, token) => validateEphemeralProviderToken(id, token, cloudExec(this.local)),
+      setProviderToken: (id, token) => this.ephemeralKeys.setToken(id, token),
+      removeProviderToken: (id) => this.ephemeralKeys.remove(id),
+      getProviderToken: (id) => this.ephemeralKeys.getToken(id),
+      assignWorkItem: (id, input) => assignWorkItem(this.local, id, input),
+      nodeLabel: (id) => ephemeralNodeLabel(id),
+      followupCount: (sessionId) => this.store.getFollowups(sessionId).length,
+      recordSessionCorrelation: (sessionId, machine) => { void this.recordSessionCorrelation(sessionId, machine); },
+      schedule: (effect, delayMs) => { setTimeout(effect, delayMs); },
     });
     this.accountCoordinator = new AutomationsAccountCoordinator({
       local: this.local,
@@ -405,6 +461,11 @@ export class AppController {
         getNotificationPreferences,
         setNotificationPreferences,
         createOneOffRun,
+        setGithubAppDefaultNode,
+        setGithubAppTriggerAccess,
+        assignWorkItem,
+        deleteWorkItem,
+        clearWorkQueue,
       },
       runContext: () => {
         const state = this.store.getState();
@@ -1799,39 +1860,7 @@ export class AppController {
    * session (bound to those choices) is created lazily by the first sendPrompt.
    */
   newSession(opts: { navigate?: boolean } = {}): void {
-    // Point the URL at the draft route (/sessions/new) so a reload/copy comes
-    // back to a fresh session rather than the last one. Skipped when the change
-    // originated from the URL itself (popstate).
-    if (opts.navigate !== false) navigate({ kind: "new" });
-    // Autofocus the composer so the user can start typing right away.
-    this.focusComposer();
-    // Detach from an in-flight cold start, but do not cancel it. Its prompt and
-    // setup log live in pendingLaunches and its placeholder remains in the
-    // sidebar, so this pane is immediately free for another new session.
-    this.pendingPrompt = null;
-    this.pendingFollowups = [];
-    this.store.resetActiveSession();
-    // resetActiveSession() just cleared the agent pill (it must not keep
-    // showing whichever agent the previously viewed session used). Re-seed the
-    // remembered agent/model/repo, then refetch runtimes + models so the picks
-    // resolve against what this node supports and the composer repopulates with
-    // the user's last-used choices (falling back to the node default when a
-    // remembered choice isn't available here).
-    this.seedDraftDefaults();
-    this.listRuntimes();
-    this.listModels();
-    // Pull the node's sandbox default so the new-session sandbox pill (and its
-    // picker) can label "Node default (<tier>)" up front, before the user opens
-    // Settings — the sandbox is chosen here, so its default should be visible here.
-    if (!this.store.getState().settings.nodeSettings) this.getNodeSettings();
-    // Warm the repo picker in the background so it's ready — usually instantly —
-    // by the time the user taps the repo pill, instead of a multi-second wait on
-    // first open. Both listings are cached briefly on the node, so re-drafting
-    // is cheap. If a repo is already remembered, prefetch its branches too so
-    // the branch drill-in is ready as well.
-    this.listRepos();
-    const repo = this.store.getState().draft.repo;
-    if (repo) this.listBranches(repo);
+    this.sessionCoordinator.newSession(opts);
   }
 
   /** Load the remembered composer defaults into the store so the next fresh
@@ -1898,99 +1927,7 @@ export class AppController {
    * through early via sendFollowupNow/steerNow.
    */
   sendPrompt(text: string, attachments?: PromptAttachment[]): void {
-    const trimmed = text.trim();
-    const files = attachments && attachments.length ? attachments : undefined;
-    if (!trimmed && !files) return;
-    const prepared = this.sessionCoordinator.preparePrompt(trimmed, files);
-    if (prepared.type !== "prompt-prepared") return;
-    const cmid = prepared.clientMessageId;
-    const active = this.store.getState().activeSession.activeSessionId;
-    // A cold-start placeholder is a persisted session intent, not a node
-    // session id. Keep extra messages queued locally until its session.new
-    // resolves instead of accidentally sending `prompt` with the placeholder.
-    if (active && this.pendingLaunches.has(active)) {
-      this.store.addUserMessage(trimmed, cmid, files);
-      this.pendingLaunches.get(active)!.followups.push({ text: trimmed, clientMessageId: cmid, attachments: files });
-      return;
-    }
-    if (active) {
-      if (this.mustQueue(active)) {
-        this.store.enqueueFollowup(active, { id: cmid, text: trimmed, attachments: files }, Date.now());
-        // Account/relay mode: mirror this queued item as a one-off scheduled
-        // message so it still sends if the app closes or the node was offline at
-        // turn-end (see persistScheduledFollowup).
-        void this.persistScheduledFollowup(active, cmid, trimmed);
-        // If the turn happened to settle between the mustQueue check and here,
-        // send it straight away rather than waiting for the next settle edge.
-        this.drainFollowups(active);
-        return;
-      }
-      // The node is offline but this is an ephemeral machine we can bring back
-      // (a suspended Sprite, or a torn-down destroy-lane machine we hold the key
-      // to rebuild). Sending IS the resume: show the bubble, buffer the prompt,
-      // wake/rebuild the machine, and replay on reconnect — no separate button.
-      if (this.shouldAutoResume()) {
-        this.store.addUserMessage(trimmed, cmid, files);
-        this.pendingResume.push({ sessionId: active, text: trimmed, clientMessageId: cmid, attachments: files });
-        void this.resumeNodeForSession(active);
-        return;
-      }
-      this.store.addUserMessage(trimmed, cmid, files);
-      this.send({ kind: "prompt", sessionId: active, text: trimmed, clientMessageId: cmid, attachments: files });
-      return;
-    }
-    // A session.new is already in flight for this draft: its session.history
-    // hasn't landed yet, so activeSessionId is still null. Firing a second
-    // session.new here would create a *separate* session on the node — and
-    // because each request carries `title`, the node names both immediately, so
-    // both surface as duplicate sidebar rows (the duplicate-sessions bug). Queue
-    // the extra prompt instead; maybeFlushPendingPrompt drains it into the one
-    // session once it's created. Guards double-tapped Send / Enter-before-clear
-    // and any rapid resend on a slow link.
-    if (this.pendingPrompt) {
-      this.store.addUserMessage(trimmed, cmid, files);
-      this.pendingFollowups.push({ text: trimmed, clientMessageId: cmid, attachments: files });
-      return;
-    }
-    // No session yet: optimistically show the bubble, create a session, and
-    // flush this prompt once session.history arrives for our requestId.
-    const rid = prepared.requestId;
-    // The node names the session (and a repo session's worktree branch) from
-    // `title`; send the first message so the sidebar row and branch aren't blank.
-    // Keep the exact frame so a post-reconnect retry re-sends it byte-identically.
-    const frame: Command = { kind: "session.new", requestId: rid, title: trimmed || undefined, ...this.draftSessionFields() };
-    this.pendingPrompt = { text: trimmed, requestId: rid, clientMessageId: cmid, attachments: files, frame };
-    // The draft targets a saved ephemeral runner that has no machine yet: sending
-    // IS the launch. Persist a sidebar row, provision the machine, and use a
-    // background relay connection to create and start the real session once the
-    // node is online — no launch modal, and the main pane is immediately free.
-    const runner = this.store.getState().draft.ephemeralConfig;
-    if (runner) {
-      const provisionalId = `starting-${rid}`;
-      this.pendingPrompt.provisionalId = provisionalId;
-      const now = new Date().toISOString();
-      const task: PendingEphemeralLaunch = {
-        id: provisionalId,
-        prompt: this.pendingPrompt,
-        config: runner,
-        logs: [],
-        followups: [],
-        phase: "provisioning",
-        createdAt: now,
-        updatedAt: now,
-      };
-      this.pendingLaunches.set(provisionalId, task);
-      void this.pendingLaunchStore.put(task);
-      this.store.addUserMessage(trimmed, cmid, files);
-      this.store.persistPendingSession(provisionalId, trimmed);
-      // Persisting the placeholder before the first provider request is the key
-      // UX invariant: New is now safe immediately, not only after cloud-init and
-      // session.new eventually finish.
-      void this.launchDraftRunnerAndBind(provisionalId);
-      return;
-    }
-    this.store.addUserMessage(trimmed, cmid, files);
-    this.send(frame);
+    this.sessionCoordinator.sendPrompt(text, attachments);
   }
 
   /** Provision the selected runner while its local sidebar row remains usable. */
@@ -2415,25 +2352,9 @@ export class AppController {
   submitOauthCode(id: string, code: string): void { this.credentialsModelsCoordinator.submitOauthCode(id, code); }
   listCredentialRecords(): void { this.credentialsModelsCoordinator.listCredentials(); }
 
-  private credentialSyncInFlight: Promise<void> | null = null;
   /** Bidirectional API-key convergence between the PWA account vault and node. */
   private syncAccountCredentialsWithNode(): Promise<void> {
-    if (this.direct || this.store.getState().connection.status !== "online") return Promise.resolve();
-    if (this.credentialSyncInFlight) return this.credentialSyncInFlight;
-    this.credentialSyncInFlight = (async () => {
-      const event = await this.awaitAck({ kind: "credentials.account.export" });
-      const incoming = Array.isArray(event.entries)
-        ? event.entries.filter((entry): entry is { provider: string; key: string } => Boolean(entry)
-          && typeof (entry as { provider?: unknown }).provider === "string"
-          && typeof (entry as { key?: unknown }).key === "string")
-        : [];
-      await this.ephemeralKeys.importModelKeys(incoming);
-      const accountKeys = (await this.ephemeralKeys.modelKeyEntries()).filter((entry) => entry.scope === "account");
-      for (const { provider, key } of accountKeys) await this.awaitAck({ kind: "credential.set", provider, label: "default", key });
-      this.listCredentialRecords();
-      this.listProviders();
-    })().catch(() => {}).finally(() => { this.credentialSyncInFlight = null; });
-    return this.credentialSyncInFlight;
+    return this.credentialsModelsCoordinator.syncAccountCredentials();
   }
 
   setCredential(provider: string, label: string, value: { key?: string; ref?: string }): Promise<void> { return this.credentialsModelsCoordinator.setCredential(provider, label, value); }
@@ -2597,7 +2518,7 @@ export class AppController {
   /** Set (empty string clears) the default node for untagged GitHub work. Without
    *  an appId it covers every connected app — it's an account-level preference. */
   setGithubAppDefaultNode(node: string, appId?: string): Promise<string | undefined> {
-    return setGithubAppDefaultNode(this.local, node, appId);
+    return this.accountCoordinator.setGithubAppDefaultNode(node, appId);
   }
   /** Set who may @-mention-trigger a run (issue #259). Without an appId it
    *  covers every connected app — it's an account-level preference. */
@@ -2605,19 +2526,19 @@ export class AppController {
     triggerAccess: "everyone" | "contributor" | "collaborator",
     appId?: string,
   ): Promise<"everyone" | "contributor" | "collaborator"> {
-    return setGithubAppTriggerAccess(this.local, triggerAccess, appId);
+    return this.accountCoordinator.setGithubAppTriggerAccess(triggerAccess, appId);
   }
   /** Manually dispatch a pending queue item to a chosen node + agent/model. */
   assignWorkItem(id: string, input: { node?: string; runtimeId?: string; model?: string; ephemeral?: boolean }): Promise<void> {
-    return assignWorkItem(this.local, id, input);
+    return this.accountCoordinator.assignWorkItem(id, input);
   }
   /** Remove a single item from the GitHub queue. */
   deleteWorkItem(id: string): Promise<void> {
-    return deleteWorkItem(this.local, id);
+    return this.accountCoordinator.deleteWorkItem(id);
   }
   /** Clear every pending (waiting) item from the GitHub queue. */
   clearWorkQueue(): Promise<number> {
-    return clearWorkQueue(this.local);
+    return this.accountCoordinator.clearWorkQueue();
   }
   githubAppDisconnect(appId?: string, hookId?: string): Promise<void> { return this.accountCoordinator.disconnectGithubApp(appId, hookId); }
   removeNode(nodeId: string): Promise<void> { return this.accountCoordinator.removeNode(nodeId); }
@@ -2663,9 +2584,6 @@ export class AppController {
   /** Launched ephemeral node ids we've already run the first-run model-auth
    *  check for this session, so a reconnect doesn't re-schedule it. */
   private firstRunAuthNodes = new Set<string>();
-  /** Machines already scheduled for finish-triggered teardown. */
-  private finishingEphemeralMachines = new Set<string>();
-
   listEphemeralKeys(): Promise<ProviderKeyInfo[]> {
     return this.ephemeralKeys.list();
   }
@@ -2682,22 +2600,15 @@ export class AppController {
     return this.ephemeralKeys.removeModelKey(provider);
   }
   getEphemeralToken(id: string): Promise<string> {
-    return this.ephemeralKeys.getToken(id);
+    return this.ephemeralCoordinator.getProviderToken(id);
   }
-  async setEphemeralToken(id: string, token: string): Promise<void> {
-    await validateEphemeralProviderToken(id, token, cloudExec(this.local));
-    await this.ephemeralKeys.setToken(id, token);
-    // Connecting a provider should be enough to start — auto-create one sensible
-    // default runner so it appears in the node picker immediately, without a
-    // separate "define a machine" step. No-op if the provider already has one.
-    void this.ensureDefaultRunner(id);
+  setEphemeralToken(id: string, token: string): Promise<void> {
+    return this.ephemeralCoordinator.setProviderToken(id, token);
   }
   /** Save a provider token and return the provider's default runner (creating one
    *  if needed), so the connect UI can immediately pick it for the draft session. */
-  async connectEphemeralProvider(providerId: string, token: string): Promise<EphemeralNodeConfig | null> {
-    await validateEphemeralProviderToken(providerId, token, cloudExec(this.local));
-    await this.ephemeralKeys.setToken(providerId, token);
-    return this.ensureDefaultRunner(providerId);
+  connectEphemeralProvider(providerId: string, token: string): Promise<EphemeralNodeConfig | null> {
+    return this.ephemeralCoordinator.connectProvider(providerId, token);
   }
   /** The provider's default runner (creating one if needed) — for the connect
    *  UI's "use this runner" action on an already-connected provider. */
@@ -2711,7 +2622,7 @@ export class AppController {
   }
 
   removeEphemeralToken(id: string): Promise<void> {
-    return this.ephemeralKeys.remove(id);
+    return this.ephemeralCoordinator.removeProviderToken(id);
   }
 
   // --- Cross-device provider-token sync (P2 / Gap A) ---------------------
@@ -2907,31 +2818,8 @@ export class AppController {
    * the control-plane reconciler reaps leak-prone providers, so teardown happens
    * even with no device online. Provider destroy is idempotent/404-tolerant, so
    * these paths race harmlessly; TTL remains the final backstop. */
-  private async maybeTeardownFinishedEphemeral(sessionId: string): Promise<void> {
-    if (this.direct || this.store.getFollowups(sessionId).length > 0) return;
-    const nodeId = this.local.cur;
-    if (!nodeId) return;
-    const machine = (await this.ephemeralMachines.list().catch(() => []))
-      // Suspend-to-zero machines (Fly Sprites) are kept, never destroyed on
-      // finish — they self-suspend to ~$0 and resume with state intact, which is
-      // the whole point; destroying one would throw away its memory.
-      .find((m) => m.nodeId === nodeId && m.teardownOnAgentFinish && !ephemeralProviderSuspendsWhenIdle(m.provider));
-    if (!machine || this.finishingEphemeralMachines.has(machine.id)) return;
-    // Persist the session↔machine correlation BEFORE teardown so this session can
-    // be rebuilt after the node is unenrolled and drops from the registry (Gap 1).
-    void this.recordSessionCorrelation(sessionId, machine);
-    this.finishingEphemeralMachines.add(machine.id);
-    setTimeout(() => {
-      // A follow-up may have been queued during the grace period.
-      if (this.store.getFollowups(sessionId).length > 0 || this.local.cur !== nodeId) {
-        this.finishingEphemeralMachines.delete(machine.id);
-        return;
-      }
-      void this.destroyEphemeral(machine).catch((e) => {
-        this.finishingEphemeralMachines.delete(machine.id);
-        this.store.setError(e instanceof Error ? e.message : String(e));
-      });
-    }, 3000);
+  private maybeTeardownFinishedEphemeral(sessionId: string): Promise<void> {
+    return this.ephemeralCoordinator.teardownFinishedSession(sessionId);
   }
 
   listEphemeralSizes(providerId: string, region?: string): Promise<ProviderSize[]> {
@@ -3050,27 +2938,11 @@ export class AppController {
    * id), so the item can be assigned before the machine has even booted; the
    * machine then picks it up via the normal hosted-queue poll once it's up.
    */
-  async runWorkItemOnEphemeral(
+  runWorkItemOnEphemeral(
     id: string,
     opts: { provider: string; region?: string; size?: string; ttlMinutes?: number; runtimeId?: string; model?: string; configId?: string },
   ): Promise<EphemeralMachine> {
-    if (!this.signedIn) throw new Error("Sign in to launch an ephemeral machine.");
-    const githubToken = await this.githubTaskToken.get();
-    const machine = await launchEphemeralMachine(
-      { ...opts, setupId: opts.configId, hostedTasks: true, githubToken: githubToken || undefined, workItemId: id, purpose: "queue-item", name: "Ephemeral queue runner" },
-      { store: this.local, exec: cloudExec(this.local), keys: this.ephemeralKeys, machines: this.ephemeralMachines },
-    );
-    try {
-      await assignWorkItem(this.local, id, { node: ephemeralNodeLabel(machine.nodeId ?? ""), runtimeId: opts.runtimeId, model: opts.model, ephemeral: true });
-    } catch (e) {
-      // The machine is already booting — better to leave it running (it still
-      // serves the shared "bivy" queue) than to tear it down mid-provision and
-      // strand it. Surface the assign failure so the UI can report it.
-      void this.refreshNodes();
-      throw e;
-    }
-    void this.refreshNodes();
-    return machine;
+    return this.ephemeralCoordinator.runWorkItem(id, opts);
   }
 
   /**
@@ -3078,15 +2950,8 @@ export class AppController {
    * (no specific item), so incoming work can run without a persistent node —
    * the queue-level "auto-provision" default's manual/triggered form.
    */
-  async launchEphemeralQueueWorker(opts: { provider: string; region?: string; size?: string; ttlMinutes?: number; configId?: string }): Promise<EphemeralMachine> {
-    if (!this.signedIn) throw new Error("Sign in to launch an ephemeral machine.");
-    const githubToken = await this.githubTaskToken.get();
-    const machine = await launchEphemeralMachine(
-      { ...opts, setupId: opts.configId, hostedTasks: true, githubToken: githubToken || undefined, purpose: "queue-default", name: "Ephemeral queue worker" },
-      { store: this.local, exec: cloudExec(this.local), keys: this.ephemeralKeys, machines: this.ephemeralMachines },
-    );
-    void this.refreshNodes();
-    return machine;
+  launchEphemeralQueueWorker(opts: { provider: string; region?: string; size?: string; ttlMinutes?: number; configId?: string }): Promise<EphemeralMachine> {
+    return this.ephemeralCoordinator.launchQueueWorker(opts);
   }
 
   /** The account's saved ephemeral-queue-default preference (whether/how to
@@ -3638,26 +3503,15 @@ export class AppController {
   }
 
   deleteSession(sessionId: string, path?: string): void {
-    this.send({ kind: "session.delete", sessionId, path });
-    if (sessionId === this.store.getState().activeSession.activeSessionId) {
-      this.store.resetActiveSession();
-      // The open session was just deleted — drop back to the draft route.
-      navigate({ kind: "new" });
-    }
-    this.store.removeSessionLocal(sessionId);
-    this.persistDeletedSessionTombstones();
-    void this.transcriptCache.delete(sessionId);
-    this.refreshSessions();
+    this.sessionCoordinator.deleteSession(sessionId, path);
   }
 
   pauseSession(sessionId?: string): void {
-    const id = sessionId || this.store.getState().activeSession.activeSessionId;
-    if (id) this.send({ kind: "session.pause", sessionId: id });
+    this.sessionCoordinator.pauseSession(sessionId);
   }
 
   resumeSession(sessionId?: string): void {
-    const id = sessionId || this.store.getState().activeSession.activeSessionId;
-    if (id) this.send({ kind: "session.resume", sessionId: id });
+    this.sessionCoordinator.resumeSession(sessionId);
   }
 
   /** Force this session's PR status to re-sync with GitHub right now, instead

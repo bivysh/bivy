@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import type { Command, PromptAttachment, ServerEvent } from "@bivy/core";
+import type { Command, EphemeralNodeConfig, PromptAttachment, ServerEvent } from "@bivy/core";
 
 const FORK_IMPORT_TIMEOUT_MS = 11 * 60 * 1000;
 
@@ -31,6 +31,54 @@ export type SessionOrchestrationResult =
   | { type: "command-sent"; command: Command }
   | { type: "prompt-prepared"; requestId: string; clientMessageId: string; text: string; attachments?: PromptAttachment[] };
 
+export interface PendingSessionPrompt {
+  text: string;
+  requestId: string;
+  clientMessageId: string;
+  attachments?: PromptAttachment[];
+  frame: Command;
+  provisionalId?: string;
+}
+
+export interface SessionWorkflowPort {
+  navigateNew(): void;
+  focusComposer(): void;
+  clearPendingPromptAndFollowups(): void;
+  resetActiveSession(): void;
+  seedDraftDefaults(): void;
+  listRuntimes(): void;
+  listModels(): void;
+  hasNodeSettings(): boolean;
+  getNodeSettings(): void;
+  listRepos(): void;
+  draftRepo(): string | null;
+  listBranches(repo: string): void;
+  activeSessionId(): string | null;
+  isPendingLaunch(id: string): boolean;
+  appendPendingLaunchFollowup(id: string, prompt: { text: string; clientMessageId: string; attachments?: PromptAttachment[] }): void;
+  addUserMessage(text: string, clientMessageId: string, attachments?: PromptAttachment[]): void;
+  mustQueue(sessionId: string): boolean;
+  enqueueFollowup(sessionId: string, prompt: { id: string; text: string; attachments?: PromptAttachment[] }): void;
+  persistFollowup(sessionId: string, id: string, text: string): void;
+  drainFollowups(sessionId: string): void;
+  shouldAutoResume(): boolean;
+  bufferResume(prompt: { sessionId: string; text: string; clientMessageId: string; attachments?: PromptAttachment[] }): void;
+  resumeNodeForSession(sessionId: string): void;
+  hasPendingPrompt(): boolean;
+  appendPendingFollowup(prompt: { text: string; clientMessageId: string; attachments?: PromptAttachment[] }): void;
+  draftSessionFields(): Record<string, unknown>;
+  setPendingPrompt(prompt: PendingSessionPrompt): void;
+  draftEphemeralRunner(): EphemeralNodeConfig | null;
+  startEphemeralLaunch(provisionalId: string, prompt: PendingSessionPrompt, runner: EphemeralNodeConfig): void;
+  send(command: Command): void;
+  resetDeletedActiveSession(): void;
+  removeSessionLocal(sessionId: string): void;
+  persistDeletedSessionTombstones(): void;
+  deleteTranscriptCache(sessionId: string): void;
+  refreshSessions(): void;
+  resolveSessionId(sessionId?: string): string | null;
+}
+
 /** Owns multi-step session protocol workflows; browser navigation and state mutation are ports. */
 export class SessionOrchestrator {
   private readonly pending = new Map<string, {
@@ -39,7 +87,10 @@ export class SessionOrchestrator {
     timer: ReturnType<typeof setTimeout>;
   }>();
 
-  constructor(private readonly deps: SessionOrchestrationDependencies) {}
+  constructor(
+    private readonly deps: SessionOrchestrationDependencies,
+    private readonly workflow?: SessionWorkflowPort,
+  ) {}
 
   send(command: Command): SessionOrchestrationResult {
     this.deps.send(command);
@@ -67,6 +118,95 @@ export class SessionOrchestrator {
     if (error) waiting.reject(new Error(String(error)));
     else waiting.resolve(event);
     return true;
+  }
+
+  newSession(opts: { navigate?: boolean } = {}): void {
+    const port = this.workflowPort();
+    if (opts.navigate !== false) port.navigateNew();
+    port.focusComposer();
+    port.clearPendingPromptAndFollowups();
+    port.resetActiveSession();
+    port.seedDraftDefaults();
+    port.listRuntimes();
+    port.listModels();
+    if (!port.hasNodeSettings()) port.getNodeSettings();
+    port.listRepos();
+    const repo = port.draftRepo();
+    if (repo) port.listBranches(repo);
+  }
+
+  sendPrompt(text: string, attachments?: PromptAttachment[]): void {
+    const port = this.workflowPort();
+    const trimmed = text.trim();
+    const files = attachments?.length ? attachments : undefined;
+    if (!trimmed && !files) return;
+    const requestId = this.deps.createRequestId();
+    const clientMessageId = this.deps.createClientMessageId();
+    const active = port.activeSessionId();
+
+    if (active && port.isPendingLaunch(active)) {
+      port.addUserMessage(trimmed, clientMessageId, files);
+      port.appendPendingLaunchFollowup(active, { text: trimmed, clientMessageId, attachments: files });
+      return;
+    }
+    if (active) {
+      if (port.mustQueue(active)) {
+        port.enqueueFollowup(active, { id: clientMessageId, text: trimmed, attachments: files });
+        port.persistFollowup(active, clientMessageId, trimmed);
+        port.drainFollowups(active);
+        return;
+      }
+      port.addUserMessage(trimmed, clientMessageId, files);
+      if (port.shouldAutoResume()) {
+        port.bufferResume({ sessionId: active, text: trimmed, clientMessageId, attachments: files });
+        port.resumeNodeForSession(active);
+      } else {
+        port.send({ kind: "prompt", sessionId: active, text: trimmed, clientMessageId, attachments: files });
+      }
+      return;
+    }
+    if (port.hasPendingPrompt()) {
+      port.addUserMessage(trimmed, clientMessageId, files);
+      port.appendPendingFollowup({ text: trimmed, clientMessageId, attachments: files });
+      return;
+    }
+
+    const frame: Command = { kind: "session.new", requestId, title: trimmed || undefined, ...port.draftSessionFields() };
+    const prompt: PendingSessionPrompt = { text: trimmed, requestId, clientMessageId, attachments: files, frame };
+    const runner = port.draftEphemeralRunner();
+    if (runner) {
+      const provisionalId = `starting-${requestId}`;
+      prompt.provisionalId = provisionalId;
+      port.setPendingPrompt(prompt);
+      port.addUserMessage(trimmed, clientMessageId, files);
+      port.startEphemeralLaunch(provisionalId, prompt, runner);
+      return;
+    }
+    port.setPendingPrompt(prompt);
+    port.addUserMessage(trimmed, clientMessageId, files);
+    port.send(frame);
+  }
+
+  deleteSession(sessionId: string, path?: string): void {
+    const port = this.workflowPort();
+    port.send({ kind: "session.delete", sessionId, path });
+    if (sessionId === port.activeSessionId()) port.resetDeletedActiveSession();
+    port.removeSessionLocal(sessionId);
+    port.persistDeletedSessionTombstones();
+    port.deleteTranscriptCache(sessionId);
+    port.refreshSessions();
+  }
+
+  pauseSession(sessionId?: string): void {
+    const port = this.workflowPort();
+    const id = port.resolveSessionId(sessionId);
+    if (id) port.send({ kind: "session.pause", sessionId: id });
+  }
+
+  resumeSession(sessionId?: string): void {
+    const port = this.workflowPort();
+    const id = port.resolveSessionId(sessionId);
+    if (id) port.send({ kind: "session.resume", sessionId: id });
   }
 
   async importNativeSession(runtimeId: string, ref: string, acceptDisclosure = false): Promise<ServerEvent> {
@@ -159,6 +299,11 @@ export class SessionOrchestrator {
       }
     }
     return { sessionId, ...this.forkResult(done, "seeded") };
+  }
+
+  private workflowPort(): SessionWorkflowPort {
+    if (!this.workflow) throw new Error("SessionOrchestrator requires a workflow port");
+    return this.workflow;
   }
 
   private forkResult(event: ServerEvent, fallback: string) {
