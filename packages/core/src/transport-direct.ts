@@ -510,21 +510,33 @@ export class DirectTransport implements Transport {
           break;
         }
         case "credential.remove": {
-          const provider = encodeURIComponent(String(obj.provider ?? ""));
-          const label = encodeURIComponent(String(obj.label ?? "default"));
-          const result = await this.directApi(`/api/auth/credentials/${provider}/${label}`, { method: "DELETE" });
-          this.emitMerged("credentials.records", result);
-          this.emitMerged("providers.list", result);
+          const requestId = String(obj.requestId ?? "");
+          try {
+            const provider = encodeURIComponent(String(obj.provider ?? ""));
+            const label = encodeURIComponent(String(obj.label ?? "default"));
+            const result = await this.directApi(`/api/auth/credentials/${provider}/${label}`, { method: "DELETE" });
+            this.emitMerged("credentials.records", result);
+            this.emitMerged("providers.list", result);
+            this.emit({ type: "credential.remove.ok", requestId });
+          } catch (error) {
+            this.emit({ type: "credential.remove.error", requestId, error: error instanceof Error ? error.message : String(error) });
+          }
           break;
         }
         case "credential.sync.set": {
-          const provider = encodeURIComponent(String(obj.provider ?? ""));
-          const label = encodeURIComponent(String(obj.label ?? "default"));
-          const result = await this.directApi(`/api/auth/credentials/${provider}/${label}/availability`, {
-            method: "POST",
-            body: JSON.stringify({ sync: obj.sync }),
-          });
-          this.emitMerged("credentials.records", result);
+          const requestId = String(obj.requestId ?? "");
+          try {
+            const provider = encodeURIComponent(String(obj.provider ?? ""));
+            const label = encodeURIComponent(String(obj.label ?? "default"));
+            const result = await this.directApi(`/api/auth/credentials/${provider}/${label}/availability`, {
+              method: "POST",
+              body: JSON.stringify({ sync: obj.sync }),
+            });
+            this.emitMerged("credentials.records", result);
+            this.emit({ type: "credential.sync.set.ok", requestId });
+          } catch (error) {
+            this.emit({ type: "credential.sync.set.error", requestId, error: error instanceof Error ? error.message : String(error) });
+          }
           break;
         }
         case "credential.test": {
@@ -546,9 +558,9 @@ export class DirectTransport implements Transport {
         case "credentials.presets.setMapping":
           this.emitMerged(
             "credentials.presets",
-            await this.directApi("/api/auth/credential-assignments/default", {
+            await this.directApi("/api/auth/credential-assignments", {
               method: "POST",
-              body: JSON.stringify({ provider: obj.provider, label: obj.label }),
+              body: JSON.stringify({ preset: obj.preset, provider: obj.provider, label: obj.label }),
             }),
           );
           break;

@@ -2781,25 +2781,31 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
       ctx.reply({ type: "credential.set.error", requestId: msg.requestId, error: message });
     }
   },
-  async "credential.remove"(msg) {
+  async "credential.remove"(msg, ctx) {
     try {
       await removeProviderCredential(credsDir, String(msg.provider ?? ""), String(msg.label ?? ""));
       await pushModelAuthToControlPlane();
       await refreshSessionAfterAuth();
       relay?.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
       broadcast({ type: "providers.list", providers: await listProvidersUnified() });
+      ctx.reply({ type: "credential.remove.ok", requestId: msg.requestId });
     } catch (error) {
-      relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
+      const message = error instanceof Error ? error.message : String(error);
+      relay?.sendEvent({ type: "session.error", error: message });
+      ctx.reply({ type: "credential.remove.error", requestId: msg.requestId, error: message });
     }
   },
-  async "credential.sync.set"(msg) {
+  async "credential.sync.set"(msg, ctx) {
     try {
       const sync = msg.sync === "node" ? "node" : "account";
       await setCredentialSync(credsDir, String(msg.provider ?? ""), String(msg.label ?? ""), sync);
       await pushModelAuthToControlPlane();
       relay?.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
+      ctx.reply({ type: "credential.sync.set.ok", requestId: msg.requestId });
     } catch (error) {
-      relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
+      const message = error instanceof Error ? error.message : String(error);
+      relay?.sendEvent({ type: "session.error", error: message });
+      ctx.reply({ type: "credential.sync.set.error", requestId: msg.requestId, error: message });
     }
   },
   // "Test connection": a bounded, non-secret liveness probe for one credential
@@ -9708,9 +9714,9 @@ app.get("/api/auth/credential-assignments", (_req, res) => {
   res.json({ presets: getCredentialPresets(credsDir) });
 });
 
-app.post("/api/auth/credential-assignments/default", async (req, res, next) => {
+app.post("/api/auth/credential-assignments", async (req, res, next) => {
   try {
-    setCredentialPresetMapping(credsDir, "default", String(req.body?.provider ?? ""), String(req.body?.label ?? ""));
+    setCredentialPresetMapping(credsDir, String(req.body?.preset ?? "default"), String(req.body?.provider ?? ""), String(req.body?.label ?? ""));
     await refreshSessionAfterAuth();
     res.json({ ok: true, presets: getCredentialPresets(credsDir) });
   } catch (error) {

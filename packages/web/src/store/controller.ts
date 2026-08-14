@@ -2527,13 +2527,13 @@ export class AppController {
   setCredential(provider: string, label: string, value: { key?: string; ref?: string }): Promise<void> {
     return this.awaitAck({ kind: "credential.set", provider, label, ...value }).then(() => undefined);
   }
-  /** Forget one labeled credential (`provider:label`). */
-  removeCredential(provider: string, label: string): void {
-    this.send({ kind: "credential.remove", provider, label });
+  /** Forget one labeled credential (`provider:label`) after the node confirms it. */
+  removeCredential(provider: string, label: string): Promise<void> {
+    return this.awaitAck({ kind: "credential.remove", provider, label }).then(() => undefined);
   }
-  /** Toggle whether a credential syncs across your nodes or stays on this one. */
-  setCredentialSync(provider: string, label: string, sync: "account" | "node"): void {
-    this.send({ kind: "credential.sync.set", provider, label, sync });
+  /** Change whether a credential is available to all account machines or only this node. */
+  setCredentialSync(provider: string, label: string, sync: "account" | "node"): Promise<void> {
+    return this.awaitAck({ kind: "credential.sync.set", provider, label, sync }).then(() => undefined);
   }
   /** "Test connection": a bounded, non-secret liveness probe for one credential.
    *  Relay and direct transports implement the same item-addressed command. */
