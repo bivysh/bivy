@@ -85,7 +85,6 @@ import {
   ephemeralAdapter,
   ephemeralCatalogEntry,
   ephemeralMachineFromNode,
-  isEphemeralNode,
   ephemeralMachineFromCorrelation,
   type SessionCorrelation,
   createDeviceVaultKeyStore,
@@ -146,6 +145,11 @@ import {
 import { navigate, parseRoute, routePath, type Route } from "../router.js";
 import { EPHEMERAL_MACHINES_ENABLED, EPHEMERAL_KEEP_FAILED_MACHINES } from "../flags.js";
 import { markFirstSuccessfulResponse } from "../pwaLifecycle.js";
+import { SessionOrchestrator } from "./coordinators/session-orchestrator.js";
+import { NodeConnectionCoordinator } from "./coordinators/node-connection-coordinator.js";
+import { CredentialsModelsCoordinator } from "./coordinators/credentials-models-coordinator.js";
+import { EphemeralCoordinator } from "./coordinators/ephemeral-coordinator.js";
+import { AutomationsAccountCoordinator } from "./coordinators/automations-account-coordinator.js";
 
 /**
  * Bounded discovery metadata for a provider-native session Bivy did not start
@@ -207,12 +211,6 @@ const FIRST_RUN_MODEL_AUTH_GRACE_MS = 8000;
  *  from scratch (1–3 min), but bounded so a self-destructed machine doesn't leave
  *  the session spinning "Reconnecting…" forever. */
 const RUNNER_BOOT_TIMEOUT_MS = 4 * 60 * 1000;
-// A fork IMPORT can clone a fresh repo on the destination node, and the node's
-// clone step allows up to 600s (repo-workspace.ts). The client timeout must sit
-// ABOVE that, or it rejects "Fork request timed out" while the node is still
-// cloning — orphaning a session that then materializes with no client waiting.
-const FORK_IMPORT_TIMEOUT_MS = 11 * 60 * 1000; // 660s > server's 600s clone cap
-
 /**
  * Same rule as the legacy client: a same-origin/loopback node (or explicit
  * `?local=1`) talks directly; a hosted control plane (app.bivy.sh) talks to a
@@ -268,8 +266,6 @@ export class AppController {
   /** In-flight transcription and speech requests, correlated with node replies. */
   private pendingTranscriptions = new Map<string, { resolve: (text: string) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   private pendingSpeech = new Map<string, { resolve: (audio: { audio: string; mimeType: string }) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
-  /** In-flight session-fork requests (export → bundle, import → done), by requestId. */
-  private pendingForks = new Map<string, { resolve: (event: ServerEvent) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   /** In-flight saves awaiting a node ack (node.settings, provider.apiKey,
    *  models.custom.save, stt.config.set), by requestId — see awaitAck/resolveAck.
    *  These commands had no protocol-level ack before #140: the UI would show
@@ -306,8 +302,131 @@ export class AppController {
    *  events are latched in this browser so reconnect/history replay cannot
    *  inflate them; the in-flight guard also closes double-emission races. */
   private productMetricsInFlight = new Set<ProductMetricEvent>();
+  private readonly sessionCoordinator: SessionOrchestrator;
+  private readonly nodeCoordinator: NodeConnectionCoordinator;
+  private readonly credentialsModelsCoordinator: CredentialsModelsCoordinator;
+  private readonly ephemeralCoordinator: EphemeralCoordinator;
+  private readonly accountCoordinator: AutomationsAccountCoordinator;
 
   constructor() {
+    this.nodeCoordinator = new NodeConnectionCoordinator({
+      facts: () => ({ direct: this.direct, solo: this.solo, signedIn: Boolean(this.local.s), currentNodeId: this.local.cur || null }),
+      status: () => this.store.getState().connection.status,
+      closeTransport: () => { try { this.transport.close(); } catch { /* noop */ } },
+      setCurrentNode: (nodeId) => { this.local.cur = nodeId; this.store.setCurrentNode(nodeId || null); },
+      resetSession: () => this.store.resetSession(),
+      seedSessions: () => this.seedSessionsFromCache(),
+      rebuildTransport: () => { this.transport = this.buildTransport(); },
+      setStatus: (status) => this.store.setStatus(status),
+      connectTransport: () => { void this.transport.connect(); },
+      refreshNodes: () => { void this.refreshNodes(); },
+      refreshAccountSessions: () => { void this.refreshAccountSessions(); },
+      waitForOnline: (timeoutMs) => this.waitForOnline(timeoutMs),
+      listProviders: () => this.listProviders(),
+    });
+    this.sessionCoordinator = new SessionOrchestrator({
+      send: (command) => { void this.transport.send(command); },
+      sendRequest: (command) => { void this.transport.send(command); },
+      createRequestId: requestId,
+      createClientMessageId: clientMessageId,
+      currentNodeId: () => this.local.cur,
+      isDirect: () => this.direct,
+      sessionRuntime: (sessionId) => this.store.getState().sessionIndex.sessions.find((session) => session.sessionId === sessionId)?.runtimeId,
+      switchNode: (nodeId) => this.switchNode(nodeId),
+      waitForOnline: (timeoutMs) => this.waitForOnline(timeoutMs),
+      openSession: (sessionId, path) => this.openSession(sessionId, path),
+      addUserMessage: (text, id) => this.store.addUserMessage(text, id),
+      transcriptUrl: (sessionId) => `${location.origin}${routePath({ kind: "session", id: sessionId })}`,
+      refreshAccountSessions: () => { void this.refreshAccountSessions(); },
+    });
+    this.credentialsModelsCoordinator = new CredentialsModelsCoordinator({
+      send: (command) => { void this.transport.send(command); },
+      awaitAck: (command, timeoutMs) => this.awaitAck(command, timeoutMs),
+      selectModelLocally: (model) => {
+        this.store.setCurrentModelLocal(model);
+        this.store.setDraftModel({ provider: (model as ModelInfo & { provider?: string }).provider, id: model.id });
+      },
+      rememberModel: (model) => this.local.setLastChoice({ modelProvider: (model as ModelInfo & { provider?: string }).provider, modelId: model.id }),
+      isDirect: () => this.direct,
+      now: () => Date.now(),
+    });
+    this.ephemeralCoordinator = new EphemeralCoordinator({
+      listConfigs: () => fetchEphemeralConfigs(this.local),
+      createConfig: (input) => apiCreateEphemeralConfig(this.local, input),
+      updateConfig: (id, patch) => apiUpdateEphemeralConfig(this.local, id, patch),
+      removeConfig: (id) => apiDeleteEphemeralConfig(this.local, id),
+      listSizes: (providerId, region) => listEphemeralSizes(providerId, { exec: cloudExec(this.local), keys: this.ephemeralKeys }, region),
+      signedIn: () => this.signedIn,
+      direct: () => this.direct,
+      currentNodeId: () => this.local.cur,
+      roomKey: (nodeId) => this.local.keys()[nodeId],
+      draftRepo: () => this.store.getState().draft.repo || undefined,
+      githubToken: () => this.githubTaskToken.get(),
+      machines: () => this.ephemeralMachines.list(),
+      nodes: () => this.store.getState().connection.nodes,
+      correlations: () => this.ephemeralCorrelations,
+      launchMachine: (opts) => launchEphemeralMachine({ ...opts, debugKeepMachine: EPHEMERAL_KEEP_FAILED_MACHINES }, { store: this.local, exec: cloudExec(this.local), keys: this.ephemeralKeys, machines: this.ephemeralMachines }),
+      destroyMachine: (machine) => destroyEphemeralMachine(machine, { store: this.local, exec: cloudExec(this.local), keys: this.ephemeralKeys, machines: this.ephemeralMachines }),
+      wakeMachine: (machine) => wakeEphemeralMachine(machine, { exec: cloudExec(this.local), keys: this.ephemeralKeys }),
+      suspendsWhenIdle: ephemeralProviderSuspendsWhenIdle,
+      machineFromNode: (node) => ephemeralMachineFromNode(node),
+      machineFromCorrelation: ephemeralMachineFromCorrelation,
+      connectToNode: (nodeId, timeoutMs) => this.connectToNode(nodeId, timeoutMs),
+      refreshNodes: () => { void this.refreshNodes(); },
+      reportError: (error) => this.store.setError(error.message),
+      defaultConfig: (providerId) => {
+        const adapter = ephemeralAdapter(providerId);
+        return {
+          name: ephemeralCatalogEntry(providerId)?.name ?? providerId,
+          region: adapter?.defaultRegion ?? null,
+          size: adapter?.defaultSize ?? null,
+          suspendsWhenIdle: Boolean(adapter?.suspendsWhenIdle),
+        };
+      },
+    });
+    this.accountCoordinator = new AutomationsAccountCoordinator({
+      local: this.local,
+      sendGithubDisconnect: ({ appId, hookId }) => this.send({ kind: "github.app.disconnect", requestId: requestId(), appId: appId || undefined, hookId: hookId || undefined }),
+      refreshNodes: () => this.refreshNodes(),
+      navigate: (url) => location.assign(url),
+      api: {
+        fetchMe,
+        fetchGithubApp,
+        fetchGithubQueue,
+        fetchAutomationRuns,
+        cancelAutomationRun: apiCancelAutomationRun,
+        disconnectGithubApp,
+        removeNode: removeAccountNode,
+        billingCheckout,
+        billingPortal,
+        enablePush: enablePushNotifications,
+        disablePush: disablePushNotifications,
+        pushStatus: getPushSubscriptionStatus,
+        getNotificationPreferences,
+        setNotificationPreferences,
+        createOneOffRun,
+      },
+      runContext: () => {
+        const state = this.store.getState();
+        const sessionId = state.activeSession.activeSessionId ?? undefined;
+        const active = sessionId ? state.sessionIndex.sessions.find((session) => session.sessionId === sessionId) : undefined;
+        const nodeId = sessionId ? this.resolveSessionNodeId(sessionId) : state.connection.currentNodeId ?? undefined;
+        const node = nodeId ? state.connection.nodes.find((candidate) => candidate.id === nodeId) : undefined;
+        return {
+          accountMode: this.accountMode(),
+          sessionId,
+          nodeId,
+          roomKey: nodeId ? this.local.keys()[nodeId] : undefined,
+          nodeLabel: node?.name ? `bivy/${node.name}` : undefined,
+          repo: state.draft.repo ?? undefined,
+          runtimeId: state.catalogs.selectedAgentId ?? undefined,
+          model: state.catalogs.currentModel?.id,
+          sandbox: active?.sandbox ?? (!sessionId ? state.draft.sandbox ?? state.settings.nodeSettings?.defaultSandbox : undefined),
+        };
+      },
+      encrypt: async (roomKey, text) => seal(await importRoomKey(unb64url(roomKey)), text),
+      recordRunAccepted: () => this.recordProductMilestone("run_accepted"),
+    });
     // Persist each applied history snapshot + cursor, and re-request canonical
     // history once a live turn settles (drives the P1.1 append-only backfill).
     this.store.onHistoryPersist = (sessionId, messages, count, historyHash) => {
@@ -315,7 +434,7 @@ export class AppController {
       void this.transcriptCache.put(sessionId, messages, count, historyHash, attachments);
     };
     this.store.requestFreshHistory = () => {
-      const sid = this.store.getState().activeSessionId;
+      const sid = this.store.getState().activeSession.activeSessionId;
       if (sid) this.requestHistory(sid);
     };
     // The reassembler detected a live-stream gap (a frame lost on an uplink blip)
@@ -336,7 +455,7 @@ export class AppController {
     // own delivery ack (session.user_message) never arrived (settleSendingFollowups).
     this.store.onSessionSettled = () => {
       this.refreshSessions();
-      const sid = this.store.getState().activeSessionId;
+      const sid = this.store.getState().activeSession.activeSessionId;
       if (sid) {
         this.store.settleSendingFollowups(sid);
         this.drainFollowups(sid);
@@ -551,19 +670,8 @@ export class AppController {
           this.resolveSpeech(event);
           return;
         }
-        // One-shot session-fork replies (bundle / done / error) resolve the
-        // awaiting forkSession() step; only the error variant is surfaced in the
-        // reducer (as a toast) — the rest is orchestration, not session state.
-        if (type === "session.fork.bundle" || type === "session.fork.done" || type === "session.fork.error") {
-          this.resolveFork(event);
-          return;
-        }
-        // Promotion reply (continue a replicated session on the standby) reuses
-        // the same keyed request/reply correlation as fork.
-        if (type === "session.promote.result") {
-          this.resolveFork(event);
-          return;
-        }
+        // Fork/promotion request correlation belongs to the session workflow.
+        if (this.sessionCoordinator.handleEvent(event)) return;
         const before = this.store.getState();
         const appliedEvent = this.eventWithNodeScope(event);
         this.store.apply(appliedEvent);
@@ -577,7 +685,7 @@ export class AppController {
       },
       onStatus: (status: ConnectionStatus) => {
         const before = this.store.getState();
-        const prev = before.status;
+        const prev = before.connection.status;
         this.store.setStatus(status);
         this.observeActivationMilestones(before, { type: "connection.status" });
         if (status === "online" && prev !== "online") {
@@ -641,8 +749,17 @@ export class AppController {
    *  from first response: opening an old Session must not look like activation. */
   private observeActivationMilestones(before: ReturnType<SessionStore["getState"]>, event: { type?: unknown }): void {
     const after = this.store.getState();
-    const beforeActivation = activationFromState({ ...before, direct: this.direct });
-    const afterActivation = activationFromState({ ...after, direct: this.direct });
+    const activationInput = (state: ReturnType<SessionStore["getState"]>) => ({
+      direct: this.direct,
+      signedIn: state.connection.signedIn,
+      status: state.connection.status,
+      runtimes: state.catalogs.runtimes,
+      providers: state.catalogs.providers,
+      reposAuthed: state.catalogs.reposAuthed,
+      transcript: state.activeSession.transcript,
+    });
+    const beforeActivation = activationFromState(activationInput(before));
+    const afterActivation = activationFromState(activationInput(after));
     // Every check but the final agent-answered one — robust to the chain
     // growing (e.g. the leading sign-in step) without re-deriving the cutoff.
     const readyBefore = beforeActivation.checks.slice(0, -1).every((check) => check.state === "passed");
@@ -657,7 +774,7 @@ export class AppController {
     }
 
     if (event.type === "session.history") return;
-    const assistantCount = (state: typeof after) => state.transcript.filter((entry) => entry.role === "assistant" && Boolean(entry.text) && !entry.tool).length;
+    const assistantCount = (state: typeof after) => state.activeSession.transcript.filter((entry) => entry.role === "assistant" && Boolean(entry.text) && !entry.tool).length;
     if (assistantCount(before) === 0 && assistantCount(after) > 0) {
       markFirstSuccessfulResponse();
       this.recordProductMilestone("first_useful_response", true);
@@ -666,17 +783,26 @@ export class AppController {
 
   /** Hosted control plane, not signed in yet. */
   needsAuth(): boolean {
-    return !this.direct && !this.solo && !this.local.s;
+    return this.connectionRequirement().type === "authentication-required";
   }
 
   /** Signed in on the hosted control plane, but no node picked yet. */
   needsNode(): boolean {
-    return !this.direct && Boolean(this.local.s) && !this.local.cur;
+    return this.connectionRequirement().type === "node-required";
   }
 
   /** True whenever the hosted client can't reach a node yet (auth or node). */
   needsSetup(): boolean {
-    return this.needsAuth() || this.needsNode();
+    return this.connectionRequirement().type !== "ready";
+  }
+
+  private connectionRequirement() {
+    return this.nodeCoordinator.requirement({
+      direct: this.direct,
+      solo: this.solo,
+      signedIn: Boolean(this.local.s),
+      currentNodeId: this.local.cur || null,
+    });
   }
 
   /** List the nodes enrolled on the signed-in account. */
@@ -719,18 +845,7 @@ export class AppController {
   }
 
   connect(): void {
-    // On the hosted control plane, don't dial the relay until the user has a
-    // session token and a selected node — otherwise surface the setup state.
-    if (this.needsSetup()) {
-      this.store.setStatus("offline");
-      if (this.signedIn) void this.refreshNodes();
-      return;
-    }
-    if (!this.direct) {
-      this.store.setCurrentNode(this.local.cur || null);
-      void this.refreshNodes();
-    }
-    void this.transport.connect();
+    this.nodeCoordinator.connect();
   }
 
   private foregroundTimer: ReturnType<typeof setTimeout> | null = null;
@@ -811,9 +926,9 @@ export class AppController {
    */
   openSlashCommands(): void {
     const s = this.store.getState();
-    const sid = s.activeSessionId;
+    const sid = s.activeSession.activeSessionId;
     if (sid) {
-      const row = s.sessions.find((r) => r.sessionId === sid);
+      const row = s.sessionIndex.sessions.find((r) => r.sessionId === sid);
       if (row?.status === "saved") this.openSession(sid);
     } else {
       // A draft has no attached session, so its runtime may not have advertised
@@ -877,7 +992,7 @@ export class AppController {
     this.foregroundTimer = setTimeout(() => {
       this.foregroundTimer = null;
       if (this.needsSetup()) return;
-      const status = this.store.getState().status;
+      const status = this.store.getState().connection.status;
       // A dead socket → reconnect; the transport's onopen burst re-pulls the
       // session list, models and runtimes. A live socket → refresh explicitly,
       // since no reconnect (and thus no burst) will happen on its own.
@@ -887,7 +1002,7 @@ export class AppController {
       }
       if (status !== "online") return; // connecting / reconnecting already in flight
       this.refreshSessions();
-      const sid = this.store.getState().activeSessionId;
+      const sid = this.store.getState().activeSession.activeSessionId;
       if (sid) this.requestHistory(sid);
       // A session.new whose reply was lost while backgrounded leaves activeSessionId
       // null (no sid above to refresh) and pendingPrompt outstanding. Re-fire it so
@@ -925,7 +1040,7 @@ export class AppController {
       this.livenessTimer = null;
       // A reconnect already in flight (status cycled) needs no nudge, and only
       // the matching pong proves the command path and event socket are live.
-      if (this.store.getState().status !== "online") return;
+      if (this.store.getState().connection.status !== "online") return;
       if (!this.pendingLivenessPings.delete(rid)) return;
       this.transport.reconnect();
     }, AppController.LIVENESS_TIMEOUT_MS);
@@ -1001,7 +1116,7 @@ export class AppController {
    *  stays enabled (isCurrentNodeResumable) and a send fires reprovisionEphemeral.
    *  Idempotent — a repeated refreshNodes while offline just no-ops. */
   private markCurrentNodeAwaitingRebuild(): void {
-    if (this.store.getState().status === "offline") return; // already parked
+    if (this.store.getState().connection.status === "offline") return; // already parked
     try {
       this.transport.close();
     } catch {
@@ -1034,44 +1149,12 @@ export class AppController {
 
   /** Switch to another node without a full reload. */
   switchNode(nodeId: string): void {
-    if (nodeId === this.local.cur && this.store.getState().status === "online") return;
-    try {
-      this.transport.close();
-    } catch {
-      /* noop */
-    }
-    this.local.cur = nodeId;
-    this.store.resetSession();
-    this.store.setCurrentNode(nodeId);
-    // Node selection changes which transport owns the session pane, not which
-    // sessions/terminals exist in the sidebar — resetSession() deliberately
-    // leaves both alone (issue #99), so there's nothing to restore here.
-    // seedSessionsFromCache is a no-op unless the list is genuinely still
-    // empty (e.g. switching before the very first load ever completed), in
-    // which case it paints instantly from the last cached list while the new
-    // node connects and refreshAccountSessions below fetches the
-    // authoritative one.
-    this.seedSessionsFromCache();
-    this.transport = this.buildTransport();
-    this.store.setStatus("connecting");
-    void this.transport.connect();
-    void this.refreshAccountSessions();
+    this.nodeCoordinator.switchNode(nodeId);
   }
 
-  /**
-   * Switch to `nodeId` (a no-op if already the current, online node) and wait
-   * for the new transport to come online, then refresh `state.providers` for
-   * it — `providers.list` is never sent automatically on (re)connect. Used by
-   * flows that need a specific node's live state before proceeding (e.g.
-   * reconnecting that node's provider OAuth from NodeSwitcher). Throws if the
-   * node doesn't come online within `timeoutMs` (see `waitForOnline`).
-   */
-  async connectToNode(nodeId: string, timeoutMs?: number): Promise<void> {
-    if (nodeId !== this.local.cur || this.store.getState().status !== "online") {
-      this.switchNode(nodeId);
-      await this.waitForOnline(timeoutMs);
-    }
-    this.listProviders();
+  /** Switch to a node, await online, and refresh its provider catalog. */
+  connectToNode(nodeId: string, timeoutMs?: number): Promise<void> {
+    return this.nodeCoordinator.connectToNode(nodeId, timeoutMs);
   }
 
   /** Sign out: revoke the session server-side (and free this device's slot),
@@ -1112,7 +1195,7 @@ export class AppController {
   }
 
   private send(command: Command): void {
-    void this.transport.send(command);
+    this.sessionCoordinator.send(command);
   }
 
   /** Trigger `bivy update` on the connected node from the version-mismatch
@@ -1121,7 +1204,7 @@ export class AppController {
    *  the new build (the banner clears itself — see the store's node.update
    *  handler), and a start failure comes back as node.update.result. */
   updateNode(): void {
-    if (this.store.getState().nodeUpdating) return;
+    if (this.store.getState().connection.nodeUpdating) return;
     this.store.setNodeUpdating(true);
     this.send({ kind: "node.update" });
   }
@@ -1260,170 +1343,28 @@ export class AppController {
   // fork was cross-runtime, and — for a "move" — retire the source only after the
   // import confirms, so a failed fork never loses the session.
 
-  /** Resolve/reject an in-flight fork step from its matching server reply. */
-  private resolveFork(event: ServerEvent): void {
-    const rid = String(event.requestId || "");
-    const pending = rid ? this.pendingForks.get(rid) : undefined;
-    if (!pending) return;
-    clearTimeout(pending.timer);
-    this.pendingForks.delete(rid);
-    const error = (event as { error?: unknown }).error;
-    if (error) pending.reject(new Error(String(error)));
-    else pending.resolve(event);
-  }
-
-  /**
-   * Continue a replicated session on `standbyNodeId` (the warm standby) when its
-   * owner is offline: switch to the standby, ask it to promote (control-plane
-   * epoch compare-and-set + materialize the replica), and refresh the list.
-   * Throws on failure so the caller can surface it.
-   */
-  async promoteSession(sessionId: string, standbyNodeId: string): Promise<{ epoch: number }> {
-    if (standbyNodeId && standbyNodeId !== this.local.cur) {
-      this.switchNode(standbyNodeId);
-      await this.waitForOnline();
-    }
-    const reply = await this.forkRequest({ kind: "session.promote", sessionId }, 30000);
-    const epoch = Number((reply as { epoch?: unknown }).epoch ?? 0);
-    this.refreshAccountSessions();
-    return { epoch };
-  }
-
-  /** Send a fork command on the current transport and await its keyed reply. */
-  private forkRequest(command: Command, timeoutMs: number): Promise<ServerEvent> {
-    const rid = requestId();
-    return new Promise<ServerEvent>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pendingForks.delete(rid);
-        reject(new Error("Fork request timed out"));
-      }, timeoutMs);
-      this.pendingForks.set(rid, { resolve, reject, timer });
-      void this.transport.send({ ...command, requestId: rid });
-    });
-  }
-
   /** Resolve once the (current) transport reports online, else reject on timeout. */
   private waitForOnline(timeoutMs = 20000): Promise<void> {
-    if (this.store.getState().status === "online") return Promise.resolve();
+    if (this.store.getState().connection.status === "online") return Promise.resolve();
     return new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => { unsub(); reject(new Error("Destination machine did not come online")); }, timeoutMs);
       const unsub = this.store.subscribe(() => {
-        if (this.store.getState().status === "online") { clearTimeout(timer); unsub(); resolve(); }
+        if (this.store.getState().connection.status === "online") { clearTimeout(timer); unsub(); resolve(); }
       });
     });
   }
 
-  /**
-   * Fork `sourceSessionId` onto `destNodeId` (default: same node), optionally on a
-   * different agent/model, keeping (copy) or retiring (move) the source. `agentId`
-   * is the selected TARGET agent (not merely an "agent changed" flag). Returns
-   * the new session id + fidelity ("full" | "seeded"). Throws on any step so the
-   * caller can surface it and — critically — NOT retire the source.
-   */
-  async forkSession(
+  /** Continue a replicated session on its standby node. */
+  promoteSession(sessionId: string, standbyNodeId: string): Promise<{ epoch: number }> {
+    return this.sessionCoordinator.promote(sessionId, standbyNodeId);
+  }
+
+  /** Fork/copy/move orchestration is owned by SessionOrchestrator. */
+  forkSession(
     sourceSessionId: string,
     opts: { destNodeId?: string; agentId?: string; sourceAgentId?: string; model?: { provider: string; id: string }; retireSource?: boolean } = {},
   ): Promise<{ sessionId: string; fidelity: string; missing: Array<{ label?: string; detail?: string }> }> {
-    const sourceNodeId = this.local.cur;
-    const destNodeId = opts.destNodeId ?? sourceNodeId;
-    const crossNode = !this.direct && Boolean(destNodeId) && destNodeId !== sourceNodeId;
-    const state = this.store.getState();
-    const sourceAgentId = opts.sourceAgentId ?? state.sessions.find((session) => session.sessionId === sourceSessionId)?.runtimeId;
-    const targetAgentId = opts.agentId ?? sourceAgentId;
-    // If the source runtime is absent from a stale session summary, prefer the
-    // explicit target path over silently assuming the source/default runtime.
-    const crossAgent = Boolean(targetAgentId && (!sourceAgentId || targetAgentId !== sourceAgentId));
-
-    // Fast path: a same-node, same-agent fork is done entirely on the node — the
-    // transcript never round-trips out to the client and back. The model may
-    // still change (applied cheaply on the new session). An explicitly selected
-    // different target agent falls through to export/import.
-    if (!crossNode && !crossAgent) {
-      const doneEvent = await this.forkRequest(
-        { kind: "session.fork.local", sessionId: sourceSessionId, ...(opts.model ? { model: opts.model } : {}) },
-        FORK_IMPORT_TIMEOUT_MS,
-      );
-      const newSessionId = String((doneEvent as { sessionId?: unknown }).sessionId || "");
-      if (!newSessionId) throw new Error("Local fork returned no session id");
-      const fidelity = String((doneEvent as { fidelity?: unknown }).fidelity || "full");
-      const missingRaw = (doneEvent as { missing?: unknown }).missing;
-      const missing = Array.isArray(missingRaw) ? (missingRaw as Array<{ label?: string; detail?: string }>) : [];
-      this.openSession(newSessionId);
-      // A same-node move retires the source only after the fork confirms.
-      if (opts.retireSource) this.send({ kind: "session.delete", sessionId: sourceSessionId });
-      return { sessionId: newSessionId, fidelity, missing };
-    }
-
-    // 1. Export the bundle from the source node (current transport). Pass the
-    //    chosen agent so the source can drop the native transcript payload when
-    //    the fork targets a different runtime that could never replay it, and
-    //    flag a cross-node fork so the source publishes its branch (a same-node
-    //    cross-agent fork adopts the local branch and needs no push).
-    const exportEvent = await this.forkRequest(
-      { kind: "session.fork.export", sessionId: sourceSessionId, ...(targetAgentId ? { agent: targetAgentId } : {}), ...(crossNode ? { crossNode: true } : {}) },
-      60000,
-    );
-    const bundle = (exportEvent as { bundle?: unknown }).bundle;
-    if (!bundle) throw new Error("Fork export returned no bundle");
-
-    // 2. Move onto the destination node's transport.
-    if (crossNode) {
-      this.switchNode(destNodeId!);
-      await this.waitForOnline();
-    }
-
-    // 3. Import on the destination.
-    const transcriptUrl = `${location.origin}${routePath({ kind: "session", id: sourceSessionId })}`;
-    const doneEvent = await this.forkRequest({
-      kind: "session.fork.import",
-      bundle,
-      transcriptUrl,
-      // A same-node cross-agent fork still shares the source repository. It
-      // needs a fresh branch/worktree; adopting the checked-out source branch
-      // makes git fail with “already used by worktree”.
-      sameNode: !crossNode,
-      ...(targetAgentId ? { agent: targetAgentId } : {}),
-      ...(opts.model ? { model: opts.model } : {}),
-    }, FORK_IMPORT_TIMEOUT_MS);
-    const newSessionId = String((doneEvent as { sessionId?: unknown }).sessionId || "");
-    const actualAgentId = String((doneEvent as { runtimeId?: unknown }).runtimeId || "");
-    if (targetAgentId && actualAgentId && actualAgentId !== targetAgentId) {
-      throw new Error(`Fork requested agent ${targetAgentId}, but the destination used ${actualAgentId}`);
-    }
-    const fidelity = String((doneEvent as { fidelity?: unknown }).fidelity || "seeded");
-    const seedPrompt = (doneEvent as { seedPrompt?: unknown }).seedPrompt;
-    const missingRaw = (doneEvent as { missing?: unknown }).missing;
-    const missing = Array.isArray(missingRaw) ? (missingRaw as Array<{ label?: string; detail?: string }>) : [];
-    if (!newSessionId) throw new Error("Fork import returned no session id");
-
-    // 4. Open the new session (already on the destination transport).
-    this.openSession(newSessionId);
-
-    // 5. Seed a cross-runtime fork's first turn.
-    if (typeof seedPrompt === "string" && seedPrompt.trim()) {
-      const cmid = clientMessageId();
-      this.store.addUserMessage(seedPrompt, cmid);
-      this.send({ kind: "prompt", sessionId: newSessionId, text: seedPrompt, clientMessageId: cmid });
-    }
-
-    // 6. Retire the source for a "move" — only now that the import has confirmed.
-    if (opts.retireSource) {
-      if (crossNode) {
-        try {
-          this.switchNode(sourceNodeId);
-          await this.waitForOnline();
-          this.send({ kind: "session.delete", sessionId: sourceSessionId });
-        } finally {
-          this.switchNode(destNodeId!);
-          await this.waitForOnline().catch(() => {});
-          this.openSession(newSessionId);
-        }
-      } else {
-        this.send({ kind: "session.delete", sessionId: sourceSessionId });
-      }
-    }
-
-    return { sessionId: newSessionId, fidelity, missing };
+    return this.sessionCoordinator.fork(sourceSessionId, opts);
   }
 
   refreshSessions(): void {
@@ -1459,7 +1400,7 @@ export class AppController {
     if (this.direct || !this.signedIn) return;
     try {
       const rows = await fetchAccountSessions(this.local);
-      const existing = this.store.getState().sessions;
+      const existing = this.store.getState().sessionIndex.sessions;
       const sessions = await Promise.all(rows.map(async (s) => {
         const sessionId = String(s.sessionId || s.id || "");
         const nodeId = String(s.nodeId || "");
@@ -1490,7 +1431,7 @@ export class AppController {
       // Re-add it from the durable correlation (offline, rebuildable), keeping any
       // name/branch we cached before teardown.
       const liveIds = new Set(live.map((s) => s.sessionId));
-      const previous = this.store.getState().sessions;
+      const previous = this.store.getState().sessionIndex.sessions;
       const ghosts = this.ephemeralCorrelations
         .filter((c) => !liveIds.has(c.sessionId) && !!this.local.keys()[c.nodeId])
         .map((c) => {
@@ -1530,7 +1471,7 @@ export class AppController {
       const payload = event as unknown as { sessions?: unknown };
       const incoming = Array.isArray(payload.sessions) ? payload.sessions as Array<Record<string, unknown>> : [];
       const currentIds = new Set(incoming.map((s) => String(s?.sessionId || s?.id || "")).filter(Boolean));
-      const others = this.store.getState().sessions.filter((s) => s.nodeId && s.nodeId !== currentNode && !currentIds.has(s.sessionId));
+      const others = this.store.getState().sessionIndex.sessions.filter((s) => s.nodeId && s.nodeId !== currentNode && !currentIds.has(s.sessionId));
       return { ...event, sessions: [...incoming.map((s) => ({ ...s, nodeId: s.nodeId || currentNode })), ...others] } as ServerEvent;
     }
     if (event.type === "session.created") {
@@ -1540,7 +1481,7 @@ export class AppController {
       const payload = event as unknown as { terminals?: unknown };
       const incoming = Array.isArray(payload.terminals) ? payload.terminals as Array<Record<string, unknown>> : [];
       const currentIds = new Set(incoming.map((t) => String(t?.termId || "")).filter(Boolean));
-      const others = this.store.getState().runTerminals.filter((t) => t.nodeId && t.nodeId !== currentNode && !currentIds.has(t.termId));
+      const others = this.store.getState().sessionIndex.runTerminals.filter((t) => t.nodeId && t.nodeId !== currentNode && !currentIds.has(t.termId));
       return { ...event, terminals: [...incoming.map((t) => ({ ...t, nodeId: t.nodeId || currentNode })), ...others] } as ServerEvent;
     }
     if (event.type === "terminal.created") {
@@ -1610,9 +1551,9 @@ export class AppController {
    *  unified list, so there is no transient-empty case to protect here. */
   private installSessionCachePersist(): void {
     if (typeof localStorage === "undefined") return;
-    let last = this.store.getState().sessions;
+    let last = this.store.getState().sessionIndex.sessions;
     this.store.subscribe(() => {
-      const sessions = this.store.getState().sessions;
+      const sessions = this.store.getState().sessionIndex.sessions;
       if (sessions === last) return;
       last = sessions;
       try {
@@ -1637,11 +1578,11 @@ export class AppController {
    *  `working:false` optimistically before history reconciles, which would risk
    *  firing a queued message into a background session that's actually mid-turn. */
   private installFollowupAutoDrain(): void {
-    let wasWorking = this.store.getState().working;
-    let lastActive = this.store.getState().activeSessionId;
+    let wasWorking = this.store.getState().activeSession.working;
+    let lastActive = this.store.getState().activeSession.activeSessionId;
     this.store.subscribe(() => {
-      const active = this.store.getState().activeSessionId;
-      const working = this.store.getState().working;
+      const active = this.store.getState().activeSession.activeSessionId;
+      const working = this.store.getState().activeSession.working;
       const settledNow = active != null && active === lastActive && wasWorking && !working;
       wasWorking = working;
       lastActive = active;
@@ -1699,7 +1640,7 @@ export class AppController {
     try {
       const cached = await this.transcriptCache.get(sessionId);
       // A slow disk read must not clobber a session the user already switched away from.
-      if (cached && this.store.getState().activeSessionId === sessionId) {
+      if (cached && this.store.getState().activeSession.activeSessionId === sessionId) {
         // Restore real attachment bytes before seeding, so the seeded transcript
         // shows them instead of the node's plain-text placeholder.
         this.store.restoreAttachments(cached.attachments);
@@ -1747,7 +1688,7 @@ export class AppController {
     // run before the requestHistory below so the session it opens is the one we
     // refresh. A cross-node selection was already opened just above.
     if (!openedAfterNodeSwitch) this.applyInitialRoute();
-    const sid = this.store.getState().activeSessionId;
+    const sid = this.store.getState().activeSession.activeSessionId;
     if (sid && !openedAfterNodeSwitch) {
       this.requestHistory(sid);
       this.retryStuckFollowups(sid);
@@ -1815,16 +1756,16 @@ export class AppController {
   /** Draft repo/branch/agent/model to thread into the next session.new. */
   private draftSessionFields(): Record<string, unknown> {
     const s = this.store.getState();
-    const model = s.currentModel ? { provider: (s.currentModel as any).provider, id: s.currentModel.id } : undefined;
+    const model = s.catalogs.currentModel ? { provider: (s.catalogs.currentModel as any).provider, id: s.catalogs.currentModel.id } : undefined;
     return {
-      repo: s.draftRepo || undefined,
+      repo: s.draft.repo || undefined,
       // Only meaningful alongside `repo` — a branch is only ever set together
       // with its repo (chooseRepoBranch) and reset when the repo changes
       // (chooseRepo), so this can never leak onto an unrelated repo/workspace.
-      branch: s.draftRepo ? s.draftBranch || undefined : undefined,
-      agent: s.selectedAgentId || undefined,
-      sandbox: s.draftSandbox || undefined,
-      acknowledgeReducedProtections: s.draftAcknowledgeReducedProtections || undefined,
+      branch: s.draft.repo ? s.draft.branch || undefined : undefined,
+      agent: s.catalogs.selectedAgentId || undefined,
+      sandbox: s.draft.sandbox || undefined,
+      acknowledgeReducedProtections: s.draft.acknowledgeReducedProtections || undefined,
       model,
     };
   }
@@ -1882,14 +1823,14 @@ export class AppController {
     // Pull the node's sandbox default so the new-session sandbox pill (and its
     // picker) can label "Node default (<tier>)" up front, before the user opens
     // Settings — the sandbox is chosen here, so its default should be visible here.
-    if (!this.store.getState().nodeSettings) this.getNodeSettings();
+    if (!this.store.getState().settings.nodeSettings) this.getNodeSettings();
     // Warm the repo picker in the background so it's ready — usually instantly —
     // by the time the user taps the repo pill, instead of a multi-second wait on
     // first open. Both listings are cached briefly on the node, so re-drafting
     // is cheap. If a repo is already remembered, prefetch its branches too so
     // the branch drill-in is ready as well.
     this.listRepos();
-    const repo = this.store.getState().draftRepo;
+    const repo = this.store.getState().draft.repo;
     if (repo) this.listBranches(repo);
   }
 
@@ -1922,12 +1863,12 @@ export class AppController {
   private maybeRestoreDraftAgent(event: { type?: string }): void {
     if (event.type !== "runtimes.list") return;
     const s = this.store.getState();
-    if (s.activeSessionId) return; // only a fresh draft, never a live session
+    if (s.activeSession.activeSessionId) return; // only a fresh draft, never a live session
     const wanted = this.local.lastChoice().agentId;
-    const target = wanted ? s.runtimes.find((r) => r.id === wanted) : undefined;
+    const target = wanted ? s.catalogs.runtimes.find((r) => r.id === wanted) : undefined;
     if (
       target &&
-      wanted !== s.selectedAgentId &&
+      wanted !== s.catalogs.selectedAgentId &&
       String((target as any).status || "available") === "available"
     ) {
       // Switching to the remembered agent runtime-selects it, and the resulting
@@ -1939,13 +1880,13 @@ export class AppController {
     // The draft's agent is already the one we'd pick (remembered == node default,
     // or nothing remembered). The connect-time burst's models.list carries no
     // runtime hint, so the node may have answered it for its global-active
-    // session on a *different* agent — leaving `state.models` tagged for the
+    // session on a *different* agent — leaving `state.catalogs.models` tagged for the
     // wrong runtime (or empty). That's the "no models on the new-session screen
     // until I send the first message" bug: only session.new ever re-listed for
     // the draft's real agent. Re-list explicitly for the selected runtime so its
     // models resolve up front. Guarded on a mismatch so a correct list isn't
     // needlessly refetched on every runtimes.list.
-    if (s.selectedAgentId && s.modelsRuntimeId !== s.selectedAgentId) this.listModels();
+    if (s.catalogs.selectedAgentId && s.catalogs.modelsRuntimeId !== s.catalogs.selectedAgentId) this.listModels();
   }
 
   /**
@@ -1960,8 +1901,10 @@ export class AppController {
     const trimmed = text.trim();
     const files = attachments && attachments.length ? attachments : undefined;
     if (!trimmed && !files) return;
-    const cmid = clientMessageId();
-    const active = this.store.getState().activeSessionId;
+    const prepared = this.sessionCoordinator.preparePrompt(trimmed, files);
+    if (prepared.type !== "prompt-prepared") return;
+    const cmid = prepared.clientMessageId;
+    const active = this.store.getState().activeSession.activeSessionId;
     // A cold-start placeholder is a persisted session intent, not a node
     // session id. Keep extra messages queued locally until its session.new
     // resolves instead of accidentally sending `prompt` with the placeholder.
@@ -2011,7 +1954,7 @@ export class AppController {
     }
     // No session yet: optimistically show the bubble, create a session, and
     // flush this prompt once session.history arrives for our requestId.
-    const rid = requestId();
+    const rid = prepared.requestId;
     // The node names the session (and a repo session's worktree branch) from
     // `title`; send the first message so the sidebar row and branch aren't blank.
     // Keep the exact frame so a post-reconnect retry re-sends it byte-identically.
@@ -2021,7 +1964,7 @@ export class AppController {
     // IS the launch. Persist a sidebar row, provision the machine, and use a
     // background relay connection to create and start the real session once the
     // node is online — no launch modal, and the main pane is immediately free.
-    const runner = this.store.getState().draftEphemeralConfig;
+    const runner = this.store.getState().draft.ephemeralConfig;
     if (runner) {
       const provisionalId = `starting-${rid}`;
       this.pendingPrompt.provisionalId = provisionalId;
@@ -2059,7 +2002,7 @@ export class AppController {
       task.logs.push(message);
       task.updatedAt = new Date().toISOString();
       void this.pendingLaunchStore.put(task);
-      if (this.store.getState().activeSessionId === provisionalId || this.pendingPrompt?.provisionalId === provisionalId) {
+      if (this.store.getState().activeSession.activeSessionId === provisionalId || this.pendingPrompt?.provisionalId === provisionalId) {
         this.store.pushSystemMessage(`Setup · ${message}`);
       }
     };
@@ -2090,7 +2033,7 @@ export class AppController {
       void this.pendingLaunchStore.put(task);
       if (this.pendingPrompt?.provisionalId === provisionalId) this.pendingPrompt = null;
       this.store.failPendingSession(provisionalId);
-      if (this.store.getState().activeSessionId === provisionalId) this.store.pushSystemMessage(`Setup · ${message}`);
+      if (this.store.getState().activeSession.activeSessionId === provisionalId) this.store.pushSystemMessage(`Setup · ${message}`);
       this.store.setError(`Couldn't start ${config.name}: ${(e as Error)?.message || e}`);
     }
   }
@@ -2116,7 +2059,7 @@ export class AppController {
       task.logs.push(message);
       task.updatedAt = new Date().toISOString();
       void this.pendingLaunchStore.put(task);
-      if (this.store.getState().activeSessionId === provisionalId) this.store.pushSystemMessage(`Setup · ${message}`);
+      if (this.store.getState().activeSession.activeSessionId === provisionalId) this.store.pushSystemMessage(`Setup · ${message}`);
     };
     log("Machine accepted. Waiting for its secure Bivy service to come online…");
     this.startBootProgress(nodeId, provisionalId, log);
@@ -2168,7 +2111,7 @@ export class AppController {
     await this.pendingLaunchStore.remove(provisionalId);
     if (this.pendingPrompt?.provisionalId === provisionalId) this.pendingPrompt = null;
     this.store.completePendingSession(provisionalId, sessionId, nodeId);
-    const wasOpen = this.store.getState().activeSessionId === sessionId;
+    const wasOpen = this.store.getState().activeSession.activeSessionId === sessionId;
     if (wasOpen) this.openSessionOnNode(sessionId, undefined, nodeId);
     // Keep the transport alive long enough to flush its sealed frames, then let
     // the normal account index/main connection own the now-real session.
@@ -2186,7 +2129,7 @@ export class AppController {
     task.updatedAt = new Date().toISOString();
     void this.pendingLaunchStore.put(task);
     this.store.failPendingSession(provisionalId);
-    if (this.store.getState().activeSessionId === provisionalId) this.store.pushSystemMessage(`Setup · Startup failed: ${message}`);
+    if (this.store.getState().activeSession.activeSessionId === provisionalId) this.store.pushSystemMessage(`Setup · Startup failed: ${message}`);
     this.store.setError(`Couldn't start ${task.config.name}: ${message}`);
   }
 
@@ -2282,7 +2225,7 @@ export class AppController {
     this.pendingLaunches.delete(id);
     await this.pendingLaunchStore.remove(id);
     this.store.dismissPendingSession(id);
-    if (this.store.getState().activeSessionId == null) this.newSession();
+    if (this.store.getState().activeSession.activeSessionId == null) this.newSession();
   }
 
   /**
@@ -2292,7 +2235,7 @@ export class AppController {
    * nothing to run the command against yet).
    */
   invokeAgentCommand(name: string, args: string): void {
-    const active = this.store.getState().activeSessionId;
+    const active = this.store.getState().activeSession.activeSessionId;
     if (!active) return;
     this.send({ kind: "session.command.invoke", sessionId: active, name, args });
   }
@@ -2304,7 +2247,7 @@ export class AppController {
    *  cached yet, so a prefetch/reopen paints the last list instantly and
    *  refreshes it in the background instead of flashing a spinner. */
   listRepos(): void {
-    if (this.store.getState().repos.length === 0) this.store.setReposLoading(true);
+    if (this.store.getState().catalogs.repos.length === 0) this.store.setReposLoading(true);
     if (!this.direct && this.signedIn && !this.local.cur) {
       void fetchHostedGithubRepositories(this.local)
         .then((repos) => this.store.apply({ type: "repos.list", repos, authed: true } as never))
@@ -2341,7 +2284,7 @@ export class AppController {
    *  actually changes (or is cleared), since a branch from a different repo is
    *  meaningless here. Use chooseRepoBranch to set an explicit branch. */
   chooseRepo(slug: string | null): void {
-    const changed = slug !== this.store.getState().draftRepo;
+    const changed = slug !== this.store.getState().draft.repo;
     this.store.setDraftRepo(slug);
     if (changed) this.store.clearBranches();
     this.local.setLastChoice({ repo: slug });
@@ -2362,7 +2305,7 @@ export class AppController {
    *  we don't already hold this repo's list, so a prefetch/reopen is instant. */
   listBranches(repo: string): void {
     const s = this.store.getState();
-    const haveThisRepo = s.branchesRepo === repo && s.branches.length > 0;
+    const haveThisRepo = s.catalogs.branchesRepo === repo && s.catalogs.branches.length > 0;
     if (!haveThisRepo) this.store.setBranchesLoading(true);
     this.send({ kind: "branches.list", repo });
   }
@@ -2372,14 +2315,14 @@ export class AppController {
   }
 
   /** Ask the node for a fresh memory/CPU/storage snapshot. The reply arrives as
-   *  a `node.stats` event and lands in `state.nodeStats`. Fire-and-forget; the
+   *  a `node.stats` event and lands in `state.settings.nodeStats`. Fire-and-forget; the
    *  stats panel polls this while it's open. */
   requestNodeStats(sessionId?: string): void {
     this.send({ kind: "node.stats", sessionId });
   }
 
   /** Ask the node for a fresh Machine capability inventory. The reply arrives
-   *  as a `capabilities` event and lands in `state.capabilities`. Fetched on
+   *  as a `capabilities` event and lands in `state.settings.capabilities`. Fetched on
    *  demand (panel open / explicit refresh) — capabilities change rarely,
    *  unlike live resource stats, so this is not polled. */
   requestCapabilities(): void {
@@ -2388,11 +2331,11 @@ export class AppController {
 
   listModels(): void {
     const s = this.store.getState();
-    const sessionId = s.activeSessionId ?? undefined;
+    const sessionId = s.activeSession.activeSessionId ?? undefined;
     // On a draft, hint the agent we're previewing so the node answers for THAT
     // runtime (and tags the reply for the per-runtime cache) even if its default
     // runtime hasn't flipped yet. A live session answers for itself — no hint.
-    const runtimeId = sessionId ? undefined : (s.selectedAgentId ?? undefined);
+    const runtimeId = sessionId ? undefined : (s.catalogs.selectedAgentId ?? undefined);
     this.send({ kind: "models.list", sessionId, runtimeId });
   }
 
@@ -2401,25 +2344,21 @@ export class AppController {
    *  instead of paying the runtime spin-up on the critical path. No-op once a
    *  session is live (its agent is fixed) or when no runtimes are known yet. */
   prefetchModels(): void {
-    if (this.store.getState().activeSessionId) return;
+    if (this.store.getState().activeSession.activeSessionId) return;
     const runtimeIds = this.store
       .getState()
-      .runtimes.filter((r) => String((r as any).status || "available") === "available")
+      .catalogs.runtimes.filter((r) => String((r as any).status || "available") === "available")
       .map((r) => r.id);
     if (runtimeIds.length) this.send({ kind: "models.prefetch", runtimeIds });
   }
 
   /** Pick a model. Live session → select now; draft → keep local for session.new. */
   chooseModel(model: ModelInfo): void {
-    this.store.setCurrentModelLocal(model);
-    this.store.setDraftModel({ provider: (model as any).provider, id: model.id });
-    this.local.setLastChoice({ modelProvider: (model as any).provider, modelId: model.id });
-    const sessionId = this.store.getState().activeSessionId;
-    if (sessionId) this.send({ kind: "model.select", provider: (model as any).provider, id: model.id, sessionId });
+    this.credentialsModelsCoordinator.selectModel(model, this.store.getState().activeSession.activeSessionId);
   }
 
   setThinkingLevel(level: string): void {
-    const sessionId = this.store.getState().activeSessionId ?? undefined;
+    const sessionId = this.store.getState().activeSession.activeSessionId ?? undefined;
     this.store.setThinkingLevel(level);
     this.send({ kind: "thinking.set_level", level, sessionId });
   }
@@ -2433,13 +2372,13 @@ export class AppController {
       return;
     }
     const state = this.store.getState();
-    const activeSessionId = state.activeSessionId;
+    const activeSessionId = state.activeSession.activeSessionId;
     if (activeSessionId) {
       // Agent handoff is a real cross-runtime fork, not a client-side summary in
       // a blank draft. The shared fork path carries normalized history, repo and
       // dirty files, creates the target runtime session, and opens it.
-      const sourceAgentId = state.activeRuntimeId
-        ?? state.sessions.find((session) => session.sessionId === activeSessionId)?.runtimeId;
+      const sourceAgentId = state.activeSession.activeRuntimeId
+        ?? state.sessionIndex.sessions.find((session) => session.sessionId === activeSessionId)?.runtimeId;
       this.pendingPrompt = null;
       this.pendingFollowups = [];
       void this.forkSession(activeSessionId, {
@@ -2466,45 +2405,22 @@ export class AppController {
     this.send({ kind: "runtime.install", id });
   }
 
-  // --- Settings: providers / OAuth ---------------------------------------
+  // --- Settings: providers, credentials and custom models -----------------
+  listProviders(): void { this.credentialsModelsCoordinator.listProviders(); }
+  getProviderAuth(provider: string): void { this.credentialsModelsCoordinator.getProviderAuth(provider); }
+  saveApiKey(provider: string, key: string): Promise<void> { return this.credentialsModelsCoordinator.saveApiKey(provider, key); }
+  removeProvider(provider: string): void { this.credentialsModelsCoordinator.removeProvider(provider); }
+  resetOauth(provider: string): void { this.credentialsModelsCoordinator.resetOauth(provider); }
+  startOauth(provider: string): void { this.credentialsModelsCoordinator.startOauth(provider); }
+  submitOauthCode(id: string, code: string): void { this.credentialsModelsCoordinator.submitOauthCode(id, code); }
+  listCredentialRecords(): void { this.credentialsModelsCoordinator.listCredentials(); }
 
-  listProviders(): void {
-    this.send({ kind: "providers.list" });
-  }
-  getProviderAuth(provider: string): void {
-    this.send({ kind: "provider.auth.get", provider });
-  }
-  /** Save an API key and resolve once the node acks it (or reject with its
-   *  error) instead of assuming success the moment it was sent. */
-  saveApiKey(provider: string, key: string): Promise<void> {
-    return this.awaitAck({ kind: "provider.apiKey", provider, key }).then(() => undefined);
-  }
-  removeProvider(provider: string): void {
-    this.send({ kind: "provider.remove", provider });
-  }
-  resetOauth(provider: string): void {
-    this.send({ kind: "provider.oauth.reset", provider });
-  }
-  startOauth(provider: string): void {
-    this.send({ kind: "provider.oauth.start", provider });
-  }
-  submitOauthCode(id: string, code: string): void {
-    this.send({ kind: "provider.oauth.code", id, code });
-  }
-
-  // --- Settings: multiple credentials per provider (labeled) --------------
-  /** Ask for every labeled credential; the node replies with `credentials.records`. */
-  listCredentialRecords(): void {
-    this.send({ kind: "credentials.list" });
-  }
   private credentialSyncInFlight: Promise<void> | null = null;
   /** Bidirectional API-key convergence between the PWA account vault and node. */
   private syncAccountCredentialsWithNode(): Promise<void> {
-    if (this.direct || this.store.getState().status !== "online") return Promise.resolve();
+    if (this.direct || this.store.getState().connection.status !== "online") return Promise.resolve();
     if (this.credentialSyncInFlight) return this.credentialSyncInFlight;
     this.credentialSyncInFlight = (async () => {
-      // Pull first so an existing node seeds a new device. Then push the merged
-      // account set so a node-less-created key reaches the newly enrolled node.
       const event = await this.awaitAck({ kind: "credentials.account.export" });
       const incoming = Array.isArray(event.entries)
         ? event.entries.filter((entry): entry is { provider: string; key: string } => Boolean(entry)
@@ -2513,80 +2429,26 @@ export class AppController {
         : [];
       await this.ephemeralKeys.importModelKeys(incoming);
       const accountKeys = (await this.ephemeralKeys.modelKeyEntries()).filter((entry) => entry.scope === "account");
-      for (const { provider, key } of accountKeys) {
-        await this.awaitAck({ kind: "credential.set", provider, label: "default", key });
-      }
+      for (const { provider, key } of accountKeys) await this.awaitAck({ kind: "credential.set", provider, label: "default", key });
       this.listCredentialRecords();
       this.listProviders();
-    })().catch(() => {
-      // Best effort during reconnect; the next reconnect/settings open retries.
-    }).finally(() => { this.credentialSyncInFlight = null; });
+    })().catch(() => {}).finally(() => { this.credentialSyncInFlight = null; });
     return this.credentialSyncInFlight;
   }
-  /** Add/replace a labeled credential — an API key, or an op://…/env://… reference. */
-  setCredential(provider: string, label: string, value: { key?: string; ref?: string }): Promise<void> {
-    return this.awaitAck({ kind: "credential.set", provider, label, ...value }).then(() => undefined);
-  }
-  /** Forget one labeled credential (`provider:label`). */
-  removeCredential(provider: string, label: string): void {
-    this.send({ kind: "credential.remove", provider, label });
-  }
-  /** Toggle whether a credential syncs across your nodes or stays on this one. */
-  setCredentialSync(provider: string, label: string, sync: "account" | "node"): void {
-    this.send({ kind: "credential.sync.set", provider, label, sync });
-  }
-  /** "Test connection": a bounded, non-secret liveness probe for one credential
-   *  (see credential.test in server.ts). Resolves with the redacted result even
-   *  when the probe itself reports failure — only a transport-level problem
-   *  rejects. Direct/self-host mode has no handler for this command yet (same
-   *  gap as the rest of the labeled-credentials surface), so it always reports
-   *  "not supported" there rather than hanging. */
-  async testCredential(provider: string, label: string): Promise<{ ok: boolean; at: number; reason?: string }> {
-    if (this.direct) return { ok: false, at: Date.now(), reason: "not_supported" };
-    const event = (await this.awaitAck({ kind: "credential.test", provider, label }, 15000)) as { ok?: boolean; at?: number; reason?: string };
-    return { ok: Boolean(event.ok), at: Number(event.at) || Date.now(), ...(event.reason ? { reason: event.reason } : {}) };
-  }
-  /** Ask for the selection presets; the node replies with `credentials.presets`. */
-  getCredentialPresets(): void {
-    this.send({ kind: "credentials.presets.get" });
-  }
-  /** Choose which preset selection resolves against (empty clears it). */
-  setActivePreset(active: string): void {
-    this.send({ kind: "credentials.presets.setActive", active });
-  }
-  /** Point a provider at a label within a preset (empty label clears the mapping). */
-  setPresetMapping(preset: string, provider: string, label: string): void {
-    this.send({ kind: "credentials.presets.setMapping", preset, provider, label });
-  }
 
-  // --- Settings: local / custom model endpoints ---------------------------
-
-  listLocalModels(): void {
-    this.send({ kind: "models.custom.list" });
-  }
-  listLocalModelPresets(): void {
-    this.send({ kind: "models.custom.presets" });
-  }
-  /** Explicitly probe only the node's fixed localhost allowlist. */
-  async discoverLocalModels(): Promise<LocalModelDiscoveryResult> {
-    return await this.awaitAck({ kind: "models.custom.discover" }, 10_000) as unknown as LocalModelDiscoveryResult;
-  }
-  /** Verify one user-entered endpoint and return its normalized catalog health. */
-  async verifyLocalModel(baseUrl: string, apiKey?: string): Promise<LocalModelEndpointResult> {
-    const event = await this.awaitAck({ kind: "models.custom.verify", baseUrl, ...(apiKey ? { apiKey } : {}) }, 10_000) as any;
-    return event.result as LocalModelEndpointResult;
-  }
-  /** Save (create or update) a local/custom provider. `spec` matches the node's
-   *  save shape: { providerId, name?, baseUrl, api?, apiKey?, compat?, models[] }.
-   *  Resolves once the node acks the save (or rejects with its error) instead
-   *  of assuming success the moment it was sent. */
-  async saveLocalModel(spec: Record<string, unknown>): Promise<string> {
-    const event = await this.awaitAck({ kind: "models.custom.save", spec }) as { provider?: unknown };
-    return String(event.provider ?? spec.providerId ?? "local");
-  }
-  removeLocalModel(id: string): void {
-    this.send({ kind: "models.custom.remove", id });
-  }
+  setCredential(provider: string, label: string, value: { key?: string; ref?: string }): Promise<void> { return this.credentialsModelsCoordinator.setCredential(provider, label, value); }
+  removeCredential(provider: string, label: string): void { this.credentialsModelsCoordinator.removeCredential(provider, label); }
+  setCredentialSync(provider: string, label: string, sync: "account" | "node"): void { this.credentialsModelsCoordinator.setCredentialSync(provider, label, sync); }
+  testCredential(provider: string, label: string): Promise<{ ok: boolean; at: number; reason?: string }> { return this.credentialsModelsCoordinator.testCredential(provider, label); }
+  getCredentialPresets(): void { this.credentialsModelsCoordinator.getPresets(); }
+  setActivePreset(active: string): void { this.credentialsModelsCoordinator.setActivePreset(active); }
+  setPresetMapping(preset: string, provider: string, label: string): void { this.credentialsModelsCoordinator.setPresetMapping(preset, provider, label); }
+  listLocalModels(): void { this.credentialsModelsCoordinator.listLocalModels(); }
+  listLocalModelPresets(): void { this.credentialsModelsCoordinator.listLocalModelPresets(); }
+  discoverLocalModels(): Promise<LocalModelDiscoveryResult> { return this.credentialsModelsCoordinator.discoverLocalModels(); }
+  verifyLocalModel(baseUrl: string, apiKey?: string): Promise<LocalModelEndpointResult> { return this.credentialsModelsCoordinator.verifyLocalModel(baseUrl, apiKey); }
+  saveLocalModel(spec: Record<string, unknown>): Promise<string> { return this.credentialsModelsCoordinator.saveLocalModel(spec); }
+  removeLocalModel(id: string): void { this.credentialsModelsCoordinator.removeLocalModel(id); }
 
   // --- Settings: rulesets (run-orchestration policy) ----------------------
 
@@ -2725,35 +2587,12 @@ export class AppController {
 
   // --- Settings: account / billing / push --------------------------------
 
-  fetchMe(): Promise<AccountMe> {
-    return fetchMe(this.local);
-  }
-  /** Connected GitHub App info (name + mention handle) for the settings UI. */
-  fetchGithubApp(): ReturnType<typeof fetchGithubApp> {
-    return fetchGithubApp(this.local);
-  }
-  /** Recent incoming work items (the GitHub queue), newest first. */
-  fetchGithubQueue(limit = 30): ReturnType<typeof fetchGithubQueue> {
-    return fetchGithubQueue(this.local, limit);
-  }
-  /** Recent automation runs (account-wide), newest first. The Inbox reads these
-   *  to surface runs that need attention or failed their final attempt. */
-  fetchAutomationRuns(limit = 50): ReturnType<typeof fetchAutomationRuns> {
-    return fetchAutomationRuns(this.local, limit);
-  }
-  /** Request cancellation, then re-read both durable Run projections. The UI
-   *  must render these records rather than treating an accepted request as a
-   *  terminal result. */
-  async cancelAutomationRun(id: string): Promise<{
-    runs: Awaited<ReturnType<typeof fetchAutomationRuns>>;
-    queue: Awaited<ReturnType<typeof fetchGithubQueue>>;
-  }> {
-    await apiCancelAutomationRun(this.local, id);
-    const [runs, queue] = await Promise.all([
-      fetchAutomationRuns(this.local, 50),
-      fetchGithubQueue(this.local, 30),
-    ]);
-    return { runs, queue };
+  fetchMe(): Promise<AccountMe> { return this.accountCoordinator.fetchMe(); }
+  fetchGithubApp(): ReturnType<typeof fetchGithubApp> { return this.accountCoordinator.fetchGithubApp() as ReturnType<typeof fetchGithubApp>; }
+  fetchGithubQueue(limit = 30): ReturnType<typeof fetchGithubQueue> { return this.accountCoordinator.fetchGithubQueue(limit); }
+  fetchAutomationRuns(limit = 50): ReturnType<typeof fetchAutomationRuns> { return this.accountCoordinator.fetchAutomationRuns(limit); }
+  cancelAutomationRun(id: string): Promise<{ runs: Awaited<ReturnType<typeof fetchAutomationRuns>>; queue: Awaited<ReturnType<typeof fetchGithubQueue>> }> {
+    return this.accountCoordinator.cancelAutomationRun(id);
   }
   /** Set (empty string clears) the default node for untagged GitHub work. Without
    *  an appId it covers every connected app — it's an account-level preference. */
@@ -2780,44 +2619,15 @@ export class AppController {
   clearWorkQueue(): Promise<number> {
     return clearWorkQueue(this.local);
   }
-  /**
-   * Disconnect a GitHub App: drop the control-plane hook AND wipe the node's key.
-   * `appId` scopes it to one of the account's apps; without one every app goes,
-   * which is the only option for a hook old enough to have no App ID recorded.
-   */
-  async githubAppDisconnect(appId?: string, hookId?: string): Promise<void> {
-    // Tell the node to clear its local key/config (over the active transport)…
-    this.send({ kind: "github.app.disconnect", requestId: requestId(), appId: appId || undefined, hookId: hookId || undefined });
-    // …and drop the account's hooks on the control plane. Errors propagate so the
-    // UI can tell the user it didn't take (e.g. control plane mid-deploy). Passing
-    // hookId lets a stale app with no App ID be removed on its own.
-    await disconnectGithubApp(this.local, { appId, hookId });
-  }
-  async removeNode(nodeId: string): Promise<void> {
-    await removeAccountNode(this.local, nodeId);
-    await this.refreshNodes();
-  }
-  async startCheckout(): Promise<void> {
-    location.assign(await billingCheckout(this.local));
-  }
-  async openBillingPortal(): Promise<void> {
-    location.assign(await billingPortal(this.local));
-  }
-  enablePush(): Promise<string> {
-    return enablePushNotifications(this.local);
-  }
-  disablePush(): Promise<string> {
-    return disablePushNotifications(this.local);
-  }
-  pushStatus(): ReturnType<typeof getPushSubscriptionStatus> {
-    return getPushSubscriptionStatus();
-  }
-  getNotificationPreferences(): Promise<NotificationPreferences> {
-    return getNotificationPreferences(this.local);
-  }
-  setNotificationPreferences(patch: Partial<NotificationPreferences>): Promise<NotificationPreferences> {
-    return setNotificationPreferences(this.local, patch);
-  }
+  githubAppDisconnect(appId?: string, hookId?: string): Promise<void> { return this.accountCoordinator.disconnectGithubApp(appId, hookId); }
+  removeNode(nodeId: string): Promise<void> { return this.accountCoordinator.removeNode(nodeId); }
+  startCheckout(): Promise<void> { return this.accountCoordinator.startCheckout(); }
+  openBillingPortal(): Promise<void> { return this.accountCoordinator.openBillingPortal(); }
+  enablePush(): Promise<string> { return this.accountCoordinator.enablePush(); }
+  disablePush(): Promise<string> { return this.accountCoordinator.disablePush(); }
+  pushStatus(): ReturnType<typeof getPushSubscriptionStatus> { return this.accountCoordinator.pushStatus(); }
+  getNotificationPreferences(): Promise<NotificationPreferences> { return this.accountCoordinator.getNotificationPreferences(); }
+  setNotificationPreferences(patch: Partial<NotificationPreferences>): Promise<NotificationPreferences> { return this.accountCoordinator.setNotificationPreferences(patch); }
 
   // --- Ephemeral machines ------------------------------------------------
 
@@ -2896,25 +2706,10 @@ export class AppController {
   }
   /** The provider's default ephemeral runner (account config), creating one if it
    *  has none yet — so a freshly-connected provider is immediately pickable. */
-  private async ensureDefaultRunner(providerId: string): Promise<EphemeralNodeConfig | null> {
-    try {
-      const configs = await this.listEphemeralConfigs();
-      const existing = configs.find((c) => c.provider === providerId);
-      if (existing) return existing;
-      const adapter = ephemeralAdapter(providerId);
-      const name = ephemeralCatalogEntry(providerId)?.name ?? providerId;
-      return await this.createEphemeralConfig({
-        provider: providerId,
-        name: `${name} runner`,
-        region: adapter?.defaultRegion ?? null,
-        size: adapter?.defaultSize ?? null,
-        // Suspend-to-zero providers keep the machine; destroy-lane providers get
-        // a 1h TTL + teardown-on-finish so a forgotten machine can't bill on.
-        ttlMinutes: adapter?.suspendsWhenIdle ? null : 60,
-        teardownOnAgentFinish: !adapter?.suspendsWhenIdle,
-      });
-    } catch { /* best effort — the user can still create one in Settings */ return null; }
+  private ensureDefaultRunner(providerId: string): Promise<EphemeralNodeConfig | null> {
+    return this.ephemeralCoordinator.ensureDefaultRunner(providerId);
   }
+
   removeEphemeralToken(id: string): Promise<void> {
     return this.ephemeralKeys.remove(id);
   }
@@ -3041,7 +2836,7 @@ export class AppController {
     if (!entries.length) return;
     // Push only while the transport is still live on this same node — an async
     // hop above could have switched it out from under us.
-    if (this.store.getState().status !== "online" || this.local.cur !== nodeId) {
+    if (this.store.getState().connection.status !== "online" || this.local.cur !== nodeId) {
       this.seededEphemeralNodes.delete(nodeId); // let a later online retry
       return;
     }
@@ -3084,14 +2879,14 @@ export class AppController {
       const st = this.store.getState();
       // Bail if we've moved on, a login is already in flight, the prompt is
       // already up, or creds have since landed.
-      if (st.status !== "online" || this.local.cur !== nodeId) return;
-      if (st.needsModelAuth || st.oauth) return;
-      if (st.providers.some((p) => p.configured)) return;
+      if (st.connection.status !== "online" || this.local.cur !== nodeId) return;
+      if (st.presentation.needsModelAuth || st.presentation.oauth) return;
+      if (st.catalogs.providers.some((p) => p.configured)) return;
       // Prefer an OAuth-capable provider (Anthropic first — subscription login
       // is the whole point here), falling back to anthropic by id.
       const provider =
-        st.providers.find((p) => p.oauth && p.id === "anthropic")?.id ??
-        st.providers.find((p) => p.oauth)?.id ??
+        st.catalogs.providers.find((p) => p.oauth && p.id === "anthropic")?.id ??
+        st.catalogs.providers.find((p) => p.oauth)?.id ??
         "anthropic";
       this.store.setNeedsModelAuth({ nodeId, provider });
     }, FIRST_RUN_MODEL_AUTH_GRACE_MS);
@@ -3140,80 +2935,13 @@ export class AppController {
   }
 
   listEphemeralSizes(providerId: string, region?: string): Promise<ProviderSize[]> {
-    return listEphemeralSizes(providerId, { exec: cloudExec(this.local), keys: this.ephemeralKeys }, region);
+    return this.ephemeralCoordinator.listSizes(providerId, region);
   }
-  async launchEphemeral(opts: LaunchOpts): Promise<EphemeralMachine> {
-    if (!this.signedIn) throw new Error("Sign in to launch an ephemeral machine.");
-    // The repo a freshly-booted machine pre-clones is the new-session composer's
-    // repo selection, not a per-machine setting — so a configured machine works
-    // on whatever repo the draft targets. An explicit opts.repo (e.g. a queue
-    // caller) still wins.
-    const repo = opts.repo ?? (this.store.getState().draftRepo || undefined);
-    // A first-run ephemeral node has no native GitHub login to inherit. Seed the
-    // device-local GitHub token during bootstrap so its very first repo picker,
-    // clone, push, and PR work instead of failing after the machine boots.
-    const githubToken = opts.githubToken ?? await this.githubTaskToken.get();
-    const machine = await launchEphemeralMachine({ ...opts, repo, githubToken: githubToken || undefined, debugKeepMachine: EPHEMERAL_KEEP_FAILED_MACHINES }, {
-      store: this.local,
-      exec: cloudExec(this.local),
-      keys: this.ephemeralKeys,
-      machines: this.ephemeralMachines,
-    });
-    void this.refreshNodes();
-    return machine;
-  }
-  async destroyEphemeral(machine: EphemeralMachine): Promise<void> {
-    await destroyEphemeralMachine(machine, {
-      store: this.local,
-      exec: cloudExec(this.local),
-      keys: this.ephemeralKeys,
-      machines: this.ephemeralMachines,
-    });
-    void this.refreshNodes();
-  }
+  launchEphemeral(opts: LaunchOpts): Promise<EphemeralMachine> { return this.ephemeralCoordinator.launch(opts); }
+  destroyEphemeral(machine: EphemeralMachine): Promise<void> { return this.ephemeralCoordinator.destroy(machine); }
+  wakeEphemeral(machine: EphemeralMachine): Promise<void> { return this.ephemeralCoordinator.wake(machine); }
+  resumeAndConnectNode(nodeId: string, timeoutMs = 90_000): Promise<void> { return this.ephemeralCoordinator.resumeAndConnect(nodeId, timeoutMs); }
 
-  /** Wake a suspended machine (Fly Sprites) so it rejoins the relay. No-op for
-   *  providers whose machines don't suspend. */
-  async wakeEphemeral(machine: EphemeralMachine): Promise<void> {
-    await wakeEphemeralMachine(machine, { exec: cloudExec(this.local), keys: this.ephemeralKeys });
-    void this.refreshNodes();
-  }
-
-  /**
-   * Open a node that may be a suspended, suspend-to-zero ephemeral machine (Fly
-   * Sprites): wake it first if needed — a suspended machine is off the relay, so
-   * plain `switchNode` would sit at "connecting" forever — then connect and wait
-   * for it to come online. For an already-online node this is just a connect.
-   * This is the "reopen the session to resume it" path behind the node switcher.
-   */
-  async resumeAndConnectNode(nodeId: string, timeoutMs = 90_000): Promise<void> {
-    try {
-      // The launching device holds the machine record locally; a second account
-      // device doesn't, so fall back to the non-secret machine identity carried
-      // on the account node registry entry (cross-device resume — Gap A in
-      // docs/ephemeral-sessions.md). Reconstructing it lets this device wake a
-      // suspended node instead of hanging while connecting to it off-relay.
-      const machine =
-        (await this.ephemeralMachines.list().catch(() => [])).find((m) => m.nodeId === nodeId) ??
-        ephemeralMachineFromNode(this.store.getState().nodes.find((n) => n.id === nodeId) ?? { id: nodeId });
-      if (machine && ephemeralProviderSuspendsWhenIdle(machine.provider)) {
-        await this.wakeEphemeral(machine);
-      }
-      await this.connectToNode(nodeId, timeoutMs);
-    } catch (e) {
-      // Surface a wake/connect failure (bad token, provider hiccup, slow resume)
-      // to the error toast rather than leaving the UI silently at "connecting".
-      this.store.setError(e instanceof Error ? e.message : String(e));
-    }
-  }
-
-  /**
-   * Rebuild-resume (Gap B): re-provision a torn-down destroy-lane session onto a
-   * NEW machine and restore it from its control-plane snapshot. Reuses the old
-   * node id + room key (this device holds it) so the new machine can decrypt the
-   * snapshot, and the old session id so its daemon knows what to restore. The
-   * machine's shape comes from its device-local record (or the node registry).
-   */
   /** Base control-plane URL + bearer for the account-authenticated (`requireUser`)
    *  session-correlation endpoints. */
   private correlationApi() {
@@ -3264,71 +2992,10 @@ export class AppController {
     }
   }
 
-  async reprovisionEphemeral(nodeId: string, sessionId: string): Promise<void> {
-    try {
-      const roomKeyB64 = this.local.keys()[nodeId];
-      if (!roomKeyB64) throw new Error("This device no longer holds this session's key, so it can't rebuild it.");
-      // Prefer the device-local record; fall back to the registry node; finally,
-      // for a torn-down machine (record + node both gone) fall back to the durable
-      // server-side correlation (Gap 1) matched by node or session.
-      const corr = this.ephemeralCorrelations.find((c) => c.nodeId === nodeId || c.sessionId === sessionId);
-      const machine =
-        (await this.ephemeralMachines.list().catch(() => [])).find((m) => m.nodeId === nodeId) ??
-        ephemeralMachineFromNode(this.store.getState().nodes.find((n) => n.id === nodeId) ?? { id: nodeId }) ??
-        (corr ? ephemeralMachineFromCorrelation(corr) : null);
-      if (!machine) throw new Error("No record of the machine to rebuild — re-launch it from Ephemeral settings.");
-      if (ephemeralProviderSuspendsWhenIdle(machine.provider)) {
-        // A suspend provider is never destroyed — just wake it.
-        await this.resumeAndConnectNode(nodeId);
-        return;
-      }
-      await this.launchEphemeral({
-        provider: machine.provider,
-        region: machine.region || undefined,
-        ttlMinutes: machine.ttlMinutes,
-        repo: machine.repo,
-        setupId: machine.setupId,
-        teardownOnAgentFinish: machine.teardownOnAgentFinish,
-        reuseNodeId: nodeId,
-        reuseRoomKeyB64: roomKeyB64,
-        restoreSessionId: sessionId,
-      });
-      await this.connectToNode(nodeId, 120_000);
-    } catch (e) {
-      this.store.setError(e instanceof Error ? e.message : String(e));
-    }
+  reprovisionEphemeral(nodeId: string, sessionId: string): Promise<void> {
+    return this.ephemeralCoordinator.reprovision(nodeId, sessionId);
   }
-
-  /**
-   * True when the current node is an ephemeral machine this device can bring back
-   * with a send, so it should auto-resume rather than being blocked (drives both
-   * `shouldAutoResume` and the composer's enabled state). Two cases, both requiring
-   * that we still hold the node's room key:
-   *  - a suspended/offline enrolled node (Sprite/E2B) — wake it; or
-   *  - a torn-down destroy-lane node that dropped from the registry but has a
-   *    durable session↔machine correlation (Gap 1) — rebuild it.
-   */
-  isCurrentNodeResumable(): boolean {
-    if (this.direct) return false;
-    const nodeId = this.local.cur;
-    if (!nodeId) return false;
-    let hasKey = false;
-    try {
-      hasKey = !!this.local.keys()[nodeId];
-    } catch {
-      return false;
-    }
-    if (!hasKey) return false;
-    const node = this.store.getState().nodes.find((n) => n.id === nodeId);
-    // Enrolled but offline → resumable ONLY when it's actually an ephemeral machine
-    // we can wake. A persistent node that's merely offline is NOT resumable from this
-    // device: it reconnects on its own when its daemon rejoins the relay, and sweeping
-    // it into the ephemeral wake/rebuild path throws a misleading "no record of the
-    // machine to rebuild" error (reprovisionEphemeral). Absent from the registry →
-    // resumable only if a durable correlation lets us rebuild it.
-    if (node) return !node.online && isEphemeralNode(node);
-    return this.ephemeralCorrelations.some((c) => c.nodeId === nodeId);
-  }
+  isCurrentNodeResumable(): boolean { return this.ephemeralCoordinator.isCurrentNodeResumable(); }
   private shouldAutoResume(): boolean {
     return this.isCurrentNodeResumable() && !this.resumingNode.has(this.local.cur);
   }
@@ -3432,16 +3099,16 @@ export class AppController {
   }
   /** Account-level ephemeral node configs (shared across the account's devices). */
   listEphemeralConfigs(): Promise<EphemeralNodeConfig[]> {
-    return fetchEphemeralConfigs(this.local);
+    return this.ephemeralCoordinator.listConfigs();
   }
   createEphemeralConfig(input: EphemeralConfigInput): Promise<EphemeralNodeConfig> {
-    return apiCreateEphemeralConfig(this.local, input);
+    return this.ephemeralCoordinator.createConfig(input);
   }
   updateEphemeralConfig(id: string, patch: Partial<EphemeralConfigInput>): Promise<EphemeralNodeConfig> {
-    return apiUpdateEphemeralConfig(this.local, id, patch);
+    return this.ephemeralCoordinator.updateConfig(id, patch);
   }
   removeEphemeralConfig(id: string): Promise<void> {
-    return apiDeleteEphemeralConfig(this.local, id);
+    return this.ephemeralCoordinator.removeConfig(id);
   }
   /** The account's default queue routing (primary runner + optional fallback). */
   getQueueRouting(): Promise<QueueRouting> {
@@ -3558,7 +3225,7 @@ export class AppController {
    */
   private retryPendingSessionNew(): void {
     if (!this.pendingPrompt) return;
-    if (this.store.getState().activeSessionId) return;
+    if (this.store.getState().activeSession.activeSessionId) return;
     this.send(this.pendingPrompt.frame);
   }
 
@@ -3572,7 +3239,7 @@ export class AppController {
     // the very first message (and the naming it triggers) into the wrong
     // session while this one was permanently stranded on its placeholder name.
     if (event.requestId !== this.pendingPrompt.requestId) return;
-    const sessionId = event.sessionId || this.store.getState().activeSessionId;
+    const sessionId = event.sessionId || this.store.getState().activeSession.activeSessionId;
     if (!sessionId) return;
     // The draft just became a real session — swap /sessions/new for its id so the
     // URL is copyable. Replace (not push) so Back doesn't land on an empty draft.
@@ -3595,7 +3262,7 @@ export class AppController {
   }
 
   abort(): void {
-    const active = this.store.getState().activeSessionId;
+    const active = this.store.getState().activeSession.activeSessionId;
     if (active) this.send({ kind: "abort", sessionId: active });
   }
 
@@ -3623,12 +3290,12 @@ export class AppController {
 
   /** The node that owns a session (SessionSummary.nodeId), when known. */
   private resolveSessionNodeId(sessionId: string): string | undefined {
-    return this.store.getState().sessions.find((s) => s.sessionId === sessionId)?.nodeId;
+    return this.store.getState().sessionIndex.sessions.find((s) => s.sessionId === sessionId)?.nodeId;
   }
 
   /** The routing label a node serves, from its enrolled name (`bivy/<name>`). */
   private resolveNodeLabel(nodeId: string): string | undefined {
-    const node = this.store.getState().nodes.find((n) => n.id === nodeId);
+    const node = this.store.getState().connection.nodes.find((n) => n.id === nodeId);
     return node?.name ? `bivy/${node.name}` : undefined;
   }
 
@@ -3643,7 +3310,7 @@ export class AppController {
     // scheduled for later (status "scheduled") is on its own timer and isn't
     // blocking, so it never forces a send into the queue.
     const waiting = this.store.getFollowups(sessionId).filter((f) => f.status === "queued").length;
-    return mustQueueFollowup(waiting, this.store.getState().working);
+    return mustQueueFollowup(waiting, this.store.getState().activeSession.working);
   }
 
   /**
@@ -3687,48 +3354,9 @@ export class AppController {
     }
   }
 
-  /** Start a durable Run from the message currently in the composer. A draft
-   * creates a fresh Session; an active Session is referenced as execution
-   * context. The message is the Run objective, not a permanent Session mode. */
-  async startRun(
-    instruction: string,
-    options: { approvalMode: "risky" | "autonomous"; maxAttempts: number },
-  ): Promise<{ runId?: string; error?: string }> {
-    const text = instruction.trim();
-    if (!text) return { error: "Describe the task this Run should complete." };
-    if (!this.accountMode()) return { error: "Sign in to start a Run." };
-
-    const state = this.store.getState();
-    const sessionId = state.activeSessionId ?? undefined;
-    const active = sessionId ? state.sessions.find((session) => session.sessionId === sessionId) : undefined;
-    const nodeId = sessionId ? this.resolveSessionNodeId(sessionId) : state.currentNodeId ?? undefined;
-    if (!nodeId) return { error: sessionId ? "This Session has no owning Machine." : "Choose a Machine before starting a Run." };
-    const roomKeyB64 = this.local.keys()[nodeId];
-    if (!roomKeyB64) return { error: "This Machine isn't paired on this device—open it first so the instruction can be encrypted." };
-    const label = this.resolveNodeLabel(nodeId);
-    if (!label) return { error: "This Machine has no routing name. Reconnect it before starting a Run." };
-
-    try {
-      const roomKey = await importRoomKey(unb64url(roomKeyB64));
-      const encrypted = await seal(roomKey, text);
-      const run = await createOneOffRun(this.local, {
-        title: (text.split(/\r?\n/, 1)[0] || "Run").slice(0, 120),
-        body: `${TEMPLATE_PREFIX}:${nodeId}:${encrypted}`,
-        label,
-        repo: sessionId ? undefined : state.draftRepo ?? undefined,
-        runtimeId: sessionId ? undefined : state.selectedAgentId ?? undefined,
-        model: sessionId ? undefined : state.currentModel?.id,
-        approvalMode: options.approvalMode,
-        sandbox: active?.sandbox ?? (!sessionId ? state.draftSandbox ?? state.nodeSettings?.defaultSandbox : undefined),
-        maxAttempts: options.maxAttempts,
-        targetKind: sessionId ? "existing_session" : "new_session",
-        targetSessionId: sessionId,
-      });
-      this.recordProductMilestone("run_accepted");
-      return { runId: run.id };
-    } catch (error) {
-      return { error: error instanceof Error ? error.message : "Could not start this Run." };
-    }
+  /** Start a durable account Run; validation, encryption and routing live in the account coordinator. */
+  startRun(instruction: string, options: { approvalMode: "risky" | "autonomous"; maxAttempts: number }): Promise<{ runId?: string; error?: string }> {
+    return this.accountCoordinator.startRun(instruction, options);
   }
 
   /** Drop the control-plane backstop for a follow-up (user cancelled it, or it
@@ -3765,7 +3393,7 @@ export class AppController {
     const nodeId =
       target === "existing_session"
         ? (sessionId ? this.resolveSessionNodeId(sessionId) : undefined)
-        : this.store.getState().currentNodeId;
+        : this.store.getState().connection.currentNodeId;
     if (!nodeId) return "No machine selected for this message.";
     const roomKeyB64 = this.local.keys()[nodeId];
     if (!roomKeyB64) return "This machine isn't paired on this device — open it first so the message can be encrypted.";
@@ -3780,7 +3408,7 @@ export class AppController {
         nodeLabel: this.resolveNodeLabel(nodeId),
         targetKind: target,
         targetSessionId: target === "existing_session" ? sessionId ?? undefined : undefined,
-        repo: target === "new_session" ? this.store.getState().draftRepo ?? undefined : undefined,
+        repo: target === "new_session" ? this.store.getState().draft.repo ?? undefined : undefined,
         message: true,
         enabled: true,
       });
@@ -3833,7 +3461,7 @@ export class AppController {
       return; // offline / control plane unreachable — leave rows in place
     }
     const pending = new Set(all.filter((a) => a.enabled && a.nextRunAt != null).map((a) => a.id));
-    for (const sessionId of Object.keys(this.store.getState().followupsBySession)) {
+    for (const sessionId of Object.keys(this.store.getState().sessionIndex.followupsBySession)) {
       this.store.pruneScheduledFollowups(sessionId, pending);
     }
   }
@@ -3850,7 +3478,7 @@ export class AppController {
    *  capability check itself. */
   supportsSteering(): boolean {
     const s = this.store.getState();
-    const runtime = s.runtimes.find((r) => r.id === s.selectedAgentId);
+    const runtime = s.catalogs.runtimes.find((r) => r.id === s.catalogs.selectedAgentId);
     return runtimeSupportsSteering(runtime?.capabilities as { streamingBehaviors?: unknown } | undefined);
   }
 
@@ -3904,7 +3532,7 @@ export class AppController {
     const item = this.store.getFollowups(sessionId).find((f) => f.id === id);
     if (!item || item.status !== "queued") return;
     this.store.reorderFollowup(sessionId, id, 0);
-    if (!this.store.getState().working) {
+    if (!this.store.getState().activeSession.working) {
       this.drainFollowups(sessionId);
       return;
     }
@@ -3925,8 +3553,8 @@ export class AppController {
     const trimmed = text.trim();
     const files = attachments && attachments.length ? attachments : undefined;
     if (!trimmed && !files) return false;
-    const active = this.store.getState().activeSessionId;
-    if (!active || !this.store.getState().working || !this.supportsSteering()) return false;
+    const active = this.store.getState().activeSession.activeSessionId;
+    if (!active || !this.store.getState().activeSession.working || !this.supportsSteering()) return false;
     const cmid = clientMessageId();
     this.store.addUserMessage(trimmed, cmid, files);
     this.send({ kind: "prompt", sessionId: active, text: trimmed, clientMessageId: cmid, attachments: files, streamingBehavior: "steer" });
@@ -3938,8 +3566,8 @@ export class AppController {
    *  enqueue and this check. No-op while busy or with nothing queued — the
    *  queue only ever has one item in flight ("sending") at a time. */
   private drainFollowups(sessionId: string): void {
-    if (sessionId !== this.store.getState().activeSessionId) return;
-    if (this.store.getState().working) return;
+    if (sessionId !== this.store.getState().activeSession.activeSessionId) return;
+    if (this.store.getState().activeSession.working) return;
     const next = nextQueuedFollowup(this.store.getFollowups(sessionId));
     if (!next) return;
     this.dispatchFollowup(sessionId, next);
@@ -3973,7 +3601,7 @@ export class AppController {
    *  isn't in the queue. */
   private maybeConfirmFollowup(event: { type?: string; sessionId?: string; clientMessageId?: unknown }): void {
     if (event.type !== "session.user_message") return;
-    const sid = event.sessionId || this.store.getState().activeSessionId;
+    const sid = event.sessionId || this.store.getState().activeSession.activeSessionId;
     const cmid = typeof event.clientMessageId === "string" ? event.clientMessageId : undefined;
     if (!sid || !cmid) return;
     // Delivered in-app — retire the control-plane backstop so it can't fire.
@@ -4003,7 +3631,7 @@ export class AppController {
     if (!trimmed) return;
     // Optimistically reflect the rename in the list + title.
     const s = this.store.getState();
-    if (sessionId === s.activeSessionId) this.store.setActiveTitle(trimmed);
+    if (sessionId === s.activeSession.activeSessionId) this.store.setActiveTitle(trimmed);
     this.store.renameSessionLocal(sessionId, trimmed);
     this.send({ kind: "session.rename", sessionId, name: trimmed });
     this.refreshSessions();
@@ -4011,7 +3639,7 @@ export class AppController {
 
   deleteSession(sessionId: string, path?: string): void {
     this.send({ kind: "session.delete", sessionId, path });
-    if (sessionId === this.store.getState().activeSessionId) {
+    if (sessionId === this.store.getState().activeSession.activeSessionId) {
       this.store.resetActiveSession();
       // The open session was just deleted — drop back to the draft route.
       navigate({ kind: "new" });
@@ -4023,12 +3651,12 @@ export class AppController {
   }
 
   pauseSession(sessionId?: string): void {
-    const id = sessionId || this.store.getState().activeSessionId;
+    const id = sessionId || this.store.getState().activeSession.activeSessionId;
     if (id) this.send({ kind: "session.pause", sessionId: id });
   }
 
   resumeSession(sessionId?: string): void {
-    const id = sessionId || this.store.getState().activeSessionId;
+    const id = sessionId || this.store.getState().activeSession.activeSessionId;
     if (id) this.send({ kind: "session.resume", sessionId: id });
   }
 
@@ -4036,7 +3664,7 @@ export class AppController {
    *  of waiting for its next turn. Works even when the session isn't live — the
    *  node resumes it just enough to check. */
   refreshPrStatus(sessionId?: string): void {
-    const id = sessionId || this.store.getState().activeSessionId;
+    const id = sessionId || this.store.getState().activeSession.activeSessionId;
     if (id) this.send({ kind: "session.pr.refresh", sessionId: id });
   }
 
@@ -4051,7 +3679,7 @@ export class AppController {
   /** Universal Agent Harness: restore the session's workspace to a checkpoint
    *  (e.g. the state before the last turn). */
   rewind(checkpointId: string, sessionId?: string): void {
-    const id = sessionId || this.store.getState().activeSessionId;
+    const id = sessionId || this.store.getState().activeSession.activeSessionId;
     if (id && checkpointId) this.send({ kind: "session.rewind", sessionId: id, checkpointId });
   }
 
@@ -4059,13 +3687,13 @@ export class AppController {
    *  doesn't rewind the whole turn. `content` is the file's pre-turn text, or null
    *  when the turn added the file (revert = remove it). */
   revertFile(path: string, content: string | null, sessionId?: string): void {
-    const id = sessionId || this.store.getState().activeSessionId;
+    const id = sessionId || this.store.getState().activeSession.activeSessionId;
     if (id && path) this.send({ kind: "session.revert_file", sessionId: id, path, content });
   }
 
   /** Ask the node for this session's checkpoint list (rewind targets). */
   listCheckpoints(sessionId?: string): void {
-    const id = sessionId || this.store.getState().activeSessionId;
+    const id = sessionId || this.store.getState().activeSession.activeSessionId;
     if (id) this.send({ kind: "session.checkpoints", sessionId: id });
   }
 

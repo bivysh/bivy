@@ -34,7 +34,7 @@ test("the journey gates in order: sign-in first, then machine pair/select, then 
 
 test("direct/self-host mode never shows the sign-in gate — it has no account to sign into", async () => {
   const app = await read("../../packages/web/src/App.tsx");
-  expect(app).toContain("const needsAuth = !controller.direct && !controller.solo && !state.signedIn;");
+  expect(app).toContain("const needsAuth = !controller.direct && !controller.solo && !state.connection.signedIn;");
 });
 
 test("every failed readiness check maps to exactly one wired, real remediation — no inert buttons", async () => {
@@ -54,7 +54,7 @@ test("every failed readiness check maps to exactly one wired, real remediation �
 });
 
 test("provider readiness ('Test connection') is wired end to end: web action -> relay command -> node handler", async () => {
-  const controller = await read("../../packages/web/src/store/controller.ts");
+  const controller = await read("../../packages/web/src/store/coordinators/credentials-models-coordinator.ts");
   const settings = await read("../../packages/web/src/components/Settings.tsx");
   const server = await read("../../src/server.ts");
   expect(controller).toContain("async testCredential(provider: string, label: string)");

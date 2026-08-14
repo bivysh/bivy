@@ -6,7 +6,7 @@ import { Sheet } from "./Sheet.js";
 import { relTime } from "./ChangesCard.js";
 import { controller } from "../store/useStore.js";
 
-// Session/Run artifacts: everything deriveArtifacts(state.transcript) found —
+// Session/Run artifacts: everything deriveArtifacts(state.activeSession.transcript) found —
 // agent-sent attachments, user uploads, resolved inline images — grouped so a
 // user can find "the report the agent made" without hunting through the
 // transcript. Bytes are fetched on demand through the same authenticated

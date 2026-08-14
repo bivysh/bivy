@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import assert from "node:assert/strict";
-import { reapSettledHostedMachine, reconcileHostedMachines, reconcileAllHostedMachines, markHostedMachineMilestone, type DestroyFn } from "../src/ephemeral-provisioner.js";
-import type { MeshStore } from "../src/store.js";
+import { reapSettledHostedMachine, reconcileHostedMachines, reconcileAllHostedMachines, markHostedMachineMilestone, type DestroyFn, type EphemeralProvisioningPort } from "../src/ephemeral-provisioner.js";
 
 function fakeStore(machines: Array<Record<string, unknown>>, providerTokens: Record<string, string>) {
   let hosted = machines.slice();
@@ -14,7 +13,7 @@ function fakeStore(machines: Array<Record<string, unknown>>, providerTokens: Rec
     createSession: async () => "sess-token",
     removeNode: async () => true,
     appendHostedAudit: async (_a: string, e: Record<string, unknown>) => { audits.push(e); },
-  } as unknown as MeshStore;
+  } as unknown as EphemeralProvisioningPort;
   return { store, audits };
 }
 
@@ -134,7 +133,7 @@ const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
     createSession: async () => "sess-token",
     removeNode: async () => true,
     appendHostedAudit: async (accountId: string, event: { action?: string }) => { audits.push({ accountId, action: event.action }); },
-  } as unknown as MeshStore;
+  } as unknown as EphemeralProvisioningPort;
   let destroyed = 0;
   const result = await reconcileAllHostedMachines(store, env, Date.now(), async () => { destroyed++; });
   assert.deepEqual(result, { accounts: 2, reaped: 1, failed: 1 });

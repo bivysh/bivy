@@ -16,8 +16,8 @@ test("Local models presents discovery, verification, Machine ownership, and a st
 });
 
 test("controller discovery and verification await node acknowledgements", async () => {
-  const controller = await read("../../packages/web/src/store/controller.ts");
-  expect(controller).toContain('this.awaitAck({ kind: "models.custom.discover" }, 10_000)');
-  expect(controller).toContain('this.awaitAck({ kind: "models.custom.verify", baseUrl');
-  expect(controller).toContain("return String(event.provider");
+  const coordinator = await read("../../packages/web/src/store/coordinators/credentials-models-coordinator.ts");
+  expect(coordinator).toContain('this.deps.awaitAck({ kind: "models.custom.discover" }, 10_000)');
+  expect(coordinator).toContain('this.deps.awaitAck({ kind: "models.custom.verify", baseUrl');
+  expect(coordinator).toContain("return String(event.provider");
 });

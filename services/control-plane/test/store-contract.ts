@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import assert from "node:assert/strict";
-import type { MeshStore } from "../src/store.js";
+import type { ControlPlaneStore } from "../src/store.js";
 
 /**
- * Shared, implementation-agnostic contract suite for `MeshStore`.
+ * Shared, implementation-agnostic contract suite for `ControlPlaneStore`.
  *
  * Exercises the full store surface (accounts & auth, link grants, session index,
  * inbound hooks, the work queue, and notification preferences) against whichever
@@ -13,11 +13,11 @@ import type { MeshStore } from "../src/store.js";
  * exercised with no live database (test/store-contract.test.ts). A factory (not a
  * single instance) is taken so each test gets a fresh, isolated in-memory schema.
  */
-export type StoreFactory = () => MeshStore | Promise<MeshStore>;
+export type StoreFactory = () => ControlPlaneStore | Promise<ControlPlaneStore>;
 
 export async function runStoreContract(label: string, makeStore: StoreFactory): Promise<number> {
   let passed = 0;
-  async function test(name: string, fn: (store: MeshStore) => Promise<void>) {
+  async function test(name: string, fn: (store: ControlPlaneStore) => Promise<void>) {
     const store = await makeStore();
     await store.init();
     await fn(store);

@@ -17,7 +17,7 @@ function modelKey(model: ModelInfo & { provider?: unknown }): string {
  * default is context-aware: move when the node changes, copy when it doesn't.
  */
 export function ForkSheet({ sessionId, onClose }: { sessionId: string; onClose: () => void }) {
-  const { nodes, currentNodeId, runtimes, models, currentModel, activeSessionId, activeRuntimeId, sessions } = useAppState();
+  const { connection: { nodes, currentNodeId }, catalogs: { runtimes, models, currentModel }, activeSession: { activeSessionId, activeRuntimeId }, sessionIndex: { sessions } } = useAppState();
   // selectedAgentId is the node/global draft preference, not the owner of an
   // existing session. Prefer the runtime from canonical history for the active
   // session, with its session-list row only as an early open-paint fallback.

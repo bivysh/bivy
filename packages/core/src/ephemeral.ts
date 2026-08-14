@@ -13,9 +13,15 @@ import {
 } from "./ephemeral-provider-adapters.js";
 import type { EphemeralMachine } from "./ephemeral-machine.js";
 import { planEphemeralLaunch, trackProvisionedMachine } from "./ephemeral-launch-plan.js";
+import { createEphemeralExecutionEnvelope } from "./ephemeral-execution-envelope.js";
 import type { EphemeralKeyStore, MachineStore } from "./ephemeral-storage.js";
 
-export * from "./ephemeral-catalog.js";
+export {
+  EPHEMERAL_PROVIDERS,
+  ephemeralCatalogEntry,
+  ephemeralProviderSuspendsWhenIdle,
+  type EphemeralProviderCatalog,
+} from "./ephemeral-catalog.js";
 export {
   clampTtlMinutes,
   ephemeralColdStartMs,
@@ -27,10 +33,79 @@ export {
   type EphemeralLifecyclePhase,
   type PricedMachineSize,
 } from "./ephemeral-lifecycle.js";
-export * from "./ephemeral-machine.js";
-export * from "./ephemeral-launch-plan.js";
-export * from "./ephemeral-storage.js";
-export * from "./ephemeral-provider-adapters.js";
+export {
+  ephemeralMachineFromCorrelation,
+  ephemeralMachineFromNode,
+  isEphemeralNode,
+  type EphemeralMachine,
+  type EphemeralMachinePurpose,
+  type EphemeralMilestones,
+  type SessionCorrelation,
+} from "./ephemeral-machine.js";
+export {
+  ephemeralNodeLabel,
+  planEphemeralLaunch,
+  trackProvisionedMachine,
+  type EphemeralLaunchPlan,
+  type EphemeralLaunchPlanInput,
+} from "./ephemeral-launch-plan.js";
+export {
+  createEphemeralExecutionEnvelope,
+  type EphemeralExecutionEnvelope,
+  type EphemeralExecutionEnvelopeInput,
+} from "./ephemeral-execution-envelope.js";
+export {
+  createEphemeralKeyStore,
+  createEphemeralModelKeyStore,
+  createEphemeralPrefsStore,
+  createEphemeralSetupStore,
+  createGithubTaskTokenStore,
+  createMachineStore,
+  createPendingEphemeralLaunchStore,
+  indexedDbBackend,
+  memoryBackend,
+  type DeviceCredentialScope,
+  type EphemeralKeyStore,
+  type EphemeralModelKeyEntry,
+  type EphemeralModelKeyInfo,
+  type EphemeralModelKeyStore,
+  type EphemeralPrefs,
+  type EphemeralPrefsStore,
+  type EphemeralSetup,
+  type EphemeralSetupStore,
+  type GithubTaskTokenStore,
+  type KvBackend,
+  type MachineStore,
+  type PendingEphemeralLaunch,
+  type PendingEphemeralLaunchStore,
+  type ProviderKeyInfo,
+} from "./ephemeral-storage.js";
+export {
+  ALLOWED_HOSTS,
+  assertAllowedUrl,
+  awsSign,
+  buildBootstrapUserData,
+  ephemeralAdapter,
+  ephemeralCostEstimate,
+  extractProviderMessage,
+  parseAwsToken,
+  parseXml,
+  validateEphemeralProviderToken,
+  xmlChild,
+  xmlChildren,
+  xmlFind,
+  type AwsCreds,
+  type XmlEl,
+} from "./ephemeral-provider-adapters.js";
+export type {
+  BootstrapOpts,
+  ExecFn,
+  ExecRequest,
+  ExecResult,
+  ProviderAdapter,
+  ProviderProvisionConfig,
+  ProviderSize,
+} from "./ephemeral-provider-ports.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -288,16 +363,21 @@ export async function launchEphemeralMachine(
     attemptId,
     nodeId,
     requestedAt,
+    defaultRegion: adapter.defaultRegion,
+    defaultSize: adapter.defaultSize,
+  });
+  // The plan is safe to inspect. Secret-bearing bootstrap material is created
+  // separately and consumed only by this effect interpreter.
+  const envelope = createEphemeralExecutionEnvelope({
+    ...opts,
+    provider: plan.provider,
+    nodeId: plan.nodeId,
     enrollmentToken: enroll.enrollmentToken,
     roomKeyB64: b64(roomBytes),
     relayUrl: deps.store.relay,
     controlPlaneUrl: cpBase(deps.store),
-    defaultRegion: adapter.defaultRegion,
-    defaultSize: adapter.defaultSize,
   });
-  // The plan is inspectable data. Only this shell interprets it into provider
-  // user-data and effects.
-  const userData = buildBootstrapUserData(plan.bootstrap);
+  const userData = buildBootstrapUserData(envelope.bootstrap);
   progress(`Creating the machine in ${plan.region} (${plan.size})…`);
   let machine: EphemeralMachine;
   try {
@@ -305,7 +385,7 @@ export async function launchEphemeralMachine(
       exec: deps.exec,
       token,
       userData,
-      bootstrap: plan.bootstrap,
+      bootstrap: envelope.bootstrap,
       config: plan.providerConfig,
     });
   } catch (error) {

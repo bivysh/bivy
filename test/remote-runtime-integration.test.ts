@@ -44,7 +44,7 @@ function normalize(messages: RuntimeMessage[]): Array<{ role: unknown; content: 
   return messages.map((m) => ({ role: (m as Record<string, unknown>).role, content: (m as Record<string, unknown>).content }));
 }
 
-async function connectWithRetry(addr: string, timeoutMs = 8000): Promise<void> {
+async function connectWithRetry(addr: string, timeoutMs = 20_000): Promise<void> {
   const start = Date.now();
   const opts: net.NetConnectOpts = { path: addr.replace(/^unix:/, "") };
   for (;;) {

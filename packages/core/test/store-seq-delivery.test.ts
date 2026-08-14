@@ -43,7 +43,7 @@ const seg = (startSeq: number, text: string): Ev[] => [msgStart(startSeq), msgEn
 
 /** Committed assistant-bubble texts, in order — the "what got applied" view. */
 function texts(store: SessionStore): string[] {
-  return store.getState().transcript.filter((e) => e.role === "assistant" && e.text).map((e) => e.text!);
+  return store.getState().activeSession.transcript.filter((e) => e.role === "assistant" && e.text).map((e) => e.text!);
 }
 
 describe("store sequenced live delivery (Phase 2)", () => {

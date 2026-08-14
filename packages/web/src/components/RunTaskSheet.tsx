@@ -26,14 +26,14 @@ export function RunTaskSheet({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  const active = state.activeSessionId
-    ? state.sessions.find((session) => session.sessionId === state.activeSessionId)
+  const active = state.activeSession.activeSessionId
+    ? state.sessionIndex.sessions.find((session) => session.sessionId === state.activeSession.activeSessionId)
     : undefined;
-  const sandbox = active?.sandbox ?? state.draftSandbox ?? state.nodeSettings?.defaultSandbox;
+  const sandbox = active?.sandbox ?? state.draft.sandbox ?? state.settings.nodeSettings?.defaultSandbox;
   const dangerous = approvalMode === "autonomous" && sandbox === "danger-full-access";
-  const unsupportedDraft = !active && state.draftEphemeralConfig
+  const unsupportedDraft = !active && state.draft.ephemeralConfig
     ? "Start the isolated Machine’s Session first, then start a Run from that Session."
-    : !active && state.draftBranch
+    : !active && state.draft.branch
       ? "Runs currently start from a repository’s default branch. Choose the default branch before starting."
       : null;
 

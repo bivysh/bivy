@@ -78,7 +78,7 @@ describe("SessionStore", () => {
   it("retains authoritative activation readiness probes", () => {
     const store = new SessionStore();
     store.apply({ type: "activation.readiness", credential: { configured: true, probed: true, ok: true }, repository: { chosen: false, probed: true, ok: false, authed: true } } as never);
-    expect(store.getState().activationReadiness).toEqual({ credential: { configured: true, probed: true, ok: true }, repository: { chosen: false, probed: true, ok: false, authed: true } });
+    expect(store.getState().catalogs.activationReadiness).toEqual({ credential: { configured: true, probed: true, ok: true }, repository: { chosen: false, probed: true, ok: false, authed: true } });
   });
 
   it("stores a valid Machine capability inventory snapshot", () => {
@@ -94,7 +94,7 @@ describe("SessionStore", () => {
       workspaces: { count: 1 },
     };
     store.apply({ type: "capabilities", capabilities } as never);
-    expect(store.getState().capabilities).toEqual(capabilities);
+    expect(store.getState().settings.capabilities).toEqual(capabilities);
   });
 
   it("ignores a garbled capabilities frame instead of blanking a good panel", () => {
@@ -112,7 +112,7 @@ describe("SessionStore", () => {
     store.apply({ type: "capabilities", capabilities } as never);
     // A later, malformed frame (missing `os`) must not clobber the good snapshot.
     store.apply({ type: "capabilities", capabilities: { generatedAt: "2026-01-01T00:00:01.000Z" } } as never);
-    expect(store.getState().capabilities).toEqual(capabilities);
+    expect(store.getState().settings.capabilities).toEqual(capabilities);
   });
 
   it("retains a credential's testable/verification fields, feeding the redacted readiness projection", () => {
@@ -123,7 +123,7 @@ describe("SessionStore", () => {
         { provider: "anthropic", label: "default", kind: "api_key", sync: "node", origin: "bivy", testable: true, lastVerifiedAt: 1700000000000, lastVerifiedOk: true },
       ],
     } as never);
-    expect(store.getState().credentialRecords).toEqual([
+    expect(store.getState().settings.credentialRecords).toEqual([
       { provider: "anthropic", label: "default", kind: "api_key", sync: "node", origin: "bivy", testable: true, lastVerifiedAt: 1700000000000, lastVerifiedOk: true },
     ]);
   });
@@ -131,14 +131,14 @@ describe("SessionStore", () => {
   it("retains node audit degradation in Session context", () => {
     const store = new SessionStore();
     store.apply({ type: "sessions.list", sessions: [{ id: "s1", name: "One", auditHealth: { storage: "corrupt", writes: "degraded", failedWrites: 2, corruptLines: 1 }, eventLogHealth: { state: "degraded", operation: "append", at: 42 } }] } as never);
-    expect(store.getState().sessions[0].auditHealth).toEqual({ storage: "corrupt", writes: "degraded", failedWrites: 2, corruptLines: 1 });
-    expect(store.getState().sessions[0].eventLogHealth).toEqual({ state: "degraded", operation: "append", at: 42 });
+    expect(store.getState().sessionIndex.sessions[0].auditHealth).toEqual({ storage: "corrupt", writes: "degraded", failedWrites: 2, corruptLines: 1 });
+    expect(store.getState().sessionIndex.sessions[0].eventLogHealth).toEqual({ state: "degraded", operation: "append", at: 42 });
   });
 
   it("retains observed Session protection context from the node", () => {
     const store = new SessionStore();
     store.apply({ type: "sessions.list", sessions: [{ id: "s1", name: "One", sandbox: "workspace-write", approvalMode: "risky", ephemeral: true, executionProfile: "isolated_customer_cloud" }] } as never);
-    expect(store.getState().sessions[0]).toMatchObject({ sandbox: "workspace-write", approvalMode: "risky", ephemeral: true, executionProfile: "isolated_customer_cloud" });
+    expect(store.getState().sessionIndex.sessions[0]).toMatchObject({ sandbox: "workspace-write", approvalMode: "risky", ephemeral: true, executionProfile: "isolated_customer_cloud" });
   });
 
   it("notifies subscribers and exposes immutable snapshots", () => {
@@ -149,19 +149,19 @@ describe("SessionStore", () => {
     const before = store.getState();
     store.setStatus("online");
     expect(store.getState()).not.toBe(before); // new identity => React re-renders
-    expect(store.getState().status).toBe("online");
+    expect(store.getState().connection.status).toBe("online");
     expect(fn).toHaveBeenCalled();
     void seen;
   });
 
   it("tracks the reactive signed-in flag for the auth gate", () => {
     const store = new SessionStore();
-    expect(store.getState().signedIn).toBe(false);
+    expect(store.getState().connection.signedIn).toBe(false);
     const before = store.getState();
     store.setSignedIn(true);
     // New identity so the auth gate re-renders the moment a sign-in completes.
     expect(store.getState()).not.toBe(before);
-    expect(store.getState().signedIn).toBe(true);
+    expect(store.getState().connection.signedIn).toBe(true);
     // Idempotent: setting the same value keeps the state identity stable.
     const stable = store.getState();
     store.setSignedIn(true);
@@ -174,13 +174,13 @@ describe("SessionStore", () => {
       { sessionId: "s1", name: "Alpha" },
       { sessionId: "s2", name: "Beta" },
     ]);
-    expect(store.getState().sessions.map((s) => s.sessionId)).toEqual(["s1", "s2"]);
+    expect(store.getState().sessionIndex.sessions.map((s) => s.sessionId)).toEqual(["s1", "s2"]);
     // A cache seed must never clobber a live list once one exists.
     store.seedSessions([{ sessionId: "s3", name: "Gamma" }]);
-    expect(store.getState().sessions.map((s) => s.sessionId)).toEqual(["s1", "s2"]);
+    expect(store.getState().sessionIndex.sessions.map((s) => s.sessionId)).toEqual(["s1", "s2"]);
     // The authoritative sessions.list still overwrites the seed.
     store.apply({ type: "sessions.list", sessions: [{ sessionId: "s9", name: "Live" }] } as never);
-    expect(store.getState().sessions.map((s) => s.sessionId)).toEqual(["s9"]);
+    expect(store.getState().sessionIndex.sessions.map((s) => s.sessionId)).toEqual(["s9"]);
   });
 
   it("ignores an empty or malformed cache seed", () => {
@@ -191,7 +191,7 @@ describe("SessionStore", () => {
     store.seedSessions("nonsense");
     // No rows to paint => state identity is untouched (no needless re-render).
     expect(store.getState()).toBe(before);
-    expect(store.getState().sessions).toEqual([]);
+    expect(store.getState().sessionIndex.sessions).toEqual([]);
   });
 
   it("builds a transcript from session.history messages", () => {
@@ -206,12 +206,12 @@ describe("SessionStore", () => {
       ],
     });
     const s = store.getState();
-    expect(s.activeSessionId).toBe("s1");
-    expect(s.activeTitle).toBe("Fix bug");
-    expect(s.transcript).toHaveLength(2);
-    expect(s.transcript[0]!.role).toBe("user");
+    expect(s.activeSession.activeSessionId).toBe("s1");
+    expect(s.activeSession.activeTitle).toBe("Fix bug");
+    expect(s.activeSession.transcript).toHaveLength(2);
+    expect(s.activeSession.transcript[0]!.role).toBe("user");
     // History entries carry raw text; markdown is rendered lazily by the view.
-    expect(toHtml(s.transcript[1]!.text)).toContain("<strong>hi</strong>");
+    expect(toHtml(s.activeSession.transcript[1]!.text)).toContain("<strong>hi</strong>");
   });
 
   it("stores a session's advertised commands per session (not on the runtime row)", () => {
@@ -230,9 +230,9 @@ describe("SessionStore", () => {
       capabilities: { toolInterception: true, commands: [{ name: "/compact", description: "Compact" }] },
     });
     // Commands live per session, keyed by sessionId, for the composer to read.
-    expect(store.getState().commandsBySession["s1"]).toEqual([{ name: "/compact", description: "Compact" }]);
+    expect(store.getState().sessionIndex.commandsBySession["s1"]).toEqual([{ name: "/compact", description: "Compact" }]);
     // The shared runtime row is NOT mutated with the session's commands…
-    const caps = store.getState().runtimes.find((r) => r.id === "agent-x")!.capabilities as Record<string, unknown>;
+    const caps = store.getState().catalogs.runtimes.find((r) => r.id === "agent-x")!.capabilities as Record<string, unknown>;
     expect(caps.commands).toBeUndefined();
     // …but other refined caps still fold onto the row, and catalog-only fields survive.
     expect(caps.interactiveTui).toBe(true);
@@ -244,8 +244,8 @@ describe("SessionStore", () => {
     store.apply({ type: "session.created", sessionId: "s1", runtimeId: "pi", capabilities: { commands: [{ name: "/one" }] } });
     store.apply({ type: "session.created", sessionId: "s2", runtimeId: "pi", capabilities: { commands: [{ name: "/two" }] } });
     // Each session keeps its own set — s2 does not overwrite s1 (the old per-runtime bug).
-    expect(store.getState().commandsBySession["s1"]).toEqual([{ name: "/one" }]);
-    expect(store.getState().commandsBySession["s2"]).toEqual([{ name: "/two" }]);
+    expect(store.getState().sessionIndex.commandsBySession["s1"]).toEqual([{ name: "/one" }]);
+    expect(store.getState().sessionIndex.commandsBySession["s2"]).toEqual([{ name: "/two" }]);
   });
 
   it("carries a command's invocation mode through and drops malformed entries", () => {
@@ -262,7 +262,7 @@ describe("SessionStore", () => {
         ],
       },
     });
-    expect(store.getState().commandsBySession["s1"]).toEqual([
+    expect(store.getState().sessionIndex.commandsBySession["s1"]).toEqual([
       { name: "/deploy", description: "Deploy", mode: "protocol" },
       { name: "/x" },
     ]);
@@ -282,9 +282,9 @@ describe("SessionStore", () => {
       runtimeId: "claude",
       capabilities: { toolInterception: true, commands: [{ name: "/compact" }, { name: "/review" }] },
     });
-    expect(store.getState().commandsBySession["s1"]).toEqual([{ name: "/compact" }, { name: "/review" }]);
+    expect(store.getState().sessionIndex.commandsBySession["s1"]).toEqual([{ name: "/compact" }, { name: "/review" }]);
     // Still not on the runtime row.
-    const caps = store.getState().runtimes.find((r) => r.id === "claude")!.capabilities as Record<string, unknown>;
+    const caps = store.getState().catalogs.runtimes.find((r) => r.id === "claude")!.capabilities as Record<string, unknown>;
     expect(caps.commands).toBeUndefined();
   });
 
@@ -292,36 +292,36 @@ describe("SessionStore", () => {
     const store = new SessionStore();
     store.apply({ type: "session.created", sessionId: "s1", runtimeId: "pi", capabilities: { commands: [{ name: "/one" }] } });
     store.apply({ type: "session.deleted", sessionId: "s1" });
-    expect(store.getState().commandsBySession["s1"]).toBeUndefined();
+    expect(store.getState().sessionIndex.commandsBySession["s1"]).toBeUndefined();
     store.apply({ type: "session.created", sessionId: "s2", runtimeId: "pi", capabilities: { commands: [{ name: "/two" }] } });
     store.resetSession();
-    expect(store.getState().commandsBySession).toEqual({});
+    expect(store.getState().sessionIndex.commandsBySession).toEqual({});
   });
 
   it("carries the repo-list unauthed reason so the picker can prompt to connect GitHub", () => {
     const store = new SessionStore();
     // Nothing connected and no gh CLI: steer to `bivy github:connect`.
     store.apply({ type: "repos.list", authed: false, repos: [], reason: "no-token" } as never);
-    expect(store.getState().reposAuthed).toBe(false);
-    expect(store.getState().reposReason).toBe("no-token");
+    expect(store.getState().catalogs.reposAuthed).toBe(false);
+    expect(store.getState().catalogs.reposReason).toBe("no-token");
     // gh installed but logged out: the picker additionally offers `gh auth login`.
     store.apply({ type: "repos.list", authed: false, repos: [], reason: "gh-unauthed" } as never);
-    expect(store.getState().reposReason).toBe("gh-unauthed");
+    expect(store.getState().catalogs.reposReason).toBe("gh-unauthed");
     // A successful listing clears the reason and marks authed.
     store.apply({ type: "repos.list", authed: true, repos: [{ slug: "acme/app" }] } as never);
-    expect(store.getState().reposAuthed).toBe(true);
-    expect(store.getState().reposReason).toBeNull();
+    expect(store.getState().catalogs.reposAuthed).toBe(true);
+    expect(store.getState().catalogs.reposReason).toBeNull();
     // An unknown/absent reason never leaks through as a truthy value.
     store.apply({ type: "repos.list", authed: false, repos: [] } as never);
-    expect(store.getState().reposReason).toBeNull();
+    expect(store.getState().catalogs.reposReason).toBeNull();
   });
 
   it("tracks the Connect-GitHub device flow so the repo picker can drive it", () => {
     const store = new SessionStore();
-    expect(store.getState().githubConnect).toEqual({ status: "idle" });
+    expect(store.getState().catalogs.githubConnect).toEqual({ status: "idle" });
     // Optimistic local state before the node answers.
     store.setGithubConnect({ status: "starting" });
-    expect(store.getState().githubConnect.status).toBe("starting");
+    expect(store.getState().catalogs.githubConnect.status).toBe("starting");
     // Node hands back a device code to show the user.
     store.apply({
       type: "github.connect.status",
@@ -330,19 +330,19 @@ describe("SessionStore", () => {
       verificationUri: "https://github.com/login/device",
       intervalMs: 5000,
     } as never);
-    expect(store.getState().githubConnect).toMatchObject({ status: "waiting", userCode: "ABCD-1234", intervalMs: 5000 });
+    expect(store.getState().catalogs.githubConnect).toMatchObject({ status: "waiting", userCode: "ABCD-1234", intervalMs: 5000 });
     // Success clears back to a terminal state the picker reacts to.
     store.apply({ type: "github.connect.status", status: "connected" } as never);
-    expect(store.getState().githubConnect.status).toBe("connected");
+    expect(store.getState().catalogs.githubConnect.status).toBe("connected");
     // A node with no device-flow client id tells the UI to fall back to the CLI.
     store.apply({ type: "github.connect.status", status: "unconfigured" } as never);
-    expect(store.getState().githubConnect.status).toBe("unconfigured");
+    expect(store.getState().catalogs.githubConnect.status).toBe("unconfigured");
     // An unknown status never leaks through — it collapses to idle.
     store.apply({ type: "github.connect.status", status: "bogus" } as never);
-    expect(store.getState().githubConnect.status).toBe("idle");
+    expect(store.getState().catalogs.githubConnect.status).toBe("idle");
     // Error carries its message.
     store.apply({ type: "github.connect.status", status: "error", error: "nope" } as never);
-    expect(store.getState().githubConnect).toMatchObject({ status: "error", error: "nope" });
+    expect(store.getState().catalogs.githubConnect).toMatchObject({ status: "error", error: "nope" });
   });
 
   it("keeps the current node online when a stale registry snapshot races the live transport", () => {
@@ -355,7 +355,7 @@ describe("SessionStore", () => {
 
     // The relay connection is direct evidence that this selected node is live.
     store.setStatus("online");
-    expect(store.getState().nodes.find((n) => n.id === "new-node")?.online).toBe(true);
+    expect(store.getState().connection.nodes.find((n) => n.id === "new-node")?.online).toBe(true);
 
     // The relay's fire-and-forget control-plane write may still be in flight;
     // that late list must not turn the dot grey again.
@@ -363,13 +363,13 @@ describe("SessionStore", () => {
       { id: "new-node", name: "New node", online: false },
       { id: "other", name: "Other", online: false },
     ]);
-    expect(store.getState().nodes.find((n) => n.id === "new-node")?.online).toBe(true);
-    expect(store.getState().nodes.find((n) => n.id === "other")?.online).toBe(false);
+    expect(store.getState().connection.nodes.find((n) => n.id === "new-node")?.online).toBe(true);
+    expect(store.getState().connection.nodes.find((n) => n.id === "other")?.online).toBe(false);
 
     // Closing this browser transport (for example, to switch nodes) is not proof
     // that the daemon went offline, so it must not undo account presence.
     store.setStatus("offline");
-    expect(store.getState().nodes.find((n) => n.id === "new-node")?.online).toBe(true);
+    expect(store.getState().connection.nodes.find((n) => n.id === "new-node")?.online).toBe(true);
   });
 
   it("clears nodeSettings on node switch so a new node's panel never shows the previous node's settings (issue #75)", () => {
@@ -378,13 +378,13 @@ describe("SessionStore", () => {
       type: "node.settings",
       settings: { name: "node-a", defaultAgent: "claude", githubIssuePrompt: "a-prompt" },
     });
-    expect(store.getState().nodeSettings?.name).toBe("node-a");
+    expect(store.getState().settings.nodeSettings?.name).toBe("node-a");
     // Switching nodes must drop the stale settings immediately — if the newly
     // selected node is offline it may never answer node.settings.get, and
     // without this reset the UI would go on showing node-a's settings as if
     // they belonged to the new node.
     store.resetSession();
-    expect(store.getState().nodeSettings).toBeNull();
+    expect(store.getState().settings.nodeSettings).toBeNull();
   });
 
   it("leaves state identity stable when session.created adds no new capabilities or commands", () => {
@@ -393,12 +393,12 @@ describe("SessionStore", () => {
       type: "runtimes.list",
       runtimes: [{ id: "agent-x", displayName: "Agent X", capabilities: { toolInterception: true } }],
     });
-    const beforeRuntimes = store.getState().runtimes;
-    const beforeCommands = store.getState().commandsBySession;
+    const beforeRuntimes = store.getState().catalogs.runtimes;
+    const beforeCommands = store.getState().sessionIndex.commandsBySession;
     store.apply({ type: "session.created", sessionId: "s1", runtimeId: "agent-x", capabilities: { toolInterception: true } });
     // Nothing changed → same array/map identity, so no needless re-render.
-    expect(store.getState().runtimes).toBe(beforeRuntimes);
-    expect(store.getState().commandsBySession).toBe(beforeCommands);
+    expect(store.getState().catalogs.runtimes).toBe(beforeRuntimes);
+    expect(store.getState().sessionIndex.commandsBySession).toBe(beforeCommands);
   });
 
   it("classifies an agent API/auth error as an error bubble on reload, not a grey reply", () => {
@@ -416,7 +416,7 @@ describe("SessionStore", () => {
         { role: "assistant", content: [{ type: "text", text: "All 58 suites pass. Committing now." }] },
       ],
     });
-    const tx = store.getState().transcript;
+    const tx = store.getState().activeSession.transcript;
     expect(tx.find((e) => e.text.startsWith("Failed to authenticate"))!.role).toBe("error");
     // A normal reply is untouched — no false positive.
     expect(tx.find((e) => e.text.startsWith("All 58 suites"))!.role).toBe("assistant");
@@ -426,7 +426,7 @@ describe("SessionStore", () => {
     const store = new SessionStore();
     store.apply({ type: "message_start", message: { role: "assistant" } });
     store.apply({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "API Error: 401 Invalid authentication credentials" }] } });
-    const tx = store.getState().transcript;
+    const tx = store.getState().activeSession.transcript;
     expect(tx.some((e) => e.role === "assistant")).toBe(false);
     const err = tx.find((e) => e.role === "error");
     expect(err).toBeDefined();
@@ -441,16 +441,16 @@ describe("SessionStore", () => {
     // plain text (no per-update markdown pass; that churn is why streaming prose
     // used to be deferred to boundaries).
     store.apply({ type: "message_update", message: { role: "assistant", content: [{ type: "text", text: "partial" }] } });
-    const streaming = store.getState().transcript.filter((e) => e.role === "assistant");
+    const streaming = store.getState().activeSession.transcript.filter((e) => e.role === "assistant");
     expect(streaming).toHaveLength(1);
     expect(streaming[0]!.streaming).toBe(true);
     expect(streaming[0]!.text).toBe("partial");
     expect(streaming[0]!.html).toBeUndefined(); // rendered as plain text while streaming
-    expect(store.getState().working).toBe(true); // the working indicator still signals activity
+    expect(store.getState().activeSession.working).toBe(true); // the working indicator still signals activity
     // The finished message seals in place — the same single bubble, now whole and
     // markdown-rendered, never a leftover streaming draft alongside it.
     store.apply({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "final answer" }] } });
-    const assistant = store.getState().transcript.filter((e) => e.role === "assistant");
+    const assistant = store.getState().activeSession.transcript.filter((e) => e.role === "assistant");
     expect(assistant).toHaveLength(1);
     expect(assistant[0]!.text).toBe("final answer");
     expect(assistant[0]!.streaming).toBe(false);
@@ -462,11 +462,11 @@ describe("SessionStore", () => {
     store.apply({ type: "message_start", message: { role: "assistant" } });
     // A partial that doesn't yet read as an error paints a live preview…
     store.apply({ type: "message_update", message: { role: "assistant", content: [{ type: "text", text: "API Error: 401" }] } });
-    expect(store.getState().transcript.filter((e) => e.role === "assistant")).toHaveLength(1);
+    expect(store.getState().activeSession.transcript.filter((e) => e.role === "assistant")).toHaveLength(1);
     // …but once it seals and classifies as an error, the plain-text preview is
     // dropped (no orphan assistant bubble) and a single error bubble remains.
     store.apply({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "API Error: 401 Invalid authentication credentials" }] } });
-    const tx = store.getState().transcript;
+    const tx = store.getState().activeSession.transcript;
     expect(tx.some((e) => e.role === "assistant")).toBe(false);
     expect(tx.filter((e) => e.role === "error")).toHaveLength(1);
     expect(tx.find((e) => e.role === "error")!.text).toContain("API Error: 401");
@@ -483,7 +483,7 @@ describe("SessionStore", () => {
         { role: "toolResult", toolCallId: "call_1", toolName: "read", content: [{ type: "text", text: "function main() {}" }], isError: false },
       ],
     });
-    const tx = store.getState().transcript;
+    const tx = store.getState().activeSession.transcript;
     expect(tx).toHaveLength(1);
     expect(tx[0]!.text).toBe("");
     expect(tx[0]!.tool).toMatchObject({ callId: "call_1", name: "read", status: "done", result: "function main() {}" });
@@ -507,7 +507,7 @@ describe("SessionStore", () => {
         { role: "assistant", content: [{ type: "text", text: "Here is the file:" }, { type: "text", text: "```js\nconst x = 1;\n```" }] },
       ],
     });
-    const entry = store.getState().transcript.at(-1)!;
+    const entry = store.getState().activeSession.transcript.at(-1)!;
     expect(entry.text).toBe("Here is the file:\n```js\nconst x = 1;\n```");
   });
 
@@ -521,7 +521,7 @@ describe("SessionStore", () => {
         { role: "assistant", content: [{ type: "text", text: "Here is the file:" }, { type: "text", text: "```js\nconst x = 1;\n```" }] },
       ],
     });
-    const entry = store.getState().transcript.at(-1)!;
+    const entry = store.getState().activeSession.transcript.at(-1)!;
     // The joined text is what must render as a real fenced block once the view
     // (or anyone) markdowns it — the store leaves html unset for history entries.
     const html = toHtml(entry.text);
@@ -536,15 +536,15 @@ describe("SessionStore", () => {
     store.apply({ type: "message_update", message: { role: "assistant", content: [] }, assistantMessageEvent: { type: "thinking_delta", delta: "Let me " } });
     store.apply({ type: "message_update", message: { role: "assistant", content: [] }, assistantMessageEvent: { type: "thinking_delta", delta: "think about it." } });
     // The deltas accumulate but nothing renders mid-stream.
-    expect(store.getState().transcript.some((e) => e.role === "thinking")).toBe(false);
+    expect(store.getState().activeSession.transcript.some((e) => e.role === "thinking")).toBe(false);
     // Then the real answer streams and the turn finalizes.
     store.apply({ type: "message_update", message: { role: "assistant", content: [{ type: "text", text: "Answer" }] } });
     store.apply({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Answer." }] } });
     const s = store.getState();
-    expect(s.transcript.find((e) => e.role === "thinking")!.text).toBe("Let me think about it."); // whole, accumulated
-    expect(s.transcript.find((e) => e.role === "assistant")!.text).toBe("Answer.");
-    expect(s.transcript.filter((e) => e.role === "thinking")).toHaveLength(1);
-    expect(s.transcript.filter((e) => e.role === "assistant")).toHaveLength(1);
+    expect(s.activeSession.transcript.find((e) => e.role === "thinking")!.text).toBe("Let me think about it."); // whole, accumulated
+    expect(s.activeSession.transcript.find((e) => e.role === "assistant")!.text).toBe("Answer.");
+    expect(s.activeSession.transcript.filter((e) => e.role === "thinking")).toHaveLength(1);
+    expect(s.activeSession.transcript.filter((e) => e.role === "assistant")).toHaveLength(1);
   });
 
   it("prefers an accumulated thinking block over deltas", () => {
@@ -559,7 +559,7 @@ describe("SessionStore", () => {
       type: "message_end",
       message: { role: "assistant", content: [{ type: "thinking", thinking: "Full reasoning so far" }] },
     });
-    const thinking = store.getState().transcript.find((e) => e.role === "thinking")!;
+    const thinking = store.getState().activeSession.transcript.find((e) => e.role === "thinking")!;
     expect(thinking.text).toBe("Full reasoning so far");
   });
 
@@ -578,7 +578,7 @@ describe("SessionStore", () => {
         { role: "assistant", content: [{ type: "text", text: "two" }] },
       ],
     });
-    expect(store.getState().transcript).toHaveLength(2);
+    expect(store.getState().activeSession.transcript).toHaveLength(2);
     expect(store.getHistoryCursor("s1")).toEqual({ have: 2, haveToken: "h2" });
     // Append delta: only the new tail, keyed to the prefix we already hold.
     store.apply({
@@ -591,8 +591,8 @@ describe("SessionStore", () => {
       messages: [{ role: "user", content: "three" }],
     });
     const s = store.getState();
-    expect(s.transcript).toHaveLength(3); // prefix + appended, not just the tail
-    expect(s.transcript.at(-1)!.text).toBe("three");
+    expect(s.activeSession.transcript).toHaveLength(3); // prefix + appended, not just the tail
+    expect(s.activeSession.transcript.at(-1)!.text).toBe("three");
     expect(store.getHistoryCursor("s1")).toEqual({ have: 3, haveToken: "h3" });
     expect(persisted.at(-1)).toEqual({ count: 3, hash: "h3", len: 3 });
   });
@@ -613,7 +613,7 @@ describe("SessionStore", () => {
     store.apply({ type: "session.event", sessionId: "s1", event: { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "reply1" }] } } });
     store.addUserMessage("MSG2", "cm2");
     store.apply({ type: "session.user_message", sessionId: "s1", text: "MSG2", clientMessageId: "cm2" });
-    const before = store.getState().transcript.map((e) => `${e.role}:${e.text}`);
+    const before = store.getState().activeSession.transcript.map((e) => `${e.role}:${e.text}`);
     expect(before).toEqual(["user:MSG1", "assistant:reply1", "user:MSG2"]);
     // Append delta with a base we don't hold (prev.count is 1, not 99).
     store.apply({
@@ -621,7 +621,7 @@ describe("SessionStore", () => {
       messages: [{ role: "assistant", content: [{ type: "text", text: "reply1" }] }, { role: "user", content: "MSG2" }],
     });
     // The unusable delta is discarded (order preserved) and a full refetch is asked for.
-    expect(store.getState().transcript.map((e) => `${e.role}:${e.text}`)).toEqual(["user:MSG1", "assistant:reply1", "user:MSG2"]);
+    expect(store.getState().activeSession.transcript.map((e) => `${e.role}:${e.text}`)).toEqual(["user:MSG1", "assistant:reply1", "user:MSG2"]);
     expect(refetched).toBe(1);
     expect(store.getHistoryCursor("s1")).toEqual({}); // diverged cursor forgotten -> next request is full
   });
@@ -629,9 +629,9 @@ describe("SessionStore", () => {
   it("seeds a transcript from the persistent cache before the node answers", () => {
     const store = new SessionStore();
     store.beginOpen("s9");
-    expect(store.getState().transcript).toHaveLength(0);
+    expect(store.getState().activeSession.transcript).toHaveLength(0);
     store.seedHistory("s9", [{ role: "user", content: "cached hi" }], 1, "hh");
-    expect(store.getState().transcript).toHaveLength(1);
+    expect(store.getState().activeSession.transcript).toHaveLength(1);
     expect(store.getHistoryCursor("s9")).toEqual({ have: 1, haveToken: "hh" });
   });
 
@@ -641,16 +641,16 @@ describe("SessionStore", () => {
     // A turn starts and streams.
     store.apply({ type: "message_start", message: { role: "assistant" } });
     store.apply({ type: "message_update", message: { role: "assistant", content: [{ type: "text", text: "streaming answer" }] } });
-    const streaming = store.getState().transcript;
+    const streaming = store.getState().activeSession.transcript;
     // A snapshot arrives mid-turn — must NOT clobber the live tail.
     let freshRequested = 0;
     store.requestFreshHistory = () => (freshRequested += 1);
     store.apply({ type: "session.history", sessionId: "s1", count: 2, historyHash: "h2", messages: [{ role: "user", content: "hi" }, { role: "assistant", content: [] }] });
-    expect(store.getState().transcript).toEqual(streaming); // deferred, not applied
+    expect(store.getState().activeSession.transcript).toEqual(streaming); // deferred, not applied
     // Turn ends → reconcile with fresh canonical history.
     store.apply({ type: "agent_end" });
     expect(freshRequested).toBe(1);
-    expect(store.getState().working).toBe(false);
+    expect(store.getState().activeSession.working).toBe(false);
   });
 
   it("applies the initial open snapshot even when a live delta flipped working first", () => {
@@ -664,25 +664,25 @@ describe("SessionStore", () => {
     // Live delta for the just-opened session lands first → working flips true.
     store.apply({ type: "message_start", message: { role: "assistant" } });
     store.apply({ type: "message_update", message: { role: "assistant", content: [{ type: "text", text: "streaming" }] } });
-    expect(store.getState().working).toBe(true);
+    expect(store.getState().activeSession.working).toBe(true);
     // The authoritative open snapshot arrives mid-turn — must PAINT, not defer.
     store.apply({ type: "session.history", sessionId: "s1", isStreaming: true, count: 2, historyHash: "h1", messages: [{ role: "user", content: "hi" }, { role: "assistant", content: [{ type: "text", text: "streaming" }] }] });
-    expect(store.getState().transcript.some((e) => e.text === "hi")).toBe(true);
+    expect(store.getState().activeSession.transcript.some((e) => e.text === "hi")).toBe(true);
     expect(freshRequested).toBe(0); // applied, not deferred
     // The turn keeps streaming after the open-paint; a LATER unsolicited mid-turn
     // snapshot must defer again (open-paint was a one-shot, guard restored).
     store.apply({ type: "message_start", message: { role: "assistant" } });
     store.apply({ type: "message_update", message: { role: "assistant", content: [{ type: "text", text: "streaming more" }] } });
-    const painted = store.getState().transcript;
+    const painted = store.getState().activeSession.transcript;
     store.apply({ type: "session.history", sessionId: "s1", count: 3, historyHash: "h2", messages: [{ role: "user", content: "hi" }] });
-    expect(store.getState().transcript).toEqual(painted); // deferred, not applied
+    expect(store.getState().activeSession.transcript).toEqual(painted); // deferred, not applied
   });
 
   it("merges tool start + result into a single card", () => {
     const store = new SessionStore();
     store.apply({ type: "tool_call", toolCallId: "t1", name: "bash", input: { cmd: "ls" } });
     store.apply({ type: "tool_result", toolCallId: "t1", name: "bash", result: "file.txt" });
-    const tools = store.getState().transcript.filter((e) => e.tool);
+    const tools = store.getState().activeSession.transcript.filter((e) => e.tool);
     expect(tools).toHaveLength(1);
     expect(tools[0]!.tool!.status).toBe("done");
     expect(tools[0]!.tool!.result).toBe("file.txt");
@@ -697,8 +697,8 @@ describe("SessionStore", () => {
       input: { description: "trace auth" },
       detail: { kind: "delegation", label: "Explore", description: "trace auth" },
     });
-    expect(store.getState().workingLabel).toBe("Explore sub-agent is working…");
-    const tool = store.getState().transcript.find((entry) => entry.tool)?.tool;
+    expect(store.getState().activeSession.workingLabel).toBe("Explore sub-agent is working…");
+    const tool = store.getState().activeSession.transcript.find((entry) => entry.tool)?.tool;
     expect(tool?.detail).toEqual({ kind: "delegation", label: "Explore", description: "trace auth" });
 
     // Long-running agent tools emit elapsed-time progress with no repeated
@@ -708,17 +708,17 @@ describe("SessionStore", () => {
     // description survives alongside the new elapsed marker instead of being
     // clobbered away.
     store.apply({ type: "tool_execution_update", toolCallId: "sub-1", name: "Task", input: { elapsedSeconds: 42 } });
-    const updated = store.getState().transcript.find((entry) => entry.tool)?.tool;
+    const updated = store.getState().activeSession.transcript.find((entry) => entry.tool)?.tool;
     expect(updated?.detail?.kind).toBe("delegation");
     expect(updated?.input).toEqual({ description: "trace auth", elapsedSeconds: 42 });
-    expect(store.getState().workingLabel).toBe("Explore sub-agent is working…");
+    expect(store.getState().activeSession.workingLabel).toBe("Explore sub-agent is working…");
   });
 
   it("carries a tool call's failure outcome (exitCode/isError) onto the done card", () => {
     const store = new SessionStore();
     store.apply({ type: "tool_call", toolCallId: "c1", name: "bash", input: { command: "make" }, detail: { kind: "shell", command: "make" } });
     store.apply({ type: "tool_result", toolCallId: "c1", name: "bash", result: "boom", detail: { kind: "shell", command: "make", result: { exitCode: 2, isError: true } } });
-    const tool = store.getState().transcript.find((e) => e.tool?.callId === "c1")?.tool;
+    const tool = store.getState().activeSession.transcript.find((e) => e.tool?.callId === "c1")?.tool;
     expect(tool?.status).toBe("done");
     // The result-time detail (call classification + outcome) replaced the
     // call-time detail, so the UI can render this command as failed.
@@ -729,20 +729,20 @@ describe("SessionStore", () => {
     const store = new SessionStore();
     store.apply({ type: "tool_execution_update", toolName: "agent_output", input: { stream: "stderr", output: "first" } });
     store.apply({ type: "tool_execution_update", toolName: "agent_output", input: { stream: "stderr", output: "first\nsecond" } });
-    const tools = store.getState().transcript.filter((e) => e.tool);
+    const tools = store.getState().activeSession.transcript.filter((e) => e.tool);
     expect(tools).toHaveLength(1);
     expect(tools[0]!.tool!.input).toEqual({ stream: "stderr", output: "first\nsecond" });
-    expect(store.getState().workingLabel).toBe("Reading agent output…");
+    expect(store.getState().activeSession.workingLabel).toBe("Reading agent output…");
   });
 
   it("force-closes a still-running tool card on agent_end (e.g. aborted mid-tool, no matching tool_result ever arrives)", () => {
     const store = new SessionStore();
     store.apply({ type: "tool_call", toolCallId: "t1", name: "bash", input: { cmd: "sleep 100" } });
-    const running = store.getState().transcript.filter((e) => e.tool);
+    const running = store.getState().activeSession.transcript.filter((e) => e.tool);
     expect(running).toHaveLength(1);
     expect(running[0]!.tool!.status).toBe("running");
     store.apply({ type: "agent_end" });
-    const tools = store.getState().transcript.filter((e) => e.tool);
+    const tools = store.getState().activeSession.transcript.filter((e) => e.tool);
     expect(tools[0]!.tool!.status).toBe("done");
   });
 
@@ -756,7 +756,7 @@ describe("SessionStore", () => {
       prUrl: "https://github.com/acme/widgets/pull/9",
       messages: [],
     });
-    const gh = store.getState().github;
+    const gh = store.getState().activeSession.github;
     expect(gh.repo).toBe("acme/widgets");
     expect(gh.branch).toBe("feature/x");
     expect(gh.prUrl).toBe("https://github.com/acme/widgets/pull/9");
@@ -773,7 +773,7 @@ describe("SessionStore", () => {
       sessionId: "s1",
       event: { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "hello there" }] } },
     });
-    const assistant = store.getState().transcript.filter((e) => e.role === "assistant");
+    const assistant = store.getState().activeSession.transcript.filter((e) => e.role === "assistant");
     expect(assistant).toHaveLength(1);
     expect(assistant[0]!.text).toBe("hello there");
   });
@@ -786,7 +786,7 @@ describe("SessionStore", () => {
       sessionId: "other",
       event: { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "leak" }] } },
     });
-    expect(store.getState().transcript).toHaveLength(0);
+    expect(store.getState().activeSession.transcript).toHaveLength(0);
   });
 
   it("dedups the node's user_message echo against our optimistic bubble", () => {
@@ -795,10 +795,10 @@ describe("SessionStore", () => {
     store.addUserMessage("hi there", "cm-1");
     // The node echoes our own prompt back with the same clientMessageId.
     store.apply({ type: "session.user_message", sessionId: "s1", text: "hi there", clientMessageId: "cm-1" });
-    expect(store.getState().transcript.filter((e) => e.role === "user")).toHaveLength(1);
+    expect(store.getState().activeSession.transcript.filter((e) => e.role === "user")).toHaveLength(1);
     // A user_message from another client (no matching id) still renders.
     store.apply({ type: "session.user_message", sessionId: "s1", text: "from phone", clientMessageId: "cm-2" });
-    expect(store.getState().transcript.filter((e) => e.role === "user")).toHaveLength(2);
+    expect(store.getState().activeSession.transcript.filter((e) => e.role === "user")).toHaveLength(2);
   });
 
   it("keeps an optimistic user bubble through a new session's empty history", () => {
@@ -806,15 +806,15 @@ describe("SessionStore", () => {
     // New-session flow: the bubble is shown, then session.new answers with an
     // empty history for the freshly created session.
     store.addUserMessage("build me a thing", "cm-new");
-    expect(store.getState().transcript).toHaveLength(1);
+    expect(store.getState().activeSession.transcript).toHaveLength(1);
     store.apply({ type: "session.history", requestId: "r1", sessionId: "s-new", messages: [] });
     // The prompt must survive — not vanish leaving only a "working" row.
-    const users = store.getState().transcript.filter((e) => e.role === "user");
+    const users = store.getState().activeSession.transcript.filter((e) => e.role === "user");
     expect(users).toHaveLength(1);
     expect(users[0]!.text).toBe("build me a thing");
     // Streamed reply then renders after it.
     store.apply({ type: "session.event", sessionId: "s-new", event: { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "on it" }] } } });
-    expect(store.getState().transcript.map((e) => e.role)).toEqual(["user", "assistant"]);
+    expect(store.getState().activeSession.transcript.map((e) => e.role)).toEqual(["user", "assistant"]);
   });
 
   it("keeps the just-sent bubble when a stale/empty history races in after the echo (repo clone)", () => {
@@ -832,19 +832,19 @@ describe("SessionStore", () => {
     // session.new reply: empty history for the freshly created session (adopted
     // because it carries our requestId).
     store.apply({ type: "session.history", requestId: "r1", sessionId: "s-new", messages: [] });
-    expect(store.getState().transcript.filter((e) => e.role === "user")).toHaveLength(1);
+    expect(store.getState().activeSession.transcript.filter((e) => e.role === "user")).toHaveLength(1);
     // The node echoes our own prompt back (it's now persisted server-side).
     store.apply({ type: "session.user_message", sessionId: "s-new", text: "build me a thing", clientMessageId: "cm-1" });
     // A stale/empty history snapshot races in before the turn streams. This must
     // NOT wipe the message the user just sent.
     store.apply({ type: "session.history", sessionId: "s-new", messages: [] });
-    const users = store.getState().transcript.filter((e) => e.role === "user");
+    const users = store.getState().activeSession.transcript.filter((e) => e.role === "user");
     expect(users).toHaveLength(1);
     expect(users[0]!.text).toBe("build me a thing");
     // Canonical history finally carries the prompt — it must appear exactly once.
     store.apply({ type: "session.history", sessionId: "s-new", messages: [{ role: "user", content: "build me a thing" }, { role: "assistant", content: [{ type: "text", text: "on it" }] }] });
-    expect(store.getState().transcript.filter((e) => e.role === "user")).toHaveLength(1);
-    expect(store.getState().transcript.map((e) => e.role)).toEqual(["user", "assistant"]);
+    expect(store.getState().activeSession.transcript.filter((e) => e.role === "user")).toHaveLength(1);
+    expect(store.getState().activeSession.transcript.map((e) => e.role)).toEqual(["user", "assistant"]);
   });
 
   it("does not duplicate the optimistic bubble once the node echoes and history catches up", () => {
@@ -855,7 +855,7 @@ describe("SessionStore", () => {
     store.apply({ type: "session.user_message", sessionId: "s1", text: "hello node", clientMessageId: "cm-x" });
     // A later canonical history now contains the message; it must appear once.
     store.apply({ type: "session.history", sessionId: "s1", messages: [{ role: "user", content: "hello node" }] });
-    expect(store.getState().transcript.filter((e) => e.role === "user")).toHaveLength(1);
+    expect(store.getState().activeSession.transcript.filter((e) => e.role === "user")).toHaveLength(1);
   });
 
   it("retires a confirmed bubble the runtime rewrote, instead of re-appending it at the bottom every snapshot", () => {
@@ -885,10 +885,10 @@ describe("SessionStore", () => {
         { role: "assistant", content: [{ type: "text", text: "step " + i }] },
       ] });
     }
-    const users = store.getState().transcript.filter((e) => e.role === "user");
+    const users = store.getState().activeSession.transcript.filter((e) => e.role === "user");
     expect(users).toHaveLength(2); // old prompt + the steering prompt, not duplicated
     // The steering prompt sits in place (before the agent's reply), never trailing it.
-    expect(store.getState().transcript.map((e) => e.role)).toEqual(["user", "assistant", "user", "assistant"]);
+    expect(store.getState().activeSession.transcript.map((e) => e.role)).toEqual(["user", "assistant", "user", "assistant"]);
   });
 
   it("does not retire an unconfirmed bubble on a count-matching snapshot (only the node's echo confirms persistence)", () => {
@@ -901,7 +901,7 @@ describe("SessionStore", () => {
     store.addUserMessage("mine", "cm1");
     // A snapshot with a same-count user message from ELSEWHERE, no echo for cm1 yet.
     store.apply({ type: "session.history", sessionId: "s1", messages: [{ role: "user", content: "from another device" }] });
-    const users = store.getState().transcript.filter((e) => e.role === "user").map((e) => e.text);
+    const users = store.getState().activeSession.transcript.filter((e) => e.role === "user").map((e) => e.text);
     expect(users).toEqual(["from another device", "mine"]); // ours survives, appended
   });
 
@@ -914,15 +914,15 @@ describe("SessionStore", () => {
     const store = new SessionStore();
     const attachments = [{ kind: "image" as const, name: "shot.png", size: 12345, mimeType: "image/png", data: "Zm9v" }];
     store.addUserMessage("look at this", "cm-1", attachments);
-    expect(store.getState().transcript[0]!.attachments).toEqual(attachments);
+    expect(store.getState().activeSession.transcript[0]!.attachments).toEqual(attachments);
     store.apply({ type: "session.history", sessionId: "s1", messages: [] });
     // Still present while the bubble is only the optimistic (pending) one.
-    expect(store.getState().transcript[0]!.attachments).toEqual(attachments);
+    expect(store.getState().activeSession.transcript[0]!.attachments).toEqual(attachments);
     store.apply({ type: "session.user_message", sessionId: "s1", text: "look at this", clientMessageId: "cm-1" });
     // Canonical history replaces the entry entirely (new id, no attachments of
     // its own) — the cache re-attaches by matching text.
     store.apply({ type: "session.history", sessionId: "s1", messages: [{ role: "user", content: "look at this" }] });
-    const users = store.getState().transcript.filter((e) => e.role === "user");
+    const users = store.getState().activeSession.transcript.filter((e) => e.role === "user");
     expect(users).toHaveLength(1);
     expect(users[0]!.attachments).toEqual(attachments);
   });
@@ -940,7 +940,7 @@ describe("SessionStore", () => {
     const composed = "check this out\n\n[Image attachment: shot.png (12345 bytes)]";
     store.apply({ type: "session.user_message", sessionId: "s1", text: composed, clientMessageId: "cm-1" });
     store.apply({ type: "session.history", sessionId: "s1", messages: [{ role: "user", content: composed }] });
-    const users = store.getState().transcript.filter((e) => e.role === "user");
+    const users = store.getState().activeSession.transcript.filter((e) => e.role === "user");
     expect(users).toHaveLength(1);
     expect(users[0]!.attachments).toEqual(attachments);
   });
@@ -956,7 +956,7 @@ describe("SessionStore", () => {
     const composed = "[Image attachment: shot.png (12345 bytes)]";
     store.apply({ type: "session.user_message", sessionId: "s1", text: composed, clientMessageId: "cm-1" });
     store.apply({ type: "session.history", sessionId: "s1", messages: [{ role: "user", content: composed }] });
-    const users = store.getState().transcript.filter((e) => e.role === "user");
+    const users = store.getState().activeSession.transcript.filter((e) => e.role === "user");
     expect(users).toHaveLength(1);
     expect(users[0]!.attachments).toEqual(attachments);
   });
@@ -982,7 +982,7 @@ describe("SessionStore", () => {
     after.restoreAttachments(persisted);
     after.beginOpen("s1");
     after.seedHistory("s1", messages, 1, "hash1");
-    const users = after.getState().transcript.filter((e) => e.role === "user");
+    const users = after.getState().activeSession.transcript.filter((e) => e.role === "user");
     expect(users).toHaveLength(1);
     expect(users[0]!.attachments).toEqual(attachments);
   });
@@ -994,13 +994,13 @@ describe("SessionStore", () => {
     store.apply({ type: "session.history", sessionId: "A", name: "Session A", messages: [{ role: "user", content: "a1" }] });
     store.beginOpen("B");
     store.apply({ type: "session.history", sessionId: "B", name: "Session B", messages: [{ role: "user", content: "b1" }] });
-    expect(store.getState().activeSessionId).toBe("B");
+    expect(store.getState().activeSession.activeSessionId).toBe("B");
     // A's (slow) history now arrives — it must NOT hijack the view back to A.
     store.apply({ type: "session.history", sessionId: "A", name: "Session A", messages: [{ role: "user", content: "a1" }, { role: "assistant", content: [{ type: "text", text: "a-reply" }] }] });
-    expect(store.getState().activeSessionId).toBe("B");
-    expect(store.getState().activeTitle).toBe("Session B");
-    expect(store.getState().transcript.some((e) => e.text === "b1")).toBe(true);
-    expect(store.getState().transcript.some((e) => e.text === "a-reply")).toBe(false);
+    expect(store.getState().activeSession.activeSessionId).toBe("B");
+    expect(store.getState().activeSession.activeTitle).toBe("Session B");
+    expect(store.getState().activeSession.transcript.some((e) => e.text === "b1")).toBe(true);
+    expect(store.getState().activeSession.transcript.some((e) => e.text === "a-reply")).toBe(false);
   });
 
   it("reconciles the open session on reconnect and clears a stuck working flag", () => {
@@ -1008,23 +1008,23 @@ describe("SessionStore", () => {
     store.apply({ type: "session.history", requestId: "r1", sessionId: "s1", messages: [{ role: "user", content: "go" }] });
     // A turn starts streaming, then the connection drops mid-turn.
     store.apply({ type: "session.event", sessionId: "s1", event: { type: "agent_start" } });
-    expect(store.getState().working).toBe(true);
+    expect(store.getState().activeSession.working).toBe(true);
     store.markStreamInterrupted();
     // Reconnect: fresh history says the turn is done. It must apply (not be
     // deferred forever as "mid-turn") and clear working.
     store.apply({ type: "session.history", sessionId: "s1", isStreaming: false, messages: [{ role: "user", content: "go" }, { role: "assistant", content: [{ type: "text", text: "done" }] }] });
-    expect(store.getState().working).toBe(false);
-    expect(store.getState().transcript.some((e) => e.text === "done")).toBe(true);
+    expect(store.getState().activeSession.working).toBe(false);
+    expect(store.getState().activeSession.transcript.some((e) => e.text === "done")).toBe(true);
   });
 
   it("clears the sidebar needs-action dot when its approval resolves", () => {
     const store = new SessionStore();
     store.apply({ type: "sessions.list", sessions: [{ id: "s1", name: "One" }] });
     store.apply({ type: "approval.created", approval: { id: "a1", sessionId: "s1", tool: "bash" } });
-    expect(store.getState().sessions[0]!.needsAction).toBe(true);
+    expect(store.getState().sessionIndex.sessions[0]!.needsAction).toBe(true);
     store.apply({ type: "approval.resolved", id: "a1" });
-    expect(store.getState().sessions[0]!.needsAction).toBe(false);
-    expect(store.getState().sessions[0]!.status).toBe("idle");
+    expect(store.getState().sessionIndex.sessions[0]!.needsAction).toBe(false);
+    expect(store.getState().sessionIndex.sessions[0]!.status).toBe("idle");
   });
 
   it("tracks live bivy run terminals from list and lifecycle events", () => {
@@ -1033,16 +1033,16 @@ describe("SessionStore", () => {
       type: "terminal.list",
       terminals: [{ termId: "term-1", name: "Pi · mesh", agent: "pi", createdAt: 100, lastActivityAt: 100 }],
     });
-    expect(store.getState().runTerminals.map((t) => t.termId)).toEqual(["term-1"]);
+    expect(store.getState().sessionIndex.runTerminals.map((t) => t.termId)).toEqual(["term-1"]);
 
     store.apply({ type: "terminal.activity", termId: "term-1", at: 200 });
-    expect(store.getState().runTerminals[0]!.lastActivityAt).toBe(200);
+    expect(store.getState().sessionIndex.runTerminals[0]!.lastActivityAt).toBe(200);
 
     store.apply({ type: "terminal.created", terminal: { termId: "term-2", name: "Codex · repo", agent: "codex", createdAt: 300 } });
-    expect(store.getState().runTerminals.map((t) => t.termId)).toEqual(["term-2", "term-1"]);
+    expect(store.getState().sessionIndex.runTerminals.map((t) => t.termId)).toEqual(["term-2", "term-1"]);
 
     store.apply({ type: "terminal.closed", termId: "term-1" });
-    expect(store.getState().runTerminals.map((t) => t.termId)).toEqual(["term-2"]);
+    expect(store.getState().sessionIndex.runTerminals.map((t) => t.termId)).toEqual(["term-2"]);
   });
 
   it("keeps sessions and run terminals across a node switch — they're unified all-node sidebar lists, not per-node state (issue #99)", () => {
@@ -1052,17 +1052,17 @@ describe("SessionStore", () => {
       type: "terminal.list",
       terminals: [{ termId: "term-1", name: "Pi · mesh", agent: "pi", nodeId: "node-a" }],
     });
-    expect(store.getState().sessions.map((s) => s.sessionId)).toEqual(["s1"]);
-    expect(store.getState().runTerminals.map((t) => t.termId)).toEqual(["term-1"]);
+    expect(store.getState().sessionIndex.sessions.map((s) => s.sessionId)).toEqual(["s1"]);
+    expect(store.getState().sessionIndex.runTerminals.map((t) => t.termId)).toEqual(["term-1"]);
     // resetSession() is what controller.switchNode() calls when the user picks
     // a different node (e.g. from the "new session" node switcher) — it must
     // still blank the active session pane, but the sidebar's session/terminal
     // lists (spanning every node on the account) must not change just because
     // the client's own connected transport did.
     store.resetSession();
-    expect(store.getState().sessions.map((s) => s.sessionId)).toEqual(["s1"]);
-    expect(store.getState().runTerminals.map((t) => t.termId)).toEqual(["term-1"]);
-    expect(store.getState().activeSessionId).toBeNull();
+    expect(store.getState().sessionIndex.sessions.map((s) => s.sessionId)).toEqual(["s1"]);
+    expect(store.getState().sessionIndex.runTerminals.map((t) => t.termId)).toEqual(["term-1"]);
+    expect(store.getState().activeSession.activeSessionId).toBeNull();
   });
 
   // ---- seen/unseen + live/not-live state (issue #387) ----
@@ -1073,16 +1073,16 @@ describe("SessionStore", () => {
   it("stamps finishedAt only on the real agent_end transition to idle, not on other activity", () => {
     const store = new SessionStore();
     store.apply({ type: "sessions.list", sessions: [{ id: "s1", name: "One" }] });
-    expect(store.getState().sessions[0]!.finishedAt).toBeUndefined();
+    expect(store.getState().sessionIndex.sessions[0]!.finishedAt).toBeUndefined();
     // Mid-turn activity on a session that isn't focused moves it to "working"
     // — not a finish, so no finishedAt yet.
     store.apply({ type: "session.event", sessionId: "s1", event: { type: "agent_start" } });
-    expect(store.getState().sessions[0]!.status).toBe("working");
-    expect(store.getState().sessions[0]!.finishedAt).toBeUndefined();
+    expect(store.getState().sessionIndex.sessions[0]!.status).toBe("working");
+    expect(store.getState().sessionIndex.sessions[0]!.finishedAt).toBeUndefined();
     // The turn actually finishing is what stamps it.
     store.apply({ type: "session.event", sessionId: "s1", event: { type: "agent_end" } });
-    expect(store.getState().sessions[0]!.status).toBe("idle");
-    expect(store.getState().sessions[0]!.finishedAt).toBeTypeOf("number");
+    expect(store.getState().sessionIndex.sessions[0]!.status).toBe("idle");
+    expect(store.getState().sessionIndex.sessions[0]!.finishedAt).toBeTypeOf("number");
   });
 
   it("never stamps finishedAt for a brand-new session or a cold sessions.list snapshot", () => {
@@ -1091,33 +1091,33 @@ describe("SessionStore", () => {
     // observed by this client counts as "just finished".
     const store = new SessionStore();
     store.apply({ type: "sessions.list", sessions: [{ id: "s1", name: "One", status: "idle" }] });
-    expect(store.getState().sessions[0]!.finishedAt).toBeUndefined();
+    expect(store.getState().sessionIndex.sessions[0]!.finishedAt).toBeUndefined();
   });
 
   it("beginOpen stamps lastSeenAt on the opened row", () => {
     const store = new SessionStore();
     store.apply({ type: "sessions.list", sessions: [{ id: "s1", name: "One" }] });
-    expect(store.getState().sessions[0]!.lastSeenAt).toBeUndefined();
+    expect(store.getState().sessionIndex.sessions[0]!.lastSeenAt).toBeUndefined();
     store.beginOpen("s1");
-    expect(store.getState().sessions[0]!.lastSeenAt).toBeTypeOf("number");
+    expect(store.getState().sessionIndex.sessions[0]!.lastSeenAt).toBeTypeOf("number");
   });
 
   it("keeps the active session's lastSeenAt current as its own live updates land, but not a background session's", () => {
     const store = new SessionStore();
     store.apply({ type: "sessions.list", sessions: [{ id: "s1", name: "One" }, { id: "s2", name: "Two" }] });
     store.beginOpen("s1");
-    const seenAtOpen = store.getState().sessions.find((s) => s.sessionId === "s1")!.lastSeenAt;
+    const seenAtOpen = store.getState().sessionIndex.sessions.find((s) => s.sessionId === "s1")!.lastSeenAt;
     expect(seenAtOpen).toBeTypeOf("number");
     // The focused session finishing a run must not flag itself unseen — the
     // user is already looking at it.
     store.apply({ type: "session.event", sessionId: "s1", event: { type: "agent_end" } });
-    const s1 = store.getState().sessions.find((s) => s.sessionId === "s1")!;
+    const s1 = store.getState().sessionIndex.sessions.find((s) => s.sessionId === "s1")!;
     expect(s1.finishedAt).toBeTypeOf("number");
     expect(s1.lastSeenAt).toBeGreaterThanOrEqual(s1.finishedAt!);
     // A different, unfocused session finishing meanwhile must NOT get its
     // lastSeenAt bumped — nobody's looking at it.
     store.apply({ type: "session.event", sessionId: "s2", event: { type: "agent_end" } });
-    const s2 = store.getState().sessions.find((s) => s.sessionId === "s2")!;
+    const s2 = store.getState().sessionIndex.sessions.find((s) => s.sessionId === "s2")!;
     expect(s2.finishedAt).toBeTypeOf("number");
     expect(s2.lastSeenAt).toBeUndefined();
   });
@@ -1126,12 +1126,12 @@ describe("SessionStore", () => {
     const store = new SessionStore();
     store.apply({ type: "sessions.list", sessions: [{ id: "s1", name: "One" }] });
     store.apply({ type: "session.event", sessionId: "s1", event: { type: "agent_end" } });
-    const finishedAt = store.getState().sessions[0]!.finishedAt;
+    const finishedAt = store.getState().sessionIndex.sessions[0]!.finishedAt;
     expect(finishedAt).toBeTypeOf("number");
     // A later poll re-fetches the list from scratch (the node has no notion of
     // these client-local fields) — they must survive the rebuild.
     store.apply({ type: "sessions.list", sessions: [{ id: "s1", name: "One", status: "idle" }] });
-    expect(store.getState().sessions[0]!.finishedAt).toBe(finishedAt);
+    expect(store.getState().sessionIndex.sessions[0]!.finishedAt).toBe(finishedAt);
   });
 
   it("keeps each session's on-disk path so a sidebar tap can open it", () => {
@@ -1141,7 +1141,7 @@ describe("SessionStore", () => {
     // survive normalization for SessionList → openSession to forward it.
     const store = new SessionStore();
     store.apply({ type: "sessions.list", sessions: [{ id: "s1", name: "One", path: "/w/s1.jsonl" }] });
-    expect(store.getState().sessions[0]!.path).toBe("/w/s1.jsonl");
+    expect(store.getState().sessionIndex.sessions[0]!.path).toBe("/w/s1.jsonl");
   });
 
   it("opening a known session keeps its name and last-active time (no Untitled, no reorder)", () => {
@@ -1152,7 +1152,7 @@ describe("SessionStore", () => {
     const store = new SessionStore();
     store.apply({ type: "sessions.list", sessions: [{ id: "s1", name: "Fix the parser", path: "/w/s1", updatedAt: 1000 }] });
     store.apply({ type: "session.created", sessionId: "s1", runtimeId: "pi" });
-    const row = store.getState().sessions.find((s) => s.sessionId === "s1")!;
+    const row = store.getState().sessionIndex.sessions.find((s) => s.sessionId === "s1")!;
     expect(row.name).toBe("Fix the parser");
     expect(row.updatedAt).toBe(1000);
   });
@@ -1160,7 +1160,7 @@ describe("SessionStore", () => {
   it("session.created still fills a default name/time for a genuinely new row", () => {
     const store = new SessionStore();
     store.apply({ type: "session.created", sessionId: "new1", runtimeId: "pi" });
-    const row = store.getState().sessions.find((s) => s.sessionId === "new1")!;
+    const row = store.getState().sessionIndex.sessions.find((s) => s.sessionId === "new1")!;
     expect(row.name).toBe("Untitled session");
     expect(typeof row.updatedAt).toBe("number");
   });
@@ -1169,7 +1169,7 @@ describe("SessionStore", () => {
     const store = new SessionStore();
     store.apply({ type: "sessions.list", sessions: [{ id: "s2", name: "Ship the PR", path: "/w/s2", updatedAt: 2000 }] });
     store.beginOpen("s2");
-    expect(store.getState().activeTitle).toBe("Ship the PR");
+    expect(store.getState().activeSession.activeTitle).toBe("Ship the PR");
   });
 
   it("beginOpen replaces the New-session agent/model pills with session-scoped metadata", () => {
@@ -1194,14 +1194,14 @@ describe("SessionStore", () => {
     });
 
     // These are the selections visible on the New session screen.
-    expect(store.getState().currentAgentName).toBe("Claude Code");
-    expect(store.getState().currentModel?.id).toBe("sonnet");
+    expect(store.getState().catalogs.currentAgentName).toBe("Claude Code");
+    expect(store.getState().catalogs.currentModel?.id).toBe("sonnet");
 
     store.beginOpen("s2");
-    expect(store.getState().currentAgentName).toBe("Codex");
-    expect(store.getState().activeRuntimeId).toBe("codex");
-    expect(store.getState().currentModel).toBeNull();
-    expect(store.getState().models).toEqual([]);
+    expect(store.getState().catalogs.currentAgentName).toBe("Codex");
+    expect(store.getState().activeSession.activeRuntimeId).toBe("codex");
+    expect(store.getState().catalogs.currentModel).toBeNull();
+    expect(store.getState().catalogs.models).toEqual([]);
 
     // The session-scoped refresh fills in that session's actual model.
     store.apply({
@@ -1211,7 +1211,7 @@ describe("SessionStore", () => {
       current: { id: "gpt-5.4", provider: "openai" },
       models: [{ id: "gpt-5.4", provider: "openai" }],
     });
-    expect(store.getState().currentModel?.id).toBe("gpt-5.4");
+    expect(store.getState().catalogs.currentModel?.id).toBe("gpt-5.4");
   });
 
   it("tracks the active session runtime independently from the global agent selection", () => {
@@ -1219,15 +1219,15 @@ describe("SessionStore", () => {
     store.setSelectedAgentLocal("pi");
     store.apply({ type: "sessions.list", sessions: [{ id: "s2", name: "Claude session", runtimeId: "pi" }] });
     store.beginOpen("s2");
-    expect(store.getState().activeRuntimeId).toBe("pi");
+    expect(store.getState().activeSession.activeRuntimeId).toBe("pi");
 
     // Canonical history wins over a stale list row/global last-used agent.
     store.apply({ type: "session.history", sessionId: "s2", runtimeId: "claude-code-sdk", agentName: "Claude Code SDK", messages: [] });
-    expect(store.getState().activeRuntimeId).toBe("claude-code-sdk");
-    expect(store.getState().selectedAgentId).toBe("pi");
+    expect(store.getState().activeSession.activeRuntimeId).toBe("claude-code-sdk");
+    expect(store.getState().catalogs.selectedAgentId).toBe("pi");
 
     store.resetActiveSession();
-    expect(store.getState().activeRuntimeId).toBeNull();
+    expect(store.getState().activeSession.activeRuntimeId).toBeNull();
   });
 
   it("keeps the agent pill and picker on the active session when runtimes refresh", () => {
@@ -1256,11 +1256,11 @@ describe("SessionStore", () => {
     });
 
     const state = store.getState();
-    expect(state.activeRuntimeId).toBe("opencode");
-    expect(state.currentAgentName).toBe("OpenCode");
+    expect(state.activeSession.activeRuntimeId).toBe("opencode");
+    expect(state.catalogs.currentAgentName).toBe("OpenCode");
     // The node default may still be remembered for a future draft without
     // leaking into the active session's display.
-    expect(state.selectedAgentId).toBe("pi");
+    expect(state.catalogs.selectedAgentId).toBe("pi");
   });
 
   it("beginOpen primes the GitHub pill from the known row so it shows without waiting on history", () => {
@@ -1270,7 +1270,7 @@ describe("SessionStore", () => {
       sessions: [{ id: "s2", name: "Ship the PR", path: "/w/s2", source: "repo:acme/widgets", branch: "feat/x", prs: [{ url: "https://github.com/acme/widgets/pull/9", state: "open" }] }],
     });
     store.beginOpen("s2");
-    const gh = store.getState().github;
+    const gh = store.getState().activeSession.github;
     expect(gh.prUrl).toBe("https://github.com/acme/widgets/pull/9");
     expect(gh.prs.map((p) => p.state)).toEqual(["open"]);
     expect(gh.branch).toBe("feat/x");
@@ -1286,8 +1286,8 @@ describe("SessionStore", () => {
         { id: "plain1", name: "Ordinary session" },
       ],
     });
-    const fork = store.getState().sessions.find((s) => s.sessionId === "fork1");
-    const plain = store.getState().sessions.find((s) => s.sessionId === "plain1");
+    const fork = store.getState().sessionIndex.sessions.find((s) => s.sessionId === "fork1");
+    const plain = store.getState().sessionIndex.sessions.find((s) => s.sessionId === "plain1");
     expect(fork?.forkedFrom).toBe("parent1");
     expect(plain?.forkedFrom).toBeUndefined();
   });
@@ -1302,10 +1302,10 @@ describe("SessionStore", () => {
       ],
     });
     store.beginOpen("withpr");
-    expect(store.getState().github.prs).toHaveLength(1);
+    expect(store.getState().activeSession.github.prs).toHaveLength(1);
     store.beginOpen("nopr");
-    expect(store.getState().github.prs).toEqual([]);
-    expect(store.getState().github.prUrl).toBeNull();
+    expect(store.getState().activeSession.github.prs).toEqual([]);
+    expect(store.getState().activeSession.github.prUrl).toBeNull();
   });
 
   it("dedupes sessions.list by sessionId so the sidebar never renders duplicate rows", () => {
@@ -1322,7 +1322,7 @@ describe("SessionStore", () => {
         { id: "s2", name: "Other" },
       ],
     });
-    const { sessions } = store.getState();
+    const { sessions } = store.getState().sessionIndex;
     expect(sessions).toHaveLength(2);
     expect(sessions.filter((s) => s.sessionId === "s1")).toHaveLength(1);
     expect(sessions.find((s) => s.sessionId === "s1")!.name).toBe("First");
@@ -1331,11 +1331,11 @@ describe("SessionStore", () => {
   it("clears a stale model when a runtime reports no models", () => {
     const store = new SessionStore();
     store.apply({ type: "models.list", models: [{ id: "opus", provider: "anthropic" }], current: { id: "opus", provider: "anthropic" } });
-    expect(store.getState().currentModel?.id).toBe("opus");
+    expect(store.getState().catalogs.currentModel?.id).toBe("opus");
     // Switching to a runtime with no model selection (e.g. Codex).
     store.apply({ type: "models.list", models: [], current: null });
-    expect(store.getState().currentModel).toBeNull();
-    expect(store.getState().currentModelId).toBeNull();
+    expect(store.getState().catalogs.currentModel).toBeNull();
+    expect(store.getState().catalogs.currentModelId).toBeNull();
   });
 
   it("drops a model the new runtime doesn't support instead of leaving a mismatch", () => {
@@ -1346,29 +1346,29 @@ describe("SessionStore", () => {
     // the runtime's default (first) model instead.
     const store = new SessionStore();
     store.apply({ type: "models.list", models: [{ id: "opus", provider: "anthropic" }], current: { id: "opus", provider: "anthropic" } });
-    expect(store.getState().currentModel?.id).toBe("opus");
+    expect(store.getState().catalogs.currentModel?.id).toBe("opus");
     // New agent supports a different model set that doesn't include opus, and the
     // node sends no explicit `current`.
     store.apply({ type: "models.list", models: [{ id: "grok-4", provider: "xai" }, { id: "grok-3", provider: "xai" }] });
-    expect(store.getState().currentModel?.id).toBe("grok-4");
-    expect((store.getState().currentModel as any)?.provider).toBe("xai");
+    expect(store.getState().catalogs.currentModel?.id).toBe("grok-4");
+    expect((store.getState().catalogs.currentModel as any)?.provider).toBe("xai");
   });
 
   it("keeps the current model across a refresh when the runtime still supports it", () => {
     const store = new SessionStore();
     store.apply({ type: "models.list", models: [{ id: "a", provider: "p" }, { id: "b", provider: "p" }], current: { id: "b", provider: "p" } });
-    expect(store.getState().currentModel?.id).toBe("b");
+    expect(store.getState().catalogs.currentModel?.id).toBe("b");
     // A plain re-list (no explicit current) that still contains "b" must not
     // snap the selection back to the first model.
     store.apply({ type: "models.list", models: [{ id: "a", provider: "p" }, { id: "b", provider: "p" }] });
-    expect(store.getState().currentModel?.id).toBe("b");
+    expect(store.getState().catalogs.currentModel?.id).toBe("b");
   });
 
-  it("keeps an unconnected model in state.models but never auto-selects it as current (#390 'other models' section)", () => {
+  it("keeps an unconnected model in state.catalogs.models but never auto-selects it as current (#390 'other models' section)", () => {
     // The model picker's "other models" section (#390) rides in the same
     // models.list payload as the connected ones, each flagged
     // `configured: false` by the node. The reducer must still surface them in
-    // state.models (so the picker can render them + an inline connect action)
+    // state.catalogs.models (so the picker can render them + an inline connect action)
     // but must never let one become currentModel via any of the fallback
     // paths — a provider with no auth configured can't actually run a turn.
     const store = new SessionStore();
@@ -1380,8 +1380,8 @@ describe("SessionStore", () => {
       ],
       current: { id: "opus", provider: "anthropic" },
     });
-    expect(store.getState().models).toHaveLength(2);
-    expect(store.getState().currentModel?.id).toBe("opus");
+    expect(store.getState().catalogs.models).toHaveLength(2);
+    expect(store.getState().catalogs.currentModel?.id).toBe("opus");
   });
 
   it("falls back to null (not an unconnected model) when nothing configured is left", () => {
@@ -1391,13 +1391,13 @@ describe("SessionStore", () => {
     // models" — never silently promote an unconnected model to current.
     const store = new SessionStore();
     store.apply({ type: "models.list", models: [{ id: "opus", provider: "anthropic" }], current: { id: "opus", provider: "anthropic" } });
-    expect(store.getState().currentModel?.id).toBe("opus");
+    expect(store.getState().catalogs.currentModel?.id).toBe("opus");
     store.apply({
       type: "models.list",
       models: [{ id: "gpt-5", provider: "openai", configured: false }],
       current: null,
     });
-    expect(store.getState().currentModel).toBeNull();
+    expect(store.getState().catalogs.currentModel).toBeNull();
   });
 
   it("defaults a fresh draft to the last-used model, ahead of the node default", () => {
@@ -1412,7 +1412,7 @@ describe("SessionStore", () => {
       current: { id: "grok-3", provider: "xai" },
       models: [{ id: "grok-3", provider: "xai" }, { id: "grok-4", provider: "xai" }],
     });
-    expect(store.getState().currentModel?.id).toBe("grok-4");
+    expect(store.getState().catalogs.currentModel?.id).toBe("grok-4");
   });
 
   it("ignores the last-used model the runtime doesn't list, and once a session is active", () => {
@@ -1424,7 +1424,7 @@ describe("SessionStore", () => {
       current: { id: "opus", provider: "anthropic" },
       models: [{ id: "opus", provider: "anthropic" }, { id: "sonnet", provider: "anthropic" }],
     });
-    expect(store.getState().currentModel?.id).toBe("opus");
+    expect(store.getState().catalogs.currentModel?.id).toBe("opus");
 
     // Once a session is active, its own `current` wins over the draft preference
     // even when the remembered model is listed.
@@ -1436,14 +1436,14 @@ describe("SessionStore", () => {
       current: { id: "grok-3", provider: "xai" },
       models: [{ id: "grok-3", provider: "xai" }, { id: "grok-4", provider: "xai" }],
     });
-    expect(store.getState().currentModel?.id).toBe("grok-3");
+    expect(store.getState().catalogs.currentModel?.id).toBe("grok-3");
   });
 
   it("applies branches.list into the branch picker's fields (#466)", () => {
     const store = new SessionStore();
     store.setDraftRepo("bivysh/bivy");
     store.setBranchesLoading(true);
-    expect(store.getState().branchesLoading).toBe(true);
+    expect(store.getState().catalogs.branchesLoading).toBe(true);
     store.apply({
       type: "branches.list",
       repo: "bivysh/bivy",
@@ -1451,28 +1451,28 @@ describe("SessionStore", () => {
       defaultBranch: "main",
     });
     const s = store.getState();
-    expect(s.branchesLoading).toBe(false);
-    expect(s.branchesRepo).toBe("bivysh/bivy");
-    expect(s.branchesDefault).toBe("main");
-    expect(s.branches.map((b) => b.name)).toEqual(["main", "feature/x"]);
+    expect(s.catalogs.branchesLoading).toBe(false);
+    expect(s.catalogs.branchesRepo).toBe("bivysh/bivy");
+    expect(s.catalogs.branchesDefault).toBe("main");
+    expect(s.catalogs.branches.map((b) => b.name)).toEqual(["main", "feature/x"]);
   });
 
   it("surfaces a branches.list error and tolerates a malformed/missing list", () => {
     const store = new SessionStore();
     store.apply({ type: "branches.list", repo: "bivysh/bivy", error: "GitHub responded 404" });
-    expect(store.getState().branches).toEqual([]);
-    expect(store.getState().branchesError).toBe("GitHub responded 404");
+    expect(store.getState().catalogs.branches).toEqual([]);
+    expect(store.getState().catalogs.branchesError).toBe("GitHub responded 404");
     // No `branches` array at all (an older/odd payload) → empty list, not a throw.
     store.apply({ type: "branches.list", repo: "bivysh/bivy" } as never);
-    expect(store.getState().branches).toEqual([]);
+    expect(store.getState().catalogs.branches).toEqual([]);
   });
 
   it("clearBranches resets the branch list AND the picked branch (repo changed)", () => {
     const store = new SessionStore();
     store.setDraftBranch("feature/x");
     store.apply({ type: "branches.list", repo: "bivysh/bivy", branches: [{ name: "feature/x" }], defaultBranch: "main" });
-    expect(store.getState().draftBranch).toBe("feature/x");
-    expect(store.getState().branches.length).toBe(1);
+    expect(store.getState().draft.branch).toBe("feature/x");
+    expect(store.getState().catalogs.branches.length).toBe(1);
 
     // Picking a different repo must drop the previous repo's branch pick and
     // list — a branch chosen on repo A means nothing once the draft moves to
@@ -1480,24 +1480,24 @@ describe("SessionStore", () => {
     // repo's clone off a branch name that belongs to someone else's repo).
     store.clearBranches();
     const s = store.getState();
-    expect(s.draftBranch).toBeNull();
-    expect(s.branches).toEqual([]);
-    expect(s.branchesRepo).toBeNull();
-    expect(s.branchesDefault).toBeNull();
+    expect(s.draft.branch).toBeNull();
+    expect(s.catalogs.branches).toEqual([]);
+    expect(s.catalogs.branchesRepo).toBeNull();
+    expect(s.catalogs.branchesDefault).toBeNull();
   });
 
   it("tracks paused sessions and folds a PR result into github context", () => {
     const store = new SessionStore();
     store.apply({ type: "session.history", requestId: "r1", sessionId: "s1", messages: [] });
     store.apply({ type: "session.paused", sessionId: "s1" });
-    expect(store.getState().pausedSessionIds).toContain("s1");
+    expect(store.getState().sessionIndex.pausedSessionIds).toContain("s1");
     store.apply({ type: "session.resumed", sessionId: "s1" });
-    expect(store.getState().pausedSessionIds).not.toContain("s1");
+    expect(store.getState().sessionIndex.pausedSessionIds).not.toContain("s1");
     store.apply({ type: "session.pr_result", sessionId: "s1", ok: true, prUrl: "https://github.com/a/b/pull/3" });
-    expect(store.getState().prResult?.url).toBe("https://github.com/a/b/pull/3");
-    expect(store.getState().github.prUrl).toBe("https://github.com/a/b/pull/3");
+    expect(store.getState().presentation.prResult?.url).toBe("https://github.com/a/b/pull/3");
+    expect(store.getState().activeSession.github.prUrl).toBe("https://github.com/a/b/pull/3");
     store.clearPrResult();
-    expect(store.getState().prResult).toBeNull();
+    expect(store.getState().presentation.prResult).toBeNull();
   });
 
   it("session.pr_opened folds a multi-PR list onto both the row and the active pill", () => {
@@ -1509,11 +1509,11 @@ describe("SessionStore", () => {
       { url: "https://github.com/a/b/pull/2", number: 2, state: "merged" },
     ];
     store.apply({ type: "session.pr_opened", sessionId: "s1", prUrl: "https://github.com/a/b/pull/4", prs });
-    const row = store.getState().sessions.find((s) => s.sessionId === "s1");
+    const row = store.getState().sessionIndex.sessions.find((s) => s.sessionId === "s1");
     expect(row?.prs).toHaveLength(2);
     expect(row?.prUrl).toBe("https://github.com/a/b/pull/4");
-    expect(store.getState().github.prs).toHaveLength(2);
-    expect(store.getState().github.prUrl).toBe("https://github.com/a/b/pull/4");
+    expect(store.getState().activeSession.github.prs).toHaveLength(2);
+    expect(store.getState().activeSession.github.prUrl).toBe("https://github.com/a/b/pull/4");
   });
 
   it("a PR merging (no open PR left) clears the open prUrl but keeps the merged PR in the list", () => {
@@ -1521,27 +1521,27 @@ describe("SessionStore", () => {
     store.apply({ type: "sessions.list", sessions: [{ id: "s1", name: "One" }] });
     store.apply({ type: "session.history", requestId: "r1", sessionId: "s1", messages: [] });
     store.apply({ type: "session.pr_opened", sessionId: "s1", prUrl: "https://github.com/a/b/pull/4", prs: [{ url: "https://github.com/a/b/pull/4", state: "open" }] });
-    expect(store.getState().github.prUrl).toBe("https://github.com/a/b/pull/4");
+    expect(store.getState().activeSession.github.prUrl).toBe("https://github.com/a/b/pull/4");
     // Later refresh: the PR merged, so there's no open PR and prUrl is absent.
     store.apply({ type: "session.pr_opened", sessionId: "s1", prs: [{ url: "https://github.com/a/b/pull/4", state: "merged" }] });
-    expect(store.getState().github.prUrl).toBeNull();
-    expect(store.getState().github.prs[0].state).toBe("merged");
-    expect(store.getState().sessions[0].prUrl).toBeUndefined();
+    expect(store.getState().activeSession.github.prUrl).toBeNull();
+    expect(store.getState().activeSession.github.prs[0].state).toBe("merged");
+    expect(store.getState().sessionIndex.sessions[0].prUrl).toBeUndefined();
   });
 
   it("synthesizes a PR list from a bare prUrl (older node without a prs field)", () => {
     const store = new SessionStore();
     store.apply({ type: "sessions.list", sessions: [{ id: "s1", name: "One", prUrl: "https://github.com/a/b/pull/7" }] });
-    const row = store.getState().sessions.find((s) => s.sessionId === "s1");
+    const row = store.getState().sessionIndex.sessions.find((s) => s.sessionId === "s1");
     expect(row?.prs).toEqual([{ url: "https://github.com/a/b/pull/7", state: "open" }]);
   });
 
   it("tracks pending approvals and clears them on resolve", () => {
     const store = new SessionStore();
     store.apply({ type: "approval.created", approval: { id: "a1", tool: "bash", summary: "rm -rf" } });
-    expect(store.getState().approvals).toHaveLength(1);
+    expect(store.getState().activeSession.approvals).toHaveLength(1);
     store.apply({ type: "approval.resolved", id: "a1" });
-    expect(store.getState().approvals).toHaveLength(0);
+    expect(store.getState().activeSession.approvals).toHaveLength(0);
   });
 
   it("tracks a pending clarifying question, lights the sidebar dot, and clears both on resolve", () => {
@@ -1553,14 +1553,14 @@ describe("SessionStore", () => {
       requestId: "q1",
       questions: [{ question: "Which approach?", header: "Approach", options: [{ label: "A", description: "" }, { label: "B", description: "" }] }],
     });
-    expect(store.getState().questions).toHaveLength(1);
-    expect(store.getState().questions[0]!.sessionId).toBe("s1");
-    expect(store.getState().sessions[0]!.needsAction).toBe(true);
-    expect(store.getState().sessions[0]!.status).toBe("needs_action");
+    expect(store.getState().activeSession.questions).toHaveLength(1);
+    expect(store.getState().activeSession.questions[0]!.sessionId).toBe("s1");
+    expect(store.getState().sessionIndex.sessions[0]!.needsAction).toBe(true);
+    expect(store.getState().sessionIndex.sessions[0]!.status).toBe("needs_action");
     store.apply({ type: "session.question.resolved", sessionId: "s1", requestId: "q1" });
-    expect(store.getState().questions).toHaveLength(0);
-    expect(store.getState().sessions[0]!.needsAction).toBe(false);
-    expect(store.getState().sessions[0]!.status).toBe("idle");
+    expect(store.getState().activeSession.questions).toHaveLength(0);
+    expect(store.getState().sessionIndex.sessions[0]!.needsAction).toBe(false);
+    expect(store.getState().sessionIndex.sessions[0]!.status).toBe("idle");
   });
 
   it("keeps the sidebar needs-action dot lit while either an approval or a question is still pending on that session", () => {
@@ -1576,9 +1576,9 @@ describe("SessionStore", () => {
     store.apply({ type: "approval.resolved", id: "a1" });
     // The question is still pending — resolving the approval alone must not
     // clear the dot out from under it.
-    expect(store.getState().sessions[0]!.needsAction).toBe(true);
+    expect(store.getState().sessionIndex.sessions[0]!.needsAction).toBe(true);
     store.apply({ type: "session.question.resolved", sessionId: "s1", requestId: "q1" });
-    expect(store.getState().sessions[0]!.needsAction).toBe(false);
+    expect(store.getState().sessionIndex.sessions[0]!.needsAction).toBe(false);
   });
 
   it("a session.question's needs_action survives the node's generic session.event re-broadcast of the same user_question", () => {
@@ -1593,15 +1593,15 @@ describe("SessionStore", () => {
     const questions = [{ question: "Which approach?", header: "Approach", options: [{ label: "A", description: "" }, { label: "B", description: "" }] }];
     store.apply({ type: "session.question", sessionId: "s1", requestId: "q1", questions });
     store.apply({ type: "session.event", sessionId: "s1", event: { type: "user_question", requestId: "q1", questions } });
-    expect(store.getState().sessions[0]!.needsAction).toBe(true);
-    expect(store.getState().sessions[0]!.status).toBe("needs_action");
+    expect(store.getState().sessionIndex.sessions[0]!.needsAction).toBe(true);
+    expect(store.getState().sessionIndex.sessions[0]!.status).toBe("needs_action");
     // Same for the resolution side: the generic envelope's re-broadcast must
     // not flip it back to "working" between the dedicated resolved event and
     // whatever comes next.
     store.apply({ type: "session.question.resolved", sessionId: "s1", requestId: "q1" });
     store.apply({ type: "session.event", sessionId: "s1", event: { type: "user_question_resolved", requestId: "q1" } });
-    expect(store.getState().sessions[0]!.needsAction).toBe(false);
-    expect(store.getState().sessions[0]!.status).toBe("idle");
+    expect(store.getState().sessionIndex.sessions[0]!.needsAction).toBe(false);
+    expect(store.getState().sessionIndex.sessions[0]!.status).toBe("idle");
   });
 
   it("ignores a session.error broadcast for a different, non-active session", () => {
@@ -1612,17 +1612,17 @@ describe("SessionStore", () => {
     const store = new SessionStore();
     store.apply({ type: "session.history", requestId: "r1", sessionId: "s1", messages: [] });
     store.apply({ type: "agent_start" });
-    expect(store.getState().working).toBe(true);
+    expect(store.getState().activeSession.working).toBe(true);
     store.apply({ type: "session.error", sessionId: "s2", error: "boom" });
-    expect(store.getState().working).toBe(true);
-    expect(store.getState().error).toBeNull();
-    expect(store.getState().transcript.some((e) => e.role === "error")).toBe(false);
+    expect(store.getState().activeSession.working).toBe(true);
+    expect(store.getState().presentation.error).toBeNull();
+    expect(store.getState().activeSession.transcript.some((e) => e.role === "error")).toBe(false);
     // An error naming the active session now lands *inline in that chat* as an
     // error entry (not the floating toast) and still clears the working spinner.
     store.apply({ type: "session.error", sessionId: "s1", error: "boom" });
-    expect(store.getState().working).toBe(false);
-    expect(store.getState().error).toBeNull();
-    const errorEntry = store.getState().transcript.find((e) => e.role === "error");
+    expect(store.getState().activeSession.working).toBe(false);
+    expect(store.getState().presentation.error).toBeNull();
+    const errorEntry = store.getState().activeSession.transcript.find((e) => e.role === "error");
     expect(errorEntry?.text).toBe("boom");
   });
 
@@ -1632,8 +1632,8 @@ describe("SessionStore", () => {
     const store = new SessionStore();
     store.apply({ type: "session.history", requestId: "r1", sessionId: "s1", messages: [] });
     store.apply({ type: "session.error", error: "relay down" });
-    expect(store.getState().error).toBe("relay down");
-    expect(store.getState().transcript.some((e) => e.role === "error")).toBe(false);
+    expect(store.getState().presentation.error).toBe("relay down");
+    expect(store.getState().activeSession.transcript.some((e) => e.role === "error")).toBe(false);
   });
 
   it("rebuilds a persisted error turn as an inline error on reload", () => {
@@ -1650,7 +1650,7 @@ describe("SessionStore", () => {
         { role: "assistant", content: [], stopReason: "error", errorMessage: "Credit balance is too low." },
       ],
     });
-    const errorEntry = store.getState().transcript.find((e) => e.role === "error");
+    const errorEntry = store.getState().activeSession.transcript.find((e) => e.role === "error");
     expect(errorEntry?.text).toBe("Credit balance is too low.");
   });
 
@@ -1662,8 +1662,8 @@ describe("SessionStore", () => {
     const store = new SessionStore();
     store.apply({ type: "session.history", requestId: "r1", sessionId: "s1", messages: [] });
     store.apply({ type: "session.event", sessionId: "s1", event: { type: "session.error", error: "Codex has no OpenAI credential on this node." } });
-    expect(store.getState().error).toBeNull();
-    const errorEntry = store.getState().transcript.find((e) => e.role === "error");
+    expect(store.getState().presentation.error).toBeNull();
+    const errorEntry = store.getState().activeSession.transcript.find((e) => e.role === "error");
     expect(errorEntry?.text).toBe("Codex has no OpenAI credential on this node.");
   });
 
@@ -1675,7 +1675,7 @@ describe("SessionStore", () => {
       sessionId: "s1",
       error: '400 {"type":"error","error":{"type":"invalid_request_error","message":"Add more usage and keep going."}}',
     });
-    const errorEntry = store.getState().transcript.find((e) => e.role === "error");
+    const errorEntry = store.getState().activeSession.transcript.find((e) => e.role === "error");
     expect(errorEntry?.text).toBe("Add more usage and keep going.");
   });
 
@@ -1713,8 +1713,8 @@ describe("SessionStore", () => {
     store.apply({ type: "session.history", requestId: "r1", sessionId: "open", messages: [], name: "Open one" });
     store.apply({ type: "session.created", sessionId: "cli", name: "From CLI", sessionFile: "/p/cli.json" });
     const state = store.getState();
-    expect(state.activeSessionId).toBe("open"); // focus unchanged
-    const row = state.sessions.find((s) => s.sessionId === "cli");
+    expect(state.activeSession.activeSessionId).toBe("open"); // focus unchanged
+    const row = state.sessionIndex.sessions.find((s) => s.sessionId === "cli");
     expect(row).toBeTruthy();
     expect(row!.name).toBe("From CLI");
     expect(row!.path).toBe("/p/cli.json");
@@ -1728,7 +1728,7 @@ describe("SessionStore", () => {
     // refresh happened to catch up.
     const store = new SessionStore();
     store.apply({ type: "session.created", sessionId: "s1", name: "New one" });
-    const row = store.getState().sessions.find((s) => s.sessionId === "s1");
+    const row = store.getState().sessionIndex.sessions.find((s) => s.sessionId === "s1");
     expect(row!.updatedAt).toBeGreaterThan(0);
   });
 
@@ -1744,7 +1744,7 @@ describe("SessionStore", () => {
       sessionId: "s1",
       event: { type: "agent_end" },
     });
-    const row = store.getState().sessions.find((s) => s.sessionId === "s1");
+    const row = store.getState().sessionIndex.sessions.find((s) => s.sessionId === "s1");
     expect(row!.updatedAt).toBeGreaterThan(100);
   });
 
@@ -1758,7 +1758,7 @@ describe("SessionStore", () => {
     for (const type of ["agent_start", "turn_start", "message_start", "message_update", "tool_call", "tool_result", "turn_end"]) {
       store.apply({ type: "session.event", sessionId: "s1", event: { type } });
     }
-    const row = store.getState().sessions.find((s) => s.sessionId === "s1");
+    const row = store.getState().sessionIndex.sessions.find((s) => s.sessionId === "s1");
     expect(row!.updatedAt).toBe(100);
     // The status dot still reflects the live activity — only ordering is held back.
     expect(row!.status).toBe("working");
@@ -1775,8 +1775,8 @@ describe("SessionStore", () => {
     });
     store.apply({ type: "approval.created", approval: { id: "a1", sessionId: "s1", tool: "bash" } });
     store.apply({ type: "session.question", sessionId: "s2", requestId: "q1", questions: [{ question: "Which?", header: "h", options: [{ label: "a" }, { label: "b" }] }] });
-    const s1 = store.getState().sessions.find((s) => s.sessionId === "s1");
-    const s2 = store.getState().sessions.find((s) => s.sessionId === "s2");
+    const s1 = store.getState().sessionIndex.sessions.find((s) => s.sessionId === "s1");
+    const s2 = store.getState().sessionIndex.sessions.find((s) => s.sessionId === "s2");
     expect(s1!.updatedAt).toBeGreaterThan(100);
     expect(s2!.updatedAt).toBeGreaterThan(100);
   });
@@ -1786,7 +1786,7 @@ describe("SessionStore", () => {
     store.apply({ type: "sessions.list", sessions: [{ sessionId: "s1", name: "One", updatedAt: 100 }] });
     store.apply({ type: "session.history", requestId: "r1", sessionId: "s1", messages: [] });
     store.addUserMessage("go", "cm-1");
-    const row = store.getState().sessions.find((s) => s.sessionId === "s1");
+    const row = store.getState().sessionIndex.sessions.find((s) => s.sessionId === "s1");
     expect(row!.updatedAt).toBeGreaterThan(100);
   });
 
@@ -1798,8 +1798,8 @@ describe("SessionStore", () => {
     store.apply({ type: "session.history", requestId: "r1", sessionId: "s1", messages: [], name: "Session abc12345" });
     store.apply({ type: "session.renamed", sessionId: "s1", name: "Fix the parser" });
     const state = store.getState();
-    expect(state.activeTitle).toBe("Fix the parser");
-    expect(state.sessions.find((s) => s.sessionId === "s1")!.name).toBe("Fix the parser");
+    expect(state.activeSession.activeTitle).toBe("Fix the parser");
+    expect(state.sessionIndex.sessions.find((s) => s.sessionId === "s1")!.name).toBe("Fix the parser");
   });
 
   it("drops the row and clears the view on session.deleted for the active session", () => {
@@ -1808,9 +1808,9 @@ describe("SessionStore", () => {
     store.apply({ type: "session.history", sessionId: "s1", messages: [{ role: "user", content: "hi" }] });
     store.apply({ type: "session.deleted", sessionId: "s1" });
     const state = store.getState();
-    expect(state.sessions.map((s) => s.sessionId)).toEqual(["s2"]);
-    expect(state.activeSessionId).toBeNull();
-    expect(state.transcript).toEqual([]);
+    expect(state.sessionIndex.sessions.map((s) => s.sessionId)).toEqual(["s2"]);
+    expect(state.activeSession.activeSessionId).toBeNull();
+    expect(state.activeSession.transcript).toEqual([]);
   });
 
   it("marks a session saved but keeps the active view on session.closed", () => {
@@ -1824,18 +1824,18 @@ describe("SessionStore", () => {
     store.apply({ type: "session.history", sessionId: "s1", messages: [{ role: "user", content: "hi" }] });
     store.apply({ type: "session.closed", sessionId: "s1" });
     const state = store.getState();
-    expect(state.sessions.find((s) => s.sessionId === "s1")!.status).toBe("saved");
-    expect(state.activeSessionId).toBe("s1");
-    expect(state.transcript.map((e) => e.text)).toEqual(["hi"]);
-    expect(state.working).toBe(false);
+    expect(state.sessionIndex.sessions.find((s) => s.sessionId === "s1")!.status).toBe("saved");
+    expect(state.activeSession.activeSessionId).toBe("s1");
+    expect(state.activeSession.transcript.map((e) => e.text)).toEqual(["hi"]);
+    expect(state.activeSession.working).toBe(false);
   });
 
   it("shows a working label while a repo session clones (session.cloning)", () => {
     const store = new SessionStore();
     store.apply({ type: "session.history", requestId: "r1", sessionId: "s1", messages: [] });
     store.apply({ type: "session.cloning", sessionId: "s1", repo: "owner/repo" });
-    expect(store.getState().working).toBe(true);
-    expect(store.getState().workingLabel).toBe("Cloning owner/repo…");
+    expect(store.getState().activeSession.working).toBe(true);
+    expect(store.getState().activeSession.workingLabel).toBe("Cloning owner/repo…");
   });
 
   it("clears the agent pill when starting a fresh draft, instead of keeping the previous session's agent", () => {
@@ -1847,10 +1847,10 @@ describe("SessionStore", () => {
     // actual agent used for the new session.
     const store = new SessionStore();
     store.apply({ type: "session.history", requestId: "r1", sessionId: "s1", messages: [], agentName: "Pi" });
-    expect(store.getState().currentAgentName).toBe("Pi");
+    expect(store.getState().catalogs.currentAgentName).toBe("Pi");
     store.resetActiveSession();
-    expect(store.getState().currentAgentName).toBe("");
-    expect(store.getState().selectedAgentId).toBeNull();
+    expect(store.getState().catalogs.currentAgentName).toBe("");
+    expect(store.getState().catalogs.selectedAgentId).toBeNull();
   });
 
   it("clears the previous session's usage/changes/checkpoints when starting a fresh draft", () => {
@@ -1865,11 +1865,11 @@ describe("SessionStore", () => {
       sessionId: "s1",
       usage: { costUsd: 6.9832, tokens: { total: 6_895_052 } },
     });
-    expect(store.getState().usage?.tokens?.total).toBe(6_895_052);
+    expect(store.getState().activeSession.usage?.tokens?.total).toBe(6_895_052);
     store.resetActiveSession();
-    expect(store.getState().usage).toBeNull();
-    expect(store.getState().changes).toBeNull();
-    expect(store.getState().checkpoints).toEqual([]);
+    expect(store.getState().activeSession.usage).toBeNull();
+    expect(store.getState().activeSession.changes).toBeNull();
+    expect(store.getState().activeSession.checkpoints).toEqual([]);
   });
 
   it("ignores a previous session's late chrome events while on a fresh draft", () => {
@@ -1884,7 +1884,7 @@ describe("SessionStore", () => {
     const store = new SessionStore();
     store.apply({ type: "session.history", requestId: "r1", sessionId: "s1", messages: [] });
     store.resetActiveSession();
-    expect(store.getState().activeSessionId).toBeNull();
+    expect(store.getState().activeSession.activeSessionId).toBeNull();
 
     store.apply({
       type: "session.changes",
@@ -1896,9 +1896,9 @@ describe("SessionStore", () => {
     store.apply({ type: "session.usage", sessionId: "s1", usage: { costUsd: 1, tokens: { total: 100 } } });
     store.apply({ type: "session.checkpoints", sessionId: "s1", checkpoints: [{ id: "cp0", label: "start", createdAt: 1 }] });
 
-    expect(store.getState().changes).toBeNull();
-    expect(store.getState().usage).toBeNull();
-    expect(store.getState().checkpoints).toEqual([]);
+    expect(store.getState().activeSession.changes).toBeNull();
+    expect(store.getState().activeSession.usage).toBeNull();
+    expect(store.getState().activeSession.checkpoints).toEqual([]);
   });
 
   it("still applies chrome events that belong to the focused session", () => {
@@ -1913,7 +1913,7 @@ describe("SessionStore", () => {
       after: "cp1",
       changes: [{ path: "a.ts", status: "modified", oldText: "x", newText: "y" }],
     });
-    expect(store.getState().changes?.files.length).toBe(1);
+    expect(store.getState().activeSession.changes?.files.length).toBe(1);
   });
 
   it("seeds a fresh draft's agent + model pills from the known lists (no bare Agent/Default flash)", () => {
@@ -1937,12 +1937,12 @@ describe("SessionStore", () => {
     });
     // Start a fresh draft — the pill is blanked here…
     store.resetActiveSession();
-    expect(store.getState().currentAgentName).toBe("");
+    expect(store.getState().catalogs.currentAgentName).toBe("");
     // …then eagerly re-seeded from the last-used pick before any round-trip.
     store.seedDraftAgentModel("pi", { provider: "anthropic", id: "opus" });
-    expect(store.getState().selectedAgentId).toBe("pi");
-    expect(store.getState().currentAgentName).toBe("Pi");
-    expect(store.getState().currentModel?.id).toBe("opus");
+    expect(store.getState().catalogs.selectedAgentId).toBe("pi");
+    expect(store.getState().catalogs.currentAgentName).toBe("Pi");
+    expect(store.getState().catalogs.currentModel?.id).toBe("opus");
   });
 
   it("falls back to the node's default agent + model when nothing is remembered", () => {
@@ -1962,17 +1962,17 @@ describe("SessionStore", () => {
     });
     store.resetActiveSession();
     store.seedDraftAgentModel(null, null);
-    expect(store.getState().currentAgentName).toBe("Claude Code");
-    expect(store.getState().currentModel?.id).toBe("sonnet");
+    expect(store.getState().catalogs.currentAgentName).toBe("Claude Code");
+    expect(store.getState().catalogs.currentModel?.id).toBe("sonnet");
   });
 
   it("never overrides a live session's agent/model when seeding a draft", () => {
     const store = new SessionStore();
     store.apply({ type: "session.history", requestId: "r1", sessionId: "s1", messages: [], agentName: "Pi" });
-    expect(store.getState().activeSessionId).toBe("s1");
+    expect(store.getState().activeSession.activeSessionId).toBe("s1");
     store.seedDraftAgentModel("claude", { provider: "anthropic", id: "opus" });
     // A session is active — the seed must be a no-op.
-    expect(store.getState().currentAgentName).toBe("Pi");
+    expect(store.getState().catalogs.currentAgentName).toBe("Pi");
   });
 
   it("prefers the node's actual default runtime over the leaky node-global `active` session's agent", () => {
@@ -1995,8 +1995,8 @@ describe("SessionStore", () => {
       ],
     });
     const state = store.getState();
-    expect(state.selectedAgentId).toBe("claude");
-    expect(state.currentAgentName).toBe("Claude Code");
+    expect(state.catalogs.selectedAgentId).toBe("claude");
+    expect(state.catalogs.currentAgentName).toBe("Claude Code");
   });
 
   it("does not seed a draft model from a list that belongs to a different agent", () => {
@@ -2023,16 +2023,16 @@ describe("SessionStore", () => {
       current: { id: "gpt-5", provider: "openai" },
       models: [{ id: "gpt-5", provider: "openai", current: true }],
     });
-    expect(store.getState().modelsRuntimeId).toBe("codex");
-    expect(store.getState().currentModel?.id).toBe("gpt-5");
+    expect(store.getState().catalogs.modelsRuntimeId).toBe("codex");
+    expect(store.getState().catalogs.currentModel?.id).toBe("gpt-5");
 
     // The user starts a fresh draft preferring Claude — the stale Codex model
     // must not carry over onto Claude's pill.
     store.resetActiveSession();
     store.seedDraftAgentModel("claude", null);
-    expect(store.getState().selectedAgentId).toBe("claude");
-    expect(store.getState().currentModel).toBeNull();
-    expect(store.getState().models).toEqual([]);
+    expect(store.getState().catalogs.selectedAgentId).toBe("claude");
+    expect(store.getState().catalogs.currentModel).toBeNull();
+    expect(store.getState().catalogs.models).toEqual([]);
 
     // Claude's own models.list refresh then repopulates the pill correctly.
     store.apply({
@@ -2041,8 +2041,8 @@ describe("SessionStore", () => {
       current: { id: "sonnet", provider: "anthropic" },
       models: [{ id: "opus", provider: "anthropic" }, { id: "sonnet", provider: "anthropic" }],
     });
-    expect(store.getState().modelsRuntimeId).toBe("claude");
-    expect(store.getState().currentModel?.id).toBe("sonnet");
+    expect(store.getState().catalogs.modelsRuntimeId).toBe("claude");
+    expect(store.getState().catalogs.currentModel?.id).toBe("sonnet");
   });
 
   it("still seeds the model when the held list is for the same agent (no flash)", () => {
@@ -2063,7 +2063,7 @@ describe("SessionStore", () => {
     });
     store.resetActiveSession();
     store.seedDraftAgentModel("claude", { provider: "anthropic", id: "opus" });
-    expect(store.getState().currentModel?.id).toBe("opus");
+    expect(store.getState().catalogs.currentModel?.id).toBe("opus");
   });
 
   it("drops the outgoing agent's models the moment a different agent is picked", () => {
@@ -2086,9 +2086,9 @@ describe("SessionStore", () => {
       models: [{ id: "gpt-5", provider: "openai", current: true }],
     });
     store.setSelectedAgentLocal("claude");
-    expect(store.getState().selectedAgentId).toBe("claude");
-    expect(store.getState().currentModel).toBeNull();
-    expect(store.getState().models).toEqual([]);
+    expect(store.getState().catalogs.selectedAgentId).toBe("claude");
+    expect(store.getState().catalogs.currentModel).toBeNull();
+    expect(store.getState().catalogs.models).toEqual([]);
   });
 
   it("repaints a previously-viewed agent's models instantly on switch back (per-runtime cache)", () => {
@@ -2115,8 +2115,8 @@ describe("SessionStore", () => {
     });
     // Switch to Codex (never viewed) → blanks, as before.
     store.setSelectedAgentLocal("codex");
-    expect(store.getState().models).toEqual([]);
-    expect(store.getState().currentModel).toBeNull();
+    expect(store.getState().catalogs.models).toEqual([]);
+    expect(store.getState().catalogs.currentModel).toBeNull();
     store.apply({
       type: "models.list",
       runtimeId: "codex",
@@ -2126,9 +2126,9 @@ describe("SessionStore", () => {
     // Switch back to Claude → its cached list repaints at once (no blank), with
     // the runtime tag flipped and the remembered current model restored.
     store.setSelectedAgentLocal("claude");
-    expect(store.getState().modelsRuntimeId).toBe("claude");
-    expect(store.getState().models.map((m) => m.id)).toEqual(["opus", "sonnet"]);
-    expect(store.getState().currentModel?.id).toBe("sonnet");
+    expect(store.getState().catalogs.modelsRuntimeId).toBe("claude");
+    expect(store.getState().catalogs.models.map((m) => m.id)).toEqual(["opus", "sonnet"]);
+    expect(store.getState().catalogs.currentModel?.id).toBe("sonnet");
   });
 });
 
@@ -2143,13 +2143,13 @@ describe("session.auth_required → sign-in prompt", () => {
   it("raises needsModelAuth targeted at the failing provider", () => {
     const store = focusedStore();
     store.apply({ type: "session.auth_required", sessionId: "s1", provider: "openai-codex", reason: "401 Unauthorized" } as never);
-    expect(store.getState().needsModelAuth).toEqual({ nodeId: "node-1", provider: "openai-codex", reason: "401 Unauthorized" });
+    expect(store.getState().presentation.needsModelAuth).toEqual({ nodeId: "node-1", provider: "openai-codex", reason: "401 Unauthorized" });
   });
 
   it("ignores an auth_required for a background (non-active) session", () => {
     const store = focusedStore();
     store.apply({ type: "session.auth_required", sessionId: "other", provider: "openai-codex" } as never);
-    expect(store.getState().needsModelAuth).toBeNull();
+    expect(store.getState().presentation.needsModelAuth).toBeNull();
   });
 
   it("does not dismiss a targeted prompt when a DIFFERENT provider connects", () => {
@@ -2157,14 +2157,14 @@ describe("session.auth_required → sign-in prompt", () => {
     store.apply({ type: "session.auth_required", sessionId: "s1", provider: "openai-codex" } as never);
     // Anthropic connecting must not satisfy an openai-codex prompt.
     store.apply({ type: "providers.list", providers: [{ id: "anthropic", configured: true }, { id: "openai-codex", configured: false }] } as never);
-    expect(store.getState().needsModelAuth?.provider).toBe("openai-codex");
+    expect(store.getState().presentation.needsModelAuth?.provider).toBe("openai-codex");
   });
 
   it("dismisses when the targeted provider connects", () => {
     const store = focusedStore();
     store.apply({ type: "session.auth_required", sessionId: "s1", provider: "openai-codex" } as never);
     store.apply({ type: "providers.list", providers: [{ id: "openai-codex", configured: true }] } as never);
-    expect(store.getState().needsModelAuth).toBeNull();
+    expect(store.getState().presentation.needsModelAuth).toBeNull();
   });
 
   it("dismisses when the api-key alias (openai) connects for a codex prompt", () => {
@@ -2173,6 +2173,6 @@ describe("session.auth_required → sign-in prompt", () => {
     // A pasted OpenAI key lands under `openai` (OPENAI_API_KEY), which Codex
     // reads — that satisfies the openai-codex prompt too.
     store.apply({ type: "providers.list", providers: [{ id: "openai", configured: true }] } as never);
-    expect(store.getState().needsModelAuth).toBeNull();
+    expect(store.getState().presentation.needsModelAuth).toBeNull();
   });
 });

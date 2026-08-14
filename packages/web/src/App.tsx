@@ -66,7 +66,7 @@ export function App() {
   const runRoute = useSyncExternalStore(subscribeRunRoute, getRunRoute);
   // Returning from a GitHub App redirect reloads the SPA — finish in Automations
   // (the sole place for source connections), not Settings.
-  const githubAppReturning = state.githubApp?.returning;
+  const githubAppReturning = state.presentation.githubApp?.returning;
   useEffect(() => {
     if (githubAppReturning) openAutomations({ setup: "github" });
   }, [githubAppReturning]);
@@ -79,7 +79,7 @@ export function App() {
   // over the transcript the store already holds (see deriveArtifacts) — no
   // extra round trip to the node.
   const [artifactsSheetOpen, setArtifactsSheetOpen] = useState(false);
-  const artifacts = useMemo(() => deriveArtifacts(state.transcript), [state.transcript]);
+  const artifacts = useMemo(() => deriveArtifacts(state.activeSession.transcript), [state.activeSession.transcript]);
   const [terminalOpen, setTerminalOpen] = useState(false);
   /** A live `bivy run` PTY selected from the sidebar; null means open the
    * ordinary shell terminal for the active chat/node. */
@@ -113,34 +113,34 @@ export function App() {
   // safe default (better to re-show than to silently swallow a blocked agent).
   const [seenAttn, setSeenAttn] = useState<Set<string>>(() => new Set());
   const refreshGithubQueue = useCallback(() => {
-    if (controller.direct || !state.signedIn) return;
+    if (controller.direct || !state.connection.signedIn) return;
     controller.fetchGithubQueue().then(setGithubQueue).catch(() => {});
-  }, [state.signedIn]);
+  }, [state.connection.signedIn]);
   const refreshAutomationRuns = useCallback(() => {
-    if (controller.direct || !state.signedIn) return;
+    if (controller.direct || !state.connection.signedIn) return;
     controller.fetchAutomationRuns().then(setAutomationRuns).catch(() => {});
-  }, [state.signedIn]);
+  }, [state.connection.signedIn]);
   useEffect(() => {
-    if (controller.direct || !state.signedIn) return;
+    if (controller.direct || !state.connection.signedIn) return;
     refreshGithubQueue();
     refreshAutomationRuns();
     const id = setInterval(() => {
       if (document.visibilityState !== "hidden") { refreshGithubQueue(); refreshAutomationRuns(); }
     }, 30000);
     return () => clearInterval(id);
-  }, [refreshGithubQueue, refreshAutomationRuns, state.signedIn]);
+  }, [refreshGithubQueue, refreshAutomationRuns, state.connection.signedIn]);
   // sessionId → the run that produced it, joined from the queue's evidence.
   // Feeds the sidebar's exception hints and the run pill's outcome. Declared up
   // here (not by activeSession below) so the hook stays above any early return.
   const runEvidence = useMemo(() => indexRunEvidence(githubQueue), [githubQueue]);
   const inboxItems = useMemo(() => buildInboxItems({
-    sessions: state.sessions,
-    approvals: state.approvals,
-    questions: state.questions,
-    nodes: state.nodes,
+    sessions: state.sessionIndex.sessions,
+    approvals: state.activeSession.approvals,
+    questions: state.activeSession.questions,
+    nodes: state.connection.nodes,
     queue: githubQueue ?? [],
     runs: automationRuns ?? [],
-  }), [state.sessions, state.approvals, state.questions, state.nodes, githubQueue, automationRuns]);
+  }), [state.sessionIndex.sessions, state.activeSession.approvals, state.activeSession.questions, state.connection.nodes, githubQueue, automationRuns]);
   // Something needs the user that they haven't seen yet → the ☰ burger wears a
   // red dot. Opening the session drawer (openDrawer) marks the current set seen.
   const attnUnseen = inboxItems.some((it) => !seenAttn.has(it.id));
@@ -169,7 +169,7 @@ export function App() {
   // machine so the empty state advances to the live app the moment the node
   // dials in — the user shouldn't have to hit "Refresh nodes" after running the
   // installer. Stops as soon as a node is selected (the card disappears).
-  const awaitingNode = !controller.direct && state.signedIn && !state.currentNodeId;
+  const awaitingNode = !controller.direct && state.connection.signedIn && !state.connection.currentNodeId;
   useEffect(() => {
     if (!awaitingNode) return;
     const id = setInterval(() => {
@@ -188,21 +188,21 @@ export function App() {
       return next;
     });
   }, []);
-  const online = state.status === "online";
-  useEffect(() => setTurnActive(state.working), [state.working]);
+  const online = state.connection.status === "online";
+  useEffect(() => setTurnActive(state.activeSession.working), [state.activeSession.working]);
   useEffect(() => { if (online) clearQueuedPrompts(); }, [online]);
-  const queuedFollowupCount = Object.values(state.followupsBySession).reduce((total, items) => total + items.length, 0);
+  const queuedFollowupCount = Object.values(state.sessionIndex.followupsBySession).reduce((total, items) => total + items.length, 0);
   useEffect(() => setFollowupQueuedPrompts(queuedFollowupCount), [queuedFollowupCount]);
   const activation = useMemo(() => deriveActivation({
-    accountSignedIn: controller.direct ? true : state.signedIn,
-    machineOnline: state.status === "online" ? true : state.status === "offline" ? false : undefined,
-    agentInstalled: state.runtimes.length
-      ? state.runtimes.some((runtime) => String(runtime.status ?? "available") === "available" && runtime.supportTier === "supported")
+    accountSignedIn: controller.direct ? true : state.connection.signedIn,
+    machineOnline: state.connection.status === "online" ? true : state.connection.status === "offline" ? false : undefined,
+    agentInstalled: state.catalogs.runtimes.length
+      ? state.catalogs.runtimes.some((runtime) => String(runtime.status ?? "available") === "available" && runtime.supportTier === "supported")
       : undefined,
-    credentialValid: state.activationReadiness ? state.activationReadiness.credential.ok : undefined,
-    repositoryReady: state.activationReadiness ? state.activationReadiness.repository.ok : undefined,
-    agentAnswered: state.transcript.some((entry) => entry.role === "assistant" && Boolean(entry.text) && !entry.tool) ? true : undefined,
-  }), [state.activationReadiness, state.runtimes, state.signedIn, state.status, state.transcript]);
+    credentialValid: state.catalogs.activationReadiness ? state.catalogs.activationReadiness.credential.ok : undefined,
+    repositoryReady: state.catalogs.activationReadiness ? state.catalogs.activationReadiness.repository.ok : undefined,
+    agentAnswered: state.activeSession.transcript.some((entry) => entry.role === "assistant" && Boolean(entry.text) && !entry.tool) ? true : undefined,
+  }), [state.catalogs.activationReadiness, state.catalogs.runtimes, state.connection.signedIn, state.connection.status, state.activeSession.transcript]);
   // Latch: has this client ever had a live connection this run? Once true, we
   // treat the WHOLE transient reconnect window as still-composable — not just the
   // brief "reconnecting" beat, but the redial's "connecting" and any re-pair
@@ -231,21 +231,21 @@ export function App() {
   // first connect (no prior live pipe, nothing to preserve, and typing can't be
   // queued to a node we've never reached).
   const transientReconnect =
-    state.status === "reconnecting" ||
+    state.connection.status === "reconnecting" ||
     (everConnectedRef.current &&
-      (state.status === "connecting" || state.status === "linking" || state.status === "pairing"));
+      (state.connection.status === "connecting" || state.connection.status === "linking" || state.connection.status === "pairing"));
   // The active session is being driven by its interactive TUI (single writer):
   // chat sends are refused by the node until the TUI exits. Rather than let a
   // send fail with an error, lock the composer and show a banner offering to
   // jump to the terminal or take the session back into chat.
-  const activeTuiLocked = Boolean(state.activeSessionId && state.tuiSessions.includes(state.activeSessionId));
+  const activeTuiLocked = Boolean(state.activeSession.activeSessionId && state.sessionIndex.tuiSessions.includes(state.activeSession.activeSessionId));
   // When the node is an offline-but-resumable ephemeral machine (a suspended
   // Sprite we hold the key for), keep the composer usable: sending IS the resume
   // gesture — controller.sendPrompt wakes the machine and replays the message.
   // A picked-but-unlaunched ephemeral runner also keeps the composer usable:
   // sending IS the launch — controller.sendPrompt provisions the machine, binds
   // the session, and replays the message once it's online (no launch button).
-  const canCompose = (online || transientReconnect || controller.isCurrentNodeResumable() || Boolean(state.draftEphemeralConfig)) && !activeTuiLocked;
+  const canCompose = (online || transientReconnect || controller.isCurrentNodeResumable() || Boolean(state.draft.ephemeralConfig)) && !activeTuiLocked;
 
   // Left-edge swipe opens the sidebar drawer; swipe-left closes it (mobile).
   useEdgeSwipe({ isOpen: drawerOpen, onOpen: openDrawer, onClose: () => setDrawerOpen(false) });
@@ -279,8 +279,8 @@ export function App() {
     // node list is fetched once on connect, but refresh it defensively here too
     // so a stale-empty list can't be misread as "only one node" and wrongly
     // skip the picker.
-    if (!controller.direct && state.nodes.length === 0) void controller.refreshNodes();
-    if (controller.direct || state.nodes.length <= 1) {
+    if (!controller.direct && state.connection.nodes.length === 0) void controller.refreshNodes();
+    if (controller.direct || state.connection.nodes.length <= 1) {
       setTerminalTarget(null);
       setTerminalStandalone(true);
       setTerminalTui(false);
@@ -288,19 +288,19 @@ export function App() {
       return;
     }
     setTerminalNodePicker(true);
-  }, [state.nodes]);
+  }, [state.connection.nodes]);
 
   const pickTerminalNode = useCallback(
     (nodeId: string) => {
       setTerminalNodePicker(false);
-      if (!controller.direct && nodeId !== state.currentNodeId) controller.switchNode(nodeId);
+      if (!controller.direct && nodeId !== state.connection.currentNodeId) controller.switchNode(nodeId);
       setTerminalTarget(null);
       setTerminalStandalone(true);
       setTerminalTui(false);
       setTerminalOpen(true);
       setDrawerOpen(false);
     },
-    [state.currentNodeId],
+    [state.connection.currentNodeId],
   );
 
   // A `bivy run` terminal picked from the sidebar (SessionList's runTerminals
@@ -326,7 +326,7 @@ export function App() {
         setTerminalTui(false);
       };
       setDrawerOpen(false);
-      if (!controller.direct && nodeId && nodeId !== state.currentNodeId) {
+      if (!controller.direct && nodeId && nodeId !== state.connection.currentNodeId) {
         void controller.connectToNode(nodeId).then(select).catch((err) => {
           controller.store.setError(err instanceof Error ? err.message : String(err));
         });
@@ -334,7 +334,7 @@ export function App() {
       }
       select();
     },
-    [state.currentNodeId],
+    [state.connection.currentNodeId],
   );
 
   const openPendingRunTerminal = useCallback(() => {
@@ -359,10 +359,10 @@ export function App() {
   // Drop the run-terminal handoff if its live PTY disappears (exited/takeover).
   useEffect(() => {
     if (!pendingRunTerm) return;
-    if (!state.runTerminals.some((t) => t.termId === pendingRunTerm.termId)) {
+    if (!state.sessionIndex.runTerminals.some((t) => t.termId === pendingRunTerm.termId)) {
       setPendingRunTerm(null);
     }
-  }, [pendingRunTerm, state.runTerminals]);
+  }, [pendingRunTerm, state.sessionIndex.runTerminals]);
 
   // "Continue in terminal": open the overlay bound to the active chat session in
   // interactive-TUI mode. The overlay sends `terminal.open.tui`, which resumes
@@ -380,29 +380,29 @@ export function App() {
   // that owns the active session; it rebuilds the session from disk and
   // broadcasts `terminal.tui {active:false}`, which unlocks the composer.
   const takeoverInChat = useCallback(() => {
-    if (state.activeSessionId) controller.closeSessionTui(state.activeSessionId);
-  }, [state.activeSessionId]);
+    if (state.activeSession.activeSessionId) controller.closeSessionTui(state.activeSession.activeSessionId);
+  }, [state.activeSession.activeSessionId]);
 
   // Push taps and copied inbox links use the same `attention` target. Wait until
   // the owning session's live card has arrived, then reveal and focus it.
   useEffect(() => {
     const attention = new URLSearchParams(location.search).get("attention");
-    if (!attention || !state.activeSessionId) return;
+    if (!attention || !state.activeSession.activeSessionId) return;
     const target = document.getElementById(`attention-${encodeURIComponent(attention)}`);
     if (!target) return;
     target.scrollIntoView({ block: "center" });
     target.setAttribute("tabindex", "-1");
     target.focus({ preventScroll: true });
-  }, [state.activeSessionId, state.approvals, state.questions, state.turnAttentions]);
+  }, [state.activeSession.activeSessionId, state.activeSession.approvals, state.activeSession.questions, state.activeSession.turnAttentions]);
 
   // Auth/setup gates, derived from reactive store fields (not read live off
   // localStorage) so signing in swaps the sign-in screen for the app shell the
   // instant the token lands — no page reload needed. `direct` (local/loopback
   // mode) never gates on a control-plane session.
-  const needsAuth = !controller.direct && !controller.solo && !state.signedIn;
+  const needsAuth = !controller.direct && !controller.solo && !state.connection.signedIn;
   // Picking an ephemeral runner counts as having chosen where to run, even
   // before its machine exists — show the composer, not the onboarding screen.
-  const needsNode = !controller.direct && state.signedIn && !state.currentNodeId && !state.draftEphemeralConfig;
+  const needsNode = !controller.direct && state.connection.signedIn && !state.connection.currentNodeId && !state.draft.ephemeralConfig;
 
   // Hosted control plane, not signed in yet: show the sign-in screen instead of a
   // dead shell. Once signed in we always render the normal app — a node is picked
@@ -421,7 +421,7 @@ export function App() {
   }
 
   const closeDrawer = () => setDrawerOpen(false);
-  const activeSession = state.sessions.find((s) => s.sessionId === state.activeSessionId);
+  const activeSession = state.sessionIndex.sessions.find((s) => s.sessionId === state.activeSession.activeSessionId);
   // Every active session shows the run card (source + live status) in the band
   // above the composer; `null` for a draft (no session yet) falls back to the
   // plain GitHub pill.
@@ -430,10 +430,10 @@ export function App() {
   // is resolved from the local session list when known; it may live on
   // another node or be gone by now, so this degrades to a bare id.
   const activeForkedFrom = activeSession?.forkedFrom
-    ? { sessionId: activeSession.forkedFrom, name: state.sessions.find((s) => s.sessionId === activeSession.forkedFrom)?.name }
+    ? { sessionId: activeSession.forkedFrom, name: state.sessionIndex.sessions.find((s) => s.sessionId === activeSession.forkedFrom)?.name }
     : undefined;
-  const activeSessionNodeId = activeSession?.nodeId || state.currentNodeId || undefined;
-  const activeSessionNode = state.nodes.find((node) => node.id === activeSessionNodeId);
+  const activeSessionNodeId = activeSession?.nodeId || state.connection.currentNodeId || undefined;
+  const activeSessionNode = state.connection.nodes.find((node) => node.id === activeSessionNodeId);
   const activeSessionNodeLabel = activeSessionNode
     ? `${activeSessionNode.name || activeSessionNode.id} (${activeSessionNode.id})`
     : activeSessionNodeId;
@@ -442,11 +442,11 @@ export function App() {
   // itself to its native TUI on the node (capability `interactiveTui`) — the
   // analog of the terminal's capability-gated "continue in chat". Absent caps
   // (older node / runtime not yet loaded) default to hidden.
-  const activeRuntimeCaps = state.runtimes.find((r) => r.id === activeSession?.runtimeId)?.capabilities as
+  const activeRuntimeCaps = state.catalogs.runtimes.find((r) => r.id === activeSession?.runtimeId)?.capabilities as
     | { interactiveTui?: boolean }
     | undefined;
   const canContinueInTerminal = online && Boolean(activeRuntimeCaps?.interactiveTui);
-  const activeRuntime = state.runtimes.find((r) => r.id === activeSession?.runtimeId);
+  const activeRuntime = state.catalogs.runtimes.find((r) => r.id === activeSession?.runtimeId);
   const executionProfile = activeSession?.executionProfile === "isolated_customer_cloud" ? "Isolated customer-cloud"
     : activeSession?.executionProfile === "trusted_workstation" ? "Trusted workstation"
       : activeSession?.executionProfile === "restricted" ? "Restricted" : undefined;
@@ -457,9 +457,9 @@ export function App() {
   // in the store (for the sidebar "needs response" indicator); we just don't render
   // another session's cards into whichever chat happens to be on screen. Items with
   // no sessionId are treated as global and shown everywhere.
-  const activeApprovals = state.approvals.filter((a) => !a.sessionId || a.sessionId === state.activeSessionId);
-  const activeQuestions = state.questions.filter((q) => !q.sessionId || q.sessionId === state.activeSessionId);
-  const activeTurnAttention = state.turnAttentions.find((a) => a.sessionId === state.activeSessionId);
+  const activeApprovals = state.activeSession.approvals.filter((a) => !a.sessionId || a.sessionId === state.activeSession.activeSessionId);
+  const activeQuestions = state.activeSession.questions.filter((q) => !q.sessionId || q.sessionId === state.activeSession.activeSessionId);
+  const activeTurnAttention = state.activeSession.turnAttentions.find((a) => a.sessionId === state.activeSession.activeSessionId);
   return (
     <div className="app">
       <aside className={`sidebar${drawerOpen ? " open" : ""}`}>
@@ -568,8 +568,8 @@ export function App() {
                   aria-hidden
                 />
               )}
-              <h1 className="title" title={state.activeTitle}>
-                {state.activeTitle}
+              <h1 className="title" title={state.activeSession.activeTitle}>
+                {state.activeSession.activeTitle}
               </h1>
             </div>
             {/* Node stays below the title as a plain subtitle line — but it's
@@ -578,7 +578,7 @@ export function App() {
             {!controller.direct && !controller.solo && <NodeSwitcher />}
           </div>
           <div className="topbar-actions">
-            {state.activeSessionId && (
+            {state.activeSession.activeSessionId && (
               <button
                 className="icon-btn eye-btn"
                 onClick={toggleCollapsed}
@@ -601,10 +601,10 @@ export function App() {
                 )}
               </button>
             )}
-            {state.activeSessionId && (
+            {state.activeSession.activeSessionId && (
               <SessionMenu
-                sessionId={state.activeSessionId}
-                name={state.activeTitle}
+                sessionId={state.activeSession.activeSessionId}
+                name={state.activeSession.activeTitle}
                 isRepo={isRepoSession}
                 node={activeSessionNodeLabel}
                 agent={activeSession?.agentName || activeSession?.runtimeId}
@@ -629,7 +629,7 @@ export function App() {
             blip, which on mobile is constant and jarring. That state is now shown
             as a quiet spinner on the node status indicator (see NodeSwitcher)
             instead of reflowing the layout. */}
-        {(state.status === "pairing" || state.status === "linking") && (
+        {(state.connection.status === "pairing" || state.connection.status === "linking") && (
           <div className="banner info" role="status">
             <span className="reconnect-spinner" aria-hidden />
             Linking this device…
@@ -639,22 +639,22 @@ export function App() {
         {/* The connected node is running an older Bivy than the latest release.
             One tap runs `bivy update` on the node (it restarts on the new build;
             this banner clears itself once the socket reconnects up to date). */}
-        {state.nodeUpdate && (
+        {state.connection.nodeUpdate && (
           <div className="banner update" role="status">
             <span className="banner-text">
-              This machine runs Bivy {state.nodeUpdate.current} — {state.nodeUpdate.latest} is available.
+              This machine runs Bivy {state.connection.nodeUpdate.current} — {state.connection.nodeUpdate.latest} is available.
             </span>
             <button
               className="banner-action"
               onClick={() => controller.updateNode()}
-              disabled={state.nodeUpdating}
+              disabled={state.connection.nodeUpdating}
             >
-              {state.nodeUpdating ? "Updating…" : "Update this machine"}
+              {state.connection.nodeUpdating ? "Updating…" : "Update this machine"}
             </button>
           </div>
         )}
 
-        {!state.activeSessionId && state.transcript.length === 0 && state.sessions.length === 0 && (
+        {!state.activeSession.activeSessionId && state.activeSession.transcript.length === 0 && state.sessionIndex.sessions.length === 0 && (
           <Suspense fallback={null}>
             <ReadinessChecklist
               activation={activation}
@@ -672,7 +672,7 @@ export function App() {
         {needsNode && (
           <div className="connect-runner-scroll">
             <ConnectRunner
-              nodes={state.nodes}
+              nodes={state.connection.nodes}
               ephemeralEnabled={EPHEMERAL_MACHINES_ENABLED}
               onPickNode={(nodeId) => controller.switchNode(nodeId)}
               onEphemeral={() => setEphemeralOpen(true)}
@@ -683,18 +683,18 @@ export function App() {
 
         {pendingRunTerm && !terminalOpen ? (
           (() => {
-            const run = state.runTerminals.find((t) => t.termId === pendingRunTerm.termId);
+            const run = state.sessionIndex.runTerminals.find((t) => t.termId === pendingRunTerm.termId);
             const runName = run?.name || run?.label || run?.agent || "Terminal session";
-            const runNode = state.nodes.find((n) => n.id === (run?.nodeId || pendingRunTerm.nodeId));
+            const runNode = state.connection.nodes.find((n) => n.id === (run?.nodeId || pendingRunTerm.nodeId));
             // Same capability gate the Terminal overlay uses for "Continue in chat".
-            const runtime = state.runtimes.find((r) => r.id === String(run?.agent || ""));
+            const runtime = state.catalogs.runtimes.find((r) => r.id === String(run?.agent || ""));
             const caps = runtime?.capabilities as { sessionDiscovery?: boolean } | undefined;
             const canTakeover = Boolean(run?.sessionId) || Boolean(caps?.sessionDiscovery);
             return (
               <TuiLockedView
                 sessionName={runName}
                 nodeLabel={runNode?.name}
-                online={state.status !== "offline"}
+                online={state.connection.status !== "offline"}
                 onOpenTerminal={openPendingRunTerminal}
                 onUseChat={canTakeover ? takeoverPendingRun : undefined}
               />
@@ -702,25 +702,25 @@ export function App() {
           })()
         ) : activeTuiLocked ? (
           <TuiLockedView
-            sessionName={state.activeTitle}
+            sessionName={state.activeSession.activeTitle}
             nodeLabel={activeSessionNode?.name}
-            online={state.status !== "offline"}
+            online={state.connection.status !== "offline"}
             onOpenTerminal={continueInTerminal}
             onUseChat={takeoverInChat}
           />
         ) : (
           <>
             <ChatView
-              entries={state.transcript}
-              working={state.working}
-              workingLabel={state.workingLabel}
+              entries={state.activeSession.transcript}
+              working={state.activeSession.working}
+              workingLabel={state.activeSession.workingLabel}
               // Whether there's no real session behind the current view — driven by
               // the session store rather than the URL, since the URL now moves to
               // `/settings/*` while Settings is open without changing (or clearing)
               // whatever session is open behind it.
-              draftRoute={!state.activeSessionId}
-              opening={state.opening}
-              sessionKey={state.activeSessionId}
+              draftRoute={!state.activeSession.activeSessionId}
+              opening={state.activeSession.opening}
+              sessionKey={state.activeSession.activeSessionId}
               collapsed={collapsed}
               onAction={runCommand}
               footer={
@@ -743,7 +743,7 @@ export function App() {
 
             {changesSheetOpen && (
               <SessionChangesSheet
-                history={state.changesHistory}
+                history={state.activeSession.changesHistory}
                 checks={activeSession ? runEvidence.get(activeSession.sessionId)?.checks?.map((c) => ({ name: c.name, status: c.status })) : undefined}
                 onClose={() => setChangesSheetOpen(false)}
               />
@@ -765,12 +765,12 @@ export function App() {
                   source={activeRunSource}
                   statusClass={statusClass(activeSession)}
                   statusLabel={statusLabel(activeSession)}
-                  gh={state.github}
+                  gh={state.activeSession.github}
                   evidence={runEvidence.get(activeSession.sessionId)}
                   finishedAt={activeSession.finishedAt}
-                  usage={state.usage}
+                  usage={state.activeSession.usage}
                   forkedFrom={activeForkedFrom}
-                  filesEdited={countUniqueEditedFiles(state.changesHistory)}
+                  filesEdited={countUniqueEditedFiles(state.activeSession.changesHistory)}
                   onOpenChanges={() => setChangesSheetOpen(true)}
                   artifactsCount={artifacts.length}
                   onOpenArtifacts={() => setArtifactsSheetOpen(true)}
@@ -795,7 +795,7 @@ export function App() {
                   }}
                 />
               ) : (
-                <GithubPill gh={state.github} />
+                <GithubPill gh={state.activeSession.github} />
               )}
               {/* Slash-command pill, pushed to the right so it sits top-right over
                   the composer on the same band as the GitHub context. Tapping it
@@ -805,7 +805,7 @@ export function App() {
                   row when the draft warms it) are offered there, so the menu is a
                   real affordance rather than dead — an agent with none still gets
                   the "no slash commands" empty state instead of a hidden button. */}
-              {(state.activeSessionId || !activeTuiLocked) && (
+              {(state.activeSession.activeSessionId || !activeTuiLocked) && (
                 <button
                   type="button"
                   className="slash-pill"
@@ -821,14 +821,14 @@ export function App() {
               )}
             </div>
 
-            <PwaLifecycleNotice status={state.status} hasCachedTranscript={state.transcript.length > 0} />
+            <PwaLifecycleNotice status={state.connection.status} hasCachedTranscript={state.activeSession.transcript.length > 0} />
             <Composer
               state={state}
               disabled={!canCompose}
-              disabledHint={state.status === "offline" ? "Not connected" : "Connecting…"}
-              working={state.working}
+              disabledHint={state.connection.status === "offline" ? "Not connected" : "Connecting…"}
+              working={state.activeSession.working}
               onSend={(text, attachments) => {
-                if (state.status !== "online") markPromptQueued();
+                if (state.connection.status !== "online") markPromptQueued();
                 setTurnActive(true); // close the pre-`working` update-activation race
                 controller.sendPrompt(text, attachments);
               }}
@@ -850,12 +850,12 @@ export function App() {
             // Land on the Run route: dismiss Automations onto the session behind
             // it first (replace, no extra history), then push /runs/:runId so
             // Back returns to that session rather than stacking two overlays.
-            closeAutomations(state.activeSessionId ? { kind: "session", id: state.activeSessionId } : { kind: "new" });
+            closeAutomations(state.activeSession.activeSessionId ? { kind: "session", id: state.activeSession.activeSessionId } : { kind: "new" });
             openRun(runId);
           }}
           onClose={() =>
             closeAutomations(
-              state.activeSessionId ? { kind: "session", id: state.activeSessionId } : { kind: "new" },
+              state.activeSession.activeSessionId ? { kind: "session", id: state.activeSession.activeSessionId } : { kind: "new" },
             )
           }
           onOpenSession={(sessionId) => {
@@ -863,7 +863,7 @@ export function App() {
             // owning node/path from the unified session list so a cross-node
             // session opens the same way the sidebar and Settings do; then
             // dismiss Automations onto that session's route.
-            const s = state.sessions.find((x) => x.sessionId === sessionId);
+            const s = state.sessionIndex.sessions.find((x) => x.sessionId === sessionId);
             controller.openSessionOnNode(sessionId, s?.path, s?.nodeId);
             closeAutomations({ kind: "session", id: sessionId });
             closeDrawer();
@@ -878,23 +878,23 @@ export function App() {
           onCancel={async (id) => { await cancelAutomationRun(controller.local, id); refreshAutomationRuns(); refreshGithubQueue(); }}
           onRetry={async (id) => { await retryAutomationRun(controller.local, id); refreshAutomationRuns(); refreshGithubQueue(); }}
           onReauthenticate={async (provider, machineId, reason) => {
-            const targetNode = machineId || state.currentNodeId;
+            const targetNode = machineId || state.connection.currentNodeId;
             if (!targetNode) throw new Error("The Machine for this Run is not available.");
             await controller.connectToNode(targetNode);
             controller.store.setNeedsModelAuth({ nodeId: targetNode, provider, reason });
           }}
-          resolveMachineName={(machineId) => state.nodes.find((n) => n.id === machineId)?.name || undefined}
-          isSessionResolvable={(sessionId) => state.sessions.some((s) => s.sessionId === sessionId)}
+          resolveMachineName={(machineId) => state.connection.nodes.find((n) => n.id === machineId)?.name || undefined}
+          isSessionResolvable={(sessionId) => state.sessionIndex.sessions.some((s) => s.sessionId === sessionId)}
           onReceiptReviewed={() => { void recordProductMetric(controller.local, "receipt_reviewed", matchMedia("(max-width: 700px)").matches ? "mobile" : "desktop").catch(() => {}); }}
           onOpenSession={(sessionId) => {
-            const s = state.sessions.find((x) => x.sessionId === sessionId);
+            const s = state.sessionIndex.sessions.find((x) => x.sessionId === sessionId);
             controller.openSessionOnNode(sessionId, s?.path, s?.nodeId);
             closeRun({ kind: "session", id: sessionId });
             closeDrawer();
           }}
           onClose={() =>
             closeRun(
-              state.activeSessionId ? { kind: "session", id: state.activeSessionId } : { kind: "new" },
+              state.activeSession.activeSessionId ? { kind: "session", id: state.activeSession.activeSessionId } : { kind: "new" },
             )
           }
         />
@@ -916,7 +916,7 @@ export function App() {
             // hub. A stale `/settings/:view` deep link bounces there: source
             // connections open the connect sheet; the rest land on their tab.
             closeSettings(
-              state.activeSessionId ? { kind: "session", id: state.activeSessionId } : { kind: "new" },
+              state.activeSession.activeSessionId ? { kind: "session", id: state.activeSession.activeSessionId } : { kind: "new" },
             );
             if (view === "github" || view === "linear" || view === "slack") {
               openAutomations({ setup: view });
@@ -930,17 +930,17 @@ export function App() {
           }}
           onClose={() =>
             closeSettings(
-              state.activeSessionId ? { kind: "session", id: state.activeSessionId } : { kind: "new" },
+              state.activeSession.activeSessionId ? { kind: "session", id: state.activeSession.activeSessionId } : { kind: "new" },
             )
           }
         />
       )}
       {ephemeralOpen && <EphemeralSheet onClose={() => setEphemeralOpen(false)} firstRun={needsNode} />}
-      {state.needsModelAuth && <FirstRunModelAuthSheet state={state} />}
+      {state.presentation.needsModelAuth && <FirstRunModelAuthSheet state={state} />}
       {terminalNodePicker && (
         <NodePicker
           state={state}
-          currentNodeId={state.currentNodeId}
+          currentNodeId={state.connection.currentNodeId}
           onPick={pickTerminalNode}
           onClose={() => setTerminalNodePicker(false)}
         />
@@ -948,7 +948,7 @@ export function App() {
       {terminalOpen && (
         <Suspense fallback={null}>
           <TerminalOverlay
-            sessionId={terminalStandalone ? null : state.activeSessionId}
+            sessionId={terminalStandalone ? null : state.activeSession.activeSessionId}
             attachTermId={terminalTarget}
             standalone={terminalStandalone}
             tui={terminalTui}

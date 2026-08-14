@@ -30,7 +30,7 @@ function AgentRow({ agent }: { agent: CapabilityAgentSummary }) {
  * (unlike the Node stats panel, which polls) since this data changes rarely.
  */
 export function MachineCapabilitiesSection({ online }: { online: boolean }) {
-  const { capabilities } = useAppState();
+  const { settings: { capabilities } } = useAppState();
   const [loading, setLoading] = useState(false);
 
   const refresh = () => {

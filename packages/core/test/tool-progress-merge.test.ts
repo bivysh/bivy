@@ -25,7 +25,7 @@ describe("tool progress ping does not clobber a running tool's input", () => {
       { type: "tool_call", toolName: "some_unclassified_tool", input: { command: "run-the-thing --flag" }, toolCallId: "t1" },
       { type: "tool_execution_update", toolName: "some_unclassified_tool", toolCallId: "t1", input: { elapsedSeconds: 7 } },
     ]);
-    const card = store.getState().transcript.find((e) => e.tool?.callId === "t1")?.tool;
+    const card = store.getState().activeSession.transcript.find((e) => e.tool?.callId === "t1")?.tool;
     expect(card).toBeTruthy();
     expect(card!.status).toBe("running");
     expect(card!.input).toMatchObject({ command: "run-the-thing --flag", elapsedSeconds: 7 });
@@ -38,7 +38,7 @@ describe("tool progress ping does not clobber a running tool's input", () => {
       { type: "tool_call", toolName: "bash", input: {}, toolCallId: "t2" },
       { type: "tool_execution_update", toolName: "bash", toolCallId: "t2", input: { command: "npm test" } },
     ]);
-    const card = store.getState().transcript.find((e) => e.tool?.callId === "t2")?.tool;
+    const card = store.getState().activeSession.transcript.find((e) => e.tool?.callId === "t2")?.tool;
     expect(card!.input).toMatchObject({ command: "npm test" });
   });
 });

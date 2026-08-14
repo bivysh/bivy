@@ -53,9 +53,9 @@ for (const runtimeId of RECOMMENDED) {
       type: "session.history", sessionId: "session-1", runtimeId, isStreaming: false,
       messages: [{ role: "user", content: "do it" }, { role: "assistant", content: [{ type: "text", text: "done" }] }],
     } as never);
-    assert.equal(firstClient.getState().working, false);
-    assert.equal(firstClient.getState().activeRuntimeId, runtimeId);
-    assert.ok(firstClient.getState().transcript.some((entry) => entry.text === "done"));
+    assert.equal(firstClient.getState().activeSession.working, false);
+    assert.equal(firstClient.getState().activeSession.activeRuntimeId, runtimeId);
+    assert.ok(firstClient.getState().activeSession.transcript.some((entry) => entry.text === "done"));
 
     // Approval and question survive a client disappearance because their
     // managers remain node-owned and listable for replay on the next client.
@@ -82,11 +82,11 @@ for (const runtimeId of RECOMMENDED) {
       type: "session.history", sessionId: "session-1", runtimeId, isStreaming: false,
       messages: [{ role: "user", content: "do it" }, { role: "assistant", content: [{ type: "text", text: "done" }] }],
     } as never);
-    assert.equal(secondClient.getState().activeSessionId, "session-1");
-    assert.equal(secondClient.getState().activeRuntimeId, runtimeId);
+    assert.equal(secondClient.getState().activeSession.activeSessionId, "session-1");
+    assert.equal(secondClient.getState().activeSession.activeRuntimeId, runtimeId);
     assert.deepEqual(
-      secondClient.getState().transcript.map((entry) => [entry.role, entry.text]),
-      firstClient.getState().transcript.map((entry) => [entry.role, entry.text]),
+      secondClient.getState().activeSession.transcript.map((entry) => [entry.role, entry.text]),
+      firstClient.getState().activeSession.transcript.map((entry) => [entry.role, entry.text]),
     );
 
     // Stop/teardown settles every node-owned attention wait immediately.

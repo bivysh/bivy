@@ -752,19 +752,19 @@ function PresetBar({ presets }: { presets: CredentialPresetsView | null }) {
 
 function ProvidersPanel({ state }: { state: AppState }) {
   // Holds just the id, not a snapshot of the ProviderInfo object: `managing`
-  // below is re-derived from live `state.providers` every render instead, so
+  // below is re-derived from live `state.catalogs.providers` every render instead, so
   // a remove (whose only signal is an eventual refreshed providers.list —
   // save now awaits a direct ack, see saveApiKey) actually shows up in this
   // detail view (e.g. the "Connected" chip) instead of the view staying
   // frozen on the object as it looked when the user first tapped in.
   // In hosted (relay) mode the account can have several nodes, each with its
-  // own provider logins/keys. `state.providers` only ever reflects the node the
+  // own provider logins/keys. `state.catalogs.providers` only ever reflects the node the
   // app is currently connected to, so managing another node's keys used to mean
   // switching nodes somewhere else first. The node switcher below lets the user
   // pick which node's keys this panel shows and edits, without leaving Settings.
   const hosted = !controller.direct;
-  const nodes = state.nodes;
-  const currentNodeId = state.currentNodeId;
+  const nodes = state.connection.nodes;
+  const currentNodeId = state.connection.currentNodeId;
   const showNodePicker = hosted && nodes.length > 1;
   const [managingId, setManagingId] = useState<string | null>(null);
   const [switchingTo, setSwitchingTo] = useState<string | null>(null);
@@ -799,7 +799,7 @@ function ProvidersPanel({ state }: { state: AppState }) {
     setManagingId(null);
     setSwitchingTo(id);
     // connectToNode switches the transport, waits for the node to come online,
-    // then re-lists its providers — so `state.providers` ends up scoped to the
+    // then re-lists its providers — so `state.catalogs.providers` ends up scoped to the
     // picked node with no extra plumbing here.
     controller
       .connectToNode(id)
@@ -807,7 +807,7 @@ function ProvidersPanel({ state }: { state: AppState }) {
       .finally(() => setSwitchingTo(null));
   };
 
-  const managing = managingId ? state.providers.find((p) => p.id === managingId) ?? null : null;
+  const managing = managingId ? state.catalogs.providers.find((p) => p.id === managingId) ?? null : null;
   useEffect(() => {
     if (managing?.configured) controller.getProviderAuth(managing.id);
     // Re-check when `configured` flips true too (e.g. right after a save
@@ -815,7 +815,7 @@ function ProvidersPanel({ state }: { state: AppState }) {
   }, [managing?.id, managing?.configured]);
 
   if (managing) {
-    const auth = state.providerAuth?.provider === managing.id ? state.providerAuth : null;
+    const auth = state.settings.providerAuth?.provider === managing.id ? state.settings.providerAuth : null;
     const isOauth = (auth?.kind || managing.kind) === "oauth";
     return (
       <div className="settings-form">
@@ -851,7 +851,7 @@ function ProvidersPanel({ state }: { state: AppState }) {
           </>
         ) : (
           <>
-            {state.oauth ? (
+            {state.presentation.oauth ? (
               <OauthStep />
             ) : (
               <>
@@ -875,7 +875,7 @@ function ProvidersPanel({ state }: { state: AppState }) {
                         await controller.saveApiKey(managing.id, key.trim());
                         setKey("");
                         // Re-list so the "Connected" chip (managing is derived
-                        // live from state.providers, see above) reflects it.
+                        // live from state.catalogs.providers, see above) reflects it.
                         controller.listProviders();
                       } catch (e) {
                         setKeyErr(String((e as Error)?.message || e));
@@ -910,10 +910,10 @@ function ProvidersPanel({ state }: { state: AppState }) {
           </>
         )}
         {(() => {
-          const defaultRecord = state.credentialRecords.find((r) => r.provider === managing.id && r.label === "default");
+          const defaultRecord = state.settings.credentialRecords.find((r) => r.provider === managing.id && r.label === "default");
           return defaultRecord ? <CredentialReadinessRow providerId={managing.id} record={defaultRecord} accountEmail={accountEmail} /> : null;
         })()}
-        <ProviderCredentials providerId={managing.id} records={state.credentialRecords} presets={state.credentialPresets} accountEmail={accountEmail} />
+        <ProviderCredentials providerId={managing.id} records={state.settings.credentialRecords} presets={state.settings.credentialPresets} accountEmail={accountEmail} />
       </div>
     );
   }
@@ -957,13 +957,13 @@ function ProvidersPanel({ state }: { state: AppState }) {
           <label className="field-label">Keys &amp; OAuth on {nodeLabel(nodes, currentNodeId)}</label>
         </>
       )}
-      {!switchingTo && <PresetBar presets={state.credentialPresets} />}
+      {!switchingTo && <PresetBar presets={state.settings.credentialPresets} />}
       {switchingTo ? (
         <p className="muted">Connecting to {nodeLabel(nodes, switchingTo)}…</p>
       ) : (
         <div className="picker-list">
-          {state.providers.length === 0 && <div className="picker-empty">No providers reported.</div>}
-          {state.providers.map((p) => (
+          {state.catalogs.providers.length === 0 && <div className="picker-empty">No providers reported.</div>}
+          {state.catalogs.providers.map((p) => (
             <PickerItem
               key={p.id}
               title={p.name || p.id}
@@ -974,7 +974,7 @@ function ProvidersPanel({ state }: { state: AppState }) {
                 // readiness label (only "Verified" once an actual test ran);
                 // an env-sourced credential has no record to test, so it keeps
                 // the plain "Connected" chip it always had.
-                const record = state.credentialRecords.find((r) => r.provider === p.id && r.label === "default");
+                const record = state.settings.credentialRecords.find((r) => r.provider === p.id && r.label === "default");
                 const verified = record ? deriveCredentialReadiness(record, accountEmail).verified : undefined;
                 if (verified === "verified") return <span className="chip ok">Verified</span>;
                 if (verified === "failed") return <span className="chip warn">Verification failed</span>;
@@ -1304,8 +1304,8 @@ function LocalModelsPanel({ state, onStartWork }: { state: AppState; onStartWork
 
       <label className="field-label">Configured for this account</label>
       <div className="picker-list">
-        {state.localModels.length === 0 && <div className="picker-empty">No local or custom endpoints yet.</div>}
-        {state.localModels.map((p) => (
+        {state.settings.localModels.length === 0 && <div className="picker-empty">No local or custom endpoints yet.</div>}
+        {state.settings.localModels.map((p) => (
           <PickerItem
             key={p.id}
             title={p.name || p.id}
@@ -1342,11 +1342,11 @@ function LocalModelsPanel({ state, onStartWork }: { state: AppState; onStartWork
 
       <button className="btn primary block" onClick={() => openDraft({ ...EMPTY_DRAFT })}>+ Add endpoint</button>
 
-      {state.localModelPresets.length > 0 && (
+      {state.settings.localModelPresets.length > 0 && (
         <>
           <label className="field-label">Quick add</label>
           <div className="row-actions" style={{ flexWrap: "wrap" }}>
-            {state.localModelPresets.map((preset) => (
+            {state.settings.localModelPresets.map((preset) => (
               <button key={preset.id} className="btn" title={preset.note} onClick={() => openDraft(draftFromPreset(preset))}>
                 {preset.name}
               </button>
@@ -1382,10 +1382,10 @@ function NodesPanel({ state }: { state: AppState }) {
   useEffect(reload, [hosted]);
 
   // The node whose settings we're editing is only ever the one the transport
-  // is actually connected to (`state.status === "online"`) — never a guess
+  // is actually connected to (`state.connection.status === "online"`) — never a guess
   // based on a fixed timeout. While it's offline/connecting, don't trust
-  // whatever is left in `state.nodeSettings` (a prior node's data, or none).
-  const nodeOnline = state.status === "online";
+  // whatever is left in `state.settings.nodeSettings` (a prior node's data, or none).
+  const nodeOnline = state.connection.status === "online";
   useEffect(() => {
     if (hosted && nodeOnline) controller.getNodeSettings();
   }, [hosted, nodeOnline, currentNodeId]);
@@ -1393,7 +1393,7 @@ function NodesPanel({ state }: { state: AppState }) {
   // Re-seed the editable form whenever fresh settings arrive from the node
   // (initial load, or after switching to a different node). Keyed on the node
   // name so an in-progress edit isn't clobbered by an unrelated re-render.
-  const settings = nodeOnline ? state.nodeSettings : null;
+  const settings = nodeOnline ? state.settings.nodeSettings : null;
   // Includes githubIssuePrompt so `resetIssuePrompt` (which doesn't touch the
   // rest of the form) re-seeds once the node echoes back the restored default.
   const sig = settings ? `${settings.name}|${settings.defaultAgent}|${settings.githubIssuePrompt}` : "";
@@ -1403,10 +1403,10 @@ function NodesPanel({ state }: { state: AppState }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { setForm(settings); }, [sig]);
 
-  const runtimes = state.runtimes.filter((r) => String((r as { status?: string }).status ?? "available") === "available");
-  const agentCaps = state.runtimes.find((r) => r.id === form?.defaultAgent)?.capabilities as { modelSelection?: boolean } | undefined;
+  const runtimes = state.catalogs.runtimes.filter((r) => String((r as { status?: string }).status ?? "available") === "available");
+  const agentCaps = state.catalogs.runtimes.find((r) => r.id === form?.defaultAgent)?.capabilities as { modelSelection?: boolean } | undefined;
   const modelSelectable = agentCaps?.modelSelection !== false;
-  const models = state.models;
+  const models = state.catalogs.models;
 
   const save = async () => {
     if (!form || saving) return;
@@ -1486,7 +1486,7 @@ function NodesPanel({ state }: { state: AppState }) {
 
       {!nodeOnline ? (
         <p className="muted">
-          {state.status === "offline"
+          {state.connection.status === "offline"
             ? "This machine is offline — its settings aren't reachable until it reconnects."
             : "Connecting to this machine…"}
         </p>

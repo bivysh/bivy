@@ -37,7 +37,7 @@ export function NodeReconnectSheet({
   // Captured once, on mount — the node the user was on before opening this
   // sheet, so `close()` can put them back rather than leaving `nodeId` as the
   // new default just because they stopped by to fix its login.
-  const previousNodeId = useRef(state.currentNodeId);
+  const previousNodeId = useRef(state.connection.currentNodeId);
 
   useEffect(() => {
     let cancelled = false;
@@ -63,7 +63,7 @@ export function NodeReconnectSheet({
     };
   }, [nodeId, providerId]);
 
-  const provider = state.providers.find((p) => p.id === providerId);
+  const provider = state.catalogs.providers.find((p) => p.id === providerId);
   const providerName = provider?.name || providerId;
 
   function retry() {
@@ -99,7 +99,7 @@ export function NodeReconnectSheet({
             </button>
           </>
         )}
-        {phase === "ready" && (state.oauth ? <OauthStep /> : <p className="muted">Starting sign-in…</p>)}
+        {phase === "ready" && (state.presentation.oauth ? <OauthStep /> : <p className="muted">Starting sign-in…</p>)}
       </div>
     </Sheet>
   );
