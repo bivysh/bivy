@@ -44,6 +44,8 @@ export interface CredentialRecord {
   sync: SyncPolicy;
   /** Provenance — display + default-picker only; behavior must never branch on it. */
   origin: CredentialOrigin;
+  /** Explicit grant for control-plane-custodied unattended runners. Never implied by account sync. */
+  unattended?: boolean;
   /** Store-owned mutation time (set by the vault, not by callers). */
   updatedAt?: number;
 }

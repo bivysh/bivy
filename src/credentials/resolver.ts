@@ -11,6 +11,7 @@
 // This keeps Bivy's hot credential path decoupled from Pi: Pi is just another
 // agent that reads the same store.
 
+import path from "node:path";
 import { createCredentialVault } from "./store.js";
 import { resolveCredential, type CredentialPresets } from "./records.js";
 import { loadPresets, defaultPresetsPath } from "./presets.js";
@@ -20,11 +21,21 @@ import type { SecretResolver, OAuthRefresher } from "./ports.js";
 /** Refresh an OAuth token this many ms before it expires (clock-skew guard). */
 const OAUTH_REFRESH_SKEW_MS = 60_000;
 
+/** Stable project identifiers discoverable without importing repo/session code. */
+export function projectIdsFromWorkspace(workspace: string): string[] {
+  const resolved = path.resolve(workspace);
+  const ids = new Set<string>([resolved, path.basename(resolved)]);
+  for (const part of resolved.split(path.sep)) {
+    const split = part.indexOf("__");
+    if (split > 0 && split < part.length - 2) ids.add(`${part.slice(0, split)}/${part.slice(split + 2)}`);
+  }
+  return [...ids];
+}
+
 /** Resolver over Bivy's credential store, with OAuth refresh-on-read via the bridge. */
 export class NodeCredentialResolver implements AgentCredentialStore {
   private readonly store: ReturnType<typeof createCredentialVault>;
   private readonly presetsPath: string;
-  private presetsCache?: CredentialPresets;
 
   // Reference resolution (op:///env:///cmd://) and OAuth refresh are injected
   // capabilities (ports) — the resolver stays free of secrets.ts and the Pi
@@ -38,13 +49,13 @@ export class NodeCredentialResolver implements AgentCredentialStore {
     this.presetsPath = defaultPresetsPath(credsDir);
   }
 
-  /** The node's selection presets, read once per resolver (see presets.ts). */
+  /** Read assignments on each resolution so a vault UI change applies to an
+   * already-running agent on its next turn, not only after a daemon restart. */
   private presets(): CredentialPresets {
-    if (!this.presetsCache) this.presetsCache = loadPresets(this.presetsPath);
-    return this.presetsCache;
+    return loadPresets(this.presetsPath);
   }
 
-  async getCredential(provider: string): Promise<ProviderCredential | undefined> {
+  async getCredential(provider: string, context?: { project?: string; workspace?: string; preferLabel?: string }): Promise<ProviderCredential | undefined> {
     const id = provider.trim().toLowerCase();
     if (!id) return undefined;
 
@@ -53,7 +64,15 @@ export class NodeCredentialResolver implements AgentCredentialStore {
     // credential; ambiguity (multiple accounts, no preset) returns nothing rather
     // than guessing.
     const records = await this.store.listRecords().catch(() => []);
-    const selection = resolveCredential(id, records, this.presets());
+    const presets = this.presets();
+    // Project assignments are ordinary preset mappings named `project:<id>`.
+    // Bivy-managed clones encode owner/repo as owner__repo in their workspace
+    // path; direct local workspaces also match their absolute path/basename.
+    const explicitProject = context?.project?.trim();
+    const workspace = context?.workspace?.trim();
+    const projectCandidates = [explicitProject, ...(workspace ? projectIdsFromWorkspace(workspace) : [])].filter((value): value is string => Boolean(value));
+    const projectPreset = projectCandidates.map((value) => `project:${value}`).find((name) => presets.presets?.[name]?.[id]);
+    const selection = resolveCredential(id, records, presets, { ...(projectPreset ? { preset: projectPreset } : {}), ...(context?.preferLabel ? { preferLabel: context.preferLabel } : {}) });
     if (!selection) return undefined;
     const source = selection.record.source;
 
@@ -70,7 +89,10 @@ export class NodeCredentialResolver implements AgentCredentialStore {
     const cred = source.cred;
 
     if (cred.type === "api_key") {
-      const token = typeof cred.key === "string" ? cred.key : "";
+      // Keyless local endpoints are valid. They still need a harmless value in
+      // the conventional API-key variable because several OpenAI-compatible
+      // clients require the variable even when the server ignores auth.
+      const token = typeof cred.key === "string" && cred.key ? cred.key : cred.env ? "local" : "";
       if (!token) return undefined;
       return { provider: id, kind: "api_key", token, ...(cred.env ? { env: cred.env } : {}) };
     }
@@ -166,6 +188,7 @@ export async function buildAgentCredentialEnv(
   store: AgentCredentialStore,
   providers?: string[],
   activeProvider?: string,
+  workspace?: string,
 ): Promise<Record<string, string>> {
   const ids = providers ?? (store.listConfigured ? await store.listConfigured().catch(() => []) : []);
   const active = activeProvider?.trim().toLowerCase() || undefined;
@@ -177,7 +200,7 @@ export async function buildAgentCredentialEnv(
   for (const id of ordered) {
     let cred: ProviderCredential | undefined;
     try {
-      cred = await store.getCredential(id);
+      cred = await store.getCredential(id, workspace ? { workspace } : undefined);
     } catch {
       continue;
     }

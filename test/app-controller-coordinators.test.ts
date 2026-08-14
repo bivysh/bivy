@@ -30,20 +30,21 @@ test("node coordinator owns the complete switch ordering", () => {
   assert.deepEqual(events, ["close", "identity:new", "reset", "seed", "build", "connecting", "connect", "sessions"]);
 });
 
-test("credentials coordinator owns direct-mode probe policy", async () => {
+test("credentials coordinator uses the item-addressed probe in direct mode", async () => {
   let sent = false;
   const coordinator = new CredentialsModelsCoordinator({
     send: () => { sent = true; },
-    awaitAck: async () => { throw new Error("must not send"); },
+    awaitAck: async () => ({ type: "credential.test.result", ok: true, at: 41 } as never),
     rememberModel: () => {},
     selectModelLocally: () => {},
     isDirect: () => true,
     now: () => 42,
     isOnline: () => true,
     importModelKeys: async () => {},
+    removeModelKey: async () => {},
     accountModelKeys: async () => [],
   });
-  assert.deepEqual(await coordinator.testCredential("openai", "default"), { ok: false, at: 42, reason: "not_supported" });
+  assert.deepEqual(await coordinator.testCredential("openai", "default"), { ok: true, at: 41 });
   assert.equal(sent, false);
 });
 

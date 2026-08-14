@@ -51,7 +51,7 @@ import { deriveSessionState, type SessionState } from "./session/session-state.j
 import type { SessionRecord, PromptOptions, StreamingBehavior, PromptImage } from "./session/record.js";
 import { resolveStreamingBehavior } from "./session/record.js";
 import { createSessionEngine } from "./session/engine.js";
-import { exportProviderAuth, exportAccountApiKeys, exportSyncableProviderAuth, exportProviderAuthTombstones, importProviderAuth, removeProvider, setProviderApiKey, listCredentialRecords, setProviderApiKeyLabeled, setProviderReferenceLabeled, removeProviderCredential, setCredentialSync, getCredentialPresets, setActiveCredentialPreset, setCredentialPresetMapping, exportSyncableRecords, exportRecordTombstones, importCredentialRecords } from "./credentials/api.js";
+import { exportProviderAuth, exportAccountApiKeys, exportSyncableProviderAuth, exportProviderAuthTombstones, importProviderAuth, removeProvider, setProviderApiKey, listCredentialRecords, setProviderApiKeyLabeled, setProviderReferenceLabeled, removeProviderCredential, setCredentialSync, setCredentialUnattended, exportUnattendedRecords, unattendedCredentialRevision, getCredentialPresets, setActiveCredentialPreset, setCredentialPresetMapping, exportSyncableRecords, exportRecordTombstones, importCredentialRecords, reconcileHostedCredentialRecords } from "./credentials/api.js";
 import { listProviders } from "./runtime/provider-catalog.js";
 import { exportLocalModels, importLocalModels } from "./runtime/local-model-store.js";
 import { execEphemeralRequest, type EphemeralExecRequest } from "./ephemeral-exec.js";
@@ -2765,15 +2765,18 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
   async "credentials.account.export"(_msg, ctx) {
     // This reply travels inside the already-paired E2E node channel. It contains
     // API keys only; OAuth/ref/node-local material is excluded by the API.
-    ctx.reply({ type: "credentials.account.export", requestId: _msg.requestId, entries: await exportAccountApiKeys(credsDir) });
+    ctx.reply({ type: "credentials.account.export", requestId: _msg.requestId, entries: await exportAccountApiKeys(credsDir), records: await listCredentialRecords(credsDir), deletedAt: await exportRecordTombstones(credsDir) });
   },
   async "credential.set"(msg, ctx) {
     try {
       const provider = String(msg.provider ?? "").trim().toLowerCase();
       const label = String(msg.label ?? "");
       const ref = typeof msg.ref === "string" ? msg.ref.trim() : "";
-      if (ref) await setProviderReferenceLabeled(credsDir, provider, label, ref);
-      else await setProviderApiKeyLabeled(credsDir, provider, label, String(msg.key ?? ""));
+      const requestedSync = msg.sync === "account" || msg.sync === "node" ? msg.sync : undefined;
+      // Persist the secret and its requested tier atomically. Creating a
+      // machine-only credential must never leave an account-tier crash window.
+      if (ref) await setProviderReferenceLabeled(credsDir, provider, label, ref, requestedSync);
+      else await setProviderApiKeyLabeled(credsDir, provider, label, String(msg.key ?? ""), requestedSync);
       await pushModelAuthToControlPlane();
       await refreshSessionAfterAuth();
       relay?.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
@@ -2785,25 +2788,42 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
       ctx.reply({ type: "credential.set.error", requestId: msg.requestId, error: message });
     }
   },
-  async "credential.remove"(msg) {
+  async "credential.remove"(msg, ctx) {
     try {
       await removeProviderCredential(credsDir, String(msg.provider ?? ""), String(msg.label ?? ""));
       await pushModelAuthToControlPlane();
       await refreshSessionAfterAuth();
       relay?.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
       broadcast({ type: "providers.list", providers: await listProvidersUnified() });
+      ctx.reply({ type: "credential.remove.ok", requestId: msg.requestId });
     } catch (error) {
-      relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
+      const message = error instanceof Error ? error.message : String(error);
+      relay?.sendEvent({ type: "session.error", error: message });
+      ctx.reply({ type: "credential.remove.error", requestId: msg.requestId, error: message });
     }
   },
-  async "credential.sync.set"(msg) {
+  async "credential.sync.set"(msg, ctx) {
     try {
       const sync = msg.sync === "node" ? "node" : "account";
       await setCredentialSync(credsDir, String(msg.provider ?? ""), String(msg.label ?? ""), sync);
       await pushModelAuthToControlPlane();
       relay?.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
+      ctx.reply({ type: "credential.sync.set.ok", requestId: msg.requestId });
     } catch (error) {
-      relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
+      const message = error instanceof Error ? error.message : String(error);
+      relay?.sendEvent({ type: "session.error", error: message });
+      ctx.reply({ type: "credential.sync.set.error", requestId: msg.requestId, error: message });
+    }
+  },
+  async "credential.unattended.set"(msg, ctx) {
+    try {
+      await setCredentialUnattended(credsDir, String(msg.provider ?? ""), String(msg.label ?? ""), msg.unattended === true);
+      await pushModelAuthToControlPlane();
+      relay?.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
+      ctx.reply({ type: "credential.unattended.set.ok", requestId: msg.requestId });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.reply({ type: "credential.unattended.set.error", requestId: msg.requestId, error: message });
     }
   },
   // "Test connection": a bounded, non-secret liveness probe for one credential
@@ -2833,13 +2853,15 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
       relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
     }
   },
-  async "credentials.presets.setMapping"(msg) {
+  async "credentials.presets.setMapping"(msg, ctx) {
     try {
       setCredentialPresetMapping(credsDir, String(msg.preset ?? ""), String(msg.provider ?? ""), String(msg.label ?? ""));
       await refreshSessionAfterAuth();
       relay?.sendEvent({ type: "credentials.presets", presets: getCredentialPresets(credsDir) });
+      ctx.reply({ type: "credentials.presets.setMapping.ok", requestId: msg.requestId });
     } catch (error) {
-      relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.reply({ type: "credentials.presets.setMapping.error", requestId: msg.requestId, error: message });
     }
   },
   // --- Local / custom models (Bivy-owned registry; Pi is a projection). ---
@@ -2994,7 +3016,7 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
   // `auth.oauth.progress|done|error` already mirror to the relay via broadcast.
   async "provider.oauth.start"(msg) {
     try {
-      const state = await startOAuthLogin(String(msg.provider ?? msg.id ?? ""));
+      const state = await startOAuthLogin(String(msg.provider ?? msg.id ?? ""), String(msg.label ?? "default"));
       relay?.sendEvent({
         type: "provider.oauth.started",
         id: state.id,
@@ -3437,13 +3459,19 @@ function startRelayIfConfigured() {
 type ModelAuthVaultResponse = {
   vault?: { ciphertext: string; updatedAt: string; updatedByNodeId: string; needsRotation?: boolean } | null;
   wrappedKey?: { nodeId: string; wrappedKey: string; wrappedByNodeId: string; wrappedByPublicKey: string } | null;
-  // Hosted escrow: the raw vault key, served only for hosted-provisioning accounts
-  // so a lone hosted ephemeral can decrypt the vault without a peer (node-less).
-  hostedKey?: string | null;
   requests?: Array<{ nodeId: string; publicKey: string }>;
 };
+type HostedModelAuthVaultResponse = {
+  hostedKey?: string | null;
+  hostedVault?: { ciphertext: string; generation: number; revision: number } | null;
+};
 const modelAuthVaultKeyPath = path.join(appDir, "model-auth-vault.json");
+const hostedModelAuthVaultKeyPath = path.join(appDir, "model-auth-hosted-vault.json");
+const hostedImportedRecordsPath = path.join(appDir, "model-auth-hosted-records.json");
 let lastPushedModelAuthCiphertext = "";
+let lastPushedHostedModelAuthCiphertext = "";
+let lastPushedHostedModelAuthRevision = -1;
+const isHostedCustodyNode = () => Boolean(process.env.BIVY_GITHUB_HOSTED_TASKS);
 
 function readLocalModelAuthVaultKey(): string | undefined {
   try {
@@ -3463,6 +3491,36 @@ function writeLocalModelAuthVaultKey(vaultKeyB64: string) {
 
 function forgetLocalModelAuthVaultKey() {
   try { fs.rmSync(modelAuthVaultKeyPath, { force: true }); } catch { /* best effort */ }
+}
+
+function readHostedModelAuthVaultKey(): string | undefined {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(hostedModelAuthVaultKeyPath, "utf8")) as { vaultKeyB64?: string };
+    if (parsed.vaultKeyB64 && Buffer.from(parsed.vaultKeyB64, "base64").length === 32) return parsed.vaultKeyB64;
+  } catch { /* no hosted key */ }
+  return undefined;
+}
+function writeHostedModelAuthVaultKey(vaultKeyB64: string) {
+  fs.writeFileSync(hostedModelAuthVaultKeyPath, `${JSON.stringify({ vaultKeyB64, createdAt: new Date().toISOString() }, null, 2)}\n`, { mode: 0o600 });
+}
+function readHostedImportedRecords(): Array<{ provider: string; label: string }> {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(hostedImportedRecordsPath, "utf8"));
+    return Array.isArray(parsed?.records)
+      ? parsed.records.filter((record: unknown): record is { provider: string; label: string } => Boolean(record) && typeof record === "object" && typeof (record as any).provider === "string" && typeof (record as any).label === "string")
+      : [];
+  } catch { return []; }
+}
+function writeHostedImportedRecords(records: Array<{ provider: string; label: string }>) {
+  fs.writeFileSync(hostedImportedRecordsPath, `${JSON.stringify({ records }, null, 2)}\n`, { mode: 0o600 });
+}
+
+function ensureHostedModelAuthVaultKey(): string {
+  const existing = readHostedModelAuthVaultKey();
+  if (existing) return existing;
+  const created = randomBytes(32).toString("base64");
+  writeHostedModelAuthVaultKey(created);
+  return created;
 }
 
 function ensureLocalModelAuthVaultKey(): string {
@@ -3603,34 +3661,44 @@ async function syncModelAuthFromControlPlane() {
     const res = await modelAuthFetch("/node/model-auth-vault");
     if (!res?.ok) return;
     const data = (await res.json().catch(() => ({}))) as ModelAuthVaultResponse;
-    let vaultKeyB64 = readLocalModelAuthVaultKey();
+    const hostedCustody = isHostedCustodyNode();
+    let hostedData: HostedModelAuthVaultResponse = {};
+    if (hostedCustody) {
+      const hostedResponse = await modelAuthFetch("/node/model-auth-hosted-vault");
+      if (hostedResponse?.ok) hostedData = (await hostedResponse.json().catch(() => ({}))) as HostedModelAuthVaultResponse;
+    }
+    const targetVault = hostedCustody ? hostedData.hostedVault : data.vault;
+    let vaultKeyB64 = hostedCustody ? readHostedModelAuthVaultKey() : readLocalModelAuthVaultKey();
 
-    if (!vaultKeyB64 && data.wrappedKey?.wrappedKey) {
+    if (!hostedCustody && !vaultKeyB64 && data.wrappedKey?.wrappedKey) {
       vaultKeyB64 = pairingStore.unwrapFromNodePublicKey(data.wrappedKey.wrappedByPublicKey, data.wrappedKey.wrappedKey);
       writeLocalModelAuthVaultKey(vaultKeyB64);
     }
 
-    // Node-less inheritance: a lone HOSTED ephemeral (no peer to wrap the key)
-    // adopts the vault key the control plane escrowed for this hosted account, so
-    // it can decrypt the synced vault (incl. subscription OAuth) on cold start. The
-    // control plane serves `hostedKey` only for hosted-provisioning accounts.
-    if (!vaultKeyB64 && data.hostedKey && Buffer.from(data.hostedKey, "base64").length === 32) {
-      vaultKeyB64 = data.hostedKey;
-      writeLocalModelAuthVaultKey(vaultKeyB64);
+    // Hosted runners may decrypt ONLY the separately encrypted snapshot of
+    // records that the user explicitly granted to unattended execution.
+    if (hostedCustody && !vaultKeyB64 && hostedData.hostedKey && hostedData.hostedVault && Buffer.from(hostedData.hostedKey, "base64").length === 32) {
+      vaultKeyB64 = hostedData.hostedKey;
+      writeHostedModelAuthVaultKey(vaultKeyB64);
     }
 
-    if (data.vault?.ciphertext && vaultKeyB64) {
+    if (targetVault?.ciphertext && vaultKeyB64) {
       let decrypted;
       try {
-        decrypted = decryptModelAuthEnvelope(data.vault.ciphertext, vaultKeyB64);
+        decrypted = decryptModelAuthEnvelope(targetVault.ciphertext, vaultKeyB64);
       } catch (error) {
         // Most commonly this node cached the previous generation while another
         // survivor completed a revoke-triggered re-key. Forget it and request a
         // wrap of the current key; retaining it would make every poll fail forever.
-        forgetLocalModelAuthVaultKey();
-        lastPushedModelAuthCiphertext = "";
-        await modelAuthFetch("/node/model-auth-key/request", { method: "POST", body: JSON.stringify({ publicKey: pairingStore.nodePublicKeyB64() }) });
-        ensureModelAuthColdStart();
+        if (hostedCustody) {
+          try { fs.rmSync(hostedModelAuthVaultKeyPath, { force: true }); } catch { /* best effort */ }
+          lastPushedHostedModelAuthCiphertext = "";
+        } else {
+          forgetLocalModelAuthVaultKey();
+          lastPushedModelAuthCiphertext = "";
+          await modelAuthFetch("/node/model-auth-key/request", { method: "POST", body: JSON.stringify({ publicKey: pairingStore.nodePublicKeyB64() }) });
+          ensureModelAuthColdStart();
+        }
         console.warn("[auth-sync] cached vault key is stale; requested the rotated key:", (error as Error).message);
         return;
       }
@@ -3640,7 +3708,15 @@ async function syncModelAuthFromControlPlane() {
       // so importing records alone (plus its record-keyed tombstones) is complete.
       // Fall back to the provider-keyed fields for a v2 peer.
       if (v >= 3) {
-        await importCredentialRecords(credsDir, records, recordsDeletedAt as Record<string, unknown>);
+        if (hostedCustody) {
+          // Hosted snapshots are authoritative filtered sets, not additive peer
+          // merges. Remove custody-derived records omitted by a later snapshot
+          // so a revoke takes effect on already-running hosted nodes.
+          const current = await reconcileHostedCredentialRecords(credsDir, records, readHostedImportedRecords());
+          writeHostedImportedRecords(current);
+        } else {
+          await importCredentialRecords(credsDir, records, recordsDeletedAt as Record<string, unknown>);
+        }
       } else {
         await importProviderAuth(credsDir, providers, deletedAt);
       }
@@ -3649,13 +3725,14 @@ async function syncModelAuthFromControlPlane() {
       // regenerate it (and refresh the panel) after importing the vault.
       await writePiModelsProjection();
       await broadcastLocalModels();
-      lastPushedModelAuthCiphertext = data.vault.ciphertext;
+      if (hostedCustody) lastPushedHostedModelAuthCiphertext = targetVault.ciphertext;
+      else lastPushedModelAuthCiphertext = targetVault.ciphertext;
       // Got the key and imported the vault (incl. any subscription-OAuth logins) —
       // the cold-start race is over.
       stopModelAuthColdStart();
       broadcast({ type: "providers.list", providers: await listProvidersUnified() });
-      if (data.vault.needsRotation) await pushModelAuthToControlPlane(true);
-    } else if (data.vault?.ciphertext && !vaultKeyB64) {
+      if (!hostedCustody && data.vault?.needsRotation) await pushModelAuthToControlPlane(true);
+    } else if (targetVault?.ciphertext && !vaultKeyB64 && !hostedCustody) {
       await modelAuthFetch("/node/model-auth-key/request", { method: "POST", body: JSON.stringify({ publicKey: pairingStore.nodePublicKeyB64() }) });
       // No peer has wrapped our key yet. Fast-retry (bounded) so a short-lived
       // ephemeral runner picks up the key within seconds of a peer answering,
@@ -3671,7 +3748,7 @@ async function syncModelAuthFromControlPlane() {
     await processModelAuthKeyRequests(data.requests ?? []);
     // Ready means there is no encrypted vault to hydrate, or this node has the
     // key needed to consume it. Ciphertext with no key remains not-ready.
-    if (!data.vault?.ciphertext || readLocalModelAuthVaultKey()) void reportEphemeralMilestone("credentialsReadyAt");
+    if (!targetVault?.ciphertext || (hostedCustody ? readHostedModelAuthVaultKey() : readLocalModelAuthVaultKey())) void reportEphemeralMilestone("credentialsReadyAt");
   } catch (error) {
     console.warn("[auth-sync] model auth sync failed:", (error as Error).message);
   }
@@ -3690,6 +3767,35 @@ async function processModelAuthKeyRequests(requests: Array<{ nodeId: string; pub
   }
 }
 
+async function pushHostedModelAuthToControlPlane() {
+  const [records, revision] = await Promise.all([exportUnattendedRecords(credsDir), unattendedCredentialRevision(credsDir)]);
+  if (revision === lastPushedHostedModelAuthRevision) return;
+  const key = ensureHostedModelAuthVaultKey();
+  const ciphertext = encryptModelAuthProviders({}, {}, {}, key, records, {});
+  const publish = async (expectedGeneration: number) => modelAuthFetch("/node/model-auth-hosted-vault", {
+    method: "PUT",
+    body: JSON.stringify({ ciphertext, vaultKeyB64: key, expectedGeneration, revision }),
+  });
+  const currentResponse = await modelAuthFetch("/node/model-auth-hosted-vault");
+  if (currentResponse?.status === 403) return; // hosted provisioning is disabled
+  const current = currentResponse?.ok
+    ? (await currentResponse.json().catch(() => ({}))) as HostedModelAuthVaultResponse
+    : {};
+  let response = await publish(current.hostedVault?.generation ?? 0);
+  if (response?.status === 409) {
+    const conflict = await response.json().catch(() => ({})) as { generation?: number; revision?: number };
+    // Retry only when our logical state is at least as new; the store also
+    // enforces this revision check atomically with the generation CAS.
+    if (revision >= Number(conflict.revision ?? 0)) response = await publish(Number(conflict.generation ?? 0));
+  }
+  if (response?.ok) {
+    lastPushedHostedModelAuthCiphertext = ciphertext;
+    lastPushedHostedModelAuthRevision = revision;
+  } else if (response?.status !== 403 && response?.status !== 409) {
+    throw new Error(`hosted model-auth push failed (${response?.status ?? "offline"})`);
+  }
+}
+
 async function pushModelAuthToControlPlane(rotateKey = false) {
   if (!sessionAdvertiseTarget) return;
   // Piggyback the (plaintext, non-secret) provider status summary on every
@@ -3699,6 +3805,13 @@ async function pushModelAuthToControlPlane(rotateKey = false) {
   // versa.
   await pushProviderSummaryToControlPlane();
   try {
+    // A hosted runner holds only the explicitly granted snapshot and must never
+    // overwrite the peer-to-peer account vault with that filtered subset.
+    if (isHostedCustodyNode()) {
+      // Hosted runners are recipients, never authorities for the custody set.
+      // Letting one republish its stale filtered copy could undo a revocation.
+      return;
+    }
     // Only push credentials on the account-sync tier; a `sync: "node"` credential
     // stays local (per-credential opt-out). Tombstones still converge for all.
     const providers = await exportSyncableProviderAuth(credsDir);
@@ -3712,7 +3825,10 @@ async function pushModelAuthToControlPlane(rotateKey = false) {
     const vaultKeyB64 = rotateKey ? randomBytes(32).toString("base64") : ensureLocalModelAuthVaultKey();
     if (rotateKey) writeLocalModelAuthVaultKey(vaultKeyB64);
     const ciphertext = encryptModelAuthProviders(providers, deletedAt, localModels, vaultKeyB64, records, recordsDeletedAt);
-    if (!rotateKey && ciphertext === lastPushedModelAuthCiphertext) return;
+    if (!rotateKey && ciphertext === lastPushedModelAuthCiphertext) {
+      await pushHostedModelAuthToControlPlane();
+      return;
+    }
     const push = await modelAuthFetch("/node/model-auth-vault", { method: "PUT", body: JSON.stringify({ ciphertext, rotated: rotateKey }) });
     if (!push?.ok) {
       if (rotateKey) {
@@ -3725,14 +3841,11 @@ async function pushModelAuthToControlPlane(rotateKey = false) {
       method: "PUT",
       body: JSON.stringify({ targetNodeId: identity.nodeId, wrappedByPublicKey: pairingStore.nodePublicKeyB64(), wrappedKey: pairingStore.wrapForNodePublicKey(pairingStore.nodePublicKeyB64(), vaultKeyB64) }),
     });
-    // Node-less inheritance: a HOSTED node also escrows the vault key to the control
-    // plane (sealed at rest, hosted-only) so the account's NEXT hosted ephemeral —
-    // possibly the only node — can decrypt this vault without a peer to wrap the key.
-    // Gated to hosted nodes; the CP double-checks the account is hosted. Best effort.
-    if (process.env.BIVY_GITHUB_HOSTED_TASKS) {
-      await modelAuthFetch("/node/model-auth-key/hosted-escrow", { method: "PUT", body: JSON.stringify({ vaultKeyB64 }) }).catch(() => {});
-    }
     lastPushedModelAuthCiphertext = ciphertext;
+    // Publish a DIFFERENT ciphertext under a DIFFERENT key containing only
+    // records with `unattended:true`. Escrowing this key cannot decrypt the E2E
+    // account vault, which is the critical custody separation.
+    await pushHostedModelAuthToControlPlane();
   } catch (error) {
     console.warn("[auth-sync] could not push model auth:", (error as Error).message);
   }
@@ -5655,7 +5768,7 @@ function chooseHeadlessOAuthOption(prompt: any) {
   );
 }
 
-async function startOAuthLogin(provider: string) {
+async function startOAuthLogin(provider: string, label: string = "default") {
   if (!isNativeOAuthProvider(provider)) {
     throw new Error(`Provider ${provider} does not support browser/subscription login`);
   }
@@ -5714,7 +5827,7 @@ async function startOAuthLogin(provider: string) {
     throw new Error(`${input.message} Use terminal login for this provider step.`);
   };
 
-  loginModelOAuth(credsDir, provider, { signal: abort.signal, notify, prompt })
+  loginModelOAuth(credsDir, provider, { signal: abort.signal, notify, prompt }, label)
     .then(() => {
       state.status = "done";
       settleInitial();
@@ -5724,8 +5837,11 @@ async function startOAuthLogin(provider: string) {
       // list. Push a fresh list to every connected client; otherwise Settings
       // clears the login form but continues rendering its stale "Not connected"
       // snapshot until a reload or a later manual refresh.
-      void listProvidersUnified()
-        .then((providers) => broadcast({ type: "providers.list", providers }))
+      void Promise.all([listProvidersUnified(), listCredentialRecords(credsDir)])
+        .then(([providers, records]) => {
+          broadcast({ type: "providers.list", providers });
+          broadcast({ type: "credentials.records", records });
+        })
         .catch(() => {});
       void pushModelAuthToControlPlane();
       void refreshSessionAfterAuth();
@@ -9630,6 +9746,107 @@ app.post("/api/auth/api-key", async (req, res, next) => {
     await pushModelAuthToControlPlane();
     await refreshSessionAfterAuth();
     res.json({ ok: true, provider, providers: await listProvidersUnified() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Item-addressed credential-vault REST API. This mirrors the relay commands so
+// direct/self-hosted and hosted clients use the same records and behavior.
+app.get("/api/auth/credentials", async (_req, res, next) => {
+  try {
+    res.json({ records: await listCredentialRecords(credsDir) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/auth/credentials/account-export", async (_req, res, next) => {
+  try {
+    res.json({ entries: await exportAccountApiKeys(credsDir), records: await listCredentialRecords(credsDir), deletedAt: await exportRecordTombstones(credsDir) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/auth/credentials", async (req, res, next) => {
+  try {
+    const provider = String(req.body?.provider ?? "").trim().toLowerCase();
+    const label = String(req.body?.label ?? "default");
+    const ref = typeof req.body?.ref === "string" ? req.body.ref.trim() : "";
+    const requestedSync = req.body?.sync === "account" || req.body?.sync === "node" ? req.body.sync : undefined;
+    if (ref) await setProviderReferenceLabeled(credsDir, provider, label, ref, requestedSync);
+    else await setProviderApiKeyLabeled(credsDir, provider, label, String(req.body?.key ?? ""), requestedSync);
+    await pushModelAuthToControlPlane();
+    await refreshSessionAfterAuth();
+    res.json({ ok: true, records: await listCredentialRecords(credsDir), providers: await listProvidersUnified() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/auth/credentials/:provider/:label", async (req, res, next) => {
+  try {
+    await removeProviderCredential(credsDir, String(req.params.provider), String(req.params.label));
+    await pushModelAuthToControlPlane();
+    await refreshSessionAfterAuth();
+    res.json({ ok: true, records: await listCredentialRecords(credsDir), providers: await listProvidersUnified() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/auth/credentials/:provider/:label/availability", async (req, res, next) => {
+  try {
+    const sync = req.body?.sync === "node" ? "node" : "account";
+    await setCredentialSync(credsDir, String(req.params.provider), String(req.params.label), sync);
+    await pushModelAuthToControlPlane();
+    res.json({ ok: true, records: await listCredentialRecords(credsDir) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/auth/credentials/:provider/:label/unattended", async (req, res, next) => {
+  try {
+    await setCredentialUnattended(credsDir, String(req.params.provider), String(req.params.label), req.body?.unattended === true);
+    await pushModelAuthToControlPlane();
+    res.json({ ok: true, records: await listCredentialRecords(credsDir) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/auth/credentials/:provider/:label/test", async (req, res, next) => {
+  try {
+    const provider = String(req.params.provider).trim().toLowerCase();
+    const label = String(req.params.label);
+    const result = await testProviderCredential(credsDir, provider, label);
+    res.json({ provider, label, ...result, records: await listCredentialRecords(credsDir) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/auth/credential-assignments", (_req, res) => {
+  res.json({ presets: getCredentialPresets(credsDir) });
+});
+
+app.post("/api/auth/credential-assignments/active", async (req, res, next) => {
+  try {
+    setActiveCredentialPreset(credsDir, String(req.body?.active ?? ""));
+    await refreshSessionAfterAuth();
+    res.json({ ok: true, presets: getCredentialPresets(credsDir) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/auth/credential-assignments", async (req, res, next) => {
+  try {
+    setCredentialPresetMapping(credsDir, String(req.body?.preset ?? "default"), String(req.body?.provider ?? ""), String(req.body?.label ?? ""));
+    await refreshSessionAfterAuth();
+    res.json({ ok: true, presets: getCredentialPresets(credsDir) });
   } catch (error) {
     next(error);
   }

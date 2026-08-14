@@ -99,6 +99,23 @@ describe("device vault — cross-device token sync", () => {
     expect(await b.getModelKey("groq")).toBe("");
   });
 
+  it("syncs multiple labeled API-key accounts as distinct vault items", async () => {
+    const A = await makeDevice();
+    const B = await makeDevice();
+    const cp = fakeControlPlane();
+    const a = store(A, cp.forDevice(A.pub));
+    const b = store(B, cp.forDevice(B.pub));
+
+    await a.setModelKey("anthropic", "personal-key", "account", "default");
+    await a.setModelKey("anthropic", "work-key", "account", "work");
+    await b.sync();
+
+    expect((await b.modelKeyEntries()).map(({ provider, label, key }) => ({ provider, label, key }))).toEqual([
+      { provider: "anthropic", label: "default", key: "personal-key" },
+      { provider: "anthropic", label: "work", key: "work-key" },
+    ]);
+  });
+
   it("prefers the device-local token over the synced copy", async () => {
     const A = await makeDevice();
     const B = await makeDevice();

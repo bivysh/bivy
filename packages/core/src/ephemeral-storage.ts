@@ -168,6 +168,8 @@ export type DeviceCredentialScope = "device" | "account";
 
 export interface EphemeralModelKeyInfo {
   provider: string;
+  /** Human account name. `default` stays implicit in the single-key path. */
+  label: string;
   configured: boolean;
   updatedAt: string | null;
   /** Account keys enter the E2E device vault; device keys never leave this PWA. */
@@ -176,6 +178,7 @@ export interface EphemeralModelKeyInfo {
 
 export interface EphemeralModelKeyEntry {
   provider: string;
+  label: string;
   key: string;
   updatedAt?: string | null;
   scope: DeviceCredentialScope;
@@ -199,15 +202,19 @@ export interface EphemeralModelKeyStore {
   list(): Promise<EphemeralModelKeyInfo[]>;
   /** The stored keys, for seeding a node. Secrets — never surface in the UI. */
   entries(): Promise<EphemeralModelKeyEntry[]>;
-  get(provider: string): Promise<string>;
-  set(provider: string, key: string, scope?: DeviceCredentialScope): Promise<void>;
-  remove(provider: string): Promise<void>;
+  get(provider: string, label?: string): Promise<string>;
+  set(provider: string, key: string, scope?: DeviceCredentialScope, label?: string): Promise<void>;
+  remove(provider: string, label?: string): Promise<void>;
 }
 
 export function createEphemeralModelKeyStore(
   backend: KvBackend = defaultBackend("model-keys", "provider"),
 ): EphemeralModelKeyStore {
   const norm = (p: string) => String(p || "").trim().toLowerCase();
+  const normLabel = (label?: string) => String(label || "default").trim().toLowerCase() || "default";
+  // Preserve the legacy IndexedDB key for defaults; labeled accounts use a
+  // collision-free composite key and therefore need no destructive migration.
+  const recordId = (provider: string, label: string) => label === "default" ? provider : `${provider}:${label}`;
   const all = async (): Promise<any[]> => {
     try {
       return await backend.getAll();
@@ -222,6 +229,7 @@ export function createEphemeralModelKeyStore(
         .filter((r) => r && r.provider)
         .map((r) => ({
           provider: String(r.provider),
+          label: normLabel(r.label),
           configured: Boolean(r.key),
           updatedAt: r.updatedAt ?? null,
           // Existing ephemeral seed keys become account keys: this preserves their
@@ -229,7 +237,7 @@ export function createEphemeralModelKeyStore(
           // the unified account vault.
           scope: r.scope === "device" ? "device" as const : "account" as const,
         }))
-        .sort((a, b) => a.provider.localeCompare(b.provider));
+        .sort((a, b) => a.provider.localeCompare(b.provider) || a.label.localeCompare(b.label));
     },
     async entries() {
       const stored = await all();
@@ -237,29 +245,32 @@ export function createEphemeralModelKeyStore(
         .filter((r) => r && r.provider && r.key)
         .map((r) => ({
           provider: String(r.provider),
+          label: normLabel(r.label),
           key: String(r.key),
           updatedAt: r.updatedAt ?? null,
           scope: r.scope === "device" ? "device" as const : "account" as const,
         }));
     },
-    async get(provider) {
+    async get(provider, label = "default") {
       const id = norm(provider);
+      const account = normLabel(label);
       if (!id) return "";
-      const rec = (await all()).find((r) => r.provider === id);
+      const rec = (await all()).find((r) => r.provider === id && normLabel(r.label) === account);
       return rec && rec.key ? rec.key : "";
     },
-    async set(provider, key, scope = "account") {
+    async set(provider, key, scope = "account", label = "default") {
       const id = norm(provider);
+      const account = normLabel(label);
       if (!id) throw new Error("Provider is required");
       const value = String(key || "").trim();
       if (!value) throw new Error("API key cannot be empty");
       if (scope !== "account" && scope !== "device") throw new Error("Credential scope must be account or device");
-      await backend.put(id, { provider: id, key: value, scope, updatedAt: nowIso() });
+      await backend.put(recordId(id, account), { provider: id, label: account, key: value, scope, updatedAt: nowIso() });
     },
-    async remove(provider) {
+    async remove(provider, label = "default") {
       const id = norm(provider);
       if (!id) return;
-      await backend.delete(id);
+      await backend.delete(recordId(id, normLabel(label)));
     },
   };
 }

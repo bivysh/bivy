@@ -18,7 +18,7 @@ Purpose: let Bivy-native runtimes (Pi and compatible runtimes) use model API key
 Current model:
 
 - The node stores provider credentials in its local vault/Pi auth store.
-- When hosted model-auth sync is enabled, the node encrypts a model-auth vault snapshot locally before uploading it to the control plane.
+- For ordinary account sync, the node encrypts a model-auth vault snapshot locally before uploading it to the control plane.
 - The control plane stores ciphertext plus node public-key wrapping metadata.
 - Another enrolled node requests a wrapped vault key; an existing node wraps the key to the requesting node public key.
 - Removing a node that received a wrapped model-auth key flags the vault for
@@ -29,7 +29,11 @@ Current model:
   envelope. Tombstones remove older credentials on every node and prevent a stale
   snapshot from resurrecting them; signing in again later supersedes the tombstone.
 - That request now **wakes the account's peer nodes over the relay** (the same `work.available` signal used for queued work), so a peer answers the wrapped-key request within seconds rather than on its 30s poll. The requesting node fast-retries (bounded) until the key lands, then falls back to the steady poll. This makes the vault — including supported subscription-OAuth logins — usable almost immediately on a short-lived ephemeral runner, while staying **peer-only**: the key is always wrapped node→node and never transits the device or control plane in the clear.
-- Bivy Cloud never receives plaintext model credentials.
+- Bivy Cloud never receives plaintext model credentials in ordinary account sync.
+  **Allow unattended runs** is a separate per-item custody grant: Bivy encrypts
+  only granted stored credentials into a second snapshot under a different key,
+  then seals that key with the hosted account key. The hosted key cannot decrypt
+  the ordinary account vault; password-manager references are never escrowed.
 
 If you lose every node and device that can unwrap the vault, the stored
 ciphertext can no longer be decrypted — sign in to each provider again on a new

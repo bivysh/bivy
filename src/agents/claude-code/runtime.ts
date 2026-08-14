@@ -1025,7 +1025,7 @@ class ClaudeSession implements RuntimeSession {
     const provider = this.runtimeOptions.credentialProvider?.trim() || "anthropic";
     let cred;
     try {
-      cred = await store.getCredential(provider);
+      cred = await store.getCredential(provider, { workspace: this.cwd });
     } catch {
       return {};
     }

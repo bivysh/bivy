@@ -395,6 +395,7 @@ export class AppController {
       now: () => Date.now(),
       isOnline: () => this.store.getState().connection.status === "online",
       importModelKeys: (entries) => this.ephemeralKeys.importModelKeys(entries),
+      removeModelKey: (provider, label) => this.ephemeralKeys.removeModelKey(provider, label),
       accountModelKeys: async () => (await this.ephemeralKeys.modelKeyEntries()).filter((entry) => entry.scope === "account"),
     });
     this.ephemeralCoordinator = new EphemeralCoordinator({
@@ -2348,7 +2349,7 @@ export class AppController {
   saveApiKey(provider: string, key: string): Promise<void> { return this.credentialsModelsCoordinator.saveApiKey(provider, key); }
   removeProvider(provider: string): void { this.credentialsModelsCoordinator.removeProvider(provider); }
   resetOauth(provider: string): void { this.credentialsModelsCoordinator.resetOauth(provider); }
-  startOauth(provider: string): void { this.credentialsModelsCoordinator.startOauth(provider); }
+  startOauth(provider: string, label?: string): void { this.credentialsModelsCoordinator.startOauth(provider, label); }
   submitOauthCode(id: string, code: string): void { this.credentialsModelsCoordinator.submitOauthCode(id, code); }
   listCredentialRecords(): void { this.credentialsModelsCoordinator.listCredentials(); }
 
@@ -2357,13 +2358,14 @@ export class AppController {
     return this.credentialsModelsCoordinator.syncAccountCredentials();
   }
 
-  setCredential(provider: string, label: string, value: { key?: string; ref?: string }): Promise<void> { return this.credentialsModelsCoordinator.setCredential(provider, label, value); }
-  removeCredential(provider: string, label: string): void { this.credentialsModelsCoordinator.removeCredential(provider, label); }
-  setCredentialSync(provider: string, label: string, sync: "account" | "node"): void { this.credentialsModelsCoordinator.setCredentialSync(provider, label, sync); }
+  setCredential(provider: string, label: string, value: { key?: string; ref?: string; sync?: "account" | "node" }): Promise<void> { return this.credentialsModelsCoordinator.setCredential(provider, label, value); }
+  removeCredential(provider: string, label: string): Promise<void> { return this.credentialsModelsCoordinator.removeCredential(provider, label); }
+  setCredentialSync(provider: string, label: string, sync: "account" | "node"): Promise<void> { return this.credentialsModelsCoordinator.setCredentialSync(provider, label, sync); }
+  setCredentialUnattended(provider: string, label: string, unattended: boolean): Promise<void> { return this.credentialsModelsCoordinator.setCredentialUnattended(provider, label, unattended); }
   testCredential(provider: string, label: string): Promise<{ ok: boolean; at: number; reason?: string }> { return this.credentialsModelsCoordinator.testCredential(provider, label); }
   getCredentialPresets(): void { this.credentialsModelsCoordinator.getPresets(); }
   setActivePreset(active: string): void { this.credentialsModelsCoordinator.setActivePreset(active); }
-  setPresetMapping(preset: string, provider: string, label: string): void { this.credentialsModelsCoordinator.setPresetMapping(preset, provider, label); }
+  setPresetMapping(preset: string, provider: string, label: string): Promise<void> { return this.credentialsModelsCoordinator.setPresetMapping(preset, provider, label); }
   listLocalModels(): void { this.credentialsModelsCoordinator.listLocalModels(); }
   listLocalModelPresets(): void { this.credentialsModelsCoordinator.listLocalModelPresets(); }
   discoverLocalModels(): Promise<LocalModelDiscoveryResult> { return this.credentialsModelsCoordinator.discoverLocalModels(); }
@@ -2593,11 +2595,11 @@ export class AppController {
   listEphemeralModelKeys(): Promise<EphemeralModelKeyInfo[]> {
     return this.ephemeralKeys.listModelKeys();
   }
-  setEphemeralModelKey(provider: string, key: string, scope: "account" | "device" = "account"): Promise<void> {
-    return this.ephemeralKeys.setModelKey(provider, key, scope);
+  setEphemeralModelKey(provider: string, key: string, scope: "account" | "device" = "account", label = "default"): Promise<void> {
+    return this.ephemeralKeys.setModelKey(provider, key, scope, label);
   }
-  removeEphemeralModelKey(provider: string): Promise<void> {
-    return this.ephemeralKeys.removeModelKey(provider);
+  removeEphemeralModelKey(provider: string, label = "default"): Promise<void> {
+    return this.ephemeralKeys.removeModelKey(provider, label);
   }
   getEphemeralToken(id: string): Promise<string> {
     return this.ephemeralCoordinator.getProviderToken(id);

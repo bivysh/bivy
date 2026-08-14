@@ -124,7 +124,10 @@ export function ProviderConnectForm({
               // Await the node's authoritative ack. A timer/re-list can make a
               // failed save look successful and is especially harmful in the
               // first-run auth path.
-              await controller.saveApiKey(keyProvider, key.trim());
+              await controller.setCredential(keyProvider, "default", { key: key.trim() });
+              // Keep the account's device vault converged too, so the same item
+              // can seed a first machine even when no peer node is online later.
+              await controller.setEphemeralModelKey(keyProvider, key.trim(), "account", "default").catch(() => {});
               setKey("");
               controller.listProviders();
             } catch (e) {

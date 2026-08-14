@@ -80,7 +80,7 @@ await check("OAuth callback HTML escapes provider-controlled text", async () => 
   );
 });
 
-await check("Anthropic auth-code login (manual paste) exchanges + persists an oauth credential", async () => {
+await check("Anthropic auth-code login persists a labeled OAuth account", async () => {
   const dir = tmpDir();
   const calls = stubFetch((call) => {
     assert.equal(call.url, "https://platform.claude.com/v1/oauth/token");
@@ -92,12 +92,14 @@ await check("Anthropic auth-code login (manual paste) exchanges + persists an oa
     return { json: { access_token: "at-1", refresh_token: "rt-1", expires_in: 3600 } };
   });
 
-  await loginModelOAuth(dir, "anthropic", pasteInteraction("acode#somestate"));
+  await loginModelOAuth(dir, "anthropic", pasteInteraction("acode#somestate"), "work");
   assert.equal(calls().length, 1);
-  const cred = await createCredentialVault(dir).read("anthropic");
+  const record = await createCredentialVault(dir).readRecord("anthropic", "work");
+  const cred = record?.source.kind === "stored" ? record.source.cred : undefined;
   assert.equal(cred?.type, "oauth");
   assert.equal((cred as { access?: string }).access, "at-1");
   assert.equal((cred as { refresh?: string }).refresh, "rt-1");
+  assert.equal(await createCredentialVault(dir).read("anthropic"), undefined, "a named OAuth account does not overwrite the default");
 });
 
 await check("OpenAI Codex login extracts the account id from the JWT access token", async () => {

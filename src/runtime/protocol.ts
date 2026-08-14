@@ -415,7 +415,7 @@ class ProtocolSession implements RuntimeSession {
     const hook = this.runtimeOptions.interactiveTui;
     if (!hook) return null;
     const credentialEnv = this.runtimeOptions.credentials
-      ? await buildAgentCredentialEnv(this.runtimeOptions.credentials, undefined, this.currentModelProvider).catch(() => ({}))
+      ? await buildAgentCredentialEnv(this.runtimeOptions.credentials, undefined, this.currentModelProvider, this.cwd).catch(() => ({}))
       : {};
     let prepareEnv = this.prepareEnv;
     if (this.runtimeOptions.prepare) {
@@ -437,7 +437,7 @@ class ProtocolSession implements RuntimeSession {
   async start(): Promise<void> {
     if (this.child) return;
     const credentialEnv = this.runtimeOptions.credentials
-      ? await buildAgentCredentialEnv(this.runtimeOptions.credentials, undefined, this.currentModelProvider).catch(() => ({}))
+      ? await buildAgentCredentialEnv(this.runtimeOptions.credentials, undefined, this.currentModelProvider, this.cwd).catch(() => ({}))
       : {};
     // Optional prepare step, run before the child spawns because a shim reads its
     // credential at launch (e.g. Codex mints ~/.codex/auth.json from the vault and
@@ -863,7 +863,7 @@ class ProtocolSession implements RuntimeSession {
     // idempotent (it no-ops once auth.json exists), so the repeat is cheap.
     if (this.runtimeOptions.prepare || this.runtimeOptions.preflight) {
       const credentialEnv = this.runtimeOptions.credentials
-        ? await buildAgentCredentialEnv(this.runtimeOptions.credentials, undefined, this.currentModelProvider).catch(() => ({}))
+        ? await buildAgentCredentialEnv(this.runtimeOptions.credentials, undefined, this.currentModelProvider, this.cwd).catch(() => ({}))
         : {};
       if (this.runtimeOptions.prepare) {
         this.prepareEnv =

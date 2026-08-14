@@ -15,8 +15,9 @@ export interface CredentialsModelsDependencies {
   isDirect(): boolean;
   now(): number;
   isOnline(): boolean;
-  importModelKeys(entries: Array<{ provider: string; key: string }>): Promise<void>;
-  accountModelKeys(): Promise<Array<{ provider: string; key: string }>>;
+  importModelKeys(entries: Array<{ provider: string; label?: string; key: string }>): Promise<void>;
+  removeModelKey(provider: string, label?: string): Promise<void>;
+  accountModelKeys(): Promise<Array<{ provider: string; label: string; key: string; updatedAt?: string | null }>>;
 }
 
 export type CredentialsModelsResult =
@@ -49,47 +50,65 @@ export class CredentialsModelsCoordinator {
   saveApiKey(provider: string, key: string): Promise<void> { return this.ack({ kind: "provider.apiKey", provider, key }); }
   removeProvider(provider: string): void { this.deps.send({ kind: "provider.remove", provider }); }
   resetOauth(provider: string): void { this.deps.send({ kind: "provider.oauth.reset", provider }); }
-  startOauth(provider: string): void { this.deps.send({ kind: "provider.oauth.start", provider }); }
+  startOauth(provider: string, label?: string): void { this.deps.send({ kind: "provider.oauth.start", provider, ...(label ? { label } : {}) }); }
   submitOauthCode(id: string, code: string): void { this.deps.send({ kind: "provider.oauth.code", id, code }); }
 
   listCredentials(): void { this.request({ kind: "credentials.list" }, "credentials"); }
   syncAccountCredentials(): Promise<void> {
-    if (this.deps.isDirect() || !this.deps.isOnline()) return Promise.resolve();
+    if (!this.deps.isOnline()) return Promise.resolve();
     if (this.accountSyncInFlight) return this.accountSyncInFlight;
     this.accountSyncInFlight = (async () => {
-      const event = await this.deps.awaitAck({ kind: "credentials.account.export" });
-      const rawEntries = (event as unknown as { entries?: unknown }).entries;
-      const entries = Array.isArray(rawEntries)
-        ? rawEntries.filter((entry): entry is { provider: string; key: string } => Boolean(entry)
+      const event = await this.deps.awaitAck({ kind: "credentials.account.export" }) as unknown as { entries?: unknown; records?: unknown; deletedAt?: unknown };
+      const incoming = Array.isArray(event.entries)
+        ? event.entries.filter((entry): entry is { provider: string; label?: string; key: string; updatedAt?: number | string } => Boolean(entry)
           && typeof (entry as { provider?: unknown }).provider === "string"
           && typeof (entry as { key?: unknown }).key === "string")
         : [];
-      await this.deps.importModelKeys(entries);
-      for (const { provider, key } of await this.deps.accountModelKeys()) {
-        await this.deps.awaitAck({ kind: "credential.set", provider, label: "default", key });
+      const nodeRecords = Array.isArray(event.records)
+        ? event.records.filter((record): record is { provider: string; label: string; kind: string } => Boolean(record)
+          && typeof (record as { provider?: unknown }).provider === "string"
+          && typeof (record as { label?: unknown }).label === "string"
+          && typeof (record as { kind?: unknown }).kind === "string")
+        : [];
+      const deletedAt = event.deletedAt && typeof event.deletedAt === "object" ? event.deletedAt as Record<string, unknown> : {};
+      const localBefore = await this.deps.accountModelKeys();
+      for (const local of localBefore) {
+        const recordId = local.label === "default" ? local.provider : `${local.provider}:${local.label}`;
+        const tombstoneAt = Number(deletedAt[recordId]);
+        const localAt = Date.parse(String(local.updatedAt ?? ""));
+        if (Number.isFinite(tombstoneAt) && tombstoneAt > 0 && (!Number.isFinite(localAt) || tombstoneAt >= localAt)) await this.deps.removeModelKey(local.provider, local.label);
+      }
+      for (const record of nodeRecords) if (record.kind !== "api_key") await this.deps.removeModelKey(record.provider, record.label);
+      const acceptedIncoming = incoming.filter((entry) => {
+        const local = localBefore.find((candidate) => candidate.provider === entry.provider && candidate.label === (entry.label ?? "default"));
+        if (!local) return true;
+        const remoteAt = typeof entry.updatedAt === "number" ? entry.updatedAt : Date.parse(String(entry.updatedAt ?? ""));
+        const localAt = Date.parse(String(local.updatedAt ?? ""));
+        return Number.isFinite(remoteAt) && (!Number.isFinite(localAt) || remoteAt > localAt);
+      });
+      await this.deps.importModelKeys(acceptedIncoming);
+      for (const { provider, label, key } of await this.deps.accountModelKeys()) {
+        if (nodeRecords.some((record) => record.provider === provider && record.label === label && record.kind !== "api_key")) continue;
+        await this.deps.awaitAck({ kind: "credential.set", provider, label, key });
       }
       this.listCredentials();
       this.listProviders();
     })().catch(() => {}).finally(() => { this.accountSyncInFlight = null; });
     return this.accountSyncInFlight;
   }
-  setCredential(provider: string, label: string, value: { key?: string; ref?: string }): Promise<void> {
+  setCredential(provider: string, label: string, value: { key?: string; ref?: string; sync?: "account" | "node" }): Promise<void> {
     return this.ack({ kind: "credential.set", provider, label, ...value });
   }
-  removeCredential(provider: string, label: string): void { this.deps.send({ kind: "credential.remove", provider, label }); }
-  setCredentialSync(provider: string, label: string, sync: "account" | "node"): void {
-    this.deps.send({ kind: "credential.sync.set", provider, label, sync });
-  }
+  removeCredential(provider: string, label: string): Promise<void> { return this.ack({ kind: "credential.remove", provider, label }); }
+  setCredentialSync(provider: string, label: string, sync: "account" | "node"): Promise<void> { return this.ack({ kind: "credential.sync.set", provider, label, sync }); }
+  setCredentialUnattended(provider: string, label: string, unattended: boolean): Promise<void> { return this.ack({ kind: "credential.unattended.set", provider, label, unattended }); }
   async testCredential(provider: string, label: string): Promise<{ ok: boolean; at: number; reason?: string }> {
-    if (this.deps.isDirect()) return { ok: false, at: this.deps.now(), reason: "not_supported" };
     const event = await this.deps.awaitAck({ kind: "credential.test", provider, label }, 15_000) as { ok?: boolean; at?: number; reason?: string };
     return { ok: Boolean(event.ok), at: Number(event.at) || this.deps.now(), ...(event.reason ? { reason: event.reason } : {}) };
   }
   getPresets(): void { this.deps.send({ kind: "credentials.presets.get" }); }
   setActivePreset(active: string): void { this.deps.send({ kind: "credentials.presets.setActive", active }); }
-  setPresetMapping(preset: string, provider: string, label: string): void {
-    this.deps.send({ kind: "credentials.presets.setMapping", preset, provider, label });
-  }
+  setPresetMapping(preset: string, provider: string, label: string): Promise<void> { return this.ack({ kind: "credentials.presets.setMapping", preset, provider, label }); }
 
   listLocalModels(): void { this.deps.send({ kind: "models.custom.list" }); }
   listLocalModelPresets(): void { this.deps.send({ kind: "models.custom.presets" }); }

@@ -471,7 +471,7 @@ class ProcessSession implements RuntimeSession {
     // added after this session started) reach the agent. The vault wins over any
     // ambient key so Bivy's shared sign-in is authoritative.
     const credentialEnv = this.runtimeOptions.credentials
-      ? await buildAgentCredentialEnv(this.runtimeOptions.credentials, undefined, this.currentModelProvider).catch(() => ({}))
+      ? await buildAgentCredentialEnv(this.runtimeOptions.credentials, undefined, this.currentModelProvider, this.cwd).catch(() => ({}))
       : {};
     // Optional prepare step (e.g. Codex materializes its auth.json from the vault
     // and pins CODEX_HOME). Runs after credentials, before preflight/spawn; its

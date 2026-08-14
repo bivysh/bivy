@@ -6,10 +6,9 @@
 //
 // Deliberately Pi-FREE: every function here operates on Bivy's own encrypted
 // vault (credential-store.ts) with zero Pi involvement, so the service compiles
-// and tests without Pi. The one thing that legitimately comes from Pi — the
-// model-provider *catalog* (Bivy has none of its own) — is INJECTED:
-// `joinProviderCatalog` takes the catalog as a parameter, and the thin
-// `runtime/provider-catalog.ts` bridge supplies Pi's. See
+// and tests without Pi. Provider catalog data is likewise injected:
+// `joinProviderCatalog` receives Bivy's baseline overlaid with optional live
+// runtime metadata by the thin `runtime/provider-catalog.ts` bridge. See
 // docs/credentials-service-plan.md §3.1.
 
 import type { StoredCredential } from "./types.js";
@@ -80,9 +79,9 @@ export async function joinProviderCatalog(
     id: provider.id,
     name: provider.name,
     oauth: provider.oauth,
-    configured: provider.configured,
+    configured: provider.configured || infoById.has(provider.id),
     kind: infoById.get(provider.id)?.type,
-    source: provider.source,
+    source: provider.source ?? (infoById.has(provider.id) ? "stored" : undefined),
     expiresAt: infoById.get(provider.id)?.expiresAt,
   }));
 }
@@ -113,15 +112,16 @@ export async function exportSyncableRecords(credsDir: string): Promise<Record<st
 /**
  * Browser-safe account API-key projection. Used to converge a node-less PWA's
  * E2E account vault with an enrolled node. OAuth refresh tokens, references,
- * non-default labels, and node-local records are deliberately excluded.
+ * and node-local records are deliberately excluded; labeled API-key accounts
+ * are included as distinct vault items.
  */
-export async function exportAccountApiKeys(credsDir: string): Promise<Array<{ provider: string; key: string; updatedAt?: number }>> {
+export async function exportAccountApiKeys(credsDir: string): Promise<Array<{ provider: string; label: string; key: string; updatedAt?: number }>> {
   return (await createCredentialVault(credsDir).listRecords())
     .flatMap((record) => {
-      if (record.label !== DEFAULT_LABEL || record.sync !== "account" || record.source.kind !== "stored") return [];
+      if (record.sync !== "account" || record.source.kind !== "stored") return [];
       const credential = record.source.cred;
       return credential.type === "api_key" && typeof credential.key === "string"
-        ? [{ provider: record.provider, key: credential.key, updatedAt: record.updatedAt }]
+        ? [{ provider: record.provider, label: record.label, key: credential.key, updatedAt: record.updatedAt }]
         : [];
     });
 }
@@ -148,6 +148,22 @@ export async function importCredentialRecords(
     if (key && Number.isFinite(stamp) && stamp > 0) tombstones[key] = stamp;
   }
   return createCredentialVault(credsDir).importRecords(list, tombstones);
+}
+
+/** Apply a hosted custody snapshot as an authoritative filtered set. */
+export async function reconcileHostedCredentialRecords(
+  credsDir: string,
+  records: Record<string, unknown>,
+  previous: readonly { provider: string; label: string }[],
+): Promise<Array<{ provider: string; label: string }>> {
+  const current = Object.values(records ?? {}).filter((record): record is CredentialRecord => Boolean(record) && typeof record === "object" && typeof (record as CredentialRecord).provider === "string" && typeof (record as CredentialRecord).label === "string");
+  const currentIds = new Set(current.map((record) => `${record.provider}\u0000${record.label}`));
+  const store = createCredentialVault(credsDir);
+  for (const prior of previous) {
+    if (!currentIds.has(`${prior.provider}\u0000${prior.label}`)) await store.deleteRecord(prior.provider, prior.label);
+  }
+  await importCredentialRecords(credsDir, records);
+  return current.map((record) => ({ provider: record.provider, label: record.label }));
 }
 
 /** Export provider revocations for cross-node convergence. */
@@ -245,6 +261,8 @@ export interface CredentialRecordSummary {
   expiresAt?: number;
   /** The non-secret pointer, when `kind === "reference"`. */
   ref?: string;
+  /** Explicitly allowed in the separately escrowed unattended-run vault. */
+  unattended: boolean;
   /** Whether "Test connection" (see `testCredential`) supports this provider/kind. */
   testable: boolean;
   /** The most recent "Test connection" result for this record, if any run. */
@@ -261,7 +279,7 @@ export async function listCredentialRecords(credsDir: string): Promise<Credentia
     const verification = await vault.readVerification(record.provider, record.label).catch(() => undefined);
     const verified = verification ? { lastVerifiedAt: verification.at, lastVerifiedOk: verification.ok } : {};
     if (source.kind === "reference") {
-      return { provider: record.provider, label: record.label, kind: "reference", sync: record.sync, origin: record.origin, ref: source.ref, testable: false, ...verified };
+      return { provider: record.provider, label: record.label, kind: "reference", sync: record.sync, origin: record.origin, unattended: record.unattended === true, ref: source.ref, testable: false, ...verified };
     }
     const cred = source.cred;
     const summary: CredentialRecordSummary = {
@@ -270,6 +288,7 @@ export async function listCredentialRecords(credsDir: string): Promise<Credentia
       kind: cred.type,
       sync: record.sync,
       origin: record.origin,
+      unattended: record.unattended === true,
       testable: isTestableProvider(record.provider),
       ...verified,
     };
@@ -283,13 +302,17 @@ export async function listCredentialRecords(credsDir: string): Promise<Credentia
  * a credential the user opted node-local must not silently re-enable sync), else
  * default to a Bivy-first, opt-out-sync credential.
  */
-async function labeledMeta(credsDir: string, provider: string, label: string): Promise<Pick<CredentialRecord, "sync" | "origin">> {
+async function labeledMeta(credsDir: string, provider: string, label: string): Promise<Pick<CredentialRecord, "sync" | "origin" | "unattended">> {
   const existing = await createCredentialVault(credsDir).readRecord(provider, label);
-  return { sync: existing?.sync ?? defaultSyncFor("bivy"), origin: existing?.origin ?? "bivy" };
+  return {
+    sync: existing?.sync ?? defaultSyncFor("bivy"),
+    origin: existing?.origin ?? "bivy",
+    ...(existing?.unattended === true ? { unattended: true } : {}),
+  };
 }
 
 /** Store an API key under a specific label (multi-account). */
-export async function setProviderApiKeyLabeled(credsDir: string, provider: string, label: string, key: string): Promise<void> {
+export async function setProviderApiKeyLabeled(credsDir: string, provider: string, label: string, key: string, sync?: "account" | "node"): Promise<void> {
   const id = provider.trim().toLowerCase();
   if (!id) throw new Error("Provider is required");
   const apiKey = String(key ?? "").trim();
@@ -300,11 +323,12 @@ export async function setProviderApiKeyLabeled(credsDir: string, provider: strin
     label: normalizeLabel(label),
     source: { kind: "stored", cred: { type: "api_key", key: apiKey } },
     ...meta,
+    ...(sync ? { sync } : {}),
   });
 }
 
 /** Store a reference (op:// / env://) under a specific label (multi-account). */
-export async function setProviderReferenceLabeled(credsDir: string, provider: string, label: string, ref: string): Promise<void> {
+export async function setProviderReferenceLabeled(credsDir: string, provider: string, label: string, ref: string, sync?: "account" | "node"): Promise<void> {
   const id = provider.trim().toLowerCase();
   if (!id) throw new Error("Provider is required");
   const pointer = String(ref ?? "").trim();
@@ -316,6 +340,7 @@ export async function setProviderReferenceLabeled(credsDir: string, provider: st
     label: normalizeLabel(label),
     source: { kind: "reference", ref: pointer, backend },
     ...meta,
+    ...(sync ? { sync } : {}),
   });
 }
 
@@ -336,13 +361,21 @@ export async function removeProviderCredential(credsDir: string, provider: strin
  *  check — chosen for being cheap (no completion/generation billed) and not
  *  mutating anything provider-side. A provider absent here is honestly
  *  reported as `testable: false` rather than guessing at a result. */
-const PROVIDER_PING: Record<string, (token: string) => { url: string; headers: Record<string, string> }> = {
-  anthropic: (token) => ({ url: "https://api.anthropic.com/v1/models", headers: { "x-api-key": token, "anthropic-version": "2023-06-01" } }),
-  openai: (token) => ({ url: "https://api.openai.com/v1/models", headers: { authorization: `Bearer ${token}` } }),
-};
+function providerPing(provider: string, secret: string): { url: string; headers: Record<string, string> } | undefined {
+  // Keep dispatch explicit: provider ids originate at the API boundary and
+  // must never select an arbitrary callable property.
+  switch (provider) {
+    case "anthropic":
+      return { url: "https://api.anthropic.com/v1/models", headers: { "x-api-key": secret, "anthropic-version": "2023-06-01" } };
+    case "openai":
+      return { url: "https://api.openai.com/v1/models", headers: { authorization: `Bearer ${secret}` } };
+    default:
+      return undefined;
+  }
+}
 
 function isTestableProvider(provider: string): boolean {
-  return provider.trim().toLowerCase() in PROVIDER_PING;
+  return providerPing(provider.trim().toLowerCase(), "") !== undefined;
 }
 
 /**
@@ -387,9 +420,9 @@ export async function testCredential(
       if (!token) return { ok: false, at, reason: "not_found" };
     }
 
-    const ping = PROVIDER_PING[id];
+    const ping = providerPing(id, token);
     if (!ping) return { ok: false, at, reason: "not_supported" };
-    const { url, headers } = ping(token);
+    const { url, headers } = ping;
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 8_000);
@@ -433,6 +466,32 @@ export function setCredentialIngestPolicy(credsDir: string, policy: IngestPolicy
   setIngestPolicyFile(defaultPresetsPath(credsDir), policy);
 }
 
+/** Explicitly grant/revoke use by separately escrowed unattended runners. */
+export async function setCredentialUnattended(credsDir: string, provider: string, label: string, unattended: boolean): Promise<void> {
+  const id = provider.trim().toLowerCase();
+  if (!id) throw new Error("Provider is required");
+  const store = createCredentialVault(credsDir);
+  const existing = await store.readRecord(id, label);
+  if (!existing) throw new Error(`No credential for ${id}:${normalizeLabel(label)}`);
+  if (existing.sync !== "account" && unattended) throw new Error("A machine-only credential cannot be granted to unattended runners");
+  if (existing.source.kind === "reference" && unattended) throw new Error("Password-manager references cannot be resolved by unattended runners");
+  await store.putRecord({ ...existing, unattended });
+}
+
+/** Credentials included in the explicit hosted custody snapshot. */
+export async function exportUnattendedRecords(credsDir: string): Promise<Record<string, CredentialRecord>> {
+  const records = await createCredentialVault(credsDir).exportSyncableRecords();
+  return Object.fromEntries(Object.entries(records).filter(([, record]) => record.unattended === true && record.source.kind === "stored"));
+}
+
+/** Monotonic logical revision for the filtered custody projection. */
+export async function unattendedCredentialRevision(credsDir: string): Promise<number> {
+  const store = createCredentialVault(credsDir);
+  const records = await store.listRecords();
+  const deletedAt = await store.exportRecordTombstones();
+  return Math.max(0, ...records.map((record) => Number(record.updatedAt) || 0), ...Object.values(deletedAt).map((stamp) => Number(stamp) || 0));
+}
+
 /** Set a labeled credential's sync tier — the per-credential opt-out toggle. */
 export async function setCredentialSync(
   credsDir: string,
@@ -450,5 +509,5 @@ export async function setCredentialSync(
   if (existing.source.kind === "reference" && existing.source.backend === "command" && sync === "account") {
     throw new Error("A cmd:// reference is node-local (it runs a command on this machine) and cannot be synced.");
   }
-  await store.putRecord({ ...existing, sync });
+  await store.putRecord({ ...existing, sync, ...(sync === "node" ? { unattended: false } : {}) });
 }
