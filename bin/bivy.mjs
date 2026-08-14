@@ -1736,7 +1736,7 @@ function cmdCompletions(args = []) {
   const shell = (args[0] || "").toLowerCase();
   const commands = [
     "run", "runs", "sessions", "ls", "resume", "promote", "rename", "nodes", "agent", "agents", "agents:install", "shim", "takeover", "token", "exec",
-    "send", "attach", "kill", "setup", "start", "stop", "restart", "status", "doctor", "diagnostics", "logs", "login",
+    "send", "attach", "kill", "setup", "start", "stop", "restart", "status", "doctor", "diagnostics", "capabilities", "logs", "login",
     "update", "update:log", "audit", "automation", "config", "plugin", "open", "service", "secrets", "voice", "link", "relay:setup",
     "github:connect", "github:app-create", "github:app-connect", "github:app-sync", "prune", "uninstall", "help", "version",
   ];
@@ -3932,6 +3932,70 @@ async function cmdDiagnostics(args = []) {
   }
 }
 
+// `bivy capabilities [--json]` — the Machine capability inventory: what this
+// node actually unlocks for agents (OS/architecture, installed maintained/
+// custom agents, configured model providers/local endpoints, Docker/GPU
+// availability, installed plugins, workspace count). Capability discovery,
+// not a deep scan — every probe is honestly available/not available/unknown.
+// See src/capabilities.ts for exactly what is (and isn't) included.
+async function cmdCapabilities(args = []) {
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log("Usage: bivy capabilities [--json]\n\nShow what this Machine unlocks for agents: OS/architecture, installed maintained/custom agents, configured model providers/local endpoints, Docker/GPU availability, installed plugins, and workspace count.");
+    return;
+  }
+  const json = args.includes("--json");
+  const config = loadConfig();
+  if (!(await ensureNodeRunning(config))) { console.error(c.red(`Could not reach the Bivy node at ${url(config)}.`)); process.exit(1); return; }
+  let snapshot;
+  try {
+    snapshot = await localApi(config, "/api/capabilities");
+  } catch (error) {
+    console.error(c.red(`Could not fetch capabilities: ${error?.message || String(error)}`));
+    process.exit(1);
+    return;
+  }
+  if (json) {
+    console.log(JSON.stringify(snapshot, null, 2));
+    return;
+  }
+
+  const stateLabel = (state) =>
+    state === "available" ? c.green("available") : state === "unavailable" ? c.dim("not available") : c.yellow("unknown");
+  const agentLine = (agent) =>
+    `    ${agent.installed ? c.green("●") : c.dim("○")} ${agent.label}${agent.supportTier ? c.dim(`  (${agent.supportTier})`) : ""}`;
+
+  console.log(c.bold("\n  Machine capabilities\n"));
+  console.log(`  OS:      ${snapshot.os?.platform} ${snapshot.os?.arch} (${snapshot.os?.release})`);
+  console.log(`  Docker:  ${stateLabel(snapshot.docker?.state)}${snapshot.docker?.detail ? c.dim(`  (${snapshot.docker.detail})`) : ""}`);
+  console.log(`  GPU:     ${stateLabel(snapshot.gpu?.state)}${snapshot.gpu?.detail ? c.dim(`  (${snapshot.gpu.detail})`) : ""}`);
+
+  const maintained = snapshot.agents?.maintained ?? [];
+  console.log(`\n  Maintained agents (${maintained.filter((a) => a.installed).length}/${maintained.length} installed):`);
+  for (const agent of maintained) console.log(agentLine(agent));
+  const custom = snapshot.agents?.custom ?? [];
+  if (custom.length) {
+    console.log(`\n  Custom agents (${custom.filter((a) => a.installed).length}/${custom.length} installed):`);
+    for (const agent of custom) console.log(agentLine(agent));
+  }
+
+  const configuredProviders = snapshot.providers?.configured ?? [];
+  console.log(`\n  Model providers configured: ${configuredProviders.length ? configuredProviders.join(", ") : c.dim("none")}`);
+  console.log(`  Local model endpoints:      ${snapshot.providers?.localEndpoints?.count ?? 0} configured (${snapshot.providers?.localEndpoints?.withModels ?? 0} with models)`);
+
+  const plugins = snapshot.plugins ?? [];
+  if (plugins.length) {
+    console.log(`\n  Plugins (${plugins.length}):`);
+    for (const plugin of plugins) {
+      console.log(`    ${plugin.valid ? c.green("●") : c.red("✗")} ${plugin.name || plugin.id}${plugin.version ? c.dim(`  v${plugin.version}`) : ""}${plugin.valid ? "" : c.dim("  (invalid manifest)")}`);
+    }
+  } else {
+    console.log(`\n  Plugins: ${c.dim("none installed")}`);
+  }
+
+  console.log(`\n  Workspaces configured: ${snapshot.workspaces?.count ?? 0}`);
+  console.log("");
+}
+
 async function cmdDoctor(args = []) {
   if (args.includes("-h") || args.includes("--help")) {
     console.log("Usage: bivy doctor\n\nHealth check: runtime deps, node reachability, model auth, remote/relay, and agents on PATH. Exits non-zero if Node is unsupported or the node is unreachable, so it can gate CI/monitoring. See also 'bivy diagnostics' for a shareable redacted bundle.");
@@ -4593,6 +4657,7 @@ ${c.bold("bivy")} — Bivy node CLI
   ${c.cyan("bivy restart")}    Restart the background service (waits for active sessions to finish a turn; --force to skip)
   ${c.cyan("bivy status")}     Show config and whether the node is reachable
   ${c.cyan("bivy doctor")}     Health check: deps, node, model, remote, agents
+  ${c.cyan("bivy capabilities")} [--json]  What this Machine unlocks: OS, agents, providers, Docker/GPU, plugins, workspaces
   ${c.cyan("bivy logs")} [-f]   Tail the node logs (systemd journal, launchd, or background log)
   ${c.cyan("bivy login")}      Sign into a model provider (Pi /login)
   ${c.cyan("bivy update")}     Update Bivy + install deps + restart service (waits for active sessions to finish a turn; --force to skip)
@@ -4792,6 +4857,9 @@ Unlike 'bivy run', these commands operate on governed background Runs with check
       break;
     case "diagnostics":
       await cmdDiagnostics(args);
+      break;
+    case "capabilities":
+      await cmdCapabilities(args);
       break;
     case "logs":
       await cmdLogs(args);

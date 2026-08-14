@@ -123,6 +123,7 @@ import { buildLinearTaskPrompt, getLinearIssue, linearBranchName } from "./linea
 import { PairingStore } from "./device-registry.js";
 import { IntegrationManager, type SessionIdRef } from "./integrations/index.js";
 import { listInstalledPlugins } from "./plugins/store.js";
+import { createCapabilitiesController } from "./controllers/capabilities.js";
 import { historyDelta, type HistoryCursor } from "./history-sync.js";
 import { MetadataStore, type MetadataSession } from "./metadata.js";
 import { resolveResumeRef, resumeRefFor } from "./session-ref.js";
@@ -1471,6 +1472,41 @@ const {
   addSavedWorkspace,
   removeSavedWorkspace,
 } = createWorkspaceController({ readSettings, writeSettings, metadata });
+
+// The Machine capability inventory lives in its own controller (platform
+// modularization Phase 2, alongside the workspace/model/ruleset controllers
+// above). server.ts adapts the node's existing canonical stores — the agent
+// registry, credential vault, local-model registry, plugin store, and saved
+// workspace list — into the controller's plain fact shapes; the controller
+// itself owns the bounded Docker/GPU probing and result caching.
+const capabilitiesController = createCapabilitiesController({
+  listAgents: () =>
+    listRuntimes().map((runtime) => {
+      const maintained = runtime.source?.kind === "package" && runtime.source.location === "distribution";
+      return {
+        id: runtime.id,
+        label: runtime.displayName,
+        kind: maintained ? "maintained" as const : "custom" as const,
+        installed: runtime.status === "available",
+        ...(runtime.supportTier ? { supportTier: runtime.supportTier } : {}),
+      };
+    }),
+  listConfiguredProviderIds: async () => {
+    const configured = await createCredentialVault(credsDir, piDir).list();
+    return [...new Set(configured.map((entry) => entry.providerId))];
+  },
+  listLocalEndpoints: async () =>
+    (await localModelSummaries()).map((provider) => ({ id: provider.id, modelCount: provider.modelCount })),
+  listPlugins: () =>
+    listInstalledPlugins(appDir).map((plugin) => ({
+      id: plugin.id,
+      valid: Boolean(plugin.manifest) && plugin.errors.length === 0,
+      agentCount: plugin.manifest?.contributes.agents.length ?? 0,
+      ...(plugin.manifest?.metadata.name ? { name: plugin.manifest.metadata.name } : {}),
+      ...(plugin.manifest?.metadata.version ? { version: plugin.manifest.metadata.version } : {}),
+    })),
+  countWorkspaces: () => loadSavedWorkspaces().length,
+});
 
 function saveApprovalMode(mode: ApprovalMode) {
   const settings = readSettings();
@@ -8986,6 +9022,20 @@ app.get("/api/diagnostics", (_req, res) => {
     generatedAt: new Date().toISOString(),
   });
   res.json(report);
+});
+
+// Machine capability inventory (capability discovery, not deep scanning): what
+// this Machine unlocks for agents — OS/arch, installed maintained/custom
+// agents, configured providers/local endpoints, Docker/GPU availability,
+// installed plugins, and a bounded workspace count. Backs `bivy capabilities`
+// and the PWA's Machine settings surface. See src/capabilities.ts for the
+// redaction/bounding rules applied before this ever leaves the process.
+app.get("/api/capabilities", async (_req, res, next) => {
+  try {
+    res.json(await capabilitiesController.getCapabilities());
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get("/api/status", (_req, res) => {
