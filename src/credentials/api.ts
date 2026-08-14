@@ -6,10 +6,9 @@
 //
 // Deliberately Pi-FREE: every function here operates on Bivy's own encrypted
 // vault (credential-store.ts) with zero Pi involvement, so the service compiles
-// and tests without Pi. The one thing that legitimately comes from Pi — the
-// model-provider *catalog* (Bivy has none of its own) — is INJECTED:
-// `joinProviderCatalog` takes the catalog as a parameter, and the thin
-// `runtime/provider-catalog.ts` bridge supplies Pi's. See
+// and tests without Pi. Provider catalog data is likewise injected:
+// `joinProviderCatalog` receives Bivy's baseline overlaid with optional live
+// runtime metadata by the thin `runtime/provider-catalog.ts` bridge. See
 // docs/credentials-service-plan.md §3.1.
 
 import type { StoredCredential } from "./types.js";
@@ -82,7 +81,7 @@ export async function joinProviderCatalog(
     oauth: provider.oauth,
     configured: provider.configured || infoById.has(provider.id),
     kind: infoById.get(provider.id)?.type,
-    source: provider.source,
+    source: provider.source ?? (infoById.has(provider.id) ? "stored" : undefined),
     expiresAt: infoById.get(provider.id)?.expiresAt,
   }));
 }
@@ -149,6 +148,22 @@ export async function importCredentialRecords(
     if (key && Number.isFinite(stamp) && stamp > 0) tombstones[key] = stamp;
   }
   return createCredentialVault(credsDir).importRecords(list, tombstones);
+}
+
+/** Apply a hosted custody snapshot as an authoritative filtered set. */
+export async function reconcileHostedCredentialRecords(
+  credsDir: string,
+  records: Record<string, unknown>,
+  previous: readonly { provider: string; label: string }[],
+): Promise<Array<{ provider: string; label: string }>> {
+  const current = Object.values(records ?? {}).filter((record): record is CredentialRecord => Boolean(record) && typeof record === "object" && typeof (record as CredentialRecord).provider === "string" && typeof (record as CredentialRecord).label === "string");
+  const currentIds = new Set(current.map((record) => `${record.provider}\u0000${record.label}`));
+  const store = createCredentialVault(credsDir);
+  for (const prior of previous) {
+    if (!currentIds.has(`${prior.provider}\u0000${prior.label}`)) await store.deleteRecord(prior.provider, prior.label);
+  }
+  await importCredentialRecords(credsDir, records);
+  return current.map((record) => ({ provider: record.provider, label: record.label }));
 }
 
 /** Export provider revocations for cross-node convergence. */
@@ -469,6 +484,14 @@ export async function exportUnattendedRecords(credsDir: string): Promise<Record<
   return Object.fromEntries(Object.entries(records).filter(([, record]) => record.unattended === true && record.source.kind === "stored"));
 }
 
+/** Monotonic logical revision for the filtered custody projection. */
+export async function unattendedCredentialRevision(credsDir: string): Promise<number> {
+  const store = createCredentialVault(credsDir);
+  const records = await store.listRecords();
+  const deletedAt = await store.exportRecordTombstones();
+  return Math.max(0, ...records.map((record) => Number(record.updatedAt) || 0), ...Object.values(deletedAt).map((stamp) => Number(stamp) || 0));
+}
+
 /** Set a labeled credential's sync tier — the per-credential opt-out toggle. */
 export async function setCredentialSync(
   credsDir: string,
@@ -486,5 +509,5 @@ export async function setCredentialSync(
   if (existing.source.kind === "reference" && existing.source.backend === "command" && sync === "account") {
     throw new Error("A cmd:// reference is node-local (it runs a command on this machine) and cannot be synced.");
   }
-  await store.putRecord({ ...existing, sync });
+  await store.putRecord({ ...existing, sync, ...(sync === "node" ? { unattended: false } : {}) });
 }

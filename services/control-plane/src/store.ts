@@ -1402,8 +1402,8 @@ export interface MeshStore {
   getHostedModelAuthVaultKey(accountId: string): Promise<SecretEnvelope | undefined>;
   setHostedModelAuthVaultKey(accountId: string, enc: SecretEnvelope): Promise<void>;
   /** Separately encrypted snapshot containing only explicitly granted records. */
-  getHostedModelAuthVault(accountId: string): Promise<string | undefined>;
-  setHostedModelAuthVault(accountId: string, ciphertext: string, enc: SecretEnvelope): Promise<void>;
+  getHostedModelAuthVault(accountId: string): Promise<{ ciphertext: string; generation: number; revision: number } | undefined>;
+  setHostedModelAuthVault(accountId: string, ciphertext: string, enc: SecretEnvelope, expectedGeneration: number, revision: number): Promise<number | undefined>;
 
   // Device→device provider-token vault (P2 / Gap A) — recipients are paired devices.
   getDeviceVault(accountId: string): Promise<DeviceVault | undefined>;

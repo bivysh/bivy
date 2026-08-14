@@ -382,17 +382,20 @@ export class PostgresStore implements MeshStore {
       );
       ALTER TABLE model_auth_wrapped_keys ADD COLUMN IF NOT EXISTS wrapped_by_public_key TEXT NOT NULL DEFAULT '';
 
-      -- Hosted escrow of the model-auth vault KEY (node-less inheritance). Sealed at
-      -- rest with the per-account hosted key so a LONE hosted ephemeral can decrypt
-      -- the synced vault without a peer to wrap the key. One row per account, written
-      -- and served ONLY for hosted-provisioning accounts (gated at the endpoint).
+      -- Explicit hosted custody uses a filtered ciphertext and a distinct sealed
+      -- key. Generation provides compare-and-swap; revision rejects stale logical
+      -- snapshots during concurrent grant/revoke updates.
       CREATE TABLE IF NOT EXISTS hosted_model_auth_keys (
         account_id  TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
         key_enc     JSONB NOT NULL,
         ciphertext TEXT,
-        updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+        generation BIGINT NOT NULL DEFAULT 0,
+        revision   BIGINT NOT NULL DEFAULT 0,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
       );
       ALTER TABLE hosted_model_auth_keys ADD COLUMN IF NOT EXISTS ciphertext TEXT;
+      ALTER TABLE hosted_model_auth_keys ADD COLUMN IF NOT EXISTS generation BIGINT NOT NULL DEFAULT 0;
+      ALTER TABLE hosted_model_auth_keys ADD COLUMN IF NOT EXISTS revision BIGINT NOT NULL DEFAULT 0;
 
       CREATE TABLE IF NOT EXISTS model_auth_key_requests (
         account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -1921,18 +1924,51 @@ export class PostgresStore implements MeshStore {
     );
   }
 
-  async getHostedModelAuthVault(accountId: string): Promise<string | undefined> {
-    const { rows } = await this.query(`SELECT ciphertext FROM hosted_model_auth_keys WHERE account_id = $1`, [accountId]);
-    return typeof rows[0]?.ciphertext === "string" && rows[0].ciphertext ? rows[0].ciphertext : undefined;
+  async getHostedModelAuthVault(accountId: string): Promise<{ ciphertext: string; generation: number; revision: number } | undefined> {
+    const { rows } = await this.query(`SELECT ciphertext, generation, revision FROM hosted_model_auth_keys WHERE account_id = $1`, [accountId]);
+    return typeof rows[0]?.ciphertext === "string" && rows[0].ciphertext
+      ? { ciphertext: rows[0].ciphertext, generation: Number(rows[0].generation) || 0, revision: Number(rows[0].revision) || 0 }
+      : undefined;
   }
 
-  async setHostedModelAuthVault(accountId: string, ciphertext: string, enc: SecretEnvelope): Promise<void> {
-    await this.query(
-      `INSERT INTO hosted_model_auth_keys (account_id, key_enc, ciphertext, updated_at)
-       VALUES ($1, $2, $3, now())
-       ON CONFLICT (account_id) DO UPDATE SET key_enc = EXCLUDED.key_enc, ciphertext = EXCLUDED.ciphertext, updated_at = now()`,
-      [accountId, JSON.stringify(enc), ciphertext],
-    );
+  async setHostedModelAuthVault(accountId: string, ciphertext: string, enc: SecretEnvelope, expectedGeneration: number, revision: number): Promise<number | undefined> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const current = await client.query(
+        `SELECT generation, revision FROM hosted_model_auth_keys WHERE account_id = $1 FOR UPDATE`,
+        [accountId],
+      );
+      const row = current.rows[0];
+      if (!row) {
+        if (expectedGeneration !== 0) { await client.query("ROLLBACK"); return undefined; }
+        await client.query(
+          `INSERT INTO hosted_model_auth_keys (account_id, key_enc, ciphertext, generation, revision, updated_at)
+           VALUES ($1, $2, $3, 1, $4, now())`,
+          [accountId, JSON.stringify(enc), ciphertext, revision],
+        );
+        await client.query("COMMIT");
+        return 1;
+      }
+      const generation = Number(row.generation) || 0;
+      const currentRevision = Number(row.revision) || 0;
+      if (generation !== expectedGeneration || revision < currentRevision) {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+      const next = generation + 1;
+      await client.query(
+        `UPDATE hosted_model_auth_keys SET key_enc=$2, ciphertext=$3, generation=$4, revision=$5, updated_at=now() WHERE account_id=$1`,
+        [accountId, JSON.stringify(enc), ciphertext, next, revision],
+      );
+      await client.query("COMMIT");
+      return next;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async setModelAuthVault(accountId: string, nodeId: string, ciphertext: string, rotated = false): Promise<ModelAuthVault> {

@@ -11,7 +11,7 @@ import path from "node:path";
 
 import { createCredentialVault } from "../src/runtime/credential-store.js";
 import type { CredentialRecord } from "../src/credentials/records.js";
-import { exportUnattendedRecords, setCredentialUnattended, setProviderApiKeyLabeled } from "../src/credentials/api.js";
+import { exportUnattendedRecords, reconcileHostedCredentialRecords, setCredentialUnattended, setProviderApiKeyLabeled } from "../src/credentials/api.js";
 
 function freshCredsDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-sync-pol-"));
@@ -83,6 +83,22 @@ function oauthRecord(provider: string, label: string, access: string, expires: n
     assert.equal((await store.readRecord("anthropic", "default"))?.unattended, undefined, "account sync never implies hosted custody");
     await setProviderApiKeyLabeled(credsDir, "anthropic", "work", "rotated-work-key");
     assert.equal((await store.readRecord("anthropic", "work"))?.unattended, true, "rotating a key preserves its custody grant");
+  } finally {
+    fs.rmSync(path.dirname(credsDir), { recursive: true, force: true });
+  }
+}
+
+// --- hosted snapshots authoritatively remove revoked custody ----------------
+{
+  const credsDir = freshCredsDir();
+  try {
+    const store = createCredentialVault(credsDir);
+    const record: CredentialRecord = { provider: "anthropic", label: "work", origin: "bivy", sync: "account", unattended: true, updatedAt: 10, source: { kind: "stored", cred: { type: "api_key", key: "hosted-key" } } };
+    const manifest = await reconcileHostedCredentialRecords(credsDir, { "anthropic:work": record }, []);
+    assert.equal((await store.readRecord("anthropic", "work"))?.source.kind, "stored");
+    assert.deepEqual(manifest, [{ provider: "anthropic", label: "work" }]);
+    assert.deepEqual(await reconcileHostedCredentialRecords(credsDir, {}, manifest), []);
+    assert.equal(await store.readRecord("anthropic", "work"), undefined, "omission from the next filtered snapshot revokes a running hosted recipient");
   } finally {
     fs.rmSync(path.dirname(credsDir), { recursive: true, force: true });
   }

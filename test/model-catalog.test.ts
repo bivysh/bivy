@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { createCredentialVault } from "../src/runtime/credential-store.js";
 import { aggregateModelCatalog, mergeProviderCatalog } from "../src/runtime/model-catalog.js";
-import { BIVY_PROVIDER_CATALOG as nodeProviderCatalog } from "../src/runtime/bivy-provider-catalog.js";
+import { BIVY_PROVIDER_CATALOG as nodeProviderCatalog, BIVY_PROVIDER_CATALOG_VERSION } from "../src/runtime/bivy-provider-catalog.js";
 import { BIVY_PROVIDER_CATALOG as webProviderCatalog } from "../packages/core/src/provider-catalog.js";
 import { ProcessRuntime } from "../src/runtime/process.js";
 import type { AgentRuntime, CatalogProvider } from "../src/runtime/types.js";
@@ -50,6 +50,9 @@ await check("unions providers across agents, dedupes models, records contributin
   assert.equal(anthropic.models.filter((model) => model.id === "claude-opus-4-8").length, 1, "overlapping live model deduped by id");
   assert.ok(anthropic.models.some((model) => model.id === "claude-sonnet-5"), "live models extend the Bivy baseline");
   assert.ok(anthropic.oauth, "anthropic is an OAuth provider");
+  assert.equal(anthropic.provenance?.baselineVersion, BIVY_PROVIDER_CATALOG_VERSION);
+  assert.deepEqual(anthropic.provenance?.runtimeIds.sort(), ["claude-code-sdk", "pi"]);
+  assert.ok(anthropic.provenance?.refreshedAt, "live overlay carries freshness metadata");
   assert.ok(catalog.find((p) => p.id === "openai"), "a provider only one agent offers still appears");
 });
 

@@ -29,7 +29,9 @@ test("browser-node convergence preserves an offline key rotation", async () => {
   const controller = await read("../../packages/web/src/store/controller.ts");
   expect(controller).toContain("acceptedIncoming");
   expect(controller).toContain("remoteAt > localAt");
+  expect(controller).toContain("deletedAt[recordId]");
   expect(controller).toContain("record.kind !== \"api_key\"");
+  expect(controller).not.toContain('if (this.direct || this.store.getState().status !== "online")');
 });
 
 test("inline and first-run connect use the item-addressed credential path", async () => {

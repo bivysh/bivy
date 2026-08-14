@@ -1853,29 +1853,13 @@ app.post("/api/ephemeral/exec", requireUser, asyncHandler(async (req, res) => {
 // whose distinct key is escrowed only after an explicit per-item grant.
 app.get("/node/model-auth-vault", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
-  // A hosted-provisioning node may receive only the distinct hosted key together
-  // with its filtered hosted ciphertext. It never receives an escrowed key that
-  // can decrypt `vault`, the ordinary peer-wrapped account snapshot.
-  let hostedKey: string | null = null;
-  let hostedVault: { ciphertext: string } | null = null;
-  try {
-    if ((await store.getHostedProvisioning(node.accountId)).enabled) {
-      const [enc, ciphertext] = await Promise.all([
-        store.getHostedModelAuthVaultKey(node.accountId),
-        store.getHostedModelAuthVault(node.accountId),
-      ]);
-      if (enc && ciphertext) {
-        hostedKey = decryptSecret(node.accountId, enc);
-        hostedVault = { ciphertext };
-      }
-    }
-  } catch { /* best effort — fall back to peer wrapping */ }
+  // Keep this legacy response peer-vault-only. Older nodes interpret any
+  // `hostedKey` here as the key for `vault`, so mixing the distinct filtered
+  // custody key into this shape would break rolling upgrades.
   res.json({
     ok: true,
     vault: await store.getModelAuthVault(node.accountId) ?? null,
-    hostedVault,
     wrappedKey: await store.getModelAuthWrappedKey(node.accountId, node.id) ?? null,
-    hostedKey,
     requests: await store.listModelAuthKeyRequests(node.accountId, node.id),
   });
 }));
@@ -1899,19 +1883,41 @@ app.put("/node/model-auth-key/hosted-escrow", requireNode, asyncHandler(async (r
   res.json({ ok: true });
 }));
 
+app.get("/node/model-auth-hosted-vault", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  if (!(await store.getHostedProvisioning(node.accountId)).enabled) {
+    return res.status(403).json({ error: "hosted provisioning not enabled for this account" });
+  }
+  const [enc, vault] = await Promise.all([
+    store.getHostedModelAuthVaultKey(node.accountId),
+    store.getHostedModelAuthVault(node.accountId),
+  ]);
+  res.json({
+    ok: true,
+    hostedVault: vault ? { ciphertext: vault.ciphertext, generation: vault.generation, revision: vault.revision } : null,
+    hostedKey: enc && vault ? decryptSecret(node.accountId, enc) : null,
+  });
+}));
+
 app.put("/node/model-auth-hosted-vault", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const vaultKeyB64 = String(req.body?.vaultKeyB64 ?? "").trim();
   const ciphertext = String(req.body?.ciphertext ?? "").trim();
-  if (!ciphertext || !vaultKeyB64 || Buffer.from(vaultKeyB64, "base64").length !== 32) {
+  const expectedGeneration = Number(req.body?.expectedGeneration);
+  const revision = Number(req.body?.revision);
+  if (!ciphertext || !vaultKeyB64 || Buffer.from(vaultKeyB64, "base64").length !== 32 || !Number.isSafeInteger(expectedGeneration) || expectedGeneration < 0 || !Number.isSafeInteger(revision) || revision < 0) {
     return res.status(400).json({ error: "Missing/invalid hosted vault" });
   }
   if (!(await store.getHostedProvisioning(node.accountId)).enabled) {
     return res.status(403).json({ error: "hosted provisioning not enabled for this account" });
   }
-  await store.setHostedModelAuthVault(node.accountId, ciphertext, encryptSecret(node.accountId, vaultKeyB64));
+  const generation = await store.setHostedModelAuthVault(node.accountId, ciphertext, encryptSecret(node.accountId, vaultKeyB64), expectedGeneration, revision);
+  if (generation === undefined) {
+    const current = await store.getHostedModelAuthVault(node.accountId);
+    return res.status(409).json({ error: "hosted credential vault changed", generation: current?.generation ?? 0, revision: current?.revision ?? 0 });
+  }
   await store.appendHostedAudit(node.accountId, { at: new Date().toISOString(), action: "model_credential_escrowed", nodeId: node.id });
-  res.json({ ok: true });
+  res.json({ ok: true, generation, revision });
 }));
 
 app.put("/node/model-auth-vault", requireNode, asyncHandler(async (req, res) => {

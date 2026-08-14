@@ -2486,8 +2486,8 @@ export class AppController {
   resetOauth(provider: string): void {
     this.send({ kind: "provider.oauth.reset", provider });
   }
-  startOauth(provider: string): void {
-    this.send({ kind: "provider.oauth.start", provider });
+  startOauth(provider: string, label?: string): void {
+    this.send({ kind: "provider.oauth.start", provider, ...(label ? { label } : {}) });
   }
   submitOauthCode(id: string, code: string): void {
     this.send({ kind: "provider.oauth.code", id, code });
@@ -2501,7 +2501,7 @@ export class AppController {
   private credentialSyncInFlight: Promise<void> | null = null;
   /** Bidirectional API-key convergence between the PWA account vault and node. */
   private syncAccountCredentialsWithNode(): Promise<void> {
-    if (this.direct || this.store.getState().status !== "online") return Promise.resolve();
+    if (this.store.getState().status !== "online") return Promise.resolve();
     if (this.credentialSyncInFlight) return this.credentialSyncInFlight;
     this.credentialSyncInFlight = (async () => {
       // Pull first so an existing node seeds a new device. Then push the merged
@@ -2517,10 +2517,22 @@ export class AppController {
           && typeof (record as { provider?: unknown }).provider === "string"
           && typeof (record as { label?: unknown }).label === "string")
         : [];
-      // OAuth/reference items are node-recipient records. Delete any stale
-      // browser API-key replica for the same identity so convergence can never
-      // replace a newer subscription login with an old pasted key.
+      const deletedAt = event.deletedAt && typeof event.deletedAt === "object"
+        ? event.deletedAt as Record<string, unknown>
+        : {};
+      // Apply node tombstones before pushing browser-only entries. Otherwise a
+      // key deleted while this browser was offline would be resurrected on the
+      // next reconnect. OAuth/reference records likewise supersede stale pasted
+      // API-key replicas for the same logical identity.
       const localBefore = await this.ephemeralKeys.modelKeyEntries();
+      for (const local of localBefore) {
+        const recordId = local.label === "default" ? local.provider : `${local.provider}:${local.label}`;
+        const tombstoneAt = Number(deletedAt[recordId]);
+        const localAt = Date.parse(String(local.updatedAt ?? ""));
+        if (Number.isFinite(tombstoneAt) && tombstoneAt > 0 && (!Number.isFinite(localAt) || tombstoneAt >= localAt)) {
+          await this.ephemeralKeys.removeModelKey(local.provider, local.label);
+        }
+      }
       for (const record of nodeRecords) if (record.kind !== "api_key") {
         await this.ephemeralKeys.removeModelKey(record.provider, record.label);
       }
