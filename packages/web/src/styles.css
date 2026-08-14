@@ -1404,6 +1404,21 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .vault-detail-grid strong { min-width: 0; overflow-wrap: anywhere; }
 .vault-detail-grid code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vault-custody-note { padding: 12px 14px; border-left: 3px solid var(--accent); border-radius: 4px 10px 10px 4px; background: var(--surface-2); line-height: 1.5; }
+/* One-glance trust model: access enters the encrypted vault, then goes only to
+   the scope the user selects. Unattended storage is visibly a separate branch. */
+.vault-schematic { display: grid; grid-template-columns: auto 14px auto 14px minmax(150px, 1fr); align-items: center; gap: 8px; padding: 13px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-2); }
+.vault-schematic-step { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.vault-schematic-step > span:last-child, .vault-schematic-unattended > span:last-child { display: flex; flex-direction: column; gap: 1px; }
+.vault-schematic strong { font-size: 12px; line-height: 1.25; }
+.vault-schematic small { color: var(--muted); font-size: 10px; line-height: 1.3; }
+.vault-schematic-icon { display: grid; place-items: center; flex: none; width: 27px; height: 27px; border-radius: 8px; background: var(--surface); color: var(--muted); font-size: 13px; }
+.vault-schematic-core .vault-schematic-icon { background: color-mix(in srgb, var(--accent) 15%, var(--surface)); color: var(--accent); }
+.vault-schematic-arrow { color: var(--muted); font-size: 19px; text-align: center; }
+.vault-schematic-destination { display: flex; min-width: 0; flex-direction: column; gap: 6px; }
+.vault-schematic-destination > span { display: flex; flex-wrap: wrap; gap: 4px; }
+.vault-schematic-destination small { padding: 3px 6px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); white-space: nowrap; }
+.vault-schematic-unattended { grid-column: 5; display: flex; align-items: center; gap: 7px; padding-top: 7px; border-top: 1px dashed var(--line-strong); color: var(--muted); }
+.vault-schematic-unattended strong { color: var(--ink); }
 .vault-advanced { padding: 10px 0; border-top: 1px solid var(--line); }
 .vault-advanced summary { cursor: pointer; color: var(--ink); font-weight: 600; }
 .vault-advanced[open] summary { margin-bottom: 10px; }
@@ -2405,6 +2420,11 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
   .credential-vault > .picker-list .picker-item { align-items: flex-start; padding: 13px 10px; }
   .vault-row-status { flex: none; }
   .vault-detail-grid { grid-template-columns: 1fr; gap: 3px; padding: 14px; }
+  .vault-schematic { grid-template-columns: 1fr; gap: 7px; padding: 12px 14px; }
+  .vault-schematic-step { min-height: 32px; }
+  .vault-schematic-arrow { transform: rotate(90deg); justify-self: start; margin: -6px 0 -6px 8px; }
+  .vault-schematic-destination { padding-left: 35px; }
+  .vault-schematic-unattended { grid-column: 1; margin-left: 35px; }
   .vault-detail-grid > strong { margin-bottom: 9px; }
   .vault-detail-grid > strong:last-child { margin-bottom: 0; }
   .credential-vault .row-actions { align-items: stretch; }

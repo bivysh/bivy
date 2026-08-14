@@ -18,6 +18,8 @@ test("vault unifies saved providers, custom endpoints, assignment and unattended
   expect(vault).toContain("No providers yet");
   expect(vault).toContain("Local server or custom endpoint");
   expect(vault).toContain("Test endpoint & find models");
+  expect(vault).toContain("Available where you choose");
+  expect(vault).toContain("Unattended runs are separate");
   expect(vault).toContain("Search providers");
   expect(vault).toContain("All my machines — end-to-end encrypted");
   expect(vault).toContain("Use for {projectId}");

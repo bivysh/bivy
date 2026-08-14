@@ -34,6 +34,28 @@ const titleFor = (item: VaultItem) => item.label === "default" ? item.providerNa
 const methodLabel = (kind: VaultItem["kind"]) => kind === "oauth" ? "Subscription sign-in" : kind === "reference" ? "Password-manager reference" : kind === "environment" ? "Environment" : "API key";
 const availabilityLabel = (value: Availability) => value === "account" ? "All my machines" : value === "node" ? "Only this machine" : "Only this device";
 
+function VaultSchematic() {
+  return <div className="vault-schematic" aria-label="How the encrypted key vault works">
+    <div className="vault-schematic-step">
+      <span className="vault-schematic-icon" aria-hidden>＋</span>
+      <span><strong>Add access</strong><small>Key or sign-in</small></span>
+    </div>
+    <span className="vault-schematic-arrow" aria-hidden>›</span>
+    <div className="vault-schematic-step vault-schematic-core">
+      <span className="vault-schematic-icon" aria-hidden>◆</span>
+      <span><strong>Encrypted vault</strong><small>Secrets stay hidden</small></span>
+    </div>
+    <span className="vault-schematic-arrow" aria-hidden>›</span>
+    <div className="vault-schematic-destination">
+      <strong>Available where you choose</strong>
+      <span><small>This device</small><small>One machine</small><small>All machines</small></span>
+    </div>
+    <div className="vault-schematic-unattended">
+      <span aria-hidden>↳</span><span><strong>Unattended runs are separate</strong><small>Optional encrypted cloud copy</small></span>
+    </div>
+  </div>;
+}
+
 export function CredentialVault({ state }: { state: AppState }) {
   const status = state.connection.status;
   const currentNodeId = state.connection.currentNodeId;
@@ -415,6 +437,7 @@ export function CredentialVault({ state }: { state: AppState }) {
   const filtered = items.filter((item) => `${item.providerName} ${item.provider} ${item.label}`.toLowerCase().includes(query.toLowerCase()));
   return <div className="settings-form credential-vault">
     <div className="vault-title-row"><div><h3>Your model access</h3><p className="muted settings-intro">Hosted providers, subscription sign-ins, API keys, and your own model endpoints.</p></div><button className="btn primary" onClick={() => { setSelectedKey(null); resetAdd(); setQuery(""); setView("add"); }}>+ Add</button></div>
+    <VaultSchematic />
     {items.length === 0 ? <div className="vault-empty"><h4>No providers yet</h4><p className="muted">Add a sign-in, API key, local model, or custom endpoint.</p><button className="btn primary" onClick={() => { setSelectedKey(null); resetAdd(); setView("add"); }}>Add provider</button></div> : <>
       <input className="picker-search" placeholder="Search credentials…" value={query} onChange={(e) => setQuery(e.target.value)} />
       <div className="picker-list vault-items">{filtered.map((item) => <button className="picker-item" key={keyOf(item.provider, item.label)} onClick={() => { setSelectedKey(keyOf(item.provider, item.label)); setMessage(null); setError(null); setView("detail"); }}>
