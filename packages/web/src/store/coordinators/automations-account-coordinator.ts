@@ -26,6 +26,11 @@ export interface AutomationsAccountDependencies {
     getNotificationPreferences(local: LocalStore): Promise<NotificationPreferences>;
     setNotificationPreferences(local: LocalStore, patch: Partial<NotificationPreferences>): Promise<NotificationPreferences>;
     createOneOffRun(local: LocalStore, input: any): Promise<{ id: string }>;
+    setGithubAppDefaultNode(local: LocalStore, node: string, appId?: string): Promise<string | undefined>;
+    setGithubAppTriggerAccess(local: LocalStore, access: "everyone" | "contributor" | "collaborator", appId?: string): Promise<"everyone" | "contributor" | "collaborator">;
+    assignWorkItem(local: LocalStore, id: string, input: { node?: string; runtimeId?: string; model?: string; ephemeral?: boolean }): Promise<void>;
+    deleteWorkItem(local: LocalStore, id: string): Promise<void>;
+    clearWorkQueue(local: LocalStore): Promise<number>;
   };
   runContext(): {
     accountMode: boolean;
@@ -50,6 +55,18 @@ export class AutomationsAccountCoordinator {
   fetchGithubApp(): Promise<unknown> { return this.deps.api.fetchGithubApp(this.deps.local); }
   fetchGithubQueue(limit = 30): Promise<any> { return this.deps.api.fetchGithubQueue(this.deps.local, limit); }
   fetchAutomationRuns(limit = 50): Promise<any> { return this.deps.api.fetchAutomationRuns(this.deps.local, limit); }
+
+  setGithubAppDefaultNode(node: string, appId?: string): Promise<string | undefined> {
+    return this.deps.api.setGithubAppDefaultNode(this.deps.local, node, appId);
+  }
+  setGithubAppTriggerAccess(access: "everyone" | "contributor" | "collaborator", appId?: string): Promise<"everyone" | "contributor" | "collaborator"> {
+    return this.deps.api.setGithubAppTriggerAccess(this.deps.local, access, appId);
+  }
+  assignWorkItem(id: string, input: { node?: string; runtimeId?: string; model?: string; ephemeral?: boolean }): Promise<void> {
+    return this.deps.api.assignWorkItem(this.deps.local, id, input);
+  }
+  deleteWorkItem(id: string): Promise<void> { return this.deps.api.deleteWorkItem(this.deps.local, id); }
+  clearWorkQueue(): Promise<number> { return this.deps.api.clearWorkQueue(this.deps.local); }
 
   async cancelAutomationRun(id: string): Promise<{ runs: any; queue: any }> {
     await this.deps.api.cancelAutomationRun(this.deps.local, id);
