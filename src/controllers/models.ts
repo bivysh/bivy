@@ -149,6 +149,20 @@ export function createModelController(deps: ModelControllerDeps) {
   // reflects the Bivy registry from the very first boot.
   async function initLocalModelRegistry(): Promise<void> {
     await migrateLegacyPiModelsIntoRegistry();
+    // Registries created before Machine scoping had no owner marker. Claim only
+    // their loopback entries on the Machine performing this migration; remote
+    // custom endpoints intentionally remain network-scoped.
+    const existing = loadLocalModels(localModelsDir);
+    let claimedLegacy = false;
+    for (const [id, provider] of Object.entries(existing.providers)) {
+      if (!provider.scope && isLoopbackEndpoint(provider.baseUrl)) {
+        existing.providers[id] = { ...provider, scope: "machine", machineId: machine.id, machineName: machine.name };
+        claimedLegacy = true;
+      }
+    }
+    if (claimedLegacy) {
+      for (const [id, provider] of Object.entries(existing.providers)) upsertLocalProvider(localModelsDir, id, provider);
+    }
     await writePiModelsProjection();
   }
 
@@ -162,7 +176,9 @@ export function createModelController(deps: ModelControllerDeps) {
     // Machine-scoped ids include a stable node suffix so two Machines running
     // Ollama do not overwrite each other when the registry syncs.
     const suffix = `-${machine.id.slice(0, 8)}`;
-    const scopedId = loopback && !String(requestedId).endsWith(suffix) ? `${requestedId}${suffix}` : requestedId;
+    const existing = loadLocalModels(localModelsDir).providers[normalizeProviderId(String(requestedId))];
+    const alreadyOwnedHere = existing?.scope === "machine" && existing.machineId === machine.id;
+    const scopedId = loopback && !alreadyOwnedHere && !String(requestedId).endsWith(suffix) ? `${requestedId}${suffix}` : requestedId;
     const spec: any = {
       baseUrl: normalizedBaseUrl,
       api: api || "openai-completions",

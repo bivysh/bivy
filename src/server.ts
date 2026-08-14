@@ -2765,9 +2765,10 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
       // The client sends the same field set as the REST body (baseUrl, api,
       // apiKey, models[], compat, name, providerId). persistLocalModelSave
       // broadcasts the refreshed list to every client, requester included.
-      await persistLocalModelSave((msg as any)?.spec ?? msg);
-      // Dedicated per-request ack — see the provider.apiKey comment above (#140).
-      ctx.reply({ type: "models.custom.save.ok", requestId: msg.requestId });
+      const result = await persistLocalModelSave((msg as any)?.spec ?? msg);
+      // Return the normalized (Machine-scoped) provider id so the PWA can make
+      // the imported model the next draft's explicit choice.
+      ctx.reply({ type: "models.custom.save.ok", requestId: msg.requestId, provider: result.id });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       relay?.sendEvent({ type: "session.error", error: message });

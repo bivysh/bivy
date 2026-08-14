@@ -510,15 +510,13 @@ export class DirectTransport implements Transport {
         case "models.custom.save": {
           const requestId = String(obj.requestId ?? "");
           try {
-            this.emitMerged(
-              "models.custom.list",
-              await this.directApi("/api/models/custom", {
-                method: "POST",
-                body: JSON.stringify((obj as any).spec ?? obj),
-              }),
-            );
+            const result = await this.directApi("/api/models/custom", {
+              method: "POST",
+              body: JSON.stringify((obj as any).spec ?? obj),
+            });
+            this.emitMerged("models.custom.list", result);
             // Dedicated per-request ack, mirroring the relay path — see #140.
-            this.emit({ type: "models.custom.save.ok", requestId });
+            this.emit({ type: "models.custom.save.ok", requestId, provider: result.provider });
           } catch (error) {
             this.emit({ type: "models.custom.save.error", requestId, error: error instanceof Error ? error.message : String(error) });
           }

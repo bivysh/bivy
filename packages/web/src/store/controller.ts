@@ -2572,8 +2572,9 @@ export class AppController {
    *  save shape: { providerId, name?, baseUrl, api?, apiKey?, compat?, models[] }.
    *  Resolves once the node acks the save (or rejects with its error) instead
    *  of assuming success the moment it was sent. */
-  saveLocalModel(spec: Record<string, unknown>): Promise<void> {
-    return this.awaitAck({ kind: "models.custom.save", spec }).then(() => undefined);
+  async saveLocalModel(spec: Record<string, unknown>): Promise<string> {
+    const event = await this.awaitAck({ kind: "models.custom.save", spec }) as { provider?: unknown };
+    return String(event.provider ?? spec.providerId ?? "local");
   }
   removeLocalModel(id: string): void {
     this.send({ kind: "models.custom.remove", id });
