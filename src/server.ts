@@ -59,6 +59,7 @@ import { ApprovalManager, type ApprovalRequest } from "./approval.js";
 import { QuestionManager, validQuestions, isAskUserQuestionTool, formatQuestionResult } from "./question.js";
 import { NodeIdentity } from "./identity.js";
 import { canOpenBrowser, openBrowser } from "./browser-open.js";
+import { openOAuthLoginOnNode } from "./runtime/oauth/oauth-node-open.js";
 import { collectNodeStats } from "./node-stats.js";
 import { SessionEventCoalescer } from "./session-event-coalescer.js";
 import { authMiddleware, resolveAuth, isAuthorized, requestOriginAllowed } from "./auth.js";
@@ -3040,13 +3041,8 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
   // general remote-browser-launch primitive.
   "provider.oauth.open_on_node"(msg, ctx) {
     const requestId = String(msg.requestId ?? "");
-    const state = oauthLogins.get(String(msg.id ?? ""));
-    if (!state?.authUrl || state.status !== "waiting") {
-      ctx.reply({ type: "provider.oauth.open_on_node.result", requestId, opened: false, error: "Login is no longer waiting for authorization." });
-      return;
-    }
-    const opened = openBrowser(state.authUrl);
-    ctx.reply({ type: "provider.oauth.open_on_node.result", requestId, opened, ...(!opened ? { error: "This machine cannot open a graphical browser." } : {}) });
+    const result = openOAuthLoginOnNode(oauthLogins.get(String(msg.id ?? "")), openBrowser);
+    ctx.reply({ type: "provider.oauth.open_on_node.result", requestId, ...result });
   },
   // Paste-back step for providers that return a redirect URL/code instead of a
   // pollable device code.
@@ -9735,10 +9731,8 @@ app.post("/api/auth/oauth/start", async (req, res, next) => {
 });
 
 app.post("/api/auth/oauth/:id/open-on-node", (req, res) => {
-  const state = oauthLogins.get(req.params.id);
-  if (!state?.authUrl || state.status !== "waiting") return res.status(409).json({ opened: false, error: "Login is no longer waiting for authorization." });
-  const opened = openBrowser(state.authUrl);
-  res.status(opened ? 200 : 409).json({ opened, ...(!opened ? { error: "This machine cannot open a graphical browser." } : {}) });
+  const result = openOAuthLoginOnNode(oauthLogins.get(req.params.id), openBrowser);
+  res.status(result.opened ? 200 : 409).json(result);
 });
 
 app.post("/api/auth/oauth/:id/manual-code", (req, res) => {
