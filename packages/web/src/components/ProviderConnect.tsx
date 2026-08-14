@@ -14,42 +14,77 @@ import { controller } from "../store/useStore.js";
 export function OauthStep() {
   const oauth = controller.store.getState().presentation.oauth;
   const [code, setCode] = useState("");
+  const [deviceFallback, setDeviceFallback] = useState(false);
+  const [openingOnNode, setOpeningOnNode] = useState(false);
+  const [openedOnNode, setOpenedOnNode] = useState(false);
+  const [openError, setOpenError] = useState<string | null>(null);
   if (!oauth) return null;
   const url = oauth.authUrl || oauth.deviceCode?.verificationUri;
-  // Authorization-code providers redirect the browser to localhost on the
-  // machine running the node. When this React app is on a phone or another
-  // computer that callback cannot reach the node, even though the node did
-  // successfully start its callback listener. Always keep manual paste
-  // available for those flows; it is the remote-browser fallback, not an
-  // alternative to starting the callback server.
-  const needsPaste = !oauth.deviceCode;
+  const deviceCode = Boolean(oauth.deviceCode);
+  const canOpenOnNode = !deviceCode && oauth.canOpenOnNode === true;
+  const machine = oauth.nodeName || "your machine";
+
+  const openOnNode = async () => {
+    setOpeningOnNode(true);
+    setOpenError(null);
+    try {
+      const result = await controller.openOauthOnNode(oauth.id);
+      setOpenedOnNode(result.opened);
+      if (!result.opened) {
+        setOpenError(result.error || `Could not open a browser on ${machine}.`);
+        setDeviceFallback(true);
+      }
+    } catch (error) {
+      setOpenError(error instanceof Error ? error.message : String(error));
+      setDeviceFallback(true);
+    } finally {
+      setOpeningOnNode(false);
+    }
+  };
+
+  const useThisDevice = () => {
+    setDeviceFallback(true);
+    if (url) window.open(url, "_blank", "noopener");
+  };
+
+  const pasteClipboard = async () => {
+    try {
+      const value = (await navigator.clipboard.readText()).trim();
+      if (value) {
+        setCode(value);
+        controller.submitOauthCode(oauth.id, value);
+      }
+    } catch {
+      setOpenError("Clipboard access was blocked. Paste the redirect URL below instead.");
+    }
+  };
+
   return (
     <div className="settings-form">
-      {oauth.error && <div className="banner error inline">{oauth.error}</div>}
-      {url && (
-        <a className="btn primary block" href={url} target="_blank" rel="noopener">
-          Open sign-in page
-        </a>
-      )}
-      {oauth.deviceCode?.userCode && (
-        <p className="muted">
-          Code: <strong>{oauth.deviceCode.userCode}</strong>
-        </p>
-      )}
-      {needsPaste ? (
-        <>
-          <p className="muted">
-            After signing in, the browser may stop on a localhost page. Copy that page&apos;s full URL and paste it here.
-          </p>
-          <label className="field-label">Redirect URL or authorization code</label>
-          <input className="picker-search" value={code} onChange={(e) => setCode(e.target.value)} />
-          <button className="btn primary" disabled={!code.trim()} onClick={() => controller.submitOauthCode(oauth.id, code.trim())}>
-            Submit
-          </button>
-        </>
-      ) : (
-        <p className="muted">{oauth.status || "Waiting for sign-in…"}</p>
-      )}
+      {oauth.error && <div className="banner error inline" role="alert">{oauth.error}</div>}
+      {openError && <div className="banner error inline" role="alert">{openError}</div>}
+
+      {deviceCode && url && <a className="btn primary block" href={url} target="_blank" rel="noopener">Continue on this device</a>}
+      {oauth.deviceCode?.userCode && <p className="muted">Code: <strong>{oauth.deviceCode.userCode}</strong></p>}
+
+      {canOpenOnNode && !deviceFallback && <>
+        <button className="btn primary block" disabled={openingOnNode || openedOnNode} onClick={() => void openOnNode()}>
+          {openingOnNode ? "Opening…" : openedOnNode ? `Opened on ${machine}` : `Open sign-in on ${machine}`}
+        </button>
+        <p className="muted">The provider will return directly to Bivy on that machine. This page updates automatically.</p>
+        {!openedOnNode && <button className="link-btn" onClick={useThisDevice}>Use this device instead</button>}
+      </>}
+
+      {!deviceCode && (!canOpenOnNode || deviceFallback) && <>
+        {!deviceFallback && url && <a className="btn primary block" href={url} target="_blank" rel="noopener">Continue on this device</a>}
+        <p className="muted">After approval, the browser may stop on a localhost page. Copy its full URL, return here, then paste it.</p>
+        {typeof navigator !== "undefined" && navigator.clipboard && <button className="btn" onClick={() => void pasteClipboard()}>Paste redirect from clipboard</button>}
+        <label className="field-label" htmlFor="oauth-redirect-code">Redirect URL or authorization code</label>
+        <input id="oauth-redirect-code" className="picker-search" value={code} onChange={(e) => setCode(e.target.value)} />
+        <button className="btn primary" disabled={!code.trim()} onClick={() => controller.submitOauthCode(oauth.id, code.trim())}>Submit</button>
+      </>}
+
+      <p className="muted" role="status">{oauth.status || "Waiting for sign-in…"}</p>
     </div>
   );
 }

@@ -58,6 +58,8 @@ import { execEphemeralRequest, type EphemeralExecRequest } from "./ephemeral-exe
 import { ApprovalManager, type ApprovalRequest } from "./approval.js";
 import { QuestionManager, validQuestions, isAskUserQuestionTool, formatQuestionResult } from "./question.js";
 import { NodeIdentity } from "./identity.js";
+import { canOpenBrowser, openBrowser } from "./browser-open.js";
+import { openOAuthLoginOnNode } from "./runtime/oauth/oauth-node-open.js";
 import { collectNodeStats } from "./node-stats.js";
 import { SessionEventCoalescer } from "./session-event-coalescer.js";
 import { authMiddleware, resolveAuth, isAuthorized, requestOriginAllowed } from "./auth.js";
@@ -425,6 +427,7 @@ type OAuthLoginState = {
   abort: AbortController;
   createdAt: number;
   manualCodeResolve?: (code: string) => void;
+  openedOnNode?: boolean;
 };
 
 // Per-process secret gating the loopback bootstrap endpoint. Published to a
@@ -3026,11 +3029,27 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
         instructions: state.instructions,
         deviceCode: state.deviceCode,
         usesCallbackServer: state.usesCallbackServer,
+        canOpenOnNode: canOpenBrowser(),
+        nodeName: identity.name,
         error: state.error,
       });
     } catch (error) {
       relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
     }
+  },
+  // Open only the authorization URL generated inside this active ceremony. The
+  // remote client never supplies an arbitrary URL, so this cannot become a
+  // general remote-browser-launch primitive.
+  "provider.oauth.open_on_node"(msg, ctx) {
+    const requestId = String(msg.requestId ?? "");
+    const state = oauthLogins.get(String(msg.id ?? ""));
+    if (state?.openedOnNode) {
+      ctx.reply({ type: "provider.oauth.open_on_node.result", requestId, opened: true, alreadyOpened: true });
+      return;
+    }
+    const result = openOAuthLoginOnNode(state, openBrowser);
+    if (result.opened && state) state.openedOnNode = true;
+    ctx.reply({ type: "provider.oauth.open_on_node.result", requestId, ...result });
   },
   // Paste-back step for providers that return a redirect URL/code instead of a
   // pollable device code.
@@ -9711,11 +9730,19 @@ app.post("/api/auth/native-login", async (_req, res, next) => {
 app.post("/api/auth/oauth/start", async (req, res, next) => {
   try {
     const provider = String(req.body?.provider ?? "openai-codex").trim();
-    const state = await startOAuthLogin(provider);
-    res.json({ ok: true, id: state.id, provider: state.provider, status: state.status, authUrl: state.authUrl, instructions: state.instructions, deviceCode: state.deviceCode, usesCallbackServer: state.usesCallbackServer, error: state.error });
+    const state = await startOAuthLogin(provider, String(req.body?.label ?? "default"));
+    res.json({ ok: true, id: state.id, provider: state.provider, status: state.status, authUrl: state.authUrl, instructions: state.instructions, deviceCode: state.deviceCode, usesCallbackServer: state.usesCallbackServer, canOpenOnNode: canOpenBrowser(), nodeName: identity.name, error: state.error });
   } catch (error) {
     next(error);
   }
+});
+
+app.post("/api/auth/oauth/:id/open-on-node", (req, res) => {
+  const state = oauthLogins.get(req.params.id);
+  if (state?.openedOnNode) return res.json({ opened: true, alreadyOpened: true });
+  const result = openOAuthLoginOnNode(state, openBrowser);
+  if (result.opened && state) state.openedOnNode = true;
+  res.json(result);
 });
 
 app.post("/api/auth/oauth/:id/manual-code", (req, res) => {

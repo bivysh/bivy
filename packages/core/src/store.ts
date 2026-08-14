@@ -541,6 +541,9 @@ export interface OauthState {
   instructions?: string;
   deviceCode?: { verificationUri?: string; userCode?: string } | null;
   usesCallbackServer?: boolean;
+  /** This connected node reports a usable local graphical browser. */
+  canOpenOnNode?: boolean;
+  nodeName?: string;
   status?: string;
   error?: string;
 }
@@ -2689,6 +2692,8 @@ export class SessionStore {
             instructions: e.instructions,
             deviceCode: e.deviceCode || null,
             usesCallbackServer: e.usesCallbackServer,
+            canOpenOnNode: e.canOpenOnNode === true,
+            nodeName: typeof e.nodeName === "string" ? e.nodeName : undefined,
             status: e.error ? undefined : "Waiting for sign-in…",
             error: e.error,
           },

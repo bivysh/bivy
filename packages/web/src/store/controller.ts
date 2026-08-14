@@ -2350,6 +2350,7 @@ export class AppController {
   removeProvider(provider: string): void { this.credentialsModelsCoordinator.removeProvider(provider); }
   resetOauth(provider: string): void { this.credentialsModelsCoordinator.resetOauth(provider); }
   startOauth(provider: string, label?: string): void { this.credentialsModelsCoordinator.startOauth(provider, label); }
+  openOauthOnNode(id: string): Promise<{ opened: boolean; error?: string }> { return this.credentialsModelsCoordinator.openOauthOnNode(id); }
   submitOauthCode(id: string, code: string): void { this.credentialsModelsCoordinator.submitOauthCode(id, code); }
   listCredentialRecords(): void { this.credentialsModelsCoordinator.listCredentials(); }
 

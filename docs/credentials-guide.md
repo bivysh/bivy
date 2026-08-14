@@ -34,7 +34,7 @@ Each record has:
 
 ## The three ways a credential gets in
 
-1. **You add it** (Bivy-first) — `bivy login`, or the PWA's **Keys & OAuth**
+1. **You add it** (Bivy-first) — `bivy login`, or the PWA's **Credential vault**
    screen. Paste an API key, sign in via OAuth, or add a **password-manager
    reference** (`op://…` / `env://NAME`). Defaults to `sync: account`.
 2. **An agent's own login** (agent-native) — you ran `codex login`,
@@ -42,6 +42,25 @@ Each record has:
    next time you run that agent through it. You choose what happens — see
    [Ingest policy](#agent-native-logins-merge-vs-separate). Defaults to `sync: node`.
 3. **A synced peer** — another of your nodes pushed it (when `sync: account`).
+
+### Subscription sign-in from the PWA
+
+The PWA chooses the least awkward flow the provider and connected node support:
+
+- Device-code providers open on the current device; the node polls and stores the
+  resulting tokens.
+- For callback providers, a connected desktop node reports whether it can open a
+  local browser. **Open sign-in on _machine_** launches only the authorization URL
+  generated for that active ceremony. The provider returns to the node's loopback
+  callback automatically, so no localhost URL is copied.
+- A headless node cannot open a graphical browser. **Use this device instead**
+  remains available; if the provider's registered redirect is localhost, the PWA
+  offers a one-tap clipboard paste plus manual fallback.
+
+The PKCE verifier and token exchange remain on the node. The remote-open command
+accepts a ceremony id, not a URL, and validates the stored URL against Bivy's
+provider registry before launching it; it is not a general remote browser opener.
+The control plane receives neither OAuth access nor refresh tokens.
 
 ---
 
