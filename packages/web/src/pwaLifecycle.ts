@@ -38,9 +38,11 @@ type BeforeInstallPromptEvent = Event & {
 
 const FIRST_SUCCESS_KEY = "bivy.pwa.first-success";
 const LEGACY_FIRST_SUCCESS_KEY = "bivy.product-metric.first_useful_response";
+const INSTALL_DISMISSED_KEY = "bivy.pwa.install-dismissed";
 const listeners = new Set<() => void>();
 let installEvent: BeforeInstallPromptEvent | null = null;
 let installedThisRun = false;
+let installDismissed = false;
 let reconnectQueuedPrompts = 0;
 let followupQueuedPrompts = 0;
 
@@ -57,6 +59,12 @@ function isStandalone(): boolean {
   return window.matchMedia?.("(display-mode: standalone)").matches === true ||
     (navigator as Navigator & { standalone?: boolean }).standalone === true;
 }
+
+function storedInstallDismissal(): boolean {
+  try { return localStorage.getItem(INSTALL_DISMISSED_KEY) === "1"; } catch { return false; }
+}
+
+installDismissed = typeof window !== "undefined" && storedInstallDismissal();
 
 /** Browser-family fallback used only when the native install event is absent. */
 export function fallbackInstallChoice(
@@ -101,7 +109,7 @@ function refreshInstallChoice(): void {
   const standalone = isStandalone();
   publish({
     standalone,
-    installChoice: standalone || installedThisRun || !state.firstSuccess
+    installChoice: standalone || installedThisRun || installDismissed || !state.firstSuccess
       ? null
       : installEvent ? "native" : browserFallbackInstallChoice(),
   });
@@ -183,6 +191,14 @@ export function markFirstSuccessfulResponse(): void {
   try { localStorage.setItem(FIRST_SUCCESS_KEY, "1"); } catch {}
   publish({ firstSuccess: true });
   refreshInstallChoice();
+}
+
+/** Permanently hide the optional install suggestion on this browser profile. */
+export function dismissInstall(): void {
+  installDismissed = true;
+  installEvent = null;
+  try { localStorage.setItem(INSTALL_DISMISSED_KEY, "1"); } catch {}
+  publish({ installChoice: null });
 }
 
 export async function requestInstall(): Promise<"accepted" | "dismissed" | "unavailable"> {

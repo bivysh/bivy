@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useState, useSyncExternalStore } from "react";
 import type { ConnectionStatus } from "@bivy/core";
-import { describeAvailability, getPwaLifecycleState, requestInstall, subscribePwaLifecycle } from "../pwaLifecycle.js";
+import { describeAvailability, dismissInstall, getPwaLifecycleState, requestInstall, subscribePwaLifecycle } from "../pwaLifecycle.js";
 
 export function PwaLifecycleNotice({ status, hasCachedTranscript }: { status: ConnectionStatus; hasCachedTranscript: boolean }) {
   const lifecycle = useSyncExternalStore(subscribePwaLifecycle, getPwaLifecycleState);
@@ -13,24 +13,36 @@ export function PwaLifecycleNotice({ status, hasCachedTranscript }: { status: Co
   if (!showStatus && !showInstall) return null;
 
   return (
-    <aside className="pwa-lifecycle" aria-label="App availability">
-      {showStatus && <div className="pwa-lifecycle-copy" data-availability={availability.kind}><strong>{availability.label}</strong><span>{availability.detail}</span></div>}
+    <>
+      {showStatus && (
+        <aside className="pwa-lifecycle" aria-label="App availability">
+          <div className="pwa-lifecycle-copy" data-availability={availability.kind}>
+            <strong>{availability.label}</strong><span>{availability.detail}</span>
+          </div>
+        </aside>
+      )}
       {showInstall && (
-        <div className="pwa-install">
-          <span>Install Bivy for a dedicated window and reliable return to this device.</span>
-          {lifecycle.installChoice === "native" ? (
-            <button type="button" className="btn ghost" onClick={() => void requestInstall()}>Install</button>
-          ) : (
-            <button type="button" className="btn ghost" onClick={() => setGuidance((value) => !value)}>How to install</button>
-          )}
+        <aside className="pwa-install" aria-label="Install Bivy">
+          <button type="button" className="pwa-install-dismiss" onClick={dismissInstall} aria-label="Dismiss install suggestion" title="Don't show again">×</button>
+          <div className="pwa-install-copy">
+            <strong>Install Bivy</strong>
+            <span>Open Bivy in a dedicated window and return to this device more reliably.</span>
+          </div>
+          <div className="pwa-install-actions">
+            {lifecycle.installChoice === "native" ? (
+              <button type="button" className="btn ghost" onClick={() => void requestInstall()}>Install</button>
+            ) : (
+              <button type="button" className="btn ghost" onClick={() => setGuidance((value) => !value)}>How to install</button>
+            )}
+          </div>
           {guidance && lifecycle.installChoice === "ios" && (
             <p role="status">In Safari, tap Share, then <strong>Add to Home Screen</strong>, then Add. Other iOS browsers cannot install Bivy directly.</p>
           )}
           {guidance && lifecycle.installChoice === "safari" && (
             <p role="status">On macOS Sonoma or later, choose <strong>File → Add to Dock</strong> in Safari 17 or later. Older macOS Safari versions cannot install Bivy as a web app.</p>
           )}
-        </div>
+        </aside>
       )}
-    </aside>
+    </>
   );
 }

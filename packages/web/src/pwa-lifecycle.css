@@ -2,7 +2,6 @@
 .pwa-lifecycle {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
   margin: 0 16px 8px;
   padding: 9px 12px;
@@ -12,9 +11,51 @@
   color: var(--muted);
   font-size: 12px;
 }
-.pwa-lifecycle-copy, .pwa-install { display: flex; align-items: center; gap: 8px; }
+.pwa-lifecycle-copy { display: flex; align-items: center; gap: 8px; }
 .pwa-lifecycle-copy strong { color: var(--text); white-space: nowrap; }
-.pwa-install p { margin: 4px 0 0; max-width: 48ch; }
+
+/* Keep the optional install offer away from the composer. It is a compact,
+   dismissible card at the quiet top-right edge rather than a full-width banner
+   in the primary send flow. */
+.pwa-install {
+  position: fixed;
+  z-index: 45;
+  top: calc(max(10px, env(safe-area-inset-top)) + 58px);
+  right: 16px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  width: min(360px, calc(100vw - 32px));
+  box-sizing: border-box;
+  padding: 12px 38px 12px 14px;
+  border: 1px solid var(--line-strong, var(--border));
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--muted);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, .22);
+  font-size: 12px;
+  animation: sheet-up .16s ease;
+}
+.pwa-install-copy { display: grid; gap: 2px; line-height: 1.4; }
+.pwa-install-copy strong { color: var(--text); font-size: 13px; }
+.pwa-install-actions { display: flex; align-items: center; }
+.pwa-install-actions .btn { padding: 6px 10px; white-space: nowrap; }
+.pwa-install p { grid-column: 1 / -1; margin: 0; line-height: 1.45; }
+.pwa-install-dismiss {
+  position: absolute;
+  top: 5px;
+  right: 6px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 19px;
+  line-height: 1;
+}
+.pwa-install-dismiss:hover { background: var(--surface-2); color: var(--text); }
 .attachment-recovery {
   display: flex;
   align-items: center;
@@ -28,6 +69,7 @@
 }
 .update-toast button:disabled { opacity: .5; cursor: not-allowed; }
 @media (max-width: 720px) {
-  .pwa-lifecycle, .pwa-lifecycle-copy, .pwa-install { align-items: flex-start; flex-direction: column; }
+  .pwa-lifecycle, .pwa-lifecycle-copy { align-items: flex-start; flex-direction: column; }
   .pwa-lifecycle { margin-inline: 10px; }
+  .pwa-install { top: calc(max(10px, env(safe-area-inset-top)) + 54px); right: 10px; width: calc(100vw - 20px); }
 }
