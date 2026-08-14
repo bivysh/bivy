@@ -25,6 +25,13 @@ test("vault has saved-items, catalog add, detail, assignment and custody flows",
   expect(vault).toContain("Machine availability");
 });
 
+test("browser-node convergence preserves an offline key rotation", async () => {
+  const controller = await read("../../packages/web/src/store/controller.ts");
+  expect(controller).toContain("acceptedIncoming");
+  expect(controller).toContain("remoteAt > localAt");
+  expect(controller).toContain("record.kind !== \"api_key\"");
+});
+
 test("inline and first-run connect use the item-addressed credential path", async () => {
   const connect = await read("../../packages/web/src/components/ProviderConnect.tsx");
   expect(connect).toContain('controller.setCredential(keyProvider, "default"');

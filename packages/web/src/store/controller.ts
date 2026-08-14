@@ -2508,7 +2508,7 @@ export class AppController {
       // account set so a node-less-created key reaches the newly enrolled node.
       const event = await this.awaitAck({ kind: "credentials.account.export" });
       const incoming = Array.isArray(event.entries)
-        ? event.entries.filter((entry): entry is { provider: string; label?: string; key: string } => Boolean(entry)
+        ? event.entries.filter((entry): entry is { provider: string; label?: string; key: string; updatedAt?: number | string } => Boolean(entry)
           && typeof (entry as { provider?: unknown }).provider === "string"
           && typeof (entry as { key?: unknown }).key === "string")
         : [];
@@ -2520,10 +2520,21 @@ export class AppController {
       // OAuth/reference items are node-recipient records. Delete any stale
       // browser API-key replica for the same identity so convergence can never
       // replace a newer subscription login with an old pasted key.
+      const localBefore = await this.ephemeralKeys.modelKeyEntries();
       for (const record of nodeRecords) if (record.kind !== "api_key") {
         await this.ephemeralKeys.removeModelKey(record.provider, record.label);
       }
-      await this.ephemeralKeys.importModelKeys(incoming);
+      // Pull-first convergence must not erase a key rotated while this browser
+      // was offline. Import only a strictly newer node copy (or a missing item),
+      // then the push below carries any newer browser copy to the node.
+      const acceptedIncoming = incoming.filter((entry) => {
+        const local = localBefore.find((candidate) => candidate.provider === entry.provider && candidate.label === (entry.label ?? "default"));
+        if (!local) return true;
+        const remoteAt = typeof entry.updatedAt === "number" ? entry.updatedAt : Date.parse(String(entry.updatedAt ?? ""));
+        const localAt = Date.parse(String(local.updatedAt ?? ""));
+        return Number.isFinite(remoteAt) && (!Number.isFinite(localAt) || remoteAt > localAt);
+      });
+      await this.ephemeralKeys.importModelKeys(acceptedIncoming);
       const accountKeys = (await this.ephemeralKeys.modelKeyEntries()).filter((entry) => entry.scope === "account");
       for (const { provider, label, key } of accountKeys) {
         if (nodeRecords.some((record) => record.provider === provider && record.label === label && record.kind !== "api_key")) continue;
