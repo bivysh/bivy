@@ -102,6 +102,7 @@ interface PiTuiLaunch {
   sessionsDir: string;
   piCommand: string;
   credentialOwner: "agent" | "bivy";
+  allowModelNetwork: boolean;
 }
 
 export interface PiRuntimeOptions {
@@ -113,6 +114,8 @@ export interface PiRuntimeOptions {
   sessionsDir: string;
   /** Agent-owned auth/config is used by packaged integrations; legacy callers may use Bivy's vault. */
   credentialOwner?: "agent" | "bivy";
+  /** Disable remote model-catalog refreshes for deterministic/offline callers. Defaults to true. */
+  allowModelNetwork?: boolean;
 }
 
 function toModelInfo(model: any, configured?: boolean): ModelInfo {
@@ -349,7 +352,16 @@ class PiSession implements RuntimeSession {
   /** Reload the projected models.json in-place so a live session immediately
    * sees custom endpoints added after that session was created. */
   async refreshModels(): Promise<void> {
-    await this.session.modelRuntime.refresh({ allowNetwork: true });
+    const controller = this.tui.allowModelNetwork ? new AbortController() : undefined;
+    const timeout = controller ? setTimeout(() => controller.abort(), 15_000) : undefined;
+    try {
+      await this.session.modelRuntime.refresh({
+        allowNetwork: this.tui.allowModelNetwork,
+        signal: controller?.signal,
+      });
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
   }
 
   getCurrentModel(): ModelInfo | undefined {
@@ -493,15 +505,16 @@ export class PiRuntime implements AgentRuntime {
 
   private async build(sessionManager: SessionManager, options: OpenSessionOptions): Promise<OpenSessionResult> {
     const { credsDir, piDir } = this.options;
+    const allowModelNetwork = this.options.allowModelNetwork !== false;
     // Packaged integration sessions read Pi's own auth/config files. The Bivy
     // credential path remains only for compatibility with explicit legacy use.
     const modelRuntime = this.options.credentialOwner === "agent"
       ? await ModelRuntime.create({
           authPath: path.join(piDir, "auth.json"),
           modelsPath: path.join(piDir, "models.json"),
-          allowModelNetwork: true,
+          allowModelNetwork,
         })
-      : await createPiModelRuntime({ credsDir, piDir, allowModelNetwork: true });
+      : await createPiModelRuntime({ credsDir, piDir, allowModelNetwork });
     const backgroundShells = new BackgroundShellTracker();
     const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, agentDir, sessionManager, sessionStartEvent }) => {
       const sessionId = sessionManager.getSessionId();
@@ -536,6 +549,7 @@ export class PiRuntime implements AgentRuntime {
       sessionsDir: this.options.sessionsDir,
       piCommand: resolvePiCommand(),
       credentialOwner: this.options.credentialOwner ?? "bivy",
+      allowModelNetwork,
     };
     return { session: new PiSession(runtime, tui, backgroundShells), warning: runtime.modelFallbackMessage };
   }
