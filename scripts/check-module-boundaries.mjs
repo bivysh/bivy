@@ -26,8 +26,9 @@ const globalEnforce = process.argv.includes("--enforce");
 /**
  * Each rule: files under `dir` (recursively) may not `import`/`export ... from`
  * any specifier matching one of `forbid` (substring match against the raw
- * specifier string). `enforce` promotes this rule's violations to failures even
- * without the global --enforce flag.
+ * specifier string). `allowOnly`, when present, rejects every specifier not in
+ * that exact allowlist. `enforce` promotes violations to failures even without
+ * the global --enforce flag.
  */
 const RULES = [
   {
@@ -126,6 +127,32 @@ const RULES = [
     note: "provider contracts depend on values; adapter and persistence implementations depend on the contracts.",
   },
   {
+    name: "ephemeral-provider-interpreters-only-depend-downward",
+    dir: "packages/core/src/ephemeral-providers",
+    allowOnly: [
+      "../base64.js",
+      "../ephemeral-provider-bootstrap.js",
+      "../ephemeral-catalog.js",
+      "../ephemeral-lifecycle.js",
+      "../ephemeral-machine.js",
+      "../ephemeral-provider-ports.js",
+      "../ephemeral-provider-utils.js",
+    ],
+    forbid: [
+      "../ephemeral.js",
+      "../ephemeral-storage",
+      "../ephemeral-launch-plan",
+      "../store",
+      "../local-store",
+      "../transport",
+      "../account",
+      "node:",
+      "react",
+    ],
+    enforce: true,
+    note: "provider interpreters may depend on provider ports, shared provider utilities, and values; never launch orchestration, persistence, stores, or transports.",
+  },
+  {
     name: "ephemeral-storage-does-not-import-providers",
     dir: "packages/core/src/ephemeral-storage.ts",
     forbid: ["./ephemeral-provider", "./ephemeral.js", "./transport", "./local-store"],
@@ -175,10 +202,11 @@ for (const rule of RULES) {
     for (const spec of specifiersOf(source)) {
       if (rule.allow?.some((a) => spec === a || spec.includes(a))) continue;
       const hit = rule.forbid.find((f) => spec.includes(f));
-      if (!hit) continue;
+      const outsideAllowlist = rule.allowOnly && !rule.allowOnly.includes(spec);
+      if (!hit && !outsideAllowlist) continue;
       // Best-effort line number for the specifier.
       const lineNo = lines.findIndex((l) => l.includes(`"${spec}"`) || l.includes(`'${spec}'`)) + 1;
-      violations.push({ file, lineNo, spec, hit });
+      violations.push({ file, lineNo, spec, hit: hit || "not in allowOnly" });
     }
   }
   const enforced = globalEnforce || rule.enforce;
