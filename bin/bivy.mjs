@@ -1796,6 +1796,21 @@ complete -c bivy -n '__fish_seen_subcommand_from run' -a '${agents.join(" ")}'`)
 // used to provide. The server side is still in place (multiplexer discovery +
 // `terminal.open.mux`, used today by the web app); this would just re-add a CLI
 // flag on top of it.
+// Native terminal command ids and governed runtime ids are intentionally not
+// identical for the two richer bridges. The ordinary CLI names remain the UX;
+// translate only on the --chat path before calling /api/session. Without this,
+// `bivy run claude|codex --chat` advertises a valid command in --help and then
+// fails with "Unknown agent" because the daemon expects the bridge ids.
+const GOVERNED_CHAT_AGENT_IDS = {
+  claude: "claude-code-sdk",
+  "claude-code": "claude-code-sdk",
+  codex: "codex-approvals",
+};
+
+function governedChatAgentId(id) {
+  return GOVERNED_CHAT_AGENT_IDS[String(id || "").toLowerCase()] || id;
+}
+
 async function cmdRun(args = []) {
   if (!(await ensureDeps())) process.exit(1);
   const { name, model, node, workspace, chat, noOpen, clone, rest } = extractRunFlags(args);
@@ -1830,7 +1845,7 @@ async function cmdRun(args = []) {
     try {
       const created = await localApi(config, "/api/session", {
         method: "POST",
-        body: JSON.stringify({ agent: agentId, ...(model ? { model: { provider: "", id: model } } : {}), ...(sessionWorkspace ? { workspace: sessionWorkspace } : {}) }),
+        body: JSON.stringify({ agent: governedChatAgentId(agentId), ...(model ? { model: { provider: "", id: model } } : {}), ...(sessionWorkspace ? { workspace: sessionWorkspace } : {}) }),
       });
       if (name) {
         await localApi(config, "/api/sessions/rename", {

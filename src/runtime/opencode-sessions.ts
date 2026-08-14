@@ -18,7 +18,7 @@
 // to the model — and `opencode session list` / `opencode export` read the same
 // snapshot, so those three rows are all a replay fork needs.
 //
-// IMPORTANT — best-effort, verified against opencode 1.18.13 (the version
+// IMPORTANT — best-effort, verified against opencode 1.18.18 (the version
 // pin in AGENT_PROFILES): the schema is version-variable, so the writer checks
 // for the `session`/`message`/`part` tables and throws (never corrupts) when a
 // node's OpenCode layout doesn't match. The fork engine calls this only as its
@@ -34,7 +34,7 @@ import { DatabaseSync } from "node:sqlite";
 import type { ForkHistoryMessage, ForkImportContext, RuntimeMessage } from "./types.js";
 
 /** Fallback when the DB has no session row to learn the running version from. */
-const FALLBACK_VERSION = "1.18.13";
+const FALLBACK_VERSION = "1.18.18";
 
 /** The project every OpenCode install seeds; used for fork sessions so no
  *  per-directory project row has to be synthesised. */

@@ -6,7 +6,7 @@ streaming, native resume, and a model picker populated from the providers you
 have actually signed into.
 
 - **Runtime id:** `opencode` · **Tier:** Supported · **In picker:** Yes
-- **Release-tested against:** OpenCode 1.18.13
+- **Release-tested against:** OpenCode 1.18.18
 
 ## Install
 

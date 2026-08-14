@@ -6,9 +6,9 @@ An agent is shown as **Supported** only when its active configured path matches 
 
 | Agent | Runtime id | Supported range | Platforms | Required mode | Certified capabilities |
 | --- | --- | --- | --- | --- | --- |
-| Claude Code | `claude-code-sdk` | `>=0.3.220 <=0.3.220` (pin `0.3.220`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
+| Claude Code | `claude-code-sdk` | `>=0.3.232 <=0.3.232` (pin `0.3.232`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
 | Codex (governed) | `codex-approvals` | `>=0.147.0 <=0.147.0` (pin `0.147.0`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
-| Pi | `pi` | `>=0.83.0 <=0.83.0` (pin `0.83.0`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
-| OpenCode ACP | `opencode` | `>=1.18.13 <=1.18.13` (pin `1.18.13`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
+| Pi | `pi` | `>=0.84.1 <=0.84.1` (pin `0.84.1`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
+| OpenCode ACP | `opencode` | `>=1.18.18 <=1.18.18` (pin `1.18.18`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
 
 Deterministic normal-CI fixtures exercise: probe-install, auth-handoff, first-turn, structured-streaming, approval, denial, cancellation, resume, attachments, token-refresh, malformed-output, version-drift. Live credentials are tested only by explicit workflow dispatch. Nightly latest-upstream checks report drift and never update this file or the production pins.

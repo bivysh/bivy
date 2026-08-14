@@ -16,7 +16,7 @@ const fullyGuaranteed = (over: Partial<SessionContractInput> = {}): SessionContr
   now: NOW,
   preview: false,
   agentId: "claude-code",
-  detectedVersion: "0.3.220",
+  detectedVersion: "0.3.232",
   versionSource: "reported",
   supportTier: "supported",
   certification: "release-tested",
