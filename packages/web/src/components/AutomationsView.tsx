@@ -56,6 +56,7 @@ import { WorkQueueSetupSheet, type SourceSetupFocus } from "./WorkQueueSetupShee
 import { GithubQueuePanel } from "./GithubQueue.js";
 import { RulesetsPanel } from "./Rulesets.js";
 import { QueueRoutingSection } from "./QueueRouting.js";
+import { HostedMachinesPanel } from "./HostedMachines.js";
 import { takeAutomationsSetupFocus } from "../automationsRoute.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import type { AutomationsSection } from "../router.js";
@@ -1108,6 +1109,20 @@ export function AutomationsView({
         {section === "queue" && (
           <>
             {cancelError && <div className="banner error inline">Could not cancel run: {cancelError}</div>}
+            {EPHEMERAL_MACHINES_ENABLED && (
+              <details className="runs-setup">
+                <summary>
+                  <span>
+                    <strong>Run setup &amp; routing</strong>
+                    <small>Choose where unattended work runs</small>
+                  </span>
+                  <span className="runs-setup-chevron" aria-hidden="true">›</span>
+                </summary>
+                <div className="runs-setup-body">
+                  <QueueRoutingSection hosted={sources.hosted} onConfigureCredentials={() => openSetup("work-queue")} />
+                </div>
+              </details>
+            )}
             <RunHistory
               runs={definitionRuns}
               definitions={items}
@@ -1118,20 +1133,18 @@ export function AutomationsView({
               onOpenRun={onOpenRun}
               onOpenSession={(sessionId) => { onOpenSession(sessionId); onClose(); }}
             />
-            <GithubQueuePanel
-              queue={githubQueue ?? null}
-              onRefresh={() => onRefreshGithubQueue?.()}
-              onPick={(id) => { onOpenSession(id); onClose(); }}
-              onOpenRun={onOpenRun}
-              onOpenGithubSettings={() => openSetup("github")}
-            />
-            {EPHEMERAL_MACHINES_ENABLED && (
-              <section className="autom-section">
-                <h2 className="autom-section-label">Queue routing</h2>
-                <p className="settings-hint">Where queued work runs by default when an automation doesn&apos;t pin a machine.</p>
-                <QueueRoutingSection hosted={sources.hosted} onConfigureCredentials={() => openSetup("work-queue")} />
-              </section>
-            )}
+            <section className="autom-section incoming-work">
+              <h2 className="autom-section-label">Incoming work</h2>
+              <GithubQueuePanel
+                queue={githubQueue ?? null}
+                onRefresh={() => onRefreshGithubQueue?.()}
+                onPick={(id) => { onOpenSession(id); onClose(); }}
+                onOpenRun={onOpenRun}
+                onOpenGithubSettings={() => openSetup("github")}
+                showHistory={false}
+              />
+            </section>
+            {EPHEMERAL_MACHINES_ENABLED && <HostedMachinesPanel />}
           </>
         )}
 

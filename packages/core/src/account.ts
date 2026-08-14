@@ -743,6 +743,20 @@ export interface HostedMachineSummary {
   purpose?: "queue-item" | "queue-default" | "ready-capacity";
   claimedAt?: string;
   milestones?: Record<string, string>;
+  /** Durable controller lifecycle phase from the attempt record (see
+   * HostedMachineAttemptState in the control plane) — distinct from the
+   * coarser `status` above, which is the provider's raw last-observed state. */
+  lifecycleState?: string;
+  /** "deleted" means the controller is actively driving this machine toward
+   * teardown (TTL/boot-deadline expiry, an abandoned create, or a force-destroy
+   * request) — surfaced so the UI can show "tearing down" rather than a stale
+   * running/claimed phase while that convergence is still in flight. */
+  desiredState?: "active" | "deleted";
+  observedState?: string;
+  /** Next moment the reconciler will force a transition (boot timeout, or TTL
+   * + grace) if nothing else happens — the deadline to show next to a phase. */
+  deadlineAt?: string;
+  lastError?: string;
 }
 
 function coerceHostedStatus(d: any): HostedProvisioningStatus {

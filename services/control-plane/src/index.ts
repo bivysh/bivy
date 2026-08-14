@@ -8,7 +8,7 @@ import express, { type Request, type Response, type NextFunction } from "express
 import Stripe from "stripe";
 import webpush from "web-push";
 import { providerCredentialFingerprint, type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, type AutomationRun, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
-import { maybeAutoProvision, planAutoProvision, hostedExecutionReadiness, mintHostedInstallationToken, reapSettledHostedMachine, reconcileAllHostedMachines, reconcileAllReadyCapacity, validateHostedProviderToken, markHostedMachineMilestone, EPHEMERAL_MILESTONES, ephemeralMachinesEnabled } from "./ephemeral-provisioner.js";
+import { maybeAutoProvision, planAutoProvision, hostedExecutionReadiness, mintHostedInstallationToken, reapSettledHostedMachine, reconcileAllHostedMachines, reconcileAllReadyCapacity, sweepAllOrphanProviderResources, validateHostedProviderToken, markHostedMachineMilestone, EPHEMERAL_MILESTONES, ephemeralMachinesEnabled } from "./ephemeral-provisioner.js";
 import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecret } from "./hosted-crypto.js";
 import { listAppInstallations, listInstallationRepositories } from "./hosted-github-auth.js";
 import { correlateHostedSessions } from "./hosted-correlation.js";
@@ -458,7 +458,12 @@ setInterval(pruneExpiredAuthTokens, 60 * 60_000).unref();
 // even when no new work arrives and the runner never reports /node/settled.
 // Cleanup deliberately ignores the launch feature flag: an emergency kill switch
 // must stop new spend without disabling deletion of resources already billing.
-const HOSTED_MACHINE_RECONCILE_MS = Math.max(60_000, Number(process.env.HOSTED_MACHINE_RECONCILE_MS) || 5 * 60_000);
+// Continuous convergence: this now runs on a short interval (default 60s, was
+// 5 minutes) so a create that never joins or a runner past TTL is observed and
+// destroyed promptly instead of waiting out a long, fixed sweep window — see
+// docs/ephemeral-lifecycle-review.md P1 "tracked state is not a convergent
+// controller model". Bounded to per-account tracked machines, which is small.
+const HOSTED_MACHINE_RECONCILE_MS = Math.max(60_000, Number(process.env.HOSTED_MACHINE_RECONCILE_MS) || 60_000);
 async function reconcileHostedMachineFleet() {
   try {
     const result = await reconcileAllHostedMachines(store, provisionEnv());
@@ -475,6 +480,28 @@ async function reconcileHostedMachineFleet() {
 }
 void reconcileHostedMachineFleet();
 setInterval(reconcileHostedMachineFleet, HOSTED_MACHINE_RECONCILE_MS).unref();
+
+// Discover-based orphan recovery (docs/ephemeral-lifecycle-review.md P1
+// "deletion needs discovery, not only a remembered id"): the one failure the
+// fast convergence sweep above can't catch is tracking itself being lost, so
+// this asks each provider directly for everything tagged as an account's and
+// reconciles anything neither the legacy inventory nor any attempt row still
+// knows about. Runs on its own, coarser interval — `discover` is a heavier,
+// multi-call provider operation with no business running every 60s — and
+// visits every hosted-enabled account, not only ones with something tracked.
+const HOSTED_ORPHAN_SWEEP_MS = Math.max(60_000, Number(process.env.HOSTED_ORPHAN_SWEEP_MS) || 5 * 60_000);
+async function sweepHostedOrphans() {
+  try {
+    const result = await sweepAllOrphanProviderResources(store, provisionEnv());
+    if (result.found || result.failed) {
+      console.log(`[hosted-orphan-sweep] accounts=${result.accounts} found=${result.found} reaped=${result.reaped} failed=${result.failed}`);
+    }
+  } catch (error) {
+    console.error("[hosted-orphan-sweep] account scan failed:", error);
+  }
+}
+void sweepHostedOrphans();
+setInterval(sweepHostedOrphans, HOSTED_ORPHAN_SWEEP_MS).unref();
 
 function securityHeaders(_req: Request, res: Response, next: NextFunction) {
   res.setHeader("X-Content-Type-Options", "nosniff");
@@ -3327,7 +3354,16 @@ app.get("/account/hosted-machines", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const machines = await store.getHostedMachines(client.accountId);
-  res.json(machines.map((m) => ({
+  // Join in the durable attempt for lifecycle fields the legacy inventory row
+  // doesn't carry — phase, deadline, last provider-observed status, and the
+  // last error, so the PWA can show WHY a machine is stuck rather than just
+  // that it exists. Best-effort: a missing/unreadable attempt just omits them.
+  const machinesWithAttempts = await Promise.all(machines.map(async (m) => {
+    const attemptId = typeof m.attemptId === "string" ? m.attemptId : "";
+    const attempt = attemptId ? await store.getHostedMachineAttempt(client.accountId, attemptId).catch(() => undefined) : undefined;
+    return { m, attempt };
+  }));
+  res.json(machinesWithAttempts.map(({ m, attempt }) => ({
     id: typeof m.id === "string" ? m.id : "",
     nodeId: typeof m.nodeId === "string" ? m.nodeId : undefined,
     name: typeof m.name === "string" ? m.name : undefined,
@@ -3341,6 +3377,11 @@ app.get("/account/hosted-machines", asyncHandler(async (req, res) => {
     purpose: m.purpose === "queue-item" || m.purpose === "queue-default" || m.purpose === "ready-capacity" ? m.purpose : undefined,
     claimedAt: typeof m.claimedAt === "string" ? m.claimedAt : undefined,
     milestones: m.milestones && typeof m.milestones === "object" ? m.milestones : undefined,
+    lifecycleState: attempt?.state,
+    desiredState: attempt?.desiredState,
+    observedState: attempt?.observedState,
+    deadlineAt: attempt?.deadlineAt,
+    lastError: attempt?.lastError,
   })));
 }));
 

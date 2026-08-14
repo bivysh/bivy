@@ -72,6 +72,7 @@ export function GithubQueuePanel({
   onPick,
   onOpenRun,
   onOpenGithubSettings,
+  showHistory = true,
 }: {
   queue: GithubQueueItem[] | null;
   onRefresh: () => void;
@@ -80,6 +81,9 @@ export function GithubQueuePanel({
    *  the Run id (both are the same work_items record). */
   onOpenRun?: (runId: string) => void;
   onOpenGithubSettings: () => void;
+  /** The Runs destination already has canonical RunHistory. Keep the legacy
+   * session/report projections available for standalone queue consumers only. */
+  showHistory?: boolean;
 }) {
   const { sessions, activeSessionId, prRefreshAllResult, runtimes } = useAppState();
   const canQuery = !controller.direct;
@@ -450,6 +454,7 @@ export function GithubQueuePanel({
           </div>
         )}
 
+        {showHistory && <>
         <div className="queue-head">
           <h4 className="settings-subhead">Sessions</h4>
           <div className="queue-head-actions">
@@ -508,6 +513,8 @@ export function GithubQueuePanel({
             )}
           </>
         )}
+
+        </>}
 
         {canQuery && workQueueEnabled !== false && (
           <>
@@ -691,7 +698,7 @@ export function GithubQueuePanel({
           </>
         )}
 
-        {canQuery && reports.length > 0 && (
+        {showHistory && canQuery && reports.length > 0 && (
           <>
             <div className="queue-head"><h4 className="settings-subhead">Run details</h4></div>
             {cancelRun && (

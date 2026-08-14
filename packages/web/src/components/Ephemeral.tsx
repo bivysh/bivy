@@ -65,7 +65,9 @@ export function EphemeralSheet({ onClose, firstRun = false }: { onClose: () => v
                 meta={p.blurb}
                 right={k?.configured
                   ? <span className="chip ok">Connected</span>
-                  : <span className={`chip${p.maturity === "experimental" ? " warn" : ""}`}>{p.maturity === "experimental" ? "Experimental" : "Stable"}</span>}
+                  : p.hostedOnly
+                    ? <span className="chip warn">Hosted only</span>
+                    : <span className={`chip${p.maturity === "experimental" ? " warn" : ""}`}>{p.maturity === "experimental" ? "Experimental" : "Stable"}</span>}
                 onClick={() => setProvider(p.id)}
               />
             );
@@ -131,6 +133,15 @@ function ProviderConnectPanel({ providerId, onKeysChanged, onDone }: { providerI
 
   return (
     <div className="settings-form">
+      {catalog.hostedOnly && (
+        <p className="muted small warn-text">
+          {catalog.name} can't be launched from this device: powering off its guest doesn't stop billing, so a
+          browser-held token isn't enough — only hosted (control-plane) provisioning, which keeps independent
+          deletion authority, can launch it. You can still connect a token below to validate it, but "Use this
+          profile" will refuse to launch. Turn on hosted execution in Settings → Automations to actually run on
+          {" "}{catalog.name}.
+        </p>
+      )}
       {!hasToken ? (
         <>
           <p className="muted">{catalog.blurb}</p>
@@ -160,7 +171,9 @@ function ProviderConnectPanel({ providerId, onKeysChanged, onDone }: { providerI
             </div>
           )}
           <div className="row-actions">
-            <button className="btn primary" disabled={busy} onClick={useRunner}>{busy ? "…" : "Use this profile"}</button>
+            <button className="btn primary" disabled={busy || catalog.hostedOnly} onClick={useRunner}>
+              {busy ? "…" : catalog.hostedOnly ? "Device launch unavailable" : "Use this profile"}
+            </button>
             <button
               className="btn danger-ghost"
               onClick={() => setConfirm({
