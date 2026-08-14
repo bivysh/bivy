@@ -4,11 +4,12 @@ import { randomUUID, randomBytes } from "node:crypto";
 import pg from "pg";
 import { anyNodeEligible } from "@bivy/core";
 import { encryptSecret, decryptSecret, isSecretEnvelope, type SecretEnvelope } from "./hosted-crypto.js";
+import { PostgresDatabaseContext } from "./postgres-database.js";
 import {
   type Account,
   type DeviceLoginStatus,
   type Entitlements,
-  type MeshStore,
+  type ControlPlaneStore,
   type NodeRecord,
   type NodeProviderSummary,
   type PairedDeviceInfo,
@@ -95,8 +96,8 @@ const workLeaseExpiry = (): string => new Date(Date.now() + WORK_LEASE_MS).toISO
  * account-vault ciphertext for cross-node auth. All bearer tokens are stored hashed
  * (SHA-256); raw tokens are returned to the caller exactly once at creation.
  */
-export class PostgresStore implements MeshStore {
-  private pool: pg.Pool;
+export class PostgresStore implements ControlPlaneStore {
+  private readonly database: PostgresDatabaseContext;
 
   // `pool` is an optional injection seam: production passes only a
   // connectionString and we build a real pg.Pool; tests can hand in an
@@ -111,51 +112,11 @@ export class PostgresStore implements MeshStore {
     // (instances x DATABASE_POOL_MAX) under Postgres `max_connections`, or
     // front Postgres with PgBouncer (see docs/scaling.md).
     const max = Math.max(Number(process.env.DATABASE_POOL_MAX) || 10, 1);
-    this.pool = pool ?? new pg.Pool({ connectionString, max });
-    // A pg.Pool emits 'error' when an *idle* pooled connection fails on its own
-    // — the managed database reaping idle connections, a failover/restart, or a
-    // network blip. node-postgres requires a listener here: with none attached,
-    // that idle-client error escalates to an uncaught exception and takes the
-    // whole process down. A crashed control plane means every request (including
-    // POST /client/relay-ticket) returns 502 Bad Gateway until the container
-    // restarts — the exact intermittent-502 symptom this guards against. The pool
-    // discards the dead connection and reconnects on the next query, so logging
-    // (not crashing) is the correct response.
-    this.pool.on("error", (err) => {
-      console.error("Postgres idle client error (pool will reconnect):", err.message);
-    });
+    this.database = new PostgresDatabaseContext(pool ?? new pg.Pool({ connectionString, max }));
   }
 
-  // Errors that happen while *establishing* a connection — before any SQL is
-  // sent — so the query provably never ran and retrying is safe. A transient DNS
-  // hiccup (getaddrinfo EAI_AGAIN, the exact error that turned relay-ticket mint
-  // and GitHub sign-in into intermittent 500s), a refused connection during a
-  // database restart/failover, or an unresolved host all land here. We
-  // deliberately exclude mid-query drops (ECONNRESET / "Connection terminated"):
-  // those can leave a non-idempotent write half-applied, so we surface them
-  // rather than risk double-applying.
-  private static readonly RETRYABLE_CONNECT_CODES = new Set(["EAI_AGAIN", "ENOTFOUND", "ECONNREFUSED"]);
-
-  private isRetryable(err: unknown): boolean {
-    const code = (err as { code?: string })?.code;
-    return typeof code === "string" && PostgresStore.RETRYABLE_CONNECT_CODES.has(code);
-  }
-
-  // Run a pooled query, retrying a couple of times with backoff when the pool
-  // fails to reach Postgres at connect time. Turns a brief network/DNS blip into
-  // a successful request instead of a user-facing 500.
-  private async query(text: string, params?: unknown[]): Promise<pg.QueryResult> {
-    const maxRetries = 2;
-    for (let attempt = 0; ; attempt++) {
-      try {
-        return await this.pool.query(text, params as unknown[] | undefined);
-      } catch (err) {
-        if (attempt >= maxRetries || !this.isRetryable(err)) throw err;
-        const backoffMs = 100 * 2 ** attempt;
-        console.warn(`Postgres connect error (retry ${attempt + 1}/${maxRetries} in ${backoffMs}ms):`, (err as Error).message);
-        await new Promise((resolve) => setTimeout(resolve, backoffMs));
-      }
-    }
+  private query(text: string, params?: unknown[]): Promise<pg.QueryResult> {
+    return this.database.query(text, params);
   }
 
   async init() {
@@ -788,13 +749,13 @@ export class PostgresStore implements MeshStore {
   }
 
   async close() {
-    await this.pool.end();
+    await this.database.end();
   }
 
   // Cheapest possible round-trip to confirm the pool can reach Postgres. Throws
   // (surfacing the connection error) when the database is unreachable.
   async ping() {
-    await this.pool.query("SELECT 1");
+    await this.database.query("SELECT 1");
   }
 
   // Aggregate row counts for the monitoring dashboard. Six cheap COUNT/GROUP BY
@@ -999,9 +960,8 @@ export class PostgresStore implements MeshStore {
   }
 
   async registerPairedDevice(accountId: string, publicKeyB64: string, label = "Device"): Promise<void> {
-    const client = await this.pool.connect();
+    const client = await this.database.beginTransaction();
     try {
-      await client.query("BEGIN");
       const existing = await client.query(`SELECT account_id FROM paired_devices WHERE public_key_b64 = $1 FOR UPDATE`, [publicKeyB64]);
       const current = existing.rows[0];
 
@@ -1017,9 +977,9 @@ export class PostgresStore implements MeshStore {
          ON CONFLICT (public_key_b64) DO UPDATE SET account_id = $2, label = $3, updated_at = now()`,
         [publicKeyB64, accountId, label.slice(0, 80)],
       );
-      await client.query("COMMIT");
+      await client.commit();
     } catch (error) {
-      await client.query("ROLLBACK");
+      await client.rollback();
       throw error;
     } finally {
       client.release();
@@ -1044,9 +1004,8 @@ export class PostgresStore implements MeshStore {
   }
 
   async removePairedDevice(accountId: string, publicKeyB64: string): Promise<boolean> {
-    const client = await this.pool.connect();
+    const client = await this.database.beginTransaction();
     try {
-      await client.query("BEGIN");
       const result = await client.query(
         `DELETE FROM paired_devices WHERE account_id = $1 AND public_key_b64 = $2`,
         [accountId, publicKeyB64],
@@ -1059,10 +1018,10 @@ export class PostgresStore implements MeshStore {
         await client.query(`DELETE FROM device_vault_key_requests WHERE account_id = $1 AND device_pub = $2`, [accountId, publicKeyB64]);
         await client.query(`UPDATE device_vaults SET key_generation = key_generation + 1, updated_at = now() WHERE account_id = $1`, [accountId]);
       }
-      await client.query("COMMIT");
+      await client.commit();
       return (result.rowCount ?? 0) > 0;
     } catch (error) {
-      await client.query("ROLLBACK");
+      await client.rollback();
       throw error;
     } finally {
       client.release();
@@ -1142,9 +1101,8 @@ export class PostgresStore implements MeshStore {
     const enrollmentToken = `enr_${randomBytes(32).toString("base64url")}`;
     const tokenHash = hashToken(enrollmentToken);
 
-    const client = await this.pool.connect();
+    const client = await this.database.beginTransaction();
     try {
-      await client.query("BEGIN");
       const existing = await client.query(`SELECT * FROM nodes WHERE id = $1 FOR UPDATE`, [nodeId]);
       const current = existing.rows[0] ? mapNode(existing.rows[0]) : undefined;
       // Names route work, so keep them unique per account — auto-suffix a collision.
@@ -1176,11 +1134,11 @@ export class PostgresStore implements MeshStore {
          RETURNING *`,
         [nodeId, accountId, safeName, tokenHash],
       );
-      await client.query("COMMIT");
+      await client.commit();
       const { enrollmentTokenHash: _h, ...node } = mapNode(rows[0]);
       return { node, enrollmentToken, created: !current };
     } catch (error) {
-      await client.query("ROLLBACK");
+      await client.rollback();
       throw error;
     } finally {
       client.release();
@@ -1241,12 +1199,11 @@ export class PostgresStore implements MeshStore {
 
   async setNodeName(nodeId: string, name: string): Promise<NodeRecord | undefined> {
     const clean = cleanNodeName(name);
-    const client = await this.pool.connect();
+    const client = await this.database.beginTransaction();
     try {
-      await client.query("BEGIN");
       const node = (await client.query(`SELECT account_id, name FROM nodes WHERE id = $1 FOR UPDATE`, [nodeId])).rows[0];
       if (!node) {
-        await client.query("ROLLBACK");
+        await client.rollback();
         return undefined;
       }
       // Reject a rename to a name another node on the account already holds.
@@ -1275,10 +1232,10 @@ export class PostgresStore implements MeshStore {
           [node.account_id, prevName, clean],
         );
       }
-      await client.query("COMMIT");
+      await client.commit();
       return rows[0] ? mapNode(rows[0]) : undefined;
     } catch (error) {
-      await client.query("ROLLBACK");
+      await client.rollback();
       throw error;
     } finally {
       client.release();
@@ -1286,9 +1243,8 @@ export class PostgresStore implements MeshStore {
   }
 
   async removeNode(accountId: string, nodeId: string): Promise<boolean> {
-    const client = await this.pool.connect();
+    const client = await this.database.beginTransaction();
     try {
-      await client.query("BEGIN");
       // Clear any GitHub App hook this node was serving first, so a removed node
       // never leaves a stale "connected" behind (the ghost delete/reinstall left).
       await client.query(
@@ -1318,10 +1274,10 @@ export class PostgresStore implements MeshStore {
         `DELETE FROM nodes WHERE id = $1 AND account_id = $2`,
         [nodeId, accountId],
       );
-      await client.query("COMMIT");
+      await client.commit();
       return (rowCount ?? 0) > 0;
     } catch (error) {
-      await client.query("ROLLBACK");
+      await client.rollback();
       throw error;
     } finally {
       client.release();
@@ -1329,10 +1285,9 @@ export class PostgresStore implements MeshStore {
   }
 
   async replaceNodeSessions(accountId: string, nodeId: string, sessions: SessionAdvert[]): Promise<number> {
-    const client = await this.pool.connect();
+    const client = await this.database.beginTransaction();
     let newRunStarts = 0;
     try {
-      await client.query("BEGIN");
       // Only touch the index if the node belongs to this account.
       const owns = await client.query(`SELECT 1 FROM nodes WHERE id = $1 AND account_id = $2`, [nodeId, accountId]);
       if (owns.rowCount) {
@@ -1411,9 +1366,9 @@ export class PostgresStore implements MeshStore {
           );
         }
       }
-      await client.query("COMMIT");
+      await client.commit();
     } catch (error) {
-      await client.query("ROLLBACK");
+      await client.rollback();
       throw error;
     } finally {
       client.release();
@@ -1422,10 +1377,9 @@ export class PostgresStore implements MeshStore {
   }
 
   async upsertNodeSession(accountId: string, nodeId: string, session: SessionAdvert): Promise<boolean> {
-    const client = await this.pool.connect();
+    const client = await this.database.beginTransaction();
     let runStarted = false;
     try {
-      await client.query("BEGIN");
       // Only touch the index if the node belongs to this account (mirrors
       // replaceNodeSessions' ownership fence).
       const owns = await client.query(`SELECT 1 FROM nodes WHERE id = $1 AND account_id = $2`, [nodeId, accountId]);
@@ -1480,9 +1434,9 @@ export class PostgresStore implements MeshStore {
           [accountId, session.sessionId],
         );
       }
-      await client.query("COMMIT");
+      await client.commit();
     } catch (error) {
-      await client.query("ROLLBACK");
+      await client.rollback();
       throw error;
     } finally {
       client.release();
@@ -1920,9 +1874,8 @@ export class PostgresStore implements MeshStore {
   }
 
   async setModelAuthVault(accountId: string, nodeId: string, ciphertext: string, rotated = false): Promise<ModelAuthVault> {
-    const client = await this.pool.connect();
+    const client = await this.database.beginTransaction();
     try {
-      await client.query("BEGIN");
       // Serialize all generation writers on the account row. The lock makes the
       // check + generation flip atomic: exactly one survivor can consume a
       // rotation flag, and a stale-key writer cannot clear it accidentally.
@@ -1959,10 +1912,10 @@ export class PostgresStore implements MeshStore {
           [accountId, nodeId],
         );
       }
-      await client.query("COMMIT");
+      await client.commit();
       return { ciphertext: rows[0].ciphertext, updatedAt: new Date(rows[0].updated_at).toISOString(), updatedByNodeId: rows[0].updated_by_node_id, needsRotation: Boolean(rows[0].needs_rotation) };
     } catch (error) {
-      await client.query("ROLLBACK");
+      await client.rollback();
       throw error;
     } finally {
       client.release();
@@ -2793,9 +2746,8 @@ export class PostgresStore implements MeshStore {
   }
 
   async cancelAutomationRun(accountId: string, id: string): Promise<CancelAutomationRunResult | undefined> {
-    const client = await this.pool.connect();
+    const client = await this.database.beginTransaction();
     try {
-      await client.query("BEGIN");
       // The account predicate makes unknown and cross-account ids identical. The
       // row lock serializes cancellation with another cancellation/transition,
       // so the status, bounded event, completion timestamp, and lease release
@@ -2806,16 +2758,16 @@ export class PostgresStore implements MeshStore {
       );
       const current = selected.rows[0];
       if (!current) {
-        await client.query("COMMIT");
+        await client.commit();
         return undefined;
       }
       const previousStatus = current.status as AutomationRunStatus;
       if (previousStatus === "cancelled" || previousStatus === "succeeded" || previousStatus === "failed") {
-        await client.query("COMMIT");
+        await client.commit();
         return { run: mapAutomationRun(current), previousStatus, transitioned: false };
       }
       if (!["pending", "claimed", "running", "waiting", "needs_attention"].includes(previousStatus)) {
-        await client.query("COMMIT");
+        await client.commit();
         return { run: mapAutomationRun(current), previousStatus, transitioned: false };
       }
       const at = new Date().toISOString();
@@ -2833,10 +2785,10 @@ export class PostgresStore implements MeshStore {
       // Keep claimed_by_node_id as a privacy-safe ownership tombstone. It lets
       // only that node's heartbeat distinguish cancellation from a generic lost
       // lease while the actual renewable lease above is always cleared.
-      await client.query("COMMIT");
+      await client.commit();
       return { run: mapAutomationRun(updated.rows[0]), previousStatus, transitioned: true };
     } catch (error) {
-      await client.query("ROLLBACK").catch(() => {});
+      await client.rollback().catch(() => {});
       throw error;
     } finally {
       client.release();
@@ -2844,15 +2796,14 @@ export class PostgresStore implements MeshStore {
   }
 
   async retryAutomationRun(accountId: string, id: string): Promise<RetryAutomationRunResult | undefined> {
-    const client = await this.pool.connect();
+    const client = await this.database.beginTransaction();
     try {
-      await client.query("BEGIN");
       const selected = await client.query(
         `SELECT * FROM work_items WHERE account_id = $1 AND id = $2 FOR UPDATE`,
         [accountId, id],
       );
       const current = selected.rows[0];
-      if (!current) { await client.query("COMMIT"); return undefined; }
+      if (!current) { await client.commit(); return undefined; }
       const checks = Array.isArray(current.checks) ? current.checks : [];
       const output = current.output ?? {};
       const events = Array.isArray(current.events) ? current.events : [];
@@ -2862,13 +2813,13 @@ export class PostgresStore implements MeshStore {
       const ambiguousSuccess = current.status === "succeeded" && !failedCheck && !explicitNoChanges && !hasArtifact;
       const eligible = current.status === "failed" || failedCheck || ambiguousSuccess;
       if (!eligible) {
-        await client.query("COMMIT");
+        await client.commit();
         return { run: mapAutomationRun(current), transitioned: false, reason: "not_retryable" };
       }
       const attempt = Math.max(1, Number(current.attempt ?? 1));
       const maxAttempts = Number(current.max_attempts);
       if (Number.isFinite(maxAttempts) && maxAttempts > 0 && attempt >= maxAttempts) {
-        await client.query("COMMIT");
+        await client.commit();
         return { run: mapAutomationRun(current), transitioned: false, reason: "attempt_limit" };
       }
       if (current.collapse_key) {
@@ -2877,7 +2828,7 @@ export class PostgresStore implements MeshStore {
           [accountId, current.collapse_key, id],
         );
         if (pending.rows[0]) {
-          await client.query("COMMIT");
+          await client.commit();
           return { run: mapAutomationRun(current), transitioned: false, reason: "not_retryable" };
         }
       }
@@ -2891,10 +2842,10 @@ export class PostgresStore implements MeshStore {
          WHERE account_id = $1 AND id = $2 RETURNING *`,
         [accountId, id, attempt + 1, JSON.stringify([...events, retryEvent].slice(-100))],
       );
-      await client.query("COMMIT");
+      await client.commit();
       return { run: mapAutomationRun(updated.rows[0]), transitioned: true };
     } catch (error) {
-      await client.query("ROLLBACK").catch(() => {});
+      await client.rollback().catch(() => {});
       throw error;
     } finally {
       client.release();

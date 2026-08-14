@@ -6,7 +6,7 @@ import type { SecretEnvelope } from "./hosted-crypto.js";
 /**
  * Control plane data store.
  *
- * `MeshStore` is the async interface the service depends on. There is ONE
+ * Cohesive repository ports define the persistence capabilities consumers depend on.
  * implementation, `PostgresStore` (postgres-store.ts): durable against a real
  * Postgres when `DATABASE_URL` is set, and backed by an in-memory Postgres
  * (pg-mem, see pg-mem-store.ts) for dev/tests otherwise. Selected by `createStore()`
@@ -1193,7 +1193,7 @@ export interface UsageMetrics {
   sessionsByStatus: Record<string, number>;
 }
 
-export interface MeshStore {
+export interface StoreLifecycle {
   init(): Promise<void>;
   // Lightweight liveness check for the backing store. Resolves when the store is
   // reachable, rejects when it is not (e.g. Postgres unreachable). Used by the
@@ -1205,6 +1205,9 @@ export interface MeshStore {
   // UsageMetrics above.
   usageMetrics(): Promise<UsageMetrics>;
 
+}
+
+export interface AccountAuthRepository {
   // Accounts & auth
   findOrCreateAccount(email: string): Promise<Account>;
   getAccount(accountId: string): Promise<Account | undefined>;
@@ -1245,6 +1248,9 @@ export interface MeshStore {
   createRelayTicket(input: { role: RelayRole; accountId: string; nodeId: string | null; ttlMs?: number }): Promise<string>;
   consumeRelayTicket(token: string | null): Promise<RelayTicket | undefined>;
 
+}
+
+export interface BillingRepository {
   // Billing
   setPlan(accountId: string, plan: Plan, stripeCustomerId?: string): Promise<void>;
   // Records full subscription metadata from a Stripe webhook (plan, status, and
@@ -1253,6 +1259,9 @@ export interface MeshStore {
   setSubscriptionState(accountId: string, state: SubscriptionState): Promise<void>;
   entitlements(accountId: string): Promise<Entitlements>;
 
+}
+
+export interface NodeRepository {
   // Nodes
   listNodes(accountId: string): Promise<NodeRecord[]>;
   enrollNode(
@@ -1273,6 +1282,9 @@ export interface MeshStore {
   // setNodeProviders. Never verified; a stale/offline declaration is kept as-is.
   setNodeCapabilities(nodeId: string, capabilities: string[]): Promise<void>;
 
+}
+
+export interface SessionIndexRepository {
   // Session index (cross-node unified view). A node replaces its full current
   // session list; clients read the merged list for the account.
   // Returns how many session ids were first observed (and therefore became new
@@ -1321,6 +1333,9 @@ export interface MeshStore {
     expectedEpoch: number,
   ): Promise<SessionOwnership | undefined>;
 
+}
+
+export interface NotificationRepository {
   // Web Push subscriptions for hosted PWA notifications.
   upsertPushSubscription(accountId: string, endpoint: string, subscription: unknown): Promise<void>;
   removePushSubscription(accountId: string, endpoint: string): Promise<void>;
@@ -1332,6 +1347,9 @@ export interface MeshStore {
   getNotificationPreferences(accountId: string): Promise<NotificationPreferences>;
   setNotificationPreferences(accountId: string, patch: Partial<NotificationPreferences>): Promise<NotificationPreferences>;
 
+}
+
+export interface EphemeralConfigurationRepository {
   // Per-account ephemeral-queue-default preference (issue #532): whether/how a
   // signed-in device should auto-provision an ephemeral runner for the GitHub
   // work queue when nothing persistent is online. Same getter/setter shape as
@@ -1347,6 +1365,9 @@ export interface MeshStore {
   getQueueRouting(accountId: string): Promise<QueueRouting>;
   setQueueRouting(accountId: string, routing: QueueRouting): Promise<QueueRouting>;
 
+}
+
+export interface HostedMachineRepository {
   // Hosted (control-plane-orchestrated) provisioning: per-account credentials +
   // enable flag, and a tracking list of machines the control plane launched
   // itself (for dedupe/teardown). Machines are stored as opaque JSONB records.
@@ -1384,6 +1405,9 @@ export interface MeshStore {
   appendHostedAudit(accountId: string, event: HostedAuditEvent): Promise<void>;
   listHostedAudit(accountId: string, limit?: number): Promise<HostedAuditEvent[]>;
 
+}
+
+export interface VaultRepository {
   // Account-wide model provider credentials, shared across enrolled nodes.
   getModelAuthVault(accountId: string): Promise<ModelAuthVault | undefined>;
   setModelAuthVault(accountId: string, nodeId: string, ciphertext: string, rotated?: boolean): Promise<ModelAuthVault>;
@@ -1411,6 +1435,9 @@ export interface MeshStore {
   listDeviceVaultKeyRequests(accountId: string, exceptDevicePublicKey: string): Promise<DeviceVaultKeyRequest[]>;
   setDeviceVaultWrappedKey(accountId: string, targetDevicePublicKey: string, wrappedByPublicKey: string, wrappedKey: string, generation?: number): Promise<DeviceVaultWrappedKeyRecord>;
 
+}
+
+export interface SessionStateRepository {
   // Durable E2E session snapshots for rebuild-resume (Gap B) — opaque ciphertext.
   getSessionSnapshot(accountId: string, sessionId: string): Promise<SessionSnapshotRecord | undefined>;
   setSessionSnapshot(accountId: string, sessionId: string, ciphertext: string): Promise<SessionSnapshotRecord>;
@@ -1444,6 +1471,9 @@ export interface MeshStore {
   getNodeRoomKeyEnc(accountId: string, nodeId: string): Promise<SecretEnvelope | undefined>;
   setNodeRoomKeyEnc(accountId: string, nodeId: string, enc: SecretEnvelope): Promise<void>;
 
+}
+
+export interface GithubAppVaultRepository {
   // GitHub App private-key vault (issue #88), per-app — see GithubAppVault above.
   // A node lists every app the account has a vault for (it may not hold all of
   // them locally yet) rather than asking per-app, so a newly opted-in node
@@ -1465,6 +1495,9 @@ export interface MeshStore {
     wrappedKey: string,
   ): Promise<GithubAppWrappedKey>;
 
+}
+
+export interface InboundHookRepository {
   // Inbound hooks (route a third-party webhook to an account) + work queue.
   createInboundHook(accountId: string, kind: string): Promise<InboundHook>;
   listInboundHooks(accountId: string, kind?: string): Promise<InboundHook[]>;
@@ -1521,7 +1554,9 @@ export interface MeshStore {
   deleteGithubAppHooks(accountId: string): Promise<number>;
   // Remove just one app's hooks (disconnecting a single app, leaving the rest).
   deleteGithubAppHooksForApp(accountId: string, appId: string): Promise<number>;
-  enqueueWorkItem(accountId: string, input: WorkItemInput): Promise<WorkItem>;
+}
+
+export interface AutomationRepository {
   createAutomationDefinition(accountId: string, input: Omit<AutomationDefinition, "id" | "accountId" | "createdAt" | "updatedAt">): Promise<AutomationDefinition>;
   updateAutomationDefinition(accountId: string, id: string, input: Partial<Omit<AutomationDefinition, "id" | "accountId" | "createdAt" | "updatedAt" | "lastScheduledAt">>): Promise<AutomationDefinition | undefined>;
   deleteAutomationDefinition(accountId: string, id: string): Promise<boolean>;
@@ -1560,6 +1595,10 @@ export interface MeshStore {
   // patch are appended to the run's existing history (bounded), never replacing
   // it. Returns undefined for an unknown run.
   appendRunEvidence(accountId: string, id: string, patch: RunEvidencePatch, expectedNodeId?: string): Promise<AutomationRun | undefined>;
+}
+
+export interface WorkQueueRepository {
+  enqueueWorkItem(accountId: string, input: WorkItemInput): Promise<WorkItem>;
   // Pending items a node may run: the account's items whose label the node serves
   // (a node serving "bivy" also serves "bivy/<self>"; pass the labels it accepts).
   listPendingWorkItems(accountId: string, labels: string[]): Promise<WorkItem[]>;
@@ -1624,3 +1663,24 @@ export interface MeshStore {
   // Returns how many were removed.
   clearPendingWorkItems(accountId: string): Promise<number>;
 }
+
+/**
+ * Complete persistence context used only at the application composition root and
+ * by the concrete Postgres adapter. Business consumers accept one or more of the
+ * narrow repository ports above instead of this aggregate.
+ */
+export interface ControlPlaneStore
+  extends StoreLifecycle,
+    AccountAuthRepository,
+    BillingRepository,
+    NodeRepository,
+    SessionIndexRepository,
+    NotificationRepository,
+    EphemeralConfigurationRepository,
+    HostedMachineRepository,
+    VaultRepository,
+    SessionStateRepository,
+    GithubAppVaultRepository,
+    InboundHookRepository,
+    AutomationRepository,
+    WorkQueueRepository {}
