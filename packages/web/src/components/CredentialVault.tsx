@@ -180,9 +180,23 @@ export function CredentialVault({ state }: { state: AppState }) {
     }
   };
 
+  const assign = async (preset: string, providerId: string, account: string, success: string) => {
+    setBusy(true); setError(null);
+    try {
+      await controller.setPresetMapping(preset, providerId, account);
+      setMessage(success);
+      controller.getCredentialPresets();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const remove = async (item: VaultItem) => {
     setBusy(true); setError(null);
     try {
+      if (state.localModels.some((model) => model.id === item.provider)) controller.removeLocalModel(item.provider);
       if (item.device) await controller.removeEphemeralModelKey(item.provider, item.label);
       if (item.record) await controller.removeCredential(item.provider, item.label);
       setConfirmDelete(null);
@@ -286,9 +300,9 @@ export function CredentialVault({ state }: { state: AppState }) {
       </div>
       {selected.record && <div className="row-actions">
         {selected.record.testable && <button className="btn" disabled={busy} onClick={async () => { setBusy(true); setError(null); const result = await controller.testCredential(selected.provider, selected.label).catch(() => ({ ok: false, at: Date.now(), reason: "network_error" })); setMessage(result.ok ? "Connection verified." : `Verification failed: ${result.reason || "unknown error"}.`); refresh(); setBusy(false); }}>Test connection</button>}
-        {count > 1 && !isDefault && <button className="btn" onClick={() => { controller.setPresetMapping("default", selected.provider, selected.label); setMessage("Now used by default."); setTimeout(() => controller.getCredentialPresets(), 150); }}>Use by default</button>}
-        {count > 1 && projectPreset && !usedByProject && <button className="btn" onClick={() => { controller.setPresetMapping(projectPreset, selected.provider, selected.label); setMessage(`Assigned to ${assignmentProject}.`); setTimeout(() => controller.getCredentialPresets(), 150); }}>Use for {assignmentProject}</button>}
-        {projectPreset && usedByProject && <button className="btn" onClick={() => { controller.setPresetMapping(projectPreset, selected.provider, ""); setMessage(`${assignmentProject} now uses the provider default.`); setTimeout(() => controller.getCredentialPresets(), 150); }}>Clear project assignment</button>}
+        {count > 1 && !isDefault && <button className="btn" disabled={busy} onClick={() => void assign("default", selected.provider, selected.label, "Now used by default.")}>Use by default</button>}
+        {count > 1 && projectPreset && !usedByProject && <button className="btn" disabled={busy} onClick={() => void assign(projectPreset, selected.provider, selected.label, `Assigned to ${assignmentProject}.`)}>Use for {assignmentProject}</button>}
+        {projectPreset && usedByProject && <button className="btn" disabled={busy} onClick={() => void assign(projectPreset, selected.provider, "", `${assignmentProject} now uses the provider default.`)}>Clear project assignment</button>}
         {selected.record.sync === "account" && selected.record.kind !== "reference" && <button className="btn" disabled={busy} onClick={async () => { setBusy(true); setError(null); try { await controller.setCredentialUnattended(selected.provider, selected.label, !selected.record!.unattended); setMessage(selected.record!.unattended ? "Unattended access revoked." : "Unattended access granted with separate hosted custody."); refresh(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); } }}>{selected.record.unattended ? "Revoke unattended access" : "Allow unattended runs"}</button>}
       </div>}
       {count > 1 && state.repos.length > 0 && <div>

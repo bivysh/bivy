@@ -2567,8 +2567,8 @@ export class AppController {
     this.send({ kind: "credentials.presets.setActive", active });
   }
   /** Point a provider at a label within a preset (empty label clears the mapping). */
-  setPresetMapping(preset: string, provider: string, label: string): void {
-    this.send({ kind: "credentials.presets.setMapping", preset, provider, label });
+  setPresetMapping(preset: string, provider: string, label: string): Promise<void> {
+    return this.awaitAck({ kind: "credentials.presets.setMapping", preset, provider, label }).then(() => undefined);
   }
 
   // --- Settings: local / custom model endpoints ---------------------------

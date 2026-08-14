@@ -2850,13 +2850,15 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
       relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
     }
   },
-  async "credentials.presets.setMapping"(msg) {
+  async "credentials.presets.setMapping"(msg, ctx) {
     try {
       setCredentialPresetMapping(credsDir, String(msg.preset ?? ""), String(msg.provider ?? ""), String(msg.label ?? ""));
       await refreshSessionAfterAuth();
       relay?.sendEvent({ type: "credentials.presets", presets: getCredentialPresets(credsDir) });
+      ctx.reply({ type: "credentials.presets.setMapping.ok", requestId: msg.requestId });
     } catch (error) {
-      relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.reply({ type: "credentials.presets.setMapping.error", requestId: msg.requestId, error: message });
     }
   },
   // --- Local / custom models (Bivy-owned registry; Pi is a projection). ---

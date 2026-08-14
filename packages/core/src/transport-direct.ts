@@ -571,15 +571,22 @@ export class DirectTransport implements Transport {
         case "credentials.presets.get":
           this.emitMerged("credentials.presets", await this.directApi("/api/auth/credential-assignments"));
           break;
-        case "credentials.presets.setMapping":
-          this.emitMerged(
-            "credentials.presets",
-            await this.directApi("/api/auth/credential-assignments", {
-              method: "POST",
-              body: JSON.stringify({ preset: obj.preset, provider: obj.provider, label: obj.label }),
-            }),
-          );
+        case "credentials.presets.setMapping": {
+          const requestId = String(obj.requestId ?? "");
+          try {
+            this.emitMerged(
+              "credentials.presets",
+              await this.directApi("/api/auth/credential-assignments", {
+                method: "POST",
+                body: JSON.stringify({ preset: obj.preset, provider: obj.provider, label: obj.label }),
+              }),
+            );
+            this.emit({ type: "credentials.presets.setMapping.ok", requestId });
+          } catch (error) {
+            this.emit({ type: "credentials.presets.setMapping.error", requestId, error: error instanceof Error ? error.message : String(error) });
+          }
           break;
+        }
         case "credentials.presets.setActive":
           this.emitMerged("credentials.presets", await this.directApi("/api/auth/credential-assignments/active", {
             method: "POST",
