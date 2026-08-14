@@ -83,6 +83,34 @@ const RULES = [
     enforce: true,
     note: "ephemeral lifecycle projections are data-in/data-out and import no storage, provider, transport, browser, or clock implementation.",
   },
+  {
+    name: "ephemeral-catalog-is-pure-data",
+    dir: "packages/core/src/ephemeral-catalog.ts",
+    forbid: ["./", "../", "node:", "@"],
+    enforce: true,
+    note: "provider identity and capability facts are standalone data, not adapter behavior.",
+  },
+  {
+    name: "ephemeral-machine-is-a-value",
+    dir: "packages/core/src/ephemeral-machine.ts",
+    forbid: ["./ephemeral-storage", "./ephemeral-provider", "./transport", "./account", "node:", "react"],
+    enforce: true,
+    note: "provider-neutral machine facts depend only on other value projections.",
+  },
+  {
+    name: "ephemeral-provider-ports-dont-import-effects",
+    dir: "packages/core/src/ephemeral-provider-ports.ts",
+    forbid: ["./ephemeral-storage", "./ephemeral-provider-adapters", "./ephemeral.js", "./transport", "./local-store"],
+    enforce: true,
+    note: "provider contracts depend on values; adapter and persistence implementations depend on the contracts.",
+  },
+  {
+    name: "ephemeral-storage-does-not-import-providers",
+    dir: "packages/core/src/ephemeral-storage.ts",
+    forbid: ["./ephemeral-provider", "./ephemeral.js", "./transport", "./local-store"],
+    enforce: true,
+    note: "device persistence composes value modules without knowing provider implementations or orchestration.",
+  },
 ];
 
 // Match the `from "spec"` clause of any import/export (including multi-line

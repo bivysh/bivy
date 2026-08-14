@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { describe, expect, it } from "vitest";
-import { ephemeralCatalogEntry } from "../src/ephemeral.js";
+import { ephemeralCatalogEntry } from "../src/ephemeral-catalog.js";
 
 describe("ephemeral provider positioning", () => {
   it.each(["aws", "hetzner", "fly"])("marks %s as stable BYO cloud", (id) => {
