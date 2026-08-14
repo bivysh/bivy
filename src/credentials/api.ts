@@ -6,10 +6,10 @@
 //
 // Deliberately Pi-FREE: every function here operates on Bivy's own encrypted
 // vault (credential-store.ts) with zero Pi involvement, so the service compiles
-// and tests without Pi. The one thing that legitimately comes from Pi — the
-// model-provider *catalog* (Bivy has none of its own) — is INJECTED:
-// `joinProviderCatalog` takes the catalog as a parameter, and the thin
-// `runtime/provider-catalog.ts` bridge supplies Pi's. See
+// and tests without Pi. Provider catalog data is likewise INJECTED:
+// `joinProviderCatalog` takes catalog data, and the thin
+// `runtime/provider-catalog.ts` bridge supplies Bivy's baseline overlaid with
+// any live runtime metadata. See
 // docs/credentials-service-plan.md §3.1.
 
 import type { StoredCredential } from "./types.js";
@@ -52,9 +52,9 @@ export interface ProviderAuthInfo {
 
 /**
  * A model provider from the catalog — the shape Bivy needs, injected so this
- * module never imports Pi. Structurally matches `pi-oauth`'s `PiProviderInfo`,
- * so the bridge can pass Pi's catalog straight through; a Bivy-owned catalog
- * later would satisfy the same shape.
+ * module never imports Pi. Structurally matches live runtime provider rows, so
+ * the bridge can overlay runtime metadata on Bivy's browser-safe baseline
+ * without coupling this credential domain to either source.
  */
 export interface ProviderCatalogEntry {
   id: string;
@@ -80,9 +80,11 @@ export async function joinProviderCatalog(
     id: provider.id,
     name: provider.name,
     oauth: provider.oauth,
-    configured: provider.configured,
+    // Baseline rows have no runtime status. A vault credential still makes
+    // them configured when Pi is unavailable or does not know the provider.
+    configured: provider.configured || infoById.has(provider.id),
     kind: infoById.get(provider.id)?.type,
-    source: provider.source,
+    source: provider.source ?? (infoById.has(provider.id) ? "stored" : undefined),
     expiresAt: infoById.get(provider.id)?.expiresAt,
   }));
 }
