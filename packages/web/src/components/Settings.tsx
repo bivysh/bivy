@@ -1392,9 +1392,8 @@ function EphemeralPanel() {
         <button className="btn primary" onClick={() => setView({ k: "add" })}>Add profile</button>
       </div>
       <p className="muted">
-        Reusable setups for temporary cloud servers in your own account — pick one in the machine menu when
-        you start a session. Compute is billed by your provider; Bivy adds no markup. The repo it works on
-        comes from the composer, not from here.
+        Reusable setups for temporary cloud servers in your own account. Compute is billed by your
+        provider — Bivy adds no markup.
       </p>
 
       {setups.length === 0 ? (
