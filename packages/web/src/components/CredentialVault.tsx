@@ -40,7 +40,10 @@ export function CredentialVault({ state }: { state: AppState }) {
   const [method, setMethod] = useState<"api_key" | "oauth" | "reference">("api_key");
   const [label, setLabel] = useState("");
   const [secret, setSecret] = useState("");
+  const [customBaseUrl, setCustomBaseUrl] = useState("");
+  const [customModels, setCustomModels] = useState("");
   const [availability, setAvailability] = useState<Availability>("account");
+  const [assignmentProject, setAssignmentProject] = useState(state.draftRepo ?? "");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -56,6 +59,7 @@ export function CredentialVault({ state }: { state: AppState }) {
     controller.listProviders();
     controller.listCredentialRecords();
     controller.getCredentialPresets();
+    controller.listRepos();
     void controller.listEphemeralModelKeys().then(setDeviceKeys).catch(() => setDeviceKeys([]));
   }, [state.currentNodeId]);
 
@@ -101,7 +105,7 @@ export function CredentialVault({ state }: { state: AppState }) {
   const providerCounts = useMemo(() => new Map(items.map((item) => [item.provider, items.filter((x) => x.provider === item.provider).length])), [items]);
 
   const resetAdd = (id = "") => {
-    setProvider(id); setMethod("api_key"); setLabel(""); setSecret(""); setAvailability("account"); setError(null); setMessage(null);
+    setProvider(id); setMethod("api_key"); setLabel(""); setSecret(""); setCustomBaseUrl(""); setCustomModels(""); setAvailability("account"); setError(null); setMessage(null);
   };
 
   const save = async () => {
@@ -111,6 +115,25 @@ export function CredentialVault({ state }: { state: AppState }) {
     if (method !== "oauth" && !secret.trim()) return;
     setBusy(true); setError(null); setMessage(null);
     try {
+      const catalogKnown = catalog.some((entry) => entry.id === id);
+      if (!catalogKnown) {
+        if (state.status !== "online") throw new Error("Connect a machine to configure a custom model endpoint.");
+        if (!customBaseUrl.trim()) throw new Error("A custom provider needs a base URL.");
+        await controller.saveLocalModel({
+          providerId: id,
+          name: id,
+          baseUrl: customBaseUrl.trim(),
+          api: "openai-completions",
+          ...(secret.trim() ? { apiKey: secret.trim() } : {}),
+          models: customModels.split(/[,\n]/).map((model) => model.trim()).filter(Boolean).map((modelId) => ({ id: modelId, name: modelId })),
+        });
+        controller.listLocalModels();
+        refresh();
+        setMessage("Custom provider saved.");
+        setSelectedKey(keyOf(id, "default"));
+        setView("detail");
+        return;
+      }
       if (method === "oauth") {
         if (state.status !== "online") throw new Error("An online machine is needed to complete subscription sign-in.");
         controller.startOauth(id);
@@ -157,7 +180,7 @@ export function CredentialVault({ state }: { state: AppState }) {
   };
 
   if (view === "add") {
-    const chosen = catalog.find((p) => p.id === provider);
+    const chosen = catalog.find((p) => p.id === provider) ?? (provider ? { id: provider, name: provider } : undefined);
     if (!chosen) {
       const matches = catalog.filter((p) => `${p.name} ${p.id}`.toLowerCase().includes(query.toLowerCase()));
       return <div className="settings-form credential-vault">
@@ -175,30 +198,43 @@ export function CredentialVault({ state }: { state: AppState }) {
         </div>
       </div>;
     }
+    const customProvider = !catalog.some((entry) => entry.id === chosen.id);
     return <div className="settings-form credential-vault">
       <button className="link-btn" onClick={() => setProvider("")}>‹ Providers</button>
-      <h3>{chosen.name}</h3>
+      <h3>{customProvider ? "Custom provider" : chosen.name}</h3>
       {state.oauth?.provider === chosen.id ? <OauthStep /> : <>
-        <label className="field-label">Sign-in method</label>
-        <div className="vault-methods">
+        {customProvider && <>
+          <label className="field-label">Provider ID</label>
+          <input className="picker-search" value={provider} onChange={(e) => setProvider(e.target.value.toLowerCase())} />
+          <label className="field-label">Endpoint</label>
+          <input className="picker-search" placeholder="https://api.example.com/v1" value={customBaseUrl} onChange={(e) => setCustomBaseUrl(e.target.value)} />
+          <label className="field-label">Models <span className="muted">(one per line, optional)</span></label>
+          <textarea className="picker-search" rows={3} placeholder="model-id" value={customModels} onChange={(e) => setCustomModels(e.target.value)} />
+        </>}
+        {!customProvider && <label className="field-label">Sign-in method</label>}
+        {!customProvider && <div className="vault-methods">
           {chosen.oauth && <button className={`btn ${method === "oauth" ? "primary" : ""}`} onClick={() => setMethod("oauth")}>Subscription sign-in</button>}
           <button className={`btn ${method === "api_key" ? "primary" : ""}`} onClick={() => setMethod("api_key")}>API key</button>
           <button className={`btn ${method === "reference" ? "primary" : ""}`} onClick={() => setMethod("reference")}>Password manager</button>
-        </div>
+        </div>}
         {method !== "oauth" && <>
-          <label className="field-label">Name <span className="muted">(optional)</span></label>
-          <input className="picker-search" placeholder="e.g. Work — leave empty for the default" value={label} onChange={(e) => setLabel(e.target.value)} />
+          {!customProvider && <>
+            <label className="field-label">Name <span className="muted">(optional)</span></label>
+            <input className="picker-search" placeholder="e.g. Work — leave empty for the default" value={label} onChange={(e) => setLabel(e.target.value)} />
+          </>}
           <label className="field-label">{method === "reference" ? "Reference" : "API key"}</label>
           <input className="picker-search" type={method === "reference" ? "text" : "password"} placeholder={method === "reference" ? "op://Vault/Item/field, env://NAME, or cmd://…" : "Paste API key"} value={secret} onChange={(e) => setSecret(e.target.value)} />
           {chosen.help && method === "api_key" && <a className="link-btn" href={chosen.help} target="_blank" rel="noreferrer">Where to create a key ↗</a>}
-          <label className="field-label">Available on</label>
-          <select className="picker-search" value={availability} onChange={(e) => setAvailability(e.target.value as Availability)}>
-            <option value="account">All my machines — end-to-end encrypted</option>
-            <option value="node">Only this machine</option>
-            {method === "api_key" && <option value="device">Only this device</option>}
-          </select>
+          {!customProvider && <>
+            <label className="field-label">Available on</label>
+            <select className="picker-search" value={availability} onChange={(e) => setAvailability(e.target.value as Availability)}>
+              <option value="account">All my machines — end-to-end encrypted</option>
+              <option value="node">Only this machine</option>
+              {method === "api_key" && <option value="device">Only this device</option>}
+            </select>
+          </>}
         </>}
-        <button className="btn primary block" disabled={busy || (method !== "oauth" && !secret.trim())} onClick={save}>{busy ? "Saving…" : method === "oauth" ? `Sign in with ${chosen.name}` : "Save credential"}</button>
+        <button className="btn primary block" disabled={busy || (!customProvider && method !== "oauth" && !secret.trim()) || (customProvider && !customBaseUrl.trim())} onClick={save}>{busy ? "Saving…" : method === "oauth" ? `Sign in with ${chosen.name}` : customProvider ? "Save custom provider" : "Save credential"}</button>
       </>}
       {error && <div className="banner error inline" role="alert">{error}</div>}
     </div>;
@@ -207,7 +243,7 @@ export function CredentialVault({ state }: { state: AppState }) {
   if (view === "detail" && selected) {
     const count = providerCounts.get(selected.provider) ?? 1;
     const isDefault = (state.credentialPresets?.presets?.default?.[selected.provider] ?? "default") === selected.label;
-    const projectPreset = state.draftRepo ? `project:${state.draftRepo}` : undefined;
+    const projectPreset = assignmentProject ? `project:${assignmentProject}` : undefined;
     const projectLabel = projectPreset ? state.credentialPresets?.presets?.[projectPreset]?.[selected.provider] : undefined;
     const usedByProject = projectLabel === selected.label;
     return <div className="settings-form credential-vault">
@@ -216,7 +252,7 @@ export function CredentialVault({ state }: { state: AppState }) {
       <div className="vault-detail-grid">
         <span className="muted">Available on</span><strong>{availabilityLabel(selected.availability)}</strong>
         <span className="muted">Used by default</span><strong>{isDefault ? "Yes" : "No"}</strong>
-        {state.draftRepo && <><span className="muted">Current project</span><strong>{usedByProject ? state.draftRepo : projectLabel ? `Uses ${projectLabel}` : "Uses provider default"}</strong></>}
+        {assignmentProject && <><span className="muted">Project assignment</span><strong>{usedByProject ? assignmentProject : projectLabel ? `Uses ${projectLabel}` : "Uses provider default"}</strong></>}
         {selected.record && <><span className="muted">Unattended runs</span><strong>{selected.record.unattended ? "Allowed (separate hosted custody)" : "Not allowed"}</strong></>}
         {selected.record?.origin === "agent-native" && <><span className="muted">Added by</span><strong>Agent sign-in</strong></>}
         {selected.record?.ref && <><span className="muted">Reference</span><code>{selected.record.ref}</code></>}
@@ -224,9 +260,16 @@ export function CredentialVault({ state }: { state: AppState }) {
       {selected.record && <div className="row-actions">
         {selected.record.testable && <button className="btn" disabled={busy} onClick={async () => { setBusy(true); setError(null); const result = await controller.testCredential(selected.provider, selected.label).catch(() => ({ ok: false, at: Date.now(), reason: "network_error" })); setMessage(result.ok ? "Connection verified." : `Verification failed: ${result.reason || "unknown error"}.`); refresh(); setBusy(false); }}>Test connection</button>}
         {count > 1 && !isDefault && <button className="btn" onClick={() => { controller.setPresetMapping("default", selected.provider, selected.label); setMessage("Now used by default."); setTimeout(() => controller.getCredentialPresets(), 150); }}>Use by default</button>}
-        {count > 1 && projectPreset && !usedByProject && <button className="btn" onClick={() => { controller.setPresetMapping(projectPreset, selected.provider, selected.label); setMessage(`Assigned to ${state.draftRepo}.`); setTimeout(() => controller.getCredentialPresets(), 150); }}>Use for {state.draftRepo}</button>}
-        {projectPreset && usedByProject && <button className="btn" onClick={() => { controller.setPresetMapping(projectPreset, selected.provider, ""); setMessage(`${state.draftRepo} now uses the provider default.`); setTimeout(() => controller.getCredentialPresets(), 150); }}>Clear project assignment</button>}
+        {count > 1 && projectPreset && !usedByProject && <button className="btn" onClick={() => { controller.setPresetMapping(projectPreset, selected.provider, selected.label); setMessage(`Assigned to ${assignmentProject}.`); setTimeout(() => controller.getCredentialPresets(), 150); }}>Use for {assignmentProject}</button>}
+        {projectPreset && usedByProject && <button className="btn" onClick={() => { controller.setPresetMapping(projectPreset, selected.provider, ""); setMessage(`${assignmentProject} now uses the provider default.`); setTimeout(() => controller.getCredentialPresets(), 150); }}>Clear project assignment</button>}
         {selected.record.sync === "account" && selected.record.kind !== "reference" && <button className="btn" disabled={busy} onClick={async () => { setBusy(true); setError(null); try { await controller.setCredentialUnattended(selected.provider, selected.label, !selected.record!.unattended); setMessage(selected.record!.unattended ? "Unattended access revoked." : "Unattended access granted with separate hosted custody."); refresh(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); } }}>{selected.record.unattended ? "Revoke unattended access" : "Allow unattended runs"}</button>}
+      </div>}
+      {count > 1 && state.repos.length > 0 && <div>
+        <label className="field-label">Assign for project</label>
+        <select className="picker-search" value={assignmentProject} onChange={(e) => setAssignmentProject(e.target.value)}>
+          <option value="">Choose a project…</option>
+          {state.repos.map((repo) => <option key={repo.slug} value={repo.slug}>{repo.slug}</option>)}
+        </select>
       </div>}
       {!selected.ambient && <>
         <details className="vault-advanced"><summary>Replace or change availability</summary>

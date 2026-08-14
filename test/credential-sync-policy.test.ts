@@ -11,7 +11,7 @@ import path from "node:path";
 
 import { createCredentialVault } from "../src/runtime/credential-store.js";
 import type { CredentialRecord } from "../src/credentials/records.js";
-import { exportUnattendedRecords, setCredentialUnattended } from "../src/credentials/api.js";
+import { exportUnattendedRecords, setCredentialUnattended, setProviderApiKeyLabeled } from "../src/credentials/api.js";
 
 function freshCredsDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-sync-pol-"));
@@ -68,6 +68,8 @@ function oauthRecord(provider: string, label: string, access: string, expires: n
     assert.deepEqual(Object.keys(hosted), ["anthropic:work"]);
     assert.equal(hosted["anthropic:work"]?.unattended, true);
     assert.equal((await store.readRecord("anthropic", "default"))?.unattended, undefined, "account sync never implies hosted custody");
+    await setProviderApiKeyLabeled(credsDir, "anthropic", "work", "rotated-work-key");
+    assert.equal((await store.readRecord("anthropic", "work"))?.unattended, true, "rotating a key preserves its custody grant");
   } finally {
     fs.rmSync(path.dirname(credsDir), { recursive: true, force: true });
   }

@@ -41,6 +41,8 @@ assert.equal(
   "work-key",
   "an explicit project id resolves the same assignment",
 );
+fs.writeFileSync(path.join(root, "credentials.config.json"), JSON.stringify({ presets: { default: { anthropic: "work" } } }));
+assert.equal((await resolver.getCredential("anthropic"))?.token, "work-key", "an assignment edit applies to an existing resolver immediately");
 
 fs.rmSync(root, { recursive: true, force: true });
 console.log("credential-project-assignments: all tests passed");

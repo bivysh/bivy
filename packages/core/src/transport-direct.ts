@@ -581,9 +581,10 @@ export class DirectTransport implements Transport {
           );
           break;
         case "credentials.presets.setActive":
-          // The vault UI uses explicit provider defaults rather than a global
-          // active mode. Keep legacy callers deterministic in direct mode.
-          this.emitMerged("credentials.presets", await this.directApi("/api/auth/credential-assignments"));
+          this.emitMerged("credentials.presets", await this.directApi("/api/auth/credential-assignments/active", {
+            method: "POST",
+            body: JSON.stringify({ active: obj.active }),
+          }));
           break;
         case "models.custom.list":
           this.emitMerged("models.custom.list", await this.directApi("/api/models/custom"));

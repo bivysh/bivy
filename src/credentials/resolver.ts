@@ -36,7 +36,6 @@ export function projectIdsFromWorkspace(workspace: string): string[] {
 export class NodeCredentialResolver implements AgentCredentialStore {
   private readonly store: ReturnType<typeof createCredentialVault>;
   private readonly presetsPath: string;
-  private presetsCache?: CredentialPresets;
 
   // Reference resolution (op:///env:///cmd://) and OAuth refresh are injected
   // capabilities (ports) — the resolver stays free of secrets.ts and the Pi
@@ -50,10 +49,10 @@ export class NodeCredentialResolver implements AgentCredentialStore {
     this.presetsPath = defaultPresetsPath(credsDir);
   }
 
-  /** The node's selection presets, read once per resolver (see presets.ts). */
+  /** Read assignments on each resolution so a vault UI change applies to an
+   * already-running agent on its next turn, not only after a daemon restart. */
   private presets(): CredentialPresets {
-    if (!this.presetsCache) this.presetsCache = loadPresets(this.presetsPath);
-    return this.presetsCache;
+    return loadPresets(this.presetsPath);
   }
 
   async getCredential(provider: string, context?: { project?: string; workspace?: string; preferLabel?: string }): Promise<ProviderCredential | undefined> {

@@ -9784,6 +9784,16 @@ app.get("/api/auth/credential-assignments", (_req, res) => {
   res.json({ presets: getCredentialPresets(credsDir) });
 });
 
+app.post("/api/auth/credential-assignments/active", async (req, res, next) => {
+  try {
+    setActiveCredentialPreset(credsDir, String(req.body?.active ?? ""));
+    await refreshSessionAfterAuth();
+    res.json({ ok: true, presets: getCredentialPresets(credsDir) });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/auth/credential-assignments", async (req, res, next) => {
   try {
     setCredentialPresetMapping(credsDir, String(req.body?.preset ?? "default"), String(req.body?.provider ?? ""), String(req.body?.label ?? ""));

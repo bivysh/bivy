@@ -18,7 +18,8 @@ test("vault has saved-items, catalog add, detail, assignment and custody flows",
   expect(vault).toContain("No credentials yet");
   expect(vault).toContain("Search providers");
   expect(vault).toContain("All my machines — end-to-end encrypted");
-  expect(vault).toContain("Use for {state.draftRepo}");
+  expect(vault).toContain("Use for {assignmentProject}");
+  expect(vault).toContain("Assign for project");
   expect(vault).toContain("Allow unattended runs");
   expect(vault).toContain("Machine availability");
 });

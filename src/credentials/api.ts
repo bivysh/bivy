@@ -287,9 +287,13 @@ export async function listCredentialRecords(credsDir: string): Promise<Credentia
  * a credential the user opted node-local must not silently re-enable sync), else
  * default to a Bivy-first, opt-out-sync credential.
  */
-async function labeledMeta(credsDir: string, provider: string, label: string): Promise<Pick<CredentialRecord, "sync" | "origin">> {
+async function labeledMeta(credsDir: string, provider: string, label: string): Promise<Pick<CredentialRecord, "sync" | "origin" | "unattended">> {
   const existing = await createCredentialVault(credsDir).readRecord(provider, label);
-  return { sync: existing?.sync ?? defaultSyncFor("bivy"), origin: existing?.origin ?? "bivy" };
+  return {
+    sync: existing?.sync ?? defaultSyncFor("bivy"),
+    origin: existing?.origin ?? "bivy",
+    ...(existing?.unattended === true ? { unattended: true } : {}),
+  };
 }
 
 /** Store an API key under a specific label (multi-account). */
