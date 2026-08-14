@@ -84,6 +84,13 @@ const RULES = [
     note: "ephemeral lifecycle projections are data-in/data-out and import no storage, provider, transport, browser, or clock implementation.",
   },
   {
+    name: "followup-queue-is-a-pure-reducer",
+    dir: "packages/core/src/followup-queue.ts",
+    forbid: ["./store", "./transport", "./account", "./local-store", "node:", "react"],
+    enforce: true,
+    note: "follow-up commands reduce immutable queue values; the SessionStore is only an identity/subscription shell.",
+  },
+  {
     name: "ephemeral-catalog-is-pure-data",
     dir: "packages/core/src/ephemeral-catalog.ts",
     forbid: ["./", "../", "node:", "@"],

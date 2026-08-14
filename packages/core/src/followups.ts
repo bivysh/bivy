@@ -9,7 +9,7 @@
 // data shape and CRUD (enqueue/edit/remove/reorder/...); this module is the
 // small bit of policy layered on top of it.
 
-import type { PendingFollowup } from "./store.js";
+import type { PendingFollowup } from "./followup-queue.js";
 
 /**
  * A new prompt for a session must be held in the visible queue rather than

@@ -5,7 +5,6 @@
 
 import { b64, b64url, unb64url } from "./base64.js";
 import type { LocalStore } from "./local-store.js";
-import { ephemeralCatalogEntry } from "./ephemeral-catalog.js";
 import {
   buildBootstrapUserData,
   ephemeralAdapter,
