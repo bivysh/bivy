@@ -114,6 +114,17 @@ function rememberItem(item) {
       model: item.model,
       receiverThreadIds: item.receiverThreadIds,
     });
+  } else if (item.type === "subAgentActivity") {
+    // Codex 0.147+ exposes child-agent lifecycle as first-class transcript
+    // items. Keep the stable child id and readable agent path so generic tool
+    // normalization can render this as sub-agent activity rather than silently
+    // dropping it as an unknown app-server item.
+    itemInputs.set(id, {
+      agent: item.agentPath || item.agentThreadId,
+      description: item.agentPath,
+      activity: item.kind,
+      agentThreadId: item.agentThreadId,
+    });
   }
 }
 
@@ -230,6 +241,11 @@ function handleCompletedItem(params) {
       bivy({ type: "tool.result", toolCallId: itemId, name: "spawn_agent", result, isError: item.status === "failed" });
       return;
     }
+    case "subAgentActivity": {
+      const result = text(item.kind || "completed");
+      bivy({ type: "tool.result", toolCallId: itemId, name: "subagent_activity", result, isError: item.kind === "interrupted" });
+      return;
+    }
     default:
       return;
   }
@@ -338,12 +354,13 @@ function onNotification(m) {
       const item = params?.item;
       rememberItem(item);
       const itemId = paramsItemId(params);
-      if (["commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall"].includes(item?.type) && itemId) activeObservedItems.add(itemId);
+      if (["commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall", "subAgentActivity"].includes(item?.type) && itemId) activeObservedItems.add(itemId);
       if (item?.type === "commandExecution") emitToolObserved(itemId, "shell", updateInput(itemId));
       if (item?.type === "fileChange") emitToolObserved(itemId, "apply_patch", updateInput(itemId));
       if (item?.type === "mcpToolCall") emitToolObserved(itemId, text(item.tool || "mcp"), updateInput(itemId));
       if (item?.type === "dynamicToolCall") emitToolObserved(itemId, text(item.tool || "tool"), updateInput(itemId));
       if (item?.type === "collabAgentToolCall") emitToolObserved(itemId, "spawn_agent", updateInput(itemId));
+      if (item?.type === "subAgentActivity") emitToolObserved(itemId, "subagent_activity", updateInput(itemId));
       return;
     }
     case "item/completed": {

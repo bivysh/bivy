@@ -30,6 +30,12 @@ rl.on("line", (line) => {
       model: "gpt-5.6-sol", prompt: "Inspect the workspace",
     };
     send({ jsonrpc: "2.0", method: "item/started", params: { item: collab } });
+    const activity = {
+      type: "subAgentActivity", id: "activity-1", kind: "interacted",
+      agentThreadId: "child-thread", agentPath: "explorer",
+    };
+    send({ jsonrpc: "2.0", method: "item/started", params: { item: activity } });
+    send({ jsonrpc: "2.0", method: "item/completed", params: { item: activity } });
     const shell = {
       type: "commandExecution", id: "shell-1", command: "false", commandActions: [], cwd: "/tmp",
       status: "failed", aggregatedOutput: "command failed", exitCode: 7,
