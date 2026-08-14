@@ -30,7 +30,7 @@ export type FollowupQueueCommand =
   | { type: "attach-automation"; id: string; automationId: string }
   | { type: "edit"; id: string; patch: { text: string; attachments?: PromptAttachment[] }; expectedVersion: number; now: number }
   | { type: "remove"; id: string }
-  | { type: "prune-scheduled"; keepIds: ReadonlySet<string> }
+  | { type: "prune-scheduled"; keepIds: readonly string[] }
   | { type: "reschedule"; id: string; scheduledAt: number; now: number }
   | { type: "reorder"; id: string; toIndex: number }
   | { type: "mark-sending"; id: string; now: number }
@@ -110,7 +110,7 @@ export function reduceFollowupQueue(
       return { queue: queue.filter((candidate) => candidate.id !== command.id), changed: true, accepted: true };
     }
     case "prune-scheduled": {
-      const next = queue.filter((item) => item.status !== "scheduled" || (item.scheduledAutomationId ? command.keepIds.has(item.scheduledAutomationId) : false));
+      const next = queue.filter((item) => item.status !== "scheduled" || (item.scheduledAutomationId ? command.keepIds.includes(item.scheduledAutomationId) : false));
       return next.length === queue.length ? unchanged(queue) : { queue: next, changed: true, accepted: true };
     }
     case "reschedule": {

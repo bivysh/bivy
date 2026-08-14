@@ -12,8 +12,8 @@ export interface EphemeralProviderCatalog {
   maturity: "stable" | "experimental";
   tokenLabel: string;
   blurb: string;
-  steps: string[];
-  links: { label: string; url: string }[];
+  steps: readonly string[];
+  links: readonly { label: string; url: string }[];
   /** Mirrors the adapter's `guestCanEnsureDeletion === false`: this provider's
    * guest shutdown does not stop billing, so a device-only (browser-held
    * token) launch is refused outright — only hosted/control-plane
@@ -26,7 +26,7 @@ export interface EphemeralProviderCatalog {
   suspendsWhenIdle?: boolean;
 }
 
-export const EPHEMERAL_PROVIDERS: EphemeralProviderCatalog[] = [
+export const EPHEMERAL_PROVIDERS = [
   {
     id: "fly",
     name: "Fly.io",
@@ -116,7 +116,7 @@ export const EPHEMERAL_PROVIDERS: EphemeralProviderCatalog[] = [
       { label: "Minimal IAM policy (Bivy docs)", url: "https://github.com/bivysh/bivy/blob/main/docs/ephemeral-sessions.md#aws-ec2" },
     ],
   },
-];
+] as const satisfies readonly EphemeralProviderCatalog[];
 
 export function ephemeralCatalogEntry(id: string): EphemeralProviderCatalog | null {
   const key = String(id || "").trim().toLowerCase();

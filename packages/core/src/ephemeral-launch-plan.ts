@@ -5,7 +5,7 @@
 // supplied facts into a plan and projects a provider result into tracked data.
 
 import type { EphemeralMachine, EphemeralMachinePurpose } from "./ephemeral-machine.js";
-import type { BootstrapOpts } from "./ephemeral-provider-ports.js";
+import type { BootstrapOpts, ProviderProvisionConfig } from "./ephemeral-provider-ports.js";
 
 export interface EphemeralLaunchPlanInput {
   provider: string;
@@ -44,15 +44,7 @@ export interface EphemeralLaunchPlan {
   region: string;
   size: string;
   bootstrap: BootstrapOpts;
-  providerConfig: {
-    slug: string;
-    region: string;
-    size: string;
-    image?: string;
-    ttlMinutes?: number;
-    attemptId: string;
-    ownershipTag?: string;
-  };
+  providerConfig: ProviderProvisionConfig;
   machineFacts: Partial<Pick<EphemeralMachine, "name" | "setupId" | "repo" | "teardownOnAgentFinish" | "workItemId" | "purpose">>;
 }
 

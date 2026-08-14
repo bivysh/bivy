@@ -1661,7 +1661,7 @@ export class SessionStore {
   }
 
   pruneScheduledFollowups(sessionId: string, keepIds: ReadonlySet<string>): void {
-    this.transitionFollowups(sessionId, { type: "prune-scheduled", keepIds });
+    this.transitionFollowups(sessionId, { type: "prune-scheduled", keepIds: [...keepIds] });
   }
 
   rescheduleFollowup(sessionId: string, id: string, scheduledAt: number, now: number): boolean {

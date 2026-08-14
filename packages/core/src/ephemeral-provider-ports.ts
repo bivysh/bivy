@@ -80,6 +80,20 @@ export interface ProviderSize extends PricedMachineSize {
   pricePerHour?: number;
 }
 
+export interface ProviderProvisionConfig {
+  slug: string;
+  region: string;
+  size: string;
+  image?: string;
+  ttlMinutes?: number;
+  attemptId: string;
+  ownershipTag?: string;
+  /** Provider-specific optional resource overrides used by direct adapter callers. */
+  org?: string;
+  cpus?: number;
+  memoryMb?: number;
+}
+
 export interface ProviderAdapter {
   id: string;
   name: string;
@@ -107,7 +121,7 @@ export interface ProviderAdapter {
    *  `bootstrap` is the same intent in structured form, for providers that can't
    *  run cloud-init and must assemble their own boot config (Fly — see its
    *  adapter). Both describe one node; an adapter uses whichever it needs. */
-  provision(args: { exec: ExecFn; token: string; config: any; userData: string; bootstrap?: BootstrapOpts }): Promise<EphemeralMachine>;
+  provision(args: { exec: ExecFn; token: string; config: ProviderProvisionConfig; userData: string; bootstrap?: BootstrapOpts }): Promise<EphemeralMachine>;
   status(args: { exec: ExecFn; token: string; machine: EphemeralMachine }): Promise<string>;
   destroy(args: { exec: ExecFn; token: string; machine: EphemeralMachine }): Promise<void>;
   /** List every live resource tagged with `ownershipTag` at the provider,
