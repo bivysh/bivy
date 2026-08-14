@@ -1258,8 +1258,8 @@ function NodesPanel({ state }: { state: AppState }) {
           <div className="row-actions settings-save-actions">
             <button className="btn primary" disabled={saving} onClick={save}>{saving ? "Saving…" : "Save"}</button>
             {savedMsg && <span className="chip ok">{savedMsg}</span>}
-            {saveErr && <span className="chip err">{saveErr}</span>}
           </div>
+          {saveErr && <div className="banner error inline" role="alert">{saveErr}</div>}
         </>
       )}
     </div>
