@@ -92,7 +92,7 @@ const PLAN = new Set(["plan", "updateplan", "setplan", "todo", "todowrite", "exi
 // still falls through to the opaque default, never a false "Delegated".
 const DELEGATE = new Set([
   "task", "agent", "subagent", "runagent", "runsubagent", "spawnagent",
-  "dispatchagent", "delegate", "delegatetask", "agenttask", "startagent",
+  "dispatchagent", "delegate", "delegatetask", "agenttask", "startagent", "startrun",
 ]);
 
 const PATH_KEYS = ["path", "file_path", "filePath", "filename", "fileName", "file", "target_file", "targetFile"];

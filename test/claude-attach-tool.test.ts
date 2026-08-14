@@ -103,4 +103,23 @@ async function waitFor(cond: () => boolean, ms = 1000): Promise<void> {
   assert.match(failed.content[0].text, /File not found/);
 }
 
-console.log("claude attach_to_chat native tool OK");
+// --- runtime-agnostic provider -> the same native MCP surface used by Pi ---
+{
+  const { sdk, queries } = makeSdk();
+  const invoked: string[] = [];
+  const provider = {
+    list: () => [{ name: "start_run", description: "Delegate a governed Run", parameters: { type: "object", properties: { instructions: { type: "string" } }, required: ["instructions"] } }],
+    invoke: async (name: string) => { invoked.push(name); return { content: [{ type: "text" as const, text: '{"runId":"child-1","status":"pending"}' }], details: {} }; },
+  };
+  const runtime = new ClaudeCodeRuntime({ sdkLoader: async () => sdk });
+  const { session } = await runtime.createSession({ workspace: process.cwd(), toolProvider: provider });
+  await session.prompt("ask another agent to review this branch");
+  await waitFor(() => queries.length === 1);
+  const tool = queries[0].options.mcpServers[BIVY_ATTACH_MCP_SERVER_NAME].tools.find((candidate: any) => candidate.name === "start_run");
+  assert.ok(tool, "Claude receives Bivy's runtime-agnostic start_run provider as an in-process MCP tool");
+  const result = await tool.handler({ instructions: "review this branch" }, {});
+  assert.deepEqual(invoked, ["start_run"]);
+  assert.match(result.content[0].text, /child-1/);
+}
+
+console.log("claude attach_to_chat and ToolProvider native tools OK");

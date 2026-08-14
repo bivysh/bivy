@@ -30,6 +30,10 @@ export type MetadataSession = {
    *  bundle (see src/session/fork.ts). A bare identifier — never a prompt,
    *  transcript, or diff — so it's safe to persist and surface in the UI. */
   forkedFrom?: string;
+  /** Content-free provenance for a Session created by an unattended Run. Used
+   * to preserve child-Run nesting limits across daemon restarts. */
+  automationRunId?: string;
+  delegationDepth?: number;
   runtimeId?: string;
   /** Per-session sandbox tier override ("read-only" | "workspace-write" |
    *  "danger-full-access"), so resume rebuilds the runtime at the same tier. */

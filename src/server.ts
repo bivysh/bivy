@@ -183,6 +183,7 @@ import {
 } from "./stt.js";
 import { synthesizeOpenAiSpeech } from "./tts.js";
 import { seal, open } from "./e2e.js";
+import { RunDelegationService, parseDelegationSource, runToolProvider, type StartRunInput } from "./run-tools.js";
 import {
   ControlPlaneTaskPoller,
   resolveControlPlaneTaskConfig,
@@ -552,7 +553,57 @@ function resolveApproval(id: string, approved: boolean) {
   }
   return ok;
 }
-const integrations = new IntegrationManager(appDir, undefined, attachToChatForSession);
+async function delegatedRunRequest(pathname: string, init: RequestInit = {}): Promise<Record<string, unknown>> {
+  if (!sessionAdvertiseTarget) throw new Error("Hosted Runs are not configured. Run bivy setup first.");
+  const headers = new Headers(init.headers);
+  headers.set("authorization", `Bearer ${sessionAdvertiseTarget.enrollmentToken}`);
+  if (init.body) headers.set("content-type", "application/json");
+  const response = await fetch(`${sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "")}${pathname}`, { ...init, headers, signal: init.signal ?? AbortSignal.timeout(15_000) });
+  const body = await response.json().catch(() => ({})) as Record<string, unknown>;
+  if (!response.ok) throw new Error(typeof body.error === "string" ? body.error : `control plane returned ${response.status}`);
+  return body;
+}
+
+const runDelegation = new RunDelegationService({
+  parentContext: (sessionId) => {
+    const record = openSessions.get(sessionId);
+    return record ? { parentRunId: record.automationRunId, depth: record.delegationDepth } : undefined;
+  },
+  listRecent: async () => {
+    const body = await delegatedRunRequest("/node/automation-runs?limit=100");
+    return Array.isArray(body.runs) ? body.runs as Record<string, unknown>[] : [];
+  },
+  get: async (runId) => {
+    try { return await delegatedRunRequest(`/node/automation-runs/${encodeURIComponent(runId)}`); }
+    catch (error) { if (error instanceof Error && /not found/i.test(error.message)) return undefined; throw error; }
+  },
+  start: async (_sessionId, input: StartRunInput, provenance) => {
+    const machine = input.machine?.trim() || identity.name;
+    const nodes = await delegatedRunRequest("/nodes") as unknown;
+    const target = Array.isArray(nodes) ? nodes.find((node) => node && typeof node === "object" && (node as Record<string, unknown>).name === machine) as Record<string, unknown> | undefined : undefined;
+    const targetId = typeof target?.id === "string" ? target.id : machine === identity.name ? identity.nodeId : undefined;
+    if (!targetId) throw new Error(`Machine not found on this account: ${machine}`);
+    return delegatedRunRequest("/node/automation-runs", {
+      method: "POST",
+      body: JSON.stringify({
+        title: "Delegated Run",
+        body: `bivy-room-v1:${targetId}:${seal(pairingStore.roomKey(), input.instructions)}`,
+        repo: input.repo,
+        node: machine,
+        runtimeId: input.agent,
+        model: input.model,
+        approvalMode: input.safety?.approval,
+        sandbox: input.safety?.sandbox,
+        maxAttempts: input.safety?.maxAttempts ?? 2,
+        idempotencyKey: input.idempotencyKey,
+        parentSessionId: provenance.parentSessionId,
+        parentRunId: provenance.parentRunId,
+        delegationDepth: provenance.depth,
+      }),
+    });
+  },
+});
+const integrations = new IntegrationManager(appDir, undefined, attachToChatForSession, (ref) => runToolProvider(runDelegation, () => ref.current));
 const terminals = new TerminalManager();
 // Per-session agents: a node holds one AgentRuntime instance *per agent id*,
 // built lazily and cached, instead of a single global runtime. `defaultRuntimeId`
@@ -4242,7 +4293,12 @@ interface RunIssueOverrides {
 }
 
 function recordRunAuditCorrelation(record: SessionRecord, correlation?: RunIssueOverrides["correlation"]): void {
-  if (correlation) auditLog.record({ kind: "run.correlation", session: record.id, agent: record.runtimeId, ...correlation });
+  if (correlation) {
+    record.automationRunId = correlation.runId;
+    record.delegationDepth ??= 0;
+    persistSessionMetadata(record);
+    auditLog.record({ kind: "run.correlation", session: record.id, agent: record.runtimeId, ...correlation });
+  }
 }
 
 async function runIssueTask(cfg: GitHubTaskConfig, issue: GitHubIssue, overrides: RunIssueOverrides = {}) {
@@ -5172,7 +5228,8 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
   // definition name is metadata, not part of the instructions, so don't fold it
   // into the prompt. A scheduled chat message must arrive verbatim; the name is
   // only the run/session label.
-  const request = item.source === "schedule"
+  const delegatedProvenance = parseDelegationSource(item.source);
+  const request = item.source === "schedule" || delegatedProvenance
     ? (item.body || item.title)
     : item.body ? `${item.title}\n\n${item.body}` : item.title;
   // Plain chat messages (scheduled "message me later" reminders) skip the
@@ -5210,7 +5267,10 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
   // Preserve queue provenance for non-repo work. Repo-backed sessions retain
   // `repo:owner/repo`, which is required by branch push/PR detection.
   if (!parsedRepo && !record.worktree) record.source = `queue:${item.source}`;
+  record.automationRunId = item.id;
+  record.delegationDepth = delegatedProvenance?.depth ?? 0;
   record.approvalMode = safety.approval;
+  persistSessionMetadata(record);
   if (item.model) {
     try { await record.session.setModel("", item.model); } catch {}
   }
@@ -6382,6 +6442,8 @@ function persistSessionMetadata(record: SessionRecord, status = sessionStatus(re
     workspace: record.workspace,
     source: record.source ?? "manual",
     forkedFrom: record.forkedFrom,
+    automationRunId: record.automationRunId,
+    delegationDepth: record.delegationDepth,
     runtimeId: record.runtimeId,
     sandbox: record.sandbox,
     agentName: getRuntime(record.runtimeId).displayName,
@@ -8057,7 +8119,7 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
   // Rehydrating (rather than leaving this undefined for a resumed session)
   // also avoids a persistSessionMetadata call later silently clobbering the
   // stored contract with undefined via its `{...prev, ...input}` merge.
-  const record: SessionRecord = { id: sessionId, session, runtimeId: rt.id, sandbox: sessionSandbox, approvalMode: sessionSafety.approval, workspace: sessionWorkspace, sessionFile: session.sessionFile, agentServiceAddress: attachedAddress ?? (rt as { agentServiceAddress?: string }).agentServiceAddress, worktree, source, prUrl: storedMeta?.prUrl, prs: storedMeta?.prs, contract: storedMeta?.contract, lastTouchedAt: resumedLastActive ?? Date.now(), warning: modelFallbackMessage, ephemeral: opts.ephemeral, workspaceState: runGit(["status", "--porcelain", "--untracked-files=normal"], sessionWorkspace) ? "dirty" : "clean" };
+  const record: SessionRecord = { id: sessionId, session, runtimeId: rt.id, sandbox: sessionSandbox, approvalMode: sessionSafety.approval, automationRunId: storedMeta?.automationRunId, delegationDepth: storedMeta?.delegationDepth, workspace: sessionWorkspace, sessionFile: session.sessionFile, agentServiceAddress: attachedAddress ?? (rt as { agentServiceAddress?: string }).agentServiceAddress, worktree, source, prUrl: storedMeta?.prUrl, prs: storedMeta?.prs, contract: storedMeta?.contract, lastTouchedAt: resumedLastActive ?? Date.now(), warning: modelFallbackMessage, ephemeral: opts.ephemeral, workspaceState: runGit(["status", "--porcelain", "--untracked-files=normal"], sessionWorkspace) ? "dirty" : "clean" };
   // Migration: a session resumed/reopened from before this feature (or from a
   // node that predates it) has no stored contract. Stamp an honest one now
   // from currently-observed facts rather than leaving it blank forever or
@@ -10670,6 +10732,22 @@ app.post("/api/session/:id/attach", (req, res) => {
   if ("error" in result) return res.status(400).json({ error: result.error });
   const { hash, name, mimeType, size, kind } = result.ref;
   res.json({ ok: true, hash, name, mimeType, size, kind });
+});
+
+// Bivy-owned child Run tools for MCP agents. These use the exact same service as
+// Pi's native ToolProvider and remain behind /api authentication. The service
+// authorizes every status lookup against this parent Session's provenance.
+app.post("/api/session/:id/delegated-runs", async (req, res) => {
+  try { res.status(201).json(await runDelegation.startRun(String(req.params.id), req.body as StartRunInput)); }
+  catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
+});
+app.get("/api/session/:id/delegated-runs/:runId", async (req, res) => {
+  try { res.json(await runDelegation.getRunStatus(String(req.params.id), String(req.params.runId))); }
+  catch (error) { res.status(404).json({ error: error instanceof Error ? error.message : String(error) }); }
+});
+app.post("/api/session/:id/delegated-runs/:runId/wait", async (req, res) => {
+  try { res.json(await runDelegation.waitForRun(String(req.params.id), String(req.params.runId), Number(req.body?.timeoutSeconds), AbortSignal.timeout(305_000))); }
+  catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
 });
 
 app.post("/api/session/prompt", async (req, res, next) => {

@@ -62,13 +62,17 @@ export class IntegrationManager {
   /** Backs the native `attach_to_chat` tool (see toolProvider); undefined = the
    *  tool isn't offered (e.g. a test harness that never wired one). */
   private readonly attachToChat?: AttachToChatFn;
+  /** Additional Bivy-owned tools (for example governed child Runs), bound to
+   * the same lazy Session id as attach_to_chat. */
+  private readonly builtInToolProvider?: (sessionIdRef: SessionIdRef) => ToolProvider;
 
-  constructor(appDir: string, registry: IntegrationDef[] = BUILT_IN_INTEGRATIONS, attachToChat?: AttachToChatFn) {
+  constructor(appDir: string, registry: IntegrationDef[] = BUILT_IN_INTEGRATIONS, attachToChat?: AttachToChatFn, builtInToolProvider?: (sessionIdRef: SessionIdRef) => ToolProvider) {
     this.store = new IntegrationStore(appDir);
     this.secrets = new SecretVault(appDir);
     this.registry = registry;
     this.riskyTools = new Set(registry.flatMap((d) => d.tools.filter((t) => t.risky).map((t) => t.name)));
     this.attachToChat = attachToChat;
+    this.builtInToolProvider = builtInToolProvider;
   }
 
   // --- helpers ------------------------------------------------------------
@@ -319,6 +323,13 @@ export class IntegrationManager {
             return { content: [{ type: "text", text: `${tool.name} failed: ${message}` }], details: {}, isError: true };
           }
         });
+      }
+    }
+    if (this.builtInToolProvider && sessionIdRef) {
+      const provider = this.builtInToolProvider(sessionIdRef);
+      for (const spec of provider.list()) {
+        specs.push(spec);
+        executors.set(spec.name, (params, signal) => provider.invoke(spec.name, `bivy-${randomUUID()}`, params, signal));
       }
     }
     if (this.attachToChat && sessionIdRef) {
