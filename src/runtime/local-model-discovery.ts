@@ -6,6 +6,7 @@
 
 import dns from "node:dns/promises";
 import net from "node:net";
+import { Agent } from "undici";
 
 export type LocalEndpointStatus = "ready" | "offline" | "timeout" | "auth_required" | "malformed" | "unsupported";
 
@@ -71,21 +72,35 @@ function isLoopback(hostname: string): boolean {
 }
 
 function unsafeAddress(address: string): boolean {
-  if (net.isIPv4(address)) {
-    const octets = address.split(".").map(Number);
-    return octets[0] === 0 || octets[0] === 127 || (octets[0] === 169 && octets[1] === 254) || octets[0] >= 224;
-  }
   const value = address.toLowerCase().split("%")[0];
-  return value === "::" || value === "::1" || value.startsWith("fe8") || value.startsWith("fe9") || value.startsWith("fea") || value.startsWith("feb") || value.startsWith("ff");
+  const mappedV4 = value.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/)?.[1];
+  if (mappedV4) return unsafeAddress(mappedV4);
+  if (net.isIPv4(value)) {
+    const octets = value.split(".").map(Number);
+    return octets[0] === 0
+      || octets[0] === 127
+      || (octets[0] === 169 && octets[1] === 254)
+      || value === "100.100.100.200"
+      || value === "192.0.0.192"
+      || octets[0] >= 224;
+  }
+  return value === "::"
+    || value === "::1"
+    || value === "fd00:ec2::254"
+    || value.startsWith("fe8")
+    || value.startsWith("fe9")
+    || value.startsWith("fea")
+    || value.startsWith("feb")
+    || value.startsWith("ff");
 }
 
 /** Validate a custom verification target. Private RFC1918 addresses are allowed
  * only after an explicit user action; link-local, metadata-adjacent, multicast,
  * unspecified, credentials-in-URL, and non-HTTP targets are always rejected. */
-export async function validateLocalEndpointUrl(
+async function resolveLocalEndpointUrl(
   raw: string,
   options: { allowNonLoopback?: boolean; lookup?: Lookup } = {},
-): Promise<URL> {
+): Promise<{ url: URL; addresses: Array<{ address: string; family: number }> }> {
   let url: URL;
   try {
     url = new URL(String(raw ?? "").trim());
@@ -95,18 +110,33 @@ export async function validateLocalEndpointUrl(
   if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("Endpoint must use http:// or https://.");
   if (url.username || url.password) throw new Error("Endpoint URLs cannot contain credentials; use the API key field.");
   if (!url.hostname) throw new Error("Endpoint hostname is required.");
-  if (isLoopback(url.hostname)) return url;
+  if (isLoopback(url.hostname)) {
+    const address = url.hostname.replace(/^\[|\]$/g, "") === "::1" ? "::1" : "127.0.0.1";
+    return { url, addresses: [{ address, family: net.isIP(address) }] };
+  }
   if (!options.allowNonLoopback) throw new Error("Discovery is limited to this Machine (localhost). Add remote endpoints explicitly.");
 
   const literalFamily = net.isIP(url.hostname);
-  const addresses = literalFamily
-    ? [{ address: url.hostname, family: literalFamily }]
-    : await (options.lookup ?? (async (hostname) => dns.lookup(hostname, { all: true })))(url.hostname);
+  let addresses: Array<{ address: string; family: number }>;
+  try {
+    addresses = literalFamily
+      ? [{ address: url.hostname, family: literalFamily }]
+      : await (options.lookup ?? (async (hostname) => dns.lookup(hostname, { all: true })))(url.hostname);
+  } catch {
+    throw new Error("Endpoint hostname could not be resolved.");
+  }
   if (!addresses.length) throw new Error("Endpoint hostname did not resolve.");
   if (addresses.some(({ address }) => unsafeAddress(address))) {
     throw new Error("Endpoint resolves to a blocked loopback, link-local, unspecified, or multicast address.");
   }
-  return url;
+  return { url, addresses };
+}
+
+export async function validateLocalEndpointUrl(
+  raw: string,
+  options: { allowNonLoopback?: boolean; lookup?: Lookup } = {},
+): Promise<URL> {
+  return (await resolveLocalEndpointUrl(raw, options)).url;
 }
 
 function catalogUrl(baseUrl: URL): URL {
@@ -160,12 +190,19 @@ export function normalizeCatalog(payload: unknown, kind: "openai" | "ollama"): D
 
 async function probe(
   target: { baseUrl: string; catalogUrl: string; catalog: "openai" | "ollama"; candidateId?: string; name?: string },
-  options: { apiKey?: string; timeoutMs?: number; fetchImpl?: FetchLike },
+  options: { apiKey?: string; timeoutMs?: number; fetchImpl?: FetchLike; dispatcher?: Agent },
 ): Promise<LocalEndpointResult> {
   const timeoutMs = Math.max(50, Math.min(options.timeoutMs ?? DEFAULT_TIMEOUT_MS, 5_000));
   const controller = new AbortController();
   let timedOut = false;
-  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+      reject(new Error("request timed out"));
+    }, timeoutMs);
+  });
   const base: Omit<LocalEndpointResult, "status" | "models"> = {
     ...(target.candidateId ? { candidateId: target.candidateId } : {}),
     ...(target.name ? { name: target.name } : {}),
@@ -179,8 +216,9 @@ async function probe(
         headers: { accept: "application/json", ...(options.apiKey ? { authorization: `Bearer ${options.apiKey}` } : {}) },
         redirect: "error",
         signal: controller.signal,
-      }),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("request timed out")), timeoutMs)),
+        ...(options.dispatcher ? { dispatcher: options.dispatcher } : {}),
+      } as RequestInit),
+      timeout,
     ]);
     if (response.status === 401 || response.status === 403) return { ...base, status: "auth_required", models: [], detail: "The endpoint requires an API key." };
     if (response.status === 404 || response.status === 405) return { ...base, status: "unsupported", models: [], detail: "The endpoint does not expose a compatible model catalog." };
@@ -195,7 +233,7 @@ async function probe(
     const timeout = timedOut || (error as Error)?.name === "AbortError" || /timed out/i.test(String((error as Error)?.message));
     return { ...base, status: timeout ? "timeout" : "offline", models: [], detail: timeout ? `No response within ${timeoutMs} ms.` : "Could not connect to the endpoint." };
   } finally {
-    clearTimeout(timer);
+    clearTimeout(timer!);
   }
 }
 
@@ -206,8 +244,25 @@ export async function discoverLocalModels(options: { timeoutMs?: number; fetchIm
 
 /** Verify and list models at one explicitly entered endpoint. */
 export async function verifyLocalModelEndpoint(options: VerifyLocalEndpointOptions): Promise<LocalEndpointResult> {
-  const base = await validateLocalEndpointUrl(options.baseUrl, { allowNonLoopback: options.allowNonLoopback, lookup: options.lookup });
-  return probe({ baseUrl: base.href.replace(/\/$/, ""), catalogUrl: catalogUrl(base).href, catalog: "openai" }, options);
+  const resolved = await resolveLocalEndpointUrl(options.baseUrl, { allowNonLoopback: options.allowNonLoopback, lookup: options.lookup });
+  const base = resolved.url;
+  // Pin hostname resolution for this request. Validation followed by an ordinary
+  // second DNS lookup would leave a rebinding window into a blocked address.
+  const pinned = resolved.addresses[0];
+  const dispatcher = net.isIP(base.hostname)
+    ? undefined
+    : new Agent({
+        connect: {
+          lookup: ((_hostname: string, _lookupOptions: unknown, callback: (error: Error | null, address: string, family: number) => void) => {
+            callback(null, pinned.address, pinned.family);
+          }) as any,
+        },
+      });
+  try {
+    return await probe({ baseUrl: base.href.replace(/\/$/, ""), catalogUrl: catalogUrl(base).href, catalog: "openai" }, { ...options, dispatcher });
+  } finally {
+    await dispatcher?.close();
+  }
 }
 
 /** Stable readiness projection for future Machine capability inventory consumers. */

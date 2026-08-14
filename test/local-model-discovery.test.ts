@@ -38,6 +38,10 @@ describe("local model discovery security", () => {
     await assert.rejects(validateLocalEndpointUrl("http://169.254.169.254/v1", { allowNonLoopback: true }), /blocked/);
     await assert.rejects(validateLocalEndpointUrl("https://models.example/v1", {
       allowNonLoopback: true,
+      lookup: async () => [{ address: "::ffff:169.254.169.254", family: 6 }],
+    }), /blocked/);
+    await assert.rejects(validateLocalEndpointUrl("https://models.example/v1", {
+      allowNonLoopback: true,
       lookup: async () => [{ address: "169.254.169.254", family: 4 }],
     }), /blocked/);
   });
