@@ -30,6 +30,10 @@ import { type SlashCommand } from "./slash.js";
 import { toHtml, extractRemoteImageUrls } from "./markdown.js";
 import { eventKind, normalizeEventType, toolCallId, toolDetail, toolInput, toolName } from "./tool-activity.js";
 import { SeqReassembler } from "./seq-reassembler.js";
+import { foldConnectionEvent } from "./connection-event-fold.js";
+import { foldSessionIndexEvent } from "./session-index-event-fold.js";
+import { foldCatalogSettingsEvent } from "./catalog-settings-event-fold.js";
+import { foldPresentationEvent } from "./presentation-event-fold.js";
 import type { ToolCallDetail } from "./tool-format.js";
 import { humanizeError, looksLikeAgentError } from "./store-errors.js";
 import {
@@ -676,49 +680,44 @@ export interface NodeSettings {
   autoAttachToolImages: boolean;
 }
 
-export interface AppState {
+export interface ConnectionAccountState {
   status: ConnectionStatus;
-  /** Whether the hosted client holds a control-plane session token. Mirrors
-   *  `LocalStore.s` but lives in the reactive store so the auth gate (sign-in
-   *  screen vs. app shell) re-renders the instant a sign-in completes in-app —
-   *  the token itself is in localStorage, which React can't subscribe to. */
   signedIn: boolean;
-  /** Account nodes (relay mode) for the header switcher. */
   nodes: AccountNode[];
   currentNodeId: string | null;
+  nodeUpdate: { current: string; latest: string } | null;
+  nodeUpdating: boolean;
+}
+
+export interface SessionIndexState {
   sessions: SessionSummary[];
-  /** Live `bivy run` PTYs on the selected node. */
   runTerminals: RunTerminalSummary[];
+  tuiSessions: string[];
+  pausedSessionIds: string[];
+  commandsBySession: Record<string, SlashCommand[]>;
+  followupsBySession: Record<string, PendingFollowup[]>;
+}
+
+export interface ActiveSessionState {
   activeSessionId: string | null;
-  /** Runtime that actually owns the active session. Unlike selectedAgentId,
-   *  this is session-scoped and comes from canonical session history. */
   activeRuntimeId: string | null;
   activeTitle: string;
-  /** Sessions currently driven by their interactive TUI (single-writer): chat
-   *  for these is locked until the TUI exits. Fed by `terminal.tui` broadcasts
-   *  so every device shows the same locked/unlocked state. */
-  tuiSessions: string[];
   github: GithubContext;
   transcript: TranscriptEntry[];
   working: boolean;
   workingLabel: string;
-  /** True while an existing session is being opened and we have nothing cached
-   *  to paint yet — the transcript is empty because history is still in flight,
-   *  not because the session is new. Drives a loading spinner instead of the
-   *  "start a new session" empty state (which made an opening session look like
-   *  a fresh one during the node's resume round-trip). */
   opening: boolean;
   approvals: ApprovalRequest[];
-  /** Pending clarifying questions (see UserQuestionRequest) across every session. */
   questions: UserQuestionRequest[];
-  /** Soft watchdog decisions pending across sessions. */
   turnAttentions: TurnAttentionRequest[];
+  usage: Usage | null;
+  changes: TurnChanges | null;
+  changesHistory: SessionChangeEntry[];
+  checkpoints: Checkpoint[];
+}
+
+export interface CatalogState {
   models: ModelInfo[];
-  /** The runtime the current `models`/`currentModel` were resolved for (the
-   *  node tags each models.list with its runtime). Null when unknown — e.g. the
-   *  very first list before any agent is selected, or an older node that doesn't
-   *  send it. Used to reject a list that belongs to a different agent than the
-   *  one now selected, so the composer/picker never show another agent's models. */
   modelsRuntimeId: string | null;
   currentModelId: string | null;
   currentModel: ModelInfo | null;
@@ -731,125 +730,73 @@ export interface AppState {
   reposAuthed: boolean;
   reposError: string | null;
   reposLoading: boolean;
-  /** When the repo list is empty because GitHub isn't connected, WHY — so the
-   *  picker can show an actionable prompt (connect flow, plus a `gh auth login`
-   *  hint when gh is installed-but-logged-out). Null once authed. */
   reposReason: RepoAuthReason;
-  /** State of the repo-picker "Connect GitHub" device flow (Tier 2). */
   githubConnect: GithubConnectState;
-  /** Target choices whose identity lasts only until the next session starts. */
-  draft: SessionDraft;
-  /** Remote branches of `draft.repo` (for the adjacent branch pill), and which
-   *  repo slug they belong to — so a still-loading/stale list from the
-   *  PREVIOUS repo pick is never shown as if it were the new one's. */
   branches: BranchInfo[];
   branchesRepo: string | null;
-  /** The repo's default branch name (e.g. "main"), so the branch picker can
-   *  label its "use the default" row without a second round trip. */
   branchesDefault: string | null;
   branchesError: string | null;
   branchesLoading: boolean;
-  /** Current node's settings (Settings → Nodes), or null until fetched. */
-  nodeSettings: NodeSettings | null;
   providers: ProviderInfo[];
   activationReadiness: {
     credential: { configured: boolean; probed: boolean; ok: boolean; reason?: string };
     repository: { chosen: boolean; probed: boolean; ok: boolean; authed: boolean; reason?: string };
   } | null;
+}
+
+export interface SettingsState {
+  nodeSettings: NodeSettings | null;
   providerAuth: ProviderAuth | null;
-  /** Labeled credentials per provider (Settings → Keys & OAuth), from `credentials.records`. */
   credentialRecords: CredentialRecordSummary[];
-  /** Selection presets (which labeled credential a project uses), from `credentials.presets`. */
   credentialPresets: CredentialPresetsView | null;
-  /** User-provided / local model endpoints (Settings → Local models). */
   localModels: LocalModelProvider[];
-  /** Quick-add presets for common local inference servers. */
   localModelPresets: LocalModelPreset[];
-  /** User-authored run-orchestration rulesets (Settings → Rulesets). */
   rulesets: RulesetInfo[];
-  /** Voice-input config (preferred provider + stored keys), or null until fetched. */
   sttConfig: SttConfig | null;
+  nodeStats: NodeStats | null;
+  capabilities: MachineCapabilities | null;
+}
+
+export interface PresentationState {
   oauth: OauthState | null;
-  /** A launched ephemeral runner came online with no usable model credentials
-   *  (nothing to seed from this device, no peer vault, no hosted escrow) — the
-   *  first-run subscription-OAuth prompt. Also raised mid-session when a running
-   *  agent's credential is missing/expired and it 401s (`reason` carries the
-   *  failure text so the sheet can explain a re-auth vs a first sign-in). `nodeId`
-   *  scopes it to the runner that needs it; cleared once the *targeted* provider
-   *  becomes configured. Null otherwise. */
   needsModelAuth: { nodeId: string; provider: string; reason?: string } | null;
   githubApp: GithubAppState | null;
-  /** Cost/token/plan-quota for the active session (display-only), or null. */
-  usage: Usage | null;
-  /** Latest node-resource snapshot (memory/CPU/storage) for the header "Node
-   *  stats" panel, or null until first requested. Polled while the panel is open. */
-  nodeStats: NodeStats | null;
-  /** Machine capability inventory (OS/arch, agents, providers, Docker/GPU,
-   *  plugins, workspace count) for the Settings → Nodes panel, or null until
-   *  first requested. Fetched on demand, not polled — capabilities change
-   *  rarely, unlike live resource stats. */
-  capabilities: MachineCapabilities | null;
-  /** Sessions currently paused (every action asks for approval until resumed). */
-  pausedSessionIds: string[];
-  /** Transient result of an Open-PR action, for the UI to toast. */
   prResult: { sessionId?: string; url?: string; error?: string } | null;
-  /** Transient result of the global "refresh GitHub status" scan
-   *  (`sessions.pr.refresh_all`), for the UI to report back to the user. */
   prRefreshAllResult: { scanned: number; changed: number; error?: string } | null;
-  /** Files the active session's last turn changed (Universal Agent Harness), or
-   *  null. Drives the "files changed / undo this turn" card. Cleared on session
-   *  switch, when a new turn starts, and after a rewind. */
-  changes: TurnChanges | null;
-  /** Every turn's file changes for the active session, oldest first — the
-   *  durable record `changes` above doesn't keep (that field is retired the
-   *  instant the next turn starts, so it can only ever show the most recent
-   *  turn). Appended to on every `session.changes` that touched files; NOT
-   *  cleared when `changes` is retired or on rewind, only on session switch —
-   *  it backs the "session changes" sheet, which the user can open at any
-   *  point to see every turn's diff, not just whichever one happened to be
-   *  live when they looked. */
-  changesHistory: SessionChangeEntry[];
-  /** The active session's harness checkpoints (newest first), for the rewind
-   *  timeline. Populated on demand via `session.checkpoints`; [] until fetched. */
-  checkpoints: Checkpoint[];
-  /**
-   * Agent-native slash commands advertised by each open session, keyed by
-   * sessionId. Stored per session — NOT merged onto a shared runtime row — so two
-   * sessions on the same runtime never overwrite each other's command set (the
-   * bug the per-runtime merge had). The composer offers only the *active*
-   * session's entry (`commandsBySession[activeSessionId]`), falling back to the
-   * selected runtime's static catalog commands for a pre-session draft. Populated
-   * from session.created / session.capabilities; dropped on session.deleted and
-   * on a node switch.
-   */
-  commandsBySession: Record<string, SlashCommand[]>;
-  /**
-   * Follow-up prompts the composer queued instead of sending immediately —
-   * because the session was mid-turn, or the queue already held something (so
-   * a new prompt can't jump ahead of it) — keyed by sessionId. Per-session for
-   * the same reason as commandsBySession: switching sessions must never blend
-   * one session's queue into another's. Only ever populated for a *real*
-   * session — a prompt sent before the very first session.new resolves is
-   * handled by AppController's own pendingPrompt/pendingFollowups instead (a
-   * narrower, invisible race that predates a session existing at all). See
-   * AppController.sendPrompt/drainFollowups for the delivery lifecycle (queued
-   * -> sending -> gone, folded into the transcript as a normal message once
-   * the node acknowledges it).
-   */
-  followupsBySession: Record<string, PendingFollowup[]>;
   error: string | null;
-  /** A transient, non-error confirmation banner (e.g. "You're on Pro"). Shown as
-   *  a success toast and auto-dismissed by the UI. Distinct from `error` so the
-   *  two can coexist and are styled differently. */
   notice: string | null;
-  /** Set when the connected node reports it's running an older Bivy than the
-   *  latest release — drives the version-mismatch banner and its one-tap
-   *  "Update this node" button (controller.updateNode). Null when up to date. */
-  nodeUpdate: { current: string; latest: string } | null;
-  /** True from the moment the user taps "Update this node" until the node
-   *  restarts on the new build (the socket reconnects) or reports it couldn't
-   *  start the update. Keeps the button from being tapped twice. */
-  nodeUpdating: boolean;
+}
+
+/** Reactive application state is a composition of independently meaningful
+ * immutable values. Fields intentionally exist in exactly one nested value. */
+export interface AppState {
+  readonly connection: Readonly<ConnectionAccountState>;
+  readonly sessionIndex: Readonly<SessionIndexState>;
+  readonly activeSession: Readonly<ActiveSessionState>;
+  readonly catalogs: Readonly<CatalogState>;
+  readonly settings: Readonly<SettingsState>;
+  readonly presentation: Readonly<PresentationState>;
+  readonly draft: Readonly<SessionDraft>;
+}
+
+type AppStatePatch = Partial<
+  ConnectionAccountState & SessionIndexState & ActiveSessionState & CatalogState &
+  SettingsState & PresentationState & { draft: SessionDraft }
+>;
+
+const CONNECTION_FIELDS = ["status", "signedIn", "nodes", "currentNodeId", "nodeUpdate", "nodeUpdating"] as const;
+const SESSION_INDEX_FIELDS = ["sessions", "runTerminals", "tuiSessions", "pausedSessionIds", "commandsBySession", "followupsBySession"] as const;
+const ACTIVE_SESSION_FIELDS = ["activeSessionId", "activeRuntimeId", "activeTitle", "github", "transcript", "working", "workingLabel", "opening", "approvals", "questions", "turnAttentions", "usage", "changes", "changesHistory", "checkpoints"] as const;
+const CATALOG_FIELDS = ["models", "modelsRuntimeId", "currentModelId", "currentModel", "thinking", "runtimes", "currentAgentName", "selectedAgentId", "installingRuntimeId", "repos", "reposAuthed", "reposError", "reposLoading", "reposReason", "githubConnect", "branches", "branchesRepo", "branchesDefault", "branchesError", "branchesLoading", "providers", "activationReadiness"] as const;
+const SETTINGS_FIELDS = ["nodeSettings", "providerAuth", "credentialRecords", "credentialPresets", "localModels", "localModelPresets", "rulesets", "sttConfig", "nodeStats", "capabilities"] as const;
+const PRESENTATION_FIELDS = ["oauth", "needsModelAuth", "githubApp", "prResult", "prRefreshAllResult", "error", "notice"] as const;
+
+function pickPatch<T extends object>(current: T, patch: AppStatePatch, fields: readonly (keyof T)[]): T {
+  const entries: Array<[keyof T, unknown]> = [];
+  for (const field of fields) {
+    if (Object.prototype.hasOwnProperty.call(patch, field)) entries.push([field, patch[field as keyof AppStatePatch]]);
+  }
+  return entries.length ? { ...current, ...Object.fromEntries(entries as Array<[PropertyKey, unknown]>) } : current;
 }
 
 /** A harness checkpoint (rewind target) for the active session. */
@@ -893,73 +840,40 @@ export interface SessionChangeEntry extends TurnChanges {
 
 export function initialState(): AppState {
   return {
-    status: "offline",
-    signedIn: false,
-    nodes: [],
-    currentNodeId: null,
-    sessions: [],
-    runTerminals: [],
-    activeSessionId: null,
-    activeRuntimeId: null,
-    activeTitle: "New session",
-    tuiSessions: [],
-    github: { issueUrl: null, prUrl: null, branch: null, repo: null, prs: [] },
-    transcript: [],
-    working: false,
-    workingLabel: "",
-    opening: false,
-    approvals: [],
-    questions: [],
-    turnAttentions: [],
-    models: [],
-    modelsRuntimeId: null,
-    currentModelId: null,
-    currentModel: null,
-    thinking: { supportsThinking: false, thinkingLevel: "off", availableThinkingLevels: ["off"] },
-    runtimes: [],
-    currentAgentName: "Agent",
-    selectedAgentId: null,
-    installingRuntimeId: null,
-    repos: [],
-    reposAuthed: true,
-    reposError: null,
-    reposLoading: false,
-    reposReason: null,
-    githubConnect: { status: "idle" },
+    connection: {
+      status: "offline", signedIn: false, nodes: [], currentNodeId: null,
+      nodeUpdate: null, nodeUpdating: false,
+    },
+    sessionIndex: {
+      sessions: [], runTerminals: [], tuiSessions: [], pausedSessionIds: [],
+      commandsBySession: {}, followupsBySession: {},
+    },
+    activeSession: {
+      activeSessionId: null, activeRuntimeId: null, activeTitle: "New session",
+      github: { issueUrl: null, prUrl: null, branch: null, repo: null, prs: [] },
+      transcript: [], working: false, workingLabel: "", opening: false,
+      approvals: [], questions: [], turnAttentions: [], usage: null, changes: null,
+      changesHistory: [], checkpoints: [],
+    },
+    catalogs: {
+      models: [], modelsRuntimeId: null, currentModelId: null, currentModel: null,
+      thinking: { supportsThinking: false, thinkingLevel: "off", availableThinkingLevels: ["off"] },
+      runtimes: [], currentAgentName: "Agent", selectedAgentId: null,
+      installingRuntimeId: null, repos: [], reposAuthed: true, reposError: null,
+      reposLoading: false, reposReason: null, githubConnect: { status: "idle" },
+      branches: [], branchesRepo: null, branchesDefault: null, branchesError: null,
+      branchesLoading: false, providers: [], activationReadiness: null,
+    },
+    settings: {
+      nodeSettings: null, providerAuth: null, credentialRecords: [],
+      credentialPresets: null, localModels: [], localModelPresets: [], rulesets: [],
+      sttConfig: null, nodeStats: null, capabilities: null,
+    },
+    presentation: {
+      oauth: null, needsModelAuth: null, githubApp: null, prResult: null,
+      prRefreshAllResult: null, error: null, notice: null,
+    },
     draft: { ...EMPTY_SESSION_DRAFT },
-    branches: [],
-    branchesRepo: null,
-    branchesDefault: null,
-    branchesError: null,
-    branchesLoading: false,
-    nodeSettings: null,
-    providers: [],
-    activationReadiness: null,
-    providerAuth: null,
-    credentialRecords: [],
-    credentialPresets: null,
-    localModels: [],
-    localModelPresets: [],
-    rulesets: [],
-    sttConfig: null,
-    oauth: null,
-    needsModelAuth: null,
-    githubApp: null,
-    usage: null,
-    nodeStats: null,
-    capabilities: null,
-    pausedSessionIds: [],
-    prResult: null,
-    prRefreshAllResult: null,
-    changes: null,
-    changesHistory: [],
-    checkpoints: [],
-    commandsBySession: {},
-    followupsBySession: {},
-    error: null,
-    notice: null,
-    nodeUpdate: null,
-    nodeUpdating: false,
   };
 }
 
@@ -1195,7 +1109,7 @@ export class SessionStore {
 
   /** Locally advance the GitHub App flow (used by the client between events). */
   setGithubAppPhase(phase: GithubAppState["phase"], patch: Partial<GithubAppState> = {}): void {
-    this.set({ githubApp: { ...(this.state.githubApp || { phase: "idle" }), phase, ...patch } });
+    this.set({ githubApp: { ...(this.state.presentation.githubApp || { phase: "idle" }), phase, ...patch } });
   }
 
   /** Set the repo-picker Connect-GitHub flow state (optimistic "starting", reset). */
@@ -1220,7 +1134,7 @@ export class SessionStore {
     this.historyRaw.set(sessionId, { messages, count, historyHash });
     const transcript = this.withInlineImageRefs(this.withCachedAttachments(renderHistory(messages)));
     this.cacheTranscript(sessionId, transcript);
-    if (this.state.activeSessionId === sessionId && this.state.transcript.length === 0) {
+    if (this.state.activeSession.activeSessionId === sessionId && this.state.activeSession.transcript.length === 0) {
       this.set({ transcript, opening: false });
     }
   }
@@ -1442,7 +1356,7 @@ export class SessionStore {
     this.pending.clear();
     this.usersBeforePending = 0;
     const cached = this.transcriptCache.get(sessionId);
-    const known = this.state.sessions.find((s) => s.sessionId === sessionId);
+    const known = this.state.sessionIndex.sessions.find((s) => s.sessionId === sessionId);
     this.set({
       activeSessionId: sessionId,
       activeRuntimeId: known?.runtimeId ?? null,
@@ -1455,7 +1369,7 @@ export class SessionStore {
       // the session-scoped models.list response supplies the real selection.
       currentAgentName:
         known?.agentName ||
-        agentLabel(this.state.runtimes.find((r) => r.id === known?.runtimeId)) ||
+        agentLabel(this.state.catalogs.runtimes.find((r) => r.id === known?.runtimeId)) ||
         "",
       currentModel: null,
       currentModelId: null,
@@ -1465,8 +1379,8 @@ export class SessionStore {
       // so a finished-but-unseen row's indicator clears the instant they look,
       // rather than waiting on a node round-trip to confirm anything.
       sessions: known
-        ? this.state.sessions.map((s) => (s.sessionId === sessionId ? { ...s, lastSeenAt: Date.now() } : s))
-        : this.state.sessions,
+        ? this.state.sessionIndex.sessions.map((s) => (s.sessionId === sessionId ? { ...s, lastSeenAt: Date.now() } : s))
+        : this.state.sessionIndex.sessions,
       // Update the header title at once from the row we already know, instead of
       // leaving the previous session's title until session.history lands.
       // applyHistory reconciles to the canonical name when it arrives.
@@ -1499,13 +1413,33 @@ export class SessionStore {
     return () => this.listeners.delete(fn);
   };
 
-  private set(next: Partial<AppState>): void {
+  private set(next: AppStatePatch): void {
+    const connection = pickPatch(this.state.connection, next, CONNECTION_FIELDS);
+    const sessionIndex = pickPatch(this.state.sessionIndex, next, SESSION_INDEX_FIELDS);
+    const activeSession = pickPatch(this.state.activeSession, next, ACTIVE_SESSION_FIELDS);
+    const catalogs = pickPatch(this.state.catalogs, next, CATALOG_FIELDS);
+    const settings = pickPatch(this.state.settings, next, SETTINGS_FIELDS);
+    const presentation = pickPatch(this.state.presentation, next, PRESENTATION_FIELDS);
+    this.setValues({
+      connection,
+      sessionIndex,
+      activeSession,
+      catalogs,
+      settings,
+      presentation,
+      draft: next.draft ?? this.state.draft,
+    });
+  }
+
+  /** Install already-folded nested values; identity/subscription is the store's
+   * only responsibility after a pure fold has returned data. */
+  private setValues(next: Partial<AppState>): void {
     this.state = { ...this.state, ...next };
     // Streaming events can update the store several times in one transport
     // tick (draft text, tool state, working label). Delay only while a turn is
     // active so React subscribers repaint at most once per frame; lifecycle and
     // completed-turn updates remain synchronous.
-    if (this.state.working) {
+    if (this.state.activeSession.working) {
       this.scheduleNotify();
       return;
     }
@@ -1560,15 +1494,15 @@ export class SessionStore {
   private mergeRuntimeCapabilities(runtimeId: unknown, capabilities: unknown): void {
     const rid = runtimeId ? String(runtimeId) : "";
     if (!rid || !capabilities || typeof capabilities !== "object") return;
-    const idx = this.state.runtimes.findIndex((r) => r.id === rid);
-    const row = idx >= 0 ? this.state.runtimes[idx] : undefined;
+    const idx = this.state.catalogs.runtimes.findIndex((r) => r.id === rid);
+    const row = idx >= 0 ? this.state.catalogs.runtimes[idx] : undefined;
     if (!row) return;
     const existing = (row.capabilities as Record<string, unknown> | undefined) || {};
     const incoming = { ...(capabilities as Record<string, unknown>) };
     delete incoming.commands;
     const merged = { ...existing, ...incoming };
     if (JSON.stringify(merged) === JSON.stringify(existing)) return;
-    const nextRuntimes = this.state.runtimes.slice();
+    const nextRuntimes = this.state.catalogs.runtimes.slice();
     nextRuntimes[idx] = { ...row, capabilities: merged };
     this.set({ runtimes: nextRuntimes });
   }
@@ -1584,9 +1518,9 @@ export class SessionStore {
     if (!sid) return;
     const caps = capabilities && typeof capabilities === "object" ? (capabilities as Record<string, unknown>) : undefined;
     const commands = normalizeAgentCommands(caps?.commands);
-    const prev = this.state.commandsBySession[sid] ?? [];
+    const prev = this.state.sessionIndex.commandsBySession[sid] ?? [];
     if (sameCommandList(prev, commands)) return;
-    const next = { ...this.state.commandsBySession };
+    const next = { ...this.state.sessionIndex.commandsBySession };
     if (commands.length) next[sid] = commands;
     else delete next[sid];
     this.set({ commandsBySession: next });
@@ -1595,8 +1529,8 @@ export class SessionStore {
   /** Forget a session's advertised commands (on delete). Keeps the map from
    *  growing unbounded across a long-lived client and stops a stale set lingering. */
   private dropSessionCommands(sessionId: string): void {
-    if (!(sessionId in this.state.commandsBySession)) return;
-    const next = { ...this.state.commandsBySession };
+    if (!(sessionId in this.state.sessionIndex.commandsBySession)) return;
+    const next = { ...this.state.sessionIndex.commandsBySession };
     delete next[sessionId];
     this.set({ commandsBySession: next });
   }
@@ -1606,11 +1540,11 @@ export class SessionStore {
   // only the identity/subscription shell that installs the returned value.
 
   getFollowups(sessionId: string): PendingFollowup[] {
-    return this.state.followupsBySession[sessionId] ?? [];
+    return this.state.sessionIndex.followupsBySession[sessionId] ?? [];
   }
 
   private setFollowupsFor(sessionId: string, list: readonly PendingFollowup[]): void {
-    const next = { ...this.state.followupsBySession };
+    const next = { ...this.state.sessionIndex.followupsBySession };
     if (list.length) next[sessionId] = [...list];
     else delete next[sessionId];
     this.set({ followupsBySession: next });
@@ -1677,14 +1611,14 @@ export class SessionStore {
   }
 
   dropFollowups(sessionId: string): void {
-    if (sessionId in this.state.followupsBySession) {
+    if (sessionId in this.state.sessionIndex.followupsBySession) {
       this.transitionFollowups(sessionId, { type: "clear" });
     }
   }
 
   setStatus(status: ConnectionStatus): void {
-    if (status === this.state.status) return;
-    const currentNodeId = this.state.currentNodeId;
+    if (status === this.state.connection.status) return;
+    const currentNodeId = this.state.connection.currentNodeId;
     // The live transport is more authoritative for the selected node than a
     // possibly-racing /nodes snapshot. In particular, first install can fetch
     // the registry while the relay's online write is still in flight; once this
@@ -1696,7 +1630,7 @@ export class SessionStore {
     this.set({
       status,
       ...(currentNodeId && status === "online"
-        ? { nodes: this.state.nodes.map((node) => node.id === currentNodeId ? { ...node, online: true } : node) }
+        ? { nodes: this.state.connection.nodes.map((node) => node.id === currentNodeId ? { ...node, online: true } : node) }
         : {}),
     });
   }
@@ -1705,16 +1639,16 @@ export class SessionStore {
    *  auth gate so signing in (or out) swaps the sign-in screen and the app shell
    *  without a full page reload. */
   setSignedIn(signedIn: boolean): void {
-    if (signedIn !== this.state.signedIn) this.set({ signedIn });
+    if (signedIn !== this.state.connection.signedIn) this.set({ signedIn });
   }
 
   setNodes(nodes: AccountNode[]): void {
     // A control-plane list can race just behind the relay connection that made
     // the current transport online. Preserve the stronger live signal so a late
     // `{ online:false }` response cannot regress the selected node's dot.
-    const currentNodeId = this.state.currentNodeId;
+    const currentNodeId = this.state.connection.currentNodeId;
     this.set({
-      nodes: currentNodeId && this.state.status === "online"
+      nodes: currentNodeId && this.state.connection.status === "online"
         ? nodes.map((node) => node.id === currentNodeId ? { ...node, online: true } : node)
         : nodes,
     });
@@ -1732,11 +1666,11 @@ export class SessionStore {
    * just because the row object was rebuilt from scratch.
    */
   setSessions(list: unknown): void {
-    const sessions = this.withoutRecentlyDeleted(normalizeSessions(list, this.state.sessions));
+    const sessions = this.withoutRecentlyDeleted(normalizeSessions(list, this.state.sessionIndex.sessions));
     const ids = new Set(sessions.map((s) => s.sessionId));
-    const pending = this.state.sessions.filter((s) => s.pendingLaunch && !ids.has(s.sessionId));
+    const pending = this.state.sessionIndex.sessions.filter((s) => s.pendingLaunch && !ids.has(s.sessionId));
     const merged = [...pending, ...sessions];
-    const activeId = this.state.activeSessionId;
+    const activeId = this.state.activeSession.activeSessionId;
     this.set({
       sessions: activeId
         ? merged.map((s) => (s.sessionId === activeId ? { ...s, lastSeenAt: Date.now() } : s))
@@ -1752,8 +1686,8 @@ export class SessionStore {
    * reducer overwrites this the moment the node answers.
    */
   seedSessions(list: unknown): void {
-    if (this.state.sessions.length > 0) return;
-    const sessions = this.withoutRecentlyDeleted(normalizeSessions(list, this.state.sessions));
+    if (this.state.sessionIndex.sessions.length > 0) return;
+    const sessions = this.withoutRecentlyDeleted(normalizeSessions(list, this.state.sessionIndex.sessions));
     if (sessions.length === 0) return;
     this.set({ sessions });
   }
@@ -1842,12 +1776,12 @@ export class SessionStore {
 
   /** Consume the transient Open-PR result once the UI has shown it. */
   clearPrResult(): void {
-    if (this.state.prResult) this.set({ prResult: null });
+    if (this.state.presentation.prResult) this.set({ prResult: null });
   }
 
   /** Consume the transient "refresh all GitHub statuses" result once shown. */
   clearPrRefreshAllResult(): void {
-    if (this.state.prRefreshAllResult) this.set({ prRefreshAllResult: null });
+    if (this.state.presentation.prRefreshAllResult) this.set({ prRefreshAllResult: null });
   }
 
   setReposLoading(loading: boolean): void {
@@ -1923,13 +1857,13 @@ export class SessionStore {
    * or when the lists aren't loaded yet (the burst reducers populate them then).
    */
   seedDraftAgentModel(agentId: string | null | undefined, model: { provider?: string; id: string } | null): void {
-    if (this.state.activeSessionId) return;
-    const next: Partial<AppState> = {};
+    if (this.state.activeSession.activeSessionId) return;
+    const next: AppStatePatch = {};
     // Agent: the remembered pick if this node offers it and it's installed/ready,
     // else the runtime the node flags as current (its default for a new session).
     const available = (r: RuntimeInfo) => String((r as any).status || "available") === "available";
-    const remembered = agentId ? this.state.runtimes.find((r) => r.id === agentId && available(r)) : undefined;
-    const defaultRuntime = this.state.runtimes.find((r) => (r as any).current && available(r));
+    const remembered = agentId ? this.state.catalogs.runtimes.find((r) => r.id === agentId && available(r)) : undefined;
+    const defaultRuntime = this.state.catalogs.runtimes.find((r) => (r as any).current && available(r));
     const agent = remembered || defaultRuntime;
     if (agent) {
       const label = agentLabel(agent);
@@ -1945,10 +1879,10 @@ export class SessionStore {
     // (via runtime.select → runtime.updated → listModels) repopulates it. A null
     // modelsRuntimeId means "unknown" (older node, or the very first list before
     // any agent was selected) — trust it, preserving the pre-scoping behavior.
-    const listMatchesAgent = agent ? this.state.modelsRuntimeId == null || this.state.modelsRuntimeId === agent.id : true;
+    const listMatchesAgent = agent ? this.state.catalogs.modelsRuntimeId == null || this.state.catalogs.modelsRuntimeId === agent.id : true;
     if (listMatchesAgent) {
-      const rememberedModel = model ? this.state.models.find((m) => sameModel(m, model as ModelInfo)) : undefined;
-      const defaultModel = this.state.models.find((m) => (m as any).current);
+      const rememberedModel = model ? this.state.catalogs.models.find((m) => sameModel(m, model as ModelInfo)) : undefined;
+      const defaultModel = this.state.catalogs.models.find((m) => (m as any).current);
       const chosen = rememberedModel || defaultModel;
       if (chosen) {
         next.currentModel = chosen;
@@ -1968,24 +1902,24 @@ export class SessionStore {
     this.set({
       currentModel: model,
       currentModelId: model.id,
-      models: this.state.models.map((m) => ({ ...m, current: sameModel(m, model) })),
+      models: this.state.catalogs.models.map((m) => ({ ...m, current: sameModel(m, model) })),
     });
   }
 
   /** Optimistically reflect an agent pick before runtime.updated arrives. */
   setSelectedAgentLocal(id: string): void {
-    const rt = this.state.runtimes.find((a) => a.id === id);
+    const rt = this.state.catalogs.runtimes.find((a) => a.id === id);
     // A prior agent's reduced-protections acknowledgement must never silently
     // carry over to a different one — always re-confirm on switch.
-    const next: Partial<AppState> = {
+    const next: AppStatePatch = {
       selectedAgentId: id,
-      currentAgentName: agentLabel(rt) || this.state.currentAgentName,
+      currentAgentName: agentLabel(rt) || this.state.catalogs.currentAgentName,
       draft: reduceSessionDraft(this.state.draft, { type: "acknowledge-reduced-protections", acknowledged: false }),
     };
     // Only touch the model list when the held one belongs to a *different*
     // runtime; a null (unknown) id is left for the refresh to overwrite so we
     // don't needlessly blank a still-valid pill.
-    if (this.state.modelsRuntimeId != null && this.state.modelsRuntimeId !== id) {
+    if (this.state.catalogs.modelsRuntimeId != null && this.state.catalogs.modelsRuntimeId !== id) {
       const cached = this.modelsByRuntime.get(id);
       if (cached) {
         // Switching back to an agent already viewed this session: repaint its
@@ -2014,7 +1948,7 @@ export class SessionStore {
 
   /** Optimistically move the reasoning level before the node confirms. */
   setThinkingLevel(level: string): void {
-    this.set({ thinking: { ...this.state.thinking, thinkingLevel: level } });
+    this.set({ thinking: { ...this.state.catalogs.thinking, thinkingLevel: level } });
   }
 
   /** Drop the active session/transcript (e.g. starting a new draft), keeping
@@ -2062,7 +1996,7 @@ export class SessionStore {
    *  the launch. The controller replaces this row with the node's canonical id
    *  as soon as session.new completes. */
   persistPendingSession(sessionId: string, name: string, activate = true): void {
-    const existing = this.state.sessions.find((s) => s.sessionId === sessionId);
+    const existing = this.state.sessionIndex.sessions.find((s) => s.sessionId === sessionId);
     const row: SessionSummary = {
       ...existing,
       sessionId,
@@ -2073,29 +2007,29 @@ export class SessionStore {
     };
     this.set({
       ...(activate ? { activeSessionId: sessionId, activeTitle: row.name } : {}),
-      sessions: [row, ...this.state.sessions.filter((s) => s.sessionId !== sessionId)],
+      sessions: [row, ...this.state.sessionIndex.sessions.filter((s) => s.sessionId !== sessionId)],
     });
   }
 
   retryPendingSession(sessionId: string): void {
-    this.set({ sessions: this.state.sessions.map((s) => s.sessionId === sessionId ? { ...s, status: "working", updatedAt: Date.now() } : s) });
+    this.set({ sessions: this.state.sessionIndex.sessions.map((s) => s.sessionId === sessionId ? { ...s, status: "working", updatedAt: Date.now() } : s) });
   }
 
   dismissPendingSession(sessionId: string): void {
     this.set({
-      activeSessionId: this.state.activeSessionId === sessionId ? null : this.state.activeSessionId,
-      sessions: this.state.sessions.filter((s) => s.sessionId !== sessionId),
+      activeSessionId: this.state.activeSession.activeSessionId === sessionId ? null : this.state.activeSession.activeSessionId,
+      sessions: this.state.sessionIndex.sessions.filter((s) => s.sessionId !== sessionId),
     });
   }
 
   /** Add provider routing to a pending row once provisioning returns a node id. */
   bindPendingSessionNode(sessionId: string, nodeId: string): void {
-    this.set({ sessions: this.state.sessions.map((s) => s.sessionId === sessionId ? { ...s, nodeId } : s) });
+    this.set({ sessions: this.state.sessionIndex.sessions.map((s) => s.sessionId === sessionId ? { ...s, nodeId } : s) });
   }
 
   /** Replace a cold-start placeholder with the node's canonical session. */
   completePendingSession(pendingId: string, sessionId: string, nodeId: string): void {
-    const pending = this.state.sessions.find((s) => s.sessionId === pendingId);
+    const pending = this.state.sessionIndex.sessions.find((s) => s.sessionId === pendingId);
     const row: SessionSummary = {
       ...pending,
       sessionId,
@@ -2106,15 +2040,15 @@ export class SessionStore {
       updatedAt: Date.now(),
     };
     this.set({
-      activeSessionId: this.state.activeSessionId === pendingId ? sessionId : this.state.activeSessionId,
-      sessions: [row, ...this.state.sessions.filter((s) => s.sessionId !== pendingId && s.sessionId !== sessionId)],
+      activeSessionId: this.state.activeSession.activeSessionId === pendingId ? sessionId : this.state.activeSession.activeSessionId,
+      sessions: [row, ...this.state.sessionIndex.sessions.filter((s) => s.sessionId !== pendingId && s.sessionId !== sessionId)],
     });
   }
 
   /** Keep a failed cold start visible and clearly settled so its setup log can
    *  still be opened, instead of leaving an endless working spinner. */
   failPendingSession(sessionId: string): void {
-    this.set({ sessions: this.state.sessions.map((s) => s.sessionId === sessionId ? { ...s, status: "failed" } : s) });
+    this.set({ sessions: this.state.sessionIndex.sessions.map((s) => s.sessionId === sessionId ? { ...s, status: "failed" } : s) });
   }
 
   setActiveTitle(name: string): void {
@@ -2123,7 +2057,7 @@ export class SessionStore {
 
   /** Optimistically rename a session-list row before the node confirms. */
   renameSessionLocal(sessionId: string, name: string): void {
-    this.set({ sessions: this.state.sessions.map((s) => (s.sessionId === sessionId ? { ...s, name } : s)) });
+    this.set({ sessions: this.state.sessionIndex.sessions.map((s) => (s.sessionId === sessionId ? { ...s, name } : s)) });
   }
 
   /** Restore deletion guards persisted by a view layer across a PWA reload. */
@@ -2148,7 +2082,7 @@ export class SessionStore {
     // (the control-plane index lags the node's debounced advert) can't add it
     // back — see setSessions / recentlyDeleted.
     this.recentlyDeleted.set(sessionId, Date.now());
-    this.set({ sessions: this.state.sessions.filter((s) => s.sessionId !== sessionId) });
+    this.set({ sessions: this.state.sessionIndex.sessions.filter((s) => s.sessionId !== sessionId) });
   }
 
   private pruneDeletedSessionTombstones(): void {
@@ -2173,15 +2107,15 @@ export class SessionStore {
    *  existing row so we never clobber a name/status the list already carried. */
   private upsertSession(summary: SessionSummary): void {
     if (!summary.sessionId) return;
-    const existing = this.state.sessions.find((s) => s.sessionId === summary.sessionId);
+    const existing = this.state.sessionIndex.sessions.find((s) => s.sessionId === summary.sessionId);
     if (existing) {
       const merged: SessionSummary = {
         ...existing,
         ...Object.fromEntries(Object.entries(summary).filter(([, v]) => v !== undefined && v !== "")),
       };
-      this.set({ sessions: this.state.sessions.map((s) => (s.sessionId === summary.sessionId ? merged : s)) });
+      this.set({ sessions: this.state.sessionIndex.sessions.map((s) => (s.sessionId === summary.sessionId ? merged : s)) });
     } else {
-      this.set({ sessions: [summary, ...this.state.sessions] });
+      this.set({ sessions: [summary, ...this.state.sessionIndex.sessions] });
     }
   }
 
@@ -2204,7 +2138,7 @@ export class SessionStore {
       // history's catch-up against this baseline. Captured before the entry is
       // queued so it counts only prior, settled messages.
       if (this.pending.size === 0) {
-        this.usersBeforePending = this.state.transcript.reduce((n, e) => (e.role === "user" ? n + 1 : n), 0);
+        this.usersBeforePending = this.state.activeSession.transcript.reduce((n, e) => (e.role === "user" ? n + 1 : n), 0);
       }
       // Hold onto it (unconfirmed) so a session.new's empty history — or any full
       // replace that races ahead of the node persisting this prompt — can't erase
@@ -2212,16 +2146,54 @@ export class SessionStore {
       this.pending.set(clientMessageId, { entry, confirmed: false });
     }
     if (attachments && attachments.length) this.rememberAttachments(text, attachments);
-    this.set({ transcript: [...this.state.transcript, entry] });
+    this.set({ transcript: [...this.state.activeSession.transcript, entry] });
     // Sending a message is the clearest possible "this is now the most recently
     // active session" signal — bump it right away rather than waiting on the
     // round trip through session.event, so the sidebar reorders the instant you
     // hit send instead of only once the agent's turn starts streaming back.
-    if (this.state.activeSessionId) this.updateSessionRow(this.state.activeSessionId, { updatedAt: Date.now() });
+    if (this.state.activeSession.activeSessionId) this.updateSessionRow(this.state.activeSession.activeSessionId, { updatedAt: Date.now() });
   }
 
   apply(event: ServerEvent): void {
     const type = String(event.type || "");
+
+    const connectionFold = foldConnectionEvent(this.state.connection, event);
+    if (connectionFold.handled) {
+      this.setValues({
+        connection: connectionFold.value,
+        ...(connectionFold.error ? { presentation: { ...this.state.presentation, error: connectionFold.error } } : {}),
+      });
+      return;
+    }
+    const indexFold = foldSessionIndexEvent(this.state.sessionIndex, event);
+    if (indexFold.handled) {
+      if (indexFold.value !== this.state.sessionIndex) {
+        this.setValues({ sessionIndex: { ...this.state.sessionIndex, pausedSessionIds: [...indexFold.value.pausedSessionIds] } });
+      }
+      return;
+    }
+    const catalogSettingsFold = foldCatalogSettingsEvent(event);
+    if (catalogSettingsFold.handled) {
+      if (catalogSettingsFold.catalogs || catalogSettingsFold.settings) {
+        this.setValues({
+          ...(catalogSettingsFold.catalogs ? { catalogs: { ...this.state.catalogs, ...catalogSettingsFold.catalogs } as CatalogState } : {}),
+          ...(catalogSettingsFold.settings ? { settings: { ...this.state.settings, ...catalogSettingsFold.settings } as SettingsState } : {}),
+        });
+      }
+      return;
+    }
+    const presentationFold = foldPresentationEvent(this.state.presentation, event);
+    if (presentationFold.handled) {
+      this.setValues({ presentation: presentationFold.value as PresentationState });
+      return;
+    }
+
+    this.applyStatefulEvent(event, type);
+  }
+
+  /** Stateful transcript/cache fold kept behind the pure value-fold pipeline.
+   * These events need shell-owned optimistic-send and history identities. */
+  private applyStatefulEvent(event: ServerEvent, type: string): void {
     switch (type) {
       case "terminal.list": {
         const terminals = Array.isArray((event as any).terminals)
@@ -2233,7 +2205,7 @@ export class SessionStore {
       case "terminal.created": {
         const terminal = (event as any).terminal as RunTerminalSummary | undefined;
         if (!terminal?.termId) return;
-        const rest = this.state.runTerminals.filter((t) => t.termId !== terminal.termId);
+        const rest = this.state.sessionIndex.runTerminals.filter((t) => t.termId !== terminal.termId);
         this.set({ runTerminals: [terminal, ...rest] });
         return;
       }
@@ -2241,7 +2213,7 @@ export class SessionStore {
         const e = event as any;
         const termId = String(e.termId || "");
         if (termId) this.set({
-          runTerminals: this.state.runTerminals.map((t) =>
+          runTerminals: this.state.sessionIndex.runTerminals.map((t) =>
             t.termId === termId ? { ...t, lastActivityAt: Number(e.at) || Date.now() } : t,
           ),
         });
@@ -2250,7 +2222,7 @@ export class SessionStore {
       case "terminal.closed":
       case "terminal.exit": {
         const termId = String((event as any).termId || "");
-        if (termId) this.set({ runTerminals: this.state.runTerminals.filter((t) => t.termId !== termId) });
+        if (termId) this.set({ runTerminals: this.state.sessionIndex.runTerminals.filter((t) => t.termId !== termId) });
         return;
       }
       case "terminal.tui": {
@@ -2260,9 +2232,9 @@ export class SessionStore {
         const sid = String((event as any).sessionId || "");
         if (!sid) return;
         const active = Boolean((event as any).active);
-        const has = this.state.tuiSessions.includes(sid);
-        if (active && !has) this.set({ tuiSessions: [...this.state.tuiSessions, sid] });
-        else if (!active && has) this.set({ tuiSessions: this.state.tuiSessions.filter((s) => s !== sid) });
+        const has = this.state.sessionIndex.tuiSessions.includes(sid);
+        if (active && !has) this.set({ tuiSessions: [...this.state.sessionIndex.tuiSessions, sid] });
+        else if (!active && has) this.set({ tuiSessions: this.state.sessionIndex.tuiSessions.filter((s) => s !== sid) });
         return;
       }
       case "sessions.list": {
@@ -2279,7 +2251,7 @@ export class SessionStore {
         const e = event as any;
         const sid = String(e.sessionId || e.id || "");
         if (sid) {
-          const known = this.state.sessions.find((s) => s.sessionId === sid);
+          const known = this.state.sessionIndex.sessions.find((s) => s.sessionId === sid);
           const sessionState = normalizeSessionState(e.sessionState ?? e.bivySession?.state);
           this.upsertSession({
             sessionId: sid,
@@ -2328,7 +2300,7 @@ export class SessionStore {
           status: sessionStatusFromState(sessionState),
           needsAction: sessionState.displayStatus === "needs_attention",
         });
-        if (sid === this.state.activeSessionId) {
+        if (sid === this.state.activeSession.activeSessionId) {
           this.set({ working: sessionState.agent === "working", ...(sessionState.agent !== "working" ? { workingLabel: "" } : {}) });
         }
         return;
@@ -2355,10 +2327,10 @@ export class SessionStore {
         // for every session), same as the status dot above — only the active
         // session's `github` pill additionally needs it.
         if (e.branch && sid) this.updateSessionRow(sid, { branch: String(e.branch) });
-        if (!sid || sid === this.state.activeSessionId) {
-          const patch: Partial<AppState> = {};
+        if (!sid || sid === this.state.activeSession.activeSessionId) {
+          const patch: AppStatePatch = {};
           if (e.name) patch.activeTitle = String(e.name);
-          if (e.branch) patch.github = { ...this.state.github, branch: String(e.branch) };
+          if (e.branch) patch.github = { ...this.state.activeSession.github, branch: String(e.branch) };
           if (Object.keys(patch).length) this.set(patch);
         }
         return;
@@ -2367,8 +2339,8 @@ export class SessionStore {
         const e = event as any;
         const sid = String(e.sessionId || "");
         if (e.branch && sid) this.updateSessionRow(sid, { branch: String(e.branch) });
-        if ((!sid || sid === this.state.activeSessionId) && e.branch) {
-          this.set({ github: { ...this.state.github, branch: String(e.branch) } });
+        if ((!sid || sid === this.state.activeSession.activeSessionId) && e.branch) {
+          this.set({ github: { ...this.state.activeSession.github, branch: String(e.branch) } });
         }
         return;
       }
@@ -2381,7 +2353,7 @@ export class SessionStore {
         // draft when the node reaps/flushes the active session (idle close,
         // restart, foreground reconcile). Keep the transcript visible and simply
         // stop live indicators; a later prompt/open will reopen the session.
-        if (sid && sid === this.state.activeSessionId) this.set({ working: false, workingLabel: "", opening: false });
+        if (sid && sid === this.state.activeSession.activeSessionId) this.set({ working: false, workingLabel: "", opening: false });
         return;
       }
       case "session.deleted": {
@@ -2392,22 +2364,22 @@ export class SessionStore {
         // protection as this client's optimistic delete.
         if (sid) this.recentlyDeleted.set(sid, Date.now());
         this.set({
-          sessions: this.state.sessions.filter(
+          sessions: this.state.sessionIndex.sessions.filter(
             (s) => s.sessionId !== sid && (!file || s.path !== file),
           ),
         });
         if (sid) this.dropSessionCommands(sid);
         if (sid) this.dropFollowups(sid);
         if (sid) this.knownAgentAttachmentsBySession.delete(sid);
-        if (sid && sid === this.state.activeSessionId) this.resetActiveSession();
+        if (sid && sid === this.state.activeSession.activeSessionId) this.resetActiveSession();
         return;
       }
       case "node.updated": {
         const e = event as any;
-        if (e.name && this.state.currentNodeId) {
+        if (e.name && this.state.connection.currentNodeId) {
           this.set({
-            nodes: this.state.nodes.map((n) =>
-              n.id === this.state.currentNodeId ? { ...n, name: String(e.name) } : n,
+            nodes: this.state.connection.nodes.map((n) =>
+              n.id === this.state.connection.currentNodeId ? { ...n, name: String(e.name) } : n,
             ),
           });
         }
@@ -2436,7 +2408,7 @@ export class SessionStore {
       case "session.notice": {
         const e = event as any;
         const sid = String(e.sessionId || "");
-        if ((!sid || sid === this.state.activeSessionId) && e.message) {
+        if ((!sid || sid === this.state.activeSession.activeSessionId) && e.message) {
           // Carry an optional `action` (a slash command like "/new") onto the
           // entry so the view can render it as a tappable button — e.g. a node
           // suggestion the user can act on with one tap.
@@ -2450,12 +2422,12 @@ export class SessionStore {
         // progress so the composer doesn't look idle. Mirrors legacy setWorking.
         const e = event as any;
         const sid = String(e.sessionId || "");
-        if (!sid || sid === this.state.activeSessionId) this.setWorking(`Cloning ${e.repo || "repo"}…`);
+        if (!sid || sid === this.state.activeSession.activeSessionId) this.setWorking(`Cloning ${e.repo || "repo"}…`);
         return;
       }
       case "session.history": {
         const e = event as any;
-        const sessionId = (e.sessionId as string) || this.state.activeSessionId;
+        const sessionId = (e.sessionId as string) || this.state.activeSession.activeSessionId;
         // Focus arbitration: applying a snapshot captured mid-turn erases the
         // output the live stream just rendered. While a turn is streaming into
         // the focused session, buffer the snapshot; agent_end drops it and
@@ -2467,8 +2439,8 @@ export class SessionStore {
         // transcript until agent_end, so let the open snapshot through.
         if (
           sessionId &&
-          sessionId === this.state.activeSessionId &&
-          this.state.working &&
+          sessionId === this.state.activeSession.activeSessionId &&
+          this.state.activeSession.working &&
           !this.draft.finalized &&
           !this.awaitingOpenHistory
         ) {
@@ -2489,11 +2461,11 @@ export class SessionStore {
         // of the same cmid falls through and renders like any other client's.
         const ownSend = e.clientMessageId ? this.pending.get(e.clientMessageId) : undefined;
         const own = Boolean(ownSend && !ownSend.confirmed);
-        if (e.sessionId && this.state.activeSessionId && e.sessionId !== this.state.activeSessionId) return;
-        if (e.sessionId && !this.state.activeSessionId && !own) return;
+        if (e.sessionId && this.state.activeSession.activeSessionId && e.sessionId !== this.state.activeSession.activeSessionId) return;
+        if (e.sessionId && !this.state.activeSession.activeSessionId && !own) return;
         // A new turn is starting for the focused session — retire the previous
         // turn's "files changed / undo" card so it can't be mistaken for this one.
-        if (this.state.changes) this.set({ changes: null });
+        if (this.state.activeSession.changes) this.set({ changes: null });
         if (own && ownSend) {
           // The node echoes back the *composed* text it actually persisted —
           // our own caption plus an appended attachment placeholder line (see
@@ -2571,8 +2543,8 @@ export class SessionStore {
         const e = event as any;
         if (this.isForeignSessionEvent(e.sessionId)) return;
         const provider = String(e.provider || "");
-        if (provider && this.state.currentNodeId) {
-          this.setNeedsModelAuth({ nodeId: this.state.currentNodeId, provider, reason: String(e.reason || "") });
+        if (provider && this.state.connection.currentNodeId) {
+          this.setNeedsModelAuth({ nodeId: this.state.connection.currentNodeId, provider, reason: String(e.reason || "") });
         }
         return;
       }
@@ -2581,14 +2553,14 @@ export class SessionStore {
         // Needing a response is one of the few things worth reordering the
         // sidebar for (see #479) — surface it at the top like a fresh reply.
         this.updateSessionRow(approval?.sessionId, { status: "needs_action", needsAction: true, updatedAt: Date.now() });
-        this.set({ approvals: upsertApproval(this.state.approvals, approval) });
+        this.set({ approvals: upsertApproval(this.state.activeSession.approvals, approval) });
         return;
       }
       case "approval.resolved":
       case "approval.removed": {
         const e = event as any;
-        const resolved = this.state.approvals.find((a) => a.id === e.id || a.id === e.approvalId);
-        const approvals = this.state.approvals.filter((a) => a.id !== e.id && a.id !== e.approvalId);
+        const resolved = this.state.activeSession.approvals.find((a) => a.id === e.id || a.id === e.approvalId);
+        const approvals = this.state.activeSession.approvals.filter((a) => a.id !== e.id && a.id !== e.approvalId);
         this.set({ approvals });
         // Clear the sidebar "needs response" dot once nothing else on that
         // session is still pending, instead of leaving it red until an unrelated
@@ -2615,14 +2587,14 @@ export class SessionStore {
         // "needs your response" moment worth surfacing at the top of the list.
         this.updateSessionRow(e.sessionId, { status: "needs_action", needsAction: true, updatedAt: Date.now() });
         const request: UserQuestionRequest = { id, sessionId: e.sessionId ? String(e.sessionId) : undefined, questions, createdAt: Number(e.createdAt) || Date.now() };
-        this.set({ questions: [...this.state.questions.filter((q) => q.id !== id), request] });
+        this.set({ questions: [...this.state.activeSession.questions.filter((q) => q.id !== id), request] });
         return;
       }
       case "session.question.resolved": {
         const e = event as any;
         const id = String(e.requestId || e.id || "");
-        const resolved = this.state.questions.find((q) => q.id === id);
-        const questions = this.state.questions.filter((q) => q.id !== id);
+        const resolved = this.state.activeSession.questions.find((q) => q.id === id);
+        const questions = this.state.activeSession.questions.filter((q) => q.id !== id);
         this.set({ questions });
         if (resolved?.sessionId && !this.sessionStillNeedsAction(resolved.sessionId)) {
           this.updateSessionRow(resolved.sessionId, { status: "idle", needsAction: false });
@@ -2641,21 +2613,21 @@ export class SessionStore {
           at: Number(e.at) || Date.now(),
           message: String(e.message || "This turn may be stuck. Stop it or keep waiting?"),
         };
-        this.set({ turnAttentions: [...this.state.turnAttentions.filter((a) => a.sessionId !== sessionId), request] });
+        this.set({ turnAttentions: [...this.state.activeSession.turnAttentions.filter((a) => a.sessionId !== sessionId), request] });
         this.updateSessionRow(sessionId, { status: "needs_action", needsAction: true, updatedAt: Date.now() });
         return;
       }
       case "session.turn_attention.resolved": {
         const sessionId = String((event as any).sessionId || "");
         if (!sessionId) return;
-        this.set({ turnAttentions: this.state.turnAttentions.filter((a) => a.sessionId !== sessionId) });
+        this.set({ turnAttentions: this.state.activeSession.turnAttentions.filter((a) => a.sessionId !== sessionId) });
         if (!this.sessionStillNeedsAction(sessionId)) this.updateSessionRow(sessionId, { status: "working", needsAction: false });
         return;
       }
       case "models.list": {
         const e = event as any;
         // Broadcast to all paired clients: ignore another session's list.
-        if (e.sessionId && this.state.activeSessionId && e.sessionId !== this.state.activeSessionId) return;
+        if (e.sessionId && this.state.activeSession.activeSessionId && e.sessionId !== this.state.activeSession.activeSessionId) return;
         const models = normalizeModels(e.models);
         const explicit = e.current ? normalizeModels([e.current])[0]! : null;
         // `models` may include an unconnected tail the node can't select yet
@@ -2669,7 +2641,7 @@ export class SessionStore {
         // user last picked, ahead of the node's own default `current`. A live
         // session always honors its own `current`, so this is draft-only.
         const remembered =
-          !this.state.activeSessionId && this.draftModel
+          !this.state.activeSession.activeSessionId && this.draftModel
             ? configuredModels.find((m) => sameModel(m, this.draftModel as ModelInfo))
             : undefined;
         // A runtime that doesn't support model selection reports an empty list
@@ -2690,7 +2662,7 @@ export class SessionStore {
           // new runtime doesn't support is dropped instead of lingering as a
           // mismatch the composer would show and session.new would reject.
           const flagged = configuredModels.find((m) => (m as any).current);
-          const stillValid = configuredModels.find((m) => sameModel(m, this.state.currentModel));
+          const stillValid = configuredModels.find((m) => sameModel(m, this.state.catalogs.currentModel));
           current = flagged ?? stillValid ?? configuredModels[0]!;
         }
         const listRuntimeId = e.runtimeId != null ? String(e.runtimeId) : null;
@@ -2711,12 +2683,12 @@ export class SessionStore {
       }
       case "model.updated": {
         const e = event as any;
-        if (e.sessionId && this.state.activeSessionId && e.sessionId !== this.state.activeSessionId) return;
-        const model = e.model ? normalizeModels([e.model])[0]! : this.state.currentModel;
+        if (e.sessionId && this.state.activeSession.activeSessionId && e.sessionId !== this.state.activeSession.activeSessionId) return;
+        const model = e.model ? normalizeModels([e.model])[0]! : this.state.catalogs.currentModel;
         this.set({
           currentModel: model,
-          currentModelId: model?.id ?? this.state.currentModelId,
-          models: this.state.models.map((m) => ({ ...m, current: sameModel(m, model) })),
+          currentModelId: model?.id ?? this.state.catalogs.currentModelId,
+          models: this.state.catalogs.models.map((m) => ({ ...m, current: sameModel(m, model) })),
         });
         return;
       }
@@ -2728,7 +2700,7 @@ export class SessionStore {
       case "runtimes.list":
       case "runtime.updated": {
         const e = event as any;
-        const runtimes = (e.runtimes as RuntimeInfo[]) || this.state.runtimes;
+        const runtimes = (e.runtimes as RuntimeInfo[]) || this.state.catalogs.runtimes;
         // `activeAgent` mirrors the node-global `active` session's runtime — a
         // legacy, single-session concept any client (including the local CLI)
         // may have set, unrelated to "what agent will a new session start with".
@@ -2740,19 +2712,19 @@ export class SessionStore {
         // user's last-used agent is restored imperatively by the controller
         // (which must runtime.select it so the node previews that agent's models),
         // not here — see AppController.maybeRestoreDraftAgent.
-        const cur = e.current || runtimes.find((a) => a.id === (this.state.selectedAgentId || e.activeAgent));
-        const selectedAgentId = cur?.id || e.activeAgent || this.state.selectedAgentId;
+        const cur = e.current || runtimes.find((a) => a.id === (this.state.catalogs.selectedAgentId || e.activeAgent));
+        const selectedAgentId = cur?.id || e.activeAgent || this.state.catalogs.selectedAgentId;
         // runtimes.list is also requested whenever the agent sheet opens. Its
         // `current` runtime is the default for the *next* session, not the owner
         // of the session on screen. Keep the pill tied to activeRuntimeId just
         // like the sheet checkmark; on a draft both use selectedAgentId instead.
-        const displayedRuntime = this.state.activeSessionId
-          ? runtimes.find((a) => a.id === this.state.activeRuntimeId)
+        const displayedRuntime = this.state.activeSession.activeSessionId
+          ? runtimes.find((a) => a.id === this.state.activeSession.activeRuntimeId)
           : runtimes.find((a) => a.id === selectedAgentId) || cur;
         this.set({
           runtimes,
           selectedAgentId,
-          currentAgentName: agentLabel(displayedRuntime) || this.state.currentAgentName,
+          currentAgentName: agentLabel(displayedRuntime) || this.state.catalogs.currentAgentName,
           ...(e.type === "runtime.updated" ? { installingRuntimeId: null } : {}),
         });
         return;
@@ -2760,7 +2732,7 @@ export class SessionStore {
       case "runtime.install.done": {
         const e = event as any;
         this.set({
-          runtimes: (e.runtimes as RuntimeInfo[]) || this.state.runtimes,
+          runtimes: (e.runtimes as RuntimeInfo[]) || this.state.catalogs.runtimes,
           installingRuntimeId: null,
         });
         return;
@@ -2768,7 +2740,7 @@ export class SessionStore {
       case "runtime.install.error": {
         const e = event as any;
         this.set({
-          runtimes: (e.runtimes as RuntimeInfo[]) || this.state.runtimes,
+          runtimes: (e.runtimes as RuntimeInfo[]) || this.state.catalogs.runtimes,
           installingRuntimeId: null,
           error: String(e.error || "Install failed"),
         });
@@ -2826,7 +2798,7 @@ export class SessionStore {
         // Check the specific provider, not just "any provider configured": a
         // mid-session prompt for e.g. openai-codex must not be dismissed just
         // because anthropic is already connected.
-        const pendingAuth = this.state.needsModelAuth;
+        const pendingAuth = this.state.presentation.needsModelAuth;
         if (pendingAuth) {
           const alias = modelAuthApiKeyProvider(pendingAuth.provider);
           if (providers.some((p) => (p.id === pendingAuth.provider || p.id === alias) && p.configured)) {
@@ -2900,20 +2872,20 @@ export class SessionStore {
       }
       case "auth.oauth.progress": {
         const e = event as any;
-        if (this.state.oauth && this.state.oauth.id === e.id) {
-          this.set({ oauth: { ...this.state.oauth, status: String(e.message || "") } });
+        if (this.state.presentation.oauth && this.state.presentation.oauth.id === e.id) {
+          this.set({ oauth: { ...this.state.presentation.oauth, status: String(e.message || "") } });
         }
         return;
       }
       case "auth.oauth.done": {
         const e = event as any;
-        if (!this.state.oauth || this.state.oauth.id === e.id) this.set({ oauth: null });
+        if (!this.state.presentation.oauth || this.state.presentation.oauth.id === e.id) this.set({ oauth: null });
         return;
       }
       case "auth.oauth.error": {
         const e = event as any;
-        if (this.state.oauth && this.state.oauth.id === e.id) {
-          this.set({ oauth: { ...this.state.oauth, error: String(e.error || "sign-in failed"), status: undefined } });
+        if (this.state.presentation.oauth && this.state.presentation.oauth.id === e.id) {
+          this.set({ oauth: { ...this.state.presentation.oauth, error: String(e.error || "sign-in failed"), status: undefined } });
         }
         return;
       }
@@ -2921,7 +2893,7 @@ export class SessionStore {
         const e = event as any;
         this.set({
           githubApp: {
-            ...(this.getState().githubApp || { phase: "idle" }),
+            ...(this.getState().presentation.githubApp || { phase: "idle" }),
             phase: "submitting",
             action: typeof e.action === "string" ? e.action : undefined,
             manifest: (e.manifest && typeof e.manifest === "object" ? e.manifest : undefined) as Record<string, unknown> | undefined,
@@ -2935,7 +2907,7 @@ export class SessionStore {
         const e = event as any;
         this.set({
           githubApp: {
-            ...(this.getState().githubApp || { phase: "idle" }),
+            ...(this.getState().presentation.githubApp || { phase: "idle" }),
             phase: "done",
             installUrl: typeof e.installUrl === "string" ? e.installUrl : undefined,
             error: undefined,
@@ -2948,7 +2920,7 @@ export class SessionStore {
         const e = event as any;
         this.set({
           githubApp: {
-            ...(this.getState().githubApp || { phase: "idle" }),
+            ...(this.getState().presentation.githubApp || { phase: "idle" }),
             phase: "error",
             error: typeof e.error === "string" ? e.error : "GitHub App setup failed.",
             returning: false,
@@ -2996,8 +2968,8 @@ export class SessionStore {
             ...(justFinished ? { updatedAt: Date.now(), finishedAt: Date.now() } : {}),
           });
         }
-        if (sid && this.state.activeSessionId && sid !== this.state.activeSessionId) return;
-        if (sid && !this.state.activeSessionId) return;
+        if (sid && this.state.activeSession.activeSessionId && sid !== this.state.activeSession.activeSessionId) return;
+        if (sid && !this.state.activeSession.activeSessionId) return;
         if (inner && inner.type) {
           // A runtime that emits a bare session.error inside this envelope (e.g. a
           // CLI adapter's credential preflight) doesn't tag the inner event with a
@@ -3028,7 +3000,7 @@ export class SessionStore {
         // mode:"reset" when the ring evicted past our cursor → full history resync.
         const e = event as any;
         const sid = e.sessionId as string | undefined;
-        if (sid && this.state.activeSessionId && sid !== this.state.activeSessionId) return;
+        if (sid && this.state.activeSession.activeSessionId && sid !== this.state.activeSession.activeSessionId) return;
         if (e.mode === "reset") {
           this.requestFreshHistory?.();
           return;
@@ -3072,7 +3044,7 @@ export class SessionStore {
         // `changes` itself is retired the instant the next turn starts (see the
         // "new turn starting" handler above), so it can't back a "see every
         // turn's changes" view on its own.
-        this.set({ changes: turn, changesHistory: [...this.state.changesHistory, { ...turn, id: nextId(), at: Date.now() }] });
+        this.set({ changes: turn, changesHistory: [...this.state.activeSession.changesHistory, { ...turn, id: nextId(), at: Date.now() }] });
         return;
       }
       case "session.rewound": {
@@ -3096,14 +3068,14 @@ export class SessionStore {
       }
       case "session.paused": {
         const sid = String((event as any).sessionId || "");
-        if (sid && !this.state.pausedSessionIds.includes(sid)) {
-          this.set({ pausedSessionIds: [...this.state.pausedSessionIds, sid] });
+        if (sid && !this.state.sessionIndex.pausedSessionIds.includes(sid)) {
+          this.set({ pausedSessionIds: [...this.state.sessionIndex.pausedSessionIds, sid] });
         }
         return;
       }
       case "session.resumed": {
         const sid = String((event as any).sessionId || "");
-        if (sid) this.set({ pausedSessionIds: this.state.pausedSessionIds.filter((id) => id !== sid) });
+        if (sid) this.set({ pausedSessionIds: this.state.sessionIndex.pausedSessionIds.filter((id) => id !== sid) });
         return;
       }
       case "session.pr_result": {
@@ -3170,7 +3142,7 @@ export class SessionStore {
       if (sessionId) this.historyRaw.delete(sessionId);
       // Only the focused session needs an immediate refetch; a background
       // session re-requests full history whenever it's next opened.
-      if (sessionId && sessionId === this.state.activeSessionId) this.requestFreshHistory?.();
+      if (sessionId && sessionId === this.state.activeSession.activeSessionId) this.requestFreshHistory?.();
       return;
     }
     const full = isAppend ? prev!.messages.concat(incoming) : incoming;
@@ -3207,8 +3179,8 @@ export class SessionStore {
     // "intermingled sessions" bug (and, downstream, "no messages": once
     // activeSessionId is wrong, the session.event filter drops the real stream).
     const adopt =
-      this.state.activeSessionId === sessionId ||
-      (this.state.activeSessionId === null && Boolean(e.requestId));
+      this.state.activeSession.activeSessionId === sessionId ||
+      (this.state.activeSession.activeSessionId === null && Boolean(e.requestId));
     if (!adopt) return;
     this.draft = freshDraft();
     this.deferredHistory = null;
@@ -3227,9 +3199,9 @@ export class SessionStore {
     // sent. They're cleared as the node echoes each one (session.user_message).
     this.set({
       activeSessionId: sessionId,
-      activeRuntimeId: e.runtimeId ? String(e.runtimeId) : this.state.activeRuntimeId,
-      activeTitle: e.name || this.state.activeTitle,
-      currentAgentName: e.agentName || this.state.currentAgentName,
+      activeRuntimeId: e.runtimeId ? String(e.runtimeId) : this.state.activeSession.activeRuntimeId,
+      activeTitle: e.name || this.state.activeSession.activeTitle,
+      currentAgentName: e.agentName || this.state.catalogs.currentAgentName,
       github: githubContext(e),
       transcript: this.withPendingUserEntries(withAttachments),
       working: sessionState ? sessionState.agent === "working" : Boolean(e.isStreaming),
@@ -3257,7 +3229,7 @@ export class SessionStore {
     this.deferredHistory = null;
     // A connection drop mid-open will never deliver the history it was waiting
     // on, so stop the spinner rather than leaving the pane blank indefinitely.
-    if (this.state.opening) this.set({ opening: false });
+    if (this.state.activeSession.opening) this.set({ opening: false });
     // A turn cut short still shows any attachments it managed to emit.
     this.flushPendingAgentAttachments();
     if (this.draft.finalized) return;
@@ -3274,11 +3246,11 @@ export class SessionStore {
     // ask for fresh history now that the tail is idle. Fall back to applying the
     // buffered payload when no controller hook is wired (e.g. unit tests).
     if (this.requestFreshHistory) this.requestFreshHistory();
-    else this.applyHistory(pending, (pending.sessionId as string) || this.state.activeSessionId);
+    else this.applyHistory(pending, (pending.sessionId as string) || this.state.activeSession.activeSessionId);
   }
 
   private pushEntry(entry: TranscriptEntry): void {
-    this.set({ transcript: [...this.state.transcript, entry] });
+    this.set({ transcript: [...this.state.activeSession.transcript, entry] });
   }
 
   /**
@@ -3294,7 +3266,7 @@ export class SessionStore {
     const buffered = this.pendingAgentAttachments;
     if (!buffered.length) return;
     this.pendingAgentAttachments = [];
-    const transcript = this.state.transcript;
+    const transcript = this.state.activeSession.transcript;
     // Skip any whose bytes the transcript already carries (a reconnect/resume that
     // re-broadcasts a live `attachment` event history already grouped in) so a
     // replay never doubles the chip.
@@ -3302,7 +3274,7 @@ export class SessionStore {
     const fresh = buffered.filter((b) => !b.attachment.hash || !present.has(b.attachment.hash));
     const next = this.placeAgentAttachments(transcript, fresh);
     if (next !== transcript) this.set({ transcript: next });
-    this.rememberAgentAttachments(this.state.activeSessionId, this.state.transcript);
+    this.rememberAgentAttachments(this.state.activeSession.activeSessionId, this.state.activeSession.transcript);
   }
 
   /** The set of attachment content hashes present anywhere in a transcript. */
@@ -3396,14 +3368,14 @@ export class SessionStore {
   ): void {
     if (!sessionId) return;
     let changed = false;
-    const sessions = this.state.sessions.map((s) => {
+    const sessions = this.state.sessionIndex.sessions.map((s) => {
       if (s.sessionId !== sessionId) return s;
       const next = { ...s, ...patch };
       // A session the user is actively viewing counts as "seen" the moment any
       // live update lands on it — otherwise the row you're already looking at
       // would flash the same "unseen" treatment as one that finished while you
       // were elsewhere (see SessionSummary.lastSeenAt / isUnseen).
-      if (sessionId === this.state.activeSessionId) next.lastSeenAt = Date.now();
+      if (sessionId === this.state.activeSession.activeSessionId) next.lastSeenAt = Date.now();
       if (
         next.status !== s.status ||
         next.needsAction !== s.needsAction ||
@@ -3431,8 +3403,8 @@ export class SessionStore {
     if (prs.length === 0) return;
     const openUrl = prs.find((p) => p.state === "open")?.url ?? null;
     if (sessionId) this.updateSessionRow(sessionId, { prUrl: openUrl ?? undefined, prs });
-    if (!sessionId || sessionId === this.state.activeSessionId) {
-      this.set({ github: { ...this.state.github, prUrl: openUrl, prs } });
+    if (!sessionId || sessionId === this.state.activeSession.activeSessionId) {
+      this.set({ github: { ...this.state.activeSession.github, prUrl: openUrl, prs } });
     }
   }
 
@@ -3441,9 +3413,9 @@ export class SessionStore {
    *  question, or watchdog decision. Shared by resolution handlers so resolving
    *  one kind can't clear the dot out from under another still-pending kind. */
   private sessionStillNeedsAction(sessionId: string): boolean {
-    return this.state.approvals.some((a) => a.sessionId === sessionId)
-      || this.state.questions.some((q) => q.sessionId === sessionId)
-      || this.state.turnAttentions.some((a) => a.sessionId === sessionId);
+    return this.state.activeSession.approvals.some((a) => a.sessionId === sessionId)
+      || this.state.activeSession.questions.some((q) => q.sessionId === sessionId)
+      || this.state.activeSession.turnAttentions.some((a) => a.sessionId === sessionId);
   }
 
   /**
@@ -3462,11 +3434,11 @@ export class SessionStore {
    * particular and should surface wherever the user is.
    */
   private isForeignSessionEvent(sessionId: unknown): boolean {
-    return Boolean(sessionId) && sessionId !== this.state.activeSessionId;
+    return Boolean(sessionId) && sessionId !== this.state.activeSession.activeSessionId;
   }
 
   private replaceEntry(id: string, patch: Partial<TranscriptEntry>): void {
-    this.set({ transcript: this.state.transcript.map((e) => (e.id === id ? { ...e, ...patch } : e)) });
+    this.set({ transcript: this.state.activeSession.transcript.map((e) => (e.id === id ? { ...e, ...patch } : e)) });
   }
 
   private setWorking(label: string): void {
@@ -3488,7 +3460,7 @@ export class SessionStore {
     if (name === "agent_output" || name === "stderr" || name === "stdout") return "Reading agent output…";
     const callId = toolCallId(event as any);
     const detail = toolDetail(event as any) ?? (callId
-      ? this.state.transcript.find((entry) => entry.tool?.callId === callId)?.tool?.detail
+      ? this.state.activeSession.transcript.find((entry) => entry.tool?.callId === callId)?.tool?.detail
       : undefined);
     if (detail?.kind === "delegation") {
       return detail.label ? `${detail.label} sub-agent is working…` : "Sub-agent is working…";
@@ -3539,7 +3511,7 @@ export class SessionStore {
         if (typeof url !== "string" || !url || !ref || typeof ref.hash !== "string") return;
         this.inlineImagesByUrl.set(url, ref);
         let changed = false;
-        const transcript = this.state.transcript.map((e) => {
+        const transcript = this.state.activeSession.transcript.map((e) => {
           if (e.role !== "assistant" || !e.text || e.imageRefs?.[url] || !e.text.includes(url)) return e;
           changed = true;
           return { ...e, imageRefs: { ...(e.imageRefs ?? {}), [url]: ref } };
@@ -3590,7 +3562,7 @@ export class SessionStore {
           // Keep the working label honest, and only when it actually changes so
           // we don't notify on every update.
           const label = text ? "Drafting response…" : "Thinking…";
-          if (this.state.workingLabel !== label || !this.state.working) this.setWorking(label);
+          if (this.state.activeSession.workingLabel !== label || !this.state.activeSession.working) this.setWorking(label);
           // Show the in-flight prose as a live streaming bubble so a session the
           // user just switched back to (or is watching continuously) reflects the
           // agent's current answer immediately — instead of nothing until
@@ -3789,7 +3761,7 @@ export class SessionStore {
   }
 
   private removeEntry(id: string): void {
-    this.set({ transcript: this.state.transcript.filter((e) => e.id !== id) });
+    this.set({ transcript: this.state.activeSession.transcript.filter((e) => e.id !== id) });
   }
 
   private finishDrafts(): void {
@@ -3801,7 +3773,7 @@ export class SessionStore {
   }
 
   private applyTool(tool: ToolActivity): void {
-    const transcript = [...this.state.transcript];
+    const transcript = [...this.state.activeSession.transcript];
     mergeToolInto(transcript, tool);
     this.set({ transcript });
   }
@@ -3818,7 +3790,7 @@ export class SessionStore {
    */
   private closeRunningTools(): void {
     let changed = false;
-    const transcript = this.state.transcript.map((e) => {
+    const transcript = this.state.activeSession.transcript.map((e) => {
       if (!e.tool || e.tool.status !== "running") return e;
       changed = true;
       return { ...e, tool: { ...e.tool, status: "done" as const } };

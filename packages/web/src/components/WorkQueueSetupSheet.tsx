@@ -121,7 +121,7 @@ export function WorkQueueSetupSheet({
   const [slackErr, setSlackErr] = useState("");
   const [slackJustConnected, setSlackJustConnected] = useState(false);
 
-  const app = state.githubApp;
+  const app = state.presentation.githubApp;
   const phase = app?.phase ?? "idle";
   const ready = phase === "submitting" && app?.action && app?.manifest;
 
@@ -198,7 +198,7 @@ export function WorkQueueSetupSheet({
     setCeNodeConnected(false);
     setCeHostedResult(null);
     try {
-      if (state.currentNodeId) {
+      if (state.connection.currentNodeId) {
         await controller.githubAppConnectExisting({ appId: ceAppId.trim(), privateKeyPem: cePem.trim() });
         setCeNodeConnected(true);
       } else {
@@ -465,7 +465,7 @@ export function WorkQueueSetupSheet({
                         placeholder="…or paste the PEM here"
                         onChange={(e) => setCePem(e.target.value)}
                       />
-                      {!state.currentNodeId && (
+                      {!state.connection.currentNodeId && (
                         <>
                           <label className="field-label">Installation ID (only needed for apps installed on multiple accounts)</label>
                           <input className="picker-search" value={ceInstallationId} placeholder="auto-selected when there is one" onChange={(e) => setCeInstallationId(e.target.value)} />
@@ -477,7 +477,7 @@ export function WorkQueueSetupSheet({
                         disabled={!ceAppId.trim() || !cePem.trim() || phase === "completing" || ceHostedBusy}
                         onClick={() => void connectExistingApp()}
                       >
-                        {phase === "completing" || ceHostedBusy ? "Connecting…" : state.currentNodeId ? "Connect app to this machine" : "Connect app for isolated runs"}
+                        {phase === "completing" || ceHostedBusy ? "Connecting…" : state.connection.currentNodeId ? "Connect app to this machine" : "Connect app for isolated runs"}
                       </button>
                       {ceHostedError && <div className="banner error inline" role="alert">{ceHostedError}</div>}
                       {ceNodeConnected && (
@@ -669,7 +669,7 @@ export function WorkQueueSetupSheet({
                             placeholder="…or paste the PEM here"
                             onChange={(e) => setCePem(e.target.value)}
                           />
-                          {!state.currentNodeId && (
+                          {!state.connection.currentNodeId && (
                             <>
                               <label className="field-label">Installation ID (only needed for apps installed on multiple accounts)</label>
                               <input className="picker-search" value={ceInstallationId} placeholder="auto-selected when there is one" onChange={(e) => setCeInstallationId(e.target.value)} />
@@ -681,7 +681,7 @@ export function WorkQueueSetupSheet({
                             disabled={!ceAppId.trim() || !cePem.trim() || phase === "completing" || ceHostedBusy}
                             onClick={() => void connectExistingApp()}
                           >
-                            {phase === "completing" || ceHostedBusy ? "Connecting…" : state.currentNodeId ? "Connect app to this machine" : "Connect app for isolated runs"}
+                            {phase === "completing" || ceHostedBusy ? "Connecting…" : state.connection.currentNodeId ? "Connect app to this machine" : "Connect app for isolated runs"}
                           </button>
                           {ceHostedError && <div className="banner error inline" role="alert">{ceHostedError}</div>}
                           {ceNodeConnected && (

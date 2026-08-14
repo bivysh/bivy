@@ -57,7 +57,7 @@ test("ScheduleSheet infers the target from the screen instead of asking", async 
   expect(source).toContain("const target: \"existing_session\" | \"new_session\" = active ? \"existing_session\" : \"new_session\";");
   expect(source).toContain("<Sheet title=\"Schedule message\" onClose={onClose} autoFocusSearch={false}>");
   // The node for delivery comes from the session, falling back to the draft's.
-  expect(source).toContain("const nodeId = active?.nodeId ?? state.currentNodeId;");
+  expect(source).toContain("const nodeId = active?.nodeId ?? state.connection.currentNodeId;");
 });
 
 test("queue rows show scheduled messages with a reschedule action, delivered by the automation", async () => {

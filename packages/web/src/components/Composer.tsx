@@ -150,7 +150,7 @@ export function Composer({
   onError?: (message: string) => void;
 }) {
   const initialDraft = useRef<ReturnType<typeof readComposerDraft> | null>(null);
-  if (!initialDraft.current) initialDraft.current = readComposerDraft(localStorage, state.activeSessionId);
+  if (!initialDraft.current) initialDraft.current = readComposerDraft(localStorage, state.activeSession.activeSessionId);
   const [text, setText] = useState(() => initialDraft.current?.text ?? "");
   const [picker, setPicker] = useState<Picker>(null);
   const [attachments, setAttachments] = useState<PromptAttachment[]>([]);
@@ -181,7 +181,7 @@ export function Composer({
   // never opens a picker that can only ever say "No models available." Anything
   // not explicitly false (including runtimes that haven't loaded yet) stays
   // interactive, so we never disable it for a capable agent.
-  const currentRuntime = state.runtimes.find((r) => r.id === (state.activeRuntimeId ?? state.selectedAgentId));
+  const currentRuntime = state.catalogs.runtimes.find((r) => r.id === (state.activeSession.activeRuntimeId ?? state.catalogs.selectedAgentId));
   const currentCaps = currentRuntime?.capabilities as
     | { modelSelection?: boolean; commands?: SlashCommand[] }
     | undefined;
@@ -195,22 +195,22 @@ export function Composer({
   // join the composer's autocomplete and, when invoked, are either forwarded to
   // the agent as a prompt (mode "prompt") or dispatched via command.invoke
   // (mode "protocol") rather than run as a Bivy control command.
-  const sessionCommands = state.activeSessionId ? state.commandsBySession[state.activeSessionId] : undefined;
+  const sessionCommands = state.activeSession.activeSessionId ? state.sessionIndex.commandsBySession[state.activeSession.activeSessionId] : undefined;
   const runtimeCommands: SlashCommand[] = Array.isArray(currentCaps?.commands) ? currentCaps.commands : [];
-  const agentCommands: SlashCommand[] = sessionCommands ?? (state.activeSessionId ? [] : runtimeCommands);
+  const agentCommands: SlashCommand[] = sessionCommands ?? (state.activeSession.activeSessionId ? [] : runtimeCommands);
   // Follow-ups held back while this session is busy (or while earlier ones are
   // still waiting) — see AppController.sendPrompt/mustQueue. Only ever
   // populated for a real (non-draft) session.
-  const followups = state.activeSessionId ? state.followupsBySession[state.activeSessionId] ?? [] : [];
+  const followups = state.activeSession.activeSessionId ? state.sessionIndex.followupsBySession[state.activeSession.activeSessionId] ?? [] : [];
   // Whether the active runtime has advertised it can safely take an explicit
   // mid-turn interrupt — gates the "Steer current turn" affordance below.
   const canSteer = controller.supportsSteering();
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
-  const isDraft = !state.activeSessionId;
-  const activeDraftKey = useRef(composerDraftKey(state.activeSessionId));
-  const activeDraftSession = useRef(state.activeSessionId);
+  const isDraft = !state.activeSession.activeSessionId;
+  const activeDraftKey = useRef(composerDraftKey(state.activeSession.activeSessionId));
+  const activeDraftSession = useRef(state.activeSession.activeSessionId);
   const textRef = useRef(text);
   const attachmentsRef = useRef(attachments);
   const recoveredRef = useRef(recoveredAttachments);
@@ -222,13 +222,13 @@ export function Composer({
   // extracted text deliberately stay in memory; after reload the user sees what
   // was pending and must re-select the files before sending.
   useEffect(() => {
-    const nextKey = composerDraftKey(state.activeSessionId);
+    const nextKey = composerDraftKey(state.activeSession.activeSessionId);
     if (activeDraftKey.current === nextKey) return;
     writeComposerDraft(localStorage, activeDraftSession.current, textRef.current, [
       ...attachmentsRef.current,
       ...recoveredRef.current as PromptAttachment[],
     ]);
-    const saved = readComposerDraft(localStorage, state.activeSessionId);
+    const saved = readComposerDraft(localStorage, state.activeSession.activeSessionId);
     setText(saved.text);
     setAttachments([]);
     setRecoveredAttachments(saved.attachments);
@@ -236,8 +236,8 @@ export function Composer({
     setMenuIndex(0);
     requestAnimationFrame(autosize);
     activeDraftKey.current = nextKey;
-    activeDraftSession.current = state.activeSessionId;
-  }, [state.activeSessionId]);
+    activeDraftSession.current = state.activeSession.activeSessionId;
+  }, [state.activeSession.activeSessionId]);
 
   useEffect(() => {
     writeComposerDraft(localStorage, activeDraftSession.current, text, [
@@ -350,16 +350,16 @@ export function Composer({
   // they try to dictate with no provider key stored, instead of prompting for
   // the mic and then failing.
   useEffect(() => {
-    if (!disabled && !state.sttConfig) controller.getSttConfig();
-  }, [disabled, state.sttConfig]);
-  const voiceReady = Boolean(state.sttConfig?.providers.some((p) => p.configured));
+    if (!disabled && !state.settings.sttConfig) controller.getSttConfig();
+  }, [disabled, state.settings.sttConfig]);
+  const voiceReady = Boolean(state.settings.sttConfig?.providers.some((p) => p.configured));
 
   // Pick the transcription engine: a stored provider key routes audio through
   // the node (best quality); otherwise fall back to the browser's built-in Web
   // Speech dictation (no key, no cost). Only error when neither is available.
   function startRecording() {
     if (disabled) return;
-    if (voiceReady || !state.sttConfig) setRecording("server");
+    if (voiceReady || !state.settings.sttConfig) setRecording("server");
     else if (webSpeechSupported()) setRecording("webspeech");
     else onError?.("Add a Groq or OpenAI key in Settings → Voice input to use voice input.");
   }
@@ -524,7 +524,7 @@ export function Composer({
     requestAnimationFrame(autosize);
   }
 
-  const modelLabel = state.currentModel?.label || state.currentModel?.id || "Default";
+  const modelLabel = state.catalogs.currentModel?.label || state.catalogs.currentModel?.id || "Default";
   // The repo pill also carries the chosen remote branch (#466) — picked from
   // the arrow on a repo row in the repo picker, not a separate pill. A blank
   // branch means "the repo's default branch", so we only append "@ <branch>"
@@ -543,14 +543,14 @@ export function Composer({
   // default (shown by name when known). Chosen up front on the draft; a running
   // session shows it read-only in Session settings.
   const draftTier = SANDBOX_TIERS.find((t) => t.id === state.draft.sandbox);
-  const nodeDefaultTier = SANDBOX_TIERS.find((t) => t.id === state.nodeSettings?.defaultSandbox);
+  const nodeDefaultTier = SANDBOX_TIERS.find((t) => t.id === state.settings.nodeSettings?.defaultSandbox);
   // The ◈ glyph already reads as "sandbox", so we drop the redundant "Sandbox"
   // word: show the chosen tier, else the node default's name, else glyph only.
   const sandboxLabel = draftTier
     ? draftTier.label
     : nodeDefaultTier
       ? nodeDefaultTier.label
-      : state.nodeSettings?.defaultSandbox ?? "";
+      : state.settings.nodeSettings?.defaultSandbox ?? "";
   const sandboxTitle = draftTier ? draftTier.hint : "Sandbox mode for this session (machine default)";
   const canSend = !disabled && (Boolean(text.trim()) || attachments.length > 0);
   // Scheduled messages land on the account's control plane and are delivered by
@@ -577,12 +577,12 @@ export function Composer({
   // agent/model, protection. On a draft we render a single explicit summary of
   // them (the machine otherwise lives only in the topbar switcher), so a new user
   // sees the whole decision set at a glance rather than inferring it from pills.
-  const machineLabel = state.nodes.find((n) => n.id === state.currentNodeId)?.name
+  const machineLabel = state.connection.nodes.find((n) => n.id === state.connection.currentNodeId)?.name
     || (controller.direct ? "This machine" : "Default machine");
   const firstSessionLine = firstSessionSummary({
     machine: machineLabel,
     repo: state.draft.repo || "No repo",
-    agent: state.currentAgentName || "Agent",
+    agent: state.catalogs.currentAgentName || "Agent",
     model: modelLabel,
     modelManagedByAgent: !modelSelectable,
     protection: sandboxLabel || state.draft.sandbox || undefined,
@@ -620,9 +620,9 @@ export function Composer({
           </button>
         </div>
       )}
-      {state.activeSessionId && (
+      {state.activeSession.activeSessionId && (
         <FollowupQueue
-          sessionId={state.activeSessionId}
+          sessionId={state.activeSession.activeSessionId}
           items={followups}
           canSteer={canSteer}
           busy={working}
@@ -813,7 +813,7 @@ export function Composer({
               </button>
               <button type="button" className="pill agent-pill" onClick={() => setPicker("agent")} title="Agent">
                 <span className="pill-glyph"><AgentGlyph /></span>
-                <span className="pill-label">{state.currentAgentName || "Agent"}</span>
+                <span className="pill-label">{state.catalogs.currentAgentName || "Agent"}</span>
               </button>
               <button
                 type="button"

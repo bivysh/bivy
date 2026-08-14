@@ -342,7 +342,7 @@ export function TerminalOverlay({
 }) {
   // Runtime capabilities (e.g. `sessionDiscovery`) drive whether a run-terminal
   // with no pinned session id can still be continued as a governed chat.
-  const { runtimes } = useAppState();
+  const { catalogs: { runtimes } } = useAppState();
   const mountRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -899,9 +899,9 @@ export function TerminalOverlay({
       awaitingReconnect = false;
       term.write("\r\n\x1b[32m« reconnected »\x1b[0m\r\n");
     };
-    let prevStatus = controller.store.getState().status;
+    let prevStatus = controller.store.getState().connection.status;
     const offStatus = controller.store.subscribe(() => {
-      const s = controller.store.getState().status;
+      const s = controller.store.getState().connection.status;
       // Only a drop→online transition is a reconnect; the initial connecting→online
       // must not print the notice or double the first attach.
       if (s === "online" && (prevStatus === "reconnecting" || prevStatus === "offline")) {

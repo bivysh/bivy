@@ -146,6 +146,11 @@ import {
 import { navigate, parseRoute, routePath, type Route } from "../router.js";
 import { EPHEMERAL_MACHINES_ENABLED, EPHEMERAL_KEEP_FAILED_MACHINES } from "../flags.js";
 import { markFirstSuccessfulResponse } from "../pwaLifecycle.js";
+import { SessionOrchestrator } from "./coordinators/session-orchestrator.js";
+import { NodeConnectionCoordinator } from "./coordinators/node-connection-coordinator.js";
+import { CredentialsModelsCoordinator } from "./coordinators/credentials-models-coordinator.js";
+import { EphemeralCoordinator } from "./coordinators/ephemeral-coordinator.js";
+import { AutomationsAccountCoordinator } from "./coordinators/automations-account-coordinator.js";
 
 /**
  * Bounded discovery metadata for a provider-native session Bivy did not start
@@ -306,8 +311,37 @@ export class AppController {
    *  events are latched in this browser so reconnect/history replay cannot
    *  inflate them; the in-flight guard also closes double-emission races. */
   private productMetricsInFlight = new Set<ProductMetricEvent>();
+  private readonly sessionCoordinator: SessionOrchestrator;
+  private readonly nodeCoordinator = new NodeConnectionCoordinator();
+  private readonly credentialsModelsCoordinator: CredentialsModelsCoordinator;
+  private readonly ephemeralCoordinator: EphemeralCoordinator;
+  private readonly accountCoordinator: AutomationsAccountCoordinator;
 
   constructor() {
+    this.sessionCoordinator = new SessionOrchestrator({
+      send: (command) => { void this.transport.send(command); },
+      createRequestId: requestId,
+      createClientMessageId: clientMessageId,
+    });
+    this.credentialsModelsCoordinator = new CredentialsModelsCoordinator({
+      send: (command) => { void this.transport.send(command); },
+      selectModelLocally: (model) => {
+        this.store.setCurrentModelLocal(model);
+        this.store.setDraftModel({ provider: (model as ModelInfo & { provider?: string }).provider, id: model.id });
+      },
+      rememberModel: (model) => this.local.setLastChoice({ modelProvider: (model as ModelInfo & { provider?: string }).provider, modelId: model.id }),
+    });
+    this.ephemeralCoordinator = new EphemeralCoordinator({
+      listConfigs: () => fetchEphemeralConfigs(this.local),
+      createConfig: (input) => apiCreateEphemeralConfig(this.local, input),
+      launch: (opts) => this.launchEphemeral(opts),
+    });
+    this.accountCoordinator = new AutomationsAccountCoordinator({
+      execute: async <T>(operation: string): Promise<T> => {
+        if (operation === "fetch-me") return await fetchMe(this.local) as T;
+        throw new Error(`Unknown account operation: ${operation}`);
+      },
+    });
     // Persist each applied history snapshot + cursor, and re-request canonical
     // history once a live turn settles (drives the P1.1 append-only backfill).
     this.store.onHistoryPersist = (sessionId, messages, count, historyHash) => {
@@ -315,7 +349,7 @@ export class AppController {
       void this.transcriptCache.put(sessionId, messages, count, historyHash, attachments);
     };
     this.store.requestFreshHistory = () => {
-      const sid = this.store.getState().activeSessionId;
+      const sid = this.store.getState().activeSession.activeSessionId;
       if (sid) this.requestHistory(sid);
     };
     // The reassembler detected a live-stream gap (a frame lost on an uplink blip)
@@ -336,7 +370,7 @@ export class AppController {
     // own delivery ack (session.user_message) never arrived (settleSendingFollowups).
     this.store.onSessionSettled = () => {
       this.refreshSessions();
-      const sid = this.store.getState().activeSessionId;
+      const sid = this.store.getState().activeSession.activeSessionId;
       if (sid) {
         this.store.settleSendingFollowups(sid);
         this.drainFollowups(sid);
@@ -577,7 +611,7 @@ export class AppController {
       },
       onStatus: (status: ConnectionStatus) => {
         const before = this.store.getState();
-        const prev = before.status;
+        const prev = before.connection.status;
         this.store.setStatus(status);
         this.observeActivationMilestones(before, { type: "connection.status" });
         if (status === "online" && prev !== "online") {
@@ -641,8 +675,17 @@ export class AppController {
    *  from first response: opening an old Session must not look like activation. */
   private observeActivationMilestones(before: ReturnType<SessionStore["getState"]>, event: { type?: unknown }): void {
     const after = this.store.getState();
-    const beforeActivation = activationFromState({ ...before, direct: this.direct });
-    const afterActivation = activationFromState({ ...after, direct: this.direct });
+    const activationInput = (state: ReturnType<SessionStore["getState"]>) => ({
+      direct: this.direct,
+      signedIn: state.connection.signedIn,
+      status: state.connection.status,
+      runtimes: state.catalogs.runtimes,
+      providers: state.catalogs.providers,
+      reposAuthed: state.catalogs.reposAuthed,
+      transcript: state.activeSession.transcript,
+    });
+    const beforeActivation = activationFromState(activationInput(before));
+    const afterActivation = activationFromState(activationInput(after));
     // Every check but the final agent-answered one — robust to the chain
     // growing (e.g. the leading sign-in step) without re-deriving the cutoff.
     const readyBefore = beforeActivation.checks.slice(0, -1).every((check) => check.state === "passed");
@@ -657,7 +700,7 @@ export class AppController {
     }
 
     if (event.type === "session.history") return;
-    const assistantCount = (state: typeof after) => state.transcript.filter((entry) => entry.role === "assistant" && Boolean(entry.text) && !entry.tool).length;
+    const assistantCount = (state: typeof after) => state.activeSession.transcript.filter((entry) => entry.role === "assistant" && Boolean(entry.text) && !entry.tool).length;
     if (assistantCount(before) === 0 && assistantCount(after) > 0) {
       markFirstSuccessfulResponse();
       this.recordProductMilestone("first_useful_response", true);
@@ -666,17 +709,26 @@ export class AppController {
 
   /** Hosted control plane, not signed in yet. */
   needsAuth(): boolean {
-    return !this.direct && !this.solo && !this.local.s;
+    return this.connectionRequirement().type === "authentication-required";
   }
 
   /** Signed in on the hosted control plane, but no node picked yet. */
   needsNode(): boolean {
-    return !this.direct && Boolean(this.local.s) && !this.local.cur;
+    return this.connectionRequirement().type === "node-required";
   }
 
   /** True whenever the hosted client can't reach a node yet (auth or node). */
   needsSetup(): boolean {
-    return this.needsAuth() || this.needsNode();
+    return this.connectionRequirement().type !== "ready";
+  }
+
+  private connectionRequirement() {
+    return this.nodeCoordinator.requirement({
+      direct: this.direct,
+      solo: this.solo,
+      signedIn: Boolean(this.local.s),
+      currentNodeId: this.local.cur || null,
+    });
   }
 
   /** List the nodes enrolled on the signed-in account. */
@@ -811,9 +863,9 @@ export class AppController {
    */
   openSlashCommands(): void {
     const s = this.store.getState();
-    const sid = s.activeSessionId;
+    const sid = s.activeSession.activeSessionId;
     if (sid) {
-      const row = s.sessions.find((r) => r.sessionId === sid);
+      const row = s.sessionIndex.sessions.find((r) => r.sessionId === sid);
       if (row?.status === "saved") this.openSession(sid);
     } else {
       // A draft has no attached session, so its runtime may not have advertised
@@ -877,7 +929,7 @@ export class AppController {
     this.foregroundTimer = setTimeout(() => {
       this.foregroundTimer = null;
       if (this.needsSetup()) return;
-      const status = this.store.getState().status;
+      const status = this.store.getState().connection.status;
       // A dead socket → reconnect; the transport's onopen burst re-pulls the
       // session list, models and runtimes. A live socket → refresh explicitly,
       // since no reconnect (and thus no burst) will happen on its own.
@@ -887,7 +939,7 @@ export class AppController {
       }
       if (status !== "online") return; // connecting / reconnecting already in flight
       this.refreshSessions();
-      const sid = this.store.getState().activeSessionId;
+      const sid = this.store.getState().activeSession.activeSessionId;
       if (sid) this.requestHistory(sid);
       // A session.new whose reply was lost while backgrounded leaves activeSessionId
       // null (no sid above to refresh) and pendingPrompt outstanding. Re-fire it so
@@ -925,7 +977,7 @@ export class AppController {
       this.livenessTimer = null;
       // A reconnect already in flight (status cycled) needs no nudge, and only
       // the matching pong proves the command path and event socket are live.
-      if (this.store.getState().status !== "online") return;
+      if (this.store.getState().connection.status !== "online") return;
       if (!this.pendingLivenessPings.delete(rid)) return;
       this.transport.reconnect();
     }, AppController.LIVENESS_TIMEOUT_MS);
@@ -1001,7 +1053,7 @@ export class AppController {
    *  stays enabled (isCurrentNodeResumable) and a send fires reprovisionEphemeral.
    *  Idempotent — a repeated refreshNodes while offline just no-ops. */
   private markCurrentNodeAwaitingRebuild(): void {
-    if (this.store.getState().status === "offline") return; // already parked
+    if (this.store.getState().connection.status === "offline") return; // already parked
     try {
       this.transport.close();
     } catch {
@@ -1034,7 +1086,7 @@ export class AppController {
 
   /** Switch to another node without a full reload. */
   switchNode(nodeId: string): void {
-    if (nodeId === this.local.cur && this.store.getState().status === "online") return;
+    if (nodeId === this.local.cur && this.store.getState().connection.status === "online") return;
     try {
       this.transport.close();
     } catch {
@@ -1060,14 +1112,14 @@ export class AppController {
 
   /**
    * Switch to `nodeId` (a no-op if already the current, online node) and wait
-   * for the new transport to come online, then refresh `state.providers` for
+   * for the new transport to come online, then refresh `state.catalogs.providers` for
    * it — `providers.list` is never sent automatically on (re)connect. Used by
    * flows that need a specific node's live state before proceeding (e.g.
    * reconnecting that node's provider OAuth from NodeSwitcher). Throws if the
    * node doesn't come online within `timeoutMs` (see `waitForOnline`).
    */
   async connectToNode(nodeId: string, timeoutMs?: number): Promise<void> {
-    if (nodeId !== this.local.cur || this.store.getState().status !== "online") {
+    if (nodeId !== this.local.cur || this.store.getState().connection.status !== "online") {
       this.switchNode(nodeId);
       await this.waitForOnline(timeoutMs);
     }
@@ -1112,7 +1164,7 @@ export class AppController {
   }
 
   private send(command: Command): void {
-    void this.transport.send(command);
+    this.sessionCoordinator.send(command);
   }
 
   /** Trigger `bivy update` on the connected node from the version-mismatch
@@ -1121,7 +1173,7 @@ export class AppController {
    *  the new build (the banner clears itself — see the store's node.update
    *  handler), and a start failure comes back as node.update.result. */
   updateNode(): void {
-    if (this.store.getState().nodeUpdating) return;
+    if (this.store.getState().connection.nodeUpdating) return;
     this.store.setNodeUpdating(true);
     this.send({ kind: "node.update" });
   }
@@ -1304,11 +1356,11 @@ export class AppController {
 
   /** Resolve once the (current) transport reports online, else reject on timeout. */
   private waitForOnline(timeoutMs = 20000): Promise<void> {
-    if (this.store.getState().status === "online") return Promise.resolve();
+    if (this.store.getState().connection.status === "online") return Promise.resolve();
     return new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => { unsub(); reject(new Error("Destination machine did not come online")); }, timeoutMs);
       const unsub = this.store.subscribe(() => {
-        if (this.store.getState().status === "online") { clearTimeout(timer); unsub(); resolve(); }
+        if (this.store.getState().connection.status === "online") { clearTimeout(timer); unsub(); resolve(); }
       });
     });
   }
@@ -1328,7 +1380,7 @@ export class AppController {
     const destNodeId = opts.destNodeId ?? sourceNodeId;
     const crossNode = !this.direct && Boolean(destNodeId) && destNodeId !== sourceNodeId;
     const state = this.store.getState();
-    const sourceAgentId = opts.sourceAgentId ?? state.sessions.find((session) => session.sessionId === sourceSessionId)?.runtimeId;
+    const sourceAgentId = opts.sourceAgentId ?? state.sessionIndex.sessions.find((session) => session.sessionId === sourceSessionId)?.runtimeId;
     const targetAgentId = opts.agentId ?? sourceAgentId;
     // If the source runtime is absent from a stale session summary, prefer the
     // explicit target path over silently assuming the source/default runtime.
@@ -1459,7 +1511,7 @@ export class AppController {
     if (this.direct || !this.signedIn) return;
     try {
       const rows = await fetchAccountSessions(this.local);
-      const existing = this.store.getState().sessions;
+      const existing = this.store.getState().sessionIndex.sessions;
       const sessions = await Promise.all(rows.map(async (s) => {
         const sessionId = String(s.sessionId || s.id || "");
         const nodeId = String(s.nodeId || "");
@@ -1490,7 +1542,7 @@ export class AppController {
       // Re-add it from the durable correlation (offline, rebuildable), keeping any
       // name/branch we cached before teardown.
       const liveIds = new Set(live.map((s) => s.sessionId));
-      const previous = this.store.getState().sessions;
+      const previous = this.store.getState().sessionIndex.sessions;
       const ghosts = this.ephemeralCorrelations
         .filter((c) => !liveIds.has(c.sessionId) && !!this.local.keys()[c.nodeId])
         .map((c) => {
@@ -1530,7 +1582,7 @@ export class AppController {
       const payload = event as unknown as { sessions?: unknown };
       const incoming = Array.isArray(payload.sessions) ? payload.sessions as Array<Record<string, unknown>> : [];
       const currentIds = new Set(incoming.map((s) => String(s?.sessionId || s?.id || "")).filter(Boolean));
-      const others = this.store.getState().sessions.filter((s) => s.nodeId && s.nodeId !== currentNode && !currentIds.has(s.sessionId));
+      const others = this.store.getState().sessionIndex.sessions.filter((s) => s.nodeId && s.nodeId !== currentNode && !currentIds.has(s.sessionId));
       return { ...event, sessions: [...incoming.map((s) => ({ ...s, nodeId: s.nodeId || currentNode })), ...others] } as ServerEvent;
     }
     if (event.type === "session.created") {
@@ -1540,7 +1592,7 @@ export class AppController {
       const payload = event as unknown as { terminals?: unknown };
       const incoming = Array.isArray(payload.terminals) ? payload.terminals as Array<Record<string, unknown>> : [];
       const currentIds = new Set(incoming.map((t) => String(t?.termId || "")).filter(Boolean));
-      const others = this.store.getState().runTerminals.filter((t) => t.nodeId && t.nodeId !== currentNode && !currentIds.has(t.termId));
+      const others = this.store.getState().sessionIndex.runTerminals.filter((t) => t.nodeId && t.nodeId !== currentNode && !currentIds.has(t.termId));
       return { ...event, terminals: [...incoming.map((t) => ({ ...t, nodeId: t.nodeId || currentNode })), ...others] } as ServerEvent;
     }
     if (event.type === "terminal.created") {
@@ -1610,9 +1662,9 @@ export class AppController {
    *  unified list, so there is no transient-empty case to protect here. */
   private installSessionCachePersist(): void {
     if (typeof localStorage === "undefined") return;
-    let last = this.store.getState().sessions;
+    let last = this.store.getState().sessionIndex.sessions;
     this.store.subscribe(() => {
-      const sessions = this.store.getState().sessions;
+      const sessions = this.store.getState().sessionIndex.sessions;
       if (sessions === last) return;
       last = sessions;
       try {
@@ -1637,11 +1689,11 @@ export class AppController {
    *  `working:false` optimistically before history reconciles, which would risk
    *  firing a queued message into a background session that's actually mid-turn. */
   private installFollowupAutoDrain(): void {
-    let wasWorking = this.store.getState().working;
-    let lastActive = this.store.getState().activeSessionId;
+    let wasWorking = this.store.getState().activeSession.working;
+    let lastActive = this.store.getState().activeSession.activeSessionId;
     this.store.subscribe(() => {
-      const active = this.store.getState().activeSessionId;
-      const working = this.store.getState().working;
+      const active = this.store.getState().activeSession.activeSessionId;
+      const working = this.store.getState().activeSession.working;
       const settledNow = active != null && active === lastActive && wasWorking && !working;
       wasWorking = working;
       lastActive = active;
@@ -1699,7 +1751,7 @@ export class AppController {
     try {
       const cached = await this.transcriptCache.get(sessionId);
       // A slow disk read must not clobber a session the user already switched away from.
-      if (cached && this.store.getState().activeSessionId === sessionId) {
+      if (cached && this.store.getState().activeSession.activeSessionId === sessionId) {
         // Restore real attachment bytes before seeding, so the seeded transcript
         // shows them instead of the node's plain-text placeholder.
         this.store.restoreAttachments(cached.attachments);
@@ -1747,7 +1799,7 @@ export class AppController {
     // run before the requestHistory below so the session it opens is the one we
     // refresh. A cross-node selection was already opened just above.
     if (!openedAfterNodeSwitch) this.applyInitialRoute();
-    const sid = this.store.getState().activeSessionId;
+    const sid = this.store.getState().activeSession.activeSessionId;
     if (sid && !openedAfterNodeSwitch) {
       this.requestHistory(sid);
       this.retryStuckFollowups(sid);
@@ -1815,14 +1867,14 @@ export class AppController {
   /** Draft repo/branch/agent/model to thread into the next session.new. */
   private draftSessionFields(): Record<string, unknown> {
     const s = this.store.getState();
-    const model = s.currentModel ? { provider: (s.currentModel as any).provider, id: s.currentModel.id } : undefined;
+    const model = s.catalogs.currentModel ? { provider: (s.catalogs.currentModel as any).provider, id: s.catalogs.currentModel.id } : undefined;
     return {
       repo: s.draft.repo || undefined,
       // Only meaningful alongside `repo` — a branch is only ever set together
       // with its repo (chooseRepoBranch) and reset when the repo changes
       // (chooseRepo), so this can never leak onto an unrelated repo/workspace.
       branch: s.draft.repo ? s.draft.branch || undefined : undefined,
-      agent: s.selectedAgentId || undefined,
+      agent: s.catalogs.selectedAgentId || undefined,
       sandbox: s.draft.sandbox || undefined,
       acknowledgeReducedProtections: s.draft.acknowledgeReducedProtections || undefined,
       model,
@@ -1882,7 +1934,7 @@ export class AppController {
     // Pull the node's sandbox default so the new-session sandbox pill (and its
     // picker) can label "Node default (<tier>)" up front, before the user opens
     // Settings — the sandbox is chosen here, so its default should be visible here.
-    if (!this.store.getState().nodeSettings) this.getNodeSettings();
+    if (!this.store.getState().settings.nodeSettings) this.getNodeSettings();
     // Warm the repo picker in the background so it's ready — usually instantly —
     // by the time the user taps the repo pill, instead of a multi-second wait on
     // first open. Both listings are cached briefly on the node, so re-drafting
@@ -1922,12 +1974,12 @@ export class AppController {
   private maybeRestoreDraftAgent(event: { type?: string }): void {
     if (event.type !== "runtimes.list") return;
     const s = this.store.getState();
-    if (s.activeSessionId) return; // only a fresh draft, never a live session
+    if (s.activeSession.activeSessionId) return; // only a fresh draft, never a live session
     const wanted = this.local.lastChoice().agentId;
-    const target = wanted ? s.runtimes.find((r) => r.id === wanted) : undefined;
+    const target = wanted ? s.catalogs.runtimes.find((r) => r.id === wanted) : undefined;
     if (
       target &&
-      wanted !== s.selectedAgentId &&
+      wanted !== s.catalogs.selectedAgentId &&
       String((target as any).status || "available") === "available"
     ) {
       // Switching to the remembered agent runtime-selects it, and the resulting
@@ -1939,13 +1991,13 @@ export class AppController {
     // The draft's agent is already the one we'd pick (remembered == node default,
     // or nothing remembered). The connect-time burst's models.list carries no
     // runtime hint, so the node may have answered it for its global-active
-    // session on a *different* agent — leaving `state.models` tagged for the
+    // session on a *different* agent — leaving `state.catalogs.models` tagged for the
     // wrong runtime (or empty). That's the "no models on the new-session screen
     // until I send the first message" bug: only session.new ever re-listed for
     // the draft's real agent. Re-list explicitly for the selected runtime so its
     // models resolve up front. Guarded on a mismatch so a correct list isn't
     // needlessly refetched on every runtimes.list.
-    if (s.selectedAgentId && s.modelsRuntimeId !== s.selectedAgentId) this.listModels();
+    if (s.catalogs.selectedAgentId && s.catalogs.modelsRuntimeId !== s.catalogs.selectedAgentId) this.listModels();
   }
 
   /**
@@ -1960,8 +2012,10 @@ export class AppController {
     const trimmed = text.trim();
     const files = attachments && attachments.length ? attachments : undefined;
     if (!trimmed && !files) return;
-    const cmid = clientMessageId();
-    const active = this.store.getState().activeSessionId;
+    const prepared = this.sessionCoordinator.preparePrompt(trimmed, files);
+    if (prepared.type !== "prompt-prepared") return;
+    const cmid = prepared.clientMessageId;
+    const active = this.store.getState().activeSession.activeSessionId;
     // A cold-start placeholder is a persisted session intent, not a node
     // session id. Keep extra messages queued locally until its session.new
     // resolves instead of accidentally sending `prompt` with the placeholder.
@@ -2011,7 +2065,7 @@ export class AppController {
     }
     // No session yet: optimistically show the bubble, create a session, and
     // flush this prompt once session.history arrives for our requestId.
-    const rid = requestId();
+    const rid = prepared.requestId;
     // The node names the session (and a repo session's worktree branch) from
     // `title`; send the first message so the sidebar row and branch aren't blank.
     // Keep the exact frame so a post-reconnect retry re-sends it byte-identically.
@@ -2059,7 +2113,7 @@ export class AppController {
       task.logs.push(message);
       task.updatedAt = new Date().toISOString();
       void this.pendingLaunchStore.put(task);
-      if (this.store.getState().activeSessionId === provisionalId || this.pendingPrompt?.provisionalId === provisionalId) {
+      if (this.store.getState().activeSession.activeSessionId === provisionalId || this.pendingPrompt?.provisionalId === provisionalId) {
         this.store.pushSystemMessage(`Setup · ${message}`);
       }
     };
@@ -2090,7 +2144,7 @@ export class AppController {
       void this.pendingLaunchStore.put(task);
       if (this.pendingPrompt?.provisionalId === provisionalId) this.pendingPrompt = null;
       this.store.failPendingSession(provisionalId);
-      if (this.store.getState().activeSessionId === provisionalId) this.store.pushSystemMessage(`Setup · ${message}`);
+      if (this.store.getState().activeSession.activeSessionId === provisionalId) this.store.pushSystemMessage(`Setup · ${message}`);
       this.store.setError(`Couldn't start ${config.name}: ${(e as Error)?.message || e}`);
     }
   }
@@ -2116,7 +2170,7 @@ export class AppController {
       task.logs.push(message);
       task.updatedAt = new Date().toISOString();
       void this.pendingLaunchStore.put(task);
-      if (this.store.getState().activeSessionId === provisionalId) this.store.pushSystemMessage(`Setup · ${message}`);
+      if (this.store.getState().activeSession.activeSessionId === provisionalId) this.store.pushSystemMessage(`Setup · ${message}`);
     };
     log("Machine accepted. Waiting for its secure Bivy service to come online…");
     this.startBootProgress(nodeId, provisionalId, log);
@@ -2168,7 +2222,7 @@ export class AppController {
     await this.pendingLaunchStore.remove(provisionalId);
     if (this.pendingPrompt?.provisionalId === provisionalId) this.pendingPrompt = null;
     this.store.completePendingSession(provisionalId, sessionId, nodeId);
-    const wasOpen = this.store.getState().activeSessionId === sessionId;
+    const wasOpen = this.store.getState().activeSession.activeSessionId === sessionId;
     if (wasOpen) this.openSessionOnNode(sessionId, undefined, nodeId);
     // Keep the transport alive long enough to flush its sealed frames, then let
     // the normal account index/main connection own the now-real session.
@@ -2186,7 +2240,7 @@ export class AppController {
     task.updatedAt = new Date().toISOString();
     void this.pendingLaunchStore.put(task);
     this.store.failPendingSession(provisionalId);
-    if (this.store.getState().activeSessionId === provisionalId) this.store.pushSystemMessage(`Setup · Startup failed: ${message}`);
+    if (this.store.getState().activeSession.activeSessionId === provisionalId) this.store.pushSystemMessage(`Setup · Startup failed: ${message}`);
     this.store.setError(`Couldn't start ${task.config.name}: ${message}`);
   }
 
@@ -2282,7 +2336,7 @@ export class AppController {
     this.pendingLaunches.delete(id);
     await this.pendingLaunchStore.remove(id);
     this.store.dismissPendingSession(id);
-    if (this.store.getState().activeSessionId == null) this.newSession();
+    if (this.store.getState().activeSession.activeSessionId == null) this.newSession();
   }
 
   /**
@@ -2292,7 +2346,7 @@ export class AppController {
    * nothing to run the command against yet).
    */
   invokeAgentCommand(name: string, args: string): void {
-    const active = this.store.getState().activeSessionId;
+    const active = this.store.getState().activeSession.activeSessionId;
     if (!active) return;
     this.send({ kind: "session.command.invoke", sessionId: active, name, args });
   }
@@ -2304,7 +2358,7 @@ export class AppController {
    *  cached yet, so a prefetch/reopen paints the last list instantly and
    *  refreshes it in the background instead of flashing a spinner. */
   listRepos(): void {
-    if (this.store.getState().repos.length === 0) this.store.setReposLoading(true);
+    if (this.store.getState().catalogs.repos.length === 0) this.store.setReposLoading(true);
     if (!this.direct && this.signedIn && !this.local.cur) {
       void fetchHostedGithubRepositories(this.local)
         .then((repos) => this.store.apply({ type: "repos.list", repos, authed: true } as never))
@@ -2362,7 +2416,7 @@ export class AppController {
    *  we don't already hold this repo's list, so a prefetch/reopen is instant. */
   listBranches(repo: string): void {
     const s = this.store.getState();
-    const haveThisRepo = s.branchesRepo === repo && s.branches.length > 0;
+    const haveThisRepo = s.catalogs.branchesRepo === repo && s.catalogs.branches.length > 0;
     if (!haveThisRepo) this.store.setBranchesLoading(true);
     this.send({ kind: "branches.list", repo });
   }
@@ -2372,14 +2426,14 @@ export class AppController {
   }
 
   /** Ask the node for a fresh memory/CPU/storage snapshot. The reply arrives as
-   *  a `node.stats` event and lands in `state.nodeStats`. Fire-and-forget; the
+   *  a `node.stats` event and lands in `state.settings.nodeStats`. Fire-and-forget; the
    *  stats panel polls this while it's open. */
   requestNodeStats(sessionId?: string): void {
     this.send({ kind: "node.stats", sessionId });
   }
 
   /** Ask the node for a fresh Machine capability inventory. The reply arrives
-   *  as a `capabilities` event and lands in `state.capabilities`. Fetched on
+   *  as a `capabilities` event and lands in `state.settings.capabilities`. Fetched on
    *  demand (panel open / explicit refresh) — capabilities change rarely,
    *  unlike live resource stats, so this is not polled. */
   requestCapabilities(): void {
@@ -2388,11 +2442,11 @@ export class AppController {
 
   listModels(): void {
     const s = this.store.getState();
-    const sessionId = s.activeSessionId ?? undefined;
+    const sessionId = s.activeSession.activeSessionId ?? undefined;
     // On a draft, hint the agent we're previewing so the node answers for THAT
     // runtime (and tags the reply for the per-runtime cache) even if its default
     // runtime hasn't flipped yet. A live session answers for itself — no hint.
-    const runtimeId = sessionId ? undefined : (s.selectedAgentId ?? undefined);
+    const runtimeId = sessionId ? undefined : (s.catalogs.selectedAgentId ?? undefined);
     this.send({ kind: "models.list", sessionId, runtimeId });
   }
 
@@ -2401,25 +2455,21 @@ export class AppController {
    *  instead of paying the runtime spin-up on the critical path. No-op once a
    *  session is live (its agent is fixed) or when no runtimes are known yet. */
   prefetchModels(): void {
-    if (this.store.getState().activeSessionId) return;
+    if (this.store.getState().activeSession.activeSessionId) return;
     const runtimeIds = this.store
       .getState()
-      .runtimes.filter((r) => String((r as any).status || "available") === "available")
+      .catalogs.runtimes.filter((r) => String((r as any).status || "available") === "available")
       .map((r) => r.id);
     if (runtimeIds.length) this.send({ kind: "models.prefetch", runtimeIds });
   }
 
   /** Pick a model. Live session → select now; draft → keep local for session.new. */
   chooseModel(model: ModelInfo): void {
-    this.store.setCurrentModelLocal(model);
-    this.store.setDraftModel({ provider: (model as any).provider, id: model.id });
-    this.local.setLastChoice({ modelProvider: (model as any).provider, modelId: model.id });
-    const sessionId = this.store.getState().activeSessionId;
-    if (sessionId) this.send({ kind: "model.select", provider: (model as any).provider, id: model.id, sessionId });
+    this.credentialsModelsCoordinator.selectModel(model, this.store.getState().activeSession.activeSessionId);
   }
 
   setThinkingLevel(level: string): void {
-    const sessionId = this.store.getState().activeSessionId ?? undefined;
+    const sessionId = this.store.getState().activeSession.activeSessionId ?? undefined;
     this.store.setThinkingLevel(level);
     this.send({ kind: "thinking.set_level", level, sessionId });
   }
@@ -2433,13 +2483,13 @@ export class AppController {
       return;
     }
     const state = this.store.getState();
-    const activeSessionId = state.activeSessionId;
+    const activeSessionId = state.activeSession.activeSessionId;
     if (activeSessionId) {
       // Agent handoff is a real cross-runtime fork, not a client-side summary in
       // a blank draft. The shared fork path carries normalized history, repo and
       // dirty files, creates the target runtime session, and opens it.
-      const sourceAgentId = state.activeRuntimeId
-        ?? state.sessions.find((session) => session.sessionId === activeSessionId)?.runtimeId;
+      const sourceAgentId = state.activeSession.activeRuntimeId
+        ?? state.sessionIndex.sessions.find((session) => session.sessionId === activeSessionId)?.runtimeId;
       this.pendingPrompt = null;
       this.pendingFollowups = [];
       void this.forkSession(activeSessionId, {
@@ -2469,7 +2519,7 @@ export class AppController {
   // --- Settings: providers / OAuth ---------------------------------------
 
   listProviders(): void {
-    this.send({ kind: "providers.list" });
+    this.credentialsModelsCoordinator.request({ kind: "providers.list" }, "providers");
   }
   getProviderAuth(provider: string): void {
     this.send({ kind: "provider.auth.get", provider });
@@ -2500,7 +2550,7 @@ export class AppController {
   private credentialSyncInFlight: Promise<void> | null = null;
   /** Bidirectional API-key convergence between the PWA account vault and node. */
   private syncAccountCredentialsWithNode(): Promise<void> {
-    if (this.direct || this.store.getState().status !== "online") return Promise.resolve();
+    if (this.direct || this.store.getState().connection.status !== "online") return Promise.resolve();
     if (this.credentialSyncInFlight) return this.credentialSyncInFlight;
     this.credentialSyncInFlight = (async () => {
       // Pull first so an existing node seeds a new device. Then push the merged
@@ -2725,8 +2775,10 @@ export class AppController {
 
   // --- Settings: account / billing / push --------------------------------
 
-  fetchMe(): Promise<AccountMe> {
-    return fetchMe(this.local);
+  async fetchMe(): Promise<AccountMe> {
+    const result = await this.accountCoordinator.run<AccountMe>("fetch-me");
+    if (result.type === "account-operation-failed") throw result.error;
+    return result.value;
   }
   /** Connected GitHub App info (name + mention handle) for the settings UI. */
   fetchGithubApp(): ReturnType<typeof fetchGithubApp> {
@@ -3041,7 +3093,7 @@ export class AppController {
     if (!entries.length) return;
     // Push only while the transport is still live on this same node — an async
     // hop above could have switched it out from under us.
-    if (this.store.getState().status !== "online" || this.local.cur !== nodeId) {
+    if (this.store.getState().connection.status !== "online" || this.local.cur !== nodeId) {
       this.seededEphemeralNodes.delete(nodeId); // let a later online retry
       return;
     }
@@ -3084,14 +3136,14 @@ export class AppController {
       const st = this.store.getState();
       // Bail if we've moved on, a login is already in flight, the prompt is
       // already up, or creds have since landed.
-      if (st.status !== "online" || this.local.cur !== nodeId) return;
-      if (st.needsModelAuth || st.oauth) return;
-      if (st.providers.some((p) => p.configured)) return;
+      if (st.connection.status !== "online" || this.local.cur !== nodeId) return;
+      if (st.presentation.needsModelAuth || st.presentation.oauth) return;
+      if (st.catalogs.providers.some((p) => p.configured)) return;
       // Prefer an OAuth-capable provider (Anthropic first — subscription login
       // is the whole point here), falling back to anthropic by id.
       const provider =
-        st.providers.find((p) => p.oauth && p.id === "anthropic")?.id ??
-        st.providers.find((p) => p.oauth)?.id ??
+        st.catalogs.providers.find((p) => p.oauth && p.id === "anthropic")?.id ??
+        st.catalogs.providers.find((p) => p.oauth)?.id ??
         "anthropic";
       this.store.setNeedsModelAuth({ nodeId, provider });
     }, FIRST_RUN_MODEL_AUTH_GRACE_MS);
@@ -3195,7 +3247,7 @@ export class AppController {
       // suspended node instead of hanging while connecting to it off-relay.
       const machine =
         (await this.ephemeralMachines.list().catch(() => [])).find((m) => m.nodeId === nodeId) ??
-        ephemeralMachineFromNode(this.store.getState().nodes.find((n) => n.id === nodeId) ?? { id: nodeId });
+        ephemeralMachineFromNode(this.store.getState().connection.nodes.find((n) => n.id === nodeId) ?? { id: nodeId });
       if (machine && ephemeralProviderSuspendsWhenIdle(machine.provider)) {
         await this.wakeEphemeral(machine);
       }
@@ -3274,7 +3326,7 @@ export class AppController {
       const corr = this.ephemeralCorrelations.find((c) => c.nodeId === nodeId || c.sessionId === sessionId);
       const machine =
         (await this.ephemeralMachines.list().catch(() => [])).find((m) => m.nodeId === nodeId) ??
-        ephemeralMachineFromNode(this.store.getState().nodes.find((n) => n.id === nodeId) ?? { id: nodeId }) ??
+        ephemeralMachineFromNode(this.store.getState().connection.nodes.find((n) => n.id === nodeId) ?? { id: nodeId }) ??
         (corr ? ephemeralMachineFromCorrelation(corr) : null);
       if (!machine) throw new Error("No record of the machine to rebuild — re-launch it from Ephemeral settings.");
       if (ephemeralProviderSuspendsWhenIdle(machine.provider)) {
@@ -3319,7 +3371,7 @@ export class AppController {
       return false;
     }
     if (!hasKey) return false;
-    const node = this.store.getState().nodes.find((n) => n.id === nodeId);
+    const node = this.store.getState().connection.nodes.find((n) => n.id === nodeId);
     // Enrolled but offline → resumable ONLY when it's actually an ephemeral machine
     // we can wake. A persistent node that's merely offline is NOT resumable from this
     // device: it reconnects on its own when its daemon rejoins the relay, and sweeping
@@ -3432,10 +3484,10 @@ export class AppController {
   }
   /** Account-level ephemeral node configs (shared across the account's devices). */
   listEphemeralConfigs(): Promise<EphemeralNodeConfig[]> {
-    return fetchEphemeralConfigs(this.local);
+    return this.ephemeralCoordinator.listConfigs();
   }
   createEphemeralConfig(input: EphemeralConfigInput): Promise<EphemeralNodeConfig> {
-    return apiCreateEphemeralConfig(this.local, input);
+    return this.ephemeralCoordinator.createConfig(input);
   }
   updateEphemeralConfig(id: string, patch: Partial<EphemeralConfigInput>): Promise<EphemeralNodeConfig> {
     return apiUpdateEphemeralConfig(this.local, id, patch);
@@ -3558,7 +3610,7 @@ export class AppController {
    */
   private retryPendingSessionNew(): void {
     if (!this.pendingPrompt) return;
-    if (this.store.getState().activeSessionId) return;
+    if (this.store.getState().activeSession.activeSessionId) return;
     this.send(this.pendingPrompt.frame);
   }
 
@@ -3572,7 +3624,7 @@ export class AppController {
     // the very first message (and the naming it triggers) into the wrong
     // session while this one was permanently stranded on its placeholder name.
     if (event.requestId !== this.pendingPrompt.requestId) return;
-    const sessionId = event.sessionId || this.store.getState().activeSessionId;
+    const sessionId = event.sessionId || this.store.getState().activeSession.activeSessionId;
     if (!sessionId) return;
     // The draft just became a real session — swap /sessions/new for its id so the
     // URL is copyable. Replace (not push) so Back doesn't land on an empty draft.
@@ -3595,7 +3647,7 @@ export class AppController {
   }
 
   abort(): void {
-    const active = this.store.getState().activeSessionId;
+    const active = this.store.getState().activeSession.activeSessionId;
     if (active) this.send({ kind: "abort", sessionId: active });
   }
 
@@ -3623,12 +3675,12 @@ export class AppController {
 
   /** The node that owns a session (SessionSummary.nodeId), when known. */
   private resolveSessionNodeId(sessionId: string): string | undefined {
-    return this.store.getState().sessions.find((s) => s.sessionId === sessionId)?.nodeId;
+    return this.store.getState().sessionIndex.sessions.find((s) => s.sessionId === sessionId)?.nodeId;
   }
 
   /** The routing label a node serves, from its enrolled name (`bivy/<name>`). */
   private resolveNodeLabel(nodeId: string): string | undefined {
-    const node = this.store.getState().nodes.find((n) => n.id === nodeId);
+    const node = this.store.getState().connection.nodes.find((n) => n.id === nodeId);
     return node?.name ? `bivy/${node.name}` : undefined;
   }
 
@@ -3643,7 +3695,7 @@ export class AppController {
     // scheduled for later (status "scheduled") is on its own timer and isn't
     // blocking, so it never forces a send into the queue.
     const waiting = this.store.getFollowups(sessionId).filter((f) => f.status === "queued").length;
-    return mustQueueFollowup(waiting, this.store.getState().working);
+    return mustQueueFollowup(waiting, this.store.getState().activeSession.working);
   }
 
   /**
@@ -3699,9 +3751,9 @@ export class AppController {
     if (!this.accountMode()) return { error: "Sign in to start a Run." };
 
     const state = this.store.getState();
-    const sessionId = state.activeSessionId ?? undefined;
-    const active = sessionId ? state.sessions.find((session) => session.sessionId === sessionId) : undefined;
-    const nodeId = sessionId ? this.resolveSessionNodeId(sessionId) : state.currentNodeId ?? undefined;
+    const sessionId = state.activeSession.activeSessionId ?? undefined;
+    const active = sessionId ? state.sessionIndex.sessions.find((session) => session.sessionId === sessionId) : undefined;
+    const nodeId = sessionId ? this.resolveSessionNodeId(sessionId) : state.connection.currentNodeId ?? undefined;
     if (!nodeId) return { error: sessionId ? "This Session has no owning Machine." : "Choose a Machine before starting a Run." };
     const roomKeyB64 = this.local.keys()[nodeId];
     if (!roomKeyB64) return { error: "This Machine isn't paired on this device—open it first so the instruction can be encrypted." };
@@ -3716,10 +3768,10 @@ export class AppController {
         body: `${TEMPLATE_PREFIX}:${nodeId}:${encrypted}`,
         label,
         repo: sessionId ? undefined : state.draft.repo ?? undefined,
-        runtimeId: sessionId ? undefined : state.selectedAgentId ?? undefined,
-        model: sessionId ? undefined : state.currentModel?.id,
+        runtimeId: sessionId ? undefined : state.catalogs.selectedAgentId ?? undefined,
+        model: sessionId ? undefined : state.catalogs.currentModel?.id,
         approvalMode: options.approvalMode,
-        sandbox: active?.sandbox ?? (!sessionId ? state.draft.sandbox ?? state.nodeSettings?.defaultSandbox : undefined),
+        sandbox: active?.sandbox ?? (!sessionId ? state.draft.sandbox ?? state.settings.nodeSettings?.defaultSandbox : undefined),
         maxAttempts: options.maxAttempts,
         targetKind: sessionId ? "existing_session" : "new_session",
         targetSessionId: sessionId,
@@ -3765,7 +3817,7 @@ export class AppController {
     const nodeId =
       target === "existing_session"
         ? (sessionId ? this.resolveSessionNodeId(sessionId) : undefined)
-        : this.store.getState().currentNodeId;
+        : this.store.getState().connection.currentNodeId;
     if (!nodeId) return "No machine selected for this message.";
     const roomKeyB64 = this.local.keys()[nodeId];
     if (!roomKeyB64) return "This machine isn't paired on this device — open it first so the message can be encrypted.";
@@ -3833,7 +3885,7 @@ export class AppController {
       return; // offline / control plane unreachable — leave rows in place
     }
     const pending = new Set(all.filter((a) => a.enabled && a.nextRunAt != null).map((a) => a.id));
-    for (const sessionId of Object.keys(this.store.getState().followupsBySession)) {
+    for (const sessionId of Object.keys(this.store.getState().sessionIndex.followupsBySession)) {
       this.store.pruneScheduledFollowups(sessionId, pending);
     }
   }
@@ -3850,7 +3902,7 @@ export class AppController {
    *  capability check itself. */
   supportsSteering(): boolean {
     const s = this.store.getState();
-    const runtime = s.runtimes.find((r) => r.id === s.selectedAgentId);
+    const runtime = s.catalogs.runtimes.find((r) => r.id === s.catalogs.selectedAgentId);
     return runtimeSupportsSteering(runtime?.capabilities as { streamingBehaviors?: unknown } | undefined);
   }
 
@@ -3904,7 +3956,7 @@ export class AppController {
     const item = this.store.getFollowups(sessionId).find((f) => f.id === id);
     if (!item || item.status !== "queued") return;
     this.store.reorderFollowup(sessionId, id, 0);
-    if (!this.store.getState().working) {
+    if (!this.store.getState().activeSession.working) {
       this.drainFollowups(sessionId);
       return;
     }
@@ -3925,8 +3977,8 @@ export class AppController {
     const trimmed = text.trim();
     const files = attachments && attachments.length ? attachments : undefined;
     if (!trimmed && !files) return false;
-    const active = this.store.getState().activeSessionId;
-    if (!active || !this.store.getState().working || !this.supportsSteering()) return false;
+    const active = this.store.getState().activeSession.activeSessionId;
+    if (!active || !this.store.getState().activeSession.working || !this.supportsSteering()) return false;
     const cmid = clientMessageId();
     this.store.addUserMessage(trimmed, cmid, files);
     this.send({ kind: "prompt", sessionId: active, text: trimmed, clientMessageId: cmid, attachments: files, streamingBehavior: "steer" });
@@ -3938,8 +3990,8 @@ export class AppController {
    *  enqueue and this check. No-op while busy or with nothing queued — the
    *  queue only ever has one item in flight ("sending") at a time. */
   private drainFollowups(sessionId: string): void {
-    if (sessionId !== this.store.getState().activeSessionId) return;
-    if (this.store.getState().working) return;
+    if (sessionId !== this.store.getState().activeSession.activeSessionId) return;
+    if (this.store.getState().activeSession.working) return;
     const next = nextQueuedFollowup(this.store.getFollowups(sessionId));
     if (!next) return;
     this.dispatchFollowup(sessionId, next);
@@ -3973,7 +4025,7 @@ export class AppController {
    *  isn't in the queue. */
   private maybeConfirmFollowup(event: { type?: string; sessionId?: string; clientMessageId?: unknown }): void {
     if (event.type !== "session.user_message") return;
-    const sid = event.sessionId || this.store.getState().activeSessionId;
+    const sid = event.sessionId || this.store.getState().activeSession.activeSessionId;
     const cmid = typeof event.clientMessageId === "string" ? event.clientMessageId : undefined;
     if (!sid || !cmid) return;
     // Delivered in-app — retire the control-plane backstop so it can't fire.
@@ -4003,7 +4055,7 @@ export class AppController {
     if (!trimmed) return;
     // Optimistically reflect the rename in the list + title.
     const s = this.store.getState();
-    if (sessionId === s.activeSessionId) this.store.setActiveTitle(trimmed);
+    if (sessionId === s.activeSession.activeSessionId) this.store.setActiveTitle(trimmed);
     this.store.renameSessionLocal(sessionId, trimmed);
     this.send({ kind: "session.rename", sessionId, name: trimmed });
     this.refreshSessions();
@@ -4011,7 +4063,7 @@ export class AppController {
 
   deleteSession(sessionId: string, path?: string): void {
     this.send({ kind: "session.delete", sessionId, path });
-    if (sessionId === this.store.getState().activeSessionId) {
+    if (sessionId === this.store.getState().activeSession.activeSessionId) {
       this.store.resetActiveSession();
       // The open session was just deleted — drop back to the draft route.
       navigate({ kind: "new" });
@@ -4023,12 +4075,12 @@ export class AppController {
   }
 
   pauseSession(sessionId?: string): void {
-    const id = sessionId || this.store.getState().activeSessionId;
+    const id = sessionId || this.store.getState().activeSession.activeSessionId;
     if (id) this.send({ kind: "session.pause", sessionId: id });
   }
 
   resumeSession(sessionId?: string): void {
-    const id = sessionId || this.store.getState().activeSessionId;
+    const id = sessionId || this.store.getState().activeSession.activeSessionId;
     if (id) this.send({ kind: "session.resume", sessionId: id });
   }
 
@@ -4036,7 +4088,7 @@ export class AppController {
    *  of waiting for its next turn. Works even when the session isn't live — the
    *  node resumes it just enough to check. */
   refreshPrStatus(sessionId?: string): void {
-    const id = sessionId || this.store.getState().activeSessionId;
+    const id = sessionId || this.store.getState().activeSession.activeSessionId;
     if (id) this.send({ kind: "session.pr.refresh", sessionId: id });
   }
 
@@ -4051,7 +4103,7 @@ export class AppController {
   /** Universal Agent Harness: restore the session's workspace to a checkpoint
    *  (e.g. the state before the last turn). */
   rewind(checkpointId: string, sessionId?: string): void {
-    const id = sessionId || this.store.getState().activeSessionId;
+    const id = sessionId || this.store.getState().activeSession.activeSessionId;
     if (id && checkpointId) this.send({ kind: "session.rewind", sessionId: id, checkpointId });
   }
 
@@ -4059,13 +4111,13 @@ export class AppController {
    *  doesn't rewind the whole turn. `content` is the file's pre-turn text, or null
    *  when the turn added the file (revert = remove it). */
   revertFile(path: string, content: string | null, sessionId?: string): void {
-    const id = sessionId || this.store.getState().activeSessionId;
+    const id = sessionId || this.store.getState().activeSession.activeSessionId;
     if (id && path) this.send({ kind: "session.revert_file", sessionId: id, path, content });
   }
 
   /** Ask the node for this session's checkpoint list (rewind targets). */
   listCheckpoints(sessionId?: string): void {
-    const id = sessionId || this.store.getState().activeSessionId;
+    const id = sessionId || this.store.getState().activeSession.activeSessionId;
     if (id) this.send({ kind: "session.checkpoints", sessionId: id });
   }
 

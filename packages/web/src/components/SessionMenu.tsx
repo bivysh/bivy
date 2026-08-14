@@ -122,7 +122,7 @@ export function SessionMenu({
   const [forkOpen, setForkOpen] = useState(false);
   const [resumeOpen, setResumeOpen] = useState(false);
   const [prBusy, setPrBusy] = useState(false);
-  const { prResult, error } = useAppState();
+  const { presentation: { prResult, error } } = useAppState();
   const prBusyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const ref = useRef<HTMLDivElement>(null);
 
