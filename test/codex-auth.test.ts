@@ -86,6 +86,22 @@ await check("is a no-op (no grant) when an auth.json already exists", async () =
   assert.equal(calls(), 0, "did not call the refresh grant");
 });
 
+await check("reconciles a newer Codex-rotated refresh token back to the authoritative vault", async () => {
+  const piDir = freshPiDir();
+  const home = freshCodexHome();
+  fs.writeFileSync(path.join(home, "auth.json"), JSON.stringify({
+    auth_mode: "chatgpt",
+    tokens: { access_token: "codex-access", refresh_token: "codex-rotated" },
+    last_refresh: new Date(Date.now() + 1000).toISOString(),
+  }));
+  const calls = stubFetch(OK_TOKENS);
+  assert.equal(await ensureCodexAuth(piDir), home);
+  assert.equal(calls(), 0);
+  const stored = await createCredentialVault(piDir).read("openai-codex");
+  assert.equal(stored?.refresh, "codex-rotated");
+  assert.equal(stored?.access, "codex-access");
+});
+
 await check("returns undefined when the vault has no openai-codex credential", async () => {
   const piDir = freshPiDir(false);
   freshCodexHome();

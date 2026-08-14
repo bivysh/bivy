@@ -860,13 +860,19 @@ export interface GithubQueueItem {
   checks?: Array<{ name: string; commandHash?: string; status: "passed" | "failed" | "skipped"; exitCode?: number; durationMs?: number }>;
   events?: Array<{
     at: string;
-    kind: "triggered" | "routed" | "claimed" | "attempt_started" | "checkpoint" | "approval" | "policy_denial"
-      | "retry" | "fallback" | "rate_limited" | "branch" | "pull_request" | "needs_attention" | "completed" | "cancelled";
+    kind: "trigger_received" | "trigger_matched" | "queued" | "routed" | "provisioning" | "claimed"
+      | "agent_started" | "checks_started" | "checks_completed" | "result_delivery" | "notification"
+      | "retry" | "cancel_requested" | "terminal"
+      | "triggered" | "attempt_started" | "checkpoint" | "approval" | "policy_denial"
+      | "fallback" | "rate_limited" | "branch" | "pull_request" | "needs_attention" | "completed" | "cancelled";
     summary: string;
     attempt?: number;
     ref?: string;
     url?: string;
     status?: "passed" | "failed" | "denied" | "approved";
+    reasonCode?: string;
+    evidenceRef?: string;
+    milestoneId?: string;
   }>;
   receiptEvidence?: {
     approvals: { requests: number; approved: number; denied: number };
@@ -893,6 +899,10 @@ export interface GithubQueueItem {
       }>;
     };
   };
+  usage?: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number; costUsd?: number };
+  notification?: { status: "not_requested" | "pending" | "delivered" | "failed"; channel?: "push" | "email" | "webhook"; updatedAt: string; reason?: string };
+  references?: Array<{ kind: "receipt" | "evidence" | "log"; ref: string; url?: string }>;
+  attention?: { severity: "warning" | "error" | "critical"; reason: string; since: string };
 }
 
 export type AutomationSchedule =
@@ -981,6 +991,10 @@ export interface AccountAutomationRun {
   checks?: GithubQueueItem["checks"];
   events?: GithubQueueItem["events"];
   receiptEvidence?: GithubQueueItem["receiptEvidence"];
+  usage?: GithubQueueItem["usage"];
+  notification?: GithubQueueItem["notification"];
+  references?: GithubQueueItem["references"];
+  attention?: GithubQueueItem["attention"];
   output?: GithubQueueItem["output"];
 }
 
@@ -1109,7 +1123,25 @@ export async function fetchAutomationRun(
   return (await res.json()) as AccountAutomationRun;
 }
 
-export type ProductMetricEvent = "activation_ready" | "first_useful_response" | "remote_reconnect" | "remote_intervention" | "run_accepted" | "receipt_reviewed";
+export type ProductMetricEvent =
+  | "activation_ready"
+  | "first_useful_response"
+  | "remote_reconnect"
+  | "remote_intervention"
+  | "run_accepted"
+  | "receipt_reviewed"
+  // Readiness-led first-run journey: one ok/failed pair per step, closed-enum
+  // and content-free (no ids, no reasons, no free text — see recordProductMetric).
+  // Sign-in itself is tracked server-side (control-plane FunnelEvent
+  // sign_in_completed/sign_in_failed) instead of here: a sign-in FAILURE has,
+  // by definition, no authenticated account yet to attribute this
+  // account-scoped metric to.
+  | "first_run_machine_ready"
+  | "first_run_machine_failed"
+  | "first_run_provider_connected"
+  | "first_run_provider_failed"
+  | "first_run_agent_verified"
+  | "first_run_agent_failed";
 export type ProductMetricClient = "desktop" | "mobile" | "cli" | "node";
 
 /** Emit one content-free milestone. The request contains closed enums only. */

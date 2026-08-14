@@ -68,15 +68,17 @@ test("the new Run UI carries no prohibited customer vocabulary", async () => {
 });
 
 test("every Run surface links to the exact Run route, preserving the Run id", async () => {
-  const [app, automations, queue, pill] = await Promise.all([
+  const [app, automations, history, queue, pill] = await Promise.all([
     read("../../packages/web/src/App.tsx"),
     read("../../packages/web/src/components/AutomationsView.tsx"),
+    read("../../packages/web/src/components/RunHistory.tsx"),
     read("../../packages/web/src/components/GithubQueue.tsx"),
     read("../../packages/web/src/components/RunPill.tsx"),
   ]);
   // Automation activity, queue/history, and the in-session Run pill all deep-link
   // by the exact Run id; App maps each onto /runs/:runId.
-  expect(automations).toContain("onClick={() => onOpenRun(run.id)}");
+  expect(automations).toContain("onOpenRun={onOpenRun}");
+  expect(history).toContain("onClick={() => onOpenRun(run.id)}");
   expect(queue).toContain("onClick={() => onOpenRun(item.id)}");
   // Session → Run: the pill opens the correlated Run by its stable id (a retry
   // keeps the same Run id).

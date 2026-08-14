@@ -15,8 +15,16 @@
 
 /** The distinct readiness checks, in the order they must resolve. Each depends on
  *  every earlier one, so a downstream check stays pending until its prerequisites
- *  pass — a credential can't be validated on a Machine that is not online. */
+ *  pass — a credential can't be validated on a Machine that is not online.
+ *
+ *  `account_signed_in` is resolved eagerly by every caller (never left
+ *  "checking") — in hosted mode the sign-in screen already gates all
+ *  rendering before this model ever runs, and direct/self-host mode has no
+ *  account concept at all. It exists so the model names the full five-step
+ *  journey (sign-in, machine, provider, agent, first response) for state-model
+ *  tests and funnel metrics, not to duplicate that screen's own gating. */
 export type ActivationCheckId =
+  | "account_signed_in"
   | "machine_online"
   | "agent_installed"
   | "credential_valid"
@@ -28,6 +36,7 @@ export type ActivationCheckState = "pending" | "checking" | "passed" | "failed" 
 /** A concrete, wired next action. Every failed check maps to exactly one — no
  *  inert buttons: a client only renders a remediation it can actually perform. */
 export type ActivationRemediationKind =
+  | "sign_in"
   | "connect_machine"
   | "install_agent"
   | "authenticate_credential"
@@ -68,9 +77,14 @@ export interface Activation {
  *  and `undefined` = not yet determined (still checking / pending). Keeping them
  *  independent lets a client fill each in as its probe resolves. */
 export interface ActivationSignals {
+  /** The account is signed in (direct/self-host mode has no account, so this is
+   *  always `true` there — see the `account_signed_in` doc comment above). */
+  accountSignedIn?: boolean;
   /** The Machine is enrolled and currently reachable. */
   machineOnline?: boolean;
-  /** The recommended agent (Claude Code / Codex) is installed at a supported version. */
+  /** A certified/supported agent (Claude Code / Codex) is installed and its
+   *  capability has been verified — not merely present. An installed-but-
+   *  unsupported/uncertified runtime does not satisfy this signal. */
   agentInstalled?: boolean;
   /** The model credential the agent needs is present and valid. */
   credentialValid?: boolean;
@@ -93,6 +107,15 @@ interface CheckSpec {
 
 const SPECS: readonly CheckSpec[] = [
   {
+    id: "account_signed_in",
+    label: "Signed in",
+    signal: (s) => s.accountSignedIn,
+    passed: "You're signed in.",
+    checking: "Checking your sign-in…",
+    failed: "You're not signed in yet.",
+    remediation: { kind: "sign_in", label: "Sign in" },
+  },
+  {
     id: "machine_online",
     label: "Machine online",
     signal: (s) => s.machineOnline,
@@ -103,11 +126,11 @@ const SPECS: readonly CheckSpec[] = [
   },
   {
     id: "agent_installed",
-    label: "Agent installed",
+    label: "Supported agent",
     signal: (s) => s.agentInstalled,
-    passed: "A supported agent is installed.",
-    checking: "Checking for a supported agent…",
-    failed: "No supported agent was found on the Machine.",
+    passed: "A certified agent's capability is verified.",
+    checking: "Verifying a supported agent's capability…",
+    failed: "No certified, supported agent was found on the Machine.",
     remediation: { kind: "install_agent", label: "Install the agent" },
   },
   {
@@ -204,10 +227,16 @@ export function deriveActivation(signals: ActivationSignals): Activation {
  *  dependency-free and unit-testable with plain objects; the real `AppState`
  *  satisfies it structurally. */
 export interface ActivationStateInput {
+  /** Direct/self-host mode has no account concept — `account_signed_in`
+   *  resolves `true` unconditionally when this is set. */
+  direct: boolean;
+  /** Hosted-mode sign-in state; ignored when `direct` is true. */
+  signedIn: boolean;
   /** ConnectionStatus: "online" | "offline" | "connecting" | "reconnecting" | … */
   status: string;
-  /** RuntimeInfo carries a runtime `status` behind an index signature, so accept
-   *  any record and read it defensively (an absent status means "available"). */
+  /** RuntimeInfo carries `status`/`supportTier` behind an index signature, so
+   *  accept any record and read both defensively (an absent status means
+   *  "available"; only `supportTier === "supported"` counts as certified). */
   runtimes: ReadonlyArray<Record<string, unknown>>;
   providers: ReadonlyArray<{ configured?: boolean; expiresAt?: number }>;
   reposAuthed: boolean;
@@ -219,20 +248,23 @@ export interface ActivationStateInput {
  *
  *  - a transient connection state (connecting/reconnecting) leaves
  *    `machineOnline` undefined (still checking) rather than failing;
+ *  - `agentInstalled` requires a *certified, supported* runtime — an installed
+ *    but experimental/beta/unverified one leaves the signal `false`, not `true`;
  *  - `agentAnswered` is set ONLY by a real assistant message with text in the
  *    transcript — never by an installed agent or an online Machine. A turn that
  *    has not answered yet stays "checking", surfacing "run the starter task" as
  *    the next action, so the UI can never claim readiness before a real response.
  */
 export function activationFromState(state: ActivationStateInput, now: number = Date.now()): Activation {
+  const accountSignedIn = state.direct ? true : state.signedIn;
   const machineOnline = state.status === "online" ? true : state.status === "offline" ? false : undefined;
   const agentInstalled = state.runtimes.length
-    ? state.runtimes.some((r) => String(r.status ?? "available") === "available")
+    ? state.runtimes.some((r) => String(r.status ?? "available") === "available" && r.supportTier === "supported")
     : undefined;
   const credentialValid = state.providers.length
     ? state.providers.some((p) => p.configured === true && (!p.expiresAt || p.expiresAt > now))
     : undefined;
   const repositoryReady = state.reposAuthed;
   const agentAnswered = state.transcript.some((e) => e.role === "assistant" && Boolean(e.text) && !e.tool) ? true : undefined;
-  return deriveActivation({ machineOnline, agentInstalled, credentialValid, repositoryReady, agentAnswered });
+  return deriveActivation({ accountSignedIn, machineOnline, agentInstalled, credentialValid, repositoryReady, agentAnswered });
 }

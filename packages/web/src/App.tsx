@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { activationFromState, cancelAutomationRun, fetchAutomationRun, recordProductMetric, retryAutomationRun, type AccountAutomationRun, type GithubQueueItem } from "@bivy/core";
+import { deriveActivation, cancelAutomationRun, fetchAutomationRun, recordProductMetric, retryAutomationRun, type AccountAutomationRun, type GithubQueueItem } from "@bivy/core";
 import { useAppState } from "./store/useStore.js";
 import { SessionList } from "./components/SessionList.js";
 import { ChatView } from "./components/ChatView.js";
@@ -32,7 +32,6 @@ import { EphemeralSheet } from "./components/Ephemeral.js";
 import { FirstRunModelAuthSheet } from "./components/FirstRunModelAuth.js";
 import { NodePicker } from "./components/Pickers.js";
 import { ConnectRunner } from "./components/ConnectRunner.js";
-import { ReadinessChecklist } from "./components/ReadinessChecklist.js";
 import { buildInboxItems } from "./components/Inbox.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "./flags.js";
 import { PwaLifecycleNotice } from "./components/PwaLifecycleNotice.js";
@@ -42,6 +41,9 @@ import { clearQueuedPrompts, markPromptQueued, setFollowupQueuedPrompts, setTurn
 // paint fast; the chunk is fetched the first time the user opens a terminal.
 const TerminalOverlay = lazy(() =>
   import("./components/Terminal.js").then((m) => ({ default: m.TerminalOverlay })),
+);
+const ReadinessChecklist = lazy(() =>
+  import("./components/ReadinessChecklist.js").then((m) => ({ default: m.ReadinessChecklist })),
 );
 import { useEdgeSwipe } from "./useEdgeSwipe.js";
 import { controller } from "./store/useStore.js";
@@ -124,11 +126,6 @@ export function App() {
   // Feeds the sidebar's exception hints and the run pill's outcome. Declared up
   // here (not by activeSession below) so the hook stays above any early return.
   const runEvidence = useMemo(() => indexRunEvidence(githubQueue), [githubQueue]);
-  const activation = useMemo(() => activationFromState(state), [state]);
-  // Keep first-use readiness in the customer journey, not in Settings. Scope it
-  // to an isolated Machine so established workstation Sessions never acquire an
-  // onboarding panel; it disappears only after a real assistant response.
-  const showFirstRunReadiness = Boolean(state.currentNodeId?.startsWith("eph-") && !activation.activated);
   const inboxItems = useMemo(() => buildInboxItems({
     sessions: state.sessions,
     approvals: state.approvals,
@@ -189,6 +186,16 @@ export function App() {
   useEffect(() => { if (online) clearQueuedPrompts(); }, [online]);
   const queuedFollowupCount = Object.values(state.followupsBySession).reduce((total, items) => total + items.length, 0);
   useEffect(() => setFollowupQueuedPrompts(queuedFollowupCount), [queuedFollowupCount]);
+  const activation = useMemo(() => deriveActivation({
+    accountSignedIn: controller.direct ? true : state.signedIn,
+    machineOnline: state.status === "online" ? true : state.status === "offline" ? false : undefined,
+    agentInstalled: state.runtimes.length
+      ? state.runtimes.some((runtime) => String(runtime.status ?? "available") === "available" && runtime.supportTier === "supported")
+      : undefined,
+    credentialValid: state.activationReadiness ? state.activationReadiness.credential.ok : undefined,
+    repositoryReady: state.activationReadiness ? state.activationReadiness.repository.ok : undefined,
+    agentAnswered: state.transcript.some((entry) => entry.role === "assistant" && Boolean(entry.text) && !entry.tool) ? true : undefined,
+  }), [state.activationReadiness, state.runtimes, state.signedIn, state.status, state.transcript]);
   // Latch: has this client ever had a live connection this run? Once true, we
   // treat the WHOLE transient reconnect window as still-composable — not just the
   // brief "reconnecting" beat, but the redial's "connecting" and any re-pair
@@ -640,6 +647,21 @@ export function App() {
           </div>
         )}
 
+        {!state.activeSessionId && state.transcript.length === 0 && (
+          <Suspense fallback={null}>
+            <ReadinessChecklist
+              activation={activation}
+              onRemediate={{
+                connect_machine: () => openSettings("nodes"),
+                install_agent: () => (document.querySelector(".agent-pill") as HTMLButtonElement | null)?.click(),
+                authenticate_credential: () => openSettings("providers"),
+                grant_repository: () => (document.querySelector(".repo-pill") as HTMLButtonElement | null)?.click(),
+                run_starter_task: () => (document.querySelector(".composer-input") as HTMLTextAreaElement | null)?.focus(),
+              }}
+            />
+          </Suspense>
+        )}
+
         {needsNode && (
           <div className="connect-runner-scroll">
             <ConnectRunner
@@ -681,14 +703,6 @@ export function App() {
           />
         ) : (
           <>
-            {showFirstRunReadiness && (
-              <ReadinessChecklist
-                activation={activation}
-                onRemediate={{
-                  authenticate_credential: () => openSettings("providers"),
-                }}
-              />
-            )}
             <ChatView
               entries={state.transcript}
               working={state.working}

@@ -82,6 +82,7 @@ new client.Gauge({
  */
 export type FunnelEvent =
   | "sign_in_completed"
+  | "sign_in_failed"
   | "node_enrolled"
   | "run_started"
   | "quota_blocked"
@@ -105,7 +106,20 @@ export function recordFunnelEvent(event: FunnelEvent, source: string, plan: stri
   console.info(`[funnel] ${JSON.stringify({ event, source: safeSource, plan: safePlan, count })}`);
 }
 
-export const PRODUCT_EVENT_VALUES = ["activation_ready", "first_useful_response", "remote_reconnect", "remote_intervention", "run_accepted", "receipt_reviewed"] as const;
+export const PRODUCT_EVENT_VALUES = [
+  "activation_ready",
+  "first_useful_response",
+  "remote_reconnect",
+  "remote_intervention",
+  "run_accepted",
+  "receipt_reviewed",
+  "first_run_machine_ready",
+  "first_run_machine_failed",
+  "first_run_provider_connected",
+  "first_run_provider_failed",
+  "first_run_agent_verified",
+  "first_run_agent_failed",
+] as const;
 export type ProductEvent = (typeof PRODUCT_EVENT_VALUES)[number];
 export const PRODUCT_CLIENT_VALUES = ["desktop", "mobile", "cli", "node"] as const;
 export type ProductClient = (typeof PRODUCT_CLIENT_VALUES)[number];

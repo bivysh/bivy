@@ -485,12 +485,17 @@ export interface DeviceVault {
   ciphertext: string;
   updatedByDevice: string;
   updatedAt: string;
+  /** Optimistic ciphertext revision. */
+  generation: number;
+  /** Vault-key epoch, advanced whenever a paired device is revoked. */
+  keyGeneration: number;
 }
 
 export interface DeviceVaultWrappedKeyRecord {
   devicePublicKey: string;
   wrappedKey: string;
   wrappedByPublicKey: string;
+  generation: number;
   updatedAt: string;
 }
 
@@ -578,6 +583,7 @@ export type AutomationRunStatus =
   | "pending"
   | "claimed"
   | "running"
+  | "waiting"
   | "needs_attention"
   | "succeeded"
   | "failed"
@@ -607,20 +613,16 @@ export type AutomationTriggerKind = "github" | "slack" | "manual" | "webhook" | 
 // before it ever reaches storage — no prompt, transcript, diff, file content,
 // secret, token, or raw command/tool output is ever accepted.
 export type RunEvidenceEventKind =
-  | "triggered"
-  | "routed"
-  | "claimed"
-  | "attempt_started"
-  | "checkpoint"
-  | "approval"
-  | "policy_denial"
-  | "retry"
-  | "fallback"
-  | "branch"
-  | "pull_request"
-  | "needs_attention"
-  | "completed"
-  | "cancelled";
+  // Canonical causal lifecycle. Legacy names below remain readable during the
+  // additive rollout; new control-plane milestones use these exact stages.
+  | "trigger_received" | "trigger_matched" | "queued" | "routed"
+  | "provisioning" | "claimed" | "agent_started"
+  | "checks_started" | "checks_completed" | "result_delivery"
+  | "notification" | "retry" | "cancel_requested" | "terminal"
+  // Evidence/detail and legacy lifecycle vocabulary.
+  | "triggered" | "attempt_started" | "checkpoint" | "approval"
+  | "policy_denial" | "fallback" | "branch" | "pull_request"
+  | "needs_attention" | "completed" | "cancelled";
 export interface RunEvidenceEvent {
   at: string;
   kind: RunEvidenceEventKind;
@@ -631,6 +633,12 @@ export interface RunEvidenceEvent {
   ref?: string;
   url?: string;
   status?: "passed" | "failed" | "denied" | "approved";
+  /** Closed, machine-readable reason; bounded free-text stays in summary. */
+  reasonCode?: string;
+  /** Receipt/evidence/log identifier or URL; never log content. */
+  evidenceRef?: string;
+  /** Stable id makes retried reports idempotent. */
+  milestoneId?: string;
 }
 export interface RunCheck {
   name: string;
@@ -664,12 +672,39 @@ export interface RunReceiptEvidence {
 /** Sanitized, allowlisted patch a node may report against its own claimed run.
  *  `checks`/`events` are treated as INCREMENTAL — appended to, never replacing,
  *  the run's existing history. */
+export interface RunUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  costUsd?: number;
+}
+export interface RunNotificationDelivery {
+  status: "not_requested" | "pending" | "delivered" | "failed";
+  channel?: "push" | "email" | "webhook";
+  updatedAt: string;
+  reason?: string;
+}
+export interface RunReference {
+  kind: "receipt" | "evidence" | "log";
+  ref: string;
+  url?: string;
+}
+export interface RunAttention {
+  severity: "warning" | "error" | "critical";
+  reason: string;
+  since: string;
+}
 export interface RunEvidencePatch {
   routingReason?: string;
   output?: Partial<NonNullable<AutomationRun["output"]>>;
   checks?: RunCheck[];
   events?: RunEvidenceEvent[];
   receiptEvidence?: RunReceiptEvidence;
+  usage?: RunUsage;
+  notification?: RunNotificationDelivery;
+  references?: RunReference[];
+  attention?: RunAttention | null;
 }
 export interface AutomationDefinition {
   id: string;
@@ -789,6 +824,12 @@ export interface AutomationRun {
   events?: RunEvidenceEvent[];
   /** Bounded governance metadata correlated from the node audit stream. */
   receiptEvidence?: RunReceiptEvidence;
+  /** Optional provider-reported usage/cost, sanitized operational references,
+   *  delivery state, and explicit operator attention. */
+  usage?: RunUsage;
+  notification?: RunNotificationDelivery;
+  references?: RunReference[];
+  attention?: RunAttention;
   title: string;
   body?: string;
   /** Plain chat message (no automation boilerplate/push/checks). */
@@ -863,6 +904,10 @@ export interface WorkItem {
   checks?: RunCheck[];
   events?: RunEvidenceEvent[];
   receiptEvidence?: RunReceiptEvidence;
+  usage?: RunUsage;
+  notification?: RunNotificationDelivery;
+  references?: RunReference[];
+  attention?: RunAttention;
   /** Plain chat message (no automation boilerplate/push/checks). */
   message?: boolean;
 }
@@ -1273,11 +1318,12 @@ export interface MeshStore {
 
   // Device→device provider-token vault (P2 / Gap A) — recipients are paired devices.
   getDeviceVault(accountId: string): Promise<DeviceVault | undefined>;
-  setDeviceVault(accountId: string, byDevicePublicKey: string, ciphertext: string): Promise<DeviceVault>;
+  /** Compare-and-set ciphertext. A stale expected generation fails with 409. */
+  setDeviceVault(accountId: string, byDevicePublicKey: string, ciphertext: string, expectedGeneration?: number, keyGeneration?: number): Promise<DeviceVault>;
   getDeviceVaultWrappedKey(accountId: string, devicePublicKey: string): Promise<DeviceVaultWrappedKeyRecord | undefined>;
   requestDeviceVaultWrappedKey(accountId: string, devicePublicKey: string): Promise<void>;
   listDeviceVaultKeyRequests(accountId: string, exceptDevicePublicKey: string): Promise<DeviceVaultKeyRequest[]>;
-  setDeviceVaultWrappedKey(accountId: string, targetDevicePublicKey: string, wrappedByPublicKey: string, wrappedKey: string): Promise<DeviceVaultWrappedKeyRecord>;
+  setDeviceVaultWrappedKey(accountId: string, targetDevicePublicKey: string, wrappedByPublicKey: string, wrappedKey: string, generation?: number): Promise<DeviceVaultWrappedKeyRecord>;
 
   // Durable E2E session snapshots for rebuild-resume (Gap B) — opaque ciphertext.
   getSessionSnapshot(accountId: string, sessionId: string): Promise<SessionSnapshotRecord | undefined>;
@@ -1427,7 +1473,7 @@ export interface MeshStore {
   // declared-check results, and new timeline events. `checks`/`events` in the
   // patch are appended to the run's existing history (bounded), never replacing
   // it. Returns undefined for an unknown run.
-  appendRunEvidence(accountId: string, id: string, patch: RunEvidencePatch): Promise<AutomationRun | undefined>;
+  appendRunEvidence(accountId: string, id: string, patch: RunEvidencePatch, expectedNodeId?: string): Promise<AutomationRun | undefined>;
   // Pending items a node may run: the account's items whose label the node serves
   // (a node serving "bivy" also serves "bivy/<self>"; pass the labels it accepts).
   listPendingWorkItems(accountId: string, labels: string[]): Promise<WorkItem[]>;

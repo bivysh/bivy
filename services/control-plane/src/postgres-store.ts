@@ -430,17 +430,23 @@ export class PostgresStore implements MeshStore {
         account_id         TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
         ciphertext         TEXT NOT NULL,
         updated_by_device  TEXT NOT NULL,
+        generation         BIGINT NOT NULL DEFAULT 1,
+        key_generation     BIGINT NOT NULL DEFAULT 0,
         updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
       );
+      ALTER TABLE device_vaults ADD COLUMN IF NOT EXISTS generation BIGINT NOT NULL DEFAULT 1;
+      ALTER TABLE device_vaults ADD COLUMN IF NOT EXISTS key_generation BIGINT NOT NULL DEFAULT 0;
 
       CREATE TABLE IF NOT EXISTS device_vault_wrapped_keys (
         account_id             TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
         device_pub             TEXT NOT NULL,
         wrapped_key            TEXT NOT NULL,
         wrapped_by_public_key  TEXT NOT NULL,
+        generation             BIGINT NOT NULL DEFAULT 0,
         updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
         PRIMARY KEY (account_id, device_pub)
       );
+      ALTER TABLE device_vault_wrapped_keys ADD COLUMN IF NOT EXISTS generation BIGINT NOT NULL DEFAULT 0;
 
       CREATE TABLE IF NOT EXISTS device_vault_key_requests (
         account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -679,6 +685,10 @@ export class PostgresStore implements MeshStore {
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS checks JSONB NOT NULL DEFAULT '[]'::jsonb;
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS events JSONB NOT NULL DEFAULT '[]'::jsonb;
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS receipt_evidence JSONB;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS run_usage JSONB;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS notification_delivery JSONB;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS run_references JSONB NOT NULL DEFAULT '[]'::jsonb;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS attention JSONB;
       INSERT INTO trigger_events (id, account_id, kind, created_at)
         SELECT 'legacy:' || id, account_id,
           CASE WHEN source LIKE 'github:%' THEN 'github'
@@ -1007,11 +1017,29 @@ export class PostgresStore implements MeshStore {
   }
 
   async removePairedDevice(accountId: string, publicKeyB64: string): Promise<boolean> {
-    const result = await this.query(
-      `DELETE FROM paired_devices WHERE account_id = $1 AND public_key_b64 = $2`,
-      [accountId, publicKeyB64],
-    );
-    return (result.rowCount ?? 0) > 0;
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query(
+        `DELETE FROM paired_devices WHERE account_id = $1 AND public_key_b64 = $2`,
+        [accountId, publicKeyB64],
+      );
+      if ((result.rowCount ?? 0) > 0) {
+        // The revoked device's old wrap must never be copied forward. Advancing
+        // the epoch asks any surviving holder to generate a new vault key and
+        // rewrap it only for the still-paired recipient list.
+        await client.query(`DELETE FROM device_vault_wrapped_keys WHERE account_id = $1 AND device_pub = $2`, [accountId, publicKeyB64]);
+        await client.query(`DELETE FROM device_vault_key_requests WHERE account_id = $1 AND device_pub = $2`, [accountId, publicKeyB64]);
+        await client.query(`UPDATE device_vaults SET key_generation = key_generation + 1, updated_at = now() WHERE account_id = $1`, [accountId]);
+      }
+      await client.query("COMMIT");
+      return (result.rowCount ?? 0) > 0;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async createRelayTicket(input: { role: RelayRole; accountId: string; nodeId: string | null; ttlMs?: number }): Promise<string> {
@@ -2004,25 +2032,37 @@ export class PostgresStore implements MeshStore {
     const { rows } = await this.query(`SELECT * FROM device_vaults WHERE account_id = $1`, [accountId]);
     const row = rows[0];
     if (!row) return undefined;
-    return { ciphertext: row.ciphertext, updatedByDevice: row.updated_by_device, updatedAt: new Date(row.updated_at).toISOString() };
+    return { ciphertext: row.ciphertext, updatedByDevice: row.updated_by_device, updatedAt: new Date(row.updated_at).toISOString(), generation: Number(row.generation), keyGeneration: Number(row.key_generation) };
   }
 
-  async setDeviceVault(accountId: string, byDevicePublicKey: string, ciphertext: string): Promise<DeviceVault> {
+  async setDeviceVault(accountId: string, byDevicePublicKey: string, ciphertext: string, expectedGeneration = 0, keyGeneration = 0): Promise<DeviceVault> {
+    // Give callers an immediate useful conflict (and support pg-mem, which does
+    // not fully implement ON CONFLICT ... WHERE); the SQL predicate below is the
+    // authoritative cross-replica compare-and-set.
+    const observed = await this.getDeviceVault(accountId);
+    if (observed && (observed.generation !== expectedGeneration || observed.keyGeneration !== keyGeneration)) {
+      throw Object.assign(new Error("Device vault changed concurrently"), { status: 409 });
+    }
+    // The WHERE on the conflict update makes this a real compare-and-set, not a
+    // read/check/write race across control-plane replicas.
     const { rows } = await this.query(
-      `INSERT INTO device_vaults (account_id, ciphertext, updated_by_device, updated_at)
-       VALUES ($1, $2, $3, now())
-       ON CONFLICT (account_id) DO UPDATE SET ciphertext = EXCLUDED.ciphertext, updated_by_device = EXCLUDED.updated_by_device, updated_at = now()
+      `INSERT INTO device_vaults (account_id, ciphertext, updated_by_device, generation, key_generation, updated_at)
+       VALUES ($1, $2, $3, 1, $5, now())
+       ON CONFLICT (account_id) DO UPDATE SET ciphertext = EXCLUDED.ciphertext, updated_by_device = EXCLUDED.updated_by_device, generation = device_vaults.generation + 1, updated_at = now()
+       WHERE device_vaults.generation = $4 AND device_vaults.key_generation = $5
        RETURNING *`,
-      [accountId, ciphertext, byDevicePublicKey],
+      [accountId, ciphertext, byDevicePublicKey, expectedGeneration, keyGeneration],
     );
-    return { ciphertext: rows[0].ciphertext, updatedByDevice: rows[0].updated_by_device, updatedAt: new Date(rows[0].updated_at).toISOString() };
+    const row = rows[0];
+    if (!row) throw Object.assign(new Error("Device vault changed concurrently"), { status: 409 });
+    return { ciphertext: row.ciphertext, updatedByDevice: row.updated_by_device, updatedAt: new Date(row.updated_at).toISOString(), generation: Number(row.generation), keyGeneration: Number(row.key_generation) };
   }
 
   async getDeviceVaultWrappedKey(accountId: string, devicePublicKey: string): Promise<DeviceVaultWrappedKeyRecord | undefined> {
     const { rows } = await this.query(`SELECT * FROM device_vault_wrapped_keys WHERE account_id = $1 AND device_pub = $2`, [accountId, devicePublicKey]);
     const row = rows[0];
     if (!row) return undefined;
-    return { devicePublicKey: row.device_pub, wrappedKey: row.wrapped_key, wrappedByPublicKey: row.wrapped_by_public_key, updatedAt: new Date(row.updated_at).toISOString() };
+    return { devicePublicKey: row.device_pub, wrappedKey: row.wrapped_key, wrappedByPublicKey: row.wrapped_by_public_key, generation: Number(row.generation), updatedAt: new Date(row.updated_at).toISOString() };
   }
 
   async requestDeviceVaultWrappedKey(accountId: string, devicePublicKey: string): Promise<void> {
@@ -2043,16 +2083,20 @@ export class PostgresStore implements MeshStore {
     return rows.map((row: any) => ({ devicePublicKey: row.device_pub, createdAt: new Date(row.created_at).toISOString() }));
   }
 
-  async setDeviceVaultWrappedKey(accountId: string, targetDevicePublicKey: string, wrappedByPublicKey: string, wrappedKey: string): Promise<DeviceVaultWrappedKeyRecord> {
+  async setDeviceVaultWrappedKey(accountId: string, targetDevicePublicKey: string, wrappedByPublicKey: string, wrappedKey: string, generation = 0): Promise<DeviceVaultWrappedKeyRecord> {
+    const current = await this.getDeviceVault(accountId);
+    if (current && generation !== current.keyGeneration) throw Object.assign(new Error("Device vault key generation is stale"), { status: 409 });
+    const paired = await this.query(`SELECT 1 FROM paired_devices WHERE account_id = $1 AND public_key_b64 = $2`, [accountId, targetDevicePublicKey]);
+    if (!paired.rows[0]) throw Object.assign(new Error("Vault recipient is not a paired device"), { status: 403 });
     const { rows } = await this.query(
-      `INSERT INTO device_vault_wrapped_keys (account_id, device_pub, wrapped_key, wrapped_by_public_key, updated_at)
-       VALUES ($1, $2, $3, $4, now())
-       ON CONFLICT (account_id, device_pub) DO UPDATE SET wrapped_key = EXCLUDED.wrapped_key, wrapped_by_public_key = EXCLUDED.wrapped_by_public_key, updated_at = now()
+      `INSERT INTO device_vault_wrapped_keys (account_id, device_pub, wrapped_key, wrapped_by_public_key, generation, updated_at)
+       VALUES ($1, $2, $3, $4, $5, now())
+       ON CONFLICT (account_id, device_pub) DO UPDATE SET wrapped_key = EXCLUDED.wrapped_key, wrapped_by_public_key = EXCLUDED.wrapped_by_public_key, generation = EXCLUDED.generation, updated_at = now()
        RETURNING *`,
-      [accountId, targetDevicePublicKey, wrappedKey, wrappedByPublicKey],
+      [accountId, targetDevicePublicKey, wrappedKey, wrappedByPublicKey, generation],
     );
     await this.query(`DELETE FROM device_vault_key_requests WHERE account_id = $1 AND device_pub = $2`, [accountId, targetDevicePublicKey]);
-    return { devicePublicKey: rows[0].device_pub, wrappedKey: rows[0].wrapped_key, wrappedByPublicKey: rows[0].wrapped_by_public_key, updatedAt: new Date(rows[0].updated_at).toISOString() };
+    return { devicePublicKey: rows[0].device_pub, wrappedKey: rows[0].wrapped_key, wrappedByPublicKey: rows[0].wrapped_by_public_key, generation: Number(rows[0].generation), updatedAt: new Date(rows[0].updated_at).toISOString() };
   }
 
   // --- Durable E2E session snapshots (Gap B) ---------------------------
@@ -2567,13 +2611,14 @@ export class PostgresStore implements MeshStore {
     // Two partial-unique constraints can fire: the per-delivery dedupe key and the
     // per-issue collapse key (only against the still-pending row). ON CONFLICT DO
     // NOTHING covers both; on either conflict we return the existing item.
-    const triggeredEvent: RunEvidenceEvent = {
-      at: new Date().toISOString(),
-      kind: "triggered",
-      summary: "Automation run created.",
-      ref: repo && input.issueNumber !== undefined ? `${repo}#${input.issueNumber}` : repo,
-      url: input.url,
-    };
+    const observedAt = new Date().toISOString();
+    const sourceRefText = repo && input.issueNumber !== undefined ? `${repo}#${input.issueNumber}` : repo;
+    const initialEvents: RunEvidenceEvent[] = [
+      { at: observedAt, kind: "trigger_received", summary: "Trigger received.", ref: sourceRefText, url: input.url, milestoneId: `${canonicalTriggerId}:received` },
+      { at: observedAt, kind: "trigger_matched", summary: definition ? "Trigger matched an Automation." : "Trigger accepted as a one-off Run.", ref: definition?.id, milestoneId: `${canonicalTriggerId}:matched` },
+      { at: observedAt, kind: "queued", summary: "Run persisted in the durable queue.", milestoneId: `${canonicalTriggerId}:queued` },
+      { at: observedAt, kind: "routed", summary: "Run routed to an eligible Machine label.", ref: normalizeWorkLabel(input.label ?? definition?.nodeLabel), milestoneId: `${canonicalTriggerId}:routed` },
+    ];
     const { rows } = await this.query(
       `INSERT INTO work_items (id, account_id, label, source, status, title, body, repo, issue_number, url, external_id, dedupe_key, collapse_key, default_routed, runtime_id, model, installation_id, app_id, definition_id, trigger_id, trigger_kind, target_kind, target_session_id, message, ephemeral, approval_mode, sandbox, max_attempts, events, event_context)
        VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28::jsonb, $29)
@@ -2607,7 +2652,7 @@ export class PostgresStore implements MeshStore {
         input.approvalMode ?? definition?.approvalMode ?? null,
         input.sandbox ?? definition?.sandbox ?? null,
         input.maxAttempts ?? definition?.maxAttempts ?? null,
-        JSON.stringify([triggeredEvent]),
+        JSON.stringify(initialEvents),
         input.eventContext ?? null,
       ],
     );
@@ -2664,13 +2709,15 @@ export class PostgresStore implements MeshStore {
         await client.query("COMMIT");
         return { run: mapAutomationRun(current), previousStatus, transitioned: false };
       }
-      if (!["pending", "claimed", "running", "needs_attention"].includes(previousStatus)) {
+      if (!["pending", "claimed", "running", "waiting", "needs_attention"].includes(previousStatus)) {
         await client.query("COMMIT");
         return { run: mapAutomationRun(current), previousStatus, transitioned: false };
       }
+      const at = new Date().toISOString();
       const events = [
         ...(current.events ?? []),
-        { at: new Date().toISOString(), kind: "cancelled", summary: "Automation run cancelled." },
+        { at, kind: "cancel_requested", summary: "Cancellation requested by an operator.", milestoneId: `${id}:cancel-requested` },
+        { at, kind: "terminal", summary: "Run reached the cancelled terminal outcome.", status: "denied", milestoneId: `${id}:terminal` },
       ].slice(-100);
       const updated = await client.query(
         `UPDATE work_items SET status = 'cancelled', completed_at = COALESCE(completed_at, now()),
@@ -2753,8 +2800,9 @@ export class PostgresStore implements MeshStore {
     const from: Record<AutomationRunStatus, AutomationRunStatus[]> = {
       pending: [],
       claimed: [],
-      running: ["claimed"],
-      needs_attention: ["running"],
+      running: ["claimed", "waiting"],
+      waiting: ["claimed", "running"],
+      needs_attention: ["running", "waiting"],
       succeeded: ["running", "needs_attention"],
       // Allow failure straight from "claimed": a node can throw before the
       // best-effort /running transition lands, and the run must still terminate
@@ -2768,11 +2816,12 @@ export class PostgresStore implements MeshStore {
     // even when the node never calls the dedicated evidence endpoint, so every
     // run has at least a baseline trigger→claim→attempt→outcome timeline.
     const eventForStatus: Partial<Record<AutomationRunStatus, { kind: RunEvidenceEvent["kind"]; summary: string }>> = {
-      running: { kind: "attempt_started", summary: "Execution started on the assigned node." },
-      needs_attention: { kind: "needs_attention", summary: "Run needs manual attention." },
-      succeeded: { kind: "completed", summary: "Automation run completed successfully." },
-      failed: { kind: "completed", summary: "Automation run failed. Detailed diagnostics remain on the node." },
-      cancelled: { kind: "cancelled", summary: "Automation run cancelled." },
+      running: { kind: "agent_started", summary: "Agent execution started on the assigned Machine." },
+      waiting: { kind: "needs_attention", summary: "Run parked while waiting on an external dependency." },
+      needs_attention: { kind: "needs_attention", summary: "Run parked for operator attention." },
+      succeeded: { kind: "terminal", summary: "Run reached the succeeded terminal outcome." },
+      failed: { kind: "terminal", summary: "Run reached the failed terminal outcome; detailed diagnostics remain on the Machine." },
+      cancelled: { kind: "terminal", summary: "Run reached the cancelled terminal outcome." },
     };
     const event = eventForStatus[status];
     // No jsonb `||` concatenation here (deliberately): pg-mem — the in-memory
@@ -2790,7 +2839,7 @@ export class PostgresStore implements MeshStore {
        started_at = CASE WHEN $3 = 'running' THEN COALESCE(started_at, now()) ELSE started_at END,
        completed_at = CASE WHEN $4 THEN COALESCE(completed_at, now()) ELSE completed_at END,
        lease_expires_at = CASE
-         WHEN $4 OR $3 = 'needs_attention' THEN NULL
+         WHEN $4 OR $3 IN ('waiting', 'needs_attention') THEN NULL
          WHEN $3 = 'running' THEN $7
          ELSE lease_expires_at END,
        output = COALESCE($5, output)
@@ -2800,7 +2849,11 @@ export class PostgresStore implements MeshStore {
     );
     if (!rows[0]) return undefined;
     if (!event) return mapAutomationRun(rows[0]);
-    const events = [...(rows[0].events ?? []), { at: new Date().toISOString(), ...event }].slice(-100);
+    const at = new Date().toISOString();
+    const delivery = terminal ? [{ at, kind: "result_delivery" as const, summary: "Durable result metadata delivered to the control plane.", milestoneId: `${id}:result-delivery` }] : [];
+    const events = [...(rows[0].events ?? []), ...delivery, { at, ...event, attempt: Number(rows[0].attempt ?? 1), milestoneId: `${id}:${status}:${Number(rows[0].attempt ?? 1)}` }]
+      .filter((candidate, index, all) => !candidate.milestoneId || all.findIndex((other) => other.milestoneId === candidate.milestoneId) === index)
+      .slice(-100);
     const { rows: withEvent } = await this.query(
       `UPDATE work_items SET events = $3::jsonb WHERE account_id = $1 AND id = $2 RETURNING *`,
       [accountId, id, JSON.stringify(events)],
@@ -2814,8 +2867,12 @@ export class PostgresStore implements MeshStore {
    *  Read-then-write (not an atomic jsonb `||` UPDATE) — see the comment in
    *  transitionAutomationRun for why; a lost update here just drops one
    *  low-frequency evidence report, never the run's actual status. */
-  async appendRunEvidence(accountId: string, id: string, patch: RunEvidencePatch): Promise<AutomationRun | undefined> {
-    const { rows } = await this.query(`SELECT * FROM work_items WHERE account_id = $1 AND id = $2`, [accountId, id]);
+  async appendRunEvidence(accountId: string, id: string, patch: RunEvidencePatch, expectedNodeId?: string): Promise<AutomationRun | undefined> {
+    const { rows } = await this.query(
+      `SELECT * FROM work_items WHERE account_id = $1 AND id = $2
+       AND ($3::text IS NULL OR (claimed_by_node_id = $3 AND status IN ('claimed', 'running', 'waiting', 'needs_attention')))`,
+      [accountId, id, expectedNodeId ?? null],
+    );
     if (!rows[0]) return undefined;
     const current = rows[0];
     const routingReason = patch.routingReason ?? current.routing_reason ?? undefined;
@@ -2823,10 +2880,34 @@ export class PostgresStore implements MeshStore {
     const checks = patch.checks ? [...(current.checks ?? []), ...patch.checks].slice(-50) : (current.checks ?? []);
     const events = patch.events ? [...(current.events ?? []), ...patch.events].slice(-100) : (current.events ?? []);
     const receiptEvidence = patch.receiptEvidence ?? current.receipt_evidence ?? null;
+    const usage = patch.usage ? { ...(current.run_usage ?? {}), ...patch.usage } : current.run_usage ?? null;
+    const notification = patch.notification ?? current.notification_delivery ?? null;
+    const references = patch.references ? [...(current.run_references ?? []), ...patch.references].slice(-20) : current.run_references ?? [];
+    const attention = patch.attention === null ? null : patch.attention ?? current.attention ?? null;
+    // Check reporting implies an observed checks phase even when an older node
+    // did not send explicit milestones. Stable ids make repeated reports safe.
+    const derivedEvents: RunEvidenceEvent[] = [
+      ...(patch.checks?.length ? [
+        { at: new Date().toISOString(), kind: "checks_started" as const, summary: "Required checks started.", attempt: Number(current.attempt ?? 1), milestoneId: `${id}:checks-started:${Number(current.attempt ?? 1)}` },
+        { at: new Date().toISOString(), kind: "checks_completed" as const, summary: patch.checks.some((check) => check.status === "failed") ? "Required checks completed with failures." : "Required checks completed.", attempt: Number(current.attempt ?? 1), status: patch.checks.some((check) => check.status === "failed") ? "failed" as const : "passed" as const, milestoneId: `${id}:checks-completed:${Number(current.attempt ?? 1)}` },
+      ] : []),
+      ...(patch.notification ? [{
+        at: patch.notification.updatedAt, kind: "notification" as const,
+        summary: `Operator notification ${patch.notification.status.replace("_", " ")}.`,
+        attempt: Number(current.attempt ?? 1), reasonCode: patch.notification.status,
+        milestoneId: `${id}:notification:${patch.notification.status}:${patch.notification.updatedAt}`,
+      }] : []),
+    ];
+    const dedupedEvents = [...events, ...derivedEvents]
+      .filter((candidate, index, all) => !candidate.milestoneId || all.findIndex((other) => other.milestoneId === candidate.milestoneId) === index)
+      .slice(-100);
     const { rows: updated } = await this.query(
-      `UPDATE work_items SET routing_reason = $3, output = $4::jsonb, checks = $5::jsonb, events = $6::jsonb, receipt_evidence = $7::jsonb
-       WHERE account_id = $1 AND id = $2 RETURNING *`,
-      [accountId, id, routingReason ?? null, JSON.stringify(output), JSON.stringify(checks), JSON.stringify(events), JSON.stringify(receiptEvidence)],
+      `UPDATE work_items SET routing_reason = $3, output = $4::jsonb, checks = $5::jsonb, events = $6::jsonb, receipt_evidence = $7::jsonb,
+       run_usage = $8::jsonb, notification_delivery = $9::jsonb, run_references = $10::jsonb, attention = $11::jsonb
+       WHERE account_id = $1 AND id = $2
+         AND ($12::text IS NULL OR (claimed_by_node_id = $12 AND status IN ('claimed', 'running', 'waiting', 'needs_attention')))
+       RETURNING *`,
+      [accountId, id, routingReason ?? null, JSON.stringify(output), JSON.stringify(checks), JSON.stringify(dedupedEvents), JSON.stringify(receiptEvidence), JSON.stringify(usage), JSON.stringify(notification), JSON.stringify(references), JSON.stringify(attention), expectedNodeId ?? null],
     );
     return updated[0] ? mapAutomationRun(updated[0]) : undefined;
   }
@@ -2847,12 +2928,19 @@ export class PostgresStore implements MeshStore {
     id: string,
     input: { label: string; runtimeId?: string; model?: string; ephemeral?: boolean },
   ): Promise<WorkItem | undefined> {
+    const current = await this.getAutomationRun(accountId, id);
+    const at = new Date().toISOString();
+    const routeEvents: RunEvidenceEvent[] = current ? [
+      ...(current.events ?? []),
+      ...(input.ephemeral ? [{ at, kind: "provisioning" as const, summary: "Provisioning an isolated Machine for this Run.", ref: normalizeWorkLabel(input.label), milestoneId: `${id}:provisioning:${current.attempt}` }] : []),
+      { at, kind: "routed" as const, summary: "Run routing was updated by an operator.", ref: normalizeWorkLabel(input.label), attempt: current.attempt, milestoneId: `${id}:routed:${current.attempt}:${normalizeWorkLabel(input.label)}` },
+    ].slice(-100) : [];
     const { rows } = await this.query(
       `UPDATE work_items
-       SET label = $3, runtime_id = $4, model = $5, default_routed = false, ephemeral = $6
+       SET label = $3, runtime_id = $4, model = $5, default_routed = false, ephemeral = $6, events = $7::jsonb
        WHERE id = $2 AND account_id = $1 AND status = 'pending'
        RETURNING *`,
-      [accountId, id, normalizeWorkLabel(input.label), input.runtimeId?.trim() || null, input.model?.trim() || null, Boolean(input.ephemeral)],
+      [accountId, id, normalizeWorkLabel(input.label), input.runtimeId?.trim() || null, input.model?.trim() || null, Boolean(input.ephemeral), JSON.stringify(routeEvents)],
     );
     return rows[0] ? mapWorkItem(rows[0]) : undefined;
   }
@@ -2894,7 +2982,10 @@ export class PostgresStore implements MeshStore {
     // Best-effort timeline entry (issue #153) — read-then-write, same rationale
     // as transitionAutomationRun; the claim's atomicity is already guaranteed
     // above and does not depend on this second query.
-    const claimedEvent: RunEvidenceEvent = { at: new Date().toISOString(), kind: "claimed", summary: "Run claimed by an eligible node.", ref: nodeId };
+    const claimedEvent: RunEvidenceEvent = {
+      at: new Date().toISOString(), kind: "claimed", summary: "Run claimed by an eligible Machine.", ref: nodeId,
+      attempt: Number(rows[0].attempt ?? 1), milestoneId: `${id}:claimed:${Number(rows[0].attempt ?? 1)}`,
+    };
     const events = [...(rows[0].events ?? []), claimedEvent].slice(-100);
     const { rows: withEvent } = await this.query(
       `UPDATE work_items SET events = $3::jsonb WHERE account_id = $1 AND id = $2 RETURNING *`,
@@ -3053,12 +3144,16 @@ function mapHook(row: any): InboundHook {
  *  mapAutomationRun. Defensively re-bounds on read (in addition to the bounds
  *  already enforced at write time by run-evidence.ts) so a row written by an
  *  older/looser server version can never balloon a response unbounded. */
-function mapEvidenceFields(row: any): { routingReason?: string; checks: RunCheck[]; events: RunEvidenceEvent[]; receiptEvidence?: AutomationRun["receiptEvidence"] } {
+function mapEvidenceFields(row: any): Pick<AutomationRun, "routingReason" | "checks" | "events" | "receiptEvidence" | "usage" | "notification" | "references" | "attention"> {
   return {
     routingReason: row.routing_reason ?? undefined,
     checks: Array.isArray(row.checks) ? row.checks.slice(-50) : [],
     events: Array.isArray(row.events) ? row.events.slice(-100) : [],
     receiptEvidence: row.receipt_evidence && typeof row.receipt_evidence === "object" ? row.receipt_evidence : undefined,
+    usage: row.run_usage && typeof row.run_usage === "object" ? row.run_usage : undefined,
+    notification: row.notification_delivery && typeof row.notification_delivery === "object" ? row.notification_delivery : undefined,
+    references: Array.isArray(row.run_references) ? row.run_references.slice(-20) : [],
+    attention: row.attention && typeof row.attention === "object" ? row.attention : undefined,
   };
 }
 

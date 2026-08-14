@@ -122,12 +122,29 @@ export async function ensureCodexAuth(credsDir: string): Promise<string | undefi
   const codexHome = resolveCodexHome();
   const authFile = path.join(codexHome, "auth.json");
 
-  // Never clobber an existing login (native or previously materialized); Codex
-  // owns and refreshes it. An OPENAI_API_KEY, if present, is handled by preflight.
-  if (fs.existsSync(authFile)) return codexHome;
   if (process.env.OPENAI_API_KEY?.trim()) return undefined;
 
   const store = createCredentialVault(credsDir);
+  // Bivy's vault is authoritative, but Codex legitimately rotates the projected
+  // refresh token while running. Reconcile that rotation back under the same
+  // provider lock before deciding the projection is current. This avoids leaving
+  // Bivy with an invalidated token while still refusing arbitrary stale files.
+  if (fs.existsSync(authFile)) {
+    try {
+      const projected = JSON.parse(fs.readFileSync(authFile, "utf8")) as Record<string, any>;
+      const nativeStamp = Date.parse(String(projected.last_refresh ?? ""));
+      const nativeRefresh = String(projected.tokens?.refresh_token ?? "");
+      const nativeAccess = String(projected.tokens?.access_token ?? "");
+      if (nativeRefresh && Number.isFinite(nativeStamp)) {
+        await store.modify("openai-codex", async (current) => {
+          if (!current || current.type !== "oauth" || nativeStamp <= Number(current.updatedAt ?? 0)) return current;
+          return { ...current, access: nativeAccess || current.access, refresh: nativeRefresh, refreshedAt: nativeStamp };
+        });
+      }
+    } catch { /* malformed/native-only file remains Codex-owned */ }
+    return codexHome;
+  }
+
   const cred = await store.read("openai-codex").catch(() => undefined);
   if (!cred || cred.type !== "oauth" || typeof cred.refresh !== "string" || !cred.refresh) return undefined;
 
@@ -144,6 +161,7 @@ export async function ensureCodexAuth(credsDir: string): Promise<string | undefi
       access: refreshed.accessToken,
       refresh: refreshed.refreshToken,
       expires: Date.now() + refreshed.expiresIn * 1000,
+      refreshedAt: Date.now(),
     }));
   } catch {
     return undefined;

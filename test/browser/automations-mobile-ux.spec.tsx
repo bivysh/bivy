@@ -5,11 +5,15 @@ import { readFile } from "node:fs/promises";
 const read = (rel: string) => readFile(new URL(rel, import.meta.url), "utf8");
 
 test("Automations and Runs have distinct, task-focused destinations", async () => {
-  const view = await read("../../packages/web/src/components/AutomationsView.tsx");
+  const [view, history] = await Promise.all([
+    read("../../packages/web/src/components/AutomationsView.tsx"),
+    read("../../packages/web/src/components/RunHistory.tsx"),
+  ]);
   expect(view).toContain('{ label: "Automations", section: null }');
   expect(view).toContain('{ label: "Runs", section: "queue" }');
-  expect(view).toContain('className="autom-section runs-overview"');
-  expect(view).toContain("Current state and recent results from scheduled, webhook, and manual runs.");
+  expect(view).toContain("<RunHistory");
+  expect(history).toContain('className="autom-section runs-overview"');
+  expect(history).toContain("Live lifecycle and recent outcomes. Polling recovers any missed relay update.");
   // Creation remains reachable while reviewing Runs or policy.
   expect(view).not.toContain("{section === null && (\n            <button type=\"button\" className=\"btn autom-new-btn\"");
 });

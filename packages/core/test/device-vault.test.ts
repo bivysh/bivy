@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createDeviceVaultKeyStore,
+  DeviceVaultConflictError,
   createEphemeralKeyStore,
   createEphemeralModelKeyStore,
   memoryBackend,
@@ -25,23 +26,32 @@ async function makeDevice(): Promise<DeviceKeypair> {
  *  wrapped keys + pending requests, exactly what the CP stores. */
 function fakeControlPlane() {
   let vault: string | null = null;
+  let generation = 0;
+  let keyGeneration = 0;
   const wrapped: Record<string, DeviceVaultWrappedKey> = {};
   const requests = new Set<string>();
+  const recipients = new Set<string>();
   return {
     peekVault: () => vault,
+    revoke(pub: string) { recipients.delete(pub); delete wrapped[pub]; keyGeneration += 1; },
     forDevice(devPub: string): DeviceVaultRemote {
+      recipients.add(devPub);
       return {
         async get() {
-          return { vault, wrappedKey: wrapped[devPub] ?? null, requests: [...requests] };
+          return { vault, wrappedKey: wrapped[devPub] ?? null, requests: [...requests], generation, keyGeneration, recipients: [...recipients] };
         },
-        async putVault(ct) {
+        async putVault(ct, expected = 0, keyEpoch = 0) {
+          if (expected !== generation || keyEpoch !== keyGeneration) throw new DeviceVaultConflictError();
           vault = ct;
+          generation += 1;
+          return { generation };
         },
         async requestKey() {
           requests.add(devPub);
         },
-        async putWrapped(target, wrappedKey, wrappedByPublicKeyB64) {
-          wrapped[target] = { wrappedKey, wrappedByPublicKeyB64 };
+        async putWrapped(target, wrappedKey, wrappedByPublicKeyB64, epoch = 0) {
+          if (!recipients.has(target) || epoch !== keyGeneration) throw new Error("stale recipient or epoch");
+          wrapped[target] = { wrappedKey, wrappedByPublicKeyB64, generation: epoch };
           requests.delete(target);
         },
       };
@@ -70,14 +80,8 @@ describe("device vault — cross-device token sync", () => {
     await a.setToken("fly", "fly-token-123");
     expect(cp.peekVault()).toBeTruthy(); // CP holds ciphertext, never the token
 
-    // Device B (no local token) — first read posts a wrapped-key request, "" for now.
-    expect(await b.getToken("fly")).toBe("");
-
-    // Device A re-syncs, sees B's request, and wraps the vault key for B.
-    await a.sync();
-
-    // Device B can now unwrap the vault key and read the synced token.
-    await b.sync();
+    // Current paired recipients are proactively wrapped, so B can consume on
+    // its first read (older servers fall back to the request/response path).
     expect(await b.getToken("fly")).toBe("fly-token-123");
   });
 
@@ -91,9 +95,6 @@ describe("device vault — cross-device token sync", () => {
     await a.setModelKey("openai", "account-openai", "account");
     await a.setModelKey("groq", "device-groq", "device");
     expect(cp.peekVault()).not.toContain("account-openai");
-    expect(await b.getModelKey("openai")).toBe(""); // requests a wrap
-    await a.sync();
-    await b.sync();
     expect(await b.getModelKey("openai")).toBe("account-openai");
     expect(await b.getModelKey("groq")).toBe("");
   });
@@ -131,6 +132,68 @@ describe("device vault — cross-device token sync", () => {
     const a = store(A, cp.forDevice(A.pub));
     await a.setToken("fly", "super-secret-token");
     expect(cp.peekVault()).not.toContain("super-secret-token");
+  });
+
+  it("a delete tombstone beats an offline device's stale value", async () => {
+    const A = await makeDevice();
+    const B = await makeDevice();
+    const cp = fakeControlPlane();
+    const a = store(A, cp.forDevice(A.pub));
+    const b = store(B, cp.forDevice(B.pub));
+    await a.setToken("fly", "old-token");
+    await b.sync();
+    await a.remove("fly");
+    await b.sync();
+    expect(await b.getToken("fly")).toBe("");
+    await b.sync();
+    await a.sync();
+    expect(await a.getToken("fly")).toBe("");
+  });
+
+  it("delete followed by re-login converges to the newer credential", async () => {
+    const A = await makeDevice();
+    const B = await makeDevice();
+    const cp = fakeControlPlane();
+    const a = store(A, cp.forDevice(A.pub));
+    const b = store(B, cp.forDevice(B.pub));
+    await a.setToken("fly", "old");
+    await b.sync();
+    await a.remove("fly");
+    await a.setToken("fly", "new");
+    await b.sync();
+    expect(await b.getToken("fly")).toBe("new");
+  });
+
+  it("rotates and rewraps the key only for survivors after revocation", async () => {
+    const A = await makeDevice();
+    const B = await makeDevice();
+    const cp = fakeControlPlane();
+    const a = store(A, cp.forDevice(A.pub));
+    const b = store(B, cp.forDevice(B.pub));
+    await a.setToken("fly", "secret");
+    await b.sync();
+    cp.revoke(B.pub);
+    await a.sync();
+    await expect(b.sync()).rejects.toThrow();
+  });
+
+  it("persists failed/pending sync state and exposes recovery", async () => {
+    const A = await makeDevice();
+    let fail = true;
+    let saved: any;
+    const remote: DeviceVaultRemote = {
+      get: async () => { if (fail) throw new Error("offline"); return { vault: null, wrappedKey: null, requests: [] }; },
+      putVault: async () => ({ generation: 1 }), requestKey: async () => {}, putWrapped: async () => {},
+    };
+    const a = createDeviceVaultKeyStore({
+      local: createEphemeralKeyStore(memoryBackend()), remote, device: async () => A, enabled: () => true,
+      state: { load: async () => saved, save: async (value) => { saved = structuredClone(value); } },
+    });
+    await expect(a.sync()).rejects.toThrow("offline");
+    expect(a.getSyncState()).toMatchObject({ phase: "failed", pending: true, failure: "offline" });
+    fail = false;
+    await a.sync();
+    expect(a.getSyncState().phase).toBe("pending"); // waiting for another device to wrap the key
   });
 
   it("device-vault wrap is a symmetric ECDH round-trip (produce ↔ consume)", async () => {

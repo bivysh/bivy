@@ -250,6 +250,42 @@ const httpServer = createServer((req, res) => {
     res.end(JSON.stringify({ ok: true, shardId, rooms: rooms.size, ...metrics }));
     return;
   }
+  if (req.method === "POST" && req.url === "/internal/run-updated") {
+    void (async () => {
+      if (!authOk(req)) {
+        res.writeHead(401, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "Unauthorized" }));
+        return;
+      }
+      const body = await readJsonBody(req);
+      const accountId = typeof body?.accountId === "string" ? body.accountId : "";
+      const id = typeof body?.id === "string" ? body.id : "";
+      const revision = typeof body?.revision === "string" ? body.revision : undefined;
+      if (!accountId || !id) {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "accountId and id required" }));
+        return;
+      }
+      // A client is attached to one node room, but the hint is account-wide: an
+      // operator watching machine A must still see a Run advance on machine B.
+      // De-duplicate sockets defensively if room topology ever permits a client
+      // to appear more than once. The hint is content-free; clients fetch the
+      // canonical account-scoped record before rendering anything.
+      const recipients = new Set<WebSocket>();
+      for (const r of rooms.values()) {
+        if (r.nodeAccountId !== accountId) continue;
+        for (const client of r.clients) if (client.readyState === WebSocket.OPEN) recipients.add(client);
+      }
+      for (const client of recipients) send(client, { t: "run.updated", id, revision });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true, delivered: recipients.size }));
+    })().catch((error) => {
+      Sentry.captureException(error);
+      res.writeHead(500, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "Internal error" }));
+    });
+    return;
+  }
   if (req.method === "POST" && req.url === "/internal/work-available") {
     void (async () => {
       if (!authOk(req)) {
