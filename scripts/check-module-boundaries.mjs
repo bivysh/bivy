@@ -78,6 +78,13 @@ const RULES = [
     note: "device resource semantics depend on injected ports; Express, persistence, relay, and metadata effects stay in the composition root.",
   },
   {
+    name: "http-command-adapter-is-transport-only",
+    dir: "src/http/client-command-routes.ts",
+    forbid: ["../server", "../runtime/", "../agents/", "../session/", "../credentials/", "../controllers/"],
+    enforce: true,
+    note: "the generated HTTP adapter depends only on Express types and protocol command contracts; feature behavior stays in the canonical registry.",
+  },
+  {
     name: "protocol-is-a-pure-contract",
     dir: "src/protocol",
     forbid: ["../server", "../runtime/", "../agents/", "../session/", "../credentials/", "../controllers/"],

@@ -28,6 +28,21 @@ export function expressRoutes(source) {
   return routes;
 }
 
+/** Extract `{ method, path }` rows consumed by a generated route adapter. */
+export function declarativeRoutes(source) {
+  const route = /\{\s*method:\s*(["'])(get|post|put|patch|delete|options|head)\1\s*,\s*path:\s*(["'])([^"']+)\3/g;
+  const routes = [];
+  let match;
+  while ((match = route.exec(source))) {
+    routes.push({
+      method: match[2].toUpperCase(),
+      path: match[4],
+      line: source.slice(0, match.index).split("\n").length,
+    });
+  }
+  return routes;
+}
+
 /** Group declarations that would compete for the same Express method/path. */
 export function duplicateExpressRoutes(routes) {
   const byKey = new Map();

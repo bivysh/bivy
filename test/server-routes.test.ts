@@ -3,10 +3,12 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { duplicateExpressRoutes, expressRouteCallCount, expressRoutes } from "../scripts/lib/express-routes.mjs";
+import { declarativeRoutes, duplicateExpressRoutes, expressRouteCallCount, expressRoutes } from "../scripts/lib/express-routes.mjs";
 
 const source = readFileSync(new URL("../src/server.ts", import.meta.url), "utf8");
-const routes = expressRoutes(source);
+const commandRoutesSource = readFileSync(new URL("../src/protocol/client-command-routes.ts", import.meta.url), "utf8");
+const literalRoutes = expressRoutes(source);
+const routes = [...literalRoutes, ...declarativeRoutes(commandRoutesSource)];
 
 function hasRoute(method: string, path: string): boolean {
   return routes.some((route) => route.method === method && route.path === path);
@@ -14,7 +16,7 @@ function hasRoute(method: string, path: string): boolean {
 
 test("server routes use inspectable literal paths without shadowing", () => {
   assert.equal(
-    routes.length,
+    literalRoutes.length,
     expressRouteCallCount(source),
     "every Express route path must be a literal that the duplicate guard can inspect",
   );

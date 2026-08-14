@@ -19,8 +19,11 @@ import { createAuditLog, readAuditEvents } from "./audit/index.js";
 import { receiptEvidenceForRun } from "./audit/receipt-evidence.js";
 import { createWorkspaceController } from "./controllers/workspaces.js";
 import { createModelController } from "./controllers/models.js";
-import { Type, type TSchema } from "typebox";
-import { validateInput } from "./protocol/command-spec.js";
+import type { CommandCtx } from "./protocol/command-spec.js";
+import { CommandRegistry, type CommandEntries } from "./protocol/command-registry.js";
+import { CLIENT_COMMAND_SCHEMAS } from "./protocol/client-command-schemas.js";
+import { CLIENT_COMMAND_ROUTES } from "./protocol/client-command-routes.js";
+import { bindClientCommandRoutes } from "./http/client-command-routes.js";
 import { collectDiscoveredSessions, planNativeAdoption, type NativeAdoptionPlan } from "./runtime/native-session-discovery.js";
 import { aggregateModelCatalog, mergeProviderCatalog } from "./runtime/model-catalog.js";
 import { RuntimeHost, enforcementLevelFor, remoteRuntimeEnabled } from "./runtime/host.js";
@@ -2051,19 +2054,6 @@ retireTranscriptsDir();
 // calling client; `broadcast()` reaches every client (local sockets + relay).
 // This retires the "add it to REST, forget the WS case" class of drift bugs by
 // giving each operation a single named handler both transports can share.
-interface CommandCtx {
-  reply(event: unknown): void;
-  broadcast(event: unknown): void;
-}
-type Command = (msg: ClientMessage, ctx: CommandCtx) => void | Promise<void>;
-
-// A registry entry is either a bare handler (legacy form) or a spec that adds an
-// optional typebox input schema — validated at the dispatch boundary before the
-// handler runs — plus the protocol version it was introduced at (for the
-// compatible-subset policy). The two forms coexist so commands adopt validation
-// one at a time; a bare handler behaves exactly as before. See src/protocol/.
-type CommandSpecEntry = { since?: number; schema?: TSchema; handler: Command };
-type RegisteredCommand = Command | CommandSpecEntry;
 
 // Idempotency for `session.new` keyed by requestId: a client's post-reconnect
 // retry adopts the session the first request created instead of spawning a
@@ -2083,17 +2073,9 @@ const promptDedupe = createSessionNewDedupe<void>();
 const dedupePrompt = (clientMessageId: string | undefined, run: () => Promise<void>) =>
   promptDedupe.run(clientMessageId, run);
 
-const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
-  // First command to adopt boundary validation (the spec form). `requestId` is
-  // the only declared field; typebox permits additional properties by default,
-  // so real pings always pass — this exercises the schema path end-to-end
-  // without changing behavior. Other commands adopt schemas one at a time.
-  ping: {
-    since: 0,
-    schema: Type.Object({ requestId: Type.Optional(Type.String()) }),
-    handler(msg: ClientMessage, ctx: CommandCtx) {
-      ctx.reply({ type: "pong", requestId: typeof msg.requestId === "string" ? msg.requestId : undefined });
-    },
+const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
+  ping(msg, ctx) {
+    ctx.reply({ type: "pong", requestId: typeof msg.requestId === "string" ? msg.requestId : undefined });
   },
   // Kick off `bivy update` on this node from the app's version-mismatch banner
   // (see runBivyUpdate). The node restarts itself when the update lands, so the
@@ -2124,18 +2106,24 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
     const meta = attachmentStore.readMeta(hash);
     ctx.reply({ type: "attachment.data", requestId, hash, mimeType: meta?.mimeType ?? "application/octet-stream", name: meta?.name, data: bytes.toString("base64") });
   },
-  "session.pause"(msg) {
+  "session.pause"(msg, ctx) {
     const record = resolveSession(msg.sessionId);
-    if (record) pauseSession(record);
+    if (!record) return ctx.reply({ type: "session.pause.error", httpStatus: 404, error: "No active session" });
+    pauseSession(record);
+    ctx.reply({ type: "session.pause.result", ok: true });
   },
-  "session.resume"(msg) {
+  "session.resume"(msg, ctx) {
     const record = resolveSession(msg.sessionId);
-    if (record) resumeSession(record);
+    if (!record) return ctx.reply({ type: "session.resume.error", httpStatus: 404, error: "No active session" });
+    resumeSession(record);
+    ctx.reply({ type: "session.resume.result", ok: true });
   },
-  "session.question.answer"(msg) {
+  "session.question.answer"(msg, ctx) {
     const record = resolveSession(msg.sessionId);
     const requestId = String(msg.requestId ?? "");
-    if (record && requestId) answerSessionQuestion(record, requestId, msg);
+    if (!record || !requestId) return ctx.reply({ type: "session.question.answer.error", httpStatus: 404, error: "No matching session/question" });
+    answerSessionQuestion(record, requestId, msg);
+    ctx.reply({ type: "session.question.answer.result", ok: true, requestId });
   },
   // Live-stream gap recovery: replay the session.events a client missed after the
   // last seq it holds, or tell it to full-resync (mode:"reset") when the ring has
@@ -3387,6 +3375,7 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
     });
   },
 };
+const clientCommands = new CommandRegistry(RELAY_COMMANDS, CLIENT_COMMAND_SCHEMAS);
 
 // Relay transport binding: `reply` answers the requesting remote client over the
 // encrypted relay channel; `broadcast` reaches all clients (local + relay).
@@ -3397,24 +3386,8 @@ const RELAY_CLIENT_ID = "relay";
 
 async function handleRelayMessage(msg: ClientMessage) {
   try {
-    const entry = RELAY_COMMANDS[msg.kind];
-    if (entry) {
-      const handler = typeof entry === "function" ? entry : entry.handler;
-      const schema = typeof entry === "function" ? undefined : entry.schema;
-      if (schema) {
-        const check = validateInput(schema, msg);
-        if (!check.ok) {
-          relayCtx.reply({
-            type: `${msg.kind}.error`,
-            requestId: typeof msg.requestId === "string" ? msg.requestId : undefined,
-            error: `Invalid ${msg.kind}: ${check.errors.join("; ")}`,
-          });
-          return;
-        }
-      }
-      await handler(msg, relayCtx);
-      return;
-    }
+    const dispatched = await clientCommands.dispatch(msg.kind, msg, relayCtx);
+    if (dispatched.handled) return;
     // Fallthrough for kinds not in RELAY_COMMANDS: terminal.* frames go to the
     // PTY manager; anything else is an unknown client message.
     if (typeof msg.kind === "string" && msg.kind.startsWith("terminal.")) {
@@ -11272,30 +11245,9 @@ app.post("/api/session/command", async (req, res, next) => {
   }
 });
 
-// Pause: distinct from abort/kill. The agent process keeps running, but the
-// guardian forces every subsequent tool call to ask until resumed — a soft
-// "hold on" rather than terminating the session.
-app.post("/api/session/pause", (req, res) => {
-  const record = resolveSession(req.body?.sessionId);
-  if (!record) return res.status(404).json({ error: "No active session" });
-  pauseSession(record);
-  res.json({ ok: true });
-});
-
-app.post("/api/session/resume", (req, res) => {
-  const record = resolveSession(req.body?.sessionId);
-  if (!record) return res.status(404).json({ error: "No active session" });
-  resumeSession(record);
-  res.json({ ok: true });
-});
-
-app.post("/api/session/question/answer", (req, res) => {
-  const record = resolveSession(req.body?.sessionId);
-  const requestId = String(req.body?.requestId ?? "");
-  if (!record || !requestId) return res.status(404).json({ error: "No matching session/question" });
-  answerSessionQuestion(record, requestId, req.body ?? {});
-  res.json({ ok: true });
-});
+// Pause/resume/question-answer are canonical client commands. Direct HTTP and
+// encrypted relay clients share validation + handlers; only framing differs.
+bindClientCommandRoutes(app, clientCommands, CLIENT_COMMAND_ROUTES, broadcast);
 
 // Universal Agent Harness — list this session's git checkpoints (rewind targets).
 app.post("/api/session/checkpoints", async (req, res, next) => {
