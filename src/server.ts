@@ -2761,7 +2761,7 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
   async "credentials.account.export"(_msg, ctx) {
     // This reply travels inside the already-paired E2E node channel. It contains
     // API keys only; OAuth/ref/node-local material is excluded by the API.
-    ctx.reply({ type: "credentials.account.export", requestId: _msg.requestId, entries: await exportAccountApiKeys(credsDir) });
+    ctx.reply({ type: "credentials.account.export", requestId: _msg.requestId, entries: await exportAccountApiKeys(credsDir), records: await listCredentialRecords(credsDir) });
   },
   async "credential.set"(msg, ctx) {
     try {
@@ -9716,7 +9716,7 @@ app.get("/api/auth/credentials", async (_req, res, next) => {
 
 app.get("/api/auth/credentials/account-export", async (_req, res, next) => {
   try {
-    res.json({ entries: await exportAccountApiKeys(credsDir) });
+    res.json({ entries: await exportAccountApiKeys(credsDir), records: await listCredentialRecords(credsDir) });
   } catch (error) {
     next(error);
   }

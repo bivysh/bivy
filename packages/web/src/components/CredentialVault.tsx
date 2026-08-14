@@ -139,23 +139,32 @@ export function CredentialVault({ state }: { state: AppState }) {
       }
       if (method === "oauth") {
         if (state.status !== "online") throw new Error("An online machine is needed to complete subscription sign-in.");
+        if (deviceKeys.some((record) => record.provider === id && record.label === account)) await controller.removeEphemeralModelKey(id, account);
         controller.startOauth(id);
         return;
       }
       if (method === "api_key") {
+        const nodeRecord = state.credentialRecords.find((record) => record.provider === id && record.label === account);
+        const deviceRecord = deviceKeys.find((record) => record.provider === id && record.label === account);
+        if (availability === "device" && nodeRecord && state.status !== "online") {
+          throw new Error("Connect a machine to remove its existing copy before making this credential device-only.");
+        }
         if (availability === "account" || availability === "device") {
           await controller.setEphemeralModelKey(id, secret.trim(), availability === "device" ? "device" : "account", account);
+        } else if (deviceRecord) {
+          await controller.removeEphemeralModelKey(id, account);
         }
-        if (availability !== "device") {
-          if (state.status !== "online") {
-            if (availability === "node") throw new Error("Connect to the machine where this key should be stored.");
-          } else {
-            await controller.setCredential(id, account, { key: secret.trim() });
-            if (availability === "node") await controller.setCredentialSync(id, account, "node");
-          }
+        if (availability === "device") {
+          if (nodeRecord) await controller.removeCredential(id, account);
+        } else if (state.status !== "online") {
+          if (availability === "node") throw new Error("Connect to the machine where this key should be stored.");
+        } else {
+          await controller.setCredential(id, account, { key: secret.trim() });
+          if (availability === "node") await controller.setCredentialSync(id, account, "node");
         }
       } else {
         if (state.status !== "online") throw new Error("Connect a machine to add a password-manager reference.");
+        if (deviceKeys.some((record) => record.provider === id && record.label === account)) await controller.removeEphemeralModelKey(id, account);
         await controller.setCredential(id, account, { ref: secret.trim() });
         await controller.setCredentialSync(id, account, availability === "account" ? "account" : "node");
       }
@@ -225,7 +234,7 @@ export function CredentialVault({ state }: { state: AppState }) {
         {!customProvider && <div className="vault-methods">
           {chosen.oauth && <button className={`btn ${method === "oauth" ? "primary" : ""}`} onClick={() => setMethod("oauth")}>Subscription sign-in</button>}
           <button className={`btn ${method === "api_key" ? "primary" : ""}`} onClick={() => setMethod("api_key")}>API key</button>
-          <button className={`btn ${method === "reference" ? "primary" : ""}`} onClick={() => setMethod("reference")}>Password manager</button>
+          <button className={`btn ${method === "reference" ? "primary" : ""}`} onClick={() => { setMethod("reference"); if (availability === "device") setAvailability("node"); }}>Password manager</button>
         </div>}
         {method !== "oauth" && <>
           {!customProvider && <>

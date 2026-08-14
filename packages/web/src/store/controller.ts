@@ -127,6 +127,7 @@ import {
   type Ruleset,
   type RuntimeInfo,
   type ServerEvent,
+  type CredentialRecordSummary,
   type StreamingBehavior,
   supportsSteering as runtimeSupportsSteering,
   type Transport,
@@ -2511,9 +2512,21 @@ export class AppController {
           && typeof (entry as { provider?: unknown }).provider === "string"
           && typeof (entry as { key?: unknown }).key === "string")
         : [];
+      const nodeRecords = Array.isArray(event.records)
+        ? event.records.filter((record): record is CredentialRecordSummary => Boolean(record)
+          && typeof (record as { provider?: unknown }).provider === "string"
+          && typeof (record as { label?: unknown }).label === "string")
+        : [];
+      // OAuth/reference items are node-recipient records. Delete any stale
+      // browser API-key replica for the same identity so convergence can never
+      // replace a newer subscription login with an old pasted key.
+      for (const record of nodeRecords) if (record.kind !== "api_key") {
+        await this.ephemeralKeys.removeModelKey(record.provider, record.label);
+      }
       await this.ephemeralKeys.importModelKeys(incoming);
       const accountKeys = (await this.ephemeralKeys.modelKeyEntries()).filter((entry) => entry.scope === "account");
       for (const { provider, label, key } of accountKeys) {
+        if (nodeRecords.some((record) => record.provider === provider && record.label === label && record.kind !== "api_key")) continue;
         await this.awaitAck({ kind: "credential.set", provider, label, key });
       }
       this.listCredentialRecords();
