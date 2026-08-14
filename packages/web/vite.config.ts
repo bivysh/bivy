@@ -26,6 +26,10 @@ export default defineConfig({
   resolve: {
     alias: {
       "@bivy/core": path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../core/src/index.ts"),
+      // Design-system package: tokens.css / components.css are imported by
+      // specifier (e.g. `@bivy/ui/tokens.css`) so the single source of truth is
+      // referenced, never copied. Mirrors the tsconfig `paths` entry.
+      "@bivy/ui": path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../ui"),
     },
   },
   base: "/",

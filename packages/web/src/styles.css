@@ -19,68 +19,11 @@
   src: url("/fonts/newsreader-italic.woff2") format("woff2");
 }
 
-:root {
-  --bg: #f5f3ee;
-  --surface: #faf8f3;
-  --surface-2: #efece4;
-  --surface-3: #e7e3d9;
-  --ink: #191a16;
-  --muted: #74766c;
-  --line: #e4e1d8;
-  --line-strong: #d3cfc4;
-  --accent: #3f6377;
-  /* Text on the accent fill (.btn.primary, .notice-action, .composer-btn.send,
-     badges…). The alpine-slate accent is dark, so a paper-light contrast text
-     clears ~5.3:1 (WCAG AA). Dark theme's glacier accent is light, so it pairs
-     with a near-black contrast text instead. */
-  --accent-contrast: #f5f3ee;
-  --accent-hover: #324f60;
-  --danger: #b0473d;
-  --danger-soft: #f3e3df;
-  --ok: #4f7a5c;
-  --merged: #7a6a9e; /* GitHub's merged-PR purple, desaturated to sit calmly in-palette */
-  /* A run that finished while you weren't looking — deliberately not accent
-     (working), danger (needs input) or ok/merged (already used by PR state),
-     so "something's ready" reads as its own signal at a glance. */
-  --unseen: #a8823f;
-  /* Per-source hues for the session/run marks (see sessionSource.ts). Kept
-     clear of the status palette (ok / danger / unseen) so a source is never
-     mistaken for an outcome; `app`/`cli` stay quiet so hand-opened sessions
-     don't shout next to a triggered run. */
-  --s-github: #24292f; --s-slack: #7c2d92; --s-linear: #5e6ad2; --s-schedule: #0e7490;
-  --s-webhook: #6d28d9; --s-manual: #b45309; --s-cli: #3f6212; --s-app: #64748b;
-  /* Terminal text selection — a clearly visible tint that keeps glyphs readable
-     (the old --surface-3 highlight was invisible against the terminal bg). */
-  --term-selection: rgba(63, 99, 119, 0.30);
-  --term-selection-inactive: rgba(63, 99, 119, 0.20);
-  --radius: 12px;
-  /* Editorial serif for session/display titles; mono + sans already live inline. */
-  --font-serif: "Newsreader", Georgia, "Iowan Old Style", "Palatino Linotype", "Times New Roman", serif;
-  color-scheme: light;
-}
-:root[data-theme="light"] { color-scheme: light; }
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --bg: #14171a; --surface: #191d21; --surface-2: #1f242a; --surface-3: #252b31;
-  --ink: #e6ebee; --muted: #838b91; --line: #262c31; --line-strong: #384049;
-  --accent: #8fb6cd; --accent-contrast: #14171a; --accent-hover: #a7cadd;
-  --danger: #c08a83; --danger-soft: #3a2420; --ok: #86a99f; --merged: #a99bc4;
-  --unseen: #cba96a;
-  --s-github: #d7dde3; --s-slack: #d68ce6; --s-linear: #a5adf5; --s-schedule: #4bc4de;
-  --s-webhook: #b79bf7; --s-manual: #f0a45a; --s-cli: #a3c987; --s-app: #9aa4b2;
-  --term-selection: rgba(143, 182, 205, 0.36); --term-selection-inactive: rgba(143, 182, 205, 0.24);
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) {
-    color-scheme: dark;
-    --bg: #14171a; --surface: #191d21; --surface-2: #1f242a; --surface-3: #252b31;
-    --ink: #e6ebee; --muted: #838b91; --line: #262c31; --line-strong: #384049;
-    --accent: #8fb6cd; --accent-contrast: #14171a; --accent-hover: #a7cadd;
-    --danger: #c08a83; --danger-soft: #3a2420; --ok: #86a99f; --merged: #a99bc4;
-    --unseen: #cba96a;
-    --term-selection: rgba(143, 182, 205, 0.36); --term-selection-inactive: rgba(143, 182, 205, 0.24);
-  }
-}
+/* Design tokens — palette, type scale, spacing, radius, elevation, motion — live
+   in the shared single source of truth, packages/ui/tokens.css, which main.tsx
+   imports immediately before this file. Do NOT redeclare palette tokens here:
+   `pnpm run check:design` fails if any stylesheet outside tokens.css does. To
+   change or add a token, edit tokens.css (and mirror it into styleguide.html). */
 
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }

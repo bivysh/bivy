@@ -10,6 +10,7 @@ import { initViewport } from "./viewport.js";
 import { requestPersistentStorage } from "./storage.js";
 import { initializeInstallLifecycle } from "./pwaLifecycle.js";
 import { controller } from "./store/useStore.js";
+import "@bivy/ui/tokens.css";
 import "./styles.css";
 import "./pwa-lifecycle.css";
 
