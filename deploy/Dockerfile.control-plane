@@ -22,11 +22,13 @@ RUN pnpm --filter @bivy/web run build
 # Stage 2 — the control plane service.
 FROM node:22-slim
 WORKDIR /app
-# The control plane imports @bivy/core (a monorepo sibling), declared as a
-# `file:../../packages/core` dependency and loaded from source by tsx at runtime.
-# Copy it in BEFORE install so that path resolves: from /app the `../../packages`
-# prefix clamps at the container root, so core must live at /packages/core.
+# The control plane imports monorepo siblings through `file:../../packages/*`
+# dependencies. Copy them before install so those paths resolve: from /app the
+# `../../packages` prefix clamps at the container root. automation-core's
+# tsconfig also compiles the canonical sources from ../../src/automation.
 COPY packages/core /packages/core
+COPY packages/automation-core /packages/automation-core
+COPY src/automation /src/automation
 COPY services/control-plane/package.json ./
 RUN npm install
 COPY services/control-plane/ ./
