@@ -123,6 +123,9 @@ export interface ProcessRuntimeOptions {
    * Governance is unchanged — this is structured *resume*, not tool interception.
    */
   resumable?: boolean;
+  /** Optional creation recipe for agents that accept a caller-assigned native
+   * session id. This makes resume work even when stdout does not expose a ref. */
+  newSessionArgs?: (sessionId: string) => string[];
   resumeArgs?: (sessionId: string) => string[];
   loadHistory?: (sessionId: string) => RuntimeMessage[];
   /**
@@ -273,10 +276,12 @@ class ProcessSession implements RuntimeSession {
   /** Native conversation reference supplied on reopen or learned from the first
    * structured turn. Distinct from the stable Bivy session id. */
   private nativeSessionRef?: string;
+  private upstreamSessionStarted: boolean;
 
   constructor(private readonly runtimeOptions: ProcessRuntimeOptions, public readonly cwd: string, resumeId?: string) {
-    this.nativeSessionRef = resumeId;
     this.id = resumeId ?? randomUUID();
+    this.nativeSessionRef = resumeId ?? (runtimeOptions.newSessionArgs ? this.id : undefined);
+    this.upstreamSessionStarted = Boolean(resumeId);
     // Preload prior history so a reopened session isn't blank (resumable runtimes).
     if (resumeId && runtimeOptions.loadHistory) {
       try {
@@ -447,9 +452,11 @@ class ProcessSession implements RuntimeSession {
 
     // A resumed session continues the agent's own session id each turn via
     // resumeArgs (e.g. `codex exec resume <id> --json`); otherwise the base args.
-    const baseArgs = this.nativeSessionRef && this.runtimeOptions.resumeArgs
+    const baseArgs = this.nativeSessionRef && this.upstreamSessionStarted && this.runtimeOptions.resumeArgs
       ? this.runtimeOptions.resumeArgs(this.nativeSessionRef)
-      : (this.runtimeOptions.args ?? []);
+      : this.nativeSessionRef && this.runtimeOptions.newSessionArgs
+        ? this.runtimeOptions.newSessionArgs(this.nativeSessionRef)
+        : (this.runtimeOptions.args ?? []);
     // Selection flags (model + thinking level) splice into the base args at their
     // configured positions — before a trailing prompt flag, or after a leading
     // subcommand. Both `insertAt` values index the ORIGINAL base args, so we apply
@@ -537,7 +544,10 @@ class ProcessSession implements RuntimeSession {
     // (on session.done), before the child 'close' handler runs.
     const emitParserEvents = (activeParser: CliParser, events: RuntimeEvent[]) => {
       const learnedRef = activeParser.sessionRef?.()?.trim();
-      if (learnedRef) this.nativeSessionRef = learnedRef;
+      if (learnedRef) {
+        this.nativeSessionRef = learnedRef;
+        this.upstreamSessionStarted = true;
+      }
       for (const event of events) this.emit(event);
       if (!messagesPushed && events.some((e) => e.type === "agent_end")) {
         messagesPushed = true;
@@ -595,11 +605,13 @@ class ProcessSession implements RuntimeSession {
         // capture it before emitting agent_end so persistence observers see it.
         const learnedRef = parser.sessionRef?.()?.trim();
         if (learnedRef) this.nativeSessionRef = learnedRef;
+        if ((code === 0 || code === null) && this.nativeSessionRef) this.upstreamSessionStarted = true;
         emitParserEvents(parser, closingEvents);
         if (!messagesPushed) for (const message of parser.messages()) this.messages.push(message);
         return;
       }
       const failed = code && code !== 0;
+      if (!failed && this.nativeSessionRef) this.upstreamSessionStarted = true;
       const content = stripAnsi(stdout.trim() || (failed ? stderr.trim() : ""));
       const cleanStderr = stripAnsi(stderr.trim());
       const message = { role: "assistant", content, ...(failed ? { errorMessage: `Process exited with code ${code}${cleanStderr ? `: ${cleanStderr}` : ""}` } : {}) };

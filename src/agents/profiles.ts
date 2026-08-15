@@ -98,7 +98,13 @@ export type AgentProfile = {
    * (resume stays off, and the catalog reports it off) — the honest state for an
    * agent with no native "continue session <id>" form (e.g. Aider, Crush).
    */
-  resume?: { template: string[]; historyLoader?: "grok" };
+  resume?: {
+    template: string[];
+    /** Optional fresh-launch recipe containing `{id}` for agents that accept a
+     * caller-assigned conversation id. Subsequent turns use `template`. */
+    newTemplate?: string[];
+    historyLoader?: "grok";
+  };
   /**
    * Model selection, the data-driven way. `flag` is the CLI's model option (its
    * value is the chosen model id); `insertAt` places it in the launch args (0 =

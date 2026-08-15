@@ -199,6 +199,9 @@
           "properties": {
             "args": {
               "$ref": "#/$defs/stringArgs"
+            },
+            "newArgs": {
+              "$ref": "#/$defs/stringArgs"
             }
           }
         },

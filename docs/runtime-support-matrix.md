@@ -52,8 +52,10 @@ is wired.
 
 **Resume** is the same generic, data-driven primitive everywhere it's `Yes`
 above: a `resume.template` arg array in `AGENT_PROFILES`
-(`src/agents/profiles.ts`) or a `BIVY_<ID>_RESUME_TEMPLATE` override — no
-per-agent runtime code, matching the ProtocolRuntime resume primitive
+(`src/agents/profiles.ts`) or a `BIVY_<ID>_RESUME_TEMPLATE` override. Fresh
+structured sessions capture native refs from validated output formats; plugin
+agents that accept a caller-assigned id can declare `resume.newArgs`. There is
+no per-agent runtime code, matching the ProtocolRuntime resume primitive
 (`session.create.resume`) added for Codex/Bivy-agent-protocol. It's `No` only
 where the underlying CLI genuinely has no native "continue session `<id>`" form
 today (Aider, Crush, Hermes) or the adapter itself isn't there yet (OpenClaw).
@@ -63,8 +65,8 @@ column. The `Approvals` values above describe each agent's **default** (pipe)
 path, where governance is effect-level (sandbox tier / FS-MCP-network). But any
 agent that speaks the [Agent Client Protocol](https://agentclientprotocol.com)
 can instead be driven through `bin/acp-shim.mjs` → the governed `ProtocolRuntime`
-— gaining **per-tool Approve/Deny**, **`session/load` resume**, and **model
-selection** (`session/set_model`, with the list read from the live session so it
+— gaining **Approve/Deny for blocking ACP permission requests**, observed tool
+activity, **`session/load` resume**, and **model selection** (`session/set_model`, with the list read from the live session so it
 matches the providers that node has actually authenticated) with zero per-agent
 code. The picker agents that ship a native ACP server declare it as data (an
 `acp` field in `AGENT_PROFILES`): **Gemini** (`--experimental-acp`), **Qwen
@@ -153,9 +155,11 @@ Four general, opt-in levers move an agent up that ladder without per-agent code:
   longer evidences — self-healing honesty across version drift. It never upgrades.
 - **ACP** (`acp` runtime + per-agent promotion). **The preferred way to wrap any
   agent that speaks it** — a one-shot pipe can't gate a tool *before* it runs, so
-  ACP is a strict upgrade. Any [Agent Client Protocol](https://agentclientprotocol.com)
+  ACP is a strict fidelity upgrade. Any [Agent Client Protocol](https://agentclientprotocol.com)
   agent is driven through `bin/acp-shim.mjs` → the governed `ProtocolRuntime`
-  (per-tool approvals + streaming + resume + model selection) as data. Use the
+  (permission-request approvals + observed activity + streaming + resume + model
+  selection) as data. Activity that may already be executing is never presented
+  as an approval that can still stop it. Use the
   generic runtime (`BIVY_ACP_COMMAND` / `BIVY_ACP_ARGS`), or promote a specific
   agent that declares an `acp` field. OpenCode runs this way by default;
   `BIVY_<ID>_ACP=1` opts in another one and `BIVY_PREFER_ACP=1` promotes every

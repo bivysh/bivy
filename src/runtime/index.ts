@@ -202,6 +202,11 @@ function customAgentSpecs(): Map<string, AgentProfile> {
         supportTier: "experimental",
         testedVersion: undefined,
         install: undefined,
+        // `extends` reuses declarative launch syntax, never maintained host code.
+        // A different executable must not inherit Codex/OpenCode/Grok credential,
+        // store, slash-command, or native-discovery behavior by accident.
+        behaviors: undefined,
+        ...(base.resume ? { resume: { template: base.resume.template, ...(base.resume.newTemplate ? { newTemplate: base.resume.newTemplate } : {}) } } : {}),
       });
     }
   } catch {
@@ -251,7 +256,7 @@ function pluginAgentSpec(contribution: InstalledAgentContribution): AgentProfile
     ...(agent.adapter.structured
       ? { jsonArgs: agent.adapter.structured.args, parserId: agent.adapter.structured.parser }
       : {}),
-    ...(agent.adapter.resume ? { resume: { template: agent.adapter.resume.args } } : {}),
+    ...(agent.adapter.resume ? { resume: { template: agent.adapter.resume.args, ...(agent.adapter.resume.newArgs ? { newTemplate: agent.adapter.resume.newArgs } : {}) } } : {}),
     ...(agent.adapter.model
       ? {
           model: {
@@ -650,7 +655,7 @@ function cliAgentInfo(id: string, spec: AgentProfile): RuntimeInfo {
       ? acpActive
         // Promoted to ACP: the description must match the governed path actually in
         // use, not the pipe path this agent would otherwise take.
-        ? `Available on PATH, driven through its Agent Client Protocol server (\`${spec.command} ${spec.acp?.args.join(" ")}\`): each tool call is gated by Bivy's Approve/Deny before it runs, and sessions resume natively. Force the plain stdout pipe with BIVY_${id.toUpperCase()}_ACP=0.`
+        ? `Available on PATH, driven through its Agent Client Protocol server (\`${spec.command} ${spec.acp?.args.join(" ")}\`): blocking permission requests are gated by Bivy's Approve/Deny, already-running activity is observed, and sessions resume natively. Force the plain stdout pipe with BIVY_${id.toUpperCase()}_ACP=0.`
         : `Available on PATH. This process adapter ${spec.parserId && !spec.parserUnverified ? "parses its native JSON stream into a structured transcript" : spec.parserId ? "streams stdout/stderr (a structured JSON parser is available; opt in with BIVY_AGENT_STRUCTURED=1 once validated for your version)" : "streams stdout/stderr"}; Bivy governs its filesystem/exec/MCP effects at the sandbox tier rather than intercepting each tool call. Override its launch flags with BIVY_${id.toUpperCase()}_ARGS if your CLI version differs.`
       : `${spec.command} was not found on PATH. Install it on this node, then select this agent again.`,
     install: installed || !installCommand ? undefined : {
@@ -855,7 +860,7 @@ function acpInfo(): RuntimeInfo {
     id: "acp",
     executionMode: "protocol",
     displayName: process.env.BIVY_ACP_NAME?.trim() || "ACP Agent",
-    description: "Any Agent Client Protocol (ACP) agent, driven through Bivy's shim for per-tool approvals, streaming, and resume.",
+    description: "Any Agent Client Protocol (ACP) agent, driven through Bivy's shim for permission-request approvals, observed activity, streaming, and resume.",
     status: configured ? "available" : "planned",
     packageName: process.env.BIVY_ACP_COMMAND?.trim() || "Set BIVY_ACP_COMMAND",
     language: "Process",
@@ -863,7 +868,7 @@ function acpInfo(): RuntimeInfo {
     supportTier: "experimental",
     authOwner: "agent",
     notes: configured
-      ? "Drives an ACP agent via bin/acp-shim.mjs → ProtocolRuntime: per-tool Approve/Deny, streaming transcript, and session/load resume — no per-agent code. Validate against your agent, then promote it into the picker as data."
+      ? "Drives an ACP agent via bin/acp-shim.mjs → ProtocolRuntime: Approve/Deny for blocking permission requests, observed activity, streaming transcript, and session/load resume — no per-agent code. Validate against your agent, then promote it into the picker as data."
       : "Set BIVY_ACP_COMMAND (and optional BIVY_ACP_ARGS, a JSON array) to the ACP agent's launch command, e.g. BIVY_ACP_COMMAND=gemini BIVY_ACP_ARGS='[\"--experimental-acp\"]'.",
   };
 }
@@ -1290,6 +1295,16 @@ function makeCliRuntime(id: string, options: RuntimeFactoryOptions, spec: AgentP
               // the tier (e.g. Gemini/Qwen's `--approval-mode <mode>`) — a whole
               // token, not a string substitution, since it can be multiple argv
               // words; `{id}`/`{tier}` stay plain per-token string replacement.
+              ...(spec.resume?.newTemplate
+                ? {
+                    newSessionArgs: (sessionId: string) =>
+                      spec.resume!.newTemplate!.flatMap((a) =>
+                        a === "{sandbox}"
+                          ? sandboxArgsFor(id, tier)
+                          : [a.replace(/\{id\}/g, sessionId).replace(/\{tier\}/g, tier)],
+                      ),
+                  }
+                : {}),
               resumeArgs: (sessionId: string) =>
                 resumeTemplate.flatMap((a) =>
                   a === "{sandbox}"

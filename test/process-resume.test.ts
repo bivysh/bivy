@@ -111,6 +111,29 @@ await check("prompt threads `resume <id>` and parses the structured reply", asyn
   assert.ok(msgs.some((m) => m.role === "assistant" && String(m.content).includes("resumed reply")), "assistant turn recorded in history");
 });
 
+await check("a host-assigned session ref uses creation args before resume args", async () => {
+  fs.rmSync(argsFile, { force: true });
+  const runtime = new ProcessRuntime({
+    id: "host-assigned",
+    command: stub,
+    promptMode: "argv",
+    args: ["run"],
+    resumable: true,
+    newSessionArgs: (id) => ["run", "--session-id", id],
+    resumeArgs: (id) => ["run", "--resume", id],
+    env: { STUB_ARGS_FILE: argsFile },
+  });
+  const { session } = await runtime.createSession({ workspace: tmp });
+  const ref = session.sessionFile;
+  assert.ok(ref, "host-assigned ref is persistable before the first turn");
+  await runToEnd(session);
+  for (let i = 0; session.isStreaming && i < 100; i += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  await runToEnd(session);
+  const launches = fs.readFileSync(argsFile, "utf8").trim().split("\n");
+  assert.match(launches[0]!, new RegExp(`run --session-id ${ref}`));
+  assert.match(launches[1]!, new RegExp(`run --resume ${ref}`));
+});
+
 await check("a fresh structured session captures its native ref and resumes its second turn", async () => {
   fs.rmSync(argsFile, { force: true });
   const { session } = await makeRuntime().createSession({ workspace: tmp });
