@@ -1,0 +1,34 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+import { expect, test } from "@playwright/test";
+import { readFile } from "node:fs/promises";
+
+const ROOT = new URL("../../packages/web/src/", import.meta.url);
+
+const MIGRATED = [
+  "components/ApprovalCard.tsx",
+  "components/QuestionCard.tsx",
+  "components/TurnAttentionCard.tsx",
+  "components/ArtifactsSheet.tsx",
+  "components/ToolGroup.tsx",
+  "components/SessionList.tsx",
+] as const;
+const LEGACY = ["approval-badge", "question-chip", "artifact-badge", "tool-fail"] as const;
+
+test("semantic labels use the canonical Badge", async () => {
+  for (const path of MIGRATED) {
+    const source = await readFile(new URL(path, ROOT), "utf8");
+    expect(source, path).toContain("<Badge");
+    for (const legacy of LEGACY) expect(source, path).not.toContain(legacy);
+  }
+});
+
+test("canonical badge shell exposes tones and variants", async () => {
+  const css = await readFile(new URL("styles.css", ROOT), "utf8");
+  expect(css).toContain(".badge {");
+  for (const tone of ["accent", "ok", "warn", "danger", "merged", "unseen"]) {
+    expect(css).toContain(`.badge[data-tone="${tone}"]`);
+  }
+  for (const legacy of LEGACY) expect(css).not.toContain(`.${legacy}`);
+  const filterRule = css.slice(css.indexOf(".session-filter-count {"), css.indexOf("}", css.indexOf(".session-filter-count {")));
+  expect(filterRule).not.toMatch(/(?:background|border-radius|color|font-size|font-weight)\s*:/);
+});

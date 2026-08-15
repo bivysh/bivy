@@ -9,6 +9,7 @@ import { ConfirmDialog, RenameDialog } from "./AppDialog.js";
 import { attentionRank, statusDotState, statusLabel, type SessionDotState } from "../sessionStatus.js";
 import { SourceGlyph } from "./SourceMark.js";
 import { StatusDot } from "./StatusDot.js";
+import { Badge } from "./Badge.js";
 import { classifySource, CLI_SOURCE, type SourceKind } from "../sessionSource.js";
 import { rowHint } from "../runEvidence.js";
 import { sessionDateGroup } from "../sessionPresentation.js";
@@ -439,7 +440,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
               <path d="M3 5h18l-7 8v6l-4-2v-4z" />
             </svg>
-            {activeFilterCount > 0 && <span className="session-filter-count">{activeFilterCount}</span>}
+            {activeFilterCount > 0 && <Badge tone="accent" variant="solid" className="session-filter-count">{activeFilterCount}</Badge>}
           </button>
           {filterOpen && (
             <div className="menu session-filter-menu" role="menu">

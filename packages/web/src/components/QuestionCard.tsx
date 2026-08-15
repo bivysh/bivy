@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, useState } from "react";
+import { Badge } from "./Badge.js";
 import type { UserQuestionRequest } from "@bivy/core";
 
 // A blocking, multiple-choice clarifying question the agent raised mid-turn
@@ -127,7 +128,7 @@ function QuestionCard({
         return (
           <div className="question-item" key={qi}>
             <div className="question-head">
-              <span className="question-chip">{q.header}</span>
+              <Badge tone="accent" variant="soft" upper>{q.header}</Badge>
             </div>
             <div className="question-text">{q.question}</div>
             <div className="question-options">

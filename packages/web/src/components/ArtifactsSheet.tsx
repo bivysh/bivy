@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useState } from "react";
+import { Badge } from "./Badge.js";
 import type { ArtifactEntry } from "@bivy/core";
 import { Sheet } from "./Sheet.js";
 import { relTime } from "./ChangesCard.js";
@@ -87,7 +88,7 @@ function ArtifactRow({ artifact, onJump }: { artifact: ArtifactEntry; onJump: (e
       <div className="artifact-main">
         <div className="artifact-name-line">
           <span className="artifact-name" title={artifact.name}>{artifact.name}</span>
-          {artifact.artifact && <span className="artifact-badge">Artifact</span>}
+          {artifact.artifact && <Badge tone="accent" variant="solid" upper>Artifact</Badge>}
         </div>
         <div className="artifact-meta">{meta}</div>
         {artifact.caption && <div className="artifact-caption">{artifact.caption}</div>}
