@@ -2029,7 +2029,6 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .settings-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex-shrink: 0; }
 .settings-error { color: var(--danger); font-size: 13px; margin: 4px 0 0; overflow-wrap: anywhere; }
 .row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.link-btn { align-self: flex-start; border: 0; background: transparent; color: var(--accent); font-size: 13px; padding: 0; }
 .chip { font-size: 11px; font-weight: 700; border-radius: 999px; padding: 2px 8px; border: 1px solid var(--line); color: var(--muted); }
 .chip.ok { color: var(--ok); border-color: var(--ok); }
 .chip.err { color: var(--danger); border-color: var(--danger); }
@@ -2042,8 +2041,6 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
    agent form expanding below. */
 .queue-head-actions { display: flex; align-items: center; gap: 14px; }
 .queue-count { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; margin-left: 8px; padding: 0 6px; border-radius: 999px; background: var(--surface-3); color: var(--muted); font-size: 11px; font-weight: 700; vertical-align: middle; }
-.link-btn.danger { color: var(--danger); }
-.link-btn:disabled { opacity: 0.5; }
 .queue-card { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); overflow: hidden; }
 .queue-card.open { border-color: var(--line-strong); }
 .queue-card-row { display: flex; align-items: center; gap: 10px; justify-content: space-between; padding: 8px 10px; }
@@ -2279,7 +2276,7 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
   .runs-overview .autom-section-actions .btn { min-width: 0; width: 100%; }
   .queue-head { align-items: flex-start; gap: 10px; }
   .queue-head-actions { justify-content: flex-end; gap: 8px; min-width: 0; text-align: right; }
-  .queue-head-actions .link-btn { overflow-wrap: anywhere; }
+  .queue-head-actions .btn.link { overflow-wrap: anywhere; }
   .run-details .automations-view-heading { font-size: 20px; }
   .run-details .automations-view-head-text { display: none; }
   .run-details .automations-view-head { justify-content: flex-start; border-bottom: 1px solid var(--line); }
@@ -2340,7 +2337,7 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
   .ruleset-chain-field .picker-search { min-height: 44px; }
   .ruleset-chain-remove { align-self: flex-end; min-height: 40px; margin: 0; }
   .ruleset-chain > .btn { min-height: 44px; }
-  .ruleset-collapsible .link-btn { min-height: 44px; display: flex; align-items: center; }
+  .ruleset-collapsible .btn.link { min-height: 44px; display: flex; align-items: center; }
   .settings-head-title { text-align: center; font-size: 17px; }
   .settings-panel[data-mode="menu"] .settings-content { display: none; }
   .settings-panel[data-mode="panel"] .settings-nav { display: none; }
@@ -2639,8 +2636,9 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 .btn.ghost { background: transparent; border-color: transparent; }
 .btn.ghost:hover { background: var(--surface-2); }
 .btn.danger-ghost { background: transparent; color: var(--danger); border-color: var(--danger); }
-.btn.link { border: 0; background: transparent; color: var(--accent); padding: var(--space-1) 2px; }
+.btn.link { align-self: flex-start; border: 0; background: transparent; color: var(--accent); padding: var(--space-1) 2px; }
 .btn.link:hover { background: transparent; color: var(--accent-hover); }
+.btn.link.danger { background: transparent; color: var(--danger); }
 .btn.sm { padding: var(--space-1) 10px; font-size: var(--text-xs); }
 .btn.lg { padding: 11px 18px; font-size: var(--text-md); }
 .ghost-btn { border: 1px solid var(--line-strong); background: transparent; color: var(--ink); border-radius: 8px; padding: 5px 10px; font-size: 13px; }

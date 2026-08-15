@@ -387,7 +387,7 @@ function RunBody({
         <Row k="Session">
           {run.sessionId
             ? sessionOpenable
-              ? <button type="button" className="link-btn" onClick={() => onOpenSession!(run.sessionId!)}>Open Session</button>
+              ? <button type="button" className="btn link" onClick={() => onOpenSession!(run.sessionId!)}>Open Session</button>
               : <span className="run-details-muted">Correlated Session isn&apos;t available here</span>
             : <span className="run-details-muted">Not correlated</span>}
         </Row>
@@ -463,7 +463,7 @@ function RunBody({
           <span className="v">
             {receipt.completeness === "complete" ? "Complete" : `Partial · ${receipt.missingEvidence.length} evidence gap${receipt.missingEvidence.length === 1 ? "" : "s"}`}
             {" "}
-            <button type="button" className="link-btn" onClick={exportReceipt}>Export JSON</button>
+            <button type="button" className="btn link" onClick={exportReceipt}>Export JSON</button>
           </span>
         </div>
         {receipt.observationLimitations.slice(0, 3).map((limitation) => (

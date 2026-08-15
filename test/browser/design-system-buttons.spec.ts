@@ -47,3 +47,23 @@ test("migrated call-to-actions inherit the canonical button shell", async () => 
   }
   expect(css).not.toContain(".notice-action");
 });
+
+test("legacy link buttons have been removed", async () => {
+  const paths = [
+    "components/Pickers.tsx",
+    "components/Rulesets.tsx",
+    "components/ProviderConnect.tsx",
+    "components/SetupNotice.tsx",
+    "components/WorkQueueSetupSheet.tsx",
+    "components/CredentialVault.tsx",
+    "components/Settings.tsx",
+    "components/RunDetails.tsx",
+    "components/GithubQueue.tsx",
+  ];
+  for (const path of paths) {
+    const source = await readFile(new URL(path, ROOT), "utf8");
+    expect(source, path).not.toContain("link-btn");
+  }
+  const css = await readFile(STYLES, "utf8");
+  expect(css).not.toContain(".link-btn");
+});

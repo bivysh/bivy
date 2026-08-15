@@ -258,7 +258,7 @@ export function CredentialVault({ state }: { state: AppState }) {
     if (!chosen) {
       const matches = catalog.filter((p) => `${p.name} ${p.id}`.toLowerCase().includes(query.toLowerCase()));
       return <div className="settings-form credential-vault">
-        <button className="link-btn" onClick={() => setView("list")}>‹ Credentials</button>
+        <button className="btn link" onClick={() => setView("list")}>‹ Credentials</button>
         <h3>Add model access</h3>
         <p className="muted">Connect a hosted provider or point Bivy at a model server you control.</p>
         <button className="custom-provider-card" onClick={() => { const id = query.trim().toLowerCase() || "local"; resetAdd(id); setProvider(id); setCustomMode(true); }}>
@@ -295,7 +295,7 @@ export function CredentialVault({ state }: { state: AppState }) {
       </>}
     </>;
     return <div className="settings-form credential-vault">
-      <button className="link-btn" onClick={() => setProvider("")}>‹ Providers</button>
+      <button className="btn link" onClick={() => setProvider("")}>‹ Providers</button>
       <h3>{customProvider ? "Custom provider" : chosen.name}</h3>
       {oauth?.provider === chosen.id ? <OauthStep /> : <>
         {customProvider && <>
@@ -341,7 +341,7 @@ export function CredentialVault({ state }: { state: AppState }) {
         {method !== "oauth" && !customProvider && <>
           <label className="field-label" htmlFor="credential-secret">{method === "reference" ? "Reference" : "API key"}</label>
           <input id="credential-secret" className="picker-search" type={method === "reference" ? "text" : "password"} placeholder={method === "reference" ? "op://Vault/Item/field, env://NAME, or cmd://…" : "Paste API key"} value={secret} onChange={(e) => setSecret(e.target.value)} />
-          {chosen.help && method === "api_key" && <a className="link-btn" href={chosen.help} target="_blank" rel="noreferrer">Where to create a key ↗</a>}
+          {chosen.help && method === "api_key" && <a className="btn link" href={chosen.help} target="_blank" rel="noreferrer">Where to create a key ↗</a>}
         </>}
         <button className="btn primary block" disabled={busy || (!customProvider && method !== "oauth" && !secret.trim()) || (customProvider && !customBaseUrl.trim())} onClick={save}>{busy ? "Saving…" : method === "oauth" ? `Sign in with ${chosen.name}` : customProvider ? "Save custom provider" : "Save credential"}</button>
       </>}
@@ -372,7 +372,7 @@ export function CredentialVault({ state }: { state: AppState }) {
         onCancel={() => setConfirmDelete(null)}
         onConfirm={() => void remove(confirmDelete)}
       />}
-      <button className="link-btn" onClick={() => setView("list")}>‹ Credentials</button>
+      <button className="btn link" onClick={() => setView("list")}>‹ Credentials</button>
       <div className="vault-title-row"><div><h3>{titleFor(selected)}</h3><p className="muted">{localModels.some((model) => model.id === selected.provider) ? "Local or custom endpoint" : methodLabel(selected.kind)}</p></div><span className={`chip ${selected.record?.lastVerifiedOk ? "ok" : ""}`}>{selected.record?.lastVerifiedOk ? "Verified" : selected.ambient ? "Provided by environment" : "Saved"}</span></div>
       <div className="vault-detail-grid">
         <span className="muted">Available on</span><strong>{availabilityLabel(selected.availability)}</strong>

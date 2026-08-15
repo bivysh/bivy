@@ -72,7 +72,7 @@ export function OauthStep() {
           {openingOnNode ? "Opening…" : openedOnNode ? `Opened on ${machine}` : `Open sign-in on ${machine}`}
         </button>
         <p className="muted">The provider will return directly to Bivy on that machine. This page updates automatically.</p>
-        {!openedOnNode && <button className="link-btn" onClick={useThisDevice}>Use this device instead</button>}
+        {!openedOnNode && <button className="btn link" onClick={useThisDevice}>Use this device instead</button>}
       </>}
 
       {!deviceCode && (!canOpenOnNode || deviceFallback) && <>

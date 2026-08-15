@@ -662,7 +662,7 @@ function LocalModelsPanel({ state, onStartWork }: { state: AppState; onStartWork
     };
     return (
       <div className="settings-form">
-        <button className="link-btn" onClick={() => openDraft(null)}>‹ All endpoints</button>
+        <button className="btn link" onClick={() => openDraft(null)}>‹ All endpoints</button>
         <h3>{draft.editing ? draft.name || draft.providerId : "Add endpoint"}</h3>
         <p className="muted">
           Verify an OpenAI-compatible server, then import the models it actually reports. Ollama, LM Studio, vLLM,
@@ -1360,7 +1360,7 @@ function EphemeralPanel() {
   if (view.k === "hosted") {
     return (
       <div className="settings-form machine-profiles">
-        <button className="link-btn" onClick={() => setView({ k: "list" })}>‹ Isolated machine profiles</button>
+        <button className="btn link" onClick={() => setView({ k: "list" })}>‹ Isolated machine profiles</button>
         <HostedRunnerManagement />
       </div>
     );
@@ -1371,7 +1371,7 @@ function EphemeralPanel() {
     if (catalog) {
       return (
         <div className="settings-form machine-profiles">
-          <button className="link-btn" onClick={backToList}>‹ Isolated machine profiles</button>
+          <button className="btn link" onClick={backToList}>‹ Isolated machine profiles</button>
           <EphemeralProviderConfig
             providerId={catalog.id}
             initialSetupId={view.setupId}
@@ -1452,7 +1452,7 @@ function EphemeralProviderChooser({ keys, onBack, onPick }: { keys: ProviderKeyI
   };
   return (
     <div className="settings-form machine-profiles">
-      <button className="link-btn" onClick={onBack}>‹ Isolated machine profiles</button>
+      <button className="btn link" onClick={onBack}>‹ Isolated machine profiles</button>
       <h3>Add a profile</h3>
       <p className="muted">Choose where to run. You paste a token once per provider, then save as many profiles as you like.</p>
       {recommended && (

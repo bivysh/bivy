@@ -448,7 +448,7 @@ export function WorkQueueSetupSheet({
                     </button>
                   )}
                   {!showExisting && (
-                    <button type="button" className="link-btn" onClick={() => setShowExisting(true)}>
+                    <button type="button" className="btn link" onClick={() => setShowExisting(true)}>
                       Connect an existing app instead →
                     </button>
                   )}
@@ -546,7 +546,7 @@ export function WorkQueueSetupSheet({
                         ) : entry.servedBy === null ? (
                           <p className="schedule-hint warn">
                             No online machine holds this app&apos;s key — queue items won&apos;t be claimed.{" "}
-                            <button type="button" className="link-btn" onClick={() => openReconnect(entry)}>
+                            <button type="button" className="btn link" onClick={() => openReconnect(entry)}>
                               Connect key on this machine →
                             </button>
                           </p>
@@ -651,7 +651,7 @@ export function WorkQueueSetupSheet({
                               {phase === "starting" ? "Preparing…" : phase === "completing" ? "Finishing…" : "Create GitHub App"}
                             </button>
                           )}
-                          <button type="button" className="link-btn" onClick={() => openReconnect()}>
+                          <button type="button" className="btn link" onClick={() => openReconnect()}>
                             Connect an existing app instead →
                           </button>
                         </>
@@ -696,7 +696,7 @@ export function WorkQueueSetupSheet({
                           )}
                         </div>
                       )}
-                      <button type="button" className="link-btn" onClick={() => { setAddAppOpen(false); setCeApp(null); }}>Cancel</button>
+                      <button type="button" className="btn link" onClick={() => { setAddAppOpen(false); setCeApp(null); }}>Cancel</button>
                     </div>
                   )}
 

@@ -205,7 +205,7 @@ function RepoConnectPrompt({ state }: { state: AppState }) {
           </p>
           <div className="repo-connect-code" aria-label="Device code">{gc.userCode || "…"}</div>
           <p className="repo-connect-waiting muted">Waiting for you to authorize on GitHub…</p>
-          <button type="button" className="link-btn" onClick={() => controller.githubConnectReset()}>
+          <button type="button" className="btn link" onClick={() => controller.githubConnectReset()}>
             Cancel
           </button>
         </>

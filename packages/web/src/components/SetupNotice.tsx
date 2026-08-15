@@ -285,7 +285,7 @@ export function SetupNotice() {
                 </a>
               </p>
             )}
-            <button type="button" className="link-btn" onClick={cancelGithubSignIn}>
+            <button type="button" className="btn link" onClick={cancelGithubSignIn}>
               Cancel
             </button>
           </div>
@@ -317,7 +317,7 @@ export function SetupNotice() {
         {emailWaiting && (
           <p className="setup-note muted">
             Keep this window open — signing you in automatically once you tap the link.{" "}
-            <button type="button" className="link-btn" onClick={cancelEmailSignIn}>
+            <button type="button" className="btn link" onClick={cancelEmailSignIn}>
               Cancel
             </button>
           </p>
@@ -325,7 +325,7 @@ export function SetupNotice() {
         {sentTo && !sending && (
           <p className="setup-note muted">
             Didn't get it? Check your spam folder, or{" "}
-            <button type="button" className="link-btn" onClick={() => void requestMagicLink(sentTo)}>
+            <button type="button" className="btn link" onClick={() => void requestMagicLink(sentTo)}>
               resend the link
             </button>
             . You can also edit the address above and send again.

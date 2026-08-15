@@ -260,7 +260,7 @@ function RulesetEditor({
 
   return (
     <div className="settings-form">
-      <button className="link-btn" onClick={onCancel}>‹ All rulesets</button>
+      <button className="btn link" onClick={onCancel}>‹ All rulesets</button>
       <h3>{isNew ? "New ruleset" : draft.name}</h3>
 
       <label className="field-label">Name</label>
@@ -513,7 +513,7 @@ function Collapsible({ label, children }: { label: string; children: ReactNode }
   const [open, setOpen] = useState(false);
   return (
     <div className="ruleset-collapsible">
-      <button type="button" className="link-btn" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+      <button type="button" className="btn link" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
         {open ? "▾" : "▸"} {label}
       </button>
       {open && <div className="ruleset-collapsible-body">{children}</div>}

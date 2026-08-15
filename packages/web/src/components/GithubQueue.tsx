@@ -419,14 +419,14 @@ export function GithubQueuePanel({
                 {runsUsed > runLimit
                   ? `Free plan — automation is paused after ${runLimit} included jobs plus a grace job. Capacity returns as older jobs pass 7 days. `
                   : `Free plan — you've used your ${runLimit} included automations. Your next job is the grace job. `}
-                <button className="link-btn" onClick={() => controller.startCheckout().catch(() => {})}>
+                <button className="btn link" onClick={() => controller.startCheckout().catch(() => {})}>
                   Upgrade to Pro{proPrice ? ` (${proPrice})` : ""} for unlimited automation →
                 </button>
               </>
             ) : (
               <>
                 Free plan — {Math.max(0, runLimit - runsUsed)} of {runLimit} automations left this week.{" "}
-                <button className="link-btn" onClick={() => controller.startCheckout().catch(() => {})}>
+                <button className="btn link" onClick={() => controller.startCheckout().catch(() => {})}>
                   Upgrade to Pro{proPrice ? ` (${proPrice})` : ""} for unlimited automation →
                 </button>
               </>
@@ -437,7 +437,7 @@ export function GithubQueuePanel({
         {canQuery && workQueueEnabled !== false && appInfo && apps.length === 0 && (
           <div className="banner info inline">
             No GitHub App connected yet.{" "}
-            <button className="link-btn" onClick={onOpenGithubSettings}>
+            <button className="btn link" onClick={onOpenGithubSettings}>
               Connect one in Settings →
             </button>
           </div>
@@ -448,7 +448,7 @@ export function GithubQueuePanel({
             {unservedApps.length === apps.length
               ? `${apps.length === 1 ? "Your GitHub App is" : "Your GitHub Apps are"} set up, but no online machine is running ${apps.length === 1 ? "it" : "them"} — nothing will pick these up.`
               : `${unservedApps.length} of your ${apps.length} GitHub Apps (${unservedApps.map((a) => a.name || a.mention || a.appId).join(", ")}) aren't running on any machine — work for those won't be picked up.`}{" "}
-            <button className="link-btn" onClick={onOpenGithubSettings}>
+            <button className="btn link" onClick={onOpenGithubSettings}>
               {unservedApps.length === 1 ? "Connect it on a machine →" : "Connect them on a machine →"}
             </button>
           </div>
@@ -465,7 +465,7 @@ export function GithubQueuePanel({
                   : `Checked ${prRefreshAllResult.scanned}, updated ${prRefreshAllResult.changed}`}
               </span>
             )}
-            <button className="link-btn" onClick={refreshAllStatus} disabled={refreshingAll} title="Reconcile every session's PR status against GitHub now">
+            <button className="btn link" onClick={refreshAllStatus} disabled={refreshingAll} title="Reconcile every session's PR status against GitHub now">
               {refreshingAll ? "Refreshing GitHub status…" : "Refresh GitHub status"}
             </button>
           </div>
@@ -506,7 +506,7 @@ export function GithubQueuePanel({
               })}
             </ul>
             {queueSessions.length > MAX_VISIBLE_SESSIONS && (
-              <button className="link-btn" onClick={() => setShowAllSessions((v) => !v)}>
+              <button className="btn link" onClick={() => setShowAllSessions((v) => !v)}>
                 {showAllSessions ? "Show less" : `Show more (${hiddenSessionCount})`}
               </button>
             )}
@@ -524,11 +524,11 @@ export function GithubQueuePanel({
               </h4>
               <div className="queue-head-actions">
                 {waiting && waiting.length > 0 && (
-                  <button className="link-btn danger" onClick={() => setConfirmClear(true)} disabled={clearing}>
+                  <button className="btn link danger" onClick={() => setConfirmClear(true)} disabled={clearing}>
                     {clearing ? "Clearing…" : "Clear queue"}
                   </button>
                 )}
-                <button className="link-btn" onClick={onRefresh}>
+                <button className="btn link" onClick={onRefresh}>
                   Refresh
                 </button>
               </div>
@@ -657,7 +657,7 @@ export function GithubQueuePanel({
                                       placeholder={hasGithubTaskToken ? "•••• saved" : "paste a token"}
                                       onChange={(e) => setGithubTaskTokenInput(e.target.value)}
                                     />
-                                    <button className="link-btn" disabled={!githubTaskToken.trim() || savingToken} onClick={saveGithubTaskToken}>
+                                    <button className="btn link" disabled={!githubTaskToken.trim() || savingToken} onClick={saveGithubTaskToken}>
                                       {savingToken ? "Saving…" : "Save"}
                                     </button>
                                   </div>
@@ -752,20 +752,20 @@ export function GithubQueuePanel({
                     )}
                     <div className="row-actions">
                       {onOpenRun && (
-                        <button className="link-btn" onClick={() => onOpenRun(item.id)}>
+                        <button className="btn link" onClick={() => onOpenRun(item.id)}>
                           Open Run details
                         </button>
                       )}
                       {!isTerminalRun(item) && (
                         <button
-                          className="link-btn danger"
+                          className="btn link danger"
                           disabled={cancelBusyId === item.id}
                           onClick={() => { setQueueActionErr(null); setCancelRun(item); }}
                         >
                           {cancelBusyId === item.id ? "Cancelling…" : "Cancel Run"}
                         </button>
                       )}
-                      <button className="link-btn" onClick={() => void copyReport(item)}>
+                      <button className="btn link" onClick={() => void copyReport(item)}>
                         {copiedReportId === item.id ? "Copied!" : "Copy sanitized Run JSON"}
                       </button>
                     </div>
