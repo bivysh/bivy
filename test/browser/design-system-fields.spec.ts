@@ -22,8 +22,9 @@ test("search and scheduling fields use the canonical field shell", async () => {
 
 test("surface field classes only own layout", async () => {
   const css = await readFile(new URL("styles.css", ROOT), "utf8");
-  expect(css).toContain(".field {");
+  expect(css).toContain(".field, .picker-search {");
   expect(css).not.toContain(".schedule-input");
+  expect(css).toContain(".picker-search { margin-bottom: 6px; }");
   for (const selector of [".session-search", ".settings-search", ".followup-edit-input"]) {
     const start = css.indexOf(`${selector} {`);
     const rule = css.slice(start, css.indexOf("}", start));
