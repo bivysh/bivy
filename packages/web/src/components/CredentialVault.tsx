@@ -327,7 +327,7 @@ export function CredentialVault({ state }: { state: AppState }) {
               finally { setBusy(false); }
             }}>{busy ? "Checking…" : "Test endpoint & find models"}</button>
           </div>
-          {verification && <div className={`banner inline ${verification.status === "ready" ? "success" : "error"}`}>
+          {verification && <div className="banner inline" data-tone={verification.status === "ready" ? "ok" : "danger"}>
             {verification.status === "ready" ? `Connected on ${verification.machineName}. Found ${verification.models.length} model${verification.models.length === 1 ? "" : "s"}.` : verification.detail || "This endpoint could not be reached."}
           </div>}
           <label className="field-label" htmlFor="custom-provider-models">Models <span className="muted">(one per line)</span></label>
@@ -346,7 +346,7 @@ export function CredentialVault({ state }: { state: AppState }) {
         </>}
         <button className="btn primary block" disabled={busy || (!customProvider && method !== "oauth" && !secret.trim()) || (customProvider && !customBaseUrl.trim())} onClick={save}>{busy ? "Saving…" : method === "oauth" ? `Sign in with ${chosen.name}` : customProvider ? "Save custom provider" : "Save credential"}</button>
       </>}
-      {error && <div className="banner error inline" role="alert">{error}</div>}
+      {error && <div className="banner inline" data-tone="danger" role="alert">{error}</div>}
     </div>;
   }
 
@@ -404,7 +404,7 @@ export function CredentialVault({ state }: { state: AppState }) {
         </details>
         <button className="btn danger-ghost" disabled={busy} onClick={() => setConfirmDelete(selected)}>{localModels.some((model) => model.id === selected.provider) ? "Remove endpoint" : "Delete credential"}</button>
       </>}
-      {message && <p className="banner inline">{message}</p>}{error && <div className="banner error inline">{error}</div>}
+      {message && <p className="banner inline">{message}</p>}{error && <div className="banner inline" data-tone="danger">{error}</div>}
       {nodes.length > 0 && <details className="vault-advanced"><summary>Machine availability</summary><div className="picker-list">{nodes.map((n) => {
         const available = selected.availability === "account" || (selected.availability === "node" && n.id === currentNodeId);
         const status = !available ? "Not available" : n.online ? "Available" : selected.availability === "account" ? "Will sync when online" : "Offline";

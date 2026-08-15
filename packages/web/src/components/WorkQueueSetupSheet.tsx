@@ -480,7 +480,7 @@ export function WorkQueueSetupSheet({
                       >
                         {phase === "completing" || ceHostedBusy ? "Connecting…" : state.connection.currentNodeId ? "Connect app to this machine" : "Connect app for isolated runs"}
                       </button>
-                      {ceHostedError && <div className="banner error inline" role="alert">{ceHostedError}</div>}
+                      {ceHostedError && <div className="banner inline" data-tone="danger" role="alert">{ceHostedError}</div>}
                       {ceNodeConnected && (
                         <div className="autom-success" role="status">
                           <strong>App connected.</strong> This machine now holds the key and can claim GitHub work.
@@ -502,7 +502,7 @@ export function WorkQueueSetupSheet({
                       </a>
                     </div>
                   )}
-                  {phase === "error" && <div className="banner error inline">{app?.error || "GitHub App setup failed."}</div>}
+                  {phase === "error" && <div className="banner inline" data-tone="danger">{app?.error || "GitHub App setup failed."}</div>}
                 </div>
               ) : (
                 <div className="card wq-status-card" data-tone="muted">
@@ -684,7 +684,7 @@ export function WorkQueueSetupSheet({
                           >
                             {phase === "completing" || ceHostedBusy ? "Connecting…" : state.connection.currentNodeId ? "Connect app to this machine" : "Connect app for isolated runs"}
                           </button>
-                          {ceHostedError && <div className="banner error inline" role="alert">{ceHostedError}</div>}
+                          {ceHostedError && <div className="banner inline" data-tone="danger" role="alert">{ceHostedError}</div>}
                           {ceNodeConnected && (
                             <div className="autom-success" role="status">
                               <strong>App connected.</strong> This machine now holds the key and can claim GitHub work.

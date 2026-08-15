@@ -2602,10 +2602,11 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
    <code> chips and link buttons. Keeping flex there turns each text node into
    its own column and shreds the sentence on narrow screens. */
 .banner { display: flex; align-items: center; gap: 10px; padding: 10px 18px; font-size: 13px; }
-.banner.error { background: var(--danger-soft); color: var(--danger); }
-.banner.info { background: var(--surface-2); color: var(--muted); }
-.banner.warn { background: color-mix(in srgb, var(--warn, #d9a441) 16%, transparent); color: var(--warn, #d9a441); }
-.banner.update { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--ink); }
+.banner[data-tone="danger"] { background: var(--danger-soft); color: var(--danger); }
+.banner[data-tone="ok"] { background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); }
+.banner[data-tone="neutral"] { background: var(--surface-2); color: var(--muted); }
+.banner[data-tone="warn"] { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+.banner[data-tone="accent"] { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--ink); }
 .banner.inline {
   display: block;
   border-radius: 10px;

@@ -1008,7 +1008,7 @@ export function AutomationsView({
 
         {section === "queue" && (
           <>
-            {cancelError && <div className="banner error inline">Could not cancel run: {cancelError}</div>}
+            {cancelError && <div className="banner inline" data-tone="danger">Could not cancel run: {cancelError}</div>}
             {EPHEMERAL_MACHINES_ENABLED && (
               <details className="runs-setup">
                 <summary>

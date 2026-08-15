@@ -326,7 +326,7 @@ function RulesetEditor({
         </button>
         <button className="btn" onClick={onCancel}>Cancel</button>
       </div>
-      {error && <div className="banner error inline">{error}</div>}
+      {error && <div className="banner inline" data-tone="danger">{error}</div>}
     </div>
   );
 }

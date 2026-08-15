@@ -622,7 +622,7 @@ export function App() {
             as a quiet spinner on the node status indicator (see NodeSwitcher)
             instead of reflowing the layout. */}
         {(state.connection.status === "pairing" || state.connection.status === "linking") && (
-          <div className="banner info" role="status">
+          <div className="banner" data-tone="neutral" role="status">
             <Spinner size="xs" />
             Linking this device…
           </div>
@@ -632,7 +632,7 @@ export function App() {
             One tap runs `bivy update` on the node (it restarts on the new build;
             this banner clears itself once the socket reconnects up to date). */}
         {state.connection.nodeUpdate && (
-          <div className="banner update" role="status">
+          <div className="banner" data-tone="accent" role="status">
             <span className="banner-text">
               This machine runs Bivy {state.connection.nodeUpdate.current} — {state.connection.nodeUpdate.latest} is available.
             </span>

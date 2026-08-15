@@ -22,6 +22,16 @@ test("transient feedback uses the canonical Toast", async () => {
   expect(notices).toContain('<StatusIcon tone="ok">');
 });
 
+test("banner feedback uses canonical data tones", async () => {
+  for (const path of ["App.tsx", "components/Settings.tsx", "components/CredentialVault.tsx", "components/GithubQueue.tsx", "components/ProviderConnect.tsx"]) {
+    const source = await readFile(new URL(path, ROOT), "utf8");
+    expect(source, path).not.toMatch(/className=.*banner[^"}]*\s(?:error|success|warn|info|update)(?:[ "}])/);
+  }
+  const css = await readFile(new URL("styles.css", ROOT), "utf8");
+  for (const tone of ["danger", "ok", "neutral", "warn", "accent"]) expect(css).toContain(`.banner[data-tone="${tone}"]`);
+  expect(css).not.toMatch(/\.banner\.(?:error|success|warn|info|update)/);
+});
+
 test("toast-specific CSS only owns layout and behavior", async () => {
   const css = await readFile(new URL("styles.css", ROOT), "utf8");
   expect(ruleFor(css, ".toast")).toContain("box-shadow: var(--shadow-lg)");

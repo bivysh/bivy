@@ -496,10 +496,10 @@ function NotificationsPanel() {
         <Toggle checked={on} disabled={busy} onChange={setMaster} label="Enable push notifications" />
       </div>
       {status?.permission === "denied" && (
-        <div className="banner warn inline">Notifications are blocked in your browser settings — allow them there to enable push.</div>
+        <div className="banner inline" data-tone="warn">Notifications are blocked in your browser settings — allow them there to enable push.</div>
       )}
       {msg && <div className="banner inline">{msg}</div>}
-      {err && <div className="banner error inline" role="alert">{err}</div>}
+      {err && <div className="banner inline" data-tone="danger" role="alert">{err}</div>}
 
       <label className="field-label">What to notify me about</label>
       <div className="settings-toggle-list" aria-disabled={!on}>
@@ -746,7 +746,7 @@ function LocalModelsPanel({ state, onStartWork }: { state: AppState; onStartWork
           </button>
         </div>
         {verification && (
-          <div className={`banner inline ${verification.status === "ready" ? "success" : "error"}`}>
+          <div className="banner inline" data-tone={verification.status === "ready" ? "ok" : "danger"}>
             {verification.status === "ready"
               ? `Verified on ${verification.machineName}: ${verification.models.length} model${verification.models.length === 1 ? "" : "s"} available.`
               : `${verification.status.replace("_", " ")}: ${verification.detail || "No compatible catalog was returned."}`}
@@ -777,7 +777,7 @@ function LocalModelsPanel({ state, onStartWork }: { state: AppState; onStartWork
           )}
           <button className="btn" onClick={() => openDraft(null)}>Cancel</button>
         </div>
-        {saveErr && <div className="banner error inline">{saveErr}</div>}
+        {saveErr && <div className="banner inline" data-tone="danger">{saveErr}</div>}
       </div>
     );
   }
@@ -872,7 +872,7 @@ function LocalModelsPanel({ state, onStartWork }: { state: AppState; onStartWork
           {discovering ? "Discovering on this Machine…" : "Discover on this Machine"}
         </button>
         {discoveryMachine && <p className="muted small">Results from <strong>{discoveryMachine}</strong>. They do not describe other Machines.</p>}
-        {discoveryError && <div className="banner error inline">{discoveryError}</div>}
+        {discoveryError && <div className="banner inline" data-tone="danger">{discoveryError}</div>}
         {discovered && (
           <div className="picker-list">
             {discovered.map((endpoint) => (
@@ -1262,7 +1262,7 @@ function NodesPanel({ state }: { state: AppState }) {
             <button className="btn primary" disabled={saving} onClick={save}>{saving ? "Saving…" : "Save"}</button>
             {savedMsg && <Badge tone="ok">{savedMsg}</Badge>}
           </div>
-          {saveErr && <div className="banner error inline" role="alert">{saveErr}</div>}
+          {saveErr && <div className="banner inline" data-tone="danger" role="alert">{saveErr}</div>}
         </>
       )}
     </div>
@@ -1562,7 +1562,7 @@ function HostedRunnerManagement() {
         <p className="muted">Let Bivy launch governed machines while your devices are offline. Compute is billed directly by your provider; Bivy adds no markup. Credentials are encrypted on the control plane and every use is audited.</p>
       </div>
 
-      {status && !status.encryptionReady && <div className="banner error inline" role="alert">Server credential encryption isn't configured, so unattended machines can't be enabled yet.</div>}
+      {status && !status.encryptionReady && <div className="banner inline" data-tone="danger" role="alert">Server credential encryption isn't configured, so unattended machines can't be enabled yet.</div>}
 
       <div className="settings-toggle-row">
         <div className="settings-toggle-text">
@@ -1616,7 +1616,7 @@ function HostedRunnerManagement() {
 
       <details className="vault-advanced">
         <summary>Audit log</summary>
-        {audit.some((event) => event.action === "reconcile_failed") && <div className="banner error inline" role="alert">A machine couldn't be reconciled or deleted. It stays tracked for retry — check the events below and your provider console.</div>}
+        {audit.some((event) => event.action === "reconcile_failed") && <div className="banner inline" data-tone="danger" role="alert">A machine couldn't be reconciled or deleted. It stays tracked for retry — check the events below and your provider console.</div>}
         {audit.length === 0 ? <p className="muted small">No hosted-machine events yet.</p> : <div className="picker-list">
           {audit.slice(0, 10).map((e, i) => <PickerItem
             key={`${e.at}:${e.action}:${i}`}
@@ -1626,7 +1626,7 @@ function HostedRunnerManagement() {
         </div>}
       </details>
 
-      {err && <div className="banner error inline" role="alert">{err}</div>}
+      {err && <div className="banner inline" data-tone="danger" role="alert">{err}</div>}
       {msg && <div className="banner inline">{msg}</div>}
     </div>
   );
@@ -1771,7 +1771,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
           <button className="btn primary" disabled={!token.trim() || busy} onClick={saveToken}>{busy ? "Saving…" : "Save token"}</button>
         </div>
         <p className="muted small">The token stays on this device and is sent only to {catalog.name}.</p>
-        {err && <div className="banner error inline" role="alert">{err}</div>}
+        {err && <div className="banner inline" data-tone="danger" role="alert">{err}</div>}
         {msg && <div className="banner inline">{msg}</div>}
       </div>
     );
@@ -1829,7 +1829,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
       </div>
       {savedMsg && <div className="banner inline">{savedMsg}</div>}
       {msg && <div className="banner inline">{msg}</div>}
-      {err && <div className="banner error inline" role="alert">{err}</div>}
+      {err && <div className="banner inline" data-tone="danger" role="alert">{err}</div>}
 
       {machines.length > 0 && (
         <details className="vault-advanced" open>
@@ -1929,7 +1929,7 @@ function AccountPanel() {
           onConfirm={() => { confirm.action(); setConfirm(null); }}
         />
       )}
-      {err && <div className="banner error inline">{err}</div>}
+      {err && <div className="banner inline" data-tone="danger">{err}</div>}
       <div className="stat-grid">
         <Stat label="Plan" value={planLabel(ent?.plan || me?.account?.plan)} />
         {trial && <Stat label="Pro trial" value={sessionCap} />}
@@ -2117,7 +2117,7 @@ function LinkPanel({ onDone }: { onDone: () => void }) {
       >
         Link
       </button>
-      {err && <div className="banner error inline">{err}</div>}
+      {err && <div className="banner inline" data-tone="danger">{err}</div>}
     </div>
   );
 }

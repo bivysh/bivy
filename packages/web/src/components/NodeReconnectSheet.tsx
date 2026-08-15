@@ -93,7 +93,7 @@ export function NodeReconnectSheet({
         {phase === "connecting" && <p className="muted">Connecting to {nodeName}…</p>}
         {phase === "error" && (
           <>
-            <div className="banner error inline">{error || `Could not connect to ${nodeName}.`}</div>
+            <div className="banner inline" data-tone="danger">{error || `Could not connect to ${nodeName}.`}</div>
             <button className="btn primary" onClick={retry}>
               Retry
             </button>

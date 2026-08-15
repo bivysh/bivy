@@ -414,7 +414,7 @@ export function GithubQueuePanel({
         {/* The queue is included on every plan. Free meters unattended automation
             while interactive CLI/app sessions remain unlimited. */}
         {canQuery && workQueueEnabled !== false && typeof runLimit === "number" && (
-          <div className={`banner ${runsUsed >= runLimit ? "warn" : "info"} inline`}>
+          <div className="banner inline" data-tone={runsUsed >= runLimit ? "warn" : "neutral"}>
             {runsUsed >= runLimit ? (
               <>
                 {runsUsed > runLimit
@@ -436,7 +436,7 @@ export function GithubQueuePanel({
         )}
 
         {canQuery && workQueueEnabled !== false && appInfo && apps.length === 0 && (
-          <div className="banner info inline">
+          <div className="banner inline" data-tone="neutral">
             No GitHub App connected yet.{" "}
             <button className="btn link" onClick={onOpenGithubSettings}>
               Connect one in Settings →
@@ -445,7 +445,7 @@ export function GithubQueuePanel({
         )}
 
         {canQuery && workQueueEnabled !== false && unservedApps.length > 0 && (
-          <div className="banner warn inline">
+          <div className="banner inline" data-tone="warn">
             {unservedApps.length === apps.length
               ? `${apps.length === 1 ? "Your GitHub App is" : "Your GitHub Apps are"} set up, but no online machine is running ${apps.length === 1 ? "it" : "them"} — nothing will pick these up.`
               : `${unservedApps.length} of your ${apps.length} GitHub Apps (${unservedApps.map((a) => a.name || a.mention || a.appId).join(", ")}) aren't running on any machine — work for those won't be picked up.`}{" "}
@@ -546,7 +546,7 @@ export function GithubQueuePanel({
               />
             )}
 
-            {queueActionErr && <div className="banner error inline">{queueActionErr}</div>}
+            {queueActionErr && <div className="banner inline" data-tone="danger">{queueActionErr}</div>}
 
 
             {waiting === null ? (
