@@ -423,7 +423,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
     <div className="session-list">
       <div className="session-list-tools">
         <input
-          className="session-search"
+          className="field session-search"
           type="search"
           placeholder="Search sessions…"
           value={query}

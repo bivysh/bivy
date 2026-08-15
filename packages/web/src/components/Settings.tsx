@@ -295,7 +295,7 @@ export function Settings({
               <circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" />
             </svg>
             <input
-              className="settings-search"
+              className="field settings-search"
               type="search"
               placeholder="Search"
               value={query}

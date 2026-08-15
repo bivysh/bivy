@@ -75,6 +75,14 @@ select:focus-visible, [tabindex]:focus-visible {
    or family, but must not drop below 16px. */
 input, textarea, select { font-family: inherit; font-size: 16px; }
 
+/* ---- Fields ---- */
+.field {
+  width: 100%; padding: 9px var(--space-3); border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm); background: var(--surface-2); color: var(--ink);
+  font: inherit; font-size: 16px;
+}
+.field:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+
 /* ---- Menus ---- */
 .menu {
   min-width: 190px; padding: var(--space-1); overflow: hidden;
@@ -220,11 +228,7 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
    sideways-scrollable pane instead of just clipping. */
 .session-list { display: flex; flex-direction: column; min-height: 0; flex: 1; overflow-y: auto; overflow-x: hidden; padding: 8px; }
 .session-list-tools { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
-.session-search {
-  flex: 1; min-width: 0; width: 100%; padding: 7px 9px;
-  border: 1px solid transparent; border-radius: 8px; background: var(--surface-2); color: var(--ink);
-}
-.session-search:focus { border-color: var(--line-strong); }
+.session-search { flex: 1; min-width: 0; }
 .session-filter { position: relative; flex: none; }
 .session-filter-btn {
   position: relative; display: inline-flex; align-items: center; justify-content: center;
@@ -1006,11 +1010,7 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .followup-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
 .followup-card-actions { display: flex; align-items: center; gap: 6px; flex: none; flex-wrap: wrap; justify-content: flex-end; }
 .followup-edit { display: flex; flex-direction: column; gap: 8px; padding: 8px 10px; }
-.followup-edit-input {
-  width: 100%; resize: vertical; min-height: 44px; font: inherit; font-size: 16px;
-  border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); color: var(--ink);
-  padding: 6px 8px;
-}
+.followup-edit-input { resize: vertical; min-height: 44px; }
 .followup-edit-actions { display: flex; justify-content: flex-end; gap: 8px; }
 /* Bigger tap targets for the reorder/edit/remove icon buttons specifically —
    the shared .queue-action-btn.icon sizing (from GithubQueue) is a bit tight
@@ -1032,10 +1032,6 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 }
 .schedule-field { display: flex; flex-direction: column; gap: 4px; }
 .schedule-label { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.02em; }
-.schedule-input {
-  padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px;
-  background: var(--surface-2); color: var(--ink); font: inherit; font-size: 16px;
-}
 .schedule-target { display: flex; flex-direction: column; gap: 6px; }
 .schedule-choice {
   display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px;
@@ -2151,11 +2147,7 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .settings-nav-top { display: none; } /* revealed only on mobile */
 .settings-search-wrap { position: relative; margin-bottom: 10px; flex: none; }
 .settings-search-icon { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
-.settings-search {
-  width: 100%; padding: 8px 12px 8px 34px; border: 1px solid var(--line); border-radius: 10px;
-  background: var(--surface); color: var(--ink); font: inherit; font-size: 16px;
-}
-.settings-search:focus { outline: none; border-color: var(--accent); }
+.settings-search { padding-left: 34px; }
 .settings-nav-groups { flex: 1; overflow-y: auto; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
 .settings-nav-group { display: flex; flex-direction: column; gap: 1px; }
 .settings-nav-group-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); padding: 6px 8px 2px; }

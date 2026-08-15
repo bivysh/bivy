@@ -152,7 +152,7 @@ function FollowupRow({
               <span className="schedule-label">Send at</span>
               <input
                 type="datetime-local"
-                className="schedule-input"
+                className="field"
                 value={draftAt}
                 min={toLocalInput(new Date())}
                 autoFocus
@@ -171,7 +171,7 @@ function FollowupRow({
           ) : (
             <>
               <textarea
-                className="followup-edit-input"
+                className="field followup-edit-input"
                 value={draftText}
                 autoFocus
                 rows={2}
