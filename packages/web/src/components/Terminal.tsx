@@ -1227,26 +1227,26 @@ export function TerminalOverlay({
               A+
             </button>
           </div>
-          <button className={`ghost-btn${showSearch ? " is-active" : ""}`} onClick={() => setShowSearch((v) => !v)} title="Search (Ctrl/Cmd+F)">
+          <button className={`btn sm ghost${showSearch ? " is-active" : ""}`} onClick={() => setShowSearch((v) => !v)} title="Search (Ctrl/Cmd+F)">
             Search
           </button>
-          <button className="ghost-btn" onClick={copySelection} disabled={!hasSelection} title="Copy selection (Cmd/Ctrl+C)">
+          <button className="btn sm ghost" onClick={copySelection} disabled={!hasSelection} title="Copy selection (Cmd/Ctrl+C)">
             {copied ? "Copied" : "Copy"}
           </button>
-          <button className="ghost-btn" onClick={clearScreen} title="Clear screen">
+          <button className="btn sm ghost" onClick={clearScreen} title="Clear screen">
             Clear
           </button>
-          <button className="ghost-btn term-paste" onClick={pasteFromClipboard} title="Paste from clipboard">
+          <button className="btn sm ghost term-paste" onClick={pasteFromClipboard} title="Paste from clipboard">
             Paste
           </button>
           {touch && (
-            <button className={`ghost-btn${showSnips ? " is-active" : ""}`} onClick={() => setShowSnips((v) => !v)} title="Snippets & recent commands">
+            <button className={`btn sm ghost${showSnips ? " is-active" : ""}`} onClick={() => setShowSnips((v) => !v)} title="Snippets & recent commands">
               Snippets
             </button>
           )}
           {hasAttachables && (
             <div className="term-attach-wrap" ref={attachWrapRef}>
-              <button className="ghost-btn" onClick={() => setShowAttach((v) => !v)} aria-haspopup="menu" aria-expanded={showAttach}>
+              <button className="btn sm ghost" onClick={() => setShowAttach((v) => !v)} aria-haspopup="menu" aria-expanded={showAttach}>
                 Attach ▾
               </button>
               {showAttach && (
@@ -1308,7 +1308,7 @@ export function TerminalOverlay({
               </span>
             )
           )}
-          <button className="ghost-btn" onClick={endShell}>
+          <button className="btn sm ghost" onClick={endShell}>
             End
           </button>
           <button className="icon-btn" onClick={onClose} aria-label="Close terminal">

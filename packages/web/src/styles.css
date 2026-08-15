@@ -2523,8 +2523,7 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 
 .term-zoom { display: inline-flex; gap: 2px; }
 .term-zoom .icon-btn { font-size: 13px; font-weight: 700; padding: 4px 6px; border: 1px solid var(--line-strong); border-radius: 8px; line-height: 1; }
-.ghost-btn.is-active { background: var(--surface-2); border-color: var(--accent); }
-.ghost-btn:disabled { opacity: 0.4; cursor: default; }
+.btn.ghost.is-active { background: var(--surface-2); border-color: var(--accent); }
 
 /* Incremental search bar. */
 .term-search { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-bottom: 1px solid var(--line); background: var(--surface); }
@@ -2641,7 +2640,6 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 .btn.link.danger { background: transparent; color: var(--danger); }
 .btn.sm { padding: var(--space-1) 10px; font-size: var(--text-xs); }
 .btn.lg { padding: 11px 18px; font-size: var(--text-md); }
-.ghost-btn { border: 1px solid var(--line-strong); background: transparent; color: var(--ink); border-radius: 8px; padding: 5px 10px; font-size: 13px; }
 .icon-btn { border: 0; background: transparent; color: var(--ink); font-size: 20px; }
 /* ---- Sidebar settings gear (single entry point, ChatGPT-style) ---- */
 .settings-gear {

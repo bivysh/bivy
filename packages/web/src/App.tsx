@@ -484,7 +484,7 @@ export function App() {
                 but a rarely-used discovery/adopt flow didn't belong crammed next
                 to "+ New"; it now lives in Settings → Import session. */}
             <button
-              className="ghost-btn"
+              className="btn sm ghost"
               onClick={() => {
                 setPendingRunTerm(null);
                 controller.newSession();
