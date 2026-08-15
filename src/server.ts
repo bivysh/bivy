@@ -137,6 +137,7 @@ import { createSessionControlCommands } from "./controllers/session-control.js";
 import { createForkCommands } from "./controllers/fork-commands.js";
 import { createGithubCommands } from "./controllers/github-commands.js";
 import { createCredentialCommands } from "./controllers/credential-commands.js";
+import { createCustomModelCommands } from "./controllers/custom-model-commands.js";
 import { historyDelta, type HistoryCursor } from "./history-sync.js";
 import { MetadataStore, type MetadataSession } from "./metadata.js";
 import { resolveResumeRef, resumeRefFor } from "./session-ref.js";
@@ -2160,6 +2161,16 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     refreshSessionAfterAuth,
     listProvidersUnified,
   }),
+  // Local/custom-model registry cluster, extracted to controllers/custom-model-commands.ts.
+  ...createCustomModelCommands({
+    sendEvent: (event) => relay?.sendEvent(event),
+    localModelSummaries,
+    localModelPresets,
+    discoverModelsOnMachine,
+    verifyModelEndpoint,
+    persistLocalModelSave,
+    persistLocalModelRemove,
+  }),
   // Live-stream gap recovery: replay the session.events a client missed after the
   // last seq it holds, or tell it to full-resync (mode:"reset") when the ring has
   // evicted past that point. Answers only the caller (ctx.reply); other clients
@@ -2740,49 +2751,6 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
       await pushModelAuthToControlPlane();
       await refreshSessionAfterAuth();
       broadcast({ type: "providers.list", providers: await listProvidersUnified() });
-    } catch (error) {
-      relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
-    }
-  },
-  // --- Local / custom models (Bivy-owned registry; Pi is a projection). ---
-  async "models.custom.list"() {
-    relay?.sendEvent({ type: "models.custom.list", providers: await localModelSummaries() });
-  },
-  async "models.custom.presets"() {
-    relay?.sendEvent({ type: "models.custom.presets", presets: await localModelPresets() });
-  },
-  async "models.custom.discover"(_msg, ctx) {
-    try {
-      ctx.reply({ type: "models.custom.discover.ok", ...(await discoverModelsOnMachine()) });
-    } catch (error) {
-      ctx.reply({ type: "models.custom.discover.error", error: error instanceof Error ? error.message : String(error) });
-    }
-  },
-  async "models.custom.verify"(msg, ctx) {
-    try {
-      ctx.reply({ type: "models.custom.verify.ok", result: await verifyModelEndpoint(msg) });
-    } catch (error) {
-      ctx.reply({ type: "models.custom.verify.error", error: error instanceof Error ? error.message : String(error) });
-    }
-  },
-  async "models.custom.save"(msg, ctx) {
-    try {
-      // The client sends the same field set as the REST body (baseUrl, api,
-      // apiKey, models[], compat, name, providerId). persistLocalModelSave
-      // broadcasts the refreshed list to every client, requester included.
-      const result = await persistLocalModelSave((msg as any)?.spec ?? msg);
-      // Return the normalized (Machine-scoped) provider id so the PWA can make
-      // the imported model the next draft's explicit choice.
-      ctx.reply({ type: "models.custom.save.ok", requestId: msg.requestId, provider: result.id });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      relay?.sendEvent({ type: "session.error", error: message });
-      ctx.reply({ type: "models.custom.save.error", requestId: msg.requestId, error: message });
-    }
-  },
-  async "models.custom.remove"(msg) {
-    try {
-      await persistLocalModelRemove(String((msg as any).id ?? (msg as any).provider ?? ""));
     } catch (error) {
       relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
     }
