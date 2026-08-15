@@ -15,10 +15,10 @@
 
 import { useState } from "react";
 import { deriveRunOutcome, type GithubContext, type GithubQueueItem, type PrRef, type Usage } from "@bivy/core";
-import { useModalEscape } from "../modalStack.js";
 import { SourceGlyph } from "./SourceMark.js";
 import { StatusDot, type StatusDotState } from "./StatusDot.js";
 import { Badge } from "./Badge.js";
+import { Sheet } from "./Sheet.js";
 import { PrBadge, GhMark } from "./SessionList.js";
 import { shortSourceLabel, type SourceInfo } from "../sessionSource.js";
 import { checkCounts, retryReason, runDuration, artifactRef, recoveryActions, type RecoveryKind } from "../runEvidence.js";
@@ -169,7 +169,6 @@ export function RunPill({
   anchorId?: string;
 }) {
   const [open, setOpen] = useState(false);
-  useModalEscape(() => setOpen(false), open);
   const actions = actionsFor(gh);
   const short = shortSourceLabel(source.kind);
   // The plain "Open" state means the session is still live on its node and can
@@ -220,18 +219,13 @@ export function RunPill({
         {filesLabel && <span className="run-pill-files">{filesLabel}</span>}
       </button>
       {open && (
-        <div className="action-sheet open" role="dialog" aria-label={source.label}>
-          <div className="action-sheet-backdrop" onClick={() => setOpen(false)} />
-          <div className="action-sheet-body">
-            <div className="action-sheet-head">
-              <span className="run-sheet-title">
-                <span className={`source-mark sm src-${source.kind}`} aria-hidden><SourceGlyph kind={source.kind} /></span>
-                {source.label}
-              </span>
-              <button className="action-sheet-close" onClick={() => setOpen(false)} aria-label="Close">
-                ×
-              </button>
-            </div>
+        <Sheet
+          variant="action"
+          ariaLabel={source.label}
+          title={<span className="run-sheet-title"><span className={`source-mark sm src-${source.kind}`} aria-hidden><SourceGlyph kind={source.kind} /></span>{source.label}</span>}
+          onClose={() => setOpen(false)}
+          autoFocusSearch={false}
+        >
             <div className="run-sheet-status">
               <StatusDot status={statusClass} />
               {sheetStatus}
@@ -302,7 +296,7 @@ export function RunPill({
             {filesLabel && onOpenChanges && (
               <button
                 type="button"
-                className="action-sheet-item run-sheet-changes"
+                className="sheet-action run-sheet-changes"
                 onClick={() => { setOpen(false); onOpenChanges(); }}
               >
                 <span className="run-sheet-changes-icon" aria-hidden>◈</span>
@@ -314,7 +308,7 @@ export function RunPill({
             {artifactsLabel && onOpenArtifacts && (
               <button
                 type="button"
-                className="action-sheet-item run-sheet-changes"
+                className="sheet-action run-sheet-changes"
                 onClick={() => { setOpen(false); onOpenArtifacts(); }}
               >
                 <span className="run-sheet-changes-icon" aria-hidden>📎</span>
@@ -326,7 +320,7 @@ export function RunPill({
             {actions.map((a) => (
               <a
                 key={a.url}
-                className="action-sheet-item gh-link"
+                className="sheet-action gh-link"
                 href={a.url}
                 target="_blank"
                 rel="noopener"
@@ -337,14 +331,14 @@ export function RunPill({
               </a>
             ))}
             {evidence?.output?.artifactUrl && (
-              <a className="action-sheet-item" href={evidence.output.artifactUrl} target="_blank" rel="noopener" onClick={() => setOpen(false)}>
+              <a className="sheet-action" href={evidence.output.artifactUrl} target="_blank" rel="noopener" onClick={() => setOpen(false)}>
                 View artifact
               </a>
             )}
             {evidence?.id && onOpenRun && (
               <button
                 type="button"
-                className="action-sheet-item run-sheet-open-run"
+                className="sheet-action run-sheet-open-run"
                 onClick={() => { setOpen(false); onOpenRun(evidence.id); }}
               >
                 <span aria-hidden>▸</span>
@@ -366,10 +360,9 @@ export function RunPill({
               </div>
             )}
             {actions.length === 0 && !evidence && !hasUsage && !forkedFrom && !filesLabel && (
-              <div className="action-sheet-empty">This session has nothing to report yet.</div>
+              <div className="sheet-action-empty">This session has nothing to report yet.</div>
             )}
-          </div>
-        </div>
+        </Sheet>
       )}
     </>
   );

@@ -788,8 +788,8 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
   font-size: 13px; font-weight: 600; color: var(--ink);
 }
 .run-sheet-status .session-pr { margin-left: auto; }
-.action-sheet-empty { padding: 14px 16px; color: var(--muted); font-size: 13px; }
-.action-sheet-item.run-sheet-changes {
+.sheet-action-empty { padding: 14px 16px; color: var(--muted); font-size: 13px; }
+.sheet-action.run-sheet-changes {
   display: flex; align-items: center; gap: 10px; width: 100%;
   text-align: left; font: inherit; color: inherit; cursor: pointer;
   background: none; border: 0; border-bottom: 1px solid var(--line);
@@ -812,32 +812,22 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .row-hint { font-weight: 600; }
 .row-hint.danger { color: var(--danger); }
 .row-hint.warn { color: var(--accent); }
-.action-sheet { position: fixed; inset: 0; z-index: 60; display: flex; align-items: flex-end; justify-content: center; }
-.action-sheet-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.4); }
-.action-sheet-body {
-  position: relative; width: 100%; max-width: 480px; margin: 0 12px calc(12px + env(safe-area-inset-bottom));
-  background: var(--surface); border: 1px solid var(--line-strong); border-radius: 16px; overflow: hidden;
-  box-shadow: 0 12px 40px rgba(0,0,0,0.3); animation: sheet-up 0.16s ease;
-}
 @keyframes sheet-up { from { transform: translateY(10px); opacity: 0; } to { transform: none; opacity: 1; } }
-.action-sheet-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--line); font-weight: 700; }
-.action-sheet-close { border: 0; background: transparent; color: var(--muted); font-size: 22px; line-height: 1; }
-.action-sheet-item { display: block; padding: 14px 16px; color: var(--ink); text-decoration: none; border-bottom: 1px solid var(--line); }
-.action-sheet-item:last-child { border-bottom: 0; }
-.action-sheet-item:hover { background: var(--surface-2); }
-/* action-sheet-item is used as both <a> and <button>; normalize the button. */
-button.action-sheet-item { width: 100%; text-align: left; border-width: 0 0 1px 0; border-style: solid; border-color: var(--line); background: transparent; font: inherit; }
-button.action-sheet-item:last-child { border-bottom: 0; }
-.action-sheet-item.danger { color: var(--danger); }
+.sheet-action { display: block; padding: 14px 16px; color: var(--ink); text-decoration: none; border-bottom: 1px solid var(--line); }
+.sheet-action:last-child { border-bottom: 0; }
+.sheet-action:hover { background: var(--surface-2); }
+/* sheet-action is used as both <a> and <button>; normalize the button. */
+button.sheet-action { width: 100%; text-align: left; border-width: 0 0 1px 0; border-style: solid; border-color: var(--line); background: transparent; font: inherit; }
+button.sheet-action:last-child { border-bottom: 0; }
+.sheet-action.danger { color: var(--danger); }
 /* GitHub links (issue / PR / branch) share one row anatomy: a leading GitHub
    mark, then the label — so the three read as one coherent group. */
-.action-sheet-item.gh-link { display: flex; align-items: center; gap: 10px; }
-.action-sheet-item.gh-link > span { min-width: 0; overflow-wrap: anywhere; }
-.action-sheet-item.gh-link .gh-icon { width: 15px; height: 15px; flex: none; color: var(--muted); }
+.sheet-action.gh-link { display: flex; align-items: center; gap: 10px; }
+.sheet-action.gh-link > span { min-width: 0; overflow-wrap: anywhere; }
+.sheet-action.gh-link .gh-icon { width: 15px; height: 15px; flex: none; color: var(--muted); }
 /* GitHub-pill sheet header mark, sized to match the run-pill sheet's glyph. */
 .gh-head-mark { display: inline-flex; }
 .gh-head-mark .gh-icon { width: 16px; height: 16px; color: var(--muted); }
-.action-sheet-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* GitHub pills parked in a band just above the composer: the repo picker on a
    draft (.composer-lead) and the issue/PR context pill on an active session
@@ -1138,6 +1128,8 @@ button.action-sheet-item:last-child { border-bottom: 0; }
   background: var(--surface); border: 1px solid var(--line-strong); border-radius: 16px; overflow: hidden;
   box-shadow: 0 12px 40px rgba(0,0,0,0.3); animation: sheet-up 0.16s ease;
 }
+.sheet[data-variant="action"] .sheet-body { --sheet-clear: calc(12px + env(safe-area-inset-bottom)); max-width: 480px; }
+.sheet[data-variant="action"] .sheet-content { padding: 0; }
 .sheet-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); flex: none; }
 .sheet-title { font-weight: 700; flex: 1; }
 .sheet-close { border: 0; background: transparent; color: var(--muted); font-size: 22px; line-height: 1; }
