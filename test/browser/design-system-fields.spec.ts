@@ -10,6 +10,9 @@ const SURFACES = [
   ["components/ScheduleSheet.tsx", 'className="field"'],
   ["components/FollowupQueue.tsx", 'className="field followup-edit-input"'],
   ["components/RunTaskSheet.tsx", 'className="field"'],
+  ["components/QuestionCard.tsx", 'className="field question-other-input"'],
+  ["components/Terminal.tsx", 'className="field term-search-input"'],
+  ["components/SetupNotice.tsx", 'className="field"'],
 ] as const;
 
 test("search and scheduling fields use the canonical field shell", async () => {
@@ -25,7 +28,7 @@ test("surface field classes only own layout", async () => {
   expect(css).toContain(".field, .picker-search {");
   expect(css).not.toContain(".schedule-input");
   expect(css).toContain(".picker-search { margin-bottom: 6px; }");
-  for (const selector of [".session-search", ".settings-search", ".followup-edit-input"]) {
+  for (const selector of [".session-search", ".settings-search", ".followup-edit-input", ".question-other-input", ".term-search-input"]) {
     const start = css.indexOf(`${selector} {`);
     const rule = css.slice(start, css.indexOf("}", start));
     expect(rule, selector).not.toMatch(/(?:background|border(?!-collapse)|border-radius|color|font-size|font-family)\s*:/);

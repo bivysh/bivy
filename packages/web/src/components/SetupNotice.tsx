@@ -294,6 +294,7 @@ export function SetupNotice() {
         <div className="setup-or">or with email</div>
         <form className="setup-email" onSubmit={sendMagicLink}>
           <input
+            className="field"
             type="email"
             inputMode="email"
             autoComplete="email"

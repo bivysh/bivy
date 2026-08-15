@@ -654,11 +654,7 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 /* font-size must stay at 16px (see the input/textarea/select comment near the
    top of this file) — this textarea gets autoFocus'd when "Other" is picked,
    and anything below 16px makes iOS Safari auto-zoom the viewport on focus. */
-.question-other-input {
-  width: 100%; box-sizing: border-box; resize: vertical; min-height: 40px;
-  border: 1px solid var(--accent); border-radius: 10px; background: var(--surface-2); color: var(--ink);
-  padding: 8px 10px; font-family: inherit; font-size: 16px;
-}
+.question-other-input { box-sizing: border-box; resize: vertical; min-height: 40px; }
 .question-other-input:disabled { opacity: 0.6; }
 
 /* ---- GitHub pill + action sheet ---- */
@@ -2467,7 +2463,7 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 
 /* Incremental search bar. */
 .term-search { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-bottom: 1px solid var(--line); background: var(--surface); }
-.term-search-input { flex: 1; min-width: 0; background: var(--bg); color: var(--ink); border: 1px solid var(--line-strong); border-radius: 8px; padding: 6px 10px; font-size: 16px; }
+.term-search-input { flex: 1; min-width: 0; }
 .term-search .btn.icon { font-size: var(--text-md); padding: var(--space-1) var(--space-2); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); }
 
 /* On-screen key accessory bar for touch devices (mobile PWA). */
@@ -2780,7 +2776,7 @@ select.picker-search { appearance: auto; }
 .btn.block { display: block; width: 100%; text-align: center; text-decoration: none; margin-top: 12px; padding: 11px; }
 .setup-or { color: var(--muted); font-size: 13px; margin: 16px 0 8px; }
 .setup-email { display: flex; flex-direction: column; gap: 8px; }
-.setup-email input { width: 100%; min-width: 0; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface-2); color: var(--ink); font: inherit; font-size: 16px; }
+.setup-email .field { min-width: 0; }
 .setup-email .btn { width: 100%; white-space: nowrap; }
 .setup-note { margin-top: 10px; word-break: break-word; }
 .setup-error { margin: 8px 0 4px; padding: 10px 12px; border: 1px solid var(--danger); border-left-width: 3px; border-radius: 10px; background: var(--danger-soft, transparent); color: var(--ink); font-size: 13px; line-height: 1.4; text-align: left; }

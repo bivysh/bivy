@@ -156,7 +156,7 @@ function QuestionCard({
               </button>
               {otherActive[qi] && (
                 <textarea
-                  className="question-other-input"
+                  className="field question-other-input"
                   value={otherText[qi] || ""}
                   onChange={(e) => setOtherText((prev) => ({ ...prev, [qi]: e.target.value }))}
                   placeholder="Type your answer…"

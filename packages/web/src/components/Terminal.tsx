@@ -1320,7 +1320,7 @@ export function TerminalOverlay({
       {showSearch && (
         <div className="term-search">
           <input
-            className="term-search-input"
+            className="field term-search-input"
             autoFocus
             placeholder="Search output…"
             value={searchQuery}
