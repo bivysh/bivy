@@ -158,11 +158,11 @@ export function ForkSheet({ sessionId, onClose }: { sessionId: string; onClose: 
           {warnings.map((w, i) => (
             <div key={i} className="fork-warn">{w.detail || w.label}</div>
           ))}
-          <button className="fork-submit" onClick={onClose}>Done</button>
+          <button className="btn primary fork-submit" onClick={onClose}>Done</button>
         </div>
       ) : (
         <div className="picker-section">
-          <button className="fork-submit" onClick={doFork} disabled={busy}>
+          <button className="btn primary fork-submit" onClick={doFork} disabled={busy}>
             {busy ? "Forking…" : willRetire ? "Move session" : "Create fork"}
           </button>
         </div>

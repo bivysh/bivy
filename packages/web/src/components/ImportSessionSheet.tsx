@@ -137,11 +137,11 @@ export function ImportSessionContent({ onDone }: { onDone: (sessionId: string) =
           <div className="import-session-hint">{text}</div>
         </div>
         <div className="picker-section">
-          <button className="fork-submit" disabled={importingRef === session.ref} onClick={() => setPendingDisclosure(null)}>
+          <button className="btn fork-submit" disabled={importingRef === session.ref} onClick={() => setPendingDisclosure(null)}>
             Cancel
           </button>
           <button
-            className="fork-submit"
+            className="btn primary fork-submit"
             disabled={importingRef === session.ref}
             onClick={() => {
               setPendingDisclosure(null);
@@ -233,7 +233,7 @@ export function ImportSessionContent({ onDone }: { onDone: (sessionId: string) =
                   </span>
                 ) : (
                   <button
-                    className="import-session-action"
+                    className="btn sm primary import-session-action"
                     disabled={importingRef === s.ref}
                     onClick={() => doImport(s)}
                   >

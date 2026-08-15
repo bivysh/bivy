@@ -527,7 +527,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
               server to keep everything free.
             </span>
           </div>
-          <button className="trial-wall-cta" type="button" onClick={() => void controller.startCheckout()}>
+          <button className="btn sm primary trial-wall-cta" type="button" onClick={() => void controller.startCheckout()}>
             Upgrade to Pro
           </button>
         </div>

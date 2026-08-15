@@ -48,7 +48,7 @@
   --accent-soft: color-mix(in srgb, var(--accent) 16%, var(--surface));
 
   /* ---- Status ---- */
-  --danger: #b0473d;   --danger-soft: #f3e3df;
+  --danger: #b0473d;   --danger-soft: #f3e3df;   --danger-contrast: #f5f3ee;
   --ok: #4f7a5c;
   --merged: #7a6a9e;   /* GitHub merged-PR purple, desaturated to sit in-palette */
   /* A run that finished while you weren't looking — its own signal, deliberately
@@ -156,7 +156,7 @@
   --ink: #e6ebee; --muted: #838b91; --line: #262c31; --line-strong: #384049;
   --overlay: rgba(0, 0, 0, 0.6);
   --accent: #8fb6cd; --accent-contrast: #14171a; --accent-hover: #a7cadd;
-  --danger: #c08a83; --danger-soft: #3a2420; --ok: #86a99f; --merged: #a99bc4;
+  --danger: #c08a83; --danger-soft: #3a2420; --danger-contrast: #14171a; --ok: #86a99f; --merged: #a99bc4;
   --unseen: #cba96a;
   --warn: #d9a441;
   --s-github: #d7dde3; --s-slack: #d68ce6; --s-linear: #a5adf5; --s-schedule: #4bc4de;
@@ -175,7 +175,7 @@
     --ink: #e6ebee; --muted: #838b91; --line: #262c31; --line-strong: #384049;
     --overlay: rgba(0, 0, 0, 0.6);
     --accent: #8fb6cd; --accent-contrast: #14171a; --accent-hover: #a7cadd;
-    --danger: #c08a83; --danger-soft: #3a2420; --ok: #86a99f; --merged: #a99bc4;
+    --danger: #c08a83; --danger-soft: #3a2420; --danger-contrast: #14171a; --ok: #86a99f; --merged: #a99bc4;
     --unseen: #cba96a;
     --warn: #d9a441;
     --s-github: #d7dde3; --s-slack: #d68ce6; --s-linear: #a5adf5; --s-schedule: #4bc4de;

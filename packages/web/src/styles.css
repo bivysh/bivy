@@ -237,12 +237,7 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .trial-wall-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .trial-wall-text strong { font-size: 13px; color: var(--ink); }
 .trial-wall-text span { font-size: 12px; color: var(--muted); line-height: 1.35; }
-.trial-wall-cta {
-  flex: none; align-self: flex-start; border: 0; border-radius: 9px; cursor: pointer;
-  padding: 8px 12px; font-size: 13px; font-weight: 700;
-  background: var(--accent); color: var(--accent-contrast);
-}
-.trial-wall-cta:hover { background: var(--accent-hover); }
+.trial-wall-cta { flex: none; align-self: flex-start; }
 /* Column wrapper for the two-line row (title row + meta row) so the dot can
    stay a single flex sibling, vertically centered across both lines. */
 .session-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
@@ -479,12 +474,6 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .hljs-addition { color: light-dark(#22863a, #85e89d); }
 .msg.system { align-self: center; color: var(--muted); font-size: 13px; font-style: italic; display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; }
 .msg.system .system-text { display: block; }
-.notice-action {
-  font-style: normal; cursor: pointer; padding: 6px 14px; border-radius: 999px;
-  background: var(--accent); color: var(--accent-contrast); border: 1px solid transparent;
-  font-size: 13px; font-weight: 600;
-}
-.notice-action:hover { background: var(--accent-hover); }
 .msg.thinking { align-self: flex-start; color: var(--muted); font-size: 13px; border-left: 2px solid var(--line-strong); padding-left: 10px; }
 .msg.error {
   align-self: stretch; display: flex; gap: 8px; align-items: flex-start;
@@ -977,7 +966,6 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .small { font-size: 12px; }
 
 /* --- Rulesets (Settings → Rulesets) --- */
-.btn.sm { padding: 4px 10px; font-size: 12px; border-radius: 8px; }
 .ruleset-rule-card { border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin-top: 8px; display: flex; flex-direction: column; gap: 8px; background: var(--surface-2); }
 .ruleset-rule-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .ruleset-chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -1289,16 +1277,14 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .fork-toggle input { width: 16px; height: 16px; }
 .fork-error { margin: 4px 12px; padding: 8px 10px; border-radius: 10px; background: var(--surface-2); color: var(--danger, #d33); font-size: 12px; }
 .fork-warn { margin: 4px 12px; padding: 8px 10px; border-radius: 10px; background: var(--surface-2); color: var(--muted); font-size: 12px; }
-.fork-submit { width: calc(100% - 24px); margin: 8px 12px; padding: 11px 14px; border: 0; border-radius: 12px; background: var(--accent); color: #fff; font-weight: 700; font-size: 14px; }
-.fork-submit:disabled { opacity: 0.6; }
+.fork-submit { width: calc(100% - 24px); margin: var(--space-2) var(--space-3); }
 
 /* ---- Import session sheet (issue #156: discover/adopt provider-native sessions) ---- */
 .import-session-hint { margin: 4px 12px; padding: 10px; color: var(--muted); font-size: 12px; }
 /* A live external process was detected — read-only badge, no adopt action
    (Bivy has no safe way to take over a process it doesn't own). */
 .import-session-badge { display: inline-block; padding: 5px 10px; border-radius: 999px; background: var(--surface-2); color: var(--muted); font-size: 11px; font-weight: 600; white-space: nowrap; }
-.import-session-action { padding: 7px 12px; border: 0; border-radius: 10px; background: var(--accent); color: #fff; font-weight: 700; font-size: 12px; white-space: nowrap; }
-.import-session-action:disabled { opacity: 0.6; }
+.import-session-action { white-space: nowrap; }
 /* The "follow/read-only" affordance for a live-elsewhere session: the badge
    plus the exact command to attach to it themselves, in their own terminal. */
 .import-session-follow { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
@@ -2483,7 +2469,6 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .app-dialog-body h3 { margin: 0; font-size: 17px; }
 .app-dialog-body p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.45; }
 .app-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
-.btn.danger { background: var(--danger); color: white; border-color: var(--danger); }
 .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .stat { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--surface-2); }
 .stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
@@ -2661,11 +2646,24 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 /* `.btn` styles both <button> and <a> (e.g. the onboarding "Download installer").
    Force inline-flex centering, a pointer cursor and no underline so an anchor
    reads as a real button rather than an underlined link inside a filled pill. */
-.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 7px 14px; border-radius: 10px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); font: inherit; text-decoration: none; cursor: pointer; }
-.btn:disabled { cursor: default; }
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: var(--space-2) 14px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--ink); font: inherit; font-weight: var(--weight-semibold);
+  text-decoration: none; cursor: pointer; transition: background var(--dur) var(--ease-standard);
+}
+.btn:hover { background: var(--surface-2); }
+.btn:disabled { opacity: 0.45; cursor: default; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); }
-.btn.ghost { background: transparent; }
+.btn.primary:hover { background: var(--accent-hover); }
+.btn.danger { background: var(--danger); border-color: var(--danger); color: var(--danger-contrast); }
+.btn.ghost { background: transparent; border-color: transparent; }
+.btn.ghost:hover { background: var(--surface-2); }
 .btn.danger-ghost { background: transparent; color: var(--danger); border-color: var(--danger); }
+.btn.link { border: 0; background: transparent; color: var(--accent); padding: var(--space-1) 2px; }
+.btn.link:hover { background: transparent; color: var(--accent-hover); }
+.btn.sm { padding: var(--space-1) 10px; font-size: var(--text-xs); }
+.btn.lg { padding: 11px 18px; font-size: var(--text-md); }
 .ghost-btn { border: 1px solid var(--line-strong); background: transparent; color: var(--ink); border-radius: 8px; padding: 5px 10px; font-size: 13px; }
 .icon-btn { border: 0; background: transparent; color: var(--ink); font-size: 20px; }
 /* ---- Sidebar settings gear (single entry point, ChatGPT-style) ---- */
@@ -2707,9 +2705,7 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
   color: var(--ink);
   white-space: nowrap;
 }
-.banner-action { margin-left: auto; flex: none; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-contrast); border-radius: 8px; padding: 6px 12px; font: inherit; font-weight: 650; white-space: nowrap; }
-.banner-action:hover:not(:disabled) { opacity: 0.9; }
-.banner-action:disabled { opacity: .65; }
+.banner-action { margin-left: auto; flex: none; white-space: nowrap; }
 .banner-text { flex: 1; min-width: 0; }
 .banner-dismiss { margin-left: auto; border: 0; background: transparent; color: inherit; font-size: 18px; line-height: 1; }
 @keyframes spin { to { transform: rotate(360deg); } }

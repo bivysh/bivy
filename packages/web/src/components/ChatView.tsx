@@ -340,7 +340,7 @@ const EntryView = memo(function EntryView({
       <div className="msg system">
         <span className="system-text" dangerouslySetInnerHTML={{ __html: toHtml(entry.text) }} />
         {entry.action && onAction && (
-          <button type="button" className="notice-action" onClick={() => onAction(entry.action!)}>
+          <button type="button" className="btn sm primary" onClick={() => onAction(entry.action!)}>
             {actionLabel(entry.action)}
           </button>
         )}

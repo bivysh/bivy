@@ -638,7 +638,7 @@ export function App() {
               This machine runs Bivy {state.connection.nodeUpdate.current} — {state.connection.nodeUpdate.latest} is available.
             </span>
             <button
-              className="banner-action"
+              className="btn sm primary banner-action"
               onClick={() => controller.updateNode()}
               disabled={state.connection.nodeUpdating}
             >
