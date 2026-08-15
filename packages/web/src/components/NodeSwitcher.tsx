@@ -101,7 +101,7 @@ export function NodeSwitcher() {
         {!locked && <span className="node-switcher-caret">▾</span>}
       </button>
       {open && !locked && (
-        <div className="node-menu" role="menu">
+        <div className="menu node-menu" role="menu">
           {reconnecting && (
             <div className="node-menu-status" role="status">
               <span className="reconnect-spinner" aria-hidden />
@@ -113,7 +113,7 @@ export function NodeSwitcher() {
           {persistentNodes.map((n) => (
             <div className="node-menu-row" key={n.id}>
               <button
-                className={`node-menu-item${n.id === currentNodeId ? " active" : ""}`}
+                className={`menu-item node-menu-item${n.id === currentNodeId ? " active" : ""}`}
                 role="menuitem"
                 onClick={() => {
                   setOpen(false);
@@ -140,7 +140,7 @@ export function NodeSwitcher() {
                 return (
                   <button
                     key={config.id}
-                    className={`node-menu-item${picked ? " active" : ""}`}
+                    className={`menu-item node-menu-item${picked ? " active" : ""}`}
                     role="menuitem"
                     disabled={inUse}
                     title={inUse ? "In use by another session — each profile runs one machine per session" : undefined}
@@ -164,7 +164,7 @@ export function NodeSwitcher() {
           )}
           <div className="node-menu-sep" />
           <button
-            className="node-menu-item"
+            className="menu-item node-menu-item"
             role="menuitem"
             onClick={() => {
               setOpen(false);
@@ -178,7 +178,7 @@ export function NodeSwitcher() {
           {/* Confirm first — signing out here used to be a single tap with no
               undo (it drops the session and returns to the sign-in screen),
               while the identical action in Settings already confirms. */}
-          <button className="node-menu-item danger" role="menuitem" onClick={() => { setOpen(false); setConfirmSignOut(true); }}>
+          <button className="menu-item node-menu-item danger" role="menuitem" onClick={() => { setOpen(false); setConfirmSignOut(true); }}>
             Sign out
           </button>
         </div>

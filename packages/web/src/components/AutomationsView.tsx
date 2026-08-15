@@ -957,37 +957,37 @@ export function AutomationsView({
                             …
                           </button>
                           {menuId === item.id && (
-                            <div className="row-menu-pop" role="menu">
+                            <div className="menu row-menu-pop" role="menu">
                               {!isSourceTrigger(item.trigger) && (
-                                <button type="button" className="row-menu-item" role="menuitem" onClick={() => { setMenuId(null); void runNow(item); }}>
+                                <button type="button" className="menu-item row-menu-item" role="menuitem" onClick={() => { setMenuId(null); void runNow(item); }}>
                                   {item.trigger === "webhook" ? "Test run" : "Run now"}
                                 </button>
                               )}
-                              {!item.configKey && <button type="button" className="row-menu-item" role="menuitem" onClick={() => { setMenuId(null); void edit(item); }}>Edit</button>}
+                              {!item.configKey && <button type="button" className="menu-item row-menu-item" role="menuitem" onClick={() => { setMenuId(null); void edit(item); }}>Edit</button>}
                               {item.trigger === "webhook" && item.webhookUrl && (
-                                <button type="button" className="row-menu-item" role="menuitem" onClick={() => {
+                                <button type="button" className="menu-item row-menu-item" role="menuitem" onClick={() => {
                                   setMenuId(null);
                                   void copyText(item.webhookUrl!);
                                   setNotice({ tone: "ok", title: "Webhook URL copied" });
                                 }}>Copy webhook URL</button>
                               )}
                               {item.trigger === "webhook" && (
-                                <button type="button" className="row-menu-item" role="menuitem" onClick={() => { setMenuId(null); void rotate(item); }}>Rotate secret</button>
+                                <button type="button" className="menu-item row-menu-item" role="menuitem" onClick={() => { setMenuId(null); void rotate(item); }}>Rotate secret</button>
                               )}
-                              {!item.configKey && <button type="button" className="row-menu-item" role="menuitem" onClick={() => void toggle(item)}>
+                              {!item.configKey && <button type="button" className="menu-item row-menu-item" role="menuitem" onClick={() => void toggle(item)}>
                                 {item.enabled ? "Pause" : "Resume"}
                               </button>}
                               {isSourceTrigger(item.trigger) && (
                                 <button
                                   type="button"
-                                  className="row-menu-item"
+                                  className="menu-item row-menu-item"
                                   role="menuitem"
                                   onClick={() => { setMenuId(null); openSetup(item.trigger === "linear" ? "linear" : "github"); }}
                                 >
                                   Source setup
                                 </button>
                               )}
-                              {!item.configKey && <button type="button" className="row-menu-item danger" role="menuitem" onClick={() => void remove(item)}>
+                              {!item.configKey && <button type="button" className="menu-item row-menu-item danger" role="menuitem" onClick={() => void remove(item)}>
                                 Delete
                               </button>}
                             </div>

@@ -212,7 +212,7 @@ export function SessionMenu({
         />
       )}
       {open && (
-        <div className="session-actions-menu" role="menu">
+        <div className="menu session-actions-menu" role="menu">
           {auditHealth && (["corrupt", "unreadable"].includes(auditHealth.storage) || auditHealth.writes === "degraded") && (
             <div className="session-actions-audit-warning" role="status">
               <strong>Audit evidence degraded</strong>
@@ -225,18 +225,18 @@ export function SessionMenu({
               <span>The last {eventLogHealth.operation ?? "storage"} operation failed. History may be incomplete.</span>
             </div>
           )}
-          <button className="session-actions-item" role="menuitem" onClick={copyReference} disabled={prBusy}>
+          <button className="menu-item session-actions-item" role="menuitem" onClick={copyReference} disabled={prBusy}>
             Copy session reference
           </button>
-          <button className="session-actions-item" role="menuitem" onClick={rename} disabled={prBusy}>
+          <button className="menu-item session-actions-item" role="menuitem" onClick={rename} disabled={prBusy}>
             Rename
           </button>
-          <button className="session-actions-item" role="menuitem" onClick={() => { close(); setForkOpen(true); }} disabled={prBusy}>
+          <button className="menu-item session-actions-item" role="menuitem" onClick={() => { close(); setForkOpen(true); }} disabled={prBusy}>
             Fork / move…
           </button>
           {onContinueInTerminal && (
             <button
-              className="session-actions-item"
+              className="menu-item session-actions-item"
               role="menuitem"
               onClick={() => { close(); onContinueInTerminal(); }}
               title="Open this session in the agent's interactive terminal (resumes the same conversation)"
@@ -245,7 +245,7 @@ export function SessionMenu({
             </button>
           )}
           <button
-            className="session-actions-item"
+            className="menu-item session-actions-item"
             role="menuitem"
             onClick={() => { close(); setResumeOpen(true); }}
             disabled={prBusy}
@@ -254,11 +254,11 @@ export function SessionMenu({
             Continue in terminal locally…
           </button>
           {isRepo && (
-            <button className="session-actions-item" role="menuitem" onClick={refreshPrStatus} disabled={prBusy}>
+            <button className="menu-item session-actions-item" role="menuitem" onClick={refreshPrStatus} disabled={prBusy}>
               {prBusy ? "Checking GitHub status…" : "Update GitHub status"}
             </button>
           )}
-          <button className="session-actions-item danger" role="menuitem" onClick={del} disabled={prBusy}>
+          <button className="menu-item session-actions-item danger" role="menuitem" onClick={del} disabled={prBusy}>
             Delete
           </button>
         </div>

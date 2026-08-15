@@ -661,11 +661,13 @@ function ReasoningPill({ state }: { state: AppState }) {
         ✦ {label} {open ? "▾" : "▸"}
       </button>
       {open && (
-        <div className="reasoning-menu">
+        <div className="menu reasoning-menu" role="menu">
           {t.availableThinkingLevels.map((lvl) => (
             <button
               key={lvl}
-              className={`reasoning-opt${lvl === t.thinkingLevel ? " active" : ""}`}
+              className={`menu-item reasoning-opt${lvl === t.thinkingLevel ? " active" : ""}`}
+              role="menuitemradio"
+              aria-checked={lvl === t.thinkingLevel}
               onClick={() => {
                 controller.setThinkingLevel(lvl);
                 setOpen(false);

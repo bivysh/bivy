@@ -639,14 +639,14 @@ export function Composer({
             </div>
           )}
           {slashMenu.length > 0 && (
-            <div className="slash-menu" role="listbox" aria-label="Commands">
+            <div className="menu slash-menu" role="listbox" aria-label="Commands">
               {slashMenu.map((cmd, i) => {
                 const activeIndex = Math.min(menuIndex, slashMenu.length - 1);
                 return (
                 <button
                   type="button"
                   key={cmd.name}
-                  className={`slash-item${i === activeIndex ? " active" : ""}`}
+                  className={`menu-item slash-item${i === activeIndex ? " active" : ""}`}
                   role="option"
                   aria-selected={i === activeIndex}
                   // onMouseDown (not onClick) so the textarea doesn't blur and
@@ -661,7 +661,7 @@ export function Composer({
             </div>
           )}
           {slashEmpty && (
-            <div className="slash-menu slash-empty" role="status">
+            <div className="menu slash-menu slash-empty" role="status">
               {agentCommands.length === 0
                 ? "This agent has no slash commands."
                 : "No matching command — press Esc to send as a message."}
