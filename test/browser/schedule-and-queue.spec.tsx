@@ -44,20 +44,17 @@ function ruleFor(css: string, selector: string): string {
   return css.slice(declStart, css.indexOf("}", declStart));
 }
 
-test("every focused text entry stays at 16px so iOS Safari never auto-zooms", async () => {
-  const css = await readFile(STYLES, "utf8");
-  // The queue editor, the schedule datetime field, the "Other" agent input, and
-  // the search fields are all focused directly on mobile; anything below 16px
-  // makes iOS zoom the viewport on focus (see the file-top comment).
-  for (const selector of [
-    ".followup-edit-input",
-    ".schedule-input",
-    ".question-other-input",
-    ".picker-search",
-    ".settings-search",
-  ]) {
-    expect(ruleFor(css, selector), `${selector} must be 16px`).toContain("font-size: 16px");
-  }
+test("every focused text entry inherits the canonical 16px field shell so iOS never auto-zooms", async () => {
+  const [css, queue, schedule, question] = await Promise.all([
+    readFile(STYLES, "utf8"),
+    readFile(QUEUE, "utf8"),
+    readFile(SHEET, "utf8"),
+    readFile(new URL("../../packages/web/src/components/QuestionCard.tsx", import.meta.url), "utf8"),
+  ]);
+  expect(ruleFor(css, ".field, .picker-search")).toContain("font-size: 16px");
+  expect(queue).toContain('className="field followup-edit-input"');
+  expect(schedule).toContain('className="field"');
+  expect(question).toContain('className="field question-other-input"');
 });
 
 test("ScheduleSheet infers the target from the screen instead of asking", async () => {

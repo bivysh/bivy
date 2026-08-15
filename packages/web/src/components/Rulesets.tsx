@@ -358,7 +358,7 @@ function RuleCard({
       </div>
 
       <label className="field-label">When any of</label>
-      <div className="ruleset-chip-row">
+      <div className="ruleset-choice-row">
         {CONDITIONS.map((c) => (
           <button
             key={c.id}

@@ -39,7 +39,7 @@ body {
 }
 button { font: inherit; cursor: pointer; }
 /* Baseline keyboard-focus visibility. Most custom rows/buttons in this app
-   (session rows, picker items, menu items, action-sheet items, …) never set
+   (session rows, picker items, menu items, sheet actions, …) never set
    their own focus style, so keyboard/switch-control users got only the
    inconsistent browser default (often nothing on a button with a custom
    background). A handful of controls already draw a bespoke focus treatment
@@ -225,7 +225,6 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .inbox-item-main span { overflow: hidden; color: var(--muted); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .inbox-item-meta { color: var(--muted); font-size: 11px; }
 .inbox-empty { padding: 40px 16px; color: var(--muted); text-align: center; }
-.inbox-scrim { z-index: 100; display: block; }
 .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: var(--app-h, 100dvh); overflow: hidden; }
 
 .topbar {
@@ -337,7 +336,6 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .pending-launch-actions button:hover { background: var(--surface-3); }
 @media (hover: none) { .row-menu-btn { opacity: 0.6; } }
 .row-menu-pop { position: absolute; right: 0; top: calc(100% + 2px); min-width: 180px; z-index: 20; }
-.pause-pill { border-color: var(--line-strong); }
 .session-empty { color: var(--muted); font-size: 13px; padding: 12px 10px; }
 .session-more {
   align-self: center; margin: 6px 0 2px; border: 1px solid var(--line);
@@ -646,7 +644,6 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .approval-title { font-size: 14px; font-weight: 650; }
 .approval-consequence { color: var(--muted); font-size: 13px; margin-bottom: 8px; }
 .approval-reason { font-size: 13px; font-style: italic; color: var(--muted); margin-bottom: 8px; }
-.approval-tool { font-family: ui-monospace, monospace; font-size: 13px; }
 .approval-command {
   margin: 0 0 8px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px;
   padding: 8px 10px; overflow-x: auto; font-size: 12.5px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -762,7 +759,7 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .run-pill.working .run-pill-stat { color: var(--accent); }
 .run-pill.needs-action .run-pill-stat, .run-pill.failed .run-pill-stat { color: var(--danger); }
 
-/* Run-pill action sheet extras (reuses .action-sheet* from the GitHub pill). */
+/* Run-detail anatomy shared by canonical action sheets. */
 .run-sheet-title { display: inline-flex; align-items: center; gap: 9px; min-width: 0; font-weight: 700; }
 .run-sheet-status {
   display: flex; align-items: center; gap: 8px;
@@ -882,7 +879,7 @@ button.sheet-action:last-child { border-bottom: 0; }
 .pill-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Glyph-only / short controls keep their natural width; only the long
    agent + model labels give way when space is tight. */
-.attach-pill, .pause-pill { flex: none; }
+.attach-pill { flex: none; }
 /* 40px, not the full ~44px guideline — the composer row is tight (pills +
    mic + send all share it) and 44px started crowding/wrapping the pill row on
    a narrow phone. 40px is a meaningful step up from the previous 36px without
@@ -901,7 +898,7 @@ button.sheet-action:last-child { border-bottom: 0; }
 .composer-btn.steer { background: var(--unseen); color: var(--unseen-contrast); }
 .composer-btn.steer:hover { filter: brightness(1.1); }
 .composer-btn.steer:active { transform: scale(0.92); }
-.attach-pill, .pause-pill { padding: 4px 8px; }
+.attach-pill { padding: 4px 8px; }
 
 /* Voice-input trigger: a circular icon button seated just left of Send. */
 .composer-btn.mic { background: var(--surface-3); color: var(--muted); }
@@ -941,7 +938,7 @@ button.sheet-action:last-child { border-bottom: 0; }
 /* --- Rulesets (Settings → Rulesets) --- */
 .ruleset-rule-card { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
 .ruleset-rule-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.ruleset-chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.ruleset-choice-row { display: flex; flex-wrap: wrap; gap: 6px; }
 .ruleset-field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; }
 .ruleset-field-grid .field-label { margin-top: 0; }
 .ruleset-chain { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--line); padding-top: 8px; margin-top: 4px; }
@@ -1017,15 +1014,6 @@ button.sheet-action:last-child { border-bottom: 0; }
 .schedule-field { display: flex; flex-direction: column; gap: 4px; }
 .schedule-label { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.02em; }
 .schedule-target { display: flex; flex-direction: column; gap: 6px; }
-.schedule-choice {
-  display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px;
-  border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); cursor: pointer;
-}
-.schedule-choice.active { border-color: var(--accent); }
-.schedule-choice input { margin-top: 3px; accent-color: var(--accent); }
-.schedule-choice > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.schedule-choice-title { font-size: 13.5px; font-weight: 600; color: var(--ink); }
-.schedule-choice-meta { font-size: 12px; color: var(--muted); }
 .schedule-error { margin: 0; color: var(--danger); font-size: 12.5px; }
 .schedule-ok { margin: 0; color: var(--accent); font-size: 12.5px; }
 .schedule-send { align-self: flex-end; padding: 8px 18px; font-size: 13px; }
@@ -1034,14 +1022,6 @@ button.sheet-action:last-child { border-bottom: 0; }
 .run-task-intro { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
 .run-task-danger { display: flex; align-items: flex-start; gap: 8px; color: var(--danger); font-size: 12.5px; line-height: 1.4; }
 .run-task-danger input { margin-top: 2px; accent-color: var(--danger); }
-.schedule-pending { display: flex; flex-direction: column; gap: 6px; }
-.schedule-pending-head { font-size: 12px; font-weight: 600; color: var(--muted); }
-.schedule-pending-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
-.schedule-pending-row {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding: 6px 8px 6px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2);
-}
-.schedule-pending-when { font-size: 13px; color: var(--ink); }
 
 /* Drag-and-drop drop zone over the composer card. */
 .composer-card.dragging { border-color: var(--accent); }
@@ -1338,9 +1318,6 @@ button.sheet-action:last-child { border-bottom: 0; }
 }
 .automations-tab:hover { color: var(--ink); }
 .automations-tab.active { color: var(--ink); border-bottom-color: var(--ink); }
-.autom-inline-link {
-  display: inline-block; margin-top: 4px; font-size: 12px; font-weight: 600;
-}
 @media (min-width: 640px) {
   .automations-tabs { padding: 0 24px; }
 }
@@ -1863,11 +1840,6 @@ button.template-card.is-featured .template-card-icon {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
   padding: 8px 10px 10px; border-top: 1px solid var(--line);
 }
-.autom-instructions-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
-.autom-inline-label {
-  display: inline-flex; align-items: center; gap: 6px;
-  font-size: 12px; font-weight: 600; color: var(--muted);
-}
 .autom-inline-select {
   max-width: 180px; height: 34px; padding: 0 10px;
   border: 1px solid var(--line); border-radius: 999px;
@@ -1937,7 +1909,6 @@ button.template-card.is-featured .template-card-icon {
 }
 .btn.ghost-link:hover { color: var(--ink); }
 .settings-form code { font-size: 11px; padding: 1px 5px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); }
-.settings-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
 .queue-head { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
 .queue-list { display: flex; flex-direction: column; gap: 6px; }
 /* Also used by the GitHub Queue screen (GithubQueue.tsx), not just Settings —
@@ -1963,9 +1934,6 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
   margin-bottom: 0; width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box;
 }
 .settings-hint { font-size: 13px; color: var(--muted); margin: 0; line-height: 1.4; overflow-wrap: anywhere; }
-.settings-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--surface-2); }
-.settings-row > * { min-width: 0; overflow-wrap: anywhere; }
-.settings-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex-shrink: 0; }
 .settings-error { color: var(--danger); font-size: 13px; margin: 4px 0 0; overflow-wrap: anywhere; }
 .row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 /* GitHub Queue waiting list (GithubQueue.tsx): a card per item with the title on
@@ -2242,8 +2210,8 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
   .ruleset-rule-card { padding: 14px 12px; gap: 12px; }
   .ruleset-rule-card .muted, .ruleset-rule-card .field-label, .ruleset-chain-field { color: color-mix(in srgb, var(--ink) 72%, var(--muted)); }
   .ruleset-rule-head .btn { min-height: 40px; }
-  .ruleset-chip-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-  .ruleset-chip-row .selectable { min-height: 44px; padding: 8px; line-height: 1.2; color: color-mix(in srgb, var(--ink) 72%, var(--muted)); }
+  .ruleset-choice-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .ruleset-choice-row .selectable { min-height: 44px; padding: 8px; line-height: 1.2; color: color-mix(in srgb, var(--ink) 72%, var(--muted)); }
   .ruleset-rule-card > .seg-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
   .ruleset-rule-card > .seg-row .selectable { min-width: 0; min-height: 44px; padding: 8px 4px; }
   .ruleset-field-grid { grid-template-columns: 1fr; gap: 12px; }
@@ -2600,7 +2568,6 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 }
 .banner-action { margin-left: auto; flex: none; white-space: nowrap; }
 .banner-text { flex: 1; min-width: 0; }
-.banner-dismiss { margin-left: auto; border: 0; background: transparent; color: inherit; font-size: 18px; line-height: 1; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .spinner {
   display: inline-block; flex: none; width: var(--text-xl); height: var(--text-xl);
@@ -2640,21 +2607,10 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 .node-menu-row .node-menu-item { flex: 1; min-width: 0; }
 .node-menu-item.active { font-weight: 600; }
 .node-menu-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* Per-provider connect status, shown to the right of a node row — clicking
-   any of them (connected or expired) opens NodeReconnectSheet scoped to that
-   node+provider. font/cursor reset since these are badges rendered as real
-   <button>s (need to be focusable/clickable), not inert status spans. */
-.node-provider-chip { flex: none; margin-right: 8px; font: inherit; font-size: 11px; font-weight: 700; cursor: pointer; }
-.node-provider-chip:hover { filter: brightness(1.2); }
 .node-menu-check { color: var(--accent); }
 .node-menu-glyph { color: var(--accent); flex: none; }
 .eph-steps { margin: 4px 0; padding-left: 18px; color: var(--muted); font-size: 13px; display: grid; gap: 4px; }
 .code-snippet { margin: 6px 0 0; overflow: auto; border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: var(--surface); font-size: 12px; }
-.eph-row { display: flex; flex-direction: column; gap: 4px; }
-.first-run-credentials { display: grid; gap: 8px; padding-bottom: 6px; }
-.first-run-credentials .settings-subhead { margin-top: 12px; padding-top: 14px; border-top: 1px solid var(--line); }
-.first-run-credentials .settings-subhead:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
-.first-run-credentials .badge { justify-self: start; }
 select.picker-search { appearance: auto; }
 .node-menu-sep { height: 1px; background: var(--line); margin: 4px 0; }
 /* PrToast, UpdatePrompt (both `.update-toast`), and ErrorToast used to each
@@ -2747,12 +2703,6 @@ select.picker-search { appearance: auto; }
 .setup-card .banner.inline,
 .setup-email .banner.inline { border-radius: 8px; margin: 8px 0; }
 
-.node-picker { list-style: none; margin: 16px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.node-pick { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); color: var(--ink); }
-.node-pick:hover { border-color: var(--accent); }
-.node-pick-name { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.node-pick-state { font-size: 12px; color: var(--muted); }
-
 /* ---- Responsive: drawer sidebar on mobile ---- */
 .only-mobile { display: none; }
 .scrim { position: fixed; inset: 0; background: var(--overlay); z-index: 20; }
@@ -2794,7 +2744,6 @@ select.picker-search { appearance: auto; }
 .changes-file-head:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); border-radius: 6px; }
 .changes-file-glyph { width: 1em; font-weight: 700; opacity: 0.8; }
 .changes-file-path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, monospace; font-size: 12px; }
-.changes-file-status { font-size: 11px; opacity: 0.6; }
 .changes-file.status-added .changes-file-glyph { color: var(--add); }
 .changes-file.status-deleted .changes-file-glyph { color: var(--del); }
 .changes-binary { font-size: 12px; opacity: 0.6; padding: 4px 2px; }
@@ -2815,8 +2764,6 @@ select.picker-search { appearance: auto; }
 
 /* Session changes sheet (components/SessionChangesSheet.tsx) — the durable,
    every-turn counterpart to the ephemeral current-turn ChangesCard above. */
-.changes-history-btn { display: inline-flex; align-items: center; justify-content: center; }
-.changes-history-btn svg { display: block; }
 .session-changes-toolbar {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
   flex-wrap: wrap;

@@ -16,7 +16,7 @@ test("Artifacts sheet groups images/files, badges named artifacts, and shows an 
   // Keep this tied to the real component's structure so a rename silently
   // breaking the CSS selectors below fails the test instead of the layout.
   expect(source).toContain('className="artifacts-group"');
-  expect(source).toContain('className="artifact-badge"');
+  expect(source).toContain('<Badge tone="accent" variant="solid" upper>Artifact</Badge>');
   expect(source).toContain('className="artifact-unavailable"');
 
   await page.setContent(`<!doctype html>
@@ -36,7 +36,7 @@ test("Artifacts sheet groups images/files, badges named artifacts, and shows an 
                 <div class="artifact-main">
                   <div class="artifact-name-line">
                     <span class="artifact-name">chart.png</span>
-                    <span class="artifact-badge">Artifact</span>
+                    <span class="badge" data-tone="accent" data-variant="solid">ARTIFACT</span>
                   </div>
                   <div class="artifact-meta">12 KB · 2m ago</div>
                   <div class="artifact-caption">Revenue by month</div>
@@ -75,8 +75,8 @@ test("Artifacts sheet groups images/files, badges named artifacts, and shows an 
 
   // The explicitly-marked artifact carries a visible badge; the ordinary one doesn't.
   const rows = page.locator(".artifact-row");
-  await expect(rows.nth(0).locator(".artifact-badge")).toBeVisible();
-  await expect(rows.nth(1).locator(".artifact-badge")).toHaveCount(0);
+  await expect(rows.nth(0).locator(".badge")).toBeVisible();
+  await expect(rows.nth(1).locator(".badge")).toHaveCount(0);
 
   // A pruned/offline file is described honestly, not silently hidden or retried,
   // and reads as an error state (not the same color as ordinary meta text).
