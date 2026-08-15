@@ -11,13 +11,16 @@ test("machine, session, and run presence use the canonical StatusDot", async () 
     "components/ConnectRunner.tsx",
     "components/RunPill.tsx",
     "components/RunDetails.tsx",
-    "components/SessionList.tsx",
     "components/WebSpeechRecorder.tsx",
   ]) {
     const source = await readFile(new URL(path, ROOT), "utf8");
     expect(source, path).toContain("<StatusDot");
     expect(source, path).not.toMatch(/(?:node|session|run|attn|voice-listening)-dot|mark-badge/);
   }
+  const sessions = await readFile(new URL("components/SessionList.tsx", ROOT), "utf8");
+  const sourceMarks = await readFile(new URL("components/SourceMark.tsx", ROOT), "utf8");
+  expect(sessions).toContain("<SourceMark");
+  expect(sourceMarks).toContain("<StatusDot");
   const queue = await readFile(new URL("components/GithubQueue.tsx", ROOT), "utf8");
   expect(queue).toContain("<RowMark");
   expect(queue).not.toMatch(/(?:node|session|run|attn|voice-listening)-dot|mark-badge/);

@@ -7,6 +7,7 @@
 // app's other stroked icons (mic, attach, filter).
 
 import type { SourceKind } from "../sessionSource.js";
+import { StatusDot, type StatusDotState } from "./StatusDot.js";
 
 /** The bare glyph, sized by its parent's font/box. */
 export function SourceGlyph({ kind }: { kind: SourceKind }) {
@@ -71,10 +72,21 @@ export function SourceGlyph({ kind }: { kind: SourceKind }) {
 
 /** The tinted tile that carries the glyph. `size` is the visual tier: `md` for
  *  the sidebar row, `sm` for the in-session pill / queue chip. */
-export function SourceMark({ kind, size = "md", title }: { kind: SourceKind; size?: "md" | "sm"; title?: string }) {
+export function SourceMark({
+  kind,
+  size = "md",
+  status,
+  title,
+}: {
+  kind: SourceKind;
+  size?: "md" | "sm";
+  status?: StatusDotState;
+  title?: string;
+}) {
   return (
-    <span className={`source-mark ${size === "sm" ? "sm" : ""} src-${kind}`} title={title} aria-hidden>
+    <span className={`source-mark${size === "sm" ? " sm" : ""}${status ? " has-status" : ""}`} title={title} aria-hidden>
       <SourceGlyph kind={kind} />
+      {status && <StatusDot status={status} />}
     </span>
   );
 }

@@ -15,7 +15,7 @@
 
 import { useState } from "react";
 import { deriveRunOutcome, type GithubContext, type GithubQueueItem, type PrRef, type Usage } from "@bivy/core";
-import { SourceGlyph } from "./SourceMark.js";
+import { SourceMark } from "./SourceMark.js";
 import { StatusDot, type StatusDotState } from "./StatusDot.js";
 import { Badge } from "./Badge.js";
 import { Sheet } from "./Sheet.js";
@@ -212,7 +212,7 @@ export function RunPill({
         onClick={() => setOpen(true)}
         title={[source.label, statusLabel, filesLabel].filter(Boolean).join(" · ")}
       >
-        <span className="run-pill-glyph"><SourceGlyph kind={source.kind} /></span>
+        <SourceMark kind={source.kind} size="sm" />
         <span className="run-pill-label">{short}</span>
         <span className="run-pill-stat"><StatusDot status={statusClass} />{statusLabel}</span>
         <PrBadge prs={gh.prs} />
@@ -222,7 +222,7 @@ export function RunPill({
         <Sheet
           variant="action"
           ariaLabel={source.label}
-          title={<span className="run-sheet-title"><span className={`source-mark sm src-${source.kind}`} aria-hidden><SourceGlyph kind={source.kind} /></span>{source.label}</span>}
+          title={<span className="run-sheet-title"><SourceMark kind={source.kind} size="sm" />{source.label}</span>}
           onClose={() => setOpen(false)}
           autoFocusSearch={false}
         >

@@ -6,8 +6,7 @@ import { useAppState } from "../store/useStore.js";
 import { controller } from "../store/useStore.js";
 import { ConfirmDialog, RenameDialog } from "./AppDialog.js";
 import { attentionRank, statusDotState, statusLabel, type SessionDotState } from "../sessionStatus.js";
-import { SourceGlyph } from "./SourceMark.js";
-import { StatusDot } from "./StatusDot.js";
+import { SourceMark } from "./SourceMark.js";
 import { Badge } from "./Badge.js";
 import { classifySource, CLI_SOURCE, type SourceKind } from "../sessionSource.js";
 import { rowHint } from "../runEvidence.js";
@@ -23,10 +22,7 @@ import { Sheet } from "./Sheet.js";
 export function RowMark({ kind, status, srLabel }: { kind: SourceKind; status: SessionDotState; srLabel: string }) {
   return (
     <>
-      <span className={`session-mark src-${kind}`} aria-hidden>
-        <SourceGlyph kind={kind} />
-        <StatusDot status={status} />
-      </span>
+      <SourceMark kind={kind} size="sm" status={status} />
       {/* The mark + badge are colour/shape only and aria-hidden; mirror both the
           source and the status as screen-reader-only text (parity with the old
           bare status dot, which did the same for status alone). */}

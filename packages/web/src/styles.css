@@ -728,24 +728,13 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .source-mark svg { width: 17px; height: 17px; display: block; }
 .source-mark.sm { width: 22px; height: 22px; border-radius: 6px; }
 .source-mark.sm svg { width: 13px; height: 13px; }
-
-/* Sidebar row leading mark: the source tile with the live status as a corner
-   dot badge. Source = identity, badge = presence. */
-.session-mark {
-  position: relative; flex: none;
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 22px; height: 24px; border-radius: 0;
-  color: var(--muted); background: transparent;
-}
-.session-mark svg { width: 15px; height: 15px; display: block; }
-/* The canonical status dot is positioned as a corner badge here; this rule owns
-   placement only, while StatusDot continues to own status color and shape. */
-.session-mark .status-dot {
+.source-mark.has-status { position: relative; }
+.source-mark.has-status .status-dot {
   position: absolute; right: -3px; bottom: -3px;
   width: 11px; height: 11px; box-shadow: 0 0 0 2px var(--surface);
 }
-.session-mark .status-dot[data-status="idle"],
-.session-mark .status-dot[data-status="saved"] { display: none; }
+.source-mark.has-status .status-dot[data-status="idle"],
+.source-mark.has-status .status-dot[data-status="saved"] { display: none; }
 
 /* In-session run pill (App.tsx composer band): supersedes the GitHub pill for a
    triggered session. Source glyph + short label + a status segment. */
@@ -755,13 +744,6 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
   border-radius: 999px; padding: 4px 11px 4px 5px; font-size: 12px; font-weight: 600;
 }
 .run-pill:hover { border-color: var(--line-strong); background: var(--surface-3); }
-.run-pill-glyph {
-  flex: none; display: inline-flex; align-items: center; justify-content: center;
-  width: 20px; height: 20px; border-radius: 6px;
-  color: var(--muted);
-  background: var(--surface-3);
-}
-.run-pill-glyph svg { width: 13px; height: 13px; display: block; }
 .run-pill-label { flex: none; }
 .run-pill-stat {
   display: inline-flex; align-items: center; gap: 5px; min-width: 0;
