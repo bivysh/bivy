@@ -43,6 +43,7 @@ import { ingestAgentCredentials } from "./runtime/credential-ingest.js";
 import { createSessionNamer, fallbackSessionName } from "./session/session-namer.js";
 import { createBranchPublish } from "./session/branch-publish.js";
 import { createForkStandUp } from "./session/fork-standup.js";
+import { createForkRetire } from "./session/fork-retire.js";
 import { createTranscriptPersistence } from "./session/transcript-persistence.js";
 import { createRunTerminals } from "./session/run-terminal.js";
 import { isNativeOAuthProvider, loginModelOAuth, type AuthEvent, type AuthPrompt } from "./runtime/oauth/model-oauth.js";
@@ -2464,6 +2465,26 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
       relay?.sendEvent({ type: "session.deleted", sessionId: deleted.sessionId || sid || undefined, sessionFile: deleted.sessionFile });
     } catch (error) {
       relay?.sendEvent({ type: "session.error", sessionId: sid || undefined, error: error instanceof Error ? error.message : String(error) });
+    }
+  },
+  async "session.fork.retire-source"(msg) {
+    // Retire a MOVE's source once its destination is confirmed (1A). Gated (won't
+    // retire without newSessionId) and idempotent (safe for the client to retry),
+    // so a crashed-mid-move client can't orphan the source or lose it. Emits the
+    // ordinary session.deleted so every device drops the moved-away source.
+    const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
+    const sourceSessionId = String(msg.sourceSessionId ?? "").trim();
+    const newSessionId = String(msg.newSessionId ?? "").trim();
+    try {
+      const outcome = await forkRetire.retireSource({ sourceSessionId, newSessionId });
+      if (!outcome.ok) {
+        relay?.sendEvent({ type: "session.fork.error", requestId, sessionId: sourceSessionId || undefined, error: outcome.error });
+        return;
+      }
+      if (outcome.retired) broadcast({ type: "session.deleted", sessionId: sourceSessionId });
+      relay?.sendEvent({ type: "session.fork.retired", requestId, sourceSessionId, newSessionId, alreadyGone: outcome.alreadyGone });
+    } catch (error) {
+      relay?.sendEvent({ type: "session.fork.error", requestId, sessionId: sourceSessionId || undefined, error: error instanceof Error ? error.message : String(error) });
     }
   },
   async "session.open"(msg) {
@@ -8806,6 +8827,15 @@ const forkStandUp = createForkStandUp<SessionRecord>({
   listRuntimes,
   reposRoot,
   defaultWorkspace,
+});
+
+// Confirmation-gated, idempotent source retirement for a session MOVE (1A). See
+// ./session/fork-retire: refuses to retire without a confirmed destination and is
+// safe to retry, so a client that crashed mid-move can't orphan the source or
+// delete it with nothing to show for it.
+const forkRetire = createForkRetire({
+  sessionExists: (id) => Boolean(resolveSession(id) || metadata.getSession(id)),
+  deleteSession: async (id) => { await deleteSessionFile({ id }); },
 });
 
 // Worktree branch publishing/renaming lives in ./session/branch-publish; it owns
