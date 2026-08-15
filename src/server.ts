@@ -16,6 +16,7 @@ import { SessionRerouteController, type ResumePlan } from "./policy/session-rero
 import { activeRulesetFor } from "./runtime/ruleset-store.js";
 import { createRulesetController } from "./controllers/rulesets.js";
 import { createAuditLog, readAuditEvents } from "./audit/index.js";
+import { loadOrCreateAuditKey } from "./audit/integrity.js";
 import { receiptEvidenceForRun } from "./audit/receipt-evidence.js";
 import { createWorkspaceController } from "./controllers/workspaces.js";
 import { createModelController } from "./controllers/models.js";
@@ -459,7 +460,11 @@ const approvals = new ApprovalManager();
 // governance events Bivy already intercepts — tool-call decisions today,
 // network/approval events next — attributed per session + agent, queryable via
 // `bivy audit`. Distinct from the per-session transcript (session/event-log.ts).
-const auditLog = createAuditLog(path.join(appDir, "audit"));
+// Every entry is hash-chained and signed with the node's Ed25519 audit key
+// (loaded/minted under <appDir>/audit) so the trail is tamper-evident and
+// `bivy audit --verify` can prove it — the basis of an attested Receipt (2A).
+const auditKey = loadOrCreateAuditKey(path.join(appDir, "audit"));
+const auditLog = createAuditLog(path.join(appDir, "audit"), { signer: auditKey.signer });
 
 // Bivy owns the AskUserQuestion → question-card feature at the guardian layer,
 // runtime-agnostically (see src/question.ts). The manager holds every pending
