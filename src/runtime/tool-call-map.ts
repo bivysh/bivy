@@ -93,6 +93,8 @@ const PLAN = new Set(["plan", "updateplan", "setplan", "todo", "todowrite", "exi
 const DELEGATE = new Set([
   "task", "agent", "subagent", "runagent", "runsubagent", "spawnagent",
   "dispatchagent", "delegate", "delegatetask", "agenttask", "startagent", "startrun",
+  // Codex app-server 0.147+ first-class child lifecycle item.
+  "subagentactivity",
 ]);
 
 const PATH_KEYS = ["path", "file_path", "filePath", "filename", "fileName", "file", "target_file", "targetFile"];

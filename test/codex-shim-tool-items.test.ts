@@ -47,6 +47,11 @@ const calls = events.filter((event) => event.type === "tool_call") as Array<Runt
 const delegation = calls.find((event) => event.toolName === "spawn_agent");
 assert.equal(delegation?.detail?.kind, "delegation", "collabAgentToolCall becomes a sub-agent card");
 assert.equal(delegation?.detail?.label, "gpt-5.6-sol", "sub-agent model labels the card");
+const activity = calls.find((event) => event.toolName === "subagent_activity");
+assert.equal(activity?.detail?.kind, "delegation", "Codex subAgentActivity becomes visible child-agent activity");
+assert.equal(activity?.detail?.label, "explorer", "child agent path labels its activity card");
+const activityResult = events.find((event) => event.type === "tool_result" && (event as { toolName?: string }).toolName === "subagent_activity") as (RuntimeEvent & { detail?: { result?: { text?: string } } }) | undefined;
+assert.equal(activityResult?.detail?.result?.text, "interacted", "child lifecycle outcome reaches transcript detail");
 const collabResultIndex = events.findIndex((event) => event.type === "tool_result" && (event as { toolName?: string }).toolName === "spawn_agent");
 const agentEndIndex = events.findIndex((event) => event.type === "agent_end");
 assert.ok(collabResultIndex >= 0 && collabResultIndex < agentEndIndex, "late Codex collaboration completion drains before the turn is sealed");
