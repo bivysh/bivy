@@ -12,6 +12,8 @@ import {
   discoverNativeCodexSessions,
   loadCodexTranscript,
   writeCodexRollout,
+  exportCodexRollout,
+  importCodexRollout,
 } from "../../runtime/codex-sessions.js";
 import { ProtocolRuntime } from "../../runtime/protocol.js";
 import { codexSlashCommands } from "../../runtime/slash-commands.js";
@@ -117,6 +119,10 @@ export function codexAppServerRuntime(tier?: SandboxTier): AgentRuntime {
     loadHistory: (sessionId) => loadCodexTranscript(sessionId),
     deleteHistory: (sessionId) => void deleteCodexSession(sessionId),
     writeHistory: (history, ctx) => writeCodexRollout(history, ctx.cwd || ctx.workspace),
+    // Native same-runtime fork transport (fidelity "full"): copy the rollout
+    // verbatim so a codex→codex fork keeps every response_item, not a summary.
+    exportForFork: (sessionId) => exportCodexRollout(sessionId),
+    importForFork: (payload, ctx) => importCodexRollout(payload, ctx),
     suggestName: suggestCodexSessionName,
     discoverNativeSessions: () => discoverNativeCodexSessions(),
     slashCommands: codexSlashCommands(),

@@ -24,7 +24,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { hasLiveProcessForCwd } from "./native-process-scan.js";
-import type { DiscoveredNativeSession, ForkHistoryMessage, RuntimeMessage } from "./types.js";
+import type { DiscoveredNativeSession, ForkHistoryMessage, ForkNativePayload, RuntimeMessage } from "./types.js";
 
 /** Binary names a live Codex process could be running under (see
  *  native-process-scan.ts's best-effort cwd match). */
@@ -205,6 +205,76 @@ export function writeCodexRollout(
   ];
   fs.writeFileSync(file, records.map((r) => JSON.stringify(r)).join("\n") + "\n");
   return { sessionFile: id, id };
+}
+
+/**
+ * Export a Codex session's rollout file verbatim for a NATIVE same-runtime fork
+ * (fidelity "full"). Unlike `writeCodexRollout` (which collapses to portable
+ * text turns), this carries the raw rollout — including every `response_item`
+ * reasoning/function-call record — so a codex→codex fork reproduces the session
+ * byte-exact rather than a summarised replay. Returns undefined when the id has
+ * no rollout on disk (the engine then falls to replayed/seeded).
+ */
+export function exportCodexRollout(sessionId: string): ForkNativePayload | undefined {
+  const match = listCodexSessions().find((s) => s.id === sessionId);
+  if (!match) return undefined;
+  let jsonl: string;
+  try {
+    jsonl = fs.readFileSync(match.file, "utf8");
+  } catch {
+    return undefined;
+  }
+  if (!jsonl.trim()) return undefined;
+  return { runtimeId: "codex", kind: "codex-rollout", data: { jsonl, sourceId: sessionId } };
+}
+
+/**
+ * Import a rollout exported by `exportCodexRollout` into a BRAND-NEW Codex
+ * session (fidelity "full"): mint a fresh id, rewrite the `session_meta` line's
+ * ids + cwd, and write a new dated rollout — keeping every subsequent
+ * `response_item` verbatim. Never touches the source. THROWS on a payload it
+ * can't reproduce (wrong kind, no parseable meta line) so the fork engine
+ * degrades to the replayed/seeded tiers. Honors the same escape hatch as the
+ * replay writer so a node whose Codex build rejects synthesised rollouts can
+ * force the fallback.
+ */
+export function importCodexRollout(payload: ForkNativePayload, ctx: { workspace: string; cwd: string }): { sessionFile: string; id: string } {
+  if (process.env.BIVY_CODEX_NO_FORK_REPLAY === "1") {
+    throw new Error("Codex fork transport disabled (BIVY_CODEX_NO_FORK_REPLAY=1)");
+  }
+  if (payload.kind !== "codex-rollout") throw new Error(`Unexpected Codex fork payload kind: ${payload.kind}`);
+  const jsonl = (payload.data as { jsonl?: unknown })?.jsonl;
+  if (typeof jsonl !== "string" || !jsonl.trim()) throw new Error("Codex fork payload has no rollout data");
+  const lines = jsonl.split(/\r?\n/).filter((l) => l.trim());
+  if (!lines.length) throw new Error("Codex fork payload rollout is empty");
+
+  const newId = randomUUID();
+  const cwd = ctx.cwd || ctx.workspace;
+  // Rewrite the first (session_meta) line's ids + cwd; a rollout that doesn't
+  // start with a parseable meta line can't be resumed, so refuse (→ degrade).
+  let meta: Record<string, unknown>;
+  try {
+    meta = JSON.parse(lines[0]) as Record<string, unknown>;
+  } catch {
+    throw new Error("Codex fork rollout's first line is not valid JSON metadata");
+  }
+  const payloadObj = (meta.payload && typeof meta.payload === "object" ? meta.payload : meta) as Record<string, unknown>;
+  if (!("id" in payloadObj) && !("session_id" in payloadObj)) {
+    throw new Error("Codex fork rollout does not start with session metadata");
+  }
+  payloadObj.id = newId;
+  payloadObj.session_id = newId;
+  payloadObj.cwd = cwd;
+  lines[0] = JSON.stringify(meta);
+
+  const now = new Date();
+  const iso = now.toISOString();
+  const dir = path.join(codexSessionsDir(), String(now.getUTCFullYear()), String(now.getUTCMonth() + 1).padStart(2, "0"), String(now.getUTCDate()).padStart(2, "0"));
+  fs.mkdirSync(dir, { recursive: true });
+  const stamp = iso.replace(/[:.]/g, "-").replace(/Z$/, "");
+  const file = path.join(dir, `rollout-${stamp}-${newId}.jsonl`);
+  fs.writeFileSync(file, lines.join("\n") + "\n");
+  return { sessionFile: newId, id: newId };
 }
 
 /** Enumerate Codex sessions on disk, newest first. Best-effort. */
