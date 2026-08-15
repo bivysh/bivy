@@ -390,7 +390,7 @@ export function WorkQueueSetupSheet({
             <strong>{titleFor(focus)}</strong>
             <span className="wq-head-sub">Stays in Automations · nothing to find in Settings</span>
           </div>
-          <button type="button" className="icon-btn" onClick={onClose} aria-label="Close">✕</button>
+          <button type="button" className="btn ghost icon" onClick={onClose} aria-label="Close">✕</button>
         </div>
 
         <div className="wizard-body">

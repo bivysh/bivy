@@ -2252,7 +2252,7 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
   .automations-view-head-text { min-width: 0; }
   .automations-view-sub { display: none; }
   .automations-view-head-actions { gap: 2px; }
-  .automations-view-head-actions .icon-btn { min-width: 44px; min-height: 44px; }
+  .automations-view-head-actions .btn.icon { min-width: 44px; min-height: 44px; }
   .autom-new-btn { width: 44px; min-height: 44px; padding: 0; border-radius: 10px; }
   .autom-new-btn-label { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
   .automations-tabs {
@@ -2522,13 +2522,13 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 .term-status-error { color: var(--danger, #d9534f); }
 
 .term-zoom { display: inline-flex; gap: 2px; }
-.term-zoom .icon-btn { font-size: 13px; font-weight: 700; padding: 4px 6px; border: 1px solid var(--line-strong); border-radius: 8px; line-height: 1; }
+.term-zoom .btn.icon { font-size: 13px; font-weight: 700; padding: 4px 6px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); line-height: 1; }
 .btn.ghost.is-active { background: var(--surface-2); border-color: var(--accent); }
 
 /* Incremental search bar. */
 .term-search { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-bottom: 1px solid var(--line); background: var(--surface); }
 .term-search-input { flex: 1; min-width: 0; background: var(--bg); color: var(--ink); border: 1px solid var(--line-strong); border-radius: 8px; padding: 6px 10px; font-size: 16px; }
-.term-search .icon-btn { font-size: 15px; padding: 4px 8px; border: 1px solid var(--line-strong); border-radius: 8px; }
+.term-search .btn.icon { font-size: var(--text-md); padding: var(--space-1) var(--space-2); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); }
 
 /* On-screen key accessory bar for touch devices (mobile PWA). */
 .term-keybar {
@@ -2640,7 +2640,7 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 .btn.link.danger { background: transparent; color: var(--danger); }
 .btn.sm { padding: var(--space-1) 10px; font-size: var(--text-xs); }
 .btn.lg { padding: 11px 18px; font-size: var(--text-md); }
-.icon-btn { border: 0; background: transparent; color: var(--ink); font-size: 20px; }
+.btn.icon { padding: var(--space-1); font-size: var(--text-xl); line-height: 1; }
 /* ---- Sidebar settings gear (single entry point, ChatGPT-style) ---- */
 .settings-gear {
   display: inline-flex; align-items: center; justify-content: flex-start; gap: 10px; position: relative;

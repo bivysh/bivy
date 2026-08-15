@@ -21,6 +21,7 @@ test("canonical button shell exposes the documented variants", async () => {
     ".btn.ghost",
     ".btn.danger-ghost",
     ".btn.link",
+    ".btn.icon",
     ".btn.sm",
     ".btn.lg",
   ]) expect(css).toContain(`${selector} {`);
@@ -48,7 +49,7 @@ test("migrated call-to-actions inherit the canonical button shell", async () => 
   expect(css).not.toContain(".notice-action");
 });
 
-test("legacy link and ghost buttons have been removed", async () => {
+test("legacy link, ghost, and icon buttons have been removed", async () => {
   const paths = [
     "components/Pickers.tsx",
     "components/Rulesets.tsx",
@@ -60,12 +61,14 @@ test("legacy link and ghost buttons have been removed", async () => {
     "components/RunDetails.tsx",
     "components/GithubQueue.tsx",
     "components/Terminal.tsx",
+    "components/AutomationsView.tsx",
+    "components/Inbox.tsx",
     "App.tsx",
   ];
   for (const path of paths) {
     const source = await readFile(new URL(path, ROOT), "utf8");
-    expect(source, path).not.toMatch(/(?:link|ghost)-btn/);
+    expect(source, path).not.toMatch(/(?:link|ghost|icon)-btn/);
   }
   const css = await readFile(STYLES, "utf8");
-  expect(css).not.toMatch(/\.(?:link|ghost)-btn/);
+  expect(css).not.toMatch(/\.(?:link|ghost|icon)-btn/);
 });

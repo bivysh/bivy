@@ -467,7 +467,7 @@ export function App() {
                 picked node's workspace folder. Sits to the left of "+ New" —
                 see #460. */}
             <button
-              className="icon-btn term-btn"
+              className="btn ghost icon term-btn"
               onClick={openStandaloneTerminal}
               disabled={!online}
               title="Terminal"
@@ -545,7 +545,7 @@ export function App() {
       <main className={`main${needsNode ? " needs-node" : ""}`}>
         <header className="topbar">
           <button
-            className="icon-btn only-mobile burger-btn"
+            className="btn ghost icon only-mobile burger-btn"
             onClick={openDrawer}
             aria-label={attnUnseen ? "Open sessions — something needs your attention" : "Open sessions"}
           >
@@ -575,7 +575,7 @@ export function App() {
           <div className="topbar-actions">
             {state.activeSession.activeSessionId && (
               <button
-                className="icon-btn eye-btn"
+                className="btn ghost icon eye-btn"
                 onClick={toggleCollapsed}
                 title={collapsed ? "Focus view on — show all messages" : "Focus view — hide tool use"}
                 aria-label="Toggle focus view"

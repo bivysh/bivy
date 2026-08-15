@@ -818,7 +818,7 @@ export function AutomationsView({
             <PlusIcon size={18} />
             <span className="autom-new-btn-label">New automation</span>
           </button>
-          <button type="button" className="icon-btn autom-close-btn" onClick={onClose} title="Close" aria-label="Close automations"><CloseIcon /></button>
+          <button type="button" className="btn ghost icon autom-close-btn" onClick={onClose} title="Close" aria-label="Close automations"><CloseIcon /></button>
         </div>
       </header>
 
@@ -840,7 +840,7 @@ export function AutomationsView({
         {error && (
           <div className="autom-notice warn" role="alert">
             <div className="autom-notice-text"><strong>Something went wrong</strong><span>{error}</span></div>
-            <button type="button" className="icon-btn" onClick={() => setError("")} aria-label="Dismiss">✕</button>
+            <button type="button" className="btn ghost icon" onClick={() => setError("")} aria-label="Dismiss">✕</button>
           </div>
         )}
         {notice && (
@@ -855,7 +855,7 @@ export function AutomationsView({
                   {notice.action.label}
                 </button>
               )}
-              <button type="button" className="icon-btn" onClick={() => setNotice(null)} aria-label="Dismiss">✕</button>
+              <button type="button" className="btn ghost icon" onClick={() => setNotice(null)} aria-label="Dismiss">✕</button>
             </div>
           </div>
         )}
@@ -1188,7 +1188,7 @@ function NewAutomationChooser({
             <strong>New automation</strong>
             <span className="wq-head-sub">Pick a starting point</span>
           </div>
-          <button type="button" className="icon-btn" onClick={onClose} aria-label="Close">✕</button>
+          <button type="button" className="btn ghost icon" onClick={onClose} aria-label="Close">✕</button>
         </div>
         <div className="wizard-body autom-chooser-body">
           <NewAutomationPicker onScratch={onScratch} onTemplate={onTemplate} />
@@ -1603,7 +1603,7 @@ function SourceAutomationEditor({
       <div className="wizard autom-editor" role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()}>
         <div className="wizard-head">
           <strong>{title}</strong>
-          <button type="button" className="icon-btn" onClick={onClose} aria-label="Cancel">✕</button>
+          <button type="button" className="btn ghost icon" onClick={onClose} aria-label="Cancel">✕</button>
         </div>
         <div className="wizard-body">
           {needsConnect && (
@@ -2064,7 +2064,7 @@ function AutomationEditor({
       >
         <div className="wizard-head">
           <strong>{created ? "Webhook ready" : d.id ? "Edit automation" : "New automation"}</strong>
-          <button type="button" className="icon-btn" onClick={onCancel} aria-label="Cancel">✕</button>
+          <button type="button" className="btn ghost icon" onClick={onCancel} aria-label="Cancel">✕</button>
         </div>
 
         {created ? (
@@ -2137,7 +2137,7 @@ function AutomationEditor({
                       </span>
                     </div>
                     {canEditTrigger && (
-                      <button type="button" className="icon-btn autom-trigger-clear" onClick={clearTrigger} aria-label="Remove trigger">✕</button>
+                      <button type="button" className="btn ghost icon autom-trigger-clear" onClick={clearTrigger} aria-label="Remove trigger">✕</button>
                     )}
                   </div>
                 ) : (

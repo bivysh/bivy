@@ -232,7 +232,7 @@ export function RunDetails({
           <p className="automations-view-sub">What this Run did, where it ran, and what remains unknown.</p>
         </div>
         <div className="automations-view-head-actions">
-          <button type="button" className="icon-btn run-details-close" onClick={onClose} title="Back" aria-label="Close run details"><span aria-hidden="true">‹</span><span>Back</span></button>
+          <button type="button" className="btn ghost icon run-details-close" onClick={onClose} title="Back" aria-label="Close run details"><span aria-hidden="true">‹</span><span>Back</span></button>
         </div>
       </header>
 

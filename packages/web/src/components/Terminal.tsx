@@ -1220,10 +1220,10 @@ export function TerminalOverlay({
         </span>
         <div className="term-head-actions">
           <div className="term-zoom" role="group" aria-label="Font size">
-            <button className="icon-btn" onClick={() => setFontSize((f) => Math.max(MIN_FONT, f - 1))} aria-label="Decrease font size" title="Zoom out">
+            <button className="btn ghost icon" onClick={() => setFontSize((f) => Math.max(MIN_FONT, f - 1))} aria-label="Decrease font size" title="Zoom out">
               A−
             </button>
-            <button className="icon-btn" onClick={() => setFontSize((f) => Math.min(MAX_FONT, f + 1))} aria-label="Increase font size" title="Zoom in">
+            <button className="btn ghost icon" onClick={() => setFontSize((f) => Math.min(MAX_FONT, f + 1))} aria-label="Increase font size" title="Zoom in">
               A+
             </button>
           </div>
@@ -1311,7 +1311,7 @@ export function TerminalOverlay({
           <button className="btn sm ghost" onClick={endShell}>
             End
           </button>
-          <button className="icon-btn" onClick={onClose} aria-label="Close terminal">
+          <button className="btn ghost icon" onClick={onClose} aria-label="Close terminal">
             ×
           </button>
         </div>
@@ -1336,13 +1336,13 @@ export function TerminalOverlay({
               }
             }}
           />
-          <button className="icon-btn" onClick={() => searchRef.current?.findPrevious(searchQuery)} aria-label="Previous match" title="Previous (Shift+Enter)">
+          <button className="btn ghost icon" onClick={() => searchRef.current?.findPrevious(searchQuery)} aria-label="Previous match" title="Previous (Shift+Enter)">
             ↑
           </button>
-          <button className="icon-btn" onClick={() => searchRef.current?.findNext(searchQuery)} aria-label="Next match" title="Next (Enter)">
+          <button className="btn ghost icon" onClick={() => searchRef.current?.findNext(searchQuery)} aria-label="Next match" title="Next (Enter)">
             ↓
           </button>
-          <button className="icon-btn" onClick={() => { setShowSearch(false); termRef.current?.focus(); }} aria-label="Close search">
+          <button className="btn ghost icon" onClick={() => { setShowSearch(false); termRef.current?.focus(); }} aria-label="Close search">
             ×
           </button>
         </div>
