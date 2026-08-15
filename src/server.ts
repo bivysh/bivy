@@ -16,6 +16,8 @@ import { SessionRerouteController, type ResumePlan } from "./policy/session-rero
 import { activeRulesetFor } from "./runtime/ruleset-store.js";
 import { createRulesetController } from "./controllers/rulesets.js";
 import { createAuditLog, readAuditEvents } from "./audit/index.js";
+import { loadOrCreateAuditKey, readChainState } from "./audit/integrity.js";
+import { attestEvidence } from "./audit/receipt-attest.js";
 import { receiptEvidenceForRun } from "./audit/receipt-evidence.js";
 import { createWorkspaceController } from "./controllers/workspaces.js";
 import { createModelController } from "./controllers/models.js";
@@ -92,7 +94,7 @@ import { checkDiskAdmission } from "./harness/disk-admission.js";
 import { sandboxTier, setConfiguredSandboxTier, normalizeSandboxTier, type SandboxTier } from "./harness/sandbox.js";
 import { setConfiguredAutoAttachToolImages } from "./harness/tool-image-attachments.js";
 import { injectMcpProxyForSession, injectBivyToolsForSession } from "./harness/mcp-inject.js";
-import { parseRepo, isGitHubSlugPart, inferGitHubRepoFromWorkspace, isSharedCloneRoot, resolveGitHubToken, ghCliInstalled, cloneOrUpdateRepo, resolveDefaultBaseRef, resolveBranchBaseRef, resolveAdoptBaseRef, resolveForkBaseRef, fetchOrigin, type ParsedRepo } from "./repo-workspace.js";
+import { parseRepo, isGitHubSlugPart, inferGitHubRepoFromWorkspace, isSharedCloneRoot, resolveGitHubToken, ghCliInstalled, cloneOrUpdateRepo, resolveDefaultBaseRef, resolveBranchBaseRef, resolveAdoptBaseRef, resolveForkBaseRef, originBranchPresent, fetchOrigin, type ParsedRepo } from "./repo-workspace.js";
 import { configureGitAuth, writeGitCredentialEndpoint } from "./git-auth.js";
 import {
   GitHubTaskPoller,
@@ -459,7 +461,11 @@ const approvals = new ApprovalManager();
 // governance events Bivy already intercepts — tool-call decisions today,
 // network/approval events next — attributed per session + agent, queryable via
 // `bivy audit`. Distinct from the per-session transcript (session/event-log.ts).
-const auditLog = createAuditLog(path.join(appDir, "audit"));
+// Every entry is hash-chained and signed with the node's Ed25519 audit key
+// (loaded/minted under <appDir>/audit) so the trail is tamper-evident and
+// `bivy audit --verify` can prove it — the basis of an attested Receipt (2A).
+const auditKey = loadOrCreateAuditKey(path.join(appDir, "audit"));
+const auditLog = createAuditLog(path.join(appDir, "audit"), { signer: auditKey.signer });
 
 // Bivy owns the AskUserQuestion → question-card feature at the guardian layer,
 // runtime-agnostically (see src/question.ts). The manager holds every pending
@@ -3188,7 +3194,7 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
       // When the client has already picked a target agent, pass it so the
       // bundle omits the native payload for a cross-runtime fork (it could
       // never be replayed there — see buildForkBundle). Unset => keep it.
-      const bundle = buildForkBundle({ runtime: getRuntime(rec.runtimeId), sessionFile: rec.sessionFile, record: forkRecord, dirtyPatch, targetRuntimeId: agentFrom(msg), liveMessages: rec.session.getMessages() });
+      const bundle = buildForkBundle({ runtime: getRuntime(rec.runtimeId), sessionFile: rec.sessionFile, record: forkRecord, dirtyPatch, targetRuntimeId: agentFrom(msg), liveMessages: rec.session.getMessages(), state: forkInFlightState(rec) });
       relay?.sendEvent({ type: "session.fork.bundle", requestId, bundle });
     } catch (error) {
       relay?.sendEvent({ type: "session.fork.error", requestId, error: error instanceof Error ? error.message : String(error) });
@@ -3259,7 +3265,7 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
         try { dirtyPatch = captureDirtyPatch(rec.worktree.path); } catch { /* best effort */ }
       }
       // Same runtime → the bundle carries the native payload → full fidelity.
-      const bundle = buildForkBundle({ runtime, sessionFile: rec.sessionFile, record: forkRecord, dirtyPatch, targetRuntimeId: rec.runtimeId, liveMessages: rec.session.getMessages() });
+      const bundle = buildForkBundle({ runtime, sessionFile: rec.sessionFile, record: forkRecord, dirtyPatch, targetRuntimeId: rec.runtimeId, liveMessages: rec.session.getMessages(), state: forkInFlightState(rec) });
       // Cut a fresh fork branch (the source still holds its own); skip prereq
       // detection (same node + same runtime ⇒ agent and repo are present).
       const outcome = await forkStandUp.standUpFork({
@@ -4505,6 +4511,29 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
             : stage === "no_changes" ? "Run completed with no file changes."
               : stage === "checks_failed" ? "Deterministic validation checks failed."
                 : "Execution failed. Detailed diagnostics remain on the node.";
+      // On a terminal event, attest the node-authored governance evidence with
+      // the audit key and anchor it to the current audit chain head — so the
+      // downstream Receipt carries a verifiable node signature (2A), not just an
+      // unsigned projection. Emitted alongside the raw evidence (non-breaking).
+      const receiptEvidence = terminal
+        ? receiptEvidenceForRun(auditEvents, fs.existsSync(auditLog.file), {
+          profile: record.ephemeral ? "isolated_customer_cloud" : "trusted_workstation",
+          controller: record.ephemeral ? "bivy_hosted_provisioning" : "customer",
+          sandboxTier: record.sandbox,
+          approvalMode: record.approvalMode,
+          runtimeEnforcement: runtimeInfo?.protectionLevel,
+          toolInterception: runtimeInfo?.capabilities?.toolInterception === true,
+          correlation: overrides.correlation,
+        })
+        : undefined;
+      const receiptAttestation = receiptEvidence
+        ? attestEvidence(receiptEvidence, auditKey.signer, {
+          createdAt: new Date().toISOString(),
+          runId: overrides.correlation?.runId,
+          machineId: overrides.correlation?.machineId,
+          auditChainHead: readChainState(auditLog.file).prev || undefined,
+        }).attestation
+        : undefined;
       void overrides.onEvidence?.({
         output: { sessionId: record.id, branch, prUrl: typeof extra.prUrl === "string" ? extra.prUrl : undefined },
         events: [{
@@ -4515,15 +4544,8 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
           url: typeof extra.prUrl === "string" ? extra.prUrl : undefined,
           ...(stage === "checks_failed" || stage === "failed" ? { status: "failed" } : {}),
         }],
-        ...(terminal ? { receiptEvidence: receiptEvidenceForRun(auditEvents, fs.existsSync(auditLog.file), {
-          profile: record.ephemeral ? "isolated_customer_cloud" : "trusted_workstation",
-          controller: record.ephemeral ? "bivy_hosted_provisioning" : "customer",
-          sandboxTier: record.sandbox,
-          approvalMode: record.approvalMode,
-          runtimeEnforcement: runtimeInfo?.protectionLevel,
-          toolInterception: runtimeInfo?.capabilities?.toolInterception === true,
-          correlation: overrides.correlation,
-        }) } : {}),
+        ...(receiptEvidence ? { receiptEvidence } : {}),
+        ...(receiptAttestation ? { receiptAttestation, auditPublicKey: { keyId: auditKey.keyId, publicKeyPem: auditKey.publicKeyPem } } : {}),
       });
     }
   };
@@ -6229,6 +6251,18 @@ function forkRecordFor(rec: SessionRecord): ForkRecord {
       ? { modelRef: { provider: String(currentModel.provider), id: String(currentModel.id) } }
       : {}),
     sandbox: rec.sandbox,
+  };
+}
+
+/** Snapshot the source's in-flight turn/approval state for the fork bundle, so a
+ *  fork/move DISCLOSES a mid-turn session or a pending approval instead of
+ *  silently dropping it (1A). Undefined when there is nothing in flight. */
+function forkInFlightState(rec: SessionRecord): ForkBundle["state"] {
+  const pendingApprovals = approvals.pendingFor(rec.id).map((r) => ({ toolName: r.toolName, requestId: r.id }));
+  if (!rec.isWorking && pendingApprovals.length === 0) return undefined;
+  return {
+    ...(rec.isWorking ? { working: true } : {}),
+    ...(pendingApprovals.length ? { pendingApprovals } : {}),
   };
 }
 
@@ -8764,6 +8798,7 @@ const forkStandUp = createForkStandUp<SessionRecord>({
   resolveDefaultBaseRef,
   resolveAdoptBaseRef,
   resolveForkBaseRef,
+  originBranchPresent,
   applyDirtyPatch,
   gitRepoRoot,
   materializeFork,

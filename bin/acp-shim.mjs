@@ -49,6 +49,20 @@ if (!agentCmd) {
   process.exit(2);
 }
 
+// MCP servers to advertise to the ACP agent on session/new and session/load.
+// Bivy passes its configured servers as a JSON array of ACP mcpServer objects
+// (see acpMcpServersFromConfig in src/runtime/index.ts). Forwarding them lets an
+// ACP agent reach the user's MCP tools — previously hardcoded to [] so ACP
+// agents were cut off from MCP entirely. Defaults to none; a malformed value is
+// ignored rather than crashing the shim.
+let mcpServers = [];
+if (process.env.BIVY_ACP_MCP_SERVERS) {
+  try {
+    const parsed = JSON.parse(process.env.BIVY_ACP_MCP_SERVERS);
+    if (Array.isArray(parsed)) mcpServers = parsed;
+  } catch { /* malformed → none */ }
+}
+
 // --- bivy-agent-protocol output (our stdout) --------------------------------
 function bivy(obj) {
   process.stdout.write(`${JSON.stringify(obj)}\n`);
@@ -427,7 +441,7 @@ async function onBivyCommand(msg) {
       case "session.create": {
         await ensureInitialized();
         cwd = String(msg.cwd || msg.workspace || cwd);
-        const res = await agentRequest("session/new", { cwd, mcpServers: [] });
+        const res = await agentRequest("session/new", { cwd, mcpServers });
         sessionId = res?.sessionId ?? res?.session?.id ?? null;
         publishModels(res);
         await applyPendingModel();
@@ -445,13 +459,13 @@ async function onBivyCommand(msg) {
           // hanging the reopen with no watchdog to recover it (resume isn't a
           // "working" turn). On timeout/failure we fall back to a fresh session so
           // the chat still opens instead of spinning on "Fetching transcript…".
-          const res = await agentRequest("session/load", { sessionId: ref, cwd, mcpServers: [] }, { timeoutMs: 30_000 });
+          const res = await agentRequest("session/load", { sessionId: ref, cwd, mcpServers }, { timeoutMs: 30_000 });
           sessionId = res?.sessionId ?? ref;
           publishModels(res);
         } catch {
           // Agent doesn't support session/load (or it timed out) — start fresh so
           // the chat still opens.
-          const res = await agentRequest("session/new", { cwd, mcpServers: [] });
+          const res = await agentRequest("session/new", { cwd, mcpServers });
           sessionId = res?.sessionId ?? null;
           publishModels(res);
         }

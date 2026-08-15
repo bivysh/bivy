@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveAdoptBaseRef, resolveForkBaseRef } from "../src/repo-workspace.js";
+import { originBranchPresent, resolveAdoptBaseRef, resolveForkBaseRef } from "../src/repo-workspace.js";
 import { createWorktree } from "../src/worktree.js";
 
 // Integration coverage for the cross-node fork stand-up path (fork bugs #2, #5):
@@ -119,6 +119,12 @@ async function run() {
       "git refuses a second worktree on the same branch",
     );
     assert.ok(fs.existsSync(path.join(first.path, "feature.txt")), "the first worktree survived the second attempt");
+  });
+
+  await test("originBranchPresent gates the adopt path: true for a pushed branch, false otherwise", async () => {
+    const { dest } = seedOriginAndClone();
+    assert.equal(await originBranchPresent(dest, "feature"), true, "the pushed source branch is present — commits can travel");
+    assert.equal(await originBranchPresent(dest, "never-pushed"), false, "an unpushed branch is absent — fork stand-up must refuse, not silently base off default");
   });
 
   await test("resolveForkBaseRef preserves an unpushed local branch", async () => {

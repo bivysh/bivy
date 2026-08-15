@@ -5,6 +5,9 @@
  * The engine reports what the destination is missing to continue the forked
  * session so the UI can guide the user instead of failing opaquely:
  *   - agent — the target runtime must be installed/available (a HARD blocker).
+ *   - commits — for a cross-node adopt, the source branch must be present on the
+ *     remote, or its committed work can't travel (a HARD blocker: proceeding
+ *     would silently base off the destination default and drop every commit).
  *   - model — the model's provider should have auth on this node (soft: the
  *     runtime can fall back, or the model-auth vault can supply it).
  *   - repo  — the source repo should be reachable (soft: it may be public, or
@@ -14,7 +17,7 @@
  * unit-testable.
  */
 
-export type ForkPrereqKind = "agent" | "model" | "repo";
+export type ForkPrereqKind = "agent" | "commits" | "model" | "repo";
 
 export interface ForkPrereq {
   kind: ForkPrereqKind;
@@ -31,6 +34,8 @@ export interface ForkPrereq {
 
 export interface ForkPrereqInput {
   agent: { id: string; displayName: string; available: boolean };
+  /** For a cross-node adopt: whether the source branch is present on the remote. */
+  commits?: { branch: string; present: boolean };
   model?: { provider: string; configured: boolean };
   repo?: { slug: string; reachable: boolean };
 }
@@ -48,6 +53,21 @@ export function evaluateForkPrereqs(input: ForkPrereqInput): ForkPrereq[] {
     blocking: !input.agent.available,
     ...(input.agent.available ? {} : { fix: "runtime.install" }),
   });
+
+  if (input.commits) {
+    out.push({
+      kind: "commits",
+      ok: input.commits.present,
+      label: input.commits.branch,
+      detail: input.commits.present
+        ? `Branch "${input.commits.branch}" is on the remote; its commits will travel.`
+        : `Branch "${input.commits.branch}" isn't on the remote, so its commits can't reach this node — push it from the source, then retry (proceeding would drop that work).`,
+      // HARD blocker: silently basing off the destination default would drop the
+      // source's committed work — the exact silent-loss this gate prevents.
+      blocking: !input.commits.present,
+      ...(input.commits.present ? {} : { fix: "source.push" }),
+    });
+  }
 
   if (input.model) {
     out.push({

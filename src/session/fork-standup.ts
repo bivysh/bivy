@@ -85,6 +85,9 @@ export interface ForkStandUpDeps<R extends ForkStandUpSession> {
   resolveDefaultBaseRef(repoDir: string): Promise<string>;
   resolveAdoptBaseRef(repoDir: string, branch: string): Promise<string>;
   resolveForkBaseRef(repoDir: string, branch: string | undefined, sourceWorktree?: string): Promise<string>;
+  /** Whether the source branch is on the remote — gates the adopt path so a
+   *  never-pushed branch can't silently base off the destination default. */
+  originBranchPresent(repoDir: string, branch: string): Promise<boolean>;
   applyDirtyPatch(cwd: string, patch: ForkBundle["dirtyPatch"]): { warning?: string };
   gitRepoRoot(cwd: string): Promise<string | undefined>;
   materializeFork(args: MaterializeForkOptions): Promise<ForkPlan>;
@@ -96,6 +99,24 @@ export interface ForkStandUpDeps<R extends ForkStandUpSession> {
 
 export interface ForkStandUp<R extends ForkStandUpSession> {
   standUpFork(opts: StandUpForkOptions): Promise<StandUpForkOutcome<R>>;
+}
+
+/**
+ * A one-line, user-facing disclosure of the source's in-flight state, or
+ * undefined when there is nothing to disclose. Pure so it is unit-testable.
+ */
+export function describeInFlightState(state: ForkBundle["state"]): string | undefined {
+  if (!state) return undefined;
+  const pending = state.pendingApprovals?.length ?? 0;
+  const parts: string[] = [];
+  if (pending > 0) {
+    const names = (state.pendingApprovals ?? []).map((a) => a.toolName).filter(Boolean).slice(0, 3);
+    const detail = names.length ? ` (${names.join(", ")}${pending > names.length ? ", …" : ""})` : "";
+    parts.push(`${pending} pending tool approval${pending === 1 ? "" : "s"}${detail}`);
+  }
+  if (state.working) parts.push("an unfinished turn");
+  if (!parts.length) return undefined;
+  return `The source session had ${parts.join(" and ")} that couldn't carry into the fork — re-issue the request here if you still need it.`;
 }
 
 export function createForkStandUp<R extends ForkStandUpSession>(deps: ForkStandUpDeps<R>): ForkStandUp<R> {
@@ -157,6 +178,23 @@ export function createForkStandUp<R extends ForkStandUpSession>(deps: ForkStandU
       repoReachable = Boolean(token);
       const repoDir = await deps.cloneOrUpdateRepo({ owner: parsed.owner, repo: parsed.repo, token, root: deps.reposRoot });
       const srcBranch = bundle.record.branch;
+      // Silent-loss gate (1A): a cross-node ADOPT of a branch that never reached
+      // the remote would fall back to the destination's default branch and DROP
+      // every source commit (resolveAdoptBaseRef's degrade path). Detect it and
+      // refuse with an actionable checklist item instead of losing committed work.
+      // Skipped for a same-node fork ("fresh"), which bases off the live source
+      // tip and can't lose commits this way.
+      if (opts.worktree === "adopt" && srcBranch && opts.detectPrereqs) {
+        const branchPresent = await deps.originBranchPresent(repoDir, srcBranch);
+        if (!branchPresent) {
+          const prereqs = evaluateForkPrereqs({ ...prereqInput, commits: { branch: srcBranch, present: false } });
+          return {
+            ok: false,
+            error: `The source branch "${srcBranch}" isn't on the remote yet, so its commits can't travel to this node. Push it from the source, then retry.`,
+            missing: missingForkPrereqs(prereqs),
+          };
+        }
+      }
       // Serialize clone-adjacent worktree ops on this repo so concurrent forks /
       // pickups don't race on `git worktree add` or clobber each other's trees.
       const wt = await deps.withRepoLock(repoDir, async () => {
@@ -226,6 +264,11 @@ export function createForkStandUp<R extends ForkStandUpSession>(deps: ForkStandU
     // Surface a non-fatal note when the source's uncommitted changes didn't apply
     // cleanly, so the fork isn't silently missing work-in-progress.
     if (dirtyWarning) deps.broadcast({ type: "session.notice", sessionId: record.id, message: dirtyWarning });
+    // Disclose in-flight state the source had (a mid-turn session, pending tool
+    // approvals) — it belongs to the source runtime's live turn and can't replay
+    // into the fork, so we tell the user rather than silently dropping it (1A).
+    const stateNotice = describeInFlightState(bundle.state);
+    if (stateNotice) deps.broadcast({ type: "session.notice", sessionId: record.id, message: stateNotice });
     await deps.applyRequestedModel(record, targetModel);
     deps.persistSessionMetadata(record);
     deps.scheduleAdvertise();

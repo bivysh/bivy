@@ -43,6 +43,9 @@ export interface ReceiptExecutionContext {
   runtimeEnforcement?: string;
   toolInterception?: boolean;
   agentVersion?: string;
+  /** The resolved model version/build, when the runtime reports one. Its presence
+   *  flips modelVersionStatus from "unknown" to "available" (was hardcoded). */
+  modelVersion?: string;
   correlation?: { runId: string; attempt: number; machineId: string };
 }
 
@@ -66,7 +69,7 @@ export function receiptEvidenceForRun(events: AuditEvent[], storageReadable: boo
       profile: context.profile,
       controller: context.controller,
       ...(context.agentVersion ? { agentVersion: context.agentVersion } : {}),
-      modelVersionStatus: "unknown" as const,
+      modelVersionStatus: context.modelVersion ? ("available" as const) : ("unknown" as const),
     },
     protection: {
       effective: {

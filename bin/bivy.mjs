@@ -30,7 +30,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { StringDecoder } from "node:string_decoder";
 import { spawn, spawnSync } from "node:child_process";
-import { randomBytes, createCipheriv, createDecipheriv, randomUUID } from "node:crypto";
+import { randomBytes, createCipheriv, createDecipheriv, randomUUID, createHash, verify as cryptoVerify } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import vm from "node:vm";
 import { selectStaleSessions, sessionActivityMs } from "./prune-sessions.mjs";
@@ -4310,10 +4310,11 @@ async function runUpdate(args = []) {
 // be running. Decisions + metadata only; never tool payloads.
 function cmdAudit(args = []) {
   if (args.includes("-h") || args.includes("--help")) {
-    console.log("Usage: bivy audit [--session <id>] [--kind <kind>] [--limit <n>] [--json]\n\nShow the node's governance audit trail (tool-call decisions, …).");
+    console.log("Usage: bivy audit [--session <id>] [--kind <kind>] [--limit <n>] [--json] [--verify]\n\nShow the node's governance audit trail (tool-call decisions, …).\n  --verify  recompute the tamper-evidence hash chain and check signatures.");
     return;
   }
   const file = path.join(appDir, "audit", "audit.jsonl");
+  if (args.includes("--verify")) { cmdAuditVerify(file, args.includes("--json")); return; }
   let raw;
   try { raw = fs.readFileSync(file, "utf8"); }
   catch { console.log("No audit events recorded yet."); return; }
@@ -4333,6 +4334,62 @@ function cmdAudit(args = []) {
     const cols = [when, e.kind, e.agent || "-", e.session ? String(e.session).slice(0, 8) : "-", e.tool || e.host || "", e.decision || ""].filter((p) => p !== "");
     console.log(cols.join("  "));
     if (e.reason) console.log(`    reason: ${e.reason}`);
+  }
+}
+
+// Verify the audit trail's tamper-evidence chain (moat #1, phase 2A). Mirrors
+// src/audit/integrity.ts (canonicalize / chainHash / verifyAuditChain) so the
+// check runs with no daemon and no TS toolchain — integrity.ts stays the source
+// of truth; keep the two in sync.
+function auditCanonicalize(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map((v) => auditCanonicalize(v)).join(",")}]`;
+  const keys = Object.keys(value).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${auditCanonicalize(value[k])}`).join(",")}}`;
+}
+function auditChainHash(prev, entry) {
+  return createHash("sha256").update(`${prev}\n${auditCanonicalize(entry)}`).digest("hex");
+}
+function cmdAuditVerify(file, asJson) {
+  let raw;
+  try { raw = fs.readFileSync(file, "utf8"); }
+  catch { console.log("No audit events recorded yet."); return; }
+  let pub;
+  try { pub = fs.readFileSync(path.join(path.dirname(file), "audit-key.pub.pem"), "utf8"); } catch { pub = undefined; }
+  const lines = raw.split("\n").map((l) => l.trim()).filter(Boolean);
+  let prev = "", expectedSeq, started = false;
+  let unprotectedPrefix = 0, verified = 0, signaturesVerified = 0;
+  let brokenAt, reason;
+  for (let i = 0; i < lines.length && brokenAt === undefined; i++) {
+    let parsed;
+    try { parsed = JSON.parse(lines[i]); } catch { brokenAt = i + 1; reason = "unparseable line"; break; }
+    const { prev: linePrev, hash, sig, ...entry } = parsed;
+    if (hash === undefined) {
+      if (started) { brokenAt = i + 1; reason = "unchained line inside chained region"; break; }
+      unprotectedPrefix++; continue;
+    }
+    started = true;
+    if (linePrev !== prev) { brokenAt = i + 1; reason = "prev-hash linkage broken (reordered or deleted entry)"; break; }
+    if (auditChainHash(prev, entry) !== hash) { brokenAt = i + 1; reason = "hash mismatch (entry was edited)"; break; }
+    if (expectedSeq !== undefined && entry.seq !== expectedSeq) { brokenAt = i + 1; reason = "seq gap (entry inserted or removed)"; break; }
+    expectedSeq = (entry.seq ?? 0) + 1;
+    if (sig !== undefined && pub) {
+      const good = cryptoVerify(null, Buffer.from(hash, "hex"), pub, Buffer.from(sig, "base64"));
+      if (!good) { brokenAt = i + 1; reason = "signature invalid (forged entry)"; break; }
+      signaturesVerified++;
+    }
+    prev = hash; verified++;
+  }
+  const ok = brokenAt === undefined;
+  const result = { ok, total: lines.length, unprotectedPrefix, verified, signaturesVerified, ...(ok ? {} : { brokenAt, reason }) };
+  if (asJson) { console.log(JSON.stringify(result, null, 2)); process.exitCode = ok ? 0 : 1; return; }
+  if (ok) {
+    const noun = verified === 1 ? "entry" : "entries";
+    console.log(c.green(`✓ audit trail intact — ${verified} chained ${noun} verified${pub ? `, ${signaturesVerified} signed` : " (unsigned: no public key found)"}.`));
+    if (unprotectedPrefix) console.log(c.dim(`  (${unprotectedPrefix} legacy pre-chain line(s) at the start are unprotected.)`));
+  } else {
+    console.log(c.red(`✗ audit trail FAILED verification at line ${brokenAt}: ${reason}`));
+    process.exitCode = 1;
   }
 }
 
