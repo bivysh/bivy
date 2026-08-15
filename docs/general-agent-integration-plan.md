@@ -51,6 +51,16 @@ Make Bivy's generic process and ACP paths preserve conversation identity, report
 - Update capability descriptions and support documentation to match actual adapter behavior.
 - Run typecheck, lint, unit tests, boundaries, routes, and design checks.
 
+## Implementation status
+
+- [x] Process sessions preserve captured or host-assigned native references across turns.
+- [x] ACP distinguishes observed activity from permission-gated calls.
+- [x] ACP filesystem access is workspace-confined, symlink-safe, sandbox-aware, and approval-gated for writes.
+- [x] ACP resume failures are explicit; images and production-factory MCP configuration are forwarded.
+- [x] Plugin manifests support host-assigned session references; custom commands no longer inherit maintained host behavior.
+- [x] Capability documentation and conformance coverage match the implemented paths.
+- [x] Typecheck, web typecheck, lint, unit/core tests, boundaries, routes, design, and link checks pass.
+
 ## Delivery
 
-Commits are split by independently reviewable behavior. The draft PR remains draft until every phase above is implemented and the full validation suite passes.
+Commits are split by independently reviewable behavior. The PR is ready once the final validation commit is pushed.

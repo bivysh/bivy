@@ -58,6 +58,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   session in OpenCode's own store (`$XDG_DATA_HOME/opencode/opencode.db`), so
   `session/load` resumes it and the model replays the whole history — the same
   "replayed" fidelity Codex's rollout forks get.
+- Generic process integrations preserve native session identity across turns by
+  capturing refs from validated structured output or using declarative
+  host-assigned creation args (`resume.newArgs` in plugin manifests).
+
+### Fixed
+
+- ACP integrations now distinguish already-running observed activity from
+  permission-gated calls, confine filesystem client operations to the workspace
+  with symlink-safe checks, approval-gate writes, enforce read-only mode, forward
+  images and configured MCP servers, and fail explicitly instead of silently
+  replacing a failed resume with an empty conversation.
+- Custom `BIVY_CUSTOM_AGENTS` commands no longer inherit maintained agents'
+  credential, session-store, discovery, or slash-command host behavior.
 
 ## [0.10.0] - 2026-08-07
 
