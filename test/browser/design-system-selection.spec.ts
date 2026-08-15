@@ -22,5 +22,5 @@ test("legacy segmented and ruleset choice recipes are removed", async () => {
   const css = await readFile(new URL("styles.css", ROOT), "utf8");
   expect(css).toContain('.selectable[aria-checked="true"]');
   expect(css).toContain('.selectable[aria-disabled="true"]');
-  expect(css).not.toMatch(/\.(?:seg-btn|ruleset-chip)(?:[ .:{\[])/);
+  expect(css).not.toMatch(/\.(?:seg-btn|ruleset-chip)(?:[ .:{[])/);
 });

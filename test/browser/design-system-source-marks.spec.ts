@@ -20,5 +20,5 @@ test("session and run identity use the canonical neutral SourceMark", async () =
 test("legacy source-mark shells are removed", async () => {
   const css = await readFile(new URL("styles.css", ROOT), "utf8");
   expect(css).toContain(".source-mark.has-status .status-dot");
-  expect(css).not.toMatch(/\.(?:session-mark|run-pill-glyph)(?:[ .:{\[])/);
+  expect(css).not.toMatch(/\.(?:session-mark|run-pill-glyph)(?:[ .:{[])/);
 });

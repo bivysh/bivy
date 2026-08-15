@@ -55,7 +55,7 @@ test("runtime and automation labels use canonical badges", async () => {
     expect(source, path).not.toMatch(/className=(?:"|{`)(?:runtime-cap\s|runtime-tier|runtime-protection|autom-status|run-status|import-session-badge)/);
   }
   const css = await readFile(new URL("styles.css", ROOT), "utf8");
-  expect(css).not.toMatch(/\.(?:runtime-cap|runtime-tier|runtime-protection|autom-status|run-status|import-session-badge)(?:[ .:{\[])/);
+  expect(css).not.toMatch(/\.(?:runtime-cap|runtime-tier|runtime-protection|autom-status|run-status|import-session-badge)(?:[ .:{[])/);
 });
 
 test("legacy generic chips have been removed", async () => {

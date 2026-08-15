@@ -18,5 +18,5 @@ test("the canonical Sheet owns action-menu shells", async () => {
   const css = await readFile(new URL("styles.css", ROOT), "utf8");
   expect(source).toContain('variant?: "default" | "action"');
   expect(css).toContain('.sheet[data-variant="action"] .sheet-body');
-  expect(css).not.toMatch(/\.action-sheet(?:[ .:{\[])/);
+  expect(css).not.toMatch(/\.action-sheet(?:[ .:{[])/);
 });
