@@ -74,11 +74,12 @@ test("test connection never leaves the credential's secret in the client-facing 
   // testCredential signature and its return sites for accidental token leakage.
   expect(api).toContain("Promise<CredentialVerification>");
   expect(api).not.toMatch(/return\s*\{[^}]*token[^}]*\}/);
-  const server = await read("../../src/server.ts");
-  expect(server).toContain('"credential.test"');
-  expect(server).toContain("ctx.reply({ type: \"credential.test.result\"");
+  // The node handler lives in the extracted credential command controller.
+  const handler = await read("../../src/controllers/credential-commands.ts");
+  expect(handler).toContain('"credential.test"');
+  expect(handler).toContain("ctx.reply({ type: \"credential.test.result\"");
   // The reply spreads only the verification result, never the raw record.
-  expect(server).not.toMatch(/credential\.test\.result[\s\S]{0,120}\bkey\b/);
+  expect(handler).not.toMatch(/credential\.test\.result[\s\S]{0,120}\bkey\b/);
 });
 
 test("verification status is node-local by construction — never synced as if another device tested it", async () => {

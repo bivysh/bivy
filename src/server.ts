@@ -136,6 +136,7 @@ import { createAccessDeviceController, createLinkedDeviceController } from "./co
 import { createSessionControlCommands } from "./controllers/session-control.js";
 import { createForkCommands } from "./controllers/fork-commands.js";
 import { createGithubCommands } from "./controllers/github-commands.js";
+import { createCredentialCommands } from "./controllers/credential-commands.js";
 import { historyDelta, type HistoryCursor } from "./history-sync.js";
 import { MetadataStore, type MetadataSession } from "./metadata.js";
 import { resolveResumeRef, resumeRefFor } from "./session-ref.js";
@@ -2150,6 +2151,15 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     connectExistingApp,
     disconnectGithubApp,
   }),
+  // Credential CRUD + presets cluster, extracted to controllers/credential-commands.ts.
+  ...createCredentialCommands({
+    credsDir,
+    sendEvent: (event) => relay?.sendEvent(event),
+    broadcast,
+    pushModelAuthToControlPlane,
+    refreshSessionAfterAuth,
+    listProvidersUnified,
+  }),
   // Live-stream gap recovery: replay the session.events a client missed after the
   // last seq it holds, or tell it to full-resync (mode:"reset") when the ring has
   // evicted past that point. Answers only the caller (ctx.reply); other clients
@@ -2732,112 +2742,6 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
       broadcast({ type: "providers.list", providers: await listProvidersUnified() });
     } catch (error) {
       relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
-    }
-  },
-  // --- Multiple credentials per provider (labeled). ----------------------
-  async "credentials.list"() {
-    relay?.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
-  },
-  async "credentials.account.export"(_msg, ctx) {
-    // This reply travels inside the already-paired E2E node channel. It contains
-    // API keys only; OAuth/ref/node-local material is excluded by the API.
-    ctx.reply({ type: "credentials.account.export", requestId: _msg.requestId, entries: await exportAccountApiKeys(credsDir), records: await listCredentialRecords(credsDir), deletedAt: await exportRecordTombstones(credsDir) });
-  },
-  async "credential.set"(msg, ctx) {
-    try {
-      const provider = String(msg.provider ?? "").trim().toLowerCase();
-      const label = String(msg.label ?? "");
-      const ref = typeof msg.ref === "string" ? msg.ref.trim() : "";
-      const requestedSync = msg.sync === "account" || msg.sync === "node" ? msg.sync : undefined;
-      // Persist the secret and its requested tier atomically. Creating a
-      // machine-only credential must never leave an account-tier crash window.
-      if (ref) await setProviderReferenceLabeled(credsDir, provider, label, ref, requestedSync);
-      else await setProviderApiKeyLabeled(credsDir, provider, label, String(msg.key ?? ""), requestedSync);
-      await pushModelAuthToControlPlane();
-      await refreshSessionAfterAuth();
-      relay?.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
-      broadcast({ type: "providers.list", providers: await listProvidersUnified() });
-      ctx.reply({ type: "credential.set.ok", requestId: msg.requestId });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      relay?.sendEvent({ type: "session.error", error: message });
-      ctx.reply({ type: "credential.set.error", requestId: msg.requestId, error: message });
-    }
-  },
-  async "credential.remove"(msg, ctx) {
-    try {
-      await removeProviderCredential(credsDir, String(msg.provider ?? ""), String(msg.label ?? ""));
-      await pushModelAuthToControlPlane();
-      await refreshSessionAfterAuth();
-      relay?.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
-      broadcast({ type: "providers.list", providers: await listProvidersUnified() });
-      ctx.reply({ type: "credential.remove.ok", requestId: msg.requestId });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      relay?.sendEvent({ type: "session.error", error: message });
-      ctx.reply({ type: "credential.remove.error", requestId: msg.requestId, error: message });
-    }
-  },
-  async "credential.sync.set"(msg, ctx) {
-    try {
-      const sync = msg.sync === "node" ? "node" : "account";
-      await setCredentialSync(credsDir, String(msg.provider ?? ""), String(msg.label ?? ""), sync);
-      await pushModelAuthToControlPlane();
-      relay?.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
-      ctx.reply({ type: "credential.sync.set.ok", requestId: msg.requestId });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      relay?.sendEvent({ type: "session.error", error: message });
-      ctx.reply({ type: "credential.sync.set.error", requestId: msg.requestId, error: message });
-    }
-  },
-  async "credential.unattended.set"(msg, ctx) {
-    try {
-      await setCredentialUnattended(credsDir, String(msg.provider ?? ""), String(msg.label ?? ""), msg.unattended === true);
-      await pushModelAuthToControlPlane();
-      relay?.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
-      ctx.reply({ type: "credential.unattended.set.ok", requestId: msg.requestId });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      ctx.reply({ type: "credential.unattended.set.error", requestId: msg.requestId, error: message });
-    }
-  },
-  // "Test connection": a bounded, non-secret liveness probe for one credential
-  // record (see credentials/api.ts testCredential). The reply carries only
-  // ok/at/reason — the credential's own token never leaves this handler.
-  async "credential.test"(msg, ctx) {
-    const provider = String(msg.provider ?? "").trim().toLowerCase();
-    const label = String(msg.label ?? "");
-    try {
-      const result = await testProviderCredential(credsDir, provider, label);
-      ctx.reply({ type: "credential.test.result", requestId: msg.requestId, provider, label, ...result });
-      relay?.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
-    } catch (error) {
-      ctx.reply({ type: "credential.test.result", requestId: msg.requestId, provider, label, ok: false, at: Date.now(), reason: "network_error" });
-      relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
-    }
-  },
-  async "credentials.presets.get"() {
-    relay?.sendEvent({ type: "credentials.presets", presets: getCredentialPresets(credsDir) });
-  },
-  async "credentials.presets.setActive"(msg) {
-    try {
-      setActiveCredentialPreset(credsDir, String(msg.active ?? ""));
-      await refreshSessionAfterAuth();
-      relay?.sendEvent({ type: "credentials.presets", presets: getCredentialPresets(credsDir) });
-    } catch (error) {
-      relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
-    }
-  },
-  async "credentials.presets.setMapping"(msg, ctx) {
-    try {
-      setCredentialPresetMapping(credsDir, String(msg.preset ?? ""), String(msg.provider ?? ""), String(msg.label ?? ""));
-      await refreshSessionAfterAuth();
-      relay?.sendEvent({ type: "credentials.presets", presets: getCredentialPresets(credsDir) });
-      ctx.reply({ type: "credentials.presets.setMapping.ok", requestId: msg.requestId });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      ctx.reply({ type: "credentials.presets.setMapping.error", requestId: msg.requestId, error: message });
     }
   },
   // --- Local / custom models (Bivy-owned registry; Pi is a projection). ---
