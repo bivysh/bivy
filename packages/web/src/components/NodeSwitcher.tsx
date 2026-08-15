@@ -7,6 +7,7 @@ import { AddNodeSheet } from "./AddNodeSheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { Spinner } from "./Spinner.js";
 import { StatusDot } from "./StatusDot.js";
+import { Badge } from "./Badge.js";
 import { useModalEscape } from "../modalStack.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import type { EphemeralNodeConfig, EphemeralMachine } from "@bivy/core";
@@ -152,8 +153,8 @@ export function NodeSwitcher() {
                     <StatusDot status="idle" label={inUse ? "In use — " : picked ? "Selected — " : "Available — "} />
                     <span className="node-menu-name">{config.name}</span>
                     {inUse
-                      ? <span className="chip" title="This machine belongs to another session">In use</span>
-                      : <span className="chip">{config.provider}</span>}
+                      ? <Badge title="This machine belongs to another session">In use</Badge>
+                      : <Badge>{config.provider}</Badge>}
                     {picked && <span className="node-menu-check">✓</span>}
                   </button>
                 );

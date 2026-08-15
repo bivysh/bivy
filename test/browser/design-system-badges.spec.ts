@@ -27,6 +27,21 @@ test("semantic labels use the canonical Badge", async () => {
   expect(github).toContain('className="badge github-pill"');
 });
 
+test("settings status labels use canonical badges", async () => {
+  for (const path of [
+    "components/Rulesets.tsx",
+    "components/NodeSwitcher.tsx",
+    "components/CredentialVault.tsx",
+    "components/Settings.tsx",
+    "components/VoiceSettings.tsx",
+    "components/MachineCapabilities.tsx",
+  ]) {
+    const source = await readFile(new URL(path, ROOT), "utf8");
+    expect(source, path).toContain("<Badge");
+    expect(source, path).not.toMatch(/className=(?:"chip(?:\s|")|{`chip(?:\s|\$|`))/);
+  }
+});
+
 test("canonical badge shell exposes tones and variants", async () => {
   const css = await readFile(new URL("styles.css", ROOT), "utf8");
   expect(css).toContain(".badge {");

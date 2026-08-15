@@ -6,6 +6,7 @@ import { BIVY_PROVIDER_CATALOG, mergeCredentialItems, migrateBrowserModelKeys, m
 import { controller } from "../store/useStore.js";
 import { OauthStep } from "./ProviderConnect.js";
 import { ConfirmDialog } from "./AppDialog.js";
+import { Badge } from "./Badge.js";
 
 type CatalogProvider = { id: string; name: string; oauth?: boolean; apiKey?: boolean; reference?: boolean; help?: string };
 type Availability = "account" | "node" | "device";
@@ -373,7 +374,7 @@ export function CredentialVault({ state }: { state: AppState }) {
         onConfirm={() => void remove(confirmDelete)}
       />}
       <button className="btn link" onClick={() => setView("list")}>‹ Credentials</button>
-      <div className="vault-title-row"><div><h3>{titleFor(selected)}</h3><p className="muted">{localModels.some((model) => model.id === selected.provider) ? "Local or custom endpoint" : methodLabel(selected.kind)}</p></div><span className={`chip ${selected.record?.lastVerifiedOk ? "ok" : ""}`}>{selected.record?.lastVerifiedOk ? "Verified" : selected.ambient ? "Provided by environment" : "Saved"}</span></div>
+      <div className="vault-title-row"><div><h3>{titleFor(selected)}</h3><p className="muted">{localModels.some((model) => model.id === selected.provider) ? "Local or custom endpoint" : methodLabel(selected.kind)}</p></div><Badge tone={selected.record?.lastVerifiedOk ? "ok" : undefined}>{selected.record?.lastVerifiedOk ? "Verified" : selected.ambient ? "Provided by environment" : "Saved"}</Badge></div>
       <div className="vault-detail-grid">
         <span className="muted">Available on</span><strong>{availabilityLabel(selected.availability)}</strong>
         <span className="muted">Used by default</span><strong>{isDefault ? "Yes" : "No"}</strong>
@@ -407,7 +408,7 @@ export function CredentialVault({ state }: { state: AppState }) {
       {nodes.length > 0 && <details className="vault-advanced"><summary>Machine availability</summary><div className="picker-list">{nodes.map((n) => {
         const available = selected.availability === "account" || (selected.availability === "node" && n.id === currentNodeId);
         const status = !available ? "Not available" : n.online ? "Available" : selected.availability === "account" ? "Will sync when online" : "Offline";
-        return <div className="picker-item" key={n.id}><span><strong>{n.name || n.id}</strong><small>{status}</small></span><span className={`chip ${available && n.online ? "ok" : ""}`}>{status}</span></div>;
+        return <div className="picker-item" key={n.id}><span><strong>{n.name || n.id}</strong><small>{status}</small></span><Badge tone={available && n.online ? "ok" : undefined}>{status}</Badge></div>;
       })}</div></details>}
     </div>;
   }
@@ -418,7 +419,7 @@ export function CredentialVault({ state }: { state: AppState }) {
     {items.length === 0 ? <div className="vault-empty"><h4>No providers yet</h4><p className="muted">Add a sign-in, API key, local model, or custom endpoint.</p><button className="btn primary" onClick={() => { setSelectedKey(null); resetAdd(); setView("add"); }}>Add provider</button></div> : <>
       <input className="picker-search" placeholder="Search credentials…" value={query} onChange={(e) => setQuery(e.target.value)} />
       <div className="picker-list vault-items">{filtered.map((item) => <button className="picker-item" key={keyOf(item.provider, item.label)} onClick={() => { setSelectedKey(keyOf(item.provider, item.label)); setMessage(null); setError(null); setView("detail"); }}>
-        <span><strong>{titleFor(item)}</strong><small>{localModels.some((model) => model.id === item.provider) ? "Local or custom endpoint" : methodLabel(item.kind)} · {availabilityLabel(item.availability)}</small></span><span className="vault-row-status">{item.record?.lastVerifiedOk && <span className="chip ok">Verified</span>}<span aria-hidden>›</span></span>
+        <span><strong>{titleFor(item)}</strong><small>{localModels.some((model) => model.id === item.provider) ? "Local or custom endpoint" : methodLabel(item.kind)} · {availabilityLabel(item.availability)}</small></span><span className="vault-row-status">{item.record?.lastVerifiedOk && <Badge tone="ok">Verified</Badge>}<span aria-hidden>›</span></span>
       </button>)}</div>
     </>}
   </div>;

@@ -10,6 +10,7 @@ import { ConfirmDialog } from "./AppDialog.js";
 import { ImportSessionContent } from "./ImportSessionSheet.js";
 import { MachineCapabilitiesSection } from "./MachineCapabilities.js";
 import { Segmented } from "./Segmented.js";
+import { Badge } from "./Badge.js";
 import { currentThemeSetting, setTheme, type ThemeSetting } from "../theme.js";
 import { useModalEscape } from "../modalStack.js";
 import type { SettingsView } from "../router.js";
@@ -881,7 +882,7 @@ function LocalModelsPanel({ state, onStartWork }: { state: AppState; onStartWork
                 meta={endpoint.status === "ready"
                   ? `${endpoint.models.length} model${endpoint.models.length === 1 ? "" : "s"} available on ${endpoint.machineName}`
                   : `${endpoint.status.replace("_", " ")} · ${endpoint.detail || "No compatible response"}`}
-                right={endpoint.status === "ready" ? <span className="chip ok">Import</span> : endpoint.status === "auth_required" ? <span className="chip warn">Add key</span> : <span className="chip warn">{endpoint.status.replace("_", " ")}</span>}
+                right={endpoint.status === "ready" ? <Badge tone="ok">Import</Badge> : endpoint.status === "auth_required" ? <Badge tone="warn">Add key</Badge> : <Badge tone="warn">{endpoint.status.replace("_", " ")}</Badge>}
                 onClick={endpoint.status === "ready" || endpoint.status === "auth_required" ? () => openDraft({
                   ...draftFromPreset({ id: endpoint.candidateId || "local", name: endpoint.name || "Local models", baseUrl: endpoint.baseUrl, api: endpoint.api }),
                   models: endpoint.models.map((model) => model.name !== model.id ? `${model.id} | ${model.name}` : model.id).join("\n"),
@@ -1257,7 +1258,7 @@ function NodesPanel({ state }: { state: AppState }) {
 
           <div className="row-actions settings-save-actions">
             <button className="btn primary" disabled={saving} onClick={save}>{saving ? "Saving…" : "Save"}</button>
-            {savedMsg && <span className="chip ok">{savedMsg}</span>}
+            {savedMsg && <Badge tone="ok">{savedMsg}</Badge>}
           </div>
           {saveErr && <div className="banner error inline" role="alert">{saveErr}</div>}
         </>
@@ -1445,10 +1446,10 @@ function EphemeralProviderChooser({ keys, onBack, onPick }: { keys: ProviderKeyI
     ?? EPHEMERAL_PROVIDERS.find((p) => p.maturity === "stable");
   const others = EPHEMERAL_PROVIDERS.filter((p) => p.id !== recommended?.id);
   const statusChip = (id: string, maturity: string, hostedOnly?: boolean) => {
-    if (keys.find((x) => x.id === id)?.configured) return <span className="chip ok">Token saved</span>;
-    if (hostedOnly) return <span className="chip warn">Hosted only</span>;
-    if (maturity === "experimental") return <span className="chip warn">Experimental</span>;
-    return <span className="chip">Not set up</span>;
+    if (keys.find((x) => x.id === id)?.configured) return <Badge tone="ok">Token saved</Badge>;
+    if (hostedOnly) return <Badge tone="warn">Hosted only</Badge>;
+    if (maturity === "experimental") return <Badge tone="warn">Experimental</Badge>;
+    return <Badge>Not set up</Badge>;
   };
   return (
     <div className="settings-form machine-profiles">
@@ -1460,7 +1461,7 @@ function EphemeralProviderChooser({ keys, onBack, onPick }: { keys: ProviderKeyI
           <span className="custom-provider-card-icon" aria-hidden>✦</span>
           <span><strong>{recommended.name} · Recommended</strong><small>{recommended.blurb}</small></span>
           {keys.find((x) => x.id === recommended.id)?.configured
-            ? <span className="chip ok">Token saved</span>
+            ? <Badge tone="ok">Token saved</Badge>
             : <span className="picker-meta" aria-hidden>›</span>}
         </button>
       )}
@@ -1603,7 +1604,7 @@ function HostedRunnerManagement() {
               : "cost via provider bill";
             return <PickerItem
               key={`${m.provider}:${m.id}`}
-              title={<>{m.name || m.nodeId || m.id} <span className={`chip ${failure ? "err" : phase === "ready" ? "ok" : ""}`}>{phase.replaceAll("-", " ")}</span></>}
+              title={<>{m.name || m.nodeId || m.id} <Badge tone={failure ? "danger" : phase === "ready" ? "ok" : undefined}>{phase.replaceAll("-", " ")}</Badge></>}
               meta={[m.provider, m.region, m.size, cost, m.ttlMinutes ? `TTL ${m.ttlMinutes}m` : null].filter(Boolean).join(" · ")}
               right={<button type="button" className="picker-action danger" disabled={!m.nodeId || busy} onClick={(e) => { e.stopPropagation(); setConfirmDestroy(m); }}>Destroy</button>}
             />;
@@ -1784,7 +1785,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
           <h3>{setupId ? (setupName || `${catalog.name} profile`) : `New ${catalog.name} profile`}</h3>
           <p className="muted small">{catalog.name} · token saved on this device</p>
         </div>
-        <span className="chip ok">{catalog.name} connected</span>
+        <Badge tone="ok">{catalog.name} connected</Badge>
       </div>
 
       <div className="vault-detail-grid">

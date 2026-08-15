@@ -25,6 +25,7 @@ import type {
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
+import { Badge } from "./Badge.js";
 
 // The stable failure conditions a rule can match, with a short human label so
 // the editor never asks the user to know the raw code taxonomy by heart.
@@ -185,7 +186,7 @@ export function RulesetsPanel({ state }: { state: AppState }) {
             meta={summarize(rs)}
             right={
               <span className="row-actions">
-                {rs.active && <span className="chip ok">Active</span>}
+                {rs.active && <Badge tone="ok">Active</Badge>}
                 <button
                   className="btn danger-ghost sm"
                   onClick={(e) => {
