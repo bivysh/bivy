@@ -16,6 +16,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmDialog } from "./AppDialog.js";
+import { StatusDot, type StatusDotState } from "./StatusDot.js";
 import {
   RunFetchError,
   receiptV1FromRun,
@@ -43,6 +44,13 @@ const LIFECYCLE_LABEL: Record<Run["lifecycle"], string> = {
   waiting: "Waiting",
   needs_attention: "Needs attention",
   finished: "Finished",
+};
+const LIFECYCLE_STATUS: Record<Run["lifecycle"], StatusDotState> = {
+  queued: "idle",
+  running: "working",
+  waiting: "idle",
+  needs_attention: "needs-action",
+  finished: "idle",
 };
 
 function formatWhen(value?: string): string {
@@ -350,7 +358,7 @@ function RunBody({
       <div className="run-details-title">{run.title}</div>
 
       <div className="run-sheet-status">
-        <span className={`run-dot`} aria-hidden />
+        <StatusDot status={LIFECYCLE_STATUS[run.lifecycle]} />
         {LIFECYCLE_LABEL[run.lifecycle]}
         {" · "}
         <span className={`chip outcome-${run.outcome.tone} outcome-kind-${run.outcome.kind}`}>{run.outcome.label}</span>

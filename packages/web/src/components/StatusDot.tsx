@@ -1,14 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 
-export type StatusDotState =
-  | "idle"
-  | "unseen"
-  | "online"
-  | "working"
-  | "needs-action"
-  | "failed"
-  | "saved";
+import type { SessionDotState } from "../sessionStatus.js";
+
+export type StatusDotState = SessionDotState | "online";
 
 /** Canonical compact status signal. Supply `label` when visible neighboring
  * text does not already spell out the state. */

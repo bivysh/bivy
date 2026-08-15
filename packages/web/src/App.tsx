@@ -29,6 +29,7 @@ import { ArtifactsSheet } from "./components/ArtifactsSheet.js";
 import { ErrorToast } from "./components/ErrorToast.js";
 import { NoticeToast } from "./components/NoticeToast.js";
 import { Spinner } from "./components/Spinner.js";
+import { StatusDot } from "./components/StatusDot.js";
 import { Settings } from "./components/Settings.js";
 import { EphemeralSheet } from "./components/Ephemeral.js";
 import { FirstRunModelAuthSheet } from "./components/FirstRunModelAuth.js";
@@ -49,7 +50,7 @@ const ReadinessChecklist = lazy(() =>
 );
 import { useEdgeSwipe } from "./useEdgeSwipe.js";
 import { controller } from "./store/useStore.js";
-import { isUnseen, statusClass, statusLabel } from "./sessionStatus.js";
+import { statusClass, statusDotState, statusLabel } from "./sessionStatus.js";
 
 export function App() {
   const state = useAppState();
@@ -558,11 +559,9 @@ export function App() {
                   looking at the list or already inside it. Only rendered once a
                   real session is open; a brand-new draft has no status yet. */}
               {activeSession && (
-                <span
-                  className={`session-dot ${statusClass(activeSession)}${isUnseen(activeSession) ? " unseen" : ""}`}
-                  title={statusLabel(activeSession)}
-                  aria-hidden
-                />
+                <span title={statusLabel(activeSession)}>
+                  <StatusDot status={statusDotState(activeSession)} label={statusLabel(activeSession)} />
+                </span>
               )}
               <h1 className="title" title={state.activeSession.activeTitle}>
                 {state.activeSession.activeTitle}

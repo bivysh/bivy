@@ -5,6 +5,8 @@ import type { SessionStatus } from "@bivy/core";
 /** The subset of SessionSummary that status/seen derivation needs — kept
  *  narrow so callers (sidebar rows, the header pill) can pass either the full
  *  row or a partial/synthetic one without extra plumbing. */
+export type SessionDotState = "idle" | "unseen" | "working" | "needs-action" | "failed" | "saved";
+
 export interface SessionStatusInput {
   status?: SessionStatus;
   state?: { agent?: "idle" | "working" | "waiting" | "awaiting-input" };
@@ -19,7 +21,7 @@ export interface SessionStatusInput {
  *  depends on color alone; the color itself distinguishes needs-action /
  *  working / idle. Shared by the sidebar row and the header status pill so
  *  the two views can never drift out of sync. */
-export function statusClass(s: SessionStatusInput): string {
+export function statusClass(s: SessionStatusInput): Exclude<SessionDotState, "unseen"> {
   if (s.needsAction || s.status === "needs_action") return "needs-action";
   if (s.status === "working") return "working";
   if (s.status === "failed") return "failed";
@@ -33,6 +35,10 @@ export function statusClass(s: SessionStatusInput): string {
  *  Deliberately narrower than "status === idle": a brand-new session or a
  *  cold sessions.list snapshot never carries `finishedAt`, so neither ever
  *  reads as an unseen finished run. */
+export function statusDotState(s: SessionStatusInput): SessionDotState {
+  return isUnseen(s) ? "unseen" : statusClass(s);
+}
+
 export function isUnseen(s: SessionStatusInput): boolean {
   if (s.status !== "idle" || s.finishedAt == null) return false;
   return s.lastSeenAt == null || s.finishedAt > s.lastSeenAt;

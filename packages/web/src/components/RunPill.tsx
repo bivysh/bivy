@@ -17,6 +17,7 @@ import { useState } from "react";
 import { deriveRunOutcome, type GithubContext, type GithubQueueItem, type PrRef, type Usage } from "@bivy/core";
 import { useModalEscape } from "../modalStack.js";
 import { SourceGlyph } from "./SourceMark.js";
+import { StatusDot, type StatusDotState } from "./StatusDot.js";
 import { PrBadge, GhMark } from "./SessionList.js";
 import { shortSourceLabel, type SourceInfo } from "../sessionSource.js";
 import { checkCounts, retryReason, runDuration, artifactRef, recoveryActions, type RecoveryKind } from "../runEvidence.js";
@@ -122,7 +123,7 @@ export function RunPill({
   source: SourceInfo;
   /** The row's status class (`working` / `needs-action` / `saved` / `idle`)
    *  from sessionStatus.ts, shared with the sidebar so the two never drift. */
-  statusClass: string;
+  statusClass: Exclude<StatusDotState, "online" | "unseen">;
   statusLabel: string;
   gh: GithubContext;
   /** The run's evidence, joined by session id in App (null in direct/local
@@ -213,7 +214,7 @@ export function RunPill({
       >
         <span className="run-pill-glyph"><SourceGlyph kind={source.kind} /></span>
         <span className="run-pill-label">{short}</span>
-        <span className="run-pill-stat"><span className="run-dot" />{statusLabel}</span>
+        <span className="run-pill-stat"><StatusDot status={statusClass} />{statusLabel}</span>
         <PrBadge prs={gh.prs} />
         {filesLabel && <span className="run-pill-files">{filesLabel}</span>}
       </button>
@@ -231,7 +232,7 @@ export function RunPill({
               </button>
             </div>
             <div className="run-sheet-status">
-              <span className={`run-dot ${statusClass}`} aria-hidden />
+              <StatusDot status={statusClass} />
               {sheetStatus}
             </div>
 
