@@ -16,7 +16,7 @@ import {
 } from "../agents/codex/integration.js";
 import { invalidatePiCommandProbe, piAgentDir, piCommandAvailable, piIntegration } from "../agents/pi/integration.js";
 import { deleteCodexSession, loadCodexTranscript } from "./codex-sessions.js";
-import { deleteOpenCodeSession, loadOpenCodeTranscript, writeOpenCodeHistory } from "./opencode-sessions.js";
+import { deleteOpenCodeSession, exportOpenCodeSession, importOpenCodeSession, loadOpenCodeTranscript, writeOpenCodeHistory } from "./opencode-sessions.js";
 import { discoverNativeGrokSessions, listGrokSessions, loadGrokTranscript } from "./grok-sessions.js";
 import { createCredentialStore } from "./credentials.js";
 import { AgentRegistry } from "../agents/registry.js";
@@ -56,7 +56,7 @@ function codexResumeArgs(sessionId: string, tier: string): string[] {
   // (read-only | workspace-write | danger-full-access), so `tier` needs no mapping.
   return ["exec", "--json", "--sandbox", tier, "resume", sessionId];
 }
-import type { ModelInfo, ForkHistoryMessage, ForkImportContext } from "./types.js";
+import type { ModelInfo, ForkHistoryMessage, ForkImportContext, ForkNativePayload } from "./types.js";
 import { PiRuntime } from "../agents/pi/runtime.js";
 import { ProcessRuntime, processRuntimeFromEnv, type ProcessModelConfig, type ProcessPromptMode, type ProcessThinkingConfig } from "./process.js";
 import { codexCredentialPreflight } from "./codex-preflight.js";
@@ -745,6 +745,11 @@ function acpRuntimeOptions(opts: { id: string; displayName: string; command: str
           loadHistory: (sessionRef: string) => loadOpenCodeTranscript(sessionRef),
           deleteHistory: (sessionRef: string) => void deleteOpenCodeSession(sessionRef),
           writeHistory: (history: ForkHistoryMessage[], ctx: ForkImportContext) => writeOpenCodeHistory(history, ctx),
+          // Native same-runtime fork transport (fidelity "full"): clone the
+          // session/message/part rows so an opencode→opencode fork keeps each
+          // message's full data, not a one-text-part-per-turn summary.
+          exportForFork: (sessionRef: string) => exportOpenCodeSession(sessionRef),
+          importForFork: (payload: ForkNativePayload, ctx: ForkImportContext) => importOpenCodeSession(payload, ctx),
         }
       : {}),
   };

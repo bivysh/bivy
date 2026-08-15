@@ -14,6 +14,7 @@ import type {
   DiscoveredNativeSession,
   ForkHistoryMessage,
   ForkImportContext,
+  ForkNativePayload,
   ModelInfo,
   OpenSessionOptions,
   OpenSessionResult,
@@ -119,6 +120,21 @@ export interface ProtocolRuntimeOptions {
    * this throws. Absent = no history import for this agent.
    */
   writeHistory?: (history: ForkHistoryMessage[], ctx: ForkImportContext) => { sessionFile: string; id: string };
+  /**
+   * Optional: NATIVE same-runtime fork transport (fidelity "full", byte-exact) —
+   * export a session's own on-disk store as an opaque payload, and import that
+   * payload back into a brand-new session in the SAME store. Unlike `writeHistory`
+   * (which collapses to portable `{role,text}` turns), this preserves the store's
+   * full native records (Codex's `response_item` reasoning/function-call lines,
+   * OpenCode's per-message `data`). Both must be present to enable
+   * `capabilities.forkTransport`; the fork engine only imports a payload whose
+   * `runtimeId` matches this runtime, and `importForFork` must THROW on a schema it
+   * can't reproduce so materializeFork degrades to the replayed/seeded tiers.
+   * The write-side counterpart pair to `loadHistory` (for Codex these are
+   * `exportCodexRollout` / `importCodexRollout`). Absent = no native transport.
+   */
+  exportForFork?: (sessionFile: string) => ForkNativePayload | undefined;
+  importForFork?: (payload: ForkNativePayload, ctx: ForkImportContext) => { sessionFile: string; id: string } | Promise<{ sessionFile: string; id: string }>;
   /** Runtime-specific, side-effect-free title request (for example `codex exec --ephemeral`). */
   suggestName?: (firstPrompt: string, context: { cwd: string; model?: string }) => Promise<string | undefined>;
   /**
@@ -976,6 +992,10 @@ export class ProtocolRuntime implements AgentRuntime {
     // A runtime that can write its own resumable store from portable history
     // (Codex's rollout) supports true cross-runtime replay forks INTO it.
     if (options.writeHistory) this.capabilities.forkHistoryImport = true;
+    // A runtime that can export AND re-import its own native store supports
+    // byte-exact same-runtime forks (fidelity "full"). Both hooks are required —
+    // a capability without a working import would silently degrade to replayed.
+    if (options.exportForFork && options.importForFork) this.capabilities.forkTransport = true;
     if (options.capabilities) Object.assign(this.capabilities, withExactCapabilitySurface({ ...this.capabilities, ...options.capabilities }));
   }
 
@@ -1034,6 +1054,30 @@ export class ProtocolRuntime implements AgentRuntime {
   ): Promise<{ sessionFile: string; id: string }> {
     if (!this.options.writeHistory) throw new Error(`${this.displayName} does not support history import.`);
     return this.options.writeHistory(history, ctx);
+  }
+
+  /**
+   * Export this session's native store for a byte-exact same-runtime fork,
+   * delegating to the runtime-specific `exportForFork` hook. Stamps this runtime's
+   * id so the fork engine only re-imports it into a matching runtime. Absent hook
+   * or nothing to export → undefined (the engine falls to replayed/seeded).
+   */
+  exportForFork(sessionFile: string): ForkNativePayload | undefined {
+    const payload = this.options.exportForFork?.(sessionFile);
+    return payload ? { ...payload, runtimeId: this.id } : undefined;
+  }
+
+  /**
+   * Import a payload from THIS runtime's `exportForFork` into a brand-new session
+   * (fidelity "full"). The hook must throw on a store schema it can't reproduce so
+   * materializeFork degrades to the replayed then seeded tiers.
+   */
+  async importForFork(
+    payload: ForkNativePayload,
+    ctx: ForkImportContext,
+  ): Promise<{ sessionFile: string; id: string }> {
+    if (!this.options.importForFork) throw new Error(`${this.displayName} does not support native fork transport.`);
+    return this.options.importForFork(payload, ctx);
   }
 
   /** See ProtocolRuntimeOptions.discoverNativeSessions (issue #156). */
