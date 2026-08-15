@@ -6,6 +6,7 @@
 // a session/prompt turn that streams an assistant message, requests one tool
 // permission, and (once granted) reports the tool completed before finishing.
 import { createInterface } from "node:readline";
+import fs from "node:fs";
 
 function send(obj) { process.stdout.write(`${JSON.stringify(obj)}\n`); }
 function reply(id, result) { send({ jsonrpc: "2.0", id, result }); }
@@ -32,6 +33,11 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       reply(id, { protocolVersion: 1, agentCapabilities: { promptCapabilities: {} } });
       return;
     case "session/new":
+      // Record the mcpServers the shim advertised, so a test can assert Bivy's
+      // MCP passthrough (3A) reached the agent instead of the old hardcoded [].
+      if (process.env.BIVY_TEST_MCP_DUMP) {
+        try { fs.writeFileSync(process.env.BIVY_TEST_MCP_DUMP, JSON.stringify(params?.mcpServers ?? null)); } catch { /* ignore */ }
+      }
       reply(id, { sessionId });
       return;
     case "session/load":

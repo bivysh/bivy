@@ -284,18 +284,22 @@ export class SessionOrchestrator {
     }
 
     if (opts.retireSource) {
+      // Retire the MOVE's source with the confirmation-gated, idempotent command
+      // (1A) — it carries the destination id so the source node refuses to retire
+      // unless the move actually produced `sessionId`, and is safe to re-send.
+      const retire = { kind: "session.fork.retire-source" as const, sourceSessionId, newSessionId: sessionId };
       if (crossNode) {
         try {
           this.deps.switchNode(sourceNodeId);
           await this.deps.waitForOnline();
-          this.deps.send({ kind: "session.delete", sessionId: sourceSessionId });
+          this.deps.send(retire);
         } finally {
           this.deps.switchNode(destNodeId!);
           await this.deps.waitForOnline().catch(() => {});
           this.deps.openSession(sessionId);
         }
       } else {
-        this.deps.send({ kind: "session.delete", sessionId: sourceSessionId });
+        this.deps.send(retire);
       }
     }
     return { sessionId, ...this.forkResult(done, "seeded") };

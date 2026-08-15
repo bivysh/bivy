@@ -16,8 +16,15 @@
 //
 // Pure fs leaf: imports nothing from the kernel; the daemon constructs one
 // AuditLog and hands `record` to the guardian / egress / approval seams.
+//
+// TAMPER-EVIDENCE (phase 2A): when built with a signer, every appended line is
+// hash-chained and signed (see ./integrity.ts), so truncation, reordering, and
+// edits become detectable via `verifyAuditChain`. The chain is stamped as extra
+// fields (`seq`/`prev`/`hash`/`sig`), which readers below ignore, so it is fully
+// backward-compatible with pre-chain audit files.
 import fs from "node:fs";
 import path from "node:path";
+import { type AuditSigner, type ChainState, chainEntry, readChainState } from "./integrity.js";
 
 /** A single governance event. `ts` is stamped by the writer. */
 export interface AuditEvent {
@@ -77,8 +84,14 @@ export interface AuditHealth {
   corruptLines: number;
 }
 
+export interface CreateAuditLogOptions {
+  /** When present, hash-chain and sign every entry so the trail is tamper-evident
+   *  (the daemon passes the node's Ed25519 audit key; omit for a plain trail). */
+  signer?: AuditSigner;
+}
+
 /** Build the node's audit log under `<dir>/audit.jsonl` (dir created lazily). */
-export function createAuditLog(dir: string): AuditLog {
+export function createAuditLog(dir: string, opts: CreateAuditLogOptions = {}): AuditLog {
   const file = path.join(dir, "audit.jsonl");
   let ensured = false;
   let successfulWrites = 0;
@@ -86,6 +99,9 @@ export function createAuditLog(dir: string): AuditLog {
   let cachedSignature = "";
   let cachedStorage: AuditHealth["storage"] = "missing";
   let cachedCorruptLines = 0;
+  // Resume the hash chain from the file's tail so a daemon restart continues it
+  // rather than forking a fresh chain (which would read as a truncation).
+  const chain: ChainState = readChainState(file);
   return {
     file,
     record(event) {
@@ -94,7 +110,8 @@ export function createAuditLog(dir: string): AuditLog {
           fs.mkdirSync(dir, { recursive: true });
           ensured = true;
         }
-        fs.appendFileSync(file, `${JSON.stringify({ ts: Date.now(), ...event })}\n`);
+        const line = chainEntry(chain, { ts: Date.now(), ...event }, opts.signer);
+        fs.appendFileSync(file, `${JSON.stringify(line)}\n`);
         successfulWrites += 1;
         cachedSignature = "";
       } catch {

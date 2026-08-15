@@ -16,7 +16,7 @@ import {
 } from "../agents/codex/integration.js";
 import { invalidatePiCommandProbe, piAgentDir, piCommandAvailable, piIntegration } from "../agents/pi/integration.js";
 import { deleteCodexSession, loadCodexTranscript } from "./codex-sessions.js";
-import { deleteOpenCodeSession, loadOpenCodeTranscript, writeOpenCodeHistory } from "./opencode-sessions.js";
+import { deleteOpenCodeSession, exportOpenCodeSession, importOpenCodeSession, loadOpenCodeTranscript, writeOpenCodeHistory } from "./opencode-sessions.js";
 import { discoverNativeGrokSessions, listGrokSessions, loadGrokTranscript } from "./grok-sessions.js";
 import { createCredentialStore } from "./credentials.js";
 import { AgentRegistry } from "../agents/registry.js";
@@ -56,7 +56,7 @@ function codexResumeArgs(sessionId: string, tier: string): string[] {
   // (read-only | workspace-write | danger-full-access), so `tier` needs no mapping.
   return ["exec", "--json", "--sandbox", tier, "resume", sessionId];
 }
-import type { ModelInfo, ForkHistoryMessage, ForkImportContext } from "./types.js";
+import type { ModelInfo, ForkHistoryMessage, ForkImportContext, ForkNativePayload } from "./types.js";
 import { PiRuntime } from "../agents/pi/runtime.js";
 import { ProcessRuntime, processRuntimeFromEnv, type ProcessModelConfig, type ProcessPromptMode, type ProcessThinkingConfig } from "./process.js";
 import { codexCredentialPreflight } from "./codex-preflight.js";
@@ -65,6 +65,8 @@ import { grokCredentialPreflight } from "./grok-preflight.js";
 import { ensureGrokAuth } from "./grok-auth.js";
 import { parserFactoryFor } from "./cli-parsers.js";
 import { sandboxTier, sandboxArgsFor } from "../harness/sandbox.js";
+import type { McpConfig } from "../harness/mcp-config.js";
+import { serializeAcpMcpEnv } from "./acp-mcp.js";
 import { ProtocolRuntime, protocolRuntimeFromEnv, protocolCommandsFromEnv, type ProtocolRuntimeOptions } from "./protocol.js";
 import { codexSlashCommands, opencodeSlashCommands, type SlashCommandProvider } from "./slash-commands.js";
 import { withExactCapabilitySurface, type AgentRuntime } from "./types.js";
@@ -710,9 +712,13 @@ function acpShimPath(): string {
  * through bin/acp-shim.mjs. Shared by the generic `acp` runtime and the per-agent
  * ACP promotion path so both wrap agents identically.
  */
-function acpRuntimeOptions(opts: { id: string; displayName: string; command: string; agentArgs: string[]; credsDir?: string; behaviors?: AgentProfileBehaviors }): ProtocolRuntimeOptions {
+function acpRuntimeOptions(opts: { id: string; displayName: string; command: string; agentArgs: string[]; credsDir?: string; behaviors?: AgentProfileBehaviors; mcpConfig?: McpConfig }): ProtocolRuntimeOptions {
   const slashBehavior = opts.behaviors?.slashCommands;
   const slashCommands = slashBehavior ? SLASH_COMMAND_BEHAVIORS[slashBehavior]() : undefined;
+  // Forward Bivy's configured MCP servers to the ACP agent (3A): the shim reads
+  // BIVY_ACP_MCP_SERVERS and advertises them on session/new — previously it sent
+  // [], so ACP agents couldn't reach MCP (including Bivy's own tools server).
+  const acpMcpEnv = serializeAcpMcpEnv(opts.mcpConfig);
   return {
     id: opts.id,
     displayName: opts.displayName,
@@ -722,6 +728,7 @@ function acpRuntimeOptions(opts: { id: string; displayName: string; command: str
     // the FIRST session (before the shim's hello lands); the hello confirms them.
     capabilities: { toolInterception: true, resume: true },
     resumable: true,
+    ...(acpMcpEnv ? { env: { BIVY_ACP_MCP_SERVERS: acpMcpEnv } } : {}),
     // An ACP-promoted opencode still surfaces/expands its on-disk commands (the
     // ACP handshake doesn't carry them); a bare ACP agent has none.
     ...(slashCommands ? { slashCommands } : {}),
@@ -738,6 +745,11 @@ function acpRuntimeOptions(opts: { id: string; displayName: string; command: str
           loadHistory: (sessionRef: string) => loadOpenCodeTranscript(sessionRef),
           deleteHistory: (sessionRef: string) => void deleteOpenCodeSession(sessionRef),
           writeHistory: (history: ForkHistoryMessage[], ctx: ForkImportContext) => writeOpenCodeHistory(history, ctx),
+          // Native same-runtime fork transport (fidelity "full"): clone the
+          // session/message/part rows so an opencode→opencode fork keeps each
+          // message's full data, not a one-text-part-per-turn summary.
+          exportForFork: (sessionRef: string) => exportOpenCodeSession(sessionRef),
+          importForFork: (payload: ForkNativePayload, ctx: ForkImportContext) => importOpenCodeSession(payload, ctx),
         }
       : {}),
   };

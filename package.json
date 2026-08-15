@@ -56,6 +56,7 @@
     "check:routes": "node scripts/check-server-routes.mjs",
     "check:design": "node scripts/check-design-tokens.mjs",
     "gen:agent-manifest": "tsx scripts/generate-agent-manifest.ts",
+    "gen:fork-matrix": "tsx scripts/gen-fork-matrix.ts",
     "certification:generate": "node scripts/certification.mjs --generate",
     "certification:check": "node scripts/certification.mjs --check",
     "certification:latest": "node scripts/certification.mjs --latest",

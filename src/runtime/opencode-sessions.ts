@@ -31,7 +31,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import type { ForkHistoryMessage, ForkImportContext, RuntimeMessage } from "./types.js";
+import type { ForkHistoryMessage, ForkImportContext, ForkNativePayload, RuntimeMessage } from "./types.js";
 
 /** Fallback when the DB has no session row to learn the running version from. */
 const FALLBACK_VERSION = "1.18.18";
@@ -218,6 +218,144 @@ export function writeOpenCodeHistory(
       throw error;
     }
     return { sessionFile: sessionId, id: sessionId };
+  } finally {
+    db.close();
+  }
+}
+
+type Row = Record<string, unknown>;
+
+/** Deep-copy `value`, replacing any string that exactly matches a key in `map`
+ *  with its mapped value. Used to remap old→new ids inside a row's JSON `data`
+ *  (parentID, sessionID, …) without hardcoding the version-variable schema —
+ *  only exact-id string matches are swapped, so unrelated text is never touched. */
+function remapIds(value: unknown, map: Map<string, string>): unknown {
+  if (typeof value === "string") return map.get(value) ?? value;
+  if (Array.isArray(value)) return value.map((v) => remapIds(v, map));
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = remapIds(v, map);
+    return out;
+  }
+  return value;
+}
+
+/** Remap ids inside a JSON-string column (message/part `data`, session `model`). */
+function remapJsonColumn(json: unknown, map: Map<string, string>): unknown {
+  if (typeof json !== "string") return json;
+  try {
+    return JSON.stringify(remapIds(JSON.parse(json), map));
+  } catch {
+    return json; // not JSON (or unparseable) — leave verbatim
+  }
+}
+
+/** Insert one row into `table` using its own column set (schema-version-robust). */
+function insertRow(db: DatabaseSync, table: string, row: Row): void {
+  const cols = Object.keys(row);
+  const placeholders = cols.map(() => "?").join(", ");
+  db.prepare(`INSERT INTO "${table}" (${cols.map((c) => `"${c}"`).join(", ")}) VALUES (${placeholders})`).run(...cols.map((c) => row[c] as never));
+}
+
+/**
+ * Export an OpenCode session's own `session`/`message`/`part` rows verbatim for a
+ * NATIVE same-runtime fork (fidelity "full"). Unlike `writeOpenCodeHistory` (which
+ * collapses every turn to one text part), this carries each message's full `data`
+ * JSON — model, tokens, timestamps, multi-part content — so an opencode→opencode
+ * fork reproduces the session exactly. Returns undefined when the store or the id
+ * is missing (the engine then degrades to replayed/seeded).
+ */
+export function exportOpenCodeSession(sessionRef: string): ForkNativePayload | undefined {
+  let db: DatabaseSync;
+  try {
+    db = openOpenCodeDb(false);
+  } catch {
+    return undefined;
+  }
+  try {
+    const session = db.prepare("SELECT * FROM session WHERE id = ?").get(sessionRef) as Row | undefined;
+    if (!session) return undefined;
+    const messages = db.prepare("SELECT * FROM message WHERE session_id = ? ORDER BY time_created, id").all(sessionRef) as Row[];
+    const parts = db.prepare("SELECT * FROM part WHERE session_id = ? ORDER BY time_created, id").all(sessionRef) as Row[];
+    return { runtimeId: "opencode", kind: "opencode-rows", data: { session, messages, parts, sourceId: sessionRef } };
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Import a payload from `exportOpenCodeSession` into a BRAND-NEW OpenCode session
+ * (fidelity "full"): mint fresh `ses_`/`msg_`/`prt_` ids, remap every FK + nested
+ * id reference, retarget the session's directory/path (and model when requested),
+ * and re-INSERT the rows verbatim otherwise — preserving each message's full
+ * `data`. Never touches the source. THROWS on an unreproducible payload (wrong
+ * kind, missing session row, incompatible store) so the fork engine degrades to
+ * the replayed/seeded tiers. Honors BIVY_OPENCODE_NO_FORK_REPLAY.
+ */
+export function importOpenCodeSession(payload: ForkNativePayload, ctx: ForkImportContext): { sessionFile: string; id: string } {
+  if (process.env.BIVY_OPENCODE_NO_FORK_REPLAY === "1") {
+    throw new Error("OpenCode fork transport disabled (BIVY_OPENCODE_NO_FORK_REPLAY=1)");
+  }
+  if (payload.kind !== "opencode-rows") throw new Error(`Unexpected OpenCode fork payload kind: ${payload.kind}`);
+  const data = payload.data as { session?: Row; messages?: Row[]; parts?: Row[] } | undefined;
+  const srcSession = data?.session;
+  if (!srcSession || typeof srcSession.id !== "string") throw new Error("OpenCode fork payload has no session row");
+  const messages = Array.isArray(data?.messages) ? data!.messages : [];
+  const parts = Array.isArray(data?.parts) ? data!.parts : [];
+
+  // Build the old→new id remap (session + every message + every part).
+  const map = new Map<string, string>();
+  const newSessionId = openCodeId("ses_");
+  map.set(String(srcSession.id), newSessionId);
+  for (const m of messages) if (typeof m.id === "string") map.set(m.id, openCodeId("msg_"));
+  for (const p of parts) if (typeof p.id === "string") map.set(p.id, openCodeId("prt_"));
+
+  const { modelID, providerID } = resolveModel(ctx);
+  const directory = ctx.cwd;
+  const openCodePath = directory.replace(/^\/+/, "");
+
+  const db = openOpenCodeDb(true);
+  try {
+    db.exec("BEGIN");
+    try {
+      // Ensure the fork's project FK resolves (OpenCode seeds `global` lazily).
+      const now = Date.now();
+      db.prepare(
+        `INSERT OR IGNORE INTO project (id, worktree, vcs, name, icon_url, icon_url_override, icon_color,
+          time_created, time_updated, time_initialized, sandboxes, commands)
+         VALUES ('global', '/', NULL, NULL, NULL, NULL, NULL, ?, ?, NULL, '[]', NULL)`,
+      ).run(now, now);
+
+      // Session row: remap ids, retarget cwd/path, refresh slug (avoid a UNIQUE
+      // collision), stamp the requested model, and force the shared `global`
+      // project so the FK always resolves on the destination.
+      const sessionRow: Row = { ...srcSession };
+      for (const k of Object.keys(sessionRow)) sessionRow[k] = remapIds(sessionRow[k], map);
+      sessionRow.id = newSessionId;
+      if ("project_id" in sessionRow) sessionRow.project_id = GLOBAL_PROJECT_ID;
+      if ("slug" in sessionRow) sessionRow.slug = `fork-${randomUUID().slice(0, 8)}`;
+      if ("directory" in sessionRow) sessionRow.directory = directory;
+      if ("path" in sessionRow) sessionRow.path = openCodePath;
+      if ("model" in sessionRow && ctx.model?.id) sessionRow.model = JSON.stringify({ id: modelID, providerID });
+      else if ("model" in sessionRow) sessionRow.model = remapJsonColumn(sessionRow.model, map);
+      insertRow(db, "session", sessionRow);
+
+      for (const src of messages) {
+        const row: Row = {};
+        for (const [k, v] of Object.entries(src)) row[k] = k === "data" ? remapJsonColumn(v, map) : remapIds(v, map);
+        insertRow(db, "message", row);
+      }
+      for (const src of parts) {
+        const row: Row = {};
+        for (const [k, v] of Object.entries(src)) row[k] = k === "data" ? remapJsonColumn(v, map) : remapIds(v, map);
+        insertRow(db, "part", row);
+      }
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+    return { sessionFile: newSessionId, id: newSessionId };
   } finally {
     db.close();
   }

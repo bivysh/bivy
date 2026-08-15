@@ -227,6 +227,26 @@ export async function resolveAdoptBaseRef(repoDir: string, branch: string): Prom
 }
 
 /**
+ * Whether the source branch is actually present on the remote this node cloned
+ * from — i.e. whether a cross-node ADOPT can carry the source's committed work.
+ * When false, adopting would silently base off the destination's DEFAULT branch
+ * and drop every source commit (see resolveAdoptBaseRef's fallback), so fork
+ * stand-up uses this to refuse rather than lose work. Fetches first so a branch
+ * pushed after the clone is still seen.
+ */
+export async function originBranchPresent(repoDir: string, branch: string): Promise<boolean> {
+  // A transient fetch failure shouldn't crash the fork; fall back to whatever
+  // remote-tracking refs the clone already has.
+  try { await fetchOrigin(repoDir); } catch { /* offline / no remote — check local refs */ }
+  try {
+    await exec("git", ["-C", repoDir, "rev-parse", "--verify", "--quiet", `origin/${branch}`], { cwd: repoDir });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Resolve the best base for a same-node fork without assuming the source branch
  * ref still exists. Prefer the live source checkout because it preserves its
  * exact committed tip, including commits that were never pushed. Then try the
