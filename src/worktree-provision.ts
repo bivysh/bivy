@@ -233,7 +233,11 @@ function defaultInstallRunner(): InstallProvisionRunner {
         // Bound each install so a wedged manager can't provision forever.
         const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("install timed out")); }, INSTALL_TIMEOUT_MS);
         child.on("error", (err) => { clearTimeout(timer); reject(err); });
-        child.on("exit", (code) => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error(`exit ${code}`)); });
+        child.on("exit", (code) => {
+          clearTimeout(timer);
+          if (code === 0) resolve();
+          else reject(new Error(`exit ${code}`));
+        });
       });
     },
   };
