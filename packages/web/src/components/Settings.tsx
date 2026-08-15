@@ -1976,44 +1976,16 @@ function AccountPanel() {
           </button>
         )}
       </div>
-      <label className="field-label">Enrolled machines</label>
-      <div className="picker-list">
-        {nodes.map((n) => (
-          <PickerItem
-            key={n.id}
-            active={n.id === controller.local.cur}
-            title={n.name || n.id}
-            meta={n.online ? "Online" : "Offline"}
-            right={
-              <button
-                type="button"
-                className="picker-action danger"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setConfirm({
-                    title: "Remove machine?",
-                    message: `Remove ${n.name || n.id} from your account?`,
-                    action: () => controller.removeNode(n.id).then(() => controller.listNodes().then(setNodes)),
-                  });
-                }}
-              >
-                Remove
-              </button>
-            }
-            onClick={() => controller.switchNode(n.id)}
-          />
-        ))}
-      </div>
-      <label className="field-label">Signed-in devices</label>
-      <div className="picker-list">
-        {devices.length === 0 && <p className="muted">No paired devices.</p>}
-        {devices.map((d) => {
-          const current = controller.isCurrentDevice(d.id);
-          return (
+      <div className="settings-section">
+        <h4 className="settings-subhead">Enrolled machines</h4>
+        <div className="picker-list">
+          {nodes.length === 0 && <div className="picker-empty">No machines enrolled yet.</div>}
+          {nodes.map((n) => (
             <PickerItem
-              key={d.id}
-              title={`${d.label || "Device"}${current ? " (this device)" : ""}`}
-              meta={`Last active ${formatDeviceDate(d.updatedAt)}`}
+              key={n.id}
+              active={n.id === controller.local.cur}
+              title={n.name || n.id}
+              meta={n.online ? "Online" : "Offline"}
               right={
                 <button
                   type="button"
@@ -2021,41 +1993,78 @@ function AccountPanel() {
                   onClick={(e) => {
                     e.stopPropagation();
                     setConfirm({
-                      title: current ? "Sign out this device?" : "Sign out device?",
-                      message: current ? "This device will need to sign in again." : `Sign out ${d.label || "this device"}?`,
-                      label: "Sign out",
-                      action: () => controller
-                        .removeDevice(d.id)
-                        .then(() => {
-                          reloadDevices();
-                          reloadMe();
-                        })
-                        .catch((err) => setErr(String(err.message || err))),
+                      title: "Remove machine?",
+                      message: `Remove ${n.name || n.id} from your account?`,
+                      action: () => controller.removeNode(n.id).then(() => controller.listNodes().then(setNodes)),
                     });
                   }}
                 >
-                  Sign out
+                  Remove
                 </button>
               }
+              onClick={() => controller.switchNode(n.id)}
             />
-          );
-        })}
+          ))}
+        </div>
       </div>
-      {/* This signs the whole account out on this device (unlike the
-          per-device "Sign out" above, which only revokes one paired device) —
-          the higher-impact action, so it gets the same confirmation every
-          other destructive action in this panel already has. */}
-      <button
-        className="btn danger-ghost block"
-        onClick={() => setConfirm({
-          title: "Sign out?",
-          message: "Sign out of Bivy on this device?",
-          label: "Sign out",
-          action: () => controller.signOut(),
-        })}
-      >
-        Sign out
-      </button>
+
+      <div className="settings-section">
+        <h4 className="settings-subhead">Signed-in devices</h4>
+        <div className="picker-list">
+          {devices.length === 0 && <div className="picker-empty">No paired devices.</div>}
+          {devices.map((d) => {
+            const current = controller.isCurrentDevice(d.id);
+            return (
+              <PickerItem
+                key={d.id}
+                title={`${d.label || "Device"}${current ? " (this device)" : ""}`}
+                meta={`Last active ${formatDeviceDate(d.updatedAt)}`}
+                right={
+                  <button
+                    type="button"
+                    className="picker-action danger"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setConfirm({
+                        title: current ? "Sign out this device?" : "Sign out device?",
+                        message: current ? "This device will need to sign in again." : `Sign out ${d.label || "this device"}?`,
+                        label: "Sign out",
+                        action: () => controller
+                          .removeDevice(d.id)
+                          .then(() => {
+                            reloadDevices();
+                            reloadMe();
+                          })
+                          .catch((err) => setErr(String(err.message || err))),
+                      });
+                    }}
+                  >
+                    Sign out
+                  </button>
+                }
+              />
+            );
+          })}
+        </div>
+      </div>
+
+      {/* This signs the whole account out on this device (unlike the per-device
+          "Sign out" above, which only revokes one paired device) — the higher-
+          impact action, so it gets the same confirmation as every other
+          destructive action in this panel. */}
+      <div className="settings-section">
+        <button
+          className="btn danger-ghost block"
+          onClick={() => setConfirm({
+            title: "Sign out?",
+            message: "Sign out of Bivy on this device?",
+            label: "Sign out",
+            action: () => controller.signOut(),
+          })}
+        >
+          Sign out
+        </button>
+      </div>
     </div>
   );
 }
