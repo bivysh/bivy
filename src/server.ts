@@ -135,6 +135,7 @@ import { createCapabilitiesController } from "./controllers/capabilities.js";
 import { createAccessDeviceController, createLinkedDeviceController } from "./controllers/devices.js";
 import { createSessionControlCommands } from "./controllers/session-control.js";
 import { createForkCommands } from "./controllers/fork-commands.js";
+import { createGithubCommands } from "./controllers/github-commands.js";
 import { historyDelta, type HistoryCursor } from "./history-sync.js";
 import { MetadataStore, type MetadataSession } from "./metadata.js";
 import { resolveResumeRef, resumeRefFor } from "./session-ref.js";
@@ -2139,6 +2140,16 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     standUpFork: (opts) => forkStandUp.standUpFork(opts),
     retireSource: (input) => forkRetire.retireSource(input),
   }),
+  // GitHub connect + App-manifest cluster, extracted to controllers/github-commands.ts.
+  ...createGithubCommands({
+    sendEvent: (event) => relay?.sendEvent(event),
+    startGithubConnect,
+    pollGithubConnect,
+    startAppManifest,
+    completeAppManifest,
+    connectExistingApp,
+    disconnectGithubApp,
+  }),
   // Live-stream gap recovery: replay the session.events a client missed after the
   // last seq it holds, or tell it to full-resync (mode:"reset") when the ring has
   // evicted past that point. Answers only the caller (ctx.reply); other clients
@@ -2308,70 +2319,12 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
   async "activation.readiness"(_msg, ctx) {
     ctx.broadcast({ type: "activation.readiness", ...(await activationReadinessSnapshot()) });
   },
-  // Web-driven "Connect GitHub" for the repo picker: start the node's device
-  // flow, then poll it on GitHub's interval. Both answer with the same
-  // `github.connect.status` event so the client has one shape to handle.
-  async "github.connect.start"() {
-    relay?.sendEvent({ type: "github.connect.status", ...(await startGithubConnect()) });
-  },
-  async "github.connect.poll"() {
-    relay?.sendEvent({ type: "github.connect.status", ...(await pollGithubConnect()) });
-  },
   // Branches for the repo the composer's repo pill just picked, so the branch
   // pill next to it can offer a specific remote branch to clone/base a new
   // session from instead of always the repo's default. See listRepoBranches.
   async "branches.list"(msg) {
     const repo = typeof msg.repo === "string" ? msg.repo.trim() : "";
     relay?.sendEvent({ type: "branches.list", ...(await listRepoBranches(repo)) });
-  },
-  // GitHub App one-click, over the relay so it works on a headless/remote
-  // node: the browser passes its own origin as the redirect base, submits
-  // the manifest to GitHub itself, then relays the returned code back here —
-  // the node alone exchanges it, so the private key never leaves it.
-  async "github.app.manifest.start"(msg) {
-    const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
-    try {
-      const out = await startAppManifest({
-        redirectBase: String(msg.origin ?? ""),
-        org: typeof msg.org === "string" ? msg.org : undefined,
-      });
-      relay?.sendEvent({ type: "github.app.manifest.ready", requestId, ...out });
-    } catch (error) {
-      relay?.sendEvent({ type: "github.app.manifest.error", requestId, error: error instanceof Error ? error.message : String(error) });
-    }
-  },
-  async "github.app.manifest.code"(msg) {
-    const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
-    try {
-      const out = await completeAppManifest({ code: String(msg.code ?? ""), state: String(msg.state ?? "") });
-      relay?.sendEvent({ type: "github.app.manifest.done", requestId, ...out });
-    } catch (error) {
-      relay?.sendEvent({ type: "github.app.manifest.error", requestId, error: error instanceof Error ? error.message : String(error) });
-    }
-  },
-  async "github.app.connect-existing"(msg) {
-    // Reuse the manifest flow's done/error events so the existing GithubApp
-    // phase machine + settings UI handle success/failure with no new plumbing.
-    const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
-    try {
-      const out = await connectExistingApp({
-        appId: String(msg.appId ?? ""),
-        privateKeyPem: String(msg.privateKeyPem ?? ""),
-        nodeLabel: typeof msg.nodeLabel === "string" ? msg.nodeLabel : undefined,
-      });
-      relay?.sendEvent({ type: "github.app.manifest.done", requestId, ...out });
-    } catch (error) {
-      relay?.sendEvent({ type: "github.app.manifest.error", requestId, error: error instanceof Error ? error.message : String(error) });
-    }
-  },
-  "github.app.disconnect"(msg) {
-    const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
-    // appId (or hookId, for a stale app with no App ID) scopes the disconnect to
-    // one app; both omitted = disconnect them all.
-    const appId = typeof msg.appId === "string" && msg.appId.trim() ? msg.appId.trim() : undefined;
-    const hookId = typeof msg.hookId === "string" && msg.hookId.trim() ? msg.hookId.trim() : undefined;
-    disconnectGithubApp({ appId, hookId });
-    relay?.sendEvent({ type: "github.app.disconnected", requestId, ok: true, appId, hookId });
   },
   "workspaces.list"() {
     relay?.sendEvent({
