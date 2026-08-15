@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 import fs from "node:fs";
 import path from "node:path";
 
-import { cowProvisionDeps } from "./worktree-provision.js";
+import { cowProvisionDeps, provisionDepsByInstall } from "./worktree-provision.js";
 
 const exec = promisify(execFile);
 
@@ -131,7 +131,17 @@ export async function createWorktree(opts: {
   // target, .venv) via copy-on-write when the filesystem supports it, so a
   // second worktree of this repo costs ~its diff instead of a full re-install.
   // Opt-in (BIVY_WORKTREE_COW_CLONE), CoW-only, lockfile-matched, best-effort.
-  cowProvisionDeps({ worktreePath: wtPath, worktreesRoot: root, log: (m) => console.log(m) });
+  const cow = cowProvisionDeps({ worktreePath: wtPath, worktreesRoot: root, log: (m) => console.log(m) });
+
+  // Cross-Machine fallback (1D): when CoW cloned nothing (fresh destination with
+  // no sibling — the exact cross-Machine move case), provision the deps by running
+  // the detected managers' installs so the agent doesn't hit a cold tree. Opt-in
+  // (BIVY_WORKTREE_AUTO_INSTALL), background (never blocks worktree creation),
+  // best-effort. `planInstallProvision` skips any dir a CoW clone already filled.
+  if (cow.cloned.length === 0) {
+    void provisionDepsByInstall({ worktreePath: wtPath, log: (m) => console.log(m) })
+      .catch((error) => console.log(`[worktree] auto-provision error: ${error instanceof Error ? error.message : String(error)}`));
+  }
 
   return { path: wtPath, branch, repoRoot };
 }

@@ -25,6 +25,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { spawn, spawnSync } from "node:child_process";
 
 import { detectCloneStrategy, cloneDir, type CloneStrategy } from "./harness/cow-clone.js";
 
@@ -102,6 +103,143 @@ export function planCowProvision(opts: { worktreePath: string; worktreesRoot: st
   }
   return plan;
 }
+
+// --- install-based provisioning (Approach B: cross-Machine, no sibling) --------
+// The CoW path above only helps when a SIBLING worktree of the same repo already
+// has the installed dir. On a fresh destination Machine (a cross-Machine move,
+// phase 1D) there is no sibling, so the tree lands with no node_modules/.venv/
+// target and the agent hits a cold — sometimes broken — tree on its first turn.
+// This detects the project's package managers from its lockfiles and runs their
+// install so the destination provisions itself. Data-driven: a new ecosystem is a
+// new row, not new branching.
+
+export interface InstallManager {
+  /** Lockfile/manifest whose presence selects this manager. */
+  lockfile: string;
+  /** The installed/derived dir it populates ("" = no local dir, e.g. Go's global
+   *  module cache — such a manager can't be skipped by a present dir). */
+  dir: string;
+  command: string;
+  args: string[];
+}
+
+// Precedence order: the FIRST manager whose lockfile is present wins per `dir`.
+export const INSTALL_MANAGERS: InstallManager[] = [
+  { lockfile: "pnpm-lock.yaml", dir: "node_modules", command: "pnpm", args: ["install", "--frozen-lockfile"] },
+  { lockfile: "package-lock.json", dir: "node_modules", command: "npm", args: ["ci"] },
+  { lockfile: "npm-shrinkwrap.json", dir: "node_modules", command: "npm", args: ["ci"] },
+  { lockfile: "yarn.lock", dir: "node_modules", command: "yarn", args: ["install", "--frozen-lockfile"] },
+  { lockfile: "bun.lockb", dir: "node_modules", command: "bun", args: ["install"] },
+  { lockfile: "Cargo.lock", dir: "target", command: "cargo", args: ["fetch"] },
+  { lockfile: "uv.lock", dir: ".venv", command: "uv", args: ["sync"] },
+  { lockfile: "poetry.lock", dir: ".venv", command: "poetry", args: ["install"] },
+  { lockfile: "Pipfile.lock", dir: ".venv", command: "pipenv", args: ["install"] },
+  { lockfile: "requirements.txt", dir: ".venv", command: "pip", args: ["install", "-r", "requirements.txt"] },
+  { lockfile: "go.mod", dir: "", command: "go", args: ["mod", "download"] },
+];
+
+function fileExists(p: string): boolean {
+  try {
+    return fs.statSync(p).isFile();
+  } catch {
+    return false;
+  }
+}
+
+export interface InstallPlanItem {
+  dir: string;
+  command: string;
+  args: string[];
+  lockfile: string;
+}
+
+/**
+ * Plan the installs a worktree needs to provision its deps from scratch: for each
+ * ecosystem, the first manager (by precedence) whose lockfile is present AND whose
+ * target dir isn't already populated. Pure filesystem logic, so it is fully
+ * unit-testable. Already-provisioned dirs (a CoW clone landed, or the agent ran an
+ * install already) are skipped, so this is safe to re-run.
+ */
+export function planInstallProvision(worktreePath: string): InstallPlanItem[] {
+  const plan: InstallPlanItem[] = [];
+  const claimed = new Set<string>();
+  for (const m of INSTALL_MANAGERS) {
+    if (m.dir && claimed.has(m.dir)) continue; // a higher-precedence manager already owns this dir
+    if (!fileExists(path.join(worktreePath, m.lockfile))) continue;
+    if (m.dir && isDir(path.join(worktreePath, m.dir))) { claimed.add(m.dir); continue; } // already provisioned
+    plan.push({ dir: m.dir, command: m.command, args: m.args, lockfile: m.lockfile });
+    if (m.dir) claimed.add(m.dir);
+  }
+  return plan;
+}
+
+export interface InstallProvisionResult {
+  strategy: "disabled" | "ran";
+  ran: string[];
+  skipped: Array<{ command: string; reason: string }>;
+}
+
+/** Injectable side effects so the orchestration is unit-testable without spawning. */
+export interface InstallProvisionRunner {
+  /** Whether `command` is on PATH (a missing manager is skipped, not fatal). */
+  has(command: string): boolean;
+  /** Run one install in `cwd`; resolves on success, rejects on failure. */
+  run(item: InstallPlanItem, cwd: string): Promise<void>;
+}
+
+/**
+ * Provision a worktree's deps by running each detected manager's install
+ * (cross-Machine fallback when CoW found no sibling). Opt-in via
+ * BIVY_WORKTREE_AUTO_INSTALL. Best-effort: a missing manager is skipped and one
+ * failing install never blocks the others (or the caller). The default runner
+ * spawns real processes; tests inject a fake.
+ */
+export async function provisionDepsByInstall(
+  opts: { worktreePath: string; log?: (msg: string) => void },
+  runner: InstallProvisionRunner = defaultInstallRunner(),
+): Promise<InstallProvisionResult> {
+  if (!process.env.BIVY_WORKTREE_AUTO_INSTALL) return { strategy: "disabled", ran: [], skipped: [] };
+  const ran: string[] = [];
+  const skipped: Array<{ command: string; reason: string }> = [];
+  for (const item of planInstallProvision(opts.worktreePath)) {
+    if (!runner.has(item.command)) {
+      skipped.push({ command: item.command, reason: "not on PATH" });
+      opts.log?.(`[worktree] provision skipped: ${item.command} not installed (${item.lockfile})`);
+      continue;
+    }
+    try {
+      opts.log?.(`[worktree] provisioning ${item.dir || item.command} via ${item.command} ${item.args.join(" ")}`);
+      await runner.run(item, opts.worktreePath);
+      ran.push(item.command);
+    } catch (error) {
+      skipped.push({ command: item.command, reason: error instanceof Error ? error.message : String(error) });
+      opts.log?.(`[worktree] provision of ${item.dir || item.command} failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return { strategy: "ran", ran, skipped };
+}
+
+function defaultInstallRunner(): InstallProvisionRunner {
+  return {
+    has(command: string): boolean {
+      const probe = process.platform === "win32" ? "where" : "command";
+      const args = process.platform === "win32" ? [command] : ["-v", command];
+      const result = spawnSync(probe, args, { stdio: "ignore", shell: process.platform === "win32" });
+      return result.status === 0;
+    },
+    run(item: InstallPlanItem, cwd: string): Promise<void> {
+      return new Promise((resolve, reject) => {
+        const child = spawn(item.command, item.args, { cwd, stdio: "ignore" });
+        // Bound each install so a wedged manager can't provision forever.
+        const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("install timed out")); }, INSTALL_TIMEOUT_MS);
+        child.on("error", (err) => { clearTimeout(timer); reject(err); });
+        child.on("exit", (code) => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error(`exit ${code}`)); });
+      });
+    },
+  };
+}
+
+const INSTALL_TIMEOUT_MS = 15 * 60 * 1000;
 
 export interface CowProvisionResult {
   strategy: CloneStrategy | "disabled" | "no-cow";
