@@ -3,8 +3,9 @@
 The **general high-capability adapter**. Any agent that speaks the
 [Agent Client Protocol](https://agentclientprotocol.com) (ACP) — e.g.
 `gemini --experimental-acp` — is driven through `bin/acp-shim.mjs` into the same
-governed `ProtocolRuntime` that backs Codex approvals. That buys **per-tool
-Approve/Deny**, a **streaming transcript**, and **resume** (`session/load`) with
+governed `ProtocolRuntime` that backs Codex approvals. That buys **Approve/Deny
+for blocking ACP permission requests**, a **streaming transcript**, and **resume**
+(`session/load`) with
 zero per-agent code — the honest, standards-based version of "wrap an agent."
 
 - **Runtime id:** `acp` · **Tier:** Experimental · **In picker:** No (opt-in)
@@ -22,7 +23,7 @@ protocol:
 | --- | --- |
 | `session/update` `agent_message_chunk` | streaming assistant text |
 | `session/update` `agent_thought_chunk` | reasoning block |
-| `session/update` `tool_call` / `tool_call_update` | tool card + result |
+| `session/update` `tool_call` / `tool_call_update` | observed tool card + result (no misleading approval after execution starts) |
 | `session/request_permission` | a governed `tool.call` → Approve/Deny → the selected ACP option |
 | `session/load` | resume a prior session |
 | `fs/read_text_file` / `fs/write_text_file` | serviced against the workspace |
@@ -95,8 +96,10 @@ bundle. When one of them ships a first-party ACP server, promoting it is a one-l
 
 ## Capabilities
 
-- **Approvals:** Yes — per-tool, via `session/request_permission`.
-- **Resume:** Yes — `session/load` (Bivy passes the session ref back).
+- **Approvals:** Yes for calls the agent gates with `session/request_permission`;
+  already-running activity is observed rather than falsely presented as stoppable.
+- **Resume:** Yes — `session/load` (Bivy passes the session ref back). A failed
+  load is explicit and never silently replaced with a new empty conversation.
 - **Models:** Yes, when the agent reports a selectable model config option on
   `session/new`. The shim publishes that list to Bivy as a post-`hello`
   `runtime.models` event and applies a choice with `session/set_model` (falling
@@ -110,5 +113,6 @@ bundle. When one of them ships a first-party ACP server, promoting it is a one-l
 - Experimental: the shim is validated against the ACP spec and a stub agent in
   CI (`test/acp-adapter.test.ts`), not yet against every shipping ACP agent —
   validate for your agent before relying on it.
-- `terminal/*` client methods are declined (the agent falls back); `fs/*` reads
-  and writes are serviced directly within the workspace sandbox.
+- `terminal/*` client methods are declined (the agent falls back). `fs/*` paths
+  are confined to the workspace with symlink-safe checks; writes are blocked in
+  read-only mode and otherwise pass through Bivy's approval/policy decision.

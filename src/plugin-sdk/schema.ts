@@ -106,7 +106,10 @@ export const PLUGIN_MANIFEST_SCHEMA = {
           type: "object",
           additionalProperties: false,
           required: ["args"],
-          properties: { args: { $ref: "#/$defs/stringArgs" } },
+          properties: {
+            args: { $ref: "#/$defs/stringArgs" },
+            newArgs: { $ref: "#/$defs/stringArgs" },
+          },
         },
         model: {
           type: "object",

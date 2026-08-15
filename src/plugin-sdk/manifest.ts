@@ -33,6 +33,8 @@ export interface ProcessAgentAdapter {
   };
   resume?: {
     args: string[];
+    /** Fresh-launch args for an agent that accepts a host-assigned session id. */
+    newArgs?: string[];
   };
   model?: {
     flag: string;
@@ -203,10 +205,12 @@ function parseProcessAdapter(raw: Record<string, unknown>, at: string, errors: s
     const value = object(raw.resume);
     if (!value) errors.push(`${at}.resume must be an object`);
     else {
-      rejectUnknown(value, ["args"], `${at}.resume`, errors);
+      rejectUnknown(value, ["args", "newArgs"], `${at}.resume`, errors);
       const resumeArgs = stringList(value.args, `${at}.resume.args`, errors) ?? [];
+      const newArgs = stringList(value.newArgs, `${at}.resume.newArgs`, errors);
       if (!resumeArgs.some((arg) => arg.includes("{id}"))) errors.push(`${at}.resume.args must contain an {id} placeholder`);
-      resume = { args: resumeArgs };
+      if (newArgs && !newArgs.some((arg) => arg.includes("{id}"))) errors.push(`${at}.resume.newArgs must contain an {id} placeholder`);
+      resume = { args: resumeArgs, ...(newArgs ? { newArgs } : {}) };
     }
   }
 

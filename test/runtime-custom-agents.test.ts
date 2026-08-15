@@ -18,6 +18,7 @@ try {
   assert.equal(custom.displayName, "My Codex");
   assert.equal(custom.supportTier, "experimental");
   assert.equal(custom.certification, "unverified");
+  assert.equal(custom.capabilities.sessionDiscovery, false, "custom commands do not inherit Codex host behavior");
   assert.deepEqual(custom.source, { kind: "config" });
   assert.equal(listRuntimes().some((runtime) => runtime.id === "missing-base"), false);
   assert.equal(listRuntimes().some((runtime) => runtime.id === "prototype-base"), false);

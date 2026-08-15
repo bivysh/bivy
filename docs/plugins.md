@@ -144,6 +144,8 @@ contributes:
           parser: generic-stream-json
         resume:
           args: [run, --resume, "{id}"]
+          # Optional: use when a fresh launch accepts a caller-assigned id.
+          newArgs: [run, --session-id, "{id}"]
         model:
           flag: --model
           insertAt: 1
@@ -197,8 +199,11 @@ An agent contribution supports:
 - `authOwner: agent | bivy | mixed`;
 - `adapter.kind: process | acp`.
 
-Commands and arguments are bounded during validation. Resume arguments must
-contain an `{id}` placeholder. Model choices and agent ids must be unique within
+Commands and arguments are bounded during validation. Resume arguments must contain an `{id}` placeholder. Process agents that accept
+an id on first launch may also declare `resume.newArgs` with `{id}`; Bivy then
+persists that host-assigned ref immediately and uses `resume.args` from the
+second turn onward. Otherwise, validated structured parsers capture a native ref
+from the agent's output when the format exposes one. Model choices and agent ids must be unique within
 the manifest.
 
 ## SDK, schema, and developer loop

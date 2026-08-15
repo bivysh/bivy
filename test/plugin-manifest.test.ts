@@ -32,6 +32,7 @@ contributes:
           parser: generic-stream-json
         resume:
           args: [run, --resume, "{id}"]
+          newArgs: [run, --session-id, "{id}"]
         model:
           flag: --model
           insertAt: 1
@@ -49,6 +50,7 @@ test("plugin manifest validates and normalizes a process agent", () => {
   assert.equal(agent?.adapter.kind, "process");
   if (agent?.adapter.kind === "process") {
     assert.deepEqual(agent.adapter.resume?.args, ["run", "--resume", "{id}"]);
+    assert.deepEqual(agent.adapter.resume?.newArgs, ["run", "--session-id", "{id}"]);
     assert.equal(agent.adapter.model?.choices[0]?.id, "fast");
   }
 });
