@@ -122,7 +122,7 @@ function QuestionCard({
   };
 
   return (
-    <div id={`attention-${encodeURIComponent(request.id)}`} className="question-card">
+    <div id={`attention-${encodeURIComponent(request.id)}`} className="card question-card">
       {request.questions.map((q, qi) => {
         const picked = selected[qi] || [];
         return (

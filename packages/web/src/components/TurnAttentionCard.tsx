@@ -21,7 +21,7 @@ export function TurnAttentionCard({
   };
 
   return (
-    <div id={`attention-${encodeURIComponent(attention.sessionId)}`} className="question-card turn-attention-card" role="alert">
+    <div id={`attention-${encodeURIComponent(attention.sessionId)}`} className="card question-card turn-attention-card" role="alert">
       <div className="question-item">
         <div className="question-head"><Badge tone="warn" variant="soft" upper>Turn may be stuck</Badge></div>
         <div className="question-text">{attention.message}</div>

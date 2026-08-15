@@ -99,6 +99,19 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .menu-item:hover, .menu-item[aria-checked="true"], .menu-item.active { background: var(--surface-2); }
 .menu-item.danger { color: var(--danger); }
 
+/* ---- Cards ---- */
+.card {
+  padding: var(--space-3) var(--space-4); border: 1px solid var(--line);
+  border-radius: var(--radius-md); background: var(--surface);
+}
+.card[data-tone="accent"] { border-color: var(--accent); }
+.card[data-tone="danger"] { border-color: var(--danger); }
+.card[data-tone="muted"] { background: var(--surface-2); }
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin-bottom: var(--space-2); }
+.card-title { font-size: var(--text-base); font-weight: var(--weight-semibold); }
+.card-sub { color: var(--muted); font-size: var(--text-sm); }
+.card-actions { display: flex; gap: var(--space-2); justify-content: flex-end; margin-top: var(--space-3); }
+
 /* ---- Badges ---- */
 .badge {
   display: inline-flex; align-items: center; gap: 5px; width: max-content;
@@ -609,8 +622,6 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
    instead of being clipped in a fixed region between the chat and composer. No
    own padding: .chat already supplies the 20px gutter and the 14px row gap. */
 .approval-stack { display: flex; flex-direction: column; gap: 10px; }
-.approval-card { border: 1px solid var(--accent); border-radius: var(--radius); background: var(--surface); padding: 12px 14px; }
-.approval-card.sev-critical { border-color: var(--danger); }
 .approval-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
 .approval-title { font-size: 14px; font-weight: 650; }
 .approval-consequence { color: var(--muted); font-size: 13px; margin-bottom: 8px; }
@@ -637,7 +648,7 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 /* ---- Clarifying questions (AskUserQuestion) — a blocking multi-choice
    question, not a tool approval, so it gets its own accent (not the
    approval/danger palette) even though it shares the stack/actions layout. */
-.question-card { border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); padding: 12px 14px; display: flex; flex-direction: column; gap: 14px; }
+.question-card { display: flex; flex-direction: column; gap: 14px; }
 .question-item { display: flex; flex-direction: column; gap: 8px; }
 .question-head { display: flex; }
 .question-text { font-size: 14px; font-weight: 600; }
