@@ -101,6 +101,24 @@ export interface ForkStandUp<R extends ForkStandUpSession> {
   standUpFork(opts: StandUpForkOptions): Promise<StandUpForkOutcome<R>>;
 }
 
+/**
+ * A one-line, user-facing disclosure of the source's in-flight state, or
+ * undefined when there is nothing to disclose. Pure so it is unit-testable.
+ */
+export function describeInFlightState(state: ForkBundle["state"]): string | undefined {
+  if (!state) return undefined;
+  const pending = state.pendingApprovals?.length ?? 0;
+  const parts: string[] = [];
+  if (pending > 0) {
+    const names = (state.pendingApprovals ?? []).map((a) => a.toolName).filter(Boolean).slice(0, 3);
+    const detail = names.length ? ` (${names.join(", ")}${pending > names.length ? ", …" : ""})` : "";
+    parts.push(`${pending} pending tool approval${pending === 1 ? "" : "s"}${detail}`);
+  }
+  if (state.working) parts.push("an unfinished turn");
+  if (!parts.length) return undefined;
+  return `The source session had ${parts.join(" and ")} that couldn't carry into the fork — re-issue the request here if you still need it.`;
+}
+
 export function createForkStandUp<R extends ForkStandUpSession>(deps: ForkStandUpDeps<R>): ForkStandUp<R> {
   async function standUpFork(opts: StandUpForkOptions): Promise<StandUpForkOutcome<R>> {
     const { bundle, targetRuntimeId } = opts;
@@ -246,6 +264,11 @@ export function createForkStandUp<R extends ForkStandUpSession>(deps: ForkStandU
     // Surface a non-fatal note when the source's uncommitted changes didn't apply
     // cleanly, so the fork isn't silently missing work-in-progress.
     if (dirtyWarning) deps.broadcast({ type: "session.notice", sessionId: record.id, message: dirtyWarning });
+    // Disclose in-flight state the source had (a mid-turn session, pending tool
+    // approvals) — it belongs to the source runtime's live turn and can't replay
+    // into the fork, so we tell the user rather than silently dropping it (1A).
+    const stateNotice = describeInFlightState(bundle.state);
+    if (stateNotice) deps.broadcast({ type: "session.notice", sessionId: record.id, message: stateNotice });
     await deps.applyRequestedModel(record, targetModel);
     deps.persistSessionMetadata(record);
     deps.scheduleAdvertise();

@@ -68,6 +68,19 @@ export interface ForkDirtyPatch {
   pushedInstead?: boolean;
 }
 
+/**
+ * In-flight state the source had when the bundle was captured. A pending tool
+ * approval and a mid-turn ("working") session belong to the SOURCE runtime's
+ * live turn and cannot be replayed into a fork/move — so they are carried here
+ * purely to DISCLOSE them on the destination (a notice), never silently dropped.
+ */
+export interface ForkInFlightState {
+  /** The source session was mid-turn when captured. */
+  working?: boolean;
+  /** Unanswered tool approvals (bounded metadata: tool name + request id). */
+  pendingApprovals?: Array<{ toolName?: string; requestId?: string }>;
+}
+
 /** The full, E2E-transported fork payload. */
 export interface ForkBundle {
   record: ForkRecord;
@@ -75,6 +88,8 @@ export interface ForkBundle {
   /** Present only when the source runtime supports same-runtime full transport. */
   native?: ForkNativePayload;
   dirtyPatch?: ForkDirtyPatch;
+  /** In-flight turn/approval state, carried for disclosure (see the interface). */
+  state?: ForkInFlightState;
 }
 
 export interface BuildForkBundleOptions {
@@ -103,6 +118,8 @@ export interface BuildForkBundleOptions {
    * shape as `readMessages`. Omit when the runtime already exposes readMessages.
    */
   liveMessages?: readonly RuntimeMessage[];
+  /** In-flight turn/approval state to carry for disclosure on the destination. */
+  state?: ForkInFlightState;
 }
 
 /**
@@ -145,7 +162,7 @@ export function buildForkBundle(opts: BuildForkBundleOptions): ForkBundle {
       // transcript below still supports replay or a seeded continuation.
     }
   }
-  return { record, normalized, ...(native ? { native } : {}), ...(opts.dirtyPatch ? { dirtyPatch: opts.dirtyPatch } : {}) };
+  return { record, normalized, ...(native ? { native } : {}), ...(opts.dirtyPatch ? { dirtyPatch: opts.dirtyPatch } : {}), ...(opts.state ? { state: opts.state } : {}) };
 }
 
 /**

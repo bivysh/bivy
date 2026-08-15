@@ -166,6 +166,23 @@ test("marks forkedFrom, attaches the worktree, and broadcasts session.updated", 
   assert.ok(calls.broadcast.some((b: any) => b.type === "session.updated"));
 });
 
+test("in-flight source state is disclosed on the destination (no silent loss)", async () => {
+  const { standUp, calls } = harness();
+  const b = bundle();
+  (b as any).state = { working: true, pendingApprovals: [{ toolName: "bash", requestId: "r1" }] };
+  const outcome = await standUp.standUpFork(opts({ bundle: b }));
+  assert.ok(outcome.ok);
+  const notice = calls.broadcast.find((p: any) => p.type === "session.notice" && /pending tool approval/.test(p.message));
+  assert.ok(notice, "the destination broadcasts a notice disclosing the source's pending approval / unfinished turn");
+});
+
+test("no in-flight notice when the source had nothing pending", async () => {
+  const { standUp, calls } = harness();
+  await standUp.standUpFork(opts());
+  const notice = calls.broadcast.find((p: any) => p.type === "session.notice" && /pending tool approval|unfinished turn/.test(p.message ?? ""));
+  assert.equal(notice, undefined, "no spurious in-flight notice for a clean fork");
+});
+
 test("resume plan creates from the transcript file; fresh plan creates blank", async () => {
   const resume = harness();
   await resume.standUp.standUpFork(opts());

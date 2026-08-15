@@ -51,6 +51,13 @@ export class ApprovalManager {
     return [...this.history, ...[...this.pending.values()].map((p) => p.request)];
   }
 
+  /** Unanswered approvals for a session. Carried into a fork bundle so a move
+   *  DISCLOSES them (they belong to the source runtime's turn and can't replay
+   *  across a fork) rather than silently dropping the pending decision. */
+  pendingFor(sessionId: string): ApprovalRequest[] {
+    return [...this.pending.values()].map((p) => p.request).filter((r) => r.sessionId === sessionId);
+  }
+
   async request(input: {
     sessionId: string;
     toolName: string;

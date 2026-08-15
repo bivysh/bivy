@@ -3194,7 +3194,7 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
       // When the client has already picked a target agent, pass it so the
       // bundle omits the native payload for a cross-runtime fork (it could
       // never be replayed there — see buildForkBundle). Unset => keep it.
-      const bundle = buildForkBundle({ runtime: getRuntime(rec.runtimeId), sessionFile: rec.sessionFile, record: forkRecord, dirtyPatch, targetRuntimeId: agentFrom(msg), liveMessages: rec.session.getMessages() });
+      const bundle = buildForkBundle({ runtime: getRuntime(rec.runtimeId), sessionFile: rec.sessionFile, record: forkRecord, dirtyPatch, targetRuntimeId: agentFrom(msg), liveMessages: rec.session.getMessages(), state: forkInFlightState(rec) });
       relay?.sendEvent({ type: "session.fork.bundle", requestId, bundle });
     } catch (error) {
       relay?.sendEvent({ type: "session.fork.error", requestId, error: error instanceof Error ? error.message : String(error) });
@@ -3265,7 +3265,7 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
         try { dirtyPatch = captureDirtyPatch(rec.worktree.path); } catch { /* best effort */ }
       }
       // Same runtime → the bundle carries the native payload → full fidelity.
-      const bundle = buildForkBundle({ runtime, sessionFile: rec.sessionFile, record: forkRecord, dirtyPatch, targetRuntimeId: rec.runtimeId, liveMessages: rec.session.getMessages() });
+      const bundle = buildForkBundle({ runtime, sessionFile: rec.sessionFile, record: forkRecord, dirtyPatch, targetRuntimeId: rec.runtimeId, liveMessages: rec.session.getMessages(), state: forkInFlightState(rec) });
       // Cut a fresh fork branch (the source still holds its own); skip prereq
       // detection (same node + same runtime ⇒ agent and repo are present).
       const outcome = await forkStandUp.standUpFork({
@@ -6251,6 +6251,18 @@ function forkRecordFor(rec: SessionRecord): ForkRecord {
       ? { modelRef: { provider: String(currentModel.provider), id: String(currentModel.id) } }
       : {}),
     sandbox: rec.sandbox,
+  };
+}
+
+/** Snapshot the source's in-flight turn/approval state for the fork bundle, so a
+ *  fork/move DISCLOSES a mid-turn session or a pending approval instead of
+ *  silently dropping it (1A). Undefined when there is nothing in flight. */
+function forkInFlightState(rec: SessionRecord): ForkBundle["state"] {
+  const pendingApprovals = approvals.pendingFor(rec.id).map((r) => ({ toolName: r.toolName, requestId: r.id }));
+  if (!rec.isWorking && pendingApprovals.length === 0) return undefined;
+  return {
+    ...(rec.isWorking ? { working: true } : {}),
+    ...(pendingApprovals.length ? { pendingApprovals } : {}),
   };
 }
 
