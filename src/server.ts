@@ -134,11 +134,12 @@ import { listInstalledPlugins } from "./plugins/store.js";
 import { createCapabilitiesController } from "./controllers/capabilities.js";
 import { createAccessDeviceController, createLinkedDeviceController } from "./controllers/devices.js";
 import { createSessionControlCommands } from "./controllers/session-control.js";
+import { createForkCommands } from "./controllers/fork-commands.js";
 import { historyDelta, type HistoryCursor } from "./history-sync.js";
 import { MetadataStore, type MetadataSession } from "./metadata.js";
 import { resolveResumeRef, resumeRefFor } from "./session-ref.js";
-import { buildForkBundle, materializeFork, type ForkBundle, type ForkRecord, type ForkPlan } from "./session/fork.js";
-import { captureDirtyPatch, applyDirtyPatch } from "./session/fork-dirty.js";
+import { materializeFork, type ForkBundle, type ForkRecord, type ForkPlan } from "./session/fork.js";
+import { applyDirtyPatch } from "./session/fork-dirty.js";
 import { thinkingTextFromContent } from "./session/transcript-merge.js";
 import { normalizeMessages } from "./session/transcript-normal.js";
 import { buildNativeImportSeedPrompt } from "./session/native-import.js";
@@ -2120,6 +2121,24 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     resume: resumeSession,
     answer: (record, requestId, input) => answerSessionQuestion(record, requestId, input),
   }),
+  // Session fork/move command cluster, extracted to controllers/fork-commands.ts
+  // (server.ts decomposition). Late-bound singletons (forkStandUp/forkRetire/
+  // branchPublish, declared below) are wrapped in thunks resolved at dispatch time.
+  ...createForkCommands({
+    sendEvent: (event) => relay?.sendEvent(event),
+    broadcast,
+    resolveSession: (sessionId) => resolveSession(sessionId),
+    getRuntime: (runtimeId) => getRuntime(runtimeId),
+    forkRecordFor,
+    forkInFlightState,
+    forkDoneEvent,
+    agentFrom,
+    modelFrom,
+    pushModelAuthToControlPlane,
+    pushForkSourceBranch: (rec) => branchPublish.pushForkSourceBranch(rec),
+    standUpFork: (opts) => forkStandUp.standUpFork(opts),
+    retireSource: (input) => forkRetire.retireSource(input),
+  }),
   // Live-stream gap recovery: replay the session.events a client missed after the
   // last seq it holds, or tell it to full-resync (mode:"reset") when the ring has
   // evicted past that point. Answers only the caller (ctx.reply); other clients
@@ -2465,26 +2484,6 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
       relay?.sendEvent({ type: "session.deleted", sessionId: deleted.sessionId || sid || undefined, sessionFile: deleted.sessionFile });
     } catch (error) {
       relay?.sendEvent({ type: "session.error", sessionId: sid || undefined, error: error instanceof Error ? error.message : String(error) });
-    }
-  },
-  async "session.fork.retire-source"(msg) {
-    // Retire a MOVE's source once its destination is confirmed (1A). Gated (won't
-    // retire without newSessionId) and idempotent (safe for the client to retry),
-    // so a crashed-mid-move client can't orphan the source or lose it. Emits the
-    // ordinary session.deleted so every device drops the moved-away source.
-    const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
-    const sourceSessionId = String(msg.sourceSessionId ?? "").trim();
-    const newSessionId = String(msg.newSessionId ?? "").trim();
-    try {
-      const outcome = await forkRetire.retireSource({ sourceSessionId, newSessionId });
-      if (!outcome.ok) {
-        relay?.sendEvent({ type: "session.fork.error", requestId, sessionId: sourceSessionId || undefined, error: outcome.error });
-        return;
-      }
-      if (outcome.retired) broadcast({ type: "session.deleted", sessionId: sourceSessionId });
-      relay?.sendEvent({ type: "session.fork.retired", requestId, sourceSessionId, newSessionId, alreadyGone: outcome.alreadyGone });
-    } catch (error) {
-      relay?.sendEvent({ type: "session.fork.error", requestId, sessionId: sourceSessionId || undefined, error: error instanceof Error ? error.message : String(error) });
     }
   },
   async "session.open"(msg) {
@@ -3184,127 +3183,6 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
       clearSessionWorking(record);
       broadcast({ type: "session.error", sessionId: record.id, error: actionableAgentError(record.runtimeId, error) });
     });
-  },
-  async "session.fork.export"(msg) {
-    // Source side of a session fork (docs/session-fork-plan.md): package the
-    // session's transcript + portable metadata + any uncommitted worktree
-    // changes into an E2E bundle the client carries to the destination node.
-    const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
-    const rec = resolveSession(msg.sessionId);
-    if (!rec) {
-      relay?.sendEvent({ type: "session.fork.error", requestId, error: "Session not found on this node." });
-      return;
-    }
-    try {
-      const forkRecord = forkRecordFor(rec);
-      let dirtyPatch;
-      if (rec.worktree) {
-        try { dirtyPatch = captureDirtyPatch(rec.worktree.path); } catch { /* best effort — omit dirty state */ }
-      }
-      // Publish the source branch so a cross-node fork's COMMITTED work travels
-      // via origin (the destination adopts `origin/<branch>`; see
-      // resolveAdoptBaseRef). Uncommitted work rides the dirtyPatch above. Only
-      // for a genuine cross-node fork — a same-node cross-agent fork adopts the
-      // LOCAL branch and needs no push. Best-effort: a no-token/offline node just
-      // falls back to the default base downstream.
-      if (msg.crossNode === true) await branchPublish.pushForkSourceBranch(rec);
-      // Refresh the account model-auth vault so the destination node can pull
-      // this session's model credentials during import (fork credential-move,
-      // docs/session-fork-plan.md). Best-effort: local-only nodes just skip it.
-      await pushModelAuthToControlPlane().catch(() => {});
-      // When the client has already picked a target agent, pass it so the
-      // bundle omits the native payload for a cross-runtime fork (it could
-      // never be replayed there — see buildForkBundle). Unset => keep it.
-      const bundle = buildForkBundle({ runtime: getRuntime(rec.runtimeId), sessionFile: rec.sessionFile, record: forkRecord, dirtyPatch, targetRuntimeId: agentFrom(msg), liveMessages: rec.session.getMessages(), state: forkInFlightState(rec) });
-      relay?.sendEvent({ type: "session.fork.bundle", requestId, bundle });
-    } catch (error) {
-      relay?.sendEvent({ type: "session.fork.error", requestId, error: error instanceof Error ? error.message : String(error) });
-    }
-  },
-  async "session.fork.import"(msg) {
-    // Destination side of a fork: rebuild the repo/worktree, materialise the
-    // transcript into the (possibly different) target runtime — full fidelity
-    // for a same-runtime fork, a seeded continuation prompt otherwise — and
-    // stand up the new session. The client retires the source (for a "move")
-    // only after this succeeds, so a failed fork never loses the session.
-    const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
-    const bundle = msg.bundle as ForkBundle | undefined;
-    if (!bundle?.record || !bundle.normalized) {
-      relay?.sendEvent({ type: "session.fork.error", requestId, error: "Malformed fork bundle." });
-      return;
-    }
-    try {
-      // Cross-node fork: adopt the source's branch on this node and run full
-      // prerequisite detection. See standUpFork / fork-prereqs.ts.
-      const outcome = await forkStandUp.standUpFork({
-        bundle,
-        targetRuntimeId: agentFrom(msg) ?? bundle.record.runtimeId,
-        model: modelFrom(msg),
-        transcriptUrl: typeof msg.transcriptUrl === "string" ? msg.transcriptUrl : undefined,
-        // Cross-agent forks can use this import handler without changing
-        // nodes. In that case the source branch is already checked out here,
-        // so cut an independent fork branch instead of trying to adopt it.
-        worktree: msg.sameNode === true ? "fresh" : "adopt",
-        detectPrereqs: true,
-        // A same-node cross-agent fork can safely retain a non-repo workspace.
-        // A cross-node path belongs to the source machine, so standUpFork keeps
-        // its destination default unless repo metadata lets it reconstruct one.
-        ...(msg.sameNode === true
-          ? { fallback: { workspace: bundle.record.workspace, cwd: bundle.record.cwd } }
-          : {}),
-      });
-      if (!outcome.ok) {
-        relay?.sendEvent({ type: "session.fork.error", requestId, error: outcome.error, missing: outcome.missing });
-        return;
-      }
-      relay?.sendEvent(forkDoneEvent(requestId, outcome.record, outcome.plan, outcome.missing));
-    } catch (error) {
-      relay?.sendEvent({ type: "session.fork.error", requestId, error: error instanceof Error ? error.message : String(error) });
-    }
-  },
-  async "session.fork.local"(msg) {
-    // Fast path (docs/session-fork-plan.md): fork a session on the SAME node
-    // and SAME runtime WITHOUT round-tripping the transcript out to the client
-    // and back. We build the fork bundle in-process and stand the new session
-    // up locally (via the shared standUpFork), so a large transcript never
-    // leaves the node. Full fidelity by construction (same runtime → native
-    // replay). The client uses this whenever the fork keeps the node and agent
-    // (model may still change); any node/agent change goes through import above.
-    const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
-    const rec = resolveSession(msg.sessionId);
-    if (!rec) {
-      relay?.sendEvent({ type: "session.fork.error", requestId, error: "Session not found on this node." });
-      return;
-    }
-    try {
-      const runtime = getRuntime(rec.runtimeId);
-      const forkRecord = forkRecordFor(rec);
-      // Carry uncommitted work: capture from the SOURCE worktree; standUpFork
-      // re-applies it into the fork's fresh worktree. Local git ops only.
-      let dirtyPatch;
-      if (rec.worktree) {
-        try { dirtyPatch = captureDirtyPatch(rec.worktree.path); } catch { /* best effort */ }
-      }
-      // Same runtime → the bundle carries the native payload → full fidelity.
-      const bundle = buildForkBundle({ runtime, sessionFile: rec.sessionFile, record: forkRecord, dirtyPatch, targetRuntimeId: rec.runtimeId, liveMessages: rec.session.getMessages(), state: forkInFlightState(rec) });
-      // Cut a fresh fork branch (the source still holds its own); skip prereq
-      // detection (same node + same runtime ⇒ agent and repo are present).
-      const outcome = await forkStandUp.standUpFork({
-        bundle,
-        targetRuntimeId: rec.runtimeId,
-        model: modelFrom(msg),
-        worktree: "fresh",
-        detectPrereqs: false,
-        fallback: { workspace: rec.workspace, cwd: rec.session.cwd || rec.worktree?.path || rec.workspace },
-      });
-      if (!outcome.ok) {
-        relay?.sendEvent({ type: "session.fork.error", requestId, error: outcome.error, missing: outcome.missing });
-        return;
-      }
-      relay?.sendEvent(forkDoneEvent(requestId, outcome.record, outcome.plan, outcome.missing));
-    } catch (error) {
-      relay?.sendEvent({ type: "session.fork.error", requestId, error: error instanceof Error ? error.message : String(error) });
-    }
   },
   async "session.new"(msg) {
     // Start a fresh session. With `repo` ("owner/repo"), clone it and branch
