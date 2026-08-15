@@ -12,8 +12,8 @@
  * hex or px. `pnpm run check:design` enforces that no other stylesheet redeclares
  * a palette token. See packages/web/CLAUDE.md for the design rules agents follow.
  *
- * Palette: warm "paper" light theme + "alpine slate" dark theme — the shipping
- * Bivy look. Toggle dark with <html data-theme="dark">; with no attribute it
+ * Palette: high-contrast neutral light + dark themes, with color reserved for
+ * actions and status. Toggle dark with <html data-theme="dark">; with no attribute it
  * follows the OS. prefers-reduced-motion collapses the motion tokens.
  *
  * Naming: the canonical vocabulary is --bg / --surface* / --ink / --muted /
@@ -26,23 +26,20 @@
 :root {
   color-scheme: light;
 
-  /* ---- Core surfaces & text (paper) ---- */
-  --bg: #f5f3ee;
-  --surface: #faf8f3;
-  --surface-2: #efece4;
-  --surface-3: #e7e3d9;
-  --ink: #191a16;
-  --muted: #74766c;
-  --line: #e4e1d8;
-  --line-strong: #d3cfc4;
-  --overlay: rgba(25, 26, 22, 0.42);
+  /* ---- Core surfaces & text (neutral) ---- */
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f5f5f5;
+  --surface-3: #ededed;
+  --ink: #111111;
+  --muted: #6b6b6b;
+  --line: #e5e5e5;
+  --line-strong: #d4d4d4;
+  --overlay: rgba(0, 0, 0, 0.46);
 
-  /* ---- Accent (alpine slate) ---- */
+  /* ---- Accent (reserved for primary actions and active status) ---- */
   --accent: #3f6377;
-  /* Text on the accent fill (.btn.primary, badges, composer send…). The slate
-     accent is dark, so paper-light text clears ~5.3:1 (WCAG AA). Dark theme's
-     glacier accent is light, so it pairs with a near-black contrast text. */
-  --accent-contrast: #f5f3ee;
+  --accent-contrast: #ffffff;
   --accent-hover: #324f60;
   --accent-active: color-mix(in srgb, var(--accent), #000 22%);
   --accent-soft: color-mix(in srgb, var(--accent) 16%, var(--surface));
@@ -50,7 +47,7 @@
   /* ---- Status ---- */
   --danger: #b0473d;   --danger-soft: #f3e3df;
   --ok: #4f7a5c;
-  --merged: #7a6a9e;   /* GitHub merged-PR purple, desaturated to sit in-palette */
+  --merged: #7a6a9e;
   /* A run that finished while you weren't looking — its own signal, deliberately
      not accent (working) / danger (needs input) / ok / merged, so
      "something's ready" reads at a glance. */
@@ -103,10 +100,10 @@
   --radius-full: 999px;
 
   /* ---- Elevation ---- */
-  --shadow-sm: 0 1px 2px rgba(25, 26, 22, 0.06), 0 1px 3px rgba(25, 26, 22, 0.08);
-  --shadow-md: 0 4px 12px rgba(25, 26, 22, 0.08);
-  --shadow-lg: 0 12px 32px rgba(25, 26, 22, 0.12);
-  --shadow-xl: 0 24px 70px rgba(25, 26, 22, 0.16);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.12);
+  --shadow-xl: 0 24px 70px rgba(0, 0, 0, 0.16);
 
   /* ---- Motion ---- */
   --dur-fast: 120ms;
@@ -152,10 +149,10 @@
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #14171a; --surface: #191d21; --surface-2: #1f242a; --surface-3: #252b31;
-  --ink: #e6ebee; --muted: #838b91; --line: #262c31; --line-strong: #384049;
-  --overlay: rgba(0, 0, 0, 0.6);
-  --accent: #8fb6cd; --accent-contrast: #14171a; --accent-hover: #a7cadd;
+  --bg: #0a0a0a; --surface: #0a0a0a; --surface-2: #171717; --surface-3: #262626;
+  --ink: #fafafa; --muted: #a3a3a3; --line: #262626; --line-strong: #404040;
+  --overlay: rgba(0, 0, 0, 0.7);
+  --accent: #8fb6cd; --accent-contrast: #0a0a0a; --accent-hover: #a7cadd;
   --danger: #c08a83; --danger-soft: #3a2420; --ok: #86a99f; --merged: #a99bc4;
   --unseen: #cba96a;
   --warn: #d9a441;
@@ -171,10 +168,10 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
     color-scheme: dark;
-    --bg: #14171a; --surface: #191d21; --surface-2: #1f242a; --surface-3: #252b31;
-    --ink: #e6ebee; --muted: #838b91; --line: #262c31; --line-strong: #384049;
-    --overlay: rgba(0, 0, 0, 0.6);
-    --accent: #8fb6cd; --accent-contrast: #14171a; --accent-hover: #a7cadd;
+    --bg: #0a0a0a; --surface: #0a0a0a; --surface-2: #171717; --surface-3: #262626;
+    --ink: #fafafa; --muted: #a3a3a3; --line: #262626; --line-strong: #404040;
+    --overlay: rgba(0, 0, 0, 0.7);
+    --accent: #8fb6cd; --accent-contrast: #0a0a0a; --accent-hover: #a7cadd;
     --danger: #c08a83; --danger-soft: #3a2420; --ok: #86a99f; --merged: #a99bc4;
     --unseen: #cba96a;
     --warn: #d9a441;
