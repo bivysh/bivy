@@ -16,7 +16,8 @@ import { SessionRerouteController, type ResumePlan } from "./policy/session-rero
 import { activeRulesetFor } from "./runtime/ruleset-store.js";
 import { createRulesetController } from "./controllers/rulesets.js";
 import { createAuditLog, readAuditEvents } from "./audit/index.js";
-import { loadOrCreateAuditKey } from "./audit/integrity.js";
+import { loadOrCreateAuditKey, readChainState } from "./audit/integrity.js";
+import { attestEvidence } from "./audit/receipt-attest.js";
 import { receiptEvidenceForRun } from "./audit/receipt-evidence.js";
 import { createWorkspaceController } from "./controllers/workspaces.js";
 import { createModelController } from "./controllers/models.js";
@@ -4510,6 +4511,29 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
             : stage === "no_changes" ? "Run completed with no file changes."
               : stage === "checks_failed" ? "Deterministic validation checks failed."
                 : "Execution failed. Detailed diagnostics remain on the node.";
+      // On a terminal event, attest the node-authored governance evidence with
+      // the audit key and anchor it to the current audit chain head — so the
+      // downstream Receipt carries a verifiable node signature (2A), not just an
+      // unsigned projection. Emitted alongside the raw evidence (non-breaking).
+      const receiptEvidence = terminal
+        ? receiptEvidenceForRun(auditEvents, fs.existsSync(auditLog.file), {
+          profile: record.ephemeral ? "isolated_customer_cloud" : "trusted_workstation",
+          controller: record.ephemeral ? "bivy_hosted_provisioning" : "customer",
+          sandboxTier: record.sandbox,
+          approvalMode: record.approvalMode,
+          runtimeEnforcement: runtimeInfo?.protectionLevel,
+          toolInterception: runtimeInfo?.capabilities?.toolInterception === true,
+          correlation: overrides.correlation,
+        })
+        : undefined;
+      const receiptAttestation = receiptEvidence
+        ? attestEvidence(receiptEvidence, auditKey.signer, {
+          createdAt: new Date().toISOString(),
+          runId: overrides.correlation?.runId,
+          machineId: overrides.correlation?.machineId,
+          auditChainHead: readChainState(auditLog.file).prev || undefined,
+        }).attestation
+        : undefined;
       void overrides.onEvidence?.({
         output: { sessionId: record.id, branch, prUrl: typeof extra.prUrl === "string" ? extra.prUrl : undefined },
         events: [{
@@ -4520,15 +4544,8 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
           url: typeof extra.prUrl === "string" ? extra.prUrl : undefined,
           ...(stage === "checks_failed" || stage === "failed" ? { status: "failed" } : {}),
         }],
-        ...(terminal ? { receiptEvidence: receiptEvidenceForRun(auditEvents, fs.existsSync(auditLog.file), {
-          profile: record.ephemeral ? "isolated_customer_cloud" : "trusted_workstation",
-          controller: record.ephemeral ? "bivy_hosted_provisioning" : "customer",
-          sandboxTier: record.sandbox,
-          approvalMode: record.approvalMode,
-          runtimeEnforcement: runtimeInfo?.protectionLevel,
-          toolInterception: runtimeInfo?.capabilities?.toolInterception === true,
-          correlation: overrides.correlation,
-        }) } : {}),
+        ...(receiptEvidence ? { receiptEvidence } : {}),
+        ...(receiptAttestation ? { receiptAttestation, auditPublicKey: { keyId: auditKey.keyId, publicKeyPem: auditKey.publicKeyPem } } : {}),
       });
     }
   };
