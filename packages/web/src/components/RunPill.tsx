@@ -255,7 +255,7 @@ export function RunPill({
 
             {evidence && (
               <div className="run-sheet-rows">
-                {outcome && <Row k="Outcome"><span className={`chip outcome-${outcome.tone} outcome-kind-${outcome.kind}`}>{outcome.label}</span></Row>}
+                {outcome && <Row k="Outcome"><Badge tone={outcome.tone === "success" ? "ok" : outcome.tone === "warning" ? "warn" : outcome.tone === "danger" ? "danger" : undefined}>{outcome.label}</Badge></Row>}
                 {artifact?.url && (
                   <Row k="Artifact">
                     <a href={artifact.url} target="_blank" rel="noopener">{artifact.label}</a>

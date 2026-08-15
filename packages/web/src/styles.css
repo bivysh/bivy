@@ -2013,13 +2013,6 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .settings-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex-shrink: 0; }
 .settings-error { color: var(--danger); font-size: 13px; margin: 4px 0 0; overflow-wrap: anywhere; }
 .row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.chip { font-size: 11px; font-weight: 700; border-radius: 999px; padding: 2px 8px; border: 1px solid var(--line); color: var(--muted); }
-.chip.ok { color: var(--ok); border-color: var(--ok); }
-.chip.err { color: var(--danger); border-color: var(--danger); }
-/* Expired-but-recoverable (e.g. a node's provider OAuth token past its expiry) —
-   distinct from .chip.err's harder failure red; reuses --accent, already an
-   amber/orange tone in this palette. */
-.chip.warn { color: var(--accent); border-color: var(--accent); }
 /* GitHub Queue waiting list (GithubQueue.tsx): a card per item with the title on
    the left and inline actions (Run… + remove) on the right, and the "Run…" node/
    agent form expanding below. */
@@ -2052,13 +2045,6 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .routing-readiness-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .routing-readiness-copy strong { font-size: 14px; }
 .routing-readiness-copy span { color: var(--muted); font-size: 12px; line-height: 1.4; }
-.chip.outcome-success { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 55%, var(--line)); }
-.chip.outcome-warning { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
-.chip.outcome-danger { color: var(--err); border-color: color-mix(in srgb, var(--err) 55%, var(--line)); }
-/* Waiting/rate-limited (C4b): visually distinct from an actively-running run —
-   a dashed border + hourglass reads as "paused, not consuming compute". */
-.chip.outcome-kind-waiting { border-style: dashed; color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
-.chip.outcome-kind-waiting::before { content: "⏳ "; }
 /* Recovery actions (C2): fix / retry / fork buttons on a terminal run's sheet. */
 .run-sheet-recovery { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 .run-sheet-recovery .btn.small { padding: 4px 12px; font-size: 12px; }
@@ -2084,7 +2070,6 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
    per-file actions, and the split (side-by-side) diff layout. */
 .changes-meta { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line); }
 .changes-states, .changes-checks { display: inline-flex; gap: 6px; flex-wrap: wrap; }
-.changes-states .chip { font-size: 10px; padding: 1px 7px; }
 .changes-mode { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
 .changes-mode button { border: 0; background: transparent; color: var(--muted); font-size: 11px; padding: 2px 8px; cursor: pointer; }
 .changes-mode button.active { background: var(--accent); color: #fff; }

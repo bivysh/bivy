@@ -42,6 +42,29 @@ test("settings status labels use canonical badges", async () => {
   }
 });
 
+test("legacy generic chips have been removed", async () => {
+  for (const path of [
+    "components/Rulesets.tsx",
+    "components/NodeSwitcher.tsx",
+    "components/CredentialVault.tsx",
+    "components/Settings.tsx",
+    "components/VoiceSettings.tsx",
+    "components/MachineCapabilities.tsx",
+    "components/QueueRouting.tsx",
+    "components/Ephemeral.tsx",
+    "components/ChangesCard.tsx",
+    "components/GithubQueue.tsx",
+    "components/HostedMachines.tsx",
+    "components/RunDetails.tsx",
+    "components/RunPill.tsx",
+  ]) {
+    const source = await readFile(new URL(path, ROOT), "utf8");
+    expect(source, path).not.toMatch(/className=(?:"chip(?:\s|")|{`chip(?:\s|\$|`))/);
+  }
+  const css = await readFile(new URL("styles.css", ROOT), "utf8");
+  expect(css).not.toContain(".chip");
+});
+
 test("canonical badge shell exposes tones and variants", async () => {
   const css = await readFile(new URL("styles.css", ROOT), "utf8");
   expect(css).toContain(".badge {");

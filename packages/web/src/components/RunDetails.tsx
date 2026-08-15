@@ -362,7 +362,7 @@ function RunBody({
         <StatusDot status={LIFECYCLE_STATUS[run.lifecycle]} />
         {LIFECYCLE_LABEL[run.lifecycle]}
         {" · "}
-        <span className={`chip outcome-${run.outcome.tone} outcome-kind-${run.outcome.kind}`}>{run.outcome.label}</span>
+        <Badge tone={run.outcome.tone === "success" ? "ok" : run.outcome.tone === "warning" ? "warn" : run.outcome.tone === "danger" ? "danger" : undefined}>{run.outcome.label}</Badge>
         {run.attempt > 1 && <span className="run-details-attempt"> · attempt {run.attempt}</span>}
       </div>
 

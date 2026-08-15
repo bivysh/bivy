@@ -15,6 +15,7 @@ import { ephemeralCatalogEntry, type AccountNode, type EphemeralNodeConfig, type
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
+import { Badge } from "./Badge.js";
 
 /** Editable form state for one ephemeral config. */
 type EphemeralConfigDraft = {
@@ -283,7 +284,7 @@ export function QueueRoutingSection({
           <button className="btn primary block" onClick={() => { setErr(null); setDraft({ name: "", provider: keys[0]?.id ?? "", region: "", size: "", ttlMinutes: null, readyCapacity: false, teardownOnAgentFinish: false }); }}>+ Add profile</button>
         </>
       )}
-      {err && <span className="chip err">{err}</span>}
+      {err && <Badge tone="danger">{err}</Badge>}
       {confirmRemove && (
         <ConfirmDialog
           title="Remove profile?"

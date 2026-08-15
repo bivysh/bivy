@@ -11,6 +11,7 @@ import { useEffect, useState } from "react";
 import { ephemeralCatalogEntry, ephemeralLifecyclePhase, type HostedMachineSummary } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { ConfirmDialog } from "./AppDialog.js";
+import { Badge, type BadgeTone } from "./Badge.js";
 
 const PHASE_LABEL: Record<string, string> = {
   requested: "Requesting…",
@@ -101,7 +102,8 @@ export function HostedMachinesPanel() {
         {machines.map((m) => {
           const catalog = ephemeralCatalogEntry(m.provider);
           const phase = phaseLabel(m);
-          const tone = phaseTone(phase, Boolean(m.lastError));
+          const phaseClass = phaseTone(phase, Boolean(m.lastError));
+          const tone: BadgeTone | undefined = phaseClass === "err" ? "danger" : phaseClass === "ok" ? "ok" : phaseClass === "warn" ? "warn" : undefined;
           const deadline = relativeDeadline(m.deadlineAt, Date.now());
           const snapshotReady = Boolean(m.milestones?.snapshotReadyAt);
           const key = m.nodeId || m.id;
@@ -110,7 +112,7 @@ export function HostedMachinesPanel() {
               <div className="automation-row-main">
                 <div className="automation-row-title">
                   <strong>{m.name || catalog?.name || m.provider}</strong>
-                  <span className={`chip ${tone}`}>{phase}</span>
+                  <Badge tone={tone}>{phase}</Badge>
                 </div>
                 <div className="settings-hint">
                   {[

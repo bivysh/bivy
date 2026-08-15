@@ -18,6 +18,7 @@ import { classifySource } from "../sessionSource.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import { writeClipboard } from "../clipboard.js";
+import { Badge, type BadgeTone } from "./Badge.js";
 import { isTerminalRun, projectRunDetail } from "../runDetail.js";
 
 // Issue #153: a queue item is worth an "Outcome report" once it has left
@@ -565,7 +566,7 @@ export function GithubQueuePanel({
                           <a className="queue-item-main link" href={w.url} target="_blank" rel="noopener noreferrer" title={title}>
                             <span className="queue-item-title">
                               {title}
-                              {EPHEMERAL_MACHINES_ENABLED && w.ephemeral && <span className="chip" title="Dispatched to an ephemeral server">⚡ ephemeral</span>}
+                              {EPHEMERAL_MACHINES_ENABLED && w.ephemeral && <Badge title="Dispatched to an ephemeral server">⚡ ephemeral</Badge>}
                             </span>
                             <span className="queue-item-meta">{meta}</span>
                           </a>
@@ -573,7 +574,7 @@ export function GithubQueuePanel({
                           <div className="queue-item-main" title={title}>
                             <span className="queue-item-title">
                               {title}
-                              {EPHEMERAL_MACHINES_ENABLED && w.ephemeral && <span className="chip" title="Dispatched to an ephemeral server">⚡ ephemeral</span>}
+                              {EPHEMERAL_MACHINES_ENABLED && w.ephemeral && <Badge title="Dispatched to an ephemeral server">⚡ ephemeral</Badge>}
                             </span>
                             <span className="queue-item-meta">{meta}</span>
                           </div>
@@ -685,7 +686,7 @@ export function GithubQueuePanel({
                             <button className="btn" disabled={assignBusy || (primarySel.kind === "config" && !selectedConfig)} onClick={() => submitAssign(w.id)}>
                               {assignBusy ? "Dispatching…" : primarySel.kind === "config" ? "Provision & run" : "Run"}
                             </button>
-                            {assignErr && <span className="chip err">{assignErr}</span>}
+                            {assignErr && <Badge tone="danger">{assignErr}</Badge>}
                           </div>
                         </div>
                       )}
@@ -713,12 +714,12 @@ export function GithubQueuePanel({
             <div className="evidence-list">
               {reports.map((item) => {
                 const detail = projectRunDetail(item);
-                const outcomeClass = detail.outcome.tone === "danger" ? "err" : detail.outcome.tone === "success" ? "ok" : detail.outcome.tone === "warning" ? "warn" : "";
+                const outcomeTone: BadgeTone | undefined = detail.outcome.tone === "danger" ? "danger" : detail.outcome.tone === "success" ? "ok" : detail.outcome.tone === "warning" ? "warn" : undefined;
                 return (
                   <details className="evidence-report" key={item.id}>
                     <summary>
                       <span>{item.repo}{item.issueNumber ? ` #${item.issueNumber}` : ""} · {queueItemSourceLabel(item.source)}</span>
-                      <span className={`chip ${outcomeClass}`}>{detail.outcome.label}</span>
+                      <Badge tone={outcomeTone}>{detail.outcome.label}</Badge>
                     </summary>
                     <div className="evidence-meta">
                       <span>Trigger: {item.triggerKind ?? item.source}</span>

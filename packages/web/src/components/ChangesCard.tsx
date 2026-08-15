@@ -218,7 +218,7 @@ export function ChangesCard({
             <div className="changes-meta">
               {states.length > 0 && (
                 <span className="changes-states">
-                  {states.map((s) => <span key={s} className={`chip state-${s}`}>{reviewStateLabel(s)}</span>)}
+                  {states.map((s) => <Badge key={s}>{reviewStateLabel(s)}</Badge>)}
                 </span>
               )}
               {checks && checks.length > 0 && (
