@@ -34,6 +34,10 @@ export interface CliParser {
   messages(): RuntimeMessage[];
   /** Best-effort token/cost usage parsed from the agent's own output, or undefined. */
   usage?(): UsageSnapshot | undefined;
+  /** Native conversation reference learned from structured output. A fresh
+   * process session uses this to continue the same upstream conversation on its
+   * next turn and to persist an honest resume token. */
+  sessionRef?(): string | undefined;
 }
 
 /**
@@ -292,6 +296,7 @@ export function claudeStreamJsonParser(): CliParser {
  */
 export function codexJsonParser(): CliParser {
   const acc = new TurnAccumulator({ provider: "codex", protocol: "structured-pipe" });
+  let sessionRef: string | undefined;
   const handleItem = (item: Record<string, unknown>, events: RuntimeEvent[]) => {
     const id = String(item.id ?? "");
     switch (String(item.type ?? "")) {
@@ -342,6 +347,9 @@ export function codexJsonParser(): CliParser {
         return events;
       }
       switch (String(msg.type ?? "")) {
+        case "thread.started":
+          if (typeof msg.thread_id === "string" && msg.thread_id.trim()) sessionRef = msg.thread_id.trim();
+          break;
         case "turn.started":
           events.push({ type: "turn_start" });
           break;
@@ -375,6 +383,7 @@ export function codexJsonParser(): CliParser {
     },
     messages: () => acc.history(),
     usage: () => acc.usageSnapshot,
+    sessionRef: () => sessionRef,
   };
 }
 
@@ -387,6 +396,7 @@ export function codexJsonParser(): CliParser {
  */
 export function gooseStreamJsonParser(): CliParser {
   const acc = new TurnAccumulator({ provider: "goose", protocol: "structured-pipe" });
+  let sessionRef: string | undefined;
   return {
     onLine(line) {
       const events: RuntimeEvent[] = [];
@@ -398,6 +408,8 @@ export function gooseStreamJsonParser(): CliParser {
       } catch {
         return events;
       }
+      const ref = msg.session_id ?? msg.sessionId;
+      if (typeof ref === "string" && ref.trim()) sessionRef = ref.trim();
       const type = String(msg.type ?? "");
       if (type === "message") {
         const message = (msg.message ?? {}) as { role?: unknown; content?: unknown };
@@ -433,6 +445,7 @@ export function gooseStreamJsonParser(): CliParser {
     },
     messages: () => acc.history(),
     usage: () => acc.usageSnapshot,
+    sessionRef: () => sessionRef,
   };
 }
 
@@ -445,6 +458,7 @@ export function gooseStreamJsonParser(): CliParser {
 export function geminiJsonParser(): CliParser {
   const acc = new TurnAccumulator({ provider: "gemini", protocol: "structured-pipe" });
   let raw = "";
+  let sessionRef: string | undefined;
   return {
     onLine(line) {
       raw += `${line}\n`;
@@ -458,6 +472,8 @@ export function geminiJsonParser(): CliParser {
       } catch {
         obj = undefined;
       }
+      const ref = obj?.session_id ?? obj?.sessionId;
+      if (typeof ref === "string" && ref.trim()) sessionRef = ref.trim();
       if (obj && (obj.error as { message?: unknown } | undefined)?.message) {
         events.push({ type: "session.error", error: String((obj.error as { message?: unknown }).message) });
       } else if (obj && typeof obj.response === "string") {
@@ -475,6 +491,7 @@ export function geminiJsonParser(): CliParser {
     },
     messages: () => acc.history(),
     usage: () => acc.usageSnapshot,
+    sessionRef: () => sessionRef,
   };
 }
 

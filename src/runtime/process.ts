@@ -270,11 +270,12 @@ class ProcessSession implements RuntimeSession {
   private emitter = new EventEmitter();
   private streaming = false;
   private name?: string;
-  /** Set when this session was opened to resume an existing agent session. */
-  private readonly resumeId?: string;
+  /** Native conversation reference supplied on reopen or learned from the first
+   * structured turn. Distinct from the stable Bivy session id. */
+  private nativeSessionRef?: string;
 
   constructor(private readonly runtimeOptions: ProcessRuntimeOptions, public readonly cwd: string, resumeId?: string) {
-    this.resumeId = resumeId;
+    this.nativeSessionRef = resumeId;
     this.id = resumeId ?? randomUUID();
     // Preload prior history so a reopened session isn't blank (resumable runtimes).
     if (resumeId && runtimeOptions.loadHistory) {
@@ -288,7 +289,7 @@ class ProcessSession implements RuntimeSession {
 
   /** The resume token handed back to the daemon; the id doubles as the ref. */
   get sessionFile(): string | undefined {
-    return this.resumeId;
+    return this.nativeSessionRef;
   }
 
   get isStreaming(): boolean {
@@ -375,7 +376,7 @@ class ProcessSession implements RuntimeSession {
   async interactiveTuiCommand(): Promise<TuiLaunchSpec | null> {
     const hook = this.runtimeOptions.interactiveTui;
     if (!hook) return null;
-    const sessionRef = this.resumeId ?? this.id;
+    const sessionRef = this.nativeSessionRef ?? this.id;
     let env: Record<string, string> = {};
     if (this.runtimeOptions.prepare) {
       try {
@@ -446,8 +447,8 @@ class ProcessSession implements RuntimeSession {
 
     // A resumed session continues the agent's own session id each turn via
     // resumeArgs (e.g. `codex exec resume <id> --json`); otherwise the base args.
-    const baseArgs = this.resumeId && this.runtimeOptions.resumeArgs
-      ? this.runtimeOptions.resumeArgs(this.resumeId)
+    const baseArgs = this.nativeSessionRef && this.runtimeOptions.resumeArgs
+      ? this.runtimeOptions.resumeArgs(this.nativeSessionRef)
       : (this.runtimeOptions.args ?? []);
     // Selection flags (model + thinking level) splice into the base args at their
     // configured positions — before a trailing prompt flag, or after a leading
@@ -535,6 +536,8 @@ class ProcessSession implements RuntimeSession {
     // soon as agent_end fires — the parser emits agent_end during stdout parsing
     // (on session.done), before the child 'close' handler runs.
     const emitParserEvents = (activeParser: CliParser, events: RuntimeEvent[]) => {
+      const learnedRef = activeParser.sessionRef?.()?.trim();
+      if (learnedRef) this.nativeSessionRef = learnedRef;
       for (const event of events) this.emit(event);
       if (!messagesPushed && events.some((e) => e.type === "agent_end")) {
         messagesPushed = true;
@@ -587,7 +590,12 @@ class ProcessSession implements RuntimeSession {
         // already finalized mid-stream this close is a no-op for messages.
         if (lineBuf.trim()) emitParserEvents(parser, parser.onLine(lineBuf));
         lineBuf = "";
-        emitParserEvents(parser, parser.onClose(code, stderr));
+        const closingEvents = parser.onClose(code, stderr);
+        // Final-object parsers (Gemini) only learn the native ref in onClose;
+        // capture it before emitting agent_end so persistence observers see it.
+        const learnedRef = parser.sessionRef?.()?.trim();
+        if (learnedRef) this.nativeSessionRef = learnedRef;
+        emitParserEvents(parser, closingEvents);
         if (!messagesPushed) for (const message of parser.messages()) this.messages.push(message);
         return;
       }

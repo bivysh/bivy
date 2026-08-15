@@ -34,8 +34,8 @@ fs.writeFileSync(
   stub,
   [
     "#!/bin/sh",
-    `[ -n "$STUB_ARGS_FILE" ] && printf '%s' "$*" > "$STUB_ARGS_FILE"`,
-    `printf '%s\\n' '{"type":"turn.started"}' '{"type":"item.completed","item":{"id":"i1","type":"agent_message","text":"resumed reply"}}' '{"type":"turn.completed"}'`,
+    `[ -n "$STUB_ARGS_FILE" ] && printf '%s\\n' "$*" >> "$STUB_ARGS_FILE"`,
+    `printf '%s\\n' '{"type":"thread.started","thread_id":"native-new-123"}' '{"type":"turn.started"}' '{"type":"item.completed","item":{"id":"i1","type":"agent_message","text":"resumed reply"}}' '{"type":"turn.completed"}'`,
     "",
   ].join("\n"),
   { mode: 0o755 },
@@ -93,6 +93,7 @@ await check("openSession binds the session id and preloads history", async () =>
 });
 
 await check("prompt threads `resume <id>` and parses the structured reply", async () => {
+  fs.rmSync(argsFile, { force: true });
   const { session } = await makeRuntime().openSession({ workspace: tmp, sessionFile: "sess-abc" });
   const events = await runToEnd(session);
 
@@ -108,6 +109,21 @@ await check("prompt threads `resume <id>` and parses the structured reply", asyn
   const msgs = session.getMessages() as Array<{ role: string; content: unknown }>;
   assert.equal(msgs[0]?.role, "user");
   assert.ok(msgs.some((m) => m.role === "assistant" && String(m.content).includes("resumed reply")), "assistant turn recorded in history");
+});
+
+await check("a fresh structured session captures its native ref and resumes its second turn", async () => {
+  fs.rmSync(argsFile, { force: true });
+  const { session } = await makeRuntime().createSession({ workspace: tmp });
+  assert.equal(session.sessionFile, undefined);
+  await runToEnd(session);
+  assert.equal(session.sessionFile, "native-new-123", "native ref emitted by the parser becomes the persisted resume token");
+  for (let i = 0; session.isStreaming && i < 100; i += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  await runToEnd(session);
+
+  const launches = fs.readFileSync(argsFile, "utf8").trim().split("\n");
+  assert.equal(launches.length, 2);
+  assert.equal(launches[0], "exec --json hello", "first turn creates an upstream conversation");
+  assert.match(launches[1]!, /resume native-new-123/, "second turn continues the captured upstream conversation");
 });
 
 try {
