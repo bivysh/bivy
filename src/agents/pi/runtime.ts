@@ -560,7 +560,15 @@ export class PiRuntime implements AgentRuntime {
   }
 
   openSession(options: OpenSessionOptions & { sessionFile: string }): Promise<OpenSessionResult> {
-    const sessionManager = SessionManager.open(options.sessionFile, this.options.sessionsDir);
+    // Pi intentionally defers writing a new transcript until the first assistant
+    // response. A named empty session can therefore outlive its in-memory host
+    // (restart/detach) while its metadata path does not exist yet. Recreate that
+    // empty shell with Bivy's canonical id instead of letting SessionManager.open
+    // assign a new id, which would duplicate the sidebar row. Existing files keep
+    // Pi's normal full-fidelity resume path.
+    const sessionManager = !fs.existsSync(options.sessionFile) && options.canonicalId
+      ? SessionManager.create(options.workspace, this.options.sessionsDir, { id: options.canonicalId })
+      : SessionManager.open(options.sessionFile, this.options.sessionsDir);
     return this.build(sessionManager, options);
   }
 

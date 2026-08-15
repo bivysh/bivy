@@ -6,7 +6,7 @@ An agent is shown as **Supported** only when its active configured path matches 
 
 | Agent | Runtime id | Supported range | Platforms | Required mode | Certified capabilities |
 | --- | --- | --- | --- | --- | --- |
-| Claude Code | `claude-code-sdk` | `>=0.3.232 <=0.3.232` (pin `0.3.232`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
+| Claude Code | `claude-code-sdk` | `>=0.3.233 <=0.3.233` (pin `0.3.233`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
 | Codex (governed) | `codex-approvals` | `>=0.147.0 <=0.147.0` (pin `0.147.0`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
 | Pi | `pi` | `>=0.84.2 <=0.84.2` (pin `0.84.2`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
 | OpenCode ACP | `opencode` | `>=1.18.18 <=1.18.18` (pin `1.18.18`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |

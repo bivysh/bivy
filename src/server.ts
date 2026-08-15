@@ -140,7 +140,7 @@ import { createCredentialCommands } from "./controllers/credential-commands.js";
 import { createCustomModelCommands } from "./controllers/custom-model-commands.js";
 import { historyDelta, type HistoryCursor } from "./history-sync.js";
 import { MetadataStore, type MetadataSession } from "./metadata.js";
-import { resolveResumeRef, resumeRefFor } from "./session-ref.js";
+import { resolveResumeRef, resumeRefFor, storedResumeRef } from "./session-ref.js";
 import { materializeFork, type ForkBundle, type ForkRecord, type ForkPlan } from "./session/fork.js";
 import { applyDirtyPatch } from "./session/fork-dirty.js";
 import { thinkingTextFromContent } from "./session/transcript-merge.js";
@@ -7914,9 +7914,17 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
   // made Claude Code (and any id-based runtime) sessions un-resumable with
   // "Session file is outside the sessions directory".
   const requestedRef = typeof sessionFile === "string" && sessionFile.trim() ? sessionFile.trim() : undefined;
-  const refRuntimeId = opts.runtimeId ?? (requestedRef ? metadata.getSession(requestedRef)?.runtimeId : undefined);
-  const requestedSessionFile = requestedRef
-    ? resolveResumeRef({ ref: requestedRef, resumesByPath: runtimeResumesByPath(refRuntimeId), sessionsDir })
+  const requestedMeta = requestedRef ? metadata.getSession(requestedRef) : undefined;
+  const refRuntimeId = opts.runtimeId ?? requestedMeta?.runtimeId;
+  // Some callers (notably the local CLI HTTP API) name a closed session by its
+  // Bivy id and enter createSession directly rather than resolveOrResumeSession.
+  // Translate that id to the owning runtime's durable ref before applying the
+  // path guard/opening it. Without this, a valid empty Pi session was interpreted
+  // as a relative filename and rejected as outside pi/sessions; id-based native
+  // refs could likewise resume the wrong id. Explicit path refs remain unchanged.
+  const durableRef = requestedRef ? storedResumeRef(requestedRef, requestedMeta) : undefined;
+  const requestedSessionFile = durableRef
+    ? resolveResumeRef({ ref: durableRef, resumesByPath: runtimeResumesByPath(refRuntimeId), sessionsDir })
     : undefined;
   const storedMeta = requestedSessionFile ? metadata.getSession(requestedSessionFile) : undefined;
   const restoredWorktree = requestedSessionFile ? restoredWorktreeFromMetadata(storedMeta) : undefined;

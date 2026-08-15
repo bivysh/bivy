@@ -185,6 +185,9 @@ function handleCompletedItem(params) {
   if (!item || typeof item !== "object" || !itemId) return;
   switch (item.type) {
     case "agentMessage":
+      // Child-thread prose belongs to the delegated agent, not the parent's
+      // answer stream. Its lifecycle is represented by the collaboration items.
+      if (params?.threadId && threadId && params.threadId !== threadId) return;
       if (!agentMessageItems.has(itemId) && item.text) {
         agentMessageItems.add(itemId);
         bivy({ type: "message.delta", text: String(item.text) });
@@ -317,20 +320,29 @@ function onServerRequest(m) {
 
 function onNotification(m) {
   const { method, params } = m;
+  // Codex publishes child-thread prose on the same app-server connection as the
+  // parent. It is not a continuation of the parent's assistant message: folding
+  // both token streams together produces character-level corruption whenever a
+  // delegated agent answers concurrently. Child lifecycle remains visible via
+  // collabAgentToolCall/subAgentActivity; only prose/reasoning is scoped here.
+  const fromCurrentThread = !params?.threadId || !threadId || params.threadId === threadId;
   switch (method) {
-    case "item/agentMessage/delta":
-      if (typeof params.delta === "string" && params.delta) {
-        const itemId = paramsItemId(params);
-        if (itemId) agentMessageItems.add(itemId);
+    case "item/agentMessage/delta": {
+      const itemId = paramsItemId(params);
+      // Remember ignored child items too so their later item/completed echo is
+      // not mistaken for a parent message and replayed wholesale.
+      if (itemId) agentMessageItems.add(itemId);
+      if (fromCurrentThread && typeof params.delta === "string" && params.delta) {
         bivy({ type: "message.delta", text: params.delta });
       }
       return;
+    }
     case "item/plan/delta":
-      emitReasoning(paramsItemId(params), params.delta);
+      if (fromCurrentThread) emitReasoning(paramsItemId(params), params.delta);
       return;
     case "item/reasoning/summaryTextDelta":
     case "item/reasoning/textDelta":
-      emitReasoning(paramsItemId(params), params.delta);
+      if (fromCurrentThread) emitReasoning(paramsItemId(params), params.delta);
       return;
     case "item/commandExecution/outputDelta": {
       const itemId = paramsItemId(params);

@@ -63,6 +63,8 @@ assert.equal(shellResult?.detail?.result?.exitCode, 7, "Codex exit code reaches 
 assert.equal(shellResult?.detail?.result?.isError, true, "failed Codex command is visibly failed");
 
 const history = JSON.stringify(session.getMessages());
+assert.match(history, /Parent answer\./, "parent-thread prose reaches the transcript");
+assert.doesNotMatch(history, /CHILD_(?:PROSE|REASONING|COMPLETION)_MUST_NOT_LEAK/, "child-thread prose never corrupts the parent answer");
 assert.match(history, /spawn_agent/, "sub-agent activity persists across reopen");
 assert.match(history, /commandExecution|false/, "command activity persists across reopen");
 

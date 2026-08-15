@@ -83,7 +83,7 @@
     "audit:prod": "node scripts/audit-prod.mjs"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.232",
+    "@anthropic-ai/claude-agent-sdk": "0.3.233",
     "@earendil-works/pi-ai": "0.84.2",
     "@earendil-works/pi-coding-agent": "0.84.2",
     "@modelcontextprotocol/sdk": "1.30.0",

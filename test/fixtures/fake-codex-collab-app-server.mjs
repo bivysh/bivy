@@ -24,6 +24,11 @@ rl.on("line", (line) => {
   if (message.method === "turn/start") {
     send({ jsonrpc: "2.0", id: message.id, result: { turn: { id: "turn-fixture" } } });
     send({ jsonrpc: "2.0", method: "turn/started", params: { threadId: "thread-fixture" } });
+    // Child and parent message streams share one app-server connection. The shim
+    // must not splice this child prose/reasoning into the parent's answer.
+    send({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { threadId: "child-thread", turnId: "child-turn", itemId: "child-message", delta: "CHILD_PROSE_MUST_NOT_LEAK" } });
+    send({ jsonrpc: "2.0", method: "item/reasoning/textDelta", params: { threadId: "child-thread", turnId: "child-turn", itemId: "child-reasoning", delta: "CHILD_REASONING_MUST_NOT_LEAK" } });
+    send({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { threadId: "thread-fixture", turnId: "turn-fixture", itemId: "parent-message", delta: "Parent answer." } });
     const collab = {
       type: "collabAgentToolCall", id: "collab-1", tool: "spawnAgent", status: "inProgress",
       senderThreadId: "thread-fixture", receiverThreadIds: ["child-thread"], agentsStates: {},
@@ -42,6 +47,8 @@ rl.on("line", (line) => {
     };
     send({ jsonrpc: "2.0", method: "item/started", params: { item: shell } });
     send({ jsonrpc: "2.0", method: "item/completed", params: { item: shell } });
+    send({ jsonrpc: "2.0", method: "item/completed", params: { threadId: "child-thread", item: { type: "agentMessage", id: "child-complete-only", text: "CHILD_COMPLETION_MUST_NOT_LEAK" } } });
+    send({ jsonrpc: "2.0", method: "item/completed", params: { threadId: "thread-fixture", item: { type: "agentMessage", id: "parent-message", text: "Parent answer." } } });
     send({ jsonrpc: "2.0", method: "turn/completed", params: { turn: { status: "completed" } } });
     // Codex 0.147 may deliver this final collaboration completion just after the
     // turn boundary. The shim must drain it before publishing session.done.
