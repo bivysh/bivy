@@ -152,13 +152,9 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .session-actions-wrap { position: relative; flex: none; }
 .session-actions-btn { border: 0; background: transparent; color: var(--ink); font-size: 20px; line-height: 1; padding: 4px 8px; border-radius: 8px; }
 .session-actions-btn:hover, .session-actions-btn[aria-expanded="true"] { background: var(--surface-3); }
-.session-actions-menu { position: absolute; right: 0; top: calc(100% + 6px); min-width: 190px; z-index: 40; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,0.28); overflow: hidden; padding: 4px; animation: sheet-up 0.14s ease; }
+.session-actions-menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 40; }
 .session-actions-audit-warning { display: grid; gap: 3px; margin: 4px; padding: 8px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--warn, #d4a017) 40%, var(--line)); background: color-mix(in srgb, var(--warn, #d4a017) 10%, var(--surface)); color: var(--ink); font-size: 11px; }
-.session-actions-item { display: block; width: 100%; text-align: left; border: 0; background: transparent; color: var(--ink); padding: 9px 12px; font-size: 13px; border-radius: 8px; }
-.session-actions-item:has(svg) { display: flex; align-items: center; gap: 8px; }
 .session-actions-item svg { flex: none; color: var(--muted); }
-.session-actions-item:hover { background: var(--surface-2); }
-.session-actions-item.danger { color: var(--danger); }
 
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
 
@@ -285,10 +281,7 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .pending-launch-actions button:last-child { color: var(--muted); background: transparent; }
 .pending-launch-actions button:hover { background: var(--surface-3); }
 @media (hover: none) { .row-menu-btn { opacity: 0.6; } }
-.row-menu-pop { position: absolute; right: 0; top: calc(100% + 2px); min-width: 180px; z-index: 20; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,0.28); overflow: hidden; padding: 4px; }
-.row-menu-item { display: block; width: 100%; text-align: left; border: 0; background: transparent; color: var(--ink); padding: 9px 12px; font-size: 13px; border-radius: 8px; }
-.row-menu-item:hover { background: var(--surface-2); }
-.row-menu-item.danger { color: var(--danger); }
+.row-menu-pop { position: absolute; right: 0; top: calc(100% + 2px); min-width: 180px; z-index: 20; }
 .pause-pill { border-color: var(--line-strong); }
 .session-empty { color: var(--muted); font-size: 13px; padding: 12px 10px; }
 .session-more {
@@ -2673,6 +2666,22 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
   color: var(--ink); font-size: 12px; line-height: 1; padding: 0;
   display: flex; align-items: center; justify-content: center;
 }
+
+/* ---- Menus ---- */
+.menu {
+  min-width: 190px; padding: var(--space-1); overflow: hidden;
+  border: 1px solid var(--line-strong); border-radius: var(--radius-md);
+  background: var(--surface); box-shadow: var(--shadow-lg);
+  animation: sheet-up var(--dur-fast) var(--ease-standard);
+}
+.menu-item {
+  display: flex; align-items: center; gap: var(--space-2); width: 100%;
+  padding: 9px var(--space-3); border: 0; border-radius: var(--radius-sm);
+  background: transparent; color: var(--ink); font: inherit;
+  font-size: var(--text-sm); text-align: left; cursor: pointer;
+}
+.menu-item:hover, .menu-item[aria-checked="true"], .menu-item.active { background: var(--surface-2); }
+.menu-item.danger { color: var(--danger); }
 
 /* ---- Buttons ---- */
 /* `.btn` styles both <button> and <a> (e.g. the onboarding "Download installer").
