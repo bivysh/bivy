@@ -124,6 +124,8 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 }
 .card[data-tone="accent"] { border-color: var(--accent); }
 .card[data-tone="danger"] { border-color: var(--danger); }
+.card[data-tone="ok"] { border-color: var(--ok); }
+.card[data-tone="warn"] { border-color: var(--warn); }
 .card[data-tone="muted"] { background: var(--surface-2); }
 .card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin-bottom: var(--space-2); }
 .card-title { font-size: var(--text-base); font-weight: var(--weight-semibold); }
@@ -971,7 +973,7 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .small { font-size: 12px; }
 
 /* --- Rulesets (Settings → Rulesets) --- */
-.ruleset-rule-card { border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin-top: 8px; display: flex; flex-direction: column; gap: 8px; background: var(--surface-2); }
+.ruleset-rule-card { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
 .ruleset-rule-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .ruleset-chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
 .ruleset-chip {
@@ -1678,12 +1680,7 @@ button.template-card.is-featured .template-card-icon {
 
 /* A runner is a first-class requirement, not a tiny select hidden under the
    prompt. Pairing/key readiness is visible before Save can become disabled. */
-.autom-runner-card {
-  border: 1px solid var(--line); border-radius: 16px; background: var(--surface-2);
-  overflow: hidden; min-width: 0;
-}
-.autom-runner-card.ready { border-color: color-mix(in srgb, var(--ok) 35%, var(--line)); }
-.autom-runner-card.warn { border-color: color-mix(in srgb, var(--warn, #d4a017) 45%, var(--line)); }
+.autom-runner-card { padding: 0; overflow: hidden; min-width: 0; }
 .autom-runner-select-row { display: flex; align-items: center; gap: 10px; padding: 11px 12px; min-width: 0; }
 .autom-runner-icon {
   width: 34px; height: 34px; flex: none; display: grid; place-items: center;
@@ -2014,7 +2011,7 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
    agent form expanding below. */
 .queue-head-actions { display: flex; align-items: center; gap: 14px; }
 .queue-count { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; margin-left: 8px; padding: 0 6px; border-radius: 999px; background: var(--surface-3); color: var(--muted); font-size: 11px; font-weight: 700; vertical-align: middle; }
-.queue-card { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); overflow: hidden; }
+.queue-card { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
 .queue-card.open { border-color: var(--line-strong); }
 .queue-card-row { display: flex; align-items: center; gap: 10px; justify-content: space-between; padding: 8px 10px; }
 .queue-item-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; text-decoration: none; color: inherit; }

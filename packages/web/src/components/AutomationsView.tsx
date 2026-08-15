@@ -2321,7 +2321,7 @@ function AutomationEditor({
 
               <div className="autom-field-block autom-runner-block">
                 <div className="autom-field-label">Run on</div>
-                <div className={`autom-runner-card${selectedNodeHasKey ? " ready" : " warn"}`}>
+                <div className={`card autom-runner-card${selectedNodeHasKey ? " ready" : " warn"}`} data-tone={selectedNodeHasKey ? "ok" : "warn"}>
                   <label className="autom-runner-select-row">
                     <span className="autom-runner-icon" aria-hidden="true">⌁</span>
                     <span className="autom-runner-select-copy">

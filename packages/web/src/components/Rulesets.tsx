@@ -350,7 +350,7 @@ function RuleCard({
   const showRecovery = rule.action === "retry" || rule.action === "reroute";
 
   return (
-    <div className="ruleset-rule-card">
+    <div className="card ruleset-rule-card" data-tone="muted">
       <div className="ruleset-rule-head">
         <span className="settings-toggle-title">Rule {index + 1}</span>
         <button className="btn danger-ghost sm" onClick={onRemove}>Remove</button>

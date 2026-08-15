@@ -560,7 +560,7 @@ export function GithubQueuePanel({
                   const title = w.title || `${w.repo ?? ""}#${w.issueNumber ?? ""}`;
                   const meta = `${w.repo ?? ""}${w.issueNumber ? ` #${w.issueNumber}` : ""} · ${queueItemSourceLabel(w.source)}`;
                   return (
-                    <div className={`queue-card${open ? " open" : ""}`} key={w.id}>
+                    <div className={`card queue-card${open ? " open" : ""}`} data-tone="muted" key={w.id}>
                       <div className="queue-card-row">
                         {w.url ? (
                           <a className="queue-item-main link" href={w.url} target="_blank" rel="noopener noreferrer" title={title}>
