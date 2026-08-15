@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
+import type { McpConfig } from "../harness/mcp-config.js";
 import type { SandboxTier } from "../harness/sandbox.js";
 import type { AttachToChatFn, RuntimeCapabilities } from "../runtime/types.js";
 import type { AgentIntegrationOrigin } from "./definition.js";
@@ -16,6 +17,9 @@ export interface AgentSessionOptions {
   sessionsDir: string;
   /** Per-session sandbox tier override. */
   sandbox?: SandboxTier;
+  /** MCP servers supplied by the host for protocol adapters that negotiate them
+   * at session creation rather than reading an agent-owned config file. */
+  mcpConfig?: McpConfig;
   /** Host callback exposed through an agent bridge when supported. */
   attachToChat?: AttachToChatFn;
 }

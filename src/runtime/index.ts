@@ -712,7 +712,7 @@ function acpShimPath(): string {
  * through bin/acp-shim.mjs. Shared by the generic `acp` runtime and the per-agent
  * ACP promotion path so both wrap agents identically.
  */
-function acpRuntimeOptions(opts: { id: string; displayName: string; command: string; agentArgs: string[]; credsDir?: string; behaviors?: AgentProfileBehaviors; mcpConfig?: McpConfig }): ProtocolRuntimeOptions {
+function acpRuntimeOptions(opts: { id: string; displayName: string; command: string; agentArgs: string[]; credsDir?: string; behaviors?: AgentProfileBehaviors; mcpConfig?: McpConfig; sandbox?: AgentSessionOptions["sandbox"] }): ProtocolRuntimeOptions {
   const slashBehavior = opts.behaviors?.slashCommands;
   const slashCommands = slashBehavior ? SLASH_COMMAND_BEHAVIORS[slashBehavior]() : undefined;
   // Forward Bivy's configured MCP servers to the ACP agent (3A): the shim reads
@@ -728,7 +728,10 @@ function acpRuntimeOptions(opts: { id: string; displayName: string; command: str
     // the FIRST session (before the shim's hello lands); the hello confirms them.
     capabilities: { toolInterception: true, resume: true },
     resumable: true,
-    ...(acpMcpEnv ? { env: { BIVY_ACP_MCP_SERVERS: acpMcpEnv } } : {}),
+    env: {
+      BIVY_ACP_SANDBOX: sandboxTier(opts.sandbox),
+      ...(acpMcpEnv ? { BIVY_ACP_MCP_SERVERS: acpMcpEnv } : {}),
+    },
     // An ACP-promoted opencode still surfaces/expands its on-disk commands (the
     // ACP handshake doesn't carry them); a bare ACP agent has none.
     ...(slashCommands ? { slashCommands } : {}),
@@ -755,7 +758,7 @@ function acpRuntimeOptions(opts: { id: string; displayName: string; command: str
   };
 }
 
-function acpRuntimeFromEnv(credsDir?: string): ProtocolRuntimeOptions | null {
+function acpRuntimeFromEnv(credsDir?: string, sandbox?: AgentSessionOptions["sandbox"], mcpConfig?: McpConfig): ProtocolRuntimeOptions | null {
   const command = process.env.BIVY_ACP_COMMAND?.trim();
   if (!command) return null;
   let agentArgs: string[] = [];
@@ -763,7 +766,7 @@ function acpRuntimeFromEnv(credsDir?: string): ProtocolRuntimeOptions | null {
   if (rawArgs) {
     try { const p = JSON.parse(rawArgs); if (Array.isArray(p)) agentArgs = p.map(String); } catch { /* ignore malformed */ }
   }
-  return acpRuntimeOptions({ id: "acp", displayName: process.env.BIVY_ACP_NAME?.trim() || "ACP Agent", command, agentArgs, credsDir });
+  return acpRuntimeOptions({ id: "acp", displayName: process.env.BIVY_ACP_NAME?.trim() || "ACP Agent", command, agentArgs, credsDir, sandbox, mcpConfig });
 }
 
 /**
@@ -1175,7 +1178,7 @@ function createCatalogRuntime(id: string, options: RuntimeFactoryOptions): Agent
       return new ProtocolRuntime({ ...protocolOptions, credentials: createCredentialStore(options.credsDir) });
     }
     case "acp": {
-      const acpOptions = acpRuntimeFromEnv();
+      const acpOptions = acpRuntimeFromEnv(options.credsDir, options.sandbox, options.mcpConfig);
       if (!acpOptions) throw new Error("acp requires BIVY_ACP_COMMAND to be set (the ACP agent's launch command, e.g. gemini).");
       return new ProtocolRuntime(acpOptions);
     }
@@ -1231,6 +1234,8 @@ function makeCliRuntime(id: string, options: RuntimeFactoryOptions, spec: AgentP
           agentArgs: spec.acp.args,
           behaviors: spec.behaviors,
           ...(spec.authOwner && spec.authOwner !== "agent" ? { credsDir: options.credsDir } : {}),
+          sandbox: options.sandbox,
+          mcpConfig: options.mcpConfig,
         }));
       }
       const structured = executionMode === "structured-pipe";

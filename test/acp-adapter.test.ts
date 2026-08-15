@@ -87,6 +87,28 @@ await check("acp: drives a stub ACP agent — streaming, governed tool call, res
   }
 });
 
+await check("acp: observed tool activity never opens a misleading approval", async () => {
+  process.env.BIVY_ACP_COMMAND = process.execPath;
+  process.env.BIVY_ACP_ARGS = JSON.stringify([acpAgent]);
+  process.env.ACP_AUTO_TOOL = "1";
+  try {
+    const runtime = makeRuntime({ runtime: "acp", credsDir: __dirname, piDir: __dirname, sessionsDir: __dirname });
+    const decisions: string[] = [];
+    const { session } = await runtime.createSession({ workspace: __dirname, toolInterceptor: async (ctx) => { decisions.push(ctx.toolName); } });
+    const events: RuntimeEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    await session.prompt("observe an automatic tool");
+    await waitFor(events, (event) => event.type === "agent_end");
+    assert.deepEqual(decisions, ["execute"], "only the blocking permission request reaches policy");
+    assert.ok(events.some((event) => event.type === "tool_call" && event.toolCallId === "auto1"), "observed activity still renders");
+    session.dispose();
+  } finally {
+    delete process.env.BIVY_ACP_COMMAND;
+    delete process.env.BIVY_ACP_ARGS;
+    delete process.env.ACP_AUTO_TOOL;
+  }
+});
+
 // 3A: Bivy's configured MCP servers must reach the ACP agent on session/new
 // (they were hardcoded to [] in the shim, cutting ACP agents off from MCP).
 await check("acp: forwards BIVY_ACP_MCP_SERVERS to the agent on session/new", async () => {
@@ -95,9 +117,11 @@ await check("acp: forwards BIVY_ACP_MCP_SERVERS to the agent on session/new", as
   process.env.BIVY_ACP_ARGS = JSON.stringify([acpAgent]);
   process.env.BIVY_TEST_MCP_DUMP = dump;
   const servers = [{ name: "bivy", command: "bivy", args: ["mcp-serve"] }];
-  process.env.BIVY_ACP_MCP_SERVERS = JSON.stringify(servers);
   try {
-    const runtime = makeRuntime({ runtime: "acp", credsDir: __dirname, piDir: __dirname, sessionsDir: __dirname });
+    const runtime = makeRuntime({
+      runtime: "acp", credsDir: __dirname, piDir: __dirname, sessionsDir: __dirname,
+      mcpConfig: { mcpServers: { bivy: { command: "bivy", args: ["mcp-serve"] } } },
+    });
     const { session } = await runtime.createSession({ workspace: __dirname, toolInterceptor: async () => undefined });
     // session/new is created lazily on the first prompt; drive one turn so it fires.
     const events: RuntimeEvent[] = [];
@@ -113,7 +137,126 @@ await check("acp: forwards BIVY_ACP_MCP_SERVERS to the agent on session/new", as
     delete process.env.BIVY_ACP_COMMAND;
     delete process.env.BIVY_ACP_ARGS;
     delete process.env.BIVY_TEST_MCP_DUMP;
-    delete process.env.BIVY_ACP_MCP_SERVERS;
+  }
+});
+
+await check("acp: forwards image blocks to the agent", async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-acp-images-"));
+  const dump = path.join(tmp, "prompt.json");
+  process.env.BIVY_ACP_COMMAND = process.execPath;
+  process.env.BIVY_ACP_ARGS = JSON.stringify([acpAgent]);
+  process.env.BIVY_TEST_PROMPT_DUMP = dump;
+  try {
+    const runtime = makeRuntime({ runtime: "acp", credsDir: tmp, piDir: tmp, sessionsDir: tmp });
+    const { session } = await runtime.createSession({ workspace: tmp, toolInterceptor: async () => undefined });
+    const events: RuntimeEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    await session.prompt("inspect", { images: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }] });
+    await waitFor(events, (event) => event.type === "agent_end");
+    assert.deepEqual(JSON.parse(fs.readFileSync(dump, "utf8")), [
+      { type: "text", text: "inspect" },
+      { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+    ]);
+    session.dispose();
+  } finally {
+    delete process.env.BIVY_ACP_COMMAND;
+    delete process.env.BIVY_ACP_ARGS;
+    delete process.env.BIVY_TEST_PROMPT_DUMP;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+await check("acp: confines and approval-gates filesystem writes", async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-acp-fs-"));
+  const resultDump = path.join(tmp, "result.json");
+  process.env.BIVY_ACP_COMMAND = process.execPath;
+  process.env.BIVY_ACP_ARGS = JSON.stringify([acpAgent]);
+  process.env.BIVY_TEST_FS_RESULT_DUMP = resultDump;
+  try {
+    process.env.ACP_FS_WRITE_PATH = "inside.txt";
+    let runtime = makeRuntime({ runtime: "acp", credsDir: tmp, piDir: tmp, sessionsDir: tmp, sandbox: "workspace-write" });
+    let opened = await runtime.createSession({ workspace: tmp, toolInterceptor: async () => undefined });
+    let events: RuntimeEvent[] = [];
+    opened.session.subscribe((event) => events.push(event));
+    await opened.session.prompt("write");
+    await waitFor(events, (event) => event.type === "agent_end");
+    assert.equal(fs.readFileSync(path.join(tmp, "inside.txt"), "utf8"), "written by ACP fixture");
+    opened.session.dispose();
+
+    fs.rmSync(resultDump, { force: true });
+    process.env.ACP_FS_WRITE_PATH = "denied.txt";
+    runtime = makeRuntime({ runtime: "acp", credsDir: tmp, piDir: tmp, sessionsDir: tmp, sandbox: "workspace-write" });
+    opened = await runtime.createSession({ workspace: tmp, toolInterceptor: async () => ({ block: true, reason: "fixture denial" }) });
+    events = [];
+    opened.session.subscribe((event) => events.push(event));
+    await opened.session.prompt("deny");
+    await waitFor(events, (event) => event.type === "agent_end");
+    assert.equal(fs.existsSync(path.join(tmp, "denied.txt")), false);
+    assert.match(fs.readFileSync(resultDump, "utf8"), /fixture denial/);
+    opened.session.dispose();
+
+    fs.rmSync(resultDump, { force: true });
+    process.env.ACP_FS_WRITE_PATH = "../escape.txt";
+    runtime = makeRuntime({ runtime: "acp", credsDir: tmp, piDir: tmp, sessionsDir: tmp, sandbox: "workspace-write" });
+    opened = await runtime.createSession({ workspace: tmp, toolInterceptor: async () => undefined });
+    events = [];
+    opened.session.subscribe((event) => events.push(event));
+    await opened.session.prompt("escape");
+    await waitFor(events, (event) => event.type === "agent_end");
+    assert.equal(fs.existsSync(path.join(tmp, "..", "escape.txt")), false);
+    assert.match(fs.readFileSync(resultDump, "utf8"), /outside the session workspace/);
+    opened.session.dispose();
+
+    fs.rmSync(resultDump, { force: true });
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-acp-outside-"));
+    fs.symlinkSync(outside, path.join(tmp, "linked-outside"));
+    process.env.ACP_FS_WRITE_PATH = "linked-outside/escaped.txt";
+    runtime = makeRuntime({ runtime: "acp", credsDir: tmp, piDir: tmp, sessionsDir: tmp, sandbox: "workspace-write" });
+    opened = await runtime.createSession({ workspace: tmp, toolInterceptor: async () => undefined });
+    events = [];
+    opened.session.subscribe((event) => events.push(event));
+    await opened.session.prompt("symlink escape");
+    await waitFor(events, (event) => event.type === "agent_end");
+    assert.equal(fs.existsSync(path.join(outside, "escaped.txt")), false);
+    assert.match(fs.readFileSync(resultDump, "utf8"), /path parent resolves outside/);
+    opened.session.dispose();
+    fs.rmSync(outside, { recursive: true, force: true });
+
+    fs.rmSync(resultDump, { force: true });
+    process.env.ACP_FS_WRITE_PATH = "blocked.txt";
+    runtime = makeRuntime({ runtime: "acp", credsDir: tmp, piDir: tmp, sessionsDir: tmp, sandbox: "read-only" });
+    opened = await runtime.createSession({ workspace: tmp, toolInterceptor: async () => undefined });
+    events = [];
+    opened.session.subscribe((event) => events.push(event));
+    await opened.session.prompt("blocked");
+    await waitFor(events, (event) => event.type === "agent_end");
+    assert.equal(fs.existsSync(path.join(tmp, "blocked.txt")), false);
+    assert.match(fs.readFileSync(resultDump, "utf8"), /read-only sandbox/);
+    opened.session.dispose();
+  } finally {
+    delete process.env.BIVY_ACP_COMMAND;
+    delete process.env.BIVY_ACP_ARGS;
+    delete process.env.ACP_FS_WRITE_PATH;
+    delete process.env.BIVY_TEST_FS_RESULT_DUMP;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+await check("acp: failed native resume is explicit and never creates an empty replacement", async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-acp-resume-"));
+  process.env.BIVY_ACP_COMMAND = process.execPath;
+  process.env.BIVY_ACP_ARGS = JSON.stringify([acpAgent]);
+  process.env.ACP_FAIL_LOAD = "1";
+  try {
+    const runtime = makeRuntime({ runtime: "acp", credsDir: tmp, piDir: tmp, sessionsDir: tmp });
+    const { session } = await runtime.openSession({ workspace: tmp, sessionFile: "missing-native-session" });
+    await assert.rejects(session.prompt("continue"), /ACP session resume failed: fixture refused session\/load/);
+    session.dispose();
+  } finally {
+    delete process.env.BIVY_ACP_COMMAND;
+    delete process.env.BIVY_ACP_ARGS;
+    delete process.env.ACP_FAIL_LOAD;
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
 

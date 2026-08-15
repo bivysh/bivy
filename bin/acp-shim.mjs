@@ -32,6 +32,7 @@
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import fs from "node:fs";
+import path from "node:path";
 
 // --- arg parsing: --agent <cmd> [-- <args…>] --------------------------------
 const argv = process.argv.slice(2);
@@ -138,6 +139,35 @@ let pendingModel = null;
 // toolCallId -> { requestId, options } so a later bivy tool.decision answers the
 // right ACP permission request with a concrete optionId.
 const permissionRequests = new Map();
+const sandboxTier = process.env.BIVY_ACP_SANDBOX || "workspace-write";
+
+function isWithin(root, candidate) {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
+}
+
+/** Resolve an ACP filesystem request inside the session workspace, including
+ * symlink-safe checks for existing targets and the nearest existing parent. */
+function workspacePath(requested, { write = false } = {}) {
+  if (!requested) throw new Error("path is required");
+  const root = fs.realpathSync(cwd);
+  const candidate = path.resolve(root, String(requested));
+  if (!isWithin(root, candidate)) throw new Error("path is outside the session workspace");
+  if (!write || fs.existsSync(candidate)) {
+    const resolved = fs.realpathSync(candidate);
+    if (!isWithin(root, resolved)) throw new Error("path resolves outside the session workspace");
+    return resolved;
+  }
+  let parent = path.dirname(candidate);
+  while (!fs.existsSync(parent)) {
+    const next = path.dirname(parent);
+    if (next === parent) throw new Error("no existing parent for path");
+    parent = next;
+  }
+  const resolvedParent = fs.realpathSync(parent);
+  if (!isWithin(root, resolvedParent)) throw new Error("path parent resolves outside the session workspace");
+  return candidate;
+}
 
 // --- trailing-update drain ---------------------------------------------------
 // opencode's ACP server resolves `session/prompt` (the end_turn reply) BEFORE the
@@ -303,7 +333,7 @@ function onSessionUpdate(params) {
       // shows the action; the result arrives via tool_call_update.
       const toolCallId = String(u.toolCallId ?? u.id ?? "");
       const state = mergeToolCallState(toolCallId, u);
-      bivy({ type: "tool.call", toolCallId, name: toolCallName(state), input: toolCallInput(state) });
+      bivy({ type: "tool.observe", toolCallId, name: toolCallName(state), input: toolCallInput(state) });
       break;
     }
     case "tool_call_update": {
@@ -352,7 +382,8 @@ async function onAgentRequest(id, method, params) {
     }
     case "fs/read_text_file": {
       try {
-        let text = fs.readFileSync(String(params?.path ?? ""), "utf8");
+        const file = workspacePath(params?.path);
+        let text = fs.readFileSync(file, "utf8");
         if (typeof params?.line === "number" || typeof params?.limit === "number") {
           const lines = text.split("\n");
           const start = Math.max(0, (params.line ?? 1) - 1);
@@ -366,8 +397,11 @@ async function onAgentRequest(id, method, params) {
     }
     case "fs/write_text_file": {
       try {
-        fs.writeFileSync(String(params?.path ?? ""), String(params?.content ?? ""));
-        agentReply(id, {});
+        if (sandboxTier === "read-only") throw new Error("writes are disabled by the read-only sandbox");
+        const file = workspacePath(params?.path, { write: true });
+        const toolCallId = `acp-fs-write-${id}`;
+        permissionRequests.set(toolCallId, { kind: "fs-write", requestId: id, file, content: String(params?.content ?? "") });
+        bivy({ type: "tool.call", toolCallId, name: "write", input: { path: file } });
       } catch (e) {
         agentReplyError(id, -32000, `write failed: ${e.message}`);
       }
@@ -462,12 +496,11 @@ async function onBivyCommand(msg) {
           const res = await agentRequest("session/load", { sessionId: ref, cwd, mcpServers }, { timeoutMs: 30_000 });
           sessionId = res?.sessionId ?? ref;
           publishModels(res);
-        } catch {
-          // Agent doesn't support session/load (or it timed out) — start fresh so
-          // the chat still opens.
-          const res = await agentRequest("session/new", { cwd, mcpServers });
-          sessionId = res?.sessionId ?? null;
-          publishModels(res);
+        } catch (error) {
+          // Never disguise lost model context as a successful resume. The caller
+          // can explicitly choose Bivy's disclosed seeded-continuation path.
+          bivy({ replyTo: id, ok: false, error: `ACP session resume failed: ${error instanceof Error ? error.message : String(error)}` });
+          return;
         }
         await applyPendingModel();
         bivy({ replyTo: id, ok: true, runtimeSessionRef: sessionId });
@@ -480,7 +513,12 @@ async function onBivyCommand(msg) {
         // ProtocolRuntime's command timeout, so we must not defer the ack).
         bivy({ replyTo: id, ok: true });
         bivy({ type: "session.status", status: "working" });
-        agentRequest("session/prompt", { sessionId, prompt: [{ type: "text", text: String(msg.text ?? "") }] })
+        const prompt = [];
+        if (String(msg.text ?? "")) prompt.push({ type: "text", text: String(msg.text) });
+        for (const image of Array.isArray(msg.images) ? msg.images : []) {
+          if (image && typeof image.data === "string" && typeof image.mimeType === "string") prompt.push({ type: "image", data: image.data, mimeType: image.mimeType });
+        }
+        agentRequest("session/prompt", { sessionId, prompt })
           .then(() => {
             // The prompt reply is NOT the end of the turn for opencode — the last
             // agent_message_chunk frames trail it (see the drain note above). Arm
@@ -501,6 +539,14 @@ async function onBivyCommand(msg) {
         if (entry) {
           permissionRequests.delete(msg.toolCallId);
           const allow = msg.decision !== "deny";
+          if (entry.kind === "fs-write") {
+            if (!allow) agentReplyError(entry.requestId, -32001, String(msg.reason || "write denied by Bivy policy"));
+            else {
+              try { fs.writeFileSync(entry.file, entry.content); agentReply(entry.requestId, {}); }
+              catch (e) { agentReplyError(entry.requestId, -32000, `write failed: ${e.message}`); }
+            }
+            return;
+          }
           // Pick an ACP option matching the human's choice by its `kind`
           // (allow_once/allow_always vs reject_once/reject_always); fall back to the
           // first option, or a cancelled outcome when nothing fits.
