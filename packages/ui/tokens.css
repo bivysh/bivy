@@ -36,6 +36,7 @@
   --line: #e4e1d8;
   --line-strong: #d3cfc4;
   --overlay: rgba(25, 26, 22, 0.42);
+  --overlay-strong: rgba(0, 0, 0, 0.8);
 
   /* ---- Accent (alpine slate) ---- */
   --accent: #3f6377;
@@ -55,6 +56,7 @@
      not accent (working) / danger (needs input) / ok / merged, so
      "something's ready" reads at a glance. */
   --unseen: #a8823f;
+  --unseen-contrast: #191a16;
 
   /* ---- Per-source hues for session/run marks (see packages/web sessionSource).
      Kept clear of the status palette above so a source is never mistaken for an
@@ -65,6 +67,11 @@
   /* ---- Terminal text selection ---- */
   --term-selection: rgba(63, 99, 119, 0.30);
   --term-selection-inactive: rgba(63, 99, 119, 0.20);
+
+  /* ---- Syntax highlighting ---- */
+  --syntax-comment: #6a737d; --syntax-keyword: #d73a49; --syntax-string: #032f62;
+  --syntax-number: #005cc5; --syntax-title: #6f42c1; --syntax-type: #e36209;
+  --syntax-name: #22863a; --syntax-deletion: #b31d28; --syntax-addition: #22863a;
 
   /* ---- Focus ---- */
   --focus-ring: color-mix(in srgb, var(--accent) 45%, transparent);
@@ -154,14 +161,17 @@
   color-scheme: dark;
   --bg: #14171a; --surface: #191d21; --surface-2: #1f242a; --surface-3: #252b31;
   --ink: #e6ebee; --muted: #838b91; --line: #262c31; --line-strong: #384049;
-  --overlay: rgba(0, 0, 0, 0.6);
+  --overlay: rgba(0, 0, 0, 0.6); --overlay-strong: rgba(0, 0, 0, 0.8);
   --accent: #8fb6cd; --accent-contrast: #14171a; --accent-hover: #a7cadd;
   --danger: #c08a83; --danger-soft: #3a2420; --danger-contrast: #14171a; --ok: #86a99f; --merged: #a99bc4;
-  --unseen: #cba96a;
+  --unseen: #cba96a; --unseen-contrast: #14171a;
   --warn: #d9a441;
   --s-github: #d7dde3; --s-slack: #d68ce6; --s-linear: #a5adf5; --s-schedule: #4bc4de;
   --s-webhook: #b79bf7; --s-manual: #f0a45a; --s-cli: #a3c987; --s-app: #9aa4b2;
   --term-selection: rgba(143, 182, 205, 0.36); --term-selection-inactive: rgba(143, 182, 205, 0.24);
+  --syntax-comment: #8b949e; --syntax-keyword: #ff7b72; --syntax-string: #a5d6ff;
+  --syntax-number: #79c0ff; --syntax-title: #d2a8ff; --syntax-type: #ffa657;
+  --syntax-name: #7ee787; --syntax-deletion: #ffdcd7; --syntax-addition: #85e89d;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.5);
@@ -173,14 +183,17 @@
     color-scheme: dark;
     --bg: #14171a; --surface: #191d21; --surface-2: #1f242a; --surface-3: #252b31;
     --ink: #e6ebee; --muted: #838b91; --line: #262c31; --line-strong: #384049;
-    --overlay: rgba(0, 0, 0, 0.6);
+    --overlay: rgba(0, 0, 0, 0.6); --overlay-strong: rgba(0, 0, 0, 0.8);
     --accent: #8fb6cd; --accent-contrast: #14171a; --accent-hover: #a7cadd;
     --danger: #c08a83; --danger-soft: #3a2420; --danger-contrast: #14171a; --ok: #86a99f; --merged: #a99bc4;
-    --unseen: #cba96a;
+    --unseen: #cba96a; --unseen-contrast: #14171a;
     --warn: #d9a441;
     --s-github: #d7dde3; --s-slack: #d68ce6; --s-linear: #a5adf5; --s-schedule: #4bc4de;
     --s-webhook: #b79bf7; --s-manual: #f0a45a; --s-cli: #a3c987; --s-app: #9aa4b2;
     --term-selection: rgba(143, 182, 205, 0.36); --term-selection-inactive: rgba(143, 182, 205, 0.24);
+  --syntax-comment: #8b949e; --syntax-keyword: #ff7b72; --syntax-string: #a5d6ff;
+  --syntax-number: #79c0ff; --syntax-title: #d2a8ff; --syntax-type: #ffa657;
+  --syntax-name: #7ee787; --syntax-deletion: #ffdcd7; --syntax-addition: #85e89d;
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
     --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
     --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.5);
