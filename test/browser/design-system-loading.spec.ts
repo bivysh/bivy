@@ -8,6 +8,7 @@ const LOADING_SURFACES = [
   "App.tsx",
   "components/ChatView.tsx",
   "components/Composer.tsx",
+  "components/ConnectRunner.tsx",
   "components/NodeSwitcher.tsx",
   "components/VoiceRecorder.tsx",
 ] as const;
@@ -17,6 +18,7 @@ const LEGACY_SPINNERS = [
   "attach-spinner",
   "reconnect-spinner",
   "voice-spinner",
+  "onboarding-spinner",
 ] as const;
 
 test("indeterminate loading surfaces use the canonical Spinner", async () => {

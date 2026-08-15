@@ -2476,7 +2476,6 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
   font: inherit; font-size: 12px; font-weight: 600;
 }
 .connect-refresh:hover { background: var(--surface-2); }
-.onboarding-spinner { flex: none; width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--line-strong); border-top-color: var(--accent); animation: spin 0.7s linear infinite; }
 @media (max-width: 480px) { .connect-runner { gap: 16px; } .connect-title { font-size: 20px; } }
 .app-dialog { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 18px; }
 .app-dialog-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.42); backdrop-filter: blur(3px); }

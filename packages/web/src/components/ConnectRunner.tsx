@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { AccountNode } from "@bivy/core";
 import { writeClipboard } from "../clipboard.js";
+import { Spinner } from "./Spinner.js";
 
 const INSTALL_CMD = "curl -fsSL https://bivy.sh/install.sh | bash";
 
@@ -159,7 +160,7 @@ export function ConnectRunner({
       )}
 
       <div className="connect-waiting">
-        <span className="onboarding-spinner" aria-hidden />
+        <Spinner size="sm" />
         <span className="connect-waiting-text">
           {persistentNodes.length > 0 ? "Or wait for another machine to connect…" : "Waiting for a machine to connect…"}
         </span>
