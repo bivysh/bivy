@@ -40,7 +40,7 @@ export function VoiceSettings({ state }: { state: AppState }) {
         <label className="field-label">Preferred transcription provider</label>
         <div className="seg-row">
           {providers.map((provider) => (
-            <button key={provider.id} type="button" className={`seg-btn${config?.provider === provider.id ? " active" : ""}`} onClick={() => controller.setSttProvider(provider.id)}>
+            <button key={provider.id} type="button" className="selectable" aria-pressed={config?.provider === provider.id} onClick={() => controller.setSttProvider(provider.id)}>
               {provider.label}
             </button>
           ))}

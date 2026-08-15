@@ -118,7 +118,7 @@ export function SessionSettings({ onClose }: { onClose: () => void }) {
         {running ? (
           <>
             <div className="seg-row">
-              <span className="seg-btn active" aria-disabled="true" title={sessionTierHint}>
+              <span className="selectable" role="radio" aria-checked="true" aria-disabled="true" title={sessionTierHint}>
                 {sessionTierLabel}
               </span>
             </div>
@@ -133,7 +133,8 @@ export function SessionSettings({ onClose }: { onClose: () => void }) {
             <div className="seg-row">
               <button
                 type="button"
-                className={`seg-btn${!draftSandbox ? " active" : ""}`}
+                className="selectable"
+                aria-pressed={!draftSandbox}
                 onClick={() => controller.setSessionSandbox(null)}
                 title="Use the machine's default sandbox mode"
               >
@@ -143,7 +144,8 @@ export function SessionSettings({ onClose }: { onClose: () => void }) {
                 <button
                   key={t.id}
                   type="button"
-                  className={`seg-btn${draftSandbox === t.id ? " active" : ""}`}
+                  className="selectable"
+                  aria-pressed={draftSandbox === t.id}
                   onClick={() => controller.setSessionSandbox(t.id)}
                   title={t.hint}
                 >

@@ -280,7 +280,8 @@ function RulesetEditor({
           <button
             key={c.id}
             type="button"
-            className={`seg-btn${draft.appliesTo.includes(c.id) ? " active" : ""}`}
+            className="selectable"
+            aria-pressed={draft.appliesTo.includes(c.id)}
             title={c.hint}
             onClick={() => toggleContext(c.id)}
           >
@@ -362,7 +363,7 @@ function RuleCard({
           <button
             key={c.id}
             type="button"
-            className={`ruleset-chip${rule.when.includes(c.id) ? " active" : ""}`}
+            className="selectable"
             title={c.hint}
             aria-pressed={rule.when.includes(c.id)}
             onClick={() => toggleCondition(c.id)}
@@ -379,7 +380,8 @@ function RuleCard({
           <button
             key={a.id}
             type="button"
-            className={`seg-btn${rule.action === a.id ? " active" : ""}`}
+            className="selectable"
+            aria-pressed={rule.action === a.id}
             title={a.hint}
             onClick={() => set({ action: a.id })}
           >

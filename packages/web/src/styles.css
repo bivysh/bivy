@@ -962,12 +962,6 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 
 /* Segmented picker (voice provider choice) + per-provider key rows. */
 .seg-row { display: flex; gap: 8px; flex-wrap: wrap; margin: 2px 0 6px; }
-.seg-btn {
-  border: 1px solid var(--line); background: var(--surface); color: var(--ink);
-  border-radius: 999px; padding: 6px 14px; font-size: 13px; font-weight: 600; cursor: pointer;
-}
-.seg-btn:hover { border-color: var(--line-strong); }
-.seg-btn.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--surface)); color: var(--accent); }
 .voice-provider { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
 .voice-provider-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .small { font-size: 12px; }
@@ -976,12 +970,6 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .ruleset-rule-card { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
 .ruleset-rule-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .ruleset-chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
-.ruleset-chip {
-  border: 1px solid var(--line-strong); background: var(--surface); color: var(--muted);
-  border-radius: 999px; padding: 4px 10px; font-size: 12px; font-weight: 600; cursor: pointer;
-}
-.ruleset-chip:hover { border-color: var(--accent); color: var(--ink); }
-.ruleset-chip.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, var(--surface)); color: var(--accent); }
 .ruleset-field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; }
 .ruleset-field-grid .field-label { margin-top: 0; }
 .ruleset-chain { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--line); padding-top: 8px; margin-top: 4px; }
@@ -2160,7 +2148,7 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
   border-radius: var(--radius-md); padding: var(--space-2) var(--space-3);
   font: inherit; cursor: pointer;
 }
-.selectable:disabled { opacity: 0.5; cursor: default; }
+.selectable:disabled, .selectable[aria-disabled="true"] { opacity: 0.5; cursor: default; }
 .selectable[aria-checked="true"], .selectable[aria-pressed="true"], .selectable.active {
   border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--surface)); color: var(--accent);
 }
@@ -2281,9 +2269,9 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
   .ruleset-rule-card .muted, .ruleset-rule-card .field-label, .ruleset-chain-field { color: color-mix(in srgb, var(--ink) 72%, var(--muted)); }
   .ruleset-rule-head .btn { min-height: 40px; }
   .ruleset-chip-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-  .ruleset-chip { min-height: 44px; padding: 8px; line-height: 1.2; color: color-mix(in srgb, var(--ink) 72%, var(--muted)); }
+  .ruleset-chip-row .selectable { min-height: 44px; padding: 8px; line-height: 1.2; color: color-mix(in srgb, var(--ink) 72%, var(--muted)); }
   .ruleset-rule-card > .seg-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-  .ruleset-rule-card > .seg-row .seg-btn { min-width: 0; min-height: 44px; padding: 8px 4px; }
+  .ruleset-rule-card > .seg-row .selectable { min-width: 0; min-height: 44px; padding: 8px 4px; }
   .ruleset-field-grid { grid-template-columns: 1fr; gap: 12px; }
   .ruleset-chain { gap: 10px; }
   .ruleset-chain-row { align-items: stretch; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); flex-direction: column; }

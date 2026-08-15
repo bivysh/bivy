@@ -1102,7 +1102,8 @@ function NodesPanel({ state }: { state: AppState }) {
                 <button
                   key={t.id}
                   type="button"
-                  className={`seg-btn${form.defaultSandbox === t.id ? " active" : ""}`}
+                  className="selectable"
+                  aria-pressed={form.defaultSandbox === t.id}
                   onClick={() => setForm({ ...form, defaultSandbox: t.id })}
                   title={t.hint}
                 >
@@ -1156,7 +1157,8 @@ function NodesPanel({ state }: { state: AppState }) {
                 <button
                   key={o.id}
                   type="button"
-                  className={`seg-btn${form.sessionResumeMode === o.id ? " active" : ""}`}
+                  className="selectable"
+                  aria-pressed={form.sessionResumeMode === o.id}
                   onClick={() => setForm({ ...form, sessionResumeMode: o.id })}
                   title={o.hint}
                 >
