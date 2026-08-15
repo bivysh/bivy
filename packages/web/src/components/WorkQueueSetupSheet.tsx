@@ -21,6 +21,7 @@ import {
   fetchHostedProvisioning,
 } from "@bivy/core";
 import { controller } from "../store/controller.js";
+import { Badge } from "./Badge.js";
 
 export type SourceSetupFocus = "github" | "linear" | "slack" | "work-queue";
 
@@ -510,7 +511,7 @@ export function WorkQueueSetupSheet({
                       <div className="wq-app-row-main">
                         <div className="wq-app-title-row">
                           <strong>{entry.name || entry.mention || "GitHub App"}</strong>
-                          <span className={`autom-status ${entry.installed === false ? "warn" : entry.hosted || entry.servedBy?.online || hostedReady ? "on" : "warn"}`}>
+                          <Badge tone={entry.installed === false ? "warn" : entry.hosted || entry.servedBy?.online || hostedReady ? "ok" : "warn"}>
                             {entry.installed === false
                               ? "Needs install"
                               : entry.hosted || hostedReady
@@ -520,7 +521,7 @@ export function WorkQueueSetupSheet({
                                 : entry.servedBy
                                   ? "Machine offline"
                                   : "Needs machine"}
-                          </span>
+                          </Badge>
                         </div>
                         {entry.owner && (
                           <span className="settings-hint">
@@ -756,9 +757,9 @@ export function WorkQueueSetupSheet({
                   <>
                     <div className="wq-app-title-row">
                       <strong>{linear.enabled ? "Connected" : "Finish connecting"}</strong>
-                      <span className={`autom-status ${linear.enabled ? "on" : "warn"}`}>
+                      <Badge tone={linear.enabled ? "ok" : "warn"}>
                         {linear.enabled ? "Live" : "Needs secret"}
-                      </span>
+                      </Badge>
                     </div>
                     <p className="settings-hint">
                       In <strong>Linear → Settings → API → Webhooks</strong>, create an <strong>Issue</strong> webhook with this URL:
@@ -848,7 +849,7 @@ export function WorkQueueSetupSheet({
                   <>
                     <div className="wq-app-title-row">
                       <strong>Connected</strong>
-                      <span className="autom-status on">Live</span>
+                      <Badge tone="ok">Live</Badge>
                     </div>
                     <p className="settings-hint">Use this as your Slack app&apos;s slash-command Request URL:</p>
                     <div className="reveal-row">

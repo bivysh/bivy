@@ -65,6 +65,7 @@ import { CloseIcon, PlusIcon } from "./UiIcons.js";
 import { AutomationSourcesPanel } from "./AutomationSourcesPanel.js";
 import { RunHistory } from "./RunHistory.js";
 import { compactCronSummary, formatAutomationMoment, formatNextAutomationRun } from "../automationPresentation.js";
+import { Badge } from "./Badge.js";
 
 const TEMPLATE_PREFIX = "bivy-room-v1";
 
@@ -925,7 +926,7 @@ export function AutomationsView({
                       <div className="automation-row-main">
                         <div className="automation-row-title">
                           <strong>{item.name}</strong>
-                          {chip.tone !== "on" && !needsConnect && <span className={`autom-status ${chip.tone}`}>{chip.label}</span>}
+                          {chip.tone !== "on" && !needsConnect && <Badge tone={chip.tone === "warn" ? "warn" : undefined}>{chip.label}</Badge>}
                         </div>
                         <div className="settings-hint">{meta}</div>
                         {item.trigger === "webhook" && rotated?.id === item.id && (

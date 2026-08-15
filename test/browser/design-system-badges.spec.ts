@@ -42,6 +42,22 @@ test("settings status labels use canonical badges", async () => {
   }
 });
 
+test("runtime and automation labels use canonical badges", async () => {
+  for (const path of [
+    "components/Pickers.tsx",
+    "components/AutomationsView.tsx",
+    "components/WorkQueueSetupSheet.tsx",
+    "components/RunHistory.tsx",
+    "components/ImportSessionSheet.tsx",
+  ]) {
+    const source = await readFile(new URL(path, ROOT), "utf8");
+    expect(source, path).toContain("<Badge");
+    expect(source, path).not.toMatch(/className=(?:"|{`)(?:runtime-cap\s|runtime-tier|runtime-protection|autom-status|run-status|import-session-badge)/);
+  }
+  const css = await readFile(new URL("styles.css", ROOT), "utf8");
+  expect(css).not.toMatch(/\.(?:runtime-cap|runtime-tier|runtime-protection|autom-status|run-status|import-session-badge)(?:[ .:{\[])/);
+});
+
 test("legacy generic chips have been removed", async () => {
   for (const path of [
     "components/Rulesets.tsx",

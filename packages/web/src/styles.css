@@ -1203,15 +1203,6 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .runtime-meta { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
 .runtime-meta-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .runtime-capabilities { display: flex; flex-wrap: wrap; gap: 4px; }
-.runtime-cap, .runtime-tier, .runtime-protection { border: 1px solid var(--line); border-radius: 999px; padding: 1px 6px; font-size: 10px; line-height: 1.5; color: var(--muted); }
-.runtime-tier.supported { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 65%, var(--line)); font-weight: 700; }
-.runtime-tier.beta { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); font-weight: 700; }
-.runtime-tier.planned, .runtime-tier.experimental { opacity: 0.78; }
-.runtime-protection.native-sandbox, .runtime-protection.tool-controls { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 55%, var(--line)); }
-.runtime-protection.mcp-controls { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 60%, var(--line)); }
-.runtime-protection.user-permissions { color: var(--err); border-color: color-mix(in srgb, var(--err) 55%, var(--line)); font-weight: 650; }
-.runtime-cap.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 55%, var(--line)); }
-.runtime-cap.limited { opacity: 0.72; }
 .contract-areas { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .contract-area { display: flex; align-items: baseline; gap: 8px; padding: 3px 0; border-bottom: 1px solid var(--line); }
 .contract-area-label { flex: none; width: 96px; font-weight: 600; font-size: 12px; }
@@ -1252,7 +1243,6 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .import-session-hint { margin: 4px 12px; padding: 10px; color: var(--muted); font-size: 12px; }
 /* A live external process was detected — read-only badge, no adopt action
    (Bivy has no safe way to take over a process it doesn't own). */
-.import-session-badge { display: inline-block; padding: 5px 10px; border-radius: 999px; background: var(--surface-2); color: var(--muted); font-size: 11px; font-weight: 600; white-space: nowrap; }
 .import-session-action { white-space: nowrap; }
 /* The "follow/read-only" affordance for a live-elsewhere session: the badge
    plus the exact command to attach to it themselves, in their own terminal. */
@@ -1687,14 +1677,6 @@ button.template-card.is-featured .template-card-icon {
   color: var(--ink); background: color-mix(in srgb, var(--warn, #d4a017) 9%, var(--surface));
   font-size: 12px; line-height: 1.45;
 }
-.autom-status, .run-status {
-  font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 999px;
-  border: 1px solid var(--line); color: var(--muted); background: var(--surface-2);
-  white-space: nowrap;
-}
-.autom-status.on { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 50%, var(--line)); background: color-mix(in srgb, var(--ok) 10%, var(--surface-2)); }
-.autom-status.off { color: var(--muted); }
-.autom-status.warn { color: var(--warn, #d4a017); border-color: color-mix(in srgb, var(--warn, #d4a017) 55%, var(--line)); background: color-mix(in srgb, var(--warn, #d4a017) 10%, var(--surface-2)); }
 .autom-banner {
   margin: 10px 0 4px;
   padding: 10px 12px;
@@ -1718,10 +1700,6 @@ button.template-card.is-featured .template-card-icon {
   margin: 10px 0 14px; font-size: 13px; cursor: pointer;
 }
 .autom-check-row input { margin-top: 2px; }
-.run-status.ok { color: var(--ok); border-color: currentColor; }
-.run-status.warn { color: var(--warn, var(--accent)); border-color: currentColor; }
-.run-status.bad { color: var(--danger); border-color: currentColor; }
-.run-status.info { color: var(--muted); }
 
 /* Routable run detail: readable as a page on desktop and a compact native-like
    drill-in on mobile. The shared row primitives otherwise have no page rhythm. */
