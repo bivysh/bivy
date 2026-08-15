@@ -550,7 +550,7 @@ export function App() {
             aria-label={attnUnseen ? "Open sessions — something needs your attention" : "Open sessions"}
           >
             ☰
-            {attnUnseen && <span className="attn-dot" aria-hidden />}
+            {attnUnseen && <span className="attn-indicator" aria-hidden><StatusDot status="needs-action" /></span>}
           </button>
           <div className="topbar-title">
             <div className="topbar-title-row">

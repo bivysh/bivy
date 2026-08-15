@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, useState } from "react";
+import { StatusDot } from "./StatusDot.js";
 
 // On-device dictation fallback (the browser's Web Speech API) used when no Groq
 // or OpenAI key is configured — voice input then works with no key and no cost,
@@ -106,7 +107,7 @@ export function WebSpeechRecorder({
         ✕
       </button>
       <div className="voice-listening">
-        <span className="voice-listening-dot" aria-hidden />
+        <StatusDot status="working" />
         <span className="voice-listening-text">{display || "Listening…"}</span>
       </div>
       <button

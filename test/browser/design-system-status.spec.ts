@@ -12,14 +12,15 @@ test("machine, session, and run presence use the canonical StatusDot", async () 
     "components/RunPill.tsx",
     "components/RunDetails.tsx",
     "components/SessionList.tsx",
+    "components/WebSpeechRecorder.tsx",
   ]) {
     const source = await readFile(new URL(path, ROOT), "utf8");
     expect(source, path).toContain("<StatusDot");
-    expect(source, path).not.toMatch(/(?:node|session|run)-dot|mark-badge/);
+    expect(source, path).not.toMatch(/(?:node|session|run|attn|voice-listening)-dot|mark-badge/);
   }
   const queue = await readFile(new URL("components/GithubQueue.tsx", ROOT), "utf8");
   expect(queue).toContain("<RowMark");
-  expect(queue).not.toMatch(/(?:node|session|run)-dot|mark-badge/);
+  expect(queue).not.toMatch(/(?:node|session|run|attn|voice-listening)-dot|mark-badge/);
 });
 
 test("canonical status dots expose every documented state", async () => {
@@ -28,5 +29,5 @@ test("canonical status dots expose every documented state", async () => {
   for (const status of ["unseen", "online", "working", "needs-action", "failed", "saved"]) {
     expect(css).toContain(`.status-dot[data-status="${status}"]`);
   }
-  expect(css).not.toMatch(/\.(?:node|session|run)-dot|\.mark-badge/);
+  expect(css).not.toMatch(/\.(?:node|session|run|attn|voice-listening)-dot|\.mark-badge/);
 });

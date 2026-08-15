@@ -142,7 +142,8 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
    a provider needing auth). Replaces the old separate inbox surface — the
    attention itself now floats to the top of the session list. */
 .burger-btn { position: relative; }
-.attn-dot { position: absolute; top: 3px; right: 3px; width: 9px; height: 9px; border-radius: 999px; background: var(--danger); box-shadow: 0 0 0 2px var(--surface); }
+.attn-indicator { position: absolute; top: 3px; right: 3px; display: inline-flex; }
+.attn-indicator .status-dot { box-shadow: 0 0 0 2px var(--surface); }
 .inbox { position: fixed; z-index: 101; inset: 5vh max(16px, calc((100vw - 760px) / 2)); max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: 0 20px 70px rgba(0,0,0,.28); }
 .inbox-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 20px; border-bottom: 1px solid var(--line); }
 .inbox-head h2, .inbox-head p { margin: 0; }
@@ -929,7 +930,6 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .voice-time { flex: none; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--muted); min-width: 30px; text-align: right; }
 /* On-device dictation (Web Speech fallback): pulsing dot + live transcript. */
 .voice-listening { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; overflow: hidden; }
-.voice-listening-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--danger); animation: pulse 1.2s ease-in-out infinite; }
 .voice-listening-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; color: var(--ink); }
 
 /* Segmented picker (voice provider choice) + per-provider key rows. */
