@@ -11,8 +11,11 @@ const MIGRATED = [
   "components/ArtifactsSheet.tsx",
   "components/ToolGroup.tsx",
   "components/SessionList.tsx",
+  "components/RunDetails.tsx",
+  "components/ChangesCard.tsx",
+  "components/RunPill.tsx",
 ] as const;
-const LEGACY = ["approval-badge", "question-chip", "artifact-badge", "tool-fail"] as const;
+const LEGACY = ["approval-badge", "question-chip", "artifact-badge", "tool-fail", "chk"] as const;
 
 test("semantic labels use the canonical Badge", async () => {
   for (const path of MIGRATED) {

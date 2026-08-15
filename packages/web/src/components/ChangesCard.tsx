@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { useMemo, useState } from "react";
+import { Badge } from "./Badge.js";
 import type { TurnChanges, HarnessFileChange, Checkpoint } from "@bivy/core";
 import { diffOps } from "@bivy/core";
 import { DiffView, type DiffMode } from "./DiffView.js";
@@ -223,9 +224,9 @@ export function ChangesCard({
               {checks && checks.length > 0 && (
                 <span className="changes-checks">
                   {checks.map((c, i) => (
-                    <span key={`${c.name}-${i}`} className={`chk ${c.status}`}>
+                    <Badge key={`${c.name}-${i}`} tone={c.status === "passed" ? "ok" : c.status === "failed" ? "danger" : undefined}>
                       {c.name} {c.status === "passed" ? "✓" : c.status === "failed" ? "✗" : "–"}
-                    </span>
+                    </Badge>
                   ))}
                 </span>
               )}

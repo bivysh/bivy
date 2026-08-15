@@ -18,6 +18,7 @@ import { deriveRunOutcome, type GithubContext, type GithubQueueItem, type PrRef,
 import { useModalEscape } from "../modalStack.js";
 import { SourceGlyph } from "./SourceMark.js";
 import { StatusDot, type StatusDotState } from "./StatusDot.js";
+import { Badge } from "./Badge.js";
 import { PrBadge, GhMark } from "./SessionList.js";
 import { shortSourceLabel, type SourceInfo } from "../sessionSource.js";
 import { checkCounts, retryReason, runDuration, artifactRef, recoveryActions, type RecoveryKind } from "../runEvidence.js";
@@ -84,9 +85,9 @@ function Checks({ item }: { item: GithubQueueItem }) {
   return (
     <div className="run-sheet-checks">
       {checks.map((c, i) => (
-        <span key={`${c.name}-${i}`} className={`chk ${c.status}`}>
+        <Badge key={`${c.name}-${i}`} tone={c.status === "passed" ? "ok" : c.status === "failed" ? "danger" : undefined}>
           {c.name} {c.status === "passed" ? "✓" : c.status === "failed" ? "✗" : "–"}
-        </span>
+        </Badge>
       ))}
     </div>
   );

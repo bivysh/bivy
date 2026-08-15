@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmDialog } from "./AppDialog.js";
 import { StatusDot, type StatusDotState } from "./StatusDot.js";
+import { Badge } from "./Badge.js";
 import {
   RunFetchError,
   receiptV1FromRun,
@@ -426,9 +427,9 @@ function RunBody({
       {run.checks.length > 0 && (
         <div className="run-sheet-checks" ref={checksRef} tabIndex={-1}>
           {run.checks.map((c, i) => (
-            <span key={`${c.name}-${i}`} className={`chk ${c.status}`}>
+            <Badge key={`${c.name}-${i}`} tone={c.status === "passed" ? "ok" : c.status === "failed" ? "danger" : undefined}>
               {c.name} {c.status === "passed" ? "✓" : c.status === "failed" ? "✗" : "–"}
-            </span>
+            </Badge>
           ))}
         </div>
       )}
