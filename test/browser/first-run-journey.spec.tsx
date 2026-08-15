@@ -56,10 +56,11 @@ test("every failed readiness check maps to exactly one wired, real remediation â
 test("provider readiness ('Test connection') is wired end to end: web action -> relay command -> node handler", async () => {
   const controller = await read("../../packages/web/src/store/coordinators/credentials-models-coordinator.ts");
   const vault = await read("../../packages/web/src/components/CredentialVault.tsx");
-  const server = await read("../../src/server.ts");
+  // The node handler lives in the extracted credential command controller.
+  const handler = await read("../../src/controllers/credential-commands.ts");
   expect(controller).toContain("async testCredential(provider: string, label: string)");
   expect(vault).toContain("controller.testCredential(selected.provider, selected.label)");
-  expect(server).toContain('async "credential.test"(msg, ctx) {');
+  expect(handler).toContain('async "credential.test"(msg, ctx) {');
 });
 
 test("progress survives a reload because it's derived from authoritative signals, not a client-only wizard flag", async () => {
