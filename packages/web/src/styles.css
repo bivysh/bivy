@@ -658,29 +658,14 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .question-other-input:disabled { opacity: 0.6; }
 
 /* ---- GitHub pill + action sheet ---- */
-.github-pill {
-  display: inline-flex; align-items: center; gap: 6px; flex: none;
-  border: 1px solid var(--line); background: var(--surface-2); color: var(--ink);
-  border-radius: 999px; padding: 4px 10px; font-size: 12px; font-weight: 600;
-}
+.github-pill { flex: none; background: transparent; font: inherit; cursor: pointer; }
 .github-pill .gh-icon { width: 14px; height: 14px; }
-.github-pill.pr { border-color: var(--ok); color: var(--ok); }
-.github-pill.pr.merged { border-color: var(--merged); color: var(--merged); }
-.github-pill.pr.closed { border-color: var(--muted); color: var(--muted); }
-.github-pill.issue { border-color: var(--accent); color: var(--accent); }
 .github-pill .gh-text { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Compact PR badge on a sidebar row (open/merged/closed), colour-matched to the
    header pill. Non-interactive — it sits inside the row's <button>. */
-.session-pr {
-  display: inline-flex; align-items: center; gap: 3px; flex: none;
-  border: 1px solid var(--ok); color: var(--ok);
-  border-radius: 999px; padding: 0 6px; height: 16px;
-  font-size: 10px; font-weight: 700; line-height: 1; letter-spacing: 0.02em;
-}
+.session-pr { flex: none; gap: 3px; padding: 0 6px; height: 16px; font-size: 10px; line-height: 1; letter-spacing: 0.02em; }
 .session-pr .gh-icon { width: 10px; height: 10px; }
-.session-pr.merged { border-color: var(--merged); color: var(--merged); }
-.session-pr.closed { border-color: var(--muted); color: var(--muted); }
 /* The label is all-caps with no descenders, so within the line box its ink
    rides above the optical centre and reads high in the fixed-height pill. Nudge
    it down a touch to sit on the pill's true centre next to the glyph. */

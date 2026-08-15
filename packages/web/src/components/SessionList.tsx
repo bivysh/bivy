@@ -62,10 +62,15 @@ export function PrBadge({ prs }: { prs?: PrRef[] }) {
   const label = pr.state === "merged" ? "Merged" : pr.state === "closed" ? "Closed" : "PR";
   const count = prs && prs.length > 1 ? prs.length : 0;
   return (
-    <span className={`session-pr ${pr.state}`} title={count ? `${label} · ${count} pull requests` : label} aria-hidden>
+    <Badge
+      tone={pr.state === "merged" ? "merged" : pr.state === "open" ? "ok" : undefined}
+      className="session-pr"
+      title={count ? `${label} · ${count} pull requests` : label}
+      aria-hidden
+    >
       <GhMark />
       <span className="session-pr-text">{count ? `${label} ${count}` : label}</span>
-    </span>
+    </Badge>
   );
 }
 

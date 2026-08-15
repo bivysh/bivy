@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { primaryPr, type GithubContext, type PrRef } from "@bivy/core";
 import { useModalEscape } from "../modalStack.js";
+import type { BadgeTone } from "./Badge.js";
 
 // Ports the stranded GitHub UX (PRs #219 context menu + #220 status pill/action
 // sheet) into the React client. Shows a pill for the active session's GitHub
@@ -52,7 +53,7 @@ export function GithubPill({ gh }: { gh: GithubContext }) {
   // actionable context and the one whose state (open/merged) the user tracks.
   const pr = primaryPr(gh.prs);
   const kind = pr ? "pr" : gh.issueUrl ? "issue" : "branch";
-  const state = pr?.state ?? "";
+  const tone: BadgeTone | undefined = pr?.state === "merged" ? "merged" : pr?.state === "open" ? "ok" : kind === "issue" ? "accent" : undefined;
   // For a branch pill on a repo-connected session, lead with the repo name so it
   // reads "repo · branch" — the repo is the context you're orienting on, the
   // branch the detail. `gh.repo` is "owner/name"; show just the short name.
@@ -74,7 +75,7 @@ export function GithubPill({ gh }: { gh: GithubContext }) {
 
   return (
     <>
-      <button className={`github-pill ${kind} ${state}`} onClick={() => setOpen(true)} title="GitHub context">
+      <button className="badge github-pill" data-tone={tone} data-variant="outline" onClick={() => setOpen(true)} title="GitHub context">
         <GhIcon />
         <span className="gh-text">{label}</span>
       </button>

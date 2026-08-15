@@ -23,6 +23,8 @@ test("semantic labels use the canonical Badge", async () => {
     expect(source, path).toContain("<Badge");
     for (const legacy of LEGACY) expect(source, path).not.toContain(legacy);
   }
+  const github = await readFile(new URL("components/GithubPill.tsx", ROOT), "utf8");
+  expect(github).toContain('className="badge github-pill"');
 });
 
 test("canonical badge shell exposes tones and variants", async () => {
