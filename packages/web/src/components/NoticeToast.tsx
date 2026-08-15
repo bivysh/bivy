@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect } from "react";
 import { useAppState, controller } from "../store/useStore.js";
+import { StatusIcon, Toast } from "./Toast.js";
 
 // A non-blocking success/confirmation toast, styled distinctly from the error
 // toast (which is for failures). Used for moments like a completed upgrade, so
@@ -23,14 +24,12 @@ export function NoticeToast() {
 
   if (!notice) return null;
   return (
-    <div className="notice-toast" role="status">
-      <span className="notice-toast-icon" aria-hidden>
-        ✓
-      </span>
+    <Toast tone="ok" className="notice-toast" role="status">
+      <StatusIcon tone="ok">✓</StatusIcon>
       <span className="notice-toast-text">{notice.trim()}</span>
       <button className="notice-toast-close" onClick={() => controller.store.setNotice("")} aria-label="Dismiss">
         ×
       </button>
-    </div>
+    </Toast>
   );
 }

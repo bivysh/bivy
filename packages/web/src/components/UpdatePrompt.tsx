@@ -3,6 +3,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { onUpdateAvailable, reloadForUpdate } from "../pwa.js";
 import { getPwaLifecycleState, subscribePwaLifecycle, updateBlockers } from "../pwaLifecycle.js";
+import { Toast } from "./Toast.js";
 
 /** A waiting worker never activates while user work could be displaced. */
 export function UpdatePrompt() {
@@ -12,7 +13,7 @@ export function UpdatePrompt() {
   if (!show) return null;
   const blockers = updateBlockers(lifecycle);
   return (
-    <div className="update-toast" role="status">
+    <Toast tone="accent" className="update-toast" role="status">
       <span>
         <strong>A Bivy update is ready.</strong>{" "}
         {blockers.length
@@ -23,6 +24,6 @@ export function UpdatePrompt() {
       <button className="btn primary" onClick={reloadForUpdate} disabled={blockers.length > 0} aria-disabled={blockers.length > 0}>
         Reload safely
       </button>
-    </div>
+    </Toast>
   );
 }

@@ -99,6 +99,24 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .menu-item:hover, .menu-item[aria-checked="true"], .menu-item.active { background: var(--surface-2); }
 .menu-item.danger { color: var(--danger); }
 
+/* ---- Feedback ---- */
+.toast {
+  display: flex; align-items: flex-start; gap: 10px; width: min(92vw, 420px);
+  padding: 10px var(--space-3); border: 1px solid var(--line-strong); border-left-width: 3px;
+  border-radius: var(--radius-md); background: var(--surface); box-shadow: var(--shadow-lg);
+  animation: sheet-up var(--dur-fast) var(--ease-standard);
+}
+.toast[data-tone="ok"] { border-color: var(--ok); }
+.toast[data-tone="danger"] { border-color: var(--danger); }
+.toast[data-tone="accent"] { border-color: var(--accent); }
+.status-icon {
+  display: grid; place-items: center; flex: none; width: 18px; height: 18px;
+  border-radius: var(--radius-full); color: var(--accent-contrast);
+  font-size: var(--text-xs); font-weight: var(--weight-bold);
+}
+.status-icon[data-tone="danger"] { background: var(--danger); color: var(--danger-contrast); }
+.status-icon[data-tone="ok"] { background: var(--ok); }
+
 /* ---- Cards ---- */
 .card {
   padding: var(--space-3) var(--space-4); border: 1px solid var(--line);
@@ -2705,26 +2723,14 @@ select.picker-search { appearance: auto; }
      was closed. Topmost keeps it legible over whatever is open. */
   z-index: 85; display: flex; flex-direction: column; align-items: center; gap: 10px;
 }
-.update-toast {
-  display: flex; align-items: center; gap: 10px;
-  width: max-content; max-width: min(92vw, 420px);
-  background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px;
-  padding: 10px 14px; box-shadow: 0 8px 30px rgba(0,0,0,0.25);
-  animation: sheet-up 0.16s ease;
-}
+.update-toast { align-items: center; width: max-content; max-width: min(92vw, 420px); }
 .update-toast > span { flex: 1; min-width: 0; font-size: 13px; line-height: 1.4; }
 .update-toast .btn { flex: none; white-space: nowrap; padding: 6px 12px; }
 /* Compact, non-blocking error toast (replaces the raw full-width red banner). */
-.error-toast {
-  display: flex; align-items: flex-start; gap: 10px; width: min(92vw, 560px); box-sizing: border-box;
-  background: var(--surface); border: 1px solid var(--danger); border-left-width: 3px;
-  border-radius: 12px; padding: 10px 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.28);
-  animation: sheet-up 0.16s ease;
-}
+.error-toast { box-sizing: border-box; }
 /* Only expanded diagnostics scroll. The default toast stays compact instead of
    turning raw command output into a screen-covering panel on mobile. */
 .error-toast.expanded { max-height: min(60vh, calc(100dvh - 160px)); overflow-y: auto; }
-.error-toast-icon { flex: none; width: 18px; height: 18px; margin-top: 1px; border-radius: 50%; background: var(--danger); color: #fff; font-weight: 700; font-size: 12px; display: grid; place-items: center; }
 .error-toast-content { flex: 1; min-width: 0; display: grid; gap: 5px; }
 .error-toast-text { min-width: 0; font-size: 13px; line-height: 1.4; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
 .error-toast.expanded .error-toast-text { display: block; overflow: visible; }
@@ -2732,14 +2738,7 @@ select.picker-search { appearance: auto; }
 .error-toast-close { flex: none; border: 0; background: transparent; color: var(--muted); font-size: 18px; line-height: 1; position: sticky; top: 0; }
 
 /* Success/confirmation toast — same shape as the error toast, positive accent. */
-.notice-toast {
-  display: flex; align-items: flex-start; gap: 10px; width: min(92vw, 560px); box-sizing: border-box;
-  max-height: min(60vh, calc(100dvh - 160px)); overflow-y: auto;
-  background: var(--surface); border: 1px solid var(--ok); border-left-width: 3px;
-  border-radius: 12px; padding: 10px 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.28);
-  animation: sheet-up 0.16s ease;
-}
-.notice-toast-icon { flex: none; width: 18px; height: 18px; margin-top: 1px; border-radius: 50%; background: var(--ok); color: #fff; font-weight: 700; font-size: 12px; display: grid; place-items: center; }
+.notice-toast { box-sizing: border-box; max-height: min(60vh, calc(100dvh - 160px)); overflow-y: auto; }
 .notice-toast-text { flex: 1; min-width: 0; font-size: 13px; line-height: 1.4; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
 .notice-toast-close { flex: none; border: 0; background: transparent; color: var(--muted); font-size: 18px; line-height: 1; position: sticky; top: 0; }
 
