@@ -13,7 +13,7 @@ import {
 import { useAppState } from "../store/useStore.js";
 import { controller } from "../store/useStore.js";
 import { PrBadge, RowMark, relTime, toMs } from "./SessionList.js";
-import { isUnseen, statusClass, statusLabel } from "../sessionStatus.js";
+import { statusDotState, statusLabel } from "../sessionStatus.js";
 import { classifySource } from "../sessionSource.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
@@ -479,7 +479,6 @@ export function GithubQueuePanel({
             <ul className="queue-session-list">
               {visibleQueueSessions.map((s) => {
                 const meta = queueSessionMeta(s.source);
-                const unseen = isUnseen(s);
                 const label = statusLabel(s);
                 const src = classifySource(s.source);
                 return (
@@ -488,7 +487,7 @@ export function GithubQueuePanel({
                       className={`session-item${s.sessionId === activeSessionId ? " active" : ""}`}
                       onClick={() => onPick(s.sessionId, s.path, s.nodeId)}
                     >
-                      <RowMark kind={src.kind} status={statusClass(s)} unseen={unseen} srLabel={`${src.label} · ${label}`} />
+                      <RowMark kind={src.kind} status={statusDotState(s)} srLabel={`${src.label} · ${label}`} />
                       <span className="session-body">
                         <span className="session-title-row">
                           <span className="session-name">{s.name}</span>

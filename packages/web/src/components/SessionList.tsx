@@ -6,8 +6,9 @@ import { githubIssueRefFromSource, primaryPr, repoFromSource, type GithubQueueIt
 import { useAppState } from "../store/useStore.js";
 import { controller } from "../store/useStore.js";
 import { ConfirmDialog, RenameDialog } from "./AppDialog.js";
-import { attentionRank, isUnseen, statusClass, statusLabel } from "../sessionStatus.js";
+import { attentionRank, statusDotState, statusLabel, type SessionDotState } from "../sessionStatus.js";
 import { SourceGlyph } from "./SourceMark.js";
+import { StatusDot } from "./StatusDot.js";
 import { classifySource, CLI_SOURCE, type SourceKind } from "../sessionSource.js";
 import { rowHint } from "../runEvidence.js";
 import { sessionDateGroup } from "../sessionPresentation.js";
@@ -17,13 +18,13 @@ import { CheckIcon, CloseIcon, MoreIcon } from "./UiIcons.js";
  *  trigger's glyph, with the live status as a small dot badge on its corner.
  *  Source is the identity, status is the presence — one element, two axes, so
  *  the row now reads "where it came from" and "what it's doing" at a glance.
- *  The dot's colour/shape logic is the same statusClass the header pill uses. */
-export function RowMark({ kind, status, unseen, srLabel }: { kind: SourceKind; status: string; unseen?: boolean; srLabel: string }) {
+ *  The dot's colour/shape logic is the same StatusDot the header uses. */
+export function RowMark({ kind, status, srLabel }: { kind: SourceKind; status: SessionDotState; srLabel: string }) {
   return (
     <>
       <span className={`session-mark src-${kind}`} aria-hidden>
         <SourceGlyph kind={kind} />
-        <span className={`mark-badge ${status}${unseen ? " unseen" : ""}`} />
+        <StatusDot status={status} />
       </span>
       {/* The mark + badge are colour/shape only and aria-hidden; mirror both the
           source and the status as screen-reader-only text (parity with the old
@@ -596,7 +597,6 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
             );
           }
           const meta = sessionMeta(s, nodeName(s.nodeId));
-          const unseen = isUnseen(s);
           const label = statusLabel(s);
           const src = classifySource(s.source);
           // A one-word exception hint on failed / waiting-on-you runs, so those
@@ -617,7 +617,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
                 className={`session-item${s.sessionId === activeSessionId ? " active" : ""}`}
                 onClick={() => onPick(s.sessionId, s.path, s.nodeId)}
               >
-                <RowMark kind={src.kind} status={statusClass(s)} unseen={unseen} srLabel={`${src.label} · ${label}`} />
+                <RowMark kind={src.kind} status={statusDotState(s)} srLabel={`${src.label} · ${label}`} />
                 <span className="session-body">
                   <span className="session-title-row">
                     <span className="session-name">{s.name}</span>

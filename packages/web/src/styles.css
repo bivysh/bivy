@@ -672,7 +672,7 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 /* ---- Source marks & run pill (see sessionSource.ts / SourceMark.tsx) ----
    Source identity is carried by the glyph alone: every mark renders a quiet
    muted icon on a neutral tile, so eight triggers no longer read as eight
-   colours in one list. Presence/status (the corner .mark-badge) stays the one
+   colours in one list. Presence/status (the corner status dot) stays the one
    coloured signal. `--sc` per source is kept (dormant) so a hue can be dialled
    back in per-source later without re-plumbing. */
 .src-github-issue, .src-github-mention { --sc: var(--s-github); }
@@ -705,21 +705,14 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
   color: var(--muted); background: transparent;
 }
 .session-mark svg { width: 15px; height: 15px; display: block; }
-/* The presence dot. A 2px ring in the sidebar's own surface colour lifts it off
-   the tile; this legacy corner treatment is migrated separately to StatusDot. */
-.mark-badge {
+/* The canonical status dot is positioned as a corner badge here; this rule owns
+   placement only, while StatusDot continues to own status color and shape. */
+.session-mark .status-dot {
   position: absolute; right: -3px; bottom: -3px;
-  width: 11px; height: 11px; border-radius: 50%;
-  background: var(--line-strong); box-shadow: 0 0 0 2px var(--surface);
+  width: 11px; height: 11px; box-shadow: 0 0 0 2px var(--surface);
 }
-.mark-badge.working { background: var(--accent); animation: dot-pulse 1.4s ease-in-out infinite; }
-.mark-badge.needs-action { background: var(--danger); }
-.mark-badge.failed { background: var(--danger); }
-.mark-badge.saved { background: transparent; border: 1.5px solid var(--muted); }
-.mark-badge.idle, .mark-badge.saved { display: none; }
-/* Finished-and-unseen keeps its own colour whichever base state it rode in on,
-   so it must come after .idle. */
-.mark-badge.unseen { background: var(--unseen); }
+.session-mark .status-dot[data-status="idle"],
+.session-mark .status-dot[data-status="saved"] { display: none; }
 
 /* In-session run pill (App.tsx composer band): supersedes the GitHub pill for a
    triggered session. Source glyph + short label + a status segment. */
