@@ -85,6 +85,9 @@ export interface ForkStandUpDeps<R extends ForkStandUpSession> {
   resolveDefaultBaseRef(repoDir: string): Promise<string>;
   resolveAdoptBaseRef(repoDir: string, branch: string): Promise<string>;
   resolveForkBaseRef(repoDir: string, branch: string | undefined, sourceWorktree?: string): Promise<string>;
+  /** Whether the source branch is on the remote — gates the adopt path so a
+   *  never-pushed branch can't silently base off the destination default. */
+  originBranchPresent(repoDir: string, branch: string): Promise<boolean>;
   applyDirtyPatch(cwd: string, patch: ForkBundle["dirtyPatch"]): { warning?: string };
   gitRepoRoot(cwd: string): Promise<string | undefined>;
   materializeFork(args: MaterializeForkOptions): Promise<ForkPlan>;
@@ -157,6 +160,23 @@ export function createForkStandUp<R extends ForkStandUpSession>(deps: ForkStandU
       repoReachable = Boolean(token);
       const repoDir = await deps.cloneOrUpdateRepo({ owner: parsed.owner, repo: parsed.repo, token, root: deps.reposRoot });
       const srcBranch = bundle.record.branch;
+      // Silent-loss gate (1A): a cross-node ADOPT of a branch that never reached
+      // the remote would fall back to the destination's default branch and DROP
+      // every source commit (resolveAdoptBaseRef's degrade path). Detect it and
+      // refuse with an actionable checklist item instead of losing committed work.
+      // Skipped for a same-node fork ("fresh"), which bases off the live source
+      // tip and can't lose commits this way.
+      if (opts.worktree === "adopt" && srcBranch && opts.detectPrereqs) {
+        const branchPresent = await deps.originBranchPresent(repoDir, srcBranch);
+        if (!branchPresent) {
+          const prereqs = evaluateForkPrereqs({ ...prereqInput, commits: { branch: srcBranch, present: false } });
+          return {
+            ok: false,
+            error: `The source branch "${srcBranch}" isn't on the remote yet, so its commits can't travel to this node. Push it from the source, then retry.`,
+            missing: missingForkPrereqs(prereqs),
+          };
+        }
+      }
       // Serialize clone-adjacent worktree ops on this repo so concurrent forks /
       // pickups don't race on `git worktree add` or clobber each other's trees.
       const wt = await deps.withRepoLock(repoDir, async () => {

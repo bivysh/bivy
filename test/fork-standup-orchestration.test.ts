@@ -68,6 +68,7 @@ function harness(over: Partial<ForkStandUpDeps<FakeRecord>> = {}) {
     resolveDefaultBaseRef: async () => "origin/main",
     resolveAdoptBaseRef: async (_d, branch) => `origin/${branch}`,
     resolveForkBaseRef: async (_d, branch) => branch ?? "origin/main",
+    originBranchPresent: async () => true,
     applyDirtyPatch: () => ({}),
     gitRepoRoot: async () => undefined,
     materializeFork: async () => ({ kind: "resume", sessionFile: "/s.json" } as any),
@@ -119,6 +120,35 @@ test("FRESH cuts a new branch based on the resilient fork-base resolver", async 
   assert.match(wt.branch, /^feature-x-fork-[0-9a-f]{8}$/, "new <branch>-fork-<hex> branch");
   assert.equal(wt.base, "resolved-source-tip");
   assert.deepEqual(resolved, [{ repoDir: "/repo", branch: "feature-x", worktree: undefined }]);
+});
+
+test("ADOPT blocks (no silent commit loss) when the source branch isn't on the remote", async () => {
+  // The source branch never reached origin; adopting would base off the default
+  // and drop its commits. The 1A gate must refuse and surface it, not proceed.
+  const { standUp, calls } = harness({ originBranchPresent: async () => false });
+  const outcome = await standUp.standUpFork(opts({ worktree: "adopt", detectPrereqs: true }));
+  assert.equal(outcome.ok, false);
+  if (!outcome.ok) {
+    assert.ok(outcome.missing.some((m) => m.kind === "commits" && m.fix === "source.push"), "surfaces a push-the-branch checklist item");
+  }
+  assert.deepEqual(calls.createWorktree, [], "no worktree cut — refuses rather than dropping commits");
+  assert.deepEqual(calls.createSession, [], "no session stood up on the wrong base");
+});
+
+test("ADOPT proceeds normally when the branch IS on the remote (no false positive)", async () => {
+  const { standUp, calls } = harness({ originBranchPresent: async () => true });
+  const outcome = await standUp.standUpFork(opts({ worktree: "adopt", detectPrereqs: true }));
+  assert.ok(outcome.ok);
+  assert.equal(calls.createWorktree[0].base, "origin/feature-x", "adopts the pushed branch");
+});
+
+test("same-node FRESH fork is exempt from the remote-branch gate (can't lose commits)", async () => {
+  // A never-pushed branch on a same-node fork bases off the live source tip, so
+  // the gate (adopt-only) must not fire even with the branch absent from origin.
+  const { standUp, calls } = harness({ originBranchPresent: async () => false });
+  const outcome = await standUp.standUpFork(opts({ worktree: "fresh", detectPrereqs: true }));
+  assert.ok(outcome.ok);
+  assert.equal(calls.createWorktree.length, 1);
 });
 
 test("ADOPT with no source branch falls back to the repo default base", async () => {
