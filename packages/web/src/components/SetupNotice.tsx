@@ -245,7 +245,7 @@ export function SetupNotice() {
 
   return (
     <div className="setup">
-      <div className="setup-card">
+      <div className="card setup-card">
         <div className="setup-glyph">⛺</div>
         <h1>Bivy</h1>
         <p>Sign in or create an account, then connect a machine or launch your first cloud runner.</p>

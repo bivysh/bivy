@@ -174,7 +174,7 @@ export function ChangesCard({
   ));
 
   return (
-    <div className={`changes-card${collapsed ? " collapsed" : ""}`}>
+    <div className={`card changes-card${collapsed ? " collapsed" : ""}`}>
       <div className="changes-head">
         <button
           type="button"

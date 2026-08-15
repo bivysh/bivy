@@ -855,7 +855,7 @@ button.action-sheet-item:last-child { border-bottom: 0; }
    banner's escape hatches (open the terminal / take over in chat) at a more
    deliberate, explanatory scale. */
 .tui-locked { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 24px 16px; overflow-y: auto; }
-.tui-locked-card { width: min(440px, 100%); border: 1px solid var(--line-strong); border-radius: 18px; background: var(--surface); padding: 28px 24px; display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; box-shadow: 0 24px 80px rgba(0,0,0,0.18); }
+.tui-locked-card { width: min(440px, 100%); display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; }
 .tui-locked-icon { display: inline-flex; align-items: center; justify-content: center; width: 52px; height: 52px; border-radius: 14px; background: color-mix(in srgb, var(--accent) 12%, var(--surface-2)); color: var(--accent); }
 .tui-locked-title { margin: 2px 0 0; font-size: 18px; font-weight: 700; }
 .tui-locked-sub { margin: 0; color: var(--muted); font-size: 13.5px; line-height: 1.5; max-width: 38ch; }
@@ -1018,10 +1018,7 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .followup-queue { margin: 8px 10px 0; display: flex; flex-direction: column; gap: 6px; }
 .followup-queue-head { font-size: 12px; font-weight: 600; color: var(--muted); padding: 0 2px; }
 .followup-list { display: flex; flex-direction: column; gap: 6px; }
-.followup-card {
-  border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2);
-  overflow: hidden;
-}
+.followup-card { padding: 0; overflow: hidden; }
 .followup-card.locked { opacity: 0.75; }
 .followup-card-row {
   display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px;
@@ -1955,11 +1952,7 @@ button.template-card.is-featured .template-card-icon {
   border: 1px solid var(--line); background: var(--surface-2); color: var(--ink);
   white-space: nowrap;
 }
-.wq-status-card {
-  display: flex; flex-direction: column; gap: 10px;
-  padding: 12px 14px; border-radius: 14px; border: 1px solid var(--line);
-  background: var(--surface-2); min-width: 0;
-}
+.wq-status-card { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .wq-app-row { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .wq-app-row + .wq-app-row { padding-top: 10px; border-top: 1px solid var(--line); }
 .wq-app-row-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
@@ -2777,7 +2770,7 @@ select.picker-search { appearance: auto; }
   align-items: center;
   padding: max(24px, env(safe-area-inset-top)) 24px max(24px, env(safe-area-inset-bottom));
 }
-.setup-card { width: 100%; max-width: 380px; margin: auto; text-align: center; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 32px 28px; }
+.setup-card { width: 100%; max-width: 380px; margin: auto; text-align: center; }
 .setup-glyph { font-size: 44px; }
 .setup-card h1 { margin: 6px 0 12px; }
 .setup-card p { color: var(--ink); margin: 8px 0; }
@@ -2822,7 +2815,7 @@ select.picker-search { appearance: auto; }
      then clipped by .main's overflow:hidden. Keep the review surface bounded
      and let its body own the scroll instead. */
   display: flex; flex-direction: column; min-height: 0; max-height: min(60%, 720px); overflow: hidden;
-  border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); padding: 10px 12px; margin: 8px 0;
+  margin: 8px 0;
 }
 .changes-head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
 .changes-body {
@@ -2945,10 +2938,7 @@ select.picker-search { appearance: auto; }
 
 /* Activation readiness strip (src/components/ReadinessChecklist.tsx) — the honest
    "get to your first agent response" checklist shown until the agent answers. */
-.readiness {
-  margin: 10px 12px 0; padding: 12px 14px;
-  border: 1px solid var(--line); border-radius: 12px; background: var(--surface);
-}
+.readiness { margin: 10px 12px 0; }
 .readiness-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .readiness-title { font-weight: 600; font-size: 0.92rem; letter-spacing: -0.01em; }
 .readiness-dismiss {

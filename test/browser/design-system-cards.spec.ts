@@ -16,6 +16,13 @@ test("blocking interaction cards use the canonical card shell", async () => {
     ["components/ApprovalCard.tsx", "card approval-card"],
     ["components/QuestionCard.tsx", "card question-card"],
     ["components/TurnAttentionCard.tsx", "card question-card turn-attention-card"],
+    ["components/ChangesCard.tsx", "card changes-card"],
+    ["components/FollowupQueue.tsx", "card followup-card"],
+    ["components/SetupNotice.tsx", "card setup-card"],
+    ["components/TuiLockedView.tsx", "card tui-locked-card"],
+    ["components/StatsPanel.tsx", "card stat-card"],
+    ["components/ReadinessChecklist.tsx", "card readiness"],
+    ["components/WorkQueueSetupSheet.tsx", "card wq-status-card"],
   ]) {
     const source = await readFile(new URL(path, ROOT), "utf8");
     expect(source, path).toContain(className);
@@ -28,4 +35,7 @@ test("interaction-specific card CSS only owns layout", async () => {
   expect(css).toContain('.card[data-tone="danger"]');
   expect(ruleFor(css, ".question-card")).not.toMatch(/(?:background|border(?!-collapse)|border-radius|padding)\s*:/);
   expect(css).not.toContain(".approval-card {");
+  for (const selector of [".tui-locked-card", ".followup-card", ".wq-status-card", ".setup-card", ".changes-card", ".readiness"]) {
+    expect(ruleFor(css, selector), selector).not.toMatch(/(?:background|border(?!-collapse)|border-radius|box-shadow)\s*:/);
+  }
 });

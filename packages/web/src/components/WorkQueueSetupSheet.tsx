@@ -420,7 +420,7 @@ export function WorkQueueSetupSheet({
                 GitHub
               </div>
               {apps.length === 0 ? (
-                <div className="wq-status-card">
+                <div className="card wq-status-card" data-tone="muted">
                   <p className="settings-hint">
                     No GitHub App yet. Create one (private key stays on this machine) or connect an app you already own.
                   </p>
@@ -505,7 +505,7 @@ export function WorkQueueSetupSheet({
                   {phase === "error" && <div className="banner error inline">{app?.error || "GitHub App setup failed."}</div>}
                 </div>
               ) : (
-                <div className="wq-status-card">
+                <div className="card wq-status-card" data-tone="muted">
                   {apps.map((entry) => (
                     <div className="wq-app-row" key={appKey(entry)}>
                       <div className="wq-app-row-main">
@@ -619,7 +619,7 @@ export function WorkQueueSetupSheet({
                       + Add another GitHub App
                     </button>
                   ) : (
-                    <div ref={appEditorRef} className="wq-status-card" style={{ marginTop: 4 }}>
+                    <div ref={appEditorRef} className="card wq-status-card" data-tone="muted" style={{ marginTop: 4 }}>
                       <div className="autom-field-label">
                         {ceApp ? `Reconnect ${ceApp.name || ceApp.mention || "GitHub App"}` : "Add another app"}
                       </div>
@@ -719,7 +719,7 @@ export function WorkQueueSetupSheet({
                 <span className="wq-section-icon" aria-hidden="true"><LinMark /></span>
                 Linear{focus === "work-queue" ? " (optional)" : ""}
               </div>
-              <div className="wq-status-card">
+              <div className="card wq-status-card" data-tone="muted">
                 {linErr && <p className="settings-error">{linErr}</p>}
                 {linJustEnabled && linear?.enabled && (
                   <div className="autom-success" role="status">
@@ -837,7 +837,7 @@ export function WorkQueueSetupSheet({
                 <span className="wq-section-icon" aria-hidden="true"><SlackMark /></span>
                 Slack
               </div>
-              <div className="wq-status-card">
+              <div className="card wq-status-card" data-tone="muted">
                 {slackErr && <p className="settings-error">{slackErr}</p>}
                 {slackJustConnected && slack?.enabled && (
                   <div className="autom-success" role="status">

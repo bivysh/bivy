@@ -25,7 +25,7 @@ export function TuiLockedView({
 }) {
   return (
     <div className="tui-locked" role="status" aria-live="polite">
-      <div className="tui-locked-card">
+      <div className="card tui-locked-card">
         <span className="tui-locked-icon" aria-hidden>
           <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
             <rect x="3" y="4" width="18" height="16" rx="2" />

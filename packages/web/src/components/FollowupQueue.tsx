@@ -144,7 +144,7 @@ function FollowupRow({
   const sendNowLabel = busy && canSteer ? "Steer now" : "Send next";
 
   return (
-    <div className={`followup-card${editing || editingTime ? " editing" : ""}${locked ? " locked" : ""}`} role="listitem">
+    <div className={`card followup-card${editing || editingTime ? " editing" : ""}${locked ? " locked" : ""}`} data-tone="muted" role="listitem">
       {editing || editingTime ? (
         <div className="followup-edit">
           {editingTime ? (
