@@ -28,6 +28,7 @@ import { SessionChangesSheet, countUniqueEditedFiles } from "./components/Sessio
 import { ArtifactsSheet } from "./components/ArtifactsSheet.js";
 import { ErrorToast } from "./components/ErrorToast.js";
 import { NoticeToast } from "./components/NoticeToast.js";
+import { Spinner } from "./components/Spinner.js";
 import { Settings } from "./components/Settings.js";
 import { EphemeralSheet } from "./components/Ephemeral.js";
 import { FirstRunModelAuthSheet } from "./components/FirstRunModelAuth.js";
@@ -623,7 +624,7 @@ export function App() {
             instead of reflowing the layout. */}
         {(state.connection.status === "pairing" || state.connection.status === "linking") && (
           <div className="banner info" role="status">
-            <span className="reconnect-spinner" aria-hidden />
+            <Spinner size="xs" />
             Linking this device…
           </div>
         )}

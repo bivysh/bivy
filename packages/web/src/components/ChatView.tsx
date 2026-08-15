@@ -3,6 +3,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { stripAttachmentPlaceholders, toHtml, type PromptAttachment, type ToolActivity, type TranscriptEntry } from "@bivy/core";
 import { ToolGroup } from "./ToolGroup.js";
+import { Spinner } from "./Spinner.js";
 import { decorateCodeBlocks, highlightCode } from "../highlight.js";
 import { renderMermaidDiagrams } from "../mermaid.js";
 import { writeClipboard } from "../clipboard.js";
@@ -644,7 +645,7 @@ export function ChatView({
         <div className="chat-inner" ref={contentRef}>
           {total === 0 && !draftRoute && opening && (
             <div className="chat-loading" role="status" aria-live="polite">
-              <span className="chat-loading-spinner" aria-hidden />
+              <Spinner size="lg" />
               <p>Fetching transcript…</p>
             </div>
           )}

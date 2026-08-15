@@ -346,7 +346,6 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
    an opening session never masquerades as a blank new one. */
 .chat-loading { margin: auto; display: flex; flex-direction: column; align-items: center; gap: 12px; color: var(--muted); }
 .chat-loading p { margin: 0; }
-.chat-loading-spinner { width: 26px; height: 26px; border-radius: 50%; border: 3px solid var(--line-strong); border-top-color: var(--accent); animation: spin 0.7s linear infinite; }
 /* A long unbroken token (URL, path, hash) must wrap rather than force the chat
    pane to scroll sideways — .chat is overflow-y:auto, so its overflow-x computes
    to auto and any horizontal spill becomes a full-pane sideways scroll. */
@@ -964,11 +963,6 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .voice-listening { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; overflow: hidden; }
 .voice-listening-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--danger); animation: pulse 1.2s ease-in-out infinite; }
 .voice-listening-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; color: var(--ink); }
-.voice-spinner {
-  width: 15px; height: 15px; border-radius: 50%; display: inline-block;
-  border: 2px solid color-mix(in srgb, var(--accent-contrast) 45%, transparent); border-top-color: var(--accent-contrast);
-  animation: spin 0.8s linear infinite;
-}
 
 /* Segmented picker (voice provider choice) + per-provider key rows. */
 .seg-row { display: flex; gap: 8px; flex-wrap: wrap; margin: 2px 0 6px; }
@@ -1011,7 +1005,6 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 }
 .attach-chip.omitted { opacity: 0.7; }
 .attach-chip.reading { color: var(--muted); }
-.attach-spinner { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--line-strong); border-top-color: var(--accent); animation: spin 0.7s linear infinite; flex: none; }
 .attach-chip .attach-glyph { flex: none; }
 .attach-chip .attach-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 12px glyph at 0/2px padding is well under the ~44px mobile tap-target
@@ -2720,8 +2713,19 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 .banner-action:disabled { opacity: .65; }
 .banner-text { flex: 1; min-width: 0; }
 .banner-dismiss { margin-left: auto; border: 0; background: transparent; color: inherit; font-size: 18px; line-height: 1; }
-.reconnect-spinner { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--line-strong); border-top-color: var(--accent); animation: spin 0.7s linear infinite; flex: none; }
 @keyframes spin { to { transform: rotate(360deg); } }
+.spinner {
+  display: inline-block; flex: none; width: var(--text-xl); height: var(--text-xl);
+  border: 2px solid var(--line-strong); border-top-color: var(--accent);
+  border-radius: var(--radius-full); animation: spin 0.7s linear infinite;
+}
+.spinner[data-size="xs"] { width: var(--text-xs); height: var(--text-xs); }
+.spinner[data-size="sm"] { width: var(--space-4); height: var(--space-4); }
+.spinner[data-size="lg"] { width: var(--text-2xl); height: var(--text-2xl); }
+.spinner[data-tone="inverse"] {
+  border-color: color-mix(in srgb, var(--accent-contrast) 45%, transparent);
+  border-top-color: var(--accent-contrast);
+}
 
 /* ---- Node switcher ----
    Lives as the subtitle under the session title (see .topbar-title), not as
@@ -2738,7 +2742,6 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 /* "Reconnecting…" line at the top of the open switcher, under the node the
    button shows — the dropdown's spelled-out counterpart to the spinner dot. */
 .node-menu-status { display: flex; align-items: center; gap: 8px; padding: 10px 14px; font-size: 13px; color: var(--muted); border-bottom: 1px solid var(--line); }
-.node-menu-status .reconnect-spinner { width: 12px; height: 12px; }
 .node-menu-head { padding: 10px 14px 6px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
 .node-menu-empty { padding: 6px 14px 12px; color: var(--muted); font-size: 13px; }
 /* A node row: the switch-to-node button plus zero or more provider status

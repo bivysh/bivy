@@ -5,6 +5,7 @@ import { useAppState } from "../store/useStore.js";
 import { controller } from "../store/useStore.js";
 import { AddNodeSheet } from "./AddNodeSheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
+import { Spinner } from "./Spinner.js";
 import { useModalEscape } from "../modalStack.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import type { EphemeralNodeConfig, EphemeralMachine } from "@bivy/core";
@@ -104,7 +105,7 @@ export function NodeSwitcher() {
         <div className="menu node-menu" role="menu">
           {reconnecting && (
             <div className="node-menu-status" role="status">
-              <span className="reconnect-spinner" aria-hidden />
+              <Spinner size="xs" />
               Reconnecting…
             </div>
           )}

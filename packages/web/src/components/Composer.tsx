@@ -10,6 +10,7 @@ import { firstSessionSummary } from "../firstSession.js";
 import { FollowupQueue } from "./FollowupQueue.js";
 import { SANDBOX_TIERS } from "./Settings.js";
 import { VoiceRecorder } from "./VoiceRecorder.js";
+import { Spinner } from "./Spinner.js";
 import { WebSpeechRecorder, webSpeechSupported } from "./WebSpeechRecorder.js";
 import { controller } from "../store/useStore.js";
 import { clearComposerDraft, composerDraftKey, readComposerDraft, writeComposerDraft, type PendingAttachmentMetadata } from "../composerDraft.js";
@@ -677,7 +678,7 @@ export function Composer({
             <div className="attach-chips">
               {readingCount > 0 && (
                 <span className="attach-chip reading" aria-live="polite">
-                  <span className="attach-spinner" aria-hidden />
+                  <Spinner size="xs" />
                   Reading file{readingCount > 1 ? "s" : ""}…
                 </span>
               )}
