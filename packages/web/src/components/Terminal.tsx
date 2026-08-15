@@ -1250,16 +1250,17 @@ export function TerminalOverlay({
                 Attach ▾
               </button>
               {showAttach && (
-                <div className="term-attach-menu">
+                <div className="menu term-attach-menu" role="menu">
                   {runTerminals.map((t) => (
                     <div key={t.termId} className="term-attach-row">
-                      <button className="term-attach-item" onClick={() => attachRun(t)}>
+                      <button className="menu-item term-attach-item" role="menuitem" onClick={() => attachRun(t)}>
                         {t.label || t.name || t.agent || t.termId}
                       </button>
                       {canContinueAsChat(t, runtimes) && (
                         isTakeoverReady(t) ? (
                           <button
                             className="term-attach-chat"
+                            role="menuitem"
                             onClick={() => continueAsChat(t.termId)}
                             title="Stop the terminal and continue this session as a governed chat"
                           >
@@ -1268,6 +1269,7 @@ export function TerminalOverlay({
                         ) : (
                           <button
                             className="term-attach-chat is-disabled"
+                            role="menuitem"
                             disabled
                             aria-disabled="true"
                             title={TAKEOVER_NOT_READY_HINT}
@@ -1279,7 +1281,7 @@ export function TerminalOverlay({
                     </div>
                   ))}
                   {muxSessions.map((s) => (
-                    <button key={s.target || `${s.multiplexer}:${s.name}`} className="term-attach-item" onClick={() => attachMux(s)}>
+                    <button key={s.target || `${s.multiplexer}:${s.name}`} className="menu-item term-attach-item" role="menuitem" onClick={() => attachMux(s)}>
                       {s.multiplexer}: {s.name}
                       {s.attached ? " · in use" : ""}
                     </button>

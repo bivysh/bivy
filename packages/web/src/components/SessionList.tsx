@@ -441,12 +441,12 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
             {activeFilterCount > 0 && <span className="session-filter-count">{activeFilterCount}</span>}
           </button>
           {filterOpen && (
-            <div className="session-filter-menu" role="menu">
+            <div className="menu session-filter-menu" role="menu">
               {!controller.direct && (
                 <div className="session-filter-section">
                   <div className="session-filter-head">Machine</div>
                   <button
-                    className="session-filter-item"
+                    className="menu-item session-filter-item"
                     role="menuitemradio"
                     aria-checked={!nodeFilter}
                     onClick={() => {
@@ -463,7 +463,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
                     nodes.map((n) => (
                       <button
                         key={n.id}
-                        className="session-filter-item"
+                        className="menu-item session-filter-item"
                         role="menuitemradio"
                         aria-checked={n.id === nodeFilter}
                         onClick={() => {
@@ -481,7 +481,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
               <div className="session-filter-section">
                 <div className="session-filter-head">GitHub repo</div>
                 <button
-                  className="session-filter-item"
+                  className="menu-item session-filter-item"
                   role="menuitemradio"
                   aria-checked={!repoFilter}
                   onClick={() => {
@@ -496,7 +496,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
                 {repoOptions.map((repo) => (
                   <button
                     key={repo}
-                    className="session-filter-item"
+                    className="menu-item session-filter-item"
                     role="menuitemradio"
                     aria-checked={repo === repoFilter}
                     onClick={() => {
