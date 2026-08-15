@@ -71,6 +71,27 @@ const RULES = [
     note: "controllers are imported BY server.ts; the dependency direction is server -> controller only (Phase 2).",
   },
   {
+    name: "device-controller-uses-ports",
+    dir: "src/controllers/devices.ts",
+    forbid: ["express", "../identity", "../device-registry", "../metadata", "../remote", "../server", "node:"],
+    enforce: true,
+    note: "device resource semantics depend on injected ports; Express, persistence, relay, and metadata effects stay in the composition root.",
+  },
+  {
+    name: "session-control-controller-uses-ports",
+    dir: "src/controllers/session-control.ts",
+    forbid: ["express", "../runtime", "../agents", "../session/", "../server", "node:"],
+    enforce: true,
+    note: "session control operations depend on protocol contracts and injected effects, not daemon/runtime implementation.",
+  },
+  {
+    name: "http-command-adapter-is-transport-only",
+    dir: "src/http/client-command-routes.ts",
+    forbid: ["../server", "../runtime/", "../agents/", "../session/", "../credentials/", "../controllers/"],
+    enforce: true,
+    note: "the generated HTTP adapter depends only on Express types and protocol command contracts; feature behavior stays in the canonical registry.",
+  },
+  {
     name: "protocol-is-a-pure-contract",
     dir: "src/protocol",
     forbid: ["../server", "../runtime/", "../agents/", "../session/", "../credentials/", "../controllers/"],
@@ -122,6 +143,7 @@ const RULES = [
   ...[
     "connection-event-fold.ts",
     "session-index-event-fold.ts",
+    "terminal-event-fold.ts",
     "catalog-settings-event-fold.ts",
     "presentation-event-fold.ts",
   ].map((file) => ({

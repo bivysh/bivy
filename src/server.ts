@@ -19,8 +19,11 @@ import { createAuditLog, readAuditEvents } from "./audit/index.js";
 import { receiptEvidenceForRun } from "./audit/receipt-evidence.js";
 import { createWorkspaceController } from "./controllers/workspaces.js";
 import { createModelController } from "./controllers/models.js";
-import { Type, type TSchema } from "typebox";
-import { validateInput } from "./protocol/command-spec.js";
+import type { CommandCtx } from "./protocol/command-spec.js";
+import { CommandRegistry, type CommandEntries } from "./protocol/command-registry.js";
+import { CLIENT_COMMAND_SCHEMAS } from "./protocol/client-command-schemas.js";
+import { CLIENT_COMMAND_ROUTES } from "./protocol/client-command-routes.js";
+import { bindClientCommandRoutes } from "./http/client-command-routes.js";
 import { collectDiscoveredSessions, planNativeAdoption, type NativeAdoptionPlan } from "./runtime/native-session-discovery.js";
 import { aggregateModelCatalog, mergeProviderCatalog } from "./runtime/model-catalog.js";
 import { RuntimeHost, enforcementLevelFor, remoteRuntimeEnabled } from "./runtime/host.js";
@@ -126,6 +129,8 @@ import { PairingStore } from "./device-registry.js";
 import { IntegrationManager, type SessionIdRef } from "./integrations/index.js";
 import { listInstalledPlugins } from "./plugins/store.js";
 import { createCapabilitiesController } from "./controllers/capabilities.js";
+import { createAccessDeviceController, createLinkedDeviceController } from "./controllers/devices.js";
+import { createSessionControlCommands } from "./controllers/session-control.js";
 import { historyDelta, type HistoryCursor } from "./history-sync.js";
 import { MetadataStore, type MetadataSession } from "./metadata.js";
 import { resolveResumeRef, resumeRefFor } from "./session-ref.js";
@@ -902,6 +907,23 @@ function syncPairingMetadata() {
 }
 syncPairingMetadata();
 let relay: RelayConnector | undefined;
+const linkedDevices = createLinkedDeviceController({
+  list: () => pairingStore.listDevices(),
+  revoke: (id: string) => pairingStore.revokeDevice(id),
+  onRevoked: (id, deliveries, devices) => {
+    metadata.revokeDevice(id);
+    syncPairingMetadata();
+    relay?.pushRotate(deliveries);
+    broadcast({ type: "devices.updated", devices });
+  },
+});
+const accessDevices = createAccessDeviceController({
+  list: () => identity.listDevices(),
+  create: (name: string) => identity.createDevice(name),
+  revoke: (id: string) => identity.revokeDevice(id),
+  onCreated: (device) => broadcast({ type: "device.created", device }),
+  onRevoked: (id) => broadcast({ type: "device.revoked", id }),
+});
 const clients = new Set<WebSocket>();
 const commandProcesses = new Map<string, ChildProcessWithoutNullStreams>();
 const oauthLogins = new Map<string, OAuthLoginState>();
@@ -2033,19 +2055,6 @@ retireTranscriptsDir();
 // calling client; `broadcast()` reaches every client (local sockets + relay).
 // This retires the "add it to REST, forget the WS case" class of drift bugs by
 // giving each operation a single named handler both transports can share.
-interface CommandCtx {
-  reply(event: unknown): void;
-  broadcast(event: unknown): void;
-}
-type Command = (msg: ClientMessage, ctx: CommandCtx) => void | Promise<void>;
-
-// A registry entry is either a bare handler (legacy form) or a spec that adds an
-// optional typebox input schema — validated at the dispatch boundary before the
-// handler runs — plus the protocol version it was introduced at (for the
-// compatible-subset policy). The two forms coexist so commands adopt validation
-// one at a time; a bare handler behaves exactly as before. See src/protocol/.
-type CommandSpecEntry = { since?: number; schema?: TSchema; handler: Command };
-type RegisteredCommand = Command | CommandSpecEntry;
 
 // Idempotency for `session.new` keyed by requestId: a client's post-reconnect
 // retry adopts the session the first request created instead of spawning a
@@ -2065,17 +2074,9 @@ const promptDedupe = createSessionNewDedupe<void>();
 const dedupePrompt = (clientMessageId: string | undefined, run: () => Promise<void>) =>
   promptDedupe.run(clientMessageId, run);
 
-const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
-  // First command to adopt boundary validation (the spec form). `requestId` is
-  // the only declared field; typebox permits additional properties by default,
-  // so real pings always pass — this exercises the schema path end-to-end
-  // without changing behavior. Other commands adopt schemas one at a time.
-  ping: {
-    since: 0,
-    schema: Type.Object({ requestId: Type.Optional(Type.String()) }),
-    handler(msg: ClientMessage, ctx: CommandCtx) {
-      ctx.reply({ type: "pong", requestId: typeof msg.requestId === "string" ? msg.requestId : undefined });
-    },
+const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
+  ping(msg, ctx) {
+    ctx.reply({ type: "pong", requestId: typeof msg.requestId === "string" ? msg.requestId : undefined });
   },
   // Kick off `bivy update` on this node from the app's version-mismatch banner
   // (see runBivyUpdate). The node restarts itself when the update lands, so the
@@ -2106,19 +2107,12 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
     const meta = attachmentStore.readMeta(hash);
     ctx.reply({ type: "attachment.data", requestId, hash, mimeType: meta?.mimeType ?? "application/octet-stream", name: meta?.name, data: bytes.toString("base64") });
   },
-  "session.pause"(msg) {
-    const record = resolveSession(msg.sessionId);
-    if (record) pauseSession(record);
-  },
-  "session.resume"(msg) {
-    const record = resolveSession(msg.sessionId);
-    if (record) resumeSession(record);
-  },
-  "session.question.answer"(msg) {
-    const record = resolveSession(msg.sessionId);
-    const requestId = String(msg.requestId ?? "");
-    if (record && requestId) answerSessionQuestion(record, requestId, msg);
-  },
+  ...createSessionControlCommands({
+    resolve: (sessionId) => resolveSession(sessionId),
+    pause: pauseSession,
+    resume: resumeSession,
+    answer: (record, requestId, input) => answerSessionQuestion(record, requestId, input),
+  }),
   // Live-stream gap recovery: replay the session.events a client missed after the
   // last seq it holds, or tell it to full-resync (mode:"reset") when the ring has
   // evicted past that point. Answers only the caller (ctx.reply); other clients
@@ -3369,6 +3363,7 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
     });
   },
 };
+const clientCommands = new CommandRegistry(RELAY_COMMANDS, CLIENT_COMMAND_SCHEMAS);
 
 // Relay transport binding: `reply` answers the requesting remote client over the
 // encrypted relay channel; `broadcast` reaches all clients (local + relay).
@@ -3379,24 +3374,8 @@ const RELAY_CLIENT_ID = "relay";
 
 async function handleRelayMessage(msg: ClientMessage) {
   try {
-    const entry = RELAY_COMMANDS[msg.kind];
-    if (entry) {
-      const handler = typeof entry === "function" ? entry : entry.handler;
-      const schema = typeof entry === "function" ? undefined : entry.schema;
-      if (schema) {
-        const check = validateInput(schema, msg);
-        if (!check.ok) {
-          relayCtx.reply({
-            type: `${msg.kind}.error`,
-            requestId: typeof msg.requestId === "string" ? msg.requestId : undefined,
-            error: `Invalid ${msg.kind}: ${check.errors.join("; ")}`,
-          });
-          return;
-        }
-      }
-      await handler(msg, relayCtx);
-      return;
-    }
+    const dispatched = await clientCommands.dispatch(msg.kind, msg, relayCtx);
+    if (dispatched.handled) return;
     // Fallthrough for kinds not in RELAY_COMMANDS: terminal.* frames go to the
     // PTY manager; anything else is an unknown client message.
     if (typeof msg.kind === "string" && msg.kind.startsWith("terminal.")) {
@@ -8984,8 +8963,7 @@ app.post("/api/auth/bootstrap", sensitiveRateLimiter, (req, res) => {
     return res.status(403).json({ error: "Bootstrap secret required. Open the URL printed by the launcher (bivy open)." });
   }
   const name = String(req.body?.name ?? "Local device");
-  const { device, token } = identity.createDevice(name);
-  broadcast({ type: "device.created", device });
+  const { device, token } = accessDevices.create(name);
   res.json({ ok: true, device, token });
 });
 
@@ -9072,20 +9050,15 @@ app.post("/api/relay/link", async (_req, res, next) => {
 // Linked remote web/PWA devices paired via the X25519 handshake. Local-UI
 // authenticated like the rest of /api.
 app.get("/api/devices", (_req, res) => {
-  res.json({ devices: pairingStore.listDevices() });
+  res.json({ devices: linkedDevices.list() });
 });
 
 // Revoke a device: drop it, rotate the room key, and push the re-wrapped key to
 // the remaining devices so they stay connected while the revoked one is cut off.
 app.delete("/api/devices/:id", (req, res) => {
-  const deviceId = String(req.params.id);
-  const deliveries = pairingStore.revokeDevice(deviceId);
-  if (!deliveries) return res.status(404).json({ ok: false, error: "Unknown device" });
-  metadata.revokeDevice(deviceId);
-  syncPairingMetadata();
-  relay?.pushRotate(deliveries);
-  broadcast({ type: "devices.updated", devices: pairingStore.listDevices() });
-  res.json({ ok: true, devices: pairingStore.listDevices() });
+  const result = linkedDevices.revoke(String(req.params.id));
+  if (!result.found) return res.status(404).json({ ok: false, error: "Unknown device" });
+  res.json({ ok: true, devices: result.devices });
 });
 
 app.get("/api/node/info", (_req, res) => {
@@ -9376,25 +9349,25 @@ app.post("/api/sessions/rename", (req, res, next) => {
   }
 });
 
-// Local device token management for the loopback development UI.
-app.get("/api/devices", (_req, res) => {
-  res.json(identity.listDevices());
+// Local bearer-token management for the loopback development UI. These are
+// authentication records in node.json, not the X25519-linked remote devices at
+// /api/devices above. Keeping the resources on distinct paths prevents Express's
+// first matching route from silently shadowing one of the two device stores.
+app.get("/api/auth/devices", (_req, res) => {
+  res.json(accessDevices.list());
 });
 
-app.post("/api/devices", (req, res, next) => {
+app.post("/api/auth/devices", (req, res, next) => {
   try {
-    const { device, token } = identity.createDevice(String(req.body?.name ?? ""));
-    broadcast({ type: "device.created", device });
     // `token` is returned exactly once and never recoverable afterwards.
-    res.json({ ok: true, device, token });
+    res.json({ ok: true, ...accessDevices.create(String(req.body?.name ?? "")) });
   } catch (error) {
     next(error);
   }
 });
 
-app.delete("/api/devices/:id", (req, res) => {
-  const removed = identity.revokeDevice(req.params.id);
-  if (removed) broadcast({ type: "device.revoked", id: req.params.id });
+app.delete("/api/auth/devices/:id", (req, res) => {
+  const removed = accessDevices.revoke(req.params.id);
   res.status(removed ? 200 : 404).json({ ok: removed });
 });
 
@@ -11260,30 +11233,9 @@ app.post("/api/session/command", async (req, res, next) => {
   }
 });
 
-// Pause: distinct from abort/kill. The agent process keeps running, but the
-// guardian forces every subsequent tool call to ask until resumed — a soft
-// "hold on" rather than terminating the session.
-app.post("/api/session/pause", (req, res) => {
-  const record = resolveSession(req.body?.sessionId);
-  if (!record) return res.status(404).json({ error: "No active session" });
-  pauseSession(record);
-  res.json({ ok: true });
-});
-
-app.post("/api/session/resume", (req, res) => {
-  const record = resolveSession(req.body?.sessionId);
-  if (!record) return res.status(404).json({ error: "No active session" });
-  resumeSession(record);
-  res.json({ ok: true });
-});
-
-app.post("/api/session/question/answer", (req, res) => {
-  const record = resolveSession(req.body?.sessionId);
-  const requestId = String(req.body?.requestId ?? "");
-  if (!record || !requestId) return res.status(404).json({ error: "No matching session/question" });
-  answerSessionQuestion(record, requestId, req.body ?? {});
-  res.json({ ok: true });
-});
+// Pause/resume/question-answer are canonical client commands. Direct HTTP and
+// encrypted relay clients share validation + handlers; only framing differs.
+bindClientCommandRoutes(app, clientCommands, CLIENT_COMMAND_ROUTES, broadcast);
 
 // Universal Agent Harness — list this session's git checkpoints (rewind targets).
 app.post("/api/session/checkpoints", async (req, res, next) => {

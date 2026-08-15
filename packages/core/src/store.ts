@@ -32,6 +32,7 @@ import { normalizeEventType } from "./tool-activity.js";
 import { SeqReassembler } from "./seq-reassembler.js";
 import { foldConnectionEvent } from "./connection-event-fold.js";
 import { foldSessionIndexEvent } from "./session-index-event-fold.js";
+import { foldTerminalEvent } from "./terminal-event-fold.js";
 import { foldCatalogSettingsEvent } from "./catalog-settings-event-fold.js";
 import { foldPresentationEvent } from "./presentation-event-fold.js";
 import { foldAttentionEvent } from "./attention-event-fold.js";
@@ -2162,6 +2163,17 @@ export class SessionStore {
       }
       return;
     }
+    const terminalFold = foldTerminalEvent({
+      runTerminals: this.state.sessionIndex.runTerminals,
+      tuiSessions: this.state.sessionIndex.tuiSessions,
+    }, event, Date.now());
+    if (terminalFold.handled) {
+      this.set({
+        runTerminals: [...terminalFold.value.runTerminals],
+        tuiSessions: [...terminalFold.value.tuiSessions],
+      });
+      return;
+    }
     const catalogSettingsFold = foldCatalogSettingsEvent(event);
     if (catalogSettingsFold.handled) {
       if (catalogSettingsFold.catalogs || catalogSettingsFold.settings) {
@@ -2224,48 +2236,6 @@ export class SessionStore {
    * These events need shell-owned optimistic-send and history identities. */
   private applyStatefulEvent(event: ServerEvent, type: string): void {
     switch (type) {
-      case "terminal.list": {
-        const terminals = Array.isArray((event as any).terminals)
-          ? (event as any).terminals.filter((t: any) => t && typeof t.termId === "string")
-          : [];
-        this.set({ runTerminals: terminals });
-        return;
-      }
-      case "terminal.created": {
-        const terminal = (event as any).terminal as RunTerminalSummary | undefined;
-        if (!terminal?.termId) return;
-        const rest = this.state.sessionIndex.runTerminals.filter((t) => t.termId !== terminal.termId);
-        this.set({ runTerminals: [terminal, ...rest] });
-        return;
-      }
-      case "terminal.activity": {
-        const e = event as any;
-        const termId = String(e.termId || "");
-        if (termId) this.set({
-          runTerminals: this.state.sessionIndex.runTerminals.map((t) =>
-            t.termId === termId ? { ...t, lastActivityAt: Number(e.at) || Date.now() } : t,
-          ),
-        });
-        return;
-      }
-      case "terminal.closed":
-      case "terminal.exit": {
-        const termId = String((event as any).termId || "");
-        if (termId) this.set({ runTerminals: this.state.sessionIndex.runTerminals.filter((t) => t.termId !== termId) });
-        return;
-      }
-      case "terminal.tui": {
-        // A session was handed to / returned from its interactive TUI. Track the
-        // locked set so the composer for that session can show the "open in the
-        // terminal" banner instead of a rejected send. Idempotent add/remove.
-        const sid = String((event as any).sessionId || "");
-        if (!sid) return;
-        const active = Boolean((event as any).active);
-        const has = this.state.sessionIndex.tuiSessions.includes(sid);
-        if (active && !has) this.set({ tuiSessions: [...this.state.sessionIndex.tuiSessions, sid] });
-        else if (!active && has) this.set({ tuiSessions: this.state.sessionIndex.tuiSessions.filter((s) => s !== sid) });
-        return;
-      }
       case "sessions.list": {
         this.setSessions((event as any).sessions);
         return;
@@ -2346,37 +2316,6 @@ export class SessionStore {
         if (sid) this.dropFollowups(sid);
         if (sid) this.knownAgentAttachmentsBySession.delete(sid);
         if (sid && sid === this.state.activeSession.activeSessionId) this.resetActiveSession();
-        return;
-      }
-      case "node.updated": {
-        const e = event as any;
-        if (e.name && this.state.connection.currentNodeId) {
-          this.set({
-            nodes: this.state.connection.nodes.map((n) =>
-              n.id === this.state.connection.currentNodeId ? { ...n, name: String(e.name) } : n,
-            ),
-          });
-        }
-        return;
-      }
-      case "node.update": {
-        // Authoritative: `latest` present → node is behind (show banner);
-        // absent → up to date, so clear the banner and any "Updating…" state
-        // (this is how it clears after an update lands and the socket reconnects).
-        const e = event as any;
-        const current = typeof e.current === "string" ? e.current : "";
-        const latest = typeof e.latest === "string" ? e.latest : "";
-        if (current && latest) this.set({ nodeUpdate: { current, latest } });
-        else this.set({ nodeUpdate: null, nodeUpdating: false });
-        return;
-      }
-      case "node.update.result": {
-        // The update kicked off (node is restarting) → keep the "Updating…"
-        // state; the banner clears when the new build reconnects and no longer
-        // reports an update. A failure to even start → surface it and re-enable
-        // the button so the user can retry or update manually.
-        const e = event as any;
-        if (e.ok === false) this.set({ nodeUpdating: false, error: typeof e.error === "string" ? e.error : "Couldn't start the update on this node." });
         return;
       }
       case "session.history": {
@@ -2579,17 +2518,6 @@ export class SessionStore {
         });
         return;
       }
-      case "repos.list": {
-        const e = event as any;
-        this.set({
-          repos: Array.isArray(e.repos) ? (e.repos as RepoInfo[]) : [],
-          reposAuthed: e.authed !== false,
-          reposError: e.error || null,
-          reposReason: e.reason === "gh-unauthed" || e.reason === "no-token" ? e.reason : null,
-          reposLoading: false,
-        });
-        return;
-      }
       case "activation.readiness": {
         const e = event as any;
         if (e.credential && e.repository) this.set({ activationReadiness: { credential: e.credential, repository: e.repository } });
@@ -2607,17 +2535,6 @@ export class SessionStore {
             intervalMs: typeof e.intervalMs === "number" ? e.intervalMs : undefined,
             error: typeof e.error === "string" ? e.error : undefined,
           },
-        });
-        return;
-      }
-      case "branches.list": {
-        const e = event as any;
-        this.set({
-          branches: Array.isArray(e.branches) ? (e.branches as BranchInfo[]) : [],
-          branchesRepo: typeof e.repo === "string" && e.repo ? e.repo : null,
-          branchesDefault: typeof e.defaultBranch === "string" ? e.defaultBranch : null,
-          branchesError: e.error || null,
-          branchesLoading: false,
         });
         return;
       }
@@ -2644,38 +2561,6 @@ export class SessionStore {
         this.set({ providerAuth: event as unknown as ProviderAuth });
         return;
       }
-      case "credentials.records": {
-        const e = event as any;
-        this.set({ credentialRecords: Array.isArray(e.records) ? (e.records as CredentialRecordSummary[]) : [] });
-        return;
-      }
-      case "credentials.presets": {
-        const e = event as any;
-        this.set({ credentialPresets: (e.presets ?? {}) as CredentialPresetsView });
-        return;
-      }
-      case "models.custom.list": {
-        const e = event as any;
-        if (Array.isArray(e.providers)) this.set({ localModels: e.providers as LocalModelProvider[] });
-        return;
-      }
-      case "models.custom.presets": {
-        const e = event as any;
-        if (Array.isArray(e.presets)) this.set({ localModelPresets: e.presets as LocalModelPreset[] });
-        return;
-      }
-      case "rulesets.list": {
-        const e = event as any;
-        if (Array.isArray(e.rulesets)) this.set({ rulesets: e.rulesets as RulesetInfo[] });
-        return;
-      }
-      case "stt.config": {
-        const e = event as any;
-        if (Array.isArray(e.providers) && typeof e.provider === "string") {
-          this.set({ sttConfig: { provider: e.provider, providers: e.providers } as SttConfig });
-        }
-        return;
-      }
       case "provider.oauth.reset": {
         const e = event as any;
         if (Array.isArray(e.providers)) this.set({ providers: e.providers as ProviderInfo[] });
@@ -2698,11 +2583,6 @@ export class SessionStore {
             error: e.error,
           },
         });
-        return;
-      }
-      case "node.settings": {
-        const e = event as any;
-        if (e.settings && typeof e.settings === "object") this.set({ nodeSettings: e.settings as NodeSettings });
         return;
       }
       case "auth.oauth.progress": {
@@ -2852,18 +2732,6 @@ export class SessionStore {
       case "capabilities": {
         const capabilities = normalizeCapabilitiesSnapshot((event as any).capabilities);
         if (capabilities) this.set({ capabilities });
-        return;
-      }
-      case "session.paused": {
-        const sid = String((event as any).sessionId || "");
-        if (sid && !this.state.sessionIndex.pausedSessionIds.includes(sid)) {
-          this.set({ pausedSessionIds: [...this.state.sessionIndex.pausedSessionIds, sid] });
-        }
-        return;
-      }
-      case "session.resumed": {
-        const sid = String((event as any).sessionId || "");
-        if (sid) this.set({ pausedSessionIds: this.state.sessionIndex.pausedSessionIds.filter((id) => id !== sid) });
         return;
       }
       case "session.pr_result": {

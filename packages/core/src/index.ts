@@ -155,6 +155,13 @@ export {
   type SessionIndexFoldResult,
 } from "./session-index-event-fold.js";
 export {
+  foldTerminalEvent,
+  type RunTerminalValue,
+  type TerminalEventData,
+  type TerminalFoldResult,
+  type TerminalIndexValue,
+} from "./terminal-event-fold.js";
+export {
   foldCatalogSettingsEvent,
   type CatalogSettingsEventData,
   type CatalogSettingsFoldResult,

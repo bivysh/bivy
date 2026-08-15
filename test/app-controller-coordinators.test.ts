@@ -7,6 +7,7 @@ import { CredentialsModelsCoordinator } from "../packages/web/src/store/coordina
 import { SessionOrchestrator } from "../packages/web/src/store/coordinators/session-orchestrator.js";
 import { EphemeralCoordinator } from "../packages/web/src/store/coordinators/ephemeral-coordinator.js";
 import { AutomationsAccountCoordinator } from "../packages/web/src/store/coordinators/automations-account-coordinator.js";
+import { FollowupCoordinator } from "../packages/web/src/store/coordinators/followup-coordinator.js";
 
 test("node coordinator owns the complete switch ordering", () => {
   const events: string[] = [];
@@ -125,6 +126,29 @@ test("account coordinator refreshes both automation projections after cancellati
   assert.deepEqual(new Set(events.slice(1)), new Set(["runs", "queue"]));
 });
 
+test("follow-up coordinator owns queue timing and delivery", () => {
+  const sent: any[] = [];
+  const followups: any[] = [{ id: "f1", text: "next", status: "queued", version: 1, createdAt: 1, updatedAt: 1 }];
+  let working = false;
+  const store: any = {
+    getState: () => ({ activeSession: { activeSessionId: "s1", working }, catalogs: { selectedAgentId: "pi", runtimes: [] } }),
+    getFollowups: () => followups,
+    reorderFollowup: () => true,
+    markFollowupSending: (_sid: string, id: string) => { followups.find((item) => item.id === id).status = "sending"; },
+    addUserMessage: () => {}, confirmFollowupSent: () => {}, editFollowup: () => ({ ok: false }), removeFollowup: () => false,
+  };
+  const coordinator = new FollowupCoordinator(store, {
+    send: (command) => sent.push(command), createClientMessageId: () => "new", now: () => 10,
+    persistBackstop: () => {}, cancelBackstop: () => {},
+  });
+  assert.equal(coordinator.mustQueue("s1"), true, "an earlier queued item preserves ordering even while idle");
+  coordinator.drain("s1");
+  assert.equal(sent[0].kind, "prompt");
+  assert.equal(followups[0].status, "sending");
+  working = true;
+  assert.equal(coordinator.steer("urgent"), false, "steer is unavailable until the runtime advertises it");
+});
+
 test("AppController keeps public compatibility while workflow decisions live outside it", async () => {
   const source = await readFile(new URL("../packages/web/src/store/controller.ts", import.meta.url), "utf8");
   assert.match(source, /switchNode\(nodeId: string\): void \{\s*this\.nodeCoordinator\.switchNode\(nodeId\);/);
@@ -132,13 +156,14 @@ test("AppController keeps public compatibility while workflow decisions live out
   assert.match(source, /return this\.credentialsModelsCoordinator\.testCredential\(provider, label\)/);
   assert.match(source, /this\.sessionCoordinator\.sendPrompt\(text, attachments\)/);
   assert.match(source, /this\.sessionCoordinator\.deleteSession\(sessionId, path\)/);
+  assert.match(source, /return this\.followupCoordinator\.edit\(sessionId, id, patch, expectedVersion\)/);
   assert.doesNotMatch(source, /kind: "session\.fork\.export"/);
   assert.doesNotMatch(source, /kind: "models\.custom\.verify"/);
   assert.ok(source.split("\\n").length < 3700, "controller must not absorb extracted workflows again");
 });
 
 test("coordinators remain explicit-port modules", async () => {
-  for (const file of ["session-orchestrator", "node-connection-coordinator", "credentials-models-coordinator", "ephemeral-coordinator", "automations-account-coordinator"]) {
+  for (const file of ["session-orchestrator", "node-connection-coordinator", "credentials-models-coordinator", "ephemeral-coordinator", "automations-account-coordinator", "followup-coordinator"]) {
     const source = await readFile(new URL(`../packages/web/src/store/coordinators/${file}.ts`, import.meta.url), "utf8");
     assert.doesNotMatch(source, /from ["'][^"']*controller/);
     assert.doesNotMatch(source, /SessionStore|agent-profiles|provider-interpreters|services\/control-plane/);

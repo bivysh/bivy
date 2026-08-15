@@ -10,6 +10,16 @@ import type { AgentSupportTier } from "./types.js";
 export type AgentProfileSandboxTier = "read-only" | "workspace-write" | "danger-full-access";
 export type AgentProfilePromptMode = "stdin" | "argv";
 
+/** Named host behaviors interpreted by the shared runtime wrapper. Values stay
+ * serializable so profiles remain data; implementation functions live in the
+ * runtime behavior registry rather than in per-agent branches. */
+export type AgentProfileBehaviors = {
+  preflight?: "codex" | "opencode" | "grok";
+  prepare?: "grok-auth";
+  slashCommands?: "codex" | "opencode";
+  sessionStore?: "codex" | "opencode";
+  nativeSessions?: "grok";
+};
 
 export type AgentProfileId =
   | "codex"
@@ -72,6 +82,9 @@ export type AgentProfile = {
   authOwner?: "bivy" | "agent" | "mixed";
   /** One-line human blurb for the catalog; falls back to a generic sentence. */
   blurb?: string;
+  /** Optional host-side behavior identities. The profile names capabilities;
+   * the generic runtime wrapper interprets them without branching on agent id. */
+  behaviors?: AgentProfileBehaviors;
   /**
    * Generic resume primitive (the O(1) scaling path — data, not per-agent code).
    * `template` is the arg array that continues a prior session, with `{id}` → the
@@ -154,6 +167,8 @@ export type AgentProfile = {
 export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
   codex: {
     displayName: "Codex",
+    behaviors: { preflight: "codex", slashCommands: "codex", sessionStore: "codex" },
+    supportTier: "supported",
     command: "codex",
     // Bare `codex "<prompt>"` launches the interactive TUI, which needs a real
     // TTY and dies with "stdin is not a terminal" when driven over a pipe. The
@@ -183,6 +198,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
   },
   opencode: {
     displayName: "OpenCode",
+    behaviors: { preflight: "opencode", slashCommands: "opencode", sessionStore: "opencode" },
     command: "opencode",
     packageName: "opencode-ai",
     // `opencode run "<prompt>"` runs one non-interactive turn and streams the
@@ -500,6 +516,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
   },
   grok: {
     displayName: "Grok",
+    behaviors: { preflight: "grok", prepare: "grok-auth", nativeSessions: "grok" },
     command: "grok",
     packageName: "grok (curl -fsSL https://x.ai/cli/install.sh | bash)",
     supportTier: "beta",

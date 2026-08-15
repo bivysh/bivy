@@ -5,8 +5,8 @@
       "label": "Codex",
       "command": "codex",
       "hidden": true,
-      "supportTier": "beta",
-      "certification": "adapter-tested",
+      "supportTier": "supported",
+      "certification": "unverified",
       "headlessFlags": [
         "exec"
       ],

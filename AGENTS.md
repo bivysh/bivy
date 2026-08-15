@@ -45,5 +45,6 @@ UI, CSS, or component:
 
 - `pnpm run check:design` — design-token single-source-of-truth guard
 - `pnpm run check:boundaries` — module architecture boundaries
+- `pnpm run check:routes` — duplicate Express method/path guard
 - `pnpm --filter @bivy/web run typecheck` — web PWA types
 - `pnpm run lint` / `pnpm run typecheck`

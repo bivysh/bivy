@@ -31,6 +31,7 @@ import {
   isAgentProfileId,
   type AgentInstallDescriptor,
   type AgentProfile,
+  type AgentProfileBehaviors,
   type AgentProfileId,
 } from "../agents/profiles.js";
 
@@ -55,7 +56,7 @@ function codexResumeArgs(sessionId: string, tier: string): string[] {
   // (read-only | workspace-write | danger-full-access), so `tier` needs no mapping.
   return ["exec", "--json", "--sandbox", tier, "resume", sessionId];
 }
-import type { ModelInfo, RuntimeMessage, ForkHistoryMessage, ForkImportContext } from "./types.js";
+import type { ModelInfo, ForkHistoryMessage, ForkImportContext } from "./types.js";
 import { PiRuntime } from "../agents/pi/runtime.js";
 import { ProcessRuntime, processRuntimeFromEnv, type ProcessModelConfig, type ProcessPromptMode, type ProcessThinkingConfig } from "./process.js";
 import { codexCredentialPreflight } from "./codex-preflight.js";
@@ -66,7 +67,7 @@ import { parserFactoryFor } from "./cli-parsers.js";
 import { sandboxTier, sandboxArgsFor } from "../harness/sandbox.js";
 import { ProtocolRuntime, protocolRuntimeFromEnv, protocolCommandsFromEnv, type ProtocolRuntimeOptions } from "./protocol.js";
 import { codexSlashCommands, opencodeSlashCommands, type SlashCommandProvider } from "./slash-commands.js";
-import { withExactCapabilitySurface, type AgentRuntime, type RuntimeCapabilities } from "./types.js";
+import { withExactCapabilitySurface, type AgentRuntime } from "./types.js";
 import { installedAgentContributions } from "../plugins/store.js";
 import { currentBivyVersion } from "../app-version.js";
 import type {
@@ -80,17 +81,24 @@ import type {
   AgentSupportTier,
 } from "../agents/types.js";
 
-/**
- * On-disk slash commands (custom prompts/commands) for the CLI agents that keep
- * them as markdown on the node — Codex's `$CODEX_HOME/prompts`, opencode's
- * global + project `command` dirs. Populates their composer menu and makes an
- * invoked `/name` actually run (see SlashCommandProvider). Any other agent has no
- * such directory convention, so it returns undefined (no agent-native commands).
- */
-function cliSlashCommands(id: string): SlashCommandProvider | undefined {
-  if (id === "codex") return codexSlashCommands();
-  if (id === "opencode") return opencodeSlashCommands();
-  return undefined;
+/** Host behavior interpreters keyed by serializable profile values. Adding a
+ * behavior implementation adds one row here; assigning it to an agent is data in
+ * AGENT_PROFILES, so the generic wrapper never branches on agent identity. */
+type PreflightBehavior = NonNullable<AgentProfileBehaviors["preflight"]>;
+type SlashCommandsBehavior = NonNullable<AgentProfileBehaviors["slashCommands"]>;
+const PREFLIGHT_BEHAVIORS: Record<PreflightBehavior, NonNullable<import("./process.js").ProcessRuntimeOptions["preflight"]>> = {
+  codex: (env) => codexCredentialPreflight(env),
+  opencode: (env, ctx) => opencodeCredentialPreflight(env, ctx),
+  grok: (env) => grokCredentialPreflight(env),
+};
+const SLASH_COMMAND_BEHAVIORS: Record<SlashCommandsBehavior, () => SlashCommandProvider> = {
+  codex: codexSlashCommands,
+  opencode: opencodeSlashCommands,
+};
+
+function cliSlashCommands(spec: AgentProfile): SlashCommandProvider | undefined {
+  const behavior = spec.behaviors?.slashCommands;
+  return behavior ? SLASH_COMMAND_BEHAVIORS[behavior]() : undefined;
 }
 
 export * from "./types.js";
@@ -496,7 +504,7 @@ const HELP_PROBE_CACHE = new Map<string, string | null>();
 function probeHelpText(command: string): string | null {
   const key = resolveCommandPath(command) ?? command;
   if (HELP_PROBE_CACHE.has(key)) return HELP_PROBE_CACHE.get(key) ?? null;
-  let text: string | null = null;
+  let text: string | null;
   try {
     const res = spawnSync(command, ["--help"], { encoding: "utf8", timeout: 4000 });
     const out = `${res.stdout ?? ""}\n${res.stderr ?? ""}`.trim();
@@ -573,7 +581,7 @@ function cliAgentInfo(id: string, spec: AgentProfile): RuntimeInfo {
   // agent has a known resume form (spec.resume or a BIVY_<ID>_RESUME_TEMPLATE
   // override) — Codex is the maintained example; the rest are fresh-process-per-
   // prompt until a resume template is wired.
-  let resume = id === "codex" || Boolean(cliResumeTemplate(id, spec));
+  let resume = spec.behaviors?.sessionStore === "codex" || Boolean(cliResumeTemplate(id, spec));
   let modelSelection = Boolean(cliModelConfig(id, spec));
   const usageReporting = cliUsageReporting(spec);
   const structuredPref = process.env.BIVY_AGENT_STRUCTURED;
@@ -595,7 +603,7 @@ function cliAgentInfo(id: string, spec: AgentProfile): RuntimeInfo {
   // Opt-in self-healing: if the installed binary's --help doesn't evidence a
   // resume/model flag we advertise, downgrade it (never upgrade). Codex keeps its
   // native, separately-verified resume path, so it's exempt.
-  if (process.env.BIVY_AGENT_PROBE === "1" && installed && id !== "codex") {
+  if (process.env.BIVY_AGENT_PROBE === "1" && installed && spec.behaviors?.sessionStore !== "codex") {
     const help = probeHelpText(spec.command);
     if (help) {
       const refined = refineCapabilitiesFromHelp(help, { resume, modelSelection }, { resumeTokens: resumeTokensFor(id, spec), modelFlag: spec.model?.flag });
@@ -625,15 +633,15 @@ function cliAgentInfo(id: string, spec: AgentProfile): RuntimeInfo {
       usageReporting,
       // Codex (and Grok) can locate an on-disk session by cwd + start time so a
       // `bivy run` terminal without a launch-time pin is still takeable as chat.
-      sessionDiscovery: id === "codex" || id === "grok",
-      // Grok also exposes its interactive TUI (`grok --resume <id>`) for the
-      // chat↔terminal hand-off; Codex gets this via the approvals runtime.
-      interactiveTui: id === "grok" && commandAvailable(spec.command),
-      nativeSessionDiscovery: id === "grok" && commandAvailable(spec.command),
-      nativeSessionAdoption: id === "grok" && resume,
+      sessionDiscovery: Boolean(spec.behaviors?.sessionStore === "codex" || spec.behaviors?.nativeSessions),
+      // Native-session behavior identities describe discovery/adoption and TUI
+      // hand-off without teaching the wrapper which concrete agent owns them.
+      interactiveTui: Boolean(spec.behaviors?.nativeSessions) && commandAvailable(spec.command),
+      nativeSessionDiscovery: Boolean(spec.behaviors?.nativeSessions) && commandAvailable(spec.command),
+      nativeSessionAdoption: Boolean(spec.behaviors?.nativeSessions) && resume,
     }),
     nativeSandbox: Boolean(spec.nativeSandbox),
-    supportTier: spec.supportTier ?? (id === "codex" ? "supported" : "experimental"),
+    supportTier: spec.supportTier ?? "experimental",
     testedVersion: spec.testedVersion,
     authOwner: spec.authOwner ?? "agent",
     notes: installed
@@ -702,8 +710,9 @@ function acpShimPath(): string {
  * through bin/acp-shim.mjs. Shared by the generic `acp` runtime and the per-agent
  * ACP promotion path so both wrap agents identically.
  */
-function acpRuntimeOptions(opts: { id: string; displayName: string; command: string; agentArgs: string[]; credsDir?: string }): ProtocolRuntimeOptions {
-  const slashCommands = cliSlashCommands(opts.id);
+function acpRuntimeOptions(opts: { id: string; displayName: string; command: string; agentArgs: string[]; credsDir?: string; behaviors?: AgentProfileBehaviors }): ProtocolRuntimeOptions {
+  const slashBehavior = opts.behaviors?.slashCommands;
+  const slashCommands = slashBehavior ? SLASH_COMMAND_BEHAVIORS[slashBehavior]() : undefined;
   return {
     id: opts.id,
     displayName: opts.displayName,
@@ -724,7 +733,7 @@ function acpRuntimeOptions(opts: { id: string; displayName: string; command: str
     // in that store (writeHistory → capabilities.forkHistoryImport → fidelity
     // "replayed" instead of a seeded summary prompt). Only opencode has this
     // layout; a bare ACP agent gets none of these hooks.
-    ...(opts.id === "opencode"
+    ...(opts.behaviors?.sessionStore === "opencode"
       ? {
           loadHistory: (sessionRef: string) => loadOpenCodeTranscript(sessionRef),
           deleteHistory: (sessionRef: string) => void deleteOpenCodeSession(sessionRef),
@@ -1183,6 +1192,7 @@ export function makeRuntime(options: RuntimeFactoryOptions): AgentRuntime {
  */
 function makeCliRuntime(id: string, options: RuntimeFactoryOptions, spec: AgentProfile): AgentRuntime {
       if (!commandAvailable(spec.command)) throw new Error(`${spec.displayName} command not found on PATH: ${spec.command}`);
+      const behaviors = spec.behaviors;
       // Resolve the mode before launching anything. ACP and structured parsing
       // remain data-driven; explicit mode overrides are fail-closed rather than
       // silently degrading to a less capable path.
@@ -1207,6 +1217,7 @@ function makeCliRuntime(id: string, options: RuntimeFactoryOptions, spec: AgentP
           displayName: spec.displayName,
           command: spec.command,
           agentArgs: spec.acp.args,
+          behaviors: spec.behaviors,
           ...(spec.authOwner && spec.authOwner !== "agent" ? { credsDir: options.credsDir } : {}),
         }));
       }
@@ -1231,15 +1242,8 @@ function makeCliRuntime(id: string, options: RuntimeFactoryOptions, spec: AgentP
       // Preflights validate the agent's own login. Grok explicitly declares
       // mixed auth and may materialize a Bivy-connected subscription; Codex and
       // OpenCode retain their native stores without credential replacement.
-      const preflight =
-        id === "codex"
-          ? (env: Record<string, string | undefined>) => codexCredentialPreflight(env)
-          : id === "opencode"
-            ? (env: Record<string, string | undefined>, ctx: { provider?: string }) => opencodeCredentialPreflight(env, ctx)
-            : id === "grok"
-              ? (env: Record<string, string | undefined>) => grokCredentialPreflight(env)
-              : undefined;
-      const prepare = id === "grok"
+      const preflight = behaviors?.preflight ? PREFLIGHT_BEHAVIORS[behaviors.preflight] : undefined;
+      const prepare = behaviors?.prepare === "grok-auth"
         ? async (): Promise<Record<string, string>> => {
             const home = await ensureGrokAuth(options.credsDir);
             return home ? { GROK_HOME: home } : {};
@@ -1252,8 +1256,9 @@ function makeCliRuntime(id: string, options: RuntimeFactoryOptions, spec: AgentP
       // prompt — no per-agent code. Absent = fresh process per prompt (resume
       // stays off; see the per-agent comments in AGENT_PROFILES for why some
       // genuinely have no native "continue session <id>" form).
-      const resumeTemplate = id === "codex" ? undefined : cliResumeTemplate(id, spec);
-      const resumeOpts = id === "codex"
+      const codexStore = behaviors?.sessionStore === "codex";
+      const resumeTemplate = codexStore ? undefined : cliResumeTemplate(id, spec);
+      const resumeOpts = codexStore
         ? {
             resumable: true,
             loadHistory: (sessionId: string) => loadCodexTranscript(sessionId),
@@ -1279,8 +1284,8 @@ function makeCliRuntime(id: string, options: RuntimeFactoryOptions, spec: AgentP
       // Grok-specific: on-disk session enumeration + interactive TUI hand-off so
       // `bivy run grok` sessions persist after the PTY exits and can be taken
       // over as chat or reopened in the native TUI.
-      const grokOpts =
-        id === "grok"
+      const nativeSessionOpts =
+        behaviors?.nativeSessions === "grok"
           ? {
               sessionDiscovery: true,
               listDiskSessions: () =>
@@ -1312,11 +1317,11 @@ function makeCliRuntime(id: string, options: RuntimeFactoryOptions, spec: AgentP
         model: cliModelConfig(id, spec),
         thinking: cliThinkingConfig(id, spec),
         usageReporting: cliUsageReporting(spec),
-        slashCommands: cliSlashCommands(id),
+        slashCommands: cliSlashCommands(spec),
         ...resumeOpts,
-        ...grokOpts,
+        ...nativeSessionOpts,
       });
-      if (id === "grok") {
+      if (behaviors?.nativeSessions === "grok") {
         // Issue #156 discovery surface — ProcessRuntime has no options hook for
         // this; attach it so collectDiscoveredSessions picks Grok sessions up.
         (runtime as AgentRuntime).discoverNativeSessions = () => discoverNativeGrokSessions();
