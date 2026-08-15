@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { controller, useAppState } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
+import { Badge } from "./Badge.js";
 import { NeedsDisclosureError, type DiscoveredNativeSessionDto } from "../store/controller.js";
 
 /** Last path segment of a cwd as a readable "repository" label — the same
@@ -137,11 +138,11 @@ export function ImportSessionContent({ onDone }: { onDone: (sessionId: string) =
           <div className="import-session-hint">{text}</div>
         </div>
         <div className="picker-section">
-          <button className="fork-submit" disabled={importingRef === session.ref} onClick={() => setPendingDisclosure(null)}>
+          <button className="btn fork-submit" disabled={importingRef === session.ref} onClick={() => setPendingDisclosure(null)}>
             Cancel
           </button>
           <button
-            className="fork-submit"
+            className="btn primary fork-submit"
             disabled={importingRef === session.ref}
             onClick={() => {
               setPendingDisclosure(null);
@@ -218,9 +219,7 @@ export function ImportSessionContent({ onDone }: { onDone: (sessionId: string) =
               right={
                 s.plan.mode === "follow-only" ? (
                   <span className="import-session-follow">
-                    <span className="import-session-badge" title={s.plan.disclosure}>
-                      Live elsewhere
-                    </span>
+                    <Badge title={s.plan.disclosure}>Live elsewhere</Badge>
                     {s.resumeCommand && (
                       // Bivy has no safe way to take over a process it doesn't
                       // own, so this is the "follow/read-only" affordance the
@@ -233,7 +232,7 @@ export function ImportSessionContent({ onDone }: { onDone: (sessionId: string) =
                   </span>
                 ) : (
                   <button
-                    className="import-session-action"
+                    className="btn sm primary import-session-action"
                     disabled={importingRef === s.ref}
                     onClick={() => doImport(s)}
                   >

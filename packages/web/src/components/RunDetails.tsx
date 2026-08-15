@@ -16,6 +16,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmDialog } from "./AppDialog.js";
+import { StatusDot, type StatusDotState } from "./StatusDot.js";
+import { Badge } from "./Badge.js";
 import {
   RunFetchError,
   receiptV1FromRun,
@@ -43,6 +45,13 @@ const LIFECYCLE_LABEL: Record<Run["lifecycle"], string> = {
   waiting: "Waiting",
   needs_attention: "Needs attention",
   finished: "Finished",
+};
+const LIFECYCLE_STATUS: Record<Run["lifecycle"], StatusDotState> = {
+  queued: "idle",
+  running: "working",
+  waiting: "idle",
+  needs_attention: "needs-action",
+  finished: "idle",
 };
 
 function formatWhen(value?: string): string {
@@ -224,7 +233,7 @@ export function RunDetails({
           <p className="automations-view-sub">What this Run did, where it ran, and what remains unknown.</p>
         </div>
         <div className="automations-view-head-actions">
-          <button type="button" className="icon-btn run-details-close" onClick={onClose} title="Back" aria-label="Close run details"><span aria-hidden="true">‹</span><span>Back</span></button>
+          <button type="button" className="btn ghost icon run-details-close" onClick={onClose} title="Back" aria-label="Close run details"><span aria-hidden="true">‹</span><span>Back</span></button>
         </div>
       </header>
 
@@ -350,10 +359,10 @@ function RunBody({
       <div className="run-details-title">{run.title}</div>
 
       <div className="run-sheet-status">
-        <span className={`run-dot`} aria-hidden />
+        <StatusDot status={LIFECYCLE_STATUS[run.lifecycle]} />
         {LIFECYCLE_LABEL[run.lifecycle]}
         {" · "}
-        <span className={`chip outcome-${run.outcome.tone} outcome-kind-${run.outcome.kind}`}>{run.outcome.label}</span>
+        <Badge tone={run.outcome.tone === "success" ? "ok" : run.outcome.tone === "warning" ? "warn" : run.outcome.tone === "danger" ? "danger" : undefined}>{run.outcome.label}</Badge>
         {run.attempt > 1 && <span className="run-details-attempt"> · attempt {run.attempt}</span>}
       </div>
 
@@ -379,7 +388,7 @@ function RunBody({
         <Row k="Session">
           {run.sessionId
             ? sessionOpenable
-              ? <button type="button" className="link-btn" onClick={() => onOpenSession!(run.sessionId!)}>Open Session</button>
+              ? <button type="button" className="btn link" onClick={() => onOpenSession!(run.sessionId!)}>Open Session</button>
               : <span className="run-details-muted">Correlated Session isn&apos;t available here</span>
             : <span className="run-details-muted">Not correlated</span>}
         </Row>
@@ -418,9 +427,9 @@ function RunBody({
       {run.checks.length > 0 && (
         <div className="run-sheet-checks" ref={checksRef} tabIndex={-1}>
           {run.checks.map((c, i) => (
-            <span key={`${c.name}-${i}`} className={`chk ${c.status}`}>
+            <Badge key={`${c.name}-${i}`} tone={c.status === "passed" ? "ok" : c.status === "failed" ? "danger" : undefined}>
               {c.name} {c.status === "passed" ? "✓" : c.status === "failed" ? "✗" : "–"}
-            </span>
+            </Badge>
           ))}
         </div>
       )}
@@ -455,7 +464,7 @@ function RunBody({
           <span className="v">
             {receipt.completeness === "complete" ? "Complete" : `Partial · ${receipt.missingEvidence.length} evidence gap${receipt.missingEvidence.length === 1 ? "" : "s"}`}
             {" "}
-            <button type="button" className="link-btn" onClick={exportReceipt}>Export JSON</button>
+            <button type="button" className="btn link" onClick={exportReceipt}>Export JSON</button>
           </span>
         </div>
         {receipt.observationLimitations.slice(0, 3).map((limitation) => (

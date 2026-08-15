@@ -1,30 +1,28 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { githubIssueRefFromSource, primaryPr, repoFromSource, type GithubQueueItem, type PrRef, type RunTerminalSummary } from "@bivy/core";
 import { useAppState } from "../store/useStore.js";
 import { controller } from "../store/useStore.js";
 import { ConfirmDialog, RenameDialog } from "./AppDialog.js";
-import { attentionRank, isUnseen, statusClass, statusLabel } from "../sessionStatus.js";
-import { SourceGlyph } from "./SourceMark.js";
+import { attentionRank, statusDotState, statusLabel, type SessionDotState } from "../sessionStatus.js";
+import { SourceMark } from "./SourceMark.js";
+import { Badge } from "./Badge.js";
 import { classifySource, CLI_SOURCE, type SourceKind } from "../sessionSource.js";
 import { rowHint } from "../runEvidence.js";
 import { sessionDateGroup } from "../sessionPresentation.js";
-import { CheckIcon, CloseIcon, MoreIcon } from "./UiIcons.js";
+import { CheckIcon, MoreIcon } from "./UiIcons.js";
+import { Sheet } from "./Sheet.js";
 
 /** The leading indicator on a session row: a tinted source tile carrying the
  *  trigger's glyph, with the live status as a small dot badge on its corner.
  *  Source is the identity, status is the presence — one element, two axes, so
  *  the row now reads "where it came from" and "what it's doing" at a glance.
- *  The dot's colour/shape logic is the same statusClass the header pill uses. */
-export function RowMark({ kind, status, unseen, srLabel }: { kind: SourceKind; status: string; unseen?: boolean; srLabel: string }) {
+ *  The dot's colour/shape logic is the same StatusDot the header uses. */
+export function RowMark({ kind, status, srLabel }: { kind: SourceKind; status: SessionDotState; srLabel: string }) {
   return (
     <>
-      <span className={`session-mark src-${kind}`} aria-hidden>
-        <SourceGlyph kind={kind} />
-        <span className={`mark-badge ${status}${unseen ? " unseen" : ""}`} />
-      </span>
+      <SourceMark kind={kind} size="sm" status={status} />
       {/* The mark + badge are colour/shape only and aria-hidden; mirror both the
           source and the status as screen-reader-only text (parity with the old
           bare status dot, which did the same for status alone). */}
@@ -60,10 +58,15 @@ export function PrBadge({ prs }: { prs?: PrRef[] }) {
   const label = pr.state === "merged" ? "Merged" : pr.state === "closed" ? "Closed" : "PR";
   const count = prs && prs.length > 1 ? prs.length : 0;
   return (
-    <span className={`session-pr ${pr.state}`} title={count ? `${label} · ${count} pull requests` : label} aria-hidden>
+    <Badge
+      tone={pr.state === "merged" ? "merged" : pr.state === "open" ? "ok" : undefined}
+      className="session-pr"
+      title={count ? `${label} · ${count} pull requests` : label}
+      aria-hidden
+    >
       <GhMark />
       <span className="session-pr-text">{count ? `${label} ${count}` : label}</span>
-    </span>
+    </Badge>
   );
 }
 
@@ -233,46 +236,36 @@ function RowMenu({ sessionId, name, isRepo, prs }: { sessionId: string; name: st
       {/* The mobile sidebar is transformed into an off-canvas drawer. A fixed
           descendant of a transformed element is fixed to that element, not the
           viewport, so keep the full-screen sheet at the document root. */}
-      {open && createPortal(
-        <div className="action-sheet" role="dialog" aria-modal="true" aria-label={`Actions for ${name}`} onClick={(e) => e.stopPropagation()}>
-          <div className="action-sheet-backdrop" onClick={close} />
-          <div className="action-sheet-body">
-            <div className="action-sheet-head">
-              <span className="action-sheet-title">{name}</span>
-              <button className="action-sheet-close" onClick={close} aria-label="Close">
-                <CloseIcon />
-              </button>
-            </div>
-            <button className="action-sheet-item" onClick={rename} disabled={prBusy}>
-              Rename
+      {open && (
+        <Sheet variant="action" ariaLabel={`Actions for ${name}`} title={name} onClose={close} autoFocusSearch={false}>
+          <button className="sheet-action" onClick={rename} disabled={prBusy}>
+            Rename
+          </button>
+          {/* Every PR the session has (open, merged, closed) as a direct link —
+              this is how multiple PRs on one session stay reachable without
+              cluttering the row. */}
+          {(prs ?? []).map((pr) => (
+            <a key={pr.url} className="sheet-action" href={pr.url} target="_blank" rel="noopener" onClick={close}>
+              {prActionLabel(pr)}
+            </a>
+          ))}
+          {/* Force a fresh GitHub check regardless of what this session last saw —
+              the badge only updates opportunistically (after a turn), so a
+              session that's finished or not attached keeps a stale `open` PR
+              until something nudges it. Always offered for a repo session, PR
+              or not, so a merge/close is one tap away from being reflected. */}
+          {isRepo && (
+            <button className="sheet-action" onClick={refreshPrStatus} disabled={prBusy}>
+              {prBusy ? "Checking GitHub status…" : "Update GitHub status"}
             </button>
-            {/* Every PR the session has (open, merged, closed) as a direct link —
-                this is how multiple PRs on one session stay reachable without
-                cluttering the row. */}
-            {(prs ?? []).map((pr) => (
-              <a key={pr.url} className="action-sheet-item" href={pr.url} target="_blank" rel="noopener" onClick={close}>
-                {prActionLabel(pr)}
-              </a>
-            ))}
-            {/* Force a fresh GitHub check regardless of what this session last saw —
-                the badge only updates opportunistically (after a turn), so a
-                session that's finished or not attached keeps a stale `open` PR
-                until something nudges it. Always offered for a repo session, PR
-                or not, so a merge/close is one tap away from being reflected. */}
-            {isRepo && (
-              <button className="action-sheet-item" onClick={refreshPrStatus} disabled={prBusy}>
-                {prBusy ? "Checking GitHub status…" : "Update GitHub status"}
-              </button>
-            )}
-            <button className="action-sheet-item" onClick={promote} disabled={prBusy}>
-              Continue here (promote replica)
-            </button>
-            <button className="action-sheet-item danger" onClick={del} disabled={prBusy}>
-              Delete
-            </button>
-          </div>
-        </div>,
-        document.body,
+          )}
+          <button className="sheet-action" onClick={promote} disabled={prBusy}>
+            Continue here (promote replica)
+          </button>
+          <button className="sheet-action danger" onClick={del} disabled={prBusy}>
+            Delete
+          </button>
+        </Sheet>
       )}
     </div>
   );
@@ -416,7 +409,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
     <div className="session-list">
       <div className="session-list-tools">
         <input
-          className="session-search"
+          className="field session-search"
           type="search"
           placeholder="Search sessions…"
           value={query}
@@ -438,7 +431,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
               <path d="M3 5h18l-7 8v6l-4-2v-4z" />
             </svg>
-            {activeFilterCount > 0 && <span className="session-filter-count">{activeFilterCount}</span>}
+            {activeFilterCount > 0 && <Badge tone="accent" variant="solid" className="session-filter-count">{activeFilterCount}</Badge>}
           </button>
           {filterOpen && (
             <div className="menu session-filter-menu" role="menu">
@@ -527,7 +520,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
               server to keep everything free.
             </span>
           </div>
-          <button className="trial-wall-cta" type="button" onClick={() => void controller.startCheckout()}>
+          <button className="btn sm primary trial-wall-cta" type="button" onClick={() => void controller.startCheckout()}>
             Upgrade to Pro
           </button>
         </div>
@@ -596,7 +589,6 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
             );
           }
           const meta = sessionMeta(s, nodeName(s.nodeId));
-          const unseen = isUnseen(s);
           const label = statusLabel(s);
           const src = classifySource(s.source);
           // A one-word exception hint on failed / waiting-on-you runs, so those
@@ -617,7 +609,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
                 className={`session-item${s.sessionId === activeSessionId ? " active" : ""}`}
                 onClick={() => onPick(s.sessionId, s.path, s.nodeId)}
               >
-                <RowMark kind={src.kind} status={statusClass(s)} unseen={unseen} srLabel={`${src.label} · ${label}`} />
+                <RowMark kind={src.kind} status={statusDotState(s)} srLabel={`${src.label} · ${label}`} />
                 <span className="session-body">
                   <span className="session-title-row">
                     <span className="session-name">{s.name}</span>

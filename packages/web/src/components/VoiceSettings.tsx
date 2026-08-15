@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { AppState } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { getSpeechPreferences, OPENAI_VOICES, setSpeechPreferences, SPEECH_TONES, type SpeechPreferences } from "../speech.js";
+import { Badge } from "./Badge.js";
 
 /** Voice settings are lazy-loaded because the voice lists and controls are not
  * needed on the initial chat route, keeping them out of the entry bundle. */
@@ -39,7 +40,7 @@ export function VoiceSettings({ state }: { state: AppState }) {
         <label className="field-label">Preferred transcription provider</label>
         <div className="seg-row">
           {providers.map((provider) => (
-            <button key={provider.id} type="button" className={`seg-btn${config?.provider === provider.id ? " active" : ""}`} onClick={() => controller.setSttProvider(provider.id)}>
+            <button key={provider.id} type="button" className="selectable" aria-pressed={config?.provider === provider.id} onClick={() => controller.setSttProvider(provider.id)}>
               {provider.label}
             </button>
           ))}
@@ -49,7 +50,7 @@ export function VoiceSettings({ state }: { state: AppState }) {
           <div key={provider.id} className="voice-provider">
             <div className="voice-provider-head">
               <span className="field-label">{provider.label}</span>
-              {provider.configured ? <span className="chip ok">Available</span> : <span className="chip">No account key</span>}
+              {provider.configured ? <Badge tone="ok">Available</Badge> : <Badge>No account key</Badge>}
             </div>
             <div className="muted small">{provider.model} · Manage this key under Keys &amp; OAuth.</div>
           </div>

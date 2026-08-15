@@ -39,7 +39,7 @@ export function ReadinessChecklist({
   const handler = next && onRemediate ? onRemediate[next.kind] : undefined;
 
   return (
-    <section className="readiness" role="status" aria-label="Setup readiness">
+    <section className="card readiness" role="status" aria-label="Setup readiness">
       <header className="readiness-head">
         <span className="readiness-title">Get your first agent response</span>
         {onDismiss && (

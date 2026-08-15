@@ -49,7 +49,7 @@ function ResourceCard({
   rows: { label: string; value: ReactNode; pct?: number | null }[];
 }) {
   return (
-    <section className="stat-card">
+    <section className="card stat-card">
       <div className="stat-card-head">
         <span className="stat-card-title">{title}</span>
         <span className="stat-card-detail">{barDetail}</span>

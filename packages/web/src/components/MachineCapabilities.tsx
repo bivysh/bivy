@@ -3,10 +3,11 @@
 import { useEffect, useState } from "react";
 import { describeCapabilityState, type CapabilityAgentSummary, type CapabilityState } from "@bivy/core";
 import { useAppState, controller } from "../store/useStore.js";
+import { Badge } from "./Badge.js";
 
 function StateChip({ state }: { state: CapabilityState }) {
-  const cls = state === "available" ? "chip ok" : state === "unknown" ? "chip warn" : "chip";
-  return <span className={cls}>{describeCapabilityState(state)}</span>;
+  const tone = state === "available" ? "ok" : state === "unknown" ? "warn" : undefined;
+  return <Badge tone={tone}>{describeCapabilityState(state)}</Badge>;
 }
 
 function AgentRow({ agent }: { agent: CapabilityAgentSummary }) {
@@ -15,7 +16,7 @@ function AgentRow({ agent }: { agent: CapabilityAgentSummary }) {
       <span>{agent.label}</span>
       <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
         {agent.supportTier && <span className="muted small">{agent.supportTier}</span>}
-        <span className={`chip${agent.installed ? " ok" : ""}`}>{agent.installed ? "Installed" : "Not installed"}</span>
+        <Badge tone={agent.installed ? "ok" : undefined}>{agent.installed ? "Installed" : "Not installed"}</Badge>
       </span>
     </div>
   );

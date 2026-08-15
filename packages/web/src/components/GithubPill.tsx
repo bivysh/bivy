@@ -2,7 +2,8 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useState } from "react";
 import { primaryPr, type GithubContext, type PrRef } from "@bivy/core";
-import { useModalEscape } from "../modalStack.js";
+import type { BadgeTone } from "./Badge.js";
+import { Sheet } from "./Sheet.js";
 
 // Ports the stranded GitHub UX (PRs #219 context menu + #220 status pill/action
 // sheet) into the React client. Shows a pill for the active session's GitHub
@@ -44,7 +45,6 @@ function GhIcon() {
 
 export function GithubPill({ gh }: { gh: GithubContext }) {
   const [open, setOpen] = useState(false);
-  useModalEscape(() => setOpen(false), open);
   const actions = actionsFor(gh);
   if (actions.length === 0) return null;
 
@@ -52,7 +52,7 @@ export function GithubPill({ gh }: { gh: GithubContext }) {
   // actionable context and the one whose state (open/merged) the user tracks.
   const pr = primaryPr(gh.prs);
   const kind = pr ? "pr" : gh.issueUrl ? "issue" : "branch";
-  const state = pr?.state ?? "";
+  const tone: BadgeTone | undefined = pr?.state === "merged" ? "merged" : pr?.state === "open" ? "ok" : kind === "issue" ? "accent" : undefined;
   // For a branch pill on a repo-connected session, lead with the repo name so it
   // reads "repo · branch" — the repo is the context you're orienting on, the
   // branch the detail. `gh.repo` is "owner/name"; show just the short name.
@@ -74,38 +74,32 @@ export function GithubPill({ gh }: { gh: GithubContext }) {
 
   return (
     <>
-      <button className={`github-pill ${kind} ${state}`} onClick={() => setOpen(true)} title="GitHub context">
+      <button className="badge github-pill" data-tone={tone} data-variant="outline" onClick={() => setOpen(true)} title="GitHub context">
         <GhIcon />
         <span className="gh-text">{label}</span>
       </button>
       {open && (
-        <div className="action-sheet open" role="dialog" aria-label="GitHub actions">
-          <div className="action-sheet-backdrop" onClick={() => setOpen(false)} />
-          <div className="action-sheet-body">
-            <div className="action-sheet-head">
-              <span className="run-sheet-title">
-                <span className="gh-head-mark" aria-hidden><GhIcon /></span>
-                GitHub
-              </span>
-              <button className="action-sheet-close" onClick={() => setOpen(false)} aria-label="Close">
-                ×
-              </button>
-            </div>
-            {actions.map((a) => (
-              <a
-                key={a.url}
-                className="action-sheet-item gh-link"
-                href={a.url}
-                target="_blank"
-                rel="noopener"
-                onClick={() => setOpen(false)}
-              >
-                <GhIcon />
-                <span>{a.label}</span>
-              </a>
-            ))}
-          </div>
-        </div>
+        <Sheet
+          variant="action"
+          ariaLabel="GitHub actions"
+          title={<span className="run-sheet-title"><span className="gh-head-mark" aria-hidden><GhIcon /></span>GitHub</span>}
+          onClose={() => setOpen(false)}
+          autoFocusSearch={false}
+        >
+          {actions.map((a) => (
+            <a
+              key={a.url}
+              className="sheet-action gh-link"
+              href={a.url}
+              target="_blank"
+              rel="noopener"
+              onClick={() => setOpen(false)}
+            >
+              <GhIcon />
+              <span>{a.label}</span>
+            </a>
+          ))}
+        </Sheet>
       )}
     </>
   );

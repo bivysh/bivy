@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { runFromAutomationRun, type AccountAutomation, type AccountAutomationRun } from "@bivy/core";
 import { formatAutomationMoment } from "../automationPresentation.js";
 import { projectRunDetail } from "../runDetail.js";
+import { Badge, type BadgeTone } from "./Badge.js";
 
 export type RunHistoryFilter = "all" | "active" | "attention" | "parked" | "dead_letter";
 
@@ -68,9 +69,9 @@ export function RunHistory({
           {visible.slice(0, 30).map((run) => {
             const detail = projectRunDetail(run);
             const canonical = runFromAutomationRun(run);
-            const tone = detail.outcome.tone === "success" ? "ok" : detail.outcome.tone === "danger" ? "bad" : detail.outcome.tone === "warning" ? "warn" : "info";
+            const tone: BadgeTone | undefined = detail.outcome.tone === "success" ? "ok" : detail.outcome.tone === "danger" ? "danger" : detail.outcome.tone === "warning" ? "warn" : undefined;
             const defName = definitions.find((item) => item.id === run.definitionId)?.name;
-            const rowMain = <><div className="automation-row-title"><strong>{run.title}</strong><span className={`run-status ${tone}`}>{detail.outcome.label}</span>{canonical.operationalState === "parked" && <span className="run-status warn">Parked</span>}{canonical.operationalState === "dead_letter" && <span className="run-status bad">Dead letter</span>}</div><div className="settings-hint">{[defName, formatAutomationMoment(run.createdAt), run.triggerKind, detail.checksSummary, `attempt ${canonical.attempt}${canonical.maxAttempts ? `/${canonical.maxAttempts}` : ""}`].filter(Boolean).join(" · ")}</div>{canonical.attemptReason && <div className="settings-hint">{canonical.attemptReason}</div>}{detail.failure && <div className="settings-hint warn-text">{detail.failure}</div>}</>;
+            const rowMain = <><div className="automation-row-title"><strong>{run.title}</strong><Badge tone={tone}>{detail.outcome.label}</Badge>{canonical.operationalState === "parked" && <Badge tone="warn">Parked</Badge>}{canonical.operationalState === "dead_letter" && <Badge tone="danger">Dead letter</Badge>}</div><div className="settings-hint">{[defName, formatAutomationMoment(run.createdAt), run.triggerKind, detail.checksSummary, `attempt ${canonical.attempt}${canonical.maxAttempts ? `/${canonical.maxAttempts}` : ""}`].filter(Boolean).join(" · ")}</div>{canonical.attemptReason && <div className="settings-hint">{canonical.attemptReason}</div>}{detail.failure && <div className="settings-hint warn-text">{detail.failure}</div>}</>;
             return <div className="automation-row run-row" key={run.id}>
               {onOpenRun ? <button type="button" className="automation-row-main run-row-open" onClick={() => onOpenRun(run.id)}>{rowMain}</button> : <div className="automation-row-main">{rowMain}</div>}
               <div className="automation-row-actions">

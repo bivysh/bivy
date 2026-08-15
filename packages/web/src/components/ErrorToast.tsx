@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useState } from "react";
 import { useAppState, controller } from "../store/useStore.js";
+import { StatusIcon, Toast } from "./Toast.js";
 
 // A non-blocking error toast pinned above the composer. Keep verbose command
 // output collapsed initially so one failure cannot cover most of a phone screen;
@@ -29,10 +30,8 @@ export function ErrorToast() {
   const message = error.trim();
   const hasDetails = message.includes("\n") || message.length > 240;
   return (
-    <div className={`error-toast${expanded ? " expanded" : ""}`} role="alert">
-      <span className="error-toast-icon" aria-hidden>
-        !
-      </span>
+    <Toast tone="danger" className={`error-toast${expanded ? " expanded" : ""}`} role="alert">
+      <StatusIcon tone="danger">!</StatusIcon>
       <div className="error-toast-content">
         <span className="error-toast-text">{message}</span>
         {hasDetails && (
@@ -44,6 +43,6 @@ export function ErrorToast() {
       <button className="error-toast-close" onClick={() => controller.store.setError("")} aria-label="Dismiss">
         ×
       </button>
-    </div>
+    </Toast>
   );
 }

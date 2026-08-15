@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, useState } from "react";
+import { Badge, type BadgeTone } from "./Badge.js";
 import { formatApproval, type ApprovalRequest } from "@bivy/core";
 
 // How long the "pending" state is given before it's treated as stalled and a
@@ -49,11 +50,12 @@ function ApprovalCard({
     armStallTimer();
   };
   const badgeText = f.severity === "critical" ? "Permanent" : f.severity === "high" ? "High risk" : f.severity === "medium" ? "Medium risk" : "Low risk";
+  const badgeTone: BadgeTone = f.severity === "critical" || f.severity === "high" ? "danger" : f.severity === "medium" ? "warn" : "accent";
   return (
-    <div id={`attention-${encodeURIComponent(approval.id)}`} className={`approval-card sev-${f.severity}${pending ? " pending" : ""}`}>
+    <div id={`attention-${encodeURIComponent(approval.id)}`} className={`card approval-card sev-${f.severity}${pending ? " pending" : ""}`} data-tone={f.severity === "critical" ? "danger" : "accent"}>
       <div className="approval-head">
         <span className="approval-title">{f.title}</span>
-        <span className={`approval-badge tone-${f.severity}`}>{badgeText}</span>
+        <Badge tone={badgeTone} variant="soft" upper>{badgeText}</Badge>
       </div>
       <div className="approval-consequence">{f.consequence}</div>
       {typeof approval.reason === "string" && approval.reason && <div className="approval-reason">{approval.reason}</div>}

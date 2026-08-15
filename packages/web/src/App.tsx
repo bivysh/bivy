@@ -28,6 +28,8 @@ import { SessionChangesSheet, countUniqueEditedFiles } from "./components/Sessio
 import { ArtifactsSheet } from "./components/ArtifactsSheet.js";
 import { ErrorToast } from "./components/ErrorToast.js";
 import { NoticeToast } from "./components/NoticeToast.js";
+import { Spinner } from "./components/Spinner.js";
+import { StatusDot } from "./components/StatusDot.js";
 import { Settings } from "./components/Settings.js";
 import { EphemeralSheet } from "./components/Ephemeral.js";
 import { FirstRunModelAuthSheet } from "./components/FirstRunModelAuth.js";
@@ -48,7 +50,7 @@ const ReadinessChecklist = lazy(() =>
 );
 import { useEdgeSwipe } from "./useEdgeSwipe.js";
 import { controller } from "./store/useStore.js";
-import { isUnseen, statusClass, statusLabel } from "./sessionStatus.js";
+import { statusClass, statusDotState, statusLabel } from "./sessionStatus.js";
 
 export function App() {
   const state = useAppState();
@@ -465,7 +467,7 @@ export function App() {
                 picked node's workspace folder. Sits to the left of "+ New" —
                 see #460. */}
             <button
-              className="icon-btn term-btn"
+              className="btn ghost icon term-btn"
               onClick={openStandaloneTerminal}
               disabled={!online}
               title="Terminal"
@@ -482,7 +484,7 @@ export function App() {
                 but a rarely-used discovery/adopt flow didn't belong crammed next
                 to "+ New"; it now lives in Settings → Import session. */}
             <button
-              className="ghost-btn"
+              className="btn sm ghost"
               onClick={() => {
                 setPendingRunTerm(null);
                 controller.newSession();
@@ -543,12 +545,12 @@ export function App() {
       <main className={`main${needsNode ? " needs-node" : ""}`}>
         <header className="topbar">
           <button
-            className="icon-btn only-mobile burger-btn"
+            className="btn ghost icon only-mobile burger-btn"
             onClick={openDrawer}
             aria-label={attnUnseen ? "Open sessions — something needs your attention" : "Open sessions"}
           >
             ☰
-            {attnUnseen && <span className="attn-dot" aria-hidden />}
+            {attnUnseen && <span className="attn-indicator" aria-hidden><StatusDot status="needs-action" /></span>}
           </button>
           <div className="topbar-title">
             <div className="topbar-title-row">
@@ -557,11 +559,9 @@ export function App() {
                   looking at the list or already inside it. Only rendered once a
                   real session is open; a brand-new draft has no status yet. */}
               {activeSession && (
-                <span
-                  className={`session-dot ${statusClass(activeSession)}${isUnseen(activeSession) ? " unseen" : ""}`}
-                  title={statusLabel(activeSession)}
-                  aria-hidden
-                />
+                <span title={statusLabel(activeSession)}>
+                  <StatusDot status={statusDotState(activeSession)} label={statusLabel(activeSession)} />
+                </span>
               )}
               <h1 className="title" title={state.activeSession.activeTitle}>
                 {state.activeSession.activeTitle}
@@ -575,7 +575,7 @@ export function App() {
           <div className="topbar-actions">
             {state.activeSession.activeSessionId && (
               <button
-                className="icon-btn eye-btn"
+                className="btn ghost icon eye-btn"
                 onClick={toggleCollapsed}
                 title={collapsed ? "Focus view on — show all messages" : "Focus view — hide tool use"}
                 aria-label="Toggle focus view"
@@ -622,8 +622,8 @@ export function App() {
             as a quiet spinner on the node status indicator (see NodeSwitcher)
             instead of reflowing the layout. */}
         {(state.connection.status === "pairing" || state.connection.status === "linking") && (
-          <div className="banner info" role="status">
-            <span className="reconnect-spinner" aria-hidden />
+          <div className="banner" data-tone="neutral" role="status">
+            <Spinner size="xs" />
             Linking this device…
           </div>
         )}
@@ -632,12 +632,12 @@ export function App() {
             One tap runs `bivy update` on the node (it restarts on the new build;
             this banner clears itself once the socket reconnects up to date). */}
         {state.connection.nodeUpdate && (
-          <div className="banner update" role="status">
+          <div className="banner" data-tone="accent" role="status">
             <span className="banner-text">
               This machine runs Bivy {state.connection.nodeUpdate.current} — {state.connection.nodeUpdate.latest} is available.
             </span>
             <button
-              className="banner-action"
+              className="btn sm primary banner-action"
               onClick={() => controller.updateNode()}
               disabled={state.connection.nodeUpdating}
             >

@@ -5,6 +5,7 @@ import { EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint, type DeviceVa
 import { controller } from "../store/useStore.js";
 import { Sheet, PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
+import { Badge } from "./Badge.js";
 
 /**
  * Connect-a-cloud-provider sheet — the onboarding entry point for ephemeral
@@ -48,7 +49,7 @@ export function EphemeralSheet({ onClose, firstRun = false }: { onClose: () => v
                 key={recommended.id}
                 title={`${recommended.name} · Recommended`}
                 meta={recommended.blurb}
-                right={k?.configured ? <span className="chip ok">Connected</span> : <span className="chip">Stable</span>}
+                right={k?.configured ? <Badge tone="ok">Connected</Badge> : <Badge>Stable</Badge>}
                 onClick={() => setProvider(recommended.id)}
               />
             );
@@ -64,10 +65,10 @@ export function EphemeralSheet({ onClose, firstRun = false }: { onClose: () => v
                 title={p.name}
                 meta={p.blurb}
                 right={k?.configured
-                  ? <span className="chip ok">Connected</span>
+                  ? <Badge tone="ok">Connected</Badge>
                   : p.hostedOnly
-                    ? <span className="chip warn">Hosted only</span>
-                    : <span className={`chip${p.maturity === "experimental" ? " warn" : ""}`}>{p.maturity === "experimental" ? "Experimental" : "Stable"}</span>}
+                    ? <Badge tone="warn">Hosted only</Badge>
+                    : <Badge tone={p.maturity === "experimental" ? "warn" : undefined}>{p.maturity === "experimental" ? "Experimental" : "Stable"}</Badge>}
                 onClick={() => setProvider(p.id)}
               />
             );
@@ -162,13 +163,13 @@ function ProviderConnectPanel({ providerId, onKeysChanged, onDone }: { providerI
         </>
       ) : (
         <>
-          <p className="chip ok">✓ {catalog.name} connected</p>
+          <Badge tone="ok">✓ {catalog.name} connected</Badge>
           <p className="muted small">A default isolated machine profile is ready. Pick it and send your first message to launch a machine — no launch button. Adjust its region / size / TTL anytime in Settings → Isolated machine profiles.</p>
           {controller.getDeviceTokenSync() && syncState.phase !== "idle" && (
-            <div role="status" className={`chip ${syncState.phase === "failed" ? "err" : syncState.phase === "synced" ? "ok" : ""}`}>
+            <Badge role="status" tone={syncState.phase === "failed" ? "danger" : syncState.phase === "synced" ? "ok" : undefined}>
               {syncState.phase === "failed" ? `Credential sync pending: ${syncState.failure ?? "retry needed"}` : syncState.phase === "synced" ? "Credentials synced" : "Credential sync pending"}
               {syncState.phase === "failed" && <button className="btn ghost" onClick={() => controller.syncDeviceVault().then(() => setSyncState(controller.getDeviceVaultSyncState())).catch(() => setSyncState(controller.getDeviceVaultSyncState()))}>Retry</button>}
-            </div>
+            </Badge>
           )}
           <div className="row-actions">
             <button className="btn primary" disabled={busy || catalog.hostedOnly} onClick={useRunner}>
@@ -219,7 +220,7 @@ function ProviderConnectPanel({ providerId, onKeysChanged, onDone }: { providerI
           onConfirm={() => { confirm.action(); setConfirm(null); }}
         />
       )}
-      {err && <span className="chip err">{err}</span>}
+      {err && <Badge tone="danger">{err}</Badge>}
     </div>
   );
 }

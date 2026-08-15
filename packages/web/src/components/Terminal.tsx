@@ -1220,33 +1220,33 @@ export function TerminalOverlay({
         </span>
         <div className="term-head-actions">
           <div className="term-zoom" role="group" aria-label="Font size">
-            <button className="icon-btn" onClick={() => setFontSize((f) => Math.max(MIN_FONT, f - 1))} aria-label="Decrease font size" title="Zoom out">
+            <button className="btn ghost icon" onClick={() => setFontSize((f) => Math.max(MIN_FONT, f - 1))} aria-label="Decrease font size" title="Zoom out">
               A−
             </button>
-            <button className="icon-btn" onClick={() => setFontSize((f) => Math.min(MAX_FONT, f + 1))} aria-label="Increase font size" title="Zoom in">
+            <button className="btn ghost icon" onClick={() => setFontSize((f) => Math.min(MAX_FONT, f + 1))} aria-label="Increase font size" title="Zoom in">
               A+
             </button>
           </div>
-          <button className={`ghost-btn${showSearch ? " is-active" : ""}`} onClick={() => setShowSearch((v) => !v)} title="Search (Ctrl/Cmd+F)">
+          <button className={`btn sm ghost${showSearch ? " is-active" : ""}`} onClick={() => setShowSearch((v) => !v)} title="Search (Ctrl/Cmd+F)">
             Search
           </button>
-          <button className="ghost-btn" onClick={copySelection} disabled={!hasSelection} title="Copy selection (Cmd/Ctrl+C)">
+          <button className="btn sm ghost" onClick={copySelection} disabled={!hasSelection} title="Copy selection (Cmd/Ctrl+C)">
             {copied ? "Copied" : "Copy"}
           </button>
-          <button className="ghost-btn" onClick={clearScreen} title="Clear screen">
+          <button className="btn sm ghost" onClick={clearScreen} title="Clear screen">
             Clear
           </button>
-          <button className="ghost-btn term-paste" onClick={pasteFromClipboard} title="Paste from clipboard">
+          <button className="btn sm ghost term-paste" onClick={pasteFromClipboard} title="Paste from clipboard">
             Paste
           </button>
           {touch && (
-            <button className={`ghost-btn${showSnips ? " is-active" : ""}`} onClick={() => setShowSnips((v) => !v)} title="Snippets & recent commands">
+            <button className={`btn sm ghost${showSnips ? " is-active" : ""}`} onClick={() => setShowSnips((v) => !v)} title="Snippets & recent commands">
               Snippets
             </button>
           )}
           {hasAttachables && (
             <div className="term-attach-wrap" ref={attachWrapRef}>
-              <button className="ghost-btn" onClick={() => setShowAttach((v) => !v)} aria-haspopup="menu" aria-expanded={showAttach}>
+              <button className="btn sm ghost" onClick={() => setShowAttach((v) => !v)} aria-haspopup="menu" aria-expanded={showAttach}>
                 Attach ▾
               </button>
               {showAttach && (
@@ -1308,10 +1308,10 @@ export function TerminalOverlay({
               </span>
             )
           )}
-          <button className="ghost-btn" onClick={endShell}>
+          <button className="btn sm ghost" onClick={endShell}>
             End
           </button>
-          <button className="icon-btn" onClick={onClose} aria-label="Close terminal">
+          <button className="btn ghost icon" onClick={onClose} aria-label="Close terminal">
             ×
           </button>
         </div>
@@ -1320,7 +1320,7 @@ export function TerminalOverlay({
       {showSearch && (
         <div className="term-search">
           <input
-            className="term-search-input"
+            className="field term-search-input"
             autoFocus
             placeholder="Search output…"
             value={searchQuery}
@@ -1336,13 +1336,13 @@ export function TerminalOverlay({
               }
             }}
           />
-          <button className="icon-btn" onClick={() => searchRef.current?.findPrevious(searchQuery)} aria-label="Previous match" title="Previous (Shift+Enter)">
+          <button className="btn ghost icon" onClick={() => searchRef.current?.findPrevious(searchQuery)} aria-label="Previous match" title="Previous (Shift+Enter)">
             ↑
           </button>
-          <button className="icon-btn" onClick={() => searchRef.current?.findNext(searchQuery)} aria-label="Next match" title="Next (Enter)">
+          <button className="btn ghost icon" onClick={() => searchRef.current?.findNext(searchQuery)} aria-label="Next match" title="Next (Enter)">
             ↓
           </button>
-          <button className="icon-btn" onClick={() => { setShowSearch(false); termRef.current?.focus(); }} aria-label="Close search">
+          <button className="btn ghost icon" onClick={() => { setShowSearch(false); termRef.current?.focus(); }} aria-label="Close search">
             ×
           </button>
         </div>

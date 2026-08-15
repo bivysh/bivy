@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { useState } from "react";
+import { Badge } from "./Badge.js";
 import type { TurnAttentionRequest } from "@bivy/core";
 
 /** A non-destructive watchdog decision. The turn is still alive while this card
@@ -20,9 +21,9 @@ export function TurnAttentionCard({
   };
 
   return (
-    <div id={`attention-${encodeURIComponent(attention.sessionId)}`} className="question-card turn-attention-card" role="alert">
+    <div id={`attention-${encodeURIComponent(attention.sessionId)}`} className="card question-card turn-attention-card" role="alert">
       <div className="question-item">
-        <div className="question-head"><span className="question-chip">Turn may be stuck</span></div>
+        <div className="question-head"><Badge tone="warn" variant="soft" upper>Turn may be stuck</Badge></div>
         <div className="question-text">{attention.message}</div>
         <div className="question-option-desc">
           Bivy has not stopped the agent. The normal turn time limit is still active.

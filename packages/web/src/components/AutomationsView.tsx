@@ -65,6 +65,7 @@ import { CloseIcon, PlusIcon } from "./UiIcons.js";
 import { AutomationSourcesPanel } from "./AutomationSourcesPanel.js";
 import { RunHistory } from "./RunHistory.js";
 import { compactCronSummary, formatAutomationMoment, formatNextAutomationRun } from "../automationPresentation.js";
+import { Badge } from "./Badge.js";
 
 const TEMPLATE_PREFIX = "bivy-room-v1";
 
@@ -814,11 +815,11 @@ export function AutomationsView({
           <p className="automations-view-sub">Jobs that run on your machines while you&apos;re away.</p>
         </div>
         <div className="automations-view-head-actions">
-          <button type="button" className="autom-new-btn" onClick={openChooser} aria-label="New automation">
+          <button type="button" className="btn primary autom-new-btn" onClick={openChooser} aria-label="New automation">
             <PlusIcon size={18} />
             <span className="autom-new-btn-label">New automation</span>
           </button>
-          <button type="button" className="icon-btn autom-close-btn" onClick={onClose} title="Close" aria-label="Close automations"><CloseIcon /></button>
+          <button type="button" className="btn ghost icon autom-close-btn" onClick={onClose} title="Close" aria-label="Close automations"><CloseIcon /></button>
         </div>
       </header>
 
@@ -840,7 +841,7 @@ export function AutomationsView({
         {error && (
           <div className="autom-notice warn" role="alert">
             <div className="autom-notice-text"><strong>Something went wrong</strong><span>{error}</span></div>
-            <button type="button" className="icon-btn" onClick={() => setError("")} aria-label="Dismiss">✕</button>
+            <button type="button" className="btn ghost icon" onClick={() => setError("")} aria-label="Dismiss">✕</button>
           </div>
         )}
         {notice && (
@@ -855,7 +856,7 @@ export function AutomationsView({
                   {notice.action.label}
                 </button>
               )}
-              <button type="button" className="icon-btn" onClick={() => setNotice(null)} aria-label="Dismiss">✕</button>
+              <button type="button" className="btn ghost icon" onClick={() => setNotice(null)} aria-label="Dismiss">✕</button>
             </div>
           </div>
         )}
@@ -925,7 +926,7 @@ export function AutomationsView({
                       <div className="automation-row-main">
                         <div className="automation-row-title">
                           <strong>{item.name}</strong>
-                          {chip.tone !== "on" && !needsConnect && <span className={`autom-status ${chip.tone}`}>{chip.label}</span>}
+                          {chip.tone !== "on" && !needsConnect && <Badge tone={chip.tone === "warn" ? "warn" : undefined}>{chip.label}</Badge>}
                         </div>
                         <div className="settings-hint">{meta}</div>
                         {item.trigger === "webhook" && rotated?.id === item.id && (
@@ -1007,7 +1008,7 @@ export function AutomationsView({
 
         {section === "queue" && (
           <>
-            {cancelError && <div className="banner error inline">Could not cancel run: {cancelError}</div>}
+            {cancelError && <div className="banner inline" data-tone="danger">Could not cancel run: {cancelError}</div>}
             {EPHEMERAL_MACHINES_ENABLED && (
               <details className="runs-setup">
                 <summary>
@@ -1188,7 +1189,7 @@ function NewAutomationChooser({
             <strong>New automation</strong>
             <span className="wq-head-sub">Pick a starting point</span>
           </div>
-          <button type="button" className="icon-btn" onClick={onClose} aria-label="Close">✕</button>
+          <button type="button" className="btn ghost icon" onClick={onClose} aria-label="Close">✕</button>
         </div>
         <div className="wizard-body autom-chooser-body">
           <NewAutomationPicker onScratch={onScratch} onTemplate={onTemplate} />
@@ -1603,7 +1604,7 @@ function SourceAutomationEditor({
       <div className="wizard autom-editor" role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()}>
         <div className="wizard-head">
           <strong>{title}</strong>
-          <button type="button" className="icon-btn" onClick={onClose} aria-label="Cancel">✕</button>
+          <button type="button" className="btn ghost icon" onClick={onClose} aria-label="Cancel">✕</button>
         </div>
         <div className="wizard-body">
           {needsConnect && (
@@ -2064,7 +2065,7 @@ function AutomationEditor({
       >
         <div className="wizard-head">
           <strong>{created ? "Webhook ready" : d.id ? "Edit automation" : "New automation"}</strong>
-          <button type="button" className="icon-btn" onClick={onCancel} aria-label="Cancel">✕</button>
+          <button type="button" className="btn ghost icon" onClick={onCancel} aria-label="Cancel">✕</button>
         </div>
 
         {created ? (
@@ -2137,7 +2138,7 @@ function AutomationEditor({
                       </span>
                     </div>
                     {canEditTrigger && (
-                      <button type="button" className="icon-btn autom-trigger-clear" onClick={clearTrigger} aria-label="Remove trigger">✕</button>
+                      <button type="button" className="btn ghost icon autom-trigger-clear" onClick={clearTrigger} aria-label="Remove trigger">✕</button>
                     )}
                   </div>
                 ) : (
@@ -2320,7 +2321,7 @@ function AutomationEditor({
 
               <div className="autom-field-block autom-runner-block">
                 <div className="autom-field-label">Run on</div>
-                <div className={`autom-runner-card${selectedNodeHasKey ? " ready" : " warn"}`}>
+                <div className={`card autom-runner-card${selectedNodeHasKey ? " ready" : " warn"}`} data-tone={selectedNodeHasKey ? "ok" : "warn"}>
                   <label className="autom-runner-select-row">
                     <span className="autom-runner-icon" aria-hidden="true">⌁</span>
                     <span className="autom-runner-select-copy">

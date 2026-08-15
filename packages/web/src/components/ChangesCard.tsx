@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { useMemo, useState } from "react";
+import { Badge } from "./Badge.js";
 import type { TurnChanges, HarnessFileChange, Checkpoint } from "@bivy/core";
 import { diffOps } from "@bivy/core";
 import { DiffView, type DiffMode } from "./DiffView.js";
@@ -173,7 +174,7 @@ export function ChangesCard({
   ));
 
   return (
-    <div className={`changes-card${collapsed ? " collapsed" : ""}`}>
+    <div className={`card changes-card${collapsed ? " collapsed" : ""}`}>
       <div className="changes-head">
         <button
           type="button"
@@ -217,15 +218,15 @@ export function ChangesCard({
             <div className="changes-meta">
               {states.length > 0 && (
                 <span className="changes-states">
-                  {states.map((s) => <span key={s} className={`chip state-${s}`}>{reviewStateLabel(s)}</span>)}
+                  {states.map((s) => <Badge key={s}>{reviewStateLabel(s)}</Badge>)}
                 </span>
               )}
               {checks && checks.length > 0 && (
                 <span className="changes-checks">
                   {checks.map((c, i) => (
-                    <span key={`${c.name}-${i}`} className={`chk ${c.status}`}>
+                    <Badge key={`${c.name}-${i}`} tone={c.status === "passed" ? "ok" : c.status === "failed" ? "danger" : undefined}>
                       {c.name} {c.status === "passed" ? "✓" : c.status === "failed" ? "✗" : "–"}
-                    </span>
+                    </Badge>
                   ))}
                 </span>
               )}

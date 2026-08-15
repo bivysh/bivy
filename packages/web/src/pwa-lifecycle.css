@@ -32,7 +32,7 @@
   border-radius: 12px;
   background: var(--surface);
   color: var(--muted);
-  box-shadow: 0 8px 30px rgba(0, 0, 0, .22);
+  box-shadow: var(--shadow-lg);
   font-size: 12px;
   animation: sheet-up .16s ease;
 }

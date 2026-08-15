@@ -14,15 +14,18 @@
   color-scheme: light;
   --bg: #ffffff; --surface: #ffffff; --surface-2: #f5f5f5; --surface-3: #ededed;
   --ink: #111111; --muted: #6b6b6b; --line: #e5e5e5; --line-strong: #d4d4d4;
-  --overlay: rgba(0, 0, 0, 0.46);
+  --overlay: rgba(0, 0, 0, 0.46); --overlay-strong: rgba(0,0,0,0.8);
   --accent: #3f6377; --accent-contrast: #ffffff; --accent-hover: #324f60;
   --accent-active: color-mix(in srgb, var(--accent), #000 22%);
   --accent-soft: color-mix(in srgb, var(--accent) 16%, var(--surface));
-  --danger: #b0473d; --danger-soft: #f3e3df; --ok: #4f7a5c; --merged: #7a6a9e;
-  --unseen: #a8823f; --warn: #b8862f;
+  --danger: #b0473d; --danger-soft: #f3e3df; --danger-contrast: #ffffff; --ok: #4f7a5c; --merged: #7a6a9e;
+  --unseen: #a8823f; --unseen-contrast: #111111; --warn: #b8862f;
   --warn-soft: color-mix(in srgb, #b8862f 16%, var(--surface));
   --s-github: #24292f; --s-slack: #7c2d92; --s-linear: #5e6ad2; --s-schedule: #0e7490;
   --s-webhook: #6d28d9; --s-manual: #b45309; --s-cli: #3f6212; --s-app: #64748b;
+  --syntax-comment: #6a737d; --syntax-keyword: #d73a49; --syntax-string: #032f62;
+  --syntax-number: #005cc5; --syntax-title: #6f42c1; --syntax-type: #e36209;
+  --syntax-name: #22863a; --syntax-deletion: #b31d28; --syntax-addition: #22863a;
   --focus-ring: color-mix(in srgb, var(--accent) 45%, transparent);
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
@@ -44,12 +47,15 @@
   color-scheme: dark;
   --bg: #0a0a0a; --surface: #0a0a0a; --surface-2: #171717; --surface-3: #262626;
   --ink: #fafafa; --muted: #a3a3a3; --line: #262626; --line-strong: #404040;
-  --overlay: rgba(0,0,0,0.7);
+  --overlay: rgba(0,0,0,0.7); --overlay-strong: rgba(0,0,0,0.8);
   --accent: #8fb6cd; --accent-contrast: #0a0a0a; --accent-hover: #a7cadd;
-  --danger: #c08a83; --danger-soft: #3a2420; --ok: #86a99f; --merged: #a99bc4;
-  --unseen: #cba96a; --warn: #d9a441;
+  --danger: #c08a83; --danger-soft: #3a2420; --danger-contrast: #0a0a0a; --ok: #86a99f; --merged: #a99bc4;
+  --unseen: #cba96a; --unseen-contrast: #0a0a0a; --warn: #d9a441;
   --s-github: #d7dde3; --s-slack: #d68ce6; --s-linear: #a5adf5; --s-schedule: #4bc4de;
   --s-webhook: #b79bf7; --s-manual: #f0a45a; --s-cli: #a3c987; --s-app: #9aa4b2;
+  --syntax-comment: #8b949e; --syntax-keyword: #ff7b72; --syntax-string: #a5d6ff;
+  --syntax-number: #79c0ff; --syntax-title: #d2a8ff; --syntax-type: #ffa657;
+  --syntax-name: #7ee787; --syntax-deletion: #ffdcd7; --syntax-addition: #85e89d;
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.4); --shadow-md: 0 4px 12px rgba(0,0,0,0.45);
   --shadow-lg: 0 12px 32px rgba(0,0,0,0.5); --shadow-xl: 0 24px 70px rgba(0,0,0,0.6);
 }
@@ -58,12 +64,15 @@
     color-scheme: dark;
     --bg: #0a0a0a; --surface: #0a0a0a; --surface-2: #171717; --surface-3: #262626;
     --ink: #fafafa; --muted: #a3a3a3; --line: #262626; --line-strong: #404040;
-    --overlay: rgba(0,0,0,0.7);
+    --overlay: rgba(0,0,0,0.7); --overlay-strong: rgba(0,0,0,0.8);
     --accent: #8fb6cd; --accent-contrast: #0a0a0a; --accent-hover: #a7cadd;
-    --danger: #c08a83; --danger-soft: #3a2420; --ok: #86a99f; --merged: #a99bc4;
-    --unseen: #cba96a; --warn: #d9a441;
+    --danger: #c08a83; --danger-soft: #3a2420; --danger-contrast: #0a0a0a; --ok: #86a99f; --merged: #a99bc4;
+    --unseen: #cba96a; --unseen-contrast: #0a0a0a; --warn: #d9a441;
     --s-github: #d7dde3; --s-slack: #d68ce6; --s-linear: #a5adf5; --s-schedule: #4bc4de;
     --s-webhook: #b79bf7; --s-manual: #f0a45a; --s-cli: #a3c987; --s-app: #9aa4b2;
+  --syntax-comment: #8b949e; --syntax-keyword: #ff7b72; --syntax-string: #a5d6ff;
+  --syntax-number: #79c0ff; --syntax-title: #d2a8ff; --syntax-type: #ffa657;
+  --syntax-name: #7ee787; --syntax-deletion: #ffdcd7; --syntax-addition: #85e89d;
     --shadow-sm: 0 1px 2px rgba(0,0,0,0.4); --shadow-md: 0 4px 12px rgba(0,0,0,0.45);
     --shadow-lg: 0 12px 32px rgba(0,0,0,0.5); --shadow-xl: 0 24px 70px rgba(0,0,0,0.6);
   }
@@ -144,11 +153,12 @@ section > .lede { color: var(--muted); font-size: var(--text-sm); margin: 0 0 va
 .btn:disabled { opacity: 0.45; cursor: default; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); }
 .btn.primary:hover { background: var(--accent-hover); }
-.btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+.btn.danger { background: var(--danger); border-color: var(--danger); color: var(--danger-contrast); }
 .btn.ghost { background: transparent; border-color: transparent; }
 .btn.ghost:hover { background: var(--surface-2); }
 .btn.danger-ghost { background: transparent; color: var(--danger); border-color: var(--danger); }
 .btn.link { border: 0; background: transparent; color: var(--accent); padding: 4px 2px; }
+.btn.icon { padding: var(--space-1); font-size: var(--text-xl); line-height: 1; }
 .btn.sm { padding: 4px 10px; font-size: var(--text-xs); }
 .btn.lg { padding: 11px 18px; font-size: var(--text-md); }
 
@@ -423,6 +433,7 @@ section > .lede { color: var(--muted); font-size: var(--text-sm); margin: 0 0 va
         <button class="btn danger">Danger</button>
         <button class="btn danger-ghost">Danger ghost</button>
         <button class="btn link">Link</button>
+        <button class="btn ghost icon" aria-label="Close">×</button>
         <button class="btn primary" disabled>Disabled</button>
       </div>
       <div class="demo plain">

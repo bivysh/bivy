@@ -21,6 +21,7 @@ import {
   fetchHostedProvisioning,
 } from "@bivy/core";
 import { controller } from "../store/controller.js";
+import { Badge } from "./Badge.js";
 
 export type SourceSetupFocus = "github" | "linear" | "slack" | "work-queue";
 
@@ -390,7 +391,7 @@ export function WorkQueueSetupSheet({
             <strong>{titleFor(focus)}</strong>
             <span className="wq-head-sub">Stays in Automations · nothing to find in Settings</span>
           </div>
-          <button type="button" className="icon-btn" onClick={onClose} aria-label="Close">✕</button>
+          <button type="button" className="btn ghost icon" onClick={onClose} aria-label="Close">✕</button>
         </div>
 
         <div className="wizard-body">
@@ -419,7 +420,7 @@ export function WorkQueueSetupSheet({
                 GitHub
               </div>
               {apps.length === 0 ? (
-                <div className="wq-status-card">
+                <div className="card wq-status-card" data-tone="muted">
                   <p className="settings-hint">
                     No GitHub App yet. Create one (private key stays on this machine) or connect an app you already own.
                   </p>
@@ -448,7 +449,7 @@ export function WorkQueueSetupSheet({
                     </button>
                   )}
                   {!showExisting && (
-                    <button type="button" className="link-btn" onClick={() => setShowExisting(true)}>
+                    <button type="button" className="btn link" onClick={() => setShowExisting(true)}>
                       Connect an existing app instead →
                     </button>
                   )}
@@ -479,7 +480,7 @@ export function WorkQueueSetupSheet({
                       >
                         {phase === "completing" || ceHostedBusy ? "Connecting…" : state.connection.currentNodeId ? "Connect app to this machine" : "Connect app for isolated runs"}
                       </button>
-                      {ceHostedError && <div className="banner error inline" role="alert">{ceHostedError}</div>}
+                      {ceHostedError && <div className="banner inline" data-tone="danger" role="alert">{ceHostedError}</div>}
                       {ceNodeConnected && (
                         <div className="autom-success" role="status">
                           <strong>App connected.</strong> This machine now holds the key and can claim GitHub work.
@@ -501,16 +502,16 @@ export function WorkQueueSetupSheet({
                       </a>
                     </div>
                   )}
-                  {phase === "error" && <div className="banner error inline">{app?.error || "GitHub App setup failed."}</div>}
+                  {phase === "error" && <div className="banner inline" data-tone="danger">{app?.error || "GitHub App setup failed."}</div>}
                 </div>
               ) : (
-                <div className="wq-status-card">
+                <div className="card wq-status-card" data-tone="muted">
                   {apps.map((entry) => (
                     <div className="wq-app-row" key={appKey(entry)}>
                       <div className="wq-app-row-main">
                         <div className="wq-app-title-row">
                           <strong>{entry.name || entry.mention || "GitHub App"}</strong>
-                          <span className={`autom-status ${entry.installed === false ? "warn" : entry.hosted || entry.servedBy?.online || hostedReady ? "on" : "warn"}`}>
+                          <Badge tone={entry.installed === false ? "warn" : entry.hosted || entry.servedBy?.online || hostedReady ? "ok" : "warn"}>
                             {entry.installed === false
                               ? "Needs install"
                               : entry.hosted || hostedReady
@@ -520,7 +521,7 @@ export function WorkQueueSetupSheet({
                                 : entry.servedBy
                                   ? "Machine offline"
                                   : "Needs machine"}
-                          </span>
+                          </Badge>
                         </div>
                         {entry.owner && (
                           <span className="settings-hint">
@@ -546,7 +547,7 @@ export function WorkQueueSetupSheet({
                         ) : entry.servedBy === null ? (
                           <p className="schedule-hint warn">
                             No online machine holds this app&apos;s key — queue items won&apos;t be claimed.{" "}
-                            <button type="button" className="link-btn" onClick={() => openReconnect(entry)}>
+                            <button type="button" className="btn link" onClick={() => openReconnect(entry)}>
                               Connect key on this machine →
                             </button>
                           </p>
@@ -618,7 +619,7 @@ export function WorkQueueSetupSheet({
                       + Add another GitHub App
                     </button>
                   ) : (
-                    <div ref={appEditorRef} className="wq-status-card" style={{ marginTop: 4 }}>
+                    <div ref={appEditorRef} className="card wq-status-card" data-tone="muted" style={{ marginTop: 4 }}>
                       <div className="autom-field-label">
                         {ceApp ? `Reconnect ${ceApp.name || ceApp.mention || "GitHub App"}` : "Add another app"}
                       </div>
@@ -651,7 +652,7 @@ export function WorkQueueSetupSheet({
                               {phase === "starting" ? "Preparing…" : phase === "completing" ? "Finishing…" : "Create GitHub App"}
                             </button>
                           )}
-                          <button type="button" className="link-btn" onClick={() => openReconnect()}>
+                          <button type="button" className="btn link" onClick={() => openReconnect()}>
                             Connect an existing app instead →
                           </button>
                         </>
@@ -683,7 +684,7 @@ export function WorkQueueSetupSheet({
                           >
                             {phase === "completing" || ceHostedBusy ? "Connecting…" : state.connection.currentNodeId ? "Connect app to this machine" : "Connect app for isolated runs"}
                           </button>
-                          {ceHostedError && <div className="banner error inline" role="alert">{ceHostedError}</div>}
+                          {ceHostedError && <div className="banner inline" data-tone="danger" role="alert">{ceHostedError}</div>}
                           {ceNodeConnected && (
                             <div className="autom-success" role="status">
                               <strong>App connected.</strong> This machine now holds the key and can claim GitHub work.
@@ -696,7 +697,7 @@ export function WorkQueueSetupSheet({
                           )}
                         </div>
                       )}
-                      <button type="button" className="link-btn" onClick={() => { setAddAppOpen(false); setCeApp(null); }}>Cancel</button>
+                      <button type="button" className="btn link" onClick={() => { setAddAppOpen(false); setCeApp(null); }}>Cancel</button>
                     </div>
                   )}
 
@@ -718,7 +719,7 @@ export function WorkQueueSetupSheet({
                 <span className="wq-section-icon" aria-hidden="true"><LinMark /></span>
                 Linear{focus === "work-queue" ? " (optional)" : ""}
               </div>
-              <div className="wq-status-card">
+              <div className="card wq-status-card" data-tone="muted">
                 {linErr && <p className="settings-error">{linErr}</p>}
                 {linJustEnabled && linear?.enabled && (
                   <div className="autom-success" role="status">
@@ -756,9 +757,9 @@ export function WorkQueueSetupSheet({
                   <>
                     <div className="wq-app-title-row">
                       <strong>{linear.enabled ? "Connected" : "Finish connecting"}</strong>
-                      <span className={`autom-status ${linear.enabled ? "on" : "warn"}`}>
+                      <Badge tone={linear.enabled ? "ok" : "warn"}>
                         {linear.enabled ? "Live" : "Needs secret"}
-                      </span>
+                      </Badge>
                     </div>
                     <p className="settings-hint">
                       In <strong>Linear → Settings → API → Webhooks</strong>, create an <strong>Issue</strong> webhook with this URL:
@@ -836,7 +837,7 @@ export function WorkQueueSetupSheet({
                 <span className="wq-section-icon" aria-hidden="true"><SlackMark /></span>
                 Slack
               </div>
-              <div className="wq-status-card">
+              <div className="card wq-status-card" data-tone="muted">
                 {slackErr && <p className="settings-error">{slackErr}</p>}
                 {slackJustConnected && slack?.enabled && (
                   <div className="autom-success" role="status">
@@ -848,7 +849,7 @@ export function WorkQueueSetupSheet({
                   <>
                     <div className="wq-app-title-row">
                       <strong>Connected</strong>
-                      <span className="autom-status on">Live</span>
+                      <Badge tone="ok">Live</Badge>
                     </div>
                     <p className="settings-hint">Use this as your Slack app&apos;s slash-command Request URL:</p>
                     <div className="reveal-row">

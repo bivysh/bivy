@@ -9,6 +9,7 @@ import { useModalEscape } from "../modalStack.js";
 import { ProviderConnectForm } from "./ProviderConnect.js";
 import { SANDBOX_TIERS } from "./Settings.js";
 import { writeClipboard } from "../clipboard.js";
+import { Badge, type BadgeTone } from "./Badge.js";
 
 function agentLabel(a: RuntimeInfo): string {
   return String(a.displayName || a.name || a.id || "Agent");
@@ -86,39 +87,41 @@ function RuntimeMeta({ runtime, text }: { runtime: RuntimeInfo; text?: string })
   const tier = runtimeTier(runtime);
   const protectionLevel = runtime.protectionLevel || "user-permissions";
   const protectionLabel = runtime.protectionLabel || "Protection unknown";
+  const tierTone: BadgeTone | undefined = tier === "supported" ? "ok" : tier === "beta" || tier === "experimental" ? "warn" : undefined;
+  const protectionTone: BadgeTone = protectionLevel === "native-sandbox" || protectionLevel === "tool-controls" ? "ok" : protectionLevel === "mcp-controls" ? "warn" : "danger";
   return (
     <span className="runtime-meta">
       {text && <span className="runtime-meta-text">{text}</span>}
       <span className="runtime-capabilities" aria-label="Agent support tier, protection, and capabilities">
-        <span
-          className={`runtime-tier ${tier}`}
+        <Badge
+          tone={tierTone}
           title={runtime.certification === "release-tested"
             ? `Release-tested${runtime.testedVersion ? ` with version ${runtime.testedVersion}` : ""}`
             : runtime.certification === "adapter-tested" ? "Adapter tests pass; live CLI compatibility is not release-certified" : "Not release-certified"}
         >
           {tierLabel(tier)}{runtime.testedVersion ? ` · ${runtime.testedVersion}` : ""}
-        </span>
+        </Badge>
         {runtime.source?.kind === "package" && (
-          <span
-            className={`runtime-cap ${runtime.source.verified ? "ok" : "limited"}`}
+          <Badge
+            tone={runtime.source.verified ? "ok" : "warn"}
             title={`${runtime.source.publisher ? `${runtime.source.publisher} · ` : ""}${runtime.source.packageId}@${runtime.source.packageVersion}`}
           >
             {runtime.source.verified ? "Verified" : "Package"} · {runtime.source.packageId}
-          </span>
+          </Badge>
         )}
         {runtime.source?.kind === "config" && (
-          <span className="runtime-cap limited" title="Configured explicitly on this node">Local integration</span>
+          <Badge tone="warn" title="Configured explicitly on this node">Local integration</Badge>
         )}
-        <span
-          className={`runtime-protection ${protectionLevel}`}
+        <Badge
+          tone={protectionTone}
           title={runtime.protectionDetail || "This machine did not report a protection description."}
         >
           {protectionLabel}
-        </span>
+        </Badge>
         {runtimeCapabilityChips(runtime).map((chip) => (
-          <span key={chip.label} className={`runtime-cap ${chip.ok ? "ok" : "limited"}`} title={chip.ok ? `${chip.label} supported` : `${chip.label} not supported by this runtime`}>
+          <Badge key={chip.label} tone={chip.ok ? "ok" : undefined} title={chip.ok ? `${chip.label} supported` : `${chip.label} not supported by this runtime`}>
             {chip.ok ? "✓" : "–"} {chip.label}
-          </span>
+          </Badge>
         ))}
       </span>
     </span>
@@ -205,7 +208,7 @@ function RepoConnectPrompt({ state }: { state: AppState }) {
           </p>
           <div className="repo-connect-code" aria-label="Device code">{gc.userCode || "…"}</div>
           <p className="repo-connect-waiting muted">Waiting for you to authorize on GitHub…</p>
-          <button type="button" className="link-btn" onClick={() => controller.githubConnectReset()}>
+          <button type="button" className="btn link" onClick={() => controller.githubConnectReset()}>
             Cancel
           </button>
         </>

@@ -13,11 +13,12 @@ import {
 import { useAppState } from "../store/useStore.js";
 import { controller } from "../store/useStore.js";
 import { PrBadge, RowMark, relTime, toMs } from "./SessionList.js";
-import { isUnseen, statusClass, statusLabel } from "../sessionStatus.js";
+import { statusDotState, statusLabel } from "../sessionStatus.js";
 import { classifySource } from "../sessionSource.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import { writeClipboard } from "../clipboard.js";
+import { Badge, type BadgeTone } from "./Badge.js";
 import { isTerminalRun, projectRunDetail } from "../runDetail.js";
 
 // Issue #153: a queue item is worth an "Outcome report" once it has left
@@ -413,20 +414,20 @@ export function GithubQueuePanel({
         {/* The queue is included on every plan. Free meters unattended automation
             while interactive CLI/app sessions remain unlimited. */}
         {canQuery && workQueueEnabled !== false && typeof runLimit === "number" && (
-          <div className={`banner ${runsUsed >= runLimit ? "warn" : "info"} inline`}>
+          <div className="banner inline" data-tone={runsUsed >= runLimit ? "warn" : "neutral"}>
             {runsUsed >= runLimit ? (
               <>
                 {runsUsed > runLimit
                   ? `Free plan — automation is paused after ${runLimit} included jobs plus a grace job. Capacity returns as older jobs pass 7 days. `
                   : `Free plan — you've used your ${runLimit} included automations. Your next job is the grace job. `}
-                <button className="link-btn" onClick={() => controller.startCheckout().catch(() => {})}>
+                <button className="btn link" onClick={() => controller.startCheckout().catch(() => {})}>
                   Upgrade to Pro{proPrice ? ` (${proPrice})` : ""} for unlimited automation →
                 </button>
               </>
             ) : (
               <>
                 Free plan — {Math.max(0, runLimit - runsUsed)} of {runLimit} automations left this week.{" "}
-                <button className="link-btn" onClick={() => controller.startCheckout().catch(() => {})}>
+                <button className="btn link" onClick={() => controller.startCheckout().catch(() => {})}>
                   Upgrade to Pro{proPrice ? ` (${proPrice})` : ""} for unlimited automation →
                 </button>
               </>
@@ -435,20 +436,20 @@ export function GithubQueuePanel({
         )}
 
         {canQuery && workQueueEnabled !== false && appInfo && apps.length === 0 && (
-          <div className="banner info inline">
+          <div className="banner inline" data-tone="neutral">
             No GitHub App connected yet.{" "}
-            <button className="link-btn" onClick={onOpenGithubSettings}>
+            <button className="btn link" onClick={onOpenGithubSettings}>
               Connect one in Settings →
             </button>
           </div>
         )}
 
         {canQuery && workQueueEnabled !== false && unservedApps.length > 0 && (
-          <div className="banner warn inline">
+          <div className="banner inline" data-tone="warn">
             {unservedApps.length === apps.length
               ? `${apps.length === 1 ? "Your GitHub App is" : "Your GitHub Apps are"} set up, but no online machine is running ${apps.length === 1 ? "it" : "them"} — nothing will pick these up.`
               : `${unservedApps.length} of your ${apps.length} GitHub Apps (${unservedApps.map((a) => a.name || a.mention || a.appId).join(", ")}) aren't running on any machine — work for those won't be picked up.`}{" "}
-            <button className="link-btn" onClick={onOpenGithubSettings}>
+            <button className="btn link" onClick={onOpenGithubSettings}>
               {unservedApps.length === 1 ? "Connect it on a machine →" : "Connect them on a machine →"}
             </button>
           </div>
@@ -465,7 +466,7 @@ export function GithubQueuePanel({
                   : `Checked ${prRefreshAllResult.scanned}, updated ${prRefreshAllResult.changed}`}
               </span>
             )}
-            <button className="link-btn" onClick={refreshAllStatus} disabled={refreshingAll} title="Reconcile every session's PR status against GitHub now">
+            <button className="btn link" onClick={refreshAllStatus} disabled={refreshingAll} title="Reconcile every session's PR status against GitHub now">
               {refreshingAll ? "Refreshing GitHub status…" : "Refresh GitHub status"}
             </button>
           </div>
@@ -479,7 +480,6 @@ export function GithubQueuePanel({
             <ul className="queue-session-list">
               {visibleQueueSessions.map((s) => {
                 const meta = queueSessionMeta(s.source);
-                const unseen = isUnseen(s);
                 const label = statusLabel(s);
                 const src = classifySource(s.source);
                 return (
@@ -488,7 +488,7 @@ export function GithubQueuePanel({
                       className={`session-item${s.sessionId === activeSessionId ? " active" : ""}`}
                       onClick={() => onPick(s.sessionId, s.path, s.nodeId)}
                     >
-                      <RowMark kind={src.kind} status={statusClass(s)} unseen={unseen} srLabel={`${src.label} · ${label}`} />
+                      <RowMark kind={src.kind} status={statusDotState(s)} srLabel={`${src.label} · ${label}`} />
                       <span className="session-body">
                         <span className="session-title-row">
                           <span className="session-name">{s.name}</span>
@@ -507,7 +507,7 @@ export function GithubQueuePanel({
               })}
             </ul>
             {queueSessions.length > MAX_VISIBLE_SESSIONS && (
-              <button className="link-btn" onClick={() => setShowAllSessions((v) => !v)}>
+              <button className="btn link" onClick={() => setShowAllSessions((v) => !v)}>
                 {showAllSessions ? "Show less" : `Show more (${hiddenSessionCount})`}
               </button>
             )}
@@ -525,11 +525,11 @@ export function GithubQueuePanel({
               </h4>
               <div className="queue-head-actions">
                 {waiting && waiting.length > 0 && (
-                  <button className="link-btn danger" onClick={() => setConfirmClear(true)} disabled={clearing}>
+                  <button className="btn link danger" onClick={() => setConfirmClear(true)} disabled={clearing}>
                     {clearing ? "Clearing…" : "Clear queue"}
                   </button>
                 )}
-                <button className="link-btn" onClick={onRefresh}>
+                <button className="btn link" onClick={onRefresh}>
                   Refresh
                 </button>
               </div>
@@ -546,7 +546,7 @@ export function GithubQueuePanel({
               />
             )}
 
-            {queueActionErr && <div className="banner error inline">{queueActionErr}</div>}
+            {queueActionErr && <div className="banner inline" data-tone="danger">{queueActionErr}</div>}
 
 
             {waiting === null ? (
@@ -560,13 +560,13 @@ export function GithubQueuePanel({
                   const title = w.title || `${w.repo ?? ""}#${w.issueNumber ?? ""}`;
                   const meta = `${w.repo ?? ""}${w.issueNumber ? ` #${w.issueNumber}` : ""} · ${queueItemSourceLabel(w.source)}`;
                   return (
-                    <div className={`queue-card${open ? " open" : ""}`} key={w.id}>
+                    <div className={`card queue-card${open ? " open" : ""}`} data-tone="muted" key={w.id}>
                       <div className="queue-card-row">
                         {w.url ? (
                           <a className="queue-item-main link" href={w.url} target="_blank" rel="noopener noreferrer" title={title}>
                             <span className="queue-item-title">
                               {title}
-                              {EPHEMERAL_MACHINES_ENABLED && w.ephemeral && <span className="chip" title="Dispatched to an ephemeral server">⚡ ephemeral</span>}
+                              {EPHEMERAL_MACHINES_ENABLED && w.ephemeral && <Badge title="Dispatched to an ephemeral server">⚡ ephemeral</Badge>}
                             </span>
                             <span className="queue-item-meta">{meta}</span>
                           </a>
@@ -574,7 +574,7 @@ export function GithubQueuePanel({
                           <div className="queue-item-main" title={title}>
                             <span className="queue-item-title">
                               {title}
-                              {EPHEMERAL_MACHINES_ENABLED && w.ephemeral && <span className="chip" title="Dispatched to an ephemeral server">⚡ ephemeral</span>}
+                              {EPHEMERAL_MACHINES_ENABLED && w.ephemeral && <Badge title="Dispatched to an ephemeral server">⚡ ephemeral</Badge>}
                             </span>
                             <span className="queue-item-meta">{meta}</span>
                           </div>
@@ -658,7 +658,7 @@ export function GithubQueuePanel({
                                       placeholder={hasGithubTaskToken ? "•••• saved" : "paste a token"}
                                       onChange={(e) => setGithubTaskTokenInput(e.target.value)}
                                     />
-                                    <button className="link-btn" disabled={!githubTaskToken.trim() || savingToken} onClick={saveGithubTaskToken}>
+                                    <button className="btn link" disabled={!githubTaskToken.trim() || savingToken} onClick={saveGithubTaskToken}>
                                       {savingToken ? "Saving…" : "Save"}
                                     </button>
                                   </div>
@@ -686,7 +686,7 @@ export function GithubQueuePanel({
                             <button className="btn" disabled={assignBusy || (primarySel.kind === "config" && !selectedConfig)} onClick={() => submitAssign(w.id)}>
                               {assignBusy ? "Dispatching…" : primarySel.kind === "config" ? "Provision & run" : "Run"}
                             </button>
-                            {assignErr && <span className="chip err">{assignErr}</span>}
+                            {assignErr && <Badge tone="danger">{assignErr}</Badge>}
                           </div>
                         </div>
                       )}
@@ -714,12 +714,12 @@ export function GithubQueuePanel({
             <div className="evidence-list">
               {reports.map((item) => {
                 const detail = projectRunDetail(item);
-                const outcomeClass = detail.outcome.tone === "danger" ? "err" : detail.outcome.tone === "success" ? "ok" : detail.outcome.tone === "warning" ? "warn" : "";
+                const outcomeTone: BadgeTone | undefined = detail.outcome.tone === "danger" ? "danger" : detail.outcome.tone === "success" ? "ok" : detail.outcome.tone === "warning" ? "warn" : undefined;
                 return (
                   <details className="evidence-report" key={item.id}>
                     <summary>
                       <span>{item.repo}{item.issueNumber ? ` #${item.issueNumber}` : ""} · {queueItemSourceLabel(item.source)}</span>
-                      <span className={`chip ${outcomeClass}`}>{detail.outcome.label}</span>
+                      <Badge tone={outcomeTone}>{detail.outcome.label}</Badge>
                     </summary>
                     <div className="evidence-meta">
                       <span>Trigger: {item.triggerKind ?? item.source}</span>
@@ -753,20 +753,20 @@ export function GithubQueuePanel({
                     )}
                     <div className="row-actions">
                       {onOpenRun && (
-                        <button className="link-btn" onClick={() => onOpenRun(item.id)}>
+                        <button className="btn link" onClick={() => onOpenRun(item.id)}>
                           Open Run details
                         </button>
                       )}
                       {!isTerminalRun(item) && (
                         <button
-                          className="link-btn danger"
+                          className="btn link danger"
                           disabled={cancelBusyId === item.id}
                           onClick={() => { setQueueActionErr(null); setCancelRun(item); }}
                         >
                           {cancelBusyId === item.id ? "Cancelling…" : "Cancel Run"}
                         </button>
                       )}
-                      <button className="link-btn" onClick={() => void copyReport(item)}>
+                      <button className="btn link" onClick={() => void copyReport(item)}>
                         {copiedReportId === item.id ? "Copied!" : "Copy sanitized Run JSON"}
                       </button>
                     </div>

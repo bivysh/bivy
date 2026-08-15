@@ -14,11 +14,15 @@ export function Sheet({
   children,
   headExtra,
   autoFocusSearch = true,
+  variant = "default",
+  ariaLabel,
 }: {
   title: ReactNode;
   onClose: () => void;
   children: ReactNode;
   headExtra?: ReactNode;
+  variant?: "default" | "action";
+  ariaLabel?: string;
   /** Focus the search input on open. Off for list-heavy pickers on mobile,
    *  where popping the keyboard collapses the list to a couple of rows — we'd
    *  rather show the list and let the user tap the field to search. */
@@ -81,7 +85,7 @@ export function Sheet({
   // whenever new content pinned the chat to the bottom. At <body> it is truly
   // viewport-fixed and independent of the transcript's scroll and windowing.
   return createPortal(
-    <div className="sheet" role="dialog" aria-modal="true">
+    <div className="sheet" data-variant={variant} role="dialog" aria-modal="true" aria-label={ariaLabel}>
       <div className="sheet-backdrop" onClick={onClose} />
       <div className="sheet-body" ref={bodyRef} tabIndex={-1}>
         <div className="sheet-head">

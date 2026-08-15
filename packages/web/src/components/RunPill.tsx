@@ -15,8 +15,10 @@
 
 import { useState } from "react";
 import { deriveRunOutcome, type GithubContext, type GithubQueueItem, type PrRef, type Usage } from "@bivy/core";
-import { useModalEscape } from "../modalStack.js";
-import { SourceGlyph } from "./SourceMark.js";
+import { SourceMark } from "./SourceMark.js";
+import { StatusDot, type StatusDotState } from "./StatusDot.js";
+import { Badge } from "./Badge.js";
+import { Sheet } from "./Sheet.js";
 import { PrBadge, GhMark } from "./SessionList.js";
 import { shortSourceLabel, type SourceInfo } from "../sessionSource.js";
 import { checkCounts, retryReason, runDuration, artifactRef, recoveryActions, type RecoveryKind } from "../runEvidence.js";
@@ -83,9 +85,9 @@ function Checks({ item }: { item: GithubQueueItem }) {
   return (
     <div className="run-sheet-checks">
       {checks.map((c, i) => (
-        <span key={`${c.name}-${i}`} className={`chk ${c.status}`}>
+        <Badge key={`${c.name}-${i}`} tone={c.status === "passed" ? "ok" : c.status === "failed" ? "danger" : undefined}>
           {c.name} {c.status === "passed" ? "✓" : c.status === "failed" ? "✗" : "–"}
-        </span>
+        </Badge>
       ))}
     </div>
   );
@@ -122,7 +124,7 @@ export function RunPill({
   source: SourceInfo;
   /** The row's status class (`working` / `needs-action` / `saved` / `idle`)
    *  from sessionStatus.ts, shared with the sidebar so the two never drift. */
-  statusClass: string;
+  statusClass: Exclude<StatusDotState, "online" | "unseen">;
   statusLabel: string;
   gh: GithubContext;
   /** The run's evidence, joined by session id in App (null in direct/local
@@ -167,7 +169,6 @@ export function RunPill({
   anchorId?: string;
 }) {
   const [open, setOpen] = useState(false);
-  useModalEscape(() => setOpen(false), open);
   const actions = actionsFor(gh);
   const short = shortSourceLabel(source.kind);
   // The plain "Open" state means the session is still live on its node and can
@@ -211,27 +212,22 @@ export function RunPill({
         onClick={() => setOpen(true)}
         title={[source.label, statusLabel, filesLabel].filter(Boolean).join(" · ")}
       >
-        <span className="run-pill-glyph"><SourceGlyph kind={source.kind} /></span>
+        <SourceMark kind={source.kind} size="sm" />
         <span className="run-pill-label">{short}</span>
-        <span className="run-pill-stat"><span className="run-dot" />{statusLabel}</span>
+        <span className="run-pill-stat"><StatusDot status={statusClass} />{statusLabel}</span>
         <PrBadge prs={gh.prs} />
         {filesLabel && <span className="run-pill-files">{filesLabel}</span>}
       </button>
       {open && (
-        <div className="action-sheet open" role="dialog" aria-label={source.label}>
-          <div className="action-sheet-backdrop" onClick={() => setOpen(false)} />
-          <div className="action-sheet-body">
-            <div className="action-sheet-head">
-              <span className="run-sheet-title">
-                <span className={`source-mark sm src-${source.kind}`} aria-hidden><SourceGlyph kind={source.kind} /></span>
-                {source.label}
-              </span>
-              <button className="action-sheet-close" onClick={() => setOpen(false)} aria-label="Close">
-                ×
-              </button>
-            </div>
+        <Sheet
+          variant="action"
+          ariaLabel={source.label}
+          title={<span className="run-sheet-title"><SourceMark kind={source.kind} size="sm" />{source.label}</span>}
+          onClose={() => setOpen(false)}
+          autoFocusSearch={false}
+        >
             <div className="run-sheet-status">
-              <span className={`run-dot ${statusClass}`} aria-hidden />
+              <StatusDot status={statusClass} />
               {sheetStatus}
             </div>
 
@@ -253,7 +249,7 @@ export function RunPill({
 
             {evidence && (
               <div className="run-sheet-rows">
-                {outcome && <Row k="Outcome"><span className={`chip outcome-${outcome.tone} outcome-kind-${outcome.kind}`}>{outcome.label}</span></Row>}
+                {outcome && <Row k="Outcome"><Badge tone={outcome.tone === "success" ? "ok" : outcome.tone === "warning" ? "warn" : outcome.tone === "danger" ? "danger" : undefined}>{outcome.label}</Badge></Row>}
                 {artifact?.url && (
                   <Row k="Artifact">
                     <a href={artifact.url} target="_blank" rel="noopener">{artifact.label}</a>
@@ -300,7 +296,7 @@ export function RunPill({
             {filesLabel && onOpenChanges && (
               <button
                 type="button"
-                className="action-sheet-item run-sheet-changes"
+                className="sheet-action run-sheet-changes"
                 onClick={() => { setOpen(false); onOpenChanges(); }}
               >
                 <span className="run-sheet-changes-icon" aria-hidden>◈</span>
@@ -312,7 +308,7 @@ export function RunPill({
             {artifactsLabel && onOpenArtifacts && (
               <button
                 type="button"
-                className="action-sheet-item run-sheet-changes"
+                className="sheet-action run-sheet-changes"
                 onClick={() => { setOpen(false); onOpenArtifacts(); }}
               >
                 <span className="run-sheet-changes-icon" aria-hidden>📎</span>
@@ -324,7 +320,7 @@ export function RunPill({
             {actions.map((a) => (
               <a
                 key={a.url}
-                className="action-sheet-item gh-link"
+                className="sheet-action gh-link"
                 href={a.url}
                 target="_blank"
                 rel="noopener"
@@ -335,14 +331,14 @@ export function RunPill({
               </a>
             ))}
             {evidence?.output?.artifactUrl && (
-              <a className="action-sheet-item" href={evidence.output.artifactUrl} target="_blank" rel="noopener" onClick={() => setOpen(false)}>
+              <a className="sheet-action" href={evidence.output.artifactUrl} target="_blank" rel="noopener" onClick={() => setOpen(false)}>
                 View artifact
               </a>
             )}
             {evidence?.id && onOpenRun && (
               <button
                 type="button"
-                className="action-sheet-item run-sheet-open-run"
+                className="sheet-action run-sheet-open-run"
                 onClick={() => { setOpen(false); onOpenRun(evidence.id); }}
               >
                 <span aria-hidden>▸</span>
@@ -364,10 +360,9 @@ export function RunPill({
               </div>
             )}
             {actions.length === 0 && !evidence && !hasUsage && !forkedFrom && !filesLabel && (
-              <div className="action-sheet-empty">This session has nothing to report yet.</div>
+              <div className="sheet-action-empty">This session has nothing to report yet.</div>
             )}
-          </div>
-        </div>
+        </Sheet>
       )}
     </>
   );

@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, useState } from "react";
 import { useModalEscape } from "../modalStack.js";
+import { Spinner } from "./Spinner.js";
 
 // The in-composer recording bar (mirrors the dictation UI in the screenshot):
 // a cancel ✕, a live waveform, an elapsed timer, and a confirm ✓ that stops the
@@ -249,7 +250,7 @@ export function VoiceRecorder({
       </div>
       <span className="voice-time">{busy ? "…" : fmtElapsed(elapsed)}</span>
       <button type="button" className="voice-btn confirm" onClick={confirm} disabled={busy} aria-label="Use recording">
-        {busy ? <span className="voice-spinner" /> : "✓"}
+        {busy ? <Spinner size="sm" tone="inverse" /> : "✓"}
       </button>
     </div>
   );

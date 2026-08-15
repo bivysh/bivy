@@ -15,7 +15,8 @@ test("the Machines settings panel renders the capability inventory section", asy
 test("the capability section explains available/unavailable/unknown honestly and never as online/offline", async () => {
   const source = await read("../../packages/web/src/components/MachineCapabilities.tsx");
   expect(source).toContain("describeCapabilityState");
-  expect(source).toContain('state === "available" ? "chip ok" : state === "unknown" ? "chip warn" : "chip"');
+  expect(source).toContain('state === "available" ? "ok" : state === "unknown" ? "warn" : undefined');
+  expect(source).toContain("<Badge tone={tone}>{describeCapabilityState(state)}</Badge>");
   // Capability availability is distinct from Machine connection status — the
   // panel's own copy must not conflate them (aside from the `online` prop
   // name itself, which is the connection gate, not a capability label).

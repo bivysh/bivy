@@ -60,14 +60,14 @@ export function RunTaskSheet({
 
         <label className="schedule-field">
           <span className="schedule-label">Approval</span>
-          <select className="schedule-input" value={approvalMode} onChange={(event) => setApprovalMode(event.target.value as "risky" | "autonomous")} disabled={busy}>
+          <select className="field" value={approvalMode} onChange={(event) => setApprovalMode(event.target.value as "risky" | "autonomous")} disabled={busy}>
             <option value="risky">Ask for risky actions</option>
             <option value="autonomous">Autonomous</option>
           </select>
         </label>
         <label className="schedule-field">
           <span className="schedule-label">Attempts</span>
-          <select className="schedule-input" value={maxAttempts} onChange={(event) => setMaxAttempts(Number(event.target.value))} disabled={busy}>
+          <select className="field" value={maxAttempts} onChange={(event) => setMaxAttempts(Number(event.target.value))} disabled={busy}>
             <option value={1}>1 attempt</option>
             <option value={2}>Up to 2 attempts</option>
             <option value={3}>Up to 3 attempts</option>

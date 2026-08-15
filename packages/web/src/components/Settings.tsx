@@ -10,6 +10,7 @@ import { ConfirmDialog } from "./AppDialog.js";
 import { ImportSessionContent } from "./ImportSessionSheet.js";
 import { MachineCapabilitiesSection } from "./MachineCapabilities.js";
 import { Segmented } from "./Segmented.js";
+import { Badge } from "./Badge.js";
 import { currentThemeSetting, setTheme, type ThemeSetting } from "../theme.js";
 import { useModalEscape } from "../modalStack.js";
 import type { SettingsView } from "../router.js";
@@ -295,7 +296,7 @@ export function Settings({
               <circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" />
             </svg>
             <input
-              className="settings-search"
+              className="field settings-search"
               type="search"
               placeholder="Search"
               value={query}
@@ -495,10 +496,10 @@ function NotificationsPanel() {
         <Toggle checked={on} disabled={busy} onChange={setMaster} label="Enable push notifications" />
       </div>
       {status?.permission === "denied" && (
-        <div className="banner warn inline">Notifications are blocked in your browser settings — allow them there to enable push.</div>
+        <div className="banner inline" data-tone="warn">Notifications are blocked in your browser settings — allow them there to enable push.</div>
       )}
       {msg && <div className="banner inline">{msg}</div>}
-      {err && <div className="banner error inline" role="alert">{err}</div>}
+      {err && <div className="banner inline" data-tone="danger" role="alert">{err}</div>}
 
       <label className="field-label">What to notify me about</label>
       <div className="settings-toggle-list" aria-disabled={!on}>
@@ -662,7 +663,7 @@ function LocalModelsPanel({ state, onStartWork }: { state: AppState; onStartWork
     };
     return (
       <div className="settings-form">
-        <button className="link-btn" onClick={() => openDraft(null)}>‹ All endpoints</button>
+        <button className="btn link" onClick={() => openDraft(null)}>‹ All endpoints</button>
         <h3>{draft.editing ? draft.name || draft.providerId : "Add endpoint"}</h3>
         <p className="muted">
           Verify an OpenAI-compatible server, then import the models it actually reports. Ollama, LM Studio, vLLM,
@@ -745,7 +746,7 @@ function LocalModelsPanel({ state, onStartWork }: { state: AppState; onStartWork
           </button>
         </div>
         {verification && (
-          <div className={`banner inline ${verification.status === "ready" ? "success" : "error"}`}>
+          <div className="banner inline" data-tone={verification.status === "ready" ? "ok" : "danger"}>
             {verification.status === "ready"
               ? `Verified on ${verification.machineName}: ${verification.models.length} model${verification.models.length === 1 ? "" : "s"} available.`
               : `${verification.status.replace("_", " ")}: ${verification.detail || "No compatible catalog was returned."}`}
@@ -776,7 +777,7 @@ function LocalModelsPanel({ state, onStartWork }: { state: AppState; onStartWork
           )}
           <button className="btn" onClick={() => openDraft(null)}>Cancel</button>
         </div>
-        {saveErr && <div className="banner error inline">{saveErr}</div>}
+        {saveErr && <div className="banner inline" data-tone="danger">{saveErr}</div>}
       </div>
     );
   }
@@ -871,7 +872,7 @@ function LocalModelsPanel({ state, onStartWork }: { state: AppState; onStartWork
           {discovering ? "Discovering on this Machine…" : "Discover on this Machine"}
         </button>
         {discoveryMachine && <p className="muted small">Results from <strong>{discoveryMachine}</strong>. They do not describe other Machines.</p>}
-        {discoveryError && <div className="banner error inline">{discoveryError}</div>}
+        {discoveryError && <div className="banner inline" data-tone="danger">{discoveryError}</div>}
         {discovered && (
           <div className="picker-list">
             {discovered.map((endpoint) => (
@@ -881,7 +882,7 @@ function LocalModelsPanel({ state, onStartWork }: { state: AppState; onStartWork
                 meta={endpoint.status === "ready"
                   ? `${endpoint.models.length} model${endpoint.models.length === 1 ? "" : "s"} available on ${endpoint.machineName}`
                   : `${endpoint.status.replace("_", " ")} · ${endpoint.detail || "No compatible response"}`}
-                right={endpoint.status === "ready" ? <span className="chip ok">Import</span> : endpoint.status === "auth_required" ? <span className="chip warn">Add key</span> : <span className="chip warn">{endpoint.status.replace("_", " ")}</span>}
+                right={endpoint.status === "ready" ? <Badge tone="ok">Import</Badge> : endpoint.status === "auth_required" ? <Badge tone="warn">Add key</Badge> : <Badge tone="warn">{endpoint.status.replace("_", " ")}</Badge>}
                 onClick={endpoint.status === "ready" || endpoint.status === "auth_required" ? () => openDraft({
                   ...draftFromPreset({ id: endpoint.candidateId || "local", name: endpoint.name || "Local models", baseUrl: endpoint.baseUrl, api: endpoint.api }),
                   models: endpoint.models.map((model) => model.name !== model.id ? `${model.id} | ${model.name}` : model.id).join("\n"),
@@ -1101,7 +1102,8 @@ function NodesPanel({ state }: { state: AppState }) {
                 <button
                   key={t.id}
                   type="button"
-                  className={`seg-btn${form.defaultSandbox === t.id ? " active" : ""}`}
+                  className="selectable"
+                  aria-pressed={form.defaultSandbox === t.id}
                   onClick={() => setForm({ ...form, defaultSandbox: t.id })}
                   title={t.hint}
                 >
@@ -1155,7 +1157,8 @@ function NodesPanel({ state }: { state: AppState }) {
                 <button
                   key={o.id}
                   type="button"
-                  className={`seg-btn${form.sessionResumeMode === o.id ? " active" : ""}`}
+                  className="selectable"
+                  aria-pressed={form.sessionResumeMode === o.id}
                   onClick={() => setForm({ ...form, sessionResumeMode: o.id })}
                   title={o.hint}
                 >
@@ -1257,9 +1260,9 @@ function NodesPanel({ state }: { state: AppState }) {
 
           <div className="row-actions settings-save-actions">
             <button className="btn primary" disabled={saving} onClick={save}>{saving ? "Saving…" : "Save"}</button>
-            {savedMsg && <span className="chip ok">{savedMsg}</span>}
+            {savedMsg && <Badge tone="ok">{savedMsg}</Badge>}
           </div>
-          {saveErr && <div className="banner error inline" role="alert">{saveErr}</div>}
+          {saveErr && <div className="banner inline" data-tone="danger" role="alert">{saveErr}</div>}
         </>
       )}
     </div>
@@ -1360,7 +1363,7 @@ function EphemeralPanel() {
   if (view.k === "hosted") {
     return (
       <div className="settings-form machine-profiles">
-        <button className="link-btn" onClick={() => setView({ k: "list" })}>‹ Isolated machine profiles</button>
+        <button className="btn link" onClick={() => setView({ k: "list" })}>‹ Isolated machine profiles</button>
         <HostedRunnerManagement />
       </div>
     );
@@ -1371,7 +1374,7 @@ function EphemeralPanel() {
     if (catalog) {
       return (
         <div className="settings-form machine-profiles">
-          <button className="link-btn" onClick={backToList}>‹ Isolated machine profiles</button>
+          <button className="btn link" onClick={backToList}>‹ Isolated machine profiles</button>
           <EphemeralProviderConfig
             providerId={catalog.id}
             initialSetupId={view.setupId}
@@ -1445,14 +1448,14 @@ function EphemeralProviderChooser({ keys, onBack, onPick }: { keys: ProviderKeyI
     ?? EPHEMERAL_PROVIDERS.find((p) => p.maturity === "stable");
   const others = EPHEMERAL_PROVIDERS.filter((p) => p.id !== recommended?.id);
   const statusChip = (id: string, maturity: string, hostedOnly?: boolean) => {
-    if (keys.find((x) => x.id === id)?.configured) return <span className="chip ok">Token saved</span>;
-    if (hostedOnly) return <span className="chip warn">Hosted only</span>;
-    if (maturity === "experimental") return <span className="chip warn">Experimental</span>;
-    return <span className="chip">Not set up</span>;
+    if (keys.find((x) => x.id === id)?.configured) return <Badge tone="ok">Token saved</Badge>;
+    if (hostedOnly) return <Badge tone="warn">Hosted only</Badge>;
+    if (maturity === "experimental") return <Badge tone="warn">Experimental</Badge>;
+    return <Badge>Not set up</Badge>;
   };
   return (
     <div className="settings-form machine-profiles">
-      <button className="link-btn" onClick={onBack}>‹ Isolated machine profiles</button>
+      <button className="btn link" onClick={onBack}>‹ Isolated machine profiles</button>
       <h3>Add a profile</h3>
       <p className="muted">Choose where to run. You paste a token once per provider, then save as many profiles as you like.</p>
       {recommended && (
@@ -1460,7 +1463,7 @@ function EphemeralProviderChooser({ keys, onBack, onPick }: { keys: ProviderKeyI
           <span className="custom-provider-card-icon" aria-hidden>✦</span>
           <span><strong>{recommended.name} · Recommended</strong><small>{recommended.blurb}</small></span>
           {keys.find((x) => x.id === recommended.id)?.configured
-            ? <span className="chip ok">Token saved</span>
+            ? <Badge tone="ok">Token saved</Badge>
             : <span className="picker-meta" aria-hidden>›</span>}
         </button>
       )}
@@ -1559,7 +1562,7 @@ function HostedRunnerManagement() {
         <p className="muted">Let Bivy launch governed machines while your devices are offline. Compute is billed directly by your provider; Bivy adds no markup. Credentials are encrypted on the control plane and every use is audited.</p>
       </div>
 
-      {status && !status.encryptionReady && <div className="banner error inline" role="alert">Server credential encryption isn't configured, so unattended machines can't be enabled yet.</div>}
+      {status && !status.encryptionReady && <div className="banner inline" data-tone="danger" role="alert">Server credential encryption isn't configured, so unattended machines can't be enabled yet.</div>}
 
       <div className="settings-toggle-row">
         <div className="settings-toggle-text">
@@ -1603,7 +1606,7 @@ function HostedRunnerManagement() {
               : "cost via provider bill";
             return <PickerItem
               key={`${m.provider}:${m.id}`}
-              title={<>{m.name || m.nodeId || m.id} <span className={`chip ${failure ? "err" : phase === "ready" ? "ok" : ""}`}>{phase.replaceAll("-", " ")}</span></>}
+              title={<>{m.name || m.nodeId || m.id} <Badge tone={failure ? "danger" : phase === "ready" ? "ok" : undefined}>{phase.replaceAll("-", " ")}</Badge></>}
               meta={[m.provider, m.region, m.size, cost, m.ttlMinutes ? `TTL ${m.ttlMinutes}m` : null].filter(Boolean).join(" · ")}
               right={<button type="button" className="picker-action danger" disabled={!m.nodeId || busy} onClick={(e) => { e.stopPropagation(); setConfirmDestroy(m); }}>Destroy</button>}
             />;
@@ -1613,7 +1616,7 @@ function HostedRunnerManagement() {
 
       <details className="vault-advanced">
         <summary>Audit log</summary>
-        {audit.some((event) => event.action === "reconcile_failed") && <div className="banner error inline" role="alert">A machine couldn't be reconciled or deleted. It stays tracked for retry — check the events below and your provider console.</div>}
+        {audit.some((event) => event.action === "reconcile_failed") && <div className="banner inline" data-tone="danger" role="alert">A machine couldn't be reconciled or deleted. It stays tracked for retry — check the events below and your provider console.</div>}
         {audit.length === 0 ? <p className="muted small">No hosted-machine events yet.</p> : <div className="picker-list">
           {audit.slice(0, 10).map((e, i) => <PickerItem
             key={`${e.at}:${e.action}:${i}`}
@@ -1623,7 +1626,7 @@ function HostedRunnerManagement() {
         </div>}
       </details>
 
-      {err && <div className="banner error inline" role="alert">{err}</div>}
+      {err && <div className="banner inline" data-tone="danger" role="alert">{err}</div>}
       {msg && <div className="banner inline">{msg}</div>}
     </div>
   );
@@ -1768,7 +1771,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
           <button className="btn primary" disabled={!token.trim() || busy} onClick={saveToken}>{busy ? "Saving…" : "Save token"}</button>
         </div>
         <p className="muted small">The token stays on this device and is sent only to {catalog.name}.</p>
-        {err && <div className="banner error inline" role="alert">{err}</div>}
+        {err && <div className="banner inline" data-tone="danger" role="alert">{err}</div>}
         {msg && <div className="banner inline">{msg}</div>}
       </div>
     );
@@ -1784,7 +1787,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
           <h3>{setupId ? (setupName || `${catalog.name} profile`) : `New ${catalog.name} profile`}</h3>
           <p className="muted small">{catalog.name} · token saved on this device</p>
         </div>
-        <span className="chip ok">{catalog.name} connected</span>
+        <Badge tone="ok">{catalog.name} connected</Badge>
       </div>
 
       <div className="vault-detail-grid">
@@ -1826,7 +1829,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
       </div>
       {savedMsg && <div className="banner inline">{savedMsg}</div>}
       {msg && <div className="banner inline">{msg}</div>}
-      {err && <div className="banner error inline" role="alert">{err}</div>}
+      {err && <div className="banner inline" data-tone="danger" role="alert">{err}</div>}
 
       {machines.length > 0 && (
         <details className="vault-advanced" open>
@@ -1926,7 +1929,7 @@ function AccountPanel() {
           onConfirm={() => { confirm.action(); setConfirm(null); }}
         />
       )}
-      {err && <div className="banner error inline">{err}</div>}
+      {err && <div className="banner inline" data-tone="danger">{err}</div>}
       <div className="stat-grid">
         <Stat label="Plan" value={planLabel(ent?.plan || me?.account?.plan)} />
         {trial && <Stat label="Pro trial" value={sessionCap} />}
@@ -2114,7 +2117,7 @@ function LinkPanel({ onDone }: { onDone: () => void }) {
       >
         Link
       </button>
-      {err && <div className="banner error inline">{err}</div>}
+      {err && <div className="banner inline" data-tone="danger">{err}</div>}
     </div>
   );
 }

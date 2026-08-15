@@ -61,8 +61,8 @@ export function OauthStep() {
 
   return (
     <div className="settings-form">
-      {oauth.error && <div className="banner error inline" role="alert">{oauth.error}</div>}
-      {openError && <div className="banner error inline" role="alert">{openError}</div>}
+      {oauth.error && <div className="banner inline" data-tone="danger" role="alert">{oauth.error}</div>}
+      {openError && <div className="banner inline" data-tone="danger" role="alert">{openError}</div>}
 
       {deviceCode && url && <a className="btn primary block" href={url} target="_blank" rel="noopener">Continue on this device</a>}
       {oauth.deviceCode?.userCode && <p className="muted">Code: <strong>{oauth.deviceCode.userCode}</strong></p>}
@@ -72,7 +72,7 @@ export function OauthStep() {
           {openingOnNode ? "Opening…" : openedOnNode ? `Opened on ${machine}` : `Open sign-in on ${machine}`}
         </button>
         <p className="muted">The provider will return directly to Bivy on that machine. This page updates automatically.</p>
-        {!openedOnNode && <button className="link-btn" onClick={useThisDevice}>Use this device instead</button>}
+        {!openedOnNode && <button className="btn link" onClick={useThisDevice}>Use this device instead</button>}
       </>}
 
       {!deviceCode && (!canOpenOnNode || deviceFallback) && <>
@@ -134,7 +134,7 @@ export function ProviderConnectForm({
 
   return (
     <div className="settings-form">
-      {error && <div className="banner error inline" role="alert">{error}</div>}
+      {error && <div className="banner inline" data-tone="danger" role="alert">{error}</div>}
       {provider?.oauth && (
         <button className="btn primary block" onClick={() => controller.startOauth(providerId)}>
           Sign in with {name}

@@ -5,6 +5,9 @@ import { useAppState } from "../store/useStore.js";
 import { controller } from "../store/useStore.js";
 import { AddNodeSheet } from "./AddNodeSheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
+import { Spinner } from "./Spinner.js";
+import { StatusDot } from "./StatusDot.js";
+import { Badge } from "./Badge.js";
 import { useModalEscape } from "../modalStack.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import type { EphemeralNodeConfig, EphemeralMachine } from "@bivy/core";
@@ -92,11 +95,9 @@ export function NodeSwitcher() {
         {/* Online/offline/reconnecting is otherwise color/shape-only (a 9px
             dot, sometimes a spinner) with no text — invisible to screen
             readers and easy to miss for colorblind users. */}
-        <span
-          className={`node-dot${reconnecting ? " connecting" : showOnline ? " online" : ""}`}
-          aria-hidden
-        />
-        <span className="sr-only">{reconnecting ? "Reconnecting" : showOnline ? "Online" : "Offline"} — </span>
+        {reconnecting
+          ? <><Spinner size="xs" /><span className="sr-only">Reconnecting — </span></>
+          : <StatusDot status={showOnline ? "online" : "idle"} label={`${showOnline ? "Online" : "Offline"} — `} />}
         <span className="node-switcher-name">{label}</span>
         {!locked && <span className="node-switcher-caret">▾</span>}
       </button>
@@ -104,7 +105,7 @@ export function NodeSwitcher() {
         <div className="menu node-menu" role="menu">
           {reconnecting && (
             <div className="node-menu-status" role="status">
-              <span className="reconnect-spinner" aria-hidden />
+              <Spinner size="xs" />
               Reconnecting…
             </div>
           )}
@@ -120,8 +121,7 @@ export function NodeSwitcher() {
                   controller.switchNode(n.id);
                 }}
               >
-                <span className={`node-dot${n.online ? " online" : ""}`} aria-hidden />
-                <span className="sr-only">{n.online ? "Online" : "Offline"} — </span>
+                <StatusDot status={n.online ? "online" : "idle"} label={`${n.online ? "Online" : "Offline"} — `} />
                 <span className="node-menu-name">{n.name || n.id}</span>
                 {n.id === currentNodeId && <span className="node-menu-check">✓</span>}
               </button>
@@ -150,12 +150,11 @@ export function NodeSwitcher() {
                       controller.pickDraftEphemeralRunner(config);
                     }}
                   >
-                    <span className="node-dot" aria-hidden />
-                    <span className="sr-only">{inUse ? "In use — " : picked ? "Selected — " : "Available — "}</span>
+                    <StatusDot status="idle" label={inUse ? "In use — " : picked ? "Selected — " : "Available — "} />
                     <span className="node-menu-name">{config.name}</span>
                     {inUse
-                      ? <span className="chip" title="This machine belongs to another session">In use</span>
-                      : <span className="chip">{config.provider}</span>}
+                      ? <Badge title="This machine belongs to another session">In use</Badge>
+                      : <Badge>{config.provider}</Badge>}
                     {picked && <span className="node-menu-check">✓</span>}
                   </button>
                 );

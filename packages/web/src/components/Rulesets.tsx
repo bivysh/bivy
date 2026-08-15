@@ -25,6 +25,7 @@ import type {
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
+import { Badge } from "./Badge.js";
 
 // The stable failure conditions a rule can match, with a short human label so
 // the editor never asks the user to know the raw code taxonomy by heart.
@@ -185,7 +186,7 @@ export function RulesetsPanel({ state }: { state: AppState }) {
             meta={summarize(rs)}
             right={
               <span className="row-actions">
-                {rs.active && <span className="chip ok">Active</span>}
+                {rs.active && <Badge tone="ok">Active</Badge>}
                 <button
                   className="btn danger-ghost sm"
                   onClick={(e) => {
@@ -260,7 +261,7 @@ function RulesetEditor({
 
   return (
     <div className="settings-form">
-      <button className="link-btn" onClick={onCancel}>‹ All rulesets</button>
+      <button className="btn link" onClick={onCancel}>‹ All rulesets</button>
       <h3>{isNew ? "New ruleset" : draft.name}</h3>
 
       <label className="field-label">Name</label>
@@ -279,7 +280,8 @@ function RulesetEditor({
           <button
             key={c.id}
             type="button"
-            className={`seg-btn${draft.appliesTo.includes(c.id) ? " active" : ""}`}
+            className="selectable"
+            aria-pressed={draft.appliesTo.includes(c.id)}
             title={c.hint}
             onClick={() => toggleContext(c.id)}
           >
@@ -324,7 +326,7 @@ function RulesetEditor({
         </button>
         <button className="btn" onClick={onCancel}>Cancel</button>
       </div>
-      {error && <div className="banner error inline">{error}</div>}
+      {error && <div className="banner inline" data-tone="danger">{error}</div>}
     </div>
   );
 }
@@ -349,19 +351,19 @@ function RuleCard({
   const showRecovery = rule.action === "retry" || rule.action === "reroute";
 
   return (
-    <div className="ruleset-rule-card">
+    <div className="card ruleset-rule-card" data-tone="muted">
       <div className="ruleset-rule-head">
         <span className="settings-toggle-title">Rule {index + 1}</span>
         <button className="btn danger-ghost sm" onClick={onRemove}>Remove</button>
       </div>
 
       <label className="field-label">When any of</label>
-      <div className="ruleset-chip-row">
+      <div className="ruleset-choice-row">
         {CONDITIONS.map((c) => (
           <button
             key={c.id}
             type="button"
-            className={`ruleset-chip${rule.when.includes(c.id) ? " active" : ""}`}
+            className="selectable"
             title={c.hint}
             aria-pressed={rule.when.includes(c.id)}
             onClick={() => toggleCondition(c.id)}
@@ -378,7 +380,8 @@ function RuleCard({
           <button
             key={a.id}
             type="button"
-            className={`seg-btn${rule.action === a.id ? " active" : ""}`}
+            className="selectable"
+            aria-pressed={rule.action === a.id}
             title={a.hint}
             onClick={() => set({ action: a.id })}
           >
@@ -513,7 +516,7 @@ function Collapsible({ label, children }: { label: string; children: ReactNode }
   const [open, setOpen] = useState(false);
   return (
     <div className="ruleset-collapsible">
-      <button type="button" className="link-btn" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+      <button type="button" className="btn link" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
         {open ? "▾" : "▸"} {label}
       </button>
       {open && <div className="ruleset-collapsible-body">{children}</div>}

@@ -89,7 +89,7 @@ export function ScheduleSheet({
           <span className="schedule-label">Send at</span>
           <input
             type="datetime-local"
-            className="schedule-input"
+            className="field"
             value={at}
             min={toLocalInput(new Date())}
             onChange={(e) => setAt(e.target.value)}
