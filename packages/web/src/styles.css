@@ -1354,13 +1354,7 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .automations-view-head-actions {
   display: flex; align-items: center; gap: 4px; flex: none; padding-top: 2px;
 }
-.autom-new-btn {
-  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  min-height: 38px; border: 1px solid var(--ink); border-radius: 10px;
-  padding: 7px 12px; font: inherit; font-weight: 600; white-space: nowrap;
-  background: var(--ink); color: var(--bg);
-}
-.autom-new-btn:hover { filter: brightness(1.08); }
+.autom-new-btn { min-height: 38px; white-space: nowrap; }
 .autom-close-btn { display: inline-grid; place-items: center; width: 38px; height: 38px; padding: 0; color: var(--muted); }
 .autom-close-btn:hover { color: var(--ink); }
 /* Tab bar under the header — Overview / Work Queue / Webhooks / Rulesets.

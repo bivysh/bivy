@@ -814,7 +814,7 @@ export function AutomationsView({
           <p className="automations-view-sub">Jobs that run on your machines while you&apos;re away.</p>
         </div>
         <div className="automations-view-head-actions">
-          <button type="button" className="autom-new-btn" onClick={openChooser} aria-label="New automation">
+          <button type="button" className="btn primary autom-new-btn" onClick={openChooser} aria-label="New automation">
             <PlusIcon size={18} />
             <span className="autom-new-btn-label">New automation</span>
           </button>
