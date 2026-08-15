@@ -87,6 +87,36 @@ await check("acp: drives a stub ACP agent — streaming, governed tool call, res
   }
 });
 
+// 3A: Bivy's configured MCP servers must reach the ACP agent on session/new
+// (they were hardcoded to [] in the shim, cutting ACP agents off from MCP).
+await check("acp: forwards BIVY_ACP_MCP_SERVERS to the agent on session/new", async () => {
+  const dump = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "bivy-acp-mcp-")), "servers.json");
+  process.env.BIVY_ACP_COMMAND = process.execPath;
+  process.env.BIVY_ACP_ARGS = JSON.stringify([acpAgent]);
+  process.env.BIVY_TEST_MCP_DUMP = dump;
+  const servers = [{ name: "bivy", command: "bivy", args: ["mcp-serve"] }];
+  process.env.BIVY_ACP_MCP_SERVERS = JSON.stringify(servers);
+  try {
+    const runtime = makeRuntime({ runtime: "acp", credsDir: __dirname, piDir: __dirname, sessionsDir: __dirname });
+    const { session } = await runtime.createSession({ workspace: __dirname, toolInterceptor: async () => undefined });
+    // session/new is created lazily on the first prompt; drive one turn so it fires.
+    const events: RuntimeEvent[] = [];
+    session.subscribe((e) => events.push(e));
+    await session.prompt("hello acp");
+    await waitFor(events, (e) => e.type === "agent_end");
+    for (let i = 0; i < 300 && !fs.existsSync(dump); i++) await new Promise((r) => setTimeout(r, 10));
+    assert.ok(fs.existsSync(dump), "the stub agent recorded its session/new mcpServers");
+    const received = JSON.parse(fs.readFileSync(dump, "utf8"));
+    assert.deepEqual(received, servers, "the configured MCP servers reached the ACP agent verbatim");
+    session.dispose();
+  } finally {
+    delete process.env.BIVY_ACP_COMMAND;
+    delete process.env.BIVY_ACP_ARGS;
+    delete process.env.BIVY_TEST_MCP_DUMP;
+    delete process.env.BIVY_ACP_MCP_SERVERS;
+  }
+});
+
 // opencode's ACP server resolves session/prompt BEFORE its final
 // agent_message_chunk frames are flushed (the end_turn race, opencode#17505), so a
 // naive client finalizes the turn with the reply's tail still unstreamed — the
