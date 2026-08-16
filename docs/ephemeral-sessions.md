@@ -184,6 +184,7 @@ Helpful links:
         "ec2:DescribeInstances",
         "ec2:DescribeInstanceStatus",
         "ec2:DescribeInstanceTypes",
+        "ec2:DescribeInstanceTypeOfferings",
         "ec2:DescribeSecurityGroups",
         "ec2:DescribeSubnets",
         "ec2:DescribeAvailabilityZones"
@@ -229,7 +230,7 @@ Helpful links:
 
 For defense in depth, consider adding a `Condition` on `TerminateInstances` scoping it to instances tagged `bivy=ephemeral` (the adapter tags every instance it launches that way).
 
-Known limitations for the first cut: launches into your account's **default VPC/subnet** (no `SubnetId`/`SecurityGroupId` params yet) — accounts without a default VPC will need that added before EC2 works; regions are a curated list of six (`us-east-1`, `us-west-2`, `eu-west-1`, `eu-central-1`, `ap-southeast-1`, `ap-northeast-1`) rather than all AWS regions, each needing its EC2 + SSM hosts allowlisted; instance types are a curated x86_64 "T"-family subset (Graviton/ARM64 is a natural follow-up, paired with the arm64 SSM AMI parameter).
+Known limitations: launches into your account's **default VPC/subnet** (no `SubnetId`/`SecurityGroupId` params yet) — accounts without a default VPC will need that added before EC2 works; regions are a curated list of six (`us-east-1`, `us-west-2`, `eu-west-1`, `eu-central-1`, `ap-southeast-1`, `ap-northeast-1`) rather than all AWS regions, each needing its EC2 + SSM hosts allowlisted; instance types are a curated x86_64 set spanning economy T3, general-purpose M7i, and memory-optimized R7i plans. Bivy provisions a 40 GB gp3 root disk that is deleted with the instance. Graviton/ARM64 is a natural follow-up, paired with the arm64 SSM AMI parameter.
 
 UI safety notes:
 - The token should be scoped to a disposable project/org where possible.

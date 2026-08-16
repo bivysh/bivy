@@ -379,8 +379,10 @@ const AWS_REGIONS = [
 // retained for economy profiles; current-generation M/R plans make large and
 // memory-heavy agent work possible without adding another provider. Prices are
 // indicative Linux on-demand rates in us-east-1 and vary by region.
+const AWS_AGENT_ROOT_DISK_GIB = 40;
 const awsSize = (id: string, label: string, vcpus: number, memoryGiB: number, pricePerHour: number): ProviderSize => ({
-  id, label, vcpus, memoryMiB: memoryGiB * 1024, architecture: "x86_64", pricePerHour, priceSource: "indicative",
+  id, label, vcpus, memoryMiB: memoryGiB * 1024, diskGiB: AWS_AGENT_ROOT_DISK_GIB,
+  architecture: "x86_64", pricePerHour, priceSource: "indicative",
 });
 const AWS_SIZES: ProviderSize[] = [
   awsSize("t3.micro", "t3.micro · 2 vCPU · 1 GB", 2, 1, 0.0104),
@@ -420,6 +422,22 @@ export const awsProvider: ProviderAdapter = {
     } catch {
       return AWS_SIZES; // best-effort — keep the static list rather than failing the picker
     }
+    let offered: Set<string> | undefined;
+    try {
+      const offeringParams: Record<string, string> = { LocationType: "region" };
+      AWS_SIZES.forEach((s, idx) => {
+        offeringParams[`Filter.1.Value.${idx + 1}`] = s.id;
+      });
+      offeringParams["Filter.1.Name"] = "instance-type";
+      const offerings = await awsEc2Call(exec, creds, reg, "DescribeInstanceTypeOfferings", offeringParams, "list instance offerings");
+      offered = new Set(xmlChildren(xmlChild(offerings, "instanceTypeOfferingSet"), "item")
+        .map((item) => xmlChild(item, "instanceType")?.text || "")
+        .filter(Boolean));
+    } catch {
+      // Older least-privilege policies may not include this read-only action.
+      // Keep the type definitions rather than breaking an existing profile;
+      // launch still returns the provider's precise capacity/permission error.
+    }
     const rows = xmlChildren(xmlChild(xml, "instanceTypeSet"), "item")
       .map((item): ProviderSize | null => {
         const id = xmlChild(item, "instanceType")?.text || "";
@@ -429,13 +447,14 @@ export const awsProvider: ProviderAdapter = {
         // EC2's DescribeInstanceTypes carries no pricing, so carry the static
         // indicative price across by instance-type id for the cost hint.
         const catalog = AWS_SIZES.find((s) => s.id === id);
-        return id ? {
+        if (!id || (offered && !offered.has(id))) return null;
+        return {
           ...catalog,
           id,
           label: `${id} · ${vcpus ?? "?"} vCPU · ${gb ?? "?"} GB`,
           vcpus: vcpus ? Number(vcpus) : catalog?.vcpus,
           memoryMiB: memMib ? Number(memMib) : catalog?.memoryMiB,
-        } : null;
+        };
       })
       .filter((r): r is ProviderSize => Boolean(r));
     return rows.length ? rows : AWS_SIZES;
@@ -457,6 +476,13 @@ export const awsProvider: ProviderAdapter = {
         MaxCount: "1",
         UserData: b64(utf8.encode(userData)),
         InstanceInitiatedShutdownBehavior: "terminate",
+        // Canonical's minimal root volume is too small for dependency caches,
+        // browser installs and normal monorepo builds. gp3 is deleted with the
+        // instance, preserving the ephemeral cost/lifecycle contract.
+        "BlockDeviceMapping.1.DeviceName": "/dev/sda1",
+        "BlockDeviceMapping.1.Ebs.VolumeSize": String(AWS_AGENT_ROOT_DISK_GIB),
+        "BlockDeviceMapping.1.Ebs.VolumeType": "gp3",
+        "BlockDeviceMapping.1.Ebs.DeleteOnTermination": "true",
         // EC2 makes RunInstances idempotent for this token. A retry after a
         // timeout returns the original instance rather than billing for another.
         ...(config.attemptId ? { ClientToken: String(config.attemptId) } : {}),
