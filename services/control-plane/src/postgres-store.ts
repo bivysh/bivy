@@ -110,7 +110,7 @@ export class PostgresStore implements ControlPlaneStore {
     // node, all at once). The pg default of 10 queues hard under that burst.
     // When running multiple control-plane instances, keep total connections
     // (instances x DATABASE_POOL_MAX) under Postgres `max_connections`, or
-    // front Postgres with PgBouncer (see docs/scaling.md).
+    // front Postgres with PgBouncer.
     const max = Math.max(Number(process.env.DATABASE_POOL_MAX) || 10, 1);
     this.database = new PostgresDatabaseContext(pool ?? new pg.Pool({ connectionString, max }));
   }

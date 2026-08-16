@@ -30,7 +30,7 @@
 # Connection pooling: managed tiers often cap `max_connections` low. Keep
 # (control-plane replicas x DATABASE_POOL_MAX) under that cap, or front the
 # database with the provider's connection pooler (e.g. PgBouncer, Neon's pooled
-# endpoint). See docs/scaling.md.
+# endpoint).
 
 services:
   # Drop the bundled database entirely.

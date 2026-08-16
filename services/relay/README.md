@@ -68,6 +68,6 @@ and account ownership enforcement.
   process. The control plane supports deterministic `nodeId` sharding via
   `RELAY_SHARD_URLS`, placing a node and all of its clients on the same stable
   relay hostname without a shared pub/sub backplane. Do not round-robin one
-  shard hostname across active processes. See [`../../docs/scaling.md`](../../docs/scaling.md).
+  shard hostname across active processes.
 - **Liveness.** Nodes are marked offline on disconnect; there is no separate
   heartbeat monitor.

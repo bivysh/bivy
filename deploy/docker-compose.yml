@@ -115,7 +115,7 @@ services:
       SENTRY_TRACES_SAMPLE_RATE: "${SENTRY_TRACES_SAMPLE_RATE:-0}"
     # Raise the open-file-descriptor limit. Each enrolled node/phone introspection
     # and DB connection consumes FDs; the default 1024 caps concurrency well below
-    # the hardware. See docs/scaling.md.
+    # the hardware.
     ulimits:
       nofile:
         soft: 65536
@@ -158,7 +158,7 @@ services:
       SENTRY_TRACES_SAMPLE_RATE: "${SENTRY_TRACES_SAMPLE_RATE:-0}"
     # The relay holds one WebSocket per node plus one per connected phone, so it
     # is the most FD-hungry service. At ~2 FDs/user the default 1024 limit walls
-    # concurrency around ~500 users regardless of CPU/RAM. See docs/scaling.md.
+    # concurrency around ~500 users regardless of CPU/RAM.
     ulimits:
       nofile:
         soft: 65536
