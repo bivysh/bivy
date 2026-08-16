@@ -830,6 +830,15 @@ export class AppController {
     if (!token) return;
     this.local.s = token;
     if (!this.local.cp) this.local.cp = location.origin;
+    // A solo (account-free QR) pairing signing in mid-session: `solo` and the
+    // room-token transport were fixed at construction, so flipping the reactive
+    // flag alone would leave a half-account client (hidden NodeSwitcher, stale
+    // transport). The token is already persisted — reload to rebuild cleanly as
+    // a signed-in hosted client.
+    if (this.solo) {
+      location.reload();
+      return;
+    }
     this.store.setSignedIn(true);
     // Reconcile the device vault once on sign-in: a producer device satisfies any
     // pending wrapped-key requests from the account's other devices; a consumer

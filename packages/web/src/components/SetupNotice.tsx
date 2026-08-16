@@ -19,7 +19,7 @@ import { controller } from "../store/useStore.js";
  *    login (GitHub tab, or an emailed link) and poll the device endpoint — the
  *    app window stays put and finishes sign-in in place.
  */
-export function SetupNotice() {
+export function SetupNotice({ onDismiss }: { onDismiss?: () => void } = {}) {
   const origin = location.origin;
   // An installed/home-screen PWA runs in a scoped window; an emailed magic link
   // opens in the system browser, not this window, so the redirect-based sign-in
@@ -246,6 +246,13 @@ export function SetupNotice() {
   return (
     <div className="setup">
       <div className="card setup-card">
+        {/* Only a summoned sign-in (a solo pairing asking for an account) can be
+            dismissed — the boot-time auth gate has no app behind it to return to. */}
+        {onDismiss && (
+          <button type="button" className="btn link setup-back" onClick={onDismiss}>
+            ‹ Back
+          </button>
+        )}
         <div className="setup-glyph">⛺</div>
         <h1>Bivy</h1>
         <p>Sign in or create an account, then connect a machine or launch your first cloud runner.</p>

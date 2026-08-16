@@ -1407,6 +1407,7 @@ button.sheet-action:last-child { border-bottom: 0; }
 .autom-hero-body {
   margin: 0; font-size: 14px; color: var(--muted); line-height: 1.5;
 }
+.autom-hero-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
 
 /* New automation chooser — scratch row + grouped templates (Linear-style). */
 .wizard.autom-chooser { max-width: min(720px, 100%); }
@@ -2675,6 +2676,8 @@ select.picker-search { appearance: auto; }
   padding: max(24px, env(safe-area-inset-top)) 24px max(24px, env(safe-area-inset-bottom));
 }
 .setup-card { width: 100%; max-width: 380px; margin: auto; text-align: center; }
+/* Back out of a summoned sign-in (solo pairing) — pinned to the card's leading edge. */
+.setup-back { display: block; text-align: left; margin-bottom: 4px; }
 .setup-glyph { font-size: 44px; }
 .setup-card h1 { margin: 6px 0 12px; }
 .setup-card p { color: var(--ink); margin: 8px 0; }

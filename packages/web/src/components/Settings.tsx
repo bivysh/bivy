@@ -15,6 +15,7 @@ import { currentThemeSetting, setTheme, type ThemeSetting } from "../theme.js";
 import { useModalEscape } from "../modalStack.js";
 import type { SettingsView } from "../router.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
+import { requestSignIn } from "../signInRequest.js";
 import { ChevronRightIcon, CloseIcon } from "./UiIcons.js";
 import { CredentialVault } from "./CredentialVault.js";
 
@@ -1323,6 +1324,7 @@ function EphemeralPanel() {
     } catch { /* best effort */ }
   };
   useEffect(() => {
+    if (!controller.signedIn) return; // accountless: the signpost below renders instead
     refreshKeys();
     refreshSetups();
     void migrateLegacySetups();
@@ -1330,6 +1332,41 @@ function EphemeralPanel() {
   }, []);
 
   const backToList = () => { setView({ k: "list" }); refreshSetups(); refreshKeys(); };
+
+  // No account session (solo QR pairing or loopback/direct): profiles live on
+  // the account — that's what lets any signed-in device or an automation launch
+  // a machine — so there's nothing to list or create here yet. Say so instead
+  // of silently swallowing the 401s the fetches above would hit.
+  if (!controller.signedIn) {
+    return (
+      <div className="settings-form machine-profiles">
+        <div className="vault-title-row">
+          <div><h3>Cloud machine profiles</h3></div>
+        </div>
+        <div className="vault-empty">
+          <h4>Cloud machines need an account</h4>
+          <p className="muted">
+            A profile and its provider credential are stored on your account, so any signed-in
+            device — or an automation — can launch a temporary machine. This device is paired to
+            your machine directly, without an account.
+          </p>
+          <p className="muted">
+            {controller.solo
+              ? "Sign in here to add this machine to an account — on Bivy Cloud or on a control plane you host yourself."
+              : "Open the Bivy app from a control plane — Bivy Cloud or one you host yourself — and sign in there."}
+          </p>
+          {controller.solo && (
+            <button type="button" className="btn primary" onClick={requestSignIn}>
+              Sign in or create an account
+            </button>
+          )}
+          <a className="btn" href="https://github.com/bivysh/bivy/blob/main/docs/self-host.md" target="_blank" rel="noopener">
+            Self-hosting guide
+          </a>
+        </div>
+      </div>
+    );
+  }
 
   if (view.k === "add") {
     return (
