@@ -11,6 +11,7 @@ import {
   type ExecFn,
   type ProviderSize,
 } from "./ephemeral-provider-adapters.js";
+import { ephemeralCatalogEntry } from "./ephemeral-catalog.js";
 import type { EphemeralMachine } from "./ephemeral-machine.js";
 import { planEphemeralLaunch, trackProvisionedMachine } from "./ephemeral-launch-plan.js";
 import { createEphemeralExecutionEnvelope } from "./ephemeral-execution-envelope.js";
@@ -19,6 +20,7 @@ import type { EphemeralKeyStore, MachineStore } from "./ephemeral-storage.js";
 export {
   EPHEMERAL_PROVIDERS,
   ephemeralCatalogEntry,
+  ephemeralProviderLaunchable,
   ephemeralProviderSuspendsWhenIdle,
   type EphemeralProviderCatalog,
 } from "./ephemeral-catalog.js";
@@ -308,6 +310,10 @@ export async function launchEphemeralMachine(
   const fetchImpl = deps.fetchImpl ?? fetch;
   const adapter = ephemeralAdapter(opts.provider);
   if (!adapter) throw new Error(`Unknown provider: ${opts.provider}`);
+  const catalog = ephemeralCatalogEntry(opts.provider);
+  if (catalog?.availability === "planned") {
+    throw new Error(`${catalog.name} is not launchable yet: ${catalog.blockedReason || "provider certification is incomplete"}`);
+  }
   // Progress is deliberately best-effort: presentation code must never be able
   // to abort provisioning. Keep these messages free of credentials, enrollment
   // tokens, user-data, and provider response bodies.

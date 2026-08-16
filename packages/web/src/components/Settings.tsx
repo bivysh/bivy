@@ -1355,7 +1355,9 @@ function EphemeralPanel() {
       <EphemeralProviderChooser
         keys={keys}
         onBack={() => setView({ k: "list" })}
-        onPick={(provider) => setView({ k: "editor", provider, setupId: null })}
+        onPick={(provider) => setView(EPHEMERAL_PROVIDERS.find((entry) => entry.id === provider)?.hostedOnly
+          ? { k: "hosted" }
+          : { k: "editor", provider, setupId: null })}
       />
     );
   }
@@ -1447,10 +1449,11 @@ function EphemeralProviderChooser({ keys, onBack, onPick }: { keys: ProviderKeyI
   const recommended = EPHEMERAL_PROVIDERS.find((p) => p.id === "fly" && p.maturity === "stable")
     ?? EPHEMERAL_PROVIDERS.find((p) => p.maturity === "stable");
   const others = EPHEMERAL_PROVIDERS.filter((p) => p.id !== recommended?.id);
-  const statusChip = (id: string, maturity: string, hostedOnly?: boolean) => {
+  const statusChip = (id: string, availability: "available" | "preview" | "planned", hostedOnly?: boolean) => {
+    if (availability === "planned") return <Badge>Planned</Badge>;
     if (keys.find((x) => x.id === id)?.configured) return <Badge tone="ok">Token saved</Badge>;
-    if (hostedOnly) return <Badge tone="warn">Hosted only</Badge>;
-    if (maturity === "experimental") return <Badge tone="warn">Experimental</Badge>;
+    if (hostedOnly) return <Badge tone="warn">Hosted setup</Badge>;
+    if (availability === "preview") return <Badge tone="warn">Preview</Badge>;
     return <Badge>Not set up</Badge>;
   };
   return (
@@ -1473,8 +1476,9 @@ function EphemeralProviderChooser({ keys, onBack, onPick }: { keys: ProviderKeyI
           <PickerItem
             key={p.id}
             title={p.name}
-            meta={p.blurb}
-            right={statusChip(p.id, p.maturity, p.hostedOnly)}
+            meta={p.availability === "planned" ? p.blockedReason : p.blurb}
+            right={statusChip(p.id, p.availability, p.hostedOnly)}
+            disabled={p.availability === "planned"}
             onClick={() => onPick(p.id)}
           />
         ))}
@@ -1579,11 +1583,11 @@ function HostedRunnerManagement() {
 
       <label className="field-label">Provider credential</label>
       <select className="picker-search" value={provider} onChange={(e) => setProvider(e.target.value)}>
-        {EPHEMERAL_PROVIDERS.map((p) => <option key={p.id} value={p.id}>
-          {p.name}{p.id === "sprites" || p.id === "e2b" ? " — experimental managed compute" : " — bring your own cloud"}
+        {EPHEMERAL_PROVIDERS.filter((p) => p.availability !== "planned").map((p) => <option key={p.id} value={p.id}>
+          {p.name}{p.availability === "preview" ? " — preview managed compute" : " — bring your own cloud"}
         </option>)}
       </select>
-      {(provider === "sprites" || provider === "e2b") && <p className="muted small">Experimental managed-compute backend. Session durability stays portable; provider snapshots are an optimization, never the only copy.</p>}
+      {EPHEMERAL_PROVIDERS.find((p) => p.id === provider)?.availability === "preview" && <p className="muted small">Preview managed-compute backend. Session durability stays portable; provider snapshots are an optimization, never the only copy.</p>}
       <input className="picker-search" type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="Paste credential to validate and store" />
       <div className="row-actions">
         <button className="btn primary" disabled={busy || !token.trim() || !status?.encryptionReady} onClick={connect}>{busy ? "Working…" : "Validate and store"}</button>
@@ -1748,6 +1752,18 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
       onConfirm={() => { confirm.action(); setConfirm(null); }}
     />
   );
+
+  if (catalog.availability === "planned" || catalog.hostedOnly) {
+    return (
+      <div className="settings-form">
+        <Badge tone={catalog.hostedOnly ? "warn" : undefined}>{catalog.hostedOnly ? "Hosted setup required" : "Planned"}</Badge>
+        <p className="muted">{catalog.hostedOnly
+          ? `${catalog.name} profiles use hosted credential custody so Bivy retains independent deletion authority.`
+          : catalog.blockedReason || `${catalog.name} is not available yet.`}</p>
+        <button className="btn primary" disabled={!catalog.hostedOnly} onClick={catalog.hostedOnly ? onBack : undefined}>{catalog.hostedOnly ? "Back to profiles" : "Not available yet"}</button>
+      </div>
+    );
+  }
 
   // Connect the provider (no token yet): show the catalog steps + doc links,
   // then take the token. Saving flips this view into the profile form.

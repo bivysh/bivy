@@ -19,7 +19,7 @@ test("the Hetzner catalog entry is flagged hostedOnly and its blurb says so", as
   expect(hetznerEntry.toLowerCase()).toContain("hosted");
 });
 
-test("Fly/AWS/Sprites/E2B are not flagged hostedOnly (they have a real device-launch backstop)", async () => {
+test("hosted-only safety is separate from provider availability", async () => {
   const model = await read("../../packages/core/src/ephemeral-catalog.ts");
   for (const id of ['id: "fly"', 'id: "sprites"', 'id: "e2b"', 'id: "aws"']) {
     const start = model.indexOf(id);
@@ -29,17 +29,11 @@ test("Fly/AWS/Sprites/E2B are not flagged hostedOnly (they have a real device-la
   }
 });
 
-test("the ephemeral sheet disables device launch and warns before connecting a hostedOnly provider", async () => {
+test("the ephemeral sheet routes hosted-only setup before accepting a device token", async () => {
   const view = await read("../../packages/web/src/components/Ephemeral.tsx");
-  // A distinct "Hosted only" chip in the provider picker, not the generic
-  // Stable/Experimental badge that implies a normal standalone launch.
   expect(view).toContain('p.hostedOnly');
   expect(view).toContain('Hosted only');
-  // The connect panel warns before the user pastes a token.
-  expect(view).toContain("catalog.hostedOnly &&");
-  expect(view).toContain("can't be launched from this device");
-  // "Use this profile" is disabled rather than leading to a launch-time
-  // refusal after the user already committed to the flow.
-  expect(view).toContain("disabled={busy || catalog.hostedOnly}");
-  expect(view).toContain('"Device launch unavailable"');
+  expect(view).toContain('catalog.availability === "planned" || catalog.hostedOnly');
+  expect(view).toContain("can't be launched with a device-held token");
+  expect(view).toContain("Unattended machines");
 });

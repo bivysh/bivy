@@ -10,6 +10,11 @@ export interface EphemeralProviderCatalog {
    * compute is useful but is not evidence for Bivy's no-markup BYO-cloud moat. */
   computeClass: "byo-cloud" | "managed-compute";
   maturity: "stable" | "experimental";
+  /** Product availability is distinct from maturity. Preview providers may be
+   * launched with an explicit warning; planned providers are visible for
+   * discovery but must not accept credentials or launch. */
+  availability: "available" | "preview" | "planned";
+  blockedReason?: string;
   tokenLabel: string;
   blurb: string;
   steps: readonly string[];
@@ -32,6 +37,7 @@ export const EPHEMERAL_PROVIDERS: readonly EphemeralProviderCatalog[] = [
     name: "Fly.io",
     computeClass: "byo-cloud",
     maturity: "stable",
+    availability: "available",
     tokenLabel: "Fly.io access token",
     blurb: "Bivy creates a temporary Fly Machine, runs the session, then destroys it.",
     steps: [
@@ -49,6 +55,7 @@ export const EPHEMERAL_PROVIDERS: readonly EphemeralProviderCatalog[] = [
     name: "Hetzner Cloud",
     computeClass: "byo-cloud",
     maturity: "stable",
+    availability: "available",
     tokenLabel: "Hetzner Cloud API token",
     blurb: "Powering off a Hetzner server doesn't stop billing, so Bivy only launches one through hosted (control-plane) provisioning, which keeps independent deletion authority.",
     steps: [
@@ -67,6 +74,7 @@ export const EPHEMERAL_PROVIDERS: readonly EphemeralProviderCatalog[] = [
     name: "Fly Sprites",
     computeClass: "managed-compute",
     maturity: "experimental",
+    availability: "preview",
     tokenLabel: "Sprites API token",
     blurb: "A machine that remembers: suspends to ~$0 when idle and resumes with everything intact. Reopen the session to wake it.",
     steps: [
@@ -85,6 +93,8 @@ export const EPHEMERAL_PROVIDERS: readonly EphemeralProviderCatalog[] = [
     name: "E2B",
     computeClass: "managed-compute",
     maturity: "experimental",
+    availability: "planned",
+    blockedReason: "Bivy's E2B runner templates and live API certification are not complete yet.",
     tokenLabel: "E2B API key",
     blurb: "A managed sandbox that ends itself: after a server-enforced timeout it pauses to ~$0 (resume with state intact) — no device needed to keep it in check.",
     steps: [
@@ -103,6 +113,7 @@ export const EPHEMERAL_PROVIDERS: readonly EphemeralProviderCatalog[] = [
     name: "AWS EC2",
     computeClass: "byo-cloud",
     maturity: "stable",
+    availability: "available",
     tokenLabel: "Access key — paste as accessKeyId:secretAccessKey",
     blurb: "Bivy launches a temporary EC2 instance, runs the session, then terminates it.",
     steps: [
@@ -125,4 +136,9 @@ export function ephemeralCatalogEntry(id: string): EphemeralProviderCatalog | nu
 
 export function ephemeralProviderSuspendsWhenIdle(provider: string): boolean {
   return ephemeralCatalogEntry(provider)?.suspendsWhenIdle === true;
+}
+
+export function ephemeralProviderLaunchable(provider: string): boolean {
+  const availability = ephemeralCatalogEntry(provider)?.availability;
+  return availability === "available" || availability === "preview";
 }

@@ -72,6 +72,7 @@ export {
   ephemeralMachineFromCorrelation,
   ephemeralMachineFromNode,
   ephemeralNodeLabel,
+  ephemeralProviderLaunchable,
   ephemeralProviderSuspendsWhenIdle,
   extractProviderMessage,
   formatEphemeralPrice,

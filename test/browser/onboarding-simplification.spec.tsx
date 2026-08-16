@@ -8,7 +8,8 @@ test("isolated first use recommends one cloud and hides the rest behind progress
   const view = await read("../../packages/web/src/components/Ephemeral.tsx");
   expect(view).toContain('p.id === "fly" && p.maturity === "stable"');
   expect(view).toContain("Other cloud providers");
-  expect(view).toContain('p.maturity === "experimental" ? "Experimental" : "Stable"');
+  expect(view).toContain('p.availability === "preview" ? "Preview" : "Stable"');
+  expect(view).toContain('disabled={p.availability === "planned"}');
 });
 
 test("the first isolated Run offers a safe task and names the billable launch action", async () => {

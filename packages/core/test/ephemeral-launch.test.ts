@@ -71,6 +71,20 @@ describe("launchEphemeralMachine — durable lifecycle", () => {
     expect(fetched).toBe(false);
   });
 
+  it("refuses a planned provider before reading credentials or enrolling", async () => {
+    let fetched = false;
+    await expect(launchEphemeralMachine(
+      { provider: "e2b" },
+      {
+        store: fakeStore(), exec: flyExec,
+        keys: createEphemeralKeyStore(memoryBackend()),
+        machines: createMachineStore(memoryBackend()),
+        fetchImpl: (async () => { fetched = true; return {} as Response; }) as typeof fetch,
+      },
+    )).rejects.toThrow(/not launchable yet.*templates.*certification/i);
+    expect(fetched).toBe(false);
+  });
+
   it("does not enroll if durable intent persistence fails", async () => {
     const keys = createEphemeralKeyStore(memoryBackend());
     await keys.setToken("fly", "fly-tok");
