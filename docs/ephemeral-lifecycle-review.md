@@ -14,13 +14,13 @@ ambiguous creates, observes active machines, enforces boot/TTL deadlines, fences
 attempt updates, confirms deletion, and discovers tagged orphans. Keep this
 controller and the small `ProviderAdapter` boundary.
 
-The largest remaining gap is **agent-oriented compute selection**, not another
-basic VM adapter. The current product describes provider-native sizes as strings,
-defaults to small machines, has no disk/GPU capability model, and cannot express
-whether a profile is suitable for a large repository, Docker build, browser
-workload, or CUDA task. AWS is restricted to T3 instances, Fly to 8 GB, E2B to 16
-GB, and Sprites to 16 GB in the shipped pickers. Hetzner's live catalog is the
-only current path that naturally exposes larger-memory plans.
+Bivy now models CPU, memory, disk, architecture, price provenance, and
+accelerators as structured facts and maps plans to agent-oriented workload
+intents. New profiles default to an 8 GB-class baseline. AWS exposes curated T3,
+M7i, and R7i plans up to 128 GB with a disposable 40 GB gp3 root disk; Hetzner's
+live catalog remains the value-oriented large-memory path. GPU execution still
+requires a pinned driver-ready image and live certification before it should be
+advertised.
 
 Recommended order:
 
@@ -41,10 +41,10 @@ Recommended order:
    to increase the logo count. Their setup, variability, or execution model is a
    worse default for this product today.
 
-Also fix two product-honesty issues before promoting managed sandboxes: E2B is
-selectable even though its required Bivy templates and live API verification are
-not complete, and Sprites' idle suspension with Bivy's persistent relay traffic
-is still an unverified assumption.
+Fly Sprites and E2B support was removed. Their unverified suspend/resume
+lifecycles added a second controller policy, extra credential/SSRF surface, and
+product claims that had not passed live billing certification. Portable encrypted
+snapshots remain the single continuity model across supported providers.
 
 ## What is implemented well
 
@@ -103,11 +103,9 @@ tests, not duplicated prose.
 
 | Provider | Current fit | Agent capacity today | Main gaps | Recommendation |
 |---|---|---|---|---|
-| Fly Machines | Best simple interactive default; low setup and native auto-delete | Picker tops out at 4 shared vCPU / 8 GB | Small defaults, no live size/region capacity, no disk control, app cleanup, generic image cold start | Keep stable; raise agent baseline and add larger/performance profiles only after live capacity and price checks |
-| Hetzner Cloud | Excellent CPU/RAM value; live size and location availability | Live catalog can expose dedicated and high-memory plans | Hosted-only flow is confusing in the interactive connector; explicit deletion required; ARM compatibility not enforced | Keep stable and hosted-only; make it the value/large-memory option |
-| AWS EC2 | Broadest path to memory, CPU, GPU, networking and compliance | UI exposes only T3 up to 32 GB | Default-VPC assumption, no subnet/security group selection, no GPU family/image/driver lane, cumbersome credential input | Highest-priority expansion |
-| Fly Sprites | Attractive persistent workspace model | Curated up to 8 vCPU / 16 GB | Suspension behavior under a permanent relay socket is unverified; API/live behavior is experimental | Keep preview-only until a live suspend/resume/cost soak passes |
-| E2B | Potentially fast managed sandbox with deterministic pause | Curated up to 8 vCPU / 16 GB | Required `bivy-*` templates are not published here; REST shape and timeout refresh are unverified | Do not present as launchable; keep behind an explicit developer preview flag |
+| Fly Machines | Best simple interactive default; low setup and native auto-delete | Recommended 4 shared vCPU / 8 GB | No live size/region capacity, no disk control, app cleanup, generic image cold start | Keep stable; add larger/performance profiles only after live capacity and price checks |
+| Hetzner Cloud | Excellent CPU/RAM value; live size and location availability | Live catalog exposes dedicated and high-memory plans | Explicit deletion required; ARM compatibility not enforced | Keep stable and hosted-only; use one hosted-custody profile wizard |
+| AWS EC2 | Broadest path to memory, CPU, GPU, networking and compliance | Curated T3/M7i/R7i up to 16 vCPU / 128 GB, 40 GB gp3 root | Default-VPC assumption, no subnet/security group selection, no certified GPU image/driver lane, cumbersome credential input | Highest-priority expansion |
 
 ### Current defaults are undersized
 
@@ -199,26 +197,14 @@ Add an adapter `preflight(profile)` result with structured checks:
 Run cheap checks when saving a profile and again immediately before launch. A
 preflight must not create billable compute.
 
-### 4. Hosted-only onboarding has a dead-end
+### 4. Hosted-only onboarding uses the correct custody
 
-The interactive connector allows a local Hetzner token to be validated and saved,
-then disables `Use this profile` and tells the user to configure hosted execution
-elsewhere. The saved local token cannot make that interactive profile launch.
+Hetzner setup now validates and stores its credential in encrypted hosted custody
+and creates the reusable compute profile in the same wizard. The interactive
+sheet explains why a device-held token cannot provide independent deletion
+authority instead of accepting an unusable local credential.
 
-For `hostedOnly` providers, replace the token form in the interactive sheet with
-a direct hosted-setup action and explanation. Keep one setup wizard that stores
-the credential in the correct custody location, validates it, creates a profile,
-and returns the user to their original task.
-
-### 5. Prototype providers look usable
-
-`maturity: "experimental"` only adds a badge. It does not stop E2B from accepting
-a token and attempting a launch with templates that may not exist. Add an
-availability state such as `available | preview | planned`, plus optional feature
-flag and `blockedReason`. `planned` providers may be documented but must not be
-connectable or selectable.
-
-### 6. Launch readiness should be measured at the agent boundary
+### 5. Launch readiness should be measured at the agent boundary
 
 Provider `running` is not success. Keep using first-agent-event cold start as the
 user metric, and add explicit bootstrap/runtime health milestones:
@@ -235,7 +221,7 @@ Show actionable failure reasons and a retry/fallback action. Preserve provider
 logs or a bounded bootstrap diagnostic artifact for failed boots without keeping
 a billable machine alive by default.
 
-### 7. Capacity failures need bounded fallback
+### 6. Capacity failures need bounded fallback
 
 Large and GPU instances are frequently unavailable in a particular region. Add a
 declarative fallback policy to profiles: exact only, same class in selected
@@ -313,23 +299,24 @@ DigitalOcean immediately.
   setup make it a less general first GPU integration than RunPod or existing AWS.
 - **Modal:** a function/application runtime, not a natural host for Bivy's
   long-lived interactive daemon and portable session lifecycle.
-- **More managed sandboxes:** finish and live-certify Sprites/E2B before adding
-  Daytona or another similar substrate.
+- **Managed sandboxes:** Sprites and E2B were removed. Do not add Daytona or a
+  similar substrate without a compelling advantage over the portable VM lane
+  and the complete create/snapshot/delete certification suite.
 - **Kubernetes:** support later as an operator/deployment mode for customers who
   already own clusters, not as a first-run provider.
 
 ## Implementation plan
 
-### Phase 1 — honest, agent-fit UX
+### Phase 1 — honest, agent-fit UX (completed)
 
-1. Add structured compute capabilities and profile intents.
-2. Raise the recommended profile to an evidence-backed agent baseline.
-3. Add provider availability/blocked reason; make E2B non-launchable until its
-   template and live contract exist.
-4. Route hosted-only setup directly to hosted credential custody.
-5. Remove stale UI text saying finish teardown requires the launching device;
-   daemon/control-plane teardown is already implemented.
-6. Generate provider capability/teardown tables from catalog and adapter facts.
+1. Structured compute capabilities and profile intents.
+2. An 8 GB-class recommended agent baseline.
+3. Removal of unverified Sprites/E2B provider and suspend lifecycle support.
+4. Hosted-only setup routed directly to hosted credential custody.
+5. Correct teardown copy: daemon/control-plane teardown does not require the
+   launching device.
+6. Remaining refinement: generate provider capability/teardown tables from
+   catalog and adapter facts.
 
 ### Phase 2 — AWS large-memory lane
 
@@ -364,8 +351,7 @@ following pass in a dedicated account:
 - discovery of a deliberately untracked tagged resource;
 - provider 404, 429 and transient 5xx handling;
 - advertised CPU/RAM/disk/accelerator observed inside the guest;
-- bill/inventory empty after cleanup;
-- suspend, wake and 24-hour idle-cost soak for suspend providers.
+- bill/inventory empty after cleanup.
 
 Publish last-certified timestamp, regions/classes tested, image digest, and known
 limitations in the UI. `stable` should mean this suite passed recently, not only
@@ -376,4 +362,4 @@ that adapter unit tests exist.
 > A user chooses a workload intent, not cloud trivia. Bivy selects a compatible,
 > available machine within an explicit price limit; proves the agent is ready;
 > preserves useful session state; and converges every accepted resource to
-> suspended or provider-confirmed deleted without relying on the user's device.
+> provider-confirmed deleted without relying on the user's device.

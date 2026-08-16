@@ -71,7 +71,7 @@ describe("launchEphemeralMachine — durable lifecycle", () => {
     expect(fetched).toBe(false);
   });
 
-  it("refuses a planned provider before reading credentials or enrolling", async () => {
+  it("refuses a removed provider before reading credentials or enrolling", async () => {
     let fetched = false;
     await expect(launchEphemeralMachine(
       { provider: "e2b" },
@@ -81,7 +81,7 @@ describe("launchEphemeralMachine — durable lifecycle", () => {
         machines: createMachineStore(memoryBackend()),
         fetchImpl: (async () => { fetched = true; return {} as Response; }) as typeof fetch,
       },
-    )).rejects.toThrow(/not launchable yet.*templates.*certification/i);
+    )).rejects.toThrow(/unknown provider: e2b/i);
     expect(fetched).toBe(false);
   });
 

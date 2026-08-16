@@ -21,8 +21,7 @@ export function EphemeralSheet({ onClose, firstRun = false }: { onClose: () => v
   const [provider, setProvider] = useState<string | null>(null);
   const [showMore, setShowMore] = useState(false);
   const refreshKeys = () => controller.listEphemeralKeys().then(setKeys).catch(() => {});
-  const recommended = EPHEMERAL_PROVIDERS.find((p) => p.id === "fly" && p.maturity === "stable")
-    ?? EPHEMERAL_PROVIDERS.find((p) => p.maturity === "stable");
+  const recommended = EPHEMERAL_PROVIDERS.find((p) => p.id === "fly") ?? EPHEMERAL_PROVIDERS[0];
   const alternatives = EPHEMERAL_PROVIDERS.filter((p) => p.id !== recommended?.id);
   useEffect(() => { refreshKeys(); }, []);
 
@@ -63,15 +62,12 @@ export function EphemeralSheet({ onClose, firstRun = false }: { onClose: () => v
               <PickerItem
                 key={p.id}
                 title={p.name}
-                meta={p.availability === "planned" ? p.blockedReason : p.blurb}
-                right={p.availability === "planned"
-                  ? <Badge>Planned</Badge>
-                  : k?.configured
-                    ? <Badge tone="ok">Connected</Badge>
-                    : p.hostedOnly
-                      ? <Badge tone="warn">Hosted only</Badge>
-                      : <Badge tone={p.availability === "preview" ? "warn" : undefined}>{p.availability === "preview" ? "Preview" : "Stable"}</Badge>}
-                disabled={p.availability === "planned"}
+                meta={p.blurb}
+                right={k?.configured
+                  ? <Badge tone="ok">Connected</Badge>
+                  : p.hostedOnly
+                    ? <Badge tone="warn">Hosted only</Badge>
+                    : <Badge>Available</Badge>}
                 onClick={() => setProvider(p.id)}
               />
             );
@@ -135,16 +131,12 @@ function ProviderConnectPanel({ providerId, onKeysChanged, onDone }: { providerI
     }
   };
 
-  if (catalog.availability === "planned" || catalog.hostedOnly) {
+  if (catalog.hostedOnly) {
     return (
       <div className="settings-form">
-        <Badge tone={catalog.hostedOnly ? "warn" : undefined}>{catalog.hostedOnly ? "Hosted setup required" : "Planned"}</Badge>
-        <p className="muted">{catalog.hostedOnly
-          ? `${catalog.name} can't be launched with a device-held token because guest shutdown does not delete the billable server.`
-          : catalog.blockedReason || `${catalog.name} is not available yet.`}</p>
-        <p className="muted small">{catalog.hostedOnly
-          ? `Use Settings → Isolated machine profiles → Unattended machines. That flow stores teardown authority in the control plane and keeps retrying until ${catalog.name} confirms deletion.`
-          : "Bivy won't accept a credential or attempt billable provisioning until this integration passes live certification."}</p>
+        <Badge tone="warn">Hosted setup required</Badge>
+        <p className="muted">{catalog.name} can't be launched with a device-held token because guest shutdown does not delete the billable server.</p>
+        <p className="muted small">Use Settings → Isolated machine profiles → Unattended machines. That flow stores teardown authority in the control plane and keeps retrying until {catalog.name} confirms deletion.</p>
       </div>
     );
   }

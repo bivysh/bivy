@@ -3,7 +3,7 @@
 import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { AccountMe, AppState, EphemeralNodeConfig, LocalModelEndpointResult, LocalModelPreset, LocalModelProvider, PairedDevice, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, ProviderKeyInfo, ProviderSize, HostedAuditEvent, HostedMachineSummary, HostedProvisioningStatus } from "@bivy/core";
-import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralComputeIntentLabel, ephemeralCostHint, ephemeralCostEstimate, ephemeralLifecyclePhase, formatEphemeralPrice } from "@bivy/core";
+import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCatalogEntry, ephemeralComputeIntentLabel, ephemeralCostHint, ephemeralCostEstimate, ephemeralLifecyclePhase, formatEphemeralPrice } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
@@ -1285,7 +1285,6 @@ const EPHEMERAL_TTL_OPTIONS = [
 // One-line, humanized lifecycle for a saved profile — used in list subtitles and
 // the editor's summary card so the same wording appears everywhere.
 function ephemeralLifecycleLabel(setup: EphemeralNodeConfig): string {
-  if (ephemeralAdapter(setup.provider)?.suspendsWhenIdle) return "suspends to ~$0 when idle";
   if (setup.teardownOnAgentFinish) return "runs until the agent finishes";
   if (setup.ttlMinutes) return `destroys ${setup.ttlMinutes} min after launch`;
   return "provider-default lifetime";
@@ -1385,6 +1384,16 @@ function EphemeralPanel() {
         </div>
       );
     }
+    return (
+      <div className="settings-form machine-profiles">
+        <button className="btn link" onClick={backToList}>‹ Isolated machine profiles</button>
+        <Badge tone="warn">Unsupported provider</Badge>
+        <p className="muted">This profile uses {view.provider}, which Bivy no longer supports. It cannot launch a new machine.</p>
+        {view.setupId && <button className="btn danger-ghost" onClick={() => {
+          void controller.removeEphemeralConfig(view.setupId!).then(backToList);
+        }}>Remove profile</button>}
+      </div>
+    );
   }
 
   // List view — profiles are the whole panel; sync + hosted drill in below.
@@ -1412,7 +1421,9 @@ function EphemeralPanel() {
               key={setup.id}
               title={setup.name}
               meta={ephemeralProfileMeta(setup)}
-              right={<span className="picker-meta" aria-hidden>›</span>}
+              right={ephemeralCatalogEntry(setup.provider)
+                ? <span className="picker-meta" aria-hidden>›</span>
+                : <Badge tone="warn">Unsupported</Badge>}
               onClick={() => setView({ k: "editor", provider: setup.provider, setupId: setup.id })}
             />
           ))}
@@ -1444,14 +1455,11 @@ function EphemeralPanel() {
 // Add flow: pick where to run. The recommended provider is a highlighted card;
 // the rest are a plain list, each showing whether its token is already saved.
 function EphemeralProviderChooser({ keys, onBack, onPick }: { keys: ProviderKeyInfo[]; onBack: () => void; onPick: (provider: string) => void }) {
-  const recommended = EPHEMERAL_PROVIDERS.find((p) => p.id === "fly" && p.maturity === "stable")
-    ?? EPHEMERAL_PROVIDERS.find((p) => p.maturity === "stable");
+  const recommended = EPHEMERAL_PROVIDERS.find((p) => p.id === "fly") ?? EPHEMERAL_PROVIDERS[0];
   const others = EPHEMERAL_PROVIDERS.filter((p) => p.id !== recommended?.id);
-  const statusChip = (id: string, availability: "available" | "preview" | "planned", hostedOnly?: boolean) => {
-    if (availability === "planned") return <Badge>Planned</Badge>;
+  const statusChip = (id: string, hostedOnly?: boolean) => {
     if (hostedOnly) return <Badge tone="warn">Hosted setup</Badge>;
     if (keys.find((x) => x.id === id)?.configured) return <Badge tone="ok">Token saved</Badge>;
-    if (availability === "preview") return <Badge tone="warn">Preview</Badge>;
     return <Badge>Not set up</Badge>;
   };
   return (
@@ -1474,9 +1482,8 @@ function EphemeralProviderChooser({ keys, onBack, onPick }: { keys: ProviderKeyI
           <PickerItem
             key={p.id}
             title={p.name}
-            meta={p.availability === "planned" ? p.blockedReason : p.blurb}
-            right={statusChip(p.id, p.availability, p.hostedOnly)}
-            disabled={p.availability === "planned"}
+            meta={p.blurb}
+            right={statusChip(p.id, p.hostedOnly)}
             onClick={() => onPick(p.id)}
           />
         ))}
@@ -1581,11 +1588,10 @@ function HostedRunnerManagement() {
 
       <label className="field-label">Provider credential</label>
       <select className="picker-search" value={provider} onChange={(e) => setProvider(e.target.value)}>
-        {EPHEMERAL_PROVIDERS.filter((p) => p.availability !== "planned").map((p) => <option key={p.id} value={p.id}>
-          {p.name}{p.availability === "preview" ? " — preview managed compute" : " — bring your own cloud"}
+        {EPHEMERAL_PROVIDERS.map((p) => <option key={p.id} value={p.id}>
+          {p.name} — bring your own cloud
         </option>)}
       </select>
-      {EPHEMERAL_PROVIDERS.find((p) => p.id === provider)?.availability === "preview" && <p className="muted small">Preview managed-compute backend. Session durability stays portable; provider snapshots are an optimization, never the only copy.</p>}
       <input className="picker-search" type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="Paste credential to validate and store" />
       <div className="row-actions">
         <button className="btn primary" disabled={busy || !token.trim() || !status?.encryptionReady} onClick={connect}>{busy ? "Working…" : "Validate and store"}</button>
@@ -1637,9 +1643,6 @@ function HostedRunnerManagement() {
 function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, onSetupsChanged, onBack }: { providerId: string; initialSetupId: string | null; onKeysChanged: () => void; onSetupsChanged: () => void; onBack: () => void }) {
   const catalog = EPHEMERAL_PROVIDERS.find((p) => p.id === providerId)!;
   const adapter = ephemeralAdapter(providerId)!;
-  // Suspend-to-zero providers (Fly Sprites) keep the machine and self-suspend
-  // when idle — so TTL self-destruct and destroy-on-finish don't apply.
-  const suspendsWhenIdle = adapter.suspendsWhenIdle === true;
   const [confirm, setConfirm] = useState<null | { title: string; message: string; label?: string; action: () => void }>(null);
   const [token, setToken] = useState("");
   const [hasToken, setHasToken] = useState(false);
@@ -1745,12 +1748,10 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
   };
 
   const selectedSize = sizes.find((s) => s.id === size);
-  const costHint = ephemeralCostHint(selectedSize, suspendsWhenIdle ? undefined : ttl, adapter.currency);
-  const lifecycleSummary = suspendsWhenIdle
-    ? "Suspends to ~$0 when idle; wake it from the machine list"
-    : teardownOnAgentFinish
-      ? `Destroyed when the agent finishes (TTL ${ttl} min backstop)`
-      : `Destroyed ${ttl} min after launch`;
+  const costHint = ephemeralCostHint(selectedSize, ttl, adapter.currency);
+  const lifecycleSummary = teardownOnAgentFinish
+    ? `Destroyed when the agent finishes (TTL ${ttl} min backstop)`
+    : `Destroyed ${ttl} min after launch`;
 
   const confirmDialog = confirm && (
     <ConfirmDialog
@@ -1762,16 +1763,6 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
       onConfirm={() => { confirm.action(); setConfirm(null); }}
     />
   );
-
-  if (catalog.availability === "planned") {
-    return (
-      <div className="settings-form">
-        <Badge>Planned</Badge>
-        <p className="muted">{catalog.blockedReason || `${catalog.name} is not available yet.`}</p>
-        <button className="btn primary" disabled>Not available yet</button>
-      </div>
-    );
-  }
 
   const credentialReady = catalog.hostedOnly ? hasHostedToken : hasToken;
 
@@ -1822,7 +1813,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
         <span className="muted">Provider</span><strong>{catalog.name}</strong>
         <span className="muted">Lifecycle</span><strong>{lifecycleSummary}</strong>
         <span className="muted">Compute class</span><strong>{selectedSize ? ephemeralComputeIntentLabel(selectedSize) : "Provider default"}</strong>
-        <span className="muted">Est. cost</span><strong>{costHint ? `${costHint}${suspendsWhenIdle ? " while active · ~$0 idle" : ""} · billed by ${catalog.name}` : `provider's live rate · billed by ${catalog.name}`}</strong>
+        <span className="muted">Est. cost</span><strong>{costHint ? `${costHint} · billed by ${catalog.name}` : `provider's live rate · billed by ${catalog.name}`}</strong>
       </div>
 
       <label className="field-label">Name</label>
@@ -1838,18 +1829,14 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
         {sizes.map((s) => <option key={s.id} value={s.id}>{ephemeralComputeIntentLabel(s)} · {s.label}{s.id === adapter.defaultSize ? " · Recommended" : ""}</option>)}
       </select>
 
-      {!suspendsWhenIdle && (
-        <>
-          <label className="field-label">Auto-destroy after</label>
-          <select className="picker-search" value={ttl} onChange={(e) => setTtl(Number(e.target.value))}>
-            {EPHEMERAL_TTL_OPTIONS.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
-          </select>
-          <label className="checkbox-row">
-            <input type="checkbox" checked={teardownOnAgentFinish} onChange={(e) => setTeardownOnAgentFinish(e.target.checked)} />
-            <span>Destroy as soon as the agent finishes <span className="muted small">(the machine handles teardown; the TTL stays a safety fallback)</span></span>
-          </label>
-        </>
-      )}
+      <label className="field-label">Auto-destroy after</label>
+      <select className="picker-search" value={ttl} onChange={(e) => setTtl(Number(e.target.value))}>
+        {EPHEMERAL_TTL_OPTIONS.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
+      </select>
+      <label className="checkbox-row">
+        <input type="checkbox" checked={teardownOnAgentFinish} onChange={(e) => setTeardownOnAgentFinish(e.target.checked)} />
+        <span>Destroy as soon as the agent finishes <span className="muted small">(the machine handles teardown; the TTL stays a safety fallback)</span></span>
+      </label>
 
       <div className="banner inline">The repo this machine works on comes from the composer when you launch — it isn't set here.</div>
 

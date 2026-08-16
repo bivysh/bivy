@@ -51,8 +51,7 @@ export interface BootstrapOpts {
   /** The ephemeral provider this machine runs on (`fly`/`hetzner`/`aws`/…). Lets
    *  the daemon learn it's disposable and, for destroy-lane providers, end the
    *  machine itself once idle — see `bivyBootstrapExports`/src/ephemeral-teardown.ts.
-   *  Suspend-to-zero providers (Sprites/E2B) are kept, so no self-teardown env is
-   *  emitted for them. */
+   *  Every supported ephemeral provider is a destroy lane. */
   provider?: string;
   /** Ask the daemon to tear the machine down promptly after the agent finishes
    *  (a short grace), not just at the idle window — the server-side equivalent of
@@ -145,15 +144,6 @@ export interface ProviderAdapter {
    *  cover: the durable attempt row itself being lost (both the row AND the
    *  legacy inventory array) after a resource was actually created. Only
    *  implemented for providers where an orphaned resource keeps billing
-   *  (Hetzner/Fly/EC2) — a suspend-when-idle managed sandbox (Sprites/E2B)
-   *  doesn't carry the same cost risk and is intentionally left without one. */
+   *  (Hetzner/Fly/EC2). */
   discover?(args: { exec: ExecFn; token: string; ownershipTag: string }): Promise<EphemeralMachine[]>;
-  /** Compatibility projection of the catalog fact. Lifecycle policy reads the
-   * catalog directly; retained for adapter consumers during migration. */
-  suspendsWhenIdle?: boolean;
-  /** Resume a suspended machine so it rejoins the relay and becomes reachable.
-   *  Only meaningful when the provider catalog declares `suspendsWhenIdle` — one allowlisted request that
-   *  forces the machine warm (for Sprites, starting its supervised `bivy`
-   *  service). Idempotent: safe to call on an already-running machine. */
-  wake?(args: { exec: ExecFn; token: string; machine: EphemeralMachine }): Promise<void>;
 }

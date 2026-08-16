@@ -21,7 +21,7 @@ test("the Hetzner catalog entry is flagged hostedOnly and its blurb says so", as
 
 test("hosted-only safety is separate from provider availability", async () => {
   const model = await read("../../packages/core/src/ephemeral-catalog.ts");
-  for (const id of ['id: "fly"', 'id: "sprites"', 'id: "e2b"', 'id: "aws"']) {
+  for (const id of ['id: "fly"', 'id: "aws"']) {
     const start = model.indexOf(id);
     expect(start, `${id} not found in catalog`).toBeGreaterThan(-1);
     const entry = model.slice(start, start + 800);
@@ -34,7 +34,7 @@ test("hosted-only setup uses control-plane custody instead of a device token", a
   const settings = await read("../../packages/web/src/components/Settings.tsx");
   expect(view).toContain('p.hostedOnly');
   expect(view).toContain('Hosted only');
-  expect(view).toContain('catalog.availability === "planned" || catalog.hostedOnly');
+  expect(view).toContain("if (catalog.hostedOnly)");
   expect(view).toContain("can't be launched with a device-held token");
   expect(view).toContain("Unattended machines");
   expect(settings).toContain("controller.validateHostedProviderCredential(providerId, value, region)");

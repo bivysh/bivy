@@ -92,6 +92,7 @@ export async function hostedExecutionReadiness(store: EphemeralProvisioningPort,
   const routing = await store.getQueueRouting(accountId);
   const config = resolveAutoProvisionTarget(routing, await store.getEphemeralConfigs(accountId));
   if (!config) return { ready: false, reason: "automation routing has no ephemeral config" };
+  if (!ephemeralAdapter(config.provider)) return { ready: false, reason: `provider ${config.provider} is no longer supported`, configId: config.id };
   const token = hosted.providerTokens?.[config.provider];
   if (!token) return { ready: false, reason: `no hosted ${config.provider} credential` };
   if (hosted.validatedProviders?.[config.provider] !== providerCredentialFingerprint(token)) {
@@ -267,6 +268,9 @@ export async function planAutoProvision(store: EphemeralProvisioningPort, accoun
   const configs = await store.getEphemeralConfigs(accountId);
   const target = resolveAutoProvisionTarget(routing, configs);
   if (!target) return { willProvision: false, targetConfigId: null, reason: "routing does not point at an ephemeral config" };
+  if (!ephemeralAdapter(target.provider)) {
+    return { willProvision: false, targetConfigId: target.id, reason: `provider ${target.provider} is no longer supported` };
+  }
   if (!hosted.providerTokens?.[target.provider]) {
     return { willProvision: false, targetConfigId: target.id, reason: `no hosted token for provider ${target.provider}` };
   }
@@ -1064,12 +1068,11 @@ function trackedResourceIds(machines: Array<Record<string, unknown>>, attempts: 
  * Deliberately conservative — a resource younger than the boot deadline is
  * left alone, since a create whose attempt-row write is merely slow (not
  * lost) would otherwise be raced by a spurious "orphan" delete. Only runs for
- * providers whose adapter implements `discover` (Hetzner/Fly/EC2 today; see
- * the interface doc comment for why Sprites/E2B are intentionally excluded).
+ * providers whose adapter implements `discover` (Hetzner/Fly/EC2 today).
  */
 /** Ask one provider for everything tagged as this account's. Returns
- * `undefined` when the adapter has no `discover` capability (Sprites/E2B),
- * distinct from an empty array (checked, nothing found). Injectable so tests
+ * `undefined` when an adapter has no `discover` capability, distinct from an
+ * empty array (checked, nothing found). Injectable so tests
  * can exercise the sweep's cross-referencing/idempotency logic without a real
  * provider transport — mirrors `DestroyFn`/`ObserveFn` above. */
 export type DiscoverFn = (provider: string, token: string, ownershipTag: string) => Promise<EphemeralMachine[] | undefined>;

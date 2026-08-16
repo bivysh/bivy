@@ -237,17 +237,15 @@ export interface AccountNode {
    *  @bivy/core's capability-routing.ts. */
   capabilities?: string[];
   /** Non-secret provider identity of an ephemeral (`eph-*`) node, populated by
-   *  the control-plane node registry at launch. Lets a *second* account device —
-   *  which doesn't hold the launching device's local machine record — reconstruct
-   *  the machine so it can wake a suspend-to-zero node (see
-   *  `ephemeralMachineFromNode` and docs/ephemeral-sessions.md "Gap A"). This is
-   *  identity only (a Fly machine id / E2B sandbox id), never a credential. */
+   *  the control-plane node registry at launch. Lets another account device
+   *  reconstruct provider identity for teardown/rebuild when it lacks the
+   *  launching device's local machine record. Never a credential. */
   bootstrapStatus?: { phase: string; updatedAt: string };
   ephemeral?: {
     provider: string;
     /** The provider's machine/sandbox id (the adapter's `EphemeralMachine.id`). */
     machineId: string;
-    /** The provider "app"/grouping handle, when the adapter uses one (Fly/Sprites). */
+    /** The provider "app"/grouping handle, when the adapter uses one (Fly). */
     app?: string;
     region?: string;
   };

@@ -11,7 +11,6 @@ import {
   type ExecFn,
   type ProviderSize,
 } from "./ephemeral-provider-adapters.js";
-import { ephemeralCatalogEntry } from "./ephemeral-catalog.js";
 import type { EphemeralMachine } from "./ephemeral-machine.js";
 import { planEphemeralLaunch, trackProvisionedMachine } from "./ephemeral-launch-plan.js";
 import { createEphemeralExecutionEnvelope } from "./ephemeral-execution-envelope.js";
@@ -20,8 +19,6 @@ import type { EphemeralKeyStore, MachineStore } from "./ephemeral-storage.js";
 export {
   EPHEMERAL_PROVIDERS,
   ephemeralCatalogEntry,
-  ephemeralProviderLaunchable,
-  ephemeralProviderSuspendsWhenIdle,
   type EphemeralProviderCatalog,
 } from "./ephemeral-catalog.js";
 export {
@@ -310,10 +307,6 @@ export async function launchEphemeralMachine(
   const fetchImpl = deps.fetchImpl ?? fetch;
   const adapter = ephemeralAdapter(opts.provider);
   if (!adapter) throw new Error(`Unknown provider: ${opts.provider}`);
-  const catalog = ephemeralCatalogEntry(opts.provider);
-  if (catalog?.availability === "planned") {
-    throw new Error(`${catalog.name} is not launchable yet: ${catalog.blockedReason || "provider certification is incomplete"}`);
-  }
   // Progress is deliberately best-effort: presentation code must never be able
   // to abort provisioning. Keep these messages free of credentials, enrollment
   // tokens, user-data, and provider response bodies.
@@ -452,19 +445,4 @@ export async function destroyEphemeralMachine(
       headers: { authorization: `Bearer ${deps.store.s}` },
     }).catch(() => {});
   }
-}
-
-/** Resume a suspended machine so it rejoins the relay and becomes reachable
- *  again — the device-driven wake behind "reopen the session to resume it".
- *  No-op for providers that don't suspend (their machines are either online or
- *  destroyed). Idempotent: safe to call on a machine that's already awake. */
-export async function wakeEphemeralMachine(
-  machine: EphemeralMachine,
-  deps: { exec: ExecFn; keys: EphemeralKeyStore },
-): Promise<void> {
-  const adapter = ephemeralAdapter(machine.provider);
-  if (!adapter?.wake) return;
-  const token = await deps.keys.getToken(machine.provider);
-  if (!token) throw new Error(`Add the ${adapter.name} token on this device to resume this machine.`);
-  await adapter.wake({ exec: deps.exec, token, machine });
 }

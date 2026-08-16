@@ -6,10 +6,9 @@ const read = (rel: string) => readFile(new URL(rel, import.meta.url), "utf8");
 
 test("isolated first use recommends one cloud and hides the rest behind progressive disclosure", async () => {
   const view = await read("../../packages/web/src/components/Ephemeral.tsx");
-  expect(view).toContain('p.id === "fly" && p.maturity === "stable"');
+  expect(view).toContain('p.id === "fly"');
   expect(view).toContain("Other cloud providers");
-  expect(view).toContain('p.availability === "preview" ? "Preview" : "Stable"');
-  expect(view).toContain('disabled={p.availability === "planned"}');
+  expect(view).toContain("<Badge>Available</Badge>");
 });
 
 test("the first isolated Run offers a safe task and names the billable launch action", async () => {
