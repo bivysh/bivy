@@ -41,10 +41,10 @@ const SPRITES_GUEST: Record<string, { cpus: number; ramMb: number }> = {
   "8x16": { cpus: 8, ramMb: 16384 },
 };
 const SPRITES_SIZES: ProviderSize[] = [
-  { id: "2x4", label: "2 vCPU · 4 GB", pricePerHour: 0.06 },
-  { id: "4x8", label: "4 vCPU · 8 GB", pricePerHour: 0.115 },
-  { id: "8x8", label: "8 vCPU · 8 GB", pricePerHour: 0.16 },
-  { id: "8x16", label: "8 vCPU · 16 GB", pricePerHour: 0.22 },
+  { id: "2x4", label: "2 vCPU · 4 GB", vcpus: 2, memoryMiB: 4096, architecture: "x86_64", pricePerHour: 0.06, priceSource: "indicative" },
+  { id: "4x8", label: "4 vCPU · 8 GB", vcpus: 4, memoryMiB: 8192, architecture: "x86_64", pricePerHour: 0.115, priceSource: "indicative" },
+  { id: "8x8", label: "8 vCPU · 8 GB", vcpus: 8, memoryMiB: 8192, architecture: "x86_64", pricePerHour: 0.16, priceSource: "indicative" },
+  { id: "8x16", label: "8 vCPU · 16 GB", vcpus: 8, memoryMiB: 16384, architecture: "x86_64", pricePerHour: 0.22, priceSource: "indicative" },
 ];
 
 function mapSpritesStatus(s: string): string {

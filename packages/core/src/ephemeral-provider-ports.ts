@@ -70,14 +70,29 @@ export interface BootstrapOpts {
 
 /** A pickable machine size. `id` is the provider-native identifier that gets
  *  passed back as `config.size` at provision time. */
+export interface ProviderAccelerator {
+  vendor: "nvidia" | "amd";
+  model: string;
+  count: number;
+  memoryMiB?: number;
+}
+
 export interface ProviderSize extends PricedMachineSize {
   id: string;
   label: string;
+  /** Structured workload facts. Keep these separate from `label`: product
+   *  policy uses them to recommend agent-fit compute and reject incompatible
+   *  architectures/images without parsing provider copy. */
+  vcpus?: number;
+  memoryMiB?: number;
+  diskGiB?: number;
+  architecture?: "x86_64" | "arm64";
+  accelerator?: ProviderAccelerator;
   /** Approximate on-demand compute price per hour in the provider's currency
    *  (see `ProviderAdapter.currency`), for showing an at-a-glance cost estimate
-   *  before launch. Indicative only — the provider's live bill is authoritative;
-   *  storage/egress/taxes aren't included. Absent when we have no figure. */
+   *  before launch. Storage/egress/taxes aren't included. */
   pricePerHour?: number;
+  priceSource?: "live" | "indicative";
 }
 
 export interface ProviderProvisionConfig {

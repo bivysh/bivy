@@ -3,7 +3,7 @@
 import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { AccountMe, AppState, EphemeralNodeConfig, LocalModelEndpointResult, LocalModelPreset, LocalModelProvider, PairedDevice, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, ProviderKeyInfo, ProviderSize, HostedAuditEvent, HostedMachineSummary, HostedProvisioningStatus } from "@bivy/core";
-import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint, ephemeralCostEstimate, ephemeralLifecyclePhase, formatEphemeralPrice } from "@bivy/core";
+import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralComputeIntentLabel, ephemeralCostHint, ephemeralCostEstimate, ephemeralLifecyclePhase, formatEphemeralPrice } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
@@ -1793,6 +1793,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
       <div className="vault-detail-grid">
         <span className="muted">Provider</span><strong>{catalog.name}</strong>
         <span className="muted">Lifecycle</span><strong>{lifecycleSummary}</strong>
+        <span className="muted">Compute class</span><strong>{selectedSize ? ephemeralComputeIntentLabel(selectedSize) : "Provider default"}</strong>
         <span className="muted">Est. cost</span><strong>{costHint ? `${costHint}${suspendsWhenIdle ? " while active · ~$0 idle" : ""} · billed by ${catalog.name}` : `provider's live rate · billed by ${catalog.name}`}</strong>
       </div>
 
@@ -1806,7 +1807,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
 
       <label className="field-label">Server type</label>
       <select className="picker-search" value={size} onChange={(e) => setSize(e.target.value)}>
-        {sizes.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+        {sizes.map((s) => <option key={s.id} value={s.id}>{ephemeralComputeIntentLabel(s)} · {s.label}{s.id === adapter.defaultSize ? " · Recommended" : ""}</option>)}
       </select>
 
       {!suspendsWhenIdle && (

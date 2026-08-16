@@ -23,6 +23,12 @@ export {
   type EphemeralProviderCatalog,
 } from "./ephemeral-catalog.js";
 export {
+  EPHEMERAL_COMPUTE_INTENT_LABELS,
+  ephemeralComputeIntent,
+  ephemeralComputeIntentLabel,
+  type EphemeralComputeIntent,
+} from "./ephemeral-compute.js";
+export {
   clampTtlMinutes,
   ephemeralColdStartMs,
   ephemeralCostHint,
@@ -102,6 +108,7 @@ export type {
   ExecFn,
   ExecRequest,
   ExecResult,
+  ProviderAccelerator,
   ProviderAdapter,
   ProviderProvisionConfig,
   ProviderSize,

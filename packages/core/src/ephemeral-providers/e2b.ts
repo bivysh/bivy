@@ -52,10 +52,10 @@ function e2bAuth(token: string): Record<string, string> {
 // USD/hr while ACTIVE, derived from E2B's per-second vCPU + RAM rates; a paused
 // sandbox costs ~$0 (snapshot storage aside), surfaced via `suspendsWhenIdle`.
 const E2B_SIZES: ProviderSize[] = [
-  { id: "1x2", label: "1 vCPU · 2 GB", pricePerHour: 0.08 },
-  { id: "2x4", label: "2 vCPU · 4 GB", pricePerHour: 0.17 },
-  { id: "4x8", label: "4 vCPU · 8 GB", pricePerHour: 0.33 },
-  { id: "8x16", label: "8 vCPU · 16 GB", pricePerHour: 0.66 },
+  { id: "1x2", label: "1 vCPU · 2 GB", vcpus: 1, memoryMiB: 2048, architecture: "x86_64", pricePerHour: 0.08, priceSource: "indicative" },
+  { id: "2x4", label: "2 vCPU · 4 GB", vcpus: 2, memoryMiB: 4096, architecture: "x86_64", pricePerHour: 0.17, priceSource: "indicative" },
+  { id: "4x8", label: "4 vCPU · 8 GB", vcpus: 4, memoryMiB: 8192, architecture: "x86_64", pricePerHour: 0.33, priceSource: "indicative" },
+  { id: "8x16", label: "8 vCPU · 16 GB", vcpus: 8, memoryMiB: 16384, architecture: "x86_64", pricePerHour: 0.66, priceSource: "indicative" },
 ];
 
 function mapE2bStatus(s: string): string {
@@ -74,7 +74,7 @@ export const e2bProvider: ProviderAdapter = {
   regions: [{ id: "us", label: "United States" }],
   defaultRegion: "us",
   sizes: E2B_SIZES,
-  defaultSize: "2x4",
+  defaultSize: "4x8",
   async validateToken({ exec, token }) {
     const res = await call(exec, { method: "GET", url: `${E2B_HOST}/v2/sandboxes?limit=1`, headers: e2bAuth(token) });
     if (res.status >= 300) throw new Error(providerError(res, "validate credential"));
