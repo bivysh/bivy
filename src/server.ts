@@ -57,7 +57,7 @@ import { deriveSessionState, type SessionState } from "./session/session-state.j
 import type { SessionRecord, PromptOptions, StreamingBehavior, PromptImage } from "./session/record.js";
 import { resolveStreamingBehavior } from "./session/record.js";
 import { createSessionEngine } from "./session/engine.js";
-import { exportProviderAuth, exportAccountApiKeys, exportSyncableProviderAuth, exportProviderAuthTombstones, importProviderAuth, removeProvider, setProviderApiKey, listCredentialRecords, setProviderApiKeyLabeled, setProviderReferenceLabeled, removeProviderCredential, setCredentialSync, setCredentialUnattended, exportUnattendedRecords, unattendedCredentialRevision, getCredentialPresets, setActiveCredentialPreset, setCredentialPresetMapping, exportSyncableRecords, exportRecordTombstones, importCredentialRecords, reconcileHostedCredentialRecords } from "./credentials/api.js";
+import { exportProviderAuth, exportAccountApiKeys, exportAccountOAuthCredentials, importAccountOAuthCredentials, exportSyncableProviderAuth, exportProviderAuthTombstones, importProviderAuth, removeProvider, setProviderApiKey, listCredentialRecords, setProviderApiKeyLabeled, setProviderReferenceLabeled, removeProviderCredential, setCredentialSync, setCredentialUnattended, exportUnattendedRecords, unattendedCredentialRevision, getCredentialPresets, setActiveCredentialPreset, setCredentialPresetMapping, exportSyncableRecords, exportRecordTombstones, importCredentialRecords, reconcileHostedCredentialRecords } from "./credentials/api.js";
 import { listProviders } from "./runtime/provider-catalog.js";
 import { exportLocalModels, importLocalModels } from "./runtime/local-model-store.js";
 import { execEphemeralRequest, type EphemeralExecRequest } from "./ephemeral-exec.js";
@@ -9539,7 +9539,18 @@ app.get("/api/auth/credentials", async (_req, res, next) => {
 
 app.get("/api/auth/credentials/account-export", async (_req, res, next) => {
   try {
-    res.json({ entries: await exportAccountApiKeys(credsDir), records: await listCredentialRecords(credsDir), deletedAt: await exportRecordTombstones(credsDir) });
+    res.json({ entries: await exportAccountApiKeys(credsDir), oauthEntries: await exportAccountOAuthCredentials(credsDir), records: await listCredentialRecords(credsDir), deletedAt: await exportRecordTombstones(credsDir) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/auth/credentials/account-import", async (req, res, next) => {
+  try {
+    await importAccountOAuthCredentials(credsDir, Array.isArray(req.body?.oauthEntries) ? req.body.oauthEntries : []);
+    await pushModelAuthToControlPlane();
+    await refreshSessionAfterAuth();
+    res.json({ ok: true });
   } catch (error) {
     next(error);
   }

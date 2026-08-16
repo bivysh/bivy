@@ -6,6 +6,8 @@ import { wrapKeyFor, type DeviceKeypair } from "./pairing.js";
 import { b64, unb64 } from "./base64.js";
 import type {
   DeviceCredentialScope,
+  DeviceOAuthCredential,
+  DeviceOAuthCredentialStore,
   EphemeralKeyStore,
   EphemeralModelKeyEntry,
   EphemeralModelKeyInfo,
@@ -53,8 +55,8 @@ export interface DeviceVaultSyncState {
 
 /** Non-secret durable metadata. Implementations may use IndexedDB/localStorage. */
 export interface DeviceVaultStateStore {
-  load(): Promise<{ clock?: number; tokenVersions?: Record<string, number>; modelVersions?: Record<string, number>; tokenTombstones?: Record<string, number>; modelTombstones?: Record<string, number>; sync?: DeviceVaultSyncState } | undefined>;
-  save(state: { clock: number; tokenVersions: Record<string, number>; modelVersions: Record<string, number>; tokenTombstones: Record<string, number>; modelTombstones: Record<string, number>; sync: DeviceVaultSyncState }): Promise<void>;
+  load(): Promise<{ clock?: number; tokenVersions?: Record<string, number>; modelVersions?: Record<string, number>; oauthVersions?: Record<string, number>; tokenTombstones?: Record<string, number>; modelTombstones?: Record<string, number>; oauthTombstones?: Record<string, number>; sync?: DeviceVaultSyncState } | undefined>;
+  save(state: { clock: number; tokenVersions: Record<string, number>; modelVersions: Record<string, number>; oauthVersions: Record<string, number>; tokenTombstones: Record<string, number>; modelTombstones: Record<string, number>; oauthTombstones: Record<string, number>; sync: DeviceVaultSyncState }): Promise<void>;
 }
 
 export interface DeviceVaultDeps {
@@ -64,6 +66,9 @@ export interface DeviceVaultDeps {
   enabled: () => boolean;
   providerTokenSyncEnabled?: () => boolean;
   modelKeys?: EphemeralModelKeyStore;
+  /** Opt-in browser recovery copies of account-scoped OAuth records. */
+  oauthCredentials?: DeviceOAuthCredentialStore;
+  oauthRecoveryEnabled?: () => boolean;
   randomKey?: () => Uint8Array;
   state?: DeviceVaultStateStore;
   now?: () => number;
@@ -78,6 +83,9 @@ export interface DeviceVaultKeyStore extends EphemeralKeyStore {
   setModelKey(provider: string, key: string, scope?: DeviceCredentialScope, label?: string): Promise<void>;
   removeModelKey(provider: string, label?: string): Promise<void>;
   importModelKeys(entries: Array<{ provider: string; label?: string; key: string }>): Promise<void>;
+  oauthCredentialEntries(): Promise<DeviceOAuthCredential[]>;
+  importOAuthCredentials(entries: DeviceOAuthCredential[]): Promise<void>;
+  removeOAuthCredential(provider: string, label?: string, deletedAt?: number): Promise<void>;
 }
 
 type VersionedRecord<T> = { value: T | null; updatedAt: number; tombstone?: true };
@@ -85,10 +93,11 @@ type DeviceVaultPayload = {
   v: 3;
   providerTokens: Record<string, VersionedRecord<string>>;
   modelKeys: Record<string, VersionedRecord<{ provider: string; label: string; key: string }>>;
+  oauthCredentials: Record<string, VersionedRecord<DeviceOAuthCredential>>;
 };
 type LegacyV2 = { v: 2; providerTokens?: Record<string, string>; modelKeys?: Record<string, { key: string; updatedAt?: string | null }> };
 
-const emptyPayload = (): DeviceVaultPayload => ({ v: 3, providerTokens: {}, modelKeys: {} });
+const emptyPayload = (): DeviceVaultPayload => ({ v: 3, providerTokens: {}, modelKeys: {}, oauthCredentials: {} });
 const emptySync = (): DeviceVaultSyncState => ({ phase: "idle", attemptedAt: null, succeededAt: null, pending: false, failure: null });
 const stamp = (value: string | null | undefined): number => {
   const parsed = value ? Date.parse(value) : NaN;
@@ -106,7 +115,7 @@ function normalizePayload(parsed: unknown): DeviceVaultPayload {
         ? { ...rec, value: { provider: rec.value.provider || id.split(":")[0] || id, label: rec.value.label || id.split(":").slice(1).join(":") || "default", key: rec.value.key } }
         : rec as VersionedRecord<{ provider: string; label: string; key: string }>;
     }
-    return { v: 3, providerTokens: p.providerTokens && typeof p.providerTokens === "object" ? p.providerTokens : {}, modelKeys };
+    return { v: 3, providerTokens: p.providerTokens && typeof p.providerTokens === "object" ? p.providerTokens : {}, modelKeys, oauthCredentials: p.oauthCredentials && typeof p.oauthCredentials === "object" ? p.oauthCredentials : {} };
   }
   const migrated = emptyPayload();
   const now = Date.now();
@@ -132,6 +141,7 @@ function mergePayload(a: DeviceVaultPayload, b: DeviceVaultPayload): DeviceVault
   const out = emptyPayload();
   for (const id of new Set([...Object.keys(a.providerTokens), ...Object.keys(b.providerTokens)])) out.providerTokens[id] = choose(a.providerTokens[id], b.providerTokens[id])!;
   for (const id of new Set([...Object.keys(a.modelKeys), ...Object.keys(b.modelKeys)])) out.modelKeys[id] = choose(a.modelKeys[id], b.modelKeys[id])!;
+  for (const id of new Set([...Object.keys(a.oauthCredentials), ...Object.keys(b.oauthCredentials)])) out.oauthCredentials[id] = choose(a.oauthCredentials[id], b.oauthCredentials[id])!;
   return out;
 }
 
@@ -139,6 +149,11 @@ function modelRecordId(provider: string, label = "default"): string {
   const p = String(provider || "").trim().toLowerCase();
   const l = String(label || "default").trim().toLowerCase() || "default";
   return l === "default" ? p : `${p}:${l}`;
+}
+
+function recordParts(id: string): { provider: string; label: string } {
+  const separator = id.indexOf(":");
+  return separator < 0 ? { provider: id, label: "default" } : { provider: id.slice(0, separator), label: id.slice(separator + 1) || "default" };
 }
 
 function defaultRandomKey(): Uint8Array { return crypto.getRandomValues(new Uint8Array(32)); }
@@ -154,19 +169,23 @@ export function createDeviceVaultKeyStore(deps: DeviceVaultDeps): DeviceVaultKey
   let clock = 0;
   let tokenVersions: Record<string, number> = {};
   let modelVersions: Record<string, number> = {};
+  let oauthVersions: Record<string, number> = {};
   let tokenTombstones: Record<string, number> = {};
   let modelTombstones: Record<string, number> = {};
+  let oauthTombstones: Record<string, number> = {};
   let syncState = emptySync();
   let inFlight: Promise<void> | null = null;
 
-  const persist = async () => deps.state?.save({ clock, tokenVersions, modelVersions, tokenTombstones, modelTombstones, sync: syncState });
+  const persist = async () => deps.state?.save({ clock, tokenVersions, modelVersions, oauthVersions, tokenTombstones, modelTombstones, oauthTombstones, sync: syncState });
   const init = () => initialized ??= (async () => {
     const saved = await deps.state?.load();
     clock = Math.max(saved?.clock ?? 0, now());
     tokenVersions = { ...(saved?.tokenVersions ?? {}) };
     modelVersions = { ...(saved?.modelVersions ?? {}) };
+    oauthVersions = { ...(saved?.oauthVersions ?? {}) };
     tokenTombstones = { ...(saved?.tokenTombstones ?? {}) };
     modelTombstones = { ...(saved?.modelTombstones ?? {}) };
+    oauthTombstones = { ...(saved?.oauthTombstones ?? {}) };
     syncState = saved?.sync ?? emptySync();
   })();
   const nextStamp = () => (clock = Math.max(clock + 1, now()));
@@ -191,6 +210,14 @@ export function createDeviceVaultKeyStore(deps: DeviceVaultDeps): DeviceVaultKey
       }
     }
     for (const [id, updatedAt] of Object.entries(modelTombstones)) out.modelKeys[id] = choose(out.modelKeys[id], { value: null, updatedAt, tombstone: true })!;
+    if (deps.oauthCredentials && deps.oauthRecoveryEnabled?.() === true) {
+      for (const entry of await deps.oauthCredentials.entries()) {
+        const id = modelRecordId(entry.provider, entry.label);
+        const updatedAt = Math.max(Number(entry.refreshedAt) || 0, Number(entry.updatedAt) || 0, oauthVersions[id] ?? 1);
+        out.oauthCredentials[id] = { value: entry, updatedAt };
+      }
+    }
+    for (const [id, updatedAt] of Object.entries(oauthTombstones)) out.oauthCredentials[id] = choose(out.oauthCredentials[id], { value: null, updatedAt, tombstone: true })!;
     return out;
   }
 
@@ -221,6 +248,21 @@ export function createDeviceVaultKeyStore(deps: DeviceVaultDeps): DeviceVaultKey
         delete modelTombstones[id];
       }
     }
+    if (deps.oauthCredentials && deps.oauthRecoveryEnabled?.() === true) for (const [id, rec] of Object.entries(payload.oauthCredentials)) {
+      const current = (await deps.oauthCredentials.entries()).find((entry) => modelRecordId(entry.provider, entry.label) === id);
+      const currentStamp = Math.max(Number(current?.refreshedAt) || 0, Number(current?.updatedAt) || 0, oauthVersions[id] ?? 0);
+      if (rec.tombstone) {
+        oauthTombstones[id] = Math.max(oauthTombstones[id] ?? 0, rec.updatedAt);
+        if (currentStamp <= rec.updatedAt) {
+          const target = current ?? recordParts(id);
+          await deps.oauthCredentials.remove(target.provider, target.label);
+        }
+      } else if (rec.value && currentStamp < rec.updatedAt) {
+        await deps.oauthCredentials.set(rec.value);
+        oauthVersions[id] = rec.updatedAt;
+        delete oauthTombstones[id];
+      }
+    }
   }
 
   async function syncOnce(): Promise<void> {
@@ -245,7 +287,7 @@ export function createDeviceVaultKeyStore(deps: DeviceVaultDeps): DeviceVaultKey
 
     const local = await localPayload();
     const merged = mergePayload(remotePayload, local);
-    const hasRecords = Object.keys(merged.providerTokens).length + Object.keys(merged.modelKeys).length > 0;
+    const hasRecords = Object.keys(merged.providerTokens).length + Object.keys(merged.modelKeys).length + Object.keys(merged.oauthCredentials).length > 0;
     if (!vaultKey) {
       if (!snap.vault && hasRecords) { vaultKey = randomKey(); keyGeneration = serverKeyGeneration; }
       else { await deps.remote.requestKey(); syncState = { ...syncState, phase: "pending", pending: true, failure: null }; await persist(); return; }
@@ -303,5 +345,43 @@ export function createDeviceVaultKeyStore(deps: DeviceVaultDeps): DeviceVaultKey
     async setModelKey(provider, key, scope = "account", label = "default") { if (!deps.modelKeys) throw new Error("Device model-key storage is unavailable"); await init(); const id = modelRecordId(provider, label); await deps.modelKeys.set(provider, key, scope, label); if (scope === "device") modelTombstones[id] = nextStamp(); else { modelVersions[id] = nextStamp(); delete modelTombstones[id]; } await persist(); if (deps.enabled()) await sync(); },
     async removeModelKey(provider, label = "default") { await init(); const id = modelRecordId(provider, label); await deps.modelKeys?.remove(provider, label); modelTombstones[id] = nextStamp(); await persist(); if (deps.enabled()) await sync(); },
     async importModelKeys(entries) { if (!deps.modelKeys) return; await init(); for (const entry of entries) { const label = entry.label ?? "default"; const id = modelRecordId(entry.provider, label); await deps.modelKeys.set(entry.provider, entry.key, "account", label); modelVersions[id] = nextStamp(); delete modelTombstones[id]; } await persist(); if (deps.enabled()) await sync(); },
+    async oauthCredentialEntries() {
+      if (deps.oauthRecoveryEnabled?.() !== true) return [];
+      const local = await deps.oauthCredentials?.entries() ?? [];
+      const byId = new Map(local.map((entry) => [modelRecordId(entry.provider, entry.label), entry]));
+      for (const [id, rec] of Object.entries(remotePayload.oauthCredentials)) if (!rec.tombstone && rec.value) {
+        const current = byId.get(id);
+        const currentStamp = Math.max(Number(current?.refreshedAt) || 0, Number(current?.updatedAt) || 0);
+        if (!current || currentStamp < rec.updatedAt) byId.set(id, rec.value);
+      }
+      return [...byId.values()];
+    },
+    async importOAuthCredentials(entries) {
+      if (!deps.oauthCredentials || deps.oauthRecoveryEnabled?.() !== true) return;
+      await init();
+      const current = await deps.oauthCredentials.entries();
+      for (const entry of entries) {
+        const id = modelRecordId(entry.provider, entry.label);
+        const incomingStamp = Math.max(Number(entry.refreshedAt) || 0, Number(entry.updatedAt) || 0);
+        const existing = current.find((value) => modelRecordId(value.provider, value.label) === id);
+        const existingStamp = Math.max(Number(existing?.refreshedAt) || 0, Number(existing?.updatedAt) || 0, oauthVersions[id] ?? 0);
+        if (existing && incomingStamp <= existingStamp) continue;
+        await deps.oauthCredentials.set(entry);
+        oauthVersions[id] = incomingStamp || nextStamp();
+        delete oauthTombstones[id];
+      }
+      await persist();
+      if (deps.enabled()) await sync();
+    },
+    async removeOAuthCredential(provider, label = "default", deletedAt) {
+      await init();
+      const id = modelRecordId(provider, label);
+      const stamp = Number(deletedAt) || nextStamp();
+      if (stamp <= (oauthVersions[id] ?? 0)) return;
+      await deps.oauthCredentials?.remove(provider, label);
+      oauthTombstones[id] = Math.max(oauthTombstones[id] ?? 0, stamp);
+      await persist();
+      if (deps.enabled()) await sync();
+    },
   };
 }

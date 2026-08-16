@@ -1,6 +1,6 @@
 # Credential and key sync model
 
-Bivy has four different credential classes, each with its own sync behavior. They are not one generic "keys sync everywhere" feature.
+Bivy has several credential classes. Model OAuth/API keys and interactive compute-provider tokens now share the account key-vault experience, while using the appropriate E2E recipient set (nodes for model execution, signed-in browser devices for cloud provisioning).
 
 ## 1. Relay/session keys
 
@@ -39,7 +39,16 @@ If you lose every node and device that can unwrap the vault, the stored
 ciphertext can no longer be decrypted — sign in to each provider again on a new
 node.
 
-## 3. GitHub App private keys
+## 3. Interactive compute-provider tokens
+
+Purpose: let any signed-in device launch, wake, and destroy isolated machines in the user's cloud account.
+
+- AWS, Fly, Hetzner, Sprites, and similar interactive provisioning tokens are synchronized automatically through the E2E device vault.
+- The control plane stores only ciphertext and per-device wrapped keys.
+- Revoking a browser device advances the device-vault key generation and surviving devices re-encrypt for the remaining recipients.
+- Unattended hosted provisioning remains a separate explicit custody grant.
+
+## 4. GitHub App private keys
 
 Purpose: let a GitHub App connected on one node (`bivy github:app-connect` /
 `github:app-create`) also serve the account's other nodes, without
@@ -76,7 +85,7 @@ Current model:
   covers the webhook secret; the app's private key is rotated from GitHub's
   own app settings page).
 
-## 4. Agent-native credentials
+## 5. Agent-native credentials
 
 Purpose: credentials owned by a third-party CLI/runtime, e.g. Claude Code, Codex, Gemini CLI.
 

@@ -13,6 +13,8 @@ import type { CommandEntries } from "../protocol/command-registry.js";
 import { testProviderCredential } from "../runtime/credentials.js";
 import {
   exportAccountApiKeys,
+  exportAccountOAuthCredentials,
+  importAccountOAuthCredentials,
   exportRecordTombstones,
   listCredentialRecords,
   removeProviderCredential,
@@ -53,9 +55,19 @@ export function createCredentialCommands(deps: CredentialCommandDeps): CommandEn
       deps.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
     },
     async "credentials.account.export"(_msg, ctx) {
-      // This reply travels inside the already-paired E2E node channel. It contains
-      // API keys only; OAuth/ref/node-local material is excluded by the API.
-      ctx.reply({ type: "credentials.account.export", requestId: _msg.requestId, entries: await exportAccountApiKeys(credsDir), records: await listCredentialRecords(credsDir), deletedAt: await exportRecordTombstones(credsDir) });
+      // This reply travels inside the already-paired E2E node channel. OAuth
+      // recovery records are encrypted again in the browser's device vault.
+      ctx.reply({ type: "credentials.account.export", requestId: _msg.requestId, entries: await exportAccountApiKeys(credsDir), oauthEntries: await exportAccountOAuthCredentials(credsDir), records: await listCredentialRecords(credsDir), deletedAt: await exportRecordTombstones(credsDir) });
+    },
+    async "credentials.account.import"(msg, ctx) {
+      try {
+        await importAccountOAuthCredentials(credsDir, Array.isArray(msg.oauthEntries) ? msg.oauthEntries : []);
+        await deps.pushModelAuthToControlPlane();
+        await deps.refreshSessionAfterAuth();
+        ctx.reply({ type: "credentials.account.import.ok", requestId: msg.requestId });
+      } catch (error) {
+        ctx.reply({ type: "credentials.account.import.error", requestId: msg.requestId, error: error instanceof Error ? error.message : String(error) });
+      }
     },
     async "credential.set"(msg, ctx) {
       try {

@@ -497,6 +497,16 @@ export class DirectTransport implements Transport {
           }
           break;
         }
+        case "credentials.account.import": {
+          const requestId = String(obj.requestId ?? "");
+          try {
+            await this.directApi("/api/auth/credentials/account-import", { method: "POST", body: JSON.stringify({ oauthEntries: obj.oauthEntries }) });
+            this.emit({ type: "credentials.account.import.ok", requestId });
+          } catch (error) {
+            this.emit({ type: "credentials.account.import.error", requestId, error: error instanceof Error ? error.message : String(error) });
+          }
+          break;
+        }
         case "credential.set": {
           const requestId = String(obj.requestId ?? "");
           try {

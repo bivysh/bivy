@@ -70,6 +70,7 @@ import {
   setNotificationPreferences,
   createEphemeralKeyStore,
   createEphemeralModelKeyStore,
+  createDeviceOAuthCredentialStore,
   createEphemeralPrefsStore,
   createEphemeralSetupStore,
   createMachineStore,
@@ -400,6 +401,10 @@ export class AppController {
       importModelKeys: (entries) => this.ephemeralKeys.importModelKeys(entries),
       removeModelKey: (provider, label) => this.ephemeralKeys.removeModelKey(provider, label),
       accountModelKeys: async () => (await this.ephemeralKeys.modelKeyEntries()).filter((entry) => entry.scope === "account"),
+      importOAuthCredentials: (entries) => this.ephemeralKeys.importOAuthCredentials(entries),
+      removeOAuthCredential: (provider, label, deletedAt) => this.ephemeralKeys.removeOAuthCredential(provider, label, deletedAt),
+      accountOAuthCredentials: () => this.ephemeralKeys.oauthCredentialEntries(),
+      oauthRecoveryEnabled: () => this.oauthRecoveryEnabled(),
     });
     this.ephemeralCoordinator = new EphemeralCoordinator({
       listConfigs: () => fetchEphemeralConfigs(this.local),
@@ -2555,20 +2560,21 @@ export class AppController {
 
   // --- Ephemeral machines ------------------------------------------------
 
-  // Provider tokens are device-local by default. When cross-device sync is opted
-  // in (Settings), they're additionally synced to the account's other devices
-  // through an E2E device vault so a second device can wake/reach a machine the
-  // first launched (P2 / Gap A) — the control plane only ever sees ciphertext.
+  // Compute-provider tokens are account credentials: signed-in devices converge
+  // them through the E2E device vault, so any device can launch/wake/destroy the
+  // user's machines. The control plane only ever sees ciphertext.
   private ephemeralModelKeys: EphemeralModelKeyStore = createEphemeralModelKeyStore();
+  private deviceOAuthCredentials = createDeviceOAuthCredentialStore();
   private ephemeralKeys: DeviceVaultKeyStore = createDeviceVaultKeyStore({
     local: createEphemeralKeyStore(),
     modelKeys: this.ephemeralModelKeys,
+    oauthCredentials: this.deviceOAuthCredentials,
+    oauthRecoveryEnabled: () => this.oauthRecoveryEnabled(),
     remote: this.deviceVaultRemote(),
     device: () => deviceKeypair(this.local),
     // The account credential vault is available before the first node exists.
-    // Compute-provider token widening remains a separate explicit opt-in.
     enabled: () => !this.direct && Boolean(this.local.s),
-    providerTokenSyncEnabled: () => this.deviceTokenSyncEnabled(),
+    providerTokenSyncEnabled: () => !this.direct && Boolean(this.local.s),
     state: {
       load: async () => {
         try { return JSON.parse(localStorage.getItem("bivy_device_vault_state") || "null") ?? undefined; } catch { return undefined; }
@@ -2628,28 +2634,21 @@ export class AppController {
     return this.ephemeralCoordinator.removeProviderToken(id);
   }
 
-  // --- Cross-device provider-token sync (P2 / Gap A) ---------------------
-  // Opt-in, off by default (per the CLOUD.md credential-widening precedent). When
-  // on, ephemeral provider tokens are E2E-synced to the account's other devices
-  // so a second device can wake/reach a machine the first launched.
-  private deviceTokenSyncEnabled(): boolean {
-    try {
-      return !this.direct && !!this.local.s && localStorage.getItem("bivy_device_token_sync") === "1";
-    } catch {
-      return false;
+  // --- Cross-device credential sync --------------------------------------
+  private oauthRecoveryEnabled(): boolean {
+    try { return !this.direct && !!this.local.s && localStorage.getItem("bivy_oauth_browser_recovery") === "1"; }
+    catch { return false; }
+  }
+  getOAuthBrowserRecovery(): boolean { return this.oauthRecoveryEnabled(); }
+  async setOAuthBrowserRecovery(enabled: boolean): Promise<void> {
+    if (!enabled) {
+      // Write tombstones while recovery is still enabled, then close the gate.
+      for (const entry of await this.ephemeralKeys.oauthCredentialEntries()) await this.ephemeralKeys.removeOAuthCredential(entry.provider, entry.label);
     }
+    try { localStorage.setItem("bivy_oauth_browser_recovery", enabled ? "1" : "0"); } catch { /* noop */ }
+    if (enabled) await this.syncAccountCredentialsWithNode();
   }
-  getDeviceTokenSync(): boolean {
-    return this.deviceTokenSyncEnabled();
-  }
-  setDeviceTokenSync(enabled: boolean): void {
-    try {
-      localStorage.setItem("bivy_device_token_sync", enabled ? "1" : "0");
-    } catch {
-      /* noop */
-    }
-    if (enabled) void this.syncDeviceVault().catch(() => { /* surfaced by getDeviceVaultSyncState */ });
-  }
+
   /** Reconcile the device vault. Failures remain observable through
    * `getDeviceVaultSyncState()` and reject explicit callers instead of being
    * silently swallowed. */

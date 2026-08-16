@@ -11,7 +11,7 @@ import path from "node:path";
 
 import { createCredentialVault } from "../src/runtime/credential-store.js";
 import type { CredentialRecord } from "../src/credentials/records.js";
-import { exportUnattendedRecords, reconcileHostedCredentialRecords, setCredentialUnattended, setProviderApiKeyLabeled } from "../src/credentials/api.js";
+import { exportAccountOAuthCredentials, exportUnattendedRecords, importAccountOAuthCredentials, reconcileHostedCredentialRecords, setCredentialUnattended, setProviderApiKeyLabeled } from "../src/credentials/api.js";
 
 function freshCredsDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-sync-pol-"));
@@ -99,6 +99,23 @@ function oauthRecord(provider: string, label: string, access: string, expires: n
     assert.deepEqual(manifest, [{ provider: "anthropic", label: "work" }]);
     assert.deepEqual(await reconcileHostedCredentialRecords(credsDir, {}, manifest), []);
     assert.equal(await store.readRecord("anthropic", "work"), undefined, "omission from the next filtered snapshot revokes a running hosted recipient");
+  } finally {
+    fs.rmSync(path.dirname(credsDir), { recursive: true, force: true });
+  }
+}
+
+// --- browser OAuth recovery advances rotations but cannot replace key kinds --
+{
+  const credsDir = freshCredsDir();
+  try {
+    const store = createCredentialVault(credsDir);
+    await store.putRecord({ ...oauthRecord("anthropic", "default", "old", 2_000), source: { kind: "stored", cred: { type: "oauth", access: "old", refresh: "refresh-old", expires: 2_000, refreshedAt: 1_000 } } });
+    await importAccountOAuthCredentials(credsDir, [{ provider: "anthropic", label: "default", access: "new", refresh: "refresh-new", expires: 4_000, refreshedAt: 3_000, updatedAt: 3_000 }]);
+    assert.equal((await exportAccountOAuthCredentials(credsDir))[0]?.refresh, "refresh-new");
+
+    await store.setApiKey("openai", "intentional-key");
+    await importAccountOAuthCredentials(credsDir, [{ provider: "openai", label: "default", access: "stale", refresh: "stale-refresh", expires: 9_000, refreshedAt: 8_000 }]);
+    assert.equal((await store.read("openai"))?.type, "api_key", "browser recovery never undoes a credential type switch");
   } finally {
     fs.rmSync(path.dirname(credsDir), { recursive: true, force: true });
   }

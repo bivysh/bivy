@@ -159,13 +159,13 @@ function ProviderConnectPanel({ providerId, onKeysChanged, onDone }: { providerI
           <button className="btn primary" disabled={!token.trim() || saving} onClick={connect}>
             {saving ? "Connecting…" : "Connect"}
           </button>
-          <p className="muted small">The token stays on this device and is sent only to the selected provider. To run automations while you're offline, opt in from Settings → Cloud machine profiles.</p>
+          <p className="muted small">The token is end-to-end encrypted in your key vault, synced to your signed-in devices, and sent only to the selected provider. To run automations while you're offline, opt in from Settings → Cloud machine profiles.</p>
         </>
       ) : (
         <>
           <Badge tone="ok">✓ {catalog.name} connected</Badge>
           <p className="muted small">Your cloud profile is ready. Pick it and send your first message; Bivy starts the machine automatically. Adjust its region, size, or lifetime in Settings → Cloud machine profiles.</p>
-          {controller.getDeviceTokenSync() && syncState.phase !== "idle" && (
+          {syncState.phase !== "idle" && (
             <Badge role="status" tone={syncState.phase === "failed" ? "danger" : syncState.phase === "synced" ? "ok" : undefined}>
               {syncState.phase === "failed" ? `Credential sync pending: ${syncState.failure ?? "retry needed"}` : syncState.phase === "synced" ? "Credentials synced" : "Credential sync pending"}
               {syncState.phase === "failed" && <button className="btn ghost" onClick={() => controller.syncDeviceVault().then(() => setSyncState(controller.getDeviceVaultSyncState())).catch(() => setSyncState(controller.getDeviceVaultSyncState()))}>Retry</button>}
