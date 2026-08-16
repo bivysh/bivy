@@ -88,6 +88,8 @@ export {
 export {
   exportProviderAuth,
   exportAccountApiKeys,
+  exportAccountOAuthCredentials,
+  importAccountOAuthCredentials,
   exportProviderAuthTombstones,
   importProviderAuth,
   setProviderApiKey,

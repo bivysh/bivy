@@ -62,6 +62,7 @@ export {
 export {
   createEphemeralKeyStore,
   createEphemeralModelKeyStore,
+  createDeviceOAuthCredentialStore,
   createEphemeralPrefsStore,
   createEphemeralSetupStore,
   createGithubTaskTokenStore,
@@ -70,6 +71,8 @@ export {
   indexedDbBackend,
   memoryBackend,
   type DeviceCredentialScope,
+  type DeviceOAuthCredential,
+  type DeviceOAuthCredentialStore,
   type EphemeralKeyStore,
   type EphemeralModelKeyEntry,
   type EphemeralModelKeyInfo,

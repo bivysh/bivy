@@ -65,6 +65,7 @@ export function CredentialVault({ state }: { state: AppState }) {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<VaultItem | null>(null);
+  const [oauthRecovery, setOauthRecovery] = useState(() => controller.getOAuthBrowserRecovery());
 
   const refreshDevice = () => controller.listEphemeralModelKeys().then(setDeviceKeys).catch(() => setDeviceKeys([]));
   const refresh = () => {
@@ -416,6 +417,10 @@ export function CredentialVault({ state }: { state: AppState }) {
   const filtered = items.filter((item) => `${item.providerName} ${item.provider} ${item.label}`.toLowerCase().includes(query.toLowerCase()));
   return <div className="settings-form credential-vault">
     <div className="vault-title-row"><div><h3>Your model access</h3><p className="muted settings-intro">Hosted providers, subscription sign-ins, API keys, and your own model endpoints.</p></div><button className="btn primary" onClick={() => { setSelectedKey(null); resetAdd(); setQuery(""); setView("add"); }}>+ Add</button></div>
+    <div className="settings-toggle-row">
+      <div className="settings-toggle-text"><div className="settings-toggle-title">OAuth browser recovery</div><p className="muted small">Keep account OAuth refresh tokens end-to-end encrypted on your signed-in devices so a new machine can recover without another machine online.</p></div>
+      <button type="button" role="switch" aria-checked={oauthRecovery} aria-label="Allow OAuth browser recovery" className={`settings-toggle${oauthRecovery ? " on" : ""}`} onClick={() => { const enabled = !oauthRecovery; setOauthRecovery(enabled); void controller.setOAuthBrowserRecovery(enabled).catch(() => setOauthRecovery(!enabled)); }}><span className="settings-toggle-knob" aria-hidden /></button>
+    </div>
     {items.length === 0 ? <div className="vault-empty"><h4>No providers yet</h4><p className="muted">Add a sign-in, API key, local model, or custom endpoint.</p><button className="btn primary" onClick={() => { setSelectedKey(null); resetAdd(); setView("add"); }}>Add provider</button></div> : <>
       <input className="picker-search" placeholder="Search credentials…" value={query} onChange={(e) => setQuery(e.target.value)} />
       <div className="picker-list vault-items">{filtered.map((item) => <button className="picker-item" key={keyOf(item.provider, item.label)} onClick={() => { setSelectedKey(keyOf(item.provider, item.label)); setMessage(null); setError(null); setView("detail"); }}>

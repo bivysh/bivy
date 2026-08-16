@@ -126,6 +126,48 @@ export async function exportAccountApiKeys(credsDir: string): Promise<Array<{ pr
     });
 }
 
+/** Account-scoped OAuth recovery records for paired browser devices. This is
+ * called only inside the E2E node channel; the control plane never sees the
+ * returned access or refresh token in plaintext. */
+export async function exportAccountOAuthCredentials(credsDir: string): Promise<Array<{ provider: string; label: string; access: string; refresh: string; expires: number; refreshedAt?: number; updatedAt?: number }>> {
+  return (await createCredentialVault(credsDir).listRecords()).flatMap((record) => {
+    if (record.sync !== "account" || record.source.kind !== "stored" || record.source.cred.type !== "oauth") return [];
+    const credential = record.source.cred;
+    if (!credential.refresh) return [];
+    return [{ provider: record.provider, label: record.label, access: credential.access, refresh: credential.refresh, expires: credential.expires, refreshedAt: credential.refreshedAt, updatedAt: record.updatedAt }];
+  });
+}
+
+/** Merge browser-custodied OAuth recovery records. Rotation timestamps make
+ * this safe against a stale browser replaying a previously spent token. */
+export async function importAccountOAuthCredentials(credsDir: string, entries: readonly unknown[]): Promise<number> {
+  const vault = createCredentialVault(credsDir);
+  const existing = new Map((await vault.listRecords()).map((record) => [`${record.provider}\u0000${record.label}`, record]));
+  const records: CredentialRecord[] = [];
+  for (const value of entries) {
+    if (!value || typeof value !== "object") continue;
+    const entry = value as Record<string, unknown>;
+    const provider = String(entry.provider ?? "").trim().toLowerCase();
+    const label = normalizeLabel(String(entry.label ?? "default"));
+    const access = String(entry.access ?? "");
+    const refresh = String(entry.refresh ?? "");
+    const expires = Number(entry.expires);
+    if (!provider || !refresh || !Number.isFinite(expires)) continue;
+    // Browser recovery may seed an absent record or advance an OAuth rotation,
+    // but must never replace an intentional API-key/reference type switch.
+    const current = existing.get(`${provider}\u0000${label}`);
+    if (current && (current.source.kind !== "stored" || current.source.cred.type !== "oauth")) continue;
+    const refreshedAt = Number(entry.refreshedAt);
+    const updatedAt = Number(entry.updatedAt);
+    records.push({
+      provider, label, sync: "account", origin: "bivy",
+      source: { kind: "stored", cred: { type: "oauth", access, refresh, expires, ...(Number.isFinite(refreshedAt) ? { refreshedAt } : {}) } },
+      ...(Number.isFinite(updatedAt) ? { updatedAt } : {}),
+    });
+  }
+  return vault.importRecords(records);
+}
+
 /** Record-keyed tombstones for record-shaped cross-node convergence. */
 export async function exportRecordTombstones(credsDir: string): Promise<Record<string, number>> {
   return createCredentialVault(credsDir).exportRecordTombstones();

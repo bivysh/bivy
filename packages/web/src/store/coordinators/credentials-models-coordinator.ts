@@ -18,6 +18,10 @@ export interface CredentialsModelsDependencies {
   importModelKeys(entries: Array<{ provider: string; label?: string; key: string }>): Promise<void>;
   removeModelKey(provider: string, label?: string): Promise<void>;
   accountModelKeys(): Promise<Array<{ provider: string; label: string; key: string; updatedAt?: string | null }>>;
+  importOAuthCredentials(entries: Array<{ provider: string; label: string; access: string; refresh: string; expires: number; refreshedAt?: number; updatedAt?: number }>): Promise<void>;
+  removeOAuthCredential(provider: string, label?: string, deletedAt?: number): Promise<void>;
+  accountOAuthCredentials(): Promise<Array<{ provider: string; label: string; access: string; refresh: string; expires: number; refreshedAt?: number; updatedAt?: number }>>;
+  oauthRecoveryEnabled(): boolean;
 }
 
 export type CredentialsModelsResult =
@@ -62,11 +66,18 @@ export class CredentialsModelsCoordinator {
     if (!this.deps.isOnline()) return Promise.resolve();
     if (this.accountSyncInFlight) return this.accountSyncInFlight;
     this.accountSyncInFlight = (async () => {
-      const event = await this.deps.awaitAck({ kind: "credentials.account.export" }) as unknown as { entries?: unknown; records?: unknown; deletedAt?: unknown };
+      const event = await this.deps.awaitAck({ kind: "credentials.account.export", includeOAuth: this.deps.oauthRecoveryEnabled() }) as unknown as { entries?: unknown; oauthEntries?: unknown; records?: unknown; deletedAt?: unknown };
       const incoming = Array.isArray(event.entries)
         ? event.entries.filter((entry): entry is { provider: string; label?: string; key: string; updatedAt?: number | string } => Boolean(entry)
           && typeof (entry as { provider?: unknown }).provider === "string"
           && typeof (entry as { key?: unknown }).key === "string")
+        : [];
+      const incomingOAuth = this.deps.oauthRecoveryEnabled() && Array.isArray(event.oauthEntries)
+        ? event.oauthEntries.filter((entry): entry is { provider: string; label: string; access: string; refresh: string; expires: number; refreshedAt?: number; updatedAt?: number } => Boolean(entry)
+          && typeof (entry as { provider?: unknown }).provider === "string"
+          && typeof (entry as { label?: unknown }).label === "string"
+          && typeof (entry as { refresh?: unknown }).refresh === "string"
+          && Number.isFinite(Number((entry as { expires?: unknown }).expires)))
         : [];
       const nodeRecords = Array.isArray(event.records)
         ? event.records.filter((record): record is { provider: string; label: string; kind: string } => Boolean(record)
@@ -83,6 +94,16 @@ export class CredentialsModelsCoordinator {
         if (Number.isFinite(tombstoneAt) && tombstoneAt > 0 && (!Number.isFinite(localAt) || tombstoneAt >= localAt)) await this.deps.removeModelKey(local.provider, local.label);
       }
       for (const record of nodeRecords) if (record.kind !== "api_key") await this.deps.removeModelKey(record.provider, record.label);
+      const localOAuth = this.deps.oauthRecoveryEnabled() ? await this.deps.accountOAuthCredentials() : [];
+      for (const local of localOAuth) {
+        const record = nodeRecords.find((candidate) => candidate.provider === local.provider && candidate.label === local.label);
+        const recordId = local.label === "default" ? local.provider : `${local.provider}:${local.label}`;
+        const tombstoneAt = Number(deletedAt[recordId]);
+        if ((record && record.kind !== "oauth") || (Number.isFinite(tombstoneAt) && tombstoneAt > Math.max(Number(local.refreshedAt) || 0, Number(local.updatedAt) || 0))) {
+          await this.deps.removeOAuthCredential(local.provider, local.label, Number.isFinite(tombstoneAt) ? tombstoneAt : this.deps.now());
+        }
+      }
+      await this.deps.importOAuthCredentials(incomingOAuth);
       const acceptedIncoming = incoming.filter((entry) => {
         const local = localBefore.find((candidate) => candidate.provider === entry.provider && candidate.label === (entry.label ?? "default"));
         if (!local) return true;
@@ -95,6 +116,11 @@ export class CredentialsModelsCoordinator {
         if (nodeRecords.some((record) => record.provider === provider && record.label === label && record.kind !== "api_key")) continue;
         await this.deps.awaitAck({ kind: "credential.set", provider, label, key });
       }
+      const browserOAuth = (this.deps.oauthRecoveryEnabled() ? await this.deps.accountOAuthCredentials() : []).filter(({ provider, label }) => {
+        const record = nodeRecords.find((candidate) => candidate.provider === provider && candidate.label === label);
+        return !record || record.kind === "oauth";
+      });
+      if (browserOAuth.length) await this.deps.awaitAck({ kind: "credentials.account.import", oauthEntries: browserOAuth });
       this.listCredentials();
       this.listProviders();
     })().catch(() => {}).finally(() => { this.accountSyncInFlight = null; });

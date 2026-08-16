@@ -1308,8 +1308,8 @@ function EphemeralPanel() {
   const [view, setView] = useState<EphemeralView>({ k: "list" });
   const refreshKeys = () => controller.listEphemeralKeys().then(setKeys).catch(() => {});
   // Account-level ephemeral configs — the same records the new-session node
-  // picker lists, so a machine saved here shows up there (and syncs across the
-  // account's devices). The provider token stays device-local.
+  // picker lists, so profiles and their E2E-vaulted provider token are available
+  // across the account's signed-in devices.
   const refreshSetups = () => controller.listEphemeralConfigs().then(setSetups).catch(() => {});
   // One-time migration: earlier builds saved machines as device-local "setups"
   // (invisible to the node picker, which reads account-level configs). Copy any
@@ -1420,16 +1420,6 @@ function EphemeralPanel() {
       )}
 
       {!controller.direct && setups.length > 0 && <HostedRunnerManagement profiles={setups} />}
-
-      <details className="vault-advanced">
-        <summary>Use profiles on my other devices</summary>
-        <div className="settings-toggle-row">
-          <div className="settings-toggle-text">
-            <p className="muted small">Securely sync cloud credentials between your signed-in devices so you don't have to paste them again.</p>
-          </div>
-          <EphemeralTokenSyncToggle />
-        </div>
-      </details>
     </div>
   );
 }
@@ -1471,20 +1461,6 @@ function EphemeralProviderChooser({ keys, onBack, onPick }: { keys: ProviderKeyI
         ))}
       </div>
     </div>
-  );
-}
-
-// Opt-in: sync provider tokens to the account's OTHER devices via an E2E device
-// vault (off by default; the control plane only ever stores ciphertext).
-function EphemeralTokenSyncToggle() {
-  const [on, setOn] = useState(false);
-  useEffect(() => { setOn(controller.getDeviceTokenSync()); }, []);
-  return (
-    <Toggle
-      checked={on}
-      onChange={(v) => { controller.setDeviceTokenSync(v); setOn(v); }}
-      label="Use cloud profiles on my other devices"
-    />
   );
 }
 
@@ -1774,7 +1750,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
         </div>
         <p className="muted small">{catalog.hostedOnly
           ? `Bivy's server stores this credential securely so it can always delete the ${catalog.name} machine and stop billing.`
-          : `The token stays on this device and is sent only to ${catalog.name}.`}</p>
+          : `End-to-end encrypted in your key vault, synced to your signed-in devices, and sent only to ${catalog.name}.`}</p>
         {err && <div className="banner inline" data-tone="danger" role="alert">{err}</div>}
         {msg && <div className="banner inline">{msg}</div>}
       </div>

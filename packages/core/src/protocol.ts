@@ -64,6 +64,7 @@ export interface Command extends CommandBase {
     // sync.set mutate one `provider:label` slot and ack via requestId.
     | "credentials.list"
     | "credentials.account.export"
+    | "credentials.account.import"
     | "credential.set"
     | "credential.remove"
     | "credential.sync.set"

@@ -11,12 +11,12 @@ Bivy's credential boundary is that provider credentials stay on the node or in a
 | Secret | Default storage | Notes |
 |---|---|---|
 | GitHub repo/work-queue token | Bivy secret vault as `github.repo-token` | `cli.json` stores only `secret://github.repo-token`. |
-| GitHub App private key | Bivy secret vault as `github.app.<appId>` | `github-apps.json` stores only a `secret://` reference. Opt-in E2E sync to the account's other nodes via `bivy github:app-sync on` — see [credential-sync.md](credential-sync.md#3-github-app-private-keys). |
+| GitHub App private key | Bivy secret vault as `github.app.<appId>` | `github-apps.json` stores only a `secret://` reference. Opt-in E2E sync to the account's other nodes via `bivy github:app-sync on` — see [credential-sync.md](credential-sync.md#4-github-app-private-keys). |
 | Integration API keys | Bivy secret vault as `integration.<id>.api-key` | `integrations.json` stores only a secret reference for new connections. |
 | Integration OAuth token sets | Bivy secret vault as `integration.<id>.oauth` | Access/refresh token JSON is encrypted locally for new connections. |
-| Model provider credentials | Bivy credential vault at `.bivy/credentials/auth.enc`; account API-key replicas in the E2E device vault | Shared with runtimes by Bivy's credential adapter. Provider/model metadata comes from Bivy's versioned catalog; Pi is one runtime overlay, not the credential owner. |
+| Model provider credentials | Bivy credential vault at `.bivy/credentials/auth.enc`; account API-key and opted-in OAuth recovery replicas in the E2E device vault | Shared with runtimes by Bivy's credential adapter. Provider/model metadata comes from Bivy's versioned catalog; Pi is one runtime overlay, not the credential owner. |
 | Relay enrollment/node config | Local `.bivy/*.json` files, mode `0600` where supported | Used for outbound relay auth and device pairing. |
-| Browser/PWA device keys | Non-extractable browser key material and encrypted IndexedDB records | The credential vault syncs labeled account API keys E2E; OAuth refresh tokens remain node-recipient material. Keep an external recovery copy or password-manager reference. |
+| Browser/PWA device keys | Non-extractable browser key material and encrypted IndexedDB records | The credential vault syncs labeled account API keys and compute-provider tokens E2E. OAuth browser recovery is an explicit opt-in. |
 
 ## Bivy secret vault
 

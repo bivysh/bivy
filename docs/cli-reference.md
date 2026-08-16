@@ -739,7 +739,7 @@ vault keys — never a plaintext key — the same guarantee `github:app-connect`
 already gives a single node. Off by default: a GitHub App key is a repo-write
 credential, so which nodes hold it is a deliberate per-node opt-in, not
 automatic like model/provider auth sync. See
-[credential-sync.md](credential-sync.md#3-github-app-private-keys).
+[credential-sync.md](credential-sync.md#4-github-app-private-keys).
 
 No argument prints the current on/off status and which apps this node holds.
 

@@ -197,6 +197,50 @@ export interface EphemeralModelKeyEntry {
  * lives on the node, not here. API keys only; agent-native OAuth logins are out
  * of scope (fragile to replay onto disposable machines — see credential-sync.md).
  */
+export interface DeviceOAuthCredential {
+  provider: string;
+  label: string;
+  access: string;
+  refresh: string;
+  expires: number;
+  refreshedAt?: number;
+  updatedAt?: number;
+}
+
+/** Browser-held recovery copies of Bivy-managed OAuth records. These records
+ * are encrypted by the E2E device vault and are never used to refresh in the
+ * browser; a node remains the only OAuth actor. */
+export interface DeviceOAuthCredentialStore {
+  entries(): Promise<DeviceOAuthCredential[]>;
+  set(entry: DeviceOAuthCredential): Promise<void>;
+  remove(provider: string, label?: string): Promise<void>;
+}
+
+export function createDeviceOAuthCredentialStore(
+  backend: KvBackend = defaultBackend("model-oauth", "id"),
+): DeviceOAuthCredentialStore {
+  const norm = (value: string) => String(value || "").trim().toLowerCase();
+  const label = (value?: string) => norm(value || "default") || "default";
+  const id = (provider: string, account: string) => `${provider}:${account}`;
+  const all = async (): Promise<any[]> => { try { return await backend.getAll(); } catch { return []; } };
+  return {
+    async entries() {
+      return (await all()).filter((entry) => entry?.provider && entry?.refresh).map((entry) => ({
+        provider: norm(entry.provider), label: label(entry.label), access: String(entry.access || ""),
+        refresh: String(entry.refresh), expires: Number(entry.expires) || 0,
+        ...(Number.isFinite(Number(entry.refreshedAt)) ? { refreshedAt: Number(entry.refreshedAt) } : {}),
+        ...(Number.isFinite(Number(entry.updatedAt)) ? { updatedAt: Number(entry.updatedAt) } : {}),
+      }));
+    },
+    async set(entry) {
+      const provider = norm(entry.provider); const account = label(entry.label);
+      if (!provider || !String(entry.refresh || "").trim()) throw new Error("A provider and refresh token are required");
+      await backend.put(id(provider, account), { ...entry, id: id(provider, account), provider, label: account });
+    },
+    async remove(provider, account = "default") { await backend.delete(id(norm(provider), label(account))); },
+  };
+}
+
 export interface EphemeralModelKeyStore {
   /** Metadata for the UI — provider id + whether a key is saved. No secrets. */
   list(): Promise<EphemeralModelKeyInfo[]>;

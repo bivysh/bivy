@@ -6,6 +6,7 @@ import {
   DeviceVaultConflictError,
   createEphemeralKeyStore,
   createEphemeralModelKeyStore,
+  createDeviceOAuthCredentialStore,
   memoryBackend,
   wrapKeyFor,
   seal,
@@ -63,6 +64,8 @@ const store = (dev: DeviceKeypair, remote: DeviceVaultRemote, enabled = true) =>
   createDeviceVaultKeyStore({
     local: createEphemeralKeyStore(memoryBackend()),
     modelKeys: createEphemeralModelKeyStore(memoryBackend()),
+    oauthCredentials: createDeviceOAuthCredentialStore(memoryBackend()),
+    oauthRecoveryEnabled: () => true,
     remote,
     device: async () => dev,
     enabled: () => enabled,
@@ -114,6 +117,26 @@ describe("device vault — cross-device token sync", () => {
       { provider: "anthropic", label: "default", key: "personal-key" },
       { provider: "anthropic", label: "work", key: "work-key" },
     ]);
+  });
+
+  it("syncs OAuth recovery records and converges rotated refresh tokens", async () => {
+    const A = await makeDevice();
+    const B = await makeDevice();
+    const cp = fakeControlPlane();
+    const a = store(A, cp.forDevice(A.pub));
+    const b = store(B, cp.forDevice(B.pub));
+
+    await a.importOAuthCredentials([{ provider: "anthropic", label: "default", access: "access-1", refresh: "refresh-1", expires: 2_000, refreshedAt: 1_000, updatedAt: 1_000 }]);
+    await b.sync();
+    expect((await b.oauthCredentialEntries())[0]?.refresh).toBe("refresh-1");
+
+    await b.importOAuthCredentials([{ provider: "anthropic", label: "default", access: "access-2", refresh: "refresh-2", expires: 4_000, refreshedAt: 3_000, updatedAt: 3_000 }]);
+    await a.sync();
+    expect((await a.oauthCredentialEntries())[0]?.refresh).toBe("refresh-2");
+
+    await a.importOAuthCredentials([{ provider: "anthropic", label: "default", access: "stale", refresh: "refresh-1", expires: 2_000, refreshedAt: 1_000, updatedAt: 1_000 }]);
+    expect((await a.oauthCredentialEntries())[0]?.refresh).toBe("refresh-2");
+    expect(cp.peekVault()).not.toContain("refresh-2");
   });
 
   it("prefers the device-local token over the synced copy", async () => {

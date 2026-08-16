@@ -490,10 +490,20 @@ export class DirectTransport implements Transport {
         case "credentials.account.export": {
           const requestId = String(obj.requestId ?? "");
           try {
-            const result = await this.directApi("/api/auth/credentials/account-export");
+            const result = await this.directApi("/api/auth/credentials/account-export", { method: "POST", body: JSON.stringify({ includeOAuth: obj.includeOAuth === true }) });
             this.emit({ type: "credentials.account.export", requestId, ...result });
           } catch (error) {
             this.emit({ type: "credentials.account.export.error", requestId, error: error instanceof Error ? error.message : String(error) });
+          }
+          break;
+        }
+        case "credentials.account.import": {
+          const requestId = String(obj.requestId ?? "");
+          try {
+            await this.directApi("/api/auth/credentials/account-import", { method: "POST", body: JSON.stringify({ oauthEntries: obj.oauthEntries }) });
+            this.emit({ type: "credentials.account.import.ok", requestId });
+          } catch (error) {
+            this.emit({ type: "credentials.account.import.error", requestId, error: error instanceof Error ? error.message : String(error) });
           }
           break;
         }
