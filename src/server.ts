@@ -9537,11 +9537,11 @@ app.get("/api/auth/credentials", async (_req, res, next) => {
   }
 });
 
-app.get("/api/auth/credentials/account-export", async (req, res, next) => {
+app.post("/api/auth/credentials/account-export", async (req, res, next) => {
   try {
     res.json({
       entries: await exportAccountApiKeys(credsDir),
-      ...(req.query.includeOAuth === "1" ? { oauthEntries: await exportAccountOAuthCredentials(credsDir) } : {}),
+      ...(req.body?.includeOAuth === true ? { oauthEntries: await exportAccountOAuthCredentials(credsDir) } : {}),
       records: await listCredentialRecords(credsDir), deletedAt: await exportRecordTombstones(credsDir),
     });
   } catch (error) {
