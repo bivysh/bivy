@@ -1817,7 +1817,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
           </select>
           <label className="checkbox-row">
             <input type="checkbox" checked={teardownOnAgentFinish} onChange={(e) => setTeardownOnAgentFinish(e.target.checked)} />
-            <span>Destroy as soon as the agent finishes <span className="muted small">(the TTL above stays a safety fallback; the launching device must be online)</span></span>
+            <span>Destroy as soon as the agent finishes <span className="muted small">(the machine handles teardown; the TTL stays a safety fallback)</span></span>
           </label>
         </>
       )}
