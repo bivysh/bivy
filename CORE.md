@@ -17,6 +17,10 @@ Core includes:
 - bring-your-own-cloud ephemeral runner orchestration primitives;
 - documentation and tests needed to run, modify, and self-host Bivy.
 
+Core does not contain Bivy Cloud billing, plan definitions, commercial usage
+metering, upgrade UI, or entitlement enforcement. Those live exclusively in the
+separate Cloud repository; Core deployments do not impose commercial limits.
+
 Core promises:
 
 - Bivy requires relay/control-plane enrollment to deliver its core value — remotely visible, steerable sessions — but that enrollment can always target self-hosted infrastructure, so a Bivy Cloud account is never mandatory;

@@ -21,7 +21,7 @@ import type { PairingStore, RotateDelivery } from "../device-registry.js";
  * Or via env: BIVY_RELAY_URL, BIVY_RELAY_TOKEN.
  *
  * The connector is OPTIONAL: if no config is present, the node runs local-only
- * (free tier) exactly as before. Frame encryption always uses the rotating room
+ * exactly as before. Frame encryption always uses the rotating room
  * key from the node's `PairingStore` (X25519 pairing); there is no static key.
  */
 
@@ -121,7 +121,7 @@ export class RelayConnector {
   private heartbeatTimer?: ReturnType<typeof setInterval>;
   private stableTimer?: ReturnType<typeof setTimeout>;
   private lastPongAt = 0;
-  // True only between the relay's `ready` message (auth + entitlement passed)
+  // True only between the relay's `ready` message (admission passed)
   // and the socket closing. This — not "a connector object exists" — is what
   // "connected" means to the control plane, so it's what `bivy status` reports.
   private ready = false;
@@ -156,7 +156,7 @@ export class RelayConnector {
 
   /**
    * True only while the relay link is live AND the relay has sent `ready`
-   * (auth/entitlement checks passed) — i.e. the node is actually reachable from
+   * (admission checks passed) — i.e. the node is actually reachable from
    * the control plane. A socket that opened but was rejected, or one still
    * reconnecting, reads false.
    */
@@ -372,7 +372,7 @@ export class RelayConnector {
     this.ws = ws;
 
     ws.on("open", () => {
-      // The TCP/WebSocket handshake succeeded, but relay auth/entitlement
+      // The TCP/WebSocket handshake succeeded, but relay admission
       // checks happen after upgrade. Wait for the relay's `ready` message
       // before declaring the connector usable or resetting reconnect backoff.
     });

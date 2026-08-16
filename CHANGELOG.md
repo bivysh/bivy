@@ -62,6 +62,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   capturing refs from validated structured output or using declarative
   host-assigned creation args (`resume.newArgs` in plugin manifests).
 
+### Changed
+
+- Bivy Cloud billing, plan definitions, commercial metering, upgrade UI, and
+  entitlement enforcement were removed from Core. The self-hostable control
+  plane and relay now admit authenticated accounts without commercial limits;
+  Cloud owns the complete commercial layer in its private repository.
+
 ### Fixed
 
 - ACP integrations now distinguish already-running observed activity from

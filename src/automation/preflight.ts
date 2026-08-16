@@ -63,13 +63,6 @@ export function runPreflightChecks(signals: PreflightSignals): PreflightCheckRes
     results.push(check("sandbox_policy", "info", "Sandbox & policy", sandbox.detail ?? `Restricted by policy to ${sandbox.effectiveSandbox} / ${sandbox.effectiveApproval}.`));
   } else results.push(check("sandbox_policy", "ok", "Sandbox & policy", sandbox.detail ?? "Requested sandbox and approval are within policy."));
 
-  const quota = signals.quota;
-  if (!quota) results.push(skipped("quota", "Automation quota"));
-  else if (typeof quota.limit !== "number") results.push(check("quota", "ok", "Automation quota", quota.detail ?? "No quota limit applies to this plan."));
-  else if (quota.exhausted) results.push(check("quota", "block", "Automation quota", quota.detail ?? `The account is over its automation quota (${quota.used}/${quota.limit} this window).`));
-  else if (quota.warn) results.push(check("quota", "warn", "Automation quota", quota.detail ?? `The account is at its automation quota (${quota.used}/${quota.limit} this window); this run is in the grace band.`));
-  else results.push(check("quota", "ok", "Automation quota", quota.detail ?? `${quota.used ?? 0}/${quota.limit} used this window.`));
-
   return results;
 }
 

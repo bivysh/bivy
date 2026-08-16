@@ -17,7 +17,6 @@ assert.equal(
 
 const repositoryNames = [
   "AccountAuthRepository",
-  "BillingRepository",
   "NodeRepository",
   "SessionIndexRepository",
   "NotificationRepository",

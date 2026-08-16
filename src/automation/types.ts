@@ -96,7 +96,6 @@ export const PREFLIGHT_CHECK_IDS = [
   "assigned_machine",
   "agent_model_credentials",
   "sandbox_policy",
-  "quota",
 ] as const;
 
 export type PreflightCheckId = (typeof PREFLIGHT_CHECK_IDS)[number];
@@ -108,10 +107,7 @@ export interface PreflightCheckResult {
   severity: PreflightSeverity;
   label: string;
   detail: string;
-  /** True only for a "block" that must stop save — see runPreflightChecks for
-   *  which specific conditions set this (not every "block" severity implies
-   *  a save-blocker; see quota, which can report "block" for a simulated
-   *  event without it stopping the automation from being saved). */
+  /** True only for a condition that must stop save. */
   blocksSave: boolean;
 }
 
@@ -179,13 +175,6 @@ export interface PreflightSignals {
     effectiveSandbox: string;
     /** autonomous + danger-full-access without an explicit acknowledgement. */
     unsafeCombo: boolean;
-    detail?: string;
-  };
-  quota?: {
-    limit?: number;
-    used?: number;
-    warn?: boolean;
-    exhausted?: boolean;
     detail?: string;
   };
 }

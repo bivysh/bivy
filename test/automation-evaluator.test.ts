@@ -117,7 +117,7 @@ test("findOverlaps: schedule/webhook/manual triggers are excluded (no first-matc
 
 test("preflight: no signals means every check reports skipped, never blocks", () => {
   const results = runPreflightChecks({});
-  assert.equal(results.length, 7);
+  assert.equal(results.length, 6);
   assert.ok(results.every((r) => r.severity === "skipped"));
   assert.equal(gateFromChecks(results).blocked, false);
 });
@@ -167,14 +167,6 @@ test("preflight: offline machine with no fallback still only warns (queues rathe
   assert.equal(gate.requiresAck, true);
 });
 
-test("preflight: exhausted quota reports block severity but is not a save-blocker", () => {
-  const results = runPreflightChecks({ quota: { limit: 10, used: 11, exhausted: true } });
-  const quotaCheck = results.find((r) => r.id === "quota");
-  assert.equal(quotaCheck?.severity, "block");
-  assert.equal(quotaCheck?.blocksSave, false);
-  assert.equal(gateFromChecks(results).blocked, false);
-});
-
 test("preflight: a clean checklist across every signal requires no acknowledgement", () => {
   const results = runPreflightChecks({
     sourceConnection: { required: true, connected: true },
@@ -183,7 +175,6 @@ test("preflight: a clean checklist across every signal requires no acknowledgeme
     assignedMachine: { primaryOnline: true },
     agentModelCredentials: { ready: true, explicit: true },
     sandboxPolicy: { requestedApproval: "risky", requestedSandbox: "workspace-write", effectiveApproval: "risky", effectiveSandbox: "workspace-write", unsafeCombo: false },
-    quota: { limit: 10, used: 2 },
   });
   const gate = gateFromChecks(results);
   assert.equal(gate.blocked, false);
@@ -198,7 +189,6 @@ test("evaluateAutomation composes match, overlaps, and preflight in one call", (
   const result = evaluateAutomation({
     candidates,
     event: { kind: "github", event: "issues", labels: ["bivy"] },
-    signals: { quota: { limit: 10, used: 3 } },
   });
   assert.equal(result.match?.matched?.id, "a");
   assert.equal(result.overlaps[0]?.kind, "shadowed");
@@ -213,5 +203,5 @@ test("evaluateAutomation without an event still reports overlaps and preflight",
   const result = evaluateAutomation({ candidates });
   assert.equal(result.match, undefined);
   assert.equal(result.overlaps[0]?.kind, "shadowed");
-  assert.equal(result.preflight.length, 7);
+  assert.equal(result.preflight.length, 6);
 });

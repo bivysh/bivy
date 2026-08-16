@@ -101,14 +101,6 @@ export function GithubQueuePanel({
     [runtimes],
   );
   const [appInfo, setAppInfo] = useState<GithubAppInfo | null>(null);
-  // The hosted work queue is included on every plan. `null` = still loading;
-  // `false` remains supported for a future plan that disables it.
-  const [workQueueEnabled, setWorkQueueEnabled] = useState<boolean | null>(null);
-  // Free-tier rolling automation quota. Interactive sessions are unlimited;
-  // `limit` and `used` cover queued jobs only. Undefined means unlimited (paid).
-  const [runLimit, setRunLimit] = useState<number | undefined>(undefined);
-  const [runsUsed, setRunsUsed] = useState<number>(0);
-  const [proPrice, setProPrice] = useState<string | undefined>();
   const [nodes, setNodes] = useState<AccountNode[]>([]);
   // The queue item whose "Run…" picker is open, plus its in-progress selections.
   const [assignOpenId, setAssignOpenId] = useState<string | null>(null);
@@ -233,15 +225,6 @@ export function GithubQueuePanel({
     if (!canQuery) return;
     controller.fetchGithubApp().then(setAppInfo).catch(() => setAppInfo(null));
     controller.listNodes().then(setNodes).catch(() => {});
-    controller
-      .fetchMe()
-      .then((m) => {
-        setWorkQueueEnabled(Boolean(m?.entitlements?.workQueueEnabled));
-        setRunLimit(m?.entitlements?.weeklyRunLimit);
-        setRunsUsed(Number(m?.counts?.runsThisWeek ?? 0));
-        setProPrice(m?.pricing?.pro?.label);
-      })
-      .catch(() => setWorkQueueEnabled(null));
     controller.listEphemeralKeys().then(setEphemeralKeys).catch(() => {});
     if (EPHEMERAL_MACHINES_ENABLED) controller.listEphemeralConfigs().then(setEphemeralConfigs).catch(() => {});
     controller.getGithubTaskToken().then((t) => setHasGithubTaskToken(Boolean(t))).catch(() => {});
@@ -411,31 +394,7 @@ export function GithubQueuePanel({
 
   return (
       <div className="settings-form">
-        {/* The queue is included on every plan. Free meters unattended automation
-            while interactive CLI/app sessions remain unlimited. */}
-        {canQuery && workQueueEnabled !== false && typeof runLimit === "number" && (
-          <div className="banner inline" data-tone={runsUsed >= runLimit ? "warn" : "neutral"}>
-            {runsUsed >= runLimit ? (
-              <>
-                {runsUsed > runLimit
-                  ? `Free plan — automation is paused after ${runLimit} included jobs plus a grace job. Capacity returns as older jobs pass 7 days. `
-                  : `Free plan — you've used your ${runLimit} included automations. Your next job is the grace job. `}
-                <button className="btn link" onClick={() => controller.startCheckout().catch(() => {})}>
-                  Upgrade to Pro{proPrice ? ` (${proPrice})` : ""} for unlimited automation →
-                </button>
-              </>
-            ) : (
-              <>
-                Free plan — {Math.max(0, runLimit - runsUsed)} of {runLimit} automations left this week.{" "}
-                <button className="btn link" onClick={() => controller.startCheckout().catch(() => {})}>
-                  Upgrade to Pro{proPrice ? ` (${proPrice})` : ""} for unlimited automation →
-                </button>
-              </>
-            )}
-          </div>
-        )}
-
-        {canQuery && workQueueEnabled !== false && appInfo && apps.length === 0 && (
+        {canQuery && appInfo && apps.length === 0 && (
           <div className="banner inline" data-tone="neutral">
             No GitHub App connected yet.{" "}
             <button className="btn link" onClick={onOpenGithubSettings}>
@@ -444,7 +403,7 @@ export function GithubQueuePanel({
           </div>
         )}
 
-        {canQuery && workQueueEnabled !== false && unservedApps.length > 0 && (
+        {canQuery && unservedApps.length > 0 && (
           <div className="banner inline" data-tone="warn">
             {unservedApps.length === apps.length
               ? `${apps.length === 1 ? "Your GitHub App is" : "Your GitHub Apps are"} set up, but no online machine is running ${apps.length === 1 ? "it" : "them"} — nothing will pick these up.`
@@ -516,7 +475,7 @@ export function GithubQueuePanel({
 
         </>}
 
-        {canQuery && workQueueEnabled !== false && (
+        {canQuery && (
           <>
             <div className="queue-head">
               <h4 className="settings-subhead">

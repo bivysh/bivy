@@ -32,7 +32,7 @@ export async function initSentry(): Promise<SentryFacade> {
     environment: process.env.SENTRY_ENVIRONMENT || process.env.NODE_ENV || "development",
     release: process.env.SENTRY_RELEASE,
     // Errors only by default; performance tracing multiplies quota use and the
-    // free tier is small. Opt in with SENTRY_TRACES_SAMPLE_RATE.
+    // reporting allowance is small. Opt in with SENTRY_TRACES_SAMPLE_RATE.
     tracesSampleRate: Number(process.env.SENTRY_TRACES_SAMPLE_RATE ?? 0),
     serverName: "control-plane",
   });

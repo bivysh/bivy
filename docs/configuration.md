@@ -488,7 +488,6 @@ unauthenticated dev login enabled.
 | `NODE_ENV` | string | unset | Only `production` is special. Enables the boot-time config assertions |
 | `DATABASE_URL` | Postgres URL | unset → an **in-memory** `pg-mem` store, wiped on every restart | Required in production; the service exits 1 without it |
 | `RELAY_SECRET` | opaque string | **`dev-relay-secret`** | Shared secret for the relay's introspection calls. Required in production and must not be the default, or the service exits 1. Generate with `openssl rand -hex 32` |
-| `STRIPE_WEBHOOK_SECRET` | `whsec_…` | none | Required in production **if** `STRIPE_SECRET_KEY` is set; otherwise the service exits 1 |
 | `RESEND_API_KEY` | `re_…` | none | Required in production for magic-link email — but only checked when a magic link is first requested, not at boot |
 
 ## Core
@@ -501,9 +500,6 @@ unauthenticated dev login enabled.
 | `RELAY_SHARD_URLS` | comma-separated URLs | falls back to `RELAY_PUBLIC_URL`, then `ws://localhost:4500` | Node→shard mapping is by hash of the node id |
 | `DATABASE_POOL_MAX` | integer ≥ 1 | `10` | |
 | `LINK_GRANT_TTL_MS` | integer ms | `2592000000` (30 days) | TTL of the device-linking grant minted from a pairing QR |
-| `ENFORCE_ENTITLEMENTS` | `1` | **off without Stripe; always on with Stripe** | Stripe-backed hosted deployments always enforce plan gates, regardless of this flag. On Bivy Cloud, free accounts may surface `TRIAL_SESSIONS` (25 by default) distinct sessions through the hosted app and get `FREE_WEEKLY_RUNS` (10) unattended automations per rolling 7-day window, with one grace job before refusal. Local execution/history remains on the node when the hosted-view trial is exhausted. Paid plans omit both limits. On no-billing/self-hosted stacks enforcement remains off and all features are unlimited. |
-| `TRIAL_SESSIONS` | positive integer | `25` | Lifetime number of distinct sessions a free Bivy Cloud account may view through the hosted app. Ignored when entitlement enforcement is off. |
-| `RUN_LIMIT_OBSERVE_ONLY` | `1` | **off** | Observe-only mode for no-billing test/staging deployments with `ENFORCE_ENTITLEMENTS=1`. It is ignored when Stripe billing is configured, where the cap is always enforced. |
 
 ## Authentication
 
@@ -515,26 +511,8 @@ unauthenticated dev login enabled.
 | `DISABLE_DEV_LOGIN` | `1` | **unset — dev login is enabled outside production** | Hard kill switch for `POST /auth/dev-login`, which mints a full account session for any email with no verification. **Set this to `1`** |
 | `ALLOW_DEV_LOGIN` | `1` | unset | Re-enables dev login under `NODE_ENV=production`. Setting it in production makes the service exit 1 |
 
-## Billing (hosted only)
-
-Everything in this section exists to run Bivy as a paid hosted service. **If you
-are self-hosting, skip it.** Leave these unset along with `ENFORCE_ENTITLEMENTS`
-and every account on your stack gets every feature — there is no paywall to
-unlock and nothing to configure. `deploy/.env.example` and `deploy/self-host.sh`
-deliberately omit these variables for that reason.
-
-The paid single-user plan has the internal id `pro` and is sold as "Pro". It was
-`individual` before; the control plane migrates stored accounts on boot and still
-accepts the old id from clients released before the rename.
-
-| Variable | Type | Default | Notes |
-| --- | --- | --- | --- |
-| `STRIPE_SECRET_KEY` | `sk_…` | unset | With no Stripe client, billing endpoints return stub URLs **and the webhook applies plan changes without verifying a signature** |
-| `STRIPE_PRICE_PRO` | `price_…` | unset | Checkout returns 500 without it |
-| `STRIPE_PRICE_TEAM` | `price_…` | unset | Also gates whether the `team` plan is accepted at all |
-| `BILLING_SUCCESS_URL` | URL | `<base>/?checkout=success` | |
-| `BILLING_CANCEL_URL` | URL | `<base>/?checkout=cancel` | |
-| `BILLING_PORTAL_RETURN_URL` | URL | `<base>/` | |
+Bivy Cloud billing and commercial policy configuration belongs to the separate
+Cloud repository and is intentionally not accepted by Core services.
 
 ## Web Push
 
@@ -567,7 +545,6 @@ dumb, end-to-end-encrypted pipe — it holds no database.
 | `CONTROL_PLANE_URL` | URL | `http://localhost:4400` | Where the relay introspects tickets |
 | `PORT` | integer | `4500` | |
 | `RELAY_SHARD_ID` | string | unset | Observational label only, reported in `/healthz` and `/metrics`. No routing effect |
-| `ENFORCE_ENTITLEMENTS` | `1` | **off** | When off, any valid ticket connects regardless of plan |
 | `RELAY_MAX_FRAME_BYTES` | integer bytes | `262144` (256 KiB) | Larger inbound frames are rejected |
 | `RELAY_MAX_CLIENT_MESSAGES_PER_MINUTE` | integer | `600` | Rate cap on phone/browser sockets |
 | `RELAY_MAX_NODE_MESSAGES_PER_MINUTE` | integer | `6000` | Rate cap on node sockets |

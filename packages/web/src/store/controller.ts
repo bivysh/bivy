@@ -61,8 +61,6 @@ import {
   fetchPairedDevices,
   removePairedDevice,
   logout,
-  billingCheckout,
-  billingPortal,
   enablePushNotifications,
   disablePushNotifications,
   getPushSubscriptionStatus,
@@ -450,7 +448,6 @@ export class AppController {
       local: this.local,
       sendGithubDisconnect: ({ appId, hookId }) => this.send({ kind: "github.app.disconnect", requestId: requestId(), appId: appId || undefined, hookId: hookId || undefined }),
       refreshNodes: () => this.refreshNodes(),
-      navigate: (url) => location.assign(url),
       api: {
         fetchMe,
         fetchGithubApp,
@@ -459,8 +456,6 @@ export class AppController {
         cancelAutomationRun: apiCancelAutomationRun,
         disconnectGithubApp,
         removeNode: removeAccountNode,
-        billingCheckout,
-        billingPortal,
         enablePush: enablePushNotifications,
         disablePush: disablePushNotifications,
         pushStatus: getPushSubscriptionStatus,
@@ -575,7 +570,6 @@ export class AppController {
     // "Go Pro" deep link from the marketing site (?intent=upgrade). Runs after
     // the auth flag is seeded so the upgrade intent can resume the moment the
     // user is signed in (a fresh sign-in redirect lands here already signed in).
-    this.handleBillingReturn();
     // Remember the route we booted on (a `/sessions/:id` deep link, `/sessions/new`,
     // or root). It's replayed once we're first online — see applyInitialRoute.
     this.pendingRoute = parseRoute();
@@ -603,74 +597,6 @@ export class AppController {
     } catch {
       return null;
     }
-  }
-
-  /** localStorage key marking a pending "Go Pro" intent that must survive the
-   *  full-page sign-in redirect (which drops the query string). */
-  private static readonly UPGRADE_INTENT_KEY = "bivy_upgrade_intent";
-
-  /**
-   * React to a Stripe checkout return and to a "Go Pro" deep link:
-   *   - `?checkout=success` → confirmation banner (the plan flips via webhook,
-   *     which the Account panel picks up on its next /me fetch).
-   *   - `?checkout=cancel`  → neutral "still on free" banner, no dead-end.
-   *   - `?intent=upgrade`   → resume checkout. If signed in, redirect straight to
-   *     Stripe; if not, remember the intent so it fires once sign-in completes.
-   * Consumed params are stripped so they neither linger nor re-fire on reload.
-   */
-  private handleBillingReturn(): void {
-    let checkout = "";
-    let intent = "";
-    try {
-      const params = new URLSearchParams(location.search);
-      checkout = (params.get("checkout") || "").trim();
-      intent = (params.get("intent") || "").trim();
-      if (checkout || intent) {
-        params.delete("checkout");
-        params.delete("intent");
-        const qs = params.toString();
-        history.replaceState(null, "", location.pathname + (qs ? `?${qs}` : "") + location.hash);
-      }
-    } catch {
-      /* ignore malformed query */
-    }
-
-    if (checkout === "success") {
-      // A completed checkout supersedes any remembered intent.
-      this.clearUpgradeIntent();
-      this.store.setNotice("You're on Pro — thanks! Unlimited runs are unlocked. It may take a few seconds to show in Settings.");
-      return;
-    }
-    if (checkout === "cancel") {
-      this.clearUpgradeIntent();
-      this.store.setNotice("Checkout canceled — you're still on the free plan. Upgrade any time from Settings.");
-      return;
-    }
-
-    if (intent === "upgrade") {
-      if (this.signedIn) {
-        void this.startCheckout().catch((e) => this.store.setError(e instanceof Error ? e.message : String(e)));
-      } else {
-        // Persist across the sign-in redirect; resumed below on the next load.
-        try { localStorage.setItem(AppController.UPGRADE_INTENT_KEY, "1"); } catch { /* ignore */ }
-      }
-      return;
-    }
-
-    // No billing params this load: resume a remembered "Go Pro" intent once the
-    // user has signed in (e.g. right after the OAuth/magic-link redirect).
-    if (this.signedIn && this.hasUpgradeIntent()) {
-      this.clearUpgradeIntent();
-      void this.startCheckout().catch((e) => this.store.setError(e instanceof Error ? e.message : String(e)));
-    }
-  }
-
-  private hasUpgradeIntent(): boolean {
-    try { return localStorage.getItem(AppController.UPGRADE_INTENT_KEY) === "1"; } catch { return false; }
-  }
-
-  private clearUpgradeIntent(): void {
-    try { localStorage.removeItem(AppController.UPGRADE_INTENT_KEY); } catch { /* ignore */ }
   }
 
   private buildTransport(): Transport {
@@ -1472,11 +1398,6 @@ export class AppController {
         const sessionId = String(s.sessionId || s.id || "");
         const nodeId = String(s.nodeId || "");
         const previous = existing.find((row) => row.sessionId === sessionId && (!row.nodeId || row.nodeId === nodeId));
-        // A trial-locked session arrives content-stripped (no titleEnc/source): don't
-        // try to decrypt it or carry stale cached content — show it as a locked stub.
-        if (s.locked) {
-          return { sessionId, nodeId, name: "Locked session", status: s.status, updatedAt: s.updatedAt, locked: true as const };
-        }
         const decryptedName = await this.decryptSessionTitle(s);
         return {
           ...previous,
@@ -1488,7 +1409,6 @@ export class AppController {
           status: s.status,
           attention: Array.isArray(s.attention) ? s.attention : previous?.attention,
           updatedAt: s.updatedAt || previous?.updatedAt,
-          locked: false as const,
         };
       }));
       const live = sessions.filter((s) => s.sessionId && s.nodeId);
@@ -2514,7 +2434,7 @@ export class AppController {
     return apiConnectHostedGithubApp(this.local, input);
   }
 
-  // --- Settings: account / billing / push --------------------------------
+  // --- Settings: account / push -------------------------------------------
 
   fetchMe(): Promise<AccountMe> { return this.accountCoordinator.fetchMe(); }
   fetchGithubApp(): ReturnType<typeof fetchGithubApp> { return this.accountCoordinator.fetchGithubApp() as ReturnType<typeof fetchGithubApp>; }
@@ -2550,8 +2470,6 @@ export class AppController {
   }
   githubAppDisconnect(appId?: string, hookId?: string): Promise<void> { return this.accountCoordinator.disconnectGithubApp(appId, hookId); }
   removeNode(nodeId: string): Promise<void> { return this.accountCoordinator.removeNode(nodeId); }
-  startCheckout(): Promise<void> { return this.accountCoordinator.startCheckout(); }
-  openBillingPortal(): Promise<void> { return this.accountCoordinator.openBillingPortal(); }
   enablePush(): Promise<string> { return this.accountCoordinator.enablePush(); }
   disablePush(): Promise<string> { return this.accountCoordinator.disablePush(); }
   pushStatus(): ReturnType<typeof getPushSubscriptionStatus> { return this.accountCoordinator.pushStatus(); }

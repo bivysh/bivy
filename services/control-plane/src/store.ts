@@ -20,69 +20,10 @@ import type { SecretEnvelope } from "./hosted-crypto.js";
  * API keys/OAuth logins without the control plane decrypting them.
  */
 
-export type Plan = "free" | "pro" | "team";
-
-// The paid single-user plan was originally called `individual` internally while
-// being sold as "Pro". The id is now `pro` everywhere; this alias exists only to
-// translate requests from clients released before the rename (the published CLI
-// sends a plan id over the wire — see normalizePlan in index.ts). Accounts stored
-// under the old id are migrated at boot by postgres-store's schema init.
-export const LEGACY_PLAN_IDS: Record<string, Plan> = { individual: "pro" };
-
-export interface Entitlements {
-  plan: Plan;
-  // Node cap. Optional: when undefined there is NO cap (unlimited nodes) — every
-  // plan now omits it, so there is no node cap on any tier. Enforcement paths treat
-  // `undefined` as "no cap" so unlimited needs no sentinel number. Kept on the type
-  // (not deleted) so a future plan can reintroduce a cap without a schema change.
-  maxNodes?: number;
-  // Note: per-plan device and session caps were removed entirely (no limit on how
-  // many devices an account pairs or sessions it runs); the vestigial always-undefined
-  // `maxDevices`/`maxSessions` fields are gone with them.
-  pushEnabled: boolean;
-  relayEnabled: boolean;
-  // Hosted GitHub/Slack work queue (label an issue → PR on your node). Available
-  // on every plan; free automation usage is bounded by `weeklyRunLimit` below.
-  workQueueEnabled: boolean;
-  // AUTOMATION runs the plan may start per rolling 7-day window. Only queued work
-  // (`automation:*` run keys: GitHub, Slack, webhook, and scheduled jobs) consumes
-  // this allowance. Interactive CLI/app sessions are deliberately unlimited on
-  // every plan: remote control is the free adoption surface; Pro monetizes the
-  // differentiated unattended operations layer. A rolling window lets capacity
-  // return gradually as jobs age out. Optional means unlimited (paid plans).
-  // The legacy field name stays wire-compatible with pre-release clients.
-  weeklyRunLimit?: number;
-  // LIFETIME hosted-session trial. On Bivy Cloud, "free" is no longer a permanent
-  // tier — it's the pre-subscription trial: the account may surface this many
-  // DISTINCT sessions (any source) through the hosted relay/app before the hosted
-  // index stops showing new ones and prompts for Pro. Unlike weeklyRunLimit this is
-  // cumulative and never resets (a trial, not a rolling allowance); a long-running
-  // session counts once. Undefined = unlimited (paid plans, and self-host where
-  // enforcement is off). Sessions keep running on the user's own machine regardless
-  // — only hosted VISIBILITY is gated, so self-hosting stays the unlimited free path.
-  trialSessionLimit?: number;
-  // Quick ephemeral cloud servers brokered from a phone (Fly/Hetzner/AWS/… with the
-  // user's own token, proxied through the control-plane cold-start relay). Available
-  // on every plan. A runner used by queued work consumes that automation job's run.
-  ephemeralEnabled: boolean;
-}
-
 export interface Account {
   id: string;
   email: string;
-  plan: Plan;
-  stripeCustomerId: string | null;
-  stripeSubscriptionId: string | null;
-  subscriptionStatus: string | null;
-  planUpdatedAt: string | null;
   createdAt: string;
-}
-
-export interface SubscriptionState {
-  plan: Plan;
-  stripeCustomerId?: string | null;
-  stripeSubscriptionId?: string | null;
-  subscriptionStatus?: string | null;
 }
 
 // Plaintext (non-secret) per-provider connection status a node pushes alongside
@@ -1052,7 +993,7 @@ export interface InboundHook {
   defaultNode?: string;
   // Who may `@`-mention-trigger a run via a GitHub issue/comment (issue #259:
   // on a public repo, anyone can otherwise comment and burn the account's
-  // automation quota). Checked against the triggering author's GitHub
+  // automation capacity). Checked against the triggering author's GitHub
   // `author_association` — see `meetsTriggerAccess` in webhooks.ts. undefined
   // (and "everyone") mean no restriction — the behavior before this setting
   // existed. Set from Settings → GitHub App in the web UI.
@@ -1144,40 +1085,11 @@ export interface PairedDeviceInfo {
   updatedAt: string;
 }
 
-// Free allowance for unattended automation (GitHub, Slack, webhook, scheduled).
-// Interactive CLI/app sessions never consume it. This gives the commoditized remote
-// control surface away for adoption and charges for the differentiated ops layer.
-// Paid plans omit the limit (unlimited automation).
-export const FREE_WEEKLY_RUNS = 10;
-
-// Lifetime hosted-session trial size for the pre-subscription "free" plan. This
-// replaces "unlimited interactive sessions" as the free adoption surface: the
-// commoditized software stays free to SELF-HOST (enforcement off ⇒ unlimited), but
-// the hosted convenience layer (app.bivy.sh's relay + session index) is a
-// usage-trial — the first N sessions are free, then Pro. Env-overridable so the
-// number can be tuned without a deploy. See Entitlements.trialSessionLimit.
-export const TRIAL_SESSIONS = Number(process.env.TRIAL_SESSIONS ?? 25);
-
-export const PLAN_ENTITLEMENTS: Record<Plan, Omit<Entitlements, "plan">> = {
-  // On Bivy Cloud "free" is the pre-subscription TRIAL: unlimited nodes, push, and
-  // ephemeral runners, plus FREE_WEEKLY_RUNS queued automations per rolling window,
-  // but only trialSessionLimit LIFETIME sessions visible through the hosted app
-  // before an upgrade is required. Self-hosted stacks run with enforcement off, so
-  // both caps are inert there and free stays fully unlimited. Paid plans omit both.
-  free: { pushEnabled: true, relayEnabled: true, workQueueEnabled: true, weeklyRunLimit: FREE_WEEKLY_RUNS, trialSessionLimit: TRIAL_SESSIONS, ephemeralEnabled: true },
-  pro: { pushEnabled: true, relayEnabled: true, workQueueEnabled: true, ephemeralEnabled: true },
-  team: { pushEnabled: true, relayEnabled: true, workQueueEnabled: true, ephemeralEnabled: true },
-};
-
 export const SESSION_TTL_MS = 30 * 24 * 60 * 60_000; // 30 days
 export const LOGIN_TOKEN_TTL_MS = 15 * 60_000; // 15 minutes
 
 export function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
-}
-
-export function entitlementsForPlan(plan: Plan): Entitlements {
-  return { plan, ...PLAN_ENTITLEMENTS[plan] };
 }
 
 // Aggregate counts for the operational/business dashboard. Pure metadata — row
@@ -1186,7 +1098,6 @@ export function entitlementsForPlan(plan: Plan): Entitlements {
 // gauges. See docs/ops/monitoring.md in bivysh/bivy-cloud.
 export interface UsageMetrics {
   accountsTotal: number;
-  accountsByPlan: Record<string, number>;
   nodesTotal: number;
   nodesOnline: number;
   workItemsByStatus: Record<string, number>;
@@ -1211,8 +1122,6 @@ export interface AccountAuthRepository {
   // Accounts & auth
   findOrCreateAccount(email: string): Promise<Account>;
   getAccount(accountId: string): Promise<Account | undefined>;
-  accountFromStripeCustomer(stripeCustomerId: string): Promise<Account | undefined>;
-  setStripeCustomer(accountId: string, stripeCustomerId: string): Promise<void>;
   createLoginToken(email: string): Promise<string>; // magic-link, returns raw token
   consumeLoginToken(token: string): Promise<Account | undefined>;
   createSession(accountId: string): Promise<string>; // returns raw session token
@@ -1250,17 +1159,6 @@ export interface AccountAuthRepository {
 
 }
 
-export interface BillingRepository {
-  // Billing
-  setPlan(accountId: string, plan: Plan, stripeCustomerId?: string): Promise<void>;
-  // Records full subscription metadata from a Stripe webhook (plan, status, and
-  // the customer/subscription ids) so the account page can show real billing
-  // state and support can reconcile against Stripe.
-  setSubscriptionState(accountId: string, state: SubscriptionState): Promise<void>;
-  entitlements(accountId: string): Promise<Entitlements>;
-
-}
-
 export interface NodeRepository {
   // Nodes
   listNodes(accountId: string): Promise<NodeRecord[]>;
@@ -1290,13 +1188,13 @@ export interface SessionIndexRepository {
   // Returns how many session ids were first observed (and therefore became new
   // run starts). This preserves idempotency while letting the control plane emit
   // an accurate run-start funnel event rather than counting every status update.
-  replaceNodeSessions(accountId: string, nodeId: string, sessions: SessionAdvert[]): Promise<number>;
+  replaceNodeSessions(accountId: string, nodeId: string, sessions: SessionAdvert[]): Promise<void>;
   // Incremental single-session advertise. A session's status flips constantly
   // (idle→working→needs_action); routing that through `replaceNodeSessions`
   // means reading and rewriting the node's ENTIRE index per flip — O(sessions)
   // work per event, O(sessions²) in aggregate. This upserts just the one row.
   // True only when this session produced a new run-start row.
-  upsertNodeSession(accountId: string, nodeId: string, session: SessionAdvert): Promise<boolean>;
+  upsertNodeSession(accountId: string, nodeId: string, session: SessionAdvert): Promise<void>;
   listAccountSessions(accountId: string): Promise<SessionIndexEntry[]>;
   // A single node reads back its OWN sessions, including the node-only
   // `agentServiceAddress` routing metadata (Stage 3: a restarting daemon adopts
@@ -1610,38 +1508,13 @@ export interface WorkQueueRepository {
   claimWorkItem(accountId: string, nodeId: string, id: string): Promise<WorkItem | undefined>;
   /** Extend a claimed/running item's lease only when this node still owns it. */
   renewWorkItemLease(accountId: string, nodeId: string, id: string): Promise<WorkItem | undefined>;
-  // Record that a run STARTED, keyed by its session id (idempotent: recording the
-  // same `(accountId, sessionId)` twice is a no-op, so reconnects and repeated
-  // session advertises never double-count). `runKey` is the distinct-run identifier
-  // — normally the session id; every source (manual/app/work-queue/ephemeral) funnels
-  // through here once the run surfaces as a session. Powers the free-tier run cap.
-  // True only when the idempotent insert created a new run-start row.
-  recordRunStart(accountId: string, runKey: string): Promise<boolean>;
-  // How many DISTINCT runs the account has STARTED at/after `sinceIso` (recorded via
-  // recordRunStart). `runKeyPrefix` scopes a meter to a class such as `automation:`;
-  // omitted means all starts (useful for aggregate product metrics).
-  countRunStartsSince(accountId: string, sinceIso: string, runKeyPrefix?: string): Promise<number>;
-  // Delete run-start rows older than `beforeIso`. Runs older than the rolling window
-  // can never be counted again, so this is pure housekeeping to keep the table lean;
-  // called on an interval by the control plane. Returns how many rows were removed.
-  pruneRunStartsBefore(beforeIso: string): Promise<number>;
-  // How many DISTINCT sessions the account has ever surfaced through the hosted
-  // index (the lifetime trial meter). Unlike run_starts this ledger is NEVER pruned,
-  // so it survives the rolling-window cleanup and is the authority for the trial.
-  countTrialSessions(accountId: string): Promise<number>;
-  // The set of session ids that fall OUTSIDE the account's trial allowance: every
-  // session beyond the first `limit` by first-seen order. Returns an empty set when
-  // the account is within allowance. Read-time gate — recording is limit-agnostic,
-  // so raising the limit or upgrading immediately widens what's visible with no
-  // backfill, and self-host (which never calls this) is unaffected.
-  overTrialSessionIds(accountId: string, limit: number): Promise<Set<string>>;
   // Delete expired rows from every short-lived, single-use auth artifact table
   // (login_tokens, sessions, link_grants, relay_tickets, device_logins,
   // oauth_states, and expired auth_rate_limits). Each of
   // these is normally deleted on successful single-use consumption, but an
   // abandoned attempt (closed tab, retried client, a node that never completes
   // introspection) leaves its row behind with no other cleanup path — called on
-  // an interval by the control plane, mirroring pruneRunStartsBefore. Returns
+  // an interval by the control plane. Returns
   // how many rows were removed in total.
   pruneExpiredAuthTokens(nowIso: string): Promise<number>;
   completeWorkItem(accountId: string, id: string, expectedNodeId?: string): Promise<AutomationRun | undefined>;
@@ -1675,7 +1548,6 @@ export interface WorkQueueRepository {
 export interface ControlPlaneStore
   extends StoreLifecycle,
     AccountAuthRepository,
-    BillingRepository,
     NodeRepository,
     SessionIndexRepository,
     NotificationRepository,

@@ -2,7 +2,7 @@
 
 `src/automation/` is the single, canonical, dependency-free implementation of
 "which automation fires for this event, and is it actually safe to run" —
-first-match rule evaluation, overlap/shadow detection, and a seven-check
+first-match rule evaluation, overlap/shadow detection, and a six-check
 preflight checklist. It is the one place this logic exists; every caller
 delegates to it instead of hand-rolling an equivalent-but-not-identical
 version:
@@ -86,23 +86,19 @@ order:
 | `assigned_machine` | Is the assigned machine online, or is there a fallback / shared-queue machine that can pick up the work? |
 | `agent_model_credentials` | Are the requested agent/model's credentials ready on the assigned machine? |
 | `sandbox_policy` | Does the requested approval/sandbox combination pass policy — in particular, is `autonomous` + `danger-full-access` explicitly acknowledged? |
-| `quota` | Is the account within its automation quota for this window? |
 
 The module does **no I/O of its own** — every signal is gathered by the
 caller (the CLI reads local files and the vault; the control plane queries
 its store) and passed in. A signal a caller can't observe in its own
 environment is simply absent, which reports as `skipped` rather than being
 silently treated as passing. This is why `bivy automation test` reports
-`source_connection`/`repo_access`/`assigned_machine`/`quota` as skipped when
+`source_connection`/`repo_access`/`assigned_machine` as skipped when
 run offline — there's no honest local signal for them — while the
 control-plane simulate endpoint and the PWA's Test event workflow, which
 query the account's real state, report the genuine value.
 
 Each check has a severity (`ok` / `info` / `warn` / `block` / `skipped`) and
-a `blocksSave` flag. Severity and `blocksSave` are independent: an exhausted
-quota reports `block` severity (it's a real problem) but `blocksSave: false`
-(queued work should still be creatable; the account just can't *run* more of
-it right now — that's enforced separately, at claim time).
+a `blocksSave` flag.
 
 ## The save gate
 
@@ -124,7 +120,7 @@ interface PreflightGate {
   `safety.allowDangerous`, the control plane's `allowDangerous` field, the
   PWA's "I understand the risk" checkbox).
 - **`requiresAck`** — nothing blocks, but something isn't clean (an offline
-  machine, an unconfirmed repo install, quota pressure). The caller must
+  machine or an unconfirmed repo install). The caller must
   collect an explicit "I understand, save anyway" acknowledgement before
   proceeding.
 

@@ -59,7 +59,6 @@ try {
       PORT: String(port),
       RELAY_PUBLIC_URL: "ws://localhost:1",
       RELAY_SECRET: "idem-test",
-      ENFORCE_ENTITLEMENTS: "0",
       AUTOMATION_SCHEDULER_INTERVAL_MS: "60000",
       BIVY_WORK_LEASE_MS: String(LEASE_MS),
     },

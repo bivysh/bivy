@@ -328,12 +328,8 @@ Label an issue `bivy` (or `bivy/<machine>` to target a Machine), or mention the
 Bivy GitHub App in a comment. Bivy creates a Run on the selected Machine, uses an
 isolated worktree, executes configured checks, and reports an explicit outcome.
 
-Available on every plan. On Bivy Cloud, the free trial shows the first 25
-distinct sessions in the hosted app and includes 10 unattended automations per
-rolling 7-day window across GitHub, Slack, webhooks, and schedules. Sessions keep
-running on your machines after the hosted trial is exhausted, but new ones are
-hidden from the hosted app until you subscribe. Pro removes both limits.
-Self-hosted stacks are unlimited.
+Core applies no commercial usage limits. Bivy Cloud billing and commercial
+policy live in the separate Cloud repository.
 
 A private GitHub App only installs on the account that owns it, so connect one
 app per GitHub account — one for your personal repos, one per organization

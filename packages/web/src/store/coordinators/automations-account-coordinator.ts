@@ -9,7 +9,6 @@ export interface AutomationsAccountDependencies {
   local: LocalStore;
   sendGithubDisconnect(input: { appId?: string; hookId?: string }): void;
   refreshNodes(): Promise<void>;
-  navigate(url: string): void;
   api: {
     fetchMe(local: LocalStore): Promise<AccountMe>;
     fetchGithubApp(local: LocalStore): Promise<unknown>;
@@ -18,8 +17,6 @@ export interface AutomationsAccountDependencies {
     cancelAutomationRun(local: LocalStore, id: string): Promise<unknown>;
     disconnectGithubApp(local: LocalStore, input: { appId?: string; hookId?: string }): Promise<void>;
     removeNode(local: LocalStore, nodeId: string): Promise<void>;
-    billingCheckout(local: LocalStore): Promise<string>;
-    billingPortal(local: LocalStore): Promise<string>;
     enablePush(local: LocalStore): Promise<string>;
     disablePush(local: LocalStore): Promise<string>;
     pushStatus(): any;
@@ -114,8 +111,6 @@ export class AutomationsAccountCoordinator {
     await this.deps.refreshNodes();
   }
 
-  async startCheckout(): Promise<void> { this.deps.navigate(await this.deps.api.billingCheckout(this.deps.local)); }
-  async openBillingPortal(): Promise<void> { this.deps.navigate(await this.deps.api.billingPortal(this.deps.local)); }
   enablePush(): Promise<string> { return this.deps.api.enablePush(this.deps.local); }
   disablePush(): Promise<string> { return this.deps.api.disablePush(this.deps.local); }
   pushStatus(): any { return this.deps.api.pushStatus(); }

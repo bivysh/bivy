@@ -250,7 +250,7 @@ export function parseGithubIssueEvent(payload: unknown): ParsedIssueWork | undef
 /**
  * Access tiers for who may `@`-mention-trigger a run (issue #259 — on a public
  * repo, anyone can otherwise comment/open an issue and burn the account's
- * automation quota with arbitrary instructions). Checked against GitHub's own
+ * automation capacity with arbitrary instructions). Checked against GitHub's own
  * `author_association` on the triggering issue/comment — no extra API call:
  *   - "everyone" — no restriction (default; preserves prior behavior for hooks
  *     that never opted in).

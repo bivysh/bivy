@@ -46,7 +46,7 @@ account to confirm end-to-end. DirectTransport is verified against a live node
 | Tool activity + markdown | Grouped activity line + expandable File/Command/Query/Diff/Output detail with a real LCS diff viewer (`@bivy/core` `tool-format`, unit-tested); richer assistant markdown (headings, blockquotes, task lists, hr). |
 | Composer pickers | GitHub repo (new session), agent/runtime picker (+ install), model picker with reasoning-level pill; draft-vs-live selection threaded into `session.new`; remembered via `LocalStore.lastChoice`. |
 | Terminal overlay | xterm.js PTY attach — fresh shell, per-scope reattach, run-terminal + tmux/zellij/screen multiplexer attach. |
-| Settings panels | Keys & OAuth (API key + OAuth sign-in), remembered decisions, GitHub issue setup, account/billing/usage, push notifications, device linking. |
+| Settings panels | Keys & OAuth (API key + OAuth sign-in), remembered decisions, GitHub issue setup, account/usage, push notifications, device linking. |
 | Ephemeral provisioning | Fly/Hetzner bring-your-own-token flow ported into `@bivy/core` (`ephemeral.ts`); launch/destroy from the node selector. |
 | Sticky sidebar | Shell pinned to the viewport so a long chat scrolls the chat pane, not the page. |
 

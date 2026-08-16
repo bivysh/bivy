@@ -1325,7 +1325,7 @@ function TemplateCard({
 // ── Test event / preflight — shared by both editors ────────────────────────
 // Explains, without creating a run, which automation a representative event
 // would fire (and why the rest didn't), overlap/shadow warnings across the
-// account's rules, and the seven-check preflight — the same contract
+// account's rules, and the six-check preflight — the same contract
 // `bivy automation test` and the control-plane's live intake use (see
 // docs/automation-evaluator.md). Every Save also runs this silently (no
 // event) so a hard failure never reaches the API, and a non-blocking warning
@@ -1563,7 +1563,7 @@ function SourceAutomationEditor({
 
   /** Best-effort draft (works even before the form is complete, unlike
    *  save()) run through the shared evaluator — explains source connection,
-   *  machine, credential, and quota readiness without starting a run. */
+   *  machine and credential readiness without starting a run. */
   async function checkAutomation() {
     const labels = parseList(labelsText);
     const workflows = parseList(workflowsText);
@@ -1798,7 +1798,7 @@ function SourceAutomationEditor({
               {preflight.busy ? "Checking…" : "Check readiness"}
             </button>
             <p className="settings-hint">
-              Explains source connection, machine, credential, and quota readiness — and, for CI, whether a
+              Explains source connection, machine, and credential readiness — and, for CI, whether a
               representative failed-workflow event would fire — without starting a run.
             </p>
             <AutomationPreflightPanel
@@ -2439,7 +2439,7 @@ function AutomationEditor({
                   <p className="settings-hint">
                     {(d.trigger === "github" || d.trigger === "linear")
                       ? "Explains which automation a representative event would fire — including overlap/shadow warnings — without starting a run."
-                      : "Explains source connection, machine, credential, and quota readiness without starting a run."}
+                      : "Explains source connection, machine, and credential readiness without starting a run."}
                   </p>
                   <AutomationPreflightPanel
                     result={preflight.result}

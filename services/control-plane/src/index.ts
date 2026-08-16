@@ -5,10 +5,9 @@ import fs from "node:fs";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import express, { type Request, type Response, type NextFunction } from "express";
-import Stripe from "stripe";
 import webpush from "web-push";
 import { validateCapabilityTags } from "@bivy/core";
-import { providerCredentialFingerprint, type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, type AutomationRun, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
+import { providerCredentialFingerprint, type Account, type NodeRecord, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, type AutomationRun, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
 import { maybeAutoProvision, planAutoProvision, hostedExecutionReadiness, mintHostedInstallationToken, reapSettledHostedMachine, reconcileAllHostedMachines, reconcileAllReadyCapacity, sweepAllOrphanProviderResources, validateHostedProviderToken, markHostedMachineMilestone, EPHEMERAL_MILESTONES, ephemeralMachinesEnabled } from "./ephemeral-provisioner.js";
 import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecret } from "./hosted-crypto.js";
 import { listAppInstallations, listInstallationRepositories } from "./hosted-github-auth.js";
@@ -63,7 +62,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /**
  * Bivy — Control Plane.
  *
- * Hosted service for accounts, node registry, entitlements, and billing.
+ * Self-hostable service for accounts, node registry, and coordination metadata.
  * Interactive session content stays E2E-encrypted and is never stored here.
  * Slack and generic-webhook instructions are the explicit inbound-automation
  * exception retained with queue items; model credentials are ciphertext only.
@@ -87,12 +86,6 @@ function assertProductionConfig() {
   }
   if (process.env.ALLOW_DEV_LOGIN === "1") {
     problems.push("ALLOW_DEV_LOGIN=1 must not be set in production (it enables an unauthenticated sign-in endpoint)");
-  }
-  if (process.env.STRIPE_SECRET_KEY && !process.env.STRIPE_WEBHOOK_SECRET) {
-    problems.push("STRIPE_WEBHOOK_SECRET is required when STRIPE_SECRET_KEY is set (webhooks would be unverifiable)");
-  }
-  if (process.env.STRIPE_SECRET_KEY && !process.env.STRIPE_PRICE_PRO) {
-    problems.push("STRIPE_PRICE_PRO is required when Stripe billing is enabled");
   }
   if (!process.env.PUBLIC_CONTROL_PLANE_URL) {
     // Without a fixed public URL, baseUrl() falls back to the request's
@@ -224,75 +217,21 @@ const provisionEnv = (): { cpBaseUrl: string; relayUrl: string } => ({
   cpBaseUrl: publicControlPlaneUrl ?? `http://localhost:${process.env.PORT ?? 8080}`,
   relayUrl: relayPublicUrl,
 });
-const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
 const vapidPublicKey = process.env.WEB_PUSH_VAPID_PUBLIC_KEY || process.env.VAPID_PUBLIC_KEY || "";
 const vapidPrivateKey = process.env.WEB_PUSH_VAPID_PRIVATE_KEY || process.env.VAPID_PRIVATE_KEY || "";
 const vapidSubject = process.env.WEB_PUSH_SUBJECT || "mailto:support@bivy.sh";
 const webPushEnabled = Boolean(vapidPublicKey && vapidPrivateKey);
 if (webPushEnabled) webpush.setVapidDetails(vapidSubject, vapidPublicKey, vapidPrivateKey);
-// A Stripe-backed deployment is a billed hosted service, so entitlement
-// enforcement is always on there and cannot be accidentally disabled by a stale
-// environment flag. Self-hosted/no-billing stacks retain their explicit opt-in
-// behavior and remain unlimited by default.
-const enforceEntitlements = Boolean(stripe) || process.env.ENFORCE_ENTITLEMENTS === "1";
-// Observe-only mode is retained for no-billing staging: count and report jobs but
-// do not block them. A Stripe-backed deployment always hard-enforces, so a stale
-// staging flag cannot silently disable the paid plan boundary in production.
-const observeRunLimitOnly = !stripe && process.env.RUN_LIMIT_OBSERVE_ONLY === "1";
-const enforceRunLimit = enforceEntitlements && !observeRunLimitOnly;
-async function accountPushAllowed(accountId: string): Promise<boolean> {
-  if (!enforceEntitlements) return true;
-  return (await store.entitlements(accountId)).pushEnabled;
-}
-
-// How many days back the free-tier automation window looks. A ROLLING window (not a
-// calendar week) — capacity frees up gradually as individual runs age out the far
-// edge, which fits bursty dev work far better than a hard periodic reset.
-const RUN_WINDOW_DAYS = 7;
-
-// Start of the current rolling run window, as an ISO timestamp — `now` minus the
-// window length. Computed rather than stored, so there is no counter to reset and
-// no cron: the count is just run_starts with `started_at >= this`.
-function runWindowStartIso(): string {
-  return new Date(Date.now() - RUN_WINDOW_DAYS * 24 * 60 * 60_000).toISOString();
-}
-
-// Soft-cap grace: how many runs PAST the plan's window limit still go through
-// (warned, not blocked) before a hard refusal. The cap converts by nudging, not by
-// slapping someone mid-task the instant they cross — so the first over-limit run is
-// a courtesy ("you're over your free runs — this one's on us"), and only further
-// runs are refused until capacity ages back in. Applied against the rolling window,
-// so the courtesy naturally recurs as the window slides.
-const RUN_GRACE = 1;
-
-// The account's unattended-automation allowance for the current rolling window.
-// Only `automation:*` starts (GitHub, Slack, webhook, scheduled) count; interactive
-// CLI/app sessions stay unlimited. `limit` is the plan cap (undefined means paid),
-// `used` is the queued automation started in the window,
-// `warn` whether this run is in the grace band (over the limit but still allowed),
-// `exhausted` whether a new run must be refused (over limit + grace). Blocking is
-// only in effect under `ENFORCE_ENTITLEMENTS=1` AND not `RUN_LIMIT_OBSERVE_ONLY=1`
-// (see enforceRunLimit); otherwise both flags stay false so runners go unlimited,
-// but `used` is always reported for display. One queued work item = one automation run.
-async function runAllowance(accountId: string): Promise<{ limit?: number; used: number; warn: boolean; exhausted: boolean }> {
-  const limit = (await store.entitlements(accountId)).weeklyRunLimit;
-  if (typeof limit !== "number") return { limit: undefined, used: 0, warn: false, exhausted: false };
-  const used = await store.countRunStartsSince(accountId, runWindowStartIso(), "automation:");
-  if (!enforceRunLimit) return { limit, used, warn: false, exhausted: false };
-  return { limit, used, warn: used >= limit && used < limit + RUN_GRACE, exhausted: used >= limit + RUN_GRACE };
-}
-
 // Fetch every signal the shared preflight checklist (src/automation/preflight.ts,
 // via gatherPreflightSignals) needs, for one account. Shared by the create/update
 // save gate and the simulate endpoint so a draft and an already-saved automation
 // see identical checks.
 async function preflightSignalContext(accountId: string): Promise<PreflightSignalContext> {
-  const [hooks, nodes, allowance] = await Promise.all([
+  const [hooks, nodes] = await Promise.all([
     store.listInboundHooks(accountId),
     store.listNodes(accountId),
-    runAllowance(accountId),
   ]);
-  return { hooks, nodes, allowance };
+  return { hooks, nodes };
 }
 
 // The event-fixture vocabulary documented in docs/automations-as-code.md and
@@ -325,88 +264,6 @@ function parseSimulationEventBody(value: unknown): EvaluationEvent {
   };
 }
 
-// The account's LIFETIME hosted-session trial status. On Bivy Cloud "free" is the
-// pre-subscription trial: the first `limit` distinct sessions surface through the
-// hosted app, then new ones are withheld and Pro is prompted. `enforced` is false
-// on self-host / no-billing stacks (enforceEntitlements off) and on paid plans
-// (limit undefined) — in both cases nothing is ever hidden. `over` is how many
-// sessions currently sit outside the allowance. Sessions keep RUNNING on the user's
-// machine regardless; only hosted visibility is gated. Mirrors runAllowance's shape.
-async function trialStatus(accountId: string): Promise<{ enforced: boolean; limit?: number; used: number; remaining: number; over: number; exhausted: boolean }> {
-  const limit = (await store.entitlements(accountId)).trialSessionLimit;
-  if (!enforceEntitlements || typeof limit !== "number") {
-    return { enforced: false, limit, used: 0, remaining: Infinity, over: 0, exhausted: false };
-  }
-  const used = await store.countTrialSessions(accountId);
-  const over = Math.max(0, used - limit);
-  return { enforced: true, limit, used, remaining: Math.max(0, limit - used), over, exhausted: used >= limit };
-}
-
-const stripePrices: Partial<Record<Plan, string>> = {
-  pro: process.env.STRIPE_PRICE_PRO,
-  team: process.env.STRIPE_PRICE_TEAM,
-};
-
-export interface PublicPlanPrice {
-  id: string;
-  currency: string;
-  unitAmount: number | null;
-  interval?: string;
-  intervalCount?: number;
-  label: string;
-}
-
-let planPriceCache: { expiresAt: number; value: Partial<Record<Plan, PublicPlanPrice>> } | undefined;
-
-function stripeAmountLabel(price: Stripe.Price): string {
-  if (price.unit_amount == null) return "Contact us";
-  const currency = price.currency.toUpperCase();
-  const fractionDigits = new Intl.NumberFormat("en-US", { style: "currency", currency }).resolvedOptions().maximumFractionDigits ?? 2;
-  const amount = price.unit_amount / 10 ** fractionDigits;
-  const formatted = new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency,
-    minimumFractionDigits: amount % 1 === 0 ? 0 : fractionDigits,
-    maximumFractionDigits: fractionDigits,
-  }).format(amount);
-  const recurring = price.recurring;
-  if (!recurring) return formatted;
-  const count = recurring.interval_count;
-  const interval = recurring.interval === "month" ? "mo" : recurring.interval === "year" ? "yr" : recurring.interval;
-  return count === 1 ? `${formatted}/${interval}` : `${formatted}/${count} ${interval}`;
-}
-
-async function publicPlanPrices(): Promise<Partial<Record<Plan, PublicPlanPrice>>> {
-  if (!stripe) return {};
-  if (planPriceCache && planPriceCache.expiresAt > Date.now()) return planPriceCache.value;
-  const entries = await Promise.all(
-    Object.entries(stripePrices).map(async ([plan, id]) => {
-      if (!id) return undefined;
-      const price = await stripe.prices.retrieve(id);
-      return [plan as Plan, {
-        id: price.id,
-        currency: price.currency,
-        unitAmount: price.unit_amount,
-        interval: price.recurring?.interval,
-        intervalCount: price.recurring?.interval_count,
-        label: stripeAmountLabel(price),
-      } satisfies PublicPlanPrice] as const;
-    }),
-  );
-  const value = Object.fromEntries(entries.filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))) as Partial<Record<Plan, PublicPlanPrice>>;
-  planPriceCache = { expiresAt: Date.now() + 5 * 60_000, value };
-  return value;
-}
-
-// Plan ids arrive from two places whose version we do not control: the published
-// CLI (packages/core's billingCheckout) and the dev-mode billing webhook used by
-// tests and local stacks. Both sent `individual` before the plan was renamed to
-// `pro`, so translate rather than 400 a client that is merely older than this
-// deploy. Unrecognised ids pass through unchanged and fail the caller's own
-// validation. Accounts already stored under the old id are migrated at boot.
-function normalizePlan(plan: string): string {
-  return LEGACY_PLAN_IDS[plan] ?? plan;
-}
 const app = express();
 
 // Operational counters for the relay ticket mint path. These are intentionally
@@ -422,21 +279,6 @@ const relayTicketMetrics = {
 // the business/usage gauges from the store on an interval.
 bindRelayTicketMetrics(() => relayTicketMetrics);
 startUsageCollector(store);
-
-// Housekeeping: periodically drop run-start rows older than the rolling window
-// (plus a day of slack) so the table can't grow without bound. Rows past the
-// window are never counted again, so this is safe. `.unref()` keeps the timer from
-// holding the process open (e.g. in tests); also swept once at boot.
-const RUN_STARTS_RETENTION_MS = (RUN_WINDOW_DAYS + 1) * 24 * 60 * 60_000;
-async function pruneOldRunStarts() {
-  try {
-    await store.pruneRunStartsBefore(new Date(Date.now() - RUN_STARTS_RETENTION_MS).toISOString());
-  } catch (error) {
-    console.error("[run-starts] prune failed:", error);
-  }
-}
-void pruneOldRunStarts();
-setInterval(pruneOldRunStarts, 6 * 60 * 60_000).unref();
 
 // Housekeeping: periodically drop expired rows from the short-lived, single-use
 // auth tables (login tokens, sessions, link grants, relay tickets, device
@@ -536,7 +378,6 @@ function securityHeaders(_req: Request, res: Response, next: NextFunction) {
   next();
 }
 app.use(securityHeaders);
-app.use("/billing/webhook", express.raw({ type: "application/json", limit: "1mb" }));
 // Inbound third-party webhooks need the RAW body to verify their HMAC signature,
 // so capture it before the JSON parser runs (GitHub sends JSON, Slack sends
 // urlencoded — match any content-type).
@@ -798,7 +639,7 @@ function sendSignInFailed(res: Response, status: number, detail: string, source:
   // uses the unauthenticated, low-cardinality funnel counter (see
   // recordFunnelEvent) rather than the authenticated per-account product
   // metrics — the same reason `sign_in_completed` below isn't tracked there.
-  recordFunnelEvent("sign_in_failed", source, "unknown");
+  recordFunnelEvent("sign_in_failed", source);
   res.setHeader(
     "Content-Security-Policy",
     [
@@ -813,60 +654,6 @@ function sendSignInFailed(res: Response, status: number, detail: string, source:
     ].join("; "),
   );
   res.status(status).type("html").send(signInFailedHtml(detail));
-}
-
-function stripePriceToPlan(priceId: string | null | undefined): Plan | undefined {
-  if (priceId && stripePrices.pro && priceId === stripePrices.pro) return "pro";
-  if (priceId && stripePrices.team && priceId === stripePrices.team) return "team";
-  return undefined;
-}
-
-function planFromSubscription(subscription: Stripe.Subscription): Plan {
-  const priceId = subscription.items.data[0]?.price.id;
-  // The metadata fallback reads a value Stripe has been holding since the
-  // subscription was created, so subscriptions opened before the rename still say
-  // `individual` there. Normalize it — this is live data we cannot backfill.
-  const fromMetadata = subscription.metadata.plan
-    ? (normalizePlan(subscription.metadata.plan) as Plan)
-    : undefined;
-  return stripePriceToPlan(priceId) ?? fromMetadata ?? "free";
-}
-
-function subscriptionIsPaid(subscription: Stripe.Subscription): boolean {
-  return ["active", "trialing"].includes(subscription.status);
-}
-
-async function syncStripeBillingForAccount(account: Account): Promise<Account> {
-  if (!stripe) return account;
-  const customerIds: string[] = [];
-  if (account.stripeCustomerId) customerIds.push(account.stripeCustomerId);
-  if (!customerIds.length) {
-    const customers = await stripe.customers.list({ email: account.email, limit: 10 });
-    for (const c of customers.data) if (!c.deleted) customerIds.push(c.id);
-  }
-  for (const customerId of customerIds) {
-    const subs = await stripe.subscriptions.list({ customer: customerId, status: "all", limit: 10 });
-    const paid = subs.data.find(subscriptionIsPaid);
-    if (paid) {
-      await store.setSubscriptionState(account.id, {
-        plan: planFromSubscription(paid),
-        stripeCustomerId: customerId,
-        stripeSubscriptionId: paid.id,
-        subscriptionStatus: paid.status,
-      });
-      return (await store.getAccount(account.id)) ?? account;
-    }
-  }
-  if (account.stripeCustomerId) {
-    await store.setSubscriptionState(account.id, {
-      plan: "free",
-      stripeCustomerId: account.stripeCustomerId,
-      stripeSubscriptionId: null,
-      subscriptionStatus: null,
-    });
-    return (await store.getAccount(account.id)) ?? account;
-  }
-  return account;
 }
 
 async function sendMagicLinkEmail(email: string, loginUrl: string) {
@@ -1021,12 +808,12 @@ app.post("/auth/magic-link/consume", asyncHandler(async (req, res) => {
   const loginToken = String(req.body?.token ?? "").trim();
   const account = await store.consumeLoginToken(loginToken);
   if (!account) {
-    recordFunnelEvent("sign_in_failed", "email_api", "unknown");
+    recordFunnelEvent("sign_in_failed", "email_api");
     return res.status(401).json({ error: "Invalid or expired login token" });
   }
   const token = await store.createSession(account.id);
-  recordFunnelEvent("sign_in_completed", "email_api", account.plan);
-  res.json({ ok: true, token, account: { id: account.id, email: account.email, plan: account.plan } });
+  recordFunnelEvent("sign_in_completed", "email_api");
+  res.json({ ok: true, token, account: { id: account.id, email: account.email } });
 }));
 
 app.get("/auth/magic-link/consume", asyncHandler(async (req, res) => {
@@ -1039,11 +826,11 @@ app.get("/auth/magic-link/consume", asyncHandler(async (req, res) => {
   // embedded here — the CLI mints it when it polls.
   if (deviceId) {
     await store.completeDeviceLogin(deviceId, account.id);
-    recordFunnelEvent("sign_in_completed", "email_device", account.plan);
+    recordFunnelEvent("sign_in_completed", "email_device");
     return sendDeviceSignedIn(res, account.email);
   }
   const session = await store.createSession(account.id);
-  recordFunnelEvent("sign_in_completed", "email_browser", account.plan);
+  recordFunnelEvent("sign_in_completed", "email_browser");
   const payload = b64urlJson({ session, controlPlane: baseUrl(req), relay: relayPublicUrl });
   res.redirect(`/#${payload}`);
 }));
@@ -1082,13 +869,7 @@ app.post("/auth/device/poll", asyncHandler(async (req, res) => {
   if (!account) return res.status(500).json({ error: "Could not create account session" });
   res.json({
     ...result,
-    account: {
-      id: account.id,
-      email: account.email,
-      plan: account.plan,
-      subscriptionStatus: account.subscriptionStatus,
-      planUpdatedAt: account.planUpdatedAt,
-    },
+    account: { id: account.id, email: account.email },
   });
 }));
 
@@ -1143,7 +924,7 @@ app.get("/auth/github/callback", asyncHandler(async (req, res) => {
           : "GitHub didn't return a verified email. Make sure your GitHub account has a verified email address and that you granted the email permission, then try again.";
       return sendSignInFailed(res, 400, detail, "github_device");
     }
-    recordFunnelEvent("sign_in_failed", "github_browser", "unknown");
+    recordFunnelEvent("sign_in_failed", "github_browser");
     const path = safeReturnPath(stored.returnPath, "/");
     return res.redirect(`${path}${path.includes("?") ? "&" : "?"}authError=${errCode}`);
   }
@@ -1151,11 +932,11 @@ app.get("/auth/github/callback", asyncHandler(async (req, res) => {
   const account = await store.findOrCreateAccount(email);
   if (stored.deviceId) {
     await store.completeDeviceLogin(stored.deviceId, account.id);
-    recordFunnelEvent("sign_in_completed", "github_device", account.plan);
+    recordFunnelEvent("sign_in_completed", "github_device");
     return sendDeviceSignedIn(res, account.email);
   }
   const session = await store.createSession(account.id);
-  recordFunnelEvent("sign_in_completed", "github_browser", account.plan);
+  recordFunnelEvent("sign_in_completed", "github_browser");
   const payload = b64urlJson({ session, controlPlane: baseUrl(req), relay: relayPublicUrl });
   // Re-sanitize on the way out (defense in depth): the return path was validated
   // at /start, but never trust a stored value verbatim when building a redirect.
@@ -1181,8 +962,8 @@ app.post("/auth/dev-login", asyncHandler(async (req, res) => {
   if (!validEmail(email)) return res.status(400).json({ error: "Invalid email" });
   const account = await store.findOrCreateAccount(email);
   const token = await store.createSession(account.id);
-  recordFunnelEvent("sign_in_completed", "dev", account.plan);
-  res.json({ ok: true, token, account: { id: account.id, email: account.email, plan: account.plan } });
+  recordFunnelEvent("sign_in_completed", "dev");
+  res.json({ ok: true, token, account: { id: account.id, email: account.email } });
 }));
 
 // Sign out: revoke the presented account session so a lost/compromised device
@@ -1280,38 +1061,15 @@ app.delete("/devices/:id", requireUser, asyncHandler(async (req, res) => {
 }));
 
 app.get("/me", requireUser, asyncHandler(async (req, res) => {
-  const account = await syncStripeBillingForAccount((req as Request & { account: Account }).account);
+  const account = (req as Request & { account: Account }).account;
+  const nodes = await store.listNodes(account.id);
   res.json({
-    account: {
-      id: account.id,
-      email: account.email,
-      plan: account.plan,
-      subscriptionStatus: account.subscriptionStatus,
-      planUpdatedAt: account.planUpdatedAt,
-    },
-    entitlements: await store.entitlements(account.id),
-    pricing: await publicPlanPrices(),
+    account: { id: account.id, email: account.email },
     counts: {
-      nodes: (await store.listNodes(account.id)).length,
+      nodes: nodes.length,
       devices: await store.countPairedDevices(account.id),
-      // Active-session count only (excludes saved / offline-node entries) so the
-      // "Session limit reached — X/N" banner matches what enforcement counts.
-      sessions: countActiveAccountSessions(
-        await store.listAccountSessions(account.id),
-        await store.listNodes(account.id),
-      ),
-      // Unattended automation started in the current rolling window. The legacy
-      // property name stays compatible with existing clients; interactive sessions
-      // are excluded and unlimited on every plan.
-      runsThisWeek: (await runAllowance(account.id)).used,
+      sessions: countActiveAccountSessions(await store.listAccountSessions(account.id), nodes),
     },
-    // Lifetime hosted-session trial (Bivy Cloud "free" only). Undefined on self-host
-    // and paid plans, where nothing is metered. Drives the app's usage banner and
-    // the "upgrade to keep your sessions visible" prompt.
-    trial: await (async () => {
-      const t = await trialStatus(account.id);
-      return t.enforced ? { limit: t.limit, used: t.used, remaining: t.remaining, over: t.over, exhausted: t.exhausted } : undefined;
-    })(),
   });
 }));
 
@@ -1319,13 +1077,13 @@ app.get("/me", requireUser, asyncHandler(async (req, res) => {
 
 // A signed-in user enrolls a node (by its self-generated nodeId). Returns an
 // enrollment token the node stores and uses to authenticate to the relay /
-// control plane. Enforces the plan's maxNodes.
+// control plane.
 app.post("/nodes/enroll", requireUser, asyncHandler(async (req, res) => {
-  const account = await syncStripeBillingForAccount((req as Request & { account: Account }).account);
+  const account = (req as Request & { account: Account }).account;
   const nodeId = String(req.body?.nodeId ?? "").trim();
   if (!nodeId) return res.status(400).json({ error: "Missing nodeId" });
   const result = await store.enrollNode(account.id, nodeId, String(req.body?.name ?? "Node"));
-  if (result.created) recordFunnelEvent("node_enrolled", "api", account.plan);
+  if (result.created) recordFunnelEvent("node_enrolled", "api");
   res.json({ ok: true, ...result });
 }));
 
@@ -1389,17 +1147,10 @@ app.delete("/node", requireNode, asyncHandler(async (req, res) => {
 
 // --- Node-authenticated endpoints --------------------------------------
 
-// A node reads its own account's plan + entitlements + node count, so `bivy
-// status` can show the plan and node usage without a browser sign-in. Returns
-// only the caller's own routing/plan metadata, never another account's data.
+// A node reads basic account usage metadata for status output.
 app.get("/node/account", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
-  const account = await store.getAccount(node.accountId);
-  res.json({
-    plan: account?.plan ?? "free",
-    entitlements: await store.entitlements(node.accountId),
-    counts: { nodes: (await store.listNodes(node.accountId)).length },
-  });
+  res.json({ counts: { nodes: (await store.listNodes(node.accountId)).length } });
 }));
 
 // The node calls this periodically (and the relay can mark offline on
@@ -1507,19 +1258,6 @@ app.post("/node/settled", requireNode, asyncHandler(async (req, res) => {
   res.json({ ok: true, reaped });
 }));
 
-// The node reads its owner's entitlements (plan, node limit, push/relay flags).
-// Device and session caps have been removed, so this no longer gates session
-// creation; the account-wide open-session count is still reported for display.
-app.get("/node/entitlements", requireNode, asyncHandler(async (req, res) => {
-  const node = (req as Request & { node: NodeRecord }).node;
-  const entitlements = await store.entitlements(node.accountId);
-  const accountSessionCount = countActiveAccountSessions(
-    await store.listAccountSessions(node.accountId),
-    await store.listNodes(node.accountId),
-  );
-  res.json({ ...entitlements, accountSessionCount });
-}));
-
 // The node advertises its current session metadata (replace semantics). Titles
 // arrive E2E-encrypted; the control plane stores them opaquely. This powers the
 // cross-node unified session list without the control plane seeing content.
@@ -1570,16 +1308,8 @@ function sessionAdvertsFrom(raw: unknown) {
 app.post("/node/sessions", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const sessions = sessionAdvertsFrom(req.body?.sessions);
-  const newRuns = await store.replaceNodeSessions(node.accountId, node.id, sessions);
-  if (newRuns > 0) {
-    const plan = (await store.entitlements(node.accountId)).plan;
-    recordFunnelEvent("run_started", "session", plan, newRuns);
-    // A new session that lands a free account past its lifetime trial is withheld
-    // from the hosted app (see listClientSessions). Record it once, here, so the
-    // conversion funnel can size the trial — the read path stays metric-free.
-    if ((await trialStatus(node.accountId)).exhausted) recordFunnelEvent("quota_blocked", "trial", plan);
-    await correlateHostedSessions(store, node, sessions);
-  }
+  await store.replaceNodeSessions(node.accountId, node.id, sessions);
+  await correlateHostedSessions(store, node, sessions);
   res.json({ ok: true, count: sessions.length });
 }));
 
@@ -1615,14 +1345,8 @@ app.put("/internal/nodes/:nodeId/sessions/:sessionId", requireNode, asyncHandler
   // of the control plane pegging a core under load. Removals are still handled
   // by the periodic full advertise via POST /node/sessions.
   const advert = sessionAdvertsFrom([{ ...req.body, sessionId: req.params.sessionId }]);
-  let newRuns = 0;
-  for (const s of advert) if (await store.upsertNodeSession(node.accountId, node.id, s)) newRuns += 1;
-  if (newRuns > 0) {
-    const plan = (await store.entitlements(node.accountId)).plan;
-    recordFunnelEvent("run_started", "session", plan, newRuns);
-    if ((await trialStatus(node.accountId)).exhausted) recordFunnelEvent("quota_blocked", "trial", plan);
-    await correlateHostedSessions(store, node, advert);
-  }
+  for (const s of advert) await store.upsertNodeSession(node.accountId, node.id, s);
+  await correlateHostedSessions(store, node, advert);
   res.json({ ok: true, count: advert.length });
 }));
 
@@ -1658,30 +1382,9 @@ async function listClientSessions(req: Request, res: Response) {
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const all = await store.listAccountSessions(client.accountId);
   const scoped = client.nodeId ? all.filter((s) => s.nodeId === client.nodeId) : all;
-  // Trial gate: on Bivy Cloud a free account past its lifetime session allowance
-  // still sees its earliest sessions, but sessions beyond the cap come back as
-  // content-stripped `locked` stubs — enough to render a "subscribe to view" card,
-  // never their (E2E) title/branch/source. This is the authoritative, server-side
-  // visibility gate; the app is only the messenger. Self-host and paid plans hit
-  // the fast path below (overIds empty) and see everything.
-  const trial = await trialStatus(client.accountId);
-  const overIds = trial.enforced && trial.over > 0 && typeof trial.limit === "number"
-    ? await store.overTrialSessionIds(client.accountId, trial.limit)
-    : new Set<string>();
-  // Strip the agent-service address: it is node↔node routing metadata (Stage 2),
-  // never needed by — and not exposed to — clients.
-  const forClient = scoped.map(({ agentServiceAddress: _addr, ...s }) => {
-    if (!overIds.has(s.sessionId)) return s;
-    // Withhold everything the lock is meant to hide; keep only routing identity and
-    // status so the client can show a placeholder in the right node/position.
-    return { sessionId: s.sessionId, nodeId: s.nodeId, status: s.status, updatedAt: s.updatedAt, locked: true as const };
-  });
-  res.json({
-    sessions: forClient,
-    trial: trial.enforced
-      ? { limit: trial.limit, used: trial.used, remaining: trial.remaining, over: trial.over, exhausted: trial.exhausted }
-      : undefined,
-  });
+  // Strip node-only routing metadata from client responses.
+  const sessions = scoped.map(({ agentServiceAddress: _addr, ...session }) => session);
+  res.json({ sessions });
 }
 
 app.get("/sessions", asyncHandler(listClientSessions));
@@ -1695,13 +1398,6 @@ function pushSubscriptionEndpoint(subscription: unknown): string {
 
 async function sendPushToAccount(accountId: string, payload: Record<string, unknown>) {
   if (!webPushEnabled) return { enabled: false, sent: 0 };
-  // Authoritative plan gate on the delivery path — when entitlements are enforced
-  // (Bivy Cloud), subscriptions created while paid must stop firing the moment an
-  // account downgrades, without depending on subscription cleanup. `subscribe` is
-  // also gated, but this is the source of truth so a lingering subscription never
-  // leaks push to a free account. When enforcement is off (self-host) this is a
-  // no-op and every account may receive push.
-  if (!(await accountPushAllowed(accountId))) return { enabled: false, sent: 0, reason: "plan" };
   // Per-account, per-kind opt-out. The `kind` string arrives from the node's
   // notification hint and flows unchanged to the browser; muting it here stops
   // delivery for every device on the account without touching subscriptions.
@@ -1731,7 +1427,6 @@ app.get("/api/push/vapid-public-key", (_req, res) => {
 app.post("/api/push/subscribe", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
-  if (!(await accountPushAllowed(client.accountId))) return res.status(402).json({ error: "Push notifications require the Individual or Team plan." });
   const subscription = req.body?.subscription ?? req.body;
   const endpoint = pushSubscriptionEndpoint(subscription);
   if (!endpoint) return res.status(400).json({ error: "Missing push subscription endpoint" });
@@ -1798,9 +1493,6 @@ const EPHEMERAL_ALLOWED_HOSTS = new Set([
   "ssm.ap-northeast-1.amazonaws.com",
 ]);
 app.post("/api/ephemeral/exec", requireUser, asyncHandler(async (req, res) => {
-  // Quick ephemeral servers are available on every plan. Interactive runner
-  // launches do not consume the automation allowance; a runner serving queued work
-  // is metered when that work enters `running`, like every other automation job.
   // Fail-closed deployment gate: ephemeral machines are off unless the deploy set
   // EPHEMERAL_MACHINES_ENABLED=1 (production leaves it off). Device-initiated
   // launches route their provider create/destroy calls through this relay, so
@@ -1808,11 +1500,6 @@ app.post("/api/ephemeral/exec", requireUser, asyncHandler(async (req, res) => {
   // VITE_EPHEMERAL_MACHINES_ENABLED flag. Mirrors the planAutoProvision guard.
   if (!ephemeralMachinesEnabled()) {
     return res.status(403).json({ error: "Ephemeral machines are disabled." });
-  }
-  const account = (req as Request & { account: Account }).account;
-  const ent = await store.entitlements(account.id);
-  if (enforceEntitlements && !ent.ephemeralEnabled) {
-    return res.status(403).json({ error: "Ephemeral servers aren't available on your plan." });
   }
   const url = String(req.body?.url ?? "");
   let host: string;
@@ -3273,9 +2960,6 @@ app.post("/account/automation-runs", asyncHandler(async (req, res) => {
 app.post("/account/work-items/:id/assign", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
-  if (!(await store.entitlements(client.accountId)).workQueueEnabled) {
-    return res.status(403).json({ error: "The work queue is a paid feature." });
-  }
   const node = typeof req.body?.node === "string" ? req.body.node.trim() : "";
   const runtimeId = typeof req.body?.runtimeId === "string" ? req.body.runtimeId.trim() : "";
   const model = typeof req.body?.model === "string" ? req.body.model.trim() : "";
@@ -3618,13 +3302,6 @@ app.post("/webhooks/automation/run/:definitionId", asyncHandler(async (req, res)
   const dedupeKey = `automation:${def.id}:${idempotencyKey}`;
   const replay = await store.getAutomationRunBySourceKey(def.accountId, dedupeKey);
   if (replay) return res.status(200).json({ code: "duplicate", id: replay.id });
-  const entitlements = await store.entitlements(def.accountId);
-  if (!entitlements.workQueueEnabled) return res.status(429).json({ code: "quota_exhausted" });
-  const allowance = await runAllowance(def.accountId);
-  if (allowance.exhausted) {
-    recordFunnelEvent("quota_blocked", "automation", entitlements.plan);
-    return res.status(429).json({ code: "quota_exhausted", limit: allowance.limit, used: allowance.used });
-  }
   // The payload may pick the node (routing); everything else comes from the
   // definition, which the store applies as fallbacks when enqueuing by id.
   const route = event.routing || undefined;
@@ -3665,13 +3342,6 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
   }
   const event = String(req.headers["x-github-event"] ?? "");
   if (event === "ping") return res.json({ ok: true, pong: true });
-  // Plan gate: the hosted work queue is on every plan (free is metered per run at
-  // claim time against the rolling cap, see runAllowance), so this only refuses a
-  // plan that has the feature fully off. Ack with 200 so GitHub marks the delivery
-  // successful (a non-2xx would make GitHub retry forever) but enqueue nothing.
-  if (!(await store.entitlements(hook.accountId)).workQueueEnabled) {
-    return res.json({ ok: true, enqueued: false, reason: "plan" });
-  }
   // GitHub reuses the delivery GUID on redelivery, so it's a natural idempotency
   // key: a redelivered webhook returns the existing item instead of duplicating.
   const deliveryId = String(req.headers["x-github-delivery"] ?? "");
@@ -3924,9 +3594,6 @@ app.post("/webhooks/linear/:id", asyncHandler(async (req, res) => {
   if (!verifyLinearSignature(hook.secret, raw, req.headers["linear-signature"] as string | undefined)) {
     return res.status(401).json({ error: "Bad signature" });
   }
-  if (!(await store.entitlements(hook.accountId)).workQueueEnabled) {
-    return res.json({ ok: true, enqueued: false, reason: "plan" });
-  }
   let payload: unknown;
   try { payload = JSON.parse(raw.toString("utf8")); } catch { return res.status(400).json({ error: "Invalid JSON" }); }
   const issue = parseLinearIssueEvent(payload);
@@ -3983,9 +3650,6 @@ app.post("/webhooks/slack/:id", asyncHandler(async (req, res) => {
     req.headers["x-slack-signature"] as string | undefined,
   );
   if (!ok) return res.status(401).json({ error: "Bad signature" });
-  if (!(await store.entitlements(hook.accountId)).workQueueEnabled) {
-    return res.json({ response_type: "ephemeral", text: "The Bivy work queue is a paid feature. Upgrade to the Individual or Team plan to route Slack commands to your nodes." });
-  }
   if (hook.enabled === false) return res.status(410).json({ error: "Slack integration disabled" });
   const form = new URLSearchParams(raw.toString("utf8"));
   const { node, repo, prompt } = parseSlackCommand(form.get("text") ?? "");
@@ -4015,26 +3679,12 @@ app.get("/node/work", requireNode, asyncHandler(async (req, res) => {
     .map((l) => l.trim())
     .filter(Boolean);
   const items = await store.listPendingWorkItems(node.accountId, labels.length ? labels : ["bivy"]);
-  // Free-tier rolling automation quota: once the queued-job allowance is spent,
-  // hide pending items so the node stops trying to claim them. They stay
-  // queued and become visible again as capacity ages back in (no data lost, no
-  // churn). The claim endpoint below is the authoritative backstop for a direct/racing claim.
-  if ((await runAllowance(node.accountId)).exhausted) return res.json({ items: [] });
   res.json({ items });
 }));
 
 // Claim one item (atomic; only one node wins). Returns the item or 409 if taken.
 app.post("/node/work/:id/claim", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
-  // Authoritative free-tier quota gate for unattended automation. Interactive
-  // sessions never reach this endpoint and never consume the allowance.
-  // 402 (not 409) so the node can tell "you're out of runs" from "someone else won
-  // this item". Only bites under ENFORCE_ENTITLEMENTS; self-host is unlimited.
-  const allowance = await runAllowance(node.accountId);
-  if (allowance.exhausted) {
-    recordFunnelEvent("quota_blocked", "work_queue", (await store.entitlements(node.accountId)).plan);
-    return res.status(402).json({ error: "Weekly automation limit reached for your plan.", reason: "quota", limit: allowance.limit, used: allowance.used });
-  }
   const item = await store.claimWorkItem(node.accountId, node.id, String(req.params.id));
   if (!item) return res.status(409).json({ error: "Already claimed or unknown" });
   void notifyRelaysRunUpdated(node.accountId, {
@@ -4080,9 +3730,6 @@ app.post("/node/work/:id/complete", requireNode, asyncHandler(async (req, res) =
     return res.status(409).json({ error: "Run already reached a terminal outcome or was reclaimed", reason: latest?.status ?? "unknown" });
   }
   recordDurableRunLifecycleResult(run, "succeeded");
-  // Compatibility for older nodes that skip the explicit /running transition.
-  const started = await store.recordRunStart(node.accountId, `automation:${id}`);
-  if (started) recordFunnelEvent("run_started", "automation", (await store.entitlements(node.accountId)).plan);
   void notifyRelaysRunUpdated(node.accountId, run);
   res.json({ ok: true, run });
 }));
@@ -4096,8 +3743,6 @@ app.post("/node/work/:id/running", requireNode, asyncHandler(async (req, res) =>
   }
   const run = await store.transitionAutomationRun(node.accountId, id, "running", undefined, node.id);
   if (!run) return res.status(409).json({ error: "Run is no longer claimed by this node" });
-  const started = await store.recordRunStart(node.accountId, `automation:${id}`);
-  if (started) recordFunnelEvent("run_started", "automation", (await store.entitlements(node.accountId)).plan);
   void notifyRelaysRunUpdated(node.accountId, run);
   res.json({ ok: true, run });
 }));
@@ -4347,138 +3992,6 @@ app.post("/client/relay-ticket", asyncHandler(async (req, res) => {
   }
 }));
 
-// --- Billing ------------------------------------------------------------
-
-// Public plan prices are read from the configured Stripe Price objects rather
-// than duplicated in clients or the marketing site. The short cache avoids a
-// Stripe API request on every page load while still reflecting dashboard changes.
-app.get("/billing/plans", asyncHandler(async (_req, res) => {
-  res.setHeader("Access-Control-Allow-Origin", process.env.MARKETING_SITE_URL ?? "https://bivy.sh");
-  res.json({ plans: await publicPlanPrices() });
-}));
-
-app.post("/billing/checkout", requireUser, asyncHandler(async (req, res) => {
-  const account = (req as Request & { account: Account }).account;
-  const plan = normalizePlan(String(req.body?.plan ?? "pro")) as Plan;
-  if (plan !== "pro" && !(plan === "team" && stripePrices.team)) return res.status(400).json({ error: "Invalid plan" });
-
-  if (!stripe) {
-    if (process.env.NODE_ENV === "production") throw new Error("STRIPE_SECRET_KEY is required for production checkout");
-    recordFunnelEvent("checkout_started", plan, account.plan);
-    return res.json({ ok: true, checkoutUrl: `https://billing.example/checkout?plan=${plan}`, plan, dev: true });
-  }
-
-  const price = stripePrices[plan];
-  if (!price) return res.status(500).json({ error: `Missing Stripe price env for ${plan}` });
-
-  let customer = account.stripeCustomerId;
-  if (!customer) {
-    const created = await stripe.customers.create({ email: account.email, metadata: { accountId: account.id } });
-    customer = created.id;
-    await store.setStripeCustomer(account.id, customer);
-  }
-
-  const successUrl = process.env.BILLING_SUCCESS_URL ?? `${baseUrl(req)}/?checkout=success`;
-  const cancelUrl = process.env.BILLING_CANCEL_URL ?? `${baseUrl(req)}/?checkout=cancel`;
-  const checkout = await stripe.checkout.sessions.create({
-    mode: "subscription",
-    customer,
-    line_items: [{ price, quantity: 1 }],
-    allow_promotion_codes: true,
-    success_url: successUrl,
-    cancel_url: cancelUrl,
-    client_reference_id: account.id,
-    metadata: { accountId: account.id, plan },
-    subscription_data: { metadata: { accountId: account.id, plan } },
-  });
-
-  const checkoutUrl = checkout.url;
-  if (!checkoutUrl) throw new Error("Stripe did not return a checkout URL");
-  recordFunnelEvent("checkout_started", plan, account.plan);
-  res.json({ ok: true, checkoutUrl, plan });
-}));
-
-app.post("/billing/portal", requireUser, asyncHandler(async (req, res) => {
-  const account = (req as Request & { account: Account }).account;
-  if (!stripe) {
-    if (process.env.NODE_ENV === "production") throw new Error("STRIPE_SECRET_KEY is required for production billing portal");
-    return res.json({ ok: true, portalUrl: `https://billing.example/portal?account=${encodeURIComponent(account.id)}`, dev: true });
-  }
-
-  let customer = account.stripeCustomerId;
-  if (!customer) {
-    const created = await stripe.customers.create({ email: account.email, metadata: { accountId: account.id } });
-    customer = created.id;
-    await store.setStripeCustomer(account.id, customer);
-  }
-
-  const returnUrl = process.env.BILLING_PORTAL_RETURN_URL ?? `${baseUrl(req)}/`;
-  const portal = await stripe.billingPortal.sessions.create({ customer, return_url: returnUrl });
-  const portalUrl = portal.url;
-  if (!portalUrl) throw new Error("Stripe did not return a billing portal URL");
-  res.json({ ok: true, portalUrl });
-}));
-
-app.post("/billing/webhook", asyncHandler(async (req, res) => {
-  if (!stripe) {
-    if (process.env.NODE_ENV === "production") throw new Error("STRIPE_SECRET_KEY is required for production webhooks");
-    const body = Buffer.isBuffer(req.body) ? JSON.parse(req.body.toString("utf8")) : req.body;
-    const accountId = String(body?.accountId ?? "");
-    const plan = normalizePlan(String(body?.plan ?? "")) as Plan;
-    if (accountId && ["free", "pro", "team"].includes(plan)) {
-      const previous = await store.getAccount(accountId);
-      await store.setPlan(accountId, plan, body?.stripeCustomerId);
-      if (previous && previous.plan !== plan) recordFunnelEvent("plan_changed", "dev_webhook", plan);
-    }
-    return res.json({ received: true, dev: true });
-  }
-
-  const signature = req.headers["stripe-signature"];
-  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-  if (!webhookSecret) throw new Error("STRIPE_WEBHOOK_SECRET is required");
-  if (!signature || Array.isArray(signature)) return res.status(400).json({ error: "Missing Stripe signature" });
-
-  const event = stripe.webhooks.constructEvent(req.body as Buffer, signature, webhookSecret);
-
-  if (event.type === "checkout.session.completed") {
-    const session = event.data.object as Stripe.Checkout.Session;
-    const accountId = String(session.metadata?.accountId ?? session.client_reference_id ?? "");
-    const customerId = typeof session.customer === "string" ? session.customer : session.customer?.id;
-    if (accountId && customerId) await store.setStripeCustomer(accountId, customerId);
-  } else if (event.type === "customer.subscription.created" || event.type === "customer.subscription.updated") {
-    const subscription = event.data.object as Stripe.Subscription;
-    const customerId = typeof subscription.customer === "string" ? subscription.customer : subscription.customer?.id;
-    const accountId = String(subscription.metadata.accountId ?? "");
-    const account = accountId ? await store.getAccount(accountId) : customerId ? await store.accountFromStripeCustomer(customerId) : undefined;
-    if (account) {
-      const nextPlan = subscriptionIsPaid(subscription) ? planFromSubscription(subscription) : "free";
-      await store.setSubscriptionState(account.id, {
-        plan: nextPlan,
-        stripeCustomerId: customerId,
-        stripeSubscriptionId: subscription.id,
-        subscriptionStatus: subscription.status,
-      });
-      if (account.plan !== nextPlan) recordFunnelEvent("plan_changed", "stripe_subscription", nextPlan);
-    }
-  } else if (event.type === "customer.subscription.deleted") {
-    const subscription = event.data.object as Stripe.Subscription;
-    const customerId = typeof subscription.customer === "string" ? subscription.customer : subscription.customer?.id;
-    const accountId = String(subscription.metadata.accountId ?? "");
-    const account = accountId ? await store.getAccount(accountId) : customerId ? await store.accountFromStripeCustomer(customerId) : undefined;
-    if (account) {
-      await store.setSubscriptionState(account.id, {
-        plan: "free",
-        stripeCustomerId: customerId,
-        stripeSubscriptionId: null,
-        subscriptionStatus: subscription.status,
-      });
-      if (account.plan !== "free") recordFunnelEvent("plan_changed", "stripe_deleted", "free");
-    }
-  }
-
-  res.json({ received: true });
-}));
-
 // --- Internal: relay introspection -------------------------------------
 // The relay verifies tokens here instead of holding account data itself.
 // Protected by a shared secret (RELAY_SECRET). These endpoints reveal only
@@ -4494,20 +4007,7 @@ app.post("/internal/introspect/node", requireRelay, asyncHandler(async (req, res
   // it here both verifies and invalidates it.
   const ticket = await store.consumeRelayTicket(String(req.body?.token ?? ""));
   if (!ticket || ticket.role !== "node" || !ticket.nodeId) return res.status(404).json({ error: "Invalid node ticket" });
-  const entitlements = await store.entitlements(ticket.accountId);
-  // Enforce the node cap at connect too, not just at enroll — otherwise an
-  // account that downgrades (e.g. Individual → Free) keeps every already-enrolled
-  // node reachable forever. The oldest `maxNodes` nodes stay allowed; the rest are
-  // rejected but remain enrolled, so re-upgrading restores them with no re-enroll.
-  if (entitlements.maxNodes !== undefined) {
-    const allowed = (await store.listNodes(ticket.accountId))
-      .slice()
-      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-      .slice(0, entitlements.maxNodes)
-      .some((n) => n.id === ticket.nodeId);
-    if (!allowed) return res.status(403).json({ error: "Node over plan limit" });
-  }
-  res.json({ nodeId: ticket.nodeId, accountId: ticket.accountId, entitlements });
+  res.json({ nodeId: ticket.nodeId, accountId: ticket.accountId });
 }));
 
 app.post("/internal/introspect/session", requireRelay, asyncHandler(async (req, res) => {
@@ -4515,11 +4015,7 @@ app.post("/internal/introspect/session", requireRelay, asyncHandler(async (req, 
   if (!ticket || ticket.role !== "client") return res.status(404).json({ error: "Invalid client ticket" });
   // `nodeId` (when present) restricts a link grant to a single node; the relay
   // enforces it. `null` means an account-wide session token.
-  res.json({
-    accountId: ticket.accountId,
-    nodeId: ticket.nodeId,
-    entitlements: await store.entitlements(ticket.accountId),
-  });
+  res.json({ accountId: ticket.accountId, nodeId: ticket.nodeId });
 }));
 
 app.post("/internal/node-status", requireRelay, asyncHandler(async (req, res) => {
@@ -4535,7 +4031,7 @@ app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
   }
   const message = String(error instanceof Error ? error.message : error);
   // Deliberate client errors (4xx) carry an explicit status and a message meant
-  // for the caller (e.g. "Node limit reached"). Anything else is an unexpected
+  // for the caller. Anything else is an unexpected
   // server-side failure — a DB blip, a transient DNS error like
   // "getaddrinfo EAI_AGAIN postgres", a bug — whose raw message leaks internal
   // infrastructure detail and is useless to the user. Log it server-side and

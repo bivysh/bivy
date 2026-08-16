@@ -94,12 +94,9 @@ AUTH_EMAIL_FROM=Bivy <login@app.example.com>
 GITHUB_OAUTH_CLIENT_ID=...
 GITHUB_OAUTH_CLIENT_SECRET=...
 
-# Billing is omitted on purpose — see "Billing (hosted only)" in configuration.md.
-# Self-hosted stacks leave entitlements unenforced, so there is nothing to unlock.
-
 # Web push (phone/PWA notifications). Push stays disabled until BOTH VAPID keys
-# are set; generate a pair with `npx web-push generate-vapid-keys`. With
-# Push works for every account on a self-hosted stack.
+# are set; generate a pair with `npx web-push generate-vapid-keys`. Push works
+# for every account on a self-hosted stack.
 WEB_PUSH_VAPID_PUBLIC_KEY=...
 WEB_PUSH_VAPID_PRIVATE_KEY=...
 WEB_PUSH_SUBJECT=mailto:admin@app.example.com

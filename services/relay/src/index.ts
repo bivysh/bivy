@@ -47,8 +47,6 @@ if ((process.env.NODE_ENV === "production" || !isLocalControlPlane) && (!process
 // by the control plane (which shard URL a node/client is handed), so this label
 // is purely observational and has no effect on behavior.
 const shardId = process.env.RELAY_SHARD_ID ?? null;
-const enforceEntitlements = process.env.ENFORCE_ENTITLEMENTS === "1";
-
 // Account-free ("solo") admission. OFF by default and only honoured when the
 // operator explicitly opts in — the hosted relay leaves this unset, so its
 // control-plane-introspected admission path is provably unchanged (Gap 1).
@@ -65,7 +63,7 @@ const allowRoomTokens = process.env.RELAY_ALLOW_ROOM_TOKENS === "1";
 // Fail fast on a dangerous misconfiguration: a relay reaching a real (non-local)
 // control plane is an account-gated deployment, and enabling account-free room
 // tokens there would open an admission path that BYPASSES the control plane's
-// entitlement/ownership checks — anyone with a room id + token gets on. Solo
+// account/ownership checks — anyone with a room id + token gets on. Solo
 // mode is for a self-hosted, control-plane-free relay only, so we refuse rather
 // than silently run a relay that is account-gated on one door and open on the
 // other. (A localhost control plane — i.e. no real CP — is still fine.)
@@ -464,11 +462,6 @@ async function handleConnection(role: "node" | "client", ws: WebSocket, url: URL
       ws.close(1008, "Unauthorized");
       return;
     }
-    if (enforceEntitlements && info.entitlements?.relayEnabled !== true) {
-      send(ws, { t: "error", error: "Hosted relay is not enabled for this account" });
-      ws.close(1008, "Relay disabled");
-      return;
-    }
     attachNode(ws, info.nodeId, info.accountId);
   } else {
     const nodeId = url.searchParams.get("nodeId");
@@ -483,11 +476,6 @@ async function handleConnection(role: "node" | "client", ws: WebSocket, url: URL
     if (info.nodeId && info.nodeId !== nodeId) {
       send(ws, { t: "error", error: "Token not valid for this node" });
       ws.close(1008, "Forbidden");
-      return;
-    }
-    if (enforceEntitlements && info.entitlements?.relayEnabled !== true) {
-      send(ws, { t: "error", error: "Hosted relay is not enabled for this account" });
-      ws.close(1008, "Relay disabled");
       return;
     }
     attachClient(ws, nodeId, info.accountId);

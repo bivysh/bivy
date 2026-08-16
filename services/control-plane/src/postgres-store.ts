@@ -8,12 +8,10 @@ import { PostgresDatabaseContext } from "./postgres-database.js";
 import {
   type Account,
   type DeviceLoginStatus,
-  type Entitlements,
   type ControlPlaneStore,
   type NodeRecord,
   type NodeProviderSummary,
   type PairedDeviceInfo,
-  type Plan,
   type RelayRole,
   type RelayTicket,
   type ResolvedClient,
@@ -49,7 +47,6 @@ import {
   type GithubAppVault,
   type GithubAppWrappedKey,
   type GithubAppKeyRequest,
-  type SubscriptionState,
   type InboundHook,
   type UsageMetrics,
   type WorkItem,
@@ -64,7 +61,6 @@ import {
   type RunEvidenceEvent,
   type RunCheck,
   type RunEvidencePatch,
-  entitlementsForPlan,
   hashToken,
   disambiguateNodeName,
   cleanNodeName,
@@ -124,16 +120,9 @@ export class PostgresStore implements ControlPlaneStore {
       CREATE TABLE IF NOT EXISTS accounts (
         id                  TEXT PRIMARY KEY,
         email               TEXT UNIQUE NOT NULL,
-        plan                TEXT NOT NULL DEFAULT 'free',
-        stripe_customer_id  TEXT,
         created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
       );
 
-      -- Subscription metadata (added after initial release; ADD COLUMN IF NOT
-      -- EXISTS keeps this a safe, idempotent migration on existing databases).
-      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS stripe_subscription_id  TEXT;
-      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS subscription_status     TEXT;
-      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS plan_updated_at         TIMESTAMPTZ;
       -- Per-account push notification preferences ({ [kind]: boolean }). NULL =
       -- "no preferences saved yet" and reads back as all-enabled defaults.
       ALTER TABLE accounts ADD COLUMN IF NOT EXISTS notification_preferences JSONB;
@@ -185,14 +174,6 @@ export class PostgresStore implements ControlPlaneStore {
       ALTER TABLE hosted_machine_attempts ADD COLUMN IF NOT EXISTS deadline_at TIMESTAMPTZ;
       ALTER TABLE hosted_machine_attempts ADD COLUMN IF NOT EXISTS ownership_tag TEXT;
       ALTER TABLE hosted_machine_attempts ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 0;
-      -- The paid single-user plan was renamed 'individual' -> 'pro' to match what
-      -- it is sold as. The plan column is plain TEXT with no enum or CHECK, so the
-      -- backfill is a straight UPDATE; it is idempotent (the second run matches no
-      -- rows) and runs before the process serves traffic, so no request can observe
-      -- the old id. Stripe subscription metadata cannot be backfilled this way and
-      -- is normalized on read instead — see planFromSubscription in index.ts.
-      UPDATE accounts SET plan = 'pro' WHERE plan = 'individual';
-
       CREATE TABLE IF NOT EXISTS login_tokens (
         token_hash  TEXT PRIMARY KEY,
         email       TEXT NOT NULL,
@@ -708,33 +689,6 @@ export class PostgresStore implements ControlPlaneStore {
       CREATE INDEX IF NOT EXISTS idx_automation_definitions_due
         ON automation_definitions(next_run_at) WHERE enabled = true;
 
-      -- One row per distinct run the account has started, keyed by run key (the
-      -- session id). Powers the free-tier daily cap: runs today = rows whose
-      -- started_at >= start-of-UTC-day. PRIMARY KEY(account_id, run_key) makes
-      -- recordRunStart idempotent so reconnects / repeated session advertises never
-      -- double-count. Metadata only — no session content ever lands here.
-      CREATE TABLE IF NOT EXISTS run_starts (
-        account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-        run_key     TEXT NOT NULL,
-        started_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-        PRIMARY KEY (account_id, run_key)
-      );
-
-      -- Lifetime hosted-session trial meter. One row per DISTINCT session ever
-      -- surfaced through the hosted index, deduped by PRIMARY KEY so re-advertises
-      -- never inflate it. Unlike run_starts this is NEVER pruned — it is durable
-      -- billing state, not a rolling window — so the "first N sessions are free"
-      -- trial can't be reset by ageing rows out. Which sessions fall outside the
-      -- allowance is decided at READ time (by first_seen order vs the plan limit),
-      -- so a session allowed once stays allowed and upgrading needs no backfill.
-      -- Metadata only: an account id, an opaque session id, a timestamp.
-      CREATE TABLE IF NOT EXISTS trial_sessions (
-        account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-        session_id  TEXT NOT NULL,
-        first_seen  TIMESTAMPTZ NOT NULL DEFAULT now(),
-        PRIMARY KEY (account_id, session_id)
-      );
-
       CREATE INDEX IF NOT EXISTS idx_nodes_account ON nodes(account_id);
       CREATE INDEX IF NOT EXISTS idx_nodes_token ON nodes(enrollment_token_hash);
       CREATE INDEX IF NOT EXISTS idx_sessions_account ON sessions(account_id);
@@ -748,8 +702,6 @@ export class PostgresStore implements ControlPlaneStore {
       -- status='pending' frees the key once the item is claimed/done, so a later
       -- re-label starts a fresh run rather than colliding forever.
       CREATE UNIQUE INDEX IF NOT EXISTS idx_work_items_collapse ON work_items(account_id, collapse_key) WHERE collapse_key IS NOT NULL AND status = 'pending';
-      CREATE INDEX IF NOT EXISTS idx_run_starts_account_time ON run_starts(account_id, started_at);
-      CREATE INDEX IF NOT EXISTS idx_trial_sessions_account_seen ON trial_sessions(account_id, first_seen);
     `);
   }
 
@@ -768,9 +720,8 @@ export class PostgresStore implements ControlPlaneStore {
   // only, never row contents. Called on an interval by the metrics collector,
   // not per request.
   async usageMetrics(): Promise<UsageMetrics> {
-    const [accounts, plans, nodes, online, work, sess] = await Promise.all([
+    const [accounts, nodes, online, work, sess] = await Promise.all([
       this.query(`SELECT count(*)::int AS n FROM accounts`),
-      this.query(`SELECT plan, count(*)::int AS n FROM accounts GROUP BY plan`),
       this.query(`SELECT count(*)::int AS n FROM nodes`),
       this.query(`SELECT count(*)::int AS n FROM nodes WHERE online = true`),
       this.query(`SELECT status, count(*)::int AS n FROM work_items GROUP BY status`),
@@ -783,7 +734,6 @@ export class PostgresStore implements ControlPlaneStore {
     };
     return {
       accountsTotal: Number(accounts.rows[0]?.n) || 0,
-      accountsByPlan: toMap(plans.rows, "plan"),
       nodesTotal: Number(nodes.rows[0]?.n) || 0,
       nodesOnline: Number(online.rows[0]?.n) || 0,
       workItemsByStatus: toMap(work.rows, "status"),
@@ -807,15 +757,6 @@ export class PostgresStore implements ControlPlaneStore {
   async getAccount(accountId: string): Promise<Account | undefined> {
     const { rows } = await this.query(`SELECT * FROM accounts WHERE id = $1`, [accountId]);
     return rows[0] ? mapAccount(rows[0]) : undefined;
-  }
-
-  async accountFromStripeCustomer(stripeCustomerId: string): Promise<Account | undefined> {
-    const { rows } = await this.query(`SELECT * FROM accounts WHERE stripe_customer_id = $1`, [stripeCustomerId]);
-    return rows[0] ? mapAccount(rows[0]) : undefined;
-  }
-
-  async setStripeCustomer(accountId: string, stripeCustomerId: string): Promise<void> {
-    await this.query(`UPDATE accounts SET stripe_customer_id = $2 WHERE id = $1`, [accountId, stripeCustomerId]);
   }
 
   async createLoginToken(email: string): Promise<string> {
@@ -1055,43 +996,6 @@ export class PostgresStore implements ControlPlaneStore {
     return { role: rec.role as RelayRole, accountId: rec.account_id, nodeId: rec.node_id ?? null };
   }
 
-  // --- Billing ----------------------------------------------------------
-
-  async setPlan(accountId: string, plan: Plan, stripeCustomerId?: string): Promise<void> {
-    await this.query(
-      `UPDATE accounts
-       SET plan = $2,
-           plan_updated_at = now(),
-           stripe_customer_id = COALESCE($3, stripe_customer_id)
-       WHERE id = $1`,
-      [accountId, plan, stripeCustomerId ?? null],
-    );
-  }
-
-  async setSubscriptionState(accountId: string, state: SubscriptionState): Promise<void> {
-    await this.query(
-      `UPDATE accounts
-       SET plan = $2,
-           plan_updated_at = now(),
-           stripe_customer_id = COALESCE($3, stripe_customer_id),
-           stripe_subscription_id = $4,
-           subscription_status = $5
-       WHERE id = $1`,
-      [
-        accountId,
-        state.plan,
-        state.stripeCustomerId ?? null,
-        state.stripeSubscriptionId ?? null,
-        state.subscriptionStatus ?? null,
-      ],
-    );
-  }
-
-  async entitlements(accountId: string): Promise<Entitlements> {
-    const account = await this.getAccount(accountId);
-    return entitlementsForPlan(account?.plan ?? "free");
-  }
-
   // --- Nodes ------------------------------------------------------------
 
   async listNodes(accountId: string): Promise<NodeRecord[]> {
@@ -1116,17 +1020,7 @@ export class PostgresStore implements ControlPlaneStore {
       ).rows.map((r: { name: string }) => r.name);
       const safeName = disambiguateNodeName(name, takenNames);
 
-      if (!current) {
-        const limit = entitlementsForPlan(
-          (await client.query(`SELECT plan FROM accounts WHERE id = $1`, [accountId])).rows[0]?.plan ?? "free",
-        ).maxNodes;
-        const count = Number(
-          (await client.query(`SELECT count(*)::int AS n FROM nodes WHERE account_id = $1`, [accountId])).rows[0].n,
-        );
-        if (limit !== undefined && count >= limit) {
-          throw Object.assign(new Error(`Node limit reached (${limit})`), { status: 402 });
-        }
-      } else if (current.accountId !== accountId) {
+      if (current && current.accountId !== accountId) {
         throw Object.assign(new Error("Node belongs to another account"), { status: 409 });
       }
 
@@ -1289,24 +1183,15 @@ export class PostgresStore implements ControlPlaneStore {
     }
   }
 
-  async replaceNodeSessions(accountId: string, nodeId: string, sessions: SessionAdvert[]): Promise<number> {
+  async replaceNodeSessions(accountId: string, nodeId: string, sessions: SessionAdvert[]): Promise<void> {
     const client = await this.database.beginTransaction();
-    let newRunStarts = 0;
     try {
       // Only touch the index if the node belongs to this account.
       const owns = await client.query(`SELECT 1 FROM nodes WHERE id = $1 AND account_id = $2`, [nodeId, accountId]);
       if (owns.rowCount) {
         await client.query(`DELETE FROM session_index WHERE node_id = $1`, [nodeId]);
         // Batched via a multi-row VALUES insert instead of one round trip per
-        // session: every node advertise (1s-debounced, plus a 60s full resync
-        // per node — see src/server.ts) used to cost 2 sequential awaited
-        // queries PER session (insert into session_index, insert into
-        // run_starts) on one held pooled connection. That's fine at 1-2
-        // sessions but scales linearly with concurrent nodes × sessions ×
-        // advertise frequency; batching drops it to a fixed 2 queries no
-        // matter how many sessions are in the advert. (Plain multi-row VALUES,
-        // not unnest($1::text[], ...) — pg-mem, which the whole store is
-        // deliberately tested against, doesn't support multi-array unnest.)
+        // session. pg-mem does not support the multi-array unnest alternative.
         if (sessions.length > 0) {
           const sessionIndexCols = 10;
           const sessionIndexValues: unknown[] = [];
@@ -1333,42 +1218,6 @@ export class PostgresStore implements ControlPlaneStore {
              VALUES ${sessionIndexRows}`,
             sessionIndexValues,
           );
-          // Count each run the first time its session is advertised. The session
-          // index is rewritten wholesale on every advertise, but run_starts is
-          // keyed by (account, session) with DO NOTHING, so a session only ever
-          // counts once — the day it first appears. This is the single funnel
-          // through which EVERY source (manual, app, work queue, ephemeral) lands
-          // in the daily counter, since every run eventually advertises a session.
-          const runStartsRows = sessions.map((_, i) => `($1, $${i + 2})`).join(", ");
-          // Read existing keys first only to work around pg-mem returning rows
-          // for ON CONFLICT DO NOTHING. Real Postgres's RETURNING remains the
-          // concurrency authority; filtering known rows makes both agree.
-          const existingRuns = await client.query(
-            `SELECT run_key FROM run_starts WHERE account_id = $1 AND run_key IN (${sessions.map((_, i) => `$${i + 2}`).join(", ")})`,
-            [accountId, ...sessions.map((s) => s.sessionId)],
-          );
-          const existingKeys = new Set(existingRuns.rows.map((row: { run_key: string }) => row.run_key));
-          const insertedRuns = await client.query(
-            `INSERT INTO run_starts (account_id, run_key)
-             VALUES ${runStartsRows}
-             ON CONFLICT (account_id, run_key) DO NOTHING
-             RETURNING run_key`,
-            [accountId, ...sessions.map((s) => s.sessionId)],
-          );
-          newRunStarts = insertedRuns.rows.filter((row: { run_key: string }) => !existingKeys.has(row.run_key)).length;
-          // Mirror into the durable, never-pruned trial ledger in the same batch.
-          // Deduped by PRIMARY KEY, so a session's first_seen is pinned the day it
-          // first appears and re-advertises are no-ops — the lifetime trial count is
-          // stable regardless of how often a session is re-advertised. Limit-agnostic
-          // by design: whether a session is inside the allowance is decided at read
-          // time (overTrialSessionIds), so this path needs no plan/enforcement lookup.
-          const trialRows = sessions.map((_, i) => `($1, $${i + 2})`).join(", ");
-          await client.query(
-            `INSERT INTO trial_sessions (account_id, session_id)
-             VALUES ${trialRows}
-             ON CONFLICT (account_id, session_id) DO NOTHING`,
-            [accountId, ...sessions.map((s) => s.sessionId)],
-          );
         }
       }
       await client.commit();
@@ -1378,12 +1227,10 @@ export class PostgresStore implements ControlPlaneStore {
     } finally {
       client.release();
     }
-    return newRunStarts;
   }
 
-  async upsertNodeSession(accountId: string, nodeId: string, session: SessionAdvert): Promise<boolean> {
+  async upsertNodeSession(accountId: string, nodeId: string, session: SessionAdvert): Promise<void> {
     const client = await this.database.beginTransaction();
-    let runStarted = false;
     try {
       // Only touch the index if the node belongs to this account (mirrors
       // replaceNodeSessions' ownership fence).
@@ -1416,28 +1263,6 @@ export class PostgresStore implements ControlPlaneStore {
             session.updatedAt ?? new Date(),
           ],
         );
-        // Count each run the first time its session is advertised — same funnel
-        // as replaceNodeSessions (keyed by (account, session), DO NOTHING, so a
-        // session only ever counts once).
-        const existingRun = await client.query(
-          `SELECT 1 FROM run_starts WHERE account_id = $1 AND run_key = $2`,
-          [accountId, session.sessionId],
-        );
-        const insertedRun = await client.query(
-          `INSERT INTO run_starts (account_id, run_key)
-           VALUES ($1, $2)
-           ON CONFLICT (account_id, run_key) DO NOTHING
-           RETURNING run_key`,
-          [accountId, session.sessionId],
-        );
-        runStarted = existingRun.rows.length === 0 && insertedRun.rows.length > 0;
-        // Mirror into the durable lifetime trial ledger (see replaceNodeSessions).
-        await client.query(
-          `INSERT INTO trial_sessions (account_id, session_id)
-           VALUES ($1, $2)
-           ON CONFLICT (account_id, session_id) DO NOTHING`,
-          [accountId, session.sessionId],
-        );
       }
       await client.commit();
     } catch (error) {
@@ -1446,7 +1271,6 @@ export class PostgresStore implements ControlPlaneStore {
     } finally {
       client.release();
     }
-    return runStarted;
   }
 
   async listAccountSessions(accountId: string): Promise<SessionIndexEntry[]> {
@@ -3113,70 +2937,6 @@ export class PostgresStore implements ControlPlaneStore {
     return rows[0] ? mapWorkItem(rows[0]) : undefined;
   }
 
-  async recordRunStart(accountId: string, runKey: string): Promise<boolean> {
-    // Idempotent: PRIMARY KEY(account_id, run_key) + DO NOTHING means recording the
-    // same run twice (reconnects, repeated advertises) leaves the original
-    // started_at intact and never inflates the daily count.
-    const existing = await this.query(
-      `SELECT 1 FROM run_starts WHERE account_id = $1 AND run_key = $2`,
-      [accountId, runKey],
-    );
-    const { rows } = await this.query(
-      `INSERT INTO run_starts (account_id, run_key) VALUES ($1, $2)
-       ON CONFLICT (account_id, run_key) DO NOTHING
-       RETURNING run_key`,
-      [accountId, runKey],
-    );
-    return existing.rows.length === 0 && rows.length > 0;
-  }
-
-  async countRunStartsSince(accountId: string, sinceIso: string, runKeyPrefix?: string): Promise<number> {
-    // One distinct run_key = one run. A prefix scopes commercial metering to a
-    // class of work without losing the all-source product funnel in this table.
-    // Prefixes are internal class constants (`automation:`), never user input.
-    const prefixClause = runKeyPrefix === undefined ? "" : " AND run_key LIKE $3";
-    const { rows } = await this.query(
-      `SELECT count(*)::int AS n FROM run_starts
-       WHERE account_id = $1 AND started_at >= $2${prefixClause}`,
-      runKeyPrefix === undefined ? [accountId, sinceIso] : [accountId, sinceIso, `${runKeyPrefix}%`],
-    );
-    return Number(rows[0]?.n ?? 0);
-  }
-
-  async pruneRunStartsBefore(beforeIso: string): Promise<number> {
-    // Rows older than the rolling window can never be counted again, so drop them.
-    const { rowCount } = await this.query(
-      `DELETE FROM run_starts WHERE started_at < $1`,
-      [beforeIso],
-    );
-    return rowCount ?? 0;
-  }
-
-  async countTrialSessions(accountId: string): Promise<number> {
-    const { rows } = await this.query(
-      `SELECT count(*)::int AS n FROM trial_sessions WHERE account_id = $1`,
-      [accountId],
-    );
-    return Number(rows[0]?.n ?? 0);
-  }
-
-  async overTrialSessionIds(accountId: string, limit: number): Promise<Set<string>> {
-    // Everything beyond the first `limit` sessions by first-seen order is outside
-    // the trial. OFFSET past the allowance returns exactly those rows, so the earliest
-    // `limit` sessions stay visible (a running session is never yanked when the wall
-    // is hit) and only newer ones are withheld. Ordered by (first_seen, session_id)
-    // for a stable tiebreak when timestamps collide.
-    if (!Number.isFinite(limit) || limit < 0) return new Set();
-    const { rows } = await this.query(
-      `SELECT session_id FROM trial_sessions
-       WHERE account_id = $1
-       ORDER BY first_seen ASC, session_id ASC
-       OFFSET $2`,
-      [accountId, limit],
-    );
-    return new Set(rows.map((r: { session_id: string }) => r.session_id));
-  }
-
   async pruneExpiredAuthTokens(nowIso: string): Promise<number> {
     // Each of these tables is otherwise only deleted on successful single-use
     // consumption (see consumeLoginToken, consumeRelayTicket, etc.) — an
@@ -3462,11 +3222,6 @@ function mapAccount(row: any): Account {
   return {
     id: row.id,
     email: row.email,
-    plan: row.plan as Plan,
-    stripeCustomerId: row.stripe_customer_id ?? null,
-    stripeSubscriptionId: row.stripe_subscription_id ?? null,
-    subscriptionStatus: row.subscription_status ?? null,
-    planUpdatedAt: row.plan_updated_at ? new Date(row.plan_updated_at).toISOString() : null,
     createdAt: new Date(row.created_at).toISOString(),
   };
 }
