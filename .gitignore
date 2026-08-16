@@ -6,7 +6,6 @@ dist
 .env
 .env.*
 !.env.example
-!deploy/.env.cluster.example
 test-results/
 packages/*/dist
 packages/*/node_modules

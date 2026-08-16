@@ -230,7 +230,7 @@ These are rotated in the provider's dashboard, then mirrored into `deploy/.env` 
 - `GITHUB_OAUTH_CLIENT_SECRET` — GitHub sign-in (rotate under the OAuth app's settings).
 - `WEB_PUSH_VAPID_PRIVATE_KEY` (+ public) — rotating the VAPID pair invalidates existing push subscriptions; clients re-subscribe on next load. Regenerate with `npx web-push generate-vapid-keys`.
 
-After rotating anything, confirm the stack is healthy: `docker compose -f deploy/docker-compose.yml --env-file deploy/.env ps` should show `control-plane` and `relay` as `healthy`.
+After rotating anything, confirm the containers are running with `docker compose -f deploy/docker-compose.yml --env-file deploy/.env ps`.
 
 ## Security boundary
 

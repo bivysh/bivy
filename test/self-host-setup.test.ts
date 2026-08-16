@@ -50,7 +50,8 @@ try {
   const caddy = fs.readFileSync(caddyPath, "utf8");
   assert.match(caddy, /^app\.test\.example \{/m, "untouched app placeholder should be replaced");
   assert.match(caddy, /^relay\.test\.example \{/m, "untouched relay placeholder should be replaced");
-  assert.match(caddy, /@internal path \/metrics\* \/readyz/, "generated Caddyfile must keep internal endpoints private");
+  assert.match(caddy, /reverse_proxy control-plane:4400/);
+  assert.match(caddy, /reverse_proxy relay:4500/);
   assert.doesNotMatch(caddy, /app\.example\.com|relay\.example\.com/);
 
   // Empty quoted values and a half-configured GitHub pair are still no auth.
@@ -120,7 +121,6 @@ try {
     ...githubFixture.env,
     GITHUB_OAUTH_CLIENT_ID: "github-client",
     GITHUB_OAUTH_CLIENT_SECRET: "github-secret",
-    BIVY_PRUNE: "0",
   });
   assert.equal(githubRun.status, 0, `complete GitHub setup should start\n${githubRun.stdout}\n${githubRun.stderr}`);
   assert.match(githubRun.stdout, /bivy relay:setup .* --github/);

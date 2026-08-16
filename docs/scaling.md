@@ -82,39 +82,3 @@ Changing the number or order of shard URLs changes placement and reconnects part
 of the fleet. Use a maintenance window. Prefer adding enough shards ahead of a
 traffic step and monitor each shard's connection, room, memory, and rejection
 metrics.
-
-## Deploying a fleet node
-
-The single-host `deploy/docker-compose.yml` remains the easiest self-host setup.
-For multi-host deployments, `deploy/docker-compose.cluster.yml` intentionally
-contains only application processes: managed Postgres and the external TLS/load
-balancer are operator-owned.
-
-On each server:
-
-```bash
-cp deploy/.env.cluster.example deploy/.env.cluster
-chmod 600 deploy/.env.cluster
-# Fill shared values and immutable image tags. On relay hosts set that host's
-# RELAY_SHARD_ID; route the corresponding shard hostname to it.
-
-bash deploy/cluster-node.sh control-plane deploy/.env.cluster
-# or
-bash deploy/cluster-node.sh relay deploy/.env.cluster
-```
-
-The compose file publishes port 4400 or 4500 on all interfaces by default.
-Override `CONTROL_PLANE_BIND_ADDRESS` / `RELAY_BIND_ADDRESS` when the load
-balancer reaches a specific private interface, and enforce access with the host
-firewall/security group.
-
-For rolling control-plane updates, update and drain one replica at a time. For a
-relay update, remove/drain that shard, replace it, and allow WebSocket clients to
-reconnect; do not run old and new processes as a round-robin pair.
-
-## Single-host relay sharding
-
-To exercise the same placement model on one machine, use
-`deploy/docker-compose.shards.example.yml` with
-`deploy/Caddyfile.shards.example`. This is useful before splitting shards onto
-separate servers.
