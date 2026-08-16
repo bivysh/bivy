@@ -15,6 +15,19 @@ function withCodexHome(): { home: string; restore: () => void } {
   return { home, restore: () => { if (prev === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = prev; } };
 }
 
+function findRollout(root: string, id: string): string | undefined {
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    const file = path.join(root, entry.name);
+    if (entry.isDirectory()) {
+      const nested = findRollout(file, id);
+      if (nested) return nested;
+    } else if (entry.name.includes(id)) {
+      return file;
+    }
+  }
+  return undefined;
+}
+
 /** Seed a rollout file with a session_meta line + two response_items. */
 function seedRollout(id: string, cwd: string): string {
   const dir = path.join(codexSessionsDir(), "2026", "08", "15");
@@ -48,9 +61,9 @@ test("export → import round-trips byte-exact response_items into a fresh sessi
 
     // The new rollout exists, carries the new id/cwd in meta, and preserved every
     // response_item verbatim — including the `reasoning` record the replay path drops.
-    const newFile = fs.readdirSync(path.join(codexSessionsDir(), "2026", "08", "15")).find((f) => f.includes(out.id));
+    const newFile = findRollout(codexSessionsDir(), out.id);
     assert.ok(newFile, "wrote a new rollout file for the forked id");
-    const lines = fs.readFileSync(path.join(codexSessionsDir(), "2026", "08", "15", newFile!), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    const lines = fs.readFileSync(newFile, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
     assert.equal(lines[0].payload.session_id, out.id, "meta session_id rewritten");
     assert.equal(lines[0].payload.id, out.id, "meta id rewritten");
     assert.equal(lines[0].payload.cwd, "/dst/cwd", "meta cwd rewritten to the destination");

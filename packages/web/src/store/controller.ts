@@ -80,8 +80,6 @@ import {
   validateEphemeralProviderToken,
   launchEphemeralMachine,
   destroyEphemeralMachine,
-  wakeEphemeralMachine,
-  ephemeralProviderSuspendsWhenIdle,
   ephemeralAdapter,
   ephemeralCatalogEntry,
   ephemeralMachineFromNode,
@@ -420,8 +418,6 @@ export class AppController {
       correlations: () => this.ephemeralCorrelations,
       launchMachine: (opts) => launchEphemeralMachine({ ...opts, debugKeepMachine: EPHEMERAL_KEEP_FAILED_MACHINES }, { store: this.local, exec: cloudExec(this.local), keys: this.ephemeralKeys, machines: this.ephemeralMachines }),
       destroyMachine: (machine) => destroyEphemeralMachine(machine, { store: this.local, exec: cloudExec(this.local), keys: this.ephemeralKeys, machines: this.ephemeralMachines }),
-      wakeMachine: (machine) => wakeEphemeralMachine(machine, { exec: cloudExec(this.local), keys: this.ephemeralKeys }),
-      suspendsWhenIdle: ephemeralProviderSuspendsWhenIdle,
       machineFromNode: (node) => ephemeralMachineFromNode(node),
       machineFromCorrelation: ephemeralMachineFromCorrelation,
       connectToNode: (nodeId, timeoutMs) => this.connectToNode(nodeId, timeoutMs),
@@ -433,7 +429,6 @@ export class AppController {
           name: ephemeralCatalogEntry(providerId)?.name ?? providerId,
           region: adapter?.defaultRegion ?? null,
           size: adapter?.defaultSize ?? null,
-          suspendsWhenIdle: Boolean(adapter?.suspendsWhenIdle),
         };
       },
       validateProviderToken: (id, token) => validateEphemeralProviderToken(id, token, cloudExec(this.local)),
@@ -2835,7 +2830,6 @@ export class AppController {
   }
   launchEphemeral(opts: LaunchOpts): Promise<EphemeralMachine> { return this.ephemeralCoordinator.launch(opts); }
   destroyEphemeral(machine: EphemeralMachine): Promise<void> { return this.ephemeralCoordinator.destroy(machine); }
-  wakeEphemeral(machine: EphemeralMachine): Promise<void> { return this.ephemeralCoordinator.wake(machine); }
   resumeAndConnectNode(nodeId: string, timeoutMs = 90_000): Promise<void> { return this.ephemeralCoordinator.resumeAndConnect(nodeId, timeoutMs); }
 
   /** Base control-plane URL + bearer for the account-authenticated (`requireUser`)

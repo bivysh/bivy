@@ -251,6 +251,14 @@ const DESCRIBE_INSTANCE_TYPES_XML = `<DescribeInstanceTypesResponse xmlns="http:
   </instanceTypeSet>
 </DescribeInstanceTypesResponse>`;
 
+const DESCRIBE_INSTANCE_TYPE_OFFERINGS_XML = `<DescribeInstanceTypeOfferingsResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
+  <requestId>req-6</requestId>
+  <instanceTypeOfferingSet>
+    <item><instanceType>t3.micro</instanceType><location>us-east-1</location></item>
+    <item><instanceType>t3.medium</instanceType><location>us-east-1</location></item>
+  </instanceTypeOfferingSet>
+</DescribeInstanceTypeOfferingsResponse>`;
+
 function fakeAwsExec(opts: { describeInstances?: string; statusCode?: number } = {}): { exec: ExecFn; calls: ExecRequest[] } {
   const calls: ExecRequest[] = [];
   const exec: ExecFn = async (request) => {
@@ -267,6 +275,7 @@ function fakeAwsExec(opts: { describeInstances?: string; statusCode?: number } =
     if (body.includes("Action=TerminateInstances")) {
       return { status: opts.statusCode ?? 200, body: opts.statusCode ? NOT_FOUND_XML : TERMINATE_INSTANCES_XML };
     }
+    if (body.includes("Action=DescribeInstanceTypeOfferings")) return { status: 200, body: DESCRIBE_INSTANCE_TYPE_OFFERINGS_XML };
     if (body.includes("Action=DescribeInstanceTypes")) return { status: 200, body: DESCRIBE_INSTANCE_TYPES_XML };
     return { status: 400, body: OTHER_ERROR_XML };
   };
@@ -321,6 +330,9 @@ describe("aws ProviderAdapter", () => {
     expect(params.get("ImageId")).toBe(AMI_ID);
     expect(params.get("InstanceType")).toBe("t3.medium");
     expect(params.get("InstanceInitiatedShutdownBehavior")).toBe("terminate");
+    expect(params.get("BlockDeviceMapping.1.Ebs.VolumeSize")).toBe("40");
+    expect(params.get("BlockDeviceMapping.1.Ebs.VolumeType")).toBe("gp3");
+    expect(params.get("BlockDeviceMapping.1.Ebs.DeleteOnTermination")).toBe("true");
     expect(params.get("TagSpecification.1.Tag.1.Key")).toBe("Name");
     expect(params.get("TagSpecification.1.Tag.2.Value")).toBe("ephemeral");
     expect(params.get("ClientToken")).toBe("attempt-abc123");
@@ -422,6 +434,7 @@ describe("aws ProviderAdapter", () => {
     const live = await adapter.listSizes!({ exec, token: TOKEN, region: "us-east-1" });
     expect(live.map((s) => s.id).sort()).toEqual(["t3.medium", "t3.micro"]);
     expect(live.find((s) => s.id === "t3.medium")?.label).toContain("4 GB");
+    expect(live.find((s) => s.id === "t3.medium")?.diskGiB).toBe(40);
 
     const failing: ExecFn = async () => {
       throw new Error("network down");

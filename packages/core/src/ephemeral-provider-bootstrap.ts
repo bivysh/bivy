@@ -2,11 +2,9 @@
 // Copyright (c) 2026 Petter André Sjulstad
 // Shared projections used to bootstrap equivalent Bivy nodes on each substrate.
 
-import { b64 } from "./base64.js";
-import { ephemeralCatalogEntry } from "./ephemeral-catalog.js";
 import { clampTtlMinutes } from "./ephemeral-lifecycle.js";
 import type { BootstrapOpts } from "./ephemeral-provider-ports.js";
-import { shq, utf8 } from "./ephemeral-provider-utils.js";
+import { shq } from "./ephemeral-provider-utils.js";
 
 function indentJson(json: string, pad: string): string {
   return json.split("\n").map((line) => pad + line).join("\n");
@@ -33,10 +31,9 @@ export function bivyRelayJson(opts: BootstrapOpts): string {
  *  the cloud-init (Hetzner/EC2) and Fly bootstraps so a node's env is identical
  *  however it was launched. */
 function bivyBootstrapExports(opts: BootstrapOpts): string[] {
-  // Destroy-lane providers learn they're disposable so the daemon can end the
-  // machine itself once idle (src/ephemeral-teardown.ts). Suspend-to-zero
-  // providers (Sprites/E2B) are KEPT, so they get no self-teardown env.
-  const ephemeral = Boolean(opts.provider) && ephemeralCatalogEntry(opts.provider as string)?.suspendsWhenIdle !== true;
+  // Every supported ephemeral provider is a destroy lane. The daemon learns
+  // that it is disposable so it can snapshot and end the machine once idle.
+  const ephemeral = Boolean(opts.provider);
   return [
     "export BIVY_DATA_DIR=/etc/bivy",
     opts.repo ? `export BIVY_REPO=${shq(opts.repo)}` : "",
@@ -110,17 +107,4 @@ export function buildBootstrapUserData(opts: BootstrapOpts): string {
       `  - [ bash, -lc, "systemd-run --on-active=${ttl}m --timer-property=AccuracySec=1s --unit=bivy-ttl shutdown -h now || (echo 'shutdown -h now' | at now + ${ttl} minutes) || setsid bash -c 'sleep ${ttl * 60}; shutdown -h now' </dev/null >/var/log/bivy-ttl.log 2>&1 &" ]`,
     ].join("\n") + "\n"
   );
-}
-
-export function bivyNodeEnv(opts: BootstrapOpts): Record<string, string> {
-  const env: Record<string, string> = {
-    BIVY_DATA_DIR: "/etc/bivy",
-    BIVY_RELAY_JSON_B64: b64(utf8.encode(bivyRelayJson(opts))),
-  };
-  if (opts.repo) env.BIVY_REPO = opts.repo;
-  if (opts.hostedTasks) env.BIVY_GITHUB_HOSTED_TASKS = "1";
-  if (opts.nodeLabel) env.BIVY_NODE_LABEL = opts.nodeLabel;
-  if (opts.githubToken) env.BIVY_GITHUB_TOKEN = opts.githubToken;
-  if (opts.hostedMint) env.BIVY_HOSTED_MINT = "1";
-  return env;
 }

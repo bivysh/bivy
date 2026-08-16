@@ -19,9 +19,14 @@ import type { EphemeralKeyStore, MachineStore } from "./ephemeral-storage.js";
 export {
   EPHEMERAL_PROVIDERS,
   ephemeralCatalogEntry,
-  ephemeralProviderSuspendsWhenIdle,
   type EphemeralProviderCatalog,
 } from "./ephemeral-catalog.js";
+export {
+  EPHEMERAL_COMPUTE_INTENT_LABELS,
+  ephemeralComputeIntent,
+  ephemeralComputeIntentLabel,
+  type EphemeralComputeIntent,
+} from "./ephemeral-compute.js";
 export {
   clampTtlMinutes,
   ephemeralColdStartMs,
@@ -102,6 +107,7 @@ export type {
   ExecFn,
   ExecRequest,
   ExecResult,
+  ProviderAccelerator,
   ProviderAdapter,
   ProviderProvisionConfig,
   ProviderSize,
@@ -439,19 +445,4 @@ export async function destroyEphemeralMachine(
       headers: { authorization: `Bearer ${deps.store.s}` },
     }).catch(() => {});
   }
-}
-
-/** Resume a suspended machine so it rejoins the relay and becomes reachable
- *  again — the device-driven wake behind "reopen the session to resume it".
- *  No-op for providers that don't suspend (their machines are either online or
- *  destroyed). Idempotent: safe to call on a machine that's already awake. */
-export async function wakeEphemeralMachine(
-  machine: EphemeralMachine,
-  deps: { exec: ExecFn; keys: EphemeralKeyStore },
-): Promise<void> {
-  const adapter = ephemeralAdapter(machine.provider);
-  if (!adapter?.wake) return;
-  const token = await deps.keys.getToken(machine.provider);
-  if (!token) throw new Error(`Add the ${adapter.name} token on this device to resume this machine.`);
-  await adapter.wake({ exec: deps.exec, token, machine });
 }

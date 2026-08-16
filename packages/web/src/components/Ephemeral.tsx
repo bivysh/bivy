@@ -21,8 +21,7 @@ export function EphemeralSheet({ onClose, firstRun = false }: { onClose: () => v
   const [provider, setProvider] = useState<string | null>(null);
   const [showMore, setShowMore] = useState(false);
   const refreshKeys = () => controller.listEphemeralKeys().then(setKeys).catch(() => {});
-  const recommended = EPHEMERAL_PROVIDERS.find((p) => p.id === "fly" && p.maturity === "stable")
-    ?? EPHEMERAL_PROVIDERS.find((p) => p.maturity === "stable");
+  const recommended = EPHEMERAL_PROVIDERS.find((p) => p.id === "fly") ?? EPHEMERAL_PROVIDERS[0];
   const alternatives = EPHEMERAL_PROVIDERS.filter((p) => p.id !== recommended?.id);
   useEffect(() => { refreshKeys(); }, []);
 
@@ -68,7 +67,7 @@ export function EphemeralSheet({ onClose, firstRun = false }: { onClose: () => v
                   ? <Badge tone="ok">Connected</Badge>
                   : p.hostedOnly
                     ? <Badge tone="warn">Hosted only</Badge>
-                    : <Badge tone={p.maturity === "experimental" ? "warn" : undefined}>{p.maturity === "experimental" ? "Experimental" : "Stable"}</Badge>}
+                    : <Badge>Available</Badge>}
                 onClick={() => setProvider(p.id)}
               />
             );
@@ -132,17 +131,18 @@ function ProviderConnectPanel({ providerId, onKeysChanged, onDone }: { providerI
     }
   };
 
+  if (catalog.hostedOnly) {
+    return (
+      <div className="settings-form">
+        <Badge tone="warn">Hosted setup required</Badge>
+        <p className="muted">{catalog.name} can't be launched with a device-held token because guest shutdown does not delete the billable server.</p>
+        <p className="muted small">Use Settings → Isolated machine profiles → Unattended machines. That flow stores teardown authority in the control plane and keeps retrying until {catalog.name} confirms deletion.</p>
+      </div>
+    );
+  }
+
   return (
     <div className="settings-form">
-      {catalog.hostedOnly && (
-        <p className="muted small warn-text">
-          {catalog.name} can't be launched from this device: powering off its guest doesn't stop billing, so a
-          browser-held token isn't enough — only hosted (control-plane) provisioning, which keeps independent
-          deletion authority, can launch it. You can still connect a token below to validate it, but "Use this
-          profile" will refuse to launch. Turn on hosted execution in Settings → Automations to actually run on
-          {" "}{catalog.name}.
-        </p>
-      )}
       {!hasToken ? (
         <>
           <p className="muted">{catalog.blurb}</p>

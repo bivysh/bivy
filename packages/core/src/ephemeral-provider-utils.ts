@@ -7,7 +7,7 @@ import type { ExecFn, ExecRequest, ExecResult } from "./ephemeral-provider-ports
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 export const ALLOWED_HOSTS = [
-  "api.hetzner.cloud", "api.machines.dev", "api.fly.io", "api.sprites.dev", "api.e2b.app",
+  "api.hetzner.cloud", "api.machines.dev", "api.fly.io",
   "ec2.us-east-1.amazonaws.com", "ec2.us-west-2.amazonaws.com", "ec2.eu-west-1.amazonaws.com",
   "ec2.eu-central-1.amazonaws.com", "ec2.ap-southeast-1.amazonaws.com", "ec2.ap-northeast-1.amazonaws.com",
   "ssm.us-east-1.amazonaws.com", "ssm.us-west-2.amazonaws.com", "ssm.eu-west-1.amazonaws.com",

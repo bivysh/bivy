@@ -27,10 +27,6 @@ describe("bootstrap ephemeral self-teardown env", () => {
     expect(ud).not.toContain("BIVY_TEARDOWN_ON_FINISH");
   });
 
-  it("emits nothing for a suspend-to-zero provider (kept, never destroyed)", () => {
-    const ud = buildBootstrapUserData({ ...base, provider: "sprites", teardownOnAgentFinish: true });
-    expect(ud).not.toContain("BIVY_EPHEMERAL");
-  });
 
   it("emits nothing when no provider is set (older/unaware bootstrap)", () => {
     expect(buildBootstrapUserData(base)).not.toContain("BIVY_EPHEMERAL");

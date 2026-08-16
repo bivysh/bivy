@@ -375,19 +375,26 @@ const AWS_REGIONS = [
   { id: "ap-northeast-1", label: "Asia Pacific (Tokyo)" },
 ];
 
-// A curated, x86_64 (amd64) subset of EC2's general-purpose "T" burstable
-// family — matches the Ubuntu amd64 AMI resolved via SSM above. `listSizes`
-// narrows this to whatever DescribeInstanceTypes confirms is actually
-// orderable in the chosen region, same live-catalog pattern as Hetzner.
-// Indicative on-demand price/hour (USD, us-east-1) for the cost hint. Real
-// price varies by region; this is close enough for an at-a-glance estimate.
+// Curated x86_64 choices rather than EC2's overwhelming native catalog. T3 is
+// retained for economy profiles; current-generation M/R plans make large and
+// memory-heavy agent work possible without adding another provider. Prices are
+// indicative Linux on-demand rates in us-east-1 and vary by region.
+const AWS_AGENT_ROOT_DISK_GIB = 40;
+const awsSize = (id: string, label: string, vcpus: number, memoryGiB: number, pricePerHour: number): ProviderSize => ({
+  id, label, vcpus, memoryMiB: memoryGiB * 1024, diskGiB: AWS_AGENT_ROOT_DISK_GIB,
+  architecture: "x86_64", pricePerHour, priceSource: "indicative",
+});
 const AWS_SIZES: ProviderSize[] = [
-  { id: "t3.micro", label: "t3.micro · 2 vCPU · 1 GB", pricePerHour: 0.0104 },
-  { id: "t3.small", label: "t3.small · 2 vCPU · 2 GB", pricePerHour: 0.0208 },
-  { id: "t3.medium", label: "t3.medium · 2 vCPU · 4 GB", pricePerHour: 0.0416 },
-  { id: "t3.large", label: "t3.large · 2 vCPU · 8 GB", pricePerHour: 0.0832 },
-  { id: "t3.xlarge", label: "t3.xlarge · 4 vCPU · 16 GB", pricePerHour: 0.1664 },
-  { id: "t3.2xlarge", label: "t3.2xlarge · 8 vCPU · 32 GB", pricePerHour: 0.3328 },
+  awsSize("t3.micro", "t3.micro · 2 vCPU · 1 GB", 2, 1, 0.0104),
+  awsSize("t3.small", "t3.small · 2 vCPU · 2 GB", 2, 2, 0.0208),
+  awsSize("t3.medium", "t3.medium · 2 vCPU · 4 GB", 2, 4, 0.0416),
+  awsSize("t3.large", "t3.large · 2 vCPU · 8 GB", 2, 8, 0.0832),
+  awsSize("t3.xlarge", "t3.xlarge · 4 vCPU · 16 GB", 4, 16, 0.1664),
+  awsSize("t3.2xlarge", "t3.2xlarge · 8 vCPU · 32 GB", 8, 32, 0.3328),
+  awsSize("m7i.xlarge", "m7i.xlarge · 4 vCPU · 16 GB", 4, 16, 0.2016),
+  awsSize("m7i.2xlarge", "m7i.2xlarge · 8 vCPU · 32 GB", 8, 32, 0.4032),
+  awsSize("r7i.2xlarge", "r7i.2xlarge · 8 vCPU · 64 GB", 8, 64, 0.5292),
+  awsSize("r7i.4xlarge", "r7i.4xlarge · 16 vCPU · 128 GB", 16, 128, 1.0584),
 ];
 
 export const awsProvider: ProviderAdapter = {
@@ -397,7 +404,7 @@ export const awsProvider: ProviderAdapter = {
   regions: AWS_REGIONS,
   defaultRegion: "us-east-1",
   sizes: AWS_SIZES,
-  defaultSize: "t3.medium",
+  defaultSize: "m7i.xlarge",
   async validateToken({ exec, token, region }) {
     const creds = parseAwsToken(token);
     await awsEc2Call(exec, creds, region || awsProvider.defaultRegion, "DescribeInstances", { MaxResults: "5" }, "validate credential");
@@ -415,6 +422,22 @@ export const awsProvider: ProviderAdapter = {
     } catch {
       return AWS_SIZES; // best-effort — keep the static list rather than failing the picker
     }
+    let offered: Set<string> | undefined;
+    try {
+      const offeringParams: Record<string, string> = { LocationType: "region" };
+      AWS_SIZES.forEach((s, idx) => {
+        offeringParams[`Filter.1.Value.${idx + 1}`] = s.id;
+      });
+      offeringParams["Filter.1.Name"] = "instance-type";
+      const offerings = await awsEc2Call(exec, creds, reg, "DescribeInstanceTypeOfferings", offeringParams, "list instance offerings");
+      offered = new Set(xmlChildren(xmlChild(offerings, "instanceTypeOfferingSet"), "item")
+        .map((item) => xmlChild(item, "instanceType")?.text || "")
+        .filter(Boolean));
+    } catch {
+      // Older least-privilege policies may not include this read-only action.
+      // Keep the type definitions rather than breaking an existing profile;
+      // launch still returns the provider's precise capacity/permission error.
+    }
     const rows = xmlChildren(xmlChild(xml, "instanceTypeSet"), "item")
       .map((item): ProviderSize | null => {
         const id = xmlChild(item, "instanceType")?.text || "";
@@ -423,8 +446,15 @@ export const awsProvider: ProviderAdapter = {
         const gb = memMib ? Math.round(Number(memMib) / 1024) : undefined;
         // EC2's DescribeInstanceTypes carries no pricing, so carry the static
         // indicative price across by instance-type id for the cost hint.
-        const pricePerHour = AWS_SIZES.find((s) => s.id === id)?.pricePerHour;
-        return id ? { id, label: `${id} · ${vcpus ?? "?"} vCPU · ${gb ?? "?"} GB`, pricePerHour } : null;
+        const catalog = AWS_SIZES.find((s) => s.id === id);
+        if (!id || (offered && !offered.has(id))) return null;
+        return {
+          ...catalog,
+          id,
+          label: `${id} · ${vcpus ?? "?"} vCPU · ${gb ?? "?"} GB`,
+          vcpus: vcpus ? Number(vcpus) : catalog?.vcpus,
+          memoryMiB: memMib ? Number(memMib) : catalog?.memoryMiB,
+        };
       })
       .filter((r): r is ProviderSize => Boolean(r));
     return rows.length ? rows : AWS_SIZES;
@@ -446,6 +476,13 @@ export const awsProvider: ProviderAdapter = {
         MaxCount: "1",
         UserData: b64(utf8.encode(userData)),
         InstanceInitiatedShutdownBehavior: "terminate",
+        // Canonical's minimal root volume is too small for dependency caches,
+        // browser installs and normal monorepo builds. gp3 is deleted with the
+        // instance, preserving the ephemeral cost/lifecycle contract.
+        "BlockDeviceMapping.1.DeviceName": "/dev/sda1",
+        "BlockDeviceMapping.1.Ebs.VolumeSize": String(AWS_AGENT_ROOT_DISK_GIB),
+        "BlockDeviceMapping.1.Ebs.VolumeType": "gp3",
+        "BlockDeviceMapping.1.Ebs.DeleteOnTermination": "true",
         // EC2 makes RunInstances idempotent for this token. A retry after a
         // timeout returns the original instance rather than billing for another.
         ...(config.attemptId ? { ClientToken: String(config.attemptId) } : {}),

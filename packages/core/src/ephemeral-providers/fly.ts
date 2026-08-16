@@ -78,12 +78,14 @@ export const flyProvider: ProviderAdapter = {
   // Indicative on-demand price/hour (USD) for the cost hint: Fly's shared-cpu
   // compute plus the extra RAM. Fly bills per second while the machine runs.
   sizes: [
-    { id: "shared-1x-1gb", label: "shared · 1 vCPU · 1 GB", pricePerHour: 0.009 },
-    { id: "shared-1x-2gb", label: "shared · 1 vCPU · 2 GB", pricePerHour: 0.0136 },
-    { id: "shared-2x-4gb", label: "shared · 2 vCPU · 4 GB", pricePerHour: 0.0273 },
-    { id: "shared-4x-8gb", label: "shared · 4 vCPU · 8 GB", pricePerHour: 0.0546 },
+    { id: "shared-1x-1gb", label: "shared · 1 vCPU · 1 GB", vcpus: 1, memoryMiB: 1024, architecture: "x86_64", pricePerHour: 0.009, priceSource: "indicative" },
+    { id: "shared-1x-2gb", label: "shared · 1 vCPU · 2 GB", vcpus: 1, memoryMiB: 2048, architecture: "x86_64", pricePerHour: 0.0136, priceSource: "indicative" },
+    { id: "shared-2x-4gb", label: "shared · 2 vCPU · 4 GB", vcpus: 2, memoryMiB: 4096, architecture: "x86_64", pricePerHour: 0.0273, priceSource: "indicative" },
+    { id: "shared-4x-8gb", label: "shared · 4 vCPU · 8 GB", vcpus: 4, memoryMiB: 8192, architecture: "x86_64", pricePerHour: 0.0546, priceSource: "indicative" },
   ],
-  defaultSize: "shared-1x-2gb",
+  // A normal coding agent routinely runs installs, compilers, tests and tool
+  // subprocesses. 1–2 GB is an opt-in economy choice, not a safe default.
+  defaultSize: "shared-4x-8gb",
   async validateToken({ exec, token }) {
     const res = await call(exec, {
       method: "GET",

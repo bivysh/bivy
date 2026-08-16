@@ -26,14 +26,12 @@ export interface EphemeralDependencies {
   correlations(): SessionCorrelation[];
   launchMachine(opts: LaunchOpts): Promise<EphemeralMachine>;
   destroyMachine(machine: EphemeralMachine): Promise<void>;
-  wakeMachine(machine: EphemeralMachine): Promise<void>;
-  suspendsWhenIdle(provider: string): boolean;
   machineFromNode(node: AccountNode): EphemeralMachine | null;
   machineFromCorrelation(correlation: SessionCorrelation): EphemeralMachine;
   connectToNode(nodeId: string, timeoutMs?: number): Promise<void>;
   refreshNodes(): void;
   reportError(error: Error): void;
-  defaultConfig(providerId: string): { name: string; region: string | null; size: string | null; suspendsWhenIdle: boolean };
+  defaultConfig(providerId: string): { name: string; region: string | null; size: string | null };
   validateProviderToken(providerId: string, token: string): Promise<void>;
   setProviderToken(providerId: string, token: string): Promise<void>;
   removeProviderToken(providerId: string): Promise<void>;
@@ -49,7 +47,7 @@ export type EphemeralResult<T> =
   | { type: "completed"; value: T }
   | { type: "rejected"; error: Error };
 
-/** Owns provider-neutral ephemeral launch, rebuild, wake and teardown workflows. */
+/** Owns provider-neutral ephemeral launch, rebuild and teardown workflows. */
 export class EphemeralCoordinator {
   private readonly finishingMachines = new Set<string>();
 
@@ -123,8 +121,8 @@ export class EphemeralCoordinator {
         name: `${defaults.name} runner`,
         region: defaults.region,
         size: defaults.size,
-        ttlMinutes: defaults.suspendsWhenIdle ? null : 60,
-        teardownOnAgentFinish: !defaults.suspendsWhenIdle,
+        ttlMinutes: 60,
+        teardownOnAgentFinish: true,
       });
     } catch {
       return null;
@@ -148,19 +146,12 @@ export class EphemeralCoordinator {
     this.deps.refreshNodes();
   }
 
-  async wake(machine: EphemeralMachine): Promise<void> {
-    await this.deps.wakeMachine(machine);
-    this.deps.refreshNodes();
-  }
-
   async teardownFinishedSession(sessionId: string): Promise<void> {
     if (this.deps.direct() || this.deps.followupCount(sessionId) > 0) return;
     const nodeId = this.deps.currentNodeId();
     if (!nodeId) return;
     const machine = (await this.deps.machines().catch(() => []))
-      .find((candidate) => candidate.nodeId === nodeId
-        && candidate.teardownOnAgentFinish
-        && !this.deps.suspendsWhenIdle(candidate.provider));
+      .find((candidate) => candidate.nodeId === nodeId && candidate.teardownOnAgentFinish);
     if (!machine || this.finishingMachines.has(machine.id)) return;
     this.deps.recordSessionCorrelation(sessionId, machine);
     this.finishingMachines.add(machine.id);
@@ -178,10 +169,6 @@ export class EphemeralCoordinator {
 
   async resumeAndConnect(nodeId: string, timeoutMs = 90_000): Promise<void> {
     try {
-      const node = this.deps.nodes().find((candidate) => candidate.id === nodeId);
-      const machine = (await this.deps.machines()).find((candidate) => candidate.nodeId === nodeId)
-        ?? (node ? this.deps.machineFromNode(node) : null);
-      if (machine && this.deps.suspendsWhenIdle(machine.provider)) await this.wake(machine);
       await this.deps.connectToNode(nodeId, timeoutMs);
     } catch (cause) {
       this.deps.reportError(this.error(cause));
@@ -198,10 +185,6 @@ export class EphemeralCoordinator {
         ?? (node ? this.deps.machineFromNode(node) : null)
         ?? (correlation ? this.deps.machineFromCorrelation(correlation) : null);
       if (!machine) throw new Error("No record of the machine to rebuild — re-launch it from Ephemeral settings.");
-      if (this.deps.suspendsWhenIdle(machine.provider)) {
-        await this.resumeAndConnect(nodeId);
-        return;
-      }
       await this.launch({
         provider: machine.provider,
         region: machine.region || undefined,

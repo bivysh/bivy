@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { validateEphemeralProviderToken, type ExecRequest } from "../src/ephemeral.js";
 
 describe("ephemeral provider credential validation", () => {
-  for (const provider of ["hetzner", "fly", "sprites", "e2b"] as const) {
+  for (const provider of ["hetzner", "fly"] as const) {
     it(`${provider} uses one read-only request`, async () => {
       const calls: ExecRequest[] = [];
       await validateEphemeralProviderToken(provider, "secret", async (request) => {
@@ -15,6 +15,7 @@ describe("ephemeral provider credential validation", () => {
       expect(calls[0].method).toBe("GET");
     });
   }
+
 
   it("AWS signs read-only DescribeInstances", async () => {
     const calls: ExecRequest[] = [];

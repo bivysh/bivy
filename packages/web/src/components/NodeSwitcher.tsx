@@ -10,7 +10,7 @@ import { StatusDot } from "./StatusDot.js";
 import { Badge } from "./Badge.js";
 import { useModalEscape } from "../modalStack.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
-import type { EphemeralNodeConfig, EphemeralMachine } from "@bivy/core";
+import { ephemeralCatalogEntry, type EphemeralNodeConfig, type EphemeralMachine } from "@bivy/core";
 
 /**
  * Header control (relay mode): shows the current node and a menu to switch nodes,
@@ -38,7 +38,9 @@ export function NodeSwitcher() {
   useEffect(() => {
     if (!open) return;
     if (EPHEMERAL_MACHINES_ENABLED) {
-      controller.listEphemeralConfigs().then(setEphemeralConfigs).catch(() => {});
+      controller.listEphemeralConfigs()
+        .then((configs) => setEphemeralConfigs(configs.filter((config) => Boolean(ephemeralCatalogEntry(config.provider)))))
+        .catch(() => {});
       controller.listEphemeralMachines().then(setEphemeralMachines).catch(() => {});
     }
     const onDoc = (e: MouseEvent) => {

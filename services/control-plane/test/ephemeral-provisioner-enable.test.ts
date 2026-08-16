@@ -72,6 +72,18 @@ try {
     assert.deepEqual(readiness, { ready: true, reason: "hosted ephemeral execution is ready", configId: "cfg1" });
   });
 
+  await test("removed providers cannot remain automation launch targets", async () => {
+    delete process.env.EPHEMERAL_MACHINES_ENABLED;
+    const store = await makeStore();
+    const acct = await store.findOrCreateAccount("removed-provider@example.com");
+    const token = "legacy-token";
+    await store.setHostedProvisioning(acct.id, { enabled: true, providerTokens: { sprites: token }, validatedProviders: { sprites: providerCredentialFingerprint(token) } });
+    await store.setEphemeralConfigs(acct.id, [{ ...CONFIG, provider: "sprites" }]);
+    await store.setQueueRouting(acct.id, { primary: { kind: "config", configId: CONFIG.id } });
+    assert.deepEqual(await hostedExecutionReadiness(store, acct.id), { ready: false, reason: "provider sprites is no longer supported", configId: CONFIG.id });
+    assert.deepEqual(await planAutoProvision(store, acct.id), { willProvision: false, targetConfigId: CONFIG.id, reason: "provider sprites is no longer supported" });
+  });
+
   await test("automation readiness explains missing execution setup", async () => {
     delete process.env.EPHEMERAL_MACHINES_ENABLED;
     const store = await makeStore();

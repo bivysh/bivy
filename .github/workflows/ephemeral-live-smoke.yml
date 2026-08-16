@@ -7,7 +7,7 @@ on:
         description: Provider credential configured in the ephemeral-live-smoke environment
         required: true
         type: choice
-        options: [hetzner, fly, aws, sprites, e2b]
+        options: [hetzner, fly, aws]
       region:
         description: Provider region (blank uses adapter default)
         required: false
@@ -44,8 +44,6 @@ jobs:
       BIVY_SMOKE_HETZNER_TOKEN: ${{ secrets.BIVY_SMOKE_HETZNER_TOKEN }}
       BIVY_SMOKE_FLY_TOKEN: ${{ secrets.BIVY_SMOKE_FLY_TOKEN }}
       BIVY_SMOKE_AWS_TOKEN: ${{ secrets.BIVY_SMOKE_AWS_TOKEN }}
-      BIVY_SMOKE_SPRITES_TOKEN: ${{ secrets.BIVY_SMOKE_SPRITES_TOKEN }}
-      BIVY_SMOKE_E2B_TOKEN: ${{ secrets.BIVY_SMOKE_E2B_TOKEN }}
       BIVY_SMOKE_PROVIDER: ${{ inputs.provider }}
       BIVY_SMOKE_REGION: ${{ inputs.region }}
       BIVY_SMOKE_SIZE: ${{ inputs.size }}
@@ -60,8 +58,6 @@ jobs:
             hetzner) token="$BIVY_SMOKE_HETZNER_TOKEN" ;;
             fly) token="$BIVY_SMOKE_FLY_TOKEN" ;;
             aws) token="$BIVY_SMOKE_AWS_TOKEN" ;;
-            sprites) token="$BIVY_SMOKE_SPRITES_TOKEN" ;;
-            e2b) token="$BIVY_SMOKE_E2B_TOKEN" ;;
             *) echo "::error::unsupported provider"; exit 1 ;;
           esac
           if [ -z "$token" ]; then echo "::error::No secret configured for $BIVY_SMOKE_PROVIDER"; exit 1; fi

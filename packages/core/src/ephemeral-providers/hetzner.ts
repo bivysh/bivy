@@ -17,6 +17,8 @@ interface HetznerSize {
   label: string;
   cores: number;
   memory: number;
+  disk: number;
+  architecture: "x86_64" | "arm64";
   pricePerHour?: number;
 }
 
@@ -56,6 +58,8 @@ function fetchHetznerSizes(exec: ExecFn, token: string): Promise<HetznerSize[]> 
           label: `${t.name} · ${t.cores} vCPU · ${t.memory} GB · ${t.disk} GB (${arch})`,
           cores: Number(t.cores) || 0,
           memory: Number(t.memory) || 0,
+          disk: Number(t.disk) || 0,
+          architecture: t.architecture === "arm" ? "arm64" : "x86_64",
           pricePerHour: hetznerHourlyPrice(t),
         });
       }
@@ -108,19 +112,19 @@ export const hetznerProvider: ProviderAdapter = {
   // Prices are indicative hourly gross (EUR) for the cost hint; the live
   // `listSizes` fetch below overrides them with the token's real prices.
   sizes: [
-    { id: "cpx11", label: "cpx11 · 2 vCPU · 2 GB · 40 GB (AMD x86)", pricePerHour: 0.007 },
-    { id: "cpx21", label: "cpx21 · 3 vCPU · 4 GB · 80 GB (AMD x86)", pricePerHour: 0.013 },
-    { id: "cpx31", label: "cpx31 · 4 vCPU · 8 GB · 160 GB (AMD x86)", pricePerHour: 0.026 },
-    { id: "cpx41", label: "cpx41 · 8 vCPU · 16 GB · 240 GB (AMD x86)", pricePerHour: 0.049 },
-    { id: "cpx51", label: "cpx51 · 16 vCPU · 32 GB · 360 GB (AMD x86)", pricePerHour: 0.099 },
-    { id: "cax11", label: "cax11 · 2 vCPU · 4 GB · 40 GB (Arm64)", pricePerHour: 0.006 },
-    { id: "cax21", label: "cax21 · 4 vCPU · 8 GB · 80 GB (Arm64)", pricePerHour: 0.012 },
-    { id: "cax31", label: "cax31 · 8 vCPU · 16 GB · 160 GB (Arm64)", pricePerHour: 0.024 },
-    { id: "cax41", label: "cax41 · 16 vCPU · 32 GB · 320 GB (Arm64)", pricePerHour: 0.048 },
+    { id: "cpx11", label: "cpx11 · 2 vCPU · 2 GB · 40 GB (AMD x86)", vcpus: 2, memoryMiB: 2048, diskGiB: 40, architecture: "x86_64", pricePerHour: 0.007, priceSource: "indicative" },
+    { id: "cpx21", label: "cpx21 · 3 vCPU · 4 GB · 80 GB (AMD x86)", vcpus: 3, memoryMiB: 4096, diskGiB: 80, architecture: "x86_64", pricePerHour: 0.013, priceSource: "indicative" },
+    { id: "cpx31", label: "cpx31 · 4 vCPU · 8 GB · 160 GB (AMD x86)", vcpus: 4, memoryMiB: 8192, diskGiB: 160, architecture: "x86_64", pricePerHour: 0.026, priceSource: "indicative" },
+    { id: "cpx41", label: "cpx41 · 8 vCPU · 16 GB · 240 GB (AMD x86)", vcpus: 8, memoryMiB: 16384, diskGiB: 240, architecture: "x86_64", pricePerHour: 0.049, priceSource: "indicative" },
+    { id: "cpx51", label: "cpx51 · 16 vCPU · 32 GB · 360 GB (AMD x86)", vcpus: 16, memoryMiB: 32768, diskGiB: 360, architecture: "x86_64", pricePerHour: 0.099, priceSource: "indicative" },
+    { id: "cax11", label: "cax11 · 2 vCPU · 4 GB · 40 GB (Arm64)", vcpus: 2, memoryMiB: 4096, diskGiB: 40, architecture: "arm64", pricePerHour: 0.006, priceSource: "indicative" },
+    { id: "cax21", label: "cax21 · 4 vCPU · 8 GB · 80 GB (Arm64)", vcpus: 4, memoryMiB: 8192, diskGiB: 80, architecture: "arm64", pricePerHour: 0.012, priceSource: "indicative" },
+    { id: "cax31", label: "cax31 · 8 vCPU · 16 GB · 160 GB (Arm64)", vcpus: 8, memoryMiB: 16384, diskGiB: 160, architecture: "arm64", pricePerHour: 0.024, priceSource: "indicative" },
+    { id: "cax41", label: "cax41 · 16 vCPU · 32 GB · 320 GB (Arm64)", vcpus: 16, memoryMiB: 32768, diskGiB: 320, architecture: "arm64", pricePerHour: 0.048, priceSource: "indicative" },
   ],
-  // x86, 4 GB — closest drop-in for the retired cx22, and x86 avoids the
-  // Arm-compat pitfalls of the cax line for Docker images and binaries.
-  defaultSize: "cpx21",
+  // x86, 4 vCPU and 8 GB is the agent-fit baseline. Smaller plans remain
+  // available as explicit economy choices.
+  defaultSize: "cpx31",
   // `shutdown -h now` only powers a Hetzner server off; billing continues until
   // the API resource is deleted. Hosted reconciliation supplies that authority.
   guestCanEnsureDeletion: false,
@@ -151,7 +155,16 @@ export const hetznerProvider: ProviderAdapter = {
     }
     return [...scoped]
       .sort((a, b) => a.cores - b.cores || a.memory - b.memory || a.id.localeCompare(b.id))
-      .map(({ id, label, pricePerHour }) => ({ id, label, pricePerHour }));
+      .map(({ id, label, cores, memory, disk, architecture, pricePerHour }) => ({
+        id,
+        label,
+        vcpus: cores,
+        memoryMiB: memory * 1024,
+        diskGiB: disk,
+        architecture,
+        pricePerHour,
+        priceSource: pricePerHour ? "live" as const : undefined,
+      }));
   },
   async provision({ exec, token, config, userData }) {
     const name = `bivy-${config.slug}`;

@@ -5,9 +5,8 @@
  * Server-side ephemeral teardown: lets a disposable machine's OWN daemon end
  * itself once it goes idle, so teardown no longer depends on the launching
  * device staying online (the founding "requires this device to stay online"
- * limitation). Enabled only when the bootstrap set `BIVY_EPHEMERAL=1` — a
- * destroy-lane provider (Fly / Hetzner / EC2); suspend-to-zero providers
- * (Sprites / E2B) are kept and never given the env. See
+ * limitation). Enabled only when the bootstrap set `BIVY_EPHEMERAL=1` for a
+ * destroy-lane provider (Fly / Hetzner / EC2). See
  * `bivyBootstrapExports` in packages/core/src/ephemeral.ts and
  * docs/ephemeral-sessions.md.
  *
