@@ -111,7 +111,7 @@ not automatic. Once two or more nodes have it on, a `github:app-connect` done
 on any one of them reaches the others automatically — E2E-encrypted the same
 way model/provider auth already syncs between nodes; the control plane relays
 ciphertext it cannot read. See
-[credential-sync.md](credential-sync.md#3-github-app-private-keys) for the
+[credential-sync.md](credential-sync.md#4-github-app-private-keys) for the
 mechanics, and `bivy github:app-sync` (no argument) to check whether a node
 has it on and which apps it currently holds.
 
