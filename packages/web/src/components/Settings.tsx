@@ -148,7 +148,7 @@ const TITLES: Record<View, string> = {
   webhooks: "Webhooks",
   rulesets: "Rulesets",
   nodes: "Machines",
-  ephemeral: "Isolated machine profiles",
+  ephemeral: "Cloud machine profiles",
   account: "Account & billing",
   link: "Link a device",
 };
@@ -169,7 +169,7 @@ const SEARCH_TERMS: Record<View, string> = {
   webhooks: "webhook trigger secret event",
   rulesets: "rules policy routing agent runtime model sandbox",
   nodes: "node daemon online offline diagnostics version update storage disk",
-  ephemeral: "ephemeral hosted machine provisioning billing teardown retention",
+  ephemeral: "cloud machine profiles automation offline billing teardown retention",
   account: "account billing subscription plan usage",
   link: "device qr code phone mobile pair",
 };
@@ -247,7 +247,7 @@ export function Settings({
       items: [
         { id: "nodes", label: "Machines", icon: <IconServer /> },
         ...(EPHEMERAL_MACHINES_ENABLED
-          ? [{ id: "ephemeral" as View, label: "Isolated machine profiles", icon: <IconBolt /> }]
+          ? [{ id: "ephemeral" as View, label: "Cloud machine profiles", icon: <IconBolt /> }]
           : []),
       ],
     },
@@ -1296,12 +1296,10 @@ function ephemeralProfileMeta(setup: EphemeralNodeConfig): string {
 }
 
 // The panel is a shallow view machine (like the credential vault): profiles are
-// the whole list; adding, editing, and the separate hosted concern are their own
-// focused screens, so nothing is a wall of stacked sections.
+// the whole list, while adding and editing use focused screens.
 type EphemeralView =
   | { k: "list" }
   | { k: "add" }
-  | { k: "hosted" }
   | { k: "editor"; provider: string; setupId: string | null };
 
 function EphemeralPanel() {
@@ -1359,21 +1357,12 @@ function EphemeralPanel() {
     );
   }
 
-  if (view.k === "hosted") {
-    return (
-      <div className="settings-form machine-profiles">
-        <button className="btn link" onClick={() => setView({ k: "list" })}>‹ Isolated machine profiles</button>
-        <HostedRunnerManagement />
-      </div>
-    );
-  }
-
   if (view.k === "editor") {
     const catalog = EPHEMERAL_PROVIDERS.find((p) => p.id === view.provider);
     if (catalog) {
       return (
         <div className="settings-form machine-profiles">
-          <button className="btn link" onClick={backToList}>‹ Isolated machine profiles</button>
+          <button className="btn link" onClick={backToList}>‹ Cloud machine profiles</button>
           <EphemeralProviderConfig
             providerId={catalog.id}
             initialSetupId={view.setupId}
@@ -1386,7 +1375,7 @@ function EphemeralPanel() {
     }
     return (
       <div className="settings-form machine-profiles">
-        <button className="btn link" onClick={backToList}>‹ Isolated machine profiles</button>
+        <button className="btn link" onClick={backToList}>‹ Cloud machine profiles</button>
         <Badge tone="warn">Unsupported provider</Badge>
         <p className="muted">This profile uses {view.provider}, which Bivy no longer supports. It cannot launch a new machine.</p>
         {view.setupId && <button className="btn danger-ghost" onClick={() => {
@@ -1396,23 +1385,23 @@ function EphemeralPanel() {
     );
   }
 
-  // List view — profiles are the whole panel; sync + hosted drill in below.
+  // List view — profiles first, with offline automation as one inline option.
   return (
     <div className="settings-form machine-profiles">
       <div className="vault-title-row">
-        <div><h3>Isolated machine profiles</h3></div>
+        <div><h3>Cloud machine profiles</h3></div>
         <button className="btn primary" onClick={() => setView({ k: "add" })}>Add profile</button>
       </div>
       <p className="muted">
-        Reusable setups for temporary cloud servers in your own account. Compute is billed by your
-        provider — Bivy adds no markup.
+        A profile tells Bivy where to create a temporary machine. Pick one for a chat, or let an
+        automation use it while you're offline. Your cloud provider bills the compute directly.
       </p>
 
       {setups.length === 0 ? (
         <div className="vault-empty">
-          <h4>No profiles yet</h4>
-          <p className="muted">Connect a cloud provider once, then save reusable setups for temporary servers you own.</p>
-          <button className="btn primary" onClick={() => setView({ k: "add" })}>Connect a provider</button>
+          <h4>No cloud profiles yet</h4>
+          <p className="muted">Add a provider and choose the region, server size, and when the machine should be destroyed.</p>
+          <button className="btn primary" onClick={() => setView({ k: "add" })}>Add your first profile</button>
         </div>
       ) : (
         <div className="picker-list vault-items">
@@ -1430,24 +1419,17 @@ function EphemeralPanel() {
         </div>
       )}
 
-      <div className="settings-toggle-row">
-        <div className="settings-toggle-text">
-          <div className="settings-toggle-title">Cross-device token sync</div>
-          <p className="muted small">End-to-end encrypted, opt-in — your other signed-in devices can reach machines you launch here without re-entering the token.</p>
-        </div>
-        <EphemeralTokenSyncToggle />
-      </div>
+      {!controller.direct && setups.length > 0 && <HostedRunnerManagement profiles={setups} />}
 
-      {!controller.direct && (
-        <div className="picker-list">
-          <PickerItem
-            title="Unattended machines"
-            meta="Hosted — let Bivy run governed automation while your devices are offline"
-            right={<span className="picker-meta" aria-hidden>›</span>}
-            onClick={() => setView({ k: "hosted" })}
-          />
+      <details className="vault-advanced">
+        <summary>Use profiles on my other devices</summary>
+        <div className="settings-toggle-row">
+          <div className="settings-toggle-text">
+            <p className="muted small">Securely sync cloud credentials between your signed-in devices so you don't have to paste them again.</p>
+          </div>
+          <EphemeralTokenSyncToggle />
         </div>
-      )}
+      </details>
     </div>
   );
 }
@@ -1458,15 +1440,15 @@ function EphemeralProviderChooser({ keys, onBack, onPick }: { keys: ProviderKeyI
   const recommended = EPHEMERAL_PROVIDERS.find((p) => p.id === "fly") ?? EPHEMERAL_PROVIDERS[0];
   const others = EPHEMERAL_PROVIDERS.filter((p) => p.id !== recommended?.id);
   const statusChip = (id: string, hostedOnly?: boolean) => {
-    if (hostedOnly) return <Badge tone="warn">Hosted setup</Badge>;
+    if (hostedOnly) return <Badge tone="accent">Server-managed</Badge>;
     if (keys.find((x) => x.id === id)?.configured) return <Badge tone="ok">Token saved</Badge>;
     return <Badge>Not set up</Badge>;
   };
   return (
     <div className="settings-form machine-profiles">
-      <button className="btn link" onClick={onBack}>‹ Isolated machine profiles</button>
-      <h3>Add a profile</h3>
-      <p className="muted">Choose where to run. You paste a token once per provider, then save as many profiles as you like.</p>
+      <button className="btn link" onClick={onBack}>‹ Cloud machine profiles</button>
+      <h3>Add a cloud profile</h3>
+      <p className="muted">Choose a cloud provider. Bivy will create a temporary machine there when work starts and destroy it automatically.</p>
       {recommended && (
         <button type="button" className="custom-provider-card" onClick={() => onPick(recommended.id)}>
           <span className="custom-provider-card-icon" aria-hidden>✦</span>
@@ -1501,19 +1483,19 @@ function EphemeralTokenSyncToggle() {
     <Toggle
       checked={on}
       onChange={(v) => { controller.setDeviceTokenSync(v); setOn(v); }}
-      label="Sync provider tokens across my devices"
+      label="Use cloud profiles on my other devices"
     />
   );
 }
 
-// Unattended / hosted machines — its own drill-in sub-view so it never competes
-// with the primary "profiles" purpose. Control-plane-launched machines that run
-// while your devices are offline, with credential validation + an audit log.
-function HostedRunnerManagement() {
+// Offline automation is an option of cloud profiles, not a second machine
+// concept. Keep setup inline: one switch, then only the credential still needed.
+function HostedRunnerManagement({ profiles }: { profiles: EphemeralNodeConfig[] }) {
+  const profileProviders = [...new Set(profiles.map((profile) => profile.provider))];
   const [status, setStatus] = useState<HostedProvisioningStatus | null>(null);
   const [machines, setMachines] = useState<HostedMachineSummary[]>([]);
   const [audit, setAudit] = useState<HostedAuditEvent[]>([]);
-  const [provider, setProvider] = useState("hetzner");
+  const [provider, setProvider] = useState(profileProviders[0] || "fly");
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -1566,43 +1548,46 @@ function HostedRunnerManagement() {
           if (nodeId) void act(() => controller.destroyHostedMachine(nodeId), "Machine destroyed and removed from inventory.");
         }}
       />}
-      <div>
-        <h3>Unattended machines</h3>
-        <p className="muted">Let Bivy launch governed machines while your devices are offline. Compute is billed directly by your provider; Bivy adds no markup. Credentials are encrypted on the control plane and every use is audited.</p>
-      </div>
-
-      {status && !status.encryptionReady && <div className="banner inline" data-tone="danger" role="alert">Server credential encryption isn't configured, so unattended machines can't be enabled yet.</div>}
-
-      <div className="settings-toggle-row">
-        <div className="settings-toggle-text">
-          <div className="settings-toggle-title">Allow unattended launches</div>
-          <p className="muted small">Disabling stops new launches; existing machines stay listed until destroyed or their TTL expires.</p>
+      <section className="offline-runs-card" aria-labelledby="offline-runs-title">
+        <div className="settings-toggle-row">
+          <div className="settings-toggle-text">
+            <div className="settings-toggle-title" id="offline-runs-title">Run automations while I'm offline</div>
+            <p className="muted small">Bivy can start the cloud profile selected in Automations even when none of your devices are online.</p>
+          </div>
+          <Toggle
+            checked={Boolean(status?.enabled)}
+            disabled={!status?.encryptionReady}
+            onChange={(enabled) => void act(() => controller.setHostedProvisioning({ enabled }), enabled ? "Offline automation enabled." : "Offline automation disabled.")}
+            label="Run automations while I am offline"
+          />
         </div>
-        <Toggle
-          checked={Boolean(status?.enabled)}
-          disabled={!status?.encryptionReady}
-          onChange={(enabled) => void act(() => controller.setHostedProvisioning({ enabled }), enabled ? "Unattended provisioning enabled." : "New unattended launches disabled.")}
-          label="Allow unattended machine launches"
-        />
-      </div>
 
-      <label className="field-label">Provider credential</label>
-      <select className="picker-search" value={provider} onChange={(e) => setProvider(e.target.value)}>
-        {EPHEMERAL_PROVIDERS.map((p) => <option key={p.id} value={p.id}>
-          {p.name} — bring your own cloud
-        </option>)}
-      </select>
-      <input className="picker-search" type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="Paste credential to validate and store" />
-      <div className="row-actions">
-        <button className="btn primary" disabled={busy || !token.trim() || !status?.encryptionReady} onClick={connect}>{busy ? "Working…" : "Validate and store"}</button>
-      </div>
-      {status && status.providers.length > 0 && (
-        <p className="muted small">Stored: {status.providers.map((p) => `${p}${status.validatedProviders.includes(p) ? " ✓" : " (validation required)"}`).join(", ")}</p>
-      )}
+        {status && !status.encryptionReady && <div className="banner inline" data-tone="danger" role="alert">Your Bivy server must enable encrypted credential storage before offline automation can be used.</div>}
 
-      <details className="vault-advanced" open>
-        <summary>Machines ({machines.length})</summary>
-        {machines.length === 0 ? <p className="muted small">No hosted machines are currently tracked.</p> : <div className="picker-list">
+        {status?.enabled && (
+          <div className="offline-runs-setup">
+            <p className="muted small">Because your device may be offline, Bivy needs an encrypted copy of the cloud credential for each provider an automation uses. Every use is recorded.</p>
+            <label className="field-label">Cloud provider</label>
+            <select className="picker-search" value={provider} onChange={(e) => setProvider(e.target.value)}>
+              {profileProviders.map((id) => <option key={id} value={id}>{EPHEMERAL_PROVIDERS.find((p) => p.id === id)?.name || id}</option>)}
+            </select>
+            {status.validatedProviders.includes(provider) ? (
+              <div className="offline-provider-ready"><Badge tone="ok">Ready</Badge><span>{EPHEMERAL_PROVIDERS.find((p) => p.id === provider)?.name || provider} can be used while you're offline.</span></div>
+            ) : (
+              <>
+                <input className="picker-search" type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="Paste this provider's credential" aria-label="Cloud provider credential" />
+                <div className="row-actions">
+                  <button className="btn primary" disabled={busy || !token.trim() || !status.encryptionReady} onClick={connect}>{busy ? "Checking…" : "Save credential"}</button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </section>
+
+      <details className="vault-advanced">
+        <summary>Active cloud machines ({machines.length})</summary>
+        {machines.length === 0 ? <p className="muted small">No automation machines are running.</p> : <div className="picker-list">
           {machines.map((m) => {
             const providerAdapter = ephemeralAdapter(m.provider);
             const providerSize = providerAdapter?.sizes.find((size) => size.id === m.size);
@@ -1623,9 +1608,9 @@ function HostedRunnerManagement() {
       </details>
 
       <details className="vault-advanced">
-        <summary>Audit log</summary>
+        <summary>Offline automation activity</summary>
         {audit.some((event) => event.action === "reconcile_failed") && <div className="banner inline" data-tone="danger" role="alert">A machine couldn't be reconciled or deleted. It stays tracked for retry — check the events below and your provider console.</div>}
-        {audit.length === 0 ? <p className="muted small">No hosted-machine events yet.</p> : <div className="picker-list">
+        {audit.length === 0 ? <p className="muted small">No offline automation activity yet.</p> : <div className="picker-list">
           {audit.slice(0, 10).map((e, i) => <PickerItem
             key={`${e.at}:${e.action}:${i}`}
             title={e.action.replaceAll("_", " ")}
@@ -1709,7 +1694,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
         await controller.validateHostedProviderCredential(providerId, value, region);
         await controller.setHostedProvisioning({ providerTokens: { [providerId]: value } });
         setHasHostedToken(true);
-        setMsg("Credential validated and stored for hosted teardown.");
+        setMsg("Credential checked and stored securely.");
       } else {
         await controller.setEphemeralToken(providerId, value);
         setHasToken(true);
@@ -1788,7 +1773,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
           <button className="btn primary" disabled={!token.trim() || busy} onClick={saveToken}>{busy ? "Saving…" : "Save token"}</button>
         </div>
         <p className="muted small">{catalog.hostedOnly
-          ? "This provider requires hosted custody so Bivy keeps independent deletion authority and retries until deletion is confirmed. The credential is encrypted on the control plane."
+          ? `Bivy's server stores this credential securely so it can always delete the ${catalog.name} machine and stop billing.`
           : `The token stays on this device and is sent only to ${catalog.name}.`}</p>
         {err && <div className="banner inline" data-tone="danger" role="alert">{err}</div>}
         {msg && <div className="banner inline">{msg}</div>}
@@ -1804,7 +1789,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
       <div className="vault-title-row">
         <div>
           <h3>{setupId ? (setupName || `${catalog.name} profile`) : `New ${catalog.name} profile`}</h3>
-          <p className="muted small">{catalog.name} · {catalog.hostedOnly ? "hosted teardown credential validated" : "token saved on this device"}</p>
+          <p className="muted small">{catalog.name} · {catalog.hostedOnly ? "server-managed credential saved" : "token saved on this device"}</p>
         </div>
         <Badge tone="ok">{catalog.name} connected</Badge>
       </div>

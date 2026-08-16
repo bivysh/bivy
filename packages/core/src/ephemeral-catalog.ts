@@ -44,7 +44,7 @@ export const EPHEMERAL_PROVIDERS: readonly EphemeralProviderCatalog[] = [
     name: "Hetzner Cloud",
     computeClass: "byo-cloud",
     tokenLabel: "Hetzner Cloud API token",
-    blurb: "Powering off a Hetzner server doesn't stop billing, so Bivy only launches one through hosted (control-plane) provisioning, which keeps independent deletion authority.",
+    blurb: "Bivy manages Hetzner servers from start to deletion so billing always stops, even when your devices are offline.",
     steps: [
       "Open the Hetzner Cloud Console and select or create a project for Bivy's runners.",
       "Go to Security → API Tokens and click Generate API token.",
