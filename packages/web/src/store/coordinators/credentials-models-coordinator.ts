@@ -66,7 +66,7 @@ export class CredentialsModelsCoordinator {
     if (!this.deps.isOnline()) return Promise.resolve();
     if (this.accountSyncInFlight) return this.accountSyncInFlight;
     this.accountSyncInFlight = (async () => {
-      const event = await this.deps.awaitAck({ kind: "credentials.account.export" }) as unknown as { entries?: unknown; oauthEntries?: unknown; records?: unknown; deletedAt?: unknown };
+      const event = await this.deps.awaitAck({ kind: "credentials.account.export", includeOAuth: this.deps.oauthRecoveryEnabled() }) as unknown as { entries?: unknown; oauthEntries?: unknown; records?: unknown; deletedAt?: unknown };
       const incoming = Array.isArray(event.entries)
         ? event.entries.filter((entry): entry is { provider: string; label?: string; key: string; updatedAt?: number | string } => Boolean(entry)
           && typeof (entry as { provider?: unknown }).provider === "string"

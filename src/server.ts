@@ -9537,9 +9537,13 @@ app.get("/api/auth/credentials", async (_req, res, next) => {
   }
 });
 
-app.get("/api/auth/credentials/account-export", async (_req, res, next) => {
+app.get("/api/auth/credentials/account-export", async (req, res, next) => {
   try {
-    res.json({ entries: await exportAccountApiKeys(credsDir), oauthEntries: await exportAccountOAuthCredentials(credsDir), records: await listCredentialRecords(credsDir), deletedAt: await exportRecordTombstones(credsDir) });
+    res.json({
+      entries: await exportAccountApiKeys(credsDir),
+      ...(req.query.includeOAuth === "1" ? { oauthEntries: await exportAccountOAuthCredentials(credsDir) } : {}),
+      records: await listCredentialRecords(credsDir), deletedAt: await exportRecordTombstones(credsDir),
+    });
   } catch (error) {
     next(error);
   }

@@ -2641,6 +2641,7 @@ export class AppController {
   }
   getOAuthBrowserRecovery(): boolean { return this.oauthRecoveryEnabled(); }
   async setOAuthBrowserRecovery(enabled: boolean): Promise<void> {
+    if (this.direct) throw new Error("OAuth browser recovery requires a signed-in account");
     if (!enabled) {
       // Write tombstones while recovery is still enabled, then close the gate.
       for (const entry of await this.ephemeralKeys.oauthCredentialEntries()) await this.ephemeralKeys.removeOAuthCredential(entry.provider, entry.label);

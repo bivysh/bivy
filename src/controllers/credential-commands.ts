@@ -57,7 +57,12 @@ export function createCredentialCommands(deps: CredentialCommandDeps): CommandEn
     async "credentials.account.export"(_msg, ctx) {
       // This reply travels inside the already-paired E2E node channel. OAuth
       // recovery records are encrypted again in the browser's device vault.
-      ctx.reply({ type: "credentials.account.export", requestId: _msg.requestId, entries: await exportAccountApiKeys(credsDir), oauthEntries: await exportAccountOAuthCredentials(credsDir), records: await listCredentialRecords(credsDir), deletedAt: await exportRecordTombstones(credsDir) });
+      ctx.reply({
+        type: "credentials.account.export", requestId: _msg.requestId,
+        entries: await exportAccountApiKeys(credsDir),
+        ...(_msg.includeOAuth === true ? { oauthEntries: await exportAccountOAuthCredentials(credsDir) } : {}),
+        records: await listCredentialRecords(credsDir), deletedAt: await exportRecordTombstones(credsDir),
+      });
     },
     async "credentials.account.import"(msg, ctx) {
       try {

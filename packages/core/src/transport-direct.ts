@@ -490,7 +490,7 @@ export class DirectTransport implements Transport {
         case "credentials.account.export": {
           const requestId = String(obj.requestId ?? "");
           try {
-            const result = await this.directApi("/api/auth/credentials/account-export");
+            const result = await this.directApi(`/api/auth/credentials/account-export${obj.includeOAuth === true ? "?includeOAuth=1" : ""}`);
             this.emit({ type: "credentials.account.export", requestId, ...result });
           } catch (error) {
             this.emit({ type: "credentials.account.export.error", requestId, error: error instanceof Error ? error.message : String(error) });

@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { createCredentialCommands, type CredentialCommandDeps } from "../src/controllers/credential-commands.js";
+import { createCredentialVault } from "../src/runtime/credential-store.js";
 
 // The credential functions operate on a real credsDir, so these drive the
 // controller against a temp store — exercising the wiring end to end, not mocks.
@@ -34,8 +35,19 @@ test("registers the full credential command cluster", () => {
   try {
     assert.deepEqual(Object.keys(h.cmds).sort(), [
       "credential.remove", "credential.set", "credential.sync.set", "credential.test", "credential.unattended.set",
-      "credentials.account.export", "credentials.list", "credentials.presets.get", "credentials.presets.setActive", "credentials.presets.setMapping",
+      "credentials.account.export", "credentials.account.import", "credentials.list", "credentials.presets.get", "credentials.presets.setActive", "credentials.presets.setMapping",
     ]);
+  } finally { h.cleanup(); }
+});
+
+test("account export includes OAuth material only after explicit recovery opt-in", async () => {
+  const h = harness();
+  try {
+    await createCredentialVault(h.credsDir).modify("anthropic", async () => ({ type: "oauth", access: "access", refresh: "refresh-secret", expires: 123, refreshedAt: 100 }));
+    await (h.cmds["credentials.account.export"] as any)({ kind: "credentials.account.export", requestId: "off" }, h.ctx);
+    assert.equal(h.replies.at(-1)?.oauthEntries, undefined);
+    await (h.cmds["credentials.account.export"] as any)({ kind: "credentials.account.export", requestId: "on", includeOAuth: true }, h.ctx);
+    assert.equal(h.replies.at(-1)?.oauthEntries?.[0]?.refresh, "refresh-secret");
   } finally { h.cleanup(); }
 });
 
