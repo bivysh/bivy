@@ -1355,9 +1355,7 @@ function EphemeralPanel() {
       <EphemeralProviderChooser
         keys={keys}
         onBack={() => setView({ k: "list" })}
-        onPick={(provider) => setView(EPHEMERAL_PROVIDERS.find((entry) => entry.id === provider)?.hostedOnly
-          ? { k: "hosted" }
-          : { k: "editor", provider, setupId: null })}
+        onPick={(provider) => setView({ k: "editor", provider, setupId: null })}
       />
     );
   }
@@ -1451,8 +1449,8 @@ function EphemeralProviderChooser({ keys, onBack, onPick }: { keys: ProviderKeyI
   const others = EPHEMERAL_PROVIDERS.filter((p) => p.id !== recommended?.id);
   const statusChip = (id: string, availability: "available" | "preview" | "planned", hostedOnly?: boolean) => {
     if (availability === "planned") return <Badge>Planned</Badge>;
-    if (keys.find((x) => x.id === id)?.configured) return <Badge tone="ok">Token saved</Badge>;
     if (hostedOnly) return <Badge tone="warn">Hosted setup</Badge>;
+    if (keys.find((x) => x.id === id)?.configured) return <Badge tone="ok">Token saved</Badge>;
     if (availability === "preview") return <Badge tone="warn">Preview</Badge>;
     return <Badge>Not set up</Badge>;
   };
@@ -1645,6 +1643,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
   const [confirm, setConfirm] = useState<null | { title: string; message: string; label?: string; action: () => void }>(null);
   const [token, setToken] = useState("");
   const [hasToken, setHasToken] = useState(false);
+  const [hasHostedToken, setHasHostedToken] = useState(false);
   const [region, setRegion] = useState(adapter.defaultRegion);
   const [sizes, setSizes] = useState<ProviderSize[]>(adapter.sizes);
   const [size, setSize] = useState(adapter.defaultSize);
@@ -1673,6 +1672,9 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
   // blank form when adding).
   useEffect(() => {
     controller.getEphemeralToken(providerId).then((t) => setHasToken(Boolean(t))).catch(() => {});
+    if (catalog.hostedOnly) {
+      controller.getHostedProvisioning().then((status) => setHasHostedToken(status.providers.includes(providerId))).catch(() => {});
+    }
     controller.listEphemeralConfigs().then((rows) => {
       editSetup(initialSetupId ? rows.find((s) => s.id === initialSetupId) ?? null : null);
     }).catch(() => {});
@@ -1683,7 +1685,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
   // Once a token is saved, swap the static catalog for the provider's live,
   // non-deprecated sizes for the chosen region (mirrors the launch sheet).
   useEffect(() => {
-    if (!hasToken) return;
+    if (!(catalog.hostedOnly ? hasHostedToken : hasToken)) return;
     let active = true;
     controller.listEphemeralSizes(providerId, region).then((list) => {
       if (!active || !list.length) return;
@@ -1692,18 +1694,26 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
     }).catch(() => {});
     return () => { active = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasToken, providerId, region]);
+  }, [hasHostedToken, hasToken, providerId, region]);
 
   const saveToken = async () => {
     if (busy) return;
     setBusy(true);
     setErr(null);
     try {
-      await controller.setEphemeralToken(providerId, token.trim());
+      const value = token.trim();
+      if (catalog.hostedOnly) {
+        await controller.validateHostedProviderCredential(providerId, value, region);
+        await controller.setHostedProvisioning({ providerTokens: { [providerId]: value } });
+        setHasHostedToken(true);
+        setMsg("Credential validated and stored for hosted teardown.");
+      } else {
+        await controller.setEphemeralToken(providerId, value);
+        setHasToken(true);
+        onKeysChanged();
+        setMsg("Token saved on this device.");
+      }
       setToken("");
-      setHasToken(true);
-      onKeysChanged();
-      setMsg("Token saved on this device.");
     } catch (e) {
       setErr(String((e as Error).message || e));
     } finally {
@@ -1753,21 +1763,21 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
     />
   );
 
-  if (catalog.availability === "planned" || catalog.hostedOnly) {
+  if (catalog.availability === "planned") {
     return (
       <div className="settings-form">
-        <Badge tone={catalog.hostedOnly ? "warn" : undefined}>{catalog.hostedOnly ? "Hosted setup required" : "Planned"}</Badge>
-        <p className="muted">{catalog.hostedOnly
-          ? `${catalog.name} profiles use hosted credential custody so Bivy retains independent deletion authority.`
-          : catalog.blockedReason || `${catalog.name} is not available yet.`}</p>
-        <button className="btn primary" disabled={!catalog.hostedOnly} onClick={catalog.hostedOnly ? onBack : undefined}>{catalog.hostedOnly ? "Back to profiles" : "Not available yet"}</button>
+        <Badge>Planned</Badge>
+        <p className="muted">{catalog.blockedReason || `${catalog.name} is not available yet.`}</p>
+        <button className="btn primary" disabled>Not available yet</button>
       </div>
     );
   }
 
+  const credentialReady = catalog.hostedOnly ? hasHostedToken : hasToken;
+
   // Connect the provider (no token yet): show the catalog steps + doc links,
   // then take the token. Saving flips this view into the profile form.
-  if (!hasToken) {
+  if (!credentialReady) {
     return (
       <div className="settings-form">
         {confirmDialog}
@@ -1786,7 +1796,9 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
         <div className="row-actions">
           <button className="btn primary" disabled={!token.trim() || busy} onClick={saveToken}>{busy ? "Saving…" : "Save token"}</button>
         </div>
-        <p className="muted small">The token stays on this device and is sent only to {catalog.name}.</p>
+        <p className="muted small">{catalog.hostedOnly
+          ? "This provider requires hosted custody so Bivy keeps independent deletion authority and retries until deletion is confirmed. The credential is encrypted on the control plane."
+          : `The token stays on this device and is sent only to ${catalog.name}.`}</p>
         {err && <div className="banner inline" data-tone="danger" role="alert">{err}</div>}
         {msg && <div className="banner inline">{msg}</div>}
       </div>
@@ -1801,7 +1813,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
       <div className="vault-title-row">
         <div>
           <h3>{setupId ? (setupName || `${catalog.name} profile`) : `New ${catalog.name} profile`}</h3>
-          <p className="muted small">{catalog.name} · token saved on this device</p>
+          <p className="muted small">{catalog.name} · {catalog.hostedOnly ? "hosted teardown credential validated" : "token saved on this device"}</p>
         </div>
         <Badge tone="ok">{catalog.name} connected</Badge>
       </div>
@@ -1891,7 +1903,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
               action: () => controller.removeEphemeralConfig(setupId).then(() => { onSetupsChanged(); onBack(); }),
             })}>Remove profile</button>
           )}
-          <button
+          {!catalog.hostedOnly && <button
             className="btn danger-ghost"
             onClick={() => setConfirm({
               title: "Forget provider token?",
@@ -1903,7 +1915,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
             })}
           >
             Forget {catalog.name} token
-          </button>
+          </button>}
         </div>
       </details>
     </div>

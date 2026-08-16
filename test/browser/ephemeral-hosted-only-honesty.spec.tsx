@@ -29,11 +29,15 @@ test("hosted-only safety is separate from provider availability", async () => {
   }
 });
 
-test("the ephemeral sheet routes hosted-only setup before accepting a device token", async () => {
+test("hosted-only setup uses control-plane custody instead of a device token", async () => {
   const view = await read("../../packages/web/src/components/Ephemeral.tsx");
+  const settings = await read("../../packages/web/src/components/Settings.tsx");
   expect(view).toContain('p.hostedOnly');
   expect(view).toContain('Hosted only');
   expect(view).toContain('catalog.availability === "planned" || catalog.hostedOnly');
   expect(view).toContain("can't be launched with a device-held token");
   expect(view).toContain("Unattended machines");
+  expect(settings).toContain("controller.validateHostedProviderCredential(providerId, value, region)");
+  expect(settings).toContain("providerTokens: { [providerId]: value }");
+  expect(settings).toContain("hosted teardown credential validated");
 });

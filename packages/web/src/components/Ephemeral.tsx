@@ -63,7 +63,7 @@ export function EphemeralSheet({ onClose, firstRun = false }: { onClose: () => v
               <PickerItem
                 key={p.id}
                 title={p.name}
-                meta={p.blurb}
+                meta={p.availability === "planned" ? p.blockedReason : p.blurb}
                 right={p.availability === "planned"
                   ? <Badge>Planned</Badge>
                   : k?.configured
