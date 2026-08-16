@@ -97,7 +97,6 @@ NODE_ENV=production
 PUBLIC_CONTROL_PLANE_URL=https://${APP_DOMAIN}
 RELAY_PUBLIC_URL=wss://${RELAY_DOMAIN}
 DISABLE_DEV_LOGIN=1
-ENFORCE_ENTITLEMENTS=0
 
 RELAY_SECRET=${RELAY_SECRET}
 
@@ -127,7 +126,6 @@ NODE_ENV=production
 PUBLIC_CONTROL_PLANE_URL=https://${APP_DOMAIN}
 RELAY_PUBLIC_URL=wss://${RELAY_DOMAIN}
 DISABLE_DEV_LOGIN=1
-ENFORCE_ENTITLEMENTS=0
 
 RELAY_SECRET=${RELAY_SECRET}
 POSTGRES_DB=bivy_control_plane
@@ -158,28 +156,26 @@ else
   fi
 fi
 
-# Replace the repository's untouched app.example.com/relay.example.com template
-# automatically. Preserve any operator-customized Caddyfile on re-runs.
-CADDY_IS_TEMPLATE=0
-# POSIX cksum is available on both supported host families. Match the exact
-# checked-in template so even a one-line operator customization is preserved.
-# Update both values when intentionally changing deploy/Caddyfile.
-if [[ -f deploy/Caddyfile ]]; then
-  read -r CADDY_CHECKSUM CADDY_SIZE _ < <(cksum deploy/Caddyfile)
-  if [[ "${CADDY_CHECKSUM}" == "1288800968" && "${CADDY_SIZE}" == "254" ]]; then
-    CADDY_IS_TEMPLATE=1
-  fi
-fi
-if [[ ! -f deploy/Caddyfile || "${CADDY_IS_TEMPLATE}" == "1" ]]; then
-  cat > deploy/Caddyfile <<EOF
-${APP_DOMAIN} {
+# Replace the repository's untouched template while preserving any operator
+# customization. Compare content directly so template edits do not require a
+# checksum update in this script.
+CADDY_TEMPLATE="$(cat <<'EOF'
+# Replace the domains below with yours. Caddy obtains TLS certificates
+# automatically and proxies WebSocket connections without extra configuration.
+
+app.example.com {
   reverse_proxy control-plane:4400
 }
 
-${RELAY_DOMAIN} {
+relay.example.com {
   reverse_proxy relay:4500
 }
 EOF
+)"
+if [[ ! -f deploy/Caddyfile || "$(cat deploy/Caddyfile)" == "${CADDY_TEMPLATE}" ]]; then
+  CONFIGURED_CADDY="${CADDY_TEMPLATE//app.example.com/${APP_DOMAIN}}"
+  CONFIGURED_CADDY="${CONFIGURED_CADDY//relay.example.com/${RELAY_DOMAIN}}"
+  printf '%s\n' "${CONFIGURED_CADDY}" > deploy/Caddyfile
   echo "Wrote deploy/Caddyfile for ${APP_DOMAIN} + ${RELAY_DOMAIN}"
 else
   echo "Keeping existing customized deploy/Caddyfile"

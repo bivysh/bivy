@@ -18,10 +18,8 @@
 #     --email you@example.com
 #   npm run dev   # node dials the relay; run `bivy link` to pair a phone
 #
-# NOTE: defaults to NODE_ENV=production, so the services refuse to boot with
-# insecure defaults and dev-login is disabled. For a throwaway staging box that
-# still wants dev-login, set NODE_ENV= (empty) and DISABLE_DEV_LOGIN=0 in .env.
-# Configure real Stripe keys + webhook secret before taking live payments.
+# NODE_ENV defaults to production and unauthenticated development login is
+# disabled. Configure email or GitHub OAuth before starting the stack.
 
 # Cap container log growth so the json-file driver can't fill the disk.
 x-logging: &default-logging
@@ -42,9 +40,8 @@ services:
       # initdb on a FIRST, empty data dir. If you change them on a box whose
       # postgres_data volume already exists, the new role/database are NOT
       # created and the control plane crash-loops connecting to a role that
-      # doesn't exist. After changing these, reset the volume once (run the
-      # "Deploy staging" workflow with reset_volumes=true) so postgres
-      # re-initializes under the new identifiers.
+      # doesn't exist. Do not change these values after the first start unless
+      # you also migrate the existing database roles and data.
       POSTGRES_DB: "${POSTGRES_DB:-bivy_control_plane}"
       POSTGRES_USER: "${POSTGRES_USER:-bivy}"
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
@@ -53,18 +50,11 @@ services:
     restart: unless-stopped
 
   control-plane:
-    # Hosted deploys set this to an immutable GHCR tag and use `up --no-build`;
-    # self-hosted installs keep building locally via the build block below.
-    image: "${CONTROL_PLANE_IMAGE:-bivy-control-plane:local}"
     build:
       context: ..
       dockerfile: deploy/Dockerfile.control-plane
       args:
-        # Bake the ephemeral-machines UI flag into the web bundle. OFF by default;
-        # set VITE_EPHEMERAL_MACHINES_ENABLED=1 in .env to expose the UI. Pairs with
-        # the runtime EPHEMERAL_MACHINES_ENABLED below. Hosted deploys that pull a
-        # prebuilt image (up --no-build) must set this build-arg when they build
-        # that image instead.
+        # Optional ephemeral-machine UI, paired with the runtime flag below.
         VITE_EPHEMERAL_MACHINES_ENABLED: "${VITE_EPHEMERAL_MACHINES_ENABLED:-}"
     logging: *default-logging
     mem_limit: 512m
@@ -75,14 +65,8 @@ services:
       RELAY_SECRET: "${RELAY_SECRET}"
       RELAY_PUBLIC_URL: "${RELAY_PUBLIC_URL}"
       PUBLIC_CONTROL_PLANE_URL: "${PUBLIC_CONTROL_PLANE_URL}"
-      # Entitlement enforcement is a control-plane concern too — push gating and the
-      # free-tier run cap are enforced HERE, not just by the relay's relayEnabled
-      # check — so the control plane must receive this or those gates silently no-op.
-      ENFORCE_ENTITLEMENTS: "${ENFORCE_ENTITLEMENTS:-0}"
-      # Observe-only mode for the free run cap: keep counting/reporting runs but never
-      # block. Lets a hosted deploy watch the real runs-per-window distribution before
-      # turning enforcement on. No-op unless ENFORCE_ENTITLEMENTS=1. See docs/configuration.md.
-      RUN_LIMIT_OBSERVE_ONLY: "${RUN_LIMIT_OBSERVE_ONLY:-0}"
+      # Self-hosted stacks do not have paid plan gates.
+      ENFORCE_ENTITLEMENTS: "0"
       # Ephemeral-machines flag (server-side enforcement). OFF by default: with
       # NODE_ENV=production (the compose default) ephemeral is disabled unless you
       # set EPHEMERAL_MACHINES_ENABLED=1 here. When off, planAutoProvision refuses
@@ -91,28 +75,16 @@ services:
       # above that exposes the UI. Does not touch a running machine's self-teardown,
       # so any existing machine still reaps itself when idle.
       EPHEMERAL_MACHINES_ENABLED: "${EPHEMERAL_MACHINES_ENABLED:-}"
-      DISABLE_DEV_LOGIN: "${DISABLE_DEV_LOGIN:-0}"
+      DISABLE_DEV_LOGIN: "${DISABLE_DEV_LOGIN:-1}"
       RESEND_API_KEY: "${RESEND_API_KEY:-}"
       AUTH_EMAIL_FROM: "${AUTH_EMAIL_FROM:-Bivy <login@localhost>}"
-      STRIPE_SECRET_KEY: "${STRIPE_SECRET_KEY:-}"
-      STRIPE_WEBHOOK_SECRET: "${STRIPE_WEBHOOK_SECRET:-}"
-      STRIPE_PRICE_PRO: "${STRIPE_PRICE_PRO:-}"
-      STRIPE_PRICE_TEAM: "${STRIPE_PRICE_TEAM:-}"
       GITHUB_OAUTH_CLIENT_ID: "${GITHUB_OAUTH_CLIENT_ID:-}"
       GITHUB_OAUTH_CLIENT_SECRET: "${GITHUB_OAUTH_CLIENT_SECRET:-}"
       WEB_PUSH_VAPID_PUBLIC_KEY: "${WEB_PUSH_VAPID_PUBLIC_KEY:-}"
       WEB_PUSH_VAPID_PRIVATE_KEY: "${WEB_PUSH_VAPID_PRIVATE_KEY:-}"
       WEB_PUSH_SUBJECT: "${WEB_PUSH_SUBJECT:-}"
-      BILLING_SUCCESS_URL: "${BILLING_SUCCESS_URL:-}"
-      BILLING_CANCEL_URL: "${BILLING_CANCEL_URL:-}"
-      BILLING_PORTAL_RETURN_URL: "${BILLING_PORTAL_RETURN_URL:-}"
       DATABASE_POOL_MAX: "${DATABASE_POOL_MAX:-10}"
       DATABASE_URL: "postgres://${POSTGRES_USER:-bivy}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-bivy_control_plane}"
-      # Optional Sentry error reporting (off when unset). See docs/ops/monitoring.md.
-      SENTRY_DSN: "${SENTRY_DSN_CONTROL_PLANE:-}"
-      SENTRY_ENVIRONMENT: "${NODE_ENV:-}"
-      SENTRY_RELEASE: "${SENTRY_RELEASE:-}"
-      SENTRY_TRACES_SAMPLE_RATE: "${SENTRY_TRACES_SAMPLE_RATE:-0}"
     # Raise the open-file-descriptor limit. Each enrolled node/phone introspection
     # and DB connection consumes FDs; the default 1024 caps concurrency well below
     # the hardware.
@@ -127,8 +99,6 @@ services:
     restart: unless-stopped
 
   relay:
-    # See control-plane.image above. Both variables are optional for self-hosts.
-    image: "${RELAY_IMAGE:-bivy-relay:local}"
     build:
       context: ..
       dockerfile: deploy/Dockerfile.relay
@@ -139,10 +109,8 @@ services:
       NODE_ENV: "${NODE_ENV:-production}"
       PORT: "4500"
       RELAY_SECRET: "${RELAY_SECRET}"
-      # Override for a relay running on another host against the control-plane
-      # load balancer; the single-host stack keeps using Docker DNS.
-      CONTROL_PLANE_URL: "${CONTROL_PLANE_URL:-http://control-plane:4400}"
-      ENFORCE_ENTITLEMENTS: "${ENFORCE_ENTITLEMENTS:-0}"
+      CONTROL_PLANE_URL: "http://control-plane:4400"
+      ENFORCE_ENTITLEMENTS: "0"
       RELAY_MAX_FRAME_BYTES: "${RELAY_MAX_FRAME_BYTES:-1048576}"
       # Per-socket message-rate caps. Set the CLIENT limit explicitly: the legacy
       # RELAY_MAX_MESSAGES_PER_MINUTE became the client limit via a fallback, and
@@ -151,11 +119,6 @@ services:
       RELAY_MAX_CLIENT_MESSAGES_PER_MINUTE: "${RELAY_MAX_CLIENT_MESSAGES_PER_MINUTE:-600}"
       RELAY_MAX_CONNECTIONS_PER_IP: "${RELAY_MAX_CONNECTIONS_PER_IP:-50}"
       RELAY_IDLE_TIMEOUT_MS: "${RELAY_IDLE_TIMEOUT_MS:-120000}"
-      # Optional Sentry error reporting (off when unset). See docs/ops/monitoring.md.
-      SENTRY_DSN: "${SENTRY_DSN_RELAY:-}"
-      SENTRY_ENVIRONMENT: "${NODE_ENV:-}"
-      SENTRY_RELEASE: "${SENTRY_RELEASE:-}"
-      SENTRY_TRACES_SAMPLE_RATE: "${SENTRY_TRACES_SAMPLE_RATE:-0}"
     # The relay holds one WebSocket per node plus one per connected phone, so it
     # is the most FD-hungry service. At ~2 FDs/user the default 1024 limit walls
     # concurrency around ~500 users regardless of CPU/RAM.

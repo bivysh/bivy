@@ -2,7 +2,7 @@
 
 Bivy Core runs the node + CLI locally without any hosted account (drive it from the terminal, or run agents headless). The browser UI (web/PWA) is served by a control plane — not by the node — so to get a browser UI, plus remote access, webhooks, push, and account/node registry, either use Bivy Cloud or self-host the same control-plane + relay stack described here.
 
-**Just want the fastest path to a running stack?** See [self-host-quickstart.md](self-host-quickstart.md) for the numbered walkthrough and the full environment variable checklist. This doc is the deeper operational reference — read it before you rely on a self-hosted deployment for anything that matters.
+**Just want the fastest path to a running stack?** See [self-host-quickstart.md](self-host-quickstart.md). This doc is the deeper operational reference — read it before you rely on a self-hosted deployment for anything that matters.
 
 ## Maturity and support
 
@@ -77,7 +77,6 @@ bivy start
 ```env
 NODE_ENV=production
 DISABLE_DEV_LOGIN=1
-ENFORCE_ENTITLEMENTS=0
 PUBLIC_CONTROL_PLANE_URL=https://app.example.com
 RELAY_PUBLIC_URL=wss://relay.example.com
 RELAY_SECRET=...
@@ -100,8 +99,7 @@ GITHUB_OAUTH_CLIENT_SECRET=...
 
 # Web push (phone/PWA notifications). Push stays disabled until BOTH VAPID keys
 # are set; generate a pair with `npx web-push generate-vapid-keys`. With
-# ENFORCE_ENTITLEMENTS=0 (the self-host default) push works for every account —
-# it is only gated to paid plans when ENFORCE_ENTITLEMENTS=1.
+# Push works for every account on a self-hosted stack.
 WEB_PUSH_VAPID_PUBLIC_KEY=...
 WEB_PUSH_VAPID_PRIVATE_KEY=...
 WEB_PUSH_SUBJECT=mailto:admin@app.example.com
