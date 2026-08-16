@@ -2,9 +2,9 @@
 # automatically and proxies WebSocket connections without extra configuration.
 
 app.example.com {
-	reverse_proxy control-plane:4400
+  reverse_proxy control-plane:4400
 }
 
 relay.example.com {
-	reverse_proxy relay:4500
+  reverse_proxy relay:4500
 }

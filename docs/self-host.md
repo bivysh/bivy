@@ -2,7 +2,7 @@
 
 Bivy Core runs the node + CLI locally without any hosted account (drive it from the terminal, or run agents headless). The browser UI (web/PWA) is served by a control plane — not by the node — so to get a browser UI, plus remote access, webhooks, push, and account/node registry, either use Bivy Cloud or self-host the same control-plane + relay stack described here.
 
-**Just want the fastest path to a running stack?** See [self-host-quickstart.md](self-host-quickstart.md) for the numbered walkthrough and the full environment variable checklist. This doc is the deeper operational reference — read it before you rely on a self-hosted deployment for anything that matters.
+**Just want the fastest path to a running stack?** See [self-host-quickstart.md](self-host-quickstart.md). This doc is the deeper operational reference — read it before you rely on a self-hosted deployment for anything that matters.
 
 ## Maturity and support
 
