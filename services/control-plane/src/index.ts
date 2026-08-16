@@ -20,6 +20,7 @@ import { safeReturnPath } from "./redirect.js";
 import { register, httpMetricsMiddleware, bindRelayTicketMetrics, startUsageCollector, recordFunnelEvent, recordDurableRunLifecycleResult, recordRunFailureStage, classifyRunFailureStage, recordProductEvent, PRODUCT_EVENT_VALUES, PRODUCT_CLIENT_VALUES, type ProductEvent, type ProductClient } from "./metrics.js";
 import { initSentry } from "./instrument.js";
 import { sanitizeEvidencePatch } from "./run-evidence.js";
+import { DeploymentExtension, type DeploymentOperation } from "./deployment-extension.js";
 import {
   verifyGithubSignature,
   verifyLinearSignature,
@@ -118,6 +119,22 @@ process.on("unhandledRejection", (reason) => {
 });
 
 const store = await createStore();
+const deploymentExtension = new DeploymentExtension();
+
+async function deploymentDecision(accountId: string, operation: DeploymentOperation, idempotencyKey?: string) {
+  const decision = await deploymentExtension.authorize(accountId, operation, idempotencyKey);
+  return decision;
+}
+
+async function requireDeploymentAdmission(accountId: string, operation: DeploymentOperation, idempotencyKey?: string) {
+  const decision = await deploymentDecision(accountId, operation, idempotencyKey);
+  if (!decision.allowed) {
+    const error = new Error(decision.reason || "Operation is not available") as Error & { status?: number; code?: string };
+    error.status = 429;
+    error.code = decision.code;
+    throw error;
+  }
+}
 try {
   await store.init();
 } catch (error) {
@@ -196,7 +213,11 @@ async function notifyRelaysWorkAvailable(
   void notifyRelaysRunUpdated(accountId, { id: item.id, createdAt: item.id });
   // Cancelling must never start a machine. Normal enqueue notifications retain
   // the unattended-provisioning check.
-  if (options.autoProvision !== false) void maybeAutoProvision(store, accountId, provisionEnv());
+  if (options.autoProvision !== false) {
+    void deploymentDecision(accountId, "ephemeral.provision")
+      .then((decision) => decision.allowed ? maybeAutoProvision(store, accountId, provisionEnv()) : undefined)
+      .catch((error) => console.error("[deployment-extension] provisioning admission failed", error));
+  }
 }
 if (relayShardUrls.length > 1) {
   console.log(`[relay] sharding across ${relayShardUrls.length} relays: ${relayShardUrls.join(", ")}`);
@@ -1070,7 +1091,16 @@ app.get("/me", requireUser, asyncHandler(async (req, res) => {
       devices: await store.countPairedDevices(account.id),
       sessions: countActiveAccountSessions(await store.listAccountSessions(account.id), nodes),
     },
+    extension: await deploymentExtension.account(account.id),
   });
+}));
+
+// Generic deployment-owned account actions. Core neither defines nor interprets
+// action ids; a configured extension returns presentation data from /me and
+// handles the selected action out of process.
+app.post("/account/extension/actions/:action", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  res.json(await deploymentExtension.accountAction(account.id, account.email, String(req.params.action)));
 }));
 
 // --- Node registry ------------------------------------------------------
@@ -1309,6 +1339,7 @@ app.post("/node/sessions", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const sessions = sessionAdvertsFrom(req.body?.sessions);
   await store.replaceNodeSessions(node.accountId, node.id, sessions);
+  await deploymentExtension.publishSessions(node.accountId, sessions.map((session) => session.sessionId));
   await correlateHostedSessions(store, node, sessions);
   res.json({ ok: true, count: sessions.length });
 }));
@@ -1346,6 +1377,7 @@ app.put("/internal/nodes/:nodeId/sessions/:sessionId", requireNode, asyncHandler
   // by the periodic full advertise via POST /node/sessions.
   const advert = sessionAdvertsFrom([{ ...req.body, sessionId: req.params.sessionId }]);
   for (const s of advert) await store.upsertNodeSession(node.accountId, node.id, s);
+  await deploymentExtension.publishSessions(node.accountId, advert.map((session) => session.sessionId));
   await correlateHostedSessions(store, node, advert);
   res.json({ ok: true, count: advert.length });
 }));
@@ -1382,8 +1414,9 @@ async function listClientSessions(req: Request, res: Response) {
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const all = await store.listAccountSessions(client.accountId);
   const scoped = client.nodeId ? all.filter((s) => s.nodeId === client.nodeId) : all;
+  const allowedIds = await deploymentExtension.filterSessions(client.accountId, scoped.map((session) => session.sessionId));
   // Strip node-only routing metadata from client responses.
-  const sessions = scoped.map(({ agentServiceAddress: _addr, ...session }) => session);
+  const sessions = scoped.filter((session) => allowedIds.has(session.sessionId)).map(({ agentServiceAddress: _addr, ...session }) => session);
   res.json({ sessions });
 }
 
@@ -1398,6 +1431,8 @@ function pushSubscriptionEndpoint(subscription: unknown): string {
 
 async function sendPushToAccount(accountId: string, payload: Record<string, unknown>) {
   if (!webPushEnabled) return { enabled: false, sent: 0 };
+  const admission = await deploymentDecision(accountId, "push.deliver");
+  if (!admission.allowed) return { enabled: true, sent: 0, reason: admission.code ?? "policy_denied" };
   // Per-account, per-kind opt-out. The `kind` string arrives from the node's
   // notification hint and flows unchanged to the browser; muting it here stops
   // delivery for every device on the account without touching subscriptions.
@@ -1493,6 +1528,8 @@ const EPHEMERAL_ALLOWED_HOSTS = new Set([
   "ssm.ap-northeast-1.amazonaws.com",
 ]);
 app.post("/api/ephemeral/exec", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  await requireDeploymentAdmission(account.id, "ephemeral.provision");
   // Fail-closed deployment gate: ephemeral machines are off unless the deploy set
   // EPHEMERAL_MACHINES_ENABLED=1 (production leaves it off). Device-initiated
   // launches route their provider create/destroy calls through this relay, so
@@ -3215,6 +3252,7 @@ app.post("/account/hosted-provision-now", asyncHandler(async (req, res) => {
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const plan = await planAutoProvision(store, client.accountId);
   if (req.body?.execute === true && plan.willProvision) {
+    await requireDeploymentAdmission(client.accountId, "ephemeral.provision");
     const machine = await maybeAutoProvision(store, client.accountId, provisionEnv());
     return res.json({ plan, provisioned: machine ? { id: machine.id, nodeId: machine.nodeId } : null });
   }
@@ -3685,7 +3723,11 @@ app.get("/node/work", requireNode, asyncHandler(async (req, res) => {
 // Claim one item (atomic; only one node wins). Returns the item or 409 if taken.
 app.post("/node/work/:id/claim", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
-  const item = await store.claimWorkItem(node.accountId, node.id, String(req.params.id));
+  const id = String(req.params.id);
+  const pending = await store.getAutomationRun(node.accountId, id);
+  if (!pending || ["succeeded", "failed", "cancelled", "needs_attention"].includes(pending.status)) return res.status(409).json({ error: "Already claimed or unknown" });
+  await requireDeploymentAdmission(node.accountId, "automation.run", id);
+  const item = await store.claimWorkItem(node.accountId, node.id, id);
   if (!item) return res.status(409).json({ error: "Already claimed or unknown" });
   void notifyRelaysRunUpdated(node.accountId, {
     id: item.id, events: item.events, completedAt: item.completedAt,
@@ -4007,12 +4049,14 @@ app.post("/internal/introspect/node", requireRelay, asyncHandler(async (req, res
   // it here both verifies and invalidates it.
   const ticket = await store.consumeRelayTicket(String(req.body?.token ?? ""));
   if (!ticket || ticket.role !== "node" || !ticket.nodeId) return res.status(404).json({ error: "Invalid node ticket" });
+  await requireDeploymentAdmission(ticket.accountId, "relay.connect");
   res.json({ nodeId: ticket.nodeId, accountId: ticket.accountId });
 }));
 
 app.post("/internal/introspect/session", requireRelay, asyncHandler(async (req, res) => {
   const ticket = await store.consumeRelayTicket(String(req.body?.token ?? ""));
   if (!ticket || ticket.role !== "client") return res.status(404).json({ error: "Invalid client ticket" });
+  await requireDeploymentAdmission(ticket.accountId, "relay.connect");
   // `nodeId` (when present) restricts a link grant to a single node; the relay
   // enforces it. `null` means an account-wide session token.
   res.json({ accountId: ticket.accountId, nodeId: ticket.nodeId });
@@ -4042,7 +4086,8 @@ app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
     Sentry.captureException(error);
     return res.status(status).json({ error: "Something went wrong on our end. Please try again." });
   }
-  res.status(status).json({ error: message });
+  const code = (error as { code?: string })?.code;
+  res.status(status).json({ error: message, ...(code ? { code } : {}) });
 });
 
 const server = app.listen(port, () => {

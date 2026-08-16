@@ -18,8 +18,9 @@ Core includes:
 - documentation and tests needed to run, modify, and self-host Bivy.
 
 Core does not contain Bivy Cloud billing, plan definitions, commercial usage
-metering, upgrade UI, or entitlement enforcement. Those live exclusively in the
-separate Cloud repository; Core deployments do not impose commercial limits.
+metering, upgrade UI, or entitlement rules. Those live exclusively in the
+separate Cloud repository. Operators may configure the neutral deployment-
+extension contract; without one, Core imposes no commercial limits.
 
 Core promises:
 

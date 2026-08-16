@@ -20,7 +20,7 @@ Cloud may provide:
 
 Cloud must not require uploading workspace files, interactive session transcripts or prompts, tool output, plaintext model credentials, GitHub repo tokens, or local secrets to the control plane. The node remains the data plane; Cloud coordinates metadata and routing. Explicit inbound-automation features are the documented exception: Slack commands and generic webhook instructions are sent to the control plane by their source and retained with the queued item; GitHub and Linear issue text is fetched directly by the node.
 
-Billing, plan definitions, commercial metering, and entitlement enforcement live exclusively in the private Bivy Cloud repository. Core protocols, clients, the relay, and the self-hostable control plane contain no commercial plan vocabulary or admission gates; self-hosted deployments are unrestricted.
+Billing, plan definitions, commercial metering, and entitlement enforcement live exclusively in the private Bivy Cloud repository. Core protocols, clients, the relay, and the self-hostable control plane contain no commercial plan vocabulary. The control plane exposes an optional deployment-neutral admission/account contract whose default is unrestricted; Bivy Cloud implements it out of process.
 
 Repository boundary: Bivy Core, plus the baseline self-hostable relay and control plane, are open-source under AGPL-3.0-only in this repository. Bivy-operated production infrastructure, billing, plans, commercial metering and enforcement, secrets, support tooling, private overlays, and any managed compute/inference service live in the separate private Cloud repository.
 

@@ -289,9 +289,16 @@ export async function fetchAccountSessions(store: LocalStore, fetchImpl: typeof 
   return list as AccountSessionAdvert[];
 }
 
+export interface AccountExtensionView {
+  title?: string;
+  facts?: Array<{ id: string; label: string; value: string }>;
+  actions?: Array<{ id: string; label: string; kind?: "primary" | "secondary" }>;
+}
+
 export interface AccountMe {
   account?: { id?: string; email?: string };
   counts?: { nodes?: number; sessions?: number; devices?: number };
+  extension?: AccountExtensionView;
   [k: string]: unknown;
 }
 
@@ -304,6 +311,18 @@ export async function fetchMe(store: LocalStore, fetchImpl: typeof fetch = fetch
   const res = await fetchImpl(`${cpBase(store)}/me`, { headers: authHeaders(store) });
   if (!res.ok) throw new Error(`account request failed: ${res.status}`);
   return (await res.json()) as AccountMe;
+}
+
+/** Invoke an opaque action contributed by the deployment's account extension. */
+export async function invokeAccountExtensionAction(store: LocalStore, action: string, fetchImpl: typeof fetch = fetch): Promise<{ url: string }> {
+  const res = await fetchImpl(`${cpBase(store)}/account/extension/actions/${encodeURIComponent(action)}`, {
+    method: "POST",
+    headers: authHeaders(store),
+    body: "{}",
+  });
+  const data = await res.json().catch(() => ({})) as { url?: string; error?: string };
+  if (!res.ok || !data.url) throw new Error(data.error || `account action failed: ${res.status}`);
+  return { url: data.url };
 }
 
 /** Remove an enrolled node from the account. */

@@ -500,6 +500,8 @@ unauthenticated dev login enabled.
 | `RELAY_SHARD_URLS` | comma-separated URLs | falls back to `RELAY_PUBLIC_URL`, then `ws://localhost:4500` | Node→shard mapping is by hash of the node id |
 | `DATABASE_POOL_MAX` | integer ≥ 1 | `10` | |
 | `LINK_GRANT_TTL_MS` | integer ms | `2592000000` (30 days) | TTL of the device-linking grant minted from a pairing QR |
+| `DEPLOYMENT_EXTENSION_URL` | HTTPS URL | unset | Optional operator-owned account/admission service. Unset is unrestricted; once configured, failures are fail-closed |
+| `DEPLOYMENT_EXTENSION_TOKEN` | opaque string | unset | Shared bearer for the extension. Must be configured together with the URL |
 
 ## Authentication
 
@@ -511,8 +513,9 @@ unauthenticated dev login enabled.
 | `DISABLE_DEV_LOGIN` | `1` | **unset — dev login is enabled outside production** | Hard kill switch for `POST /auth/dev-login`, which mints a full account session for any email with no verification. **Set this to `1`** |
 | `ALLOW_DEV_LOGIN` | `1` | unset | Re-enables dev login under `NODE_ENV=production`. Setting it in production makes the service exit 1 |
 
-Bivy Cloud billing and commercial policy configuration belongs to the separate
-Cloud repository and is intentionally not accepted by Core services.
+Core treats the deployment extension as an opaque policy/account contract: it
+contains no plans or billing vocabulary. Bivy Cloud's implementation and all
+commercial configuration belong to the separate Cloud repository.
 
 ## Web Push
 

@@ -435,7 +435,7 @@ function NotificationsPanel() {
     return () => clearTimeout(t);
   }, [msg, err]);
 
-  // Push notifications are included on every plan, so there's no upgrade gate.
+  // Push notification controls reflect browser/server capability only.
   const on = Boolean(status?.subscribed);
 
   const setMaster = async (next: boolean) => {
@@ -1860,6 +1860,7 @@ function AccountPanel() {
   const [nodes, setNodes] = useState<Awaited<ReturnType<typeof controller.listNodes>>>([]);
   const [devices, setDevices] = useState<PairedDevice[]>([]);
   const [err, setErr] = useState<string | null>(null);
+  const [accountAction, setAccountAction] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<null | { title: string; message: string; label?: string; action: () => void }>(null);
   const reloadMe = () => controller.fetchMe().then(setMe).catch(() => {});
   const reloadDevices = () => controller.listDevices().then(setDevices).catch(() => {});
@@ -1887,6 +1888,34 @@ function AccountPanel() {
         <Stat label="Devices" value={String(counts?.devices ?? devices.length)} />
         <Stat label="Sessions" value={counts?.sessions == null ? "—" : String(counts.sessions)} />
       </div>
+      {me?.extension && (
+        <div className="settings-section">
+          <h4 className="settings-subhead">{me.extension.title || "Account service"}</h4>
+          {(me.extension.facts ?? []).map((fact) => (
+            <div className="settings-row" key={fact.id}>
+              <span>{fact.label}</span>
+              <strong>{fact.value}</strong>
+            </div>
+          ))}
+          <div className="settings-actions">
+            {(me.extension.actions ?? []).map((action) => (
+              <button
+                type="button"
+                key={action.id}
+                className={`btn ${action.kind === "primary" ? "primary" : ""}`}
+                disabled={accountAction !== null}
+                onClick={() => {
+                  setAccountAction(action.id);
+                  controller.invokeAccountExtensionAction(action.id)
+                    .then(({ url }) => { window.location.assign(url); })
+                    .catch((e) => setErr(String(e?.message || e)))
+                    .finally(() => setAccountAction(null));
+                }}
+              >{accountAction === action.id ? "Opening…" : action.label}</button>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="settings-section">
         <h4 className="settings-subhead">Enrolled machines</h4>
         <div className="picker-list">

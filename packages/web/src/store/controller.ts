@@ -16,6 +16,7 @@ import {
   fetchAccountNodes,
   fetchAccountSessions,
   fetchMe,
+  invokeAccountExtensionAction,
   fetchGithubApp,
   fetchGithubQueue,
   fetchAutomationRuns,
@@ -2437,6 +2438,7 @@ export class AppController {
   // --- Settings: account / push -------------------------------------------
 
   fetchMe(): Promise<AccountMe> { return this.accountCoordinator.fetchMe(); }
+  invokeAccountExtensionAction(action: string): Promise<{ url: string }> { return invokeAccountExtensionAction(this.local, action); }
   fetchGithubApp(): ReturnType<typeof fetchGithubApp> { return this.accountCoordinator.fetchGithubApp() as ReturnType<typeof fetchGithubApp>; }
   fetchGithubQueue(limit = 30): ReturnType<typeof fetchGithubQueue> { return this.accountCoordinator.fetchGithubQueue(limit); }
   fetchAutomationRuns(limit = 50): ReturnType<typeof fetchAutomationRuns> { return this.accountCoordinator.fetchAutomationRuns(limit); }
