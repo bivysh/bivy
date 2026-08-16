@@ -363,7 +363,7 @@ export class RelayConnector {
     }
     if (this.closed) return;
 
-    // Connect to the shard the control plane assigned this node (docs/scaling.md),
+    // Connect to the shard the control plane assigned this node,
     // falling back to the statically configured relay for older control planes.
     // Solo mode has no shard assignment, so it always uses the configured relay.
     const relayBase = (relayUrl ?? this.config.url).replace(/\/$/, "");

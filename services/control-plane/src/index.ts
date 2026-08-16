@@ -153,7 +153,7 @@ const Sentry = await initSentry();
 
 const port = Number(process.env.PORT ?? 4400);
 const relayPublicUrl = process.env.RELAY_PUBLIC_URL ?? "ws://localhost:4500";
-// Relay shard URLs (docs/scaling.md). Defaults to the single relayPublicUrl, so
+// Relay shard URLs. Defaults to the single relayPublicUrl, so
 // behavior is unchanged until RELAY_SHARD_URLS lists more than one relay. A node
 // and all its clients are routed to the same shard by hashing the nodeId.
 const relayShardUrls = parseShardUrls(process.env);

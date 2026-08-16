@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 /**
- * Relay sharding (docs/scaling.md).
+ * Relay sharding.
  *
  * The relay is a single Node process with in-memory room state, so it routes on
  * ONE core. To use more cores (and more boxes) we run N identical relay

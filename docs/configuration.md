@@ -623,14 +623,9 @@ Publishing is driven by flags, not environment: `--publish`, `--dry-run`.
 `scripts/run-tests.mjs` and `scripts/disable-git-hooks.mjs` read no environment
 variables.
 
-## Server maintenance scripts (`deploy/`)
+## Self-host helper (`deploy/self-host.sh`)
 
-For operators running the self-hosted stack on a box.
-
-| Variable | Script | Type | Default |
-| --- | --- | --- | --- |
-| `BIVY_PRUNE_DOCKER` | `prune.sh` | `0` disables | `1` |
-| `BIVY_PRUNE_DOCKER_ALL` | `prune.sh` | `1` runs `docker system prune -af` | `0` |
-| `BIVY_PRUNE` | `self-host.sh` | `0` \| `1` \| unset | unset = prune only when a stack already exists |
-| `DATABASE_URL` | `self-host.sh` | postgres URL | unset = bundled Postgres container |
-| `CP_DOMAIN`, `RELAY_DOMAIN` | `self-host.sh` | hostname | positional args (`<app-domain> <relay-domain>`) |
+| Variable | Type | Default |
+| --- | --- | --- |
+| `DATABASE_URL` | postgres URL | unset = bundled Postgres container |
+| `CP_DOMAIN`, `RELAY_DOMAIN` | hostname | positional args (`<app-domain> <relay-domain>`) |

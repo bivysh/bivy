@@ -41,8 +41,8 @@ if ((process.env.NODE_ENV === "production" || !isLocalControlPlane) && (!process
   process.exit(1);
 }
 
-// Optional identifier for this relay process when running a sharded fleet
-// (docs/scaling.md). Surfaced in /healthz and /metrics so dashboards and uptime
+// Optional identifier for this relay process when running a sharded fleet.
+// Surfaced in /healthz and /metrics so dashboards and uptime
 // checks can tell shards apart and spot a hot shard. Routing itself is decided
 // by the control plane (which shard URL a node/client is handed), so this label
 // is purely observational and has no effect on behavior.

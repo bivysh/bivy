@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { parseShardUrls, fnv1a, shardForNode } from "../src/relay-shards.js";
 
 /**
- * Relay sharding (docs/scaling.md): a node and all of its clients must
+ * Relay sharding: a node and all of its clients must
  * deterministically map to the same relay shard, and the default (no
  * RELAY_SHARD_URLS) must behave exactly like the old single-relay setup.
  */

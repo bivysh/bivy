@@ -166,30 +166,18 @@ CADDY_IS_TEMPLATE=0
 # Update both values when intentionally changing deploy/Caddyfile.
 if [[ -f deploy/Caddyfile ]]; then
   read -r CADDY_CHECKSUM CADDY_SIZE _ < <(cksum deploy/Caddyfile)
-  if [[ "${CADDY_CHECKSUM}" == "1183089644" && "${CADDY_SIZE}" == "970" ]]; then
+  if [[ "${CADDY_CHECKSUM}" == "1288800968" && "${CADDY_SIZE}" == "254" ]]; then
     CADDY_IS_TEMPLATE=1
   fi
 fi
 if [[ ! -f deploy/Caddyfile || "${CADDY_IS_TEMPLATE}" == "1" ]]; then
   cat > deploy/Caddyfile <<EOF
 ${APP_DOMAIN} {
-  @internal path /metrics* /readyz
-  handle @internal {
-    respond 403
-  }
-  handle {
-    reverse_proxy control-plane:4400
-  }
+  reverse_proxy control-plane:4400
 }
 
 ${RELAY_DOMAIN} {
-  @internal path /metrics* /readyz
-  handle @internal {
-    respond 403
-  }
-  handle {
-    reverse_proxy relay:4500
-  }
+  reverse_proxy relay:4500
 }
 EOF
   echo "Wrote deploy/Caddyfile for ${APP_DOMAIN} + ${RELAY_DOMAIN}"
@@ -198,7 +186,7 @@ else
 fi
 
 # A production control plane deliberately disables the unauthenticated dev
-# login. Do not continue into an apparently healthy but unusable deployment:
+# login. Do not continue into an unusable deployment:
 # require at least one real sign-in path before Docker is touched. Parse
 # individual keys rather than `source`-ing operator-controlled .env content.
 env_value() {
@@ -231,7 +219,7 @@ Choose one, edit deploy/.env, then run this same command again:
     Setup guide: docs/github-oauth-setup.md
 
 The unauthenticated dev login stays disabled. Refusing to start here prevents a
-healthy-looking deployment that nobody can sign into.
+deployment that nobody can sign into.
 EOF
   exit 2
 fi
@@ -243,14 +231,6 @@ if [[ "${BIVY_SELF_HOST_CONFIG_ONLY:-0}" == "1" ]]; then
   exit 0
 fi
 
-# Reclaim disk before the build writes new image layers: prune docker cruft.
-# prune.sh runs a host-wide
-# `docker system prune -f` (keeps the reusable build cache warm; set
-# BIVY_PRUNE_DOCKER_ALL=1 for the aggressive `-af` variant). That still removes
-# stopped containers and dangling images from UNRELATED workloads on a shared
-# host — so only run it on an update (when a previous Bivy stack already
-# exists), never on a first deploy where there is nothing of ours to reclaim.
-# Force with BIVY_PRUNE=1, skip with BIVY_PRUNE=0.
 # Fail early with a clear hint if the merged compose config is invalid — the most
 # likely cause in managed mode is a Docker Compose older than v2.24 (the
 # hosted-db overlay uses the `!reset` tag).
@@ -263,16 +243,6 @@ if ! docker compose "${COMPOSE_ARGS[@]}" --env-file deploy/.env config -q 2>/tmp
     echo "Check with: docker compose version" >&2
   fi
   exit 1
-fi
-
-existing_stack="$(docker compose "${COMPOSE_ARGS[@]}" --env-file deploy/.env ps -aq 2>/dev/null || true)"
-if [ "${BIVY_PRUNE:-auto}" = "0" ]; then
-  echo "Skipping pre-deploy prune (BIVY_PRUNE=0)."
-elif [ "${BIVY_PRUNE:-auto}" = "1" ] || [ -n "${existing_stack}" ]; then
-  bash "${ROOT}/deploy/prune.sh"
-else
-  echo "First deploy detected (no existing Bivy stack) — skipping the host-wide docker prune."
-  echo "It will run automatically on future updates; force it now with BIVY_PRUNE=1."
 fi
 
 docker compose "${COMPOSE_ARGS[@]}" --env-file deploy/.env up -d --build

@@ -50,11 +50,6 @@ services:
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-bivy} -d $${POSTGRES_DB:-bivy_control_plane}"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
     restart: unless-stopped
 
   control-plane:
@@ -79,9 +74,6 @@ services:
       PORT: "4400"
       RELAY_SECRET: "${RELAY_SECRET}"
       RELAY_PUBLIC_URL: "${RELAY_PUBLIC_URL}"
-      # Optional deterministic relay fleet. Every control-plane replica must see
-      # the same ordered URL list so a node and its clients select one shard.
-      RELAY_SHARD_URLS: "${RELAY_SHARD_URLS:-}"
       PUBLIC_CONTROL_PLANE_URL: "${PUBLIC_CONTROL_PLANE_URL}"
       # Entitlement enforcement is a control-plane concern too — push gating and the
       # free-tier run cap are enforced HERE, not just by the relay's relayEnabled
@@ -123,27 +115,15 @@ services:
       SENTRY_TRACES_SAMPLE_RATE: "${SENTRY_TRACES_SAMPLE_RATE:-0}"
     # Raise the open-file-descriptor limit. Each enrolled node/phone introspection
     # and DB connection consumes FDs; the default 1024 caps concurrency well below
-    # the hardware. See docs/scaling.md.
+    # the hardware.
     ulimits:
       nofile:
         soft: 65536
         hard: 65536
     expose:
       - "4400"
-    # /readyz (not /healthz) so the container reports unhealthy when Postgres is
-    # unreachable — a DB outage shows up in `docker compose ps` instead of a green
-    # light over a control plane that 500s every request.
-    healthcheck:
-      # Avoid starting V8 every 10s: `node -e fetch(...)` briefly used most of a
-      # core on 1-vCPU hosts. This probe uses bash's built-in TCP support.
-      test: ["CMD", "bash", "/usr/local/bin/bivy-healthcheck", "4400", "/readyz"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 10s
     depends_on:
-      postgres:
-        condition: service_healthy
+      - postgres
     restart: unless-stopped
 
   relay:
@@ -178,21 +158,13 @@ services:
       SENTRY_TRACES_SAMPLE_RATE: "${SENTRY_TRACES_SAMPLE_RATE:-0}"
     # The relay holds one WebSocket per node plus one per connected phone, so it
     # is the most FD-hungry service. At ~2 FDs/user the default 1024 limit walls
-    # concurrency around ~500 users regardless of CPU/RAM. See docs/scaling.md.
+    # concurrency around ~500 users regardless of CPU/RAM.
     ulimits:
       nofile:
         soft: 65536
         hard: 65536
     expose:
       - "4500"
-    healthcheck:
-      # Same lightweight probe as the control plane; do not start V8 merely to
-      # check an HTTP endpoint.
-      test: ["CMD", "bash", "/usr/local/bin/bivy-healthcheck", "4500", "/healthz"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 10s
     restart: unless-stopped
 
   caddy:
@@ -208,10 +180,8 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
-      control-plane:
-        condition: service_healthy
-      relay:
-        condition: service_healthy
+      - control-plane
+      - relay
     restart: unless-stopped
 
 volumes:
