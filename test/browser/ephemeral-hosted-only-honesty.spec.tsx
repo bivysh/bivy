@@ -16,7 +16,7 @@ test("the Hetzner catalog entry is flagged hostedOnly and its blurb says so", as
   expect(hetznerEntryStart).toBeGreaterThan(-1);
   const hetznerEntry = model.slice(hetznerEntryStart, hetznerEntryStart + 1000);
   expect(hetznerEntry).toContain("hostedOnly: true");
-  expect(hetznerEntry.toLowerCase()).toContain("hosted");
+  expect(hetznerEntry).toContain("billing always stops");
 });
 
 test("hosted-only safety is separate from provider availability", async () => {
@@ -33,11 +33,11 @@ test("hosted-only setup uses control-plane custody instead of a device token", a
   const view = await read("../../packages/web/src/components/Ephemeral.tsx");
   const settings = await read("../../packages/web/src/components/Settings.tsx");
   expect(view).toContain('p.hostedOnly');
-  expect(view).toContain('Hosted only');
+  expect(view).toContain('Server-managed');
   expect(view).toContain("if (catalog.hostedOnly)");
-  expect(view).toContain("can't be launched with a device-held token");
-  expect(view).toContain("Unattended machines");
+  expect(view).toContain("must be managed by Bivy's server");
+  expect(view).toContain("Run automations while I'm offline");
   expect(settings).toContain("controller.validateHostedProviderCredential(providerId, value, region)");
   expect(settings).toContain("providerTokens: { [providerId]: value }");
-  expect(settings).toContain("hosted teardown credential validated");
+  expect(settings).toContain("server-managed credential saved");
 });

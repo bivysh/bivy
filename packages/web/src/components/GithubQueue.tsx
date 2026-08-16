@@ -614,7 +614,7 @@ export function GithubQueuePanel({
                                 </optgroup>
                               )}
                               {EPHEMERAL_MACHINES_ENABLED && ephemeralConfigs.length > 0 && (
-                                <optgroup label="Isolated machine profiles">
+                                <optgroup label="Cloud machine profiles">
                                   {ephemeralConfigs.map((s) => (
                                     <option key={s.id} value={`config:${s.id}`}>{s.name} · {s.provider}</option>
                                   ))}

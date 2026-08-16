@@ -131,7 +131,7 @@ export function NodeSwitcher() {
           ))}
           {EPHEMERAL_MACHINES_ENABLED && ephemeralConfigs.length > 0 && (
             <>
-              <div className="node-menu-head">Isolated machine profiles</div>
+              <div className="node-menu-head">Cloud machine profiles</div>
               {ephemeralConfigs.map((config) => {
                 // Each runner is a template. Picking it just targets the draft at
                 // it — the first message launches a fresh machine bound to the new

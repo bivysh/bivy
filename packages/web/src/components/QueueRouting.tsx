@@ -193,7 +193,7 @@ export function QueueRoutingSection({
             </optgroup>
           )}
           {configs.length > 0 && (
-            <optgroup label="Isolated machine profiles">
+            <optgroup label="Cloud machine profiles">
               {configs.map((c) => (
                 <option key={c.id} value={`config:${c.id}`}>{c.name} · {c.provider}</option>
               ))}
@@ -219,7 +219,7 @@ export function QueueRoutingSection({
             : "Runs are picked up by any online persistent machine. No cloud credential is needed."}
       </p>
 
-      <h4 className="settings-subhead">Isolated machine profiles</h4>
+      <h4 className="settings-subhead">Cloud machine profiles</h4>
       {draft ? (
         <div className="settings-form">
           <label className="field-label"><span>Name</span>
@@ -270,7 +270,7 @@ export function QueueRoutingSection({
       ) : (
         <>
           <div className="picker-list">
-            {configs.length === 0 && <div className="picker-empty">No isolated machine profiles yet.</div>}
+            {configs.length === 0 && <div className="picker-empty">No cloud machine profiles yet.</div>}
             {configs.map((c) => (
               <PickerItem
                 key={c.id}

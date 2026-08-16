@@ -66,7 +66,7 @@ export function EphemeralSheet({ onClose, firstRun = false }: { onClose: () => v
                 right={k?.configured
                   ? <Badge tone="ok">Connected</Badge>
                   : p.hostedOnly
-                    ? <Badge tone="warn">Hosted only</Badge>
+                    ? <Badge tone="accent">Server-managed</Badge>
                     : <Badge>Available</Badge>}
                 onClick={() => setProvider(p.id)}
               />
@@ -134,9 +134,9 @@ function ProviderConnectPanel({ providerId, onKeysChanged, onDone }: { providerI
   if (catalog.hostedOnly) {
     return (
       <div className="settings-form">
-        <Badge tone="warn">Hosted setup required</Badge>
-        <p className="muted">{catalog.name} can't be launched with a device-held token because guest shutdown does not delete the billable server.</p>
-        <p className="muted small">Use Settings → Isolated machine profiles → Unattended machines. That flow stores teardown authority in the control plane and keeps retrying until {catalog.name} confirms deletion.</p>
+        <Badge tone="accent">Server-managed provider</Badge>
+        <p className="muted">{catalog.name} must be managed by Bivy's server so the machine is always deleted and billing stops.</p>
+        <p className="muted small">Add it in Settings → Cloud machine profiles, then turn on “Run automations while I'm offline.”</p>
       </div>
     );
   }
@@ -159,12 +159,12 @@ function ProviderConnectPanel({ providerId, onKeysChanged, onDone }: { providerI
           <button className="btn primary" disabled={!token.trim() || saving} onClick={connect}>
             {saving ? "Connecting…" : "Connect"}
           </button>
-          <p className="muted small">For this interactive profile, the token stays on this device and is sent only to the selected provider. Unattended Automations require a separate, explicit hosted-custody opt-in. You can fine-tune region, size, and auto-destroy later in Settings → Isolated machine profiles.</p>
+          <p className="muted small">The token stays on this device and is sent only to the selected provider. To run automations while you're offline, opt in from Settings → Cloud machine profiles.</p>
         </>
       ) : (
         <>
           <Badge tone="ok">✓ {catalog.name} connected</Badge>
-          <p className="muted small">A default isolated machine profile is ready. Pick it and send your first message to launch a machine — no launch button. Adjust its region / size / TTL anytime in Settings → Isolated machine profiles.</p>
+          <p className="muted small">Your cloud profile is ready. Pick it and send your first message; Bivy starts the machine automatically. Adjust its region, size, or lifetime in Settings → Cloud machine profiles.</p>
           {controller.getDeviceTokenSync() && syncState.phase !== "idle" && (
             <Badge role="status" tone={syncState.phase === "failed" ? "danger" : syncState.phase === "synced" ? "ok" : undefined}>
               {syncState.phase === "failed" ? `Credential sync pending: ${syncState.failure ?? "retry needed"}` : syncState.phase === "synced" ? "Credentials synced" : "Credential sync pending"}
