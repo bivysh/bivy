@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import path from "node:path";
-import { resolveResumeRef, resumeRefFor, sessionIdFromRef } from "../src/session-ref.js";
+import { resolveResumeRef, resumeRefFor, sessionIdFromRef, storedResumeRef } from "../src/session-ref.js";
 
 const sessionsDir = "/home/user/.bivy/pi/sessions";
 
@@ -54,6 +54,20 @@ assert.throws(
   () => resolveResumeRef({ ref: `${sessionsDir}-evil/leak.jsonl`, resumesByPath: true, sessionsDir }),
   /outside the sessions directory/,
 );
+
+// --- storedResumeRef: direct create/open callers also honor metadata --------
+
+assert.equal(
+  storedResumeRef("pi-id", { id: "pi-id", path: "/home/user/.bivy/pi/sessions/pi.jsonl" }),
+  "/home/user/.bivy/pi/sessions/pi.jsonl",
+);
+assert.equal(storedResumeRef("bivy-codex-id", { id: "bivy-codex-id", path: "native-thread-id" }), "native-thread-id");
+// A metadata lookup by path can return the same row; an explicit path remains authoritative.
+assert.equal(
+  storedResumeRef("/explicit/session.jsonl", { id: "pi-id", path: "/stored/session.jsonl" }),
+  "/explicit/session.jsonl",
+);
+assert.equal(storedResumeRef("claude-id", { id: "claude-id" }), "claude-id");
 
 // --- resumeRefFor: decide what to resume a not-open session from -----------
 //

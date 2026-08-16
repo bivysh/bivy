@@ -43,6 +43,21 @@ export function resolveResumeRef(opts: { ref: string; resumesByPath: boolean; se
 }
 
 /**
+ * Replace a client-supplied session id with the runtime resume ref stored for
+ * that exact metadata row. Callers that already supply a path keep that path:
+ * metadata stores are commonly indexed by both id and path, and treating a path
+ * lookup as an id lookup would make an explicit ref unexpectedly change.
+ *
+ * This is intentionally runtime-neutral. Pi stores a transcript path, while
+ * Codex/OpenCode can store a provider-native thread id; both are opaque refs at
+ * this layer.
+ */
+export function storedResumeRef(requestedRef: string, meta?: { id?: string; path?: string }): string {
+  const stored = meta?.path?.trim();
+  return meta?.id === requestedRef && stored ? stored : requestedRef;
+}
+
+/**
  * Decide what to resume a client-named session from when the node isn't holding
  * it in memory (a restart, an idle close, or a session this process never
  * opened — the PWA lists sessions straight from durable metadata). Prefer an
