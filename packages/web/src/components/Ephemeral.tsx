@@ -66,7 +66,7 @@ export function EphemeralSheet({ onClose, firstRun = false }: { onClose: () => v
                 right={k?.configured
                   ? <Badge tone="ok">Connected</Badge>
                   : p.hostedOnly
-                    ? <Badge tone="warn">Hosted only</Badge>
+                    ? <Badge tone="accent">Server-managed</Badge>
                     : <Badge>Available</Badge>}
                 onClick={() => setProvider(p.id)}
               />
