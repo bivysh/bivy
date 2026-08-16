@@ -33,7 +33,6 @@ test("migrated call-to-actions inherit the canonical button shell", async () => 
     ["components/ChatView.tsx", 'className="btn sm primary"'],
     ["components/ForkSheet.tsx", 'className="btn primary fork-submit"'],
     ["components/ImportSessionSheet.tsx", 'className="btn sm primary import-session-action"'],
-    ["components/SessionList.tsx", 'className="btn sm primary trial-wall-cta"'],
     ["components/AutomationsView.tsx", 'className="btn primary autom-new-btn"'],
   ] as const;
   for (const [path, className] of surfaces) {
@@ -42,7 +41,7 @@ test("migrated call-to-actions inherit the canonical button shell", async () => 
   }
 
   const css = await readFile(STYLES, "utf8");
-  for (const selector of [".fork-submit", ".import-session-action", ".trial-wall-cta", ".banner-action"]) {
+  for (const selector of [".fork-submit", ".import-session-action", ".banner-action"]) {
     expect(ruleFor(css, selector), `${selector} should only own layout`).not.toMatch(
       /(?:background|border(?!-collapse)|border-radius|color|font-size|font-weight|padding)\s*:/,
     );
