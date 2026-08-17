@@ -229,6 +229,29 @@ bivy update           # update Bivy and restart the service
 
 Full command list, flags, and examples: [`docs/cli-reference.md`](docs/cli-reference.md).
 
+### Foreground, background, or remote
+
+`bivy run <agent>` attaches your terminal to the agent (Ctrl-\ Ctrl-\ detaches,
+leaving it running). Two flags start a session without taking over your
+terminal:
+
+```bash
+bivy run claude --no-follow   # start a native session in the background; rejoin with 'bivy resume' or open it in the app
+bivy run claude --chat        # start the governed app session and open it in the browser (--no-open just prints its URL)
+```
+
+For unattended, checked work, queue a **Run** instead — it returns immediately
+and reports a Receipt when it finishes:
+
+```bash
+bivy runs start "upgrade the http client and get the tests passing"
+bivy runs wait <id>           # follow it to completion (exit 0 = succeeded)
+```
+
+Unlike `bivy run`, `bivy runs` operates on governed background Runs with checks,
+evidence, and Receipts — the same machinery event triggers use (see
+[GitHub Runs](#github-runs) and [Linear Runs](#linear-runs)).
+
 ## Configuration
 
 The common knobs:

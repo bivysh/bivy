@@ -939,12 +939,14 @@ function extractRunFlags(args) {
   let name, model, node, workspace;
   let chat = false;
   let noOpen = false;
+  let noFollow = false;
   let clone; // undefined = no clone; true = current repo; string = explicit remote
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--") { rest.push(...args.slice(i)); break; }
     if (a === "--chat") { chat = true; continue; }
     if (a === "--no-open") { noOpen = true; continue; }
+    if (a === "--no-follow") { noFollow = true; continue; }
     if (a === "--name" && args[i + 1] !== undefined) { name = args[++i]; continue; }
     if (a.startsWith("--name=")) { name = a.slice("--name=".length); continue; }
     if (a === "--model" && args[i + 1] !== undefined) { model = args[++i]; continue; }
@@ -957,7 +959,7 @@ function extractRunFlags(args) {
     if (a === "--clone") { clone = looksLikeRemote(args[i + 1]) ? args[++i] : true; continue; }
     rest.push(a);
   }
-  return { name: name?.trim() || undefined, model: model?.trim() || undefined, node: node?.trim() || undefined, workspace: workspace?.trim() || undefined, chat, noOpen, clone, rest };
+  return { name: name?.trim() || undefined, model: model?.trim() || undefined, node: node?.trim() || undefined, workspace: workspace?.trim() || undefined, chat, noOpen, noFollow, clone, rest };
 }
 
 // A safe-ish workspace dir name from a remote or path (basename minus .git).
@@ -1813,11 +1815,19 @@ function governedChatAgentId(id) {
 
 async function cmdRun(args = []) {
   if (!(await ensureDeps())) process.exit(1);
-  const { name, model, node, workspace, chat, noOpen, clone, rest } = extractRunFlags(args);
+  const { name, model, node, workspace, chat, noOpen, noFollow, clone, rest } = extractRunFlags(args);
   // Bare `bivy` (empty rest) resolves to the configured default agent; an
   // explicit `bivy run <agent>` keeps that agent verbatim.
   const [agentIdArg, ...extraArgs] = rest;
   const agentId = agentIdArg || resolveDefaultAgent();
+
+  // --chat already returns immediately, so --no-follow adds nothing there; keep
+  // the two paths distinct rather than silently ignoring the flag.
+  if (chat && noFollow) {
+    console.error(c.red("--no-follow applies to native runs; a --chat session already starts in the background (use --no-open to skip opening the browser)."));
+    process.exit(1);
+    return;
+  }
 
   if (chat) {
     if (node) {
@@ -1923,6 +1933,9 @@ async function cmdRun(args = []) {
         "--relay-config", relayConfigPath,
         "--attach-cmd", JSON.stringify(nodeScriptArgs(attachEntry)),
         "--run", JSON.stringify(spec),
+        // The remote run-terminal is daemon-owned there too, so once it is open
+        // the relay bridge can drop and the session keeps running on the target.
+        ...(noFollow ? ["--no-follow"] : []),
       ], { cwd: repoRoot, env: process.env });
       return;
     }
@@ -1935,7 +1948,7 @@ async function cmdRun(args = []) {
     }
     const spec = { ...resolved.spec, name, model, workspace: undefined }; // workspace is the remote node's, not ours
     console.log(c.dim(`Starting on ${c.cyan(node)} (${target.url})…`));
-    await run(nodeBin, [...nodeScriptArgs(attachEntry), "--url", target.url, ...(target.token ? ["--token", target.token] : []), "--run", JSON.stringify(spec)], {
+    await run(nodeBin, [...nodeScriptArgs(attachEntry), "--url", target.url, ...(target.token ? ["--token", target.token] : []), "--run", JSON.stringify(spec), ...(noFollow ? ["--no-follow"] : [])], {
       cwd: repoRoot,
       env: process.env,
     });
@@ -1961,7 +1974,7 @@ async function cmdRun(args = []) {
   try { token = await localDeviceToken(config); }
   catch (error) { console.error(c.red(error?.message || String(error))); process.exit(1); return; }
 
-  process.exit(await run(nodeBin, [...nodeScriptArgs(attachEntry), "--url", url(config), "--token", token, "--run", JSON.stringify(spec)], {
+  process.exit(await run(nodeBin, [...nodeScriptArgs(attachEntry), "--url", url(config), "--token", token, "--run", JSON.stringify(spec), ...(noFollow ? ["--no-follow"] : [])], {
     cwd: repoRoot,
     env: startEnv(config),
   }));
@@ -4769,10 +4782,11 @@ async function main() {
       // args (including its own --help) pass straight through to it — e.g.
       // 'bivy run claude --help' must show Claude's help, not bivy's.
       if (args[0] === "-h" || args[0] === "--help") {
-        console.log(`Usage: bivy run <agent> [--chat [--no-open]] [--name <label>] [--model <model>] [--node <name>] [--clone [remote]] [--workspace <dir>] | -- <command>
+        console.log(`Usage: bivy run <agent> [--chat [--no-open] | --no-follow] [--name <label>] [--model <model>] [--node <name>] [--clone [remote]] [--workspace <dir>] | -- <command>
 
 Run a native agent (real CLI/TUI) as a relay-visible session.
 Use --chat to start the governed session used by the app instead; --no-open prints its URL without launching a browser.
+Use --no-follow to start the native session in the background without attaching your terminal; rejoin it with 'bivy resume' or open it in the app.
 Agents: ${[...AGENT_INTEGRATIONS.keys()].join(", ")}, or -- <command> for anything else.
 An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
         break;

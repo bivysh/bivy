@@ -53,6 +53,7 @@ type Args = {
   attachCmd: string[];
   run?: string;
   attachTermId?: string;
+  noFollow: boolean;
   label: string;
 };
 
@@ -93,6 +94,7 @@ function parseArgs(argv: string[]): Args {
     attachCmd,
     run: get("--run"),
     attachTermId: get("--attach"),
+    noFollow: argv.includes("--no-follow"),
     label: get("--label") || "Bivy CLI (run --node)",
   };
 }
@@ -326,6 +328,7 @@ async function main(): Promise<void> {
         localUrl,
         ...(args.run ? ["--run", args.run] : []),
         ...(args.attachTermId ? ["--attach", args.attachTermId] : []),
+        ...(args.noFollow ? ["--no-follow"] : []),
       ];
       note(c.dim(`Paired ✓  starting session on ${c.cyan(args.nodeName)}\n`));
       const child = spawn(process.execPath, childArgs, { stdio: "inherit", env: process.env });
