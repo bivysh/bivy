@@ -40,8 +40,7 @@ breaking changes between versions are likely. If you run it, you own
 operating it — TLS, backups, restores, secret rotation, monitoring, and
 abuse prevention are on you. GitHub issues are community best-effort, not a
 guarantee. **Bivy Cloud** is the supported, managed alternative. See
-[self-host.md § Maturity and support](self-host.md#maturity-and-support) and
-[CLOUD.md](../CLOUD.md).
+[self-host.md § Maturity and support](self-host.md#maturity-and-support).
 
 (Bivy Core — the node + CLI running locally with no hosted account — is a
 different thing and is not what this answer is about; that's the normal,
