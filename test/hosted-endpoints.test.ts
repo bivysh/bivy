@@ -4,10 +4,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { hostedEndpoints, DEFAULT_HOSTED_DOMAIN } from "../src/hosted-endpoints.mjs";
 
-// These tests lock in two Bivy Core promises (docs/open-source-cloud-plan.md
-// Phase 2): a node computes all of its hosted config WITHOUT requiring any cloud
-// env var (local-only mode never depends on Bivy Cloud), and every hosted
-// default is overridable for self-hosting.
+// These tests lock in two Bivy Core promises: a node computes all of its hosted
+// config WITHOUT requiring any cloud env var (local-only mode never depends on
+// Bivy Cloud), and every hosted default is overridable for self-hosting.
 
 test("local-only: endpoints resolve with an empty env, requiring no cloud vars", () => {
   // Pass a completely empty env — no BIVY_* / cloud variables set at all.

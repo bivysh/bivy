@@ -227,7 +227,7 @@ export class DirectTransport implements Transport {
           break;
         }
         case "session.replay": {
-          // Live-stream gap recovery (Phase 2): fetch the session.events we missed
+          // Live-stream gap recovery: fetch the session.events we missed
           // after `afterSeq`; the node returns them (or mode:"reset") and the store
           // reassembles/dedups them. Mirrors the relay transport's session.replay
           // RELAY_COMMAND.

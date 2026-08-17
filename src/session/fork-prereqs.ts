@@ -1,6 +1,6 @@
 /**
- * Fork prerequisite detection (docs/session-fork-plan.md, acceptance: "Missing
- * prerequisites on the destination node are detected and clearly communicated").
+ * Fork prerequisite detection: missing prerequisites on the destination node
+ * are detected and clearly communicated instead of failing opaquely.
  *
  * The engine reports what the destination is missing to continue the forked
  * session so the UI can guide the user instead of failing opaquely:

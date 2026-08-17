@@ -513,9 +513,9 @@ export interface RuntimeCapabilities {
   fork: boolean;
   /**
    * The runtime can EXPORT a session's transcript and IMPORT it back into a fresh
-   * session on another node, so a **same-runtime** fork (see
-   * docs/session-fork-plan.md) is full fidelity rather than seeded. Backed by
-   * `AgentRuntime.exportForFork` / `importForFork`. Absent/false means a fork
+   * session on another node, so a **same-runtime** fork is full fidelity rather
+   * than seeded. Backed by `AgentRuntime.exportForFork` / `importForFork`.
+   * Absent/false means a fork
    * that targets this runtime always falls back to a seeded continuation prompt.
    * Optional; absent = false.
    */
@@ -523,8 +523,8 @@ export interface RuntimeCapabilities {
   /**
    * The runtime can materialise a **cross-runtime** fork's full conversation as
    * real prior turns in its OWN session store — a "true fork" (fidelity
-   * "replayed", see docs/session-fork-plan.md) — so a fork that changes agent
-   * opens on an actual copy of the transcript instead of a seeded summary prompt.
+   * "replayed") — so a fork that changes agent opens on an actual copy of the
+   * transcript instead of a seeded summary prompt.
    * Backed by `AgentRuntime.importHistoryForFork`, which consumes the portable
    * `ForkHistoryMessage[]` any runtime can produce (`buildForkHistory`), NOT a
    * runtime-owned native payload — that is what makes it work across runtimes
@@ -712,7 +712,7 @@ export interface AgentRuntime {
   /**
    * Export a session's transcript as an opaque, runtime-owned payload so a
    * **same-runtime** fork can be reconstructed with full fidelity on another
-   * node (see docs/session-fork-plan.md). The payload is understood only by this
+   * node. The payload is understood only by this
    * runtime's `importForFork`; the fork engine treats it as a black box and, for
    * a cross-runtime fork, ignores it in favour of a seeded prompt. `sessionFile`
    * is the resume ref the node holds (a path for pi, a session id for Claude

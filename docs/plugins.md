@@ -264,8 +264,8 @@ deployments.
 An invalid or incompatible plugin is omitted from the agent catalog and does
 not prevent other integration packages from starting. Installation fails when the current
 Bivy version does not satisfy a declared `requires.bivy` range. Manifests that
-omit the range remain compatible for Phase 1 backwards compatibility, while
-`doctor` reports the missing pin as a warning.
+omit the range still install, and `doctor` reports the missing pin as a
+warning.
 
 ## Trust and protection
 

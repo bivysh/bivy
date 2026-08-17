@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-// Phase 5c (part 2): the Models-screen preset editor writes credentials.config.json
+// The Models-screen preset editor writes credentials.config.json
 // — set the active preset and map a provider→label within a preset — while
 // preserving other config keys (e.g. `ingest`). The read side is `getCredentialPresets`.
 

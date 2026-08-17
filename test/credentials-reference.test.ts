@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-// Phase 4: a reference credential (op:// / env://) is a pointer resolved per-node
+// A reference credential (op:// / env://) is a pointer resolved per-node
 // at read time via the secret vault — the secret never enters the credential
 // vault. Exercised end-to-end with an env:// pointer (op:// needs the `op` CLI).
 

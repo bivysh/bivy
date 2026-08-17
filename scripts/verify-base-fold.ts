@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// Dry-run gate for the slice-2-tail base fold (docs/dramatic-simplification-plan.md).
+// Dry-run gate for the base-transcript fold.
 // Reads a node's REAL on-disk data read-only and asserts, per session, that folding
 // the legacy base transcript into the event log is behaviour-preserving:
 //

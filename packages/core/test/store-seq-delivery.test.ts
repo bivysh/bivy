@@ -46,7 +46,7 @@ function texts(store: SessionStore): string[] {
   return store.getState().activeSession.transcript.filter((e) => e.role === "assistant" && e.text).map((e) => e.text!);
 }
 
-describe("store sequenced live delivery (Phase 2)", () => {
+describe("store sequenced live delivery", () => {
   it("applies contiguous sequenced events in order", () => {
     const { store, replays } = focused(0);
     for (const e of [...seg(1, "A"), ...seg(3, "B")]) store.apply(e as never);

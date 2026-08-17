@@ -123,7 +123,7 @@ describe("SessionStore queued follow-ups", () => {
     expect(store.getFollowups("s1")[0]!.text).toBe("one");
   });
 
-  it("three follow-ups can be reordered and drain in the displayed order (acceptance: reorder + delivery order)", () => {
+  it("three follow-ups can be reordered and drain in the displayed order", () => {
     const store = new SessionStore();
     store.enqueueFollowup("s1", { id: "f1", text: "one" }, 1000);
     store.enqueueFollowup("s1", { id: "f2", text: "two" }, 1001);
@@ -204,7 +204,7 @@ describe("SessionStore queued follow-ups", () => {
     expect(result).toEqual({ ok: false, reason: "not_found" });
   });
 
-  it("removing a queued item changes what the agent would receive (acceptance: removal)", () => {
+  it("removing a queued item changes what the agent would receive", () => {
     const store = new SessionStore();
     store.enqueueFollowup("s1", { id: "f1", text: "one" }, 1000);
     store.enqueueFollowup("s1", { id: "f2", text: "two" }, 1001);
@@ -220,7 +220,7 @@ describe("SessionStore queued follow-ups", () => {
     expect(store.getFollowups("s1")).toHaveLength(1);
   });
 
-  it("confirming delivery drops the item, and a duplicate ack for the same id is a safe no-op (acceptance: duplicate suppression)", () => {
+  it("confirming delivery drops the item, and a duplicate ack for the same id is a safe no-op", () => {
     const store = new SessionStore();
     store.enqueueFollowup("s1", { id: "f1", text: "one" }, 1000);
     store.markFollowupSending("s1", "f1", 1001);
@@ -232,7 +232,7 @@ describe("SessionStore queued follow-ups", () => {
     expect(store.getFollowups("s1")).toEqual([]);
   });
 
-  it("reverts an unconfirmed send back to the FRONT of the queue on reconnect, preserving order (acceptance: reconnect)", () => {
+  it("reverts an unconfirmed send back to the FRONT of the queue on reconnect, preserving order", () => {
     const store = new SessionStore();
     store.enqueueFollowup("s1", { id: "f1", text: "one" }, 1000);
     store.enqueueFollowup("s1", { id: "f2", text: "two" }, 1001);

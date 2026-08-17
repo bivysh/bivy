@@ -4,9 +4,9 @@ import { readFile } from "node:fs/promises";
 
 const read = (rel: string) => readFile(new URL(rel, import.meta.url), "utf8");
 
-// docs/ephemeral-lifecycle-review.md P0: a device-launched Hetzner server has
-// no independent billing cutoff (guest shutdown powers it off, not deletes
-// it). launchEphemeralMachine already hard-refuses this at the API layer —
+// A device-launched Hetzner server has no independent billing cutoff (guest
+// shutdown powers it off, not deletes it). launchEphemeralMachine already
+// hard-refuses this at the API layer —
 // these tests lock in that the onboarding UI says so up front, instead of
 // only surfacing the refusal as a generic error after connect → pick → send.
 test("the Hetzner catalog entry is flagged hostedOnly and its blurb says so", async () => {

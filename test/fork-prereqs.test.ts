@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { evaluateForkPrereqs, blockingForkPrereqs, missingForkPrereqs } from "../src/session/fork-prereqs.js";
 
 // Fork prerequisite detection: the agent is a hard blocker; model + repo are
-// soft (surfaced but non-blocking). See docs/session-fork-plan.md.
+// soft (surfaced but non-blocking).
 
 let passed = 0;
 function test(name: string, fn: () => void) {

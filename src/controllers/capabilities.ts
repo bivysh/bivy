@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// Machine capability inventory controller (platform modularization Phase 2,
-// alongside controllers/workspaces.ts, controllers/models.ts). Assembles the
-// bounded, non-sensitive MachineCapabilities snapshot from Bivy's existing
+// Machine capability inventory controller (alongside controllers/workspaces.ts,
+// controllers/models.ts). Assembles the bounded, non-sensitive
+// MachineCapabilities snapshot from Bivy's existing
 // canonical stores — server.ts adapts the real agent registry, credential
 // vault, local-model registry, plugin store, and saved-workspace list into
 // the plain fact shapes below — plus two short, cached, timeout-protected
 // probes for Docker and GPU. This is capability discovery, not deep scanning:
 // no file enumeration, no process command lines, no secrets, no active
-// network probing of local model endpoints (a separate PR owns that).
+// network probing of local model endpoints.
 //
 // Imports nothing from server.ts (boundary enforced).
 import os from "node:os";

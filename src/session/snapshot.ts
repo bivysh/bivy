@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// Node-independent, encrypted SESSION SNAPSHOT (Gap B in docs/ephemeral-sessions.md).
+// Node-independent, encrypted SESSION SNAPSHOT (docs/ephemeral-sessions.md).
 //
 // Warm replication (replicator.ts) ships a session's state node→node so a live
 // standby can take over — but that copy evaporates if every node goes away, which

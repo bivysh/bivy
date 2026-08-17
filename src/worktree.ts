@@ -16,7 +16,7 @@ const exec = promisify(execFile);
  * agent's changes are isolated and reviewable as a diff/PR rather than landing on
  * your working copy. This is OPTIONAL for manual sessions (you usually want the
  * agent in your current checkout) and REQUIRED for GitHub-issue pickup (each issue
- * gets its own branch → PR). See docs/product-definition.md.
+ * gets its own branch → PR).
  *
  * Pure-ish git wrapper; no daemon state. Unit-tested in test/worktree.test.ts.
  */

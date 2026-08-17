@@ -73,7 +73,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  * Refuse to boot in production with insecure or data-losing defaults. Catching
  * these at startup (instead of silently running with a dev relay secret or an
  * in-memory store that drops every account on restart) is a hard requirement
- * for going live. See docs/staging-ops.md.
+ * for going live.
  */
 function assertProductionConfig() {
   if (process.env.NODE_ENV !== "production") return;
@@ -324,9 +324,9 @@ setInterval(pruneExpiredAuthTokens, 60 * 60_000).unref();
 // must stop new spend without disabling deletion of resources already billing.
 // Continuous convergence: this now runs on a short interval (default 60s, was
 // 5 minutes) so a create that never joins or a runner past TTL is observed and
-// destroyed promptly instead of waiting out a long, fixed sweep window — see
-// docs/ephemeral-lifecycle-review.md P1 "tracked state is not a convergent
-// controller model". Bounded to per-account tracked machines, which is small.
+// destroyed promptly instead of waiting out a long, fixed sweep window —
+// tracked state only converges with reality if something re-checks it
+// continuously. Bounded to per-account tracked machines, which is small.
 const HOSTED_MACHINE_RECONCILE_MS = Math.max(60_000, Number(process.env.HOSTED_MACHINE_RECONCILE_MS) || 60_000);
 async function reconcileHostedMachineFleet() {
   try {
@@ -345,9 +345,9 @@ async function reconcileHostedMachineFleet() {
 void reconcileHostedMachineFleet();
 setInterval(reconcileHostedMachineFleet, HOSTED_MACHINE_RECONCILE_MS).unref();
 
-// Discover-based orphan recovery (docs/ephemeral-lifecycle-review.md P1
-// "deletion needs discovery, not only a remembered id"): the one failure the
-// fast convergence sweep above can't catch is tracking itself being lost, so
+// Discover-based orphan recovery — deletion needs discovery, not only a
+// remembered id. The one failure the fast convergence sweep above can't catch
+// is tracking itself being lost, so
 // this asks each provider directly for everything tagged as an account's and
 // reconciles anything neither the legacy inventory nor any attempt row still
 // knows about. Runs on its own, coarser interval — `discover` is a heavier,
@@ -710,7 +710,7 @@ function asyncHandler(fn: (req: Request, res: Response, next: NextFunction) => P
 // PRIMARY VERIFIED GitHub email so a GitHub login and a magic-link login for the
 // same address land on the SAME account. Minimal scope at login (read:user,
 // user:email); repo scope is requested later, only when a repo is connected to
-// the work queue. See docs/product-definition.md and docs/DEVELOPMENT_PLAN.md C1.
+// the work queue.
 // Accept the BIVY_-prefixed names as a fallback. GitHub reserves the `GITHUB_`
 // prefix for Actions secrets, so the canonical secrets are stored as
 // BIVY_GITHUB_OAUTH_CLIENT_ID / _SECRET (see scripts/sync-github-env.sh). A
@@ -1345,7 +1345,7 @@ app.post("/node/sessions", requireNode, asyncHandler(async (req, res) => {
 }));
 
 // A node reads back its OWN session index rows, INCLUDING the node-only
-// `agentServiceAddress` routing metadata (Stage 3 of docs/agent-node-decoupling.md).
+// `agentServiceAddress` routing metadata.
 // A restarting/replacement daemon calls this on boot to adopt its still-live
 // remote sessions: for each row with an address it re-attaches to the agent
 // service hosting the child rather than losing it. Unlike the client-facing

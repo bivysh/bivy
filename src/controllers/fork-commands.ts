@@ -67,9 +67,9 @@ export function createForkCommands(deps: ForkCommandDeps): CommandEntries<ForkCo
       }
     },
     async "session.fork.export"(msg) {
-      // Source side of a session fork (docs/session-fork-plan.md): package the
-      // session's transcript + portable metadata + any uncommitted worktree
-      // changes into an E2E bundle the client carries to the destination node.
+      // Source side of a session fork: package the session's transcript +
+      // portable metadata + any uncommitted worktree changes into an E2E
+      // bundle the client carries to the destination node.
       const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
       const rec = deps.resolveSession(msg.sessionId);
       if (!rec) {
@@ -90,8 +90,8 @@ export function createForkCommands(deps: ForkCommandDeps): CommandEntries<ForkCo
         // falls back to the default base downstream.
         if (msg.crossNode === true) await deps.pushForkSourceBranch(rec);
         // Refresh the account model-auth vault so the destination node can pull
-        // this session's model credentials during import (fork credential-move,
-        // docs/session-fork-plan.md). Best-effort: local-only nodes just skip it.
+        // this session's model credentials during import (fork credential-move).
+        // Best-effort: local-only nodes just skip it.
         await deps.pushModelAuthToControlPlane().catch(() => {});
         // When the client has already picked a target agent, pass it so the
         // bundle omits the native payload for a cross-runtime fork (it could
@@ -144,9 +144,9 @@ export function createForkCommands(deps: ForkCommandDeps): CommandEntries<ForkCo
       }
     },
     async "session.fork.local"(msg) {
-      // Fast path (docs/session-fork-plan.md): fork a session on the SAME node
-      // and SAME runtime WITHOUT round-tripping the transcript out to the client
-      // and back. We build the fork bundle in-process and stand the new session
+      // Fast path: fork a session on the SAME node and SAME runtime WITHOUT
+      // round-tripping the transcript out to the client and back. We build the
+      // fork bundle in-process and stand the new session
       // up locally (via the shared standUpFork), so a large transcript never
       // leaves the node. Full fidelity by construction (same runtime → native
       // replay). The client uses this whenever the fork keeps the node and agent

@@ -5,8 +5,8 @@
 // runners — the PWA surface for the durable attempt record: phase, TTL/
 // deadline, snapshot state, and last error, plus a safe force-destroy that
 // sets desiredState "deleted" and lets the reconciler retry until the
-// provider confirms the resource is actually gone (see
-// docs/ephemeral-lifecycle-review.md).
+// provider confirms the resource is actually gone — teardown is never
+// assumed, only observed.
 import { useEffect, useState } from "react";
 import { ephemeralCatalogEntry, ephemeralLifecyclePhase, type HostedMachineSummary } from "@bivy/core";
 import { controller } from "../store/useStore.js";

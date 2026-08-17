@@ -26,8 +26,7 @@ const exec = promisify(execFile);
  *
  * Explicit routing: a node only picks up issues that carry its `label`
  * (e.g. `bivy` or `bivy/<node>`). A claim label added on pickup prevents
- * double-processing across restarts/nodes. See docs/product-definition.md (work
- * queue) and docs/DEVELOPMENT_PLAN.md (Phase E). This direct poller is now the
+ * double-processing across restarts/nodes. This direct poller is the
  * local/self-hosted fallback; the hosted default is GitHub webhook push into the
  * control-plane work queue, with relay push hints to connected nodes.
  *

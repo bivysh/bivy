@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// Single append-only per-session event log (docs/dramatic-simplification-plan.md,
-// slice 2). A session's transcript detail used to live in THREE whole-file JSON
-// stores — `intermediate-messages/<id>.json`, `tool-activities/<id>.json`, and the
+// Single append-only per-session event log. A session's transcript detail used
+// to live in THREE whole-file JSON stores — `intermediate-messages/<id>.json`,
+// `tool-activities/<id>.json`, and the
 // base transcript `transcripts/<id>.json` — each rewritten in full on every change
 // and each able to drift from the others. This collapses all of them into one
 // append-only JSONL log (`event-log/<id>.jsonl`): writes append, and history is

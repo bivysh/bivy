@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-// Phase 5: the record-addressed store CRUD + labeled daemon API — multiple
+// The record-addressed store CRUD + labeled daemon API — multiple
 // credentials per provider (work / personal / per-project). The single-credential
 // path is the label="default" special case, and must stay unchanged.
 

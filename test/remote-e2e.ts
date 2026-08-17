@@ -9,11 +9,11 @@ import { PairingStore } from "../src/device-registry.js";
 import { generatePairingKeypair, pairingProof, deriveWrapKey, unwrapRoomKey } from "../src/pairing-crypto.js";
 
 /**
- * Full Step-B remote-control path test:
+ * Full remote-control path test:
  *   control plane + relay + real RelayConnector (node) + simulated phone client.
  *
  * The phone reaches its node through the X25519 pairing handshake (the legacy
- * static-e2eKey room-key path was retired — see slice 4). Node↔browser crypto
+ * static-e2eKey room-key path was retired). Node↔browser crypto
  * interop is covered by test/crypto-conformance.test.ts; the pairing handshake +
  * key rotation by test/remote-pairing-e2e.ts. This test focuses on the wider
  * remote-control path that sits ON TOP of a paired session:

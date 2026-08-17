@@ -2,10 +2,9 @@
 // Copyright (c) 2026 Petter André Sjulstad
 //
 // The live-session record — the in-memory shape the daemon tracks per open
-// session. Moved out of server.ts as the first step of the SessionEngine
-// decomposition. Kept deliberately as a plain
-// mutable data shape (Option 1) — the engine that will own the live-session Map
-// imports this type; fields are still read/written in place by server.ts today.
+// session. Kept deliberately as a plain mutable data shape — the SessionEngine
+// that owns the live-session Map imports this type; fields are still
+// read/written in place by server.ts.
 import type { RuntimeSession, UsageSnapshot } from "../runtime/index.js";
 import type { SandboxTier } from "../harness/sandbox.js";
 import type { ApprovalMode } from "../guard.js";

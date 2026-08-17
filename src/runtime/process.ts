@@ -86,7 +86,7 @@ export interface ProcessRuntimeOptions {
    */
   credentials?: AgentCredentialStore;
   /**
-   * Universal Agent Harness — Phase 4. When set, the agent's stdout is treated as
+   * Structured mode. When set, the agent's stdout is treated as
    * a structured stream (newline-delimited): each line is fed to a fresh
    * CliParser, whose normalized events (streaming assistant text, tool cards, a
    * proper transcript) are emitted instead of the opaque raw-stdout blob. Absent
@@ -532,7 +532,7 @@ class ProcessSession implements RuntimeSession {
     let stderr = "";
     let startedMessage = false;
 
-    // Phase 4 — structured mode: feed each complete stdout line to a CliParser
+    // Structured mode: feed each complete stdout line to a CliParser
     // and emit its normalized events (streaming text, tool cards, transcript)
     // instead of the raw-stdout blob.
     const parser: CliParser | undefined = this.runtimeOptions.parserFactory?.();

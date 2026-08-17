@@ -9,7 +9,7 @@ import {
 } from "./transcript-normal.js";
 
 /**
- * Session **fork** engine (see docs/session-fork-plan.md).
+ * Session **fork** engine.
  *
  * A fork continues an existing session in a new one, independently choosing the
  * node, agent, and/or model. This module is the runtime-agnostic core, split

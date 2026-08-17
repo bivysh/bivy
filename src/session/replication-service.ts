@@ -64,7 +64,7 @@ export class ReplicationService {
   private standby: StandbyApplier;
   // A single supervised connection to the current standby: it reconnects with
   // backoff on drop, so replication survives relay blips / standby restarts
-  // instead of silently pausing until the next turn (follow-up #2).
+  // instead of silently pausing until the next turn.
   private supervisor?: ReconnectingConnection<SiblingClient>;
   private supervisorStandbyId?: string;
   private declared = new Set<string>();

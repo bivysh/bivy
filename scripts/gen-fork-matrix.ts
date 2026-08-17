@@ -2,14 +2,14 @@
 // Copyright (c) 2026 Petter André Sjulstad
 //
 // Generate docs/fork-matrix.md — the (source -> destination) fork-fidelity
-// conformance matrix (phase 1E). Run: `pnpm run gen:fork-matrix`.
+// conformance matrix. Run: `pnpm run gen:fork-matrix`.
 //
 // The capability table below mirrors the fork flags each runtime actually
 // declares (grep `forkTransport` / `forkHistoryImport` under src/agents and the
 // ProtocolRuntime writeHistory hook). The tier logic itself is the shared,
 // unit-tested src/session/fork-matrix.ts, which a test pins to the production
 // resolveForkFidelity — so this file only supplies the inputs, never the rules.
-// TODO(1E follow-up): introspect the live runtime registry instead of this table
+// TODO: introspect the live runtime registry instead of this table
 // so a new agent's tiers appear automatically.
 
 import { writeFileSync } from "node:fs";

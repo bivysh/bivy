@@ -33,8 +33,8 @@ import { type ApiKeyCredential, type OAuthCredential, type StoredCredential } fr
 import type { Sealer } from "./ports.js";
 
 // Node crypto adapter for the at-rest vault. e2e.ts (AES-256-GCM seal/open) is a
-// repo crypto leaf; Layer B (this node service) may depend on it. Injecting a
-// Sealer keeps the door open for a browser/alt-crypto build (pilot phase 7).
+// repo crypto leaf; this node service may depend on it. Injecting a Sealer
+// keeps the door open for a browser/alt-crypto build.
 const nodeSealer: Sealer = { seal, open };
 
 // The canonical credential shapes now live in the pure domain layer
@@ -344,7 +344,7 @@ export class BivyCredentialStore {
    * Every stored credential, keyed by provider id — the cross-node snapshot.
    * The wire stays provider-keyed (v2 shape), so only `provider:default` records
    * are projected; the store-owned `updatedAt` is re-attached to the credential so
-   * a peer's merge can order it. (Non-default labels are not yet synced — phase 6.)
+   * a peer's merge can order it. (Non-default labels are not yet synced.)
    */
   async exportAll(): Promise<Record<string, StoredCredential>> {
     return this.projectDefaults(() => true);

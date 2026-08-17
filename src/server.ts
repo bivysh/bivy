@@ -297,7 +297,7 @@ const credsDir = path.join(appDir, "credentials");
 const sessionsDir = path.join(piDir, "sessions");
 const intermediateMessagesDir = path.join(appDir, "intermediate-messages");
 const toolActivitiesDir = path.join(appDir, "tool-activities");
-// Slice 2 (docs/dramatic-simplification-plan.md): one append-only per-session log.
+// One append-only per-session log.
 // It began by superseding the two overlay sidecars above; the base transcript
 // (transcripts/, below) is now folded in too, so it is the SOLE store for a
 // session's history — overlay detail (reasoning/tool) AND the base conversation.
@@ -319,11 +319,11 @@ const piModelsProjectionPath = path.join(piDir, "models.json");
 // they are projected into Pi. Loading is idempotent and remains part of boot.
 const identity = NodeIdentity.load(appDir);
 
-// The local-model provider domain lives in its own controller (platform
-// modularization Phase 2). server.ts wires it with the node dirs, broadcast,
-// and the session-refresh / control-plane-sync hooks (both hoisted async fns),
-// then destructures the operations it calls elsewhere. All injected dirs are
-// defined above; initLocalModelRegistry runs once at boot, exactly as before.
+// The local-model provider domain lives in its own controller. server.ts wires
+// it with the node dirs, broadcast, and the session-refresh / control-plane-sync
+// hooks (both hoisted async fns), then destructures the operations it calls
+// elsewhere. All injected dirs are defined above; initLocalModelRegistry runs
+// once at boot.
 const modelController = createModelController({
   localModelsDir,
   piDir,
@@ -352,10 +352,10 @@ void modelController.initLocalModelRegistry();
 // below), falling back to the built-in DEFAULT_RULESET when none is active.
 const rulesetsDir = appDir;
 
-// The ruleset operation domain lives in its own controller (platform
-// modularization Phase 2). server.ts wires it with the node's rulesets dir and
-// broadcast, then keeps the bare helper names so the RELAY_COMMANDS handlers,
-// the REST /api/rulesets routes, and the queue run-policy below are unchanged.
+// The ruleset operation domain lives in its own controller. server.ts wires it
+// with the node's rulesets dir and broadcast, then keeps the bare helper names
+// so the RELAY_COMMANDS handlers, the REST /api/rulesets routes, and the queue
+// run-policy below are unchanged.
 // `broadcast` is a hoisted function declaration, so passing it here (before its
 // definition) is safe; it is only invoked at request time.
 const { rulesetInfos, broadcastRulesets, persistRulesetSave, persistRulesetRemove, activeQueueRuleset } =
@@ -462,7 +462,7 @@ function publishBootstrapSecret() {
 
 const approvals = new ApprovalManager();
 
-// Node audit trail (moat #1): one append-only, redaction-aware record of the
+// Node audit trail: one append-only, redaction-aware record of the
 // governance events Bivy already intercepts — tool-call decisions today,
 // network/approval events next — attributed per session + agent, queryable via
 // `bivy audit`. Distinct from the per-session transcript (session/event-log.ts).
@@ -999,18 +999,18 @@ type CreateSessionOptions = {
 // The live-session registry (openSessions) + resolveSession/pause/resume now
 // live in the SessionEngine (src/session/engine.ts); it is instantiated below,
 // after `active` is declared, and its members are destructured back so every
-// call site is unchanged (Phase 2, step 2b).
-// Stage 2 (docs/agent-node-decoupling.md): sessionId -> agent-service address for
-// live REMOTE sessions the agent service keeps running across an eviction/
+// call site is unchanged.
+// sessionId -> agent-service address for live REMOTE sessions the agent
+// service keeps running across an eviction/
 // disconnect. Lets an openSessions miss re-attach to the still-live session
 // instead of re-opening a fresh copy from disk — making openSessions a cache.
-// Node-local primary; Stage 3 layers a control-plane-backed registry UNDER it
+// Node-local primary; a control-plane-backed registry is layered UNDER it
 // (see startRelayIfConfigured) so a lookup that misses this daemon's own memory
 // still resolves from durable state after a restart. Empty (and inert) whenever
 // the remote flag is off.
 const inMemorySessionLocations = new InMemorySessionLocationRegistry();
-// The registry the daemon reads/writes. Starts as the bare in-memory map (today's
-// behavior, and the only thing used when the remote flag is off); Stage 3 swaps in
+// The registry the daemon reads/writes. Starts as the bare in-memory map (the
+// only thing used when the remote flag is off); startup swaps in
 // a LayeredSessionLocationRegistry(inMemory, controlPlane) once the relay/control-
 // plane target is known, so re-attach survives a daemon restart. `record`/`forget`
 // still land on the in-memory layer; `lookup` falls through to the control plane.
@@ -1020,8 +1020,8 @@ let sessionLocations: SessionLocationRegistry = inMemorySessionLocations;
 // node-scoped enumeration (`listNode`), which the SessionLocationRegistry
 // interface doesn't expose.
 let cpLocationRegistry: ControlPlaneSessionLocationRegistry | undefined;
-// Stage 2 slice 4: sessionId -> its live TUI terminal id, tracked OUTSIDE the
-// openSessions record so it survives a detach/re-attach (slice 3). The PTY keeps
+// sessionId -> its live TUI terminal id, tracked OUTSIDE the
+// openSessions record so it survives a detach/re-attach. The PTY keeps
 // running when a remote session is evicted, so a re-attached session recovers its
 // terminal link from here instead of losing it. Node-local (PTYs are node-local),
 // same registry primitive as sessionLocations.
@@ -1497,9 +1497,9 @@ function writeSettings(settings: Record<string, unknown>) {
   canonicalNodeConfig = next;
 }
 
-// The saved-workspace list domain lives in its own controller (platform
-// modularization Phase 2). server.ts wires it with the settings accessors and
-// metadata store, then keeps the bare helper names so the workspaces.list
+// The saved-workspace list domain lives in its own controller. server.ts wires
+// it with the settings accessors and metadata store, then keeps the bare helper
+// names so the workspaces.list
 // handler and the REST /api/workspaces routes are unchanged. readSettings /
 // writeSettings are hoisted function declarations and metadata is defined above,
 // so instantiating here is safe.
@@ -1513,9 +1513,9 @@ const {
   removeSavedWorkspace,
 } = createWorkspaceController({ readSettings, writeSettings, metadata });
 
-// The Machine capability inventory lives in its own controller (platform
-// modularization Phase 2, alongside the workspace/model/ruleset controllers
-// above). server.ts adapts the node's existing canonical stores — the agent
+// The Machine capability inventory lives in its own controller (alongside the
+// workspace/model/ruleset controllers above). server.ts adapts the node's
+// existing canonical stores — the agent
 // registry, credential vault, local-model registry, plugin store, and saved
 // workspace list — into the controller's plain fact shapes; the controller
 // itself owns the bounded Docker/GPU probing and result caching.
@@ -1797,9 +1797,9 @@ function broadcastCoalesced(payload: unknown) {
   relay?.sendEvent(payload);
 }
 
-// Per-session live-stream sequencing + replay buffer (docs/session-reliability-
-// plan.md, Phase 2). Every fanned-out `session.event` is stamped with a monotonic
-// per-session `seq` and retained in a bounded ring, so a client that misses
+// Per-session live-stream sequencing + replay buffer. Every fanned-out
+// `session.event` is stamped with a monotonic per-session `seq` and retained
+// in a bounded ring, so a client that misses
 // frames on a node→relay uplink blip can detect the gap (contiguous seq) and ask
 // to replay the tail instead of silently losing stream output. `sessionStreamEpoch`
 // changes when the daemon restarts, so a client re-baselines its cursor against a
@@ -1848,8 +1848,8 @@ function broadcastTuiState(sessionId: string, active: boolean) {
 }
 
 // Terminals opened by relay clients (phone/web over the relay). Output is emitted
-// via the relay tagged with termId; clients filter by it. (Per-client unicast is
-// a hardening step before remote GA — see docs/DEVELOPMENT_PLAN.md B4.)
+// via the relay tagged with termId; clients filter by it. (Per-client unicast
+// is a known future hardening step.)
 const relayTerminals = new Set<string>();
 
 
@@ -1884,7 +1884,7 @@ function eventLogPath(sessionId: string): string {
   return path.join(eventLogDir, `${encodeURIComponent(sessionId)}.jsonl`);
 }
 
-// The append-only per-session log (slice 2) — now the SOLE store for a session's
+// The append-only per-session log — now the SOLE store for a session's
 // whole history: overlay detail (reasoning + tool activity) AND the base transcript,
 // the latter as bounded delta/reset records. Written on every event; read via
 // eventLog.deriveHistory. `redactSecrets` scrubs credentials at the single flush
@@ -2060,7 +2060,7 @@ retireTranscriptsDir();
 
 // Handle a message arriving from a remote client via the relay. Mirrors the
 // local HTTP API surface so remote control matches local control.
-// --- Unified command dispatch (docs/dramatic-simplification-plan.md, slice 1) --
+// --- Unified command dispatch ------------------------------------------------
 // One home per operation. `handleRelayMessage` looks a kind up here first; kinds
 // not yet migrated fall through to the inline switch below. `reply()` answers the
 // calling client; `broadcast()` reaches every client (local sockets + relay).
@@ -3843,7 +3843,7 @@ function startModelAuthWatcher() {
 // --- Cross-node session index (advertise metadata to the control plane) -------
 // The control plane shows one merged session list across the account's nodes. We
 // push METADATA ONLY; the title is sealed with the room key so the control plane
-// stores ciphertext (clients decrypt). See docs/product-definition.md (option b).
+// stores ciphertext (clients decrypt).
 let sessionAdvertiseTarget: { controlPlaneUrl: string; enrollmentToken: string } | undefined;
 let advertiseTimer: ReturnType<typeof setTimeout> | undefined;
 let advertiseResyncTimer: ReturnType<typeof setInterval> | undefined;
@@ -3952,12 +3952,12 @@ async function sendNotificationHint(input: { kind: string; sessionId?: string; t
 }
 
 /** The agent-service address hosting a live session, when it runs on a remote
- *  runtime (Stage 2 re-attach routing, docs/agent-node-decoupling.md); undefined
- *  for in-process sessions. Best-effort — never blocks advertising. */
+ *  runtime (re-attach routing); undefined for in-process sessions.
+ *  Best-effort — never blocks advertising. */
 function sessionAgentServiceAddress(record?: SessionRecord): string | undefined {
   if (!record) return undefined;
   // Prefer the address of the service this session is ACTUALLY bound to (set at
-  // create/attach time, Stage 3), so a session adopted from another service routes
+  // create/attach time), so a session adopted from another service routes
   // to its real host rather than the node default. Fall back to the default
   // runtime's address for sessions created before the field existed.
   if (record.agentServiceAddress) return record.agentServiceAddress;
@@ -4007,9 +4007,9 @@ async function fetchNodeSessionRows(): Promise<NodeSessionRow[]> {
 }
 
 /**
- * Stage 3 startup adoption (docs/agent-node-decoupling.md). Before the first
- * advert, re-attach to every session this node still owns on an agent service, so
- * a daemon RESTART re-binds still-live sessions instead of losing them (the
+ * Startup adoption. Before the first advert, re-attach to every session this
+ * node still owns on an agent service, so a daemon RESTART re-binds still-live
+ * sessions instead of losing them (the
  * in-memory sessionLocations map died with the previous process). Runs only when
  * the remote flag is on. Per the failure policy: a definitively-gone session is
  * forgotten; an unreachable service keeps its mapping for a later retry.
@@ -4494,8 +4494,8 @@ async function reportIssueOutcome(
     await commentIssueOnce(cfg, issue.number, `🤖 ${record.prUrl}`, `pr:${record.prUrl}`).catch(() => {});
     // Clean up the claim label now that the PR itself is the live "in progress"
     // signal on the issue (linked in the timeline + the comment above) — keeping
-    // `bivy:in-progress` around after a PR exists is stale and, per the issue's
-    // acceptance criteria, label state should stay consistent through the
+    // `bivy:in-progress` around after a PR exists is stale; label state should
+    // stay consistent through the
     // pickup → in-progress → PR lifecycle rather than accumulate.
     await removeLabel(cfg, issue.number, cfg.claimLabel).catch(() => {});
     return;
@@ -5722,8 +5722,8 @@ function recordToolCallAudit(params: { sessionId: string; toolName: string }, ou
   });
 }
 
-// --- Audit hooks for the other two governance decision classes (moat #1, slice
-// 2): egress (network) attempts and human approval requests/decisions. Mirrors
+// --- Audit hooks for the other two governance decision classes:
+// egress (network) attempts and human approval requests/decisions. Mirrors
 // recordToolCallAudit above — observe-and-record only. Records bounded METADATA
 // (host:port, tool name, approved boolean, requestId, session, agent) and NEVER
 // a payload: no request/response bodies, tunneled bytes, or tool arguments.
@@ -5773,7 +5773,7 @@ function recordApprovalDecisionAudit(request: ApprovalRequest, approved: boolean
   });
 }
 
-// --- Audit hooks (moat #1, slice 3): file changes and cost. Both are recorded
+// --- Audit hooks: file changes and cost. Both are recorded
 // from agent-agnostic seams the node already computes — the per-turn checkpoint
 // diff and the usage refresh — so no per-runtime tool-argument parsing is
 // needed. Content is NEVER recorded: file.change carries the path + git numstat
@@ -5870,7 +5870,7 @@ function recordMcpEvent(sessionId: string, event: unknown): void {
 // Resolve which session a request targets. Clients may pass an explicit
 // `sessionId` (per-client focus / background sessions); when omitted we fall back
 // to the node's last-focused `active` session for backward compatibility. This is
-// the server side of "active is per-client" (DEVELOPMENT_PLAN D1).
+// the server side of "active is per-client".
 // resolveSession + pauseSession + resumeSession moved into the SessionEngine
 // (src/session/engine.ts, step 2b); destructured from createSessionEngine above.
 
@@ -8105,14 +8105,14 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
     broadcast({ type: "node.egress", event });
     recordNetAttempt(event, record.id);
   });
-  // Stage 2 slice 4: a re-attached session recovers its still-running TUI
+  // A re-attached session recovers its still-running TUI
   // terminal link (the PTY survives a detach) from the session→terminal registry.
   if (attached) {
     const link = await sessionTerminals.lookup(sessionId).catch(() => undefined);
     if (link && terminals.has(link.termId)) record.tuiTermId = link.termId;
     else if (link) void sessionTerminals.forget(sessionId).catch(() => {});
   }
-  // Universal Agent Harness (Phase 2b) — for CLI agents that can't govern their
+  // Universal Agent Harness — for CLI agents that can't govern their
   // own MCP tools (no native tool interception), rewrite their on-disk MCP
   // config so servers launch through `bivy mcp-proxy`; restored on close. Opt-in
   // via BIVY_MCP_PROXY. Pi/Claude-SDK govern MCP natively, so they're skipped.
@@ -8717,7 +8717,7 @@ app.get("/api/git-credential", sensitiveRateLimiter, async (req, res) => {
 
 // Loopback-only bootstrap: a same-machine caller (the CLI, a direct-mode web
 // client, or the git-credential helper) mints itself a device token so it uses
-// the same auth path as remote clients (Step 0c). Rejected off-loopback.
+// the same auth path as remote clients. Rejected off-loopback.
 //
 // Loopback alone is NOT sufficient isolation on a multi-user host: every local
 // account shares 127.0.0.1, so any local user/process could otherwise mint a

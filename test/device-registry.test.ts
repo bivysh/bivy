@@ -104,7 +104,7 @@ await test("state persists across reload (keypair, room key, devices)", () => {
 });
 
 await test("a fresh store generates a random room key (no static seed)", () => {
-  // The legacy relay.json e2eKey seed was retired (slice 4): a brand-new store
+  // The legacy relay.json e2eKey seed was retired: a brand-new store
   // always mints a random room key; devices receive it over the X25519 handshake.
   const a = PairingStore.load(tmpDir()).roomKey();
   const b = PairingStore.load(tmpDir()).roomKey();

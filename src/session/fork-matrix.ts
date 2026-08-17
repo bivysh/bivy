@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// Fork-fidelity CONFORMANCE matrix (phase 1E). The exact fidelity a fork of one
+// Fork-fidelity CONFORMANCE matrix. The exact fidelity a fork of one
 // agent into another achieves is determined by two capability flags — this
 // derives, for every (source -> destination) pair, the tier the fork will land
 // at, so the runtime support matrix can be GENERATED and regression-tested

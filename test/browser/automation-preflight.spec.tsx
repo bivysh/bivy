@@ -57,7 +57,7 @@ test("the autonomous + full-access acknowledgement checkbox only appears for tha
 });
 
 test("legacy github_ci automations are exempt from requiring encrypted instructions server-side", async () => {
-  // Regression coverage for the bug this PR's own preflight gate would
+  // Regression coverage for a bug the preflight gate itself would
   // otherwise have introduced: github_ci runs on DEFAULT_FIX_CI_PROMPT
   // (dispatchAutomationDefinition) when no ciphertext is set, so requiring
   // one would have blocked saving/editing every seeded CI automation.

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// Account-free ("solo") relay admission — client side (Gap 1 slice 2).
+// Account-free ("solo") relay admission — client side.
 //
 // A solo node/client reaches a self-hosted relay (started with
 // RELAY_ALLOW_ROOM_TOKENS=1) by presenting an unguessable `room` id plus a

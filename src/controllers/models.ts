@@ -2,8 +2,8 @@
 // Copyright (c) 2026 Petter André Sjulstad
 //
 // Local-model controller — the custom/local model-provider domain lifted out of
-// server.ts (platform modularization Phase 2). Owns the Bivy local-model
-// registry, its projection into Pi's models.json, and the save/remove flow that
+// server.ts. Owns the Bivy local-model registry, its projection into Pi's
+// models.json, and the save/remove flow that
 // stitches secret keys into the encrypted vault. server.ts wires it with the
 // node dirs + broadcast + the session-refresh / control-plane-sync hooks, then
 // destructures the operations it calls.

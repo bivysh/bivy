@@ -8,7 +8,7 @@ import net from "node:net";
 import { WebSocket } from "ws";
 
 /**
- * End-to-end test for Step 2 (relay).
+ * End-to-end test for the relay.
  *
  * Spawns the control plane + relay, enrolls a node, then connects a mock node
  * and a remote client through the relay. Verifies:

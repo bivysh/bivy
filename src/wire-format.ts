@@ -12,7 +12,7 @@
 // outside rootDir) and would be missing at runtime. Reaching across the package
 // boundary is the browser bundler's job (Vite), not the node's tsc-with-rootDir.
 //
-// The single-source guarantee is kept the way slice 4 always intended — by the
+// The single-source guarantee is kept by the
 // CONFORMANCE TEST: test/crypto-conformance.test.ts deep-equals every export here
 // against packages/core/src/wire-format.ts, so any drift fails CI. Do NOT edit a
 // value here without changing the spec (and the wire format) in lockstep.
