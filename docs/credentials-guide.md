@@ -4,9 +4,8 @@ A practical guide to model-provider credentials: multiple keys and accounts per
 provider, password-manager references, per-credential sync, and how a project
 picks which key to use.
 
-Companion docs: [key-management.md](key-management.md) (where every secret lives),
-[credential-sync.md](credential-sync.md) (the four sync classes), and the design
-notes in [credentials-service-plan.md](credentials-service-plan.md).
+Companion docs: [key-management.md](key-management.md) (where every secret lives)
+and [credential-sync.md](credential-sync.md) (the four sync classes).
 
 ---
 

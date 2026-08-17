@@ -2174,7 +2174,7 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
   // Live-stream gap recovery: replay the session.events a client missed after the
   // last seq it holds, or tell it to full-resync (mode:"reset") when the ring has
   // evicted past that point. Answers only the caller (ctx.reply); other clients
-  // have their own cursors (docs/session-reliability-plan.md, Phase 2).
+  // have their own cursors.
   "session.replay"(msg, ctx) {
     const sessionId = typeof msg.sessionId === "string" ? msg.sessionId : "";
     if (!sessionId) return;

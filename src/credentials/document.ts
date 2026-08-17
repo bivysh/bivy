@@ -12,8 +12,6 @@
 // replacing v2's one-`StoredCredential`-per-provider map. The merge rules are the
 // v2 rules (see credential-store.ts history) re-keyed to operate per record:
 // merge-never-destroy, freshest-OAuth-wins, rotation-safe, tombstone-newer-wins.
-//
-// See docs/credentials-service-plan.md §3.2 / §8.
 
 import type { StoredCredential, OAuthCredential } from "./types.js";
 import {

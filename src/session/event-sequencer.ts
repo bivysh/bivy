@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 //
 // Per-session event sequencing + a bounded replay buffer — the node side of
-// lossless live delivery (docs/session-reliability-plan.md, Phase 2).
+// lossless live delivery.
 //
 // Today the node→relay uplink (relay-client.ts sendEvent) DROPS a session event
 // whenever its socket isn't OPEN, and the relay→client hop can lose a chunked

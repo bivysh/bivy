@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { SessionStore } from "../src/index.js";
 
 /**
- * Sequenced live delivery (docs/session-reliability-plan.md, Phase 2). The node
+ * Sequenced live delivery. The node
  * stamps every `session.event` with a monotonic per-session `seq`; the store
  * reassembles the active session's stream in order, drops duplicates/replays,
  * detects a gap and asks the controller to `replay` it, and falls back to a full

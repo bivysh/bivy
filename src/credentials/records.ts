@@ -11,8 +11,6 @@
 // a pure function over records + presets that returns BOTH the chosen record and
 // a human-readable reason — silent guesses are a footgun, so ambiguity returns
 // undefined and the caller asks the user to choose.
-//
-// See docs/credentials-service-plan.md.
 
 import type { StoredCredential } from "./types.js";
 
