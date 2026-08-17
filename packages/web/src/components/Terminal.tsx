@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
@@ -1081,6 +1082,39 @@ export function TerminalOverlay({
     }
   }, [fontSize]);
 
+  // Opening/closing the touch composer changes the terminal's height (it takes a
+  // slice below the toolbar, and focusing its field raises the keyboard). Refit
+  // the grid to the new height and pin to the newest line, so the prompt/input
+  // line stays visible while you compose instead of being left scrolled out of
+  // view above the shrunken viewport. Two frames: one after this layout commit,
+  // one after the keyboard-driven visualViewport settle. Terminal focus is left
+  // alone — the composer's own field autofocuses.
+  useEffect(() => {
+    if (!touch || !showComposer) return;
+    const pin = () => {
+      const term = termRef.current;
+      const fit = fitRef.current;
+      if (!term || !fit) return;
+      try {
+        fit.fit();
+      } catch {
+        return;
+      }
+      term.scrollToBottom();
+      const id = termIdRef.current;
+      if (id && (term.cols !== lastSizeRef.current.cols || term.rows !== lastSizeRef.current.rows)) {
+        lastSizeRef.current = { cols: term.cols, rows: term.rows };
+        controller.sendTerminal({ kind: "terminal.resize", termId: id, cols: term.cols, rows: term.rows });
+      }
+    };
+    const raf = requestAnimationFrame(pin);
+    const timer = setTimeout(pin, 300);
+    return () => {
+      cancelAnimationFrame(raf);
+      clearTimeout(timer);
+    };
+  }, [showComposer, touch]);
+
   // Run the search whenever the query changes (incremental find).
   useEffect(() => {
     if (!showSearch) return;
@@ -1237,6 +1271,13 @@ export function TerminalOverlay({
       onError={(m) => controller.store.setError(m)}
     />
   );
+  // Opening flushes synchronously so the composer mounts inside this tap — its
+  // field then focuses in-gesture (see TerminalComposer's layout effect), which
+  // is what lets iOS raise the keyboard on open rather than just parking a caret.
+  const toggleComposer = () => {
+    if (showComposer) setShowComposer(false);
+    else flushSync(() => setShowComposer(true));
+  };
 
   // Contextual header controls, kept in the top row for both the touch and
   // desktop headers when a run-terminal is bound: the Attach ▾ menu (switch
@@ -1493,7 +1534,7 @@ export function TerminalOverlay({
         <div className="term-toolbar" role="toolbar" aria-label="Terminal toolbar">
           <button
             className={`term-tool${showComposer ? " is-active" : ""}`}
-            onClick={() => setShowComposer((v) => !v)}
+            onClick={toggleComposer}
             aria-label="Compose a command or message"
             aria-pressed={showComposer}
             title="Compose"

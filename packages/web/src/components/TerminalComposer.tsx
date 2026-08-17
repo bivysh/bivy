@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { controller, useAppState } from "../store/useStore.js";
 import { VoiceRecorder } from "./VoiceRecorder.js";
 import { WebSpeechRecorder, webSpeechSupported } from "./WebSpeechRecorder.js";
@@ -57,7 +57,11 @@ export function TerminalComposer({
   }, [state.settings.sttConfig]);
   const voiceReady = Boolean(state.settings.sttConfig?.providers.some((p) => p.configured));
 
-  useEffect(() => {
+  // Layout effect (not passive) so that when the opener mounts us synchronously
+  // via flushSync inside the tap, this focus() still runs *within* that gesture —
+  // the only way iOS Safari will raise the keyboard on open rather than just
+  // placing a caret.
+  useLayoutEffect(() => {
     const ta = taRef.current;
     if (ta) {
       ta.focus();
