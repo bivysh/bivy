@@ -1928,13 +1928,18 @@ function AccountPanel() {
       {me?.extension && (
         <div className="settings-section">
           <h4 className="settings-subhead">{me.extension.title || "Account service"}</h4>
-          {(me.extension.facts ?? []).map((fact) => (
-            <div className="settings-row" key={fact.id}>
-              <span>{fact.label}</span>
-              <strong>{fact.value}</strong>
-            </div>
-          ))}
-          <div className="settings-actions">
+          {/* The extension's facts are opaque label/value pairs — render them
+              through the standard settings row (label left, value right, hairline
+              separators) rather than a bespoke layout. */}
+          <div>
+            {(me.extension.facts ?? []).map((fact) => (
+              <div className="settings-toggle-row" key={fact.id}>
+                <span className="muted">{fact.label}</span>
+                <strong>{fact.value}</strong>
+              </div>
+            ))}
+          </div>
+          <div className="card-actions">
             {(me.extension.actions ?? []).map((action) => (
               <button
                 type="button"
