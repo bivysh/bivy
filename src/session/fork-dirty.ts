@@ -5,12 +5,12 @@ import path from "node:path";
 import type { ForkDirtyPatch } from "./fork.js";
 
 /**
- * Capture / re-apply a session's UNCOMMITTED working-tree changes for a fork
- * (see docs/session-fork-plan.md). The committed branch already travels via
- * origin (the destination re-clones + checks it out); this carries the in-flight
+ * Capture / re-apply a session's UNCOMMITTED working-tree changes for a fork.
+ * The committed branch already travels via origin (the destination re-clones +
+ * checks it out); this carries the in-flight
  * edits on top so a fork never silently drops work-in-progress.
  *
- * Resolved decision: the patch is size-capped. When the working tree is larger
+ * The patch is size-capped. When the working tree is larger
  * than the cap (big or binary churn), we DON'T inline it — `capture` returns
  * `pushedInstead: true` and the caller commits & pushes the branch so the
  * destination reproduces from the pushed commit instead.

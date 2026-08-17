@@ -35,6 +35,10 @@ which subsystem or command you need.
 | [plugins.md](plugins.md) | Developers adding an external process or ACP agent through a declarative plugin manifest. |
 | [automations-as-code.md](automations-as-code.md) | Developers defining, validating, simulating, and applying automations from YAML. |
 | [automation-evaluator.md](automation-evaluator.md) | Contributors touching automation matching/preflight — the shared first-match, overlap, and checklist logic behind config-as-code, the control plane, and the PWA. |
+| [automation-runs.md](automation-runs.md) | Developers who want the run lifecycle: how every trigger lands in one durable queue, run states, and the milestone timeline. |
+| [rulesets.md](rulesets.md) | Users authoring retry / reroute / park policy for failed runs and turns. |
+| [ephemeral-sessions.md](ephemeral-sessions.md) | Users and operators running short-lived, per-task Machines that are destroyed when the work is done. |
+| [session-replication.md](session-replication.md) | Users who want a warm standby of a session on a second node (`sessionSync`). |
 | [agents/](agents/README.md) | Per-agent setup: install command, how to authenticate it, model picker, resume support, and known gaps — one short page per agent in the picker. |
 | [troubleshooting.md](troubleshooting.md) | Anyone whose node won't start, won't connect, or won't behave. |
 
@@ -43,6 +47,7 @@ which subsystem or command you need.
 | Doc | Who it's for |
 | --- | --- |
 | [remote-access.md](remote-access.md) | Users pairing a phone or laptop to reach a node from anywhere. |
+| [relay-node-cli.md](relay-node-cli.md) | Users running `bivy run --node <account-node>` to drive a session on another node from the CLI, over the relay. |
 
 ## Configuration & reference
 
@@ -52,7 +57,8 @@ which subsystem or command you need.
 | [configuration.md](configuration.md) | Complete environment-variable and internal state reference. |
 | [cli-reference.md](cli-reference.md) | Anyone looking up a `bivy` command, flag, or subcommand. |
 | [runtime-support-matrix.md](runtime-support-matrix.md) | Users deciding which agent to run and what works with it today. |
-| [agent-execution-modes.md](agent-execution-modes.md) | Design and implementation plan for choosing protocols, pipes, or PTYs per agent. |
+| [supported-agents.md](supported-agents.md) | The certified agent list and pins the picker's **Supported** badge is derived from (generated). |
+| [fork-matrix.md](fork-matrix.md) | What fidelity a fork keeps between any two agents (generated). |
 
 ## Security
 
@@ -61,6 +67,8 @@ which subsystem or command you need.
 | [security-model.md](security-model.md) | Anyone evaluating what Bivy protects, what it doesn't, and its 0.1 limits. |
 | [key-management.md](key-management.md) | Users deciding where their API keys and tokens live. |
 | [credential-sync.md](credential-sync.md) | Users running more than one node who want credentials on all of them. |
+| [credentials-guide.md](credentials-guide.md) | Users with several keys or accounts per provider, password-manager references, or per-project key routing. |
+| [hosted-provisioning-trust-model.md](hosted-provisioning-trust-model.md) | Anyone evaluating what changes in the trust boundary when the control plane provisions Machines for you. |
 | [releasing.md](releasing.md) | How Bivy is distributed on npm, how to verify a release, and how to cut one. |
 
 ## Self-hosting
@@ -80,6 +88,7 @@ which subsystem or command you need.
 | [linear-work-queue.md](linear-work-queue.md) | Teams dispatching Linear issues to agent runs and GitHub pull requests. |
 | [slack-setup.md](slack-setup.md) | Users turning Slack slash commands into agent runs and pull requests. |
 | [webhook-recipes.md](webhook-recipes.md) | Users wiring CI, monitoring, or internal systems into Bivy's signed automation queue. |
+| [github-event-rules.md](github-event-rules.md) | Developers extending which GitHub events can start an automation. |
 
 ## Questions
 

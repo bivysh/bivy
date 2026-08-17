@@ -106,8 +106,8 @@ export function planCowProvision(opts: { worktreePath: string; worktreesRoot: st
 
 // --- install-based provisioning (Approach B: cross-Machine, no sibling) --------
 // The CoW path above only helps when a SIBLING worktree of the same repo already
-// has the installed dir. On a fresh destination Machine (a cross-Machine move,
-// phase 1D) there is no sibling, so the tree lands with no node_modules/.venv/
+// has the installed dir. On a fresh destination Machine (a cross-Machine move)
+// there is no sibling, so the tree lands with no node_modules/.venv/
 // target and the agent hits a cold — sometimes broken — tree on its first turn.
 // This detects the project's package managers from its lockfiles and runs their
 // install so the destination provisions itself. Data-driven: a new ecosystem is a

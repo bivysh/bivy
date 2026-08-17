@@ -2092,7 +2092,7 @@ describe("SessionStore", () => {
   });
 
   it("repaints a previously-viewed agent's models instantly on switch back (per-runtime cache)", () => {
-    // Faster model switch (Phase 3): switching back to an agent already listed
+    // Faster model switch: switching back to an agent already listed
     // this session must NOT blank to a loading state — the store repaints that
     // runtime's last-known models immediately while the node's fresh list
     // refreshes in the background.

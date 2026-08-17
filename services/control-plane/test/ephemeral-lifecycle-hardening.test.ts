@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// Fault-injection coverage for the durable ephemeral lifecycle hardening
-// (docs/ephemeral-lifecycle-review.md): confirmed-deletion finalizer
-// semantics, enrollment rollback after a hopeless create, discover-based
-// orphan recovery, and force-destroy bypassing TTL retention. Runs against a
-// real (pg-mem) store rather than hand-rolled fakes so the attempt CRUD/CAS
-// path is exercised for real, matching the pattern in ephemeral-attempts.test.ts.
+// Fault-injection coverage for the durable ephemeral lifecycle hardening:
+// confirmed-deletion finalizer semantics, enrollment rollback after a hopeless
+// create, discover-based orphan recovery, and force-destroy bypassing TTL
+// retention. Runs against a real (pg-mem) store rather than hand-rolled fakes
+// so the attempt CRUD/CAS path is exercised for real, matching the pattern in
+// ephemeral-attempts.test.ts.
 import assert from "node:assert/strict";
 process.env.HOSTED_CREDENTIAL_KEY = Buffer.alloc(32, 7).toString("base64");
 import { createPgMemStore } from "../src/pg-mem-store.js";
@@ -148,8 +148,8 @@ async function accountWithHostedToken(store: ReturnType<typeof createPgMemStore>
 }
 
 // --- Orphan discovery: a resource whose OWN attempt row was lost -----------
-// The one failure mode idempotent-create/adopt can't cover (docs/ephemeral-
-// lifecycle-review.md P1) — nothing tracks it at all, only discover() can.
+// The one failure mode idempotent-create/adopt can't cover — nothing tracks
+// it at all, only discover() can.
 {
   const store = createPgMemStore();
   await store.init();

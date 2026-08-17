@@ -8,12 +8,11 @@ PTY streams to your terminal over the hosted relay, end-to-end encrypted.
 bivy run claude --node hetzner-bivy-staging
 ```
 
-Before this, `--node` only accepted **direct** nodes — a registry entry with a
-reachable URL (`bivy nodes add <name> <url> --token …`), i.e. a LAN IP,
-Tailscale/VPN name, or an SSH tunnel. **Account nodes** (the ones `bivy nodes`
-lists from the control plane) had no route from the CLI. Now any *online*
-account node is reachable directly over the relay — the same path a phone/PWA
-uses to reach a node.
+`--node` accepts two kinds of target. A **direct** node is a registry entry with
+a reachable URL (`bivy nodes add <name> <url> --token …`) — a LAN IP,
+Tailscale/VPN name, or an SSH tunnel. An **account node** (one that `bivy nodes`
+lists from the control plane) needs no such route: any *online* account node is
+reachable over the relay, the same path a phone/PWA uses.
 
 ## Why there is no node↔node link
 

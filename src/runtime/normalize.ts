@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// Shared runtime normalization helpers (docs/dramatic-simplification-plan.md,
-// slice 3). Every runtime adapter has to turn its own model shape into the
-// runtime-neutral `ModelInfo`. Each used to reimplement that mapping (pi.ts,
-// claude-code.ts, …), so the same field had subtly different fallbacks per
-// runtime. This is the one home for that mapping; adapters pass their per-runtime
-// quirks (default provider, whether the model is `configured`) as options.
+// Shared runtime normalization helpers. Every runtime adapter has to turn its
+// own model shape into the runtime-neutral `ModelInfo`. Each used to reimplement
+// that mapping (pi.ts, claude-code.ts, …), so the same field had subtly
+// different fallbacks per runtime. This is the one home for that mapping;
+// adapters pass their per-runtime quirks (default provider, whether the model
+// is `configured`) as options.
 //
 // Pure and defensive — a bare string, a `{model}` blob, or a rich record all map
 // without throwing — so it is unit-testable without a live agent (see

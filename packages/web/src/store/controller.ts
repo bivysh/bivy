@@ -503,7 +503,7 @@ export class AppController {
     // The reassembler detected a live-stream gap (a frame lost on an uplink blip)
     // — ask the node to replay the events after the last seq we hold. The node
     // answers with the missed tail, or mode:"reset" (→ requestFreshHistory) when
-    // its ring has already evicted past our cursor (Phase 2).
+    // its ring has already evicted past our cursor.
     this.store.requestReplay = (sessionId, afterSeq) => {
       void this.send({ kind: "session.replay", sessionId, afterSeq });
     };
@@ -1339,7 +1339,7 @@ export class AppController {
     return sessionId;
   }
 
-  // --- Session fork (docs/session-fork-plan.md) --------------------------------
+  // --- Session fork -------------------------------------------------------------
   // Continue a session in a new one on another node/agent/model. Client-mediated:
   // export the bundle from the source node, (optionally) switch to the
   // destination node, import it there, open the new session, seed it when the

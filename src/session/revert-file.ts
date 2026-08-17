@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// Safe per-file revert for the review surface (C3d). Restores ONE changed file
+// Safe per-file revert for the review surface. Restores ONE changed file
 // to its pre-turn content, so a reviewer can undo a single unwanted edit without
 // rewinding the whole turn. The pre-turn content is the diff's own `oldText`
 // (computed and sent by the node), passed back with the request; a file the turn

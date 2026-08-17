@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// Phase 3 golden-workflow certification. Live model credentials do not belong in
+// Golden-workflow certification. Live model credentials do not belong in
 // CI, so the agent boundary is deterministic; everything after the adapter has
 // produced a change is real: isolated worktree, check execution, commit, push,
 // idempotent PR creation, canonical outcome, correlated audit evidence, and the

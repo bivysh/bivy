@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-// Universal Agent Harness — Phase 4: structured chat fidelity for CLI agents.
+// Universal Agent Harness — structured chat fidelity for CLI agents.
 //
-// Governance (Phases 1–3) already works for ANY agent because it wraps effects,
+// Governance already works for ANY agent because it wraps effects,
 // not chat. This adds the *fidelity* layer: turn a CLI agent's structured stdout
 // into the same normalized RuntimeEvents the PWA renders for Pi/Claude (streaming
 // assistant text, tool cards, a proper transcript) instead of one opaque blob.

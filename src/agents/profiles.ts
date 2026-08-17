@@ -124,7 +124,7 @@ export type AgentProfile = {
   thinking?: { levels: string[]; default?: string; template: string[]; insertAt?: number };
   args?: string[];
   /**
-   * Phase 4 — structured mode. When set, Bivy launches the agent with `jsonArgs`
+   * Structured mode. When set, Bivy launches the agent with `jsonArgs`
    * (its native JSON output flags) instead of `args`, and parses stdout with the
    * `parserId` CliParser for full chat fidelity. Validated against the real CLIs.
    * Disable with BIVY_AGENT_STRUCTURED=0 to fall back to the dumb-pipe args.

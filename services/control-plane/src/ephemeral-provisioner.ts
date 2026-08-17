@@ -1057,9 +1057,9 @@ function trackedResourceIds(machines: Array<Record<string, unknown>>, attempts: 
 }
 
 /**
- * Discover-based orphan recovery (docs/ephemeral-lifecycle-review.md P1
- * "deletion needs discovery, not only a remembered id"). Every other recovery
- * path in this file — attempt-adoption, idempotent-create-and-adopt, retry —
+ * Discover-based orphan recovery — deletion needs discovery, not only a
+ * remembered id. Every other recovery path in this file — attempt-adoption,
+ * idempotent-create-and-adopt, retry —
  * depends on the durable attempt row surviving. This is the one path that
  * doesn't: it asks each provider directly for everything tagged as this
  * account's (`ProviderAdapter.discover`) and reconciles anything neither the

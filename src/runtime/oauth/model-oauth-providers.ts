@@ -10,7 +10,7 @@
 // Covered (fully Bivy-owned): Anthropic (Claude Pro/Max), OpenAI Codex (ChatGPT),
 // xAI (Grok). GitHub Copilot (two-stage token + dynamic base URL entangled with
 // Pi's request layer) and Radius (self-describing gateway) are intentionally not
-// reimplemented here — see docs/keystore-migration-plan.md.
+// reimplemented here.
 
 export type ModelOAuthFlow = "auth_code" | "device_code";
 export type TokenEncoding = "json" | "form";

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// Warm session replication — the transport-free DECISION core (Phase 1 of
-// docs/session-replication.md).
+// Warm session replication — the transport-free DECISION core
+// (docs/session-replication.md).
 //
 // The goal: a standby node continuously mirrors a session's state so that if the
 // owning node goes offline, the session can be *manually* promoted and continued

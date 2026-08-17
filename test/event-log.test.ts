@@ -249,7 +249,7 @@ test("parseLog skips blank and malformed lines", () => {
   assert.equal(parsed[1]!.id, "bivy-tool-result-c1");
 });
 
-// --- Base transcript fold (slice 2 tail) ---------------------------------------
+// --- Base transcript fold ------------------------------------------------------
 // The base is a full getMessages() snapshot overwritten each turn that SHRINKS on
 // compaction. It's stored as bounded deltas (reset|extend); replay must reproduce
 // the last snapshot exactly. `snapshots` is the sequence of snapshots the server

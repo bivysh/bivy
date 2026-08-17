@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { SessionStore } from "../src/index.js";
 
 /**
- * Live-stream ordering (slice 5, deep). #501 fixed history render: renderHistory
+ * Live-stream ordering. #501 fixed history render: renderHistory
  * walks content blocks so an assistant turn shaped `prose → tool → prose` shows
  * the tool card BETWEEN the two prose runs, not hoisted above them and not
  * merged into one bubble. The live reducer (applyStreamEvent) committed all prose

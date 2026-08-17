@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { normalizeMessages, buildSeedPrompt, buildForkHistory } from "../src/session/transcript-normal.js";
 import type { NormalizedTranscriptHeader } from "../src/session/transcript-normal.js";
 
-// Unit tests for the runtime-neutral transcript used by session fork
-// (docs/session-fork-plan.md). normalizeMessages flattens the shared
-// `{ role, content }` runtime message shape (string OR Anthropic-style block
+// Unit tests for the runtime-neutral transcript used by session fork.
+// normalizeMessages flattens the shared `{ role, content }` runtime message
+// shape (string OR Anthropic-style block
 // array — the form both pi and Claude Code return from readMessages()) into
 // portable turns; buildSeedPrompt renders the compact cross-runtime seed.
 

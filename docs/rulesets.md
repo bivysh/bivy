@@ -136,7 +136,7 @@ arbitrary node. Genuine `task_failed` and `unknown` failures fall through to the
 caller's existing failure path unchanged. Reroute + fallback chains are fully
 supported but **opt-in**: author a rule with a `chain` to enable them.
 
-## Milestone 1 — the work-queue effector (shipped)
+## The work-queue effector
 
 The queue poller (`src/control-plane-tasks.ts`) previously turned any thrown
 error straight into `failed`. It now runs each item under the policy:
@@ -160,15 +160,16 @@ Notable properties:
 
 - **No storage migration.** `attempt` already existed (just never incremented);
   the evidence kinds `retry` / `fallback` / `needs_attention` already existed;
-  `needs_attention` was a dormant status with no producer. This slice activates
-  them. The new `POST /node/work/:id/needs-attention` endpoint is the producer.
+  `needs_attention` was a dormant status with no producer. The policy layer
+  activates them; the `POST /node/work/:id/needs-attention` endpoint is the
+  producer.
 - **Back-compatible.** With no policy injected the poller behaves exactly as
   before (one attempt, any throw → `failed`).
 - **Unattended-safe.** Queue runs act automatically within the ruleset's bounds
   (`maxAttempts`, backoff cap); on exhaustion they surface as `needs_attention`
   rather than silently failing.
 
-## Milestone 2 — in-session model reroute (shipped)
+## In-session model reroute
 
 The session effector's first, fully in-place action: when a live turn ends in a
 recoverable error, swap to a fallback **model** and retry the same prompt instead
@@ -190,7 +191,7 @@ of surfacing the error.
 - **Bounded**: the per-turn reroute budget resets on each user prompt; when the
   chain drains the error surfaces as before.
 
-## Milestone 3 — in-session resume after a usage/rate limit (shipped)
+## In-session resume after a usage/rate limit
 
 A live turn that ends because a provider usage window is exhausted — a Claude
 subscription "5-hour" or "weekly" cap, `you've hit your weekly limit · resets 12am
@@ -232,8 +233,9 @@ These are not available yet:
   that preserves run lineage and workspace, rather than parking.
 - **Queue waiting state and claim leases** — releasing a node slot during a long
   `retry-after` instead of sleeping in-process, and reclaiming a dead node's
-  claimed run. (Interactive sessions already resume durably — see Milestone 3 —
-  because their due time is persisted rather than held in a lease.)
+  claimed run. (Interactive sessions already resume durably — see the in-session
+  resume section above — because their due time is persisted rather than held in
+  a lease.)
 - **Credential-aware queue reroute** — skipping un-credentialed fallback routes
   in the queue effector.
 - **Node fallback** — warm-standby promotion, cross-node fork, and ephemeral

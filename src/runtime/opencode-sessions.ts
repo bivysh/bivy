@@ -2,8 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 // OpenCode on-disk session store — the write/read side of materialising a
 // **cross-runtime** fork as a real session in OpenCode's own store (fidelity
-// "replayed", see docs/session-fork-plan.md), the same role codex-sessions.ts
-// plays for Codex.
+// "replayed"), the same role codex-sessions.ts plays for Codex.
 //
 // OpenCode (opencode-ai) persists every session in SQLite at
 //   $XDG_DATA_HOME/opencode/opencode.db        (XDG_DATA_HOME → ~/.local/share)

@@ -6,8 +6,9 @@
 export interface EphemeralProviderCatalog {
   id: string;
   name: string;
-  /** Strategic/runtime boundary, shared by every onboarding surface. Managed
-   * compute is useful but is not evidence for Bivy's no-markup BYO-cloud moat. */
+  /** Runtime/positioning boundary, shared by every onboarding surface: "byo-cloud"
+   * machines run in the user's own cloud account at provider cost (no markup);
+   * "managed-compute" runs on someone else's platform. */
   computeClass: "byo-cloud" | "managed-compute";
   tokenLabel: string;
   blurb: string;

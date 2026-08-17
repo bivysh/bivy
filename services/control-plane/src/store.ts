@@ -70,9 +70,9 @@ export interface OAuthState {
   returnPath?: string;
 }
 
-// Cross-node session index (option b). The control plane holds ONLY metadata:
-// ids, status, source, branch — and the title as an E2E-ENCRYPTED blob it cannot
-// read (clients decrypt with the room key). See docs/product-definition.md.
+// Cross-node session index. The control plane holds ONLY metadata: ids, status,
+// source, branch — and the title as an E2E-ENCRYPTED blob it cannot read
+// (clients decrypt with the room key).
 export interface SessionIndexEntry {
   sessionId: string;
   nodeId: string;

@@ -165,10 +165,10 @@ export class PostgresStore implements ControlPlaneStore {
       );
       CREATE INDEX IF NOT EXISTS hosted_machine_attempts_active_idx
         ON hosted_machine_attempts (account_id, state, updated_at);
-      -- Durable lifecycle hardening (docs/ephemeral-lifecycle-review.md): explicit
-      -- desired vs. observed state, a persisted next-deadline, the per-account
-      -- ownership tag applied to provider resources, and an optimistic-concurrency
-      -- version so a reconciler can fence a write against a stale read.
+      -- Durable lifecycle hardening: explicit desired vs. observed state, a
+      -- persisted next-deadline, the per-account ownership tag applied to
+      -- provider resources, and an optimistic-concurrency version so a
+      -- reconciler can fence a write against a stale read.
       ALTER TABLE hosted_machine_attempts ADD COLUMN IF NOT EXISTS desired_state TEXT NOT NULL DEFAULT 'active';
       ALTER TABLE hosted_machine_attempts ADD COLUMN IF NOT EXISTS observed_state TEXT;
       ALTER TABLE hosted_machine_attempts ADD COLUMN IF NOT EXISTS deadline_at TIMESTAMPTZ;
@@ -264,10 +264,10 @@ export class PostgresStore implements ControlPlaneStore {
         PRIMARY KEY (node_id, session_id)
       );
 
-      -- Stage 2 (docs/agent-node-decoupling.md): the agent-service address that
-      -- hosts a session's live runtime, so any daemon can re-attach by looking it
-      -- up. Routing metadata like node_id, not E2E payload. ADD COLUMN IF NOT
-      -- EXISTS keeps this a safe, idempotent migration on existing databases.
+      -- The agent-service address that hosts a session's live runtime, so any
+      -- daemon can re-attach by looking it up. Routing metadata like node_id,
+      -- not E2E payload. ADD COLUMN IF NOT EXISTS keeps this a safe,
+      -- idempotent migration on existing databases.
       ALTER TABLE session_index ADD COLUMN IF NOT EXISTS agent_service_address TEXT;
       ALTER TABLE session_index ADD COLUMN IF NOT EXISTS attention JSONB;
 

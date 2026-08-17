@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-// Phase 5b: the ingest policy is the user's choice. Default `merge` keeps the
+// The ingest policy is the user's choice. Default `merge` keeps the
 // historical behavior (a native login folds into the provider's synced default);
 // `separate` (opt-in via credentials.config.json) keeps a native login as a
 // distinct, node-local credential under a reserved label — it never clobbers a

@@ -10,9 +10,9 @@ import { buildForkBundle, materializeFork, resolveForkFidelity } from "../src/se
 import type { ForkRecord } from "../src/session/fork.js";
 import type { AgentRuntime } from "../src/runtime/types.js";
 
-// End-to-end tests for the session-fork transport seam (docs/session-fork-plan.md):
-// same-runtime forks are full fidelity (native export -> import on a "second
-// node"); cross-runtime forks fall back to a seeded continuation prompt.
+// End-to-end tests for the session-fork transport seam: same-runtime forks are
+// full fidelity (native export -> import on a "second node"); cross-runtime
+// forks fall back to a seeded continuation prompt.
 
 let passed = 0;
 function test(name: string, fn: () => void | Promise<void>): Promise<void> {

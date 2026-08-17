@@ -52,7 +52,6 @@ const RULES = [
     // (runtime/provider-catalog.ts wires Pi's list into the Pi-free api.ts). The
     // facade re-exports it; allow that single specifier.
     allow: ["../runtime/provider-catalog.js"],
-    // Pilot boundary (Phase 1) — two-layer split landed, boundary enforced.
     enforce: true,
     note: "credentials must be a pure domain + injected-port service; upward deps become ports (see pilot spec).",
   },
@@ -68,7 +67,7 @@ const RULES = [
     dir: "src/controllers",
     forbid: ["../server", "./server"],
     enforce: true,
-    note: "controllers are imported BY server.ts; the dependency direction is server -> controller only (Phase 2).",
+    note: "controllers are imported BY server.ts; the dependency direction is server -> controller only.",
   },
   {
     name: "device-controller-uses-ports",
@@ -103,7 +102,7 @@ const RULES = [
     dir: "src/remote",
     forbid: ["../server", "./server"],
     enforce: true,
-    note: "the remote module is imported BY the kernel via ./remote/index.js; it never imports server.ts (the composition root). Direction: server -> remote only (Phase 3).",
+    note: "the remote module is imported BY the kernel via ./remote/index.js; it never imports server.ts (the composition root). Direction: server -> remote only.",
   },
   {
     name: "audit-is-a-leaf",

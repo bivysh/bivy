@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 // Universal Agent Harness — MCP config auto-injection (fs side).
 //
-// Phase 2b: at session start, rewrite the agent's on-disk JSON MCP config so its
+// At session start, rewrite the agent's on-disk JSON MCP config so its
 // stdio servers launch through `bivy mcp-proxy` (routeThroughProxy), and hand
 // back a restore() that puts the file back exactly as it was on session end.
 // Opt-in via BIVY_MCP_PROXY so it never surprises a user. Best-effort and

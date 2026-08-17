@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// CRYPTO WIRE-FORMAT CONFORMANCE TEST (Slice 4).
+// CRYPTO WIRE-FORMAT CONFORMANCE TEST.
 //
 // Bivy carries two byte-compatible crypto stacks: the node (node:crypto) and the
 // browser/PWA client (WebCrypto). If they drift by a single byte, a paired phone

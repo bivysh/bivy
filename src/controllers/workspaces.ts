@@ -2,8 +2,8 @@
 // Copyright (c) 2026 Petter André Sjulstad
 //
 // Workspace controller — the saved-workspace list domain lifted out of
-// server.ts (platform modularization Phase 2). Owns path resolution/validation
-// and the saved-workspace list persistence that the RELAY_COMMANDS
+// server.ts. Owns path resolution/validation and the saved-workspace list
+// persistence that the RELAY_COMMANDS
 // `workspaces.list` handler and the REST `/api/workspaces` routes share.
 // server.ts wires it with the settings accessors + metadata store and keeps the
 // bare helper names, so every call site is unchanged.

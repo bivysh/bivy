@@ -4312,7 +4312,7 @@ async function runUpdate(args = []) {
   console.log(c.dim(`=== bivy update finished ${new Date().toISOString()} ===`));
 }
 
-// Show the node's governance audit trail (moat #1): the append-only record of
+// Show the node's governance audit trail: the append-only record of
 // tool-call decisions (and, as it grows, network/approval events) the node made,
 // attributed per session + agent. Reads the JSONL directly — the daemon need not
 // be running. Decisions + metadata only; never tool payloads.
@@ -4345,10 +4345,10 @@ function cmdAudit(args = []) {
   }
 }
 
-// Verify the audit trail's tamper-evidence chain (moat #1, phase 2A). Mirrors
-// src/audit/integrity.ts (canonicalize / chainHash / verifyAuditChain) so the
-// check runs with no daemon and no TS toolchain — integrity.ts stays the source
-// of truth; keep the two in sync.
+// Verify the audit trail's tamper-evidence chain. Mirrors src/audit/integrity.ts
+// (canonicalize / chainHash / verifyAuditChain) so the check runs with no daemon
+// and no TS toolchain — integrity.ts stays the source of truth; keep the two in
+// sync.
 function auditCanonicalize(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
   if (Array.isArray(value)) return `[${value.map((v) => auditCanonicalize(v)).join(",")}]`;

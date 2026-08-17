@@ -1,7 +1,7 @@
 import type { ForkHistoryMessage, RuntimeMessage } from "../runtime/types.js";
 
 /**
- * Runtime-neutral transcript for session **fork** (see docs/session-fork-plan.md).
+ * Runtime-neutral transcript for session **fork**.
  *
  * A byte-exact transcript only round-trips within one runtime (pi's session
  * file, Claude Code's `~/.claude` jsonl), so a fork that changes agent goes

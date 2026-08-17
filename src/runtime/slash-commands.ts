@@ -6,7 +6,7 @@
 // opencode's `command/*.md` dirs — rather than something learned from a live
 // handshake the way Claude (SDK `init`) and Pi (its extension runner) already do.
 // This is what gives Codex and opencode a real slash menu in the composer instead
-// of the empty state Phase 1 added for them. Two responsibilities:
+// of an empty state. Two responsibilities:
 //
 //  1. Discovery — enumerate those files as `AgentCommand[]` so `getCommands()` can
 //     advertise them and the composer offers them in autocomplete.

@@ -720,7 +720,7 @@ function acpShimPath(): string {
 function acpRuntimeOptions(opts: { id: string; displayName: string; command: string; agentArgs: string[]; credsDir?: string; behaviors?: AgentProfileBehaviors; mcpConfig?: McpConfig; sandbox?: AgentSessionOptions["sandbox"] }): ProtocolRuntimeOptions {
   const slashBehavior = opts.behaviors?.slashCommands;
   const slashCommands = slashBehavior ? SLASH_COMMAND_BEHAVIORS[slashBehavior]() : undefined;
-  // Forward Bivy's configured MCP servers to the ACP agent (3A): the shim reads
+  // Forward Bivy's configured MCP servers to the ACP agent: the shim reads
   // BIVY_ACP_MCP_SERVERS and advertises them on session/new — previously it sent
   // [], so ACP agents couldn't reach MCP (including Bivy's own tools server).
   const acpMcpEnv = serializeAcpMcpEnv(opts.mcpConfig);
@@ -1167,14 +1167,15 @@ function createCatalogRuntime(id: string, options: RuntimeFactoryOptions): Agent
       if (!processOptions) throw new Error("generic-cli requires BIVY_AGENT_COMMAND to be set.");
       // Share the node's provider logins (the shared vault) so the CLI agent finds
       // whatever model key it needs without a separate per-agent sign-in.
-      // BIVY_AGENT_PARSER opts this agent into Phase 4 structured mode (fidelity).
+      // BIVY_AGENT_PARSER opts this agent into structured mode: stdout is parsed
+      // into a real transcript instead of streamed as an opaque blob.
       return new ProcessRuntime({ ...processOptions, parserFactory: parserFactoryFor(process.env.BIVY_AGENT_PARSER) });
     }
     case "openclaw": {
       const openClawOptions = openClawProcessOptions();
       if (!commandAvailable(openClawOptions.command)) throw new Error(`OpenClaw command not found on PATH: ${openClawOptions.command}`);
       // OpenClaw owns its own auth profiles by default; Bivy only supervises the
-      // local CLI process in this phase-1 adapter.
+      // local CLI process.
       return new ProcessRuntime(openClawOptions);
     }
     case "bivy-agent-protocol": {

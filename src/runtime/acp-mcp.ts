@@ -3,7 +3,7 @@
 //
 // Translate Bivy's MCP config (a name->spec MAP, the shape Claude/Gemini/generic
 // hosts use) into the ARRAY of ACP mcpServer objects that ACP's session/new and
-// session/load expect (phase 3A). The ACP shim (bin/acp-shim.mjs) reads the
+// session/load expect. The ACP shim (bin/acp-shim.mjs) reads the
 // serialized result from BIVY_ACP_MCP_SERVERS and forwards it — previously it
 // hardcoded `[]`, cutting ACP agents off from MCP (including Bivy's own tools
 // server). Pure + unit-tested so the mapping can't silently regress.

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// Phase 2 certification matrix. These are substrate faults, not model-quality
+// Certification matrix. These are substrate faults, not model-quality
 // tests: the identical delivery/reconnect/attention/handoff contract is run for
 // both recommended adapters. Live provider calls remain separately opt-in.
 

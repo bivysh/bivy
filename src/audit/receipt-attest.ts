@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// Node EVIDENCE attestation (governance moat, phase 2A). A Receipt is projected
+// Node EVIDENCE attestation. A Receipt is projected
 // downstream (web/control-plane) from the payload-free governance evidence the
 // NODE authored (`receiptEvidenceForRun`). This signs that node-authored evidence
 // with the node's audit key — the same key that signs the audit trail — and

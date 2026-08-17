@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// Schema-capable command specification (platform modularization Phase 2). A
+// Schema-capable command specification. A
 // command in the dispatch registry can carry a typebox input schema; when
 // present, the transport boundary validates the raw message against it BEFORE
 // dispatch, so handlers receive typed, validated input instead of the ad-hoc

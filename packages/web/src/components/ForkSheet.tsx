@@ -11,10 +11,10 @@ function modelKey(model: ModelInfo & { provider?: unknown }): string {
 }
 
 /**
- * Fork a session (docs/session-fork-plan.md): continue it in a new session on
- * another node, agent, and/or model. One sheet, two finalizers — **copy** keeps
- * the original, **move** retires it once the destination confirms. The copy/move
- * default is context-aware: move when the node changes, copy when it doesn't.
+ * Fork a session: continue it in a new session on another node, agent, and/or
+ * model. One sheet, two finalizers — **copy** keeps the original, **move**
+ * retires it once the destination confirms. The copy/move default is
+ * context-aware: move when the node changes, copy when it doesn't.
  */
 export function ForkSheet({ sessionId, onClose }: { sessionId: string; onClose: () => void }) {
   const { connection: { nodes, currentNodeId }, catalogs: { runtimes, models, currentModel }, activeSession: { activeSessionId, activeRuntimeId }, sessionIndex: { sessions } } = useAppState();

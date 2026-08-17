@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// Audit-trail INTEGRITY (governance moat, phase 2A). Turns the append-only
+// Audit-trail INTEGRITY. Turns the append-only
 // JSONL audit stream from "append-only by convention" into a tamper-EVIDENT
 // record, so a receipt can move from "observation report" toward "attestation".
 //

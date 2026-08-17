@@ -16,8 +16,8 @@ import type { PendingFollowup } from "./followup-queue.js";
  * sent immediately when: the session is mid-turn (`working`), OR earlier
  * queued items are still waiting. The second clause matters even when the
  * session has gone idle — sending a fresh prompt straight through while older
- * ones are still queued would jump the queue and reorder ahead of them (the
- * "delivered in the displayed order" acceptance criterion).
+ * ones are still queued would jump the queue and reorder ahead of them —
+ * follow-ups must be delivered in the displayed order.
  *
  * `queueLength` counts only items waiting to send now (status "queued") — a
  * message scheduled for LATER (status "scheduled", e.g. long-press Send) is

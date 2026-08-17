@@ -3,7 +3,7 @@
 //
 // A supervised, self-healing connection with exponential backoff + jitter — the
 // reliability layer under the sibling replication transport
-// (docs/session-replication.md, follow-up #2). Without it, warm replication is
+// (docs/session-replication.md). Without it, warm replication is
 // only as reliable as the socket at each individual turn boundary: a relay blip
 // or a standby restart silently pauses replication until the next turn happens to
 // reconnect, and repeated failures surface nothing. This keeps exactly one live

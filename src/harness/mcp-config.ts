@@ -266,7 +266,7 @@ export function isOpenCodeConfigFile(filePath: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 2b — auto-injection into an agent's on-disk MCP config.
+// Auto-injection into an agent's on-disk MCP config.
 //
 // The transform above is shared; the per-agent bit is *where* the config lives
 // (and for OpenCode/Codex/Goose, which writer to use). This table lists the

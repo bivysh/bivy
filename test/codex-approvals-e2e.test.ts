@@ -12,9 +12,9 @@ import type { RuntimeEvent } from "../src/runtime/types.js";
 //
 //   BIVY_CODEX_E2E=1 npx tsx test/codex-approvals-e2e.test.ts
 //
-// This is the Step-0 validation from docs/agent-adoption-plan.md, pinned as a
-// runnable regression: proves thread/resume reconnects a prior thread (by its
-// rollout id) and keeps context — the basis for governed + resumable Codex.
+// Pinned as a runnable regression: proves thread/resume reconnects a prior
+// thread (by its rollout id) and keeps context — the basis for governed +
+// resumable Codex.
 
 function codexAvailable(): boolean {
   return spawnSync("command", ["-v", "codex"], { shell: true, stdio: "ignore" }).status === 0;

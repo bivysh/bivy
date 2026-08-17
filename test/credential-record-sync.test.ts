@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-// Phase 6 (part 2): the record-shaped sync wire. exportSyncableRecords →
+// The record-shaped sync wire. exportSyncableRecords →
 // importCredentialRecords carries non-default labels and reference POINTERS
 // between nodes (a node-local `sync:"node"` credential never leaves), and
 // tombstones converge. Simulates two nodes via two vault dirs.

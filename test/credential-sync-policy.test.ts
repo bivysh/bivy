@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-// Phase 6: per-credential opt-out sync (exportSyncable filters `sync:"node"`) and
+// Per-credential opt-out sync (exportSyncable filters `sync:"node"`) and
 // record-addressed writes (modifyRecord targets a specific provider:label, so a
 // refresh/rotation on one account never touches another). Pure store behavior.
 

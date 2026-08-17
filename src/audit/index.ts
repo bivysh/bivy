@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// Node audit trail — the governance record (moat work #1). One append-only
+// Node audit trail — the governance record. One append-only
 // JSONL stream of GOVERNANCE events (tool-call decisions, network attempts,
 // approvals, …) that Bivy already intercepts at the substrate, attributed per
 // session + agent, uniformly across every agent. This is distinct from the
@@ -17,7 +17,7 @@
 // Pure fs leaf: imports nothing from the kernel; the daemon constructs one
 // AuditLog and hands `record` to the guardian / egress / approval seams.
 //
-// TAMPER-EVIDENCE (phase 2A): when built with a signer, every appended line is
+// TAMPER-EVIDENCE: when built with a signer, every appended line is
 // hash-chained and signed (see ./integrity.ts), so truncation, reordering, and
 // edits become detectable via `verifyAuditChain`. The chain is stamped as extra
 // fields (`seq`/`prev`/`hash`/`sig`), which readers below ignore, so it is fully

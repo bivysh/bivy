@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// SessionEngine — owns the live-session registry and the simple lifecycle, as
-// the first behavioural slice of the session-engine decomposition.
+// SessionEngine — owns the live-session registry and the simple lifecycle.
 //
 // It CREATES and owns the `openSessions` Map and returns a reference: server.ts
-// destructures it and still reads/writes records in place (the agreed Option 1 —
-// shared mutable data, no god-object encapsulation yet). Node capabilities the
+// destructures it and still reads/writes records in place (shared mutable data,
+// no god-object encapsulation). Node capabilities the
 // lifecycle needs (the node-global `active` session, broadcast, advertise) are
-// injected, so nothing here points back at server.ts. Turn lifecycle,
-// close/abort, and createSession fold in over the next slices.
+// injected, so nothing here points back at server.ts.
 import type { SessionRecord } from "./record.js";
 
 export interface SessionEngineDeps {

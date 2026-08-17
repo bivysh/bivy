@@ -16,8 +16,7 @@ import { depCacheEnv } from "./harness/dep-cache.js";
  *
  * This module is transport-agnostic: the caller supplies `onData`/`onExit` sinks,
  * so the same manager serves the local WebSocket (per-socket routing) and the
- * relay (termId-tagged events the client filters). See docs/product-definition.md
- * (chat ⇄ terminal) and docs/DEVELOPMENT_PLAN.md (Phase B).
+ * relay (termId-tagged events the client filters).
  */
 
 /**

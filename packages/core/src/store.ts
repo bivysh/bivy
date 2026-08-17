@@ -95,8 +95,8 @@ export {
 
 export type SessionStatus = "idle" | "working" | "needs_action" | "failed" | "saved";
 
-/** Explicit live-session axes supplied by Phase 3 nodes. Optional on summaries
- * for compatibility with older nodes and persisted account-index rows. */
+/** Explicit live-session axes supplied by nodes that report them. Optional on
+ * summaries for compatibility with older nodes and persisted account-index rows. */
 export interface SessionState {
   transport: "reachable" | "unreachable";
   process: "alive" | "exited" | "none";
@@ -1056,7 +1056,7 @@ export class SessionStore {
   /** Ask the controller to replay the live events this client missed for a
    *  session, starting after `afterSeq` — wired to a `session.replay` request.
    *  Ordered live delivery: reassembles the active session's `session.event`
-   *  stream and asks for a replay on a detected gap (Phase 2). */
+   *  stream and asks for a replay on a detected gap. */
   requestReplay?: (sessionId: string, afterSeq: number) => void;
   // Ordered-reassembly state for the ACTIVE session's live stream. Only the
   // focused session is tracked (its events are the only ones applied); switching
@@ -2669,8 +2669,8 @@ export class SessionStore {
           const justFinished = innerKind === "agent_end";
           const sessionState = normalizeSessionState(e.state ?? e.sessionState);
           this.updateSessionRow(sid, {
-            // Phase-3 nodes own this projection. Fall back to the inner-event
-            // heuristic only for older nodes that don't send explicit axes.
+            // Nodes that send explicit axes own this projection. Fall back to the
+            // inner-event heuristic only for older nodes that don't.
             status: sessionStatusFromState(sessionState) ?? (justFinished ? "idle" : "working"),
             sessionState,
             needsAction: sessionState ? sessionState.agent === "awaiting-input" : false,
@@ -2687,7 +2687,7 @@ export class SessionStore {
           // rather than as a disconnected global toast.
           const innerWithSid = sid && !(inner as { sessionId?: unknown }).sessionId ? { ...inner, sessionId: sid } : inner;
           const seq = (e as { seq?: unknown }).seq;
-          // Sequenced stream (Phase 2): reassemble in order for the active session
+          // Sequenced stream: reassemble in order for the active session
           // so a frame lost on an uplink blip is detected (a seq gap) and replayed
           // instead of silently dropped. An unsequenced event (older node) has no
           // `seq` and passes straight through.
