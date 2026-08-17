@@ -50,7 +50,16 @@ export interface RelayConfig {
 
 export type ClientMessage = { kind: string; [key: string]: unknown };
 
-function isFatalRelayError(message: string) {
+// Relay admission/config rejections: the relay refused this node at connect time
+// (bad/expired ticket, relay disabled, missing token). Crucially a routine
+// control-plane/relay DEPLOY produces exactly these for a few seconds — a
+// reconnecting node races the still-restarting control plane, its ticket
+// introspection transiently fails, and the relay reports "Unauthorized node". So
+// this is NOT permanently fatal: we keep retrying (on the slower admission
+// ceiling below) and reconnect on our own once admission passes again.
+// Previously these disabled the connector for good, so every routine update
+// knocked every node offline until each was restarted by hand.
+function isAdmissionRelayError(message: string) {
   return /hosted relay is not enabled|unauthorized|missing token/i.test(message);
 }
 
@@ -113,11 +122,26 @@ const HEARTBEAT_TIMEOUT_MS = 75_000;
 // rate-limited node reconnect every ~1s indefinitely — a storm that itself keeps
 // tripping the limiter. Requiring a stable window lets backoff escalate normally.
 const BACKOFF_STABLE_RESET_MS = 30_000;
+// Reconnect backoff ceiling for a transient network drop.
+const BACKOFF_MAX_MS = 30_000;
+// Reconnect backoff ceiling once the relay has actively REJECTED admission (see
+// isAdmissionRelayError). Slower than the network ceiling so a node that is
+// genuinely deauthorized (removed, plan lost, relay turned off) retries gently
+// instead of hammering the relay every 30s forever — while still recovering
+// automatically, within this bound, the moment admission is restored (deploy
+// finished, node re-authorized). No manual node restart required either way.
+const ADMISSION_BACKOFF_MAX_MS = 5 * 60_000;
 
 export class RelayConnector {
   private ws?: WebSocket;
   private closed = false;
   private backoff = 1000;
+  // Set when the relay actively rejected admission (isAdmissionRelayError).
+  // Raises the reconnect ceiling to ADMISSION_BACKOFF_MAX_MS so we retry gently
+  // rather than give up; cleared once we reconnect. Deliberately NOT `closed` —
+  // an admission rejection must never permanently stop the connector, or a
+  // routine deploy takes the node offline until someone restarts it by hand.
+  private admissionRejected = false;
   private heartbeatTimer?: ReturnType<typeof setInterval>;
   private stableTimer?: ReturnType<typeof setTimeout>;
   private lastPongAt = 0;
@@ -171,6 +195,7 @@ export class RelayConnector {
 
   start() {
     this.closed = false;
+    this.admissionRejected = false;
     void this.connect();
   }
 
@@ -387,6 +412,9 @@ export class RelayConnector {
       if (env.t === "ready") {
         this.ready = true;
         this.lastErrorMessage = undefined;
+        // Admission passed — drop back to the fast network ceiling for any
+        // future drop (scheduleBackoffReset restores the 1s floor once stable).
+        this.admissionRejected = false;
         this.startHeartbeat(ws);
         this.scheduleBackoffReset(ws);
         console.log("[relay] connected");
@@ -422,9 +450,14 @@ export class RelayConnector {
         const message = (env as { error?: string }).error || "Relay error";
         this.lastErrorMessage = message;
         console.warn("[relay] error:", message);
-        if (isFatalRelayError(message)) {
-          console.warn("[relay] disabling connector; fix relay setup/plan and restart the node dev server");
-          this.closed = true;
+        if (isAdmissionRelayError(message)) {
+          // Do NOT disable the connector: a deploy rejects a reconnecting node
+          // this way for a few seconds, and permanently stopping meant a routine
+          // update took the node offline until it was manually restarted. Raise
+          // the backoff ceiling and let the close handler reconnect us; we
+          // recover on our own once admission passes again.
+          this.admissionRejected = true;
+          console.warn("[relay] admission rejected; retrying on a slow backoff (auto-recovers, no restart needed)");
           ws.close();
         }
       }
@@ -448,8 +481,12 @@ export class RelayConnector {
 
   private scheduleReconnect() {
     if (this.closed) return;
-    const wait = this.backoff;
-    this.backoff = Math.min(this.backoff * 2, 30_000);
+    // A relay that actively rejected admission retries on a much slower ceiling
+    // than a transient network drop, so a genuinely-unauthorized node doesn't
+    // hammer the relay while still auto-recovering when admission is restored.
+    const cap = this.admissionRejected ? ADMISSION_BACKOFF_MAX_MS : BACKOFF_MAX_MS;
+    const wait = Math.min(this.backoff, cap);
+    this.backoff = Math.min(this.backoff * 2, cap);
     setTimeout(() => {
       if (!this.closed) void this.connect();
     }, wait);
