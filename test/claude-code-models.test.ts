@@ -8,7 +8,7 @@ import { ClaudeCodeRuntime } from "../src/runtime/claude-code.js";
 const runtime = new ClaudeCodeRuntime();
 const { session } = await runtime.createSession({ workspace: process.cwd() });
 
-const models = session.getModels();
+const models = await session.getModels();
 assert.ok(models.length > 0, "a fresh Claude session must list fallback models before the first prompt");
 assert.ok(
   models.every((model) => model.provider === "anthropic" && model.id && model.name),

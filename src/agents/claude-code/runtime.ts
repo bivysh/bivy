@@ -106,6 +106,21 @@ const FALLBACK_MODELS: ModelInfo[] = [
   { provider: "anthropic", id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5", reasoning: true },
 ];
 
+// The SDK's supportedModels() labels each row with a bare family+version
+// ("Opus 4.8") or a family alias ("Sonnet", "Haiku") — while a not-yet-started
+// session's picker uses FALLBACK_MODELS' product names ("Claude Opus 4.8"). That
+// left a running session's picker showing a differently-named catalog than a
+// fresh one. Brand the live rows to match by prefixing "Claude " to any known
+// family label, so the catalog reads the same before and after a session starts.
+// The family list is data — a new lineup means adding a row here, not an `if` —
+// and branding derives from the SDK's own labels so the list never goes stale.
+const CLAUDE_MODEL_FAMILIES = ["Opus", "Sonnet", "Haiku", "Fable", "Mythos"];
+function brandClaudeModel(model: ModelInfo): ModelInfo {
+  if (model.name.startsWith("Claude ")) return model;
+  const family = CLAUDE_MODEL_FAMILIES.find((f) => model.name === f || model.name.startsWith(`${f} `));
+  return family ? { ...model, name: `Claude ${model.name}` } : model;
+}
+
 export interface ClaudeCodeRuntimeOptions {
   /** Default model alias/id passed to the SDK (e.g. "claude-opus-4-8"). */
   defaultModel?: string;
@@ -951,13 +966,38 @@ class ClaudeSession implements RuntimeSession {
     this.query = q;
     void this.consume(q);
 
-    // Best-effort: populate the model picker once the agent is up.
-    if (typeof q.supportedModels === "function") {
-      q.supportedModels()
-        .then((models: any[]) => {
-          this.models = (models ?? []).map(toModelInfo);
-        })
-        .catch(() => {});
+    // Best-effort: warm the model picker once the agent is up. getModels()
+    // re-queries on every call too, so a long-running session's list never
+    // freezes on whatever the query reported at spawn.
+    void this.refreshSupportedModels();
+  }
+
+  /**
+   * Re-read the live query's authoritative model list and brand each row to the
+   * product's naming. Called from getModels() (and once at spawn) so the picker
+   * reflects the current lineup rather than the set captured when the query
+   * first spawned — a long session used to keep a stale catalog. Best-effort:
+   * on any failure (query torn down mid-reload, or an SDK build without the
+   * call) it leaves the last-known list in place.
+   */
+  private async refreshSupportedModels(): Promise<void> {
+    const q: any = this.query;
+    if (!q || typeof q.supportedModels !== "function") return;
+    // Bound the wait: supportedModels() resolves instantly once the query has
+    // initialized, but getModels() is on the models.list request path, so a
+    // hung subprocess must not freeze the picker — fall back to the last-known
+    // list (or FALLBACK_MODELS) instead of blocking.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const models = await Promise.race([
+        q.supportedModels(),
+        new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), 1500); }),
+      ]);
+      if (Array.isArray(models) && models.length) this.models = models.map((m) => brandClaudeModel(toModelInfo(m)));
+    } catch {
+      // Keep the last-known list (getModels() falls back to FALLBACK_MODELS if empty).
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 
@@ -1356,9 +1396,12 @@ class ClaudeSession implements RuntimeSession {
     this.emitter.removeAllListeners();
   }
 
-  getModels(): ModelInfo[] {
-    // Before the query is up (or if supportedModels() failed/returned nothing)
-    // fall back to the known lineup so the picker is never empty.
+  async getModels(): Promise<ModelInfo[]> {
+    // Re-query the live agent so the picker reflects the current lineup instead
+    // of the set captured when the query first spawned. Before the query is up
+    // (or if supportedModels() failed/returned nothing) fall back to the known
+    // lineup so the picker is never empty.
+    await this.refreshSupportedModels();
     return this.models.length ? this.models : FALLBACK_MODELS;
   }
 
