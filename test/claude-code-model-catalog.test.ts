@@ -112,4 +112,29 @@ async function waitFor(cond: () => boolean, ms = 1000): Promise<void> {
   console.log("branded + unfrozen catalog OK");
 }
 
+// ── warmModels(): a not-yet-prompted session fetches the real catalog ──
+{
+  const sdkModels = [
+    { value: "claude-opus-5", displayName: "Opus 5" },
+    { value: "claude-sonnet-5", displayName: "Sonnet 5" },
+  ];
+  const { sdk, queries } = makeSdk(sdkModels);
+  const runtime = new ClaudeCodeRuntime({ sdkLoader: async () => sdk, credentials: new TokenStore() });
+  const { session } = await runtime.createSession({ workspace: process.cwd() });
+
+  // Before warming (no prompt sent) the picker shows the placeholder lineup.
+  const before = await session.getModels();
+  assert.ok(before.some((m) => m.id === "claude-opus-4-8"), "an un-warmed session shows the placeholder fallback");
+  assert.equal(queries.length, 0, "reading the placeholder does not spawn an agent");
+
+  // Warming spins up the agent just far enough to read the real, branded list.
+  await session.warmModels();
+  await waitFor(() => queries.length === 1);
+  const after = await session.getModels();
+  assert.deepEqual(after.map((m) => m.name), ["Claude Opus 5", "Claude Sonnet 5"], "warmModels() surfaces the live catalog, branded");
+
+  session.dispose();
+  console.log("warmModels catalog OK");
+}
+
 console.log("claude-code model catalog: all tests passed");
