@@ -536,12 +536,6 @@ function commandExists(cmd) {
   return runQuiet("sh", ["-lc", "command -v -- \"$1\" >/dev/null 2>&1", "sh", cmd]).code === 0;
 }
 
-function resolveCommand(cmd) {
-  const found = runQuiet("sh", ["-lc", "command -v -- \"$1\"", "sh", cmd]);
-  if (found.code === 0 && found.stdout.trim()) return found.stdout.trim().split("\n")[0];
-  return "";
-}
-
 function npmGlobalBinCommand(cmd) {
   if (!commandExists("npm")) return "";
   const prefix = runQuiet("npm", ["prefix", "-g"]);
@@ -812,8 +806,26 @@ const AGENT_INTEGRATIONS = new Map([
 ]);
 
 async function ensureTerminalCommand(agent) {
-  let command = resolveCommand(agent.command) || npmGlobalBinCommand(agent.command) || agent.command;
-  if (commandExists(agent.command) || fs.existsSync(command)) return command;
+  const shimDir = defaultShimDir();
+  const managedExe = process.platform === "win32" ? `${agent.command}.cmd` : agent.command;
+  const managed = path.join(shimDir, managedExe);
+
+  // Launch exactly what the user's own PATH points the command at — the same
+  // binary they'd get by typing it in their shell (e.g. a newer nvm/asdf/global
+  // install), not whatever an older system copy or a fresh login shell would
+  // resolve. The one thing we must never return is a Bivy `bivy run` shim: those
+  // live in ~/.local/bin (which we prepend to PATH), so a plain lookup can hit
+  // one, and running it would re-enter `bivy run` and loop. When the resolved
+  // path IS a shim, resolve again with the shim dir excluded to reach the real
+  // binary behind it.
+  let command = whichOnPath(agent.command);
+  if (command && isBivyShim(command)) {
+    command = resolveRealBinary(agent.command, shimDir) || npmGlobalBinCommand(agent.command);
+  }
+  if (command && !isBivyShim(command)) return command;
+
+  // Nothing usable on PATH: accept a copy Bivy already manages, else install one.
+  if (fs.existsSync(managed) && !isBivyShim(managed)) return managed;
 
   if (!agent.npmPackage) return "";
   if (!commandExists("npm")) {
@@ -826,8 +838,9 @@ async function ensureTerminalCommand(agent) {
   const code = await run("npm", ["install", "--global", "--prefix", userLocalPrefix, agent.npmPackage, "--no-audit", "--no-fund"]);
   if (code !== 0) return "";
 
-  command = resolveCommand(agent.command) || npmGlobalBinCommand(agent.command) || agent.command;
-  return commandExists(agent.command) || fs.existsSync(command) ? command : "";
+  if (fs.existsSync(managed) && !isBivyShim(managed)) return managed;
+  command = whichOnPath(agent.command);
+  return command && !isBivyShim(command) ? command : "";
 }
 
 function customTerminalAgent(agentId) {
@@ -1192,6 +1205,24 @@ function resolveRealBinary(agentCmd, excludeDir) {
   const found = runQuiet("sh", ["-c", 'PATH="$1" command -v -- "$2" 2>/dev/null', "sh", cleaned, agentCmd]);
   const line = found.code === 0 ? found.stdout.trim().split("\n").pop() : "";
   return line && line.startsWith("/") ? line : "";
+}
+
+// Is `candidate` one of our own agent shims rather than a real agent binary?
+// A shim carries SHIM_MARKER in its first line. Resolving a shim as the thing to
+// run would re-enter `bivy run` and loop, so callers use this to skip it.
+function isBivyShim(candidate) {
+  try {
+    const fd = fs.openSync(candidate, "r");
+    try {
+      const buf = Buffer.alloc(256);
+      const n = fs.readSync(fd, buf, 0, 256, 0);
+      return buf.subarray(0, n).includes(SHIM_MARKER);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
 }
 
 // Resolve what a command name currently points to on the full PATH (no login
