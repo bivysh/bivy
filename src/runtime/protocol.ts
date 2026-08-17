@@ -536,6 +536,75 @@ class ProtocolSession implements RuntimeSession {
     });
   }
 
+  /**
+   * Run the optional prepare step then the credential preflight — the shared gate
+   * both prompt() and warmModels() pass through before spawning the shim.
+   * Refreshes this.prepareEnv from prepare() (e.g. Codex minting ~/.codex/auth.json
+   * from a just-completed sign-in) and returns the preflight's actionable error
+   * when the agent is uncredentialed, or undefined when it is clear to spawn. A
+   * runtime with neither hook configured is always clear.
+   */
+  private async preparePreflight(): Promise<string | undefined> {
+    if (!this.runtimeOptions.prepare && !this.runtimeOptions.preflight) return undefined;
+    const credentialEnv = this.runtimeOptions.credentials
+      ? await buildAgentCredentialEnv(this.runtimeOptions.credentials, undefined, this.currentModelProvider, this.cwd).catch(() => ({}))
+      : {};
+    if (this.runtimeOptions.prepare) {
+      this.prepareEnv =
+        (await Promise.resolve(this.runtimeOptions.prepare({ ...process.env, ...this.runtimeOptions.env, ...credentialEnv })).catch(() => undefined)) ??
+        this.prepareEnv;
+    }
+    return this.runtimeOptions.preflight?.(
+      { ...process.env, ...this.runtimeOptions.env, ...credentialEnv, ...this.prepareEnv },
+      { provider: this.currentModelProvider },
+    );
+  }
+
+  /**
+   * Resolve the model list for a draft/new-session picker before the first prompt
+   * — the generic sibling of Claude Code's warmModels(). getModels() reads
+   * this.models; a shim that knows its list up front advertises it in `hello`
+   * (which createSession's start() already waited on — e.g. Codex, whose shim runs
+   * model/list at startup), so those are already warm and this is a no-op. But an
+   * ACP-style agent (Gemini, opencode, …) can't know its models until a session
+   * opens — they depend on which providers the user authenticated and only arrive
+   * with `session/new` (the late runtime.models event, see handleEvent). For those,
+   * warming has to open() a session, not just start(). Gated on the same
+   * prepare+preflight as prompt() so we never open a session a shim would only fail
+   * uncredentialed — without a credential the picker keeps whatever hello/static
+   * catalog it has. Best-effort and idempotent.
+   */
+  async warmModels(): Promise<void> {
+    // Already live, or the hello already advertised the list (createSession's
+    // start() ran) — nothing to open.
+    if (this.started || this.models.length) return;
+    try {
+      if (await this.preparePreflight()) return; // uncredentialed — keep the hello/static catalog
+      await this.start();
+      if (this.models.length) return; // hello carried the list — no session needed
+      // ACP-style: the list only lands at session/new. Open (no prompt), then give
+      // the runtime.models push a bounded window so the caller's models.list
+      // re-emit includes it instead of racing it.
+      await this.open();
+      if (!this.models.length) await this.waitForModels(1500);
+    } catch {
+      // Spawn/handshake failure — the picker keeps whatever catalog it already has.
+    }
+  }
+
+  /** Resolve once the shim has published a model registry, or after `timeoutMs`.
+   *  Immediate when models are already known (hello advertised them). Backs
+   *  warmModels() over the async runtime.models push (see handleEvent). */
+  private waitForModels(timeoutMs: number): Promise<void> {
+    if (this.models.length) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const finish = () => { clearTimeout(timer); this.emitter.off("protocol-message", onMessage); resolve(); };
+      const onMessage = (msg: Record<string, unknown>) => { if (String(msg.type) === "runtime.models") finish(); };
+      const timer = setTimeout(finish, timeoutMs);
+      this.emitter.on("protocol-message", onMessage);
+    });
+  }
+
   private onData(data: string) {
     this.buffer += data;
     for (;;) {
@@ -877,30 +946,17 @@ class ProtocolSession implements RuntimeSession {
     // initial 401. Then preflight backstops the genuinely uncredentialed case with
     // an actionable error instead of an opaque upstream 401. ensureCodexAuth is
     // idempotent (it no-ops once auth.json exists), so the repeat is cheap.
-    if (this.runtimeOptions.prepare || this.runtimeOptions.preflight) {
-      const credentialEnv = this.runtimeOptions.credentials
-        ? await buildAgentCredentialEnv(this.runtimeOptions.credentials, undefined, this.currentModelProvider, this.cwd).catch(() => ({}))
-        : {};
-      if (this.runtimeOptions.prepare) {
-        this.prepareEnv =
-          (await Promise.resolve(this.runtimeOptions.prepare({ ...process.env, ...this.runtimeOptions.env, ...credentialEnv })).catch(() => undefined)) ??
-          this.prepareEnv;
-      }
-      const preflightError = this.runtimeOptions.preflight?.(
-        { ...process.env, ...this.runtimeOptions.env, ...credentialEnv, ...this.prepareEnv },
-        { provider: this.currentModelProvider },
-      );
-      if (preflightError) {
-        this.streaming = false;
-        const message = { role: "assistant", content: "", errorMessage: preflightError };
-        this.messages.push(message);
-        this.emit({ type: "message_start", message: { role: "assistant", content: "" } });
-        this.emit({ type: "session.error", error: preflightError });
-        this.emit({ type: "message_end", message });
-        this.emit({ type: "turn_end" });
-        this.emit({ type: "agent_end", code: 1, signal: null });
-        return;
-      }
+    const preflightError = await this.preparePreflight();
+    if (preflightError) {
+      this.streaming = false;
+      const message = { role: "assistant", content: "", errorMessage: preflightError };
+      this.messages.push(message);
+      this.emit({ type: "message_start", message: { role: "assistant", content: "" } });
+      this.emit({ type: "session.error", error: preflightError });
+      this.emit({ type: "message_end", message });
+      this.emit({ type: "turn_end" });
+      this.emit({ type: "agent_end", code: 1, signal: null });
+      return;
     }
     if (!wasStarted) this.emit({ type: "agent_start" });
     const prompt = text.trim();

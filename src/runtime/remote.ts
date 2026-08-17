@@ -369,6 +369,13 @@ export class RemoteRuntimeSession implements RuntimeSession {
     return (await this.request<ModelInfo[]>("getAllModels", [])) ?? [];
   }
 
+  /** Warm the in-service session's catalog (spawn its agent without a prompt so
+   *  a draft picker gets the real list) — the RPC sibling of the in-process
+   *  runtimes' warmModels(). A no-op in-service for a static-catalog runtime. */
+  async warmModels(): Promise<void> {
+    await this.request<void>("warmModels", []);
+  }
+
   // ---- RuntimeSession: thinking ---------------------------------------------
 
   getThinkingLevel(): string | undefined {
