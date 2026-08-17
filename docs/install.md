@@ -85,7 +85,7 @@ Override the location with `BIVY_DATA_DIR`.
 `bivy setup` (run by the installer, or `pnpm run setup` in an existing checkout)
 picks sensible defaults for everything and asks two questions:
 
-- **Remote access** — hosted (recommended; the hosted app shows your first 25 distinct sessions free, then requires Pro; execution and local history on your machine remain intact) or self-hosted,
+- **Remote access** — hosted (recommended; remote access runs on a weekly allowance, while execution and local history on your machine remain intact) or self-hosted,
   pointing this node at your own control plane + relay,
 - **Remote login** — GitHub sign-in (default) or an email magic link.
 
@@ -108,9 +108,9 @@ You can start from the hosted app first:
 1. Open the Bivy PWA and sign in with GitHub or email.
 2. If no runner is connected, the app shows how to connect one:
    - **Connect your own computer** — run `curl -fsSL https://bivy.sh/install.sh | bash` on macOS/Linux. Setup signs the node into the same account and enrolls it on the hosted relay.
-3. Free-trial and Pro accounts may enroll unlimited nodes and devices. The free
-   trial shows the first 25 distinct sessions through the hosted app; self-hosted
-   stacks are unlimited.
+3. Hosted accounts enroll nodes and devices to the same account. Remote access
+   through the hosted app runs on a weekly allowance; self-hosted stacks are
+   unlimited.
 
 ## Secure remote web/PWA access (hosted relay)
 

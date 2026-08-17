@@ -75,7 +75,7 @@ persisted transitions are counted, so a blocked completion cannot inflate the
 **Idempotent intake.** Duplicate trigger delivery (a redelivered webhook, a
 repeated manual dispatch) collapses to a single run via the per-account
 source/dedupe key: re-enqueuing the same key returns the existing run rather than
-creating a second one. Hosted free-tier usage is likewise recorded once per run
+creating a second one. Hosted allowance usage is likewise recorded once per run
 key, so reconnects and reclaims never inflate the run count.
 
 **Idempotent external effects.** A retry or reclaim of the same issue run must

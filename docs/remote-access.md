@@ -212,11 +212,6 @@ node's memory — a restart invalidates them. Run `bivy link` again and scan the
 fresh code. `bivy link` also fails fast if the node is not reachable; start it
 first.
 
-**"Node limit reached" during `bivy relay:setup`.**
-Your plan allows fewer nodes than you are trying to enroll. The command lists
-your existing nodes and offers to remove one to free a slot, or you can raise
-the cap on your account.
-
 **I signed in but see no nodes, or a different set of nodes.**
 You are signed into a different account than the one the node enrolled with, or
 into a node-scoped link grant rather than your account. Sign out in the app and

@@ -217,8 +217,7 @@ and can read its stdout or the `0600` file — can bootstrap (`src/server.ts`,
   is written to `.bivy/node.json` (mode `0600`); verification uses
   `timingSafeEqual` (`src/identity.ts`).
 - Nodes enroll against the control plane and receive a one-time `enr_`
-  enrollment token. Enrollment honours the plan's optional `maxNodes` cap; no plan
-  currently sets one, so node enrollment is unlimited on every tier.
+  enrollment token.
 
 ### Revoking one device
 
