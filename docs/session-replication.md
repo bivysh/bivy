@@ -100,8 +100,8 @@ the higher epoch and defers (demotes to standby, or discards its divergent tail)
 
 The replication stream is **owner node → standby node, E2E-encrypted, over the relay
 as opaque frames** (`src/relay-chunk.ts`, `src/wire-format.ts`). Transcript, git
-objects, and `runtimeSessionRef` must **never** transit the control plane in plaintext
-(`CORE.md`, `CLOUD.md`). The control plane coordinates *metadata only*: `standbyNodeId`,
+objects, and `runtimeSessionRef` must **never** transit the control plane in plaintext.
+The control plane coordinates *metadata only*: `standbyNodeId`,
 `ownerEpoch`, and node liveness (`POST /node/heartbeat`, `online` / `lastSeenAt`).
 
 ## Promotion (manual)

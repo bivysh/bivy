@@ -422,4 +422,4 @@ self-host it under that license. If you modify Bivy and let users interact with
 it over a network, section 13 requires you to offer those users the corresponding
 source code.
 
-See [`LICENSE`](LICENSE), [`CORE.md`](CORE.md), and [`CLOUD.md`](CLOUD.md).
+See [`LICENSE`](LICENSE).

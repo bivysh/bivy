@@ -8,7 +8,7 @@ Bivy Core runs the node + CLI locally without any hosted account (drive it from 
 
 **Bivy is beta software (v0.x).** Interfaces and behavior can change between releases, and it is not production-hardened yet.
 
-**We do not provide support for self-hosting.** There is no SLA and no support queue for self-hosted deployments — if you run Bivy yourself, you own it end to end. Questions can go to GitHub issues, but answers are community best-effort and not guaranteed. Support and managed reliability are what **[Bivy Cloud](../CLOUD.md)** is for.
+**We do not provide support for self-hosting.** There is no SLA and no support queue for self-hosted deployments — if you run Bivy yourself, you own it end to end. Questions can go to GitHub issues, but answers are community best-effort and not guaranteed. Support and managed reliability are what **Bivy Cloud** is for.
 
 The two self-host surfaces differ only in how much you have to operate:
 
@@ -23,7 +23,7 @@ The two self-host surfaces differ only in how much you have to operate:
 - **No uptime, response-time, or data-durability guarantees.** Breaking changes between versions and manual upgrade/migration steps are likely.
 - **You own operations:** TLS, backups, restore drills, secret rotation, monitoring, abuse prevention, and security hardening are your responsibility. This doc gets you started; it does not make them turnkey.
 
-**When to self-host the control plane + relay:** when you specifically need full data-plane ownership, air-gapped/on-prem deployment, or you're comfortable operating beta infrastructure with no support. Otherwise use **[Bivy Cloud](../CLOUD.md)** and skip the ops.
+**When to self-host the control plane + relay:** when you specifically need full data-plane ownership, air-gapped/on-prem deployment, or you're comfortable operating beta infrastructure with no support. Otherwise use **Bivy Cloud** and skip the ops.
 
 **What does _not_ change between Cloud and self-host:** the security boundary is identical either way — model keys and repo tokens stay on your node, the control plane sees only metadata + encrypted routing state, and normal relay payloads are E2E encrypted between your clients and nodes. See [Security boundary](#security-boundary) below. Self-hosting changes *who operates the service*, not *what the service can see*.
 
