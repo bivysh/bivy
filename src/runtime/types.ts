@@ -84,8 +84,7 @@ type ToolCallKindDetail =
   // agent/role it delegated to when the call names one (e.g. a
   // `subagent_type`); `description` is the sub-task text. Deliberately NOT a
   // claim of ownership over the child — Bivy only reports the delegation the
-  // parent agent surfaced; it does not control the sub-agent. See
-  // docs/session-reliability-plan.md (Phase 4 adds parent/child linkage).
+  // parent agent surfaced; it does not control the sub-agent.
   | { kind: "delegation"; label?: string; description?: string };
 
 export type ToolCallDetail = ToolCallKindDetail & {

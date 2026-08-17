@@ -122,9 +122,8 @@ export function isTurnStalled(opts: {
  *  - `wall_clock` — the turn hit the absolute wall-clock cap (decided at the
  *                   timer callsite, not here — this classifier only sees the
  *                   idle/pid signals).
- * Exported so the daemon can attribute recoveries per runtime (see
- * docs/session-reliability-plan.md, Phase 1) instead of losing the reason to a
- * log line.
+ * Exported so the daemon can attribute recoveries per runtime instead of
+ * losing the reason to a log line.
  */
 export type StallTrigger = "pid_dead" | "stalled" | "wedged" | "wall_clock";
 

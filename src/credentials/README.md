@@ -81,9 +81,8 @@ lifted into its own package by adding a `package.json`).
 
 ## Roadmap
 
-See [`docs/credentials-service-plan.md`](../../docs/credentials-service-plan.md).
 The vault and resolver now live under this directory (two-layer split complete),
 and compatibility shims remain at `runtime/credential-store.ts` and
 `runtime/credentials.ts` for existing importers. The last step is a
-`package.json` that lifts the service out whole (plan phase 7). Each change is
+`package.json` that lifts the service out whole. Each change is
 additive; the zero-config single-credential experience stays unchanged.

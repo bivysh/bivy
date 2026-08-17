@@ -188,7 +188,6 @@ export function createTurnWatchdog(deps: WatchdogDeps): TurnWatchdog {
   // Aggregate turn-recovery counters, keyed `"<runtimeId>:<trigger>"`. A privacy-
   // safe histogram (counts only, no session content) surfaced in the redacted
   // /api/diagnostics health bag so operators can see which runtime hangs and how.
-  // See docs/session-reliability-plan.md (Phase 1).
   const turnRecoveryCounts = new Map<string, number>();
   const recoveryTargetMs = 10_000;
   const turnRecoveryDurations = new Map<string, { observations: number; totalMs: number; maxMs: number; withinTarget: number; targetMs: number }>();
@@ -225,7 +224,7 @@ export function createTurnWatchdog(deps: WatchdogDeps): TurnWatchdog {
     console.warn(`[turn-watchdog] recovering stuck session ${record.id} (runtime=${record.runtimeId} trigger=${trigger}): ${reason}`);
     // Attribute the recovery so operators can see WHICH runtime/transport hangs and
     // how (subprocess died vs went silent vs hit the wall-clock cap) instead of
-    // losing it to a log line — see docs/session-reliability-plan.md (Phase 1).
+    // losing it to a log line.
     recordTurnRecovery(record.runtimeId, trigger);
     deps.broadcast({
       type: "session.diagnostic",

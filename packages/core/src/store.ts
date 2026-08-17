@@ -2881,7 +2881,7 @@ export class SessionStore {
     // transcript reflects everything through `headSeq`, so the next live event we
     // expect is headSeq+1. Reset first when the stream epoch changed (a daemon
     // restart) so its seq counter starting over doesn't read as a flood of
-    // duplicates (docs/session-reliability-plan.md, Phase 2).
+    // duplicates.
     if (sessionId && typeof e.headSeq === "number") {
       this.trackSeqStream(sessionId, e.streamEpoch);
       this.seqReassembler.baseline(e.headSeq);

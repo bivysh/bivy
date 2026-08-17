@@ -9,7 +9,7 @@
 // Validation is hand-rolled (no schema library) so this module stays pure and
 // dependency-free — it imports only the record model — and a malformed config
 // degrades to "no presets" (the implicit default) rather than breaking the
-// credential path. See docs/credentials-service-plan.md §3.3 / §5.
+// credential path.
 
 import fs from "node:fs";
 import path from "node:path";

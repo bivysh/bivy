@@ -11,7 +11,7 @@
 // Phase 1 (this PR) is additive: the new pure record model ships here, and the
 // existing credential surface is re-exported so new code can already import from
 // `src/credentials/`. Later phases move the implementations under this directory
-// and wire selection into the live path. See docs/credentials-service-plan.md.
+// and wire selection into the live path.
 
 // --- The record model + selection (new, pure) ------------------------------
 export {

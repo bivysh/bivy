@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 //
 // Client-side ordered reassembly of sequenced `session.event`s — the consumer of
-// the node's per-session `seq` (docs/session-reliability-plan.md, Phase 2).
+// the node's per-session `seq`.
 //
 // The node stamps each fanned-out session event with a monotonic per-session
 // `seq` (see src/session/event-sequencer.ts) and keeps a bounded replay buffer.

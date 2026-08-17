@@ -8,8 +8,7 @@
 // vault (credential-store.ts) with zero Pi involvement, so the service compiles
 // and tests without Pi. Provider catalog data is likewise injected:
 // `joinProviderCatalog` receives Bivy's baseline overlaid with optional live
-// runtime metadata by the thin `runtime/provider-catalog.ts` bridge. See
-// docs/credentials-service-plan.md §3.1.
+// runtime metadata by the thin `runtime/provider-catalog.ts` bridge.
 
 import type { StoredCredential } from "./types.js";
 import { createCredentialVault, type CredentialVerification } from "./store.js";
