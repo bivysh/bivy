@@ -100,10 +100,18 @@ const SDK_PACKAGE = "@anthropic-ai/claude-agent-sdk";
 // the first prompt. Until then this.models is empty and the picker would show
 // nothing. These are the models a Claude Pro/Max subscription exposes; once
 // the query is up, supportedModels() replaces them with the authoritative set.
+// Placeholder catalog shown before a live agent can answer (see getModels() and
+// warmModels()). A not-yet-started session has no subprocess to query, so the
+// picker shows this until warmModels() spawns one and supportedModels() replaces
+// it with the account's real, current lineup. Keep it roughly current so the
+// pre-warm placeholder isn't jarringly stale, but it is only a placeholder — the
+// live list is the source of truth.
 const FALLBACK_MODELS: ModelInfo[] = [
+  { provider: "anthropic", id: "claude-opus-5", name: "Claude Opus 5", reasoning: true },
   { provider: "anthropic", id: "claude-opus-4-8", name: "Claude Opus 4.8", reasoning: true },
   { provider: "anthropic", id: "claude-sonnet-5", name: "Claude Sonnet 5", reasoning: true },
   { provider: "anthropic", id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5", reasoning: true },
+  { provider: "anthropic", id: "claude-fable-5", name: "Claude Fable 5", reasoning: true },
 ];
 
 // The SDK's supportedModels() labels each row with a bare family+version
@@ -998,6 +1006,27 @@ class ClaudeSession implements RuntimeSession {
       // Keep the last-known list (getModels() falls back to FALLBACK_MODELS if empty).
     } finally {
       if (timer) clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Spin up the agent subprocess *without* sending a prompt, purely so
+   * supportedModels() can resolve and the picker shows the account's real,
+   * current lineup instead of FALLBACK_MODELS. Used to warm a not-yet-started
+   * (e.g. draft/new-session) catalog. Gated on credentials — mirroring prompt()'s
+   * preflight — so we never spawn a subprocess that would only fail; without a
+   * credential the picker simply keeps the placeholder list. Best-effort and
+   * idempotent: once the query is up it just re-reads the list.
+   */
+  async warmModels(): Promise<void> {
+    if (this.query) return this.refreshSupportedModels();
+    try {
+      const env = { ...process.env, ...depCacheEnv(this.cwd), ...this.runtimeOptions.env, ...(await this.resolveCredentialEnv().catch(() => ({}))) } as Record<string, string>;
+      if (anthropicCredentialPreflight(env)) return; // no credential — keep FALLBACK_MODELS
+      await this.ensureStarted();
+      await this.refreshSupportedModels();
+    } catch {
+      // Spawn/credential failure — the picker keeps FALLBACK_MODELS.
     }
   }
 

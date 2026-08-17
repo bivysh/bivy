@@ -347,6 +347,16 @@ export interface RuntimeSession {
    */
   refreshModels?(): void | Promise<void>;
 
+  /**
+   * Eagerly prepare the model catalog so getModels() can return the real list
+   * before the first prompt. Optional: a runtime whose catalog is only known
+   * once a live agent is running (e.g. Claude Code, whose SDK exposes
+   * supportedModels() only after the subprocess spawns) implements this to warm
+   * that subprocess in the background for a draft/new-session picker. A runtime
+   * whose catalog is static leaves it undefined and getModels() already answers.
+   */
+  warmModels?(): Promise<void>;
+
   // ---- Thinking / reasoning levels (optional capability for models that support it)
   getThinkingLevel?(): string | undefined;
   setThinkingLevel?(level: string): void;

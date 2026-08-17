@@ -2581,16 +2581,12 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     // stale `active` on another runtime lingers on the node.
     if (!requestedSessionId && wantedRuntimeId && record?.runtimeId !== wantedRuntimeId) record = null;
     record ??= await sessionForModelQuery(wantedRuntimeId);
-    const session = record.session;
-    const current = session.getCurrentModel();
-    const models = await publicModelsList(session, current);
-    const thinking = publicThinkingInfo(session);
     // Tag the list with the runtime it was resolved for so the client can
     // tell whether it belongs to the agent it currently has selected. Without
     // this a models.list answered for one agent (e.g. Codex's models) could
     // linger on the composer/picker after the user switched to another agent
     // (e.g. Claude) — the "Claude shows Codex models" bug.
-    relay?.sendEvent({ type: "models.list", sessionId: record.id, runtimeId: record.runtimeId, current: current ? publicModel(current, current) : null, models, thinking });
+    relay?.sendEvent(await modelsListEventFor(record));
   },
   "models.prefetch"(msg) {
     // The composer's agent picker opened: warm the scratch session for each
@@ -8297,10 +8293,26 @@ async function sessionForModelQuery(runtimeId?: string): Promise<SessionRecord> 
   const inflight = modelQueryScratchPending.get(wanted);
   if (inflight) return inflight;
   const build = createSession(defaultWorkspace, undefined, { makeActive: false, ephemeral: true, runtimeId: wanted })
-    .then((rec) => { modelQueryScratch.set(wanted, rec); return rec; })
+    .then((rec) => { modelQueryScratch.set(wanted, rec); void warmScratchModels(rec); return rec; })
     .finally(() => { modelQueryScratchPending.delete(wanted); });
   modelQueryScratchPending.set(wanted, build);
   return build;
+}
+
+// A fresh scratch answers its first models.list from the runtime's placeholder
+// list (no live agent yet). Warm the real catalog in the background — for Claude
+// Code this spins up the agent subprocess just far enough for supportedModels()
+// to resolve — then push an updated models.list so a picker opened on the
+// placeholder repaints with the account's actual, current lineup. Best-effort:
+// a runtime without warmModels() (static catalog) or a warm failure is a no-op.
+async function warmScratchModels(rec: SessionRecord): Promise<void> {
+  if (typeof rec.session.warmModels !== "function") return;
+  try {
+    await rec.session.warmModels();
+    relay?.sendEvent(await modelsListEventFor(rec));
+  } catch {
+    // Keep the placeholder list; the on-demand models.list path surfaces real errors.
+  }
 }
 
 /**
@@ -9203,6 +9215,17 @@ async function publicModelsList(session: any, current: any) {
     modelCount,
   }));
   return [...connected, ...other];
+}
+
+// Build the models.list event for a session/scratch record — the single shape
+// both the on-demand handler and the background warm-push send, so an open
+// picker updates identically however the list was produced.
+async function modelsListEventFor(record: SessionRecord) {
+  const session = record.session;
+  const current = session.getCurrentModel();
+  const models = await publicModelsList(session, current);
+  const thinking = publicThinkingInfo(session);
+  return { type: "models.list" as const, sessionId: record.id, runtimeId: record.runtimeId, current: current ? publicModel(current, current) : null, models, thinking };
 }
 
 function publicThinkingInfo(session: any) {
