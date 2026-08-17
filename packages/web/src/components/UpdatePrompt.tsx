@@ -20,10 +20,12 @@ export function UpdatePrompt() {
           ? `Reload is available after ${blockers.join(", ")}.`
           : "Draft text and attachment names are stored in this browser; cached transcripts remain when browser storage is available. File contents must be re-selected."}
       </span>
-      <button className="btn ghost" onClick={() => setShow(false)}>Later</button>
-      <button className="btn primary" onClick={reloadForUpdate} disabled={blockers.length > 0} aria-disabled={blockers.length > 0}>
-        Reload safely
-      </button>
+      <div className="update-toast-actions">
+        <button className="btn ghost" onClick={() => setShow(false)}>Later</button>
+        <button className="btn primary" onClick={reloadForUpdate} disabled={blockers.length > 0} aria-disabled={blockers.length > 0}>
+          Reload
+        </button>
+      </div>
     </Toast>
   );
 }

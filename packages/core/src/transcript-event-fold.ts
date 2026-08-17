@@ -182,7 +182,20 @@ export function foldTranscriptEvent(input: TranscriptFoldValue, event: ServerEve
   const value = cloneValue(input); const commands: TranscriptFoldCommand[] = [];
   switch (kind) {
     case "agent_start": case "turn_start": value.draft.finalized = false; setWorking(value, kind === "agent_start" ? "Planning…" : "Thinking…"); break;
-    case "message_start": if ((event as any).message?.role === "assistant") { value.draft = freshTranscriptDraft(false); setWorking(value, "Drafting response…"); } break;
+    case "message_start": if ((event as any).message?.role === "assistant") {
+      // A genuinely new assistant message begins only once the prior one is
+      // sealed (message_end/message_boundary set finalized). Reset the draft
+      // then, so the next message accumulates from a clean baseline. But a
+      // message_start that arrives mid-stream — no intervening message_end
+      // (reconnect, a multi-segment turn, reassembly reorder) — must NOT wipe
+      // the open draft: doing so orphaned the live preview bubble as a
+      // permanent streaming bubble ("live typing stuck further up") and reset
+      // committedText so the next update re-appended the whole prose into a
+      // second bubble (the duplicated-"I've" symptom). Keep folding into the
+      // same draft instead, so the one bubble updates in place.
+      if (value.draft.finalized) value.draft = freshTranscriptDraft(false);
+      setWorking(value, "Drafting response…");
+    } break;
     case "attachment": {
       const ref = (event as any).ref;
       if (!ref || typeof ref.hash !== "string" || (ref.kind !== "image" && ref.kind !== "file")) return { handled: true, value: input, commands: [] };

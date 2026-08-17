@@ -25,10 +25,12 @@ function fakeStore(): LocalStore {
   } as unknown as LocalStore;
 }
 
-// The Fly adapter provisions with two exec calls: create-app then create-machine.
-// Return a machine whose provider-generated name is the Fly app name so the test
-// can prove the caller's chosen name overrides it on the stored record.
+// The Fly adapter provisions by first resolving the token's org over GraphQL,
+// then create-app + create-machine. Return a machine whose provider-generated
+// name is the Fly app name so the test can prove the caller's chosen name
+// overrides it on the stored record.
 const flyExec: ExecFn = async (req) => {
+  if (req.url === "https://api.fly.io/graphql") return { status: 200, body: { data: { organizations: { nodes: [{ slug: "personal", type: "PERSONAL" }] } } } };
   if (req.url.endsWith("/v1/apps")) return { status: 201, body: {} };
   return { status: 200, body: { id: "flymachine123", state: "created" } };
 };

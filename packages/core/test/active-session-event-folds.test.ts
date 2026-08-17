@@ -53,6 +53,34 @@ describe("active-session pure event folds", () => {
     expect(end.commands).toContainEqual({ kind: "turn-settled" });
   });
 
+  it("a mid-stream message_start keeps one bubble instead of orphaning + duplicating it", () => {
+    // Regression: a message_start arriving before the open message sealed used
+    // to wipe the draft — orphaning the "I've" preview bubble as a permanent
+    // streaming bubble and re-appending the full prose as a second bubble.
+    let v = transcriptValue();
+    v = foldTranscriptEvent(v, { type: "message_start", message: { role: "assistant", content: "" } }, 1).value;
+    v = foldTranscriptEvent(v, { type: "message_update", message: { role: "assistant", content: [{ type: "text", text: "I've" }] } }, 2).value;
+    // A stray second message_start mid-answer (no message_end in between).
+    v = foldTranscriptEvent(v, { type: "message_start", message: { role: "assistant", content: "" } }, 3).value;
+    v = foldTranscriptEvent(v, { type: "message_update", message: { role: "assistant", content: [{ type: "text", text: "I've confirmed the root cause." }] } }, 4).value;
+    const end = foldTranscriptEvent(v, { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "I've confirmed the root cause." }] } }, 5);
+
+    const prose = end.value.transcript.filter((e) => e.role === "assistant");
+    expect(prose.map((e) => e.text)).toEqual(["I've confirmed the root cause."]);
+    expect(prose.every((e) => !e.streaming)).toBe(true);
+  });
+
+  it("resets the draft on a message_start that follows a sealed message", () => {
+    let v = transcriptValue();
+    v = foldTranscriptEvent(v, { type: "message_start", message: { role: "assistant", content: "" } }, 1).value;
+    v = foldTranscriptEvent(v, { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "First reply." }] } }, 2).value;
+    v = foldTranscriptEvent(v, { type: "message_start", message: { role: "assistant", content: "" } }, 3).value;
+    const end = foldTranscriptEvent(v, { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Second reply." }] } }, 4);
+
+    const prose = end.value.transcript.filter((e) => e.role === "assistant");
+    expect(prose.map((e) => e.text)).toEqual(["First reply.", "Second reply."]);
+  });
+
   it("buffers attachments and groups them under final prose", () => {
     const withProse: TranscriptFoldValue = { ...transcriptValue(), transcript: [{ id: "reply", role: "assistant", text: "Done" }] };
     const buffered = foldTranscriptEvent(withProse, { type: "attachment", ref: { kind: "file", hash: "abc", name: "report.txt", size: 3 }, caption: "report" }, 50);

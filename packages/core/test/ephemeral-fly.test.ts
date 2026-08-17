@@ -34,12 +34,19 @@ type FlyMachineBody = {
 };
 const machineConfig = (req: ExecRequest) => (req.body as FlyMachineBody).config;
 
-/** Fake Fly transport: 200 on app create, returns a machine on machine create,
- *  and records the machine-create body so the test can assert its config. */
+/** A Fly account created via GitHub gets a *named* org (not slugged "personal"),
+ *  and that's the org the token can see — so provisioning resolves the org from
+ *  the token via GraphQL before creating the app. */
+const FLY_ORG_GRAPHQL: ExecResult = { status: 200, body: { data: { organizations: { nodes: [{ slug: "my-github-org", type: "PERSONAL" }] } } } };
+
+/** Fake Fly transport: resolves the org over GraphQL, 200 on app create, returns
+ *  a machine on machine create, and records the machine-create body so the test
+ *  can assert its config. */
 function fakeFlyExec() {
   const calls: ExecRequest[] = [];
   const exec = async (req: ExecRequest): Promise<ExecResult> => {
     calls.push(req);
+    if (req.url === "https://api.fly.io/graphql") return FLY_ORG_GRAPHQL;
     if (req.url === "https://api.machines.dev/v1/apps") return { status: 201, body: {} };
     if (/\/machines$/.test(req.url)) return { status: 200, body: { id: "abc123", state: "starting" } };
     return { status: 404, body: null };
@@ -60,6 +67,10 @@ describe("fly adapter — provision", () => {
     });
 
     expect(machine).toMatchObject({ id: "abc123", provider: "fly", app: "bivy-abc123", region: "fra" });
+
+    // The app is created in the org resolved from the token, not a hardcoded one.
+    const appCreate = calls.find((c) => c.url === "https://api.machines.dev/v1/apps" && c.method === "POST")!;
+    expect((appCreate.body as { org_slug?: string }).org_slug).toBe("my-github-org");
 
     const create = calls.find((c) => /\/machines$/.test(c.url))!;
     const cfg = machineConfig(create);
@@ -130,7 +141,8 @@ describe("fly adapter — orphan discovery", () => {
     const calls: ExecRequest[] = [];
     const exec = async (req: ExecRequest): Promise<ExecResult> => {
       calls.push(req);
-      if (req.url === "https://api.machines.dev/v1/apps") {
+      if (req.url === "https://api.fly.io/graphql") return FLY_ORG_GRAPHQL;
+      if (req.url.startsWith("https://api.machines.dev/v1/apps?org_slug=")) {
         return { status: 200, body: { apps: [{ name: "bivy-abc123" }, { name: "someone-elses-app" }] } };
       }
       if (req.url === "https://api.machines.dev/v1/apps/bivy-abc123/machines") {
@@ -153,7 +165,8 @@ describe("fly adapter — orphan discovery", () => {
 
   it("skips an app whose machine list fails, rather than aborting the whole scan", async () => {
     const exec = async (req: ExecRequest): Promise<ExecResult> => {
-      if (req.url === "https://api.machines.dev/v1/apps") return { status: 200, body: { apps: [{ name: "bivy-broken" }, { name: "bivy-ok" }] } };
+      if (req.url === "https://api.fly.io/graphql") return FLY_ORG_GRAPHQL;
+      if (req.url.startsWith("https://api.machines.dev/v1/apps?org_slug=")) return { status: 200, body: { apps: [{ name: "bivy-broken" }, { name: "bivy-ok" }] } };
       if (req.url === "https://api.machines.dev/v1/apps/bivy-broken/machines") return { status: 500, body: { error: "boom" } };
       if (req.url === "https://api.machines.dev/v1/apps/bivy-ok/machines") {
         return { status: 200, body: [{ id: "ok1", region: "iad", state: "started", config: { metadata: { bivy: "ephemeral", "bivy-account": "owner-tag-1" } } }] };

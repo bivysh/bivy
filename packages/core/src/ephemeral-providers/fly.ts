@@ -5,13 +5,52 @@ import { b64 } from "../base64.js";
 import { bivyRelayJson, bivyStartScript } from "../ephemeral-provider-bootstrap.js";
 import { clampTtlMinutes } from "../ephemeral-lifecycle.js";
 import type { EphemeralMachine } from "../ephemeral-machine.js";
-import type { BootstrapOpts, ProviderAdapter } from "../ephemeral-provider-ports.js";
-import { bearer, call, nowIso, providerError, shq, utf8 } from "../ephemeral-provider-utils.js";
+import type { BootstrapOpts, ExecFn, ProviderAdapter } from "../ephemeral-provider-ports.js";
+import { bearer, call, extractProviderMessage, nowIso, providerError, shq, utf8 } from "../ephemeral-provider-utils.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 function mapFlyStatus(s: string): string {
   return s === "started" ? "running" : s === "stopped" || s === "destroyed" ? "stopped" : "starting";
+}
+
+// Fly's Machines API scopes `/v1/apps` to an org: the endpoint is
+// `GET /v1/apps?org_slug=<org>`, and called bare (no org_slug) it 404s with a
+// plain "404 page not found" body — which surfaced as a bogus onboarding
+// "Provider failed to validate credential" error.
+//
+// We can't assume the org is `personal`: a Fly account created via GitHub gets a
+// *named* org (not slugged "personal"), and that org is the only place the
+// dashboard lets you mint API tokens — so a real user's token is scoped to it,
+// and `org_slug=personal` would 404 just like the bare URL. Since a token is
+// scoped to the org(s) it can reach, we ask Fly which org this token can see and
+// use that. The Machines API has no "list orgs" call, so this uses the GraphQL
+// API (read-only query) — the same host flyctl uses, already host-allowlisted.
+const FLY_DEFAULT_ORG = "personal";
+
+// Resolve the org slug a token should provision into. Prefers an explicit
+// override, then a personal-type org when the token can see one, else the first
+// org it can reach. Throws when the token is invalid or sees no org, so it
+// doubles as the credential check. GraphQL auth failures come back as non-2xx;
+// a valid token with an empty/errored result yields no nodes.
+async function resolveFlyOrg(exec: ExecFn, token: string, preferred?: string): Promise<string> {
+  const override = String(preferred || "").trim();
+  if (override) return override;
+  const res = await call(exec, {
+    method: "POST",
+    url: "https://api.fly.io/graphql",
+    headers: { ...bearer(token), "content-type": "application/json" },
+    body: { query: "query { organizations { nodes { slug type } } }" },
+  });
+  if (res.status >= 300) throw new Error(providerError(res, "list organizations"));
+  const nodes: any[] = Array.isArray(res.body?.data?.organizations?.nodes) ? res.body.data.organizations.nodes : [];
+  if (!nodes.length) {
+    const detail = extractProviderMessage(res.body);
+    throw new Error(`Fly token has no accessible organizations${detail ? `: ${detail}` : ""}`);
+  }
+  const personal = nodes.find((o) => String(o?.type || "").toUpperCase() === "PERSONAL" && o?.slug);
+  const chosen = personal || nodes.find((o) => o?.slug) || nodes[0];
+  return String(chosen?.slug || FLY_DEFAULT_ORG);
 }
 
 // Maps a Fly size id to the guest spec sent in the machine config.
@@ -87,16 +126,20 @@ export const flyProvider: ProviderAdapter = {
   // subprocesses. 1–2 GB is an opt-in economy choice, not a safe default.
   defaultSize: "shared-4x-8gb",
   async validateToken({ exec, token }) {
+    // Discover the org the token is scoped to (this alone rejects an invalid
+    // token), then confirm it can reach the Machines API for that org — the
+    // exact capability provisioning needs — so under-scoped tokens fail here.
+    const org = await resolveFlyOrg(exec, token);
     const res = await call(exec, {
       method: "GET",
-      url: "https://api.machines.dev/v1/apps",
+      url: `https://api.machines.dev/v1/apps?org_slug=${encodeURIComponent(org)}`,
       headers: bearer(token),
     });
     if (res.status >= 300) throw new Error(providerError(res, "validate credential"));
   },
   async provision({ exec, token, config, userData, bootstrap }) {
     const app = `bivy-${config.slug}`;
-    const org = config.org || "personal";
+    const org = await resolveFlyOrg(exec, token, config.org);
     const guest = FLY_GUEST[config.size as string] || FLY_GUEST[flyProvider.defaultSize] || { cpus: 1, memoryMb: 2048 };
     const created = await call(exec, {
       method: "POST",
@@ -192,7 +235,8 @@ export const flyProvider: ProviderAdapter = {
   // Bounded by how many bivy- apps exist for the token (normally very few);
   // one app's list call failing is skipped rather than aborting the scan.
   async discover({ exec, token, ownershipTag }) {
-    const appsRes = await call(exec, { method: "GET", url: "https://api.machines.dev/v1/apps", headers: bearer(token) });
+    const org = await resolveFlyOrg(exec, token);
+    const appsRes = await call(exec, { method: "GET", url: `https://api.machines.dev/v1/apps?org_slug=${encodeURIComponent(org)}`, headers: bearer(token) });
     if (appsRes.status >= 300) throw new Error(providerError(appsRes, "list apps"));
     const apps: any[] = Array.isArray(appsRes.body?.apps) ? appsRes.body.apps : Array.isArray(appsRes.body) ? appsRes.body : [];
     const found: EphemeralMachine[] = [];
