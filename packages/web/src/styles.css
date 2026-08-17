@@ -2409,6 +2409,15 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
    above the output like the search bar; the buttons bottom-align with a growing
    textarea. Reuses the chat composer's input + button vocabulary. */
 .term-composer { display: flex; align-items: flex-end; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--surface); }
+/* On touch the composer is the bottom-most element (below the toolbar), so it
+   owns the home-indicator safe area — otherwise its last line (mic / Send row)
+   sits behind the iPhone home bar. env() is 0 with the keyboard up, so it hugs
+   the keyboard then, and clears the indicator when the keyboard is down. */
+.term-composer { padding-bottom: calc(8px + env(safe-area-inset-bottom)); }
+/* When the composer is open the toolbar is no longer the bottom element, so drop
+   its safe-area reservation — otherwise a dead home-indicator-sized gap opens
+   between the toolbar and the composer. */
+.term-toolbar:has(+ .term-composer) { padding-bottom: 8px; }
 .term-composer-input { flex: 1; min-width: 0; }
 .term-composer-actions { display: flex; align-items: center; gap: 8px; flex: none; }
 
