@@ -14,7 +14,7 @@ const read = (rel: string) => readFile(new URL(rel, import.meta.url), "utf8");
 
 test("the journey gates in order: sign-in first, then machine pair/select, then the readiness strip", async () => {
   const app = await read("../../packages/web/src/App.tsx");
-  const needsAuth = app.indexOf("if (needsAuth) {");
+  const needsAuth = app.indexOf("if (needsAuth || signInRequested) {");
   const needsNodeDecl = app.indexOf("const needsNode =");
   const readinessStrip = app.indexOf("<ReadinessChecklist");
   expect(needsAuth).toBeGreaterThan(-1);
@@ -23,7 +23,10 @@ test("the journey gates in order: sign-in first, then machine pair/select, then 
   // The sign-in gate returns early (a full-screen replace), so it's checked
   // and rendered before the readiness strip's own JSX is ever reached.
   expect(needsAuth).toBeLessThan(readinessStrip);
-  expect(app).toContain("<SetupNotice />");
+  // Only a *summoned* sign-in (a solo pairing asking for an account from
+  // Automations / cloud machine profiles) is dismissable — the boot-time auth
+  // gate has no app behind it to return to, so it never gets onDismiss.
+  expect(app).toContain("<SetupNotice onDismiss={needsAuth ? undefined : dismissSignInRequest} />");
   // needsNode's own screen (ConnectRunner) and the readiness strip render as
   // siblings once signed in — a fresh draft with no Machine yet sees BOTH the
   // "connect a Machine" panel and the checklist reinforcing what's still

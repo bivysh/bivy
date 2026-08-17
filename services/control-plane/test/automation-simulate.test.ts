@@ -5,7 +5,6 @@
 // POST /account/automations/simulate endpoint (the control-plane half of the
 // PWA Test event workflow — see docs/automation-evaluator.md) and the
 // save-time preflight gate on POST/PUT /account/automations.
-import { createHmac } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -44,24 +43,11 @@ async function json(port: number, method: string, pathname: string, body?: unkno
   });
   return { status: response.status, body: await response.json().catch(() => ({})) as any };
 }
-async function triggerWebhook(port: number, endpoint: string, secret: string, raw: string, key: string) {
-  const signature = createHmac("sha256", secret).update(raw).digest("hex");
-  const response = await fetch(endpoint.replace(/^https?:\/\/[^/]+/, `http://localhost:${port}`), {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-bivy-signature-256": `sha256=${signature}`, "x-bivy-idempotency-key": key },
-    body: raw,
-    signal: AbortSignal.timeout(10_000),
-  });
-  return { status: response.status, body: await response.json().catch(() => ({})) as any };
-}
-
 async function main() {
   const port = await freePort();
-  // ENFORCE_ENTITLEMENTS=1 so the quota preflight signal reports real warn/
-  // exhausted state instead of always-permissive (matches production).
   const proc = spawn("npx", ["tsx", "src/index.ts"], {
     cwd: cpDir,
-    env: { ...process.env, PORT: String(port), RELAY_SECRET: "simulate-test", ENFORCE_ENTITLEMENTS: "1" },
+    env: { ...process.env, PORT: String(port), RELAY_SECRET: "simulate-test" },
     stdio: "inherit",
   });
   procs.push(proc);
@@ -131,7 +117,7 @@ async function main() {
   expect(draftSim.status === 200, "simulate accepts a brand-new draft that was never saved");
   expect(draftSim.body.matchedId === catchAll.body.id, "the earlier catch-all automation wins first-match over the draft");
   expect(draftSim.body.overlaps.some((o: any) => o.kind === "shadowed" && o.beforeId === catchAll.body.id), "simulate reports that the draft is shadowed by the earlier catch-all");
-  expect(Array.isArray(draftSim.body.preflight) && draftSim.body.preflight.length === 7, "simulate returns the full seven-check preflight checklist");
+  expect(Array.isArray(draftSim.body.preflight) && draftSim.body.preflight.length === 6, "simulate returns the full six-check preflight checklist");
   expect(draftSim.body.gate.blocked === false, "a plain github draft does not block save");
 
   const badDraftSim = await json(port, "POST", "/account/automations/simulate", { draft: { repo: "acme/api" } }, token);
@@ -151,37 +137,6 @@ async function main() {
   expect(editPreview.status === 200 && editPreview.body.gate.blocked === true, "simulate previews an unsaved edit's gate without persisting it");
   const stillSafe = await json(port, "GET", "/account/automations", undefined, token);
   expect(stillSafe.body.find((d: any) => d.id === catchAll.body.id)?.sandbox !== "danger-full-access", "previewing a draft edit via simulate never mutates the stored automation");
-
-  // --- Quota: exhausting the free weekly allowance surfaces a "block"
-  //     severity in the checklist without ever blocking save (the module's
-  //     documented contract — see runPreflightChecks in src/automation).
-  //     Manual dispatch (POST .../:id/run) is deliberately unlimited (see
-  //     Entitlements.weeklyRunLimit's doc comment) and merely enqueueing a
-  //     webhook delivery doesn't count either — the allowance meter
-  //     (run_starts) only increments once a node marks the claimed work
-  //     "running", so draining it takes a full node claim/running cycle. ---
-  const quotaHook = await json(port, "POST", "/account/automations", {
-    name: "Quota drain", trigger: "webhook", templateCiphertext: "bivy-room-v1:node-x:opaque",
-  }, token);
-  expect(quotaHook.status === 201, "webhook automation for quota exhaustion saves");
-  const drainNode = await json(port, "POST", "/nodes/enroll", { nodeId: "quota-drain-node", name: "quota-drain" }, token);
-  const drainToken = drainNode.body.enrollmentToken;
-  expect(Boolean(drainToken), "a node enrolls to drain the account's quota");
-  for (let i = 0; i < 11; i += 1) {
-    const raw = JSON.stringify({ version: "1", instruction: "drain", title: `drain-${i}` });
-    const fired = await triggerWebhook(port, quotaHook.body.webhookUrl, quotaHook.body.webhookSecret, raw, `quota-${i}`);
-    expect(fired.status === 202, `webhook delivery ${i} is accepted`);
-    const claimed = await json(port, "POST", `/node/work/${fired.body.id}/claim`, undefined, drainToken);
-    expect(claimed.status === 200, `work item ${i} is claimed`);
-    const running = await json(port, "POST", `/node/work/${fired.body.id}/running`, undefined, drainToken);
-    expect(running.status === 200, `work item ${i} transitions to running, consuming one unit of the allowance`);
-  }
-  // Quota is account-scoped, not per-automation — simulating any automation
-  // on this account now sees the exhausted allowance.
-  const overQuota = await json(port, "POST", "/account/automations/simulate", { automationId: safeCreate.body.id }, token);
-  const quotaCheck = overQuota.body.preflight.find((c: any) => c.id === "quota");
-  expect(quotaCheck?.severity === "block" && quotaCheck?.blocksSave === false, "exhausted quota reports block severity but never blocksSave");
-  expect(overQuota.body.gate.blocked === false, "an exhausted quota alone never blocks save");
 
   // --- Concurrency: many simultaneous simulate calls for distinct drafts
   //     against the same account never cross-contaminate each other's result

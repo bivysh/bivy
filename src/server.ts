@@ -9024,7 +9024,7 @@ app.get("/api/status", (_req, res) => {
   });
 });
 
-app.get("/api/billing/config", (_req, res) => {
+app.get("/api/account/config", (_req, res) => {
   const config = loadRelayConfig(appDir);
   const base = config?.clientBaseUrl ?? config?.controlPlaneUrl;
   res.json({

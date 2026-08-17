@@ -9,9 +9,8 @@
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "test:e2e": "tsx test/e2e.ts",
-    "test:entitlements": "tsx test/entitlements.test.ts",
     "test:solo": "tsx test/solo-admission.test.ts",
-    "test:unit": "npm run test:e2e && npm run test:entitlements && npm run test:solo"
+    "test:unit": "npm run test:e2e && npm run test:solo"
   },
   "dependencies": {
     "@sentry/node": "^10.69.0",

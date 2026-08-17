@@ -15,6 +15,7 @@ import { currentThemeSetting, setTheme, type ThemeSetting } from "../theme.js";
 import { useModalEscape } from "../modalStack.js";
 import type { SettingsView } from "../router.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
+import { requestSignIn } from "../signInRequest.js";
 import { ChevronRightIcon, CloseIcon } from "./UiIcons.js";
 import { CredentialVault } from "./CredentialVault.js";
 
@@ -89,22 +90,6 @@ const IconImport = () => (
   <Glyph><path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M5 19h14" /></Glyph>
 );
 
-// Display name for a plan id — capitalization only, now that the internal ids
-// ("free" | "pro" | "team") match what the marketing site sells. `individual` is
-// the pre-rename id for Pro, kept here so an account that somehow escaped the
-// boot migration still renders as "Pro" instead of falling through to a raw
-// lowercase id. Presentational only; does not touch entitlements.
-const PLAN_LABELS: Record<string, string> = {
-  free: "Free",
-  pro: "Pro",
-  individual: "Pro",
-  team: "Team",
-};
-function planLabel(plan: string | null | undefined): string {
-  if (!plan) return "—";
-  return PLAN_LABELS[plan] ?? plan;
-}
-
 /** Render the baked-in PWA build timestamp (see __APP_BUILD_TIME__) as a short
  *  local date+time, or "" when it isn't a parseable ISO string. */
 function formatBuildTime(iso: string | undefined): string {
@@ -149,7 +134,7 @@ const TITLES: Record<View, string> = {
   rulesets: "Rulesets",
   nodes: "Machines",
   ephemeral: "Cloud machine profiles",
-  account: "Account & billing",
+  account: "Account",
   link: "Link a device",
 };
 
@@ -169,8 +154,8 @@ const SEARCH_TERMS: Record<View, string> = {
   webhooks: "webhook trigger secret event",
   rulesets: "rules policy routing agent runtime model sandbox",
   nodes: "node daemon online offline diagnostics version update storage disk",
-  ephemeral: "cloud machine profiles automation offline billing teardown retention",
-  account: "account billing subscription plan usage",
+  ephemeral: "cloud machine profiles automation offline teardown retention",
+  account: "account email devices machines usage",
   link: "device qr code phone mobile pair",
 };
 
@@ -268,7 +253,7 @@ export function Settings({
     groups.push({
       label: "Account",
       items: [
-        { id: "account", label: "Account & billing", icon: <IconUser /> },
+        { id: "account", label: "Account", icon: <IconUser /> },
         { id: "link", label: "Link a device", icon: <IconLink /> },
       ],
     });
@@ -451,7 +436,7 @@ function NotificationsPanel() {
     return () => clearTimeout(t);
   }, [msg, err]);
 
-  // Push notifications are included on every plan, so there's no upgrade gate.
+  // Push notification controls reflect browser/server capability only.
   const on = Boolean(status?.subscribed);
 
   const setMaster = async (next: boolean) => {
@@ -1339,6 +1324,7 @@ function EphemeralPanel() {
     } catch { /* best effort */ }
   };
   useEffect(() => {
+    if (!controller.signedIn) return; // accountless: the signpost below renders instead
     refreshKeys();
     refreshSetups();
     void migrateLegacySetups();
@@ -1346,6 +1332,41 @@ function EphemeralPanel() {
   }, []);
 
   const backToList = () => { setView({ k: "list" }); refreshSetups(); refreshKeys(); };
+
+  // No account session (solo QR pairing or loopback/direct): profiles live on
+  // the account — that's what lets any signed-in device or an automation launch
+  // a machine — so there's nothing to list or create here yet. Say so instead
+  // of silently swallowing the 401s the fetches above would hit.
+  if (!controller.signedIn) {
+    return (
+      <div className="settings-form machine-profiles">
+        <div className="vault-title-row">
+          <div><h3>Cloud machine profiles</h3></div>
+        </div>
+        <div className="vault-empty">
+          <h4>Cloud machines need an account</h4>
+          <p className="muted">
+            A profile and its provider credential are stored on your account, so any signed-in
+            device — or an automation — can launch a temporary machine. This device is paired to
+            your machine directly, without an account.
+          </p>
+          <p className="muted">
+            {controller.solo
+              ? "Sign in here to add this machine to an account — on Bivy Cloud or on a control plane you host yourself."
+              : "Open the Bivy app from a control plane — Bivy Cloud or one you host yourself — and sign in there."}
+          </p>
+          {controller.solo && (
+            <button type="button" className="btn primary" onClick={requestSignIn}>
+              Sign in or create an account
+            </button>
+          )}
+          <a className="btn" href="https://github.com/bivysh/bivy/blob/main/docs/self-host.md" target="_blank" rel="noopener">
+            Self-hosting guide
+          </a>
+        </div>
+      </div>
+    );
+  }
 
   if (view.k === "add") {
     return (
@@ -1870,13 +1891,13 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
   );
 }
 
-// ---- Account / billing ----
+// ---- Account ----
 function AccountPanel() {
   const [me, setMe] = useState<AccountMe | null>(null);
   const [nodes, setNodes] = useState<Awaited<ReturnType<typeof controller.listNodes>>>([]);
   const [devices, setDevices] = useState<PairedDevice[]>([]);
   const [err, setErr] = useState<string | null>(null);
-  const [opening, setOpening] = useState(false);
+  const [accountAction, setAccountAction] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<null | { title: string; message: string; label?: string; action: () => void }>(null);
   const reloadMe = () => controller.fetchMe().then(setMe).catch(() => {});
   const reloadDevices = () => controller.listDevices().then(setDevices).catch(() => {});
@@ -1885,15 +1906,7 @@ function AccountPanel() {
     controller.listNodes().then(setNodes).catch(() => {});
     reloadDevices();
   }, []);
-  const ent = me?.entitlements;
   const counts = me?.counts;
-  const free = (ent?.plan || me?.account?.plan) === "free";
-  // Free caps unattended automation per rolling window, plus a lifetime hosted-session
-  // trial (present only on Bivy Cloud free accounts — absent when self-hosting or paid).
-  const runCap = ent ? (ent.weeklyRunLimit ?? "∞") : "—";
-  const trial = me?.trial;
-  const sessionCap = trial ? `${trial.used} / ${trial.limit ?? "∞"}` : "∞";
-  const proPrice = me?.pricing?.pro?.label;
   return (
     <div className="settings-form">
       {confirm && (
@@ -1908,54 +1921,38 @@ function AccountPanel() {
       )}
       {err && <div className="banner inline" data-tone="danger">{err}</div>}
       <div className="stat-grid">
-        <Stat label="Plan" value={planLabel(ent?.plan || me?.account?.plan)} />
-        {trial && <Stat label="Pro trial" value={sessionCap} />}
-        <Stat label="Automations / week" value={`${counts?.runsThisWeek ?? "—"} / ${runCap}`} />
+        <Stat label="Machines" value={String(counts?.nodes ?? nodes.length)} />
+        <Stat label="Devices" value={String(counts?.devices ?? devices.length)} />
+        <Stat label="Sessions" value={counts?.sessions == null ? "—" : String(counts.sessions)} />
       </div>
-      {free && trial && (
-        <p className="muted settings-intro">
-          You're on the Pro free trial — your first {trial.limit} sessions on Bivy Cloud are free
-          {typeof trial.remaining === "number" && trial.remaining !== Infinity ? ` (${trial.remaining} left)` : ""}.
-          Subscribe to Pro to keep unlimited sessions{proPrice ? ` for ${proPrice}` : ""} — or run your own self-hosted Bivy server to keep everything free.
-        </p>
+      {me?.extension && (
+        <div className="settings-section">
+          <h4 className="settings-subhead">{me.extension.title || "Account service"}</h4>
+          {(me.extension.facts ?? []).map((fact) => (
+            <div className="settings-row" key={fact.id}>
+              <span>{fact.label}</span>
+              <strong>{fact.value}</strong>
+            </div>
+          ))}
+          <div className="settings-actions">
+            {(me.extension.actions ?? []).map((action) => (
+              <button
+                type="button"
+                key={action.id}
+                className={`btn ${action.kind === "primary" ? "primary" : ""}`}
+                disabled={accountAction !== null}
+                onClick={() => {
+                  setAccountAction(action.id);
+                  controller.invokeAccountExtensionAction(action.id)
+                    .then(({ url }) => { window.location.assign(url); })
+                    .catch((e) => setErr(String(e?.message || e)))
+                    .finally(() => setAccountAction(null));
+                }}
+              >{accountAction === action.id ? "Opening…" : action.label}</button>
+            ))}
+          </div>
+        </div>
       )}
-      {free && !trial && (
-        <p className="muted settings-intro">
-          You're on the free plan — interactive sessions are unlimited, with {runCap} unattended automations
-          per rolling 7 days across GitHub, Slack, webhooks, and schedules. Pro removes the automation cap{proPrice ? ` for ${proPrice}` : ""}.
-        </p>
-      )}
-      <div className="row-actions">
-        {free ? (
-          <button
-            className="btn primary"
-            disabled={opening}
-            onClick={() => {
-              setOpening(true);
-              setErr(null);
-              // Both buttons fetch a redirect URL before navigating away — with
-              // no busy state the button just looked dead in that gap (#140).
-              // `finally` only fires on a failure to redirect; success replaces
-              // this page before it can run.
-              controller.startCheckout().catch((e) => setErr(String(e.message || e))).finally(() => setOpening(false));
-            }}
-          >
-            {opening ? "Opening…" : `Upgrade to Pro${proPrice ? ` — ${proPrice}` : ""}`}
-          </button>
-        ) : (
-          <button
-            className="btn"
-            disabled={opening}
-            onClick={() => {
-              setOpening(true);
-              setErr(null);
-              controller.openBillingPortal().catch((e) => setErr(String(e.message || e))).finally(() => setOpening(false));
-            }}
-          >
-            {opening ? "Opening…" : "Manage billing"}
-          </button>
-        )}
-      </div>
       <div className="settings-section">
         <h4 className="settings-subhead">Enrolled machines</h4>
         <div className="picker-list">

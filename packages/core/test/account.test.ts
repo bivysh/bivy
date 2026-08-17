@@ -331,8 +331,8 @@ describe("assignWorkItem", () => {
     const store = createLocalStore(mem(), mem());
     store.cp = "https://app.bivy.sh";
     const fakeFetch = (async () =>
-      ({ ok: false, status: 403, json: async () => ({ error: "The work queue is a paid feature." }) }) as Response) as unknown as typeof fetch;
-    await expect(assignWorkItem(store, "wi_3", {}, fakeFetch)).rejects.toThrow("paid feature");
+      ({ ok: false, status: 403, json: async () => ({ error: "Work item assignment is unavailable." }) }) as Response) as unknown as typeof fetch;
+    await expect(assignWorkItem(store, "wi_3", {}, fakeFetch)).rejects.toThrow("unavailable");
   });
 });
 

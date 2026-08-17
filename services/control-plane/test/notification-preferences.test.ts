@@ -86,7 +86,7 @@ function expect(cond: boolean, msg: string) {
 }
 
 async function main() {
-  const port = await startControlPlane({ ENFORCE_ENTITLEMENTS: "0" });
+  const port = await startControlPlane();
 
   // Unauthenticated read is refused.
   const noAuth = await req(port, "GET", "/api/push/preferences", undefined);

@@ -247,24 +247,6 @@ export function normalizeSessions(list: any, prev: SessionSummary[] = []): Sessi
     const sessionId = String(s?.sessionId || s?.id || "");
     if (!sessionId || byId.has(sessionId)) continue;
     const previous = prevById.get(sessionId);
-    // A node refresh is richer than the hosted account index but has no billing
-    // context. If the index already locked this row, keep it content-free until
-    // a later index response explicitly sends locked:false (for example after an
-    // upgrade). This prevents a normal E2E refresh from restoring the title/path
-    // the hosted trial intentionally withheld.
-    if (previous?.locked && s?.locked === undefined) {
-      byId.set(sessionId, {
-        sessionId,
-        nodeId: s?.nodeId || previous.nodeId,
-        name: "Locked session",
-        updatedAt: s?.updatedAt || s?.modified || previous.updatedAt,
-        status: normalizeSessionStatus(s?.status, Boolean(s?.needsAction), Boolean(s?.isStreaming), normalizeSessionState(s?.sessionState)),
-        locked: true,
-        lastSeenAt: previous.lastSeenAt,
-        finishedAt: previous.finishedAt,
-      });
-      continue;
-    }
     // List rows receive live state at the top level. Do not treat a closed row's
     // archival bivySession envelope as live evidence: it has no attached process
     // and must remain `saved`, not be projected back to `idle`.
@@ -299,12 +281,6 @@ export function normalizeSessions(list: any, prev: SessionSummary[] = []): Sessi
       prUrl: s?.prUrl || undefined,
       prs: normalizePrs(s?.prs, s?.prUrl),
       attention: Array.isArray(s?.attention) ? s.attention : previous?.attention,
-      // The hosted account index is the authority for trial visibility. Its
-      // locked marker must survive the node's later E2E sessions.list refresh,
-      // which cannot carry billing state because the node neither owns nor sees
-      // the account subscription. An explicit false from a fresh account-index
-      // response clears the marker immediately after upgrade.
-      locked: s?.locked === true ? true : s?.locked === false ? undefined : previous?.locked,
       // The node has no concept of these — carry them over from the row we
       // already had (see the "seen"/"unseen" client-local state doc on
       // SessionSummary.lastSeenAt/finishedAt) so a routine list refresh never

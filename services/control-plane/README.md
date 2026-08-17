@@ -1,11 +1,11 @@
 # Control Plane
 
-Hosted service for accounts, node registry, vaults, session index, GitHub App
-connections, entitlements, and billing. This is the **control plane**. The
-**data plane** (node daemon) lives in the repo root and never sends session
-content here.
+Self-hostable service for accounts, node registry, vaults, session index, and
+GitHub/automation coordination. The **data plane** (node daemon) lives in the
+repo root and never sends interactive session content here.
 
-See `../../CLOUD.md` for the open-core boundary and what the control plane does.
+Commercial billing, plans, metering, and admission policy are not part of this
+service. Bivy Cloud owns those concerns in the separate Cloud repository.
 
 ## Run
 
@@ -17,46 +17,27 @@ npm run dev   # http://localhost:4400
 
 ## Storage
 
-Uses **in-memory dev storage** by default, or **Postgres when `DATABASE_URL` is
-set**. The control plane auto-creates its tables on startup.
+Uses an in-memory Postgres-compatible store by default, or Postgres when
+`DATABASE_URL` is set. The control plane auto-creates its tables on startup.
 
-### Endpoints
+## Core endpoints
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| POST | `/auth/magic-link/start` | none | Send passwordless login email. Uses Resend when `RESEND_API_KEY` is set; dev-link fallback outside production. |
-| POST | `/auth/magic-link/consume` | none | Consume login token → user session token. |
-| GET | `/auth/magic-link/consume?token=…` | none | Browser login link; redirects to remote client with session payload. |
-| POST | `/auth/dev-login` | none | DEV/staging login by email. Disable for live beta with `DISABLE_DEV_LOGIN=1`. |
-| GET | `/me` | user | Account + entitlements. |
-| POST | `/nodes/enroll` | user | Enroll a node by its `nodeId`; returns one-time enrollment token. |
-| GET | `/nodes` | user | List the account's nodes. |
+| POST | `/auth/magic-link/start` | none | Send passwordless login email. |
+| POST | `/auth/magic-link/consume` | none | Consume login token and create a user session. |
+| POST | `/auth/dev-login` | none | Development login; disabled in production. |
+| GET | `/me` | user | Account identity and usage counts. |
+| POST | `/nodes/enroll` | user | Enroll a node and return an enrollment token. |
+| GET | `/nodes` | user/node | List account nodes. |
 | DELETE | `/nodes/:id` | user | Revoke a node. |
-| POST | `/node/heartbeat` | node | Mark node online. |
-| GET | `/node/entitlements` | node | Owner's entitlements (for node self-gating). |
-| POST | `/billing/checkout` | user | Creates Stripe Checkout when Stripe env is configured; dev placeholder outside production. |
-| POST | `/billing/webhook` | Stripe signature | Verifies signed Stripe webhook and maps subscription events to plan. |
+| POST | `/node/heartbeat` | node | Mark a node online. |
 
-Two token types: **user session tokens** (`sess_…`) and **node enrollment
-tokens** (`enr_…`). Both sent as `Authorization: Bearer …`.
-
-### Plans / entitlements
-
-Defined in `src/store.ts` (`PLAN_ENTITLEMENTS`):
-
-- `free`: unlimited nodes and devices, push, hosted relay, work queue, and
-  ephemeral runners; the hosted app surfaces the first 25 distinct sessions for
-  the lifetime of the account, plus 10 unattended automations per rolling 7 days.
-- `pro`: same features, with unlimited hosted session visibility and automation.
-- `team`: same features, with unlimited hosted session visibility and automation.
-
-Entitlements are only enforced when `ENFORCE_ENTITLEMENTS=1` (Bivy Cloud);
-self-hosted stacks leave it off, so every feature is on for every account.
+Core does not apply commercial feature or usage limits.
 
 ## How the node connects
 
-1. User signs in (control plane) → `/nodes/enroll` with the node's `nodeId`.
-2. Node stores the `enr_` token locally (in `.bivy/`).
-3. Node dials the relay outbound, authenticating with the `enr_` token.
-4. Clients reach the node through the relay. Relay routes opaque, E2E-encrypted
-   frames and cannot read session content.
+1. A user signs in and enrolls a node.
+2. The node stores its `enr_…` token locally.
+3. The node mints a single-use relay ticket and dials the relay outbound.
+4. Clients reach the node through the relay; session frames remain E2E encrypted.

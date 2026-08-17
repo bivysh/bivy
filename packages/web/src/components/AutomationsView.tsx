@@ -57,6 +57,7 @@ import { RulesetsPanel } from "./Rulesets.js";
 import { QueueRoutingSection } from "./QueueRouting.js";
 import { HostedMachinesPanel } from "./HostedMachines.js";
 import { takeAutomationsSetupFocus } from "../automationsRoute.js";
+import { requestSignIn } from "../signInRequest.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import type { AutomationsSection } from "../router.js";
 import type { GithubQueueItem } from "@bivy/core";
@@ -469,12 +470,22 @@ export function AutomationsView({
   const [chooserOpen, setChooserOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
+  // Solo (account-free QR) and direct (loopback) pairings have no account
+  // session — every account fetch below would 401. Skip them and render the
+  // signpost branch instead of surfacing a raw error.
+  const accountless = !controller.signedIn;
+
   const refreshRuns = useCallback(async () => {
+    if (accountless) return;
     const recent = await fetchAutomationRuns(controller.local, 30);
     setRuns(recent);
-  }, []);
+  }, [accountless]);
 
   const refresh = useCallback(async () => {
+    if (accountless) {
+      setLoading(false);
+      return;
+    }
     const canQuery = !controller.direct;
     const [definitions, recent, gh, lin, slack, nodes, hosted] = await Promise.all([
       fetchAutomations(controller.local),
@@ -489,7 +500,7 @@ export function AutomationsView({
     setRuns(recent);
     setSources({ github: gh, linear: lin, slack, nodes, hosted });
     setLoading(false);
-  }, []);
+  }, [accountless]);
 
   useEffect(() => { void refresh().catch((e) => { setError(String(e)); setLoading(false); }); }, [refresh]);
   useEffect(() => {
@@ -806,6 +817,55 @@ export function AutomationsView({
   const ghStatus = githubSourceStatus(sources.github);
   const linStatus = linearSourceStatus(sources.linear);
   const slackStatus = slackSourceStatus(sources.slack);
+
+  // No account session (solo QR pairing or loopback/direct): automations run
+  // through a control plane — Bivy Cloud or a self-hosted one — which stores
+  // triggers and queues Runs while this device and the machine are offline.
+  // Say so and point at both remedies instead of hiding the surface or
+  // surfacing a raw 401 (the pre-split behavior).
+  if (accountless) {
+    return createPortal(
+      <div className="automations-view" role="dialog" aria-modal="true" aria-label="Automations">
+        <header className="automations-view-head">
+          <div className="automations-view-head-text">
+            <h1 className="automations-view-heading">Automations</h1>
+            <p className="automations-view-sub">Jobs that run on your machines while you&apos;re away.</p>
+          </div>
+          <div className="automations-view-head-actions">
+            <button type="button" className="btn ghost icon autom-close-btn" onClick={onClose} title="Close" aria-label="Close automations"><CloseIcon /></button>
+          </div>
+        </header>
+        <div className="automations-view-body">
+          <section className="autom-hero">
+            <div className="autom-hero-copy">
+              <h2 className="autom-hero-title">Automations need an account</h2>
+              <p className="autom-hero-body">
+                Automations run through a control plane, which stores your triggers and queues Runs
+                even while this device and your machine are offline. Right now this device is paired
+                to your machine directly, without an account, so there&apos;s nowhere to keep them.
+              </p>
+              <p className="autom-hero-body">
+                {controller.solo
+                  ? "Sign in here to add this machine to an account — on Bivy Cloud or on a control plane you host yourself."
+                  : "Open the Bivy app from a control plane — Bivy Cloud or one you host yourself — and sign in there to use automations."}
+              </p>
+              <div className="autom-hero-actions">
+                {controller.solo && (
+                  <button type="button" className="btn primary" onClick={requestSignIn}>
+                    Sign in or create an account
+                  </button>
+                )}
+                <a className="btn" href="https://github.com/bivysh/bivy/blob/main/docs/self-host.md" target="_blank" rel="noopener">
+                  Self-hosting guide
+                </a>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>,
+      document.body,
+    );
+  }
 
   return createPortal(
     <div className="automations-view" role="dialog" aria-modal="true" aria-label="Automations">
@@ -1325,7 +1385,7 @@ function TemplateCard({
 // ── Test event / preflight — shared by both editors ────────────────────────
 // Explains, without creating a run, which automation a representative event
 // would fire (and why the rest didn't), overlap/shadow warnings across the
-// account's rules, and the seven-check preflight — the same contract
+// account's rules, and the six-check preflight — the same contract
 // `bivy automation test` and the control-plane's live intake use (see
 // docs/automation-evaluator.md). Every Save also runs this silently (no
 // event) so a hard failure never reaches the API, and a non-blocking warning
@@ -1563,7 +1623,7 @@ function SourceAutomationEditor({
 
   /** Best-effort draft (works even before the form is complete, unlike
    *  save()) run through the shared evaluator — explains source connection,
-   *  machine, credential, and quota readiness without starting a run. */
+   *  machine and credential readiness without starting a run. */
   async function checkAutomation() {
     const labels = parseList(labelsText);
     const workflows = parseList(workflowsText);
@@ -1798,7 +1858,7 @@ function SourceAutomationEditor({
               {preflight.busy ? "Checking…" : "Check readiness"}
             </button>
             <p className="settings-hint">
-              Explains source connection, machine, credential, and quota readiness — and, for CI, whether a
+              Explains source connection, machine, and credential readiness — and, for CI, whether a
               representative failed-workflow event would fire — without starting a run.
             </p>
             <AutomationPreflightPanel
@@ -2439,7 +2499,7 @@ function AutomationEditor({
                   <p className="settings-hint">
                     {(d.trigger === "github" || d.trigger === "linear")
                       ? "Explains which automation a representative event would fire — including overlap/shadow warnings — without starting a run."
-                      : "Explains source connection, machine, credential, and quota readiness without starting a run."}
+                      : "Explains source connection, machine, and credential readiness without starting a run."}
                   </p>
                   <AutomationPreflightPanel
                     result={preflight.result}

@@ -84,7 +84,7 @@ function expect(cond: boolean, msg: string) {
 }
 
 async function main() {
-  const port = await startControlPlane({ ENFORCE_ENTITLEMENTS: "0", HOSTED_CREDENTIAL_KEY: Buffer.alloc(32, 7).toString("base64") });
+  const port = await startControlPlane({ HOSTED_CREDENTIAL_KEY: Buffer.alloc(32, 7).toString("base64") });
 
   // Unauthenticated read is refused.
   const anonRead = await req(port, "GET", "/account/ephemeral-configs", undefined);
@@ -207,7 +207,7 @@ async function main() {
   expect(plan4.json?.plan?.willProvision === false && /has not been validated/.test(plan4.json?.plan?.reason), "plan: node offline + unvalidated fallback token → no provision");
 
   // Fail closed: a control plane WITHOUT an encryption key refuses to store secrets.
-  const port2 = await startControlPlane({ ENFORCE_ENTITLEMENTS: "0" });
+  const port2 = await startControlPlane();
   const token2 = (await req(port2, "POST", "/auth/dev-login", { email: "nokey@example.com" })).json.token;
   const refused = await req(port2, "PUT", "/account/hosted-provisioning", { providerTokens: { fly: "x" } }, token2);
   expect(refused.status === 503, `no encryption key → secret writes refused (got ${refused.status})`);

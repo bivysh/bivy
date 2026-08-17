@@ -109,8 +109,7 @@ POSTGRES_USER=bivy
 POSTGRES_PASSWORD=unused
 
 # Configure at least one sign-in path (Resend email or GitHub OAuth). Web push
-# remains optional. Billing is deliberately absent: self-hosted entitlements
-# stay unenforced, so every feature is available to every account.
+# remains optional.
 RESEND_API_KEY=${RESEND_API_KEY_INPUT}
 AUTH_EMAIL_FROM=${AUTH_EMAIL_FROM_INPUT}
 GITHUB_OAUTH_CLIENT_ID=${GITHUB_OAUTH_CLIENT_ID_INPUT}
@@ -133,8 +132,7 @@ POSTGRES_USER=bivy
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 
 # Configure at least one sign-in path (Resend email or GitHub OAuth). Web push
-# remains optional. Billing is deliberately absent: self-hosted entitlements
-# stay unenforced, so every feature is available to every account.
+# remains optional.
 RESEND_API_KEY=${RESEND_API_KEY_INPUT}
 AUTH_EMAIL_FROM=${AUTH_EMAIL_FROM_INPUT}
 GITHUB_OAUTH_CLIENT_ID=${GITHUB_OAUTH_CLIENT_ID_INPUT}

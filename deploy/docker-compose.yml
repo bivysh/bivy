@@ -65,8 +65,6 @@ services:
       RELAY_SECRET: "${RELAY_SECRET}"
       RELAY_PUBLIC_URL: "${RELAY_PUBLIC_URL}"
       PUBLIC_CONTROL_PLANE_URL: "${PUBLIC_CONTROL_PLANE_URL}"
-      # Self-hosted stacks do not have paid plan gates.
-      ENFORCE_ENTITLEMENTS: "0"
       # Ephemeral-machines flag (server-side enforcement). OFF by default: with
       # NODE_ENV=production (the compose default) ephemeral is disabled unless you
       # set EPHEMERAL_MACHINES_ENABLED=1 here. When off, planAutoProvision refuses
@@ -109,8 +107,9 @@ services:
       NODE_ENV: "${NODE_ENV:-production}"
       PORT: "4500"
       RELAY_SECRET: "${RELAY_SECRET}"
-      CONTROL_PLANE_URL: "http://control-plane:4400"
-      ENFORCE_ENTITLEMENTS: "0"
+      # Override for a relay running on another host against the control-plane
+      # load balancer; the single-host stack keeps using Docker DNS.
+      CONTROL_PLANE_URL: "${CONTROL_PLANE_URL:-http://control-plane:4400}"
       RELAY_MAX_FRAME_BYTES: "${RELAY_MAX_FRAME_BYTES:-1048576}"
       # Per-socket message-rate caps. Set the CLIENT limit explicitly: the legacy
       # RELAY_MAX_MESSAGES_PER_MINUTE became the client limit via a fallback, and

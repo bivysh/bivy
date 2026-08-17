@@ -17,7 +17,7 @@ It complements `docs/security-model.md`, `docs/ephemeral-sessions.md`, and
 | Principal | What it is |
 |---|---|
 | **Device** | The signed-in browser/CLI. Holds the account session token and, historically, all launch secrets (cloud provider tokens, GitHub token) in local storage. |
-| **Control plane (CP)** | The hosted API. Front door for webhooks, enrollment, billing, work-queue metadata, and the ephemeral-exec relay. |
+| **Control plane (CP)** | The hosted API. Front door for webhooks, enrollment, work-queue metadata, and the ephemeral-exec relay. |
 | **Relay** | Message bus between CP/devices and nodes. Sees only per-connect tickets and E2E-sealed frames. |
 | **Node / machine** | A runner. A *persistent node* is long-lived and holds its own credentials in a local vault; an *ephemeral machine* is a disposable VM the system launches. |
 | **Cloud provider** | Fly/Hetzner/AWS. Holds the VM; authenticated by a provider token. |

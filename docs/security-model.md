@@ -10,7 +10,7 @@ To report a vulnerability, see [`../SECURITY.md`](../SECURITY.md).
 
 Bivy has three parts. The **node** is a daemon you run on your own machine; it
 holds your code, your credentials, and the agent processes. The **control
-plane** is a hosted service that holds accounts, node registration, billing, and
+plane** is a hosted service that holds accounts, node registration, and
 routing metadata. The **relay** is a hosted WebSocket router that lets a remote
 device reach a node behind NAT. The node dials the relay outbound; no inbound
 port is opened.

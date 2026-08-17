@@ -182,7 +182,7 @@ Existing work-queue items continue to work unchanged: the older work-item
 endpoints and fields read from the same run records, so repository and issue
 context stays available to current nodes and the queue UI.
 
-## Privacy and metering boundary
+## Privacy boundary
 
 Interactive session prompts, transcripts, repository files, credentials, diffs,
 and generated content stay on the node. GitHub and Linear issue text is not
@@ -195,9 +195,8 @@ deleted. Do not include secrets in either source. Output fields and sanitized
 run evidence contain references and bounded status metadata, not generated
 content.
 
-Webhook receipt and queue browsing are not usage. Hosted free-tier usage is
-recorded only when a claimed automation run enters `running`; self-hosted
-deployments continue to bypass hosted entitlement enforcement.
+Core records no commercial usage ledger. Any Bivy Cloud metering belongs to the
+separate Cloud service boundary.
 
 ## Workspace / repository
 

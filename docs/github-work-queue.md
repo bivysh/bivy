@@ -43,14 +43,10 @@ GitHub branch + pull request
    - The agent commits, pushes its branch, and opens the pull request itself (referencing/closing the issue) — there's no separate hard-coded PR-creation step. The node still publishes the branch if the agent didn't push it, and picks up (comments with) any PR the agent opens so the issue reflects what happened.
    - Once a PR exists, the node removes `bivy:in-progress` — the linked PR is now the live "in progress" signal, and GitHub closes the issue automatically when a PR with `Closes #<n>` merges.
 
-## Availability and limits
+## Availability
 
-The GitHub work queue is available on every plan.
-
-- **Bivy Cloud free trial** — the hosted app shows the first **25 distinct sessions** for the lifetime of the account, plus **10 unattended automations per rolling 7-day window** across GitHub, Slack, signed webhooks, and schedules. One queued work item counts once. Capacity returns gradually as jobs pass 7 days. The automation cap is **soft**: the first job past the allowance still runs with a heads-up; later jobs stay queued until capacity returns. Sessions continue running on their nodes if the hosted-view trial is exhausted, but new sessions are hidden in the hosted app until upgrade.
-- **Pro / Team** — unlimited hosted session visibility and automation.
-
-The run cap is only enforced on Bivy Cloud (`ENFORCE_ENTITLEMENTS=1`). Self-hosted stacks run unlimited regardless of plan (see [configuration.md](./configuration.md)).
+Core does not apply commercial limits to the GitHub work queue. Bivy Cloud
+commercial policy is defined and enforced outside this repository.
 
 ## Why push instead of repo polling?
 

@@ -51,7 +51,6 @@ try {
       PORT: String(port),
       RELAY_PUBLIC_URL: `ws://localhost:${relayPort}`,
       RELAY_SECRET: "cancel-test",
-      ENFORCE_ENTITLEMENTS: "0",
       AUTOMATION_SCHEDULER_INTERVAL_MS: "60000",
     },
     stdio: "inherit",

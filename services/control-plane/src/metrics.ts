@@ -87,27 +87,20 @@ new client.Gauge({
 export type FunnelEvent =
   | "sign_in_completed"
   | "sign_in_failed"
-  | "node_enrolled"
-  | "run_started"
-  | "quota_blocked"
-  | "checkout_started"
-  | "plan_changed";
+  | "node_enrolled";
 
 const funnelEvents = new client.Counter({
   name: "bivy_funnel_events_total",
   help: "Privacy-safe product funnel milestones.",
-  labelNames: ["event", "source", "plan"],
+  labelNames: ["event", "source"],
   registers: [register],
 });
 
-export function recordFunnelEvent(event: FunnelEvent, source: string, plan: string, count = 1): void {
+export function recordFunnelEvent(event: FunnelEvent, source: string, count = 1): void {
   if (!Number.isFinite(count) || count <= 0) return;
-  // Call sites only pass bounded enums/product constants. Keep a final fallback
-  // here so a malformed integration cannot create an unbounded Prometheus label.
   const safeSource = /^[a-z][a-z0-9_]{0,39}$/.test(source) ? source : "other";
-  const safePlan = /^(free|pro|team)$/.test(plan) ? plan : "unknown";
-  funnelEvents.inc({ event, source: safeSource, plan: safePlan }, count);
-  console.info(`[funnel] ${JSON.stringify({ event, source: safeSource, plan: safePlan, count })}`);
+  funnelEvents.inc({ event, source: safeSource }, count);
+  console.info(`[funnel] ${JSON.stringify({ event, source: safeSource, count })}`);
 }
 
 export const PRODUCT_EVENT_VALUES = [
@@ -206,12 +199,6 @@ const accountsTotal = new client.Gauge({
   help: "Total registered accounts.",
   registers: [register],
 });
-const accountsByPlan = new client.Gauge({
-  name: "bivy_accounts_by_plan",
-  help: "Accounts by plan.",
-  labelNames: ["plan"],
-  registers: [register],
-});
 const nodesTotal = new client.Gauge({
   name: "bivy_nodes_total",
   help: "Total enrolled nodes.",
@@ -249,8 +236,6 @@ export function startUsageCollector(store: UsageMetricsReader, intervalMs = 30_0
     try {
       const m = await store.usageMetrics();
       accountsTotal.set(m.accountsTotal);
-      accountsByPlan.reset();
-      for (const [plan, n] of Object.entries(m.accountsByPlan)) accountsByPlan.set({ plan }, n);
       nodesTotal.set(m.nodesTotal);
       nodesOnline.set(m.nodesOnline);
       workItems.reset();

@@ -271,7 +271,6 @@ function nodeLabelSuffix(nodeLabel: string | undefined): string | undefined {
 export interface PreflightSignalContext {
   hooks: InboundHook[];
   nodes: NodeRecord[];
-  allowance: { limit?: number; used: number; warn: boolean; exhausted: boolean };
 }
 
 type SignalDefinitionInput = Pick<
@@ -369,7 +368,6 @@ export function gatherPreflightSignals(def: SignalDefinitionInput, ctx: Prefligh
       effectiveSandbox: requestedSandbox,
       unsafeCombo: requestedApproval === "autonomous" && requestedSandbox === "danger-full-access" && !def.allowDangerous,
     },
-    quota: ctx.allowance,
   };
 }
 

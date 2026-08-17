@@ -261,20 +261,7 @@ export interface AccountSessionAdvert {
   branch?: string;
   updatedAt?: string;
   attention?: InboxAdvert[];
-  /** Hosted-trial gate: session is beyond the account's free lifetime allowance,
-   *  returned content-stripped. Renders as a locked "subscribe to view" row. */
-  locked?: boolean;
   [k: string]: unknown;
-}
-
-/** Lifetime hosted-session trial status (Bivy Cloud free plan). Absent on
- *  self-host and paid plans, where nothing is metered. */
-export interface TrialStatus {
-  limit?: number;
-  used: number;
-  remaining: number;
-  over: number;
-  exhausted: boolean;
 }
 
 function cpBase(store: LocalStore): string {
@@ -302,35 +289,16 @@ export async function fetchAccountSessions(store: LocalStore, fetchImpl: typeof 
   return list as AccountSessionAdvert[];
 }
 
-export interface PlanPrice {
-  id: string;
-  currency: string;
-  unitAmount: number | null;
-  interval?: string;
-  intervalCount?: number;
-  label: string;
+export interface AccountExtensionView {
+  title?: string;
+  facts?: Array<{ id: string; label: string; value: string }>;
+  actions?: Array<{ id: string; label: string; kind?: "primary" | "secondary" }>;
 }
 
 export interface AccountMe {
-  account?: { email?: string; plan?: string };
-  entitlements?: {
-    plan?: string;
-    // Undefined = unlimited (no node cap on any plan). Kept for forward-compat.
-    maxNodes?: number;
-    relayEnabled?: boolean;
-    pushEnabled?: boolean;
-    workQueueEnabled?: boolean;
-    // Unattended automation jobs allowed per rolling 7-day window. Interactive
-    // CLI/app sessions are unlimited. Undefined = unlimited automation (paid);
-    // pairs with counts.runsThisWeek (legacy wire name) to render used / limit.
-    weeklyRunLimit?: number;
-    ephemeralEnabled?: boolean;
-  };
-  pricing?: { pro?: PlanPrice; team?: PlanPrice };
-  counts?: { nodes?: number; sessions?: number; devices?: number; runsThisWeek?: number };
-  /** Lifetime hosted-session trial (Bivy Cloud free plan). Absent on self-host and
-   *  paid plans. Drives the usage banner and the upgrade prompt. */
-  trial?: TrialStatus;
+  account?: { id?: string; email?: string };
+  counts?: { nodes?: number; sessions?: number; devices?: number };
+  extension?: AccountExtensionView;
   [k: string]: unknown;
 }
 
@@ -338,11 +306,23 @@ function authHeaders(store: LocalStore): Record<string, string> {
   return { authorization: `Bearer ${store.s}`, "content-type": "application/json" };
 }
 
-/** Account, plan entitlements and usage counts for the signed-in user. */
+/** Account identity and usage counts for the signed-in user. */
 export async function fetchMe(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<AccountMe> {
   const res = await fetchImpl(`${cpBase(store)}/me`, { headers: authHeaders(store) });
   if (!res.ok) throw new Error(`account request failed: ${res.status}`);
   return (await res.json()) as AccountMe;
+}
+
+/** Invoke an opaque action contributed by the deployment's account extension. */
+export async function invokeAccountExtensionAction(store: LocalStore, action: string, fetchImpl: typeof fetch = fetch): Promise<{ url: string }> {
+  const res = await fetchImpl(`${cpBase(store)}/account/extension/actions/${encodeURIComponent(action)}`, {
+    method: "POST",
+    headers: authHeaders(store),
+    body: "{}",
+  });
+  const data = await res.json().catch(() => ({})) as { url?: string; error?: string };
+  if (!res.ok || !data.url) throw new Error(data.error || `account action failed: ${res.status}`);
+  return { url: data.url };
 }
 
 /** Remove an enrolled node from the account. */
@@ -1096,7 +1076,7 @@ export interface AutomationOverlapFinding {
 export type AutomationPreflightSeverity = "ok" | "info" | "warn" | "block" | "skipped";
 
 export interface AutomationPreflightCheck {
-  id: "source_connection" | "repo_access" | "encrypted_key_ownership" | "assigned_machine" | "agent_model_credentials" | "sandbox_policy" | "quota";
+  id: "source_connection" | "repo_access" | "encrypted_key_ownership" | "assigned_machine" | "agent_model_credentials" | "sandbox_policy";
   severity: AutomationPreflightSeverity;
   label: string;
   detail: string;
@@ -1113,7 +1093,7 @@ export interface AutomationPreflightGate {
 /** Result of POST /account/automations/simulate — explains, without running
  *  anything, which automation a representative event would fire (and why the
  *  rest didn't), any overlap/shadow warnings across the account's rules, and
- *  the seven-check preflight for the tested automation. Powers the
+ *  the six-check preflight for the tested automation. Powers the
  *  Automations editor's "Test event" workflow. */
 export interface AutomationSimulationResult {
   /** The tested automation's id — real for an existing automation (with or
@@ -1446,26 +1426,6 @@ export async function logout(store: LocalStore, devicePublicKeyB64?: string, fet
     headers: authHeaders(store),
     body: JSON.stringify(devicePublicKeyB64 ? { devicePublicKeyB64 } : {}),
   });
-}
-
-/** Start a Stripe checkout; returns the URL to redirect to. */
-export async function billingCheckout(store: LocalStore, plan = "pro", fetchImpl: typeof fetch = fetch): Promise<string> {
-  const res = await fetchImpl(`${cpBase(store)}/billing/checkout`, {
-    method: "POST",
-    headers: authHeaders(store),
-    body: JSON.stringify({ plan }),
-  });
-  const data: any = await res.json().catch(() => ({}));
-  if (!res.ok || !data?.checkoutUrl) throw new Error(data?.error || "checkout failed");
-  return data.checkoutUrl as string;
-}
-
-/** Open the Stripe billing portal; returns the URL to redirect to. */
-export async function billingPortal(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<string> {
-  const res = await fetchImpl(`${cpBase(store)}/billing/portal`, { method: "POST", headers: authHeaders(store) });
-  const data: any = await res.json().catch(() => ({}));
-  if (!res.ok || !data?.portalUrl) throw new Error(data?.error || "portal failed");
-  return data.portalUrl as string;
 }
 
 function b64ToBytes(b64: string): Uint8Array {

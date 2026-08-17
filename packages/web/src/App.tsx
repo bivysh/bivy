@@ -16,6 +16,7 @@ import { closeSettings, getSettingsRoute, openSettings, setSettingsView, subscri
 import { closeAutomations, getAutomationsRoute, openAutomations, setAutomationsSection, subscribeAutomationsRoute } from "./automationsRoute.js";
 // openAutomations({ setup }) is the sole entry for source connection lifecycle.
 import { closeRun, getRunRoute, openRun, subscribeRunRoute } from "./runRoute.js";
+import { dismissSignInRequest, getSignInRequest, subscribeSignInRequest } from "./signInRequest.js";
 import { AutomationsView } from "./components/AutomationsView.js";
 import { RunDetails } from "./components/RunDetails.js";
 import { SessionMenu } from "./components/SessionMenu.js";
@@ -402,6 +403,10 @@ export function App() {
   // instant the token lands — no page reload needed. `direct` (local/loopback
   // mode) never gates on a control-plane session.
   const needsAuth = !controller.direct && !controller.solo && !state.connection.signedIn;
+  // A solo pairing never hits the auth gate, but account-only surfaces
+  // (Automations, cloud machine profiles) can summon the sign-in screen on
+  // demand — see signInRequest.ts. Dismissable, unlike the boot-time gate.
+  const signInRequested = useSyncExternalStore(subscribeSignInRequest, getSignInRequest);
   // Picking an ephemeral runner counts as having chosen where to run, even
   // before its machine exists — show the composer, not the onboarding screen.
   const needsNode = !controller.direct && state.connection.signedIn && !state.connection.currentNodeId && !state.draft.ephemeralConfig;
@@ -410,10 +415,10 @@ export function App() {
   // dead shell. Once signed in we always render the normal app — a node is picked
   // in-place from the header NodeSwitcher, not behind a separate full-screen gate,
   // so a refresh lands on the sidebar rather than a "Choose a node" wall.
-  if (needsAuth) {
+  if (needsAuth || signInRequested) {
     return (
       <>
-        <SetupNotice />
+        <SetupNotice onDismiss={needsAuth ? undefined : dismissSignInRequest} />
         <div className="toast-stack">
           <NoticeToast />
           <UpdatePrompt />

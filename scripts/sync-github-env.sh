@@ -106,10 +106,6 @@ set_secret POSTGRES_PASSWORD "$(get POSTGRES_PASSWORD)" required
 
 set_secret RESEND_API_KEY "$(get RESEND_API_KEY)"
 set_secret AUTH_EMAIL_FROM "$(get AUTH_EMAIL_FROM)"
-set_secret STRIPE_SECRET_KEY "$(get STRIPE_SECRET_KEY)"
-set_secret STRIPE_WEBHOOK_SECRET "$(get STRIPE_WEBHOOK_SECRET)"
-set_secret STRIPE_PRICE_PRO "$(get STRIPE_PRICE_PRO)"
-set_secret STRIPE_PRICE_TEAM "$(get STRIPE_PRICE_TEAM)"
 
 # Web push (VAPID) keys and subject. deploy-staging.yml reads WEB_PUSH_SUBJECT
 # from a secret first, so it is stored as a secret here too even though it is
@@ -126,7 +122,6 @@ set_secret BIVY_GITHUB_OAUTH_CLIENT_SECRET "$(get GITHUB_OAUTH_CLIENT_SECRET)"
 
 # Keep booleans as GitHub Environment variables, not secrets.
 set_var DISABLE_DEV_LOGIN "$(get DISABLE_DEV_LOGIN)" 0
-set_var ENFORCE_ENTITLEMENTS "$(get ENFORCE_ENTITLEMENTS)" 0
 set_var RUN_LIMIT_OBSERVE_ONLY "$(get RUN_LIMIT_OBSERVE_ONLY)" 0
 
 echo "Done. Verify with:"

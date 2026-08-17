@@ -2,7 +2,7 @@
 
 Routes frames between remote clients and nodes through NAT. The **node dials
 outbound**, so no inbound ports or port-forwarding are needed. Remote access
-through the hosted relay is available on every plan, including the free tier.
+through the self-hosted relay has no commercial admission policy.
 
 See `../../CLOUD.md` for the open-core boundary and how the relay fits in.
 

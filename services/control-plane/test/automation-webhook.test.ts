@@ -56,7 +56,7 @@ async function main() {
   const port = await freePort();
   const proc = spawn("npx", ["tsx", "src/index.ts"], {
     cwd: cpDir,
-    env: { ...process.env, PORT: String(port), RELAY_SECRET: "automation-test", ENFORCE_ENTITLEMENTS: "0" },
+    env: { ...process.env, PORT: String(port), RELAY_SECRET: "automation-test" },
     stdio: "inherit",
   });
   procs.push(proc);

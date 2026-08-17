@@ -50,7 +50,7 @@ import { mintInstallationToken } from "./hosted-github-auth.js";
 import { encryptSecret, decryptSecret } from "./hosted-crypto.js";
 
 /** Persistence needed by unattended machine orchestration. Deliberately omits
- * account administration, billing, notifications, device vaults, and automation
+ * account administration, notifications, device vaults, and automation
  * definition management even though the concrete adapter provides them. */
 export interface EphemeralProvisioningPort
   extends EphemeralConfigurationRepository, HostedMachineRepository {
