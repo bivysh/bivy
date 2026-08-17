@@ -82,7 +82,6 @@ export {
   parseAwsToken,
   parseXml,
   planEphemeralLaunch,
-  reapOrphanEphemeralNodes,
   trackProvisionedMachine,
   validateEphemeralProviderToken,
   xmlChild,

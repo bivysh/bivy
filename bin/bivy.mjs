@@ -3549,7 +3549,7 @@ async function cmdSetup(args = []) {
     const syncChoice = await askChoice(
       "Remote access",
       [
-        { key: "h", label: "hosted (recommended — first 25 remotely accessible sessions are free; nothing caps your local usage)" },
+        { key: "h", label: "hosted (recommended — remote access runs on a weekly allowance; nothing caps your local usage)" },
         { key: "s", label: "self-hosted (your own control plane + relay)" },
       ],
       selfHostEnv ? "s" : "h",

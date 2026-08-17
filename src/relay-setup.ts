@@ -3,7 +3,6 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import { NodeIdentity } from "./identity.js";
 import { hostedEndpoints } from "./hosted-endpoints.mjs";
@@ -52,23 +51,6 @@ async function fetchJson(url: string, init?: RequestInit): Promise<{ ok: boolean
   }
   const data = await response.json().catch(() => ({}));
   return { ok: response.ok, status: response.status, data };
-}
-
-async function askYesNo(question: string, defaultYes: boolean): Promise<boolean> {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const hint = defaultYes ? "Y/n" : "y/N";
-  try {
-    for (;;) {
-      const answer = await new Promise<string>((resolve) => rl.question(`\n${question} (${hint})\n  > `, resolve));
-      const v = answer.trim().toLowerCase();
-      if (!v) return defaultYes;
-      if (v === "y" || v === "yes") return true;
-      if (v === "n" || v === "no") return false;
-      console.log("Please answer yes or no.");
-    }
-  } finally {
-    rl.close();
-  }
 }
 
 async function checkControlPlane(controlPlaneUrl: string): Promise<void> {
@@ -245,33 +227,8 @@ async function main() {
     });
   }
 
-  let enrolled = await enrollNode();
-  let enroll = enrolled.data;
-  if (!enrolled.ok && enrolled.status === 402 && /node limit/i.test(String(enroll?.error ?? ""))) {
-    const listed = await fetchJson(`${controlPlaneUrl}/nodes`, { headers: { authorization: `Bearer ${token}` } });
-    const nodes = Array.isArray(listed.data) ? listed.data : [];
-    if (nodes.length) {
-      // Lead with the upgrade paths — subscribing or increasing the plan is the
-      // intended way to add a node. Removing an existing node is the fallback.
-      const accountUrl = `${clientBaseUrl}/?account=1`;
-      console.log("\nYour plan's node limit is reached.");
-      console.log(`To connect more nodes, subscribe or increase your plan:\n  ${accountUrl}`);
-      console.log("\nOr free a slot by removing an existing node:");
-      for (const [i, node] of nodes.entries()) {
-        console.log(`  ${i + 1}. ${node.name ?? "Node"} — ${node.online ? "online" : "offline"} — ${node.id}`);
-      }
-      const replace = await askYesNo(`Remove ${nodes[0].name ?? nodes[0].id} and enroll this node instead?`, !nodes[0].online);
-      if (replace) {
-        const removed = await fetchJson(`${controlPlaneUrl}/nodes/${encodeURIComponent(nodes[0].id)}`, {
-          method: "DELETE",
-          headers: { authorization: `Bearer ${token}` },
-        });
-        if (!removed.ok) throw new Error(`Could not remove old node (${removed.status}): ${JSON.stringify(removed.data)}`);
-        enrolled = await enrollNode();
-        enroll = enrolled.data;
-      }
-    }
-  }
+  const enrolled = await enrollNode();
+  const enroll = enrolled.data;
   if (!enrolled.ok || !enroll?.enrollmentToken) throw new Error(`Enroll failed (${enrolled.status}): ${JSON.stringify(enroll)}`);
 
   // The control plane keeps node names unique per account, so a colliding name may

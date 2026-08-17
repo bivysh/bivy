@@ -58,7 +58,7 @@ The wizard asks:
 
 1. **Default agent** — Pi, Claude Code, Codex, or another supported runtime.
    Change it later per session (`bivy run <agent>`) or in Settings.
-2. **Remote access** — `hosted` (default; the hosted app shows your first 25 distinct sessions free, then requires Pro; execution and local session history on your machine are not deleted or capped) or `self-hosted`. This is skipped when remote access is already configured.
+2. **Remote access** — `hosted` (default; remote access to your sessions runs on a weekly allowance, while execution and local session history on your machine are never deleted or capped) or `self-hosted`. This is skipped when remote access is already configured.
    Choosing self-hosted then asks for your **control plane URL** and your **relay
    `ws(s)://` URL**.
 3. **Remote login** — `GitHub` (default) or an `email sign-in link`. Choosing
