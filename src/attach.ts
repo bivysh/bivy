@@ -16,6 +16,10 @@ import { WebSocket } from "ws";
  * Modes:
  *   --run <specJson>   open a fresh run-terminal for a resolved agent command
  *   --attach <termId>  bind to an existing run-terminal (replays scrollback)
+ *
+ * With `--run --no-follow` the terminal is started but never bound to the local
+ * TTY: the daemon keeps the PTY running and this process returns immediately, so
+ * `bivy run <agent> --no-follow` launches a background session you rejoin later.
  */
 
 const c = {
@@ -59,6 +63,7 @@ type Args = {
   mode: "run" | "attach";
   run?: RunSpec;
   termId?: string;
+  noFollow?: boolean;
 };
 
 function parseArgs(argv: string[]): Args {
@@ -67,6 +72,7 @@ function parseArgs(argv: string[]): Args {
   let mode: Args["mode"] = "attach";
   let run: RunSpec | undefined;
   let termId: string | undefined;
+  let noFollow = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--url" && argv[i + 1]) url = argv[++i];
@@ -75,8 +81,9 @@ function parseArgs(argv: string[]): Args {
     else if (arg.startsWith("--token=")) token = arg.slice("--token=".length);
     else if (arg === "--run" && argv[i + 1]) { mode = "run"; run = JSON.parse(argv[++i]); }
     else if (arg === "--attach" && argv[i + 1]) { mode = "attach"; termId = argv[++i]; }
+    else if (arg === "--no-follow") noFollow = true;
   }
-  return { url: url.replace(/\/+$/, ""), token, mode, run, termId };
+  return { url: url.replace(/\/+$/, ""), token, mode, run, termId, noFollow };
 }
 
 function wsUrl(baseUrl: string, token?: string): string {
@@ -210,12 +217,56 @@ function bridge(args: Args, open: (ws: WebSocket) => void): Promise<number> {
   });
 }
 
+/**
+ * Start a run-terminal on the daemon and return immediately, WITHOUT binding the
+ * local TTY. The PTY is daemon-owned, so it keeps running once this client
+ * disconnects — the same lifecycle as a Ctrl-\ Ctrl-\ detach, except the
+ * terminal was never attached in the first place. Resolves once the daemon
+ * confirms the terminal is open (or errors trying).
+ */
+function openDetached(args: Args, spec: RunSpec, cols: number, rows: number): Promise<number> {
+  return new Promise((resolve) => {
+    const socket = new WebSocket(wsUrl(args.url, args.token));
+    let settled = false;
+    const finish = (code: number) => {
+      if (settled) return;
+      settled = true;
+      try { socket.close(); } catch {}
+      resolve(code);
+    };
+    socket.on("open", () =>
+      socket.send(JSON.stringify({ kind: "terminal.open.run", agent: spec.agent, label: spec.label, name: spec.name, model: spec.model, command: spec.command, args: spec.args ?? [], workspace: spec.workspace, sessionId: spec.sessionId, cols, rows })),
+    );
+    socket.on("error", (err) => {
+      process.stderr.write(c.red(`Connection error: ${err instanceof Error ? err.message : String(err)}\n`));
+      finish(1);
+    });
+    socket.on("close", () => finish(settled ? 0 : 1));
+    socket.on("message", (raw) => {
+      let msg: Record<string, unknown>;
+      try { msg = JSON.parse(raw.toString()); } catch { return; }
+      if (msg.type === "terminal.opened") {
+        const label = spec.name || spec.label || spec.agent || spec.command;
+        process.stdout.write(c.green(`Started ${label} in the background.\n`));
+        process.stdout.write(c.dim("It keeps running — reopen it in the Bivy app, or with `bivy resume`.\n"));
+        finish(0);
+      } else if (msg.type === "terminal.error") {
+        process.stderr.write(c.red(`${String(msg.error || "Terminal error")}\n`));
+        finish(1);
+      }
+    });
+  });
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
 
   if (args.mode === "run") {
     const spec = args.run!;
     const { cols, rows } = termSize();
+    if (args.noFollow) {
+      process.exit(await openDetached(args, spec, cols, rows));
+    }
     process.stdout.write(c.dim(`Starting ${c.cyan(spec.name || spec.label || spec.agent || spec.command)} — Ctrl-\\ Ctrl-\\ to detach\r\n`));
     const code = await bridge(args, (ws) =>
       ws.send(JSON.stringify({ kind: "terminal.open.run", agent: spec.agent, label: spec.label, name: spec.name, model: spec.model, command: spec.command, args: spec.args ?? [], workspace: spec.workspace, sessionId: spec.sessionId, cols, rows })),
