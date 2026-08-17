@@ -2621,8 +2621,9 @@ select.picker-search { appearance: auto; }
      was closed. Topmost keeps it legible over whatever is open. */
   z-index: 85; display: flex; flex-direction: column; align-items: center; gap: 10px;
 }
-.update-toast { align-items: center; width: max-content; max-width: min(92vw, 420px); }
-.update-toast > span { flex: 1; min-width: 0; font-size: 13px; line-height: 1.4; }
+.update-toast { flex-direction: column; align-items: stretch; }
+.update-toast > span { min-width: 0; font-size: 13px; line-height: 1.4; }
+.update-toast-actions { display: flex; justify-content: flex-end; gap: var(--space-2); }
 .update-toast .btn { flex: none; white-space: nowrap; padding: 6px 12px; }
 /* Compact, non-blocking error toast (replaces the raw full-width red banner). */
 .error-toast { box-sizing: border-box; }
