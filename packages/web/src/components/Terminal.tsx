@@ -13,8 +13,43 @@ import "@xterm/xterm/css/xterm.css";
 import type { RuntimeInfo, ServerEvent } from "@bivy/core";
 import { controller, useAppState } from "../store/useStore.js";
 import { RenameDialog } from "./AppDialog.js";
+import { TerminalComposer } from "./TerminalComposer.js";
+import { Sheet } from "./Sheet.js";
+import {
+  TerminalIcon,
+  SearchIcon,
+  ClipboardIcon,
+  ChatBubbleIcon,
+  ChevronUpIcon,
+  ChevronDownIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  CloseIcon,
+  PlusIcon,
+  MinusIcon,
+} from "./UiIcons.js";
 import { writeClipboard } from "../clipboard.js";
 import { useModalEscape } from "../modalStack.js";
+
+// The `ctrl` sheet's command keys — concrete escape sequences the shell reads
+// directly, so there's no sticky-modifier state to track (the old on-screen key
+// bar's Ctrl/Alt arming is replaced by these ready-made combos plus the toolbar
+// arrows). Data, not branches: add a row here to add a key.
+const CTRL_KEYS: Array<{ label: string; seq: string }> = [
+  { label: "Esc", seq: "\x1b" },
+  { label: "Tab", seq: "\t" },
+  { label: "Ctrl+C", seq: "\x03" },
+  { label: "Ctrl+D", seq: "\x04" },
+  { label: "Ctrl+Z", seq: "\x1a" },
+  { label: "Ctrl+L", seq: "\x0c" },
+  { label: "Ctrl+A", seq: "\x01" },
+  { label: "Ctrl+E", seq: "\x05" },
+  { label: "Ctrl+U", seq: "\x15" },
+  { label: "Ctrl+K", seq: "\x0b" },
+  { label: "Ctrl+R", seq: "\x12" },
+  { label: "Home", seq: "\x1b[H" },
+  { label: "End", seq: "\x1b[F" },
+];
 
 interface RunTerminal {
   termId: string;
@@ -373,6 +408,10 @@ export function TerminalOverlay({
   }, [showAttach]);
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  // Optional batch "compose" panel — a full multi-line editor with voice input
+  // that writes to the PTY on demand, for a better long-form writing experience
+  // than typing straight at the raw prompt.
+  const [showComposer, setShowComposer] = useState(false);
   const [fontSize, setFontSize] = useState<number>(readFontSize);
   const [hasSelection, setHasSelection] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -380,8 +419,11 @@ export function TerminalOverlay({
   // the node — shown in the header for the standalone terminal so it's clear
   // which node/folder you're in when it's not implied by a chat session.
   const [workspace, setWorkspace] = useState<string | null>(null);
-  const [ctrlArmed, setCtrlArmed] = useState(false);
-  const [altArmed, setAltArmed] = useState(false);
+  // The `ctrl` bottom-toolbar sheet (touch): a "Commands" list of key combos with
+  // Appearance (font size) and Snippets drill-in submenus. `ctrlView` tracks which
+  // level is showing.
+  const [ctrlOpen, setCtrlOpen] = useState(false);
+  const [ctrlView, setCtrlView] = useState<"root" | "appearance" | "snippets">("root");
   // Floating selection toolbar (touch): pixel position of where the finger lifted.
   const [selMenu, setSelMenu] = useState<{ x: number; y: number } | null>(null);
   // Current touch selection's endpoints (0-based buffer cells) — drives the two
@@ -396,8 +438,7 @@ export function TerminalOverlay({
   const ptRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const autoTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoDirRef = useRef(0);
-  // Snippets / recent-command chips (touch keyboard-avoider).
-  const [showSnips, setShowSnips] = useState(false);
+  // Snippets / recent-command chips (shown in the `ctrl` sheet's Snippets submenu).
   const [editSnips, setEditSnips] = useState(false);
   const [addingSnippet, setAddingSnippet] = useState(false);
   const [snippets, setSnippets] = useState<Snippet[]>([]);
@@ -1162,160 +1203,178 @@ export function TerminalOverlay({
 
   const hasChips = snippets.length > 0 || recents.length > 0;
 
-  // --- On-screen key accessory bar (touch) --------------------------------
-  // Ctrl / Alt act as one-shot sticky modifiers: arm them, then the next key
-  // (a bar key or a keyboard key) is sent with that modifier applied.
-  const sendKey = useCallback(
-    (raw: string, opts?: { ctrl?: boolean; literal?: boolean }) => {
-      let out = raw;
-      const applyCtrl = ctrlArmed || opts?.ctrl;
-      if (applyCtrl && !opts?.literal && raw.length === 1) {
-        const code = raw.toLowerCase().charCodeAt(0);
-        if (code >= 97 && code <= 122) out = String.fromCharCode(code - 96); // a→\x01 … z→\x1a
-      }
-      if (altArmed && !opts?.literal) out = `\x1b${out}`;
-      sendInput(out);
-      setCtrlArmed(false);
-      setAltArmed(false);
-      termRef.current?.focus();
-    },
-    [ctrlArmed, altArmed, sendInput],
-  );
-
-  const barKeys: Array<{ label: string; run: () => void; active?: boolean; wide?: boolean }> = [
-    { label: "esc", run: () => sendKey("\x1b", { literal: true }) },
-    { label: "tab", run: () => sendKey("\t", { literal: true }) },
-    { label: "ctrl", run: () => setCtrlArmed((v) => !v), active: ctrlArmed },
-    { label: "alt", run: () => setAltArmed((v) => !v), active: altArmed },
-    { label: "▲", run: () => sendKey("\x1b[A", { literal: true }) },
-    { label: "▼", run: () => sendKey("\x1b[B", { literal: true }) },
-    { label: "◀", run: () => sendKey("\x1b[D", { literal: true }) },
-    { label: "▶", run: () => sendKey("\x1b[C", { literal: true }) },
-    { label: "^C", run: () => sendKey("\x03", { literal: true }) },
-    { label: "^D", run: () => sendKey("\x04", { literal: true }) },
-    { label: "^Z", run: () => sendKey("\x1a", { literal: true }) },
-    { label: "^L", run: () => sendKey("\x0c", { literal: true }) },
-    { label: "~", run: () => sendKey("~", { literal: true }) },
-    { label: "/", run: () => sendKey("/", { literal: true }) },
-    { label: "-", run: () => sendKey("-", { literal: true }) },
-    { label: "|", run: () => sendKey("|", { literal: true }) },
-    { label: "home", run: () => sendKey("\x1b[H", { literal: true }) },
-    { label: "end", run: () => sendKey("\x1b[F", { literal: true }) },
-  ];
+  // Send a key sequence from the `ctrl` sheet, then close it so the result is
+  // visible. (Font-size changes keep the sheet open — see the Appearance view.)
+  const sendCmdKey = (seq: string) => {
+    sendInput(seq);
+    setCtrlOpen(false);
+    termRef.current?.focus();
+  };
+  const openCtrl = () => {
+    setCtrlView("root");
+    setCtrlOpen(true);
+  };
 
   const hasAttachables = runTerminals.length > 0 || muxSessions.length > 0;
 
+  // The batch compose panel — placed above the output on desktop, below the
+  // bottom toolbar on touch (see the two `showComposer` render sites).
+  const composer = (
+    <TerminalComposer
+      // Send: write the text + carriage return, exactly like a chip's "run"
+      // (Terminal keeps focus in the composer so you can keep writing).
+      onSend={(t) => sendInput(t.endsWith("\n") ? t : `${t}\r`)}
+      // Insert: drop the text at the prompt to review/edit, then hand focus to
+      // the shell so the user presses Enter themselves.
+      onInsert={(t) => {
+        sendInput(t);
+        termRef.current?.focus();
+      }}
+      onClose={() => {
+        setShowComposer(false);
+        termRef.current?.focus();
+      }}
+      onError={(m) => controller.store.setError(m)}
+    />
+  );
+
+  // Contextual header controls, kept in the top row for both the touch and
+  // desktop headers when a run-terminal is bound: the Attach ▾ menu (switch
+  // between running terminals / multiplexers) and "Continue in chat" (takeover).
+  const attachControl = hasAttachables && (
+    <div className="term-attach-wrap" ref={attachWrapRef}>
+      <button className="btn sm ghost" onClick={() => setShowAttach((v) => !v)} aria-haspopup="menu" aria-expanded={showAttach}>
+        Attach ▾
+      </button>
+      {showAttach && (
+        <div className="menu term-attach-menu" role="menu">
+          {runTerminals.map((t) => (
+            <div key={t.termId} className="term-attach-row">
+              <button className="menu-item term-attach-item" role="menuitem" onClick={() => attachRun(t)}>
+                {t.label || t.name || t.agent || t.termId}
+              </button>
+              {canContinueAsChat(t, runtimes) &&
+                (isTakeoverReady(t) ? (
+                  <button
+                    className="term-attach-chat"
+                    role="menuitem"
+                    onClick={() => continueAsChat(t.termId)}
+                    title="Stop the terminal and continue this session as a governed chat"
+                  >
+                    Continue in chat
+                  </button>
+                ) : (
+                  <button className="term-attach-chat is-disabled" role="menuitem" disabled aria-disabled="true" title={TAKEOVER_NOT_READY_HINT}>
+                    Send a message first
+                  </button>
+                ))}
+            </div>
+          ))}
+          {muxSessions.map((s) => (
+            <button key={s.target || `${s.multiplexer}:${s.name}`} className="menu-item term-attach-item" role="menuitem" onClick={() => attachMux(s)}>
+              {s.multiplexer}: {s.name}
+              {s.attached ? " · in use" : ""}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+  const continueControl = currentRun && canContinueAsChat(currentRun, runtimes) && (
+    isTakeoverReady(currentRun) ? (
+      <button
+        className="btn primary term-continue-chat"
+        onClick={() => continueAsChat(currentRun.termId)}
+        title="Stop the terminal and continue this session as a governed chat"
+      >
+        Continue in chat
+      </button>
+    ) : (
+      <span className="term-continue-notready" title={TAKEOVER_NOT_READY_HINT}>
+        <button className="btn primary term-continue-chat" disabled aria-disabled="true">
+          Continue in chat
+        </button>
+        <span className="term-continue-hint-text">Send a message first</span>
+      </span>
+    )
+  );
+
   return (
     <div className="term-overlay">
-      <div className="term-head">
-        <span className="term-title">
-          Terminal
-          {standalone && workspace && (
-            <small className="term-scope" title={workspace}>
-              {" "}
-              · {baseName(workspace)}
-            </small>
-          )}{" "}
-          <small className={`term-status term-status-${status}`}>{statusText}</small>
-        </span>
-        <div className="term-head-actions">
-          <div className="term-zoom" role="group" aria-label="Font size">
-            <button className="btn ghost icon" onClick={() => setFontSize((f) => Math.max(MIN_FONT, f - 1))} aria-label="Decrease font size" title="Zoom out">
-              A−
+      {touch ? (
+        // Minimal touch header: terminal glyph · Search · Paste · (contextual) · Close.
+        // Everything else moves to the bottom toolbar and the `ctrl` sheet.
+        <div className="term-head term-head-min">
+          <span className="term-glyph" title={workspace || "Terminal"} aria-label="Terminal">
+            <TerminalIcon size={22} />
+          </span>
+          <div className="term-head-center">
+            <button className={`btn ghost icon${showSearch ? " is-active" : ""}`} onClick={() => setShowSearch((v) => !v)} aria-label="Search output" title="Search (Ctrl/Cmd+F)">
+              <SearchIcon />
             </button>
-            <button className="btn ghost icon" onClick={() => setFontSize((f) => Math.min(MAX_FONT, f + 1))} aria-label="Increase font size" title="Zoom in">
-              A+
+            <button className="btn ghost icon" onClick={pasteFromClipboard} aria-label="Paste from clipboard" title="Paste">
+              <ClipboardIcon />
             </button>
           </div>
-          <button className={`btn sm ghost${showSearch ? " is-active" : ""}`} onClick={() => setShowSearch((v) => !v)} title="Search (Ctrl/Cmd+F)">
-            Search
-          </button>
-          <button className="btn sm ghost" onClick={copySelection} disabled={!hasSelection} title="Copy selection (Cmd/Ctrl+C)">
-            {copied ? "Copied" : "Copy"}
-          </button>
-          <button className="btn sm ghost" onClick={clearScreen} title="Clear screen">
-            Clear
-          </button>
-          <button className="btn sm ghost term-paste" onClick={pasteFromClipboard} title="Paste from clipboard">
-            Paste
-          </button>
-          {touch && (
-            <button className={`btn sm ghost${showSnips ? " is-active" : ""}`} onClick={() => setShowSnips((v) => !v)} title="Snippets & recent commands">
-              Snippets
+          <div className="term-head-actions">
+            {attachControl}
+            {continueControl}
+            <button className="btn ghost icon" onClick={onClose} aria-label="Close terminal">
+              <CloseIcon />
             </button>
-          )}
-          {hasAttachables && (
-            <div className="term-attach-wrap" ref={attachWrapRef}>
-              <button className="btn sm ghost" onClick={() => setShowAttach((v) => !v)} aria-haspopup="menu" aria-expanded={showAttach}>
-                Attach ▾
-              </button>
-              {showAttach && (
-                <div className="menu term-attach-menu" role="menu">
-                  {runTerminals.map((t) => (
-                    <div key={t.termId} className="term-attach-row">
-                      <button className="menu-item term-attach-item" role="menuitem" onClick={() => attachRun(t)}>
-                        {t.label || t.name || t.agent || t.termId}
-                      </button>
-                      {canContinueAsChat(t, runtimes) && (
-                        isTakeoverReady(t) ? (
-                          <button
-                            className="term-attach-chat"
-                            role="menuitem"
-                            onClick={() => continueAsChat(t.termId)}
-                            title="Stop the terminal and continue this session as a governed chat"
-                          >
-                            Continue in chat
-                          </button>
-                        ) : (
-                          <button
-                            className="term-attach-chat is-disabled"
-                            role="menuitem"
-                            disabled
-                            aria-disabled="true"
-                            title={TAKEOVER_NOT_READY_HINT}
-                          >
-                            Send a message first
-                          </button>
-                        )
-                      )}
-                    </div>
-                  ))}
-                  {muxSessions.map((s) => (
-                    <button key={s.target || `${s.multiplexer}:${s.name}`} className="menu-item term-attach-item" role="menuitem" onClick={() => attachMux(s)}>
-                      {s.multiplexer}: {s.name}
-                      {s.attached ? " · in use" : ""}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-          {currentRun && canContinueAsChat(currentRun, runtimes) && (
-            isTakeoverReady(currentRun) ? (
-              <button
-                className="btn primary term-continue-chat"
-                onClick={() => continueAsChat(currentRun.termId)}
-                title="Stop the terminal and continue this session as a governed chat"
-              >
-                Continue in chat
-              </button>
-            ) : (
-              <span className="term-continue-notready" title={TAKEOVER_NOT_READY_HINT}>
-                <button className="btn primary term-continue-chat" disabled aria-disabled="true">
-                  Continue in chat
-                </button>
-                <span className="term-continue-hint-text">Send a message first</span>
-              </span>
-            )
-          )}
-          <button className="btn sm ghost" onClick={endShell}>
-            End
-          </button>
-          <button className="btn ghost icon" onClick={onClose} aria-label="Close terminal">
-            ×
-          </button>
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="term-head">
+          <span className="term-title">
+            Terminal
+            {standalone && workspace && (
+              <small className="term-scope" title={workspace}>
+                {" "}
+                · {baseName(workspace)}
+              </small>
+            )}{" "}
+            <small className={`term-status term-status-${status}`}>{statusText}</small>
+          </span>
+          <div className="term-head-actions">
+            <div className="term-zoom" role="group" aria-label="Font size">
+              <button className="btn ghost icon" onClick={() => setFontSize((f) => Math.max(MIN_FONT, f - 1))} aria-label="Decrease font size" title="Zoom out">
+                A−
+              </button>
+              <button className="btn ghost icon" onClick={() => setFontSize((f) => Math.min(MAX_FONT, f + 1))} aria-label="Increase font size" title="Zoom in">
+                A+
+              </button>
+            </div>
+            <button className={`btn sm ghost${showSearch ? " is-active" : ""}`} onClick={() => setShowSearch((v) => !v)} title="Search (Ctrl/Cmd+F)">
+              Search
+            </button>
+            <button
+              className={`btn sm ghost${showComposer ? " is-active" : ""}`}
+              onClick={() => setShowComposer((v) => !v)}
+              title="Compose a command or message in a full editor, with voice input"
+            >
+              Compose
+            </button>
+            <button className="btn sm ghost" onClick={copySelection} disabled={!hasSelection} title="Copy selection (Cmd/Ctrl+C)">
+              {copied ? "Copied" : "Copy"}
+            </button>
+            <button className="btn sm ghost" onClick={clearScreen} title="Clear screen">
+              Clear
+            </button>
+            <button className="btn sm ghost term-paste" onClick={pasteFromClipboard} title="Paste from clipboard">
+              Paste
+            </button>
+            {attachControl}
+            {continueControl}
+            <button className="btn sm ghost" onClick={endShell}>
+              End
+            </button>
+            <button className="btn ghost icon" onClick={onClose} aria-label="Close terminal">
+              ×
+            </button>
+          </div>
+        </div>
+      )}
 
       {showSearch && (
         <div className="term-search">
@@ -1347,6 +1406,10 @@ export function TerminalOverlay({
           </button>
         </div>
       )}
+
+      {/* Desktop composer sits above the output (below the header/search). On
+          touch it instead opens below the bottom toolbar — see `composer` below. */}
+      {!touch && showComposer && composer}
 
       <div className="term-out" ref={mountRef} />
 
@@ -1414,40 +1477,6 @@ export function TerminalOverlay({
         );
       })()}
 
-      {touch && showSnips && (
-        <div className="term-snipbar" role="toolbar" aria-label="Snippets and recent commands">
-          <button className="term-snip-add" onClick={addSnippet} aria-label="Save a snippet" title="Save a command snippet">
-            ＋
-          </button>
-          {snippets.map((s) => (
-            <Chip
-              key={s.id}
-              label={`★ ${s.text}`}
-              onTap={() => insertChip(s.text)}
-              onHold={() => runChip(s.text)}
-              badge={editSnips ? { label: "×", aria: `Delete snippet ${s.text}`, onClick: () => removeSnippet(s.id) } : undefined}
-            />
-          ))}
-          {recents.map((r) => (
-            <Chip
-              key={`r:${r}`}
-              label={r}
-              onTap={() => insertChip(r)}
-              onHold={() => runChip(r)}
-              badge={editSnips ? { label: "★", aria: `Pin ${r} as snippet`, onClick: () => pinRecent(r) } : undefined}
-            />
-          ))}
-          {hasChips && (
-            <button className="term-snip-edit" onClick={() => setEditSnips((v) => !v)}>
-              {editSnips ? "Done" : "Edit"}
-            </button>
-          )}
-          {editSnips && recents.length > 0 && (
-            <button className="term-snip-edit" onClick={clearRecents}>Clear recents</button>
-          )}
-        </div>
-      )}
-
       {addingSnippet && (
         <RenameDialog
           title="Save command snippet"
@@ -1457,20 +1486,147 @@ export function TerminalOverlay({
         />
       )}
 
+      {/* Bottom toolbar (touch): Composer toggle · ctrl (Commands sheet) · arrow
+          keys. Replaces the old on-screen key bar; the remaining keys live in the
+          ctrl sheet. */}
       {touch && (
-        <div className="term-keybar" role="toolbar" aria-label="Terminal keys">
-          {barKeys.map((k) => (
-            <button
-              key={k.label}
-              className={`term-key${k.active ? " is-armed" : ""}`}
-              // Keep focus in the terminal so the OS keyboard doesn't dismiss.
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={k.run}
-            >
-              {k.label}
+        <div className="term-toolbar" role="toolbar" aria-label="Terminal toolbar">
+          <button
+            className={`term-tool${showComposer ? " is-active" : ""}`}
+            onClick={() => setShowComposer((v) => !v)}
+            aria-label="Compose a command or message"
+            aria-pressed={showComposer}
+            title="Compose"
+          >
+            <ChatBubbleIcon />
+          </button>
+          <button className="term-tool term-tool-ctrl" onClick={openCtrl} aria-haspopup="dialog" onMouseDown={(e) => e.preventDefault()}>
+            ctrl
+          </button>
+          <div className="term-tool-arrows" role="group" aria-label="Arrow keys">
+            {/* Keep terminal focus so the OS keyboard doesn't dismiss on tap. */}
+            <button className="term-tool" onClick={() => sendInput("\x1b[B")} onMouseDown={(e) => e.preventDefault()} aria-label="Down arrow">
+              <ChevronDownIcon />
             </button>
-          ))}
+            <button className="term-tool" onClick={() => sendInput("\x1b[D")} onMouseDown={(e) => e.preventDefault()} aria-label="Left arrow">
+              <ChevronLeftIcon />
+            </button>
+            <button className="term-tool" onClick={() => sendInput("\x1b[C")} onMouseDown={(e) => e.preventDefault()} aria-label="Right arrow">
+              <ChevronRightIcon />
+            </button>
+            <button className="term-tool" onClick={() => sendInput("\x1b[A")} onMouseDown={(e) => e.preventDefault()} aria-label="Up arrow">
+              <ChevronUpIcon />
+            </button>
+          </div>
         </div>
+      )}
+
+      {/* Touch composer opens below the bottom toolbar (the wireframe layout). */}
+      {touch && showComposer && composer}
+
+      {ctrlOpen && (
+        <Sheet
+          variant="action"
+          ariaLabel="Terminal commands"
+          autoFocusSearch={false}
+          onClose={() => setCtrlOpen(false)}
+          title={
+            ctrlView === "root" ? (
+              "Commands"
+            ) : (
+              <span className="term-sheet-title">
+                <button className="sheet-back" onClick={() => setCtrlView("root")} aria-label="Back to commands">
+                  ‹
+                </button>
+                {ctrlView === "appearance" ? "Appearance" : "Snippets"}
+              </span>
+            )
+          }
+        >
+          {ctrlView === "root" && (
+            <>
+              <div className="term-cmd-grid">
+                {CTRL_KEYS.map((k) => (
+                  <button key={k.label} className="term-key" onClick={() => sendCmdKey(k.seq)}>
+                    {k.label}
+                  </button>
+                ))}
+              </div>
+              <button className="sheet-action danger" onClick={() => { setCtrlOpen(false); endShell(); }}>
+                End session
+              </button>
+              <button className="sheet-action term-sheet-row" onClick={() => setCtrlView("appearance")}>
+                <span>Appearance</span>
+                <ChevronRightIcon size={18} />
+              </button>
+              <button className="sheet-action term-sheet-row" onClick={() => setCtrlView("snippets")}>
+                <span>Snippets</span>
+                <ChevronRightIcon size={18} />
+              </button>
+            </>
+          )}
+
+          {ctrlView === "appearance" && (
+            <div className="term-appearance">
+              <div className="term-appearance-row">
+                <span className="term-appearance-label">Font size</span>
+                {/* Stays open so you can step and see the result without reopening. */}
+                <div className="term-stepper" role="group" aria-label="Font size">
+                  <button className="btn ghost icon" onClick={() => setFontSize((f) => Math.max(MIN_FONT, f - 1))} disabled={fontSize <= MIN_FONT} aria-label="Decrease font size">
+                    <MinusIcon size={18} />
+                  </button>
+                  <span className="term-stepper-value" aria-live="polite">{fontSize}</span>
+                  <button className="btn ghost icon" onClick={() => setFontSize((f) => Math.min(MAX_FONT, f + 1))} disabled={fontSize >= MAX_FONT} aria-label="Increase font size">
+                    <PlusIcon size={18} />
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {ctrlView === "snippets" && (
+            <div className="term-snip-sheet">
+              <div className="term-snip-sheet-head">
+                <button className="term-snip-add" onClick={addSnippet} aria-label="Save a snippet" title="Save a command snippet">
+                  ＋
+                </button>
+                {hasChips && (
+                  <button className="term-snip-edit" onClick={() => setEditSnips((v) => !v)}>
+                    {editSnips ? "Done" : "Edit"}
+                  </button>
+                )}
+                {editSnips && recents.length > 0 && (
+                  <button className="term-snip-edit" onClick={clearRecents}>
+                    Clear recents
+                  </button>
+                )}
+              </div>
+              <div className="term-snip-chips">
+                {snippets.map((s) => (
+                  <Chip
+                    key={s.id}
+                    label={`★ ${s.text}`}
+                    onTap={() => { insertChip(s.text); setCtrlOpen(false); }}
+                    onHold={() => { runChip(s.text); setCtrlOpen(false); }}
+                    badge={editSnips ? { label: "×", aria: `Delete snippet ${s.text}`, onClick: () => removeSnippet(s.id) } : undefined}
+                  />
+                ))}
+                {recents.map((r) => (
+                  <Chip
+                    key={`r:${r}`}
+                    label={r}
+                    onTap={() => { insertChip(r); setCtrlOpen(false); }}
+                    onHold={() => { runChip(r); setCtrlOpen(false); }}
+                    badge={editSnips ? { label: "★", aria: `Pin ${r} as snippet`, onClick: () => pinRecent(r) } : undefined}
+                  />
+                ))}
+                {!hasChips && (
+                  <p className="term-snip-empty">Tap ＋ to save a command. Commands you run also show up here as recents.</p>
+                )}
+              </div>
+            </div>
+          )}
+        </Sheet>
       )}
     </div>
   );
