@@ -4,6 +4,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { stripAttachmentPlaceholders, toHtml, type PromptAttachment, type ToolActivity, type TranscriptEntry } from "@bivy/core";
 import { ToolGroup } from "./ToolGroup.js";
 import { Spinner } from "./Spinner.js";
+import { ImageGallery } from "./ImageGallery.js";
 import { decorateCodeBlocks, highlightCode } from "../highlight.js";
 import { renderMermaidDiagrams } from "../mermaid.js";
 import { writeClipboard } from "../clipboard.js";
@@ -29,18 +30,19 @@ function base64ToBlobUrl(base64: string, mimeType: string): string | null {
 }
 
 /**
- * A single attachment the user sent with this message, shown as a clickable
- * thumbnail (image) or file chip so they can re-open what they attached. Two
- * sources of bytes: inline `data`/`text` (present on the client that just sent
- * it), or — for an attachment rehydrated from history — a content `hash` whose
- * bytes are fetched from the node's durable attachment store on demand. The hash
- * path is what makes attachments re-findable after a reload or on another device
- * (see AttachmentStore / controller.fetchAttachment).
+ * Resolve an attachment to a displayable blob URL. Two sources of bytes: inline
+ * `data`/`text` (present on the client that just sent it), or — for an attachment
+ * rehydrated from history — a content `hash` whose bytes are fetched from the
+ * node's durable attachment store on demand. The hash path is what makes
+ * attachments re-findable after a reload or on another device (see AttachmentStore
+ * / controller.fetchAttachment). Returns null while a hash-only attachment is
+ * still fetching, or if the bytes are unavailable. Shared by AttachmentChip and
+ * the fullscreen ImageGallery.
  */
-function AttachmentChip({ attachment }: { attachment: PromptAttachment }) {
+export function useAttachmentUrl(attachment: PromptAttachment | null | undefined): string | null {
   // Synchronous URL for inline content — bytes we already hold in memory.
   const inlineUrl = useMemo(() => {
-    if (attachment.omitted) return null;
+    if (!attachment || attachment.omitted) return null;
     if (attachment.kind === "image" && attachment.data) return base64ToBlobUrl(attachment.data, attachment.mimeType);
     if (attachment.text !== undefined) {
       try {
@@ -63,25 +65,53 @@ function AttachmentChip({ attachment }: { attachment: PromptAttachment }) {
   const [fetchedUrl, setFetchedUrl] = useState<string | null>(null);
   useEffect(() => {
     setFetchedUrl(null);
-    if (inlineUrl || attachment.omitted || !attachment.hash) return;
+    if (inlineUrl || !attachment || attachment.omitted || !attachment.hash) return;
+    const mimeType = attachment.mimeType;
     let cancelled = false;
     let objectUrl: string | null = null;
     void controller.fetchAttachment(attachment.hash).then((res) => {
       if (cancelled || !res) return;
-      objectUrl = base64ToBlobUrl(res.data, res.mimeType || attachment.mimeType);
+      objectUrl = base64ToBlobUrl(res.data, res.mimeType || mimeType);
       if (objectUrl) setFetchedUrl(objectUrl);
     });
     return () => {
       cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [inlineUrl, attachment.hash, attachment.omitted, attachment.mimeType]);
+  }, [inlineUrl, attachment]);
 
-  const url = inlineUrl ?? fetchedUrl;
+  return inlineUrl ?? fetchedUrl;
+}
+
+/**
+ * A single attachment the user sent with this message, shown as a clickable
+ * thumbnail (image) or file chip so they can re-open what they attached. When an
+ * `onOpenImage` handler is supplied, a plain left-click on an image launches the
+ * in-app gallery instead of opening the raw blob in a new tab; modifier/middle
+ * clicks still fall through to the `<a>` so "open in new tab" keeps working.
+ */
+function AttachmentChip({ attachment, onOpenImage }: { attachment: PromptAttachment; onOpenImage?: () => void }) {
+  const url = useAttachmentUrl(attachment);
 
   if (attachment.kind === "image" && url) {
     return (
-      <a className="msg-attachment image" href={url} target="_blank" rel="noopener" title={attachment.name}>
+      <a
+        className="msg-attachment image"
+        href={url}
+        target="_blank"
+        rel="noopener"
+        title={attachment.name}
+        onClick={
+          onOpenImage
+            ? (e) => {
+                // Leave new-tab gestures (cmd/ctrl/shift/middle-click) untouched.
+                if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+                e.preventDefault();
+                onOpenImage();
+              }
+            : undefined
+        }
+      >
         <img src={url} alt={attachment.name} />
       </a>
     );
@@ -101,6 +131,34 @@ function AttachmentChip({ attachment }: { attachment: PromptAttachment }) {
     <span className="msg-attachment file omitted" title="Content not available">
       {label}
     </span>
+  );
+}
+
+/**
+ * The row of attachment chips under a message, plus the fullscreen gallery its
+ * image chips open. Owns the open/closed gallery state locally so paging stays
+ * scoped to this message's images (the reader's chosen scope). Omitted images are
+ * left out of the gallery set — they have no bytes to show.
+ */
+function MessageAttachments({ attachments }: { attachments: PromptAttachment[] }) {
+  const images = useMemo(() => attachments.filter((a) => a.kind === "image" && !a.omitted), [attachments]);
+  const [galleryIndex, setGalleryIndex] = useState<number | null>(null);
+  return (
+    <div className="msg-attachments">
+      {attachments.map((a, i) => {
+        const imageIndex = images.indexOf(a);
+        return (
+          <AttachmentChip
+            key={`${a.name}-${i}`}
+            attachment={a}
+            onOpenImage={imageIndex >= 0 ? () => setGalleryIndex(imageIndex) : undefined}
+          />
+        );
+      })}
+      {galleryIndex !== null && (
+        <ImageGallery images={images} index={galleryIndex} onClose={() => setGalleryIndex(null)} />
+      )}
+    </div>
   );
 }
 
@@ -367,13 +425,7 @@ const EntryView = memo(function EntryView({
     const text = hasAttachments ? stripAttachmentPlaceholders(entry.text) : entry.text;
     return (
       <div className="msg user" id={hasAttachments ? `msg-${entry.id}` : undefined}>
-        {hasAttachments && (
-          <div className="msg-attachments">
-            {entry.attachments!.map((a, i) => (
-              <AttachmentChip key={`${a.name}-${i}`} attachment={a} />
-            ))}
-          </div>
-        )}
+        {hasAttachments && <MessageAttachments attachments={entry.attachments!} />}
         {text}
       </div>
     );
@@ -395,13 +447,7 @@ const EntryView = memo(function EntryView({
   const hasAttachments = !!entry.attachments && entry.attachments.length > 0;
   return (
     <div className="assistant-row" id={hasAttachments ? `msg-${entry.id}` : undefined}>
-      {hasAttachments && (
-        <div className="msg-attachments">
-          {entry.attachments!.map((a, i) => (
-            <AttachmentChip key={`${a.name}-${i}`} attachment={a} />
-          ))}
-        </div>
-      )}
+      {hasAttachments && <MessageAttachments attachments={entry.attachments!} />}
       {(entry.text || !hasAttachments) && (
         <div ref={bodyRef} className="msg assistant" dangerouslySetInnerHTML={{ __html: html }} />
       )}
