@@ -114,6 +114,7 @@ export type RpcMethod =
   | "setModel"
   | "getModels"
   | "getAllModels"
+  | "warmModels"
   | "getUsage"
   | "suggestName"
   | "invokeCommand"

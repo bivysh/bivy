@@ -8,9 +8,16 @@ const send = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
 // FIXTURE_NO_COMMANDS to make this hello omit `commands` so a test can prove a
 // seeded list survives a hello that doesn't advertise one.
 const advertiseCommands = !process.env.FIXTURE_NO_COMMANDS;
-// Advertise a model registry unless suppressed — the host derives modelSelection
-// from this list (capabilities.modelSelection stays false to prove that).
-const advertiseModels = !process.env.FIXTURE_NO_MODELS;
+// An ACP-style agent whose model list depends on which providers the user
+// authenticated: it can't advertise models in `hello`, only once a session opens
+// (session/new). When set, this fixture omits the hello registry and instead
+// publishes a `runtime.models` event on session.create — the path warmModels()
+// must open() a session to reach (start()'s hello alone isn't enough).
+const lateModels = process.env.FIXTURE_LATE_MODELS === '1';
+// Advertise a model registry in `hello` unless suppressed — the host derives
+// modelSelection from this list (capabilities.modelSelection stays false to prove
+// that). Suppressed too under lateModels, which advertises at session.create.
+const advertiseModels = !process.env.FIXTURE_NO_MODELS && !lateModels;
 // Self-advertise resume when asked. Proves a protocol agent can turn on resume
 // purely via its hello (no Bivy-side `resumable` option): the host then honors
 // session.resume. Off by default so the base test keeps asserting resume === false.
@@ -91,6 +98,18 @@ rl.on('line', (line) => {
     // passthrough (handleEvent's default case in src/runtime/protocol.ts)
     // without needing a dedicated message type.
     send({ type: 'env.info', sessionId: msg.sessionId, bivySessionId: process.env.BIVY_SESSION_ID ?? null });
+    // ACP-style late model registry: the authoritative list is only knowable
+    // once a session opens, so it rides session.create rather than hello. Lets a
+    // test prove warmModels() reaches it by opening a session (not just start()).
+    if (lateModels) send({
+      type: 'runtime.models',
+      sessionId: msg.sessionId,
+      models: [
+        { id: 'acp-pro', name: 'ACP Pro', provider: 'acp', reasoning: true },
+        { id: 'acp-lite', name: 'ACP Lite', provider: 'acp' },
+      ],
+      currentModel: 'acp-pro',
+    });
     return;
   }
   if (msg.type === 'model.set') {

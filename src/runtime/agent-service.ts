@@ -317,6 +317,9 @@ export class AgentService<H = ReturnType<typeof setTimeout>> {
         case "getAllModels":
           value = (await s.getAllModels?.()) ?? [];
           break;
+        case "warmModels":
+          await s.warmModels?.();
+          break;
         case "getUsage":
           value = (await s.getUsage?.()) ?? undefined;
           break;
