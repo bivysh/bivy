@@ -113,6 +113,13 @@ assert.equal(describeAvailability("offline", true, idle).kind, "cached-transcrip
 assert.equal(describeAvailability("offline", false, idle).kind, "cached-shell");
 assert.equal(describeAvailability("offline", false, { ...idle, shellCached: false }).kind, "offline-page");
 assert.equal(describeAvailability("online", true, { ...idle, locallyQueuedPrompts: 1 }).kind, "local-queue");
+// An unreachable Machine is named and comes with the one actionable hint, so a
+// phone user knows which machine to check and what to run there.
+assert.match(describeAvailability("offline", true, idle, "macbook").detail, /Machine macbook is offline/);
+assert.match(describeAvailability("offline", true, idle, "macbook").detail, /bivy status/);
+assert.match(describeAvailability("offline", false, idle).detail, /The Machine is offline/);
+assert.equal(describeAvailability("reconnecting", true, idle, "macbook").label, "Reconnecting to macbook");
+assert.equal(describeAvailability("reconnecting", true, idle).label, "Reconnecting Machine");
 
 // Reconnect buffering and visible follow-up queues are independent concurrent
 // sources: reconnect recovery must not accidentally clear a queued follow-up.

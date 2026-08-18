@@ -3,7 +3,7 @@
 import type { SessionContract, SessionContractArea } from "@bivy/core";
 import { useAppState, controller } from "../store/useStore.js";
 import { Sheet } from "./Sheet.js";
-import { SANDBOX_TIERS } from "./Settings.js";
+import { SANDBOX_TIERS } from "./sandboxTiers.js";
 
 const STATE_LABEL: Record<string, string> = { guaranteed: "Guaranteed", degraded: "Degraded", unavailable: "Unavailable" };
 

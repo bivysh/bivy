@@ -8,7 +8,7 @@ import { useModalEscape } from "../modalStack.js";
 import { RepoPicker, AgentPicker, ModelPicker, SandboxPicker } from "./Pickers.js";
 import { firstSessionSummary } from "../firstSession.js";
 import { FollowupQueue } from "./FollowupQueue.js";
-import { SANDBOX_TIERS } from "./Settings.js";
+import { SANDBOX_TIERS } from "./sandboxTiers.js";
 import { VoiceRecorder } from "./VoiceRecorder.js";
 import { Spinner } from "./Spinner.js";
 import { WebSpeechRecorder, webSpeechSupported } from "./WebSpeechRecorder.js";

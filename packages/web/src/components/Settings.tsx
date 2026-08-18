@@ -2,7 +2,8 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { AccountMe, AppState, EphemeralNodeConfig, LocalModelEndpointResult, LocalModelPreset, LocalModelProvider, PairedDevice, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, ProviderKeyInfo, ProviderSize, HostedAuditEvent, HostedMachineSummary, HostedProvisioningStatus } from "@bivy/core";
+import { SANDBOX_TIERS } from "./sandboxTiers.js";
+import type { AccountMe, AppState, EphemeralNodeConfig, LocalModelEndpointResult, LocalModelPreset, LocalModelProvider, PairedDevice, NodeSettings, NotificationPreferences, EphemeralMachine, ProviderKeyInfo, ProviderSize, HostedAuditEvent, HostedMachineSummary, HostedProvisioningStatus } from "@bivy/core";
 import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCatalogEntry, ephemeralComputeIntentLabel, ephemeralCostHint, ephemeralCostEstimate, ephemeralLifecyclePhase, formatEphemeralPrice } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
@@ -34,13 +35,6 @@ const MOVED_TO_AUTOMATIONS: readonly MovedView[] = ["github", "linear", "slack",
 function isMovedView(v: View | null): v is MovedView {
   return v !== null && (MOVED_TO_AUTOMATIONS as readonly string[]).includes(v);
 }
-
-/** Sandbox tiers (Codex's vocabulary), shared by the node default + per-session picker. */
-export const SANDBOX_TIERS: Array<{ id: SandboxTier; label: string; hint: string }> = [
-  { id: "read-only", label: "Read-only", hint: "Read the workspace; no writes, no network." },
-  { id: "workspace-write", label: "Workspace write", hint: "Read/write the worktree; escapes need approval." },
-  { id: "danger-full-access", label: "Full access", hint: "No in-agent sandbox — the agent can do anything (opt-out)." },
-];
 
 // --- Line icons (currentColor, 20px). Kept inline so Settings has no icon-lib
 // dependency and each glyph inherits the nav row's ink/muted color. ---

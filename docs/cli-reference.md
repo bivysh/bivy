@@ -60,14 +60,17 @@ Steps, in order:
 1. Checks Node.js >= 22.19.0 and installs npm dependencies if needed.
 2. Picks a workspace (defaults to `~/bivy-workspace`, created if absent) and a
    local port (default `4317`). Written to `<data-dir>/cli.json`.
-3. Records the default agent (`pi` unless already set) and installs its CLI if
-   it is not Pi.
-4. If `<data-dir>/relay.json` does not exist yet, asks for a remote sync target
-   (hosted or self-hosted) and a sign-in method (GitHub or email link), then
-   runs `relay:setup`.
-5. Installs the background service (launchd on macOS, systemd `--user` on
+3. Asks for the default agent (Claude Code unless already set; Codex and the
+   rest under *More agents*) and installs its CLI if missing.
+4. If `<data-dir>/relay.json` does not exist yet, asks for remote access —
+   `hosted`, `self-hosted`, or `local only for now` — and, for the first two,
+   a sign-in method (GitHub or email link), then runs `relay:setup`. Local
+   only skips enrollment; run `bivy relay:setup` later for a browser or phone.
+5. Offers the agent's model login if it is not signed in yet.
+6. Installs the background service (launchd on macOS, systemd `--user` on
    Linux) and starts it.
-6. Opens the remote web app in a browser if one is available.
+7. Opens the remote web app in a browser if one is available and remote access
+   is configured.
 
 Takes no flags. Warns if run as root.
 

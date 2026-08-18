@@ -97,8 +97,9 @@ exactly what each agent supports.
 ## Bring your own stack
 
 Use provider subscriptions through native agent logins, API keys stored in
-Bivy's vault, or local / OpenAI-compatible inference. Add any ACP or headless
-agent with a single command — no per-agent adapter to write:
+Bivy's vault, or local / OpenAI-compatible inference. Claude Code, Codex, and Pi
+have first-class SDK integrations; any other ACP or headless agent needs no
+adapter at all — it's a data row you add with one command:
 
 ```bash
 bivy agent add       # register an existing ACP or process agent
@@ -110,15 +111,36 @@ bivy agent add       # register an existing ACP or process agent
 curl -fsSL https://bivy.sh/install.sh | bash
 ```
 
-macOS and Linux. Requires Node.js 22.19 or newer; the installer installs it for
-you on Debian/Ubuntu and otherwise points you at nodejs.org. It installs the
-[`@bivy/bivy`](https://www.npmjs.com/package/@bivy/bivy) package from npm, puts
-the `bivy` command on your `PATH`, then runs the guided `bivy setup` wizard —
-agent choice, relay/control-plane sign-in, and an auto-start background service
-(launchd on macOS, systemd on Linux). Re-running it on a machine that already
-has Bivy just applies the latest build and restarts the service.
+macOS and Linux. Requires Node.js 22.19 or newer. The installer puts the
+[`@bivy/bivy`](https://www.npmjs.com/package/@bivy/bivy) npm package and the
+`bivy` command on your `PATH`, then runs the guided `bivy setup` wizard — agent
+choice, remote access, and an auto-start background service (launchd on macOS,
+systemd on Linux). Re-running it on a machine that already has Bivy just applies
+the latest build and restarts the service.
 
-Already have Node.js 22.19+? The installer is optional:
+**What needs an account, and what doesn't.** The CLI alone — `bivy run`,
+`bivy resume`, `bivy sessions` — needs no account and no server; `bivy setup`
+lets you pick **local only for now** and skip remote access. A browser or phone
+UI needs a control plane, because the node hosts none: use the hosted one at
+`app.bivy.sh` (sign in with GitHub or email; free tier plus a paid plan — see
+[bivy.sh#pricing](https://bivy.sh#pricing)) or
+[self-host your own](docs/self-host-quickstart.md). Switch any time with
+`bivy relay:setup`.
+
+**What the installer does with sudo.** It escalates only when it must, and
+tells you when it does:
+
+- Debian/Ubuntu without a suitable Node.js: `sudo apt-get install build-essential
+  python3 curl`, then NodeSource's Node 22 setup script via `sudo`.
+- Other Linux, or macOS, without a suitable Node.js: downloads the official
+  Node 22 tarball from nodejs.org (sha256-checked) and installs it under
+  `/usr/local` with `sudo`.
+- If npm's global prefix isn't writable it falls back to `~/.local` — it never
+  runs `npm install` under `sudo`.
+- It appends a marked PATH block to `~/.bashrc` or `~/.zshrc`
+  (`BIVY_NO_RC_UPDATE=1` to opt out).
+
+Want no sudo at all? Bring your own Node.js 22.19+ and skip the script:
 
 ```bash
 npm install -g @bivy/bivy && bivy setup     # install globally
@@ -150,8 +172,9 @@ Environment variables passed to the one-line installer change what it does:
 |---|---|
 | Track the dev channel (new build on every merge to `main`) | `BIVY_CHANNEL=staging` |
 | Pin an exact version | `BIVY_VERSION=0.1.0` |
-| Install without sudo, into a user-owned prefix | `BIVY_NPM_PREFIX=~/.local` |
+| Install the npm package into a user-owned prefix | `BIVY_NPM_PREFIX=~/.local` |
 | Preinstall every known upstream agent | `BIVY_INSTALL_ALL_AGENTS=1` |
+| Don't touch `~/.bashrc` / `~/.zshrc`; print the PATH line instead | `BIVY_NO_RC_UPDATE=1` |
 
 For example: `BIVY_CHANNEL=staging curl -fsSL https://bivy.sh/install.sh | bash`.
 
@@ -224,7 +247,12 @@ Bivy has three parts. **Only the first one holds your data.**
 Because the node serves no UI, a browser or phone needs a control plane — hosted
 at `app.bivy.sh`, or one you deploy yourself. The terminal CLI needs neither.
 Interactive Session traffic is end-to-end encrypted between a Machine and its
-paired devices, so the relay cannot decrypt it.
+paired devices: the relay never sees plaintext and cannot decrypt it. Who can
+*authorize* a device depends on how you pair — with a QR / `bivy link` pairing,
+or on a self-hosted deployment, the control plane can't read your Sessions
+either; with hosted account sign-in you trust the control plane to authorize
+devices and to serve the web app that holds the keys. See
+[known limitations](docs/security-model.md#known-limitations-for-0x).
 
 See [`docs/remote-access.md`](docs/remote-access.md) and
 [`docs/security-model.md`](docs/security-model.md).
@@ -256,6 +284,11 @@ vary by runtime.
 | Continue | `bivy run continue` | Headless CLI |
 | Kilo Code | `bivy run kilocode` | ACP-capable |
 | Rovo Dev | `bivy run rovodev` | Installed out of band |
+
+Also defined but hidden from the picker as *Experimental* — runnable via
+`BIVY_RUNTIME=<id>`: Codebuff (`codebuff`, no verified headless mode upstream
+yet), Hermes (`hermes`, generic process adapter), and OpenClaw (`openclaw`,
+CLI adapter only, no resume yet).
 
 Any other command works via `bivy run -- ./your-agent --flags`. ACP-capable
 agents can be promoted to Bivy's governed protocol path for per-tool approvals
@@ -462,8 +495,11 @@ to skip interactive sign-in. `relay:setup` checks the control plane is reachable
 enrolls this node, and writes the endpoints to `.bivy/relay.json`, so `bivy open`,
 `bivy link`, and `bivy update` all keep using your deployment afterwards.
 
-**Self-hosting is unsupported** — no SLA, community best-effort via GitHub
-issues. You own TLS, backups, upgrades, and hardening. See
+**Self-hosting is community-supported** — no SLA, best-effort help via GitHub
+issues. You own TLS, backups, upgrades, and hardening. Start with the
+one-command VPS path in
+[`docs/self-host-quickstart.md`](docs/self-host-quickstart.md); the ops
+reference (backups, rotation, security boundary) is
 [`docs/self-host.md`](docs/self-host.md).
 
 ## Security
@@ -480,3 +516,9 @@ License, version 3.0 only (AGPL-3.0-only). You may use, study, modify, and
 self-host it under that license. If you modify Bivy and let users interact with
 it over a network, section 13 requires you to offer them the corresponding
 source code. See [`LICENSE`](LICENSE).
+
+**Where the open-core line is.** Everything in this repository — node, CLI,
+relay, control plane, and the web/PWA client — is AGPL Core, with no usage
+limits. **Bivy Cloud** is the hosted operation of that stack plus billing and
+plans, and lives in a separate private repository. Contributions are accepted
+under the [DCO](CONTRIBUTING.md#certificate-of-origin); there is no CLA.

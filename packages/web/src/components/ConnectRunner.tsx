@@ -5,8 +5,8 @@ import type { AccountNode } from "@bivy/core";
 import { writeClipboard } from "../clipboard.js";
 import { Spinner } from "./Spinner.js";
 import { StatusDot } from "./StatusDot.js";
-
-const INSTALL_CMD = "curl -fsSL https://bivy.sh/install.sh | bash";
+import { installCommand } from "../installCommand.js";
+import { controller } from "../store/useStore.js";
 
 /**
  * The "no runner connected" onboarding screen shown on a fresh session before a
@@ -31,6 +31,9 @@ export function ConnectRunner({
 }) {
   const [copied, setCopied] = useState(false);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Hosted: the one-line installer. Self-hosted: point `bivy setup` at this
+  // deployment, since only bivy.sh serves install.sh (see installCommand.ts).
+  const install = installCommand(location.origin, controller.local.relay);
 
   useEffect(() => () => {
     if (copyTimer.current) clearTimeout(copyTimer.current);
@@ -42,7 +45,7 @@ export function ConnectRunner({
   const persistentNodes = nodes.filter((n) => !n.id.startsWith("eph-"));
 
   const copyCommand = async () => {
-    const ok = await writeClipboard(INSTALL_CMD);
+    const ok = await writeClipboard(install.command);
     if (!ok) return;
     setCopied(true);
     if (copyTimer.current) clearTimeout(copyTimer.current);
@@ -79,11 +82,14 @@ export function ConnectRunner({
             </span>
             <div className="connect-option-copy">
               <h3>Set up a trusted workstation</h3>
-              <p>Run one command on your Mac or Linux computer for persistent, always-ready work.</p>
+              <p>
+                Run one command on your Mac or Linux computer for persistent, always-ready work.
+                {!install.hosted && " Needs Node.js 22.19 or newer; setup will point the machine at this control plane."}
+              </p>
             </div>
           </div>
           <div className="connect-command">
-            <code>{INSTALL_CMD}</code>
+            <code>{install.command}</code>
             <button
               type="button"
               className={`connect-copy${copied ? " is-copied" : ""}`}
@@ -108,9 +114,11 @@ export function ConnectRunner({
               )}
             </button>
           </div>
-          <a className="connect-option-link" href="/install.sh">
-            Prefer a file? Download the installer
-          </a>
+          {install.hosted && (
+            <a className="connect-option-link" href="/install.sh">
+              Prefer a file? Download the installer
+            </a>
+          )}
         </div>
 
         {ephemeralEnabled && (

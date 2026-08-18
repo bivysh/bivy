@@ -83,8 +83,15 @@ const canonicalConfigPath = path.join(appDir, "config.yaml");
 let canonicalConfig = null;
 async function hydrateCanonicalConfig() {
   if (!fs.existsSync(canonicalConfigPath)) return;
+  let parse;
   try {
-    const { parse } = await import("yaml");
+    ({ parse } = await import("yaml"));
+  } catch (error) {
+    // A missing dependency is an install problem, not a config problem — say so
+    // instead of blaming the user's config.yaml.
+    throw new Error(`Bivy's dependencies are not installed (${error?.message || String(error)}). Run 'pnpm install' in the checkout, or reinstall with 'bivy update'.`);
+  }
+  try {
     const value = parse(fs.readFileSync(canonicalConfigPath, "utf8"), { uniqueKeys: true });
     if (!value || typeof value !== "object" || value.version !== 1) throw new Error("version must be 1");
     canonicalConfig = value;
@@ -2119,10 +2126,14 @@ async function cmdSessions(args = [], opts = {}) {
     return;
   }
 
+  // Size the agent column to the longest label present (capped) so "Claude Code"
+  // isn't clipped to "Claude C".
+  const agentLabel = (item) => item.agentName || item.agent || "agent";
+  const agentWidth = Math.min(16, Math.max(5, ...items.map((item) => agentLabel(item).length)));
   const renderRow = (item, i) => {
     const idx = c.cyan(String(i + 1).padStart(2));
     const tag = item.kind === "live" ? c.green("live") : c.dim(item.when || "").padStart(4);
-    const agent = c.bold((item.agentName || item.agent || "agent").padEnd(8).slice(0, 8));
+    const agent = c.bold(agentLabel(item).padEnd(agentWidth).slice(0, agentWidth));
     const meta = [item.model && c.dim(item.model), item.workspace && c.dim(`~${path.basename(item.workspace)}`)].filter(Boolean).join(" ");
     return `  ${idx}  ${statusGlyph(item.status)} ${tag}  ${agent}  ${truncate(item.name, 48)}  ${meta}`;
   };
@@ -3575,9 +3586,11 @@ async function cmdSetup(args = []) {
   }
   console.log(c.dim(`Default agent: ${setupAgent?.label || "Pi"}  (change any time in Settings)`));
 
-  // 3. Secure remote web/PWA access is what makes a Bivy-managed CLI useful:
-  // without a relay/control plane it adds nothing over running the agent
-  // directly. Setup therefore requires hosted or self-hosted enrollment.
+  // 3. Remote web/PWA access is what lets you reach a session from your phone,
+  // browser, or another device, so setup offers it up front — hosted or
+  // self-hosted. It is optional: the terminal CLI works without a relay or
+  // control plane, and "local only" leaves remote access for a later
+  // `bivy relay:setup` (which is what `bivy open` points at until then).
   //
   // Carries the account session from relay:setup to the setup-completion step so
   // we can open the remote app signed into the whole account (see finishSetupRemote).
@@ -3585,7 +3598,8 @@ async function cmdSetup(args = []) {
   if (!fs.existsSync(relayConfigPath)) {
     console.log(c.bold("\n  Remote access\n"));
 
-    console.log("Bivy uses remote access to make agent sessions visible and steerable from your other devices.");
+    console.log("Remote access lets you reach your sessions from a phone, browser, or another terminal.");
+    console.log(c.dim("It needs a control plane — the hosted one at app.bivy.sh (free tier and paid plans: https://bivy.sh#pricing) or your own. The terminal CLI works without it."));
     // If self-host endpoints are already provided via the environment, default to
     // self-hosted so a scripted or self-hosted install doesn't have to re-pick it
     // (BIVY_CONTROL_PLANE_URL / BIVY_RELAY_URL then pre-fill the URL prompts below).
@@ -3593,12 +3607,16 @@ async function cmdSetup(args = []) {
     const syncChoice = await askChoice(
       "Remote access",
       [
-        { key: "h", label: "hosted (recommended — remote access runs on a weekly allowance; nothing caps your local usage)" },
+        { key: "h", label: "hosted (recommended — sign in with GitHub or email; nothing caps your local usage)" },
         { key: "s", label: "self-hosted (your own control plane + relay)" },
+        { key: "l", label: "local only for now (terminal CLI only; run 'bivy relay:setup' later)" },
       ],
       selfHostEnv ? "s" : "h",
     );
     const relayArgs = [];
+    if (syncChoice === "l") {
+      console.log(c.dim("\nSkipping remote access. Enable it any time with 'bivy relay:setup'."));
+    }
     if (syncChoice === "s") {
       const endpoints = await getHostedEndpoints();
       const controlPlane = await ask("  Control plane URL:", process.env.BIVY_CONTROL_PLANE_URL || endpoints.controlPlane);
@@ -3607,48 +3625,50 @@ async function cmdSetup(args = []) {
       if (relayWs.trim()) relayArgs.push("--relay", relayWs.trim());
     }
 
-    const loginChoice = await askChoice(
-      "Remote login",
-      [
-        { key: "g", label: "GitHub" },
-        { key: "e", label: "email sign-in link (open or scan on any device)" },
-      ],
-      "g",
-    );
-    if (loginChoice === "e") {
-      const email = await ask("  Your account email:", config.env.BIVY_EMAIL || "");
-      if (email.trim()) relayArgs.push("--email", email.trim());
-      else relayArgs.push("--github");
-    } else {
-      relayArgs.push("--github");
-    }
+    if (syncChoice !== "l") {
+      const loginChoice = await askChoice(
+        "Remote login",
+        [
+          { key: "g", label: "GitHub" },
+          { key: "e", label: "email sign-in link (open or scan on any device)" },
+        ],
+        "g",
+      );
+      if (loginChoice === "e") {
+        const email = await ask("  Your account email:", config.env.BIVY_EMAIL || "");
+        if (email.trim()) relayArgs.push("--email", email.trim());
+        else relayArgs.push("--github");
+      } else {
+        relayArgs.push("--github");
+      }
 
-    const useGithub = relayArgs.includes("--github");
-    try { fs.rmSync(setupSessionPath, { force: true }); } catch { /* best effort */ }
-    let relayOk;
-    for (;;) {
-      console.log(c.dim(useGithub
-        ? "  We'll open GitHub in your browser (or print the URL on a headless server). Authorize, and setup continues automatically."
-        : "  We'll email you a sign-in link. Open it in any browser and setup continues automatically."));
-      rl.pause();
-      const code = await run(nodeBin, [...nodeScriptArgs(relaySetupEntry), ...relayArgs, "--emit-session", setupSessionPath], {
-        cwd: repoRoot,
-        env: startEnv(config),
-      });
-      rl.resume();
-      relayOk = code === 0;
-      if (relayOk) break;
-      const retry = await askYesNo("Remote access setup failed. Try again?", true);
-      if (!retry) break;
+      const useGithub = relayArgs.includes("--github");
+      try { fs.rmSync(setupSessionPath, { force: true }); } catch { /* best effort */ }
+      let relayOk;
+      for (;;) {
+        console.log(c.dim(useGithub
+          ? "  We'll open GitHub in your browser (or print the URL on a headless server). Authorize, and setup continues automatically."
+          : "  We'll email you a sign-in link. Open it in any browser and setup continues automatically."));
+        rl.pause();
+        const code = await run(nodeBin, [...nodeScriptArgs(relaySetupEntry), ...relayArgs, "--emit-session", setupSessionPath], {
+          cwd: repoRoot,
+          env: startEnv(config),
+        });
+        rl.resume();
+        relayOk = code === 0;
+        if (relayOk) break;
+        const retry = await askYesNo("Remote access setup failed. Try again?", true);
+        if (!retry) break;
+      }
+      if (!relayOk) {
+        rl.close();
+        console.error(c.red("\nSetup is incomplete: Bivy could not connect this node to a relay/control plane."));
+        console.error(`Re-run ${c.cyan("bivy setup")} to retry, or choose "local only" to skip remote access for now.`);
+        process.exitCode = 1;
+        return;
+      }
+      setupSession = consumeSetupSession();
     }
-    if (!relayOk) {
-      rl.close();
-      console.error(c.red("\nSetup is incomplete: Bivy could not connect this node to a relay/control plane."));
-      console.error(`Re-run ${c.cyan("bivy setup")} to retry.`);
-      process.exitCode = 1;
-      return;
-    }
-    setupSession = consumeSetupSession();
   } else {
     console.log(c.dim("\nRemote access already configured. Re-run 'bivy relay:setup' to change sync or sign-in."));
   }
@@ -4088,7 +4108,9 @@ async function cmdDoctor(args = []) {
       : c.dim("not connected — 'bivy github:connect' to list/clone private repos");
   console.log(`  ${mark(ghConnected, true)} GitHub ${ghHint}`);
   console.log(`  ${mark(reachable)} node ${reachable ? c.green("reachable") : c.dim("not reachable — 'bivy start'")} at ${url(config)}`);
-  console.log(`  ${mark(/running/.test(serviceStatusLine()), true)} ${serviceStatusLine()}`);
+  // systemd reports "active", launchd "loaded"; either means the service is up.
+  const serviceLine = serviceStatusLine();
+  console.log(`  ${mark(/\((active|running|loaded)\)/.test(serviceLine), true)} ${serviceLine}`);
   const defaultAgent = String(config.env?.BIVY_RUNTIME || runtimes?.current?.id || "pi");
   const runtimeInfo = Array.isArray(runtimes?.runtimes) ? runtimes.runtimes.find((r) => r?.id === defaultAgent) : null;
   const agentAvailable = runtimeInfo ? runtimeInfo.status === "available" : defaultAgent === "pi";

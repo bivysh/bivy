@@ -1,9 +1,12 @@
 # Self-host quickstart
 
 This guide takes a new Linux VPS to a running Bivy control plane, relay, and web
-app. Self-hosting is community-supported and intended for people comfortable
+app — the AGPL control-plane and relay stack from this repo (Bivy Cloud layers
+billing on top of it in a private repository). Self-hosting
+is community-supported (no SLA; best-effort help via GitHub issues — you own
+TLS, backups, upgrades, and hardening) and intended for people comfortable
 operating their own server. If you only want to run agents on your computer, use
-the regular [quickstart](quickstart.md) instead.
+the regular [quickstart](quickstart.md) instead — the CLI needs no server at all.
 
 ## Prerequisites
 

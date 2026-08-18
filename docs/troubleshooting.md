@@ -54,21 +54,24 @@ command -v git
 
 **Symptom.** `bivy: command not found` after a successful install.
 
-**Cause.** The installer symlinks `~/.local/bin/bivy`, but `~/.local/bin` is not
-on your `PATH`.
+**Cause.** npm's global bin directory (or `~/.local/bin`, when the installer
+fell back to a user-owned prefix) is not on your `PATH`. The installer appends
+a marked block to `~/.bashrc`/`~/.zshrc`, but the terminal you ran it in
+doesn't see it until you open a new one.
 
 ```bash
+npm prefix -g          # <prefix>/bin must be on PATH
 ls -l ~/.local/bin/bivy
 echo "$PATH"
 ```
 
-**Fix.**
+**Fix.** Open a new terminal, or:
 
 ```bash
-export PATH="$HOME/.local/bin:$PATH"   # add to ~/.zshrc or ~/.bashrc
+export PATH="$(npm prefix -g)/bin:$HOME/.local/bin:$PATH"   # add to ~/.zshrc or ~/.bashrc
 ```
 
-Or call it directly: `~/.bivy/app/bin/bivy.mjs status`. From a git checkout:
+Or call it directly: `npx @bivy/bivy status`. From a git checkout:
 `pnpm run bivy -- status`.
 
 ## Node.js too old
@@ -255,7 +258,8 @@ bivy logs -f    # look for lines tagged [relay]
 
 **Fixes.**
 
-- Never set up: run `bivy relay:setup` and sign in.
+- Never set up (you chose *local only* in `bivy setup`, or skipped it): run
+  `bivy relay:setup` and sign in.
 - Configured but the running node has not picked it up: `bivy restart`.
 - The node dials the relay outbound over WSS. If a corporate proxy or firewall
   blocks outbound WebSocket connections, the node will retry with exponential
