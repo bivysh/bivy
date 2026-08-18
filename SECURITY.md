@@ -68,7 +68,8 @@ We follow coordinated disclosure.
 
 ### In scope
 
-- The node daemon (`bivy` / `bivyd`) and its local HTTP/WebSocket API.
+- The node daemon (`bivy start` / the background service) and its local
+  HTTP/WebSocket API.
 - The `bivy` CLI.
 - The relay (`services/relay`).
 - The control plane (`services/control-plane`) and the hosted service at

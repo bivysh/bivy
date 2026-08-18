@@ -567,10 +567,6 @@ export class AppController {
     // Seed the reactive auth flag from the token we may have just consumed above,
     // so the very first render lands on the right surface (sign-in vs. shell).
     this.store.setSignedIn(this.signedIn);
-    // Handle a return from Stripe checkout (?checkout=success|cancel) and a
-    // "Go Pro" deep link from the marketing site (?intent=upgrade). Runs after
-    // the auth flag is seeded so the upgrade intent can resume the moment the
-    // user is signed in (a fresh sign-in redirect lands here already signed in).
     // Remember the route we booted on (a `/sessions/:id` deep link, `/sessions/new`,
     // or root). It's replayed once we're first online — see applyInitialRoute.
     this.pendingRoute = parseRoute();

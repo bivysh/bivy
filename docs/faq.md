@@ -31,20 +31,31 @@ shell, push notifications), but it ships no app-store binary and needs no
 app-store install. See [remote-access.md § Install the
 PWA](remote-access.md#4-install-the-pwa).
 
+## Do I need an account?
+
+Not for the CLI. `bivy run`, `bivy resume`, `bivy sessions`, Runs and
+automations from the terminal all work with no account and no server; pick
+**local only for now** in `bivy setup`. You need a control plane only for a
+browser or phone UI, because the node hosts none: the hosted one at
+`app.bivy.sh` (GitHub or email sign-in; free tier plus a paid plan — see
+[bivy.sh#pricing](https://bivy.sh#pricing)) or one you
+[self-host](self-host-quickstart.md). Switch any time with `bivy relay:setup`.
+See the [README](../README.md#install).
+
 ## Can I get support for a self-hosted deployment?
 
-No, not in the sense of an SLA or a support queue. Self-hosting the control
-plane + relay stack is **open-source under AGPL-3.0-only** and explicitly
-unsupported: no uptime, response-time, or data-durability guarantees, and
-breaking changes between versions are likely. If you run it, you own
-operating it — TLS, backups, restores, secret rotation, monitoring, and
-abuse prevention are on you. GitHub issues are community best-effort, not a
-guarantee. **Bivy Cloud** is the supported, managed alternative. See
+Community support only — no SLA and no support queue. Self-hosting the control
+plane + relay stack is **open-source under AGPL-3.0-only** with no uptime,
+response-time, or data-durability guarantees, and breaking changes between
+versions are likely. If you run it, you own operating it — TLS, backups,
+restores, secret rotation, monitoring, and abuse prevention are on you. GitHub
+issues are community best-effort, not a guarantee. **Bivy Cloud** is the
+managed alternative. See
 [self-host.md § Maturity and support](self-host.md#maturity-and-support).
 
-(Bivy Core — the node + CLI running locally with no hosted account — is a
-different thing and is not what this answer is about; that's the normal,
-supported way to run Bivy.)
+(Bivy Core — the node + CLI running locally, with or without a hosted account —
+is a different thing and is not what this answer is about; that's the normal
+way to run Bivy.)
 
 ## Does the control plane see my GitHub issue text?
 

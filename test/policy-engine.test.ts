@@ -34,11 +34,30 @@ check("autonomous mode allows plain bash", () => {
   assert.equal(policy.decideToolCall("/ws", "bash", { command: "npm test" }).decision, "allow");
 });
 
-check("unrestricted mode bypasses approvals and the hard floor", () => {
+check("unrestricted (danger-full-access) bypasses approvals and the workspace boundary", () => {
   const policy = new PolicyEngine({ mode: "always", unrestricted: true, isRiskyIntegration: () => true });
   assert.equal(policy.decideToolCall("/ws", "bash", { command: "curl http://x" }).decision, "allow");
-  assert.equal(policy.decideToolCall("/ws", "bash", { command: "rm -rf /" }).decision, "allow");
+  assert.equal(policy.decideToolCall("/ws", "bash", { command: "sudo apt install foo" }).decision, "allow");
   assert.equal(policy.decideToolCall("/ws", "write", { path: "../../etc/passwd" }).decision, "allow");
+  assert.equal(policy.decideToolCall("/ws", "some_risky_integration", {}).decision, "allow");
+});
+
+check("unrestricted (danger-full-access) still denies catastrophic commands", () => {
+  const policy = new PolicyEngine({ mode: "never", unrestricted: true, isRiskyIntegration: () => false });
+  for (const command of [
+    "rm -rf /",
+    "rm -rf ~",
+    "mkfs.ext4 /dev/sda1",
+    "dd if=/dev/zero of=/dev/sda",
+    ":(){ :|:& };:",
+    "shutdown -h now",
+  ]) {
+    const result = policy.decideToolCall("/ws", "bash", { command });
+    assert.equal(result.decision, "deny", `expected deny for: ${command}`);
+    assert.match(result.reason ?? "", /catastrophic/);
+  }
+  // Runtime-specific casing (Claude Code sends `Bash`) must not slip past the floor.
+  assert.equal(policy.decideToolCall("/ws", "Bash", { command: "rm -rf /usr" }).decision, "deny");
 });
 
 check("attaches a risk category to every decision", () => {

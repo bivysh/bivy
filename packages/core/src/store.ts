@@ -11,8 +11,8 @@
 // focused client (transcript, approvals, models, runtimes, status, streaming
 // assistant text + tool activity). The legacy multi-client focus arbitration,
 // deferred-history and transcript-cache optimizations are intentionally NOT
-// reproduced here yet — see packages/web/STATUS.md. They are refinements over
-// this correct baseline, not prerequisites for it.
+// reproduced here. They are refinements over this correct baseline, not
+// prerequisites for it.
 
 import type { AttachmentRef, ConnectionStatus, CredentialPresetsView, CredentialRecordSummary, PromptAttachment, ServerEvent } from "./protocol.js";
 import type { AccountNode, EphemeralNodeConfig } from "./account.js";

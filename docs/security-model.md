@@ -19,6 +19,22 @@ The node is the data plane. The control plane and relay are not.
 
 ## Trust model
 
+### What is end-to-end encrypted, and from whom
+
+The short version, before the detail:
+
+| Path | Relay sees plaintext? | Control plane sees plaintext? | Who you trust for device authorization |
+| --- | --- | --- | --- |
+| QR / `bivy link` pairing (hosted or self-hosted control plane) | **Never** | **Never** | The node — the QR carries the node's public key and a single-use secret out of band |
+| Account pairing (a signed-in browser links a node from the app) | **Never** | **Never** for session content | The **control plane** — the node wraps the room key for any device key the control plane authorizes |
+| Hosted ephemeral provisioning (control plane launches the machine) | **Never** | It **holds the room key** (escrowed) | The control plane — this is an explicit hosted-custody mode |
+| Terminal CLI on the node (`bivy run`, `bivy attach`) | n/a — nothing leaves the machine | n/a | Nobody |
+
+"Never" for the relay is unconditional: there is no plaintext or downgrade mode
+in the wire protocol. The control-plane column depends on the path; the
+[Known limitations](#known-limitations-for-0x) spell out each of the trust
+points in the last column.
+
 ### What the node holds
 
 - Your source code and workspaces.
@@ -154,61 +170,89 @@ The room key is not shipped in the QR code. Pairing is an X25519 handshake
 Because the relay never saw the QR, it cannot forge the proof or derive the wrap
 key. Worst case it can make a pairing attempt fail; it cannot leak the room key.
 
+### Account pairing (the control plane vouches for the device)
+
+A browser that is already signed in to the app can link a node without a QR.
+It sends `pair.account` over the relay with its X25519 public key and its
+account session token; the node forwards both to the control plane
+(`POST /node/authorize-client`, `authorizeAccountPairing` in
+`src/remote/relay-client.ts`) and, on an `ok`, wraps the room key for that
+device key exactly as in step 4 above (`PairingStore.trustDevice`,
+`src/device-registry.ts`). The browser, for its part, learns the node's public
+key from the first pairing frame it receives over the relay
+(`handlePairFrame` in `packages/core/src/transport-relay.ts`) — trust on first
+use — rather than from an out-of-band QR.
+
+The relay still cannot read anything: the room key is wrapped under ECDH
+between the node and the device, and the relay holds neither private key. What
+changes is *who decides which device keys get the room key*: on this path it is
+the control plane. A malicious or compromised control plane could authorize a
+device it controls, or collude with the relay to substitute public keys during
+the handshake. QR / `bivy link` pairing does not depend on the control plane
+for that decision, and self-hosting the control plane puts it under your own
+control.
+
 ## Local daemon exposure (cross-origin and DNS rebinding)
 
-The node's HTTP/WebSocket API on `localhost:4317` can run shell commands and
-edit files. By default it authorizes any **loopback** caller without a token so
-the local UI works out of the box — but only on a host it believes has a single
-human user. `loopbackAllowed()` in `src/auth.ts` calls `isMultiUserHost()` to
-make that call: on Linux it counts `/etc/passwd` accounts with a real login
-shell and a normal (non-system) UID, and on macOS it counts real accounts from
-`dscl . -list /Users UniqueID`; more than one means the bypass is off by
-default, because loopback is shared by every local account and is not
-isolation between them. Windows detection isn't implemented, so the bypass
-stays on there today. `BIVY_REQUIRE_LOCAL_AUTH=1` always forces token auth even
-on loopback (e.g. Windows, or if you don't trust the detection); `=0` always
-keeps the bypass on even if the host looks shared. `BIVY_MULTI_USER_HOST=1`/`=0`
-overrides just the detection, if it's guessing wrong for your box. Detection is
-deliberately conservative (biased toward false negatives, not false positives)
-so it never surprises a single-user machine into requiring a token it never
-needed before.
+The node's HTTP/WebSocket API on `127.0.0.1:4317` can run shell commands, edit
+files, open terminals, and hand out repo tokens. **It hosts no web UI**:
+`http://localhost:4317` returns one line of plain text, and `bivy open` opens
+the *control plane's* web app (hosted, or one you self-host), which reaches
+the node through the relay. The daemon binds to loopback only unless you set
+`BIVY_HOST` (`src/server.ts`); remote devices never connect to this port
+directly, because the node dials the relay outbound.
+
+**Same-user callers on loopback need no token by default.** `isAuthorized()`
+in `src/auth.ts` accepts a loopback connection with no device token when
+`loopbackAllowed()` is true, which is the case on a host Bivy believes has a
+single human user. `isMultiUserHost()` decides that: on Linux it counts
+`/etc/passwd` accounts with a real login shell and a normal (non-system) UID;
+on macOS it counts real accounts from `dscl . -list /Users UniqueID`. More than
+one means the bypass is off, because loopback is shared by every local account
+and is not isolation between them. Windows detection isn't implemented, so the
+bypass stays on there today. `BIVY_REQUIRE_LOCAL_AUTH=1` always forces token
+auth even on loopback (e.g. Windows, or if you don't trust the detection); `=0`
+always keeps the bypass on even if the host looks shared.
+`BIVY_MULTI_USER_HOST=1`/`=0` overrides just the detection. Detection is
+deliberately conservative (biased toward false negatives) so it never surprises
+a single-user machine into requiring a token it never needed before.
 
 When the bypass is off, every `/api` and `/ws` caller — including the CLI —
-must present a device token, which they get from the bootstrap endpoint below.
+must present a device token. Loopback callers get one from
+`POST /api/auth/bootstrap`, which is gated by a per-process **bootstrap
+secret**: 32 random bytes generated at daemon start, printed to its stdout and
+written to `.bivy/bootstrap.json` (mode `0600`), and compared in constant time
+(`bootstrapSecretAccepted`, `src/server.ts`). Only the OS user who launched the
+daemon — and can read its stdout or the `0600` file — can mint a token this
+way. The same gate protects `GET /api/git-credential`, the loopback endpoint
+the git credential helper uses to fetch short-lived repo tokens.
+`BIVY_OPEN_BOOTSTRAP=1` drops the secret requirement on a trusted single-user
+machine.
 
-That default would otherwise let any web page you visit drive your agent. The
-actionable surface (`/api`, `/ws`) therefore rejects requests whose browser
-`Origin` is not local **and** whose `Host` header is not local — the latter is
-what defeats DNS rebinding (attacker domain resolving to `127.0.0.1`). See
-`requestOriginAllowed` in `src/auth.ts`.
+**Cross-origin and DNS rebinding.** Because loopback callers may be tokenless,
+any web page you visit could otherwise open a cross-origin WebSocket to
+`ws://127.0.0.1:4317/ws` and drive the agent. The actionable surface (`/api`,
+`/ws`) therefore rejects a request whose browser `Origin` is not a local/private
+name, and independently rejects a request whose `Host` header is not local —
+the latter is what defeats DNS rebinding (attacker domain resolving to
+`127.0.0.1`). See `requestOriginAllowed` in `src/auth.ts`.
 
-Allowed hosts are loopback, RFC1918 private ranges (`10/8`, `192.168/16`,
-`172.16/12`), link-local (`169.254/16`, `fe80::/10`), CGNAT (`100.64/10`, used
-by Tailscale), IPv6 unique-local (`fc00::/7`), and `.local` / `.ts.net` /
-`.internal` / `.localhost` names — so LAN, mDNS, and Tailscale access keep
-working. Requests with no `Origin` at all (CLI, curl, native clients) pass the
-Origin check and are still subject to the Host check.
+Hosts and origins counted as local are loopback, RFC1918 private ranges (`10/8`,
+`192.168/16`, `172.16/12`), link-local (`169.254/16`, `fe80::/10`), CGNAT
+(`100.64/10`, used by Tailscale), IPv6 unique-local (`fc00::/7`), and `.local` /
+`.ts.net` / `.internal` / `.localhost` names — so LAN, mDNS, and Tailscale
+access keep working when you deliberately bind with `BIVY_HOST`. Note the
+flip side: a page served from any private-network address (a LAN device, a
+Tailscale peer, another local dev server on `.localhost`) is treated as a local
+origin. Requests with no `Origin` at all (CLI, curl, native clients) and
+requests with `Origin: null` pass the Origin check and are subject only to the
+Host check.
 
 Escape hatches:
 
 - `BIVY_ALLOWED_HOSTS=host1,host2` — allow extra hostnames, e.g. a reverse-proxy
   domain fronting the node.
 - `BIVY_ALLOW_ANY_ORIGIN=1` — disable the check entirely. Not recommended.
-
-### Local UI bootstrap secret
-
-On a multi-user host every local account shares `127.0.0.1`, so loopback is not
-isolation. The daemon generates a 32-byte per-process bootstrap secret, prints a
-one-time URL on startup, and writes the secret to `.bivy/bootstrap.json` (mode
-`0600`). The loopback endpoint that mints the local UI's device token requires
-that secret (constant-time compared), so only the user who launched the daemon —
-and can read its stdout or the `0600` file — can bootstrap (`src/server.ts`,
-`bootstrapSecretAccepted`).
-
-- Open the UI with `bivy open`, or the URL printed at startup — not by typing
-  the bare `http://localhost:<port>` into a fresh browser.
-- On a trusted single-user machine, `BIVY_OPEN_BOOTSTRAP=1` drops the secret
-  requirement and restores zero-friction loopback bootstrap.
 
 ## Authentication and device enrollment
 
@@ -251,9 +295,16 @@ including `never`:
 
 - Known catastrophic shell commands are denied outright: `rm -rf /` (and key
   system roots), `mkfs`, `dd of=/dev/sd*`, redirects to raw block devices, the
-  classic fork bomb, `chmod -R 777 /`, and shutdown commands.
+  classic fork bomb, `chmod -R 777 /`, and shutdown commands. This rule also
+  holds at **every sandbox tier**, including `danger-full-access`: the policy
+  engine evaluates it before the full-access short-circuit
+  (`catastrophicFloor` in `src/guard.ts`, `PolicyEngine.decideToolCall`), so
+  nothing configurable sits above it.
 - Structured `write` and `edit` calls whose resolved path escapes the session
-  workspace are denied outright.
+  workspace are denied outright on the `read-only` and `workspace-write` tiers.
+  `danger-full-access` is the explicit opt-out from the workspace boundary and
+  from approval prompts (that is what "full access" means) — but not from the
+  catastrophic-command rule above.
 
 This floor does not apply to operations Bivy cannot observe. A process adapter
 without structured interception can shell out or write as the OS user. The
@@ -290,7 +341,7 @@ Bivy exposes one policy knob with three tiers, borrowing Codex's vocabulary:
 | --- | --- |
 | `read-only` | May read the workspace. No writes, no network. |
 | `workspace-write` (default) | May read/write the worktree; escapes need approval. |
-| `danger-full-access` | No in-agent limit. Explicit opt-out. |
+| `danger-full-access` | No in-agent limit, no Bivy approval prompts, no workspace boundary. Explicit opt-out. Only the catastrophic-command floor still applies on intercepted tool paths. |
 
 Precedence: per-session override > `BIVY_SANDBOX` env > node setting >
 `workspace-write`.
@@ -392,7 +443,8 @@ sensitive.
    are file-based.
 8. **No recovery story for the model-auth vault.** If you lose every node and
    device that can unwrap it, the ciphertext on the control plane is
-   unrecoverable by design. There is no escrow.
+   unrecoverable by design. There is no escrow of the account vault (the
+   separate, opt-in hosted-custody set in item 16 is the only exception).
 9. **Relay hardening is incomplete.** TLS termination is expected to be provided
    in front of the relay by the operator. Frame-size and per-socket
    message-rate limits exist, but per-account connection caps and quotas do not
@@ -411,6 +463,42 @@ sensitive.
 13. **No third-party security audit.** Bivy has not been externally audited.
 14. **Approvals expire denied after 5 minutes.** A long-running unattended
     session that hits an approval will stall and then fail rather than proceed.
+15. **Account pairing trusts the control plane to authorize devices.** When a
+    signed-in browser links a node from the app (rather than by QR /
+    `bivy link`), the node wraps the room key for **any** device public key the
+    control plane says yes to (`POST /node/authorize-client`,
+    `authorizeAccountPairing` in `src/remote/relay-client.ts`), and the browser
+    takes the node's public key on trust from the first pairing frame it sees
+    over the relay (`handlePairFrame`, `packages/core/src/transport-relay.ts`).
+    The relay still cannot read anything, but a compromised or malicious
+    control plane could authorize a device it controls, or — colluding with the
+    relay — substitute keys during the handshake. QR / `bivy link` pairing does
+    not depend on the control plane for that decision, and self-hosting the
+    control plane puts the decision under your own control. See
+    [Account pairing](#account-pairing-the-control-plane-vouches-for-the-device).
+16. **Hosted ephemeral provisioning is an explicit hosted-custody mode.** When
+    the control plane launches an ephemeral machine on your behalf, it
+    generates the machine's room key and **escrows it** (encrypted at rest,
+    `setNodeRoomKeyEnc`, `services/control-plane/src/ephemeral-provisioner.ts`)
+    so it can reach the machine again later; the same mode may hold a filtered
+    set of credentials you have explicitly granted for unattended runs. For
+    those machines the control plane can decrypt session traffic — this is a
+    deliberate trade of end-to-end privacy for device-offline provisioning,
+    off by default and opt-in per account. Device-driven ephemeral launches
+    (the browser mints the room key and bakes it into the machine) keep the
+    control plane blind. See
+    [`hosted-provisioning-trust-model.md`](hosted-provisioning-trust-model.md),
+    [`key-management.md`](key-management.md), and
+    [`ephemeral-sessions.md`](ephemeral-sessions.md).
+17. **The web app that holds your room key is delivered by the control plane.**
+    Browser-side crypto is only as trustworthy as the JavaScript that runs it,
+    and the PWA is served by the control plane (hosted `app.bivy.sh`, or your
+    own). A compromised control plane could ship modified JS that exfiltrates
+    the room key or plaintext from the browser; the relay's blindness does not
+    help there. This is inherent to any web-delivered end-to-end encryption.
+    Mitigations: self-host the control plane so you control what is served,
+    or use the terminal CLI on the node (`bivy run`, `bivy attach`), which
+    involves no control plane at all.
 
 ## Reporting
 

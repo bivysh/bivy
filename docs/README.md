@@ -3,6 +3,20 @@
 **Start here:** [Quickstart](quickstart.md) — install Bivy, start a Machine, and
 run your first agent Session.
 
+## Four words you'll see everywhere
+
+- **Machine** (also *node*) — the `bivy` daemon on a computer you own; it runs
+  the agents and holds your code and keys. "Node" is the same thing when we
+  talk about the daemon or CLI concretely.
+- **Session** — interactive agent work you can watch, steer, and resume from
+  the terminal, browser, or phone.
+- **Run** — an unattended job with checks and an explicit outcome; an
+  **Automation** creates Runs from events.
+- **Relay / control plane** — the relay forwards end-to-end-encrypted frames
+  between a Machine and your devices; the control plane holds accounts and the
+  Machine registry and serves the web/PWA app. Hosted at `app.bivy.sh`, or
+  self-hosted. The CLI alone needs neither.
+
 ## Choose an outcome
 
 | I want to… | Start here | Then use |
@@ -25,6 +39,7 @@ which subsystem or command you need.
 | --- | --- |
 | [quickstart.md](quickstart.md) | First-time users. From nothing to a running agent session. |
 | [install.md](install.md) | Anyone choosing an install method, or installing on a specific OS. |
+| [releasing.md](releasing.md) | How Bivy is distributed on npm, how to verify a release's provenance, and how maintainers cut one. |
 
 ## Using Bivy
 
@@ -64,12 +79,11 @@ which subsystem or command you need.
 
 | Doc | Who it's for |
 | --- | --- |
-| [security-model.md](security-model.md) | Anyone evaluating what Bivy protects, what it doesn't, and its 0.1 limits. |
+| [security-model.md](security-model.md) | Anyone evaluating what Bivy protects, what it doesn't, and its 0.x limits. |
 | [key-management.md](key-management.md) | Users deciding where their API keys and tokens live. |
 | [credential-sync.md](credential-sync.md) | Users running more than one node who want credentials on all of them. |
 | [credentials-guide.md](credentials-guide.md) | Users with several keys or accounts per provider, password-manager references, or per-project key routing. |
 | [hosted-provisioning-trust-model.md](hosted-provisioning-trust-model.md) | Anyone evaluating what changes in the trust boundary when the control plane provisions Machines for you. |
-| [releasing.md](releasing.md) | How Bivy is distributed on npm, how to verify a release, and how to cut one. |
 
 ## Self-hosting
 
