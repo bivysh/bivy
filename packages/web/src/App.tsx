@@ -17,7 +17,6 @@ import { closeAutomations, getAutomationsRoute, openAutomations, setAutomationsS
 // openAutomations({ setup }) is the sole entry for source connection lifecycle.
 import { closeRun, getRunRoute, openRun, subscribeRunRoute } from "./runRoute.js";
 import { dismissSignInRequest, getSignInRequest, subscribeSignInRequest } from "./signInRequest.js";
-import { AutomationsView } from "./components/AutomationsView.js";
 import { RunDetails } from "./components/RunDetails.js";
 import { SessionMenu } from "./components/SessionMenu.js";
 import { TuiLockedView } from "./components/TuiLockedView.js";
@@ -31,7 +30,6 @@ import { ErrorToast } from "./components/ErrorToast.js";
 import { NoticeToast } from "./components/NoticeToast.js";
 import { Spinner } from "./components/Spinner.js";
 import { StatusDot } from "./components/StatusDot.js";
-import { Settings } from "./components/Settings.js";
 import { EphemeralSheet } from "./components/Ephemeral.js";
 import { FirstRunModelAuthSheet } from "./components/FirstRunModelAuth.js";
 import { NodePicker } from "./components/Pickers.js";
@@ -48,6 +46,12 @@ const TerminalOverlay = lazy(() =>
 );
 const ReadinessChecklist = lazy(() =>
   import("./components/ReadinessChecklist.js").then((m) => ({ default: m.ReadinessChecklist })),
+);
+// Settings and Automations are URL-backed overlays most sessions never open;
+// each is one of the largest components in the app, so they load on demand too.
+const Settings = lazy(() => import("./components/Settings.js").then((m) => ({ default: m.Settings })));
+const AutomationsView = lazy(() =>
+  import("./components/AutomationsView.js").then((m) => ({ default: m.AutomationsView })),
 );
 import { useEdgeSwipe } from "./useEdgeSwipe.js";
 import { controller } from "./store/useStore.js";
@@ -796,11 +800,23 @@ export function App() {
               )}
             </div>
 
-            <PwaLifecycleNotice status={state.connection.status} hasCachedTranscript={state.activeSession.transcript.length > 0} />
+            <PwaLifecycleNotice
+              status={state.connection.status}
+              hasCachedTranscript={state.activeSession.transcript.length > 0}
+              machineName={activeSessionNode?.name || undefined}
+            />
             <Composer
               state={state}
               disabled={!canCompose}
-              disabledHint={state.connection.status === "offline" ? "Not connected" : "Connecting…"}
+              disabledHint={
+                state.connection.status === "offline"
+                  ? activeSessionNode?.name
+                    ? `${activeSessionNode.name} is offline — run \`bivy status\` there`
+                    : "Machine offline — run `bivy status` on it"
+                  : activeSessionNode?.name
+                    ? `Connecting to ${activeSessionNode.name}…`
+                    : "Connecting…"
+              }
               working={state.activeSession.working}
               onSend={(text, attachments) => {
                 if (state.connection.status !== "online") markPromptQueued();
@@ -815,6 +831,7 @@ export function App() {
       </main>
 
       {automationsOpen && (
+        <Suspense fallback={null}>
         <AutomationsView
           state={state}
           section={automationsOpen.section}
@@ -844,6 +861,7 @@ export function App() {
             closeDrawer();
           }}
         />
+        </Suspense>
       )}
 
       {runRoute && (
@@ -876,6 +894,7 @@ export function App() {
       )}
 
       {settingsRoute && (
+        <Suspense fallback={null}>
         <Settings
           state={state}
           view={settingsRoute.view}
@@ -909,6 +928,7 @@ export function App() {
             )
           }
         />
+        </Suspense>
       )}
       {ephemeralOpen && <EphemeralSheet onClose={() => setEphemeralOpen(false)} firstRun={needsNode} />}
       {state.presentation.needsModelAuth && <FirstRunModelAuthSheet state={state} />}

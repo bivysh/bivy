@@ -6,8 +6,17 @@ import path from "node:path";
  * The autonomy boundary.
  *
  * Bivy runs agents without per-action approval by default. Safety comes not from
- * prompting on every tool call but from a hard floor that holds in *every* mode:
- * catastrophic commands and writes outside the workspace are blocked outright.
+ * prompting on every tool call but from a hard floor rather than a prompt:
+ *
+ * - Catastrophic commands (`looksCatastrophic`) are blocked outright in every
+ *   approval mode AND every sandbox tier — including `danger-full-access`. This
+ *   is the one rule nothing opts out of; see `catastrophicFloor` and
+ *   `PolicyEngine`.
+ * - Writes outside the session workspace are blocked in every approval mode on
+ *   the `read-only` / `workspace-write` tiers. `danger-full-access` is the
+ *   explicit opt-out from the workspace boundary (that is what "full access"
+ *   means), so the policy engine skips this rule there.
+ *
  * Above that floor, `approvalMode` decides how chatty to be.
  *
  * Pure functions only (no daemon state) so they are unit-testable in isolation —
@@ -68,8 +77,10 @@ function catastrophicRm(command: string): boolean {
 }
 
 /**
- * Catastrophic, irreversible, system-wide actions. Blocked OUTRIGHT in every mode
- * — the boundary that makes unattended autonomy safe rather than reckless.
+ * Catastrophic, irreversible, system-wide actions. Blocked OUTRIGHT in every
+ * approval mode and every sandbox tier — the boundary that makes unattended
+ * autonomy safe rather than reckless. Heuristic: a regex over the command string
+ * that stops accidents, not a determined adversary (docs/security-model.md).
  */
 export function looksCatastrophic(command: string): boolean {
   const c = command.trim().toLowerCase().slice(0, 100_000);
@@ -120,6 +131,37 @@ export function pathEscapesWorkspace(workspace: string, p: string): boolean {
   return abs !== root && !abs.startsWith(root + path.sep);
 }
 
+// Built-in tool names arrive with runtime-specific casing: the Claude Code SDK
+// sends `Bash`/`Write`/`Edit` verbatim, while Pi/others send lowercase. Match
+// case-insensitively so the hard floor fires for every runtime — a
+// case-sensitive compare silently disabled it for claude-code. Integration
+// tool names (MCP, etc.) keep their original casing via `isRiskyIntegration`.
+function isShellTool(toolName: string): boolean {
+  const tool = toolName.toLowerCase();
+  return tool === "bash" || tool === "shell" || tool === "execute" || tool === "run_command";
+}
+
+// Tools that write to the filesystem and so must respect the workspace
+// boundary. MultiEdit/NotebookEdit also take a `file_path` (see toolPath).
+function isWriteTool(toolName: string): boolean {
+  const tool = toolName.toLowerCase();
+  return tool === "write" || tool === "edit" || tool === "multiedit" || tool === "notebookedit";
+}
+
+/**
+ * The unconditional part of the hard floor: a shell call that looks catastrophic
+ * is denied in every approval mode and every sandbox tier. Returns `undefined`
+ * when the call is not a catastrophic shell command. `PolicyEngine` evaluates
+ * this BEFORE the `danger-full-access` short-circuit, so a tier opt-out can skip
+ * approvals and the workspace boundary but never this rule.
+ */
+export function catastrophicFloor(toolName: string, input: unknown): { decision: "deny"; reason: string } | undefined {
+  if (isShellTool(toolName) && looksCatastrophic(bashCommand(input))) {
+    return { decision: "deny", reason: "Blocked: catastrophic command (outside the safety boundary)" };
+  }
+  return undefined;
+}
+
 /**
  * Decide what to do with a tool call. The hard floor (catastrophic commands,
  * writes outside the session workspace) applies in every mode. Above that floor,
@@ -132,21 +174,12 @@ export function guardToolCall(
   mode: ApprovalMode,
   isRiskyIntegration: (tool: string) => boolean,
 ): { decision: GuardDecision; reason?: string } {
-  // Built-in tool names arrive with runtime-specific casing: the Claude Code SDK
-  // sends `Bash`/`Write`/`Edit` verbatim, while Pi/others send lowercase. Match
-  // case-insensitively so the hard floor below fires for every runtime — a
-  // case-sensitive compare silently disabled it for claude-code. Integration
-  // tool names (MCP, etc.) keep their original casing via `isRiskyIntegration`.
-  const tool = toolName.toLowerCase();
-  const isShell = tool === "bash" || tool === "shell" || tool === "execute" || tool === "run_command";
-  // Tools that write to the filesystem and so must respect the workspace
-  // boundary. MultiEdit/NotebookEdit also take a `file_path` (see toolPath).
-  const isWrite = tool === "write" || tool === "edit" || tool === "multiedit" || tool === "notebookedit";
+  const isShell = isShellTool(toolName);
+  const isWrite = isWriteTool(toolName);
 
   // --- Hard floor: blocked in every mode ---
-  if (isShell && looksCatastrophic(bashCommand(input))) {
-    return { decision: "deny", reason: "Blocked: catastrophic command (outside the safety boundary)" };
-  }
+  const catastrophic = catastrophicFloor(toolName, input);
+  if (catastrophic) return catastrophic;
   if (isWrite) {
     const p = toolPath(input);
     if (p && pathEscapesWorkspace(workspace, p)) {

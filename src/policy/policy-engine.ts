@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { guardToolCall, type ApprovalMode, type GuardDecision } from "../guard.js";
+import { catastrophicFloor, guardToolCall, type ApprovalMode, type GuardDecision } from "../guard.js";
 import { riskCategoryForTool, type RiskCategory } from "./risk.js";
 
 export interface PolicyDecision {
@@ -12,9 +12,11 @@ export interface PolicyDecision {
 export interface PolicyEngineOptions {
   mode: ApprovalMode;
   isRiskyIntegration?: (toolName: string) => boolean;
-  /** Explicit full-access opt-out: allow every tool without applying Bivy's
-   * approval or containment policy. Interaction tools are handled before the
-   * policy engine, and a paused session may still ask at the caller. */
+  /** Explicit full-access opt-out (`danger-full-access`): skip Bivy's approval
+   * prompts and the workspace-write boundary. It does NOT lift the catastrophic
+   * command floor — that holds in every mode and every tier. Interaction tools
+   * are handled before the policy engine, and a paused session may still ask at
+   * the caller. */
   unrestricted?: boolean;
 }
 
@@ -26,6 +28,13 @@ export class PolicyEngine {
 
   decideToolCall(workspace: string, toolName: string, input: unknown): PolicyDecision {
     const risk = riskCategoryForTool(toolName);
+
+    // The catastrophic floor is evaluated first, before any opt-out, so
+    // `rm -rf /`, `mkfs`, a fork bomb, etc. are denied even at
+    // danger-full-access. Nothing configurable sits above this line.
+    const catastrophic = catastrophicFloor(toolName, input);
+    if (catastrophic) return { ...catastrophic, risk };
+
     if (this.options.unrestricted) return { decision: "allow", risk };
 
     const base = guardToolCall(

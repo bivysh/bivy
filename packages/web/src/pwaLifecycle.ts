@@ -231,52 +231,59 @@ export function canActivateUpdate(value = state): boolean {
   return value.updateAvailable && updateBlockers(value).length === 0;
 }
 
-/** Pure copy model so every availability state remains independently testable. */
+/** The one thing a user can actually do about an unreachable Machine. */
+export const OFFLINE_MACHINE_HINT = "On that machine, run `bivy status` (or `bivy restart`).";
+
+/** Pure copy model so every availability state remains independently testable.
+ *  `machineName` (the connected node's name, when known) makes the notice say
+ *  *which* Machine is unreachable instead of a generic "the Machine". */
 export function describeAvailability(
   status: ConnectionStatus,
   hasCachedTranscript: boolean,
   value = state,
+  machineName?: string,
 ): AvailabilityMessage {
+  const who = machineName ? `Machine ${machineName}` : "The Machine";
   if (value.locallyQueuedPrompts > 0) {
     return {
       kind: "local-queue",
       label: value.locallyQueuedPrompts === 1 ? "Prompt queued on this device" : `${value.locallyQueuedPrompts} prompts queued on this device`,
-      detail: "This work has not reached the Machine. Keep Bivy open; it will send after the connection recovers.",
+      detail: `Not yet delivered to ${machineName ? `Machine ${machineName}` : "the Machine"}. Keep Bivy open — it sends as soon as the connection is back.`,
     };
   }
   if (status === "reconnecting" || status === "connecting" || status === "linking" || status === "pairing") {
     return {
       kind: "reconnecting",
-      label: "Reconnecting Machine",
+      label: machineName ? `Reconnecting to ${machineName}` : "Reconnecting Machine",
       detail: hasCachedTranscript
-        ? "The transcript shown is the cached copy. You can keep drafting; live control returns after reconnect."
-        : "The app is open, but live Machine control is still reconnecting.",
+        ? "Showing the cached transcript. Keep drafting — sending resumes once the connection is back."
+        : `Waiting for ${machineName ? `Machine ${machineName}` : "the Machine"} to answer. If this sticks, run \`bivy status\` on that machine.`,
     };
   }
   if (status === "offline" && hasCachedTranscript) {
     return {
       kind: "cached-transcript",
       label: "Cached transcript",
-      detail: "This readable copy is stored on this device. It may be behind the Machine; prompts cannot send until reconnect.",
+      detail: `${who} is offline — this copy may be behind, and prompts can't send until it reconnects. ${OFFLINE_MACHINE_HINT}`,
     };
   }
   if (status === "offline" && value.shellCached) {
     return {
       kind: "cached-shell",
-      label: "Cached app shell",
-      detail: "Bivy can reopen from this device's cache, but no transcript or live Machine control is available yet.",
+      label: "Machine offline",
+      detail: `${who} is offline, so there is no transcript or live control yet. Your draft is kept here. ${OFFLINE_MACHINE_HINT}`,
     };
   }
   if (status === "offline") {
     return {
       kind: "offline-page",
       label: "Offline",
-      detail: "This open page can preserve a draft, but the app shell is not confirmed cached and live Machine control is unavailable.",
+      detail: `${who} is unreachable. Your draft is kept on this device. ${OFFLINE_MACHINE_HINT}`,
     };
   }
   return {
     kind: "live-control",
     label: "Live control",
-    detail: "This Machine is connected. Prompts send now and transcript changes sync live.",
+    detail: `${who} is connected. Prompts send now and transcript changes sync live.`,
   };
 }

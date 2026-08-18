@@ -4,10 +4,10 @@ import { useState, useSyncExternalStore } from "react";
 import type { ConnectionStatus } from "@bivy/core";
 import { describeAvailability, dismissInstall, getPwaLifecycleState, requestInstall, subscribePwaLifecycle } from "../pwaLifecycle.js";
 
-export function PwaLifecycleNotice({ status, hasCachedTranscript }: { status: ConnectionStatus; hasCachedTranscript: boolean }) {
+export function PwaLifecycleNotice({ status, hasCachedTranscript, machineName }: { status: ConnectionStatus; hasCachedTranscript: boolean; machineName?: string }) {
   const lifecycle = useSyncExternalStore(subscribePwaLifecycle, getPwaLifecycleState);
   const [guidance, setGuidance] = useState(false);
-  const availability = describeAvailability(status, hasCachedTranscript, lifecycle);
+  const availability = describeAvailability(status, hasCachedTranscript, lifecycle, machineName);
   const showStatus = availability.kind !== "live-control";
   const showInstall = lifecycle.installChoice !== null && !lifecycle.standalone;
   if (!showStatus && !showInstall) return null;

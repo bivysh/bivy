@@ -7,7 +7,7 @@ import { controller } from "../store/useStore.js";
 import { Sheet, PickerItem } from "./Sheet.js";
 import { useModalEscape } from "../modalStack.js";
 import { ProviderConnectForm } from "./ProviderConnect.js";
-import { SANDBOX_TIERS } from "./Settings.js";
+import { SANDBOX_TIERS } from "./sandboxTiers.js";
 import { writeClipboard } from "../clipboard.js";
 import { Badge, type BadgeTone } from "./Badge.js";
 

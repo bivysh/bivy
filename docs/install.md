@@ -16,10 +16,13 @@ curl -fsSL https://bivy.sh/install.sh | bash
 
 The installer:
 
-1. checks for Node.js 22.19+ (on Debian/Ubuntu it can install it for you; on
-   macOS it warns if Xcode Command Line Tools are missing, which the native
-   `node-pty` module needs to build),
-2. runs `npm install -g @bivy/bivy`,
+1. checks for Node.js 22.19+ and installs it if missing — on Debian/Ubuntu via
+   `sudo apt-get` (build tools) and NodeSource's setup script; on other
+   Linux/macOS by downloading the official Node 22 tarball from nodejs.org and
+   installing it under `/usr/local` with `sudo`. On macOS it warns if Xcode
+   Command Line Tools are missing, which the native `node-pty` module needs to
+   build. Bring your own Node.js 22.19+ and none of this runs,
+2. runs `npm install -g @bivy/bivy` (never under `sudo` — see below),
 3. migrates state from a previous tarball install, if it finds one (see below),
 4. launches the interactive `bivy setup` wizard, or restarts the background
    service on an existing install.
@@ -83,20 +86,30 @@ Override the location with `BIVY_DATA_DIR`.
 ## The setup wizard
 
 `bivy setup` (run by the installer, or `pnpm run setup` in an existing checkout)
-picks sensible defaults for everything and asks two questions:
+picks sensible defaults for everything and asks a few questions:
 
-- **Remote access** — hosted (recommended; remote access runs on a weekly allowance, while execution and local history on your machine remain intact) or self-hosted,
-  pointing this node at your own control plane + relay,
-- **Remote login** — GitHub sign-in (default) or an email magic link.
+- **Default agent** — Claude Code (default), Codex, or another runtime under
+  *More agents*.
+- **Remote access** — `hosted` (recommended; the control plane at
+  `app.bivy.sh`, free tier plus a paid plan — see
+  [bivy.sh#pricing](https://bivy.sh#pricing)), `self-hosted` (points this node
+  at your own control plane + relay), or `local only for now` (skip enrollment;
+  the CLI works locally and `bivy open` tells you to run `bivy relay:setup`
+  when you want a browser or phone). Execution and session history stay on
+  your machine in every case.
+- **Remote login** (hosted / self-hosted only) — GitHub sign-in (default) or an
+  email magic link.
+- **Model login** — if the chosen agent isn't signed in yet, an offer to open
+  its login flow now.
 
-Enrollment is required: without a relay/control plane, Bivy adds nothing over
-running the local agent CLI directly. If enrollment fails, setup can retry and
-will not install the background service until it succeeds.
+A browser or phone UI needs a control plane, because the node hosts none — so
+without enrollment Bivy is a local CLI: durable Sessions, resume, Runs, and
+automations from the terminal, but no `bivy open`. If enrollment fails, setup
+offers to retry; run `bivy relay:setup` later to finish.
 
 Everything else is automatic and changeable later in Settings: a dedicated
-`~/bivy-workspace` folder and local port, Pi as the default agent (other
-agents sign into their own CLI), and a background service (launchd/systemd)
-so the node keeps running after you close the terminal.
+`~/bivy-workspace` folder and local port, and a background service
+(launchd/systemd) so the node keeps running after you close the terminal.
 
 It writes CLI config to `.bivy/cli.json` (chmod 600) so `bivy start` and
 the background service reuse the same workspace/port/credentials.
@@ -106,15 +119,15 @@ the background service reuse the same workspace/port/credentials.
 You can start from the hosted app first:
 
 1. Open the Bivy PWA and sign in with GitHub or email.
-2. If no runner is connected, the app shows how to connect one:
+2. If no Machine is connected, the app shows how to connect one:
    - **Connect your own computer** — run `curl -fsSL https://bivy.sh/install.sh | bash` on macOS/Linux. Setup signs the node into the same account and enrolls it on the hosted relay.
-3. Hosted accounts enroll nodes and devices to the same account. Remote access
-   through the hosted app runs on a weekly allowance; self-hosted stacks are
-   unlimited.
+3. Hosted accounts enroll nodes and devices to the same account. Hosted plans
+   and limits are on [bivy.sh#pricing](https://bivy.sh#pricing); self-hosted
+   stacks have no limits.
 
 ## Secure remote web/PWA access (hosted relay)
 
-If you say yes to remote access, setup uses GitHub sign-in by default (email
+If you choose hosted remote access, setup uses GitHub sign-in by default (email
 magic-link fallback) — no URLs, no ports, no VPN. Authorize in the browser and
 setup continues automatically, enrolls this node, and writes `.bivy/relay.json`.
 
@@ -250,7 +263,7 @@ Create `/etc/systemd/system/bivy.service`:
 
 ```ini
 [Unit]
-Description=Bivy prototype
+Description=Bivy node
 After=network.target
 
 [Service]
