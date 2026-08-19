@@ -38,6 +38,7 @@ jobs:
   # folded into every filter) so CI cannot disable its own coverage unnoticed.
   changes:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
       pull-requests: read
@@ -101,6 +102,7 @@ jobs:
     if: inputs.force_all || needs.changes.outputs.root == 'true'
     name: Root security + policy
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
@@ -128,6 +130,7 @@ jobs:
     if: inputs.force_all || needs.changes.outputs.root == 'true'
     name: Root lint + typechecks
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
@@ -176,6 +179,7 @@ jobs:
     if: inputs.force_all || needs.changes.outputs.root == 'true'
     name: Web + release builds
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
@@ -204,6 +208,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
@@ -227,6 +232,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
@@ -243,6 +249,7 @@ jobs:
     needs: changes
     if: inputs.force_all || needs.changes.outputs.root == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
@@ -260,6 +267,7 @@ jobs:
     needs: changes
     if: inputs.force_all || needs.changes.outputs.docs == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -275,6 +283,7 @@ jobs:
     if: inputs.force_all || needs.changes.outputs.control_plane == 'true'
     name: Control plane
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # services/* are standalone npm projects with their own package-lock.json;
@@ -298,6 +307,7 @@ jobs:
     if: inputs.force_all || needs.changes.outputs.relay == 'true'
     name: Relay
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # services/* are standalone npm projects with their own package-lock.json;
@@ -328,6 +338,7 @@ jobs:
     if: inputs.force_all || needs.changes.outputs.e2e == 'true'
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -369,6 +380,7 @@ jobs:
       - relay
       - remote-e2e
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Verify no required job failed
         run: |
