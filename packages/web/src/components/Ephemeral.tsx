@@ -136,7 +136,7 @@ function ProviderConnectPanel({ providerId, onKeysChanged, onDone }: { providerI
       <div className="settings-form">
         <Badge tone="accent">Server-managed provider</Badge>
         <p className="muted">{catalog.name} must be managed by Bivy's server so the machine is always deleted and billing stops.</p>
-        <p className="muted small">Add it in Settings → Cloud machine profiles, then turn on “Run automations while I'm offline.”</p>
+        <p className="muted small">Add it in Settings → Cloud machine profiles, then turn on “Run automations while I'm offline” inside the profile.</p>
       </div>
     );
   }
@@ -159,7 +159,7 @@ function ProviderConnectPanel({ providerId, onKeysChanged, onDone }: { providerI
           <button className="btn primary" disabled={!token.trim() || saving} onClick={connect}>
             {saving ? "Connecting…" : "Connect"}
           </button>
-          <p className="muted small">The token is end-to-end encrypted in your key vault, synced to your signed-in devices, and sent only to the selected provider. To run automations while you're offline, opt in from Settings → Cloud machine profiles.</p>
+          <p className="muted small">The token is end-to-end encrypted in your key vault, synced to your signed-in devices, and sent only to the selected provider. To run automations while you're offline, opt in from the profile in Settings → Cloud machine profiles — it reuses this token, nothing to paste twice.</p>
         </>
       ) : (
         <>

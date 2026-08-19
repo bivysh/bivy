@@ -104,13 +104,14 @@ WEB_PUSH_SUBJECT=mailto:admin@app.example.com
 
 ## Offline automations (encrypted credential storage)
 
-**Settings → Cloud machine profiles → "Run automations while I'm offline"** lets
-the control plane start a cloud profile on a schedule or webhook when none of your
-devices are online. To do that the server has to hold your cloud-provider
-credential itself, so it refuses to enable the feature until it has a key to
-encrypt that credential at rest. Until then the toggle is disabled and the panel
-shows *"Your Bivy server must enable encrypted credential storage"* — this is a
-**server-side setting, not something in the app**.
+**Settings → Cloud machine profiles → open a profile → "Run automations while I'm
+offline"** lets the control plane start that cloud profile on a schedule or webhook
+when none of your devices are online. It reuses the credential the profile was
+connected with — there is nothing to paste a second time — but the server has to
+hold an encrypted copy of it, so it refuses to enable the feature until it has a
+key to encrypt that credential at rest. Until then the toggle is disabled and the
+profile shows *"Not available yet: this Bivy server has no encryption key for
+stored credentials"* — this is a **server-side setting, not something in the app**.
 
 There is no UI for it. Set one environment variable on the control plane:
 

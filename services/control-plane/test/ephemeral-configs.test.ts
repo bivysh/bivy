@@ -206,6 +206,12 @@ async function main() {
   const plan4 = await req(port, "POST", "/account/hosted-provision-now", {}, token);
   expect(plan4.json?.plan?.willProvision === false && /has not been validated/.test(plan4.json?.plan?.reason), "plan: node offline + unvalidated fallback token → no provision");
 
+  // A profile turning offline automations off withdraws the server's copy of
+  // that provider's credential by sending an empty token; other providers stay.
+  await req(port, "PUT", "/account/hosted-provisioning", { providerTokens: { hetzner: "hz_secret_value" } }, token);
+  const withdrawn = await req(port, "PUT", "/account/hosted-provisioning", { providerTokens: { fly: "" } }, token);
+  expect(withdrawn.status === 200 && !withdrawn.json?.providers?.includes("fly") && withdrawn.json?.providers?.includes("hetzner"), `empty token withdraws only that provider's credential (got ${JSON.stringify(withdrawn.json?.providers)})`);
+
   // Fail closed: a control plane WITHOUT an encryption key refuses to store secrets.
   const port2 = await startControlPlane();
   const token2 = (await req(port2, "POST", "/auth/dev-login", { email: "nokey@example.com" })).json.token;
