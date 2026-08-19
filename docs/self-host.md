@@ -102,6 +102,46 @@ WEB_PUSH_VAPID_PRIVATE_KEY=...
 WEB_PUSH_SUBJECT=mailto:admin@app.example.com
 ```
 
+## Offline automations (encrypted credential storage)
+
+**Settings → Cloud machine profiles → "Run automations while I'm offline"** lets
+the control plane start a cloud profile on a schedule or webhook when none of your
+devices are online. To do that the server has to hold your cloud-provider
+credential itself, so it refuses to enable the feature until it has a key to
+encrypt that credential at rest. Until then the toggle is disabled and the panel
+shows *"Your Bivy server must enable encrypted credential storage"* — this is a
+**server-side setting, not something in the app**.
+
+There is no UI for it. Set one environment variable on the control plane:
+
+```bash
+# 1. Generate a 32-byte master key
+openssl rand -base64 32
+
+# 2. Put it in deploy/.env
+HOSTED_CREDENTIAL_KEY=<the base64 output>
+
+# 3. Restart the control plane
+docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d control-plane
+```
+
+Reload the app; the toggle and **Save credential** unlock immediately.
+
+What the key does: every hosted credential (provider token, GitHub App key,
+escrowed session room keys) is sealed with AES-256-GCM under a per-account subkey
+derived from this master key (`services/control-plane/src/hosted-crypto.ts`,
+design in [`hosted-provisioning-trust-model.md`](hosted-provisioning-trust-model.md)).
+No plaintext credential is ever written to Postgres, and with no key configured
+the endpoints fail closed rather than storing anything.
+
+**Back the key up alongside the database.** If you lose it, stored credentials
+cannot be decrypted; the account has to re-enter them. Treat it like
+`RELAY_SECRET` — it lives in `deploy/.env` (mode `600`) and nowhere else.
+
+The feature also needs ephemeral machines enabled, which is the default:
+`EPHEMERAL_MACHINES_ENABLED` and the build-time `VITE_EPHEMERAL_MACHINES_ENABLED`
+are on unless set to exactly `0`.
+
 ## Using a managed/hosted Postgres
 
 By default the stack runs its own `postgres` container. If you'd rather use a
@@ -216,6 +256,23 @@ docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d control
 ```
 
 (The `DATABASE_URL` in the compose file is derived from `POSTGRES_PASSWORD`, so you only edit the one variable.)
+
+### `HOSTED_CREDENTIAL_KEY` (encrypted credential storage)
+
+Only relevant if you enabled [offline automations](#offline-automations-encrypted-credential-storage). Every stored envelope records the id of the key it was sealed with, so you can introduce a new key without breaking existing ciphertext:
+
+1. Generate a new key: `openssl rand -base64 32`
+2. Switch `deploy/.env` to the keyring form. The old single key keeps the id `default`; give the new one any id and mark it primary:
+   ```env
+   HOSTED_CREDENTIAL_KEYS=v2:<NEW_KEY>,default:<OLD_KEY>
+   HOSTED_CREDENTIAL_KEY_PRIMARY=v2
+   # HOSTED_CREDENTIAL_KEY=   (remove or leave blank)
+   ```
+3. Restart the control plane (`... up -d control-plane`). New writes are sealed under `v2`; old ciphertext still decrypts under `default`.
+4. Re-seal each account's stored credentials under the new primary — a signed-in device calls `POST /account/hosted-provisioning/rotate` (`rotateHostedProvisioning` in `packages/core`); the response's `keyId` shows the key now in use, and the account's hosted audit log records `credential_rotated`.
+5. Once no envelope references `default` any more, drop it from `HOSTED_CREDENTIAL_KEYS` and restart again.
+
+Never delete a key that still has ciphertext sealed under it — those credentials become unrecoverable and the account has to re-enter them.
 
 ### Provider credentials (optional features)
 

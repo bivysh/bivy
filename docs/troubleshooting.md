@@ -291,6 +291,28 @@ bivy link     # mint a fresh pairing QR
   during `bivy relay:setup`.
 - See [remote-access.md](remote-access.md) for the full flow.
 
+## "Your Bivy server must enable encrypted credential storage"
+
+**Symptom.** In **Settings → Cloud machine profiles**, the *Run automations while
+I'm offline* toggle is disabled and this banner shows. There is no switch for it
+anywhere in the app.
+
+**Cause.** It's a control-plane setting: the server has no
+`HOSTED_CREDENTIAL_KEY`, so it refuses (fail-closed) to store the cloud
+credential offline automations need.
+
+**Fix.** On the machine running the control plane:
+
+```bash
+openssl rand -base64 32                       # generate a key
+# add to deploy/.env:  HOSTED_CREDENTIAL_KEY=<that value>
+docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d control-plane
+```
+
+Reload the app. If you're on a Bivy Cloud you don't operate, the operator has to
+set it — nothing you can do client-side. Details and key backup/rotation:
+[self-host.md → Offline automations](self-host.md#offline-automations-encrypted-credential-storage).
+
 ## A session is stuck
 
 **Symptom.** A session shows as working and never finishes, or a terminal is

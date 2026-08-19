@@ -2615,6 +2615,8 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
   color: var(--ink);
   white-space: nowrap;
 }
+/* Inline links inside a banner keep the banner's tone color; underline carries the affordance. */
+.banner.inline a { color: inherit; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
 .banner-action { margin-left: auto; flex: none; white-space: nowrap; }
 .banner-text { flex: 1; min-width: 0; }
 @keyframes spin { to { transform: rotate(360deg); } }

@@ -525,6 +525,15 @@ commercial configuration belong to the separate Cloud repository.
 | `WEB_PUSH_VAPID_PRIVATE_KEY` (legacy alias `VAPID_PRIVATE_KEY`) | VAPID key | `""` |
 | `WEB_PUSH_SUBJECT` | `mailto:` or https URL | `mailto:support@bivy.sh` |
 
+## Cloud machines and offline automations
+
+| Variable | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `EPHEMERAL_MACHINES_ENABLED` | `0` to disable | on | Deployment kill switch for **new** cloud-machine launches (device- and server-initiated). Only the exact value `0` disables; teardown of running machines is unaffected. The web build has a matching `VITE_EPHEMERAL_MACHINES_ENABLED` that hides the UI |
+| `HOSTED_CREDENTIAL_KEY` | base64 of 32 random bytes | unset — **feature off, fail-closed** | Master key for encrypted credential storage. Required for **Settings → Cloud machine profiles → "Run automations while I'm offline"**; while unset the toggle is disabled and the panel says the server must enable encrypted credential storage. Generate with `openssl rand -base64 32`; back it up with the database. See [`self-host.md`](self-host.md#offline-automations-encrypted-credential-storage) |
+| `HOSTED_CREDENTIAL_KEYS` | `id:<base64>,id:<base64>` | unset | Keyring form, for rotation only. Envelopes record the key id they were sealed with, so old ids keep decrypting while a new primary is introduced |
+| `HOSTED_CREDENTIAL_KEY_PRIMARY` | key id | first id in `HOSTED_CREDENTIAL_KEYS` | Which keyring entry new writes are sealed under |
+
 ## GitHub webhooks
 
 | Variable | Type | Default | Notes |
