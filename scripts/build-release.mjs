@@ -161,13 +161,15 @@ if (packDir) {
   const manifestPath = path.join(packDir, "bivy-latest.json");
   run("tar", ["-czf", tarball, "-C", tmp, "bivy"]);
   const sha256 = crypto.createHash("sha256").update(fs.readFileSync(tarball)).digest("hex");
-  // Commit: the CI SHA when present, else the working tree's HEAD. builtAt is
-  // stamped at pack time. The artifact URL is where install.sh will fetch it;
-  // override via BIVY_ARTIFACT_URL for a staging/preview download host.
+  // Commit: the CI SHA when present, else the working tree's HEAD, else empty
+  // (a Docker build stage has neither git nor .git; the workflow passes the SHA
+  // in via GITHUB_SHA). builtAt is stamped at pack time. The artifact URL is
+  // where install.sh will fetch it; override via BIVY_ARTIFACT_URL for a
+  // staging/preview download host.
   const commit =
     process.env.GITHUB_SHA ||
     process.env.RENDER_GIT_COMMIT ||
-    spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).stdout.trim() ||
+    spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).stdout?.trim() ||
     "";
   const manifest = {
     name: releasePkg.name,

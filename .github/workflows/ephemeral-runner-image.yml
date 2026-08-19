@@ -56,6 +56,7 @@ jobs:
           fi
           docker buildx build \
             --file deploy/Dockerfile.ephemeral-runner \
+            --build-arg "GITHUB_SHA=$GITHUB_SHA" \
             --push \
             "${tags[@]}" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
