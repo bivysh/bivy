@@ -22,7 +22,7 @@ import { SessionMenu } from "./components/SessionMenu.js";
 import { TuiLockedView } from "./components/TuiLockedView.js";
 import { GithubPill } from "./components/GithubPill.js";
 import { RunPill } from "./components/RunPill.js";
-import { classifySource } from "./sessionSource.js";
+import { classifySource, isLiveRunSession } from "./sessionSource.js";
 import { indexRunEvidence, failingCheckNames } from "./runEvidence.js";
 import { SessionChangesSheet, countUniqueEditedFiles } from "./components/SessionChangesSheet.js";
 import { ArtifactsSheet } from "./components/ArtifactsSheet.js";
@@ -509,8 +509,24 @@ export function App() {
           runEvidence={runEvidence}
           onPick={(id, path, nodeId) => {
             setPendingRunTerm(null);
-            controller.openSessionOnNode(id, path, nodeId);
             closeDrawer();
+            // A `bivy run` session whose PTY is still alive (advertised by its
+            // node as source cli + working — typically learned via the account
+            // list, from a node we aren't connected to) is a running terminal:
+            // hand off to it like a Running row, never resume it as a chat on
+            // top of the live TUI. If the PTY turns out to be gone, the run
+            // ended and its saved session opens as a normal chat.
+            const row = state.sessionIndex.sessions.find((s) => s.sessionId === id);
+            if (row && isLiveRunSession(row)) {
+              void controller.findLiveRunTerminal(id, nodeId)
+                .then((term) => {
+                  if (term) pickTerminal(term.termId, term.nodeId ?? nodeId);
+                  else controller.openSessionOnNode(id, path, nodeId);
+                })
+                .catch((err) => controller.store.setError(err instanceof Error ? err.message : String(err)));
+              return;
+            }
+            controller.openSessionOnNode(id, path, nodeId);
           }}
           onPickTerminal={pickTerminal}
         />

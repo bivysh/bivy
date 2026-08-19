@@ -65,6 +65,11 @@ export interface RunTerminalDeps {
   sessionTerminalsRecord(sessionId: string, val: { termId: string }): Promise<void>;
   sessionTerminalsForget(sessionId: string): Promise<void>;
   upsertSessionMetadata(patch: Record<string, unknown>): void;
+  /** The durable session list changed outside the chat path (a run pinned to a
+   *  session id started, or a run ended and its session became resumable). The
+   *  server pushes the authoritative list to every client and re-advertises to
+   *  the control plane, so the sidebar converges everywhere without a poll. */
+  sessionListChanged(): void;
   listAllSessions(): Promise<Array<{ id: string; path?: string; name?: string }>>;
   listProvidersUnified(): Promise<unknown>;
   pushModelAuthToControlPlane(): Promise<unknown>;
@@ -91,6 +96,8 @@ export interface RunTerminals {
   addRunViewer(termId: string, socket: WebSocket): void;
   dropRunViewer(socket: WebSocket): void;
   hasRunTerminal(id: string): boolean;
+  /** True while a live `bivy run` PTY is pinned to this session id. */
+  hasLiveRunForSession(sessionId: string): boolean;
 }
 
 type TerminalClientMessage = { kind?: string; termId?: unknown; data?: unknown; cols?: unknown; rows?: unknown; workspace?: unknown; sessionId?: unknown; agent?: unknown; label?: unknown; name?: unknown; model?: unknown; command?: unknown; args?: unknown; mux?: unknown; standalone?: unknown };
@@ -148,6 +155,14 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
 
   function hasRunTerminal(id: string): boolean {
     return runTerminals.has(id);
+  }
+
+  function hasLiveRunForSession(sessionId: string): boolean {
+    if (!sessionId) return false;
+    for (const id of runTerminals) {
+      if (terminals.meta(id)?.sessionId === sessionId) return true;
+    }
+    return false;
   }
 
   async function runTerminalList(): Promise<unknown[]> {
@@ -308,6 +323,11 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
                 try { deps.upsertSessionMetadata({ id: sessionRef, runtimeId, agentName: agentId, workspace, name: name || undefined, source: "cli", status: "saved" }); }
                 catch { /* best-effort */ }
               }
+              // The "Running" row just left every sidebar (terminal.closed above);
+              // push the list so its saved, resumable session takes the row's place
+              // right away — and, for a pinned run, so the row flips from
+              // "working" to "saved" instead of lingering as live.
+              try { deps.sessionListChanged(); } catch { /* best-effort */ }
             })();
           }
           if (!spec.mux) {
@@ -330,10 +350,12 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
       }
       emit({ type: "terminal.opened", termId: id, workspace, mode: "run", agent: spec.agent, label, name });
       deps.broadcast({ type: "terminal.created", terminal: { termId: id, workspace, createdAt, lastActivityAt: createdAt, kind: "run", agent: spec.agent, model: spec.model, label, name, command: commandLine, mux: spec.mux, sessionId: spec.sessionId, pid: terminals.pid(id) } });
-      if (spec.sessionId && !spec.mux) {
-        void deps.listAllSessions()
-          .then((sessions) => deps.broadcast({ type: "sessions.list", sessions: sessions.map((s) => ({ ...s, sessionId: s.id })) }))
-          .catch(() => {});
+      // A pinned run is now a durable session too: push the authoritative list
+      // (status "working" while this PTY lives) and re-advertise, so clients on
+      // other nodes — which never see this node's terminal.created — still get
+      // the row without waiting for the 60 s resync or a node re-select.
+      if (spec.sessionId && spec.agent && !spec.mux) {
+        try { deps.sessionListChanged(); } catch { /* best-effort */ }
       }
       return id;
     } catch (error) {
@@ -537,5 +559,5 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
     }
   }
 
-  return { runTerminalList, openRunTerminal, takeoverRunTerminal, handleTerminalMessage, addRunViewer, dropRunViewer, hasRunTerminal };
+  return { runTerminalList, openRunTerminal, takeoverRunTerminal, handleTerminalMessage, addRunViewer, dropRunViewer, hasRunTerminal, hasLiveRunForSession };
 }

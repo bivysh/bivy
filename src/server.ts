@@ -2396,46 +2396,7 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     if (record) replayPendingInteractions(record.id);
   },
   async "sessions.list"() {
-    const sessions = await listAllSessions();
-    const list = sessions.map((s) => {
-      const rec = openSessions.get(s.id) || (s.path ? openSessions.get(path.resolve(s.path)) : undefined);
-      const meta = metadata.getSession(s.id) ?? metadata.getSession(s.path);
-      // sessionHasPendingApproval also covers a pending clarifying question
-      // (see its own comment) — without it, a session blocked on one would
-      // show as merely "working" here, including on this exact refresh path
-      // (SessionList.tsx's periodic safety-net poll) clobbering the correct
-      // needs_action the live session.question broadcast had just set.
-      const pendingApproval = rec ? sessionHasPendingApproval(rec) : approvals.list().some((a) => a.sessionId === s.id && a.status === "pending");
-      const needsAction = pendingApproval || Boolean(rec?.turnAttention);
-      return {
-        path: s.path,
-        id: s.id,
-        name: s.name,
-        modified: s.modified,
-        messageCount: s.messageCount,
-        firstMessage: s.firstMessage,
-        agent: meta?.runtimeId ?? s.agent,
-        agentName: meta?.agentName ?? s.agentName,
-        source: rec?.source ?? meta?.source,
-        forkedFrom: rec?.forkedFrom ?? meta?.forkedFrom,
-        branch: rec?.worktree?.branch ?? meta?.branch,
-        sandbox: rec?.sandbox ?? normalizeSandboxTier(meta?.sandbox),
-        approvalMode: rec?.approvalMode,
-        ephemeral: rec?.ephemeral,
-        executionProfile: rec ? (rec.ephemeral ? "isolated_customer_cloud" : "trusted_workstation") : undefined,
-        contract: rec?.contract ?? meta?.contract,
-        auditHealth: rec ? auditLog.health() : undefined,
-        eventLogHealth: rec ? eventLogHealthForSession(rec.id) : undefined,
-        prUrl: rec?.prUrl ?? meta?.prUrl,
-        prs: rec?.prs ?? meta?.prs,
-        status: needsAction ? "needs_action" : (rec ? sessionState(rec).displayStatus : "saved"),
-        sessionState: rec ? sessionState(rec) : undefined,
-        open: Boolean(rec),
-        needsAction,
-        bivySession: bivySessionEnvelopeFromSummary(s, rec, meta),
-      };
-    });
-    relay?.sendEvent({ type: "sessions.list", sessions: list });
+    relay?.sendEvent({ type: "sessions.list", sessions: await sessionListRows() });
   },
   "session.close"(msg) {
     const sid = String(msg.sessionId ?? "").trim();
@@ -4090,7 +4051,7 @@ async function advertiseSessions() {
       // Failures (including exhausted credits/rate limits) are outcomes to
       // review, not blocking questions that keep saying "Needs your response".
       // Only a still-pending approval/question owns that status.
-      status: pendingApproval ? "needs_action" : (record ? sessionState(record).displayStatus : "saved"),
+      status: pendingApproval ? "needs_action" : (record ? sessionState(record).displayStatus : detachedSessionStatus(s.id)),
       needsAction: pendingApproval,
       source: record?.source || meta?.source,
       titleEnc: name ? relay!.sealString(name) : undefined,
@@ -6092,6 +6053,73 @@ async function listAllSessions(): Promise<Array<SessionSummary & { agent: string
   }
   deduped.sort((a, b) => toMs(b.modified) - toMs(a.modified));
   return deduped.filter((s) => !isEmptyUntitledSummary(s));
+}
+
+/**
+ * Display status for a session this process holds no live chat record for. A
+ * `bivy run <agent>` pinned to this session id keeps a daemon-owned PTY alive
+ * (see createRunTerminals) — that conversation is very much in progress, just not
+ * through Bivy's chat path — so report it as "working" rather than "saved" on
+ * every list surface (relay sessions.list, /api/sessions, the control-plane
+ * advert). Clients use this, together with `source: "cli"`, to route a tap to
+ * the run-terminal handoff instead of resuming a second writer over the live TUI.
+ */
+function detachedSessionStatus(sessionId: string): "working" | "saved" {
+  return runTerms.hasLiveRunForSession(sessionId) ? "working" : "saved";
+}
+
+/** The enriched sidebar rows for the relay `sessions.list` reply and the
+ *  `broadcastSessionsList` push (same shape, one builder). */
+async function sessionListRows() {
+  const sessions = await listAllSessions();
+  return sessions.map((s) => {
+    const rec = openSessions.get(s.id) || (s.path ? openSessions.get(path.resolve(s.path)) : undefined);
+    const meta = metadata.getSession(s.id) ?? metadata.getSession(s.path);
+    // sessionHasPendingApproval also covers a pending clarifying question
+    // (see its own comment) — without it, a session blocked on one would
+    // show as merely "working" here, including on this exact refresh path
+    // (SessionList.tsx's periodic safety-net poll) clobbering the correct
+    // needs_action the live session.question broadcast had just set.
+    const pendingApproval = rec ? sessionHasPendingApproval(rec) : approvals.list().some((a) => a.sessionId === s.id && a.status === "pending");
+    const needsAction = pendingApproval || Boolean(rec?.turnAttention);
+    return {
+      path: s.path,
+      id: s.id,
+      name: s.name,
+      modified: s.modified,
+      messageCount: s.messageCount,
+      firstMessage: s.firstMessage,
+      agent: meta?.runtimeId ?? s.agent,
+      agentName: meta?.agentName ?? s.agentName,
+      source: rec?.source ?? meta?.source,
+      forkedFrom: rec?.forkedFrom ?? meta?.forkedFrom,
+      branch: rec?.worktree?.branch ?? meta?.branch,
+      sandbox: rec?.sandbox ?? normalizeSandboxTier(meta?.sandbox),
+      approvalMode: rec?.approvalMode,
+      ephemeral: rec?.ephemeral,
+      executionProfile: rec ? (rec.ephemeral ? "isolated_customer_cloud" : "trusted_workstation") : undefined,
+      contract: rec?.contract ?? meta?.contract,
+      auditHealth: rec ? auditLog.health() : undefined,
+      eventLogHealth: rec ? eventLogHealthForSession(rec.id) : undefined,
+      prUrl: rec?.prUrl ?? meta?.prUrl,
+      prs: rec?.prs ?? meta?.prs,
+      status: needsAction ? "needs_action" : (rec ? sessionState(rec).displayStatus : detachedSessionStatus(s.id)),
+      sessionState: rec ? sessionState(rec) : undefined,
+      open: Boolean(rec),
+      needsAction,
+      bivySession: bivySessionEnvelopeFromSummary(s, rec, meta),
+    };
+  });
+}
+
+/** Push the authoritative session list to every client (local + relay). Used
+ *  when the durable list changed outside the chat path — a `bivy run` session
+ *  was pinned or just ended — so the sidebar converges without waiting for its
+ *  periodic poll or a node re-select. */
+function broadcastSessionsList(): void {
+  void sessionListRows()
+    .then((sessions) => broadcast({ type: "sessions.list", sessions }))
+    .catch(() => {});
 }
 
 // --- Native session discovery/adoption (issue #156) -------------------------
@@ -8490,6 +8518,7 @@ const runTerms = createRunTerminals({
   sessionTerminalsRecord: (sessionId, val) => sessionTerminals.record(sessionId, val),
   sessionTerminalsForget: (sessionId) => sessionTerminals.forget(sessionId),
   upsertSessionMetadata: (patch) => metadata.upsertSession(patch as Parameters<typeof metadata.upsertSession>[0]),
+  sessionListChanged: () => { broadcastSessionsList(); scheduleAdvertise(); },
   listAllSessions,
   listProvidersUnified,
   pushModelAuthToControlPlane: () => pushModelAuthToControlPlane(),
@@ -9965,7 +9994,7 @@ app.get("/api/sessions", async (_req, res, next) => {
         branch: rec?.worktree?.branch ?? meta?.branch,
         prUrl: rec?.prUrl ?? meta?.prUrl,
         prs: rec?.prs ?? meta?.prs,
-        status: pendingApproval ? "needs_action" : (rec ? sessionState(rec).displayStatus : "saved"),
+        status: pendingApproval ? "needs_action" : (rec ? sessionState(rec).displayStatus : detachedSessionStatus(s.id)),
         sessionState: rec ? sessionState(rec) : undefined,
         open: Boolean(rec),
         needsAction: pendingApproval,

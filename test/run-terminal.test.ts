@@ -31,9 +31,12 @@ function harness(over: any = {}) {
   const terminals = over.terminals ?? fakeTerminals();
   const emitted: any[] = [];
   const created: string[] = [];
+  const broadcasts: any[] = [];
+  const metadata: any[] = [];
+  let listChanged = 0;
   const deps: RunTerminalDeps = {
     terminals,
-    broadcast: () => {},
+    broadcast: (p) => { broadcasts.push(p); },
     sendRelayEvent: () => {},
     sendNotificationHint: () => {},
     createSession: async (_ws, sf) => { created.push(sf ?? "<fresh>"); return { id: "new-session" }; },
@@ -41,7 +44,8 @@ function harness(over: any = {}) {
     sessionBusy: () => false,
     sessionTerminalsRecord: async () => {},
     sessionTerminalsForget: async () => {},
-    upsertSessionMetadata: () => {},
+    upsertSessionMetadata: (patch) => { metadata.push(patch); },
+    sessionListChanged: () => { listChanged += 1; },
     listAllSessions: async () => [],
     listProvidersUnified: async () => [],
     pushModelAuthToControlPlane: async () => {},
@@ -57,7 +61,7 @@ function harness(over: any = {}) {
     maxRunTerminals: 50,
   };
   const emit = (e: any) => emitted.push(e);
-  return { deps, terminals, emitted, created, emit, rt: createRunTerminals(deps) };
+  return { deps, terminals, emitted, created, broadcasts, metadata, listChanged: () => listChanged, emit, rt: createRunTerminals(deps) };
 }
 
 test("handleTerminalMessage returns false for a non-terminal message", () => {
@@ -118,4 +122,64 @@ test("takeover of a supported pinned agent reopens it as a governed chat", async
     assert.equal(r.resumeCommand, "claude --resume sess-abc");
     assert.deepEqual(created, ["sess-abc"], "createSession resumes the pinned session file");
   }
+});
+
+// --- `bivy run` sessions in the sidebar ---------------------------------------
+// A run pinned to a session id (claude/grok) is a durable session from the moment
+// it starts: the node records it (status "working"), pushes the session list and
+// re-advertises so every client — including ones on other nodes, which never see
+// this node's terminal.created — gets the row. When the PTY exits, the session
+// flips to "saved" and the list is pushed again, so the saved row takes the
+// Running row's place instead of vanishing until the next poll.
+test("a pinned run records a working session and pushes the session list on open", async () => {
+  const terminals = fakeTerminals({ meta: () => ({ kind: "run", agent: "claude", sessionId: "sess-1" }) });
+  const { rt, emit, metadata, listChanged } = harness({ terminals });
+  await rt.openRunTerminal({ command: "claude", args: ["--session-id", "sess-1"], agent: "claude", sessionId: "sess-1", workspace: "/w/repo" }, emit);
+  assert.equal(metadata.length, 1);
+  assert.equal(metadata[0].id, "sess-1");
+  assert.equal(metadata[0].status, "working");
+  assert.equal(metadata[0].source, "cli");
+  assert.equal(metadata[0].runtimeId, "claude-code-sdk");
+  assert.equal(metadata[0].name, "claude · repo", "a default name so the row is never an untitled empty shell");
+  assert.equal(listChanged(), 1, "clients + control plane learn about the row immediately");
+  assert.equal(rt.hasLiveRunForSession("sess-1"), true, "list surfaces report this session as working while the PTY lives");
+  assert.equal(rt.hasLiveRunForSession("other"), false);
+});
+
+test("when a pinned run exits, its session is saved and the list is pushed again", async () => {
+  const terminals = fakeTerminals({ meta: () => ({ kind: "run", agent: "claude", sessionId: "sess-2" }) });
+  const { rt, emit, metadata, listChanged, broadcasts } = harness({ terminals });
+  await rt.openRunTerminal({ command: "claude", args: [], agent: "claude", sessionId: "sess-2", workspace: "/w/repo" }, emit);
+  const opened = terminals.calls.open[0];
+  opened.onExit(0);
+  // The exit path resolves the session ref asynchronously (discovery for
+  // lazily-assigned ids); let it settle.
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(rt.hasLiveRunForSession("sess-2"), false, "no longer a live run");
+  assert.equal(metadata.at(-1).status, "saved");
+  assert.equal(metadata.at(-1).id, "sess-2");
+  assert.equal(listChanged(), 2, "open + exit each push the list");
+  assert.ok(broadcasts.some((b) => b.type === "terminal.closed"), "the Running row is retired; the pushed list puts the saved session in its place");
+});
+
+test("an unpinned run with no discoverable session still pushes the list on exit (no-op for clients), but never on open", async () => {
+  const terminals = fakeTerminals({ meta: () => ({ kind: "run", agent: "gemini" }) });
+  const { rt, emit, metadata, listChanged } = harness({ terminals });
+  await rt.openRunTerminal({ command: "gemini", args: [], agent: "gemini", workspace: "/w/repo" }, emit);
+  assert.equal(metadata.length, 0, "nothing durable to record without a session id");
+  assert.equal(listChanged(), 0);
+  terminals.calls.open[0].onExit(0);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(metadata.length, 0);
+  assert.equal(listChanged(), 1);
+});
+
+test("a mux attach (tmux/zellij) is not a session and never touches the list", async () => {
+  const terminals = fakeTerminals({ meta: () => ({ kind: "run", agent: "tmux", mux: "tmux:main" }) });
+  const { rt, emit, metadata, listChanged } = harness({ terminals });
+  await rt.openRunTerminal({ command: "tmux", args: ["attach"], agent: "tmux", mux: "tmux:main" }, emit);
+  terminals.calls.open[0].onExit(0);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(metadata.length, 0);
+  assert.equal(listChanged(), 0);
 });
