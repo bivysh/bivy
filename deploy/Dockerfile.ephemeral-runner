@@ -18,8 +18,14 @@ COPY bin/ ./bin/
 COPY public/qr.js ./public/qr.js
 COPY scripts/ ./scripts/
 COPY README.md LICENSE ./
-RUN pnpm install --frozen-lockfile
-RUN node scripts/build-release.mjs --pack /out
+# This stage only type-checks and packs; it never runs the node, so skip
+# install scripts (notably node-pty's node-gyp build, which needs a toolchain
+# the slim image lacks). The runtime stage below compiles node-pty for real.
+RUN pnpm install --frozen-lockfile --ignore-scripts
+# The context has no .git, so the packed manifest's `commit` comes from this
+# build-arg (the workflow passes the pushed SHA); it is empty for local builds.
+ARG GITHUB_SHA=
+RUN GITHUB_SHA="$GITHUB_SHA" node scripts/build-release.mjs --pack /out
 
 FROM node:22-bookworm-slim
 LABEL org.opencontainers.image.source="https://github.com/bivysh/bivy"
@@ -28,9 +34,17 @@ RUN apt-get update -qq \
   && apt-get install -y -qq --no-install-recommends ca-certificates curl git openssh-client tini \
   && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/bivy-latest.tar.gz /tmp/bivy.tar.gz
-RUN npm install -g /tmp/bivy.tar.gz \
+# node-pty compiles from source (same toolchain install.sh requires on
+# Debian/Ubuntu). Install it, build, and purge it in one layer so the runtime
+# image ships no compiler.
+RUN apt-get update -qq \
+  && apt-get install -y -qq --no-install-recommends python3 make g++ \
+  && npm install -g /tmp/bivy.tar.gz \
   && rm /tmp/bivy.tar.gz \
-  && command -v bivy
+  && apt-get purge -y -qq --auto-remove python3 make g++ \
+  && rm -rf /var/lib/apt/lists/* /root/.npm \
+  && command -v bivy \
+  && node -e "require('/usr/local/lib/node_modules/@bivy/bivy/node_modules/node-pty')"
 RUN mkdir -p /etc/bivy /workspace \
   && chmod 700 /etc/bivy
 ENV BIVY_DATA_DIR=/etc/bivy

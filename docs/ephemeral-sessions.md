@@ -276,8 +276,9 @@ packages, Node, Bivy, and agent dependencies after the provider accepts the VM,
 so it cannot satisfy a request-to-agent target under ten seconds. The fast lane
 uses the credential-free image built by
 `deploy/Dockerfile.ephemeral-runner` and published as
-`ghcr.io/bivysh/bivy-ephemeral-runner:sha-<commit>` by
-`.github/workflows/ephemeral-runner-image.yml`.
+`ghcr.io/bivysh/bivy-ephemeral-runner:sha-<commit>` (and `:main`) by
+`.github/workflows/ephemeral-runner-image.yml` on every push to `main`. The
+GHCR package must be public: providers pull it without registry credentials.
 
 The image contains only public runtime material (Node, Bivy, git, SSH/certificate
 tools, and installed agent dependencies). Enrollment tokens, E2E room keys,

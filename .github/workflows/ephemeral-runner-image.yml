@@ -23,30 +23,44 @@ concurrency:
   group: ephemeral-runner-image-${{ github.ref }}
   cancel-in-progress: false
 
+# The repository's Actions policy allows GitHub-owned actions plus a short
+# allowlist only (see Settings → Actions → General). The `docker/*` actions are
+# not on it, so this job drives the preinstalled Docker CLI directly; a build
+# cache lives in a `:buildcache` tag on GHCR rather than the Actions cache,
+# which run steps cannot reach without a third-party action.
+env:
+  IMAGE: ghcr.io/bivysh/bivy-ephemeral-runner
+
 jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
-      - uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/metadata-action@c1e51972afc2121e065aed6d45c65596fe445f3f # v5.8.0
-        id: meta
-        with:
-          images: ghcr.io/bivysh/bivy-ephemeral-runner
-          tags: |
-            type=sha,prefix=sha-
-            type=raw,value=main
-      - uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
-        with:
-          context: .
-          file: deploy/Dockerfile.ephemeral-runner
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      # The default `docker` driver cannot export a registry cache; a
+      # docker-container builder can.
+      - name: Create buildx builder
+        run: docker buildx create --name bivy --driver docker-container --use
+
+      # `:main` moves only for builds of main; a workflow_dispatch from another
+      # branch publishes just its `sha-` tag.
+      - name: Build and push image
+        run: |
+          set -euo pipefail
+          tags=(--tag "$IMAGE:sha-${GITHUB_SHA::7}")
+          if [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            tags+=(--tag "$IMAGE:main")
+          fi
+          docker buildx build \
+            --file deploy/Dockerfile.ephemeral-runner \
+            --build-arg "GITHUB_SHA=$GITHUB_SHA" \
+            --push \
+            "${tags[@]}" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --cache-from "type=registry,ref=$IMAGE:buildcache" \
+            --cache-to "type=registry,ref=$IMAGE:buildcache,mode=max" \
+            .
