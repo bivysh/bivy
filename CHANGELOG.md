@@ -78,6 +78,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   replacing a failed resume with an empty conversation.
 - Custom `BIVY_CUSTOM_AGENTS` commands no longer inherit maintained agents'
   credential, session-store, discovery, or slash-command host behavior.
+- The prebuilt ephemeral runner image (`ghcr.io/bivysh/bivy-ephemeral-runner`)
+  is now actually published on every push to `main`. The workflow had failed at
+  startup since it was added because it used `docker/*` actions the repository's
+  Actions allowlist does not permit; it now drives the Docker CLI directly.
 
 ## [0.10.0] - 2026-08-07
 
