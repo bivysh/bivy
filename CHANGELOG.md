@@ -61,8 +61,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Generic process integrations preserve native session identity across turns by
   capturing refs from validated structured output or using declarative
   host-assigned creation args (`resume.newArgs` in plugin manifests).
+- Approval cards can now answer "Allow `git status` this session": approve and
+  stop asking for the same program+subcommand (or the same tool, for edits)
+  until the session closes. Rules live in the node's memory only and never
+  reach the catastrophic floor, the backstop set (force-push, publish,
+  deploy, `sudo`, …), risky integrations, a paused session, or a
+  destructive-severity prompt — those keep asking every time.
 
 ### Changed
+
+- The web app's status-bar / splash colors are now derived at build time from
+  `--bg` in `packages/ui/tokens.css`, so a cold PWA load no longer paints a
+  mismatched band before the theme applies.
+- Stop stays reachable while the agent is working even after you start typing
+  a follow-up; Send (queue) appears next to it instead of replacing it.
+- Removed web components that had no entry point since earlier composer/menu
+  simplifications (Inbox dialog, node stats panel, session settings, schedule
+  sheet, run-task sheet) and their private CSS. The ☰ attention dot, session-list
+  ranking, and the follow-up queue's scheduled rows are unchanged.
 
 - Bivy Cloud billing, plan definitions, commercial metering, upgrade UI, and
   entitlement enforcement were removed from Core. The self-hostable control

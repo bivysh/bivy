@@ -62,7 +62,6 @@ test("legacy link, ghost, and icon buttons have been removed", async () => {
     "components/GithubQueue.tsx",
     "components/Terminal.tsx",
     "components/AutomationsView.tsx",
-    "components/Inbox.tsx",
     "App.tsx",
   ];
   for (const path of paths) {

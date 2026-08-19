@@ -6,11 +6,10 @@
 // above the composer so queued text, its delivery order, and its state
 // (queued/sending/failed) are never invisible the way a straight-through send
 // into a busy session used to be. Also carries the session's *scheduled*
-// messages (split Send → ScheduleSheet): the control-plane automation
-// delivers those on its own timer, so they sit here as timestamped rows that
-// can be cancelled (✕) before they fire, or re-timed (✎ → inline datetime
-// field) by updating the automation in place — rather than only living inside
-// the schedule sheet. Edit/reorder/remove/send-next for the *queued* rows are
+// messages (one-off control-plane automations, `message: true`): the
+// automation delivers those on its own timer, so they sit here as timestamped
+// rows that can be cancelled (✕) before they fire, or re-timed (✎ → inline
+// datetime field) by updating the automation in place. Edit/reorder/remove/send-next for the *queued* rows are
 // all local, synchronous store mutations (see AppController's queued-follow-ups
 // API) — they work even while offline, since nothing here is a network round
 // trip until an item is actually dispatched. Scheduled rows are the one

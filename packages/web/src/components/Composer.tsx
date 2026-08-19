@@ -834,18 +834,21 @@ export function Composer({
                 ⚡
               </button>
             )}
-            {/* One button toggles by input state: while the agent is working,
-                an empty composer shows Stop (a hard kill of the current turn),
-                but the moment you type something it becomes Send — a follow-up
-                message is a normal thing to want. It's held in the visible
-                queue (see FollowupQueue above) until the current turn settles,
-                rather than sent straight through. When not working, it's
-                always Send (disabled until there's something to send). */}
-            {working && !canSend ? (
-              <button type="button" className="composer-btn stop" onClick={onAbort} title="Stop">
+            {/* Stop (a hard kill of the current turn) is always reachable
+                while the agent is working — typing a follow-up must not take
+                away the ability to interrupt. With an empty composer it's the
+                only button; the moment you type something, Send appears next
+                to it — a follow-up message is a normal thing to want. It's
+                held in the visible queue (see FollowupQueue above) until the
+                current turn settles, rather than sent straight through. When
+                not working, it's just Send (disabled until there's something
+                to send). */}
+            {working && (
+              <button type="button" className="composer-btn stop" onClick={onAbort} title="Stop" aria-label="Stop current turn">
                 ■
               </button>
-            ) : (
+            )}
+            {(!working || canSend) && (
               <button
                 type="submit"
                 className="composer-btn send"

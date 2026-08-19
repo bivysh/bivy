@@ -82,6 +82,7 @@ import { configToLegacySettings, mergeLegacyIntoNodeConfig, readNodeConfig, writ
 import { loadProjectPolicy, resolveProjectSafety } from "./project-policy.js";
 import type { ApprovalMode } from "./guard.js";
 import { PolicyEngine } from "./policy/policy-engine.js";
+import { SessionAllowRules } from "./policy/session-allow.js";
 import { TerminalManager } from "./terminal.js";
 import { commandLaunch } from "./command-launch.js";
 import { listMultiplexerSessions, attachCommand, type MultiplexerKind } from "./multiplexer.js";
@@ -461,6 +462,10 @@ function publishBootstrapSecret() {
 }
 
 const approvals = new ApprovalManager();
+// "Allow `git status` for this session" answers from the approval card. In
+// memory only, per session, cleared in closeSessionRecord; never reaches the
+// catastrophic floor or the backstop set (PolicyEngine enforces that).
+const sessionAllowRules = new SessionAllowRules();
 
 // Node audit trail: one append-only, redaction-aware record of the
 // governance events Bivy already intercepts — tool-call decisions today,
@@ -2557,8 +2562,14 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
   approval(msg, ctx) {
     const id = String(msg.id ?? "");
     const approved = Boolean(msg.approved);
+    // "Allow this for the rest of the session": only honoured on an approve,
+    // and only if the node offered it (rememberKey set on the request) — a
+    // client can't remember its way past a backstop prompt.
+    const pending = approved && msg.remember === true ? approvals.list().find((a) => a.id === id && a.status === "pending") : undefined;
+    const remembered = pending?.rememberKey;
     if (resolveApproval(id, approved)) {
-      ctx.broadcast({ type: "approval.resolved", id, approved });
+      if (pending && remembered) sessionAllowRules.allow(pending.sessionId, remembered);
+      ctx.broadcast({ type: "approval.resolved", id, approved, ...(remembered ? { remembered } : {}) });
       scheduleAdvertise();
     }
   },
@@ -5667,8 +5678,11 @@ const guardianInterceptorImpl: ToolInterceptor = async ({ sessionId, toolName, i
     // and Bivy's tool governance. Without this, Pi/Claude still surfaced Bivy
     // approval cards even though the session was labelled unrestricted.
     unrestricted: record?.sandbox === "danger-full-access",
+    isRemembered: (key) => sessionAllowRules.has(sessionId, key),
   });
-  let { decision, reason, risk } = policy.decideToolCall(workspace, toolName, input);
+  const verdict = policy.decideToolCall(workspace, toolName, input);
+  let { decision, reason } = verdict;
+  const { risk, rememberKey } = verdict;
 
   // A paused session forces every non-catastrophic action to ask, regardless
   // of approval mode — the "Pause" card action, distinct from Kill (abort).
@@ -5693,6 +5707,9 @@ const guardianInterceptorImpl: ToolInterceptor = async ({ sessionId, toolName, i
     workspace,
     repo,
     branch,
+    // A paused session's forced ask is not rememberable (pause must keep
+    // asking); rememberKey is only set on the engine's own mode-driven asks.
+    rememberKey: record?.paused ? undefined : rememberKey,
   });
 
   if (!approved) {
@@ -6702,6 +6719,8 @@ function closeSessionRecord(record: SessionRecord, reason = "closed") {
   // Same for a pending approval: deny it so its card closes and the guardian
   // promise settles instead of haunting connected clients until the 5-min timeout.
   approvals.cancelForSession(record.id);
+  // Session-scoped "always allow" rules die with the session.
+  sessionAllowRules.clear(record.id);
   record.unsubscribe?.();
   record.unsubscribe = undefined;
   // Flush any pending coalesced update (so the last streamed text isn't lost),

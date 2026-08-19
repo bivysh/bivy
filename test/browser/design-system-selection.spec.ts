@@ -9,7 +9,6 @@ test("choice controls use the canonical selectable state", async () => {
     "components/Rulesets.tsx",
     "components/VoiceSettings.tsx",
     "components/Settings.tsx",
-    "components/SessionSettings.tsx",
     "components/Segmented.tsx",
   ]) {
     const source = await readFile(new URL(path, ROOT), "utf8");

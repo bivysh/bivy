@@ -5,16 +5,14 @@ import { readFile } from "node:fs/promises";
 const read = (rel: string) => readFile(new URL(rel, import.meta.url), "utf8");
 
 test("Run delegation remains available outside the simplified composer", async () => {
-  const [composer, sheet, controller, menu] = await Promise.all([
+  const [composer, controller, menu] = await Promise.all([
     read("../../packages/web/src/components/Composer.tsx"),
-    read("../../packages/web/src/components/RunTaskSheet.tsx"),
     read("../../packages/web/src/store/coordinators/automations-account-coordinator.ts"),
     read("../../packages/web/src/components/SessionMenu.tsx"),
   ]);
   expect(composer).not.toContain('className="split-send"');
   expect(composer).not.toContain("Start a Run");
   expect(composer).not.toContain("Schedule for later");
-  expect(sheet).toContain("You can continue to follow and steer the Session");
   expect(controller).toContain("async startRun(");
   expect(controller).toContain('targetKind: context.sessionId ? "existing_session" : "new_session"');
   expect(controller).toContain("targetSessionId: context.sessionId");

@@ -610,6 +610,11 @@ export class AppController {
           if (rid) this.pendingLivenessPings.delete(rid);
           return;
         }
+        // The node confirms a session-scoped "always allow" by echoing the
+        // remembered key; say so once, then let the card unmount as usual.
+        if (type === "approval.resolved" && typeof event.remembered === "string" && event.remembered) {
+          this.store.setNotice(`Allowing “${event.remembered}” without asking for the rest of this session.`);
+        }
         // Terminal I/O is high-frequency and self-contained — route it straight
         // to the terminal view instead of churning the session reducer. The few
         // lifecycle/list events also update the shared store so live `bivy run`
@@ -2183,13 +2188,6 @@ export class AppController {
     this.send({ kind: "runtimes.list" });
   }
 
-  /** Ask the node for a fresh memory/CPU/storage snapshot. The reply arrives as
-   *  a `node.stats` event and lands in `state.settings.nodeStats`. Fire-and-forget; the
-   *  stats panel polls this while it's open. */
-  requestNodeStats(sessionId?: string): void {
-    this.send({ kind: "node.stats", sessionId });
-  }
-
   /** Ask the node for a fresh Machine capability inventory. The reply arrives
    *  as a `capabilities` event and lands in `state.settings.capabilities`. Fetched on
    *  demand (panel open / explicit refresh) — capabilities change rarely,
@@ -3144,67 +3142,6 @@ export class AppController {
     void deleteAutomation(this.local, automationId).catch(() => {});
   }
 
-  /**
-   * "Schedule this message for later" (split Send → ScheduleSheet): write a
-   * one-off scheduled message to the account's control plane (`message: true`,
-   * E2E-sealed for the owning node) so the always-on node delivers it on time
-   * even when this app is closed, and — for an existing session — surface it as
-   * a timestamped "scheduled" row in the session's follow-up queue, where it's
-   * cancellable next to the composer (it stays out of the turn-end drain; the
-   * automation does the delivering). A new-session draft targets the machine
-   * picked on the draft and has no queue yet, so no row is created. The target
-   * is inferred from the current screen by the caller (SessionSheet only offers
-   * scheduling from an existing session; the draft composer infers new_session)
-   * — see ScheduleSheet. Returns an error message on failure, null on success.
-   */
-  async scheduleMessage(opts: {
-    text: string;
-    at: Date;
-    target: "existing_session" | "new_session";
-    sessionId?: string;
-  }): Promise<string | null> {
-    const { text, at, target, sessionId } = opts;
-    const trimmed = text.trim();
-    if (!trimmed) return "There's nothing to send.";
-    if (!this.accountMode()) return "Sign in to schedule messages for later.";
-    if (!Number.isFinite(at.getTime()) || at.getTime() <= Date.now()) return "Pick a time in the future.";
-    const nodeId =
-      target === "existing_session"
-        ? (sessionId ? this.resolveSessionNodeId(sessionId) : undefined)
-        : this.store.getState().connection.currentNodeId;
-    if (!nodeId) return "No machine selected for this message.";
-    const roomKeyB64 = this.local.keys()[nodeId];
-    if (!roomKeyB64) return "This machine isn't paired on this device — open it first so the message can be encrypted.";
-    try {
-      const roomKey = await importRoomKey(unb64url(roomKeyB64));
-      const encrypted = await seal(roomKey, trimmed);
-      const created = await createAutomation(this.local, {
-        name: "Scheduled message",
-        templateCiphertext: `${TEMPLATE_PREFIX}:${nodeId}:${encrypted}`,
-        trigger: "schedule",
-        schedule: { kind: "once", at: at.toISOString() },
-        nodeLabel: this.resolveNodeLabel(nodeId),
-        targetKind: target,
-        targetSessionId: target === "existing_session" ? sessionId ?? undefined : undefined,
-        repo: target === "new_session" ? this.store.getState().draft.repo ?? undefined : undefined,
-        message: true,
-        enabled: true,
-      });
-      // The row id IS the automation id, so cancelling the row cancels the
-      // automation and resyncScheduledFollowups drops the row once it fires.
-      if (target === "existing_session" && sessionId) {
-        this.store.enqueueScheduledFollowup(
-          sessionId,
-          { id: created.id, text: trimmed, scheduledAt: at.getTime(), scheduledAutomationId: created.id },
-          Date.now(),
-        );
-      }
-      return null;
-    } catch (e) {
-      return e instanceof Error ? e.message : "Could not schedule the message.";
-    }
-  }
-
   /** Reschedule a pending scheduled-message row (the queue's "edit schedule"
    *  action): move the control-plane automation to the new time and update the
    *  row's fire time in place. The automation keeps its id, so the row id still
@@ -3373,8 +3310,11 @@ export class AppController {
     if (id) this.send({ kind: "session.checkpoints", sessionId: id });
   }
 
-  resolveApproval(id: string, approved: boolean): void {
-    this.send({ kind: "approval", id, approved });
+  /** `remember` = "and allow this for the rest of the session" — only offered
+   *  when the node set `rememberKey` on the request; the node ignores it on a
+   *  reject or on a backstop prompt. */
+  resolveApproval(id: string, approved: boolean, remember = false): void {
+    this.send({ kind: "approval", id, approved, ...(approved && remember ? { remember: true } : {}) });
     if (!this.direct) void recordProductMetric(this.local, "remote_intervention", matchMedia("(max-width: 700px)").matches ? "mobile" : "desktop").catch(() => {});
   }
 

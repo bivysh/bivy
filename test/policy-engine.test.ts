@@ -65,6 +65,41 @@ check("attaches a risk category to every decision", () => {
   assert.ok(typeof policy.decideToolCall("/ws", "bash", { command: "ls" }).risk === "string");
 });
 
+// Session-scoped "allow … for this session" (src/policy/session-allow.ts).
+
+check("mode-driven asks carry a rememberKey the card can offer to remember", () => {
+  const policy = new PolicyEngine({ mode: "always", isRiskyIntegration: noRisky });
+  const shell = policy.decideToolCall("/ws", "bash", { command: "git status --short" });
+  assert.equal(shell.decision, "ask");
+  assert.equal(shell.rememberKey, "git status");
+  const edit = policy.decideToolCall("/ws", "Edit", { file_path: "/ws/a.ts" });
+  assert.equal(edit.decision, "ask");
+  assert.equal(edit.rememberKey, "edit");
+});
+
+check("a remembered key turns the same ask into an allow", () => {
+  const rules = new Set(["git status"]);
+  const policy = new PolicyEngine({ mode: "always", isRiskyIntegration: noRisky, isRemembered: (k) => rules.has(k) });
+  const result = policy.decideToolCall("/ws", "bash", { command: "git status" });
+  assert.equal(result.decision, "allow");
+  assert.match(result.reason ?? "", /this session/);
+  // A different subcommand of the same program is NOT covered.
+  assert.equal(policy.decideToolCall("/ws", "bash", { command: "git checkout -b x" }).decision, "ask");
+});
+
+check("backstop and risky-integration asks never carry a rememberKey and ignore remembered rules", () => {
+  const everything = () => true;
+  const policy = new PolicyEngine({ mode: "autonomous", isRiskyIntegration: (t) => t === "send_email", isRemembered: everything });
+  const push = policy.decideToolCall("/ws", "bash", { command: "git push --force origin main" });
+  assert.equal(push.decision, "ask");
+  assert.equal(push.rememberKey, undefined);
+  const mail = policy.decideToolCall("/ws", "send_email", { to: "a@b" });
+  assert.equal(mail.decision, "ask");
+  assert.equal(mail.rememberKey, undefined);
+  // And the floor still denies regardless of any rule.
+  assert.equal(policy.decideToolCall("/ws", "bash", { command: "rm -rf /" }).decision, "deny");
+});
+
 if (failures > 0) {
   console.error(`\n${failures} test(s) failed`);
   process.exit(1);

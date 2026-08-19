@@ -20,7 +20,6 @@ test("blocking interaction cards use the canonical card shell", async () => {
     ["components/FollowupQueue.tsx", "card followup-card"],
     ["components/SetupNotice.tsx", "card setup-card"],
     ["components/TuiLockedView.tsx", "card tui-locked-card"],
-    ["components/StatsPanel.tsx", "card stat-card"],
     ["components/ReadinessChecklist.tsx", "card readiness"],
     ["components/WorkQueueSetupSheet.tsx", "card wq-status-card"],
     ["components/Rulesets.tsx", "card ruleset-rule-card"],
