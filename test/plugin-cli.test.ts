@@ -6,9 +6,14 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
+import { currentBivyVersion } from "../src/app-version.js";
+import { recommendedBivyRange } from "../src/plugin-sdk/index.js";
 
 const root = path.resolve(import.meta.dirname, "..");
 const tsx = path.join(root, "node_modules", ".bin", "tsx");
+// Derive from the repo's own version so a release bump never breaks these tests.
+const bivyRange = recommendedBivyRange(currentBivyVersion());
+const escape = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 function run(args: string[], env: Record<string, string>): ReturnType<typeof spawnSync> {
   return spawnSync(tsx, [path.join(root, "src", "plugin-cli.ts"), ...args], {
@@ -28,7 +33,7 @@ test("plugin CLI scaffolds a schema-linked, compatible manifest", () => {
     assert.equal(body.plugin.id, "sample-agent");
     const manifest = fs.readFileSync(path.join(target, "bivy.plugin.yaml"), "utf8");
     assert.match(manifest, /yaml-language-server.*plugin-sdk\/schema\/bivy\.plugin\.schema\.json/);
-    assert.match(manifest, /requires:\n {2}bivy: ">=0\.10\.1 <0\.11\.0"/);
+    assert.match(manifest, new RegExp(`requires:\\n {2}bivy: "${escape(bivyRange)}"`));
     assert.match(manifest, /kind: process/);
 
     const validated = run(["validate", target, "--json"], { BIVY_DATA_DIR: dir });
@@ -55,7 +60,7 @@ metadata:
   name: Conformance Agent
   version: 1.0.0
 requires:
-  bivy: ">=0.10.0 <0.11.0"
+  bivy: "${bivyRange}"
 contributes:
   agents:
     - id: conformance-agent
