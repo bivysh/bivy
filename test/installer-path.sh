@@ -46,6 +46,13 @@ exit 0
 STUB
 chmod +x "$WORK/stub/npm"
 
+# Expose the node we're already running under on the stub PATH. Without it the
+# installer, seeing no supported Node in the bare `env -i` PATH below, takes its
+# real bootstrap path — `sudo apt-get` + curl to nodesource — which is slow,
+# needs the network, and has hung CI for hours when a mirror stalled. This test
+# is about rc-file handling; Node acquisition is not under test.
+ln -s "$(command -v node)" "$WORK/stub/node"
+
 run_installer() {
   # HOME/SHELL are redirected so the installer's rc-file handling is contained.
   # $1: HOME dir  $2: SHELL  $3+: extra PATH entries (colon-joined) beyond the stub
