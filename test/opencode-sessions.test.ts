@@ -19,6 +19,7 @@ import {
   writeOpenCodeHistory,
   loadOpenCodeTranscript,
   deleteOpenCodeSession,
+  discoverOpenCodeSessionForCwd,
 } from "../src/runtime/opencode-sessions.js";
 import type { ForkHistoryMessage } from "../src/runtime/types.js";
 
@@ -201,6 +202,30 @@ check("deleteOpenCodeSession removes the session and its rows", () => {
   const after = readStore(file);
   assert.equal((after.prepare("SELECT count(*) AS c FROM message WHERE session_id = ?").get(id) as { c: number }).c, 0, "messages cascade-deleted");
   after.close();
+});
+
+check("discoverOpenCodeSessionForCwd finds the run's session by cwd + start time", () => {
+  const file = createStore();
+  const db = new DatabaseSync(file);
+  const insert = db.prepare("INSERT INTO session (id, project_id, parent_id, slug, directory, title, version, time_created, time_updated) VALUES (?, 'global', ?, 's', ?, 't', '1.18.18', ?, ?)");
+  insert.run("ses_old", null, "/work/repo", 10_000, 10_000);          // before the run started
+  insert.run("ses_other", null, "/work/elsewhere", 100_000, 100_000); // another cwd
+  insert.run("ses_run", null, "/work/repo", 98_000, 98_000);          // the run (inside the 5 s clock skew)
+  insert.run("ses_child", "ses_run", "/work/repo", 101_000, 101_000); // a subagent child — never the run itself
+  insert.run("ses_later", null, "/work/repo", 150_000, 150_000);      // a later TUI in the same cwd
+  db.close();
+  assert.equal(discoverOpenCodeSessionForCwd("/work/repo", 100_000)?.id, "ses_run", "earliest top-level session in this cwd since the run began");
+  assert.equal(discoverOpenCodeSessionForCwd("/work/repo/../repo", 100_000)?.id, "ses_run", "cwd is resolved before matching");
+  assert.equal(discoverOpenCodeSessionForCwd("/work/nowhere", 0), undefined);
+  const missing = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-sessions-missing-"));
+  const prev = process.env.XDG_DATA_HOME;
+  process.env.XDG_DATA_HOME = missing;
+  try {
+    assert.equal(discoverOpenCodeSessionForCwd("/work/repo", 0), undefined, "missing store is not an error");
+  } finally {
+    process.env.XDG_DATA_HOME = prev;
+    fs.rmSync(missing, { recursive: true, force: true });
+  }
 });
 
 check("opencode export reconstructs the fork session (live, when installed)", () => {

@@ -638,9 +638,12 @@ function cliAgentInfo(id: string, spec: AgentProfile): RuntimeInfo {
       packages: false,
       fork: false,
       usageReporting,
-      // Codex (and Grok) can locate an on-disk session by cwd + start time so a
-      // `bivy run` terminal without a launch-time pin is still takeable as chat.
-      sessionDiscovery: Boolean(spec.behaviors?.sessionStore === "codex" || spec.behaviors?.nativeSessions),
+      // Any agent with a readable on-disk session store (Codex, OpenCode) or
+      // native-session behavior (Grok) can locate the session a `bivy run`
+      // produced by cwd + start time, so a terminal without a launch-time pin
+      // is still takeable as chat (see SESSION_DISCOVERY_BY_AGENT in
+      // src/session/run-terminal.ts).
+      sessionDiscovery: Boolean(spec.behaviors?.sessionStore || spec.behaviors?.nativeSessions),
       // Native-session behavior identities describe discovery/adoption and TUI
       // hand-off without teaching the wrapper which concrete agent owns them.
       interactiveTui: Boolean(spec.behaviors?.nativeSessions) && commandAvailable(spec.command),

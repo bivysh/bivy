@@ -56,6 +56,13 @@ export function isLiveRunSession(s: { source?: string; status?: string }): boole
   return (s.source ?? "").trim() === "cli" && s.status === "working";
 }
 
+/** A finished `bivy run` whose agent left no resumable session, so the node kept
+ *  its terminal scrollback instead (`source: "cli:log"`). Opens as a read-only
+ *  terminal log — `terminal.attach` replays it — never as a chat. */
+export function isRunLogSession(s: { source?: string }): boolean {
+  return (s.source ?? "").trim() === "cli:log";
+}
+
 /** Map a session's `source` tag to the trigger that started it. Unknown or
  *  housekeeping tags fall through to a plain `app` session — never throws, so
  *  a new server-side tag degrades to "a session" rather than breaking a row. */
@@ -85,7 +92,7 @@ export function classifySource(source: string | undefined): SourceInfo {
   if (s === "queue:manual" || s === "manual") {
     return { kind: "manual", label: "Manual run", automation: true };
   }
-  if (s === "cli") return CLI_SOURCE;
+  if (s === "cli" || s === "cli:log") return CLI_SOURCE;
   return { kind: "app", label: "App session", automation: false };
 }
 

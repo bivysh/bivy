@@ -57,6 +57,10 @@ test("bivy run --chat creates an app-style governed session without launching th
         res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, name: body.name }));
         return;
       }
+      if (req.url === "/api/node/info") {
+        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ nodeId: "node-abc", name: "Laptop" }));
+        return;
+      }
       res.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ error: "not found" }));
     });
   });
@@ -80,7 +84,9 @@ test("bivy run --chat creates an app-style governed session without launching th
 
   assert.equal(result.code, 0, result.stderr || result.stdout);
   assert.match(result.stdout, /Started chat session chat-session-123 \(Claude Code\)/);
-  assert.match(result.stdout, /https:\/\/app\.example\.test\/sessions\/chat-session-123/);
+  // The deep link carries this node's id so the app switches to it before
+  // opening the session (it may be connected to another node, or none yet).
+  assert.match(result.stdout, /https:\/\/app\.example\.test\/sessions\/chat-session-123\?node=node-abc/);
 
   const codexResult = await runCli([
     "run", "codex", "--chat", "--no-open", "--workspace", workspace,
@@ -98,10 +104,19 @@ test("bivy run --chat creates an app-style governed session without launching th
       authorization: "Bearer test-device-token",
       body: { sessionId: "chat-session-123", name: "Review auth" },
     },
+    { path: "/api/node/info", authorization: "Bearer test-device-token", body: {} },
     {
       path: "/api/session",
       authorization: "Bearer test-device-token",
       body: { agent: "codex-approvals", workspace },
     },
+    // No --name: the creation-time placeholder the app's own sessions carry, so
+    // the empty chat is listed/advertised now and still auto-named on first message.
+    {
+      path: "/api/sessions/rename",
+      authorization: "Bearer test-device-token",
+      body: { sessionId: "chat-session-123", name: "Session chat-ses" },
+    },
+    { path: "/api/node/info", authorization: "Bearer test-device-token", body: {} },
   ]);
 });

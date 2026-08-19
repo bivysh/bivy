@@ -442,3 +442,32 @@ export function deleteOpenCodeSession(sessionRef: string): boolean {
     db.close();
   }
 }
+
+/**
+ * Locate the OpenCode session a `bivy run opencode` produced when there is no
+ * pinned id (OpenCode mints its own `ses_…` ids at TUI start): the earliest
+ * top-level session whose `directory` is `cwd` and that was created at/after
+ * `since` (the run-terminal's creation time, minus a small skew). Mirrors
+ * discoverCodexSessionForCwd; best-effort — a missing store or no match is
+ * undefined, never a throw. Verified against opencode 1.18.18's `session` table
+ * (`directory`, `time_created`, `parent_id`).
+ */
+export function discoverOpenCodeSessionForCwd(cwd: string, since = 0): { id: string } | undefined {
+  let db: DatabaseSync;
+  try {
+    db = openOpenCodeDb(false);
+  } catch {
+    return undefined;
+  }
+  try {
+    const skewMs = 5_000;
+    const row = db
+      .prepare("SELECT id FROM session WHERE directory = ? AND parent_id IS NULL AND time_created >= ? ORDER BY time_created ASC, id LIMIT 1")
+      .get(path.resolve(cwd), since - skewMs) as { id?: string } | undefined;
+    return row?.id ? { id: row.id } : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    db.close();
+  }
+}

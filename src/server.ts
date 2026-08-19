@@ -46,6 +46,7 @@ import { createForkStandUp } from "./session/fork-standup.js";
 import { createForkRetire } from "./session/fork-retire.js";
 import { createTranscriptPersistence } from "./session/transcript-persistence.js";
 import { createRunTerminals } from "./session/run-terminal.js";
+import { createRunLogStore } from "./session/run-log-store.js";
 import { isNativeOAuthProvider, loginModelOAuth, type AuthEvent, type AuthPrompt } from "./runtime/oauth/model-oauth.js";
 import { decideOAuthLoginSweep } from "./runtime/oauth/oauth-login-sweep.js";
 import { listCodexSessions, loadCodexTranscript, discoverCodexSessionForCwd } from "./runtime/codex-sessions.js";
@@ -379,6 +380,8 @@ if (migrateVaultDir(piDir, credsDir)) {
   console.log(`Migrated credential vault: ${piDir} -> ${credsDir}`);
 }
 const metadata = MetadataStore.load(appDir);
+// Scrollback kept for `bivy run`s whose agent left no resumable session (see run-log-store).
+const runLogs = createRunLogStore(appDir);
 // A fresh process has no live runtimes, so any persisted "working" status is
 // stale from a prior crash/kill. Clear it at boot; otherwise those sessions'
 // worktrees are permanently exempted from cleanup (an unbounded disk leak).
@@ -6425,7 +6428,14 @@ function persistSessionMetadata(record: SessionRecord, status = sessionStatus(re
 
 function bivySessionEnvelopeFromSummary(s: SessionSummary & { agent: string; agentName: string }, rec?: SessionRecord, meta?: MetadataSession): BivySessionRecord {
   if (rec) return bivySessionEnvelope(rec);
-  const rt = getRuntime(meta?.runtimeId ?? s.agent);
+  // A row whose runtime this node can't resolve — a `bivy run -- <command>`
+  // run log keyed by its command, or an agent/plugin since removed — must not
+  // take the whole session list down with a throw; describe it with the
+  // default runtime's envelope instead.
+  const rt = (() => {
+    try { return getRuntime(meta?.runtimeId ?? s.agent); }
+    catch { return getRuntime(defaultRuntimeId); }
+  })();
   const fallback = Date.now();
   const modified = isoFrom(meta?.updatedAt ?? s.modified, fallback);
   const workspace = meta?.workspace ?? s.cwd ?? defaultWorkspace;
@@ -6804,6 +6814,10 @@ async function deleteSessionFile(opts: { id?: string; path?: string; fallbackAct
       });
     }
   }
+  // A run that only left a terminal log has no runtime store to forget; drop
+  // the log with the row.
+  const runLogOnly = Boolean(deletedSessionId && metadata.getSession(deletedSessionId)?.runLog);
+  if (runLogOnly) runLogs.remove(deletedSessionId);
   metadata.removeSession(deletedSessionId, inRoot ? resolved : undefined);
   // Forget the session from its runtime's own transcript store too. Runtimes
   // like Claude Code keep transcripts outside `piDir/sessions` (so the inRoot
@@ -6812,7 +6826,7 @@ async function deleteSessionFile(opts: { id?: string; path?: string; fallbackAct
   // the "deleted" session reappears in the sidebar. Best-effort: a runtime that
   // can't (or doesn't own this id) just returns false. Prefer the owning
   // runtime; fall back to every resume-capable runtime when it's unknown.
-  if (deletedSessionId) {
+  if (deletedSessionId && !runLogOnly) {
     const hint = requestedPath || record?.sessionFile || undefined;
     const targets = owningRuntimeId
       ? [owningRuntimeId]
@@ -8227,6 +8241,9 @@ async function resolveOrResumeSession(sessionId?: unknown, sessionPath?: unknown
   if (open) return open;
   const pathRef = typeof sessionPath === "string" && sessionPath.trim() ? sessionPath.trim() : undefined;
   const meta = metadata.getSession(id) ?? (pathRef ? metadata.getSession(pathRef) : undefined);
+  // A run that only kept its terminal log has nothing to resume — it opens as a
+  // read-only terminal (terminal.attach replays the log), never as a chat.
+  if (meta?.runLog) return undefined;
   // The resume ref: an explicit path, else metadata's stored path, else the id
   // itself (id-based runtimes like Claude Code resume by session id). Bail when
   // there is nothing durable to resume from — a genuinely unknown session.
@@ -8519,6 +8536,8 @@ const runTerms = createRunTerminals({
   sessionTerminalsForget: (sessionId) => sessionTerminals.forget(sessionId),
   upsertSessionMetadata: (patch) => metadata.upsertSession(patch as Parameters<typeof metadata.upsertSession>[0]),
   sessionListChanged: () => { broadcastSessionsList(); scheduleAdvertise(); },
+  saveRunLog: (termId, log) => runLogs.save(termId, log),
+  loadRunLog: (termId) => runLogs.load(termId),
   listAllSessions,
   listProvidersUnified,
   pushModelAuthToControlPlane: () => pushModelAuthToControlPlane(),
