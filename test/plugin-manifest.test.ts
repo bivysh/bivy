@@ -137,7 +137,8 @@ test("plugin store rejects incompatible installs and omits incompatible installe
   try {
     assert.throws(() => installPlugin(source, { dataDir: dir, bivyVersion: "0.11.0" }), /requires Bivy/);
     installPlugin(source, { dataDir: dir, bivyVersion: "0.10.1" });
-    assert.deepEqual(installedAgentContributions(dir).agents.map((item) => item.agent.id), ["review-bot"]);
+    assert.deepEqual(installedAgentContributions(dir, "0.10.1").agents.map((item) => item.agent.id), ["review-bot"]);
+    assert.deepEqual(installedAgentContributions(dir, "0.11.0").agents, []);
     assert.equal(listInstalledPlugins(dir, "0.11.0")[0]?.errors.length, 1);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
