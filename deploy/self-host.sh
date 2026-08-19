@@ -117,6 +117,10 @@ GITHUB_OAUTH_CLIENT_SECRET=${GITHUB_OAUTH_CLIENT_SECRET_INPUT}
 WEB_PUSH_VAPID_PUBLIC_KEY=
 WEB_PUSH_VAPID_PRIVATE_KEY=
 WEB_PUSH_SUBJECT=mailto:admin@${APP_DOMAIN}
+
+# Optional: encrypted credential storage for offline automations. Off while
+# empty. Generate with: openssl rand -base64 32  (docs/self-host.md → "Offline automations")
+HOSTED_CREDENTIAL_KEY=
 EOF
   else
     POSTGRES_PASSWORD="$(rand 32)"
@@ -140,6 +144,10 @@ GITHUB_OAUTH_CLIENT_SECRET=${GITHUB_OAUTH_CLIENT_SECRET_INPUT}
 WEB_PUSH_VAPID_PUBLIC_KEY=
 WEB_PUSH_VAPID_PRIVATE_KEY=
 WEB_PUSH_SUBJECT=mailto:admin@${APP_DOMAIN}
+
+# Optional: encrypted credential storage for offline automations. Off while
+# empty. Generate with: openssl rand -base64 32  (docs/self-host.md → "Offline automations")
+HOSTED_CREDENTIAL_KEY=
 EOF
   fi
   chmod 600 deploy/.env || true

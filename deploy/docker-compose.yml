@@ -65,14 +65,22 @@ services:
       RELAY_SECRET: "${RELAY_SECRET}"
       RELAY_PUBLIC_URL: "${RELAY_PUBLIC_URL}"
       PUBLIC_CONTROL_PLANE_URL: "${PUBLIC_CONTROL_PLANE_URL}"
-      # Ephemeral-machines flag (server-side enforcement). OFF by default: with
-      # NODE_ENV=production (the compose default) ephemeral is disabled unless you
-      # set EPHEMERAL_MACHINES_ENABLED=1 here. When off, planAutoProvision refuses
-      # server-initiated launches and the /api/ephemeral/exec provider relay 403s
-      # device-initiated ones. Pairs with the build-time VITE_EPHEMERAL_MACHINES_ENABLED
-      # above that exposes the UI. Does not touch a running machine's self-teardown,
-      # so any existing machine still reaps itself when idle.
+      # Ephemeral-machines kill switch (server-side enforcement). ON unless set to
+      # exactly "0". When off, planAutoProvision refuses server-initiated launches
+      # and the /api/ephemeral/exec provider relay 403s device-initiated ones.
+      # Pairs with the build-time VITE_EPHEMERAL_MACHINES_ENABLED above that hides
+      # the UI. Does not touch a running machine's self-teardown, so any existing
+      # machine still reaps itself when idle.
       EPHEMERAL_MACHINES_ENABLED: "${EPHEMERAL_MACHINES_ENABLED:-}"
+      # Encrypted credential storage for hosted provisioning ("Run automations
+      # while I'm offline" in Settings → Cloud machine profiles). Optional and
+      # fail-closed: with no key the toggle stays disabled and the control plane
+      # refuses to store any provider credential. HOSTED_CREDENTIAL_KEY is a single
+      # base64 32-byte key (`openssl rand -base64 32`); KEYS/PRIMARY are only for
+      # rotation. See docs/self-host.md → "Offline automations".
+      HOSTED_CREDENTIAL_KEY: "${HOSTED_CREDENTIAL_KEY:-}"
+      HOSTED_CREDENTIAL_KEYS: "${HOSTED_CREDENTIAL_KEYS:-}"
+      HOSTED_CREDENTIAL_KEY_PRIMARY: "${HOSTED_CREDENTIAL_KEY_PRIMARY:-}"
       DISABLE_DEV_LOGIN: "${DISABLE_DEV_LOGIN:-1}"
       RESEND_API_KEY: "${RESEND_API_KEY:-}"
       AUTH_EMAIL_FROM: "${AUTH_EMAIL_FROM:-Bivy <login@localhost>}"

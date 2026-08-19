@@ -1530,8 +1530,8 @@ const EPHEMERAL_ALLOWED_HOSTS = new Set([
 app.post("/api/ephemeral/exec", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   await requireDeploymentAdmission(account.id, "ephemeral.provision");
-  // Fail-closed deployment gate: ephemeral machines are off unless the deploy set
-  // EPHEMERAL_MACHINES_ENABLED=1 (production leaves it off). Device-initiated
+  // Deployment kill switch: ephemeral machines are on unless the deploy set
+  // EPHEMERAL_MACHINES_ENABLED=0 (ephemeralMachinesEnabled). Device-initiated
   // launches route their provider create/destroy calls through this relay, so
   // refusing here stops them server-side even if a client bypasses the web
   // VITE_EPHEMERAL_MACHINES_ENABLED flag. Mirrors the planAutoProvision guard.
@@ -2060,7 +2060,7 @@ app.get("/account/github-app", asyncHandler(async (req, res) => {
 app.post("/account/hosted-github-app/connect", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   if (!hostedEncryptionAvailable()) {
-    return res.status(503).json({ error: "Credential encryption is not configured. Refusing to store the GitHub App key." });
+    return res.status(503).json({ error: "Credential encryption is not configured (set HOSTED_CREDENTIAL_KEY). Refusing to store the GitHub App key." });
   }
   const appId = String(req.body?.appId ?? "").trim();
   const privateKeyPem = String(req.body?.privateKeyPem ?? "").trim();
@@ -3238,7 +3238,7 @@ app.delete("/account/hosted-machines/:nodeId", asyncHandler(async (req, res) => 
 app.post("/account/hosted-provisioning/rotate", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
-  if (!hostedEncryptionAvailable()) return res.status(503).json({ error: "No encryption key configured" });
+  if (!hostedEncryptionAvailable()) return res.status(503).json({ error: "Credential encryption is not configured (set HOSTED_CREDENTIAL_KEY)." });
   await store.setHostedProvisioning(client.accountId, {}); // re-encrypts under the primary key
   await store.appendHostedAudit(client.accountId, { at: new Date().toISOString(), action: "credential_rotated", detail: `kid ${hostedPrimaryKid() ?? ""}` });
   const status = await store.getHostedProvisioningStatus(client.accountId);

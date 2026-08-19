@@ -1553,7 +1553,12 @@ function HostedRunnerManagement({ profiles }: { profiles: EphemeralNodeConfig[] 
           />
         </div>
 
-        {status && !status.encryptionReady && <div className="banner inline" data-tone="danger" role="alert">Your Bivy server must enable encrypted credential storage before offline automation can be used.</div>}
+        {status && !status.encryptionReady && (
+          <div className="banner inline" data-tone="danger" role="alert">
+            Not available yet: this Bivy server has no encryption key for stored credentials. There's no setting for it in the app — whoever runs the control plane sets <code>HOSTED_CREDENTIAL_KEY</code> in its environment and restarts it.{" "}
+            <a href="https://github.com/bivysh/bivy/blob/main/docs/self-host.md#offline-automations-encrypted-credential-storage" target="_blank" rel="noopener">How to enable it</a>
+          </div>
+        )}
 
         {status?.enabled && (
           <div className="offline-runs-setup">
