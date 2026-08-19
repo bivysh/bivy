@@ -148,6 +148,9 @@ jobs:
     if: inputs.force_all || needs.changes.outputs.root == 'true'
     name: Root unit tests (${{ matrix.shard }})
     runs-on: ubuntu-latest
+    # A healthy shard finishes in ~2 min. Without this a single hung suite
+    # keeps the job (and the merge queue) waiting for GitHub's 6h default.
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:

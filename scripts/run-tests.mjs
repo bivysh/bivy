@@ -155,10 +155,37 @@ process.stdout.write(
     (concurrency === 1 ? " — parallel phase capped to 1\n" : "\n"),
 );
 
+// A suite that never exits (a stalled network call, an orphaned server holding
+// the pipe open) must fail loudly with its name, not hang the whole run until
+// the CI job's timeout. The slowest healthy suite is well under a minute, so
+// this only ever fires on a genuine hang. Override with TEST_SUITE_TIMEOUT_MS.
+const suiteTimeoutMs = Math.max(1000, Number(process.env.TEST_SUITE_TIMEOUT_MS) || 5 * 60_000);
+
+// Suites run in their own process groups (see runSuite), which also means a
+// Ctrl-C on the runner would no longer reach them — so forward it ourselves.
+const activeChildren = new Set();
+function killGroup(child) {
+  try {
+    if (process.platform !== "win32" && child.pid) process.kill(-child.pid, "SIGKILL");
+    else child.kill("SIGKILL");
+  } catch {
+    // already gone
+  }
+}
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.on(signal, () => {
+    for (const child of activeChildren) killGroup(child);
+    process.exit(130);
+  });
+}
+
 function runSuite(suite) {
   return new Promise((resolve) => {
     const suiteStart = Date.now();
-    const child = spawn(suite.cmd, suite.args, { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] });
+    // detached → own process group, so a timeout can kill grandchildren (a
+    // suite's spawned servers) too, not just the tsx/bash wrapper.
+    const child = spawn(suite.cmd, suite.args, { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
+    activeChildren.add(child);
     const chunks = [];
     child.stdout.on("data", (d) => chunks.push(d));
     child.stderr.on("data", (d) => chunks.push(d));
@@ -167,10 +194,17 @@ function runSuite(suite) {
       finish(1);
     });
     child.on("close", (code) => finish(code ?? 1));
+    const timer = setTimeout(() => {
+      chunks.push(Buffer.from(`\nTIMEOUT: ${suite.name} did not finish within ${suiteTimeoutMs / 1000}s; killing it.\n`));
+      killGroup(child);
+      finish(124);
+    }, suiteTimeoutMs);
     let finished = false;
     function finish(code) {
       if (finished) return;
       finished = true;
+      clearTimeout(timer);
+      activeChildren.delete(child);
       const ok = code === 0;
       if (!ok) failures.push(suite.name);
       done += 1;
