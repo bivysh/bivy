@@ -325,6 +325,15 @@ regardless of mode.
 Pending approvals expire after 5 minutes and expire **denied**
 (`src/approval.ts`).
 
+A prompt raised by `risky`/`always` mode can be answered "Allow … this
+session": the node then stops asking for the same program + subcommand
+(`git status`, `npm test`) or the same tool (`edit`) until that session closes.
+Rules are held in the node's memory only (`src/policy/session-allow.ts`) —
+never persisted, never shared across sessions — and are consulted only for
+mode-driven prompts. The catastrophic floor, the backstop set, risky
+integrations, a paused session, and prompts the client classifies as
+destructive never offer or honour one.
+
 Choosing `never` grants any connected client unattended code execution on the
 node. On a non-intercepted runtime that is bounded only by the runtime's own
 sandbox and OS permissions. That is a real decision—make it deliberately.

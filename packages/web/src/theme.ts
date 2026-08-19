@@ -9,14 +9,16 @@ const KEY = "bivy_theme";
 // (packages/ui/tokens.css is the single source of truth) so the chrome always
 // tracks the app background instead of showing a pure white/black band — and
 // there is no hardcoded hex here to drift out of sync when the palette changes.
-function themeColor(): string {
+// Returns null when the token can't be read yet (styles not loaded); the caller
+// then leaves the build-time `<meta>` values — also derived from `--bg` — alone.
+function themeColor(): string | null {
   try {
     const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
     if (bg) return bg;
   } catch {
     /* getComputedStyle can throw if called before styles load; fall through */
   }
-  return "#f5f3ee"; // paper-light --bg fallback; matches the static <meta> in index.html
+  return null;
 }
 
 export function currentThemeSetting(): ThemeSetting {
@@ -48,6 +50,7 @@ export function applyTheme(setting: ThemeSetting = currentThemeSetting()): void 
   // currently has "active" will show that content either way, so this
   // doesn't need to know (or care) which one that is.
   const color = themeColor();
+  if (!color) return;
   document.querySelectorAll('meta[name="theme-color"]').forEach((el) => el.setAttribute("content", color));
 }
 

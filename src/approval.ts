@@ -15,6 +15,10 @@ export interface ApprovalRequest {
   workspace?: string;
   repo?: string;
   branch?: string;
+  /** Present when the user may answer "allow this for the rest of the session"
+   *  (src/policy/session-allow.ts). The client shows that action only when
+   *  this is set; the node sets it only for mode-driven asks. */
+  rememberKey?: string;
   createdAt: number;
   status: ApprovalStatus;
 }
@@ -67,6 +71,7 @@ export class ApprovalManager {
     workspace?: string;
     repo?: string;
     branch?: string;
+    rememberKey?: string;
     timeoutMs?: number;
   }): Promise<boolean> {
     const request: ApprovalRequest = {
@@ -79,6 +84,7 @@ export class ApprovalManager {
       workspace: input.workspace,
       repo: input.repo,
       branch: input.branch,
+      ...(input.rememberKey ? { rememberKey: input.rememberKey } : {}),
       createdAt: Date.now(),
       status: "pending",
     };

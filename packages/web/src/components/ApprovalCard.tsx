@@ -11,12 +11,14 @@ import { formatApproval, type ApprovalRequest } from "@bivy/core";
 // node reconnect mid-flight, etc.), leaving no way out before this.
 const STALL_MS = 8000;
 
+export type ApprovalResolver = (id: string, approved: boolean, remember?: boolean) => void;
+
 function ApprovalCard({
   approval,
   onResolve,
 }: {
   approval: ApprovalRequest;
-  onResolve: (id: string, approved: boolean) => void;
+  onResolve: ApprovalResolver;
 }) {
   // #217: the card stays visible after a click; only the server removing the
   // approval (approval.resolved) unmounts it. We show a pending state meanwhile.
@@ -24,9 +26,16 @@ function ApprovalCard({
   const [stalled, setStalled] = useState(false);
   const [showRaw, setShowRaw] = useState(false);
   const f = formatApproval(approval);
+  // "Allow … for this session" is offered only when BOTH gates agree: the node
+  // set `rememberKey` (a mode-driven ask, not a backstop prompt — see
+  // src/policy/session-allow.ts) AND the client-side severity heuristic says
+  // it's not a destructive/irreversible action (`canRemember`). Either side
+  // alone can veto; neither can grant.
+  const rememberKey = typeof approval.rememberKey === "string" && approval.rememberKey ? approval.rememberKey : null;
+  const canRemember = f.canRemember && rememberKey !== null;
   // Remembered so Retry can resend the exact same decision without the user
   // re-picking Approve/Reject.
-  const lastChoice = useRef<{ approved: boolean } | null>(null);
+  const lastChoice = useRef<{ approved: boolean; remember: boolean } | null>(null);
   const stallTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => () => { if (stallTimer.current) clearTimeout(stallTimer.current); }, []);
@@ -36,17 +45,17 @@ function ApprovalCard({
     stallTimer.current = setTimeout(() => setStalled(true), STALL_MS);
   };
 
-  const resolve = (approved: boolean) => {
-    lastChoice.current = { approved };
+  const resolve = (approved: boolean, remember = false) => {
+    lastChoice.current = { approved, remember };
     setPending(true);
     setStalled(false);
-    onResolve(approval.id, approved);
+    onResolve(approval.id, approved, remember);
     armStallTimer();
   };
   const retry = () => {
     if (!lastChoice.current) return;
     setStalled(false);
-    onResolve(approval.id, lastChoice.current.approved);
+    onResolve(approval.id, lastChoice.current.approved, lastChoice.current.remember);
     armStallTimer();
   };
   const badgeText = f.severity === "critical" ? "Permanent" : f.severity === "high" ? "High risk" : f.severity === "medium" ? "Medium risk" : "Low risk";
@@ -91,6 +100,15 @@ function ApprovalCard({
           <button className="btn danger-ghost" onClick={() => resolve(false)}>
             Reject
           </button>
+          {canRemember && (
+            <button
+              className="btn ghost"
+              onClick={() => resolve(true, true)}
+              title={`Approve, and allow “${rememberKey}” without asking until this session closes`}
+            >
+              Allow “{rememberKey}” this session
+            </button>
+          )}
           <button className="btn primary" onClick={() => resolve(true)}>
             {f.severity === "critical" ? "Approve destructive action" : "Approve once"}
           </button>
@@ -105,7 +123,7 @@ export function ApprovalStack({
   onResolve,
 }: {
   approvals: ApprovalRequest[];
-  onResolve: (id: string, approved: boolean) => void;
+  onResolve: ApprovalResolver;
 }) {
   if (approvals.length === 0) return null;
   return (

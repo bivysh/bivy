@@ -5,7 +5,6 @@ import { readFile } from "node:fs/promises";
 const STYLES = new URL("../../packages/web/src/styles.css", import.meta.url);
 const APP = new URL("../../packages/web/src/App.tsx", import.meta.url);
 const COMPOSER = new URL("../../packages/web/src/components/Composer.tsx", import.meta.url);
-const SHEET = new URL("../../packages/web/src/components/ScheduleSheet.tsx", import.meta.url);
 const QUEUE = new URL("../../packages/web/src/components/FollowupQueue.tsx", import.meta.url);
 
 test("the composer uses one normal Send control without Run or Schedule alternatives", async () => {
@@ -45,26 +44,14 @@ function ruleFor(css: string, selector: string): string {
 }
 
 test("every focused text entry inherits the canonical 16px field shell so iOS never auto-zooms", async () => {
-  const [css, queue, schedule, question] = await Promise.all([
+  const [css, queue, question] = await Promise.all([
     readFile(STYLES, "utf8"),
     readFile(QUEUE, "utf8"),
-    readFile(SHEET, "utf8"),
     readFile(new URL("../../packages/web/src/components/QuestionCard.tsx", import.meta.url), "utf8"),
   ]);
   expect(ruleFor(css, ".field, .picker-search")).toContain("font-size: 16px");
   expect(queue).toContain('className="field followup-edit-input"');
-  expect(schedule).toContain('className="field"');
   expect(question).toContain('className="field question-other-input"');
-});
-
-test("ScheduleSheet infers the target from the screen instead of asking", async () => {
-  const source = await readFile(SHEET, "utf8");
-  // Target is derived from the open session / draft — there is no "this or new
-  // session" question.
-  expect(source).toContain("const target: \"existing_session\" | \"new_session\" = active ? \"existing_session\" : \"new_session\";");
-  expect(source).toContain("<Sheet title=\"Schedule message\" onClose={onClose} autoFocusSearch={false}>");
-  // The node for delivery comes from the session, falling back to the draft's.
-  expect(source).toContain("const nodeId = active?.nodeId ?? state.connection.currentNodeId;");
 });
 
 test("queue rows show scheduled messages with a reschedule action, delivered by the automation", async () => {

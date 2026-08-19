@@ -136,7 +136,7 @@ export function pathEscapesWorkspace(workspace: string, p: string): boolean {
 // case-insensitively so the hard floor fires for every runtime — a
 // case-sensitive compare silently disabled it for claude-code. Integration
 // tool names (MCP, etc.) keep their original casing via `isRiskyIntegration`.
-function isShellTool(toolName: string): boolean {
+export function isShellTool(toolName: string): boolean {
   const tool = toolName.toLowerCase();
   return tool === "bash" || tool === "shell" || tool === "execute" || tool === "run_command";
 }

@@ -19,6 +19,25 @@ const pkgVersion = ((): string => {
   }
 })();
 
+// Browser-chrome / splash colors, read from the design system at build time so
+// the static `<meta name="theme-color">` tags in index.html and the PWA manifest
+// can never drift from `--bg` in packages/ui/tokens.css (the single source of
+// truth). These are the literal first pixels a cold-loading PWA paints — before
+// any CSS or JS — so they have to be baked in, not read at runtime.
+const bgTokens = ((): { light: string; dark: string } => {
+  const tokensPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../ui/tokens.css");
+  const css = fs.readFileSync(tokensPath, "utf8");
+  const bgIn = (blockHeader: RegExp): string => {
+    const start = css.search(blockHeader);
+    if (start < 0) throw new Error(`tokens.css: block ${blockHeader} not found`);
+    const body = css.slice(start, css.indexOf("}", start));
+    const m = /--bg:\s*(#[0-9a-fA-F]{3,8})/.exec(body);
+    if (!m) throw new Error(`tokens.css: --bg not found in ${blockHeader}`);
+    return m[1]!.toLowerCase();
+  };
+  return { light: bgIn(/^:root\s*\{/m), dark: bgIn(/^:root\[data-theme="dark"\]\s*\{/m) };
+})();
+
 // Bivy's single web client. Both the node daemon and the control plane serve
 // this build at the root; the legacy vanilla client it replaced has been
 // removed, so there is no longer a `/next` migration base.
@@ -42,6 +61,13 @@ export default defineConfig({
   },
   plugins: [
     react(),
+    {
+      // Fill the media-scoped theme-color tags from the design tokens (see
+      // `bgTokens`). index.html carries placeholders, never hex.
+      name: "bivy-theme-color",
+      transformIndexHtml: (html) =>
+        html.replace(/%BIVY_BG_DARK%/g, bgTokens.dark).replace(/%BIVY_BG_LIGHT%/g, bgTokens.light),
+    },
     VitePWA({
       // `prompt`: never auto-reload a running session. The app shows a small
       // "Update ready" prompt and reloads only when the user opts in (or on the
@@ -76,10 +102,11 @@ export default defineConfig({
         // *is* theme-aware; see the media-scoped <meta name="theme-color"> tags
         // in index.html and theme.ts's applyTheme — this is specifically about
         // the OS-level splash shown before any web content, including those
-        // tags, has painted). Matches the app's default (system→dark-leaning)
-        // theme rather than picking an arbitrary neutral.
-        background_color: "#111111",
-        theme_color: "#111111",
+        // tags, has painted). Uses the dark `--bg` token (the app's
+        // system→dark-leaning default) so the splash blends into the first
+        // painted frame instead of flashing an unrelated neutral.
+        background_color: bgTokens.dark,
+        theme_color: bgTokens.dark,
         icons: [
           { src: "/icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },
           { src: "/icon-512.png", sizes: "512x512", type: "image/png", purpose: "any" },
