@@ -19,6 +19,7 @@ import { provisionAgentRun } from "../runtime/credential-provisioning.js";
 import { ingestAgentCredentials } from "../runtime/credential-ingest.js";
 import { discoverCodexSessionForCwd } from "../runtime/codex-sessions.js";
 import { discoverGrokSessionForCwd } from "../runtime/grok-sessions.js";
+import { discoverOpenCodeSessionForCwd } from "../runtime/opencode-sessions.js";
 import { discoverPiSessionForCwd } from "../runtime/pi-session-discovery.js";
 import { listMultiplexerSessions, attachCommand, type MultiplexerKind } from "../multiplexer.js";
 import type { TerminalManager } from "../terminal.js";
@@ -54,6 +55,14 @@ export interface RunTerminalSpec {
   sessionId?: string;
 }
 
+/** What a run leaves behind when its agent exposed no session of its own:
+ *  the terminal scrollback plus how it ended. */
+export interface RunLog {
+  data: string;
+  code: number;
+  exitedAt: number;
+}
+
 export interface RunTerminalDeps {
   terminals: TerminalManager;
   broadcast(payload: unknown): void;
@@ -65,6 +74,17 @@ export interface RunTerminalDeps {
   sessionTerminalsRecord(sessionId: string, val: { termId: string }): Promise<void>;
   sessionTerminalsForget(sessionId: string): Promise<void>;
   upsertSessionMetadata(patch: Record<string, unknown>): void;
+  /** The durable session list changed outside the chat path (a run pinned to a
+   *  session id started, or a run ended and its session became resumable). The
+   *  server pushes the authoritative list to every client and re-advertises to
+   *  the control plane, so the sidebar converges everywhere without a poll. */
+  sessionListChanged(): void;
+  /** Keep a run's terminal scrollback as its durable record when the agent left
+   *  no resumable session behind (no pinned id, nothing discoverable). Returns
+   *  the stored log's path, or undefined when nothing could be kept. */
+  saveRunLog(termId: string, log: RunLog): string | undefined;
+  /** The stored log for an ended run, keyed by the run's terminal id. */
+  loadRunLog(termId: string): RunLog | undefined;
   listAllSessions(): Promise<Array<{ id: string; path?: string; name?: string }>>;
   listProvidersUnified(): Promise<unknown>;
   pushModelAuthToControlPlane(): Promise<unknown>;
@@ -91,6 +111,8 @@ export interface RunTerminals {
   addRunViewer(termId: string, socket: WebSocket): void;
   dropRunViewer(socket: WebSocket): void;
   hasRunTerminal(id: string): boolean;
+  /** True while a live `bivy run` PTY is pinned to this session id. */
+  hasLiveRunForSession(sessionId: string): boolean;
 }
 
 type TerminalClientMessage = { kind?: string; termId?: unknown; data?: unknown; cols?: unknown; rows?: unknown; workspace?: unknown; sessionId?: unknown; agent?: unknown; label?: unknown; name?: unknown; model?: unknown; command?: unknown; args?: unknown; mux?: unknown; standalone?: unknown };
@@ -101,18 +123,27 @@ const TAKEOVER_RUNTIME_BY_AGENT: Record<string, string> = {
   pi: "pi",
   codex: "codex-approvals",
   grok: "grok",
+  // Pinned at launch (`gemini --session-id <uuid>`); the gemini runtime's resume
+  // template (`-r {id}`) reopens it as a governed chat.
+  gemini: "gemini",
+  // Discovered at exit from OpenCode's own store (discoverOpenCodeSessionForCwd);
+  // the opencode runtime's resume template (`run -s {id}`) continues it.
+  opencode: "opencode",
 };
 // The CLI command to continue an adopted session back in a terminal.
 const RESUME_CLI_BY_AGENT: Record<string, (id: string) => string> = {
   claude: (id) => `claude --resume ${id}`,
   codex: (id) => `codex resume ${id}`,
   grok: (id) => `grok --resume ${id}`,
+  gemini: (id) => `gemini --resume ${id}`,
+  opencode: (id) => `opencode --session ${id}`,
 };
 // When no resumable session id can be found, why — and what to do about it.
 const TAKEOVER_EMPTY_HINT_BY_AGENT: Record<string, string> = {
   codex: "Codex writes its session only after the first message. Send one message in the terminal, then continue as chat.",
   pi: "Pi assigns its session once the conversation starts. Send one message in the terminal, then continue as chat.",
   grok: "Grok writes its session once the conversation starts. Send one message in the terminal, then continue as chat.",
+  opencode: "OpenCode records its session as the TUI starts; if it isn't found yet, give it a moment and try again.",
 };
 
 /** Synthesize a default session name for a plain `bivy run` from agent + workspace. */
@@ -138,6 +169,7 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
       return match?.path || match?.id;
     },
     grok: (cwd, since) => discoverGrokSessionForCwd(cwd, since)?.id,
+    opencode: (cwd, since) => discoverOpenCodeSessionForCwd(cwd, since)?.id,
   };
 
   const runTerminals = new Set<string>();
@@ -148,6 +180,14 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
 
   function hasRunTerminal(id: string): boolean {
     return runTerminals.has(id);
+  }
+
+  function hasLiveRunForSession(sessionId: string): boolean {
+    if (!sessionId) return false;
+    for (const id of runTerminals) {
+      if (terminals.meta(id)?.sessionId === sessionId) return true;
+    }
+    return false;
   }
 
   async function runTerminalList(): Promise<unknown[]> {
@@ -288,26 +328,43 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
           }
           if (notifiable) armRunIdleNotify(id, name);
         },
-        onExit: (code) => {
+        onExit: (code, _signal, scrollback) => {
           runTerminals.delete(id);
           runViewers.delete(id);
           lastActivityPing.delete(id);
           clearRunIdleNotify(id);
           deps.broadcast({ type: "terminal.exit", termId: id, code });
           deps.broadcast({ type: "terminal.closed", termId: id });
-          if (!spec.mux && spec.agent) {
-            const agentId = spec.agent;
+          if (!spec.mux) {
+            // The durable record of this run, in order of fidelity: the agent's
+            // own session (pinned at launch), the session discovered in the
+            // agent's store, else — for any agent at all — the terminal
+            // scrollback kept as a read-only run log. No run simply vanishes.
+            const agentId = spec.agent ?? commandLine.split(/\s+/)[0] ?? "run";
             void (async () => {
               let sessionRef = spec.sessionId;
-              if (!sessionRef) {
-                try { sessionRef = await SESSION_DISCOVERY_BY_AGENT[agentId]?.(workspace, createdAt); }
+              if (!sessionRef && spec.agent) {
+                try { sessionRef = await SESSION_DISCOVERY_BY_AGENT[spec.agent]?.(workspace, createdAt); }
                 catch { /* agent may never have written a session */ }
               }
               if (sessionRef) {
                 const runtimeId = TAKEOVER_RUNTIME_BY_AGENT[agentId] ?? agentId;
                 try { deps.upsertSessionMetadata({ id: sessionRef, runtimeId, agentName: agentId, workspace, name: name || undefined, source: "cli", status: "saved" }); }
                 catch { /* best-effort */ }
+              } else if (scrollback?.trim()) {
+                try {
+                  const runLog = deps.saveRunLog(id, { data: scrollback, code, exitedAt: Date.now() });
+                  // `source: "cli:log"` is how every client (including ones that only
+                  // see the control-plane advert) knows this row opens as a terminal
+                  // log rather than a chat — see isRunLogSession in the web app.
+                  if (runLog) deps.upsertSessionMetadata({ id, runtimeId: agentId, agentName: agentId, workspace, name: name || undefined, source: "cli:log", status: "saved", runLog, createdAt: new Date(createdAt).toISOString() });
+                } catch { /* best-effort */ }
               }
+              // The "Running" row just left every sidebar (terminal.closed above);
+              // push the list so its saved, resumable session takes the row's place
+              // right away — and, for a pinned run, so the row flips from
+              // "working" to "saved" instead of lingering as live.
+              try { deps.sessionListChanged(); } catch { /* best-effort */ }
             })();
           }
           if (!spec.mux) {
@@ -330,10 +387,12 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
       }
       emit({ type: "terminal.opened", termId: id, workspace, mode: "run", agent: spec.agent, label, name });
       deps.broadcast({ type: "terminal.created", terminal: { termId: id, workspace, createdAt, lastActivityAt: createdAt, kind: "run", agent: spec.agent, model: spec.model, label, name, command: commandLine, mux: spec.mux, sessionId: spec.sessionId, pid: terminals.pid(id) } });
-      if (spec.sessionId && !spec.mux) {
-        void deps.listAllSessions()
-          .then((sessions) => deps.broadcast({ type: "sessions.list", sessions: sessions.map((s) => ({ ...s, sessionId: s.id })) }))
-          .catch(() => {});
+      // A pinned run is now a durable session too: push the authoritative list
+      // (status "working" while this PTY lives) and re-advertise, so clients on
+      // other nodes — which never see this node's terminal.created — still get
+      // the row without waiting for the 60 s resync or a node re-select.
+      if (spec.sessionId && spec.agent && !spec.mux) {
+        try { deps.sessionListChanged(); } catch { /* best-effort */ }
       }
       return id;
     } catch (error) {
@@ -514,6 +573,16 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
             else owned.add(msg.termId);
             if (typeof msg.cols !== "undefined" || typeof msg.rows !== "undefined") terminals.setClientSize(msg.termId, clientId, Number(msg.cols) || 80, Number(msg.rows) || 24);
             emit({ type: "terminal.attached", termId: msg.termId, data: snapshot });
+            return true;
+          }
+          // An ended run that kept its scrollback as a run log replays read-only:
+          // the stored output, then the exit the client already knows how to
+          // render (status "Exited", input released) — no fresh shell is opened.
+          let runLog: RunLog | undefined;
+          try { runLog = deps.loadRunLog(msg.termId); } catch { /* unreadable log → gone */ }
+          if (runLog) {
+            emit({ type: "terminal.attached", termId: msg.termId, data: runLog.data, replay: true });
+            emit({ type: "terminal.exit", termId: msg.termId, code: runLog.code, replay: true });
           } else {
             emit({ type: "terminal.gone", termId: msg.termId });
           }
@@ -537,5 +606,5 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
     }
   }
 
-  return { runTerminalList, openRunTerminal, takeoverRunTerminal, handleTerminalMessage, addRunViewer, dropRunViewer, hasRunTerminal };
+  return { runTerminalList, openRunTerminal, takeoverRunTerminal, handleTerminalMessage, addRunViewer, dropRunViewer, hasRunTerminal, hasLiveRunForSession };
 }

@@ -46,6 +46,7 @@ import { createForkStandUp } from "./session/fork-standup.js";
 import { createForkRetire } from "./session/fork-retire.js";
 import { createTranscriptPersistence } from "./session/transcript-persistence.js";
 import { createRunTerminals } from "./session/run-terminal.js";
+import { createRunLogStore } from "./session/run-log-store.js";
 import { isNativeOAuthProvider, loginModelOAuth, type AuthEvent, type AuthPrompt } from "./runtime/oauth/model-oauth.js";
 import { decideOAuthLoginSweep } from "./runtime/oauth/oauth-login-sweep.js";
 import { listCodexSessions, loadCodexTranscript, discoverCodexSessionForCwd } from "./runtime/codex-sessions.js";
@@ -380,6 +381,8 @@ if (migrateVaultDir(piDir, credsDir)) {
   console.log(`Migrated credential vault: ${piDir} -> ${credsDir}`);
 }
 const metadata = MetadataStore.load(appDir);
+// Scrollback kept for `bivy run`s whose agent left no resumable session (see run-log-store).
+const runLogs = createRunLogStore(appDir);
 // A fresh process has no live runtimes, so any persisted "working" status is
 // stale from a prior crash/kill. Clear it at boot; otherwise those sessions'
 // worktrees are permanently exempted from cleanup (an unbounded disk leak).
@@ -2401,46 +2404,7 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     if (record) replayPendingInteractions(record.id);
   },
   async "sessions.list"() {
-    const sessions = await listAllSessions();
-    const list = sessions.map((s) => {
-      const rec = openSessions.get(s.id) || (s.path ? openSessions.get(path.resolve(s.path)) : undefined);
-      const meta = metadata.getSession(s.id) ?? metadata.getSession(s.path);
-      // sessionHasPendingApproval also covers a pending clarifying question
-      // (see its own comment) — without it, a session blocked on one would
-      // show as merely "working" here, including on this exact refresh path
-      // (SessionList.tsx's periodic safety-net poll) clobbering the correct
-      // needs_action the live session.question broadcast had just set.
-      const pendingApproval = rec ? sessionHasPendingApproval(rec) : approvals.list().some((a) => a.sessionId === s.id && a.status === "pending");
-      const needsAction = pendingApproval || Boolean(rec?.turnAttention);
-      return {
-        path: s.path,
-        id: s.id,
-        name: s.name,
-        modified: s.modified,
-        messageCount: s.messageCount,
-        firstMessage: s.firstMessage,
-        agent: meta?.runtimeId ?? s.agent,
-        agentName: meta?.agentName ?? s.agentName,
-        source: rec?.source ?? meta?.source,
-        forkedFrom: rec?.forkedFrom ?? meta?.forkedFrom,
-        branch: rec?.worktree?.branch ?? meta?.branch,
-        sandbox: rec?.sandbox ?? normalizeSandboxTier(meta?.sandbox),
-        approvalMode: rec?.approvalMode,
-        ephemeral: rec?.ephemeral,
-        executionProfile: rec ? (rec.ephemeral ? "isolated_customer_cloud" : "trusted_workstation") : undefined,
-        contract: rec?.contract ?? meta?.contract,
-        auditHealth: rec ? auditLog.health() : undefined,
-        eventLogHealth: rec ? eventLogHealthForSession(rec.id) : undefined,
-        prUrl: rec?.prUrl ?? meta?.prUrl,
-        prs: rec?.prs ?? meta?.prs,
-        status: needsAction ? "needs_action" : (rec ? sessionState(rec).displayStatus : "saved"),
-        sessionState: rec ? sessionState(rec) : undefined,
-        open: Boolean(rec),
-        needsAction,
-        bivySession: bivySessionEnvelopeFromSummary(s, rec, meta),
-      };
-    });
-    relay?.sendEvent({ type: "sessions.list", sessions: list });
+    relay?.sendEvent({ type: "sessions.list", sessions: await sessionListRows() });
   },
   "session.close"(msg) {
     const sid = String(msg.sessionId ?? "").trim();
@@ -4101,7 +4065,7 @@ async function advertiseSessions() {
       // Failures (including exhausted credits/rate limits) are outcomes to
       // review, not blocking questions that keep saying "Needs your response".
       // Only a still-pending approval/question owns that status.
-      status: pendingApproval ? "needs_action" : (record ? sessionState(record).displayStatus : "saved"),
+      status: pendingApproval ? "needs_action" : (record ? sessionState(record).displayStatus : detachedSessionStatus(s.id)),
       needsAction: pendingApproval,
       source: record?.source || meta?.source,
       titleEnc: name ? relay!.sealString(name) : undefined,
@@ -6111,6 +6075,73 @@ async function listAllSessions(): Promise<Array<SessionSummary & { agent: string
   return deduped.filter((s) => !isEmptyUntitledSummary(s));
 }
 
+/**
+ * Display status for a session this process holds no live chat record for. A
+ * `bivy run <agent>` pinned to this session id keeps a daemon-owned PTY alive
+ * (see createRunTerminals) — that conversation is very much in progress, just not
+ * through Bivy's chat path — so report it as "working" rather than "saved" on
+ * every list surface (relay sessions.list, /api/sessions, the control-plane
+ * advert). Clients use this, together with `source: "cli"`, to route a tap to
+ * the run-terminal handoff instead of resuming a second writer over the live TUI.
+ */
+function detachedSessionStatus(sessionId: string): "working" | "saved" {
+  return runTerms.hasLiveRunForSession(sessionId) ? "working" : "saved";
+}
+
+/** The enriched sidebar rows for the relay `sessions.list` reply and the
+ *  `broadcastSessionsList` push (same shape, one builder). */
+async function sessionListRows() {
+  const sessions = await listAllSessions();
+  return sessions.map((s) => {
+    const rec = openSessions.get(s.id) || (s.path ? openSessions.get(path.resolve(s.path)) : undefined);
+    const meta = metadata.getSession(s.id) ?? metadata.getSession(s.path);
+    // sessionHasPendingApproval also covers a pending clarifying question
+    // (see its own comment) — without it, a session blocked on one would
+    // show as merely "working" here, including on this exact refresh path
+    // (SessionList.tsx's periodic safety-net poll) clobbering the correct
+    // needs_action the live session.question broadcast had just set.
+    const pendingApproval = rec ? sessionHasPendingApproval(rec) : approvals.list().some((a) => a.sessionId === s.id && a.status === "pending");
+    const needsAction = pendingApproval || Boolean(rec?.turnAttention);
+    return {
+      path: s.path,
+      id: s.id,
+      name: s.name,
+      modified: s.modified,
+      messageCount: s.messageCount,
+      firstMessage: s.firstMessage,
+      agent: meta?.runtimeId ?? s.agent,
+      agentName: meta?.agentName ?? s.agentName,
+      source: rec?.source ?? meta?.source,
+      forkedFrom: rec?.forkedFrom ?? meta?.forkedFrom,
+      branch: rec?.worktree?.branch ?? meta?.branch,
+      sandbox: rec?.sandbox ?? normalizeSandboxTier(meta?.sandbox),
+      approvalMode: rec?.approvalMode,
+      ephemeral: rec?.ephemeral,
+      executionProfile: rec ? (rec.ephemeral ? "isolated_customer_cloud" : "trusted_workstation") : undefined,
+      contract: rec?.contract ?? meta?.contract,
+      auditHealth: rec ? auditLog.health() : undefined,
+      eventLogHealth: rec ? eventLogHealthForSession(rec.id) : undefined,
+      prUrl: rec?.prUrl ?? meta?.prUrl,
+      prs: rec?.prs ?? meta?.prs,
+      status: needsAction ? "needs_action" : (rec ? sessionState(rec).displayStatus : detachedSessionStatus(s.id)),
+      sessionState: rec ? sessionState(rec) : undefined,
+      open: Boolean(rec),
+      needsAction,
+      bivySession: bivySessionEnvelopeFromSummary(s, rec, meta),
+    };
+  });
+}
+
+/** Push the authoritative session list to every client (local + relay). Used
+ *  when the durable list changed outside the chat path — a `bivy run` session
+ *  was pinned or just ended — so the sidebar converges without waiting for its
+ *  periodic poll or a node re-select. */
+function broadcastSessionsList(): void {
+  void sessionListRows()
+    .then((sessions) => broadcast({ type: "sessions.list", sessions }))
+    .catch(() => {});
+}
+
 // --- Native session discovery/adoption (issue #156) -------------------------
 // "Let a node advertise discoverable provider-native sessions and let the app
 // import/adopt one into Bivy" — capability-driven, not a per-provider UI
@@ -6414,7 +6445,14 @@ function persistSessionMetadata(record: SessionRecord, status = sessionStatus(re
 
 function bivySessionEnvelopeFromSummary(s: SessionSummary & { agent: string; agentName: string }, rec?: SessionRecord, meta?: MetadataSession): BivySessionRecord {
   if (rec) return bivySessionEnvelope(rec);
-  const rt = getRuntime(meta?.runtimeId ?? s.agent);
+  // A row whose runtime this node can't resolve — a `bivy run -- <command>`
+  // run log keyed by its command, or an agent/plugin since removed — must not
+  // take the whole session list down with a throw; describe it with the
+  // default runtime's envelope instead.
+  const rt = (() => {
+    try { return getRuntime(meta?.runtimeId ?? s.agent); }
+    catch { return getRuntime(defaultRuntimeId); }
+  })();
   const fallback = Date.now();
   const modified = isoFrom(meta?.updatedAt ?? s.modified, fallback);
   const workspace = meta?.workspace ?? s.cwd ?? defaultWorkspace;
@@ -6795,6 +6833,10 @@ async function deleteSessionFile(opts: { id?: string; path?: string; fallbackAct
       });
     }
   }
+  // A run that only left a terminal log has no runtime store to forget; drop
+  // the log with the row.
+  const runLogOnly = Boolean(deletedSessionId && metadata.getSession(deletedSessionId)?.runLog);
+  if (runLogOnly) runLogs.remove(deletedSessionId);
   metadata.removeSession(deletedSessionId, inRoot ? resolved : undefined);
   // Forget the session from its runtime's own transcript store too. Runtimes
   // like Claude Code keep transcripts outside `piDir/sessions` (so the inRoot
@@ -6803,7 +6845,7 @@ async function deleteSessionFile(opts: { id?: string; path?: string; fallbackAct
   // the "deleted" session reappears in the sidebar. Best-effort: a runtime that
   // can't (or doesn't own this id) just returns false. Prefer the owning
   // runtime; fall back to every resume-capable runtime when it's unknown.
-  if (deletedSessionId) {
+  if (deletedSessionId && !runLogOnly) {
     const hint = requestedPath || record?.sessionFile || undefined;
     const targets = owningRuntimeId
       ? [owningRuntimeId]
@@ -8218,6 +8260,9 @@ async function resolveOrResumeSession(sessionId?: unknown, sessionPath?: unknown
   if (open) return open;
   const pathRef = typeof sessionPath === "string" && sessionPath.trim() ? sessionPath.trim() : undefined;
   const meta = metadata.getSession(id) ?? (pathRef ? metadata.getSession(pathRef) : undefined);
+  // A run that only kept its terminal log has nothing to resume — it opens as a
+  // read-only terminal (terminal.attach replays the log), never as a chat.
+  if (meta?.runLog) return undefined;
   // The resume ref: an explicit path, else metadata's stored path, else the id
   // itself (id-based runtimes like Claude Code resume by session id). Bail when
   // there is nothing durable to resume from — a genuinely unknown session.
@@ -8509,6 +8554,9 @@ const runTerms = createRunTerminals({
   sessionTerminalsRecord: (sessionId, val) => sessionTerminals.record(sessionId, val),
   sessionTerminalsForget: (sessionId) => sessionTerminals.forget(sessionId),
   upsertSessionMetadata: (patch) => metadata.upsertSession(patch as Parameters<typeof metadata.upsertSession>[0]),
+  sessionListChanged: () => { broadcastSessionsList(); scheduleAdvertise(); },
+  saveRunLog: (termId, log) => runLogs.save(termId, log),
+  loadRunLog: (termId) => runLogs.load(termId),
   listAllSessions,
   listProvidersUnified,
   pushModelAuthToControlPlane: () => pushModelAuthToControlPlane(),
@@ -9984,7 +10032,7 @@ app.get("/api/sessions", async (_req, res, next) => {
         branch: rec?.worktree?.branch ?? meta?.branch,
         prUrl: rec?.prUrl ?? meta?.prUrl,
         prs: rec?.prs ?? meta?.prs,
-        status: pendingApproval ? "needs_action" : (rec ? sessionState(rec).displayStatus : "saved"),
+        status: pendingApproval ? "needs_action" : (rec ? sessionState(rec).displayStatus : detachedSessionStatus(s.id)),
         sessionState: rec ? sessionState(rec) : undefined,
         open: Boolean(rec),
         needsAction: pendingApproval,

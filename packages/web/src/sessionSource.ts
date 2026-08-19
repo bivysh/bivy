@@ -42,9 +42,26 @@ export interface SourceInfo {
   automation: boolean;
 }
 
-/** A live `bivy run <agent>` terminal — surfaced from the run-terminal list, not
- *  from a `source` tag, so it's a named constant rather than a parse result. */
+/** A `bivy run <agent>` session — the live terminal row (surfaced from the
+ *  run-terminal list) and the durable session the node records for it under
+ *  `source: "cli"` share this one mark. */
 export const CLI_SOURCE: SourceInfo = { kind: "cli", label: "Terminal · bivy run", automation: false };
+
+/** A `bivy run` session whose PTY the node reports as still alive. The node
+ *  advertises it as `source: "cli"` + `status: "working"` (no chat record holds
+ *  it — see server.ts detachedSessionStatus), so a tap must hand off to the run
+ *  terminal (open terminal / continue in chat) rather than resume a second
+ *  writer over the live TUI. */
+export function isLiveRunSession(s: { source?: string; status?: string }): boolean {
+  return (s.source ?? "").trim() === "cli" && s.status === "working";
+}
+
+/** A finished `bivy run` whose agent left no resumable session, so the node kept
+ *  its terminal scrollback instead (`source: "cli:log"`). Opens as a read-only
+ *  terminal log — `terminal.attach` replays it — never as a chat. */
+export function isRunLogSession(s: { source?: string }): boolean {
+  return (s.source ?? "").trim() === "cli:log";
+}
 
 /** Map a session's `source` tag to the trigger that started it. Unknown or
  *  housekeeping tags fall through to a plain `app` session — never throws, so
@@ -75,6 +92,7 @@ export function classifySource(source: string | undefined): SourceInfo {
   if (s === "queue:manual" || s === "manual") {
     return { kind: "manual", label: "Manual run", automation: true };
   }
+  if (s === "cli" || s === "cli:log") return CLI_SOURCE;
   return { kind: "app", label: "App session", automation: false };
 }
 

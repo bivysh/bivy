@@ -58,6 +58,7 @@ import {
   type HostedProvisioningPatch,
   type HostedAuditEvent,
   type HostedMachineSummary,
+  type RunTerminalSummary,
   removeAccountNode,
   fetchPairedDevices,
   removePairedDevice,
@@ -1585,6 +1586,38 @@ export class AppController {
       wasWorking = working;
       lastActive = active;
       if (settledNow) this.followupCoordinator.drain(active);
+    });
+  }
+
+  /**
+   * Resolve the live `bivy run` PTY pinned to a session, if the owning node still
+   * has one. A session the node advertises as `source: "cli"` + `status:
+   * "working"` is a running terminal, so a tap on it must land on the run
+   * handoff (open terminal / continue in chat), not on a chat resume that would
+   * open a second writer over the live TUI. Run terminals only reach this client
+   * from the connected node's terminal.list, so a row learned via the account
+   * list may need a node switch first; the open burst's terminal.list answer
+   * then arrives a beat after "online", hence the short wait. Resolves null when
+   * the PTY is gone (the run ended — its saved session resumes as a normal chat).
+   */
+  async findLiveRunTerminal(sessionId: string, nodeId?: string, timeoutMs = 4000): Promise<RunTerminalSummary | null> {
+    const find = () => this.store.getState().sessionIndex.runTerminals.find((t) => t.sessionId === sessionId && (!nodeId || !t.nodeId || t.nodeId === nodeId)) ?? null;
+    const known = find();
+    if (known) return known;
+    const connected = this.direct || !nodeId || (nodeId === this.local.cur && this.store.getState().connection.status === "online");
+    if (connected) {
+      // Already on the owning node: its terminal list is current (open burst +
+      // terminal.created pushes), so a miss means the PTY is gone.
+      return null;
+    }
+    await this.connectToNode(nodeId);
+    this.send({ kind: "terminal.list" });
+    return new Promise<RunTerminalSummary | null>((resolve) => {
+      const timer = setTimeout(() => { unsub(); resolve(find()); }, timeoutMs);
+      const unsub = this.store.subscribe(() => {
+        const hit = find();
+        if (hit) { clearTimeout(timer); unsub(); resolve(hit); }
+      });
     });
   }
 

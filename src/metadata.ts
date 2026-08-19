@@ -73,6 +73,11 @@ export type MetadataSession = {
    *  still shows what it actually got rather than the node re-deriving a
    *  possibly-different one from the runtime's current catalog entry. */
   contract?: SessionContract;
+  /** A `bivy run` that left no resumable agent session (no pinned id, nothing
+   *  discoverable on disk) still keeps its terminal scrollback as a run log —
+   *  the path of that log under the node's data dir. Such a row opens as a
+   *  read-only terminal log, never as a chat (see resolveOrResumeSession). */
+  runLog?: string;
   createdAt: string;
   updatedAt: string;
   lastActivityAt?: string;

@@ -353,7 +353,15 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
     // they now also appear here in the main sidebar so they're reachable the
     // same way as any other session — not buried one screen deep.
     const q = query.trim().toLowerCase();
+    // A `bivy run` pinned to a session id is one conversation with two node-side
+    // representations: the live PTY (runTerminals, rendered above under
+    // "Running" — the row that can attach or continue in chat) and its durable
+    // session (status "working" while the PTY lives, "saved" after). Show the
+    // Running row while we know of the PTY, never both; the session row takes
+    // over the moment terminal.closed removes the PTY from the store.
+    const liveRunSessionIds = new Set(runTerminals.map((t) => t.sessionId).filter(Boolean));
     const matched = sessions.filter((s) => {
+      if (liveRunSessionIds.has(s.sessionId)) return false;
       const repo = sessionRepo(s);
       if (nodeFilter && s.nodeId !== nodeFilter) return false;
       if (repoFilter && repo !== repoFilter) return false;
@@ -368,7 +376,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
     return [...matched].sort(
       (a, b) => attentionRank(b) - attentionRank(a) || toMs(b.updatedAt) - toMs(a.updatedAt),
     );
-  }, [sessions, query, repoFilter, nodeFilter]);
+  }, [sessions, runTerminals, query, repoFilter, nodeFilter]);
 
   // Search spans every session; pagination only bounds the unfiltered list, so a
   // query always reveals all of its matches, never just the first page.

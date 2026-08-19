@@ -1140,6 +1140,9 @@ const AGENT_SESSION_ID_FLAG = {
   // Official Grok CLI: `grok --session-id <uuid>` pins a new session UUID under
   // ~/.grok/sessions/<cwd>/<uuid>/ so takeover / resume has a known target.
   grok: "--session-id",
+  // Gemini CLI (≥0.55): `gemini --session-id <uuid>` "Start a new session with a
+  // manually provided UUID"; `gemini --resume <uuid>` reopens it.
+  gemini: "--session-id",
 };
 
 // Args that mean the caller already chose a session (pin or resume), so we must
@@ -1155,6 +1158,9 @@ const AGENT_RESUME_ARGS = {
   claude: (id) => ["--resume", id],
   codex: (id) => ["resume", id],
   grok: (id) => ["--resume", id],
+  gemini: (id) => ["--resume", id],
+  // `opencode -s, --session  session id to continue` (TUI), per `opencode --help`.
+  opencode: (id) => ["--session", id],
 };
 function agentResumeArgs(agentId, sessionRef) {
   const fn = AGENT_RESUME_ARGS[(agentId || "").toLowerCase()];
@@ -1895,13 +1901,20 @@ async function cmdRun(args = []) {
         method: "POST",
         body: JSON.stringify({ agent: governedChatAgentId(agentId), ...(model ? { model: { provider: "", id: model } } : {}), ...(sessionWorkspace ? { workspace: sessionWorkspace } : {}) }),
       });
-      if (name) {
-        await localApi(config, "/api/sessions/rename", {
-          method: "POST",
-          body: JSON.stringify({ sessionId: created.id, name }),
-        });
-      }
-      const sessionPath = `/sessions/${encodeURIComponent(created.id)}`;
+      // A brand-new chat has no first message yet, and the node keeps empty,
+      // untitled sessions out of every list (sidebar, control-plane advert) so
+      // scratch shells don't pile up. This one is deliberate: give it the same
+      // creation-time placeholder the app's own new sessions carry, so it is
+      // listed and advertised right away — and still auto-named from the first
+      // message (the namer only replaces placeholders). An explicit --name wins.
+      await localApi(config, "/api/sessions/rename", {
+        method: "POST",
+        body: JSON.stringify({ sessionId: created.id, name: name || `Session ${String(created.id).slice(0, 8)}` }),
+      });
+      // The app may be connected to another node (or none yet): carry this
+      // node's id so the deep link switches to it before opening the session.
+      const nodeId = await localApi(config, "/api/node/info").then((info) => String(info?.nodeId || "")).catch(() => "");
+      const sessionPath = `/sessions/${encodeURIComponent(created.id)}${nodeId ? `?node=${encodeURIComponent(nodeId)}` : ""}`;
       const remote = await openRemoteApp({ open: !noOpen, remotePath: sessionPath });
       console.log(c.green(`Started chat session ${created.id} (${created.agentName || created.runtimeId || agentId}).`));
       if (remote && (noOpen || !canOpenBrowser())) console.log(`Open it in the Bivy app: ${c.cyan(remote.openUrl)}`);
@@ -2115,6 +2128,7 @@ async function cmdSessions(args = [], opts = {}) {
       model: "",
       workspace: s.workspace || "",
       status: s.status || "saved",
+      source: s.source || "",
       when: relativeTime(s.lastActivityAt || s.updatedAt),
       costUsd: s.costUsd,
     }));
@@ -2369,9 +2383,9 @@ async function cmdAttach(args = []) {
 // runtimes (generic-cli, SDK-only) have no terminal resume and open in the web app.
 function nativeResumeAgent(runtimeId) {
   const id = (runtimeId || "").toLowerCase();
-  if (id.includes("claude")) return "claude";
-  if (id.includes("codex")) return "codex";
-  return null;
+  // Same table that drives the relaunch: every agent with a known native resume
+  // form (claude-code-sdk → claude, codex-approvals → codex, grok, gemini, opencode…).
+  return Object.keys(AGENT_RESUME_ARGS).find((agent) => id === agent || id.startsWith(`${agent}-`)) ?? null;
 }
 
 // Resume a chosen session in a Bivy-managed, relay-visible PTY: bind the live PTY
@@ -2384,6 +2398,10 @@ async function resumeSessionItem(item, config, token) {
       cwd: repoRoot,
       env: startEnv(config),
     });
+    return;
+  }
+  if (item.source === "cli:log") {
+    console.log(c.yellow(`"${item.name}" left no resumable agent session — only its terminal output was kept. Open it as a log in the web app with 'bivy open'.`));
     return;
   }
   const agentId = nativeResumeAgent(item.agent);
@@ -3826,7 +3844,9 @@ async function openRemoteApp({ setupSession = null, open = true, remotePath = ""
         ? { defaultAgent: String(loadConfig().env.BIVY_RUNTIME).trim().toLowerCase() }
         : {}),
     };
-    accountUrl = `${remoteBase}${remotePath}/#${Buffer.from(JSON.stringify(payload)).toString("base64url")}`;
+    // A remotePath may carry a query (`/sessions/<id>?node=<nodeId>`); the
+    // fragment must follow it, not split it.
+    accountUrl = `${remoteBase}${remotePath}${remotePath.includes("?") ? "" : "/"}#${Buffer.from(JSON.stringify(payload)).toString("base64url")}`;
   }
 
   const openUrl = accountUrl || `${remoteBase}${remotePath}`;

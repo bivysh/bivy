@@ -86,7 +86,10 @@ export interface TerminalOpenOptions {
   args?: string[];
   meta?: TerminalMeta;
   onData: (data: string) => void;
-  onExit: (code: number, signal?: number) => void;
+  /** `scrollback` is the retained output tail at exit (the same text snapshot()
+   *  returned while live). The entry is already gone from the registry when this
+   *  fires, so this is the caller's only chance to keep a log of the run. */
+  onExit: (code: number, signal?: number, scrollback?: string) => void;
   /**
    * Fired when the PTY emits an ASCII BEL (`\x07`) — a program rang the terminal
    * bell (a finished build, `echo -e '\a'`, a shell that wants attention). The
@@ -402,7 +405,7 @@ export class TerminalManager {
       flush();
       entry.closed = true;
       this.terminals.delete(id);
-      options.onExit(exitCode, signal);
+      options.onExit(exitCode, signal, entry.buffer);
     });
 
     return id;
