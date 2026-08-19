@@ -106,11 +106,11 @@ export function listInstalledPlugins(dataDir = defaultDataDir(), bivyVersion = c
  * Flatten valid installed agent contributions. Duplicate agent ids are rejected
  * across plugins rather than resolved by directory order.
  */
-export function installedAgentContributions(dataDir = defaultDataDir()): InstalledAgentResult {
+export function installedAgentContributions(dataDir = defaultDataDir(), bivyVersion = currentBivyVersion()): InstalledAgentResult {
   const agents: InstalledAgentContribution[] = [];
   const errors: string[] = [];
   const owners = new Map<string, string>();
-  for (const plugin of listInstalledPlugins(dataDir)) {
+  for (const plugin of listInstalledPlugins(dataDir, bivyVersion)) {
     if (!plugin.manifest || plugin.errors.length) {
       for (const error of plugin.errors) errors.push(`${plugin.id}: ${error}`);
       continue;
