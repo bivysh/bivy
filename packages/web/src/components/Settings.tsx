@@ -1434,7 +1434,7 @@ function EphemeralPanel() {
         </div>
       )}
 
-      {!controller.direct && setups.length > 0 && <HostedRunnerManagement profiles={setups} />}
+      {!controller.direct && setups.length > 0 && <HostedRunnerActivity />}
     </div>
   );
 }
@@ -1479,15 +1479,12 @@ function EphemeralProviderChooser({ keys, onBack, onPick }: { keys: ProviderKeyI
   );
 }
 
-// Offline automation is an option of cloud profiles, not a second machine
-// concept. Keep setup inline: one switch, then only the credential still needed.
-function HostedRunnerManagement({ profiles }: { profiles: EphemeralNodeConfig[] }) {
-  const profileProviders = [...new Set(profiles.map((profile) => profile.provider))];
-  const [status, setStatus] = useState<HostedProvisioningStatus | null>(null);
+// Account-wide view of what offline automations have done: the machines they
+// started and the audit trail. Opting a profile in — and the credential it uses —
+// lives in that profile's editor (EphemeralProviderConfig), not here.
+function HostedRunnerActivity() {
   const [machines, setMachines] = useState<HostedMachineSummary[]>([]);
   const [audit, setAudit] = useState<HostedAuditEvent[]>([]);
-  const [provider, setProvider] = useState(profileProviders[0] || "fly");
-  const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -1495,12 +1492,10 @@ function HostedRunnerManagement({ profiles }: { profiles: EphemeralNodeConfig[] 
   const [, setClock] = useState(0);
 
   const refresh = async () => {
-    const [nextStatus, nextMachines, nextAudit] = await Promise.all([
-      controller.getHostedProvisioning(),
+    const [nextMachines, nextAudit] = await Promise.all([
       controller.listHostedMachines(),
       controller.listHostedAudit(),
     ]);
-    setStatus(nextStatus);
     setMachines(nextMachines);
     setAudit(nextAudit);
   };
@@ -1518,13 +1513,6 @@ function HostedRunnerManagement({ profiles }: { profiles: EphemeralNodeConfig[] 
     finally { setBusy(false); }
   };
 
-  const connect = () => act(async () => {
-    const value = token.trim();
-    await controller.validateHostedProviderCredential(provider, value);
-    await controller.setHostedProvisioning({ providerTokens: { [provider]: value } });
-    setToken("");
-  }, `${EPHEMERAL_PROVIDERS.find((p) => p.id === provider)?.name || provider} credential validated and stored.`);
-
   return (
     <div className="settings-form">
       {confirmDestroy && <ConfirmDialog
@@ -1539,48 +1527,6 @@ function HostedRunnerManagement({ profiles }: { profiles: EphemeralNodeConfig[] 
           if (nodeId) void act(() => controller.destroyHostedMachine(nodeId), "Machine destroyed and removed from inventory.");
         }}
       />}
-      <section className="offline-runs-card" aria-labelledby="offline-runs-title">
-        <div className="settings-toggle-row">
-          <div className="settings-toggle-text">
-            <div className="settings-toggle-title" id="offline-runs-title">Run automations while I'm offline</div>
-            <p className="muted small">Bivy can start the cloud profile selected in Automations even when none of your devices are online.</p>
-          </div>
-          <Toggle
-            checked={Boolean(status?.enabled)}
-            disabled={!status?.encryptionReady}
-            onChange={(enabled) => void act(() => controller.setHostedProvisioning({ enabled }), enabled ? "Offline automation enabled." : "Offline automation disabled.")}
-            label="Run automations while I am offline"
-          />
-        </div>
-
-        {status && !status.encryptionReady && (
-          <div className="banner inline" data-tone="danger" role="alert">
-            Not available yet: this Bivy server has no encryption key for stored credentials. There's no setting for it in the app — whoever runs the control plane sets <code>HOSTED_CREDENTIAL_KEY</code> in its environment and restarts it.{" "}
-            <a href="https://github.com/bivysh/bivy/blob/main/docs/self-host.md#offline-automations-encrypted-credential-storage" target="_blank" rel="noopener">How to enable it</a>
-          </div>
-        )}
-
-        {status?.enabled && (
-          <div className="offline-runs-setup">
-            <p className="muted small">Because your device may be offline, Bivy needs an encrypted copy of the cloud credential for each provider an automation uses. Every use is recorded.</p>
-            <label className="field-label">Cloud provider</label>
-            <select className="picker-search" value={provider} onChange={(e) => setProvider(e.target.value)}>
-              {profileProviders.map((id) => <option key={id} value={id}>{EPHEMERAL_PROVIDERS.find((p) => p.id === id)?.name || id}</option>)}
-            </select>
-            {status.validatedProviders.includes(provider) ? (
-              <div className="offline-provider-ready"><Badge tone="ok">Ready</Badge><span>{EPHEMERAL_PROVIDERS.find((p) => p.id === provider)?.name || provider} can be used while you're offline.</span></div>
-            ) : (
-              <>
-                <input className="picker-search" type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="Paste this provider's credential" aria-label="Cloud provider credential" />
-                <div className="row-actions">
-                  <button className="btn primary" disabled={busy || !token.trim() || !status.encryptionReady} onClick={connect}>{busy ? "Checking…" : "Save credential"}</button>
-                </div>
-              </>
-            )}
-          </div>
-        )}
-      </section>
-
       <details className="vault-advanced">
         <summary>Active cloud machines ({machines.length})</summary>
         {machines.length === 0 ? <p className="muted small">No automation machines are running.</p> : <div className="picker-list">
@@ -1627,7 +1573,11 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
   const [confirm, setConfirm] = useState<null | { title: string; message: string; label?: string; action: () => void }>(null);
   const [token, setToken] = useState("");
   const [hasToken, setHasToken] = useState(false);
-  const [hasHostedToken, setHasHostedToken] = useState(false);
+  // Server-side (offline automation) credential status. Fetched for every
+  // provider on a hosted account; a hosted-only provider needs it even in
+  // direct mode because its credential only ever lives on the server.
+  const [hosted, setHosted] = useState<HostedProvisioningStatus | null>(null);
+  const hasHostedToken = Boolean(hosted?.providers.includes(providerId));
   const [region, setRegion] = useState(adapter.defaultRegion);
   const [sizes, setSizes] = useState<ProviderSize[]>(adapter.sizes);
   const [size, setSize] = useState(adapter.defaultSize);
@@ -1656,8 +1606,8 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
   // blank form when adding).
   useEffect(() => {
     controller.getEphemeralToken(providerId).then((t) => setHasToken(Boolean(t))).catch(() => {});
-    if (catalog.hostedOnly) {
-      controller.getHostedProvisioning().then((status) => setHasHostedToken(status.providers.includes(providerId))).catch(() => {});
+    if (catalog.hostedOnly || !controller.direct) {
+      controller.getHostedProvisioning().then(setHosted).catch(() => {});
     }
     controller.listEphemeralConfigs().then((rows) => {
       editSetup(initialSetupId ? rows.find((s) => s.id === initialSetupId) ?? null : null);
@@ -1688,8 +1638,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
       const value = token.trim();
       if (catalog.hostedOnly) {
         await controller.validateHostedProviderCredential(providerId, value, region);
-        await controller.setHostedProvisioning({ providerTokens: { [providerId]: value } });
-        setHasHostedToken(true);
+        setHosted(await controller.setHostedProvisioning({ providerTokens: { [providerId]: value } }));
         setMsg("Credential checked and stored securely.");
       } else {
         await controller.setEphemeralToken(providerId, value);
@@ -1721,6 +1670,48 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
       onSetupsChanged();
       setSavedMsg("Saved");
       setTimeout(() => setSavedMsg(null), 1500);
+    } catch (e) {
+      setErr(String((e as Error).message || e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Offline automations are opted into per profile, using the credential this
+  // profile already has — never a second paste. On the server that means the
+  // account switch plus an encrypted copy of this provider's credential, so the
+  // switch reads as "on" for every profile of the same provider.
+  const offlineOn = Boolean(hosted?.enabled && hosted.validatedProviders.includes(providerId));
+  const otherOfflineProviders = (hosted?.validatedProviders ?? []).filter((p) => p !== providerId);
+  const setOffline = async (on: boolean) => {
+    if (busy || !hosted) return;
+    setBusy(true);
+    setErr(null);
+    setMsg(null);
+    try {
+      if (on) {
+        if (catalog.hostedOnly) {
+          const next = await controller.setHostedProvisioning({ enabled: true });
+          setHosted(next);
+          if (!next.validatedProviders.includes(providerId)) throw new Error(`The ${catalog.name} credential hasn't been checked yet — reconnect ${catalog.name} to validate it.`);
+        } else {
+          const value = (await controller.getEphemeralToken(providerId)).trim();
+          if (!value) throw new Error(`No ${catalog.name} token is saved on this device — connect ${catalog.name} first.`);
+          await controller.validateHostedProviderCredential(providerId, value, region);
+          setHosted(await controller.setHostedProvisioning({ enabled: true, providerTokens: { [providerId]: value } }));
+        }
+        setMsg(`Automations can start ${catalog.name} profiles while you're offline.`);
+      } else if (catalog.hostedOnly) {
+        // The server must keep a hosted-only credential (it alone can delete
+        // those machines), so the only thing to turn off is the account switch.
+        setHosted(await controller.setHostedProvisioning({ enabled: false }));
+        setMsg("Offline automations turned off.");
+      } else {
+        // Withdraw the server's copy of this provider's credential; drop the
+        // account switch too once no provider is left for it to use.
+        setHosted(await controller.setHostedProvisioning({ providerTokens: { [providerId]: "" }, ...(otherOfflineProviders.length ? {} : { enabled: false }) }));
+        setMsg(`Bivy's server no longer holds your ${catalog.name} credential.`);
+      }
     } catch (e) {
       setErr(String((e as Error).message || e));
     } finally {
@@ -1825,6 +1816,38 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
         <button className="btn primary" disabled={busy || !setupName.trim()} onClick={savePrefs}>{busy ? "Saving…" : setupId ? "Save profile" : "Create profile"}</button>
       </div>
       {savedMsg && <div className="banner inline">{savedMsg}</div>}
+
+      {hosted && (
+        <section className="offline-runs-card" aria-labelledby="offline-runs-title">
+          <div className="settings-toggle-row">
+            <div className="settings-toggle-text">
+              <div className="settings-toggle-title" id="offline-runs-title">Run automations while I'm offline</div>
+              <p className="muted small">
+                Automations can start this profile even when none of your devices are online. Uses the {catalog.name} credential
+                you saved for this profile — {catalog.hostedOnly
+                  ? "already held encrypted on Bivy's server"
+                  : "an encrypted copy is kept on Bivy's server"} — and every use is recorded.
+                {catalog.hostedOnly
+                  ? ` Because ${catalog.name} is server-managed, this switch applies to offline automations for your whole account.`
+                  : ` Applies to every profile that uses ${catalog.name}.`}
+              </p>
+            </div>
+            <Toggle
+              checked={offlineOn}
+              disabled={busy || !hosted.encryptionReady}
+              onChange={(on) => void setOffline(on)}
+              label="Run automations while I am offline"
+            />
+          </div>
+          {!hosted.encryptionReady && (
+            <div className="banner inline" data-tone="danger" role="alert">
+              Not available yet: this Bivy server has no encryption key for stored credentials. There's no setting for it in the app — whoever runs the control plane sets <code>HOSTED_CREDENTIAL_KEY</code> in its environment and restarts it.{" "}
+              <a href="https://github.com/bivysh/bivy/blob/main/docs/self-host.md#offline-automations-encrypted-credential-storage" target="_blank" rel="noopener">How to enable it</a>
+            </div>
+          )}
+        </section>
+      )}
+
       {msg && <div className="banner inline">{msg}</div>}
       {err && <div className="banner inline" data-tone="danger" role="alert">{err}</div>}
 
@@ -1875,10 +1898,17 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
             className="btn danger-ghost"
             onClick={() => setConfirm({
               title: "Forget provider token?",
-              message: `Forget the ${catalog.name} token on this device?`,
-              action: () => controller.removeEphemeralToken(providerId).then(() => {
+              message: hasHostedToken
+                ? `Forget the ${catalog.name} token on this device? Bivy's server also drops its offline-automation copy.`
+                : `Forget the ${catalog.name} token on this device?`,
+              action: () => controller.removeEphemeralToken(providerId).then(async () => {
                 setHasToken(false);
                 onKeysChanged();
+                if (hasHostedToken) {
+                  await controller.setHostedProvisioning({ providerTokens: { [providerId]: "" }, ...(otherOfflineProviders.length ? {} : { enabled: false }) })
+                    .then(setHosted)
+                    .catch((error) => setErr(String((error as Error)?.message || error)));
+                }
               }),
             })}
           >

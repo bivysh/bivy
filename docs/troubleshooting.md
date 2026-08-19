@@ -291,11 +291,11 @@ bivy link     # mint a fresh pairing QR
   during `bivy relay:setup`.
 - See [remote-access.md](remote-access.md) for the full flow.
 
-## "Your Bivy server must enable encrypted credential storage"
+## "This Bivy server has no encryption key for stored credentials"
 
-**Symptom.** In **Settings → Cloud machine profiles**, the *Run automations while
-I'm offline* toggle is disabled and this banner shows. There is no switch for it
-anywhere in the app.
+**Symptom.** In **Settings → Cloud machine profiles → a profile**, the *Run
+automations while I'm offline* toggle is disabled and this banner shows. There is
+no switch for it anywhere in the app.
 
 **Cause.** It's a control-plane setting: the server has no
 `HOSTED_CREDENTIAL_KEY`, so it refuses (fail-closed) to store the cloud
