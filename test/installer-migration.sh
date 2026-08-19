@@ -44,6 +44,12 @@ exit 0
 STUB
 chmod +x "$WORK/stub/npm"
 
+# Expose the node we're already running under on the stub PATH, so the
+# installer never takes its real Node bootstrap path (sudo apt-get + curl to
+# nodesource) — slow, network-bound, and it has hung CI when a mirror stalled.
+# Migration handling is what's under test here, not Node acquisition.
+ln -s "$(command -v node)" "$WORK/stub/node"
+
 run_installer() {
   # HOME is redirected so the installer's ~/.local symlink handling is contained.
   env -i \
