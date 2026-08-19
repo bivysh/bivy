@@ -1,6 +1,6 @@
 {
   "name": "@bivy/automation-core",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "description": "Shared automation preflight and simulation evaluator: first-match rule evaluation, overlap/shadow detection, and the preflight checklist. Canonical source lives in src/automation; this package republishes it for npm-installed consumers (services/control-plane, packages/web).",
   "type": "module",
   "license": "AGPL-3.0-only",
