@@ -94,6 +94,12 @@ async function main() {
   const token = login.json.token;
   expect(Boolean(token), "dev-login returns a token");
 
+  const usage = await req(port, "GET", "/account/usage", undefined, token);
+  expect(usage.status === 200 && usage.json?.plan === "free", "usage endpoint returns the account plan");
+  expect(usage.json?.totals?.machineSeconds === 0 && Array.isArray(usage.json?.sessions), "usage endpoint returns current-month totals and a session breakdown");
+  expect(usage.json?.caps?.monthlyActiveAgentSeconds === 0 && usage.json?.remaining?.activeAgentSeconds === 0, "usage endpoint returns caps and remaining headroom");
+  expect(!/(providerTokens|token|ipAddress|roomKey|nodeId)/i.test(JSON.stringify(usage.json)), "usage endpoint contains no secret or machine-address fields");
+
   // Fresh account: no configs, shared-queue routing.
   const empty = await req(port, "GET", "/account/ephemeral-configs", undefined, token);
   expect(empty.status === 200 && Array.isArray(empty.json) && empty.json.length === 0, "fresh account has no configs");
