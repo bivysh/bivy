@@ -1044,11 +1044,15 @@ class ClaudeSession implements RuntimeSession {
    * node lost the race for — the same cross-consumer race codex-auth.ts notes).
    * Emits a "Refreshing credentials…" notice only when it actually restarts.
    */
-  private async restartWithFreshCredential(): Promise<boolean> {
+  private async restartWithFreshCredential(rejectedToken?: string): Promise<boolean> {
     if (this.reloading) return false;
     this.reloading = true;
     try {
-      const credEnv = await this.resolveCredentialEnv().catch(() => ({} as Record<string, string>));
+      // On a provider 401, identify the bearer that failed so the resolver can
+      // refresh it immediately even if its expiry claims it is still valid.
+      // The resolver compares this under the vault lock, making concurrent
+      // failures converge on one rotation.
+      const credEnv = await this.resolveCredentialEnv(rejectedToken).catch(() => ({} as Record<string, string>));
       const nextToken = authTokenFromEnv(credEnv);
       if (!nextToken || nextToken === this.spawnedToken) return false;
       this.emit({ type: "session.notice", level: "info", message: "Refreshing credentials…" });
@@ -1088,13 +1092,13 @@ class ClaudeSession implements RuntimeSession {
    * empty object when no vault is wired or no credential is configured, so the
    * SDK falls back to its own auth (ambient env / `claude` CLI login).
    */
-  private async resolveCredentialEnv(): Promise<Record<string, string>> {
+  private async resolveCredentialEnv(rejectedToken?: string): Promise<Record<string, string>> {
     const store = this.runtimeOptions.credentials;
     if (!store) return {};
     const provider = this.runtimeOptions.credentialProvider?.trim() || "anthropic";
     let cred;
     try {
-      cred = await store.getCredential(provider, { workspace: this.cwd });
+      cred = await store.getCredential(provider, { workspace: this.cwd, ...(rejectedToken ? { rejectedToken } : {}) });
     } catch {
       return {};
     }
@@ -1107,26 +1111,11 @@ class ClaudeSession implements RuntimeSession {
 
   private async consume(q: AsyncIterable<any>): Promise<void> {
     try {
-      for await (const message of q) this.handle(message);
+      for await (const message of q) await this.handle(message);
     } catch (error) {
       this.streaming = false;
       const raw = error instanceof Error ? error.message : String(error);
-      // Mid-flight credential reload: a long-lived query bakes its OAuth token in
-      // at spawn, so a turn that outlives the token fails here with a 401 even
-      // though the vault holds a freshly-refreshed one. Re-spawn once with the
-      // fresh credential and re-drive the interrupted prompt so the turn continues
-      // instead of dying. Bounded to one attempt per turn (reloadedThisTurn), only
-      // when a prompt is actually in flight, and only when the vault produced a
-      // *different* token (else restartWithFreshCredential returns false and we
-      // fall through to surfacing the error — no retry loop on a dead credential).
-      if (isAnthropicAuthError(raw) && !this.reloadedThisTurn && this.inFlightPrompt !== undefined) {
-        this.reloadedThisTurn = true;
-        if (await this.restartWithFreshCredential()) {
-          this.streaming = true;
-          this.input.push({ type: "user", message: { role: "user", content: this.inFlightPrompt }, parent_tool_use_id: null });
-          return; // the re-spawned query's consume() now drives the turn to completion.
-        }
-      }
+      if (await this.recoverFromAuthError(raw)) return;
       // Emit session.error (the toast path) — agent_end's `error` field is not
       // surfaced by the client, so without this a thrown SDK error (e.g. a 401)
       // stopped the turn silently. Auth failures get sign-in guidance appended.
@@ -1134,6 +1123,19 @@ class ClaudeSession implements RuntimeSession {
       this.emit({ type: "turn_end" });
       this.emit({ type: "agent_end", error: raw });
     }
+  }
+
+  /** Recover a provider 401 regardless of whether the SDK throws it, emits it as
+   * assistant text, or puts it in an error result. The latter is how revoked
+   * OAuth tokens commonly arrive, so only handling consume()'s catch would leave
+   * the turn stopped until the user sent another message. */
+  private async recoverFromAuthError(raw: string): Promise<boolean> {
+    if (!isAnthropicAuthError(raw) || this.reloadedThisTurn || this.inFlightPrompt === undefined) return false;
+    this.reloadedThisTurn = true;
+    if (!(await this.restartWithFreshCredential(this.spawnedToken))) return false;
+    this.streaming = true;
+    this.input.push({ type: "user", message: { role: "user", content: this.inFlightPrompt }, parent_tool_use_id: null });
+    return true;
   }
 
   private beginMessage(): void {
@@ -1169,7 +1171,7 @@ class ClaudeSession implements RuntimeSession {
     }
   }
 
-  private handle(message: any): void {
+  private async handle(message: any): Promise<void> {
     switch (message?.type) {
       case "stream_event": {
         const event = message.event;
@@ -1199,6 +1201,11 @@ class ClaudeSession implements RuntimeSession {
         // Compaction summaries and other meta assistant turns are for the model,
         // not the human — never persist or surface them as chat.
         if (hasMetaFlag(message)) break;
+        // Claude Code sometimes reports auth failures as an ordinary assistant
+        // text message rather than throwing. Intercept it before it is persisted
+        // or shown, refresh, and transparently continue the same prompt.
+        const assistantText = extractText(message.message);
+        if (assistantText && await this.recoverFromAuthError(assistantText)) break;
         const model = message.message?.model;
         if (model) this.currentModel = toModelInfo({ id: model });
         const content = Array.isArray(message.message?.content) ? message.message.content : [];
@@ -1301,6 +1308,8 @@ class ClaudeSession implements RuntimeSession {
       }
 
       case "result": {
+        const resultError = message.subtype && message.subtype !== "success" ? String(message.result ?? message.subtype) : "";
+        if (resultError && await this.recoverFromAuthError(resultError)) break;
         this.streaming = false;
         this.startedMessage = false;
         this.currentText = "";

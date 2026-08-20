@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { ClaudeCodeRuntime } from "../src/runtime/claude-code.js";
-import type { CredentialStore, ProviderCredential } from "../src/runtime/types.js";
+import type { AgentCredentialStore, CredentialContext, ProviderCredential } from "../src/runtime/types.js";
 
 // Mid-flight credential reload (src/runtime/claude-code.ts): a Claude Code query
 // bakes its OAuth token into the subprocess env at spawn, so a long-lived turn
@@ -57,12 +57,13 @@ class FakeQuery {
 
 /** A vault whose Anthropic OAuth token can be rotated between resolutions, the way
  *  Pi's AuthStorage returns a freshly-refreshed token on each getApiKey(). */
-class RotatingStore implements CredentialStore {
-  constructor(private token: string) {}
+class RotatingStore implements AgentCredentialStore {
+  constructor(private token: string, private readonly refreshTo?: string) {}
   setToken(token: string): void {
     this.token = token;
   }
-  async getCredential(): Promise<ProviderCredential | undefined> {
+  async getCredential(_provider?: string, context?: CredentialContext): Promise<ProviderCredential | undefined> {
+    if (this.refreshTo && context?.rejectedToken === this.token) this.token = this.refreshTo;
     return { provider: "anthropic", kind: "oauth", token: this.token };
   }
 }
@@ -142,6 +143,34 @@ function tokenOf(q: FakeQuery): string | undefined {
 
   session.dispose();
   console.log("reactive reload OK");
+}
+
+// ── A revoked, unexpired token is force-refreshed without another message ──
+{
+  const { sdk, queries } = makeSdk();
+  const store = new RotatingStore("tok-revoked", "tok-refreshed");
+  const runtime = new ClaudeCodeRuntime({ credentials: store, sdkLoader: async () => sdk });
+  const { session } = await runtime.createSession({ workspace: process.cwd() });
+
+  const events: any[] = [];
+  session.subscribe((e) => events.push(e));
+
+  await session.prompt("finish this turn");
+  await waitFor(() => queries.length === 1);
+  // Revoked OAuth failures commonly arrive as assistant text, not a thrown SDK
+  // error. Recovery must intercept this shape before it reaches the transcript.
+  queries[0].emit({
+    type: "assistant",
+    message: { content: [{ type: "text", text: "Failed to authenticate. API Error: 401 OAuth access token has been revoked." }] },
+  });
+
+  await waitFor(() => queries.length === 2, 2000);
+  assert.equal(tokenOf(queries[1]), "tok-refreshed", "the rejected token is refreshed immediately despite its stored expiry");
+  assert.equal((await nextWithin(queries[1].prompt!))?.message?.content, "finish this turn", "the same turn continues automatically");
+  assert.ok(!events.some((e) => e.type === "session.error"), "the recoverable 401 is not shown as a terminal error");
+
+  session.dispose();
+  console.log("revoked-token forced refresh OK");
 }
 
 // ── No fresher token: the 401 surfaces instead of looping ──

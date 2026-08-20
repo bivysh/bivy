@@ -36,9 +36,11 @@ export interface SecretResolver {
 
 /**
  * Refreshes the OAuth token set for the selected provider account (`label`) and
- * returns the new access token, or `undefined` if refresh is unavailable. The
- * node adapter binds the creds dir (`refreshModelOAuth(credsDir, provider, label)`).
+ * returns the new access token, or `undefined` if refresh is unavailable.
+ * `rejectedAccess` forces a refresh only while that exact token is still stored,
+ * preventing concurrent 401 handlers from serially rotating the token twice.
+ * The node adapter binds the creds dir.
  */
 export interface OAuthRefresher {
-  refresh(providerId: string, label: string): Promise<string | undefined>;
+  refresh(providerId: string, label: string, rejectedAccess?: string): Promise<string | undefined>;
 }
