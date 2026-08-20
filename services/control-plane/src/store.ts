@@ -296,8 +296,20 @@ export interface HostedGithubApp {
   privateKeyPem: string;
 }
 
+/** How the account authenticates to GitHub for hosted git operations.
+ *  "central-app": the operator's ONE centrally-owned GitHub App (the user just
+ *  installs it and picks repos); "own-app": the account's own BYO app stored in
+ *  `githubApp`; "token": the stored fine-grained PAT. Unset = the pre-central
+ *  behavior (own app, then PAT), with the central app as a final fallback.
+ *  Resolution to a concrete credential source is ONE table in
+ *  central-github-app.ts — adding a mode means adding a row there. */
+export const GITHUB_IDENTITY_MODES = ["central-app", "own-app", "token"] as const;
+export type GithubIdentityMode = (typeof GITHUB_IDENTITY_MODES)[number];
+
 export interface HostedProvisioning {
   enabled: boolean;
+  /** Which GitHub identity the mint/launch paths should use (see above). */
+  githubIdentity?: GithubIdentityMode;
   /** GitHub App creds — when set, a fresh installation token is minted per
    *  launch/op instead of using a stored PAT. Strongly preferred. */
   githubApp?: HostedGithubApp;
@@ -321,6 +333,9 @@ export function normalizeHostedProvisioning(value: unknown): HostedProvisioning 
   if (!value || typeof value !== "object") return { ...DEFAULT_HOSTED_PROVISIONING };
   const v = value as Record<string, unknown>;
   const out: HostedProvisioning = { enabled: Boolean(v.enabled) };
+  if (typeof v.githubIdentity === "string" && (GITHUB_IDENTITY_MODES as readonly string[]).includes(v.githubIdentity)) {
+    out.githubIdentity = v.githubIdentity as GithubIdentityMode;
+  }
   if (typeof v.githubToken === "string" && v.githubToken.trim()) out.githubToken = v.githubToken.trim();
   const app = v.githubApp as Record<string, unknown> | undefined;
   if (app && typeof app === "object"
@@ -350,6 +365,7 @@ export function normalizeHostedProvisioning(value: unknown): HostedProvisioning 
 export interface HostedProvisioningStatus {
   enabled: boolean;
   credential: "app" | "pat" | "none";
+  githubIdentity?: GithubIdentityMode;
   githubAppId?: string;
   providers: string[];
   validatedProviders: string[];
@@ -358,6 +374,7 @@ export function redactHostedProvisioning(h: HostedProvisioning): HostedProvision
   return {
     enabled: h.enabled,
     credential: h.githubApp ? "app" : h.githubToken ? "pat" : "none",
+    githubIdentity: h.githubIdentity,
     githubAppId: h.githubApp?.appId,
     providers: Object.keys(h.providerTokens ?? {}),
     validatedProviders: Object.entries(h.providerTokens ?? {})
@@ -437,7 +454,7 @@ export function ownershipTagFor(accountId: string): string {
 /** An audit event recording a use of hosted credentials (never contains a secret). */
 export interface HostedAuditEvent {
   at: string;
-  action: "credential_updated" | "credential_rotated" | "credential_validation_failed" | "github_app_connected" | "github_app_disconnected" | "provision_attempt" | "provision_launched" | "provision_failed" | "token_minted" | "machine_reaped" | "machine_milestone" | "reconcile_failed" | "room_key_escrowed" | "room_key_reused" | "work_routed" | "capacity_ready" | "capacity_claimed" | "orphan_reaped" | "orphan_detected" | "attempt_abandoned" | "force_destroy_requested" | "model_credential_escrowed" | "model_credential_used";
+  action: "credential_updated" | "credential_rotated" | "credential_validation_failed" | "github_app_connected" | "github_app_disconnected" | "provision_attempt" | "provision_launched" | "provision_failed" | "token_minted" | "machine_reaped" | "machine_milestone" | "reconcile_failed" | "room_key_escrowed" | "room_key_reused" | "work_routed" | "capacity_ready" | "capacity_claimed" | "orphan_reaped" | "orphan_detected" | "attempt_abandoned" | "force_destroy_requested" | "model_credential_escrowed" | "model_credential_used" | "central_install_bound" | "central_install_updated" | "central_install_unbound";
   provider?: string;
   configId?: string;
   nodeId?: string;
@@ -959,6 +976,32 @@ export type WorkItemInput = {
   preferredCapabilities?: string[];
 };
 
+// One central-app installation bound to an account. `installationId` is
+// GitHub-global (an installation exists exactly once, on one GitHub org/user),
+// so it is the natural primary key; the binding to a Bivy account is what the
+// state-signed setup callback establishes. Everything here is non-secret
+// metadata — the credential is minted on demand from the operator's central
+// app key (see central-github-app.ts).
+export interface CentralGithubInstallation {
+  installationId: string;
+  accountId: string;
+  /** GitHub login the app is installed on (org or user) — matches repo owners. */
+  githubAccount?: string;
+  githubAccountType?: string;
+  /** GitHub's "all" | "selected" — which repos the installation covers. */
+  repositorySelection?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CentralGithubInstallationInput {
+  installationId: string;
+  accountId: string;
+  githubAccount?: string;
+  githubAccountType?: string;
+  repositorySelection?: string;
+}
+
 // Per-account inbound hook: a stable id + secret a user configures in GitHub /
 // Slack so their webhooks route to THEIR account. The secret verifies the
 // payload signature; it is not a third-party credential (no repo/Slack access).
@@ -1457,6 +1500,27 @@ export interface InboundHookRepository {
   deleteGithubAppHooksForApp(accountId: string, appId: string): Promise<number>;
 }
 
+export interface CentralGithubAppRepository {
+  // The ONE centrally-owned GitHub App (managed tier): which installations
+  // belong to which account, plus the single-use `state` nonces that bind an
+  // install callback to the account that initiated it. The state is the ONLY
+  // way a binding is created — an installation id alone is not proof of
+  // ownership, so there is deliberately no "claim by id" write path.
+  /** Mint a single-use install state for the account; returns the raw state. */
+  createCentralInstallState(accountId: string, returnPath?: string): Promise<string>;
+  /** Consume a state (single use). Returns its binding, or undefined when the
+   *  state is unknown, already used, or expired. */
+  consumeCentralInstallState(state: string): Promise<{ accountId: string; returnPath?: string } | undefined>;
+  /** Upsert an installation binding (state-verified callback or app webhook). */
+  putCentralGithubInstallation(input: CentralGithubInstallationInput): Promise<CentralGithubInstallation>;
+  getCentralGithubInstallation(installationId: string): Promise<CentralGithubInstallation | undefined>;
+  listCentralGithubInstallations(accountId: string): Promise<CentralGithubInstallation[]>;
+  /** Remove a binding. With `accountId` (user-initiated unlink) the delete is
+   *  account-scoped; without it (app-webhook `installation.deleted`) it is by
+   *  installation id alone — the event is signed by the central app's secret. */
+  deleteCentralGithubInstallation(installationId: string, accountId?: string): Promise<boolean>;
+}
+
 export interface AutomationRepository {
   createAutomationDefinition(accountId: string, input: Omit<AutomationDefinition, "id" | "accountId" | "createdAt" | "updatedAt">): Promise<AutomationDefinition>;
   updateAutomationDefinition(accountId: string, id: string, input: Partial<Omit<AutomationDefinition, "id" | "accountId" | "createdAt" | "updatedAt" | "lastScheduledAt">>): Promise<AutomationDefinition | undefined>;
@@ -1557,5 +1621,6 @@ export interface ControlPlaneStore
     SessionStateRepository,
     GithubAppVaultRepository,
     InboundHookRepository,
+    CentralGithubAppRepository,
     AutomationRepository,
     WorkQueueRepository {}
