@@ -143,9 +143,9 @@ have a clear production upgrade path.
    ciphertext still decrypts; rotation (`POST /account/hosted-provisioning/rotate`)
    re-seals under the primary. Ciphertext is bound to its account (a cross-account
    decrypt fails); no plaintext credential is ever written to the database, and
-   **writes fail closed** (503) when no key is configured. *Interim:* keys come
-   from `HOSTED_CREDENTIAL_KEYS`/`HOSTED_CREDENTIAL_KEY`; swap `loadKeyring()` for
-   a KMS/HSM to upgrade without touching callers.
+   **writes fail closed** (503) when no key is configured. Keys come through a
+   pluggable source: environment keys by default, or encrypted data-key blobs
+   decrypted by AWS KMS at boot. Callers do not depend on the selected source.
 2. **Audit trail** — every credential update, provision attempt/launch/failure,
    token mint, and machine reap is recorded per account (`appendHostedAudit`),
    readable at `GET /account/hosted-audit`. Events never contain secrets.
@@ -208,8 +208,8 @@ invalidates all installations at once. This is deliberately more recoverable
 than mass-leaked PATs.
 
 ### Still recommended before GA
-- Back the keyring with a real **KMS/HSM** — rotation and per-key-id envelopes
-  are already in place, so only the key *source* (`loadKeyring()`) needs swapping.
+- Extend the keyring beyond the current env and **AWS KMS** sources (for example,
+  an HSM) without changing callers.
 - **Scope** the GitHub App installation and cloud tokens to the minimum repos /
   permissions needed (operational).
 - **Verify the installer's identity** in the central-app setup callback via
