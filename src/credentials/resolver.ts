@@ -15,7 +15,7 @@ import path from "node:path";
 import { createCredentialVault } from "./store.js";
 import { resolveCredential, type CredentialPresets } from "./records.js";
 import { loadPresets, defaultPresetsPath } from "./presets.js";
-import type { AgentCredentialStore, ProviderCredential } from "./types.js";
+import type { AgentCredentialStore, CredentialContext, ProviderCredential } from "./types.js";
 import type { SecretResolver, OAuthRefresher } from "./ports.js";
 
 /** Refresh an OAuth token this many ms before it expires (clock-skew guard). */
@@ -55,7 +55,7 @@ export class NodeCredentialResolver implements AgentCredentialStore {
     return loadPresets(this.presetsPath);
   }
 
-  async getCredential(provider: string, context?: { project?: string; workspace?: string; preferLabel?: string }): Promise<ProviderCredential | undefined> {
+  async getCredential(provider: string, context?: CredentialContext): Promise<ProviderCredential | undefined> {
     const id = provider.trim().toLowerCase();
     if (!id) return undefined;
 
@@ -102,10 +102,12 @@ export class NodeCredentialResolver implements AgentCredentialStore {
     // under the store lock).
     let token = typeof cred.access === "string" ? cred.access : "";
     const expires = Number(cred.expires) || 0;
-    if (!token || expires <= Date.now() + OAUTH_REFRESH_SKEW_MS) {
+    if (!token || expires <= Date.now() + OAUTH_REFRESH_SKEW_MS || context?.rejectedToken === token) {
       // Refresh the SELECTED record (its label), not just the provider default —
-      // so a second account on the same provider is left untouched.
-      const refreshed = await this.oauth.refresh(id, selection.record.label).catch(() => undefined);
+      // so a second account on the same provider is left untouched. A provider
+      // 401 forces refresh even before expiry; the rejected-token guard is
+      // re-checked under the OAuth store lock to avoid duplicate rotations.
+      const refreshed = await this.oauth.refresh(id, selection.record.label, context?.rejectedToken).catch(() => undefined);
       if (refreshed) token = refreshed;
     }
     if (!token) return undefined;

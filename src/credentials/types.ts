@@ -66,9 +66,19 @@ export interface ProviderCredential {
  * Named `AgentCredentialStore` to disambiguate from pi-ai's own `CredentialStore`
  * (the storage interface Bivy's store implements for injection into Pi).
  */
+export interface CredentialContext {
+  project?: string;
+  workspace?: string;
+  preferLabel?: string;
+  /** A bearer rejected by the provider. OAuth resolvers refresh it immediately,
+   * even when its stored expiry is still in the future; if another caller has
+   * already rotated it, the newer token is returned without a second refresh. */
+  rejectedToken?: string;
+}
+
 export interface AgentCredentialStore {
   /** Resolve a usable credential for a provider, optionally in a project context. */
-  getCredential(provider: string, context?: { project?: string; workspace?: string; preferLabel?: string }): Promise<ProviderCredential | undefined>;
+  getCredential(provider: string, context?: CredentialContext): Promise<ProviderCredential | undefined>;
   /** Provider ids the vault currently holds a credential for (for bulk env injection). */
   listConfigured?(): Promise<string[]>;
 }

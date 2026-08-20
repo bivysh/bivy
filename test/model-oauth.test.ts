@@ -174,6 +174,25 @@ await check("refresh rotates the token, persists it, and returns the fresh acces
   assert.equal((cred as { refresh?: string }).refresh, "new-rt", "rotated refresh token is persisted");
 });
 
+await check("a rejected unexpired access token refreshes immediately", async () => {
+  const dir = tmpDir();
+  const store = createCredentialVault(dir);
+  await store.modify("anthropic", async () => ({ type: "oauth", access: "revoked", refresh: "rt", expires: Date.now() + 3_600_000 }));
+  let exchanges = 0;
+  stubFetch(() => {
+    exchanges += 1;
+    return { json: { access_token: "fresh", refresh_token: "fresh-rt", expires_in: 3600 } };
+  });
+
+  const [a, b] = await Promise.all([
+    refreshModelOAuth(dir, "anthropic", "default", "revoked"),
+    refreshModelOAuth(dir, "anthropic", "default", "revoked"),
+  ]);
+  assert.equal(exchanges, 1, "concurrent 401 handlers rotate the rejected token only once");
+  assert.equal(a, "fresh");
+  assert.equal(b, "fresh");
+});
+
 await check("xAI refresh keeps the previous refresh token when the response omits one", async () => {
   const dir = tmpDir();
   const store = createCredentialVault(dir);

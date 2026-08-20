@@ -27,7 +27,7 @@ export { NodeCredentialResolver, buildAgentCredentialEnv, apiKeyEnvVar };
 export type { CredentialVerification };
 
 function oauthAdapter(credsDir: string): OAuthRefresher {
-  return { refresh: (provider, label) => refreshModelOAuth(credsDir, provider, label) };
+  return { refresh: (provider, label, rejectedAccess) => refreshModelOAuth(credsDir, provider, label, rejectedAccess) };
 }
 
 /** Build the shared credential resolver, binding the node reference/OAuth adapters. */

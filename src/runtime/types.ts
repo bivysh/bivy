@@ -834,4 +834,4 @@ export interface CatalogProvider {
 // now live in the pure credentials domain so the resolver (credentials/resolver.ts)
 // no longer points up here for them. Re-exported so runtime consumers
 // (process.ts, protocol.ts, agents/claude-code/runtime.ts) are unchanged.
-export type { ProviderCredential, AgentCredentialStore } from "../credentials/types.js";
+export type { ProviderCredential, CredentialContext, AgentCredentialStore } from "../credentials/types.js";

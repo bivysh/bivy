@@ -385,6 +385,7 @@ export async function refreshModelOAuthState(
   credsDir: string,
   providerId: string,
   label: string = DEFAULT_LABEL,
+  rejectedAccess?: string,
 ): Promise<OAuthRefreshResult> {
   const provider = getModelOAuthProvider(providerId);
   if (!provider) return { state: "reconnect_required", error: "Provider does not support OAuth refresh" };
@@ -394,8 +395,13 @@ export async function refreshModelOAuthState(
     const result = await createCredentialVault(credsDir).modifyRecord(providerId, label, async (current) => {
       if (!current || current.type !== "oauth") return current;
       found = true;
-      if (Number(current.expires) > Date.now()) return current;
-      wasExpired = true;
+      const expired = Number(current.expires) <= Date.now();
+      // Normal reads refresh on expiry. A 401 may revoke an otherwise unexpired
+      // access token, so refresh that exact rejected token too. If another
+      // process already replaced it while we waited for the lock, keep the
+      // replacement instead of rotating its refresh token again.
+      if (!expired && (!rejectedAccess || current.access !== rejectedAccess)) return current;
+      wasExpired = expired;
       const fresh = await refreshTokens(provider, current);
       return { type: "oauth", access: fresh.access, refresh: fresh.refresh, expires: fresh.expires, refreshedAt: fresh.refreshedAt, ...(fresh.accountId ? { accountId: fresh.accountId } : {}) };
     });
@@ -411,8 +417,9 @@ export async function refreshModelOAuth(
   credsDir: string,
   providerId: string,
   label: string = DEFAULT_LABEL,
+  rejectedAccess?: string,
 ): Promise<string | undefined> {
-  const result = await refreshModelOAuthState(credsDir, providerId, label);
+  const result = await refreshModelOAuthState(credsDir, providerId, label, rejectedAccess);
   if (result.state === "transient_failure") throw new Error(result.error ?? "OAuth refresh temporarily failed");
   if (result.state === "reconnect_required" && result.error !== "No OAuth credential is stored") throw new Error(result.error ?? "OAuth reconnect required");
   return result.access;
