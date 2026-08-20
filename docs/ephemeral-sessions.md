@@ -117,6 +117,35 @@ size's hourly rate, plus TTL and a jump to its audit evidence. These are estimat
 not invoices; the user's provider bill remains authoritative for discounts,
 storage, egress, taxes, and live price changes.
 
+## Managed compute metering and caps
+
+Managed-compute launches are metered by the control plane from server-stamped,
+durable machine milestones. `machineSeconds` runs from provider launch
+(`createdAt`) until the machine reports settled or provider reconciliation confirms
+it gone. `activeAgentSeconds` runs from the first agent event until that same
+settlement boundary. A machine that never emits an agent event therefore has zero
+active-agent time but still has machine time; a teardown failure is still metered
+at settlement. Records retain the milestone boundaries so finer per-turn accrual
+can replace the v1 estimate later. Usage crossing a UTC calendar-month boundary is
+apportioned to each month.
+
+Caps apply only to the `managed-compute` catalog lane. User-token/BYO-cloud
+launches are never admitted or denied by this meter. The launch gate fails closed
+when account or usage data cannot be read and records a `compute_cap_denied` audit
+event. `GET /account/usage` returns current-month totals, recent settled sessions,
+the plan limits and remaining headroom; its allowlisted response omits provider
+credentials, room keys, machine addresses and provider inventory.
+
+| Plan | Monthly active-agent time | Concurrent managed sessions | Maximum TTL |
+|---|---:|---:|---:|
+| Free | 0 hours | 0 | 0 |
+| Individual | 20 hours | 2 | 120 minutes |
+| Pro | 100 hours | 4 | 240 minutes |
+| Team | 500 hours | 10 | 480 minutes |
+
+The per-plan table in `services/control-plane/src/compute-metering.ts` is the
+source of truth for these admission values.
+
 ## Adding a new provider
 
 The whole point of `ProviderAdapter` is that adding a provider is additive — no shared dispatch/call site (the UI, the controller, `launchEphemeralMachine`/`destroyEphemeralMachine`/`listEphemeralSizes`) needs to change. It only needs to know a provider's `id` string. Checklist, using the AWS adapter as the reference example:

@@ -15,6 +15,7 @@ import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecr
 import { listAppInstallations, listInstallationRepositories, listInstallationBranches, getAppInstallation } from "./hosted-github-auth.js";
 import { correlateHostedSessions } from "./hosted-correlation.js";
 import { countActiveAccountSessions } from "./session-count.js";
+import { isManagedComputeSource, summarizeAccountUsage, utcMonthWindow } from "./compute-metering.js";
 import { createStore } from "./store-factory.js";
 import { AutomationScheduler, nextOccurrence, normalizeSchedule } from "./schedule.js";
 import { parseShardUrls, shardForNode } from "./relay-shards.js";
@@ -3315,6 +3316,20 @@ app.put("/account/queue-routing", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   res.json(await store.setQueueRouting(client.accountId, (req.body ?? {}) as QueueRouting));
+}));
+
+// Current UTC-month managed-compute usage. The response is constructed from an
+// explicit metadata allowlist: never provider tokens, room keys, IPs or internal
+// provider inventory fields.
+app.get("/account/usage", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const month = utcMonthWindow();
+  const [records, machines] = await Promise.all([
+    store.listSessionUsage(account.id, month.startsAt, month.endsAt),
+    store.getHostedMachines(account.id),
+  ]);
+  const concurrent = machines.filter((machine) => isManagedComputeSource(machine.computeSource)).length;
+  res.json(summarizeAccountUsage(account.plan, records, concurrent));
 }));
 
 // Hosted (control-plane-orchestrated) provisioning. GET returns a redacted

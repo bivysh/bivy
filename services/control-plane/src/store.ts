@@ -23,6 +23,9 @@ import type { SecretEnvelope } from "./hosted-crypto.js";
 export interface Account {
   id: string;
   email: string;
+  /** Commercial entitlement projected by the billing system. Unknown stored
+   * values normalize to free at the compute gate. */
+  plan: "free" | "individual" | "pro" | "team";
   /** GitHub user + admin-org ids proven during the latest GitHub OAuth login.
    * Central App installation is accepted only for one of these targets. */
   githubUserId?: string;
@@ -464,8 +467,8 @@ export function ownershipTagFor(accountId: string): string {
 /** An audit event recording a use of hosted credentials (never contains a secret). */
 export interface HostedAuditEvent {
   at: string;
-  action: "credential_updated" | "credential_rotated" | "credential_validation_failed" | "github_app_connected" | "github_app_disconnected" | "provision_attempt" | "provision_launched" | "provision_failed" | "token_minted" | "machine_reaped" | "machine_milestone" | "reconcile_failed" | "room_key_escrowed" | "room_key_reused" | "work_routed" | "capacity_ready" | "capacity_claimed" | "orphan_reaped" | "orphan_detected" | "attempt_abandoned" | "force_destroy_requested" | "model_credential_escrowed" | "model_credential_used" | "central_install_bound" | "central_install_updated" | "central_install_unbound" | "central_install_reconciled";
-  provider?: string;
+  action: "credential_updated" | "credential_rotated" | "credential_validation_failed" | "github_app_connected" | "github_app_disconnected" | "provision_attempt" | "provision_launched" | "provision_failed" | "token_minted" | "machine_reaped" | "machine_milestone" | "reconcile_failed" | "room_key_escrowed" | "room_key_reused" | "work_routed" | "capacity_ready" | "capacity_claimed" | "orphan_reaped" | "orphan_detected" | "attempt_abandoned" | "force_destroy_requested" | "model_credential_escrowed" | "model_credential_used" | "central_install_bound" | "central_install_updated" | "central_install_unbound" | "central_install_reconciled" | "compute_cap_denied";
+  provider?:
   configId?: string;
   nodeId?: string;
   workItemId?: string;
@@ -1167,6 +1170,20 @@ export interface UsageMetrics {
   sessionsByStatus: Record<string, number>;
 }
 
+export interface SessionUsageRecord {
+  accountId: string;
+  /** Stable launch/attempt identity; the idempotency key for settlement. */
+  usageId: string;
+  sessionId?: string;
+  machineId?: string;
+  nodeId?: string;
+  launchedAt: string;
+  firstAgentEventAt?: string;
+  settledAt: string;
+  machineSeconds: number;
+  activeAgentSeconds: number;
+}
+
 export interface StoreLifecycle {
   init(): Promise<void>;
   // Lightweight liveness check for the backing store. Resolves when the store is
@@ -1367,6 +1384,14 @@ export interface HostedMachineRepository {
   appendHostedAudit(accountId: string, event: HostedAuditEvent): Promise<void>;
   listHostedAudit(accountId: string, limit?: number): Promise<HostedAuditEvent[]>;
 
+}
+
+export interface ComputeUsageRepository {
+  /** Idempotently persist a settled launch. The first settlement boundary wins,
+   * so repeated teardown callbacks cannot extend or double-charge the machine. */
+  upsertSessionUsage(record: SessionUsageRecord): Promise<SessionUsageRecord>;
+  /** Rows overlapping [startsAt, endsAt), oldest boundaries included. */
+  listSessionUsage(accountId: string, startsAt: string, endsAt: string, limit?: number): Promise<SessionUsageRecord[]>;
 }
 
 export interface VaultRepository {
@@ -1652,6 +1677,7 @@ export interface ControlPlaneStore
     NotificationRepository,
     EphemeralConfigurationRepository,
     HostedMachineRepository,
+    ComputeUsageRepository,
     VaultRepository,
     SessionStateRepository,
     GithubAppVaultRepository,

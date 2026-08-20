@@ -36,6 +36,7 @@ import {
   ConcurrentAttemptUpdateError,
   type EphemeralConfigurationRepository,
   type HostedMachineRepository,
+  type ComputeUsageRepository,
   type EphemeralNodeConfig,
   type QueueRouting,
   type HostedAuditEvent,
@@ -57,13 +58,19 @@ import { mintInstallationToken } from "./hosted-github-auth.js";
 import { encryptSecret, decryptSecret } from "./hosted-crypto.js";
 import { centralGithubAppConfig, resolveGithubIdentity, type ResolvedGithubIdentity } from "./central-github-app.js";
 import type { CentralGithubInstallation, HostedProvisioning } from "./store.js";
+import {
+  enforceManagedComputeLaunch,
+  usageFromManagedMachine,
+  type ComputeCapDenial,
+} from "./compute-metering.js";
 
 /** Persistence needed by unattended machine orchestration. Deliberately omits
  * account administration, notifications, device vaults, and automation
  * definition management even though the concrete adapter provides them. */
 export interface EphemeralProvisioningPort
-  extends EphemeralConfigurationRepository, HostedMachineRepository {
+  extends EphemeralConfigurationRepository, HostedMachineRepository, ComputeUsageRepository {
   createSession(accountId: string): Promise<string>;
+  getAccount(accountId: string): Promise<import("./store.js").Account | undefined>;
   listNodes(accountId: string): Promise<NodeRecord[]>;
   removeNode(accountId: string, nodeId: string): Promise<boolean>;
   listWorkItems(accountId: string, limit?: number): Promise<WorkItem[]>;
@@ -105,6 +112,7 @@ export interface ProvisionPlan {
   willProvision: boolean;
   targetConfigId: string | null;
   reason: string;
+  capDenial?: ComputeCapDenial;
 }
 
 export interface HostedExecutionReadiness { ready: boolean; reason: string; configId?: string }
@@ -343,6 +351,12 @@ export async function planAutoProvision(store: EphemeralProvisioningPort, accoun
   const configs = await store.getEphemeralConfigs(accountId);
   const target = resolveAutoProvisionTarget(routing, configs);
   if (!target) return { willProvision: false, targetConfigId: null, reason: "routing does not point at an ephemeral config" };
+  // The only managed-compute admission call in the launch decision path. It is
+  // an immediate allow for BYO providers and fail-closed for managed metering.
+  const computeGate = await enforceManagedComputeLaunch(store, accountId, target, nowMs);
+  if (!computeGate.allowed) {
+    return { willProvision: false, targetConfigId: target.id, reason: computeGate.message, capDenial: computeGate };
+  }
   if (!ephemeralAdapter(target.provider)) {
     return { willProvision: false, targetConfigId: target.id, reason: `provider ${target.provider} is no longer supported` };
   }
@@ -373,11 +387,6 @@ export async function planAutoProvision(store: EphemeralProvisioningPort, accoun
   if (recentLaunches.length >= MAX_PROVISIONS_PER_HOUR) {
     return { willProvision: false, targetConfigId: target.id, reason: `rate limit: ${MAX_PROVISIONS_PER_HOUR} provisions/hour reached` };
   }
-  // CAP GATE: managed-tier metering/caps integration point. When the
-  // standalone cap-gate lands, it is consulted HERE — the single provisioning
-  // decision choke point — and may veto with `{ willProvision: false, reason }`
-  // (e.g. account over its managed-compute budget). Owned by the metering
-  // workstream; do not add a second gate elsewhere.
   return { willProvision: true, targetConfigId: target.id, reason: "ready to provision" };
 }
 
@@ -420,13 +429,19 @@ function serverKeyStore(providerToken: string): EphemeralKeyStore {
 // Machine records persisted to the account's hosted_machines JSONB. On add we
 // prune to a recent window so the list can't grow unbounded (TTL destroys the
 // real VMs; this is only bookkeeping for dedupe/teardown).
-function serverMachineStore(store: EphemeralProvisioningPort, accountId: string, nowMs: number): MachineStore {
+function serverMachineStore(
+  store: EphemeralProvisioningPort,
+  accountId: string,
+  nowMs: number,
+  computeSource?: ComputeSource,
+): MachineStore {
   return {
     list: async () => (await store.getHostedMachines(accountId)) as unknown as EphemeralMachine[],
     add: async (m) => {
       const cur = await store.getHostedMachines(accountId);
       const recent = cur.filter((x) => withinMs(x.createdAt, 6 * 60 * 60 * 1000, nowMs));
-      await store.setHostedMachines(accountId, [...recent, m as unknown as Record<string, unknown>]);
+      const record = computeSource ? { ...m, computeSource } : m;
+      await store.setHostedMachines(accountId, [...recent, record as unknown as Record<string, unknown>]);
       return m;
     },
     update: async (id, patch) => {
@@ -572,7 +587,7 @@ export async function provisionEphemeralForAccount(
         purpose,
         name: `Hosted ${config.name}`,
       },
-      { store: localStore, exec: directExec(), keys: serverKeyStore(providerToken), machines: serverMachineStore(store, accountId, nowMs) },
+      { store: localStore, exec: directExec(), keys: serverKeyStore(providerToken), machines: serverMachineStore(store, accountId, nowMs, computeSource) },
     );
     // Custom/injected launchers may not emit callbacks. Production launchers do;
     // once accepted, preserve the provider identity before any later bookkeeping.
@@ -745,7 +760,7 @@ export async function provisionEphemeralRestore(
         reuseRoomKeyB64,
         restoreSessionId: opts.restoreSessionId,
       },
-      { store: localStore, exec: directExec(), keys: serverKeyStore(providerToken), machines: serverMachineStore(store, accountId, nowMs) },
+      { store: localStore, exec: directExec(), keys: serverKeyStore(providerToken), machines: serverMachineStore(store, accountId, nowMs, computeSource) },
     );
     if (attempt) await store.putHostedMachineAttempt({ ...attempt, state: "tracked", machine: machine as unknown as Record<string, unknown>, updatedAt: new Date().toISOString() });
     await audit(store, accountId, { action: "room_key_reused", provider: config.provider, configId: config.id, nodeId: machine.nodeId });
@@ -847,6 +862,19 @@ async function destroyOneHostedMachine(
  * node (device-launched machines aren't tracked server-side → false, and the
  * endpoint simply 200s).
  */
+export async function settleManagedMachineUsage(
+  store: Pick<EphemeralProvisioningPort, "upsertSessionUsage">,
+  accountId: string,
+  machine: Record<string, unknown>,
+  settledAt = new Date().toISOString(),
+): Promise<boolean> {
+  if (normalizeComputeSource(machine.computeSource) !== "managed") return false;
+  const usage = usageFromManagedMachine(accountId, machine, settledAt);
+  if (!usage) return false;
+  await store.upsertSessionUsage(usage);
+  return true;
+}
+
 export async function reapSettledHostedMachine(
   store: EphemeralProvisioningPort,
   accountId: string,
@@ -867,7 +895,13 @@ export async function reapSettledHostedMachine(
   // MANAGED_COMPUTE_ENABLED launch switch.
   const sourceAttempt = machine.attemptId ? await store.getHostedMachineAttempt(accountId, machine.attemptId).catch(() => undefined) : undefined;
   const sourceConfigs = await store.getEphemeralConfigs(accountId).catch(() => [] as EphemeralNodeConfig[]);
-  const providerToken = (await resolveProviderCredential(hosted, machine.provider, machineComputeSource(record, sourceAttempt, sourceConfigs))).token;
+  const computeSource = machineComputeSource(record, sourceAttempt, sourceConfigs);
+  const providerToken = (await resolveProviderCredential(hosted, machine.provider, computeSource)).token;
+  // Settlement is independent of provider deletion success. A failed teardown
+  // still consumed compute and remains idempotently metered on every retry.
+  await settleManagedMachineUsage(store, accountId, { ...record, computeSource }, new Date(nowMs).toISOString()).catch(async () => {
+    await audit(store, accountId, { action: "reconcile_failed", provider: machine.provider, nodeId, detail: "usage settlement persistence failed" });
+  });
   try {
     if (providerToken) {
       if (machine.attemptId) {
@@ -1042,6 +1076,9 @@ export async function reconcileHostedMachines(store: EphemeralProvisioningPort, 
       try {
         const observed = await observe(m as unknown as EphemeralMachine, providerToken);
         if (observed === "gone") {
+          await settleManagedMachineUsage(store, accountId, { ...m, computeSource }, new Date(nowMs).toISOString()).catch(async () => {
+            await audit(store, accountId, { action: "reconcile_failed", provider, nodeId: nodeId || undefined, detail: "usage settlement persistence failed" });
+          });
           if (nodeId) await store.removeNode(accountId, nodeId).catch(() => {});
           const attempt = await store.getHostedMachineAttempt(accountId, m.attemptId).catch(() => undefined);
           if (attempt) await store.putHostedMachineAttempt({ ...attempt, state: "deleted", machine: m, updatedAt: new Date(nowMs).toISOString() }).catch(() => {});
@@ -1151,6 +1188,9 @@ export async function reconcileHostedMachines(store: EphemeralProvisioningPort, 
         /* best effort — Fly/EC2 self-destruct regardless */
       }
     }
+    await settleManagedMachineUsage(store, accountId, { ...m, computeSource }, new Date(nowMs).toISOString()).catch(async () => {
+      await audit(store, accountId, { action: "reconcile_failed", provider: provider || undefined, nodeId: nodeId || undefined, detail: "usage settlement persistence failed" });
+    });
     reaped++;
     const attemptId = typeof m.attemptId === "string" ? m.attemptId : "";
     if (attemptId) {

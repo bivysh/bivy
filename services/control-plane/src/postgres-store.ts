@@ -39,6 +39,7 @@ import {
   type CentralGithubInstallationInput,
   type HostedAuditEvent,
   type HostedMachineAttempt,
+  type SessionUsageRecord,
   ConcurrentAttemptUpdateError,
   type ModelAuthVault,
   type ModelAuthWrappedKey,
@@ -127,6 +128,7 @@ export class PostgresStore implements ControlPlaneStore {
         email               TEXT UNIQUE NOT NULL,
         created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
       );
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS plan TEXT NOT NULL DEFAULT 'free';
       ALTER TABLE accounts ADD COLUMN IF NOT EXISTS github_user_id TEXT;
       ALTER TABLE accounts ADD COLUMN IF NOT EXISTS github_install_target_ids JSONB NOT NULL DEFAULT '[]';
 
@@ -216,6 +218,21 @@ export class PostgresStore implements ControlPlaneStore {
       );
       CREATE INDEX IF NOT EXISTS hosted_machine_attempts_active_idx
         ON hosted_machine_attempts (account_id, state, updated_at);
+      CREATE TABLE IF NOT EXISTS session_usage (
+        account_id            TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        usage_id              TEXT NOT NULL,
+        session_id            TEXT,
+        machine_id            TEXT,
+        node_id               TEXT,
+        launched_at           TIMESTAMPTZ NOT NULL,
+        first_agent_event_at  TIMESTAMPTZ,
+        settled_at            TIMESTAMPTZ NOT NULL,
+        machine_seconds       BIGINT NOT NULL,
+        active_agent_seconds  BIGINT NOT NULL,
+        PRIMARY KEY (account_id, usage_id)
+      );
+      CREATE INDEX IF NOT EXISTS session_usage_month_idx
+        ON session_usage (account_id, settled_at DESC, launched_at);
       -- Durable lifecycle hardening: explicit desired vs. observed state, a
       -- persisted next-deadline, the per-account ownership tag applied to
       -- provider resources, and an optimistic-concurrency version so a
@@ -1834,6 +1851,46 @@ export class PostgresStore implements ControlPlaneStore {
     return rows.map((row) => this.hostedAttemptFromRow(row));
   }
 
+  async upsertSessionUsage(record: SessionUsageRecord): Promise<SessionUsageRecord> {
+    const { rows } = await this.query(
+      `INSERT INTO session_usage
+         (account_id, usage_id, session_id, machine_id, node_id, launched_at, first_agent_event_at,
+          settled_at, machine_seconds, active_agent_seconds)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+       ON CONFLICT (account_id, usage_id) DO UPDATE SET
+         usage_id=session_usage.usage_id
+       RETURNING *`,
+      [record.accountId, record.usageId, record.sessionId ?? null, record.machineId ?? null,
+       record.nodeId ?? null, record.launchedAt, record.firstAgentEventAt ?? null, record.settledAt,
+       record.machineSeconds, record.activeAgentSeconds],
+    );
+    return this.sessionUsageFromRow(rows[0]);
+  }
+
+  async listSessionUsage(accountId: string, startsAt: string, endsAt: string, limit?: number): Promise<SessionUsageRecord[]> {
+    const boundedLimit = limit == null ? undefined : Math.max(1, Math.min(10_000, Math.floor(limit)));
+    const { rows } = await this.query(
+      `SELECT * FROM session_usage
+       WHERE account_id=$1 AND settled_at > $2 AND launched_at < $3
+       ORDER BY settled_at DESC${boundedLimit == null ? "" : " LIMIT $4"}`,
+      boundedLimit == null ? [accountId, startsAt, endsAt] : [accountId, startsAt, endsAt, boundedLimit],
+    );
+    return rows.map((row) => this.sessionUsageFromRow(row));
+  }
+
+  private sessionUsageFromRow(row: Record<string, any>): SessionUsageRecord {
+    return {
+      accountId: String(row.account_id), usageId: String(row.usage_id),
+      sessionId: row.session_id || undefined, machineId: row.machine_id || undefined,
+      nodeId: row.node_id || undefined,
+      launchedAt: new Date(row.launched_at).toISOString(),
+      firstAgentEventAt: row.first_agent_event_at ? new Date(row.first_agent_event_at).toISOString() : undefined,
+      settledAt: new Date(row.settled_at).toISOString(),
+      machineSeconds: Number(row.machine_seconds) || 0,
+      activeAgentSeconds: Number(row.active_agent_seconds) || 0,
+    };
+  }
+
   async listHostedMachineAccountIds(): Promise<string[]> {
     // Filter in JS: pg-mem (the dev/test backend) does not implement Postgres's
     // jsonb_typeof/jsonb_array_length functions, and this scan runs only on the
@@ -3439,6 +3496,7 @@ function mapAccount(row: any): Account {
   return {
     id: row.id,
     email: row.email,
+    plan: ["individual", "pro", "team"].includes(row.plan) ? row.plan : "free",
     githubUserId: row.github_user_id || undefined,
     githubInstallTargetIds: Array.isArray(row.github_install_target_ids) ? row.github_install_target_ids.map(String) : [],
     createdAt: new Date(row.created_at).toISOString(),
