@@ -49,6 +49,13 @@ async function makeStore() {
 async function managedAccount() {
   const store = await makeStore();
   const account = await store.findOrCreateAccount("managed@example.com");
+  // This suite tests the managed lane itself, not free-plan denial; the
+  // metering suite covers plan caps independently.
+  const getAccount = store.getAccount.bind(store);
+  store.getAccount = async (accountId) => {
+    const found = await getAccount(accountId);
+    return found ? { ...found, plan: "pro" } : undefined;
+  };
   await store.setHostedProvisioning(account.id, { enabled: true });
   await store.setEphemeralConfigs(account.id, [MANAGED_CONFIG]);
   await store.setQueueRouting(account.id, { primary: { kind: "config", configId: MANAGED_CONFIG.id } });
@@ -169,6 +176,8 @@ try {
     const machine = await provisionEphemeralForAccount(store, acctId, MANAGED_CONFIG, env, fakeLauncher(seen));
     assert.equal(seen.token, OPERATOR_TOKEN, "the launch deps carry the operator credential");
     assert.equal(machine.nodeId, "eph-managed-1");
+    const persistedMachine = (await store.getHostedMachines(acctId)).find((row) => row.id === machine.id);
+    assert.equal(persistedMachine?.computeSource, "managed", "machine inventory retains the lane for metering and teardown");
     const attempt = await store.getHostedMachineAttempt(acctId, String(machine.attemptId));
     assert.equal(attempt?.state, "tracked");
     assert.equal(attempt?.desired.computeSource, "managed", "compute source rides on the durable attempt row");

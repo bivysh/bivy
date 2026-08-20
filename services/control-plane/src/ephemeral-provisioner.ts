@@ -57,7 +57,7 @@ import type { SecretEnvelope } from "./hosted-crypto.js";
 import { mintInstallationToken } from "./hosted-github-auth.js";
 import { encryptSecret, decryptSecret } from "./hosted-crypto.js";
 import { centralGithubAppConfig, resolveGithubIdentity, type ResolvedGithubIdentity } from "./central-github-app.js";
-import type { CentralGithubInstallation, HostedProvisioning } from "./store.js";
+import type { CentralGithubInstallation } from "./store.js";
 import {
   enforceManagedComputeLaunch,
   usageFromManagedMachine,
@@ -351,12 +351,6 @@ export async function planAutoProvision(store: EphemeralProvisioningPort, accoun
   const configs = await store.getEphemeralConfigs(accountId);
   const target = resolveAutoProvisionTarget(routing, configs);
   if (!target) return { willProvision: false, targetConfigId: null, reason: "routing does not point at an ephemeral config" };
-  // The only managed-compute admission call in the launch decision path. It is
-  // an immediate allow for BYO providers and fail-closed for managed metering.
-  const computeGate = await enforceManagedComputeLaunch(store, accountId, target, nowMs);
-  if (!computeGate.allowed) {
-    return { willProvision: false, targetConfigId: target.id, reason: computeGate.message, capDenial: computeGate };
-  }
   if (!ephemeralAdapter(target.provider)) {
     return { willProvision: false, targetConfigId: target.id, reason: `provider ${target.provider} is no longer supported` };
   }
@@ -371,6 +365,14 @@ export async function planAutoProvision(store: EphemeralProvisioningPort, accoun
   const cred = await resolveProviderCredential(hosted, target.provider, computeSource, { requireValidated: true });
   if (!cred.token) {
     return { willProvision: false, targetConfigId: target.id, reason: cred.reason };
+  }
+  // The only managed-compute admission call in the launch decision path. It is
+  // an immediate allow for BYO configurations and fail-closed for managed
+  // metering. Operational readiness is checked first so disabled or
+  // misconfigured deployments report the actionable infrastructure reason.
+  const computeGate = await enforceManagedComputeLaunch(store, accountId, target, nowMs);
+  if (!computeGate.allowed) {
+    return { willProvision: false, targetConfigId: target.id, reason: computeGate.message, capDenial: computeGate };
   }
   // A config primary is the designated runner (provision regardless of node
   // liveness). A node primary only falls back to its config when nothing online.
