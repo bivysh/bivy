@@ -105,7 +105,10 @@ async function startFakeGithub(): Promise<number> {
 async function main() {
   const githubPort = await startFakeGithub();
   const port = await freePort();
-  const proc = spawn("npx", ["tsx", "src/index.ts"], {
+  // Spawn Node directly rather than through `npx`: killing an npx wrapper can
+  // leave its control-plane grandchild alive and keep the test process' stdio
+  // open after every assertion has passed.
+  const proc = spawn(process.execPath, ["--import", "tsx", "src/index.ts"], {
     cwd: cpDir,
     env: {
       ...process.env,
@@ -121,7 +124,9 @@ async function main() {
   });
   procs.push(proc);
   let ready = false;
-  for (let i = 0; i < 100; i++) {
+  // A cold control-plane TypeScript startup can exceed ten seconds on the
+  // small CI/self-host runners used for the full sequential suite.
+  for (let i = 0; i < 300; i++) {
     try {
       if ((await fetch(`http://localhost:${port}/healthz`)).ok) { ready = true; break; }
     } catch {}
