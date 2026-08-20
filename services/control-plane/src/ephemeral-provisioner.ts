@@ -48,6 +48,8 @@ import {
 import type { SecretEnvelope } from "./hosted-crypto.js";
 import { mintInstallationToken } from "./hosted-github-auth.js";
 import { encryptSecret, decryptSecret } from "./hosted-crypto.js";
+import { centralGithubAppConfig, resolveGithubIdentity, type ResolvedGithubIdentity } from "./central-github-app.js";
+import type { CentralGithubInstallation, HostedProvisioning } from "./store.js";
 
 /** Persistence needed by unattended machine orchestration. Deliberately omits
  * account administration, notifications, device vaults, and automation
@@ -66,6 +68,23 @@ export interface EphemeralProvisioningPort
   getSessionCorrelation(accountId: string, sessionId: string): Promise<SessionCorrelation | undefined>;
   getNodeRoomKeyEnc(accountId: string, nodeId: string): Promise<SecretEnvelope | undefined>;
   setNodeRoomKeyEnc(accountId: string, nodeId: string, enc: SecretEnvelope): Promise<void>;
+  /** Central-app installations bound to the account. Optional so narrow test
+   *  fakes keep compiling; absent = the central-app identity never resolves. */
+  listCentralGithubInstallations?(accountId: string): Promise<CentralGithubInstallation[]>;
+}
+
+/** The account's GitHub identity, resolved through the ONE mode table in
+ *  central-github-app.ts (own app / PAT / central app installation). */
+async function resolveAccountGithubIdentity(
+  store: EphemeralProvisioningPort,
+  accountId: string,
+  hosted: HostedProvisioning,
+  repo?: string,
+): Promise<ResolvedGithubIdentity | null> {
+  const central = centralGithubAppConfig();
+  const centralInstallations =
+    central && store.listCentralGithubInstallations ? await store.listCentralGithubInstallations(accountId) : [];
+  return resolveGithubIdentity({ hosted, central, centralInstallations }, repo);
 }
 
 export interface ProvisionEnv {
@@ -426,12 +445,14 @@ export async function provisionEphemeralForAccount(
   if (!providerToken) throw new Error(`No hosted provider token for ${config.provider}`);
   await audit(store, accountId, { action: "provision_attempt", provider: config.provider, configId: config.id });
 
-  // With a GitHub App, the machine self-mints a fresh, short-lived installation
-  // token from the control plane per git op (BIVY_HOSTED_MINT) — no static
-  // credential is ever baked into the machine, and long sessions keep working.
-  // With only a stored PAT, inject it statically (the legacy fallback).
-  const useHostedMint = Boolean(hosted.githubApp);
-  const githubToken = useHostedMint ? undefined : hosted.githubToken;
+  // With an app identity (the account's own app OR the central app), the
+  // machine self-mints a fresh, short-lived installation token from the control
+  // plane per git op (BIVY_HOSTED_MINT) — no static credential is ever baked
+  // into the machine, and long sessions keep working. With only a stored PAT,
+  // inject it statically (the legacy fallback).
+  const identity = await resolveAccountGithubIdentity(store, accountId, hosted);
+  const useHostedMint = identity?.kind === "app";
+  const githubToken = identity?.kind === "token" ? identity.token : undefined;
 
   // Enroll runs over HTTP against our own /nodes/enroll with this bearer.
   const sessionToken = await store.createSession(accountId);
@@ -590,8 +611,9 @@ export async function provisionEphemeralRestore(
   const enc = await store.getNodeRoomKeyEnc(accountId, opts.reuseNodeId);
   if (!enc) throw new Error(`No escrowed room key for ${opts.reuseNodeId} — cannot rebuild this session server-side`);
   const reuseRoomKeyB64 = decryptSecret(accountId, enc);
-  const useHostedMint = Boolean(hosted.githubApp);
-  const githubToken = useHostedMint ? undefined : hosted.githubToken;
+  const identity = await resolveAccountGithubIdentity(store, accountId, hosted);
+  const useHostedMint = identity?.kind === "app";
+  const githubToken = identity?.kind === "token" ? identity.token : undefined;
   await audit(store, accountId, { action: "provision_attempt", provider: config.provider, configId: config.id });
 
   const sessionToken = await store.createSession(accountId);
@@ -653,16 +675,49 @@ export async function provisionEphemeralRestore(
 }
 
 /**
- * Mint a fresh installation token for the account's hosted GitHub App. Used by
- * the mint-on-demand endpoint so a long-running machine can re-fetch a token per
- * git op instead of holding a long-lived one. Returns null if hosted
- * provisioning is off or no app is configured.
+ * Mint a fresh installation token for the account's resolved GitHub identity
+ * (own app or the central app's installation). Used by the mint-on-demand
+ * endpoint so a long-running machine can re-fetch a token per git op instead of
+ * holding a long-lived one. The minted token is returned to the caller and
+ * NEVER persisted. Returns null if hosted provisioning is off or the identity
+ * resolves to no app (a stored PAT is injected at launch, not minted here).
+ *
+ * Isolation: the identity resolves only against installations the store has
+ * bound to `accountId`, so one account can never mint for another's
+ * installation. For the central app the token is additionally scoped down to
+ * `opts.repo` where the API allows; GitHub rejects a repo outside the
+ * installation, in which case the full-installation (still ~1h) token is used.
  */
-export async function mintHostedInstallationToken(store: EphemeralProvisioningPort, accountId: string): Promise<{ token: string; expiresAt: string } | null> {
+export async function mintHostedInstallationToken(
+  store: EphemeralProvisioningPort,
+  accountId: string,
+  opts?: { repo?: string; fetchImpl?: typeof fetch },
+): Promise<{ token: string; expiresAt: string } | null> {
   const hosted = await store.getHostedProvisioning(accountId);
-  if (!hosted.enabled || !hosted.githubApp) return null;
-  const minted = await mintInstallationToken(hosted.githubApp);
-  await audit(store, accountId, { action: "token_minted", detail: "mint-on-demand" });
+  if (!hosted.enabled) return null;
+  const identity = await resolveAccountGithubIdentity(store, accountId, hosted, opts?.repo);
+  if (identity?.kind !== "app") return null;
+  const creds = { appId: identity.appId, installationId: identity.installationId, privateKeyPem: identity.privateKeyPem };
+  const fetchImpl = opts?.fetchImpl ?? fetch;
+  // Scope to the session repo for the central app only — a BYO app's
+  // installation is already the user's own scoping choice.
+  const repoName =
+    identity.mode === "central-app" && opts?.repo?.includes("/") ? opts.repo.split("/")[1] : undefined;
+  let minted: { token: string; expiresAt: string } | undefined;
+  let scoped = false;
+  if (repoName) {
+    try {
+      minted = await mintInstallationToken(creds, fetchImpl, undefined, { repositories: [repoName] });
+      scoped = true;
+    } catch {
+      // repo outside the installation (or a transient error) — fall back below
+    }
+  }
+  if (!minted) minted = await mintInstallationToken(creds, fetchImpl);
+  await audit(store, accountId, {
+    action: "token_minted",
+    detail: `mint-on-demand mode=${identity.mode}${opts?.repo ? ` repo=${opts.repo}` : ""}${scoped ? " scoped" : ""}`,
+  });
   return minted;
 }
 

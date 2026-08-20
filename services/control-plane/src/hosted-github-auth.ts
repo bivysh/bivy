@@ -43,6 +43,12 @@ const githubHeaders = (authorization: string) => ({
   "user-agent": "bivy-control-plane",
 });
 
+/** GitHub API base — overridable for GitHub Enterprise and for tests that run
+ *  a local stand-in API. Read per call so a test can set it after import. */
+function githubApiBase(): string {
+  return (process.env.GITHUB_API_BASE_URL || "https://api.github.com").replace(/\/$/, "");
+}
+
 function b64url(input: Buffer | string): string {
   return Buffer.from(input).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
@@ -59,21 +65,28 @@ export function createAppJwt(appId: string, privateKeyPem: string, nowSec = Math
   return `${signingInput}.${signature}`;
 }
 
-/** Exchange the app JWT for a ~1h installation access token. */
+/** Exchange the app JWT for a ~1h installation access token. When
+ *  `opts.repositories` names repos (bare names, no owner), the token is scoped
+ *  down to just those — GitHub rejects names outside the installation, so
+ *  callers that scope should be prepared to retry unscoped. */
 export async function mintInstallationToken(
   creds: GithubAppCreds,
   fetchImpl: typeof fetch = fetch,
   nowSec = Math.floor(Date.now() / 1000),
+  opts?: { repositories?: string[] },
 ): Promise<InstallationToken> {
   const jwt = createAppJwt(creds.appId, creds.privateKeyPem, nowSec);
-  const res = await fetchImpl(`https://api.github.com/app/installations/${encodeURIComponent(creds.installationId)}/access_tokens`, {
+  const scoped = opts?.repositories?.length ? { repositories: opts.repositories } : undefined;
+  const res = await fetchImpl(`${githubApiBase()}/app/installations/${encodeURIComponent(creds.installationId)}/access_tokens`, {
     method: "POST",
     headers: {
       authorization: `Bearer ${jwt}`,
       accept: "application/vnd.github+json",
       "x-github-api-version": "2022-11-28",
       "user-agent": "bivy-control-plane",
+      ...(scoped ? { "content-type": "application/json" } : {}),
     },
+    ...(scoped ? { body: JSON.stringify(scoped) } : {}),
   });
   const data = (await res.json().catch(() => ({}))) as { token?: string; expires_at?: string; message?: string };
   if (!res.ok || !data.token) {
@@ -92,7 +105,7 @@ export async function listAppInstallations(
   const jwt = createAppJwt(appId, privateKeyPem, nowSec);
   const installations: GithubInstallation[] = [];
   for (let page = 1; ; page += 1) {
-    const res = await fetchImpl(`https://api.github.com/app/installations?per_page=100&page=${page}`, {
+    const res = await fetchImpl(`${githubApiBase()}/app/installations?per_page=100&page=${page}`, {
       headers: githubHeaders(`Bearer ${jwt}`),
     });
     const data = (await res.json().catch(() => ([]))) as Array<{
@@ -111,6 +124,45 @@ export async function listAppInstallations(
   return installations;
 }
 
+export interface GithubInstallationDetail {
+  id: string;
+  account?: string;
+  accountType?: string;
+  repositorySelection?: string;
+}
+
+/** One installation's metadata (owner login, repo selection), via the app JWT.
+ *  Used by the central-app setup callback to record which GitHub org/user an
+ *  installation covers — a 404 here also proves the id does NOT belong to the
+ *  app, so a forged installation_id can never be bound. */
+export async function getAppInstallation(
+  appId: string,
+  privateKeyPem: string,
+  installationId: string,
+  fetchImpl: typeof fetch = fetch,
+  nowSec = Math.floor(Date.now() / 1000),
+): Promise<GithubInstallationDetail> {
+  const jwt = createAppJwt(appId, privateKeyPem, nowSec);
+  const res = await fetchImpl(`${githubApiBase()}/app/installations/${encodeURIComponent(installationId)}`, {
+    headers: githubHeaders(`Bearer ${jwt}`),
+  });
+  const data = (await res.json().catch(() => ({}))) as {
+    id?: number | string;
+    account?: { login?: string; type?: string };
+    repository_selection?: string;
+    message?: string;
+  };
+  if (!res.ok || data.id == null) {
+    throw new Error(`GitHub installation lookup failed (${res.status}): ${data.message ?? "unknown error"}`);
+  }
+  return {
+    id: String(data.id),
+    account: data.account?.login,
+    accountType: data.account?.type,
+    repositorySelection: typeof data.repository_selection === "string" ? data.repository_selection : undefined,
+  };
+}
+
 /** Repositories visible to one installation, using only an on-demand token. */
 export async function listInstallationRepositories(
   creds: GithubAppCreds,
@@ -119,7 +171,7 @@ export async function listInstallationRepositories(
   const { token } = await mintInstallationToken(creds, fetchImpl);
   const repositories: GithubRepository[] = [];
   for (let page = 1; ; page += 1) {
-    const res = await fetchImpl(`https://api.github.com/installation/repositories?per_page=100&page=${page}`, {
+    const res = await fetchImpl(`${githubApiBase()}/installation/repositories?per_page=100&page=${page}`, {
       headers: githubHeaders(`Bearer ${token}`),
     });
     const data = (await res.json().catch(() => ({}))) as {
