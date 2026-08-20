@@ -532,7 +532,11 @@ commercial configuration belong to the separate Cloud repository.
 | `EPHEMERAL_MACHINES_ENABLED` | `0` to disable | on | Deployment kill switch for **new** cloud-machine launches (device- and server-initiated). Only the exact value `0` disables; teardown of running machines is unaffected. The web build has a matching `VITE_EPHEMERAL_MACHINES_ENABLED` that hides the UI |
 | `HOSTED_CREDENTIAL_KEY` | base64 of 32 random bytes | unset — **feature off, fail-closed** | Master key for encrypted credential storage. Required for **Settings → Cloud machine profiles → a profile → "Run automations while I'm offline"**; while unset the toggle is disabled and the profile says the server has no encryption key for stored credentials. Generate with `openssl rand -base64 32`; back it up with the database. See [`self-host.md`](self-host.md#offline-automations-encrypted-credential-storage) |
 | `HOSTED_CREDENTIAL_KEYS` | `id:<base64>,id:<base64>` | unset | Keyring form, for rotation only. Envelopes record the key id they were sealed with, so old ids keep decrypting while a new primary is introduced |
-| `HOSTED_CREDENTIAL_KEY_PRIMARY` | key id | first id in `HOSTED_CREDENTIAL_KEYS` | Which keyring entry new writes are sealed under |
+| `HOSTED_CREDENTIAL_KEY_PRIMARY` | key id | first configured entry | Which keyring entry new writes are sealed under |
+| `HOSTED_KEYRING_SOURCE` | `env` or `aws-kms` | `env` | Hosted master-key source. A selected but broken KMS source fails closed and never falls back to env |
+| `BIVY_HOSTED_KEY_KMS_CIPHERTEXT` | `id:<base64-blob>,…` (or one bare blob) | unset | AWS KMS-encrypted 32-byte data-key blob(s), decrypted once at boot |
+| `BIVY_HOSTED_KEY_KMS_REGION` | AWS region | `AWS_REGION` | Region for the SigV4-signed KMS `Decrypt` call |
+| `BIVY_HOSTED_KEY_KMS_KEY_ID` | KMS key id/ARN/alias | unset | Optional KMS key constraint passed to `Decrypt` |
 
 ## GitHub webhooks
 
