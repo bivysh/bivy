@@ -77,9 +77,20 @@ export function codexAuthToCredential(raw: unknown): { providerId: string; crede
   if (!access || !refresh) return undefined;
   const accountId = typeof tokens?.account_id === "string" ? tokens.account_id : undefined;
   const expires = jwtExpiryMs(access) ?? Date.now() + 60 * 60 * 1000;
+  // Codex writes last_refresh when it rotates the single-use refresh token.
+  // Preserve that mint-order signal: without it, an offline node's stale r1
+  // auth.json could be imported after node A's r2 and win merely by syncing last.
+  const nativeRefreshTime = Date.parse(String(record.last_refresh ?? ""));
   return {
     providerId: "openai-codex",
-    credential: { type: "oauth", access, refresh, expires, ...(accountId ? { accountId } : {}) },
+    credential: {
+      type: "oauth",
+      access,
+      refresh,
+      expires,
+      ...(Number.isFinite(nativeRefreshTime) ? { refreshedAt: nativeRefreshTime } : {}),
+      ...(accountId ? { accountId } : {}),
+    },
   };
 }
 

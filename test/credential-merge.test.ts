@@ -3,8 +3,8 @@ import { preferIncomingCredential, type StoredCredential } from "../src/runtime/
 
 // The pure cross-node merge decision (credential-store.importAll). Freshest-wins,
 // rotation-safe: a lagging / refresh-less snapshot must never clobber a fresher
-// local login, ties keep local, and `refreshedAt` (mint order) beats `expires`
-// (which clock skew can inflate).
+// local login, equal freshness converges via a canonical content tie-break, and
+// `refreshedAt` (mint order) beats `expires` (which clock skew can inflate).
 
 let passed = 0;
 function test(name: string, fn: () => void) {
@@ -26,11 +26,12 @@ test("no local entry → take the incoming credential", () => {
   assert.equal(preferIncomingCredential(undefined, oauth({})), true);
 });
 
-test("refreshedAt (mint order) decides, strictly-newer wins; tie keeps local", () => {
+test("refreshedAt (mint order) decides; equal freshness has a deterministic tie-break", () => {
   const local = oauth({ refreshedAt: 100, expires: 5000 });
   assert.equal(preferIncomingCredential(local, oauth({ refreshedAt: 200, expires: 1 })), true);  // newer mint wins even with lower expiry
   assert.equal(preferIncomingCredential(local, oauth({ refreshedAt: 50, expires: 9999 })), false); // older mint loses despite higher expiry
-  assert.equal(preferIncomingCredential(local, oauth({ refreshedAt: 100, expires: 9999 })), false); // tie keeps local
+  const tied = oauth({ refreshedAt: 100, expires: 9999 });
+  assert.notEqual(preferIncomingCredential(local, tied), preferIncomingCredential(tied, local));
 });
 
 test("clock skew: without refreshedAt, expires decides but a tie keeps local", () => {
