@@ -218,6 +218,11 @@ export interface EphemeralNodeConfig {
   readyCapacity?: number;
   ttlMinutes?: number;
   teardownOnAgentFinish?: boolean;
+  /** Which credential lane launches this config: "user" (default — the
+   * account's own hosted provider token) or "managed" (the deployment
+   * operator's token, see services/control-plane/src/managed-compute.ts).
+   * Absent means "user", so stored configs are fully backward compatible. */
+  computeSource?: "user" | "managed";
   createdAt: string;
   updatedAt: string;
 }
@@ -245,6 +250,7 @@ export function normalizeEphemeralConfigs(value: unknown): EphemeralNodeConfig[]
     if (typeof v.readyCapacity === "number" && Number.isFinite(v.readyCapacity)) cfg.readyCapacity = Math.max(0, Math.min(1, Math.floor(v.readyCapacity)));
     if (typeof v.ttlMinutes === "number" && Number.isFinite(v.ttlMinutes)) cfg.ttlMinutes = Math.max(5, Math.min(24 * 60, Math.floor(v.ttlMinutes)));
     if (v.teardownOnAgentFinish === true) cfg.teardownOnAgentFinish = true;
+    if (v.computeSource === "managed") cfg.computeSource = "managed";
     // A five-minute runner would enter the pre-claim rotation window as soon as
     // it launched. Ready capacity needs enough useful life to accept real work.
     if ((cfg.readyCapacity ?? 0) > 0 && (cfg.ttlMinutes ?? 60) < 15) cfg.ttlMinutes = 15;

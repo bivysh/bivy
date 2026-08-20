@@ -160,6 +160,33 @@ The feature also needs ephemeral machines enabled, which is the default:
 `EPHEMERAL_MACHINES_ENABLED` and the build-time `VITE_EPHEMERAL_MACHINES_ENABLED`
 are on unless set to exactly `0`.
 
+## Operator-owned managed compute
+
+A self-hoster can expose the same managed-compute lane used by Bivy Cloud while
+keeping the provider account under their own control. It is the normal hosted
+ephemeral provisioner with an operator credential instead of each user's cloud
+token; model and repository credentials still belong to each user.
+
+For Fly, create a dedicated organization and a narrowly scoped token that can
+create, inspect, and destroy Machines, then configure the control plane:
+
+```env
+# New managed launches are disabled unless this is exactly 1.
+MANAGED_COMPUTE_ENABLED=1
+MANAGED_PROVIDER_TOKEN_FLY=<operator Fly token>
+```
+
+Restart the control plane after changing these values. The token is read only by
+the control plane, used transiently for provider API calls, and is never returned
+by an account API, persisted in Postgres, logged, or included in machine
+user-data. Keep it in your deployment secret manager or `deploy/.env` with mode
+`600`, and rotate it like any other infrastructure credential.
+
+Setting `MANAGED_COMPUTE_ENABLED=0` (or removing it) blocks new managed launches.
+It does **not** disable teardown, reconciliation, creation-attempt cleanup, or
+orphan sweeps; leave `MANAGED_PROVIDER_TOKEN_FLY` available until every managed
+machine has been destroyed. User-token/BYO configurations are unaffected.
+
 ## Using a managed/hosted Postgres
 
 By default the stack runs its own `postgres` container. If you'd rather use a

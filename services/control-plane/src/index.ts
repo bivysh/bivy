@@ -3268,6 +3268,7 @@ app.post("/account/ephemeral-configs", asyncHandler(async (req, res) => {
   if (typeof body.readyCapacity === "number") config.readyCapacity = body.readyCapacity;
   if (typeof body.ttlMinutes === "number") config.ttlMinutes = body.ttlMinutes;
   if (body.teardownOnAgentFinish === true) config.teardownOnAgentFinish = true;
+  if (body.computeSource === "managed") config.computeSource = "managed";
   const current = await store.getEphemeralConfigs(client.accountId);
   const saved = await store.setEphemeralConfigs(client.accountId, [...current, config]);
   res.json(saved.find((c) => c.id === config.id) ?? config);
@@ -3290,6 +3291,7 @@ app.put("/account/ephemeral-configs/:id", asyncHandler(async (req, res) => {
   if (typeof body.readyCapacity === "number") next.readyCapacity = body.readyCapacity;
   if (typeof body.ttlMinutes === "number") next.ttlMinutes = body.ttlMinutes;
   if (typeof body.teardownOnAgentFinish === "boolean") next.teardownOnAgentFinish = body.teardownOnAgentFinish || undefined;
+  if (typeof body.computeSource === "string") next.computeSource = body.computeSource === "managed" ? "managed" : undefined;
   const saved = await store.setEphemeralConfigs(client.accountId, current.map((c) => (c.id === id ? next : c)));
   res.json(saved.find((c) => c.id === id) ?? next);
 }));
