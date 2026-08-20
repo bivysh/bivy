@@ -896,7 +896,9 @@ export async function reapSettledHostedMachine(
   // server-side destroy authority as hosted ones. Never gated by the
   // MANAGED_COMPUTE_ENABLED launch switch.
   const sourceAttempt = machine.attemptId ? await store.getHostedMachineAttempt(accountId, machine.attemptId).catch(() => undefined) : undefined;
-  const sourceConfigs = await store.getEphemeralConfigs(accountId).catch(() => [] as EphemeralNodeConfig[]);
+  const sourceConfigs = typeof store.getEphemeralConfigs === "function"
+    ? await store.getEphemeralConfigs(accountId).catch(() => [] as EphemeralNodeConfig[])
+    : [];
   const computeSource = machineComputeSource(record, sourceAttempt, sourceConfigs);
   const providerToken = (await resolveProviderCredential(hosted, machine.provider, computeSource)).token;
   // Settlement is independent of provider deletion success. A failed teardown
@@ -1053,7 +1055,9 @@ export async function reconcileHostedMachines(store: EphemeralProvisioningPort, 
   const hosted = env ? await store.getHostedProvisioning(accountId) : null;
   // For per-machine credential-lane resolution below (managed machines tear
   // down with the operator token, regardless of the managed launch switch).
-  const accountConfigs = env ? await store.getEphemeralConfigs(accountId).catch(() => [] as EphemeralNodeConfig[]) : [];
+  const accountConfigs = env && typeof store.getEphemeralConfigs === "function"
+    ? await store.getEphemeralConfigs(accountId).catch(() => [] as EphemeralNodeConfig[])
+    : [];
   // Looked up per machine to decide whether a force-destroy (desiredState
   // "deleted" — a PWA teardown, or an attempt abandoned above) should skip
   // the "still within TTL grace" retention below and be retried immediately
