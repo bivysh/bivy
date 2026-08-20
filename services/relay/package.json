@@ -13,7 +13,7 @@
     "test:unit": "npm run test:e2e && npm run test:solo"
   },
   "dependencies": {
-    "@sentry/node": "^10.69.0",
+    "@sentry/node": "^10.70.0",
     "ws": "^8.21.3"
   },
   "devDependencies": {
