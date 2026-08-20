@@ -145,6 +145,20 @@ assert.equal(tombstoneWinsRecord(api("a", "l", "x"), 0), false, "a zero/absent s
   assert.equal(kept.kind === "stored" && kept.cred.type === "oauth" ? kept.cred.refreshedAt : undefined, 50, "fresher local oauth kept");
 }
 
+// Codex rotation race: A refreshes r1→r2, then B uploads its stale r1 copy.
+// The token mint stamp, not B's later store write/sync time, decides. Applying
+// the snapshots in either direction must converge on r2.
+{
+  const stale = { ...oauth("openai-codex", "default", { access: "a1", refresh: "r1", expires: 500, refreshedAt: 100 }), updatedAt: 900 };
+  const rotated = { ...oauth("openai-codex", "default", { access: "a2", refresh: "r2", expires: 400, refreshedAt: 200 }), updatedAt: 300 };
+  const staleDoc: CredentialVaultDocumentV3 = { v: 3, credentials: { [K("openai-codex")]: stale }, deletedAt: {} };
+  const rotatedDoc: CredentialVaultDocumentV3 = { v: 3, credentials: { [K("openai-codex")]: rotated }, deletedAt: {} };
+  const staleThenRotated = mergeDocuments(staleDoc, rotatedDoc.credentials).document;
+  const rotatedThenStale = mergeDocuments(rotatedDoc, staleDoc.credentials).document;
+  assert.deepEqual(staleThenRotated.credentials[K("openai-codex")], rotated);
+  assert.deepEqual(rotatedThenStale.credentials[K("openai-codex")], rotated);
+}
+
 // --- merge: a newer snapshot tombstone removes an older local cred -----------
 {
   const local: CredentialVaultDocumentV3 = {
