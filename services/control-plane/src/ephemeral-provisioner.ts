@@ -41,10 +41,17 @@ import {
   type HostedAuditEvent,
   type HostedMachineAttempt,
   type HostedMachineAttemptState,
+  type HostedProvisioning,
   type NodeRecord,
   type SessionCorrelation,
   type WorkItem,
 } from "./store.js";
+import {
+  managedComputeEnabled,
+  normalizeComputeSource,
+  operatorTokenSource,
+  type ComputeSource,
+} from "./managed-compute.js";
 import type { SecretEnvelope } from "./hosted-crypto.js";
 import { mintInstallationToken } from "./hosted-github-auth.js";
 import { encryptSecret, decryptSecret } from "./hosted-crypto.js";
@@ -112,6 +119,12 @@ export async function hostedExecutionReadiness(store: EphemeralProvisioningPort,
   const config = resolveAutoProvisionTarget(routing, await store.getEphemeralConfigs(accountId));
   if (!config) return { ready: false, reason: "automation routing has no ephemeral config" };
   if (!ephemeralAdapter(config.provider)) return { ready: false, reason: `provider ${config.provider} is no longer supported`, configId: config.id };
+  if (normalizeComputeSource(config.computeSource) === "managed") {
+    if (!managedComputeEnabled()) return { ready: false, reason: "managed compute is disabled (MANAGED_COMPUTE_ENABLED)", configId: config.id };
+    const cred = await resolveProviderCredential(hosted, config.provider, "managed");
+    if (!cred.token) return { ready: false, reason: cred.reason, configId: config.id };
+    return { ready: true, reason: "hosted ephemeral execution is ready", configId: config.id };
+  }
   const token = hosted.providerTokens?.[config.provider];
   if (!token) return { ready: false, reason: `no hosted ${config.provider} credential` };
   if (hosted.validatedProviders?.[config.provider] !== providerCredentialFingerprint(token)) {
@@ -240,6 +253,49 @@ export function ephemeralMachinesEnabled(env: NodeJS.ProcessEnv = process.env): 
   return env.EPHEMERAL_MACHINES_ENABLED !== "0";
 }
 
+/**
+ * Resolve the transient provider credential for one launch/teardown by compute
+ * source — the ONE place the user and managed lanes differ. "user" reads the
+ * account's hosted token (optionally requiring the onboarding validation
+ * fingerprint, as planAutoProvision always has); "managed" reads the
+ * deployment's operator token source. The returned token is used exactly like
+ * hosted.providerTokens always was: transiently, never persisted, never logged,
+ * never baked into machine user-data, never returned by an API.
+ */
+async function resolveProviderCredential(
+  hosted: HostedProvisioning,
+  provider: string,
+  source: ComputeSource,
+  opts: { requireValidated?: boolean } = {},
+): Promise<{ token?: string; reason: string }> {
+  if (source === "managed") {
+    const token = await operatorTokenSource().getToken(provider);
+    if (!token) return { reason: `no operator token for provider ${provider} (managed lane)` };
+    return { token, reason: "ok" };
+  }
+  const token = hosted.providerTokens?.[provider];
+  if (!token) return { reason: `no hosted token for provider ${provider}` };
+  if (opts.requireValidated && hosted.validatedProviders?.[provider] !== providerCredentialFingerprint(token)) {
+    return { reason: `provider credential for ${provider} has not been validated` };
+  }
+  return { token, reason: "ok" };
+}
+
+/** Compute source of an already-created machine, for teardown-token selection.
+ * The attempt row's `desired.computeSource` is authoritative (durable from
+ * before provider acceptance); the config is the fallback for records that
+ * predate attempts. Legacy records resolve to "user". */
+function machineComputeSource(
+  machine: Record<string, unknown>,
+  attempt: HostedMachineAttempt | undefined,
+  configs: EphemeralNodeConfig[],
+): ComputeSource {
+  if (attempt?.desired && "computeSource" in attempt.desired) return normalizeComputeSource(attempt.desired.computeSource);
+  const setupId = typeof machine.setupId === "string" ? machine.setupId : "";
+  const config = setupId ? configs.find((c) => c.id === setupId) : undefined;
+  return normalizeComputeSource(config?.computeSource);
+}
+
 function withinMs(iso: unknown, ms: number, nowMs: number): boolean {
   if (typeof iso !== "string") return false;
   const t = Date.parse(iso);
@@ -290,11 +346,17 @@ export async function planAutoProvision(store: EphemeralProvisioningPort, accoun
   if (!ephemeralAdapter(target.provider)) {
     return { willProvision: false, targetConfigId: target.id, reason: `provider ${target.provider} is no longer supported` };
   }
-  if (!hosted.providerTokens?.[target.provider]) {
-    return { willProvision: false, targetConfigId: target.id, reason: `no hosted token for provider ${target.provider}` };
+  const computeSource = normalizeComputeSource(target.computeSource);
+  // Managed-lane kill switch: default OFF, gates NEW launches only. Cleanup /
+  // reconcile / orphan sweeps intentionally do not consult it (mirroring
+  // EPHEMERAL_MACHINES_ENABLED above), so flipping it off never strands a
+  // billing machine.
+  if (computeSource === "managed" && !managedComputeEnabled()) {
+    return { willProvision: false, targetConfigId: target.id, reason: "managed compute disabled (MANAGED_COMPUTE_ENABLED)" };
   }
-  if (hosted.validatedProviders?.[target.provider] !== providerCredentialFingerprint(hosted.providerTokens[target.provider])) {
-    return { willProvision: false, targetConfigId: target.id, reason: `provider credential for ${target.provider} has not been validated` };
+  const cred = await resolveProviderCredential(hosted, target.provider, computeSource, { requireValidated: true });
+  if (!cred.token) {
+    return { willProvision: false, targetConfigId: target.id, reason: cred.reason };
   }
   // A config primary is the designated runner (provision regardless of node
   // liveness). A node primary only falls back to its config when nothing online.
@@ -311,6 +373,11 @@ export async function planAutoProvision(store: EphemeralProvisioningPort, accoun
   if (recentLaunches.length >= MAX_PROVISIONS_PER_HOUR) {
     return { willProvision: false, targetConfigId: target.id, reason: `rate limit: ${MAX_PROVISIONS_PER_HOUR} provisions/hour reached` };
   }
+  // CAP GATE: managed-tier metering/caps integration point. When the
+  // standalone cap-gate lands, it is consulted HERE — the single provisioning
+  // decision choke point — and may veto with `{ willProvision: false, reason }`
+  // (e.g. account over its managed-compute budget). Owned by the metering
+  // workstream; do not add a second gate elsewhere.
   return { willProvision: true, targetConfigId: target.id, reason: "ready to provision" };
 }
 
@@ -441,9 +508,14 @@ export async function provisionEphemeralForAccount(
   retry?: { attemptId: string; nodeId: string; retryCount: number },
 ): Promise<EphemeralMachine> {
   const hosted = await store.getHostedProvisioning(accountId);
-  const providerToken = hosted.providerTokens?.[config.provider];
-  if (!providerToken) throw new Error(`No hosted provider token for ${config.provider}`);
-  await audit(store, accountId, { action: "provision_attempt", provider: config.provider, configId: config.id });
+  const computeSource = normalizeComputeSource(config.computeSource);
+  const cred = await resolveProviderCredential(hosted, config.provider, computeSource);
+  const providerToken = cred.token;
+  if (!providerToken) throw new Error(computeSource === "managed" ? cred.reason : `No hosted provider token for ${config.provider}`);
+  await audit(store, accountId, {
+    action: "provision_attempt", provider: config.provider, configId: config.id,
+    ...(computeSource === "managed" ? { detail: "computeSource=managed" } : {}),
+  });
 
   // With an app identity (the account's own app OR the central app), the
   // machine self-mints a fresh, short-lived installation token from the control
@@ -472,7 +544,9 @@ export async function provisionEphemeralForAccount(
       observedState: attempt?.observedState,
       deadlineAt: computeAttemptDeadline(phase, eventCreatedAt ?? attempt?.machine?.createdAt as string | undefined, config.ttlMinutes, Date.now()),
       ownershipTag,
-      desired: { region: config.region, size: config.size, image: config.image, ttlMinutes: config.ttlMinutes, purpose, setupId: config.id },
+      // computeSource rides in `desired` so teardown/reconcile can pick the
+      // right credential lane even after the config itself is deleted.
+      desired: { region: config.region, size: config.size, image: config.image, ttlMinutes: config.ttlMinutes, purpose, setupId: config.id, computeSource },
       machine: event.machine as unknown as Record<string, unknown> | undefined,
       lastError: event.error, retryCount: retry?.retryCount ?? 0,
       createdAt: attempt?.createdAt ?? createdAt, updatedAt: new Date().toISOString(),
@@ -555,7 +629,12 @@ export async function ensureReadyCapacity(
     if (!hosted.enabled) return null;
     const configs = await store.getEphemeralConfigs(accountId);
     let machines = await store.getHostedMachines(accountId);
-    const eligible = configs.filter((c) => (c.readyCapacity ?? 0) > 0 && ephemeralCatalogEntry(c.provider)?.computeClass === "byo-cloud");
+    // Ready capacity stays a BYO/user-lane feature: pre-warming operator-paid
+    // managed machines is idle spend on Bivy's bill, a call that belongs to the
+    // metering/caps workstream (see the CAP GATE in planAutoProvision).
+    const eligible = configs.filter((c) => (c.readyCapacity ?? 0) > 0
+      && ephemeralCatalogEntry(c.provider)?.computeClass === "byo-cloud"
+      && normalizeComputeSource(c.computeSource) === "user");
     for (const candidate of eligible) {
       const existing = machines.find((m) => m.setupId === candidate.id && m.purpose === "ready-capacity");
       if (!existing || readyMachineUsable(existing)) continue;
@@ -606,15 +685,20 @@ export async function provisionEphemeralRestore(
   nowMs = Date.now(),
 ): Promise<EphemeralMachine> {
   const hosted = await store.getHostedProvisioning(accountId);
-  const providerToken = hosted.providerTokens?.[config.provider];
-  if (!providerToken) throw new Error(`No hosted provider token for ${config.provider}`);
+  const computeSource = normalizeComputeSource(config.computeSource);
+  const cred = await resolveProviderCredential(hosted, config.provider, computeSource);
+  const providerToken = cred.token;
+  if (!providerToken) throw new Error(computeSource === "managed" ? cred.reason : `No hosted provider token for ${config.provider}`);
   const enc = await store.getNodeRoomKeyEnc(accountId, opts.reuseNodeId);
   if (!enc) throw new Error(`No escrowed room key for ${opts.reuseNodeId} — cannot rebuild this session server-side`);
   const reuseRoomKeyB64 = decryptSecret(accountId, enc);
   const identity = await resolveAccountGithubIdentity(store, accountId, hosted);
   const useHostedMint = identity?.kind === "app";
   const githubToken = identity?.kind === "token" ? identity.token : undefined;
-  await audit(store, accountId, { action: "provision_attempt", provider: config.provider, configId: config.id });
+  await audit(store, accountId, {
+    action: "provision_attempt", provider: config.provider, configId: config.id,
+    ...(computeSource === "managed" ? { detail: "computeSource=managed" } : {}),
+  });
 
   const sessionToken = await store.createSession(accountId);
   const localStore = serverLocalStore({ sessionToken, env, onAddKey: () => {} });
@@ -632,7 +716,7 @@ export async function provisionEphemeralRestore(
       observedState: attempt?.observedState,
       deadlineAt: computeAttemptDeadline(phase, eventCreatedAt ?? attempt?.machine?.createdAt as string | undefined, config.ttlMinutes, Date.now()),
       ownershipTag,
-      desired: { region: config.region, size: config.size, image: config.image, ttlMinutes: config.ttlMinutes, purpose: "queue-default", setupId: config.id, restoreSessionId: opts.restoreSessionId },
+      desired: { region: config.region, size: config.size, image: config.image, ttlMinutes: config.ttlMinutes, purpose: "queue-default", setupId: config.id, restoreSessionId: opts.restoreSessionId, computeSource },
       machine: event.machine as unknown as Record<string, unknown> | undefined,
       lastError: event.error, retryCount: opts.retryCount ?? 0,
       createdAt: attempt?.createdAt ?? createdAt, updatedAt: new Date().toISOString(),
@@ -777,7 +861,13 @@ export async function reapSettledHostedMachine(
   if (!record) return false;
   const machine = record as unknown as EphemeralMachine;
   const hosted = await store.getHostedProvisioning(accountId);
-  const providerToken = hosted.providerTokens?.[machine.provider];
+  // Teardown resolves its credential by the machine's compute source — the CP
+  // holds the operator token, so managed machines get the same full
+  // server-side destroy authority as hosted ones. Never gated by the
+  // MANAGED_COMPUTE_ENABLED launch switch.
+  const sourceAttempt = machine.attemptId ? await store.getHostedMachineAttempt(accountId, machine.attemptId).catch(() => undefined) : undefined;
+  const sourceConfigs = await store.getEphemeralConfigs(accountId).catch(() => [] as EphemeralNodeConfig[]);
+  const providerToken = (await resolveProviderCredential(hosted, machine.provider, machineComputeSource(record, sourceAttempt, sourceConfigs))).token;
   try {
     if (providerToken) {
       if (machine.attemptId) {
@@ -893,6 +983,12 @@ export async function reconcileHostedMachines(store: EphemeralProvisioningPort, 
       const age = nowMs - Date.parse(attempt.updatedAt);
       const backoff = Math.min(15 * 60_000, 30_000 * 2 ** Math.min(attempt.retryCount, 5));
       if (!Number.isFinite(age) || age < backoff) continue;
+      // A creation retry that never reached the provider is a NEW managed
+      // launch: while the managed kill switch is off, hold it untouched (it
+      // resumes when the switch returns). Placed after the abandonment check
+      // above so hopeless attempts are still cleaned up, and everything
+      // deletion-side below is untouched — cleanup never turns off.
+      if (normalizeComputeSource(attempt.desired?.computeSource) === "managed" && !managedComputeEnabled()) continue;
       const config = configs.find((c) => c.id === attempt.configId) ?? {
         id: attempt.configId || `recovered-${attempt.attemptId}`,
         name: "Recovered ephemeral runner",
@@ -901,6 +997,7 @@ export async function reconcileHostedMachines(store: EphemeralProvisioningPort, 
         size: typeof attempt.desired.size === "string" ? attempt.desired.size : undefined,
         image: typeof attempt.desired.image === "string" ? attempt.desired.image : undefined,
         ttlMinutes: typeof attempt.desired.ttlMinutes === "number" ? attempt.desired.ttlMinutes : 60,
+        ...(normalizeComputeSource(attempt.desired.computeSource) === "managed" ? { computeSource: "managed" as const } : {}),
         createdAt: attempt.createdAt,
         updatedAt: attempt.updatedAt,
       };
@@ -918,6 +1015,9 @@ export async function reconcileHostedMachines(store: EphemeralProvisioningPort, 
 
   if (!machines.length && !attempts.length) return 0;
   const hosted = env ? await store.getHostedProvisioning(accountId) : null;
+  // For per-machine credential-lane resolution below (managed machines tear
+  // down with the operator token, regardless of the managed launch switch).
+  const accountConfigs = env ? await store.getEphemeralConfigs(accountId).catch(() => [] as EphemeralNodeConfig[]) : [];
   // Looked up per machine to decide whether a force-destroy (desiredState
   // "deleted" — a PWA teardown, or an attempt abandoned above) should skip
   // the "still within TTL grace" retention below and be retried immediately
@@ -932,7 +1032,8 @@ export async function reconcileHostedMachines(store: EphemeralProvisioningPort, 
     const ttlMin = typeof m.ttlMinutes === "number" ? m.ttlMinutes : 60;
     const nodeId = typeof m.nodeId === "string" ? m.nodeId : "";
     const provider = typeof m.provider === "string" ? m.provider : "";
-    const providerToken = env && provider ? hosted?.providerTokens?.[provider] : undefined;
+    const computeSource = machineComputeSource(m, typeof m.attemptId === "string" ? attemptById.get(m.attemptId) : undefined, accountConfigs);
+    const providerToken = env && provider && hosted ? (await resolveProviderCredential(hosted, provider, computeSource)).token : undefined;
     const forceDelete = typeof m.attemptId === "string" && attemptById.get(m.attemptId)?.desiredState === "deleted";
 
     // Attempts opt into active observation. Legacy rows remain TTL-reconciled so
@@ -1156,8 +1257,26 @@ export async function sweepOrphanProviderResources(
   ]);
   const tracked = trackedResourceIds(machines, attempts);
   const ownershipTag = ownershipTagFor(accountId);
-  for (const [provider, token] of Object.entries(hosted.providerTokens ?? {})) {
-    if (hosted.validatedProviders?.[provider] !== providerCredentialFingerprint(token)) continue;
+  // One scan lane per (provider, credential): every validated user token, plus
+  // the operator token for any provider this account has a managed config or
+  // attempt on — a managed orphan lives in the OPERATOR's provider account and
+  // is invisible to user credentials. Runs regardless of the managed launch
+  // kill switch (cleanup never turns off).
+  const lanes: Array<{ provider: string; token: string }> = Object.entries(hosted.providerTokens ?? {})
+    .filter(([provider, token]) => hosted.validatedProviders?.[provider] === providerCredentialFingerprint(token))
+    .map(([provider, token]) => ({ provider, token }));
+  const managedProviders = new Set<string>();
+  for (const config of await store.getEphemeralConfigs(accountId).catch(() => [] as EphemeralNodeConfig[])) {
+    if (normalizeComputeSource(config.computeSource) === "managed") managedProviders.add(config.provider);
+  }
+  for (const attempt of attempts) {
+    if (normalizeComputeSource(attempt.desired?.computeSource) === "managed") managedProviders.add(attempt.provider);
+  }
+  for (const provider of managedProviders) {
+    const token = await operatorTokenSource().getToken(provider);
+    if (token) lanes.push({ provider, token });
+  }
+  for (const { provider, token } of lanes) {
     let discovered: EphemeralMachine[] | undefined;
     try {
       discovered = await discover(provider, token, ownershipTag);

@@ -23,9 +23,20 @@ Ephemeral sessions are short-lived Bivy nodes created for one task/session. Inte
    - User provides Hetzner SSH/API keys or an existing SSH target.
    - Bivy bootstraps the node with the installer, pairs it to the account, runs the session, then tears it down if Bivy created it.
 
+Saved ephemeral configurations record a `computeSource`: `user` uses that
+account's validated provider credential, while `managed` uses an operator-owned
+credential configured on the control plane. Existing configurations default to
+`user`. Both sources use the same provisioner, lifecycle milestones, teardown,
+reconciliation, and orphan cleanup; only credential resolution differs.
+Managed launches are off by default and require `MANAGED_COMPUTE_ENABLED=1`.
+Turning the flag off stops new managed launches but deliberately leaves cleanup
+running so existing machines cannot be stranded.
+
 ## Core rule
 
-The user brings secrets; Bivy brings orchestration.
+The user brings model and repository secrets; Bivy brings orchestration. A
+managed-compute operator may also supply the cloud-provider credential and pays
+for those machines, but never supplies or pools users' model credentials.
 
 Credential sources can be manual entry, Bivy vault, 1Password/Secrets Automation, provider CLIs already logged in on the node, or environment injection. Secrets should be scoped to the ephemeral node/session where possible and revoked or deleted on teardown.
 
