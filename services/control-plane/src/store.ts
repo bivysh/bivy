@@ -26,6 +26,10 @@ export interface Account {
   /** Commercial entitlement projected by the billing system. Unknown stored
    * values normalize to free at the compute gate. */
   plan: "free" | "individual" | "pro" | "team";
+  /** GitHub user + admin-org ids proven during the latest GitHub OAuth login.
+   * Central App installation is accepted only for one of these targets. */
+  githubUserId?: string;
+  githubInstallTargetIds: string[];
   createdAt: string;
 }
 
@@ -1198,6 +1202,7 @@ export interface AccountAuthRepository {
   // Accounts & auth
   findOrCreateAccount(email: string): Promise<Account>;
   getAccount(accountId: string): Promise<Account | undefined>;
+  setGithubIdentity(accountId: string, githubUserId: string, targetIds: string[]): Promise<void>;
   createLoginToken(email: string): Promise<string>; // magic-link, returns raw token
   consumeLoginToken(token: string): Promise<Account | undefined>;
   createSession(accountId: string): Promise<string>; // returns raw session token
@@ -1562,6 +1567,10 @@ export interface CentralGithubAppRepository {
   /** Consume a state (single use). Returns its binding, or undefined when the
    *  state is unknown, already used, or expired. */
   consumeCentralInstallState(state: string): Promise<{ accountId: string; returnPath?: string } | undefined>;
+  /** Signed installation.created webhooks attest the exact GitHub user that
+   * performed an org install; setup callbacks use this to reject identity drift. */
+  putCentralGithubInstallerAttestation(installationId: string, githubUserId: string): Promise<void>;
+  getCentralGithubInstallerAttestation(installationId: string): Promise<string | undefined>;
   /** Upsert an installation binding (state-verified callback or app webhook). */
   putCentralGithubInstallation(input: CentralGithubInstallationInput): Promise<CentralGithubInstallation>;
   getCentralGithubInstallation(installationId: string): Promise<CentralGithubInstallation | undefined>;

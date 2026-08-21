@@ -94,6 +94,23 @@ AUTH_EMAIL_FROM=Bivy <login@app.example.com>
 GITHUB_OAUTH_CLIENT_ID=...
 GITHUB_OAUTH_CLIENT_SECRET=...
 
+# Optional centrally-owned GitHub App used by first-run repository onboarding.
+# OAuth must grant `read:user user:email read:org`: Bivy retains only the user id
+# and ids of organizations where that identity is an active administrator.
+BIVY_CENTRAL_GITHUB_APP_ID=...
+BIVY_CENTRAL_GITHUB_APP_PRIVATE_KEY=...
+BIVY_CENTRAL_GITHUB_APP_WEBHOOK_SECRET=...
+BIVY_CENTRAL_GITHUB_APP_SLUG=...
+```
+
+Central App setup verifies that the installation target is either the signed-in
+GitHub user or an organization that user administers. For organization installs,
+the signed `installation.created` webhook must also identify that exact user as
+the installer. The OAuth access token is never retained. `BIVY_GITHUB_INSTALLER_IDENTITY_REQUIRED=0` disables this check
+for a backwards-compatible self-host migration, but hosted deployments should
+never set it.
+
+```env
 # Web push (phone/PWA notifications). Push stays disabled until BOTH VAPID keys
 # are set; generate a pair with `npx web-push generate-vapid-keys`. Push works
 # for every account on a self-hosted stack.

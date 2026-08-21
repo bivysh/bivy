@@ -748,9 +748,9 @@ function asyncHandler(fn: (req: Request, res: Response, next: NextFunction) => P
 // --- GitHub OAuth sign-in -----------------------------------------------------
 // Primary sign-in for the developer ICP. We resolve the account by the user's
 // PRIMARY VERIFIED GitHub email so a GitHub login and a magic-link login for the
-// same address land on the SAME account. Minimal scope at login (read:user,
-// user:email); repo scope is requested later, only when a repo is connected to
-// the work queue.
+// same address land on the SAME account. Login requests read:user/user:email
+// plus read:org solely to retain installer target ids; repository content stays
+// behind the separately-installed central GitHub App.
 // Accept the BIVY_-prefixed names as a fallback. GitHub reserves the `GITHUB_`
 // prefix for Actions secrets, so the canonical secrets are stored as
 // BIVY_GITHUB_OAUTH_CLIENT_ID / _SECRET (see scripts/sync-github-env.sh). A
@@ -780,7 +780,10 @@ type GithubEmailFailure = "token-exchange" | "no-verified-email";
  * ("could not read a verified email") and are impossible to diagnose from a fresh
  * install — which step actually broke never reaches the operator.
  */
-async function githubPrimaryEmail(code: string, redirectUri: string): Promise<{ email?: string; reason?: GithubEmailFailure }> {
+async function githubPrimaryEmail(
+  code: string,
+  redirectUri: string,
+): Promise<{ email?: string; installTargetIds?: string[]; reason?: GithubEmailFailure }> {
   let tokenRes: Awaited<ReturnType<typeof fetch>>;
   try {
     tokenRes = await fetch("https://github.com/login/oauth/access_token", {
@@ -802,26 +805,38 @@ async function githubPrimaryEmail(code: string, redirectUri: string): Promise<{ 
   }
 
   const ghHeaders = { authorization: `Bearer ${accessToken}`, accept: "application/vnd.github+json", "user-agent": "bivy" };
-  const emailsRes = await fetch("https://api.github.com/user/emails", { headers: ghHeaders });
+  const [emailsRes, userRes, membershipsRes] = await Promise.all([
+    fetch("https://api.github.com/user/emails", { headers: ghHeaders }),
+    fetch("https://api.github.com/user", { headers: ghHeaders }),
+    fetch("https://api.github.com/user/memberships/orgs?state=active&per_page=100", { headers: ghHeaders }),
+  ]);
+  const user = userRes.ok
+    ? await userRes.json().catch(() => ({})) as { id?: number | string; email?: string | null }
+    : {};
+  const installTargetIds = user.id == null ? [] : [String(user.id)];
+  if (membershipsRes.ok) {
+    const memberships = await membershipsRes.json().catch(() => []) as Array<{
+      state?: string; role?: string; organization?: { id?: number | string };
+    }>;
+    for (const membership of memberships) {
+      if (membership.state === "active" && membership.role === "admin" && membership.organization?.id != null) {
+        installTargetIds.push(String(membership.organization.id));
+      }
+    }
+  } else {
+    console.warn(`[auth] GitHub org membership lookup failed with status ${membershipsRes.status}; org App installs will require a fresh GitHub sign-in`);
+  }
   if (emailsRes.ok) {
     const emails = (await emailsRes.json().catch(() => [])) as Array<{ email: string; primary: boolean; verified: boolean }>;
     const chosen = emails.find((e) => e.primary && e.verified) ?? emails.find((e) => e.verified);
-    if (chosen?.email) return { email: chosen.email.toLowerCase() };
+    if (chosen?.email) return { email: chosen.email.toLowerCase(), installTargetIds };
     console.warn(`[auth] GitHub /user/emails returned ${emails.length} address(es) but none were verified`);
   } else {
-    // Non-OK here almost always means the granted token lacks the user:email scope
-    // (or the OAuth grant wasn't SSO-authorized for the org).
     console.warn(`[auth] GitHub /user/emails failed with status ${emailsRes.status} — the token is likely missing the user:email scope`);
   }
-  // Fallback to the public profile email if the emails endpoint returned nothing usable.
-  const userRes = await fetch("https://api.github.com/user", { headers: ghHeaders });
-  if (userRes.ok) {
-    const user = (await userRes.json().catch(() => ({}))) as { email?: string | null };
-    if (user.email) return { email: user.email.toLowerCase() };
-    console.warn("[auth] GitHub /user returned no public email (email set to private and no verified address was readable)");
-  } else {
-    console.warn(`[auth] GitHub /user failed with status ${userRes.status}`);
-  }
+  if (user.email) return { email: user.email.toLowerCase(), installTargetIds };
+  if (!userRes.ok) console.warn(`[auth] GitHub /user failed with status ${userRes.status}`);
+  else console.warn("[auth] GitHub /user returned no public email (email set to private and no verified address was readable)");
   return { reason: "no-verified-email" };
 }
 
@@ -952,7 +967,10 @@ app.get("/auth/github/start", asyncHandler(async (req, res) => {
   const url = new URL("https://github.com/login/oauth/authorize");
   url.searchParams.set("client_id", githubClientId!);
   url.searchParams.set("redirect_uri", `${baseUrl(req)}/auth/github/callback`);
-  url.searchParams.set("scope", "read:user user:email"); // minimal scope at login
+  // read:org lets the callback prove which organizations this GitHub identity
+  // administers. That proof is retained only as target ids (never the OAuth
+  // token) and prevents a different browser GitHub identity from binding an App.
+  url.searchParams.set("scope", "read:user user:email read:org");
   url.searchParams.set("state", state);
   url.searchParams.set("allow_signup", "true");
   res.redirect(url.toString());
@@ -969,7 +987,7 @@ app.get("/auth/github/callback", asyncHandler(async (req, res) => {
     // dead-end error page they'd have to navigate away from by hand.
     return res.redirect(`/?authError=expired`);
   }
-  const { email, reason } = await githubPrimaryEmail(code, `${baseUrl(req)}/auth/github/callback`);
+  const { email, installTargetIds, reason } = await githubPrimaryEmail(code, `${baseUrl(req)}/auth/github/callback`);
   if (!email || !validEmail(email)) {
     const errCode = reason === "token-exchange" ? "github-config" : "github-email";
     // The device (CLI/app) flow finishes in a throwaway browser tab that never
@@ -991,6 +1009,8 @@ app.get("/auth/github/callback", asyncHandler(async (req, res) => {
   }
   // Resolve by verified email → links GitHub and magic-link to one account.
   const account = await store.findOrCreateAccount(email);
+  const githubUserId = installTargetIds?.[0];
+  if (githubUserId) await store.setGithubIdentity(account.id, githubUserId, installTargetIds ?? []);
   if (stored.deviceId) {
     await store.completeDeviceLogin(stored.deviceId, account.id);
     recordFunnelEvent("sign_in_completed", "github_device");
@@ -3338,6 +3358,12 @@ app.post("/account/github/central-app/install-state", asyncHandler(async (req, r
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const central = centralGithubAppConfig();
   if (!central) return res.status(404).json({ error: "Central GitHub App is not configured" });
+  if (process.env.BIVY_GITHUB_INSTALLER_IDENTITY_REQUIRED !== "0") {
+    const account = await store.getAccount(client.accountId);
+    if (!account?.githubInstallTargetIds.length) {
+      return res.status(409).json({ error: "Sign in with GitHub again before installing the GitHub App." });
+    }
+  }
   const returnPath = safeReturnPath(typeof req.body?.returnPath === "string" ? req.body.returnPath : undefined);
   const state = await store.createCentralInstallState(client.accountId, returnPath);
   res.json({ state, installUrl: centralInstallUrl(central, state) });
@@ -3365,6 +3391,23 @@ app.get("/github/central-app/setup", asyncHandler(async (req, res) => {
     detail = await getAppInstallation(central.appId, central.privateKeyPem, installationId);
   } catch {
     return res.status(400).send("GitHub does not recognize this installation for the Bivy app.");
+  }
+  if (process.env.BIVY_GITHUB_INSTALLER_IDENTITY_REQUIRED !== "0") {
+    const account = await store.getAccount(bound.accountId);
+    const targetAllowed = Boolean(detail.accountId && account?.githubInstallTargetIds.includes(detail.accountId));
+    let exactInstaller = detail.accountId === account?.githubUserId; // personal-account install
+    // Organization installs identify the clicking user only on the signed
+    // installation.created webhook. Give normal webhook delivery a short race
+    // window, then fail closed; restarting onboarding mints fresh state.
+    if (targetAllowed && !exactInstaller && account?.githubUserId) {
+      for (let attempt = 0; attempt < 25 && !exactInstaller; attempt += 1) {
+        exactInstaller = await store.getCentralGithubInstallerAttestation(installationId) === account.githubUserId;
+        if (!exactInstaller) await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+    }
+    if (!targetAllowed || !exactInstaller) {
+      return res.status(403).send("This GitHub installation was made by a different identity. Sign in to Bivy with the GitHub user that owns or administers this target, then try again.");
+    }
   }
   await store.putCentralGithubInstallation({
     installationId,

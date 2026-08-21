@@ -170,6 +170,7 @@ export interface CentralInstallationStorePort {
     repositorySelection?: string;
   }): Promise<CentralGithubInstallation>;
   deleteCentralGithubInstallation(installationId: string, accountId?: string): Promise<boolean>;
+  putCentralGithubInstallerAttestation(installationId: string, githubUserId: string): Promise<void>;
   appendHostedAudit(accountId: string, event: HostedAuditEvent): Promise<void>;
 }
 
@@ -187,6 +188,7 @@ interface InstallationEventPayload {
     account?: { login?: string; type?: string };
     repository_selection?: string;
   };
+  sender?: { id?: number | string; login?: string };
 }
 
 export function parseInstallationMeta(payload: unknown): {
@@ -221,9 +223,18 @@ export async function applyCentralInstallationEvent(
   if (event !== "installation" && event !== "installation_repositories") return { handled: false };
   const meta = parseInstallationMeta(payload);
   if (!meta.installationId) return { handled: true, action: "ignored" };
+  const eventPayload = payload as InstallationEventPayload | undefined;
+  const action = String(eventPayload?.action ?? "");
   const existing = await store.getCentralGithubInstallation(meta.installationId);
-  if (!existing) return { handled: true, action: "unbound" };
-  const action = String((payload as InstallationEventPayload | undefined)?.action ?? "");
+  if (!existing) {
+    // The webhook is signed by the central App and uniquely supplies `sender`,
+    // the GitHub identity that actually clicked Install. Keep only this
+    // short-lived attestation; account binding still requires browser state.
+    if (event === "installation" && action === "created" && eventPayload?.sender?.id != null) {
+      await store.putCentralGithubInstallerAttestation(meta.installationId, String(eventPayload.sender.id));
+    }
+    return { handled: true, action: "unbound" };
+  }
   const at = new Date().toISOString();
   if (event === "installation" && action === "deleted") {
     await store.deleteCentralGithubInstallation(meta.installationId);

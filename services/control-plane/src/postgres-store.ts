@@ -129,6 +129,8 @@ export class PostgresStore implements ControlPlaneStore {
         created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
       );
       ALTER TABLE accounts ADD COLUMN IF NOT EXISTS plan TEXT NOT NULL DEFAULT 'free';
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS github_user_id TEXT;
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS github_install_target_ids JSONB NOT NULL DEFAULT '[]';
 
       -- Per-account push notification preferences ({ [kind]: boolean }). NULL =
       -- "no preferences saved yet" and reads back as all-enabled defaults.
@@ -175,6 +177,13 @@ export class PostgresStore implements ControlPlaneStore {
       );
       CREATE INDEX IF NOT EXISTS central_install_states_expires_idx
         ON central_install_states (expires_at);
+      CREATE TABLE IF NOT EXISTS central_github_installer_attestations (
+        installation_id TEXT PRIMARY KEY,
+        github_user_id  TEXT NOT NULL,
+        expires_at      TIMESTAMPTZ NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS central_github_installer_attestations_expires_idx
+        ON central_github_installer_attestations (expires_at);
       CREATE TABLE IF NOT EXISTS node_claims (
         id          TEXT PRIMARY KEY,
         account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -816,6 +825,14 @@ export class PostgresStore implements ControlPlaneStore {
   async getAccount(accountId: string): Promise<Account | undefined> {
     const { rows } = await this.query(`SELECT * FROM accounts WHERE id = $1`, [accountId]);
     return rows[0] ? mapAccount(rows[0]) : undefined;
+  }
+
+  async setGithubIdentity(accountId: string, githubUserId: string, targetIds: string[]): Promise<void> {
+    const normalized = [...new Set(targetIds.map(String).filter((id) => /^\d+$/.test(id)))].slice(0, 200);
+    await this.query(
+      `UPDATE accounts SET github_user_id=$2, github_install_target_ids=$3 WHERE id=$1`,
+      [accountId, githubUserId, JSON.stringify(normalized)],
+    );
   }
 
   async createLoginToken(email: string): Promise<string> {
@@ -1643,6 +1660,22 @@ export class PostgresStore implements ControlPlaneStore {
   }
 
   // --- Central GitHub App installations (managed tier) -----------------------
+
+  async putCentralGithubInstallerAttestation(installationId: string, githubUserId: string): Promise<void> {
+    await this.query(
+      `INSERT INTO central_github_installer_attestations(installation_id,github_user_id,expires_at)
+       VALUES($1,$2,$3) ON CONFLICT(installation_id) DO UPDATE SET github_user_id=EXCLUDED.github_user_id, expires_at=EXCLUDED.expires_at`,
+      [installationId, githubUserId, new Date(Date.now() + 15 * 60_000)],
+    );
+  }
+
+  async getCentralGithubInstallerAttestation(installationId: string): Promise<string | undefined> {
+    const { rows } = await this.query(
+      `SELECT github_user_id FROM central_github_installer_attestations WHERE installation_id=$1 AND expires_at > now()`,
+      [installationId],
+    );
+    return rows[0]?.github_user_id == null ? undefined : String(rows[0].github_user_id);
+  }
 
   async createCentralInstallState(accountId: string, returnPath?: string): Promise<string> {
     const state = randomBytes(24).toString("base64url");
@@ -3186,7 +3219,7 @@ export class PostgresStore implements ControlPlaneStore {
     // there is no cross-table transaction requirement (each row is independently
     // safe to drop once past its own expiry).
     let total = 0;
-    for (const table of ["login_tokens", "sessions", "link_grants", "relay_tickets", "device_logins", "oauth_states", "central_install_states", "node_claims"]) {
+    for (const table of ["login_tokens", "sessions", "link_grants", "relay_tickets", "device_logins", "oauth_states", "central_install_states", "central_github_installer_attestations", "node_claims"]) {
       const { rowCount } = await this.query(`DELETE FROM ${table} WHERE expires_at < $1`, [nowIso]);
       total += rowCount ?? 0;
     }
@@ -3464,6 +3497,8 @@ function mapAccount(row: any): Account {
     id: row.id,
     email: row.email,
     plan: ["individual", "pro", "team"].includes(row.plan) ? row.plan : "free",
+    githubUserId: row.github_user_id || undefined,
+    githubInstallTargetIds: Array.isArray(row.github_install_target_ids) ? row.github_install_target_ids.map(String) : [],
     createdAt: new Date(row.created_at).toISOString(),
   };
 }
