@@ -40,6 +40,15 @@ await test("sessions can be created, resolved, and revoked (logout)", async () =
   assert.equal(await store.accountFromSession(token), undefined);
 });
 
+await test("GitHub installer targets are retained as identity proof", async () => {
+  const store = await makeStore();
+  const account = await store.findOrCreateAccount("github-targets@example.com");
+  await store.setGithubIdentity(account.id, "123", ["123", "456", "123", "invalid"]);
+  const linked = await store.getAccount(account.id);
+  assert.equal(linked?.githubUserId, "123");
+  assert.deepEqual(linked?.githubInstallTargetIds, ["123", "456"]);
+});
+
 await test("magic-link login tokens are single-use", async () => {
   const store = await makeStore();
   const token = await store.createLoginToken("c@example.com");

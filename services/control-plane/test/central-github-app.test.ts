@@ -148,9 +148,11 @@ await test("webhook routing: lifecycle events touch only already-bound installat
   const created = await applyCentralInstallationEvent(store, "installation", {
     action: "created",
     installation: { id: 99, account: { login: "victim" } },
+    sender: { id: 700, login: "installer" },
   });
   assert.deepEqual(created, { handled: true, action: "unbound" });
   assert.equal(await store.getCentralGithubInstallation("99"), undefined);
+  assert.equal(await store.getCentralGithubInstallerAttestation("99"), "700");
 
   // repo-selection changes update the bound record's metadata.
   const updated = await applyCentralInstallationEvent(store, "installation_repositories", {

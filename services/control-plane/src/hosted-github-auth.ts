@@ -127,6 +127,7 @@ export async function listAppInstallations(
 export interface GithubInstallationDetail {
   id: string;
   account?: string;
+  accountId?: string;
   accountType?: string;
   repositorySelection?: string;
 }
@@ -148,7 +149,7 @@ export async function getAppInstallation(
   });
   const data = (await res.json().catch(() => ({}))) as {
     id?: number | string;
-    account?: { login?: string; type?: string };
+    account?: { id?: number | string; login?: string; type?: string };
     repository_selection?: string;
     message?: string;
   };
@@ -158,6 +159,7 @@ export async function getAppInstallation(
   return {
     id: String(data.id),
     account: data.account?.login,
+    accountId: data.account?.id == null ? undefined : String(data.account.id),
     accountType: data.account?.type,
     repositorySelection: typeof data.repository_selection === "string" ? data.repository_selection : undefined,
   };

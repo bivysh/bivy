@@ -116,6 +116,10 @@ async function main() {
       BIVY_CENTRAL_GITHUB_APP_PRIVATE_KEY: Buffer.from(pem).toString("base64"),
       BIVY_CENTRAL_GITHUB_APP_WEBHOOK_SECRET: WEBHOOK_SECRET,
       BIVY_CENTRAL_GITHUB_APP_SLUG: "bivy-central-test",
+      // This legacy-flow fixture signs in through dev-login and therefore has no
+      // GitHub OAuth identity proof. Dedicated store/auth tests cover the
+      // production-default installer target check.
+      BIVY_GITHUB_INSTALLER_IDENTITY_REQUIRED: "0",
     },
     stdio: "inherit",
   });
