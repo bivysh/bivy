@@ -957,7 +957,7 @@ function NodesPanel({ state, cloudMachinesEnabled }: { state: AppState; cloudMac
     if (!nodeClaim) return;
     const timer = window.setInterval(refreshClaims, 3000);
     return () => window.clearInterval(timer);
-  }, [hosted, nodeClaim?.id]);
+  }, [hosted, nodeClaim]);
 
   // The node whose settings we're editing is only ever the one the transport
   // is actually connected to (`state.connection.status === "online"`) — never a guess
