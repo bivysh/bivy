@@ -216,7 +216,11 @@ try {
     delete process.env.MANAGED_COMPUTE_ENABLED; // launches gated OFF
     process.env.MANAGED_PROVIDER_TOKEN_FLY = OPERATOR_TOKEN; // cleanup credential stays available
     const { store, acctId } = await managedAccount();
-    const machine = { id: "fly-old", provider: "fly", nodeId: "eph-old", attemptId: "att-old", setupId: MANAGED_CONFIG.id, createdAt: iso(200 * 60_000), ttlMinutes: 60, status: "running" };
+    const machine = {
+      id: "fly-old", provider: "fly", nodeId: "eph-old", attemptId: "att-old", setupId: MANAGED_CONFIG.id,
+      createdAt: iso(200 * 60_000), ttlMinutes: 60, status: "running",
+      milestones: { firstAgentEventAt: iso(100 * 60_000) },
+    };
     await store.setHostedMachines(acctId, [machine]);
     await store.putHostedMachineAttempt({
       accountId: acctId, attemptId: "att-old", provider: "fly", nodeId: "eph-old",
@@ -227,8 +231,15 @@ try {
     let destroyed = false;
     const destroy: DestroyFn = async (m, deps) => { destroyed = true; destroyToken = await deps.keys.getToken(m.provider); };
     const observe: ObserveFn = async () => (destroyed ? "gone" : "running");
-    const reaped = await reconcileHostedMachines(store, acctId, Date.now(), env, destroy, observe);
+    let settlement: { accountId: string; attemptId: string; machineSeconds: number; activeAgentSeconds: number } | undefined;
+    const reaped = await reconcileHostedMachines(store, acctId, Date.now(), env, destroy, observe, async (accountId, event) => {
+      settlement = { accountId, ...event };
+    });
     assert.equal(reaped, 1, "cleanup runs while the launch switch is off");
+    assert.equal(settlement?.accountId, acctId, "reconciliation reports settlement for private metering");
+    assert.equal(settlement?.attemptId, "att-old");
+    assert.ok((settlement?.machineSeconds ?? 0) >= 200 * 60);
+    assert.ok((settlement?.activeAgentSeconds ?? 0) >= 100 * 60);
     assert.equal(destroyToken, OPERATOR_TOKEN, "teardown resolved the managed lane's credential");
     assert.deepEqual(await store.getHostedMachines(acctId), []);
   });

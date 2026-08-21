@@ -1012,7 +1012,23 @@ export async function reapSettledHostedMachine(
  * node — the VM self-destructs at its own TTL for Fly/EC2). Returns the number
  * reaped. Safe to run lazily or on a timer.
  */
-export async function reconcileHostedMachines(store: EphemeralProvisioningPort, accountId: string, nowMs = Date.now(), env?: ProvisionEnv, destroy: DestroyFn = destroyEphemeralMachine, observe: ObserveFn = observeProviderMachine): Promise<number> {
+export interface ManagedSettlementEvent {
+  attemptId: string;
+  at: string;
+  machineSeconds: number;
+  activeAgentSeconds: number;
+}
+export type ManagedSettlementReporter = (accountId: string, event: ManagedSettlementEvent) => Promise<void>;
+
+export async function reconcileHostedMachines(
+  store: EphemeralProvisioningPort,
+  accountId: string,
+  nowMs = Date.now(),
+  env?: ProvisionEnv,
+  destroy: DestroyFn = destroyEphemeralMachine,
+  observe: ObserveFn = observeProviderMachine,
+  reportManagedSettlement?: ManagedSettlementReporter,
+): Promise<number> {
   let machines = await store.getHostedMachines(accountId);
   // Older self-hosted/test store shims may not expose the new attempt table
   // until their migration completes; legacy tracked-machine cleanup must still run.
@@ -1122,9 +1138,20 @@ export async function reconcileHostedMachines(store: EphemeralProvisioningPort, 
       try {
         const observed = await observe(m as unknown as EphemeralMachine, providerToken);
         if (observed === "gone") {
-          await settleManagedMachineUsage(store, accountId, { ...m, computeSource }, new Date(nowMs).toISOString()).catch(async () => {
+          const settledAt = new Date(nowMs).toISOString();
+          const meteredMachine = { ...m, computeSource };
+          await settleManagedMachineUsage(store, accountId, meteredMachine, settledAt).catch(async () => {
             await audit(store, accountId, { action: "reconcile_failed", provider, nodeId: nodeId || undefined, detail: "usage settlement persistence failed" });
           });
+          const usage = usageFromManagedMachine(accountId, meteredMachine, settledAt);
+          const attemptId = typeof m.attemptId === "string" ? m.attemptId : "";
+          if (usage && attemptId && reportManagedSettlement) {
+            await reportManagedSettlement(accountId, {
+              attemptId, at: settledAt, machineSeconds: usage.machineSeconds, activeAgentSeconds: usage.activeAgentSeconds,
+            }).catch(async () => {
+              await audit(store, accountId, { action: "reconcile_failed", provider, nodeId: nodeId || undefined, detail: "managed settlement event failed" });
+            });
+          }
           if (nodeId) await store.removeNode(accountId, nodeId).catch(() => {});
           const attempt = await store.getHostedMachineAttempt(accountId, m.attemptId).catch(() => undefined);
           if (attempt) await store.putHostedMachineAttempt({ ...attempt, state: "deleted", machine: m, updatedAt: new Date(nowMs).toISOString() }).catch(() => {});
@@ -1234,11 +1261,21 @@ export async function reconcileHostedMachines(store: EphemeralProvisioningPort, 
         /* best effort — Fly/EC2 self-destruct regardless */
       }
     }
-    await settleManagedMachineUsage(store, accountId, { ...m, computeSource }, new Date(nowMs).toISOString()).catch(async () => {
+    const settledAt = new Date(nowMs).toISOString();
+    const meteredMachine = { ...m, computeSource };
+    await settleManagedMachineUsage(store, accountId, meteredMachine, settledAt).catch(async () => {
       await audit(store, accountId, { action: "reconcile_failed", provider: provider || undefined, nodeId: nodeId || undefined, detail: "usage settlement persistence failed" });
     });
-    reaped++;
+    const usage = usageFromManagedMachine(accountId, meteredMachine, settledAt);
     const attemptId = typeof m.attemptId === "string" ? m.attemptId : "";
+    if (usage && attemptId && reportManagedSettlement) {
+      await reportManagedSettlement(accountId, {
+        attemptId, at: settledAt, machineSeconds: usage.machineSeconds, activeAgentSeconds: usage.activeAgentSeconds,
+      }).catch(async () => {
+        await audit(store, accountId, { action: "reconcile_failed", provider: provider || undefined, nodeId: nodeId || undefined, detail: "managed settlement event failed" });
+      });
+    }
+    reaped++;
     if (attemptId) {
       const attempt = await store.getHostedMachineAttempt(accountId, attemptId).catch(() => undefined);
       if (attempt) await store.putHostedMachineAttempt({ ...attempt, state: "deleted", machine: m, updatedAt: new Date(nowMs).toISOString() }).catch(() => {});
@@ -1264,12 +1301,13 @@ export async function reconcileAllHostedMachines(
   env: ProvisionEnv,
   nowMs = Date.now(),
   destroy: DestroyFn = destroyEphemeralMachine,
+  reportManagedSettlement?: ManagedSettlementReporter,
 ): Promise<ReconcileAllResult> {
   const accountIds = await store.listHostedMachineAccountIds();
   const result: ReconcileAllResult = { accounts: accountIds.length, reaped: 0, failed: 0 };
   for (const accountId of accountIds) {
     try {
-      result.reaped += await reconcileHostedMachines(store, accountId, nowMs, env, destroy);
+      result.reaped += await reconcileHostedMachines(store, accountId, nowMs, env, destroy, observeProviderMachine, reportManagedSettlement);
     } catch (error) {
       result.failed++;
       await audit(store, accountId, {
@@ -1458,6 +1496,7 @@ export async function maybeAutoProvision(
   launcher = launchEphemeralMachine,
   admitManaged: ManagedProvisionAdmission = allowManagedProvision,
   onManagedLaunchFailed: (attemptId: string) => Promise<void> = async () => {},
+  reportManagedSettlement?: ManagedSettlementReporter,
 ): Promise<EphemeralMachine | null> {
   const leaseHolder = randomUUID();
   let replenish = false;
@@ -1468,7 +1507,9 @@ export async function maybeAutoProvision(
     // machines past TTL before deciding, so dedupe/rate-cap see fresh state and
     // node slots are freed. Passing env lets it DELETE the provider resource
     // (Hetzner) rather than only forgetting the record.
-    await reconcileHostedMachines(store, accountId, Date.now(), env).catch(() => {});
+    await reconcileHostedMachines(
+      store, accountId, Date.now(), env, destroyEphemeralMachine, observeProviderMachine, reportManagedSettlement,
+    ).catch(() => {});
     // Planning and launching must be one cross-replica critical section. Without
     // this lease, two webhook/control-plane workers can both observe no active
     // machine and each create a separately billed VM. Five minutes covers slow
