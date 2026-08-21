@@ -316,6 +316,15 @@ export async function createCentralGithubInstall(
   return value as { state: string; installUrl: string };
 }
 
+export async function createManagedAuthRunner(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<{ machine: Record<string, unknown>; duplicate?: boolean }> {
+  const res = await fetchImpl(`${cpBase(store)}/account/onboarding/auth-runner`, {
+    method: "POST", headers: { authorization: `Bearer ${store.s}` },
+  });
+  const value = await res.json().catch(() => ({})) as { machine?: Record<string, unknown>; duplicate?: boolean; error?: string; reason?: string };
+  if (!res.ok || !value.machine) throw new Error(value.reason || value.error || `managed authentication Machine request failed: ${res.status}`);
+  return value as { machine: Record<string, unknown>; duplicate?: boolean };
+}
+
 export interface AccountNodeClaim {
   id: string;
   createdAt: string;

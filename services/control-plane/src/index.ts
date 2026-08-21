@@ -7,10 +7,10 @@ import { fileURLToPath } from "node:url";
 import express, { type Request, type Response, type NextFunction } from "express";
 import { ipKeyGenerator, rateLimit } from "express-rate-limit";
 import webpush from "web-push";
-import { validateCapabilityTags } from "@bivy/core";
+import { ephemeralAdapter, validateCapabilityTags } from "@bivy/core";
 import { providerCredentialFingerprint, type Account, type NodeRecord, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, type AutomationRun, type InboundHook, type NodeClaim, GITHUB_IDENTITY_MODES, type GithubIdentityMode, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
 import { centralGithubAppConfig, centralInstallUrl, applyCentralInstallationEvent, resolveGithubIdentity } from "./central-github-app.js";
-import { maybeAutoProvision, planAutoProvision, hostedExecutionReadiness, mintHostedInstallationToken, reapSettledHostedMachine, reconcileAllHostedMachines, reconcileAllReadyCapacity, sweepAllOrphanProviderResources, validateHostedProviderToken, markHostedMachineMilestone, EPHEMERAL_MILESTONES, ephemeralMachinesEnabled, type ManagedProvisionRequest } from "./ephemeral-provisioner.js";
+import { maybeAutoProvision, planAutoProvision, hostedExecutionReadiness, mintHostedInstallationToken, provisionEphemeralForAccount, reapSettledHostedMachine, reconcileAllHostedMachines, reconcileAllReadyCapacity, sweepAllOrphanProviderResources, validateHostedProviderToken, markHostedMachineMilestone, EPHEMERAL_MILESTONES, ephemeralMachinesEnabled, type ManagedProvisionRequest } from "./ephemeral-provisioner.js";
 import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecret, initializeHostedKeyring } from "./hosted-crypto.js";
 import { listAppInstallations, listInstallationRepositories, listInstallationBranches, getAppInstallation } from "./hosted-github-auth.js";
 import { correlateHostedSessions } from "./hosted-correlation.js";
@@ -1210,6 +1210,46 @@ function presentNodeClaim(claim: NodeClaim) {
 // Mint the one-line personal-machine command. The raw code is returned exactly
 // once and only its SHA-256 hash is persisted. It authorizes enrollment only —
 // never an account session, GitHub token, billing action, or existing-node read.
+app.post("/account/onboarding/auth-runner", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  if (!ephemeralMachinesEnabled() || process.env.MANAGED_COMPUTE_ENABLED !== "1") {
+    return res.status(503).json({ error: "Managed setup Machines are not available." });
+  }
+  const existing = (await store.getHostedMachines(account.id)).find(
+    (machine) => machine.computeSource === "managed" && machine.purpose === "auth-runner",
+  );
+  if (existing) return res.json({ ok: true, machine: existing, duplicate: true });
+
+  const provider = String(process.env.MANAGED_AUTH_RUNNER_PROVIDER || "fly").trim();
+  const adapter = ephemeralAdapter(provider);
+  if (!adapter) return res.status(503).json({ error: "Managed setup provider is not configured." });
+  const ttlMinutes = Math.max(5, Math.min(15, Number(process.env.MANAGED_AUTH_RUNNER_TTL_MINUTES) || 15));
+  const size = String(process.env.MANAGED_AUTH_RUNNER_SIZE || adapter.defaultSize).trim();
+  const selectedSize = adapter.sizes.find((entry) => entry.id === size);
+  const config: EphemeralNodeConfig = {
+    id: "managed-auth-runner", name: "Authentication Machine", provider,
+    region: String(process.env.MANAGED_AUTH_RUNNER_REGION || adapter.defaultRegion), size,
+    image: process.env.MANAGED_AUTH_RUNNER_IMAGE || undefined,
+    ttlMinutes, computeSource: "managed", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  };
+  const attemptId = randomUUID();
+  const decision = await deploymentDecision(account.id, "ephemeral.provision", attemptId, {
+    computeSource: "managed", provider, sizeId: size, vcpus: selectedSize?.vcpus,
+    memoryMiB: selectedSize?.memoryMiB, ttlMinutes, configId: config.id, purpose: "auth-runner",
+  });
+  if (!decision.allowed) return res.status(403).json({ error: decision.reason || "Managed setup Machine denied", ...decision });
+  try {
+    const machine = await provisionEphemeralForAccount(
+      store, account.id, config, provisionEnv(), undefined, Date.now(), "auth-runner",
+      { attemptId, retryCount: 0 },
+    );
+    res.status(201).json({ ok: true, machine });
+  } catch (error) {
+    await managedLaunchFailureRecorder(account.id)(attemptId).catch(() => {});
+    throw error;
+  }
+}));
+
 app.post("/account/node-claims", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   const { claim, code } = await store.createNodeClaim(account.id);

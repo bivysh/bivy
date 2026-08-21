@@ -113,6 +113,7 @@ export interface ManagedProvisionRequest {
   memoryMiB?: number;
   ttlMinutes: number;
   configId: string;
+  purpose?: string;
 }
 
 export interface ProvisionAdmissionDecision {
@@ -404,6 +405,7 @@ export async function planAutoProvision(
       memoryMiB: size?.memoryMiB,
       ttlMinutes: target.ttlMinutes ?? 60,
       configId: target.id,
+      purpose: "queue-work",
     });
     if (!decision.allowed) {
       return {
@@ -622,7 +624,10 @@ export async function provisionEphemeralForAccount(
         size: config.size,
         image: config.image,
         ttlMinutes: config.ttlMinutes,
-        hostedTasks: true,
+        // Authentication runners exist only to establish encrypted provider
+        // credentials. They must never poll or claim queued work, so no agent
+        // event can accidentally consume a managed trial.
+        hostedTasks: purpose !== "auth-runner",
         githubToken,
         hostedMint: useHostedMint,
         setupId: config.id,

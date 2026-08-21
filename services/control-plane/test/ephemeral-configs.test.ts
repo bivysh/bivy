@@ -108,6 +108,8 @@ async function main() {
   const claims = await req(port, "GET", "/account/node-claims", undefined, token);
   expect(claims.json?.[0]?.status === "used" && claims.json?.[0]?.nodeId === "claimed-machine", "claim status records only the enrolled node identity");
   expect(!JSON.stringify(claims.json).includes(code), "raw machine claim is never returned after creation");
+  const authRunnerOff = await req(port, "POST", "/account/onboarding/auth-runner", undefined, token);
+  expect(authRunnerOff.status === 503, "managed authentication Machine fails closed when the operator lane is disabled");
 
   // Fresh account: no configs, shared-queue routing.
   const empty = await req(port, "GET", "/account/ephemeral-configs", undefined, token);

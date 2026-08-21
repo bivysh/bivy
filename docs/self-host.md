@@ -174,6 +174,13 @@ create, inspect, and destroy Machines, then configure the control plane:
 # New managed launches are disabled unless this is exactly 1.
 MANAGED_COMPUTE_ENABLED=1
 MANAGED_PROVIDER_TOKEN_FLY=<operator Fly token>
+
+# Optional first-run authentication Machine overrides (defaults shown).
+MANAGED_AUTH_RUNNER_PROVIDER=fly
+MANAGED_AUTH_RUNNER_TTL_MINUTES=15
+# MANAGED_AUTH_RUNNER_REGION=<adapter default>
+# MANAGED_AUTH_RUNNER_SIZE=<adapter default>
+# MANAGED_AUTH_RUNNER_IMAGE=<provider default>
 ```
 
 Restart the control plane after changing these values. The token is read only by
