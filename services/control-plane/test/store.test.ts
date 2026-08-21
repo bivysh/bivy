@@ -593,4 +593,27 @@ await test("setNodeOnline(true) stamps last_seen_at; setNodeOnline(false) does n
   assert.equal(afterOffline?.lastSeenAt, seenWhenOnline, "offline write must not bump last_seen_at");
 });
 
+await test("node claims are account-bound, hashed, revocable, and single-use", async () => {
+  const store = await makeStore();
+  const account = await store.findOrCreateAccount("claim@example.com");
+  const other = await store.findOrCreateAccount("claim-other@example.com");
+
+  const { claim, code } = await store.createNodeClaim(account.id);
+  assert.equal(code.length, 43);
+  assert.equal((await store.listNodeClaims(account.id))[0].id, claim.id);
+  assert.equal((await store.listNodeClaims(other.id)).length, 0);
+  assert.equal(JSON.stringify(await store.listNodeClaims(account.id)).includes(code), false, "raw claim code is never read back");
+
+  assert.equal(await store.revokeNodeClaim(other.id, claim.id), false, "another account cannot revoke the claim");
+  const consumed = await store.consumeNodeClaim(code, "claimed-node");
+  assert.equal(consumed?.accountId, account.id);
+  assert.equal(consumed?.nodeId, "claimed-node");
+  assert.equal(await store.consumeNodeClaim(code, "replay-node"), undefined, "claim replay is rejected");
+  assert.equal(await store.revokeNodeClaim(account.id, claim.id), false, "used claim cannot be revoked into another state");
+
+  const revocable = await store.createNodeClaim(account.id);
+  assert.equal(await store.revokeNodeClaim(account.id, revocable.claim.id), true);
+  assert.equal(await store.consumeNodeClaim(revocable.code, "revoked-node"), undefined);
+});
+
 console.log(`\nAll ${passed} control-plane store tests passed.`);

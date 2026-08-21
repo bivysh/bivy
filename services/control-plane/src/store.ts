@@ -985,6 +985,16 @@ export type WorkItemInput = {
   preferredCapabilities?: string[];
 };
 
+export interface NodeClaim {
+  id: string;
+  accountId: string;
+  createdAt: string;
+  expiresAt: string;
+  usedAt?: string;
+  revokedAt?: string;
+  nodeId?: string;
+}
+
 // One central-app installation bound to an account. `installationId` is
 // GitHub-global (an installation exists exactly once, on one GitHub org/user),
 // so it is the natural primary key; the binding to a Bivy account is what the
@@ -1531,6 +1541,16 @@ export interface InboundHookRepository {
   deleteGithubAppHooksForApp(accountId: string, appId: string): Promise<number>;
 }
 
+export interface NodeClaimRepository {
+  /** Create a short-lived enrollment-only claim. Raw code is returned once. */
+  createNodeClaim(accountId: string): Promise<{ claim: NodeClaim; code: string }>;
+  listNodeClaims(accountId: string): Promise<NodeClaim[]>;
+  revokeNodeClaim(accountId: string, id: string): Promise<boolean>;
+  /** Atomically consume a raw code. Unknown, expired, used, and revoked claims
+   * all return undefined so the public endpoint does not disclose state. */
+  consumeNodeClaim(code: string, nodeId: string): Promise<NodeClaim | undefined>;
+}
+
 export interface CentralGithubAppRepository {
   // The ONE centrally-owned GitHub App (managed tier): which installations
   // belong to which account, plus the single-use `state` nonces that bind an
@@ -1653,6 +1673,7 @@ export interface ControlPlaneStore
     SessionStateRepository,
     GithubAppVaultRepository,
     InboundHookRepository,
+    NodeClaimRepository,
     CentralGithubAppRepository,
     AutomationRepository,
     WorkQueueRepository {}

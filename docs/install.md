@@ -14,6 +14,19 @@ The recommended path is:
 curl -fsSL https://bivy.sh/install.sh | bash
 ```
 
+If you are already signed in at `app.bivy.sh`, **Connect a machine** creates a
+short-lived, single-use command instead:
+
+```bash
+curl -fsSL https://app.bivy.sh/claim/<one-time-code> | sh
+```
+
+The claim authorizes enrollment of one new node only. It does not grant an
+account session or access to billing/GitHub settings, is stored hashed, expires
+after 10 minutes, and can be revoked before use. Fetching the script does not
+consume it; the installed CLI atomically consumes it when submitting its node
+identity.
+
 The installer:
 
 1. checks for Node.js 22.19+ and installs it if missing — on Debian/Ubuntu via

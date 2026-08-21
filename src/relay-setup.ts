@@ -207,9 +207,12 @@ async function main() {
   const clientBaseUrl = (arg("client", process.env.BIVY_CLIENT_BASE_URL) ?? controlPlaneUrl).replace(/\/$/, "") || controlPlaneUrl;
   const email = arg("email", process.env.BIVY_EMAIL);
   const sessionToken = arg("session-token", process.env.BIVY_SESSION_TOKEN);
+  const nodeClaimCode = process.env.BIVY_NODE_CLAIM_CODE?.trim();
   // GitHub is the primary sign-in: used when --github is passed, or by default
-  // when neither an email nor an existing session token is supplied.
-  const useGithub = process.argv.includes("--github") || process.env.BIVY_AUTH === "github" || (!email && !sessionToken);
+  // when neither an email, an existing session token, nor a one-time machine
+  // claim is supplied. Claims authorize enrollment only and never mint a user
+  // session token.
+  const useGithub = process.argv.includes("--github") || process.env.BIVY_AUTH === "github" || (!email && !sessionToken && !nodeClaimCode);
 
   const identity = NodeIdentity.load(appDir);
   console.log(`Node: ${identity.name} (${identity.nodeId})`);
@@ -217,12 +220,19 @@ async function main() {
   console.log(`Relay:         ${relayUrl}`);
 
   await checkControlPlane(controlPlaneUrl);
-  const token = sessionToken ?? (useGithub ? await githubDeviceLogin(controlPlaneUrl) : await deviceLogin(controlPlaneUrl, email!));
+  const token = nodeClaimCode ? undefined
+    : sessionToken ?? (useGithub ? await githubDeviceLogin(controlPlaneUrl) : await deviceLogin(controlPlaneUrl, email!));
 
   async function enrollNode() {
-    return fetchJson(`${controlPlaneUrl}/nodes/enroll`, {
+    const url = nodeClaimCode
+      ? `${controlPlaneUrl}/claim/${encodeURIComponent(nodeClaimCode)}/enroll`
+      : `${controlPlaneUrl}/nodes/enroll`;
+    return fetchJson(url, {
       method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      headers: {
+        "content-type": "application/json",
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+      },
       body: JSON.stringify({ nodeId: identity.nodeId, name: identity.name }),
     });
   }
@@ -262,7 +272,7 @@ async function main() {
   // read once and deleted by setup. We skip it when the caller supplied a session
   // token only via --session-token/env with no --emit-session, i.e. non-setup use.
   const emitSession = arg("emit-session");
-  if (emitSession) {
+  if (emitSession && token) {
     try {
       const handoff = JSON.stringify({ session: token, nodeId: identity.nodeId });
       fs.writeFileSync(emitSession, `${handoff}\n`, { mode: 0o600 });
@@ -272,7 +282,7 @@ async function main() {
     }
   }
 
-  console.log(`\n✓ Signed in and enrolled this node. Wrote ${filePath}`);
+  console.log(`\n✓ ${nodeClaimCode ? "Claimed and enrolled" : "Signed in and enrolled"} this node. Wrote ${filePath}`);
   console.log('Run "bivy link" to pair a phone, or use "Link remote device" in the app (bivy open).');
 }
 

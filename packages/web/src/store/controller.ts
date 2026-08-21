@@ -14,6 +14,9 @@ import {
   createLocalStore,
   consumeLinkPayload,
   fetchAccountNodes,
+  createAccountNodeClaim,
+  fetchAccountNodeClaims,
+  revokeAccountNodeClaim,
   fetchAccountSessions,
   fetchMe,
   invokeAccountExtensionAction,
@@ -805,6 +808,10 @@ export class AppController {
   listNodes(): Promise<AccountNode[]> {
     return fetchAccountNodes(this.local);
   }
+
+  createNodeClaim() { return createAccountNodeClaim(this.local); }
+  listNodeClaims() { return fetchAccountNodeClaims(this.local); }
+  revokeNodeClaim(id: string) { return revokeAccountNodeClaim(this.local, id); }
 
   /** Pick a node and connect to it over the relay (initial selection). */
   selectNode(nodeId: string): void {

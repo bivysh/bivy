@@ -895,6 +895,9 @@ function NodesPanel({ state }: { state: AppState }) {
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState<string | null>(null);
+  const [nodeClaim, setNodeClaim] = useState<Awaited<ReturnType<typeof controller.createNodeClaim>> | null>(null);
+  const [claimBusy, setClaimBusy] = useState(false);
+  const [claimCopied, setClaimCopied] = useState(false);
   const currentNodeId = controller.local.cur;
   const selectedNode = nodes.find((node) => node.id === currentNodeId);
   const selectedLastSeen = typeof selectedNode?.lastSeenAt === "string" ? Date.parse(selectedNode.lastSeenAt) : NaN;
@@ -979,6 +982,58 @@ function NodesPanel({ state }: { state: AppState }) {
 
   return (
     <div className="settings-form">
+      {saveErr && <div className="banner inline" data-tone="danger" role="alert">{saveErr}</div>}
+      {hosted && (
+        <section className="settings-section">
+          <h4 className="settings-subhead">Connect a machine</h4>
+          <p className="muted small">Create a one-time command, then run it on a macOS or Linux machine. It expires after 10 minutes and can enroll only one machine.</p>
+          {!nodeClaim?.command ? (
+            <button
+              type="button"
+              className="btn primary"
+              disabled={claimBusy}
+              onClick={() => {
+                setClaimBusy(true);
+                setSaveErr(null);
+                controller.createNodeClaim()
+                  .then(setNodeClaim)
+                  .catch((error) => setSaveErr(String((error as Error)?.message || error)))
+                  .finally(() => setClaimBusy(false));
+              }}
+            >{claimBusy ? "Creating…" : "Create install command"}</button>
+          ) : (
+            <>
+              <div className="repo-connect-command">
+                <code>{nodeClaim.command}</code>
+                <button
+                  type="button"
+                  className={`repo-connect-copy${claimCopied ? " is-copied" : ""}`}
+                  onClick={() => {
+                    void navigator.clipboard.writeText(nodeClaim.command || "").then(() => {
+                      setClaimCopied(true);
+                      window.setTimeout(() => setClaimCopied(false), 1500);
+                    });
+                  }}
+                >{claimCopied ? "Copied" : "Copy"}</button>
+              </div>
+              <div className="card-actions">
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => {
+                    setClaimBusy(true);
+                    controller.revokeNodeClaim(nodeClaim.id)
+                      .then(() => setNodeClaim(null))
+                      .catch((error) => setSaveErr(String((error as Error)?.message || error)))
+                      .finally(() => setClaimBusy(false));
+                  }}
+                  disabled={claimBusy}
+                >Revoke</button>
+              </div>
+            </>
+          )}
+        </section>
+      )}
       {hosted && (
         <section className="settings-section">
           <label className="field-label" htmlFor="node-settings-node">Machine</label>
@@ -1241,7 +1296,6 @@ function NodesPanel({ state }: { state: AppState }) {
             <button className="btn primary" disabled={saving} onClick={save}>{saving ? "Saving…" : "Save"}</button>
             {savedMsg && <Badge tone="ok">{savedMsg}</Badge>}
           </div>
-          {saveErr && <div className="banner inline" data-tone="danger" role="alert">{saveErr}</div>}
         </>
       )}
     </div>

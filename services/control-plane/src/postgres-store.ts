@@ -34,6 +34,7 @@ import {
   type HostedProvisioningStatus,
   GITHUB_IDENTITY_MODES,
   type GithubIdentityMode,
+  type NodeClaim,
   type CentralGithubInstallation,
   type CentralGithubInstallationInput,
   type HostedAuditEvent,
@@ -174,6 +175,18 @@ export class PostgresStore implements ControlPlaneStore {
       );
       CREATE INDEX IF NOT EXISTS central_install_states_expires_idx
         ON central_install_states (expires_at);
+      CREATE TABLE IF NOT EXISTS node_claims (
+        id          TEXT PRIMARY KEY,
+        account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        code_hash   TEXT UNIQUE NOT NULL,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        expires_at  TIMESTAMPTZ NOT NULL,
+        used_at     TIMESTAMPTZ,
+        revoked_at  TIMESTAMPTZ,
+        node_id     TEXT
+      );
+      CREATE INDEX IF NOT EXISTS node_claims_account_idx ON node_claims (account_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS node_claims_expires_idx ON node_claims (expires_at);
       CREATE TABLE IF NOT EXISTS hosted_provision_leases (
         account_id  TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
         holder      TEXT NOT NULL,
@@ -1578,6 +1591,55 @@ export class PostgresStore implements ControlPlaneStore {
     // Encrypt at rest (throws if the master key is unset — fail closed).
     await this.query(`UPDATE accounts SET hosted_provisioning = $2 WHERE id = $1`, [accountId, JSON.stringify(this.sealHosted(accountId, merged))]);
     return merged;
+  }
+
+  // --- One-line personal-machine enrollment claims ---------------------------
+
+  private nodeClaimFromRow(row: Record<string, any>): NodeClaim {
+    return {
+      id: String(row.id), accountId: String(row.account_id),
+      createdAt: new Date(row.created_at).toISOString(), expiresAt: new Date(row.expires_at).toISOString(),
+      usedAt: row.used_at ? new Date(row.used_at).toISOString() : undefined,
+      revokedAt: row.revoked_at ? new Date(row.revoked_at).toISOString() : undefined,
+      nodeId: row.node_id || undefined,
+    };
+  }
+
+  async createNodeClaim(accountId: string): Promise<{ claim: NodeClaim; code: string }> {
+    const id = randomUUID();
+    const code = randomBytes(32).toString("base64url");
+    const expiresAt = new Date(Date.now() + 10 * 60_000);
+    const { rows } = await this.query(
+      `INSERT INTO node_claims (id,account_id,code_hash,expires_at) VALUES ($1,$2,$3,$4) RETURNING *`,
+      [id, accountId, hashToken(code), expiresAt],
+    );
+    return { claim: this.nodeClaimFromRow(rows[0]), code };
+  }
+
+  async listNodeClaims(accountId: string): Promise<NodeClaim[]> {
+    const { rows } = await this.query(
+      `SELECT * FROM node_claims WHERE account_id=$1 ORDER BY created_at DESC LIMIT 50`, [accountId],
+    );
+    return rows.map((row) => this.nodeClaimFromRow(row));
+  }
+
+  async revokeNodeClaim(accountId: string, id: string): Promise<boolean> {
+    const { rowCount } = await this.query(
+      `UPDATE node_claims SET revoked_at=now() WHERE account_id=$1 AND id=$2 AND used_at IS NULL AND revoked_at IS NULL`,
+      [accountId, id],
+    );
+    return Boolean(rowCount);
+  }
+
+  async consumeNodeClaim(code: string, nodeId: string): Promise<NodeClaim | undefined> {
+    if (!code || !nodeId) return undefined;
+    const { rows } = await this.query(
+      `UPDATE node_claims SET used_at=now(), node_id=$2
+       WHERE code_hash=$1 AND used_at IS NULL AND revoked_at IS NULL AND expires_at > now()
+       RETURNING *`,
+      [hashToken(code), nodeId],
+    );
+    return rows[0] ? this.nodeClaimFromRow(rows[0]) : undefined;
   }
 
   // --- Central GitHub App installations (managed tier) -----------------------
@@ -3124,7 +3186,7 @@ export class PostgresStore implements ControlPlaneStore {
     // there is no cross-table transaction requirement (each row is independently
     // safe to drop once past its own expiry).
     let total = 0;
-    for (const table of ["login_tokens", "sessions", "link_grants", "relay_tickets", "device_logins", "oauth_states", "central_install_states"]) {
+    for (const table of ["login_tokens", "sessions", "link_grants", "relay_tickets", "device_logins", "oauth_states", "central_install_states", "node_claims"]) {
       const { rowCount } = await this.query(`DELETE FROM ${table} WHERE expires_at < $1`, [nowIso]);
       total += rowCount ?? 0;
     }

@@ -3621,8 +3621,9 @@ async function cmdSetup(args = []) {
     // If self-host endpoints are already provided via the environment, default to
     // self-hosted so a scripted or self-hosted install doesn't have to re-pick it
     // (BIVY_CONTROL_PLANE_URL / BIVY_RELAY_URL then pre-fill the URL prompts below).
-    const selfHostEnv = Boolean((process.env.BIVY_CONTROL_PLANE_URL || "").trim() || (process.env.BIVY_RELAY_URL || "").trim());
-    const syncChoice = await askChoice(
+    const nodeClaimCode = process.env.BIVY_NODE_CLAIM_CODE?.trim();
+    const selfHostEnv = !nodeClaimCode && Boolean((process.env.BIVY_CONTROL_PLANE_URL || "").trim() || (process.env.BIVY_RELAY_URL || "").trim());
+    const syncChoice = nodeClaimCode ? "h" : await askChoice(
       "Remote access",
       [
         { key: "h", label: "hosted (recommended — sign in with GitHub or email; nothing caps your local usage)" },
@@ -3644,29 +3645,33 @@ async function cmdSetup(args = []) {
     }
 
     if (syncChoice !== "l") {
-      const loginChoice = await askChoice(
-        "Remote login",
-        [
-          { key: "g", label: "GitHub" },
-          { key: "e", label: "email sign-in link (open or scan on any device)" },
-        ],
-        "g",
-      );
-      if (loginChoice === "e") {
-        const email = await ask("  Your account email:", config.env.BIVY_EMAIL || "");
-        if (email.trim()) relayArgs.push("--email", email.trim());
-        else relayArgs.push("--github");
-      } else {
-        relayArgs.push("--github");
+      if (!nodeClaimCode) {
+        const loginChoice = await askChoice(
+          "Remote login",
+          [
+            { key: "g", label: "GitHub" },
+            { key: "e", label: "email sign-in link (open or scan on any device)" },
+          ],
+          "g",
+        );
+        if (loginChoice === "e") {
+          const email = await ask("  Your account email:", config.env.BIVY_EMAIL || "");
+          if (email.trim()) relayArgs.push("--email", email.trim());
+          else relayArgs.push("--github");
+        } else {
+          relayArgs.push("--github");
+        }
       }
 
       const useGithub = relayArgs.includes("--github");
       try { fs.rmSync(setupSessionPath, { force: true }); } catch { /* best effort */ }
       let relayOk;
       for (;;) {
-        console.log(c.dim(useGithub
-          ? "  We'll open GitHub in your browser (or print the URL on a headless server). Authorize, and setup continues automatically."
-          : "  We'll email you a sign-in link. Open it in any browser and setup continues automatically."));
+        console.log(c.dim(nodeClaimCode
+          ? "  Using the one-time machine claim from your Bivy account; no additional sign-in is required."
+          : useGithub
+            ? "  We'll open GitHub in your browser (or print the URL on a headless server). Authorize, and setup continues automatically."
+            : "  We'll email you a sign-in link. Open it in any browser and setup continues automatically."));
         rl.pause();
         const code = await run(nodeBin, [...nodeScriptArgs(relaySetupEntry), ...relayArgs, "--emit-session", setupSessionPath], {
           cwd: repoRoot,

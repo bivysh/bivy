@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import express, { type Request, type Response, type NextFunction } from "express";
 import webpush from "web-push";
 import { validateCapabilityTags } from "@bivy/core";
-import { providerCredentialFingerprint, type Account, type NodeRecord, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, type AutomationRun, type InboundHook, GITHUB_IDENTITY_MODES, type GithubIdentityMode, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
+import { providerCredentialFingerprint, type Account, type NodeRecord, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, type AutomationRun, type InboundHook, type NodeClaim, GITHUB_IDENTITY_MODES, type GithubIdentityMode, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
 import { centralGithubAppConfig, centralInstallUrl, applyCentralInstallationEvent } from "./central-github-app.js";
 import { maybeAutoProvision, planAutoProvision, hostedExecutionReadiness, mintHostedInstallationToken, reapSettledHostedMachine, reconcileAllHostedMachines, reconcileAllReadyCapacity, sweepAllOrphanProviderResources, validateHostedProviderToken, markHostedMachineMilestone, EPHEMERAL_MILESTONES, ephemeralMachinesEnabled, type ManagedProvisionRequest } from "./ephemeral-provisioner.js";
 import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecret, initializeHostedKeyring } from "./hosted-crypto.js";
@@ -164,6 +164,13 @@ function managedLaunchFailureRecorder(accountId: string) {
     type: "ephemeral.launch-failed", attemptId, at: new Date().toISOString(),
   });
 }
+
+function managedSettlementRecorder(
+  accountId: string,
+  event: { attemptId: string; at: string; machineSeconds: number; activeAgentSeconds: number },
+) {
+  return deploymentExtension.record(accountId, { type: "ephemeral.settled", ...event });
+}
 try {
   await store.init();
 } catch (error) {
@@ -243,7 +250,10 @@ async function notifyRelaysWorkAvailable(
   // Cancelling must never start a machine. Normal enqueue notifications retain
   // the unattended-provisioning check.
   if (options.autoProvision !== false) {
-    void maybeAutoProvision(store, accountId, provisionEnv(), undefined, managedProvisionAdmission(accountId), managedLaunchFailureRecorder(accountId))
+    void maybeAutoProvision(
+    store, accountId, provisionEnv(), undefined, managedProvisionAdmission(accountId),
+    managedLaunchFailureRecorder(accountId), managedSettlementRecorder,
+  )
       .catch((error) => console.error("[deployment-extension] provisioning admission failed", error));
   }
 }
@@ -358,7 +368,9 @@ setInterval(pruneExpiredAuthTokens, 60 * 60_000).unref();
 const HOSTED_MACHINE_RECONCILE_MS = Math.max(60_000, Number(process.env.HOSTED_MACHINE_RECONCILE_MS) || 60_000);
 async function reconcileHostedMachineFleet() {
   try {
-    const result = await reconcileAllHostedMachines(store, provisionEnv());
+    const result = await reconcileAllHostedMachines(
+      store, provisionEnv(), Date.now(), undefined, managedSettlementRecorder,
+    );
     if (result.reaped || result.failed) {
       console.log(`[hosted-reconcile] accounts=${result.accounts} reaped=${result.reaped} failed=${result.failed}`);
     }
@@ -1132,6 +1144,66 @@ app.post("/account/extension/actions/:action", requireUser, asyncHandler(async (
 }));
 
 // --- Node registry ------------------------------------------------------
+
+function shellSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+function presentNodeClaim(claim: NodeClaim) {
+  const now = Date.now();
+  const status = claim.usedAt ? "used" : claim.revokedAt ? "revoked"
+    : Date.parse(claim.expiresAt) <= now ? "expired" : "pending";
+  return { ...claim, status };
+}
+
+// Mint the one-line personal-machine command. The raw code is returned exactly
+// once and only its SHA-256 hash is persisted. It authorizes enrollment only —
+// never an account session, GitHub token, billing action, or existing-node read.
+app.post("/account/node-claims", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const { claim, code } = await store.createNodeClaim(account.id);
+  const claimUrl = `${baseUrl(req)}/claim/${code}`;
+  res.status(201).json({ ...presentNodeClaim(claim), claimUrl, command: `curl -fsSL ${shellSingleQuote(claimUrl)} | sh` });
+}));
+
+app.get("/account/node-claims", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  res.json((await store.listNodeClaims(account.id)).map(presentNodeClaim));
+}));
+
+app.delete("/account/node-claims/:id", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const revoked = await store.revokeNodeClaim(account.id, String(req.params.id));
+  res.status(revoked ? 200 : 404).json({ ok: revoked });
+}));
+
+// Fetching the script does not consume the claim: curl piping necessarily fetches
+// before the installed CLI knows its node id. The atomic enrollment exchange is
+// the single-use operation. Invalid-looking codes receive the same generic script
+// shape and later fail at exchange, avoiding a public claim-existence oracle.
+app.get("/claim/:code", (req, res) => {
+  const code = String(req.params.code ?? "");
+  if (!/^[A-Za-z0-9_-]{43}$/.test(code)) return res.status(404).type("text").send("Not found\n");
+  const controlPlaneUrl = baseUrl(req);
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.type("text/x-shellscript").send(`#!/bin/sh\nset -eu\nexport BIVY_NODE_CLAIM_CODE=${shellSingleQuote(code)}\nexport BIVY_CONTROL_PLANE_URL=${shellSingleQuote(controlPlaneUrl)}\ncurl -fsSL https://bivy.sh/install.sh | sh\n`);
+});
+
+app.post("/claim/:code/enroll", asyncHandler(async (req, res) => {
+  const code = String(req.params.code ?? "");
+  const nodeId = String(req.body?.nodeId ?? "").trim();
+  const name = String(req.body?.name ?? "Node").trim().slice(0, 120) || "Node";
+  if (!/^[A-Za-z0-9_-]{43}$/.test(code) || !nodeId || nodeId.length > 200) {
+    return res.status(400).json({ error: "Invalid enrollment claim" });
+  }
+  const claim = await store.consumeNodeClaim(code, nodeId);
+  if (!claim) return res.status(410).json({ error: "Enrollment claim is expired, used, or revoked" });
+  const result = await store.enrollNode(claim.accountId, nodeId, name);
+  if (result.created) recordFunnelEvent("node_enrolled", "claim");
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ ok: true, ...result });
+}));
 
 // A signed-in user enrolls a node (by its self-generated nodeId). Returns an
 // enrollment token the node stores and uses to authenticate to the relay /
@@ -3428,7 +3500,8 @@ app.post("/account/hosted-provision-now", asyncHandler(async (req, res) => {
   const plan = await planAutoProvision(store, client.accountId, Date.now(), admission);
   if (req.body?.execute === true && plan.willProvision) {
     const machine = await maybeAutoProvision(
-      store, client.accountId, provisionEnv(), undefined, admission, managedLaunchFailureRecorder(client.accountId),
+      store, client.accountId, provisionEnv(), undefined, admission,
+      managedLaunchFailureRecorder(client.accountId), managedSettlementRecorder,
     );
     return res.json({ plan, provisioned: machine ? { id: machine.id, nodeId: machine.nodeId } : null });
   }
