@@ -32,6 +32,7 @@ import { Spinner } from "./components/Spinner.js";
 import { StatusDot } from "./components/StatusDot.js";
 import { EphemeralSheet } from "./components/Ephemeral.js";
 import { FirstRunModelAuthSheet } from "./components/FirstRunModelAuth.js";
+import { FirstRunOnboarding } from "./components/FirstRunOnboarding.js";
 import { NodePicker } from "./components/Pickers.js";
 import { ConnectRunner } from "./components/ConnectRunner.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "./flags.js";
@@ -60,6 +61,7 @@ import { statusClass, statusDotState, statusLabel } from "./sessionStatus.js";
 export function App() {
   const state = useAppState();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [onboardingDismissed, setOnboardingDismissed] = useState(() => localStorage.getItem("bivy:first-run-onboarding") === "done");
   // Settings is URL-backed (#78) — `settingsRoute` mirrors the `/settings` /
   // `/settings/:view` route the same way useAppState mirrors the session
   // store, and is null whenever the URL is on anything else (Settings closed).
@@ -442,6 +444,8 @@ export function App() {
   // Picking an ephemeral runner counts as having chosen where to run, even
   // before its machine exists — show the composer, not the onboarding screen.
   const needsNode = !controller.direct && state.connection.signedIn && !state.connection.currentNodeId && !state.draft.ephemeralConfig;
+  const showFirstRunOnboarding = !controller.direct && state.connection.signedIn && !onboardingDismissed
+    && state.sessionIndex.sessions.length === 0 && state.activeSession.transcript.length === 0;
 
   // Hosted control plane, not signed in yet: show the sign-in screen instead of a
   // dead shell. Once signed in we always render the normal app — a node is picked
@@ -606,7 +610,7 @@ export function App() {
 
       {drawerOpen && <div className="scrim" onClick={closeDrawer} />}
 
-      <main className={`main${needsNode ? " needs-node" : ""}`}>
+      <main className={`main${showFirstRunOnboarding ? " onboarding" : needsNode ? " needs-node" : ""}`}>
         <header className="topbar">
           <button
             className="btn ghost icon only-mobile burger-btn"
@@ -710,7 +714,7 @@ export function App() {
           </div>
         )}
 
-        {!state.activeSession.activeSessionId && state.activeSession.transcript.length === 0 && state.sessionIndex.sessions.length === 0 && (
+        {!showFirstRunOnboarding && !state.activeSession.activeSessionId && state.activeSession.transcript.length === 0 && state.sessionIndex.sessions.length === 0 && (
           <Suspense fallback={null}>
             <ReadinessChecklist
               activation={activation}
@@ -725,7 +729,16 @@ export function App() {
           </Suspense>
         )}
 
-        {needsNode && (
+        {showFirstRunOnboarding && (
+          <div className="connect-runner-scroll">
+            <FirstRunOnboarding state={state} onDone={() => {
+              localStorage.setItem("bivy:first-run-onboarding", "done");
+              setOnboardingDismissed(true);
+            }} />
+          </div>
+        )}
+
+        {!showFirstRunOnboarding && needsNode && (
           <div className="connect-runner-scroll">
             <ConnectRunner
               nodes={state.connection.nodes}

@@ -2197,7 +2197,8 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
    clips main itself. First-run onboarding replaces that pane, so give it an
    explicit flex scrollport; otherwise tall option cards are unreachable on
    mobile Safari. Hide the inactive session UI so it cannot consume height. */
-.main.needs-node > :not(.topbar):not(.banner):not(.connect-runner-scroll) { display: none; }
+.main.needs-node > :not(.topbar):not(.banner):not(.connect-runner-scroll),
+.main.onboarding > :not(.topbar):not(.banner):not(.connect-runner-scroll) { display: none; }
 .connect-runner-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
 .connect-runner { width: min(560px, 100%); margin: 0 auto; padding: 18px 16px max(24px, env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 14px; }
 .connect-hero { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 6px; }
