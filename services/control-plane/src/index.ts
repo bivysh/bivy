@@ -9,12 +9,11 @@ import webpush from "web-push";
 import { validateCapabilityTags } from "@bivy/core";
 import { providerCredentialFingerprint, type Account, type NodeRecord, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, type AutomationRun, type InboundHook, GITHUB_IDENTITY_MODES, type GithubIdentityMode, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
 import { centralGithubAppConfig, centralInstallUrl, applyCentralInstallationEvent } from "./central-github-app.js";
-import { maybeAutoProvision, planAutoProvision, hostedExecutionReadiness, mintHostedInstallationToken, reapSettledHostedMachine, reconcileAllHostedMachines, reconcileAllReadyCapacity, sweepAllOrphanProviderResources, validateHostedProviderToken, markHostedMachineMilestone, EPHEMERAL_MILESTONES, ephemeralMachinesEnabled } from "./ephemeral-provisioner.js";
+import { maybeAutoProvision, planAutoProvision, hostedExecutionReadiness, mintHostedInstallationToken, reapSettledHostedMachine, reconcileAllHostedMachines, reconcileAllReadyCapacity, sweepAllOrphanProviderResources, validateHostedProviderToken, markHostedMachineMilestone, EPHEMERAL_MILESTONES, ephemeralMachinesEnabled, type ManagedProvisionRequest } from "./ephemeral-provisioner.js";
 import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecret, initializeHostedKeyring } from "./hosted-crypto.js";
 import { listAppInstallations, listInstallationRepositories, getAppInstallation } from "./hosted-github-auth.js";
 import { correlateHostedSessions } from "./hosted-correlation.js";
 import { countActiveAccountSessions } from "./session-count.js";
-import { isManagedComputeSource, summarizeAccountUsage, utcMonthWindow } from "./compute-metering.js";
 import { createStore } from "./store-factory.js";
 import { AutomationScheduler, nextOccurrence, normalizeSchedule } from "./schedule.js";
 import { parseShardUrls, shardForNode } from "./relay-shards.js";
@@ -22,7 +21,7 @@ import { safeReturnPath } from "./redirect.js";
 import { register, httpMetricsMiddleware, bindRelayTicketMetrics, startUsageCollector, recordFunnelEvent, recordDurableRunLifecycleResult, recordRunFailureStage, classifyRunFailureStage, recordProductEvent, PRODUCT_EVENT_VALUES, PRODUCT_CLIENT_VALUES, type ProductEvent, type ProductClient } from "./metrics.js";
 import { initSentry } from "./instrument.js";
 import { sanitizeEvidencePatch } from "./run-evidence.js";
-import { DeploymentExtension, type DeploymentOperation } from "./deployment-extension.js";
+import { DeploymentExtension, type DeploymentOperation, type DeploymentPolicyContext } from "./deployment-extension.js";
 import {
   verifyGithubSignature,
   verifyLinearSignature,
@@ -129,19 +128,33 @@ process.on("unhandledRejection", (reason) => {
 const store = await createStore();
 const deploymentExtension = new DeploymentExtension();
 
-async function deploymentDecision(accountId: string, operation: DeploymentOperation, idempotencyKey?: string) {
-  const decision = await deploymentExtension.authorize(accountId, operation, idempotencyKey);
+async function deploymentDecision(
+  accountId: string,
+  operation: DeploymentOperation,
+  idempotencyKey?: string,
+  context?: DeploymentPolicyContext,
+) {
+  const decision = await deploymentExtension.authorize(accountId, operation, idempotencyKey, context);
   return decision;
 }
 
-async function requireDeploymentAdmission(accountId: string, operation: DeploymentOperation, idempotencyKey?: string) {
-  const decision = await deploymentDecision(accountId, operation, idempotencyKey);
+async function requireDeploymentAdmission(
+  accountId: string,
+  operation: DeploymentOperation,
+  idempotencyKey?: string,
+  context?: DeploymentPolicyContext,
+) {
+  const decision = await deploymentDecision(accountId, operation, idempotencyKey, context);
   if (!decision.allowed) {
     const error = new Error(decision.reason || "Operation is not available") as Error & { status?: number; code?: string };
     error.status = 429;
     error.code = decision.code;
     throw error;
   }
+}
+
+function managedProvisionAdmission(accountId: string) {
+  return (request: ManagedProvisionRequest) => deploymentDecision(accountId, "ephemeral.provision", undefined, request);
 }
 try {
   await store.init();
@@ -222,8 +235,7 @@ async function notifyRelaysWorkAvailable(
   // Cancelling must never start a machine. Normal enqueue notifications retain
   // the unattended-provisioning check.
   if (options.autoProvision !== false) {
-    void deploymentDecision(accountId, "ephemeral.provision")
-      .then((decision) => decision.allowed ? maybeAutoProvision(store, accountId, provisionEnv()) : undefined)
+    void maybeAutoProvision(store, accountId, provisionEnv(), undefined, managedProvisionAdmission(accountId))
       .catch((error) => console.error("[deployment-extension] provisioning admission failed", error));
   }
 }
@@ -3124,20 +3136,6 @@ app.put("/account/queue-routing", asyncHandler(async (req, res) => {
   res.json(await store.setQueueRouting(client.accountId, (req.body ?? {}) as QueueRouting));
 }));
 
-// Current UTC-month managed-compute usage. The response is constructed from an
-// explicit metadata allowlist: never provider tokens, room keys, IPs or internal
-// provider inventory fields.
-app.get("/account/usage", requireUser, asyncHandler(async (req, res) => {
-  const account = (req as Request & { account: Account }).account;
-  const month = utcMonthWindow();
-  const [records, machines] = await Promise.all([
-    store.listSessionUsage(account.id, month.startsAt, month.endsAt),
-    store.getHostedMachines(account.id),
-  ]);
-  const concurrent = machines.filter((machine) => isManagedComputeSource(machine.computeSource)).length;
-  res.json(summarizeAccountUsage(account.plan, records, concurrent));
-}));
-
 // Hosted (control-plane-orchestrated) provisioning. GET returns a redacted
 // status (never tokens). SECURITY: enabling this stores repo/cloud credentials
 // on the control plane — see store.ts.
@@ -3396,10 +3394,10 @@ app.post("/account/hosted-provisioning/rotate", asyncHandler(async (req, res) =>
 app.post("/account/hosted-provision-now", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
-  const plan = await planAutoProvision(store, client.accountId);
+  const admission = managedProvisionAdmission(client.accountId);
+  const plan = await planAutoProvision(store, client.accountId, Date.now(), admission);
   if (req.body?.execute === true && plan.willProvision) {
-    await requireDeploymentAdmission(client.accountId, "ephemeral.provision");
-    const machine = await maybeAutoProvision(store, client.accountId, provisionEnv());
+    const machine = await maybeAutoProvision(store, client.accountId, provisionEnv(), undefined, admission);
     return res.json({ plan, provisioned: machine ? { id: machine.id, nodeId: machine.nodeId } : null });
   }
   res.json({ plan });

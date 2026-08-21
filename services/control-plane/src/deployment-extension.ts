@@ -21,6 +21,19 @@ export interface DeploymentDecision {
   usage?: { used: number; limit?: number };
 }
 
+/** Opaque technical facts an operator may use for admission. Core never puts
+ * product tiers, prices, or commercial cap names in this contract. */
+export interface DeploymentPolicyContext {
+  computeSource?: "user" | "managed";
+  provider?: string;
+  sizeId?: string;
+  vcpus?: number;
+  memoryMiB?: number;
+  ttlMinutes?: number;
+  configId?: string;
+  purpose?: string;
+}
+
 export interface AccountExtensionView {
   title?: string;
   facts?: Array<{ id: string; label: string; value: string }>;
@@ -40,9 +53,14 @@ export class DeploymentExtension {
 
   get configured(): boolean { return Boolean(this.url); }
 
-  async authorize(accountId: string, operation: DeploymentOperation, idempotencyKey?: string): Promise<DeploymentDecision> {
+  async authorize(
+    accountId: string,
+    operation: DeploymentOperation,
+    idempotencyKey?: string,
+    context?: DeploymentPolicyContext,
+  ): Promise<DeploymentDecision> {
     if (!this.url) return { allowed: true };
-    const response = await this.request("/v1/policy/check", { subject: { accountId }, operation, idempotencyKey });
+    const response = await this.request("/v1/policy/check", { subject: { accountId }, operation, idempotencyKey, context });
     const decision = response as Partial<DeploymentDecision>;
     if (typeof decision.allowed !== "boolean") throw new Error("Deployment extension returned an invalid policy decision");
     return decision as DeploymentDecision;

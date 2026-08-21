@@ -49,13 +49,6 @@ async function makeStore() {
 async function managedAccount() {
   const store = await makeStore();
   const account = await store.findOrCreateAccount("managed@example.com");
-  // This suite tests the managed lane itself, not free-plan denial; the
-  // metering suite covers plan caps independently.
-  const getAccount = store.getAccount.bind(store);
-  store.getAccount = async (accountId) => {
-    const found = await getAccount(accountId);
-    return found ? { ...found, plan: "pro" } : undefined;
-  };
   await store.setHostedProvisioning(account.id, { enabled: true });
   await store.setEphemeralConfigs(account.id, [MANAGED_CONFIG]);
   await store.setQueueRouting(account.id, { primary: { kind: "config", configId: MANAGED_CONFIG.id } });
@@ -151,6 +144,24 @@ try {
     const { store, acctId } = await managedAccount();
     assert.deepEqual(await planAutoProvision(store, acctId), { willProvision: true, targetConfigId: MANAGED_CONFIG.id, reason: "ready to provision" });
     assert.deepEqual(await hostedExecutionReadiness(store, acctId), { ready: true, reason: "hosted ephemeral execution is ready", configId: MANAGED_CONFIG.id });
+  });
+
+  await test("managed launch forwards technical facts to the operator policy and honors denial", async () => {
+    process.env.MANAGED_COMPUTE_ENABLED = "1";
+    process.env.MANAGED_PROVIDER_TOKEN_FLY = OPERATOR_TOKEN;
+    const { store, acctId } = await managedAccount();
+    let request: Record<string, unknown> | undefined;
+    const plan = await planAutoProvision(store, acctId, Date.now(), async (input) => {
+      request = input as unknown as Record<string, unknown>;
+      return { allowed: false, code: "upgrade_required", reason: "Upgrade required" };
+    });
+    assert.equal(plan.willProvision, false);
+    assert.equal(plan.reason, "Upgrade required");
+    assert.equal(plan.policyDenial?.code, "upgrade_required");
+    assert.deepEqual(request, {
+      computeSource: "managed", provider: "fly", sizeId: "shared-4x-8gb",
+      vcpus: 4, memoryMiB: 8192, ttlMinutes: 60, configId: MANAGED_CONFIG.id,
+    });
   });
 
   await test("user-lane configs ignore the managed switch and still require the user's validated token", async () => {
