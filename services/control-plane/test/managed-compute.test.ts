@@ -58,9 +58,10 @@ async function managedAccount() {
 // Injected launcher that behaves like the production one: emits a lifecycle
 // event, registers the machine, and returns it — while capturing which
 // provider credential the launch deps carry.
-function fakeLauncher(seen: { token?: string }) {
+function fakeLauncher(seen: { token?: string; hostedTasks?: boolean }) {
   return (async (args, deps) => {
     seen.token = await deps.keys.getToken(args.provider);
+    seen.hostedTasks = args.hostedTasks;
     await args.onLifecycle?.({ attemptId: args.attemptId, phase: "requested", nodeId: "eph-managed-1" });
     const machine = {
       id: "fly-m1", provider: args.provider, nodeId: "eph-managed-1", attemptId: args.attemptId,
@@ -161,7 +162,7 @@ try {
     assert.deepEqual(request, {
       attemptId: undefined,
       computeSource: "managed", provider: "fly", sizeId: "shared-4x-8gb",
-      vcpus: 4, memoryMiB: 8192, ttlMinutes: 60, configId: MANAGED_CONFIG.id,
+      vcpus: 4, memoryMiB: 8192, ttlMinutes: 60, configId: MANAGED_CONFIG.id, purpose: "queue-work",
     });
   });
 
@@ -195,6 +196,20 @@ try {
     assert.equal(attempt?.desired.computeSource, "managed", "compute source rides on the durable attempt row");
     const actions = (await store.listHostedAudit(acctId, 20)).map((e) => e.action);
     assert.ok(actions.includes("provision_attempt") && actions.includes("provision_launched"), "same audit events as a hosted launch");
+  });
+
+  await test("managed authentication runner is credential-only and never polls task queues", async () => {
+    process.env.MANAGED_COMPUTE_ENABLED = "1";
+    process.env.MANAGED_PROVIDER_TOKEN_FLY = OPERATOR_TOKEN;
+    const { store, acctId } = await managedAccount();
+    const seen: { token?: string; hostedTasks?: boolean } = {};
+    const machine = await provisionEphemeralForAccount(
+      store, acctId, { ...MANAGED_CONFIG, ttlMinutes: 15 }, env, fakeLauncher(seen), Date.now(), "auth-runner",
+    );
+    assert.equal(seen.hostedTasks, false);
+    assert.equal(machine.purpose, "auth-runner");
+    const attempt = await store.getHostedMachineAttempt(acctId, String(machine.attemptId));
+    assert.equal(attempt?.desired.purpose, "auth-runner");
   });
 
   await test("the operator token never appears in stored records, audit, or API-shaped views", async () => {

@@ -16,6 +16,7 @@ import {
   fetchAccountNodes,
   fetchCentralGithubApp,
   createCentralGithubInstall,
+  createManagedAuthRunner,
   createAccountNodeClaim,
   fetchAccountNodeClaims,
   revokeAccountNodeClaim,
@@ -813,6 +814,7 @@ export class AppController {
 
   centralGithubApp() { return fetchCentralGithubApp(this.local); }
   createCentralGithubInstall(returnPath = "/") { return createCentralGithubInstall(this.local, returnPath); }
+  createManagedAuthRunner() { return createManagedAuthRunner(this.local); }
   createNodeClaim() { return createAccountNodeClaim(this.local); }
   listNodeClaims() { return fetchAccountNodeClaims(this.local); }
   revokeNodeClaim(id: string) { return revokeAccountNodeClaim(this.local, id); }

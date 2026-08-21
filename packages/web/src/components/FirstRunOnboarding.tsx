@@ -19,6 +19,7 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
   );
   const selectedAgentId = state.catalogs.selectedAgentId || availableAgents[0]?.id || "";
   const hasMachine = Boolean(state.connection.currentNodeId);
+  const machineOnline = hasMachine && state.connection.status === "online";
   const hasGithub = Boolean(github?.installations.length);
 
   const refreshGithub = () => controller.centralGithubApp().then(setGithub).catch((error) => setGithubError(String((error as Error)?.message || error)));
@@ -41,7 +42,7 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
     return () => window.clearInterval(timer);
   }, [claim]);
 
-  const step = !github ? "loading" : github.configured && !hasGithub ? "github" : !hasMachine ? "machine" : configuredProviders.length === 0 ? "provider" : "ready";
+  const step = !github ? "loading" : github.configured && !hasGithub ? "github" : !machineOnline ? "machine" : configuredProviders.length === 0 ? "provider" : "ready";
   const startGithubInstall = useCallback(async () => {
     setBusy(true); setGithubError(null);
     try {
@@ -86,13 +87,26 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
       )}
       {step === "machine" && (
         <section className="settings-section">
-          <h3>Connect your machine</h3>
-          <p className="muted">Run a one-time command on macOS or Linux. It can enroll one machine and expires after 10 minutes.</p>
-          {!claim?.command ? <button type="button" className="btn primary" disabled={busy} onClick={() => {
-            setBusy(true);
-            controller.createNodeClaim().then(setClaim).catch((error) => setGithubError(String((error as Error)?.message || error))).finally(() => setBusy(false));
-          }}>{busy ? "Creating…" : "Create install command"}</button> : <div className="repo-connect-command"><code>{claim.command}</code><button type="button" className={`repo-connect-copy${copied ? " is-copied" : ""}`} onClick={() => void navigator.clipboard.writeText(claim.command || "").then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1500); })}>{copied ? "Copied" : "Copy"}</button></div>}
-          <p className="muted small">Your first managed trial session can also be selected from the composer after setup.</p>
+          <h3>Choose a setup Machine</h3>
+          {hasMachine ? (
+            <p className="muted">Your authentication Machine is starting and connecting…</p>
+          ) : (
+            <>
+              <p className="muted">Use a short-lived managed Machine to sign in without installing the CLI. It cannot run tasks, expires after 15 minutes, and does not consume a trial session.</p>
+              <button type="button" className="btn primary" disabled={busy} onClick={() => {
+                setBusy(true); setGithubError(null);
+                controller.createManagedAuthRunner()
+                  .then(() => controller.refreshNodes())
+                  .catch((error) => setGithubError(String((error as Error)?.message || error)))
+                  .finally(() => setBusy(false));
+              }}>{busy ? "Starting…" : "Use managed setup Machine"}</button>
+              <p className="muted small">Or enroll your own macOS/Linux Machine with a one-time command:</p>
+              {!claim?.command ? <button type="button" className="btn" disabled={busy} onClick={() => {
+                setBusy(true);
+                controller.createNodeClaim().then(setClaim).catch((error) => setGithubError(String((error as Error)?.message || error))).finally(() => setBusy(false));
+              }}>{busy ? "Creating…" : "Create personal install command"}</button> : <div className="repo-connect-command"><code>{claim.command}</code><button type="button" className={`repo-connect-copy${copied ? " is-copied" : ""}`} onClick={() => void navigator.clipboard.writeText(claim.command || "").then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1500); })}>{copied ? "Copied" : "Copy"}</button></div>}
+            </>
+          )}
         </section>
       )}
       {step === "provider" && (

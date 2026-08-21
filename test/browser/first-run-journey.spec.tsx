@@ -58,6 +58,18 @@ test("every failed readiness check maps to exactly one wired, real remediation â
   expect(app).not.toContain("sign_in: () =>");
 });
 
+test("managed-only cold start provisions a short-lived auth Machine before provider login", async () => {
+  const wizard = await read("../../packages/web/src/components/FirstRunOnboarding.tsx");
+  const accountApi = await read("../../packages/core/src/account.ts");
+  const controlPlane = await read("../../services/control-plane/src/index.ts");
+  const provisioner = await read("../../services/control-plane/src/ephemeral-provisioner.ts");
+  expect(wizard).toContain("controller.createManagedAuthRunner()");
+  expect(accountApi).toContain("/account/onboarding/auth-runner");
+  expect(controlPlane).toContain('purpose: "auth-runner"');
+  expect(controlPlane).toContain("Math.min(15");
+  expect(provisioner).toContain('hostedTasks: purpose !== "auth-runner"');
+});
+
 test("provider readiness ('Test connection') is wired end to end: web action -> relay command -> node handler", async () => {
   const controller = await read("../../packages/web/src/store/coordinators/credentials-models-coordinator.ts");
   const vault = await read("../../packages/web/src/components/CredentialVault.tsx");
