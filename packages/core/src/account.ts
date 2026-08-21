@@ -278,6 +278,43 @@ export async function fetchAccountNodes(store: LocalStore, fetchImpl: typeof fet
   return Array.isArray(data) ? (data as AccountNode[]) : [];
 }
 
+export interface CentralGithubAppInstallationView {
+  installationId: string;
+  githubAccount?: string;
+  githubAccountType?: string;
+  repositorySelection?: string;
+  createdAt: string;
+}
+export interface CentralGithubAppView {
+  configured: boolean;
+  appId?: string;
+  slug?: string;
+  installations: CentralGithubAppInstallationView[];
+}
+
+export async function fetchCentralGithubApp(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<CentralGithubAppView> {
+  const res = await fetchImpl(`${cpBase(store)}/account/github/central-app`, {
+    headers: { authorization: `Bearer ${store.s}` },
+  });
+  if (!res.ok) throw new Error(`GitHub App status request failed: ${res.status}`);
+  return await res.json() as CentralGithubAppView;
+}
+
+export async function createCentralGithubInstall(
+  store: LocalStore,
+  returnPath = "/",
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ state: string; installUrl: string }> {
+  const res = await fetchImpl(`${cpBase(store)}/account/github/central-app/install-state`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${store.s}`, "content-type": "application/json" },
+    body: JSON.stringify({ returnPath }),
+  });
+  const value = await res.json().catch(() => ({})) as { state?: string; installUrl?: string; error?: string };
+  if (!res.ok || !value.installUrl) throw new Error(value.error || `GitHub App install request failed: ${res.status}`);
+  return value as { state: string; installUrl: string };
+}
+
 export interface AccountNodeClaim {
   id: string;
   createdAt: string;

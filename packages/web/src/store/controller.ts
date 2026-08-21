@@ -14,6 +14,8 @@ import {
   createLocalStore,
   consumeLinkPayload,
   fetchAccountNodes,
+  fetchCentralGithubApp,
+  createCentralGithubInstall,
   createAccountNodeClaim,
   fetchAccountNodeClaims,
   revokeAccountNodeClaim,
@@ -809,6 +811,8 @@ export class AppController {
     return fetchAccountNodes(this.local);
   }
 
+  centralGithubApp() { return fetchCentralGithubApp(this.local); }
+  createCentralGithubInstall(returnPath = "/") { return createCentralGithubInstall(this.local, returnPath); }
   createNodeClaim() { return createAccountNodeClaim(this.local); }
   listNodeClaims() { return fetchAccountNodeClaims(this.local); }
   revokeNodeClaim(id: string) { return revokeAccountNodeClaim(this.local, id); }
