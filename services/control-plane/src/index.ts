@@ -3954,7 +3954,11 @@ app.post("/node/work/:id/claim", requireNode, asyncHandler(async (req, res) => {
   const id = String(req.params.id);
   const pending = await store.getAutomationRun(node.accountId, id);
   if (!pending || ["succeeded", "failed", "cancelled", "needs_attention"].includes(pending.status)) return res.status(409).json({ error: "Already claimed or unknown" });
-  await requireDeploymentAdmission(node.accountId, "automation.run", id);
+  // Manual interactive work remains available on Free/BYO machines. Every
+  // unattended ingress (schedule, GitHub, Slack, generic webhook, including
+  // legacy items without an explicit trigger kind) is a hosted automation and
+  // requires the deployment extension's paid automation entitlement.
+  if (pending.triggerKind !== "manual") await requireDeploymentAdmission(node.accountId, "automation.run", id);
   const item = await store.claimWorkItem(node.accountId, node.id, id);
   if (!item) return res.status(409).json({ error: "Already claimed or unknown" });
   void notifyRelaysRunUpdated(node.accountId, {
