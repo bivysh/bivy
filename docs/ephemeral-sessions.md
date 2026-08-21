@@ -331,9 +331,12 @@ Machine** (`POST /account/onboarding/auth-runner`). It uses the ordinary managed
 provisioner and policy reservation, but has a 15-minute TTL, purpose
 `auth-runner`, and does not poll hosted task queues. The browser then runs the
 existing provider OAuth/code or API-key protocol on that Machine, so subscription
-credentials keep their node-owned trust boundary. No trial is consumed unless an
-actual first agent event occurs; private Cloud policy separately caps lifetime
-auth-Machine attempts to prevent free provisioning abuse.
+credentials keep their node-owned trust boundary. Before the temporary Machine
+expires, onboarding asks for the existing explicit **managed credential reuse**
+grant; acceptance writes the separately encrypted hosted-custody snapshot used by
+future managed Machines. No trial is consumed unless an actual first agent event
+occurs; private Cloud policy separately caps lifetime auth-Machine attempts to
+prevent free provisioning abuse.
 
 > **Subscription OAuth on ephemeral runners.** The node→node sync above carries the *whole* vault — model API keys **and** the supported subscription-OAuth logins (Anthropic Claude Code, OpenAI Codex; see [`credential-sync.md`](credential-sync.md) §2/§4). So an ephemeral runner with **any** peer node online receives those logins too, and its agent runs project them the normal way (`CLAUDE_CODE_OAUTH_TOKEN`, Codex `auth.json`) — no extra path needed. To keep this fast for a machine that may only live a minute, a node's vault-key request now **wakes the account's peers over the relay** (event-driven) so one answers within seconds instead of on its 30s poll, and the requester fast-retries until the wrapped key lands. This is **peer-only**: the wrapped key is always answered by another node over the E2E wrap, so no subscription token or vault key ever transits the device or control plane in the clear. Only the **lone-node** cold start below (no peer online at all) falls back to API-keys-only.
 

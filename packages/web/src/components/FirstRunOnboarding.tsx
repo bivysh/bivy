@@ -11,6 +11,7 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
   const [claim, setClaim] = useState<Awaited<ReturnType<typeof controller.createNodeClaim>> | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [managedAuthRunner, setManagedAuthRunner] = useState(() => sessionStorage.getItem("bivy:managed-auth-runner") === "1");
   const configuredProviders = useMemo(() => state.catalogs.providers.filter((provider) => provider.configured), [state.catalogs.providers]);
   const [providerId, setProviderId] = useState("anthropic");
   const availableAgents = useMemo(
@@ -18,6 +19,10 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
     [state.catalogs.runtimes],
   );
   const selectedAgentId = state.catalogs.selectedAgentId || availableAgents[0]?.id || "";
+  const credentialProviderId = providerId === "openai-codex" ? "openai-codex" : providerId;
+  const activeCredential = state.settings.credentialRecords.find(
+    (record) => record.provider === credentialProviderId || (providerId === "openai-codex" && record.provider === "openai"),
+  );
   const hasMachine = Boolean(state.connection.currentNodeId);
   const machineOnline = hasMachine && state.connection.status === "online";
   const hasGithub = Boolean(github?.installations.length);
@@ -30,8 +35,16 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
     return () => window.removeEventListener("focus", onFocus);
   }, []);
   useEffect(() => {
-    if (hasMachine) controller.listProviders();
+    if (hasMachine) {
+      controller.listProviders();
+      controller.listCredentialRecords();
+    }
   }, [hasMachine]);
+  useEffect(() => {
+    if (configuredProviders.length && !configuredProviders.some((provider) => provider.id === providerId)) {
+      setProviderId(configuredProviders[0]!.id);
+    }
+  }, [configuredProviders, providerId]);
   useEffect(() => {
     if (!claim) return;
     const timer = window.setInterval(() => {
@@ -42,7 +55,9 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
     return () => window.clearInterval(timer);
   }, [claim]);
 
-  const step = !github ? "loading" : github.configured && !hasGithub ? "github" : !machineOnline ? "machine" : configuredProviders.length === 0 ? "provider" : "ready";
+  const step = !github ? "loading" : github.configured && !hasGithub ? "github" : !machineOnline ? "machine"
+    : configuredProviders.length === 0 ? "provider"
+      : managedAuthRunner && !activeCredential?.unattended ? "custody" : "ready";
   const startGithubInstall = useCallback(async () => {
     setBusy(true); setGithubError(null);
     try {
@@ -96,7 +111,11 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
               <button type="button" className="btn primary" disabled={busy} onClick={() => {
                 setBusy(true); setGithubError(null);
                 controller.createManagedAuthRunner()
-                  .then(() => controller.refreshNodes())
+                  .then(() => {
+                    sessionStorage.setItem("bivy:managed-auth-runner", "1");
+                    setManagedAuthRunner(true);
+                    return controller.refreshNodes();
+                  })
                   .catch((error) => setGithubError(String((error as Error)?.message || error)))
                   .finally(() => setBusy(false));
               }}>{busy ? "Starting…" : "Use managed setup Machine"}</button>
@@ -132,11 +151,28 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
           <ProviderConnectForm state={state} providerId={providerId} apiKeyProvider={providerId === "openai-codex" ? "openai" : undefined} />
         </section>
       )}
+      {step === "custody" && (
+        <section className="settings-section">
+          <h3>Keep this login for managed sessions</h3>
+          <p className="muted">The setup Machine is temporary. To let future managed Machines use this credential, Bivy creates a separate encrypted hosted-custody snapshot. This does not expose it to GitHub or other users, and you can revoke the grant in Providers & credentials.</p>
+          <button type="button" className="btn primary" disabled={busy || !activeCredential} onClick={() => {
+            if (!activeCredential) return;
+            setBusy(true); setGithubError(null);
+            controller.setCredentialUnattended(activeCredential.provider, activeCredential.label, true)
+              .then(() => controller.listCredentialRecords())
+              .catch((error) => setGithubError(String((error as Error)?.message || error)))
+              .finally(() => setBusy(false));
+          }}>{busy ? "Encrypting…" : "Enable managed credential reuse"}</button>
+        </section>
+      )}
       {step === "ready" && (
         <section className="settings-section">
           <h3>Ready for your first task</h3>
           <p className="muted">GitHub, {state.connection.nodes.find((node) => node.id === state.connection.currentNodeId)?.name || "your machine"}, and {configuredProviders[0]?.name || "your provider"} are connected.</p>
-          <button type="button" className="btn primary" onClick={onDone}>Choose a repository and start</button>
+          <button type="button" className="btn primary" onClick={() => {
+            sessionStorage.removeItem("bivy:managed-auth-runner");
+            onDone();
+          }}>Choose a repository and start</button>
         </section>
       )}
       {step !== "ready" && <button type="button" className="btn ghost" onClick={onDone}>Finish setup later</button>}
