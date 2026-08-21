@@ -36,6 +36,11 @@ export interface DeploymentPolicyContext {
   purpose?: string;
 }
 
+export type DeploymentLifecycleEvent =
+  | { type: "ephemeral.first-agent-event"; attemptId: string; at: string }
+  | { type: "ephemeral.launch-failed"; attemptId: string; at: string }
+  | { type: "ephemeral.settled"; attemptId: string; at: string; machineSeconds?: number; activeAgentSeconds?: number };
+
 export interface AccountExtensionView {
   title?: string;
   facts?: Array<{ id: string; label: string; value: string }>;
@@ -66,6 +71,11 @@ export class DeploymentExtension {
     const decision = response as Partial<DeploymentDecision>;
     if (typeof decision.allowed !== "boolean") throw new Error("Deployment extension returned an invalid policy decision");
     return decision as DeploymentDecision;
+  }
+
+  async record(accountId: string, event: DeploymentLifecycleEvent): Promise<void> {
+    if (!this.url) return;
+    await this.request("/v1/events", { subject: { accountId }, event });
   }
 
   async publishSessions(accountId: string, sessionIds: string[]): Promise<void> {
