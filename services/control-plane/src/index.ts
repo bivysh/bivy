@@ -4251,10 +4251,16 @@ app.post("/node/work/:id/claim", requireNode, asyncHandler(async (req, res) => {
   const id = String(req.params.id);
   const pending = await store.getAutomationRun(node.accountId, id);
   if (!pending || ["succeeded", "failed", "cancelled", "needs_attention"].includes(pending.status)) return res.status(409).json({ error: "Already claimed or unknown" });
-  const admission = await deploymentDecision(node.accountId, "automation.run", id);
-  if (!admission.allowed) {
-    await parkAutomationRunForDeploymentDenial(node.accountId, { id }, admission);
-    return res.status(409).json({ error: admission.reason || "Automation run is blocked by account policy", code: admission.code || "policy_denial" });
+  // Manual interactive work remains available on Free/BYO machines. Every
+  // unattended ingress (schedule, GitHub, Slack, generic webhook, including
+  // legacy items without an explicit trigger kind) is a hosted automation and
+  // requires the deployment extension's paid automation entitlement.
+  if (pending.triggerKind !== "manual") {
+    const admission = await deploymentDecision(node.accountId, "automation.run", id);
+    if (!admission.allowed) {
+      await parkAutomationRunForDeploymentDenial(node.accountId, { id }, admission);
+      return res.status(409).json({ error: admission.reason || "Automation run is blocked by account policy", code: admission.code || "policy_denial" });
+    }
   }
   const item = await store.claimWorkItem(node.accountId, node.id, id);
   if (!item) return res.status(409).json({ error: "Already claimed or unknown" });
