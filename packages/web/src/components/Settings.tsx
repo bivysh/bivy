@@ -896,6 +896,7 @@ function NodesPanel({ state }: { state: AppState }) {
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const [nodeClaim, setNodeClaim] = useState<Awaited<ReturnType<typeof controller.createNodeClaim>> | null>(null);
+  const [nodeClaims, setNodeClaims] = useState<Awaited<ReturnType<typeof controller.listNodeClaims>>>([]);
   const [claimBusy, setClaimBusy] = useState(false);
   const [claimCopied, setClaimCopied] = useState(false);
   const currentNodeId = controller.local.cur;
@@ -912,6 +913,17 @@ function NodesPanel({ state }: { state: AppState }) {
     if (hosted) controller.listNodes().then(setNodes).catch(() => {});
   };
   useEffect(reload, [hosted]);
+  useEffect(() => {
+    if (!hosted) return;
+    const refreshClaims = () => controller.listNodeClaims().then((claims) => {
+      setNodeClaims(claims);
+      if (nodeClaim && claims.find((claim) => claim.id === nodeClaim.id)?.status !== "pending") setNodeClaim(null);
+    }).catch(() => {});
+    void refreshClaims();
+    if (!nodeClaim) return;
+    const timer = window.setInterval(refreshClaims, 3000);
+    return () => window.clearInterval(timer);
+  }, [hosted, nodeClaim?.id]);
 
   // The node whose settings we're editing is only ever the one the transport
   // is actually connected to (`state.connection.status === "online"`) — never a guess
@@ -971,6 +983,8 @@ function NodesPanel({ state }: { state: AppState }) {
     }
   };
 
+  const recentNodeClaims = nodeClaims.filter((claim) => claim.id !== nodeClaim?.id).slice(0, 5);
+
   const resetIssuePrompt = () => {
     if (!form || !settings) return;
     setSaveErr(null);
@@ -996,7 +1010,10 @@ function NodesPanel({ state }: { state: AppState }) {
                 setClaimBusy(true);
                 setSaveErr(null);
                 controller.createNodeClaim()
-                  .then(setNodeClaim)
+                  .then((claim) => {
+                    setNodeClaim(claim);
+                    setNodeClaims((current) => [claim, ...current.filter((item) => item.id !== claim.id)]);
+                  })
                   .catch((error) => setSaveErr(String((error as Error)?.message || error)))
                   .finally(() => setClaimBusy(false));
               }}
@@ -1023,7 +1040,10 @@ function NodesPanel({ state }: { state: AppState }) {
                   onClick={() => {
                     setClaimBusy(true);
                     controller.revokeNodeClaim(nodeClaim.id)
-                      .then(() => setNodeClaim(null))
+                      .then(() => {
+                        setNodeClaim(null);
+                        return controller.listNodeClaims().then(setNodeClaims);
+                      })
                       .catch((error) => setSaveErr(String((error as Error)?.message || error)))
                       .finally(() => setClaimBusy(false));
                   }}
@@ -1031,6 +1051,29 @@ function NodesPanel({ state }: { state: AppState }) {
                 >Revoke</button>
               </div>
             </>
+          )}
+          {recentNodeClaims.length > 0 && (
+            <div className="picker-list">
+              {recentNodeClaims.map((claim) => (
+                <PickerItem
+                  key={claim.id}
+                  title={`Install command · ${claim.status}`}
+                  meta={claim.nodeId ? `Used by ${claim.nodeId}` : `Expires ${new Date(claim.expiresAt).toLocaleTimeString()}`}
+                  right={claim.status === "pending" ? (
+                    <button
+                      type="button"
+                      className="picker-action danger"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        controller.revokeNodeClaim(claim.id)
+                          .then(() => controller.listNodeClaims().then(setNodeClaims))
+                          .catch((error) => setSaveErr(String((error as Error)?.message || error)));
+                      }}
+                    >Revoke</button>
+                  ) : undefined}
+                />
+              ))}
+            </div>
           )}
         </section>
       )}
