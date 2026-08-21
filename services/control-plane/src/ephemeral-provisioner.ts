@@ -58,11 +58,7 @@ import { mintInstallationToken } from "./hosted-github-auth.js";
 import { encryptSecret, decryptSecret } from "./hosted-crypto.js";
 import { centralGithubAppConfig, resolveGithubIdentity, type ResolvedGithubIdentity } from "./central-github-app.js";
 import type { CentralGithubInstallation } from "./store.js";
-import {
-  enforceManagedComputeLaunch,
-  usageFromManagedMachine,
-  type ComputeCapDenial,
-} from "./compute-metering.js";
+import { usageFromManagedMachine } from "./compute-metering.js";
 
 /** Persistence needed by unattended machine orchestration. Deliberately omits
  * account administration, notifications, device vaults, and automation
@@ -108,11 +104,30 @@ export interface ProvisionEnv {
   relayUrl: string;
 }
 
+export interface ManagedProvisionRequest {
+  computeSource: "managed";
+  provider: string;
+  sizeId?: string;
+  vcpus?: number;
+  memoryMiB?: number;
+  ttlMinutes: number;
+  configId: string;
+}
+
+export interface ProvisionAdmissionDecision {
+  allowed: boolean;
+  code?: string;
+  reason?: string;
+}
+
+export type ManagedProvisionAdmission = (request: ManagedProvisionRequest) => Promise<ProvisionAdmissionDecision>;
+const allowManagedProvision: ManagedProvisionAdmission = async () => ({ allowed: true });
+
 export interface ProvisionPlan {
   willProvision: boolean;
   targetConfigId: string | null;
   reason: string;
-  capDenial?: ComputeCapDenial;
+  policyDenial?: ProvisionAdmissionDecision;
 }
 
 export interface HostedExecutionReadiness { ready: boolean; reason: string; configId?: string }
@@ -336,7 +351,12 @@ export function resolveAutoProvisionTarget(
 }
 
 /** Decide whether to provision, without launching. Safe to expose for dry-runs. */
-export async function planAutoProvision(store: EphemeralProvisioningPort, accountId: string, nowMs = Date.now()): Promise<ProvisionPlan> {
+export async function planAutoProvision(
+  store: EphemeralProvisioningPort,
+  accountId: string,
+  nowMs = Date.now(),
+  admitManaged: ManagedProvisionAdmission = allowManagedProvision,
+): Promise<ProvisionPlan> {
   // Deployment emergency gate: exact `0` disables new launches; otherwise the
   // per-account hosted opt-in is authoritative. This is the single choke point
   // for ALL server-initiated auto-launches — both maybeAutoProvision
@@ -351,7 +371,8 @@ export async function planAutoProvision(store: EphemeralProvisioningPort, accoun
   const configs = await store.getEphemeralConfigs(accountId);
   const target = resolveAutoProvisionTarget(routing, configs);
   if (!target) return { willProvision: false, targetConfigId: null, reason: "routing does not point at an ephemeral config" };
-  if (!ephemeralAdapter(target.provider)) {
+  const adapter = ephemeralAdapter(target.provider);
+  if (!adapter) {
     return { willProvision: false, targetConfigId: target.id, reason: `provider ${target.provider} is no longer supported` };
   }
   const computeSource = normalizeComputeSource(target.computeSource);
@@ -366,13 +387,29 @@ export async function planAutoProvision(store: EphemeralProvisioningPort, accoun
   if (!cred.token) {
     return { willProvision: false, targetConfigId: target.id, reason: cred.reason };
   }
-  // The only managed-compute admission call in the launch decision path. It is
-  // an immediate allow for BYO configurations and fail-closed for managed
-  // metering. Operational readiness is checked first so disabled or
-  // misconfigured deployments report the actionable infrastructure reason.
-  const computeGate = await enforceManagedComputeLaunch(store, accountId, target, nowMs);
-  if (!computeGate.allowed) {
-    return { willProvision: false, targetConfigId: target.id, reason: computeGate.message, capDenial: computeGate };
+  // The one operator-policy seam for Bivy-paid compute. Core supplies only
+  // technical facts; a configured deployment extension owns tiers, trials,
+  // commercial usage and upgrade actions. BYO never crosses this gate.
+  if (computeSource === "managed") {
+    const sizeId = target.size ?? adapter.defaultSize;
+    const size = sizeId ? adapter.sizes.find((entry) => entry.id === sizeId) : undefined;
+    const decision = await admitManaged({
+      computeSource: "managed",
+      provider: target.provider,
+      sizeId,
+      vcpus: size?.vcpus,
+      memoryMiB: size?.memoryMiB,
+      ttlMinutes: target.ttlMinutes ?? 60,
+      configId: target.id,
+    });
+    if (!decision.allowed) {
+      return {
+        willProvision: false,
+        targetConfigId: target.id,
+        reason: decision.reason ?? "Managed compute was denied by deployment policy",
+        policyDenial: decision,
+      };
+    }
   }
   // A config primary is the designated runner (provision regardless of node
   // liveness). A node primary only falls back to its config when nothing online.
@@ -1416,6 +1453,7 @@ export async function maybeAutoProvision(
   accountId: string,
   env: ProvisionEnv,
   launcher = launchEphemeralMachine,
+  admitManaged: ManagedProvisionAdmission = allowManagedProvision,
 ): Promise<EphemeralMachine | null> {
   const leaseHolder = randomUUID();
   let replenish = false;
@@ -1466,7 +1504,7 @@ export async function maybeAutoProvision(
         return claimed as unknown as EphemeralMachine;
       }
     }
-    const plan = await planAutoProvision(store, accountId);
+    const plan = await planAutoProvision(store, accountId, Date.now(), admitManaged);
     if (!plan.willProvision || !plan.targetConfigId) return null;
     const plannedTarget = configs.find((c) => c.id === plan.targetConfigId);
     if (!plannedTarget) return null;

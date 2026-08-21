@@ -468,7 +468,7 @@ export function ownershipTagFor(accountId: string): string {
 export interface HostedAuditEvent {
   at: string;
   action: "credential_updated" | "credential_rotated" | "credential_validation_failed" | "github_app_connected" | "github_app_disconnected" | "provision_attempt" | "provision_launched" | "provision_failed" | "token_minted" | "machine_reaped" | "machine_milestone" | "reconcile_failed" | "room_key_escrowed" | "room_key_reused" | "work_routed" | "capacity_ready" | "capacity_claimed" | "orphan_reaped" | "orphan_detected" | "attempt_abandoned" | "force_destroy_requested" | "model_credential_escrowed" | "model_credential_used" | "central_install_bound" | "central_install_updated" | "central_install_unbound" | "central_install_reconciled" | "compute_cap_denied";
-  provider?:
+  provider?: string;
   configId?: string;
   nodeId?: string;
   workItemId?: string;

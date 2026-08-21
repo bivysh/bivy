@@ -117,34 +117,22 @@ size's hourly rate, plus TTL and a jump to its audit evidence. These are estimat
 not invoices; the user's provider bill remains authoritative for discounts,
 storage, egress, taxes, and live price changes.
 
-## Managed compute metering and caps
+## Managed compute metering and operator policy
 
-Managed-compute launches are metered by the control plane from server-stamped,
-durable machine milestones. `machineSeconds` runs from provider launch
-(`createdAt`) until the machine reports settled or provider reconciliation confirms
-it gone. `activeAgentSeconds` runs from the first agent event until that same
-settlement boundary. A machine that never emits an agent event therefore has zero
-active-agent time but still has machine time; a teardown failure is still metered
-at settlement. Records retain the milestone boundaries so finer per-turn accrual
-can replace the v1 estimate later. Usage crossing a UTC calendar-month boundary is
-apportioned to each month.
+Core records provider-neutral lifecycle facts from server-stamped durable
+milestones. `machineSeconds` runs from provider launch (`createdAt`) until the
+machine reports settled or provider reconciliation confirms it gone;
+`activeAgentSeconds` starts at the first agent event. A machine that never emits
+an agent event therefore has zero active-agent time but still has machine time,
+and settlement remains idempotent across teardown retries.
 
-Caps apply only to the `managed-compute` catalog lane. User-token/BYO-cloud
-launches are never admitted or denied by this meter. The launch gate fails closed
-when account or usage data cannot be read and records a `compute_cap_denied` audit
-event. `GET /account/usage` returns current-month totals, recent settled sessions,
-the plan limits and remaining headroom; its allowlisted response omits provider
-credentials, room keys, machine addresses and provider inventory.
-
-| Plan | Monthly active-agent time | Concurrent managed sessions | Maximum TTL |
-|---|---:|---:|---:|
-| Free | 0 hours | 0 | 0 |
-| Individual | 20 hours | 2 | 120 minutes |
-| Pro | 100 hours | 4 | 240 minutes |
-| Team | 500 hours | 10 | 480 minutes |
-
-The per-plan table in `services/control-plane/src/compute-metering.ts` is the
-source of truth for these admission values.
+Core contains no commercial plans or caps. At the single managed-launch seam it
+passes technical context (compute source, provider, size resources and TTL) to
+the optional deployment extension. A configured operator can enforce trials,
+allowances, concurrency and machine classes; failures deny new managed launches.
+An unconfigured self-hosted deployment remains unrestricted. User-token/BYO
+launches do not cross the managed-compute admission seam, and teardown,
+reconciliation and orphan cleanup never depend on commercial admission.
 
 ## Adding a new provider
 
