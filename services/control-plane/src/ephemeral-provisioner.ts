@@ -105,6 +105,7 @@ export interface ProvisionEnv {
 }
 
 export interface ManagedProvisionRequest {
+  attemptId?: string;
   computeSource: "managed";
   provider: string;
   sizeId?: string;
@@ -356,6 +357,7 @@ export async function planAutoProvision(
   accountId: string,
   nowMs = Date.now(),
   admitManaged: ManagedProvisionAdmission = allowManagedProvision,
+  managedAttemptId?: string,
 ): Promise<ProvisionPlan> {
   // Deployment emergency gate: exact `0` disables new launches; otherwise the
   // per-account hosted opt-in is authoritative. This is the single choke point
@@ -394,6 +396,7 @@ export async function planAutoProvision(
     const sizeId = target.size ?? adapter.defaultSize;
     const size = sizeId ? adapter.sizes.find((entry) => entry.id === sizeId) : undefined;
     const decision = await admitManaged({
+      attemptId: managedAttemptId,
       computeSource: "managed",
       provider: target.provider,
       sizeId,
@@ -559,7 +562,7 @@ export async function provisionEphemeralForAccount(
   launcher = launchEphemeralMachine,
   nowMs = Date.now(),
   purpose: EphemeralMachine["purpose"] = "queue-default",
-  retry?: { attemptId: string; nodeId: string; retryCount: number },
+  retry?: { attemptId: string; nodeId?: string; retryCount: number },
 ): Promise<EphemeralMachine> {
   const hosted = await store.getHostedProvisioning(accountId);
   const computeSource = normalizeComputeSource(config.computeSource);
@@ -1454,9 +1457,11 @@ export async function maybeAutoProvision(
   env: ProvisionEnv,
   launcher = launchEphemeralMachine,
   admitManaged: ManagedProvisionAdmission = allowManagedProvision,
+  onManagedLaunchFailed: (attemptId: string) => Promise<void> = async () => {},
 ): Promise<EphemeralMachine | null> {
   const leaseHolder = randomUUID();
   let replenish = false;
+  let admittedManagedAttemptId: string | undefined;
   let heartbeat: { stop: () => void; isLost: () => boolean } | undefined;
   try {
     // Lazy lifecycle reconciliation: prune (and actively destroy leak-prone)
@@ -1504,24 +1509,29 @@ export async function maybeAutoProvision(
         return claimed as unknown as EphemeralMachine;
       }
     }
-    const plan = await planAutoProvision(store, accountId, Date.now(), admitManaged);
+    const managedAttemptId = randomUUID();
+    const plan = await planAutoProvision(store, accountId, Date.now(), admitManaged, managedAttemptId);
     if (!plan.willProvision || !plan.targetConfigId) return null;
     const plannedTarget = configs.find((c) => c.id === plan.targetConfigId);
     if (!plannedTarget) return null;
+    if (normalizeComputeSource(plannedTarget.computeSource) === "managed") admittedManagedAttemptId = managedAttemptId;
     // Case B + Gap 3: if a pending item wants to CONTINUE an existing session whose
     // (torn-down) node still has an escrowed room key, rebuild that session in place
     // server-side rather than launching a blank machine. Best-effort — any gap
     // (no correlation / no escrowed key) falls back to a normal fresh provision.
     const restore = await planRestoreProvision(store, accountId).catch(() => null);
     const machine = restore
-      ? await provisionEphemeralRestore(store, accountId, plannedTarget, env, restore, launcher)
-      : await provisionEphemeralForAccount(store, accountId, plannedTarget, env, launcher);
+      ? await provisionEphemeralRestore(store, accountId, plannedTarget, env, { ...restore, attemptId: managedAttemptId }, launcher)
+      : await provisionEphemeralForAccount(store, accountId, plannedTarget, env, launcher, Date.now(), "queue-default", {
+          attemptId: managedAttemptId, retryCount: 0,
+        });
     // A hosted runner serves its unique `bivy/<eph suffix>` label. Move only
     // work that was waiting on the routing target which caused this launch;
     // explicit items for another node/config must remain untouched.
     await routePendingWorkToMachine(store, accountId, plannedTarget, machine);
     return machine;
   } catch (e) {
+    if (admittedManagedAttemptId) await onManagedLaunchFailed(admittedManagedAttemptId).catch(() => {});
     console.error(`[hosted-provision] account ${accountId}:`, (e as Error)?.message || e);
     return null;
   } finally {

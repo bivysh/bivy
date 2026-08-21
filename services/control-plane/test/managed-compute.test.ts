@@ -159,6 +159,7 @@ try {
     assert.equal(plan.reason, "Upgrade required");
     assert.equal(plan.policyDenial?.code, "upgrade_required");
     assert.deepEqual(request, {
+      attemptId: undefined,
       computeSource: "managed", provider: "fly", sizeId: "shared-4x-8gb",
       vcpus: 4, memoryMiB: 8192, ttlMinutes: 60, configId: MANAGED_CONFIG.id,
     });

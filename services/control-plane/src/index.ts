@@ -14,6 +14,7 @@ import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecr
 import { listAppInstallations, listInstallationRepositories, getAppInstallation } from "./hosted-github-auth.js";
 import { correlateHostedSessions } from "./hosted-correlation.js";
 import { countActiveAccountSessions } from "./session-count.js";
+import { usageFromManagedMachine } from "./compute-metering.js";
 import { createStore } from "./store-factory.js";
 import { AutomationScheduler, nextOccurrence, normalizeSchedule } from "./schedule.js";
 import { parseShardUrls, shardForNode } from "./relay-shards.js";
@@ -154,7 +155,14 @@ async function requireDeploymentAdmission(
 }
 
 function managedProvisionAdmission(accountId: string) {
-  return (request: ManagedProvisionRequest) => deploymentDecision(accountId, "ephemeral.provision", undefined, request);
+  return ({ attemptId, ...context }: ManagedProvisionRequest) =>
+    deploymentDecision(accountId, "ephemeral.provision", attemptId, context);
+}
+
+function managedLaunchFailureRecorder(accountId: string) {
+  return (attemptId: string) => deploymentExtension.record(accountId, {
+    type: "ephemeral.launch-failed", attemptId, at: new Date().toISOString(),
+  });
 }
 try {
   await store.init();
@@ -235,7 +243,7 @@ async function notifyRelaysWorkAvailable(
   // Cancelling must never start a machine. Normal enqueue notifications retain
   // the unattended-provisioning check.
   if (options.autoProvision !== false) {
-    void maybeAutoProvision(store, accountId, provisionEnv(), undefined, managedProvisionAdmission(accountId))
+    void maybeAutoProvision(store, accountId, provisionEnv(), undefined, managedProvisionAdmission(accountId), managedLaunchFailureRecorder(accountId))
       .catch((error) => console.error("[deployment-extension] provisioning admission failed", error));
   }
 }
@@ -1228,7 +1236,18 @@ app.post("/node/ephemeral-milestone", requireNode, asyncHandler(async (req, res)
   const node = (req as Request & { node: NodeRecord }).node;
   const milestone = String(req.body?.milestone ?? "");
   if (!(EPHEMERAL_MILESTONES as readonly string[]).includes(milestone)) return res.status(400).json({ error: "unknown milestone" });
-  const tracked = await markHostedMachineMilestone(store, node.accountId, node.id, milestone as (typeof EPHEMERAL_MILESTONES)[number]);
+  const at = new Date().toISOString();
+  const tracked = await markHostedMachineMilestone(store, node.accountId, node.id, milestone as (typeof EPHEMERAL_MILESTONES)[number], at);
+  if (tracked && milestone === "firstAgentEventAt") {
+    const machine = (await store.getHostedMachines(node.accountId)).find((candidate) => candidate.nodeId === node.id);
+    if (machine?.computeSource === "managed" && typeof machine.attemptId === "string") {
+      // Await activation so a failed Cloud policy write is retried by the
+      // milestone caller; the store update above is first-write-wins and safe.
+      await deploymentExtension.record(node.accountId, {
+        type: "ephemeral.first-agent-event", attemptId: machine.attemptId, at,
+      });
+    }
+  }
   res.json({ ok: true, tracked });
 }));
 
@@ -1304,7 +1323,18 @@ app.put("/session-correlation/:sessionId", requireUser, asyncHandler(async (req,
 // server-side → reaped:false. See src/ephemeral-teardown.ts.
 app.post("/node/settled", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
+  const settledAt = new Date().toISOString();
+  const machine = (await store.getHostedMachines(node.accountId)).find((candidate) => candidate.nodeId === node.id);
+  const usage = machine?.computeSource === "managed" ? usageFromManagedMachine(node.accountId, machine, settledAt) : undefined;
   const reaped = await reapSettledHostedMachine(store, node.accountId, node.id, provisionEnv()).catch(() => false);
+  // Billing/usage outages must never prevent provider teardown. The extension
+  // event is idempotent and can be recovered from the durable Core settlement.
+  if (usage && typeof machine?.attemptId === "string") {
+    await deploymentExtension.record(node.accountId, {
+      type: "ephemeral.settled", attemptId: machine.attemptId, at: settledAt,
+      machineSeconds: usage.machineSeconds, activeAgentSeconds: usage.activeAgentSeconds,
+    }).catch((error) => console.error("[deployment-extension] settlement event failed", error));
+  }
   res.json({ ok: true, reaped });
 }));
 
@@ -3397,7 +3427,9 @@ app.post("/account/hosted-provision-now", asyncHandler(async (req, res) => {
   const admission = managedProvisionAdmission(client.accountId);
   const plan = await planAutoProvision(store, client.accountId, Date.now(), admission);
   if (req.body?.execute === true && plan.willProvision) {
-    const machine = await maybeAutoProvision(store, client.accountId, provisionEnv(), undefined, admission);
+    const machine = await maybeAutoProvision(
+      store, client.accountId, provisionEnv(), undefined, admission, managedLaunchFailureRecorder(client.accountId),
+    );
     return res.json({ plan, provisioned: machine ? { id: machine.id, nodeId: machine.nodeId } : null });
   }
   res.json({ plan });
