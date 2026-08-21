@@ -143,9 +143,9 @@ have a clear production upgrade path.
    ciphertext still decrypts; rotation (`POST /account/hosted-provisioning/rotate`)
    re-seals under the primary. Ciphertext is bound to its account (a cross-account
    decrypt fails); no plaintext credential is ever written to the database, and
-   **writes fail closed** (503) when no key is configured. *Interim:* keys come
-   from `HOSTED_CREDENTIAL_KEYS`/`HOSTED_CREDENTIAL_KEY`; swap `loadKeyring()` for
-   a KMS/HSM to upgrade without touching callers.
+   **writes fail closed** (503) when no key is configured. Keys come through a
+   pluggable source: environment keys by default, or encrypted data-key blobs
+   decrypted by AWS KMS at boot. Callers do not depend on the selected source.
 2. **Audit trail** — every credential update, provision attempt/launch/failure,
    token mint, and machine reap is recorded per account (`appendHostedAudit`),
    readable at `GET /account/hosted-audit`. Events never contain secrets.
@@ -167,11 +167,57 @@ have a clear production upgrade path.
    self-destructs at its TTL independently; this keeps CP state accurate without
    relying on a device.
 
+## The central GitHub App (managed tier)
+
+Beyond BYO credentials, the operator can register ONE **central GitHub App**
+(`BIVY_CENTRAL_GITHUB_APP_ID` + `BIVY_CENTRAL_GITHUB_APP_PRIVATE_KEY`, plus a
+webhook secret and slug). Users then just install that app on their org/user
+and pick repos — no app creation, no PAT. Absent config, the feature is
+cleanly off; self-hosters can register their own "central" app.
+
+**Trust delta.** The central app's private key lives in operator env config on
+the control plane, so the CP can mint a ~1 h installation token for **any repo
+the app is installed on**. This concentrates GitHub reach for every opted-in
+account into one key — a strictly wider version of the per-account
+hosted-credential exception above. Bounds on that power:
+
+- **JIT, scoped, never stored.** Tokens are minted on demand per git operation
+  (`POST /node/hosted-git-credential`), scoped down to the session repo where
+  the GitHub API allows, and never persisted. Users choose which repos the
+  installation covers on GitHub's own consent screen.
+- **Identity mode is explicit data.** Per account,
+  `githubIdentity: "central-app" | "own-app" | "token"` selects the credential
+  source through one resolution table (`central-github-app.ts`); unset keeps
+  the pre-central behavior (own app, then PAT) with the central app only as a
+  final fallback. BYO paths are unchanged.
+- **Account binding requires proof.** An installation is bound to an account
+  only via the state-signed setup callback (single-use, 15 min, minted by the
+  signed-in account) — never by an installation id alone, which is enumerable.
+  The id is additionally verified to belong to the central app via an app-JWT
+  lookup, and an id already bound to another account is refused. `installation`
+  webhooks update/remove only already-bound installations.
+- **Isolation.** Minting resolves only installations bound to the requesting
+  node's account; account A can never mint against B's installation (unit- and
+  e2e-tested).
+- **Audited.** Binds, unbinds, and every mint append to the same per-account
+  `hosted-audit` trail.
+
+If the control plane is compromised, the central app key must be treated as
+compromised: revoke it in the GitHub App settings (one place), which
+invalidates all installations at once. This is deliberately more recoverable
+than mass-leaked PATs.
+
 ### Still recommended before GA
-- Back the keyring with a real **KMS/HSM** — rotation and per-key-id envelopes
-  are already in place, so only the key *source* (`loadKeyring()`) needs swapping.
+- Extend the keyring beyond the current env and **AWS KMS** sources (for example,
+  an HSM) without changing callers.
 - **Scope** the GitHub App installation and cloud tokens to the minimum repos /
   permissions needed (operational).
+- **Verify the installer's identity** in the central-app setup callback via
+  GitHub user OAuth (`code` exchange → `GET /user/installations`). The state
+  nonce already proves which Bivy account initiated the install; OAuth would
+  additionally prove the GitHub user completing it has access to that
+  installation, closing the residual race where an attacker holding a fresh
+  state binds a victim's just-created, not-yet-bound installation.
 - Exercise a real **end-to-end cloud launch** with live provider credentials
   (the code path is complete; it needs a real provider account to run).
 

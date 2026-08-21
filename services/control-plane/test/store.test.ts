@@ -40,6 +40,15 @@ await test("sessions can be created, resolved, and revoked (logout)", async () =
   assert.equal(await store.accountFromSession(token), undefined);
 });
 
+await test("GitHub installer targets are retained as identity proof", async () => {
+  const store = await makeStore();
+  const account = await store.findOrCreateAccount("github-targets@example.com");
+  await store.setGithubIdentity(account.id, "123", ["123", "456", "123", "invalid"]);
+  const linked = await store.getAccount(account.id);
+  assert.equal(linked?.githubUserId, "123");
+  assert.deepEqual(linked?.githubInstallTargetIds, ["123", "456"]);
+});
+
 await test("magic-link login tokens are single-use", async () => {
   const store = await makeStore();
   const token = await store.createLoginToken("c@example.com");
@@ -591,6 +600,29 @@ await test("setNodeOnline(true) stamps last_seen_at; setNodeOnline(false) does n
   const afterOffline = (await store.listNodes(acct.id)).find((n) => n.id === node.id);
   assert.equal(afterOffline?.online, false);
   assert.equal(afterOffline?.lastSeenAt, seenWhenOnline, "offline write must not bump last_seen_at");
+});
+
+await test("node claims are account-bound, hashed, revocable, and single-use", async () => {
+  const store = await makeStore();
+  const account = await store.findOrCreateAccount("claim@example.com");
+  const other = await store.findOrCreateAccount("claim-other@example.com");
+
+  const { claim, code } = await store.createNodeClaim(account.id);
+  assert.equal(code.length, 43);
+  assert.equal((await store.listNodeClaims(account.id))[0].id, claim.id);
+  assert.equal((await store.listNodeClaims(other.id)).length, 0);
+  assert.equal(JSON.stringify(await store.listNodeClaims(account.id)).includes(code), false, "raw claim code is never read back");
+
+  assert.equal(await store.revokeNodeClaim(other.id, claim.id), false, "another account cannot revoke the claim");
+  const consumed = await store.consumeNodeClaim(code, "claimed-node");
+  assert.equal(consumed?.accountId, account.id);
+  assert.equal(consumed?.nodeId, "claimed-node");
+  assert.equal(await store.consumeNodeClaim(code, "replay-node"), undefined, "claim replay is rejected");
+  assert.equal(await store.revokeNodeClaim(account.id, claim.id), false, "used claim cannot be revoked into another state");
+
+  const revocable = await store.createNodeClaim(account.id);
+  assert.equal(await store.revokeNodeClaim(account.id, revocable.claim.id), true);
+  assert.equal(await store.consumeNodeClaim(revocable.code, "revoked-node"), undefined);
 });
 
 console.log(`\nAll ${passed} control-plane store tests passed.`);

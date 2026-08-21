@@ -100,29 +100,48 @@ function sameRecordContent(a: CredentialRecord | undefined, b: CredentialRecord)
   return JSON.stringify(strip(a)) === JSON.stringify(strip(b));
 }
 
+function canonicalCredential(credential: OAuthCredential): string {
+  const { updatedAt: _drop, ...content } = credential;
+  const stable = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(stable);
+    if (!value || typeof value !== "object") return value;
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+      .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+      .map(([key, child]) => [key, stable(child)]));
+  };
+  return JSON.stringify(stable(content));
+}
+
 /**
- * Should `incoming` replace `local` during a non-destructive merge? The v2 rule,
- * re-keyed to records:
- *  - No local → take incoming.
- *  - Only stored-OAuth-vs-stored-OAuth needs freshness arbitration; anything else
- *    (api-key, reference, a type/source switch) lets a real content change win.
- *  - A snapshot with a blank refresh token must never clobber a usable one
- *    (rotated refresh tokens are single-use).
- *  - Prefer the token minted LATER by `refreshedAt`; else the later `expires`. A
- *    tie KEEPS local (strictly-greater wins), so equal stamps can't churn/rotate.
+ * OAuth ordering shared by record and legacy-wire merges. This must be a total,
+ * symmetric order: OpenAI/Codex rotates refresh tokens, so node A may publish r2
+ * after refreshing while node B later uploads its stale r1 snapshot. `updatedAt`
+ * on B can be later merely because it synced later; it must not beat the actual
+ * token mint time. A usable refresh token wins over a blank one, then the newer
+ * `refreshedAt` wins (falling back to access-token `expires` for old records).
+ * Equal freshness uses canonical content only to make both merge directions
+ * converge; it does not pretend that store write time is token freshness.
  */
+export function preferIncomingOAuthCredential(local: OAuthCredential, incoming: OAuthCredential): boolean {
+  const localHasRefresh = Boolean(String(local.refresh ?? "").trim());
+  const incomingHasRefresh = Boolean(String(incoming.refresh ?? "").trim());
+  if (localHasRefresh !== incomingHasRefresh) return incomingHasRefresh;
+  const localRefreshed = Number(local.refreshedAt);
+  const incomingRefreshed = Number(incoming.refreshedAt);
+  const bothHaveRefreshTime = Number.isFinite(localRefreshed) && Number.isFinite(incomingRefreshed);
+  const localFreshness = bothHaveRefreshTime ? localRefreshed : (Number(local.expires) || 0);
+  const incomingFreshness = bothHaveRefreshTime ? incomingRefreshed : (Number(incoming.expires) || 0);
+  if (incomingFreshness !== localFreshness) return incomingFreshness > localFreshness;
+  return canonicalCredential(incoming) > canonicalCredential(local);
+}
+
+/** Should `incoming` replace `local` during a non-destructive merge? */
 export function preferIncomingRecord(local: CredentialRecord | undefined, incoming: CredentialRecord): boolean {
   if (!local) return true;
   const localOauth = oauthOf(local);
   const incomingOauth = oauthOf(incoming);
   if (!localOauth || !incomingOauth) return true;
-  const localRefresh = String(localOauth.refresh ?? "").trim();
-  const incomingRefresh = String(incomingOauth.refresh ?? "").trim();
-  if (!incomingRefresh && localRefresh) return false;
-  const lt = Number(localOauth.refreshedAt);
-  const it = Number(incomingOauth.refreshedAt);
-  if (Number.isFinite(lt) && Number.isFinite(it)) return it > lt;
-  return (Number(incomingOauth.expires) || 0) > (Number(localOauth.expires) || 0);
+  return preferIncomingOAuthCredential(localOauth, incomingOauth);
 }
 
 /** A tombstone wins only when it is newer than the record it would remove. */

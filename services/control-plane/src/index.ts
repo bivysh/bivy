@@ -6,13 +6,15 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import express, { type Request, type Response, type NextFunction } from "express";
 import webpush from "web-push";
-import { validateCapabilityTags } from "@bivy/core";
-import { providerCredentialFingerprint, type Account, type NodeRecord, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, type AutomationRun, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
-import { maybeAutoProvision, planAutoProvision, hostedExecutionReadiness, mintHostedInstallationToken, reapSettledHostedMachine, reconcileAllHostedMachines, reconcileAllReadyCapacity, sweepAllOrphanProviderResources, validateHostedProviderToken, markHostedMachineMilestone, EPHEMERAL_MILESTONES, ephemeralMachinesEnabled } from "./ephemeral-provisioner.js";
-import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecret } from "./hosted-crypto.js";
-import { listAppInstallations, listInstallationRepositories } from "./hosted-github-auth.js";
+import { ephemeralAdapter, validateCapabilityTags } from "@bivy/core";
+import { providerCredentialFingerprint, type Account, type NodeRecord, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, type AutomationRun, type InboundHook, type NodeClaim, GITHUB_IDENTITY_MODES, type GithubIdentityMode, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
+import { centralGithubAppConfig, centralInstallUrl, applyCentralInstallationEvent } from "./central-github-app.js";
+import { maybeAutoProvision, planAutoProvision, hostedExecutionReadiness, mintHostedInstallationToken, provisionEphemeralForAccount, reapSettledHostedMachine, reconcileAllHostedMachines, reconcileAllReadyCapacity, sweepAllOrphanProviderResources, validateHostedProviderToken, markHostedMachineMilestone, EPHEMERAL_MILESTONES, ephemeralMachinesEnabled, type ManagedProvisionRequest } from "./ephemeral-provisioner.js";
+import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecret, initializeHostedKeyring } from "./hosted-crypto.js";
+import { listAppInstallations, listInstallationRepositories, getAppInstallation } from "./hosted-github-auth.js";
 import { correlateHostedSessions } from "./hosted-correlation.js";
 import { countActiveAccountSessions } from "./session-count.js";
+import { usageFromManagedMachine } from "./compute-metering.js";
 import { createStore } from "./store-factory.js";
 import { AutomationScheduler, nextOccurrence, normalizeSchedule } from "./schedule.js";
 import { parseShardUrls, shardForNode } from "./relay-shards.js";
@@ -20,7 +22,7 @@ import { safeReturnPath } from "./redirect.js";
 import { register, httpMetricsMiddleware, bindRelayTicketMetrics, startUsageCollector, recordFunnelEvent, recordDurableRunLifecycleResult, recordRunFailureStage, classifyRunFailureStage, recordProductEvent, PRODUCT_EVENT_VALUES, PRODUCT_CLIENT_VALUES, type ProductEvent, type ProductClient } from "./metrics.js";
 import { initSentry } from "./instrument.js";
 import { sanitizeEvidencePatch } from "./run-evidence.js";
-import { DeploymentExtension, type DeploymentOperation } from "./deployment-extension.js";
+import { DeploymentExtension, type DeploymentOperation, type DeploymentPolicyContext } from "./deployment-extension.js";
 import {
   verifyGithubSignature,
   verifyLinearSignature,
@@ -99,6 +101,11 @@ function assertProductionConfig() {
   if (Boolean(process.env.JANITOR_SERVICE_URL) !== Boolean(process.env.JANITOR_PROXY_SECRET)) {
     problems.push("JANITOR_SERVICE_URL and JANITOR_PROXY_SECRET must be configured together");
   }
+  if (Boolean(process.env.BIVY_CENTRAL_GITHUB_APP_ID) !== Boolean(process.env.BIVY_CENTRAL_GITHUB_APP_PRIVATE_KEY)) {
+    // Half-configured would silently disable the central app while the operator
+    // believes it is on — refuse to boot instead.
+    problems.push("BIVY_CENTRAL_GITHUB_APP_ID and BIVY_CENTRAL_GITHUB_APP_PRIVATE_KEY must be configured together");
+  }
   if (problems.length > 0) {
     console.error("Refusing to start: insecure production configuration:\n  - " + problems.join("\n  - "));
     process.exit(1);
@@ -106,6 +113,7 @@ function assertProductionConfig() {
 }
 
 assertProductionConfig();
+await initializeHostedKeyring();
 
 // Last-resort guard against a single stray async error taking down the whole
 // control plane. Express's error middleware only catches errors thrown inside a
@@ -121,19 +129,47 @@ process.on("unhandledRejection", (reason) => {
 const store = await createStore();
 const deploymentExtension = new DeploymentExtension();
 
-async function deploymentDecision(accountId: string, operation: DeploymentOperation, idempotencyKey?: string) {
-  const decision = await deploymentExtension.authorize(accountId, operation, idempotencyKey);
+async function deploymentDecision(
+  accountId: string,
+  operation: DeploymentOperation,
+  idempotencyKey?: string,
+  context?: DeploymentPolicyContext,
+) {
+  const decision = await deploymentExtension.authorize(accountId, operation, idempotencyKey, context);
   return decision;
 }
 
-async function requireDeploymentAdmission(accountId: string, operation: DeploymentOperation, idempotencyKey?: string) {
-  const decision = await deploymentDecision(accountId, operation, idempotencyKey);
+async function requireDeploymentAdmission(
+  accountId: string,
+  operation: DeploymentOperation,
+  idempotencyKey?: string,
+  context?: DeploymentPolicyContext,
+) {
+  const decision = await deploymentDecision(accountId, operation, idempotencyKey, context);
   if (!decision.allowed) {
     const error = new Error(decision.reason || "Operation is not available") as Error & { status?: number; code?: string };
     error.status = 429;
     error.code = decision.code;
     throw error;
   }
+}
+
+function managedProvisionAdmission(accountId: string) {
+  return ({ attemptId, ...context }: ManagedProvisionRequest) =>
+    deploymentDecision(accountId, "ephemeral.provision", attemptId, context);
+}
+
+function managedLaunchFailureRecorder(accountId: string) {
+  return (attemptId: string) => deploymentExtension.record(accountId, {
+    type: "ephemeral.launch-failed", attemptId, at: new Date().toISOString(),
+  });
+}
+
+function managedSettlementRecorder(
+  accountId: string,
+  event: { attemptId: string; at: string; machineSeconds: number; activeAgentSeconds: number },
+) {
+  return deploymentExtension.record(accountId, { type: "ephemeral.settled", ...event });
 }
 try {
   await store.init();
@@ -214,8 +250,10 @@ async function notifyRelaysWorkAvailable(
   // Cancelling must never start a machine. Normal enqueue notifications retain
   // the unattended-provisioning check.
   if (options.autoProvision !== false) {
-    void deploymentDecision(accountId, "ephemeral.provision")
-      .then((decision) => decision.allowed ? maybeAutoProvision(store, accountId, provisionEnv()) : undefined)
+    void maybeAutoProvision(
+    store, accountId, provisionEnv(), undefined, managedProvisionAdmission(accountId),
+    managedLaunchFailureRecorder(accountId), managedSettlementRecorder,
+  )
       .catch((error) => console.error("[deployment-extension] provisioning admission failed", error));
   }
 }
@@ -330,7 +368,9 @@ setInterval(pruneExpiredAuthTokens, 60 * 60_000).unref();
 const HOSTED_MACHINE_RECONCILE_MS = Math.max(60_000, Number(process.env.HOSTED_MACHINE_RECONCILE_MS) || 60_000);
 async function reconcileHostedMachineFleet() {
   try {
-    const result = await reconcileAllHostedMachines(store, provisionEnv());
+    const result = await reconcileAllHostedMachines(
+      store, provisionEnv(), Date.now(), undefined, managedSettlementRecorder,
+    );
     if (result.reaped || result.failed) {
       console.log(`[hosted-reconcile] accounts=${result.accounts} reaped=${result.reaped} failed=${result.failed}`);
     }
@@ -708,9 +748,9 @@ function asyncHandler(fn: (req: Request, res: Response, next: NextFunction) => P
 // --- GitHub OAuth sign-in -----------------------------------------------------
 // Primary sign-in for the developer ICP. We resolve the account by the user's
 // PRIMARY VERIFIED GitHub email so a GitHub login and a magic-link login for the
-// same address land on the SAME account. Minimal scope at login (read:user,
-// user:email); repo scope is requested later, only when a repo is connected to
-// the work queue.
+// same address land on the SAME account. Login requests read:user/user:email
+// plus read:org solely to retain installer target ids; repository content stays
+// behind the separately-installed central GitHub App.
 // Accept the BIVY_-prefixed names as a fallback. GitHub reserves the `GITHUB_`
 // prefix for Actions secrets, so the canonical secrets are stored as
 // BIVY_GITHUB_OAUTH_CLIENT_ID / _SECRET (see scripts/sync-github-env.sh). A
@@ -740,7 +780,10 @@ type GithubEmailFailure = "token-exchange" | "no-verified-email";
  * ("could not read a verified email") and are impossible to diagnose from a fresh
  * install — which step actually broke never reaches the operator.
  */
-async function githubPrimaryEmail(code: string, redirectUri: string): Promise<{ email?: string; reason?: GithubEmailFailure }> {
+async function githubPrimaryEmail(
+  code: string,
+  redirectUri: string,
+): Promise<{ email?: string; installTargetIds?: string[]; reason?: GithubEmailFailure }> {
   let tokenRes: Awaited<ReturnType<typeof fetch>>;
   try {
     tokenRes = await fetch("https://github.com/login/oauth/access_token", {
@@ -762,26 +805,38 @@ async function githubPrimaryEmail(code: string, redirectUri: string): Promise<{ 
   }
 
   const ghHeaders = { authorization: `Bearer ${accessToken}`, accept: "application/vnd.github+json", "user-agent": "bivy" };
-  const emailsRes = await fetch("https://api.github.com/user/emails", { headers: ghHeaders });
+  const [emailsRes, userRes, membershipsRes] = await Promise.all([
+    fetch("https://api.github.com/user/emails", { headers: ghHeaders }),
+    fetch("https://api.github.com/user", { headers: ghHeaders }),
+    fetch("https://api.github.com/user/memberships/orgs?state=active&per_page=100", { headers: ghHeaders }),
+  ]);
+  const user = userRes.ok
+    ? await userRes.json().catch(() => ({})) as { id?: number | string; email?: string | null }
+    : {};
+  const installTargetIds = user.id == null ? [] : [String(user.id)];
+  if (membershipsRes.ok) {
+    const memberships = await membershipsRes.json().catch(() => []) as Array<{
+      state?: string; role?: string; organization?: { id?: number | string };
+    }>;
+    for (const membership of memberships) {
+      if (membership.state === "active" && membership.role === "admin" && membership.organization?.id != null) {
+        installTargetIds.push(String(membership.organization.id));
+      }
+    }
+  } else {
+    console.warn(`[auth] GitHub org membership lookup failed with status ${membershipsRes.status}; org App installs will require a fresh GitHub sign-in`);
+  }
   if (emailsRes.ok) {
     const emails = (await emailsRes.json().catch(() => [])) as Array<{ email: string; primary: boolean; verified: boolean }>;
     const chosen = emails.find((e) => e.primary && e.verified) ?? emails.find((e) => e.verified);
-    if (chosen?.email) return { email: chosen.email.toLowerCase() };
+    if (chosen?.email) return { email: chosen.email.toLowerCase(), installTargetIds };
     console.warn(`[auth] GitHub /user/emails returned ${emails.length} address(es) but none were verified`);
   } else {
-    // Non-OK here almost always means the granted token lacks the user:email scope
-    // (or the OAuth grant wasn't SSO-authorized for the org).
     console.warn(`[auth] GitHub /user/emails failed with status ${emailsRes.status} — the token is likely missing the user:email scope`);
   }
-  // Fallback to the public profile email if the emails endpoint returned nothing usable.
-  const userRes = await fetch("https://api.github.com/user", { headers: ghHeaders });
-  if (userRes.ok) {
-    const user = (await userRes.json().catch(() => ({}))) as { email?: string | null };
-    if (user.email) return { email: user.email.toLowerCase() };
-    console.warn("[auth] GitHub /user returned no public email (email set to private and no verified address was readable)");
-  } else {
-    console.warn(`[auth] GitHub /user failed with status ${userRes.status}`);
-  }
+  if (user.email) return { email: user.email.toLowerCase(), installTargetIds };
+  if (!userRes.ok) console.warn(`[auth] GitHub /user failed with status ${userRes.status}`);
+  else console.warn("[auth] GitHub /user returned no public email (email set to private and no verified address was readable)");
   return { reason: "no-verified-email" };
 }
 
@@ -912,7 +967,10 @@ app.get("/auth/github/start", asyncHandler(async (req, res) => {
   const url = new URL("https://github.com/login/oauth/authorize");
   url.searchParams.set("client_id", githubClientId!);
   url.searchParams.set("redirect_uri", `${baseUrl(req)}/auth/github/callback`);
-  url.searchParams.set("scope", "read:user user:email"); // minimal scope at login
+  // read:org lets the callback prove which organizations this GitHub identity
+  // administers. That proof is retained only as target ids (never the OAuth
+  // token) and prevents a different browser GitHub identity from binding an App.
+  url.searchParams.set("scope", "read:user user:email read:org");
   url.searchParams.set("state", state);
   url.searchParams.set("allow_signup", "true");
   res.redirect(url.toString());
@@ -929,7 +987,7 @@ app.get("/auth/github/callback", asyncHandler(async (req, res) => {
     // dead-end error page they'd have to navigate away from by hand.
     return res.redirect(`/?authError=expired`);
   }
-  const { email, reason } = await githubPrimaryEmail(code, `${baseUrl(req)}/auth/github/callback`);
+  const { email, installTargetIds, reason } = await githubPrimaryEmail(code, `${baseUrl(req)}/auth/github/callback`);
   if (!email || !validEmail(email)) {
     const errCode = reason === "token-exchange" ? "github-config" : "github-email";
     // The device (CLI/app) flow finishes in a throwaway browser tab that never
@@ -951,6 +1009,8 @@ app.get("/auth/github/callback", asyncHandler(async (req, res) => {
   }
   // Resolve by verified email → links GitHub and magic-link to one account.
   const account = await store.findOrCreateAccount(email);
+  const githubUserId = installTargetIds?.[0];
+  if (githubUserId) await store.setGithubIdentity(account.id, githubUserId, installTargetIds ?? []);
   if (stored.deviceId) {
     await store.completeDeviceLogin(stored.deviceId, account.id);
     recordFunnelEvent("sign_in_completed", "github_device");
@@ -1105,6 +1165,106 @@ app.post("/account/extension/actions/:action", requireUser, asyncHandler(async (
 
 // --- Node registry ------------------------------------------------------
 
+function shellSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+function presentNodeClaim(claim: NodeClaim) {
+  const now = Date.now();
+  const status = claim.usedAt ? "used" : claim.revokedAt ? "revoked"
+    : Date.parse(claim.expiresAt) <= now ? "expired" : "pending";
+  return { ...claim, status };
+}
+
+// Mint the one-line personal-machine command. The raw code is returned exactly
+// once and only its SHA-256 hash is persisted. It authorizes enrollment only —
+// never an account session, GitHub token, billing action, or existing-node read.
+app.post("/account/onboarding/auth-runner", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  if (!ephemeralMachinesEnabled() || process.env.MANAGED_COMPUTE_ENABLED !== "1") {
+    return res.status(503).json({ error: "Managed setup Machines are not available." });
+  }
+  const existing = (await store.getHostedMachines(account.id)).find(
+    (machine) => machine.computeSource === "managed" && machine.purpose === "auth-runner",
+  );
+  if (existing) return res.json({ ok: true, machine: existing, duplicate: true });
+
+  const provider = String(process.env.MANAGED_AUTH_RUNNER_PROVIDER || "fly").trim();
+  const adapter = ephemeralAdapter(provider);
+  if (!adapter) return res.status(503).json({ error: "Managed setup provider is not configured." });
+  const ttlMinutes = Math.max(5, Math.min(15, Number(process.env.MANAGED_AUTH_RUNNER_TTL_MINUTES) || 15));
+  const size = String(process.env.MANAGED_AUTH_RUNNER_SIZE || adapter.defaultSize).trim();
+  const selectedSize = adapter.sizes.find((entry) => entry.id === size);
+  const config: EphemeralNodeConfig = {
+    id: "managed-auth-runner", name: "Authentication Machine", provider,
+    region: String(process.env.MANAGED_AUTH_RUNNER_REGION || adapter.defaultRegion), size,
+    image: process.env.MANAGED_AUTH_RUNNER_IMAGE || undefined,
+    ttlMinutes, computeSource: "managed", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  };
+  const attemptId = randomUUID();
+  const decision = await deploymentDecision(account.id, "ephemeral.provision", attemptId, {
+    computeSource: "managed", provider, sizeId: size, vcpus: selectedSize?.vcpus,
+    memoryMiB: selectedSize?.memoryMiB, ttlMinutes, configId: config.id, purpose: "auth-runner",
+  });
+  if (!decision.allowed) return res.status(403).json({ error: decision.reason || "Managed setup Machine denied", ...decision });
+  try {
+    const machine = await provisionEphemeralForAccount(
+      store, account.id, config, provisionEnv(), undefined, Date.now(), "auth-runner",
+      { attemptId, retryCount: 0 },
+    );
+    res.status(201).json({ ok: true, machine });
+  } catch (error) {
+    await managedLaunchFailureRecorder(account.id)(attemptId).catch(() => {});
+    throw error;
+  }
+}));
+
+app.post("/account/node-claims", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const { claim, code } = await store.createNodeClaim(account.id);
+  const claimUrl = `${baseUrl(req)}/claim/${code}`;
+  res.status(201).json({ ...presentNodeClaim(claim), claimUrl, command: `curl -fsSL ${shellSingleQuote(claimUrl)} | sh` });
+}));
+
+app.get("/account/node-claims", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  res.json((await store.listNodeClaims(account.id)).map(presentNodeClaim));
+}));
+
+app.delete("/account/node-claims/:id", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const revoked = await store.revokeNodeClaim(account.id, String(req.params.id));
+  res.status(revoked ? 200 : 404).json({ ok: revoked });
+}));
+
+// Fetching the script does not consume the claim: curl piping necessarily fetches
+// before the installed CLI knows its node id. The atomic enrollment exchange is
+// the single-use operation. Invalid-looking codes receive the same generic script
+// shape and later fail at exchange, avoiding a public claim-existence oracle.
+app.get("/claim/:code", (req, res) => {
+  const code = String(req.params.code ?? "");
+  if (!/^[A-Za-z0-9_-]{43}$/.test(code)) return res.status(404).type("text").send("Not found\n");
+  const controlPlaneUrl = baseUrl(req);
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.type("text/x-shellscript").send(`#!/bin/sh\nset -eu\nexport BIVY_NODE_CLAIM_CODE=${shellSingleQuote(code)}\nexport BIVY_CONTROL_PLANE_URL=${shellSingleQuote(controlPlaneUrl)}\ncurl -fsSL https://bivy.sh/install.sh | sh\n`);
+});
+
+app.post("/claim/:code/enroll", asyncHandler(async (req, res) => {
+  const code = String(req.params.code ?? "");
+  const nodeId = String(req.body?.nodeId ?? "").trim();
+  const name = String(req.body?.name ?? "Node").trim().slice(0, 120) || "Node";
+  if (!/^[A-Za-z0-9_-]{43}$/.test(code) || !nodeId || nodeId.length > 200) {
+    return res.status(400).json({ error: "Invalid enrollment claim" });
+  }
+  const claim = await store.consumeNodeClaim(code, nodeId);
+  if (!claim) return res.status(410).json({ error: "Enrollment claim is expired, used, or revoked" });
+  const result = await store.enrollNode(claim.accountId, nodeId, name);
+  if (result.created) recordFunnelEvent("node_enrolled", "claim");
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ ok: true, ...result });
+}));
+
 // A signed-in user enrolls a node (by its self-generated nodeId). Returns an
 // enrollment token the node stores and uses to authenticate to the relay /
 // control plane.
@@ -1208,7 +1368,18 @@ app.post("/node/ephemeral-milestone", requireNode, asyncHandler(async (req, res)
   const node = (req as Request & { node: NodeRecord }).node;
   const milestone = String(req.body?.milestone ?? "");
   if (!(EPHEMERAL_MILESTONES as readonly string[]).includes(milestone)) return res.status(400).json({ error: "unknown milestone" });
-  const tracked = await markHostedMachineMilestone(store, node.accountId, node.id, milestone as (typeof EPHEMERAL_MILESTONES)[number]);
+  const at = new Date().toISOString();
+  const tracked = await markHostedMachineMilestone(store, node.accountId, node.id, milestone as (typeof EPHEMERAL_MILESTONES)[number], at);
+  if (tracked && milestone === "firstAgentEventAt") {
+    const machine = (await store.getHostedMachines(node.accountId)).find((candidate) => candidate.nodeId === node.id);
+    if (machine?.computeSource === "managed" && typeof machine.attemptId === "string") {
+      // Await activation so a failed Cloud policy write is retried by the
+      // milestone caller; the store update above is first-write-wins and safe.
+      await deploymentExtension.record(node.accountId, {
+        type: "ephemeral.first-agent-event", attemptId: machine.attemptId, at,
+      });
+    }
+  }
   res.json({ ok: true, tracked });
 }));
 
@@ -1284,7 +1455,18 @@ app.put("/session-correlation/:sessionId", requireUser, asyncHandler(async (req,
 // server-side → reaped:false. See src/ephemeral-teardown.ts.
 app.post("/node/settled", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
+  const settledAt = new Date().toISOString();
+  const machine = (await store.getHostedMachines(node.accountId)).find((candidate) => candidate.nodeId === node.id);
+  const usage = machine?.computeSource === "managed" ? usageFromManagedMachine(node.accountId, machine, settledAt) : undefined;
   const reaped = await reapSettledHostedMachine(store, node.accountId, node.id, provisionEnv()).catch(() => false);
+  // Billing/usage outages must never prevent provider teardown. The extension
+  // event is idempotent and can be recovered from the durable Core settlement.
+  if (usage && typeof machine?.attemptId === "string") {
+    await deploymentExtension.record(node.accountId, {
+      type: "ephemeral.settled", attemptId: machine.attemptId, at: settledAt,
+      machineSeconds: usage.machineSeconds, activeAgentSeconds: usage.activeAgentSeconds,
+    }).catch((error) => console.error("[deployment-extension] settlement event failed", error));
+  }
   res.json({ ok: true, reaped });
 }));
 
@@ -3067,6 +3249,7 @@ app.post("/account/ephemeral-configs", asyncHandler(async (req, res) => {
   if (typeof body.readyCapacity === "number") config.readyCapacity = body.readyCapacity;
   if (typeof body.ttlMinutes === "number") config.ttlMinutes = body.ttlMinutes;
   if (body.teardownOnAgentFinish === true) config.teardownOnAgentFinish = true;
+  if (body.computeSource === "managed") config.computeSource = "managed";
   const current = await store.getEphemeralConfigs(client.accountId);
   const saved = await store.setEphemeralConfigs(client.accountId, [...current, config]);
   res.json(saved.find((c) => c.id === config.id) ?? config);
@@ -3089,6 +3272,7 @@ app.put("/account/ephemeral-configs/:id", asyncHandler(async (req, res) => {
   if (typeof body.readyCapacity === "number") next.readyCapacity = body.readyCapacity;
   if (typeof body.ttlMinutes === "number") next.ttlMinutes = body.ttlMinutes;
   if (typeof body.teardownOnAgentFinish === "boolean") next.teardownOnAgentFinish = body.teardownOnAgentFinish || undefined;
+  if (typeof body.computeSource === "string") next.computeSource = body.computeSource === "managed" ? "managed" : undefined;
   const saved = await store.setEphemeralConfigs(client.accountId, current.map((c) => (c.id === id ? next : c)));
   res.json(saved.find((c) => c.id === id) ?? next);
 }));
@@ -3139,6 +3323,13 @@ app.put("/account/hosted-provisioning", asyncHandler(async (req, res) => {
   }
   const patch: Partial<HostedProvisioning> = {};
   if (typeof body.enabled === "boolean") patch.enabled = body.enabled;
+  // GitHub identity mode: a non-secret selector (central-app | own-app | token);
+  // null resets to the default resolution order.
+  if (typeof body.githubIdentity === "string" && (GITHUB_IDENTITY_MODES as readonly string[]).includes(body.githubIdentity)) {
+    patch.githubIdentity = body.githubIdentity as GithubIdentityMode;
+  } else if (body.githubIdentity === null) {
+    patch.githubIdentity = undefined;
+  }
   if (typeof body.githubToken === "string") patch.githubToken = body.githubToken;
   if (body.githubApp != null && typeof body.githubApp === "object") patch.githubApp = body.githubApp as HostedProvisioning["githubApp"];
   if (providerTokens && typeof providerTokens === "object") patch.providerTokens = providerTokens as Record<string, string>;
@@ -3176,6 +3367,144 @@ app.get("/account/hosted-audit", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   res.json(await store.listHostedAudit(client.accountId, 50));
+}));
+
+// ── Central GitHub App (managed tier) ───────────────────────────────────────
+// The operator's ONE centrally-owned app: users install it and pick repos
+// instead of creating their own app or pasting a PAT. Everything returned here
+// is non-secret; the app's private key lives only in operator env config
+// (see central-github-app.ts).
+
+app.get("/account/github/central-app", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const central = centralGithubAppConfig();
+  const installations = central ? await store.listCentralGithubInstallations(client.accountId) : [];
+  res.json({
+    configured: Boolean(central),
+    appId: central?.appId,
+    slug: central?.slug,
+    installations: installations.map(({ installationId, githubAccount, githubAccountType, repositorySelection, createdAt }) => ({
+      installationId, githubAccount, githubAccountType, repositorySelection, createdAt,
+    })),
+  });
+}));
+
+// Start an install: mint the single-use state nonce that binds the GitHub
+// setup callback to THIS account, plus the install URL to open. The state is
+// the only proof of account ownership in the whole flow.
+app.post("/account/github/central-app/install-state", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const central = centralGithubAppConfig();
+  if (!central) return res.status(404).json({ error: "Central GitHub App is not configured" });
+  if (process.env.BIVY_GITHUB_INSTALLER_IDENTITY_REQUIRED !== "0") {
+    const account = await store.getAccount(client.accountId);
+    if (!account?.githubInstallTargetIds.length) {
+      return res.status(409).json({ error: "Sign in with GitHub again before installing the GitHub App." });
+    }
+  }
+  const returnPath = safeReturnPath(typeof req.body?.returnPath === "string" ? req.body.returnPath : undefined);
+  const state = await store.createCentralInstallState(client.accountId, returnPath);
+  res.json({ state, installUrl: centralInstallUrl(central, state) });
+}));
+
+// GitHub redirects the installing browser here (the app's Setup URL) with
+// ?installation_id&state. The single-use state names the account; the
+// installation id is enumerable and NEVER trusted alone — it is verified to
+// belong to the central app via an app-JWT lookup (which also yields the GitHub
+// org/user login used to match repo owners at mint time), and an id already
+// bound to a different account is refused.
+app.get("/github/central-app/setup", asyncHandler(async (req, res) => {
+  const central = centralGithubAppConfig();
+  if (!central) return res.status(404).send("Central GitHub App is not configured.");
+  const bound = await store.consumeCentralInstallState(String(req.query.state ?? ""));
+  if (!bound) return res.status(403).send("This install link has expired — restart the install from Bivy settings.");
+  const installationId = String(req.query.installation_id ?? "").trim();
+  if (!/^\d+$/.test(installationId)) return res.status(400).send("Missing installation id.");
+  const existing = await store.getCentralGithubInstallation(installationId);
+  if (existing && existing.accountId !== bound.accountId) {
+    return res.status(409).send("This installation is already linked to another Bivy account.");
+  }
+  let detail;
+  try {
+    detail = await getAppInstallation(central.appId, central.privateKeyPem, installationId);
+  } catch {
+    return res.status(400).send("GitHub does not recognize this installation for the Bivy app.");
+  }
+  if (process.env.BIVY_GITHUB_INSTALLER_IDENTITY_REQUIRED !== "0") {
+    const account = await store.getAccount(bound.accountId);
+    const targetAllowed = Boolean(detail.accountId && account?.githubInstallTargetIds.includes(detail.accountId));
+    let exactInstaller = detail.accountId === account?.githubUserId; // personal-account install
+    // Organization installs identify the clicking user only on the signed
+    // installation.created webhook. Give normal webhook delivery a short race
+    // window, then fail closed; restarting onboarding mints fresh state.
+    if (targetAllowed && !exactInstaller && account?.githubUserId) {
+      for (let attempt = 0; attempt < 25 && !exactInstaller; attempt += 1) {
+        exactInstaller = await store.getCentralGithubInstallerAttestation(installationId) === account.githubUserId;
+        if (!exactInstaller) await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+    }
+    if (!targetAllowed || !exactInstaller) {
+      return res.status(403).send("This GitHub installation was made by a different identity. Sign in to Bivy with the GitHub user that owns or administers this target, then try again.");
+    }
+  }
+  await store.putCentralGithubInstallation({
+    installationId,
+    accountId: bound.accountId,
+    githubAccount: detail.account,
+    githubAccountType: detail.accountType,
+    repositorySelection: detail.repositorySelection,
+  });
+  await store.appendHostedAudit(bound.accountId, {
+    at: new Date().toISOString(),
+    action: "central_install_bound",
+    detail: `installation ${installationId}${detail.account ? ` on ${detail.account}` : ""}`,
+  });
+  // First bind selects the central identity, unless the account already chose.
+  try {
+    const hosted = await store.getHostedProvisioning(bound.accountId);
+    if (!hosted.githubIdentity) await store.setHostedProvisioning(bound.accountId, { githubIdentity: "central-app" });
+  } catch {
+    // best-effort: sealed BYO credentials without a configured key still bind
+  }
+  res.redirect(safeReturnPath(bound.returnPath));
+}));
+
+// The repos one bound installation can reach — feeds the repo picker. The
+// installation must belong to the calling account (cross-account reads 404),
+// and the listing uses an on-demand app JWT → installation token, server-side
+// only; nothing is persisted.
+app.get("/account/github/central-app/installations/:installationId/repos", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const central = centralGithubAppConfig();
+  if (!central) return res.status(404).json({ error: "Central GitHub App is not configured" });
+  const installationId = String(req.params.installationId || "").trim();
+  const binding = await store.getCentralGithubInstallation(installationId);
+  if (!binding || binding.accountId !== client.accountId) return res.status(404).json({ error: "No such installation" });
+  const repositories = await listInstallationRepositories({
+    appId: central.appId,
+    installationId,
+    privateKeyPem: central.privateKeyPem,
+  });
+  res.json({ installationId, repositories });
+}));
+
+// Unlink an installation from this account (does not uninstall on GitHub —
+// that side is handled by the installation.deleted webhook when it happens).
+app.delete("/account/github/central-app/installations/:installationId", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const installationId = String(req.params.installationId || "").trim();
+  const removed = await store.deleteCentralGithubInstallation(installationId, client.accountId);
+  if (!removed) return res.status(404).json({ error: "No such installation" });
+  await store.appendHostedAudit(client.accountId, {
+    at: new Date().toISOString(),
+    action: "central_install_unbound",
+    detail: `installation ${installationId} unlinked`,
+  });
+  res.json({ ok: true });
 }));
 
 // Redacted inventory for unattended runners. Provider credentials and escrowed
@@ -3250,10 +3579,13 @@ app.post("/account/hosted-provisioning/rotate", asyncHandler(async (req, res) =>
 app.post("/account/hosted-provision-now", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
-  const plan = await planAutoProvision(store, client.accountId);
+  const admission = managedProvisionAdmission(client.accountId);
+  const plan = await planAutoProvision(store, client.accountId, Date.now(), admission);
   if (req.body?.execute === true && plan.willProvision) {
-    await requireDeploymentAdmission(client.accountId, "ephemeral.provision");
-    const machine = await maybeAutoProvision(store, client.accountId, provisionEnv());
+    const machine = await maybeAutoProvision(
+      store, client.accountId, provisionEnv(), undefined, admission,
+      managedLaunchFailureRecorder(client.accountId), managedSettlementRecorder,
+    );
     return res.json({ plan, provisioned: machine ? { id: machine.id, nodeId: machine.nodeId } : null });
   }
   res.json({ plan });
@@ -3264,7 +3596,12 @@ app.post("/account/hosted-provision-now", asyncHandler(async (req, res) => {
 // token). Authenticated by the node's enrollment token.
 app.post("/node/hosted-git-credential", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
-  const minted = await mintHostedInstallationToken(store, node.accountId);
+  // Optional session-repo hint ("owner/name"): picks the right central-app
+  // installation and scopes the minted token down to that repo where the API
+  // allows. Malformed values are ignored, not errors — the unscoped mint is
+  // the long-standing behavior.
+  const repo = typeof req.body?.repo === "string" && /^[\w.-]+\/[\w.-]+$/.test(req.body.repo) ? req.body.repo : undefined;
+  const minted = await mintHostedInstallationToken(store, node.accountId, { repo });
   if (!minted) return res.status(404).json({ error: "No hosted GitHub App configured" });
   res.json({ token: minted.token, expiresAt: minted.expiresAt });
 }));
@@ -3371,25 +3708,15 @@ app.post("/webhooks/automation/run/:definitionId", asyncHandler(async (req, res)
   res.status(202).json({ code: "accepted", id: result.run.id, label: result.run.routing.nodeLabel });
 }));
 
-app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(async (req, res) => {
-  const hook = await store.getInboundHook(String(req.params.id));
-  if (!hook || (hook.kind !== "github" && hook.kind !== "github_app")) return res.status(404).json({ error: "Unknown hook" });
-  const raw: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from("");
-  if (!verifyGithubSignature(hook.secret, raw, req.headers["x-hub-signature-256"] as string | undefined)) {
-    return res.status(401).json({ error: "Bad signature" });
-  }
-  const event = String(req.headers["x-github-event"] ?? "");
-  if (event === "ping") return res.json({ ok: true, pong: true });
+// Shared GitHub-event → work-item pipeline. Serves BOTH per-account hooks
+// (/webhooks/github[_app]/:id — signature already verified with the hook's own
+// secret) and the central app's fan-in (/webhooks/central-github — verified
+// with the operator's central webhook secret, then routed here with the bound
+// account's github_app hook so per-account settings apply unchanged).
+async function processGithubEvent(hook: InboundHook, event: string, deliveryId: string, payload: unknown, res: Response): Promise<Response | void> {
   // GitHub reuses the delivery GUID on redelivery, so it's a natural idempotency
   // key: a redelivered webhook returns the existing item instead of duplicating.
-  const deliveryId = String(req.headers["x-github-delivery"] ?? "");
   const dedupeKey = deliveryId ? `gh:${deliveryId}` : undefined;
-  let payload: unknown;
-  try {
-    payload = JSON.parse(raw.toString("utf8"));
-  } catch {
-    return res.status(400).json({ error: "Invalid JSON" });
-  }
   // For a GitHub App, the payload names the installation the node mints a token
   // for. Classic per-repo webhooks have none (the node uses its PAT).
   const installationId = parseInstallationId(payload);
@@ -3619,6 +3946,63 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
 
   // Unhandled event family — ack so GitHub doesn't retry forever.
   return res.json({ ok: true, enqueued: false, reason: "ignored_event" });
+}
+
+app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(async (req, res) => {
+  const hook = await store.getInboundHook(String(req.params.id));
+  if (!hook || (hook.kind !== "github" && hook.kind !== "github_app")) return res.status(404).json({ error: "Unknown hook" });
+  const raw: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from("");
+  if (!verifyGithubSignature(hook.secret, raw, req.headers["x-hub-signature-256"] as string | undefined)) {
+    return res.status(401).json({ error: "Bad signature" });
+  }
+  const event = String(req.headers["x-github-event"] ?? "");
+  if (event === "ping") return res.json({ ok: true, pong: true });
+  let payload: unknown;
+  try {
+    payload = JSON.parse(raw.toString("utf8"));
+  } catch {
+    return res.status(400).json({ error: "Invalid JSON" });
+  }
+  return processGithubEvent(hook, event, String(req.headers["x-github-delivery"] ?? ""), payload, res);
+}));
+
+// The ONE central GitHub App's webhook. Every account's deliveries arrive on
+// this single endpoint; installation lifecycle events maintain the
+// installation→account binding table, and everything else routes by
+// installation id to the bound account's enqueue path. An installation nobody
+// has bound (via the state-signed setup callback) is acked and dropped.
+app.post("/webhooks/central-github", asyncHandler(async (req, res) => {
+  const central = centralGithubAppConfig();
+  if (!central?.webhookSecret) return res.status(404).json({ error: "Central GitHub App is not configured" });
+  const raw: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from("");
+  if (!verifyGithubSignature(central.webhookSecret, raw, req.headers["x-hub-signature-256"] as string | undefined)) {
+    return res.status(401).json({ error: "Bad signature" });
+  }
+  const event = String(req.headers["x-github-event"] ?? "");
+  if (event === "ping") return res.json({ ok: true, pong: true });
+  let payload: unknown;
+  try {
+    payload = JSON.parse(raw.toString("utf8"));
+  } catch {
+    return res.status(400).json({ error: "Invalid JSON" });
+  }
+  const lifecycle = await applyCentralInstallationEvent(store, event, payload);
+  if (lifecycle.handled) return res.json({ ok: true, enqueued: false, installation: lifecycle.action });
+  const installationId = parseInstallationId(payload);
+  const binding = installationId ? await store.getCentralGithubInstallation(installationId) : undefined;
+  if (!binding) return res.json({ ok: true, enqueued: false, reason: "unbound_installation" });
+  // Per-account webhook settings (default node, trigger access, automations)
+  // ride on the account's github_app hook row for the central app id — created
+  // on first delivery so the existing Settings surface applies unchanged.
+  let hook = await store.getGithubAppHook(binding.accountId, central.appId);
+  if (!hook) {
+    hook = await store.createInboundHook(binding.accountId, "github_app");
+    hook = (await store.setInboundHookAppMeta(binding.accountId, hook.id, {
+      appId: central.appId,
+      ...(central.slug ? { mention: central.slug, name: central.slug } : {}),
+    })) ?? hook;
+  }
+  return processGithubEvent(hook, event, String(req.headers["x-github-delivery"] ?? ""), payload, res);
 }));
 
 // Linear Issue webhook. Applying `bivy` or `bivy/<node>` dispatches the issue.
@@ -3726,7 +4110,11 @@ app.post("/node/work/:id/claim", requireNode, asyncHandler(async (req, res) => {
   const id = String(req.params.id);
   const pending = await store.getAutomationRun(node.accountId, id);
   if (!pending || ["succeeded", "failed", "cancelled", "needs_attention"].includes(pending.status)) return res.status(409).json({ error: "Already claimed or unknown" });
-  await requireDeploymentAdmission(node.accountId, "automation.run", id);
+  // Manual interactive work remains available on Free/BYO machines. Every
+  // unattended ingress (schedule, GitHub, Slack, generic webhook, including
+  // legacy items without an explicit trigger kind) is a hosted automation and
+  // requires the deployment extension's paid automation entitlement.
+  if (pending.triggerKind !== "manual") await requireDeploymentAdmission(node.accountId, "automation.run", id);
   const item = await store.claimWorkItem(node.accountId, node.id, id);
   if (!item) return res.status(409).json({ error: "Already claimed or unknown" });
   void notifyRelaysRunUpdated(node.accountId, {

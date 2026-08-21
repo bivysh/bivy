@@ -32,8 +32,14 @@ import {
   normalizeHostedProvisioning,
   DEFAULT_HOSTED_PROVISIONING,
   type HostedProvisioningStatus,
+  GITHUB_IDENTITY_MODES,
+  type GithubIdentityMode,
+  type NodeClaim,
+  type CentralGithubInstallation,
+  type CentralGithubInstallationInput,
   type HostedAuditEvent,
   type HostedMachineAttempt,
+  type SessionUsageRecord,
   ConcurrentAttemptUpdateError,
   type ModelAuthVault,
   type ModelAuthWrappedKey,
@@ -122,6 +128,9 @@ export class PostgresStore implements ControlPlaneStore {
         email               TEXT UNIQUE NOT NULL,
         created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
       );
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS plan TEXT NOT NULL DEFAULT 'free';
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS github_user_id TEXT;
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS github_install_target_ids JSONB NOT NULL DEFAULT '[]';
 
       -- Per-account push notification preferences ({ [kind]: boolean }). NULL =
       -- "no preferences saved yet" and reads back as all-enabled defaults.
@@ -143,6 +152,50 @@ export class PostgresStore implements ControlPlaneStore {
       ALTER TABLE accounts ADD COLUMN IF NOT EXISTS hosted_machines     JSONB;
       -- Append-only audit trail of hosted-credential use (capped in app code).
       ALTER TABLE accounts ADD COLUMN IF NOT EXISTS hosted_audit         JSONB;
+      -- Central GitHub App (managed tier): which app installations belong to
+      -- which account. Non-secret metadata only — the credential is the
+      -- operator's app key (env), never stored here. installation_id is
+      -- GitHub-global, hence the primary key.
+      CREATE TABLE IF NOT EXISTS central_github_installations (
+        installation_id       TEXT PRIMARY KEY,
+        account_id            TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        github_account        TEXT,
+        github_account_type   TEXT,
+        repository_selection  TEXT,
+        created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS central_github_installations_account_idx
+        ON central_github_installations (account_id);
+      -- Single-use install-state nonces binding a GitHub install callback to
+      -- the account that initiated it (same shape as oauth_states).
+      CREATE TABLE IF NOT EXISTS central_install_states (
+        state_hash   TEXT PRIMARY KEY,
+        account_id   TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        return_path  TEXT,
+        expires_at   TIMESTAMPTZ NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS central_install_states_expires_idx
+        ON central_install_states (expires_at);
+      CREATE TABLE IF NOT EXISTS central_github_installer_attestations (
+        installation_id TEXT PRIMARY KEY,
+        github_user_id  TEXT NOT NULL,
+        expires_at      TIMESTAMPTZ NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS central_github_installer_attestations_expires_idx
+        ON central_github_installer_attestations (expires_at);
+      CREATE TABLE IF NOT EXISTS node_claims (
+        id          TEXT PRIMARY KEY,
+        account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        code_hash   TEXT UNIQUE NOT NULL,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        expires_at  TIMESTAMPTZ NOT NULL,
+        used_at     TIMESTAMPTZ,
+        revoked_at  TIMESTAMPTZ,
+        node_id     TEXT
+      );
+      CREATE INDEX IF NOT EXISTS node_claims_account_idx ON node_claims (account_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS node_claims_expires_idx ON node_claims (expires_at);
       CREATE TABLE IF NOT EXISTS hosted_provision_leases (
         account_id  TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
         holder      TEXT NOT NULL,
@@ -165,6 +218,21 @@ export class PostgresStore implements ControlPlaneStore {
       );
       CREATE INDEX IF NOT EXISTS hosted_machine_attempts_active_idx
         ON hosted_machine_attempts (account_id, state, updated_at);
+      CREATE TABLE IF NOT EXISTS session_usage (
+        account_id            TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        usage_id              TEXT NOT NULL,
+        session_id            TEXT,
+        machine_id            TEXT,
+        node_id               TEXT,
+        launched_at           TIMESTAMPTZ NOT NULL,
+        first_agent_event_at  TIMESTAMPTZ,
+        settled_at            TIMESTAMPTZ NOT NULL,
+        machine_seconds       BIGINT NOT NULL,
+        active_agent_seconds  BIGINT NOT NULL,
+        PRIMARY KEY (account_id, usage_id)
+      );
+      CREATE INDEX IF NOT EXISTS session_usage_month_idx
+        ON session_usage (account_id, settled_at DESC, launched_at);
       -- Durable lifecycle hardening: explicit desired vs. observed state, a
       -- persisted next-deadline, the per-account ownership tag applied to
       -- provider resources, and an optimistic-concurrency version so a
@@ -757,6 +825,14 @@ export class PostgresStore implements ControlPlaneStore {
   async getAccount(accountId: string): Promise<Account | undefined> {
     const { rows } = await this.query(`SELECT * FROM accounts WHERE id = $1`, [accountId]);
     return rows[0] ? mapAccount(rows[0]) : undefined;
+  }
+
+  async setGithubIdentity(accountId: string, githubUserId: string, targetIds: string[]): Promise<void> {
+    const normalized = [...new Set(targetIds.map(String).filter((id) => /^\d+$/.test(id)))].slice(0, 200);
+    await this.query(
+      `UPDATE accounts SET github_user_id=$2, github_install_target_ids=$3 WHERE id=$1`,
+      [accountId, githubUserId, JSON.stringify(normalized)],
+    );
   }
 
   async createLoginToken(email: string): Promise<string> {
@@ -1434,6 +1510,7 @@ export class PostgresStore implements ControlPlaneStore {
   // is an AES-256-GCM envelope bound to the account; ids stay in the clear.
   private sealHosted(accountId: string, h: HostedProvisioning): Record<string, unknown> {
     const out: Record<string, unknown> = { enabled: h.enabled };
+    if (h.githubIdentity) out.githubIdentity = h.githubIdentity; // non-secret, stays in the clear
     if (h.githubToken) out.githubToken = encryptSecret(accountId, h.githubToken);
     if (h.githubApp) {
       out.githubApp = {
@@ -1462,6 +1539,9 @@ export class PostgresStore implements ControlPlaneStore {
       return undefined;
     };
     const out: HostedProvisioning = { enabled: Boolean(s.enabled) };
+    if (typeof s.githubIdentity === "string" && (GITHUB_IDENTITY_MODES as readonly string[]).includes(s.githubIdentity)) {
+      out.githubIdentity = s.githubIdentity as GithubIdentityMode;
+    }
     const gt = dec(s.githubToken);
     if (gt) out.githubToken = gt;
     if (s.githubApp && typeof s.githubApp === "object") {
@@ -1502,6 +1582,10 @@ export class PostgresStore implements ControlPlaneStore {
     return {
       enabled: Boolean(s.enabled),
       credential: hasApp ? "app" : s.githubToken ? "pat" : "none",
+      githubIdentity:
+        typeof s.githubIdentity === "string" && (GITHUB_IDENTITY_MODES as readonly string[]).includes(s.githubIdentity)
+          ? (s.githubIdentity as GithubIdentityMode)
+          : undefined,
       githubAppId: hasApp ? String(s.githubApp.appId) : undefined,
       providers: s.providerTokens && typeof s.providerTokens === "object" ? Object.keys(s.providerTokens) : [],
       validatedProviders: s.validatedProviders && typeof s.validatedProviders === "object" ? Object.keys(s.validatedProviders) : [],
@@ -1524,6 +1608,156 @@ export class PostgresStore implements ControlPlaneStore {
     // Encrypt at rest (throws if the master key is unset — fail closed).
     await this.query(`UPDATE accounts SET hosted_provisioning = $2 WHERE id = $1`, [accountId, JSON.stringify(this.sealHosted(accountId, merged))]);
     return merged;
+  }
+
+  // --- One-line personal-machine enrollment claims ---------------------------
+
+  private nodeClaimFromRow(row: Record<string, any>): NodeClaim {
+    return {
+      id: String(row.id), accountId: String(row.account_id),
+      createdAt: new Date(row.created_at).toISOString(), expiresAt: new Date(row.expires_at).toISOString(),
+      usedAt: row.used_at ? new Date(row.used_at).toISOString() : undefined,
+      revokedAt: row.revoked_at ? new Date(row.revoked_at).toISOString() : undefined,
+      nodeId: row.node_id || undefined,
+    };
+  }
+
+  async createNodeClaim(accountId: string): Promise<{ claim: NodeClaim; code: string }> {
+    const id = randomUUID();
+    const code = randomBytes(32).toString("base64url");
+    const expiresAt = new Date(Date.now() + 10 * 60_000);
+    const { rows } = await this.query(
+      `INSERT INTO node_claims (id,account_id,code_hash,expires_at) VALUES ($1,$2,$3,$4) RETURNING *`,
+      [id, accountId, hashToken(code), expiresAt],
+    );
+    return { claim: this.nodeClaimFromRow(rows[0]), code };
+  }
+
+  async listNodeClaims(accountId: string): Promise<NodeClaim[]> {
+    const { rows } = await this.query(
+      `SELECT * FROM node_claims WHERE account_id=$1 ORDER BY created_at DESC LIMIT 50`, [accountId],
+    );
+    return rows.map((row) => this.nodeClaimFromRow(row));
+  }
+
+  async revokeNodeClaim(accountId: string, id: string): Promise<boolean> {
+    const { rowCount } = await this.query(
+      `UPDATE node_claims SET revoked_at=now() WHERE account_id=$1 AND id=$2 AND used_at IS NULL AND revoked_at IS NULL`,
+      [accountId, id],
+    );
+    return Boolean(rowCount);
+  }
+
+  async consumeNodeClaim(code: string, nodeId: string): Promise<NodeClaim | undefined> {
+    if (!code || !nodeId) return undefined;
+    const { rows } = await this.query(
+      `UPDATE node_claims SET used_at=now(), node_id=$2
+       WHERE code_hash=$1 AND used_at IS NULL AND revoked_at IS NULL AND expires_at > now()
+       RETURNING *`,
+      [hashToken(code), nodeId],
+    );
+    return rows[0] ? this.nodeClaimFromRow(rows[0]) : undefined;
+  }
+
+  // --- Central GitHub App installations (managed tier) -----------------------
+
+  async putCentralGithubInstallerAttestation(installationId: string, githubUserId: string): Promise<void> {
+    await this.query(
+      `INSERT INTO central_github_installer_attestations(installation_id,github_user_id,expires_at)
+       VALUES($1,$2,$3) ON CONFLICT(installation_id) DO UPDATE SET github_user_id=EXCLUDED.github_user_id, expires_at=EXCLUDED.expires_at`,
+      [installationId, githubUserId, new Date(Date.now() + 15 * 60_000)],
+    );
+  }
+
+  async getCentralGithubInstallerAttestation(installationId: string): Promise<string | undefined> {
+    const { rows } = await this.query(
+      `SELECT github_user_id FROM central_github_installer_attestations WHERE installation_id=$1 AND expires_at > now()`,
+      [installationId],
+    );
+    return rows[0]?.github_user_id == null ? undefined : String(rows[0].github_user_id);
+  }
+
+  async createCentralInstallState(accountId: string, returnPath?: string): Promise<string> {
+    const state = randomBytes(24).toString("base64url");
+    await this.query(
+      `INSERT INTO central_install_states (state_hash, account_id, return_path, expires_at) VALUES ($1, $2, $3, $4)`,
+      [hashToken(state), accountId, returnPath ?? null, new Date(Date.now() + LOGIN_TOKEN_TTL_MS)],
+    );
+    return state;
+  }
+
+  async consumeCentralInstallState(state: string): Promise<{ accountId: string; returnPath?: string } | undefined> {
+    if (!state) return undefined;
+    // DELETE ... RETURNING keeps the state single-use even when two callbacks
+    // race on different replicas (same pattern as consumeOAuthState).
+    const { rows } = await this.query(
+      `DELETE FROM central_install_states WHERE state_hash = $1 RETURNING account_id, return_path, expires_at`,
+      [hashToken(state)],
+    );
+    const rec = rows[0];
+    if (!rec || new Date(rec.expires_at).getTime() < Date.now()) return undefined;
+    return { accountId: String(rec.account_id), ...(rec.return_path ? { returnPath: String(rec.return_path) } : {}) };
+  }
+
+  private centralInstallationFromRow(row: Record<string, any>): CentralGithubInstallation {
+    return {
+      installationId: String(row.installation_id),
+      accountId: String(row.account_id),
+      githubAccount: row.github_account || undefined,
+      githubAccountType: row.github_account_type || undefined,
+      repositorySelection: row.repository_selection || undefined,
+      createdAt: new Date(row.created_at).toISOString(),
+      updatedAt: new Date(row.updated_at).toISOString(),
+    };
+  }
+
+  async putCentralGithubInstallation(input: CentralGithubInstallationInput): Promise<CentralGithubInstallation> {
+    const { rows } = await this.query(
+      `INSERT INTO central_github_installations
+         (installation_id, account_id, github_account, github_account_type, repository_selection)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (installation_id) DO UPDATE SET
+         account_id = EXCLUDED.account_id,
+         github_account = EXCLUDED.github_account,
+         github_account_type = EXCLUDED.github_account_type,
+         repository_selection = EXCLUDED.repository_selection,
+         updated_at = now()
+       RETURNING *`,
+      [
+        input.installationId,
+        input.accountId,
+        input.githubAccount ?? null,
+        input.githubAccountType ?? null,
+        input.repositorySelection ?? null,
+      ],
+    );
+    return this.centralInstallationFromRow(rows[0]);
+  }
+
+  async getCentralGithubInstallation(installationId: string): Promise<CentralGithubInstallation | undefined> {
+    const { rows } = await this.query(
+      `SELECT * FROM central_github_installations WHERE installation_id = $1`,
+      [installationId],
+    );
+    return rows[0] ? this.centralInstallationFromRow(rows[0]) : undefined;
+  }
+
+  async listCentralGithubInstallations(accountId: string): Promise<CentralGithubInstallation[]> {
+    const { rows } = await this.query(
+      `SELECT * FROM central_github_installations WHERE account_id = $1 ORDER BY created_at`,
+      [accountId],
+    );
+    return rows.map((row) => this.centralInstallationFromRow(row));
+  }
+
+  async deleteCentralGithubInstallation(installationId: string, accountId?: string): Promise<boolean> {
+    const { rowCount } = accountId
+      ? await this.query(
+          `DELETE FROM central_github_installations WHERE installation_id = $1 AND account_id = $2`,
+          [installationId, accountId],
+        )
+      : await this.query(`DELETE FROM central_github_installations WHERE installation_id = $1`, [installationId]);
+    return (rowCount ?? 0) > 0;
   }
 
   async getHostedMachines(accountId: string): Promise<Array<Record<string, unknown>>> {
@@ -1615,6 +1849,46 @@ export class PostgresStore implements ControlPlaneStore {
       [accountId],
     );
     return rows.map((row) => this.hostedAttemptFromRow(row));
+  }
+
+  async upsertSessionUsage(record: SessionUsageRecord): Promise<SessionUsageRecord> {
+    const { rows } = await this.query(
+      `INSERT INTO session_usage
+         (account_id, usage_id, session_id, machine_id, node_id, launched_at, first_agent_event_at,
+          settled_at, machine_seconds, active_agent_seconds)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+       ON CONFLICT (account_id, usage_id) DO UPDATE SET
+         usage_id=session_usage.usage_id
+       RETURNING *`,
+      [record.accountId, record.usageId, record.sessionId ?? null, record.machineId ?? null,
+       record.nodeId ?? null, record.launchedAt, record.firstAgentEventAt ?? null, record.settledAt,
+       record.machineSeconds, record.activeAgentSeconds],
+    );
+    return this.sessionUsageFromRow(rows[0]);
+  }
+
+  async listSessionUsage(accountId: string, startsAt: string, endsAt: string, limit?: number): Promise<SessionUsageRecord[]> {
+    const boundedLimit = limit == null ? undefined : Math.max(1, Math.min(10_000, Math.floor(limit)));
+    const { rows } = await this.query(
+      `SELECT * FROM session_usage
+       WHERE account_id=$1 AND settled_at > $2 AND launched_at < $3
+       ORDER BY settled_at DESC${boundedLimit == null ? "" : " LIMIT $4"}`,
+      boundedLimit == null ? [accountId, startsAt, endsAt] : [accountId, startsAt, endsAt, boundedLimit],
+    );
+    return rows.map((row) => this.sessionUsageFromRow(row));
+  }
+
+  private sessionUsageFromRow(row: Record<string, any>): SessionUsageRecord {
+    return {
+      accountId: String(row.account_id), usageId: String(row.usage_id),
+      sessionId: row.session_id || undefined, machineId: row.machine_id || undefined,
+      nodeId: row.node_id || undefined,
+      launchedAt: new Date(row.launched_at).toISOString(),
+      firstAgentEventAt: row.first_agent_event_at ? new Date(row.first_agent_event_at).toISOString() : undefined,
+      settledAt: new Date(row.settled_at).toISOString(),
+      machineSeconds: Number(row.machine_seconds) || 0,
+      activeAgentSeconds: Number(row.active_agent_seconds) || 0,
+    };
   }
 
   async listHostedMachineAccountIds(): Promise<string[]> {
@@ -2945,7 +3219,7 @@ export class PostgresStore implements ControlPlaneStore {
     // there is no cross-table transaction requirement (each row is independently
     // safe to drop once past its own expiry).
     let total = 0;
-    for (const table of ["login_tokens", "sessions", "link_grants", "relay_tickets", "device_logins", "oauth_states"]) {
+    for (const table of ["login_tokens", "sessions", "link_grants", "relay_tickets", "device_logins", "oauth_states", "central_install_states", "central_github_installer_attestations", "node_claims"]) {
       const { rowCount } = await this.query(`DELETE FROM ${table} WHERE expires_at < $1`, [nowIso]);
       total += rowCount ?? 0;
     }
@@ -3222,6 +3496,9 @@ function mapAccount(row: any): Account {
   return {
     id: row.id,
     email: row.email,
+    plan: ["individual", "pro", "team"].includes(row.plan) ? row.plan : "free",
+    githubUserId: row.github_user_id || undefined,
+    githubInstallTargetIds: Array.isArray(row.github_install_target_ids) ? row.github_install_target_ids.map(String) : [],
     createdAt: new Date(row.created_at).toISOString(),
   };
 }

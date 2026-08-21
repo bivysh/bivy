@@ -4782,22 +4782,27 @@ function invalidateGitHubApps(): void {
 // token nor an app key. When BIVY_HOSTED_MINT is set they mint a fresh,
 // short-lived token from the control plane per git op — cached until ~5 min
 // before expiry so a burst of git ops is a single round trip. This is the final
-// fallback rung after local apps and BIVY_GITHUB_TOKEN.
-let hostedMintCache: { token: string; expiresAt: number } | undefined;
-async function hostedMintToken(): Promise<string | undefined> {
+// fallback rung after local apps and BIVY_GITHUB_TOKEN. Passing the repo lets
+// the control plane pick the matching central-app installation and scope the
+// token down to that repo, so the cache is keyed per repo.
+const hostedMintCache = new Map<string, { token: string; expiresAt: number }>();
+async function hostedMintToken(repo?: string): Promise<string | undefined> {
   if (!process.env.BIVY_HOSTED_MINT || !sessionAdvertiseTarget) return undefined;
+  const cacheKey = repo ?? "";
   const now = Date.now();
-  if (hostedMintCache && hostedMintCache.expiresAt - now > 5 * 60 * 1000) return hostedMintCache.token;
+  const cached = hostedMintCache.get(cacheKey);
+  if (cached && cached.expiresAt - now > 5 * 60 * 1000) return cached.token;
   try {
     const res = await fetch(`${sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "")}/node/hosted-git-credential`, {
       method: "POST",
-      headers: { authorization: `Bearer ${sessionAdvertiseTarget.enrollmentToken}` },
+      headers: { authorization: `Bearer ${sessionAdvertiseTarget.enrollmentToken}`, "content-type": "application/json" },
+      body: JSON.stringify(repo ? { repo } : {}),
     });
     if (!res.ok) return undefined;
     const data = (await res.json().catch(() => ({}))) as { token?: string; expiresAt?: string };
     if (!data.token) return undefined;
     const parsed = data.expiresAt ? Date.parse(data.expiresAt) : NaN;
-    hostedMintCache = { token: data.token, expiresAt: Number.isFinite(parsed) ? parsed : now + 55 * 60 * 1000 };
+    hostedMintCache.set(cacheKey, { token: data.token, expiresAt: Number.isFinite(parsed) ? parsed : now + 55 * 60 * 1000 });
     return data.token;
   } catch {
     return undefined;
@@ -4820,7 +4825,7 @@ async function resolveTokenForWorkItem(item: ControlPlaneWorkItem): Promise<stri
       }
     }
   }
-  return (await resolveGitHubToken()) ?? (await hostedMintToken());
+  return (await resolveGitHubToken()) ?? (await hostedMintToken(item.repo));
 }
 
 /**
@@ -4868,7 +4873,7 @@ async function resolveTokenForRepo(owner: string, repo: string): Promise<string 
       }
     }
   }
-  return (await resolveGitHubToken()) ?? (await hostedMintToken());
+  return (await resolveGitHubToken()) ?? (await hostedMintToken(`${owner}/${repo}`));
 }
 
 /** The session source a Linear-issue pickup advertises, keyed by the issue's

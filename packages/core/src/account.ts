@@ -278,6 +278,88 @@ export async function fetchAccountNodes(store: LocalStore, fetchImpl: typeof fet
   return Array.isArray(data) ? (data as AccountNode[]) : [];
 }
 
+export interface CentralGithubAppInstallationView {
+  installationId: string;
+  githubAccount?: string;
+  githubAccountType?: string;
+  repositorySelection?: string;
+  createdAt: string;
+}
+export interface CentralGithubAppView {
+  configured: boolean;
+  appId?: string;
+  slug?: string;
+  installations: CentralGithubAppInstallationView[];
+}
+
+export async function fetchCentralGithubApp(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<CentralGithubAppView> {
+  const res = await fetchImpl(`${cpBase(store)}/account/github/central-app`, {
+    headers: { authorization: `Bearer ${store.s}` },
+  });
+  if (!res.ok) throw new Error(`GitHub App status request failed: ${res.status}`);
+  return await res.json() as CentralGithubAppView;
+}
+
+export async function createCentralGithubInstall(
+  store: LocalStore,
+  returnPath = "/",
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ state: string; installUrl: string }> {
+  const res = await fetchImpl(`${cpBase(store)}/account/github/central-app/install-state`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${store.s}`, "content-type": "application/json" },
+    body: JSON.stringify({ returnPath }),
+  });
+  const value = await res.json().catch(() => ({})) as { state?: string; installUrl?: string; error?: string };
+  if (!res.ok || !value.installUrl) throw new Error(value.error || `GitHub App install request failed: ${res.status}`);
+  return value as { state: string; installUrl: string };
+}
+
+export async function createManagedAuthRunner(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<{ machine: Record<string, unknown>; duplicate?: boolean }> {
+  const res = await fetchImpl(`${cpBase(store)}/account/onboarding/auth-runner`, {
+    method: "POST", headers: { authorization: `Bearer ${store.s}` },
+  });
+  const value = await res.json().catch(() => ({})) as { machine?: Record<string, unknown>; duplicate?: boolean; error?: string; reason?: string };
+  if (!res.ok || !value.machine) throw new Error(value.reason || value.error || `managed authentication Machine request failed: ${res.status}`);
+  return value as { machine: Record<string, unknown>; duplicate?: boolean };
+}
+
+export interface AccountNodeClaim {
+  id: string;
+  createdAt: string;
+  expiresAt: string;
+  usedAt?: string;
+  revokedAt?: string;
+  nodeId?: string;
+  status: "pending" | "used" | "revoked" | "expired";
+  claimUrl?: string;
+  command?: string;
+}
+
+export async function createAccountNodeClaim(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<AccountNodeClaim> {
+  const res = await fetchImpl(`${cpBase(store)}/account/node-claims`, {
+    method: "POST", headers: { authorization: `Bearer ${store.s}` },
+  });
+  if (!res.ok) throw new Error(`machine claim request failed: ${res.status}`);
+  return await res.json() as AccountNodeClaim;
+}
+
+export async function fetchAccountNodeClaims(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<AccountNodeClaim[]> {
+  const res = await fetchImpl(`${cpBase(store)}/account/node-claims`, {
+    headers: { authorization: `Bearer ${store.s}` },
+  });
+  if (!res.ok) throw new Error(`machine claims request failed: ${res.status}`);
+  const value: unknown = await res.json();
+  return Array.isArray(value) ? value as AccountNodeClaim[] : [];
+}
+
+export async function revokeAccountNodeClaim(store: LocalStore, id: string, fetchImpl: typeof fetch = fetch): Promise<void> {
+  const res = await fetchImpl(`${cpBase(store)}/account/node-claims/${encodeURIComponent(id)}`, {
+    method: "DELETE", headers: { authorization: `Bearer ${store.s}` },
+  });
+  if (!res.ok) throw new Error(`machine claim revoke failed: ${res.status}`);
+}
+
 /** List encrypted session adverts across all nodes on the signed-in account. */
 export async function fetchAccountSessions(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<AccountSessionAdvert[]> {
   const res = await fetchImpl(`${cpBase(store)}/sessions`, {

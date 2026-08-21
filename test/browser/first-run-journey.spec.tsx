@@ -12,7 +12,7 @@ import { readFile } from "node:fs/promises";
 
 const read = (rel: string) => readFile(new URL(rel, import.meta.url), "utf8");
 
-test("the journey gates in order: sign-in first, then machine pair/select, then the readiness strip", async () => {
+test("the journey gates in order: sign-in first, then cohesive onboarding, then the readiness strip", async () => {
   const app = await read("../../packages/web/src/App.tsx");
   const needsAuth = app.indexOf("if (needsAuth || signInRequested) {");
   const needsNodeDecl = app.indexOf("const needsNode =");
@@ -27,11 +27,13 @@ test("the journey gates in order: sign-in first, then machine pair/select, then 
   // Automations / cloud machine profiles) is dismissable — the boot-time auth
   // gate has no app behind it to return to, so it never gets onDismiss.
   expect(app).toContain("<SetupNotice onDismiss={needsAuth ? undefined : dismissSignInRequest} />");
-  // needsNode's own screen (ConnectRunner) and the readiness strip render as
-  // siblings once signed in — a fresh draft with no Machine yet sees BOTH the
-  // "connect a Machine" panel and the checklist reinforcing what's still
-  // needed, rather than one hiding the other.
-  expect(app).toContain("{needsNode && (");
+  // A fresh GitHub signup enters one authoritative wizard for App install,
+  // Machine enrollment, and model auth. Dismissing it deliberately falls back
+  // to the ordinary ConnectRunner; established users still get the readiness
+  // strip rather than being forced through a second wizard.
+  expect(app).toContain("{showFirstRunOnboarding && (");
+  expect(app).toContain("<FirstRunOnboarding");
+  expect(app).toContain("!showFirstRunOnboarding && needsNode");
   expect(app).toContain("<ConnectRunner");
 });
 
@@ -54,6 +56,20 @@ test("every failed readiness check maps to exactly one wired, real remediation �
     expect(app).toContain(`${kind}: () =>`);
   }
   expect(app).not.toContain("sign_in: () =>");
+});
+
+test("managed-only cold start provisions a short-lived auth Machine before provider login", async () => {
+  const wizard = await read("../../packages/web/src/components/FirstRunOnboarding.tsx");
+  const accountApi = await read("../../packages/core/src/account.ts");
+  const controlPlane = await read("../../services/control-plane/src/index.ts");
+  const provisioner = await read("../../services/control-plane/src/ephemeral-provisioner.ts");
+  expect(wizard).toContain("controller.createManagedAuthRunner()");
+  expect(wizard).toContain("Enable managed credential reuse");
+  expect(wizard).toContain("controller.setCredentialUnattended");
+  expect(accountApi).toContain("/account/onboarding/auth-runner");
+  expect(controlPlane).toContain('purpose: "auth-runner"');
+  expect(controlPlane).toContain("Math.min(15");
+  expect(provisioner).toContain('hostedTasks: purpose !== "auth-runner"');
 });
 
 test("provider readiness ('Test connection') is wired end to end: web action -> relay command -> node handler", async () => {

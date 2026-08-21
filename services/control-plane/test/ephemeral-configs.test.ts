@@ -94,6 +94,23 @@ async function main() {
   const token = login.json.token;
   expect(Boolean(token), "dev-login returns a token");
 
+  const claim = await req(port, "POST", "/account/node-claims", undefined, token);
+  expect(claim.status === 201 && typeof claim.json?.command === "string", "signed-in account creates a one-time machine command");
+  const claimUrl = new URL(claim.json.claimUrl);
+  const scriptResponse = await fetch(`http://localhost:${port}${claimUrl.pathname}`);
+  const script = await scriptResponse.text();
+  expect(scriptResponse.status === 200 && script.includes("BIVY_NODE_CLAIM_CODE") && script.includes("bivy.sh/install.sh"), "claim URL serves the enrollment bootstrap");
+  const code = claimUrl.pathname.split("/").at(-1)!;
+  const claimed = await req(port, "POST", `/claim/${code}/enroll`, { nodeId: "claimed-machine", name: "Claimed machine" });
+  expect(claimed.status === 200 && typeof claimed.json?.enrollmentToken === "string", "claim atomically enrolls one machine without a user session");
+  const replay = await req(port, "POST", `/claim/${code}/enroll`, { nodeId: "claim-replay", name: "Replay" });
+  expect(replay.status === 410, "used machine claim rejects replay");
+  const claims = await req(port, "GET", "/account/node-claims", undefined, token);
+  expect(claims.json?.[0]?.status === "used" && claims.json?.[0]?.nodeId === "claimed-machine", "claim status records only the enrolled node identity");
+  expect(!JSON.stringify(claims.json).includes(code), "raw machine claim is never returned after creation");
+  const authRunnerOff = await req(port, "POST", "/account/onboarding/auth-runner", undefined, token);
+  expect(authRunnerOff.status === 503, "managed authentication Machine fails closed when the operator lane is disabled");
+
   // Fresh account: no configs, shared-queue routing.
   const empty = await req(port, "GET", "/account/ephemeral-configs", undefined, token);
   expect(empty.status === 200 && Array.isArray(empty.json) && empty.json.length === 0, "fresh account has no configs");
