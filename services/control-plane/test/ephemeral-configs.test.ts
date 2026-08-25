@@ -252,6 +252,8 @@ async function main() {
   expect(managedDefaultAgain.json?.config?.id === managedDefault.json?.config?.id && managedConfigs.json?.length === 1, "managed default setup is idempotent");
   const managedRouting = await req(port3, "GET", "/account/queue-routing", undefined, token3);
   expect(managedRouting.json?.primary?.kind === "shared", "interactive managed setup does not silently enable unattended queue routing");
+  const forgedRestore = await req(port3, "POST", "/account/managed-machines/restore", { configId: managedDefault.json.config.id, nodeId: "eph-other", sessionId: "s-other" }, token3);
+  expect(forgedRestore.status === 404, "managed restore requires an account-scoped durable session correlation");
 
   // Delete removes the config.
   const del = await req(port, "DELETE", `/account/ephemeral-configs/${id}`, undefined, token);

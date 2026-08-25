@@ -655,7 +655,7 @@ export async function provisionEphemeralForAccount(
       await audit(store, accountId, { action: "room_key_escrowed", provider: config.provider, configId: config.id, nodeId: machine.nodeId });
       onRoomKey?.(machine.nodeId, roomKeyB64);
     }
-    return machine;
+    return { ...machine, computeSource };
   } catch (e) {
     if (attempt && attempt.state !== "failed") {
       await store.putHostedMachineAttempt({ ...attempt, state: "failed", lastError: String((e as Error)?.message || e).slice(0, 500), updatedAt: new Date().toISOString() }).catch(() => {});
@@ -745,7 +745,7 @@ export async function provisionEphemeralRestore(
   accountId: string,
   config: EphemeralNodeConfig,
   env: ProvisionEnv,
-  opts: { reuseNodeId: string; restoreSessionId: string; attemptId?: string; retryCount?: number },
+  opts: { reuseNodeId: string; restoreSessionId: string; attemptId?: string; retryCount?: number; purpose?: EphemeralMachine["purpose"] },
   launcher = launchEphemeralMachine,
   nowMs = Date.now(),
 ): Promise<EphemeralMachine> {
@@ -781,7 +781,7 @@ export async function provisionEphemeralRestore(
       observedState: attempt?.observedState,
       deadlineAt: computeAttemptDeadline(phase, eventCreatedAt ?? attempt?.machine?.createdAt as string | undefined, config.ttlMinutes, Date.now()),
       ownershipTag,
-      desired: { region: config.region, size: config.size, image: config.image, ttlMinutes: config.ttlMinutes, purpose: "queue-default", setupId: config.id, restoreSessionId: opts.restoreSessionId, computeSource },
+      desired: { region: config.region, size: config.size, image: config.image, ttlMinutes: config.ttlMinutes, purpose: opts.purpose ?? "queue-default", setupId: config.id, restoreSessionId: opts.restoreSessionId, computeSource },
       machine: event.machine as unknown as Record<string, unknown> | undefined,
       lastError: event.error, retryCount: opts.retryCount ?? 0,
       createdAt: attempt?.createdAt ?? createdAt, updatedAt: new Date().toISOString(),
@@ -798,12 +798,13 @@ export async function provisionEphemeralRestore(
         size: config.size,
         image: config.image,
         ttlMinutes: config.ttlMinutes,
-        hostedTasks: true,
+        teardownOnAgentFinish: config.teardownOnAgentFinish,
+        hostedTasks: opts.purpose !== "interactive",
         externalTeardownGuaranteed: true,
         githubToken,
         hostedMint: useHostedMint,
         setupId: config.id,
-        purpose: "queue-default",
+        purpose: opts.purpose ?? "queue-default",
         name: `Hosted ${config.name}`,
         // Rebuild the torn-down session in place: same node id + room key + session.
         reuseNodeId: opts.reuseNodeId,
@@ -815,7 +816,7 @@ export async function provisionEphemeralRestore(
     if (attempt) await store.putHostedMachineAttempt({ ...attempt, state: "tracked", machine: machine as unknown as Record<string, unknown>, updatedAt: new Date().toISOString() });
     await audit(store, accountId, { action: "room_key_reused", provider: config.provider, configId: config.id, nodeId: machine.nodeId });
     await audit(store, accountId, { action: "provision_launched", provider: config.provider, configId: config.id, nodeId: machine.nodeId });
-    return machine;
+    return { ...machine, computeSource };
   } catch (e) {
     if (attempt && attempt.state !== "failed") await store.putHostedMachineAttempt({ ...attempt, state: "failed", lastError: String((e as Error)?.message || e).slice(0, 500), updatedAt: new Date().toISOString() }).catch(() => {});
     await audit(store, accountId, { action: "provision_failed", provider: config.provider, configId: config.id, detail: String((e as Error)?.message || e).slice(0, 200) });
@@ -1107,7 +1108,10 @@ export async function reconcileHostedMachines(
       await store.putHostedMachineAttempt({ ...attempt, state: "requested", retryCount, lastError: undefined, updatedAt: new Date(nowMs).toISOString() });
       const restoreSessionId = typeof attempt.desired.restoreSessionId === "string" ? attempt.desired.restoreSessionId : "";
       if (restoreSessionId) {
-        await provisionEphemeralRestore(store, accountId, config, env, { reuseNodeId: attempt.nodeId, restoreSessionId, attemptId: attempt.attemptId, retryCount }, launchEphemeralMachine, nowMs).catch(() => {});
+        await provisionEphemeralRestore(store, accountId, config, env, {
+          reuseNodeId: attempt.nodeId, restoreSessionId, attemptId: attempt.attemptId, retryCount,
+          purpose: attempt.desired.purpose === "interactive" ? "interactive" : "queue-default",
+        }, launchEphemeralMachine, nowMs).catch(() => {});
       } else {
         await provisionEphemeralForAccount(store, accountId, config, env, launchEphemeralMachine, nowMs, (attempt.desired.purpose as EphemeralMachine["purpose"]) || "queue-default", { attemptId: attempt.attemptId, nodeId: attempt.nodeId, retryCount }).catch(() => {});
       }

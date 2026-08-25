@@ -113,6 +113,25 @@ test("ephemeral coordinator assigns queue work only after launch", async () => {
   assert.deepEqual(events, ["launch", "refresh", "assign", "refresh"]);
 });
 
+test("ephemeral coordinator restores managed sessions without a device cloud token or room key", async () => {
+  const events: string[] = [];
+  const coordinator = new EphemeralCoordinator({
+    currentNodeId: () => "eph-managed",
+    roomKey: () => undefined,
+    correlations: () => [{ sessionId: "s1", nodeId: "eph-managed", provider: "fly", setupId: "managed-default", computeSource: "managed" }],
+    restoreManagedMachine: async (input: unknown) => { events.push(`restore:${JSON.stringify(input)}`); return { nodeId: "eph-managed" } as any; },
+    connectToNode: async (nodeId: string) => { events.push(`connect:${nodeId}`); },
+    direct: () => false,
+    reportError: (error: Error) => { throw error; },
+  } as any);
+  assert.equal(coordinator.isCurrentNodeResumable(), true, "hosted escrow makes a managed correlation rebuildable on a fresh device");
+  await coordinator.reprovision("eph-managed", "s1");
+  assert.deepEqual(events, [
+    'restore:{"configId":"managed-default","nodeId":"eph-managed","sessionId":"s1"}',
+    "connect:eph-managed",
+  ]);
+});
+
 test("account coordinator refreshes both automation projections after cancellation", async () => {
   const events: string[] = [];
   const api: any = {

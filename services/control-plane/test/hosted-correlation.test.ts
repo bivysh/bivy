@@ -22,7 +22,7 @@ async function test(name: string, fn: () => Promise<void>) {
   console.log(`✓ ${name}`);
 }
 
-const HOSTED = { nodeId: "eph-hosted", provider: "fly", region: "iad", ttlMinutes: 60, setupId: "cfg1", id: "m1", repo: "o/r", app: "myapp" };
+const HOSTED = { nodeId: "eph-hosted", provider: "fly", region: "iad", ttlMinutes: 60, setupId: "cfg1", id: "m1", repo: "o/r", app: "myapp", computeSource: "managed" };
 
 await test("writes a correlation for a hosted machine's new session", async () => {
   const store = await makeStore();

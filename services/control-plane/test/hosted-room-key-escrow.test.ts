@@ -74,10 +74,12 @@ await test("provisionEphemeralRestore hands the escrowed key back to the rebuilt
     captured = opts;
     return { id: "m1", provider: "fly", name: "x", region: "iad", status: "running", ip: null, createdAt: "", nodeId: "eph-42" } as EphemeralMachine;
   };
-  await provisionEphemeralRestore(store, acct.id, CONFIG, ENV, { reuseNodeId: "eph-42", restoreSessionId: "sess-7" }, rebuildLauncher as never);
+  await provisionEphemeralRestore(store, acct.id, CONFIG, ENV, { reuseNodeId: "eph-42", restoreSessionId: "sess-7", purpose: "interactive" }, rebuildLauncher as never);
   assert.equal(captured?.reuseNodeId, "eph-42");
   assert.equal(captured?.reuseRoomKeyB64, ROOM_KEY, "must inject the decrypted escrowed key");
   assert.equal(captured?.restoreSessionId, "sess-7");
+  assert.equal(captured?.purpose, "interactive");
+  assert.equal(captured?.hostedTasks, false, "interactive restore must not poll unattended queues");
 });
 
 await test("restore fails cleanly when no room key was escrowed", async () => {

@@ -45,7 +45,7 @@ available under advanced settings.
 
 ### 4. Resume and agent fork
 
-- [ ] Route an interactive message to server-side restore when its managed Machine is
+- [x] Route an interactive message to server-side restore when its managed Machine is
   gone, including from a different signed-in device.
 - [ ] Let a fork/handoff target a managed profile, provisioning the destination before
   transferring the snapshot and normalized history.

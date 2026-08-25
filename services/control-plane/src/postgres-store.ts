@@ -514,9 +514,11 @@ export class PostgresStore implements ControlPlaneStore {
         setup_id    TEXT,
         machine_id  TEXT,
         app         TEXT,
+        compute_source TEXT,
         updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
         PRIMARY KEY (account_id, session_id)
       );
+      ALTER TABLE session_correlation ADD COLUMN IF NOT EXISTS compute_source TEXT;
 
       -- Escrowed session ROOM KEY for HOSTED (device-offline) rebuild (Gap 3).
       -- Sealed at rest with the per-account hosted-provisioning key (hosted-crypto),
@@ -2314,6 +2316,7 @@ export class PostgresStore implements ControlPlaneStore {
       setupId: row.setup_id ?? undefined,
       machineId: row.machine_id ?? undefined,
       app: row.app ?? undefined,
+      computeSource: row.compute_source === "managed" ? "managed" : undefined,
       updatedAt: new Date(row.updated_at).toISOString(),
     };
   }
@@ -2331,17 +2334,17 @@ export class PostgresStore implements ControlPlaneStore {
   async setSessionCorrelation(accountId: string, input: SessionCorrelationInput): Promise<SessionCorrelation> {
     const { rows } = await this.query(
       `INSERT INTO session_correlation
-         (account_id, session_id, node_id, provider, region, ttl_minutes, repo, setup_id, machine_id, app, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+         (account_id, session_id, node_id, provider, region, ttl_minutes, repo, setup_id, machine_id, app, compute_source, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
        ON CONFLICT (account_id, session_id) DO UPDATE SET
          node_id = EXCLUDED.node_id, provider = EXCLUDED.provider, region = EXCLUDED.region,
          ttl_minutes = EXCLUDED.ttl_minutes, repo = EXCLUDED.repo, setup_id = EXCLUDED.setup_id,
-         machine_id = EXCLUDED.machine_id, app = EXCLUDED.app, updated_at = now()
+         machine_id = EXCLUDED.machine_id, app = EXCLUDED.app, compute_source = EXCLUDED.compute_source, updated_at = now()
        RETURNING *`,
       [
         accountId, input.sessionId, input.nodeId, input.provider,
         input.region ?? null, input.ttlMinutes ?? null, input.repo ?? null,
-        input.setupId ?? null, input.machineId ?? null, input.app ?? null,
+        input.setupId ?? null, input.machineId ?? null, input.app ?? null, input.computeSource === "managed" ? "managed" : null,
       ],
     );
     return this.mapSessionCorrelation(rows[0]);

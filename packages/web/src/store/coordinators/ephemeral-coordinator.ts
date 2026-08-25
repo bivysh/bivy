@@ -25,6 +25,7 @@ export interface EphemeralDependencies {
   nodes(): AccountNode[];
   correlations(): SessionCorrelation[];
   launchMachine(opts: LaunchOpts): Promise<EphemeralMachine>;
+  restoreManagedMachine(input: { configId: string; nodeId: string; sessionId: string }): Promise<EphemeralMachine>;
   destroyMachine(machine: EphemeralMachine): Promise<void>;
   machineFromNode(node: AccountNode): EphemeralMachine | null;
   machineFromCorrelation(correlation: SessionCorrelation): EphemeralMachine;
@@ -177,9 +178,15 @@ export class EphemeralCoordinator {
 
   async reprovision(nodeId: string, sessionId: string): Promise<void> {
     try {
+      const correlation = this.deps.correlations().find((item) => item.nodeId === nodeId || item.sessionId === sessionId);
+      if (correlation?.computeSource === "managed") {
+        if (!correlation.setupId) throw new Error("This managed session no longer has a Machine profile to rebuild from.");
+        await this.deps.restoreManagedMachine({ configId: correlation.setupId, nodeId: correlation.nodeId, sessionId });
+        await this.deps.connectToNode(correlation.nodeId, 120_000);
+        return;
+      }
       const roomKeyB64 = this.deps.roomKey(nodeId);
       if (!roomKeyB64) throw new Error("This device no longer holds this session's key, so it can't rebuild it.");
-      const correlation = this.deps.correlations().find((item) => item.nodeId === nodeId || item.sessionId === sessionId);
       const node = this.deps.nodes().find((candidate) => candidate.id === nodeId);
       const machine = (await this.deps.machines()).find((candidate) => candidate.nodeId === nodeId)
         ?? (node ? this.deps.machineFromNode(node) : null)
@@ -205,10 +212,13 @@ export class EphemeralCoordinator {
   isCurrentNodeResumable(): boolean {
     if (this.deps.direct()) return false;
     const nodeId = this.deps.currentNodeId();
-    if (!nodeId || !this.deps.roomKey(nodeId)) return false;
+    if (!nodeId) return false;
+    const correlation = this.deps.correlations().find((item) => item.nodeId === nodeId);
+    if (correlation?.computeSource === "managed") return true;
+    if (!this.deps.roomKey(nodeId)) return false;
     const node = this.deps.nodes().find((candidate) => candidate.id === nodeId);
     if (node) return !node.online && Boolean(this.deps.machineFromNode(node));
-    return this.deps.correlations().some((item) => item.nodeId === nodeId);
+    return Boolean(correlation);
   }
 
   private error(cause: unknown): Error { return cause instanceof Error ? cause : new Error(String(cause)); }
