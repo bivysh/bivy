@@ -8,7 +8,7 @@ import express, { type Request, type Response, type NextFunction } from "express
 import webpush from "web-push";
 import { ephemeralAdapter, validateCapabilityTags } from "@bivy/core";
 import { providerCredentialFingerprint, type Account, type NodeRecord, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, type AutomationRun, type InboundHook, type NodeClaim, GITHUB_IDENTITY_MODES, type GithubIdentityMode, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
-import { centralGithubAppConfig, centralInstallUrl, applyCentralInstallationEvent } from "./central-github-app.js";
+import { centralGithubAppConfig, centralInstallUrl, applyCentralInstallationEvent, resolveGithubIdentity } from "./central-github-app.js";
 import { maybeAutoProvision, planAutoProvision, hostedExecutionReadiness, mintHostedInstallationToken, provisionEphemeralForAccount, reapSettledHostedMachine, reconcileAllHostedMachines, reconcileAllReadyCapacity, sweepAllOrphanProviderResources, validateHostedProviderToken, markHostedMachineMilestone, EPHEMERAL_MILESTONES, ephemeralMachinesEnabled, type ManagedProvisionRequest } from "./ephemeral-provisioner.js";
 import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecret, initializeHostedKeyring } from "./hosted-crypto.js";
 import { listAppInstallations, listInstallationRepositories, getAppInstallation } from "./hosted-github-auth.js";
@@ -2292,14 +2292,29 @@ app.post("/account/hosted-github-app/connect", requireUser, asyncHandler(async (
   }
 }));
 
-// Repo discovery for the browser when no persistent node exists. Installation
-// tokens are minted just in time and never returned to the client.
+// Repo discovery for the browser when no persistent node exists. Resolve the
+// same account identity used by JIT git-token minting, then aggregate every
+// central-App installation so a user with personal + organization installs sees
+// one ordinary repo picker. Installation tokens stay server-side and ephemeral.
 app.get("/account/hosted-github-repositories", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   const hosted = await store.getHostedProvisioning(account.id);
-  if (!hosted.githubApp) return res.status(409).json({ error: "No hosted GitHub App is configured" });
+  const central = centralGithubAppConfig();
+  const centralInstallations = central ? await store.listCentralGithubInstallations(account.id) : [];
+  const identity = resolveGithubIdentity({ hosted, central, centralInstallations });
+  if (identity?.kind !== "app") return res.status(409).json({ error: "No hosted GitHub App is configured" });
   try {
-    res.json({ repos: await listInstallationRepositories(hosted.githubApp) });
+    const installations = identity.mode === "central-app"
+      ? centralInstallations.map((installation) => ({
+          appId: identity.appId,
+          installationId: installation.installationId,
+          privateKeyPem: identity.privateKeyPem,
+        }))
+      : [{ appId: identity.appId, installationId: identity.installationId, privateKeyPem: identity.privateKeyPem }];
+    const lists = await Promise.all(installations.map((installation) => listInstallationRepositories(installation)));
+    const repos = [...new Map(lists.flat().map((repo) => [repo.slug, repo])).values()]
+      .sort((a, b) => a.slug.localeCompare(b.slug));
+    res.json({ repos });
   } catch (error) {
     res.status(502).json({ error: String((error as Error)?.message || error).slice(0, 240) });
   }
