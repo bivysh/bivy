@@ -25,6 +25,7 @@ import {
   recordProductMetric,
   createManagedAuthRunner,
   launchManagedSessionMachine,
+  restoreManagedSessionMachine,
   fetchEphemeralConfigs,
 } from "../src/index.js";
 
@@ -482,6 +483,20 @@ describe("managed account Machines", () => {
     expect(JSON.parse(body)).toEqual({ configId: "managed-default" });
     expect(machine.nodeId).toBe("eph-1");
     expect(store.keys()["eph-1"]).toBe("room-1");
+  });
+
+  it("restores a managed Machine and adopts escrowed key material on a fresh device", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.s = "tok";
+    store.cp = "https://app.bivy.sh";
+    let body = "";
+    const fakeFetch = (async (_url: string, init?: RequestInit) => {
+      body = String(init?.body || "");
+      return new Response(JSON.stringify({ machine: { id: "m-restored", provider: "fly", name: "Cloud", region: "iad", status: "running", ip: null, createdAt: "", nodeId: "eph-old", computeSource: "managed" }, roomKey: "room-restored" }), { status: 201 });
+    }) as typeof fetch;
+    await restoreManagedSessionMachine(store, { configId: "managed-default", nodeId: "eph-old", sessionId: "s1" }, fakeFetch);
+    expect(JSON.parse(body)).toEqual({ configId: "managed-default", nodeId: "eph-old", sessionId: "s1" });
+    expect(store.keys()["eph-old"]).toBe("room-restored");
   });
 });
 

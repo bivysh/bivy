@@ -360,6 +360,21 @@ export async function launchManagedSessionMachine(
   return value.machine;
 }
 
+/** Rebuild a torn-down managed session and adopt its escrowed room key. */
+export async function restoreManagedSessionMachine(
+  store: LocalStore,
+  input: { configId: string; nodeId: string; sessionId: string },
+  fetchImpl: typeof fetch = fetch,
+): Promise<EphemeralMachine> {
+  const res = await fetchImpl(`${cpBase(store)}/account/managed-machines/restore`, {
+    method: "POST", headers: authHeaders(store), body: JSON.stringify(input),
+  });
+  const value = await res.json().catch(() => ({})) as { machine?: EphemeralMachine; roomKey?: string; error?: string; reason?: string };
+  if (!res.ok || !value.machine) throw new Error(value.reason || value.error || `managed Machine restore failed: ${res.status}`);
+  adoptManagedMachineKey(store, value);
+  return value.machine;
+}
+
 export interface AccountNodeClaim {
   id: string;
   createdAt: string;

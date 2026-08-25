@@ -555,6 +555,7 @@ export interface SessionCorrelation {
   setupId?: string;
   machineId?: string;
   app?: string;
+  computeSource?: "user" | "managed";
   updatedAt: string;
 }
 export type SessionCorrelationInput = Omit<SessionCorrelation, "updatedAt">;

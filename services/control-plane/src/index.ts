@@ -9,7 +9,7 @@ import webpush from "web-push";
 import { ephemeralAdapter, validateCapabilityTags } from "@bivy/core";
 import { providerCredentialFingerprint, type Account, type NodeRecord, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, type AutomationRun, type InboundHook, type NodeClaim, GITHUB_IDENTITY_MODES, type GithubIdentityMode, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
 import { centralGithubAppConfig, centralInstallUrl, applyCentralInstallationEvent, resolveGithubIdentity } from "./central-github-app.js";
-import { maybeAutoProvision, planAutoProvision, hostedExecutionReadiness, mintHostedInstallationToken, provisionEphemeralForAccount, reapSettledHostedMachine, reconcileAllHostedMachines, reconcileAllReadyCapacity, sweepAllOrphanProviderResources, validateHostedProviderToken, markHostedMachineMilestone, EPHEMERAL_MILESTONES, ephemeralMachinesEnabled, type ManagedProvisionRequest } from "./ephemeral-provisioner.js";
+import { maybeAutoProvision, planAutoProvision, hostedExecutionReadiness, mintHostedInstallationToken, provisionEphemeralForAccount, provisionEphemeralRestore, reapSettledHostedMachine, reconcileAllHostedMachines, reconcileAllReadyCapacity, sweepAllOrphanProviderResources, validateHostedProviderToken, markHostedMachineMilestone, EPHEMERAL_MILESTONES, ephemeralMachinesEnabled, type ManagedProvisionRequest } from "./ephemeral-provisioner.js";
 import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecret, initializeHostedKeyring } from "./hosted-crypto.js";
 import { listAppInstallations, listInstallationRepositories, listInstallationBranches, getAppInstallation } from "./hosted-github-auth.js";
 import { correlateHostedSessions } from "./hosted-correlation.js";
@@ -1304,6 +1304,50 @@ app.post("/account/managed-machines", requireUser, asyncHandler(async (req, res)
   }
 }));
 
+// Rebuild a managed session onto fresh operator-owned compute. Account-scoped
+// correlation + escrowed key checks prevent choosing another session/node.
+app.post("/account/managed-machines/restore", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  res.setHeader("cache-control", "no-store");
+  if (!ephemeralMachinesEnabled() || process.env.MANAGED_COMPUTE_ENABLED !== "1") {
+    return res.status(503).json({ error: "Managed session Machines are not available." });
+  }
+  const sessionId = String(req.body?.sessionId ?? "").trim();
+  const nodeId = String(req.body?.nodeId ?? "").trim();
+  const configId = String(req.body?.configId ?? "").trim();
+  if (!sessionId || !nodeId || !configId) return res.status(400).json({ error: "sessionId, nodeId and configId are required." });
+  const [config, correlation, encryptedKey] = await Promise.all([
+    store.getEphemeralConfigs(account.id).then((configs) => configs.find((candidate) => candidate.id === configId)),
+    store.getSessionCorrelation(account.id, sessionId),
+    store.getNodeRoomKeyEnc(account.id, nodeId),
+  ]);
+  if (!config || config.computeSource !== "managed") return res.status(404).json({ error: "Managed session profile not found." });
+  if (!correlation || correlation.nodeId !== nodeId || correlation.setupId !== configId || correlation.computeSource !== "managed") {
+    return res.status(404).json({ error: "Managed session restore record not found." });
+  }
+  if (!encryptedKey) return res.status(409).json({ error: "Managed session key is no longer available." });
+  const adapter = ephemeralAdapter(config.provider);
+  if (!adapter) return res.status(503).json({ error: "Managed session provider is not configured." });
+  const sizeId = config.size || adapter.defaultSize;
+  const selectedSize = adapter.sizes.find((entry) => entry.id === sizeId);
+  const attemptId = randomUUID();
+  const decision = await deploymentDecision(account.id, "ephemeral.provision", attemptId, {
+    computeSource: "managed", provider: config.provider, sizeId,
+    vcpus: selectedSize?.vcpus, memoryMiB: selectedSize?.memoryMiB,
+    ttlMinutes: config.ttlMinutes ?? 60, configId: config.id, purpose: "interactive-restore",
+  });
+  if (!decision.allowed) return res.status(403).json({ error: decision.reason || "Managed session restore denied", ...decision });
+  try {
+    const machine = await provisionEphemeralRestore(store, account.id, config, provisionEnv(), {
+      reuseNodeId: nodeId, restoreSessionId: sessionId, attemptId, retryCount: 0, purpose: "interactive",
+    });
+    res.status(201).json({ ok: true, machine: { ...machine, computeSource: "managed" }, roomKey: decryptSecret(account.id, encryptedKey) });
+  } catch (error) {
+    await managedLaunchFailureRecorder(account.id)(attemptId).catch(() => {});
+    throw error;
+  }
+}));
+
 // Mint the one-line personal-machine command. The raw code is returned exactly
 // once and only its SHA-256 hash is persisted. It authorizes enrollment only —
 // never an account session, GitHub token, billing action, or existing-node read.
@@ -1531,6 +1575,7 @@ app.put("/session-correlation/:sessionId", requireUser, asyncHandler(async (req,
     setupId: str(req.body?.setupId),
     machineId: str(req.body?.machineId),
     app: str(req.body?.app),
+    computeSource: req.body?.computeSource === "managed" ? "managed" : undefined,
   });
   res.json({ ok: true, correlation: rec });
 }));

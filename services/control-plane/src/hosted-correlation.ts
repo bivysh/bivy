@@ -45,6 +45,7 @@ export async function correlateHostedSessions(
         setupId: m.setupId != null ? String(m.setupId) : undefined,
         machineId: m.id != null ? String(m.id) : undefined,
         app: m.app != null ? String(m.app) : undefined,
+        computeSource: m.computeSource === "managed" ? "managed" : undefined,
       });
     }
   } catch {

@@ -19,6 +19,7 @@ import {
   createManagedAuthRunner,
   ensureManagedSessionDefaults,
   launchManagedSessionMachine,
+  restoreManagedSessionMachine,
   createAccountNodeClaim,
   fetchAccountNodeClaims,
   revokeAccountNodeClaim,
@@ -431,6 +432,7 @@ export class AppController {
       nodes: () => this.store.getState().connection.nodes,
       correlations: () => this.ephemeralCorrelations,
       launchMachine: (opts) => launchEphemeralMachine({ ...opts, debugKeepMachine: EPHEMERAL_KEEP_FAILED_MACHINES }, { store: this.local, exec: cloudExec(this.local), keys: this.ephemeralKeys, machines: this.ephemeralMachines }),
+      restoreManagedMachine: (input) => restoreManagedSessionMachine(this.local, input),
       destroyMachine: (machine) => destroyEphemeralMachine(machine, { store: this.local, exec: cloudExec(this.local), keys: this.ephemeralKeys, machines: this.ephemeralMachines }),
       machineFromNode: (node) => ephemeralMachineFromNode(node),
       machineFromCorrelation: ephemeralMachineFromCorrelation,
@@ -2855,6 +2857,7 @@ export class AppController {
       setupId: machine.setupId,
       machineId: machine.id,
       app: machine.app,
+      computeSource: machine.computeSource,
     };
     try {
       const { base, auth } = this.correlationApi();
