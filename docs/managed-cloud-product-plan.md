@@ -18,20 +18,20 @@ available under advanced settings.
 
 ### 1. Repository-first account bootstrap
 
-- [ ] Feed every repository from the account's central GitHub App installations into
+- [x] Feed every repository from the account's central GitHub App installations into
   the ordinary repository picker when no personal Machine is connected.
-- [ ] Add node-less branch discovery for central App repositories.
-- [ ] Persist an idempotent default managed compute profile after hosted onboarding.
+- [x] Add node-less branch discovery for central App repositories.
+- [x] Persist an idempotent default managed compute profile after hosted onboarding.
 - [ ] Default the first-session surface to Repository + Agent + Prompt; keep Machine
   and provider controls in advanced/BYO settings.
 
 ### 2. Interactive managed launch
 
-- [ ] Add one account-authenticated control-plane operation that reserves policy and
+- [x] Add one account-authenticated control-plane operation that reserves policy and
   launches an interactive managed Machine using only operator-owned cloud credentials.
-- [ ] Return/bind the minimum E2E material required by the requesting device without
+- [x] Return/bind the minimum E2E material required by the requesting device without
   exposing provider or GitHub credentials.
-- [ ] Make the first prompt the launch trigger and replay it after secure enrollment.
+- [x] Make the first prompt the launch trigger and replay it after secure enrollment.
 - [ ] Render the existing provisioning milestones as quiet session progress.
 - [ ] Make launch denial return deployment-extension upgrade/BYO actions.
 

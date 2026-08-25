@@ -8,7 +8,7 @@ import type { EphemeralLifecycleMilestones } from "./ephemeral-lifecycle.js";
 
 export type EphemeralMilestones = EphemeralLifecycleMilestones;
 
-export type EphemeralMachinePurpose = "queue-item" | "queue-default" | "ready-capacity" | "auth-runner";
+export type EphemeralMachinePurpose = "queue-item" | "queue-default" | "ready-capacity" | "auth-runner" | "interactive";
 
 export interface EphemeralMachine {
   id: string;

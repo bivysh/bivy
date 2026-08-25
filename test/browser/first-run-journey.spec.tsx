@@ -69,7 +69,10 @@ test("managed-only cold start provisions a short-lived auth Machine before provi
   expect(accountApi).toContain("/account/onboarding/auth-runner");
   expect(controlPlane).toContain('purpose: "auth-runner"');
   expect(controlPlane).toContain("Math.min(15");
-  expect(provisioner).toContain('hostedTasks: purpose !== "auth-runner"');
+  expect(provisioner).toContain('hostedTasks: purpose !== "auth-runner" && purpose !== "interactive"');
+  expect(wizard).toContain("controller.ensureManagedSessionDefaults()");
+  expect(accountApi).toContain("/account/managed-machines");
+  expect(controlPlane).toContain('purpose: "interactive"');
 });
 
 test("provider readiness ('Test connection') is wired end to end: web action -> relay command -> node handler", async () => {

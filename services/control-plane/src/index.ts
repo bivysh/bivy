@@ -1207,20 +1207,55 @@ function presentNodeClaim(claim: NodeClaim) {
   return { ...claim, status };
 }
 
-// Mint the one-line personal-machine command. The raw code is returned exactly
-// once and only its SHA-256 hash is persisted. It authorizes enrollment only —
-// never an account session, GitHub token, billing action, or existing-node read.
+function managedSessionConfig(now = new Date().toISOString()): EphemeralNodeConfig | null {
+  const provider = String(process.env.MANAGED_SESSION_PROVIDER || process.env.MANAGED_AUTH_RUNNER_PROVIDER || "fly").trim();
+  const adapter = ephemeralAdapter(provider);
+  if (!adapter) return null;
+  return {
+    id: "managed-default",
+    name: "Bivy Cloud",
+    provider,
+    region: String(process.env.MANAGED_SESSION_REGION || adapter.defaultRegion),
+    size: String(process.env.MANAGED_SESSION_SIZE || adapter.defaultSize),
+    image: process.env.MANAGED_SESSION_IMAGE || undefined,
+    ttlMinutes: Math.max(5, Math.min(24 * 60, Number(process.env.MANAGED_SESSION_TTL_MINUTES) || 60)),
+    teardownOnAgentFinish: true,
+    computeSource: "managed",
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+async function ensureManagedDefaultForAccount(accountId: string): Promise<EphemeralNodeConfig> {
+  const desired = managedSessionConfig();
+  if (!desired) throw Object.assign(new Error("Managed session provider is not configured."), { status: 503 });
+  const configs = await store.getEphemeralConfigs(accountId);
+  const existing = configs.find((config) => config.computeSource === "managed");
+  const config = existing ?? desired;
+  if (!existing) await store.setEphemeralConfigs(accountId, [...configs, config]);
+  await store.setHostedProvisioning(accountId, { enabled: true });
+  return config;
+}
+
 app.post("/account/onboarding/auth-runner", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
+  res.setHeader("cache-control", "no-store");
   if (!ephemeralMachinesEnabled() || process.env.MANAGED_COMPUTE_ENABLED !== "1") {
     return res.status(503).json({ error: "Managed setup Machines are not available." });
   }
+  // Choosing a managed setup Machine is the durable account-level choice too:
+  // establish the later interactive profile before redirects/reloads can lose
+  // browser-only onboarding state.
+  await ensureManagedDefaultForAccount(account.id);
   const existing = (await store.getHostedMachines(account.id)).find(
     (machine) => machine.computeSource === "managed" && machine.purpose === "auth-runner",
   );
-  if (existing) return res.json({ ok: true, machine: existing, duplicate: true });
+  if (existing) {
+    const encryptedKey = typeof existing.nodeId === "string" ? await store.getNodeRoomKeyEnc(account.id, existing.nodeId) : undefined;
+    return res.json({ ok: true, machine: existing, duplicate: true, ...(encryptedKey ? { roomKey: decryptSecret(account.id, encryptedKey) } : {}) });
+  }
 
-  const provider = String(process.env.MANAGED_AUTH_RUNNER_PROVIDER || "fly").trim();
+  const provider = String(process.env.MANAGED_AUTH_RUNNER_PROVIDER || process.env.MANAGED_SESSION_PROVIDER || "fly").trim();
   const adapter = ephemeralAdapter(provider);
   if (!adapter) return res.status(503).json({ error: "Managed setup provider is not configured." });
   const ttlMinutes = Math.max(5, Math.min(15, Number(process.env.MANAGED_AUTH_RUNNER_TTL_MINUTES) || 15));
@@ -1239,17 +1274,70 @@ app.post("/account/onboarding/auth-runner", requireUser, asyncHandler(async (req
   });
   if (!decision.allowed) return res.status(403).json({ error: decision.reason || "Managed setup Machine denied", ...decision });
   try {
+    let roomKey = "";
     const machine = await provisionEphemeralForAccount(
       store, account.id, config, provisionEnv(), undefined, Date.now(), "auth-runner",
-      { attemptId, retryCount: 0 },
+      { attemptId, retryCount: 0 }, (_nodeId, key) => { roomKey = key; },
     );
-    res.status(201).json({ ok: true, machine });
+    res.status(201).json({ ok: true, machine, ...(roomKey ? { roomKey } : {}) });
   } catch (error) {
     await managedLaunchFailureRecorder(account.id)(attemptId).catch(() => {});
     throw error;
   }
 }));
 
+// Establish the durable, non-secret profile used by the repo-first composer.
+// Idempotent across redirects/devices; it never persists or returns the operator
+// provider token. Queue routing remains independent because interactive prompts
+// launch directly and Free hosted automations are separately policy-gated.
+app.post("/account/onboarding/managed-defaults", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  if (!ephemeralMachinesEnabled() || process.env.MANAGED_COMPUTE_ENABLED !== "1") {
+    return res.status(503).json({ error: "Managed session Machines are not available." });
+  }
+  res.json({ ok: true, config: await ensureManagedDefaultForAccount(account.id) });
+}));
+
+// Interactive managed launch. The account chooses only a server-authored managed
+// profile; provider credentials remain operator-only. The room key is returned
+// once over the authenticated no-store response so this browser can establish
+// the same E2E channel as a device-launched Machine.
+app.post("/account/managed-machines", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  res.setHeader("cache-control", "no-store");
+  if (!ephemeralMachinesEnabled() || process.env.MANAGED_COMPUTE_ENABLED !== "1") {
+    return res.status(503).json({ error: "Managed session Machines are not available." });
+  }
+  const configId = String(req.body?.configId ?? "").trim();
+  const config = (await store.getEphemeralConfigs(account.id)).find((candidate) => candidate.id === configId);
+  if (!config || config.computeSource !== "managed") return res.status(404).json({ error: "Managed session profile not found." });
+  const adapter = ephemeralAdapter(config.provider);
+  if (!adapter) return res.status(503).json({ error: "Managed session provider is not configured." });
+  const sizeId = config.size || adapter.defaultSize;
+  const selectedSize = adapter.sizes.find((entry) => entry.id === sizeId);
+  const attemptId = randomUUID();
+  const decision = await deploymentDecision(account.id, "ephemeral.provision", attemptId, {
+    computeSource: "managed", provider: config.provider, sizeId,
+    vcpus: selectedSize?.vcpus, memoryMiB: selectedSize?.memoryMiB,
+    ttlMinutes: config.ttlMinutes ?? 60, configId: config.id, purpose: "interactive",
+  });
+  if (!decision.allowed) return res.status(403).json({ error: decision.reason || "Managed session denied", ...decision });
+  try {
+    let roomKey = "";
+    const machine = await provisionEphemeralForAccount(
+      store, account.id, config, provisionEnv(), undefined, Date.now(), "interactive",
+      { attemptId, retryCount: 0 }, (_nodeId, key) => { roomKey = key; },
+    );
+    res.status(201).json({ ok: true, machine, ...(roomKey ? { roomKey } : {}) });
+  } catch (error) {
+    await managedLaunchFailureRecorder(account.id)(attemptId).catch(() => {});
+    throw error;
+  }
+}));
+
+// Mint the one-line personal-machine command. The raw code is returned exactly
+// once and only its SHA-256 hash is persisted. It authorizes enrollment only —
+// never an account session, GitHub token, billing action, or existing-node read.
 app.post("/account/node-claims", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   const { claim, code } = await store.createNodeClaim(account.id);
@@ -3685,7 +3773,7 @@ app.get("/account/hosted-machines", asyncHandler(async (req, res) => {
     createdAt: typeof m.createdAt === "string" ? m.createdAt : "",
     ttlMinutes: typeof m.ttlMinutes === "number" ? m.ttlMinutes : undefined,
     setupId: typeof m.setupId === "string" ? m.setupId : undefined,
-    purpose: m.purpose === "queue-item" || m.purpose === "queue-default" || m.purpose === "ready-capacity" ? m.purpose : undefined,
+    purpose: m.purpose === "queue-item" || m.purpose === "queue-default" || m.purpose === "ready-capacity" || m.purpose === "auth-runner" || m.purpose === "interactive" ? m.purpose : undefined,
     claimedAt: typeof m.claimedAt === "string" ? m.claimedAt : undefined,
     milestones: m.milestones && typeof m.milestones === "object" ? m.milestones : undefined,
     lifecycleState: attempt?.state,

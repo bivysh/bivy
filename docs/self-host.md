@@ -175,7 +175,16 @@ create, inspect, and destroy Machines, then configure the control plane:
 MANAGED_COMPUTE_ENABLED=1
 MANAGED_PROVIDER_TOKEN_FLY=<operator Fly token>
 
+# Optional interactive managed-session defaults. The first prompt launches this
+# profile through the control plane; users never receive the provider token.
+MANAGED_SESSION_PROVIDER=fly
+MANAGED_SESSION_TTL_MINUTES=60
+# MANAGED_SESSION_REGION=<adapter default>
+# MANAGED_SESSION_SIZE=<adapter default>
+# MANAGED_SESSION_IMAGE=<provider default>
+
 # Optional first-run authentication Machine overrides (defaults shown).
+# Provider falls back to MANAGED_SESSION_PROVIDER when omitted.
 MANAGED_AUTH_RUNNER_PROVIDER=fly
 MANAGED_AUTH_RUNNER_TTL_MINUTES=15
 # MANAGED_AUTH_RUNNER_REGION=<adapter default>

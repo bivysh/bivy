@@ -94,6 +94,9 @@ async function startFakeGithub(): Promise<number> {
       if (url.startsWith("/installation/repositories")) {
         return reply(200, { repositories: [{ full_name: "acme/rocket", private: true, default_branch: "main" }] });
       }
+      if (url.startsWith("/repos/acme/rocket/branches")) {
+        return reply(200, [{ name: "main" }, { name: "feature/mobile" }]);
+      }
       return reply(404, { message: "not found" });
     });
   });
@@ -170,8 +173,13 @@ async function main() {
   expect(reposA.status === 200 && reposA.body.repositories?.[0]?.slug === "acme/rocket", "repo listing returns the installation's repos for the owner");
   const pickerReposA = await json(port, "GET", "/account/hosted-github-repositories", undefined, tokenA);
   expect(pickerReposA.status === 200 && pickerReposA.body.repos?.[0]?.slug === "acme/rocket", "the node-less ordinary repo picker resolves the central App identity");
+  const pickerBranchesA = await json(port, "GET", "/account/hosted-github-repositories/acme/rocket/branches", undefined, tokenA);
+  expect(pickerBranchesA.status === 200 && pickerBranchesA.body.branches?.[1]?.name === "feature/mobile", "the node-less branch picker uses the central App identity");
+  expect(JSON.stringify(mintBodies.at(-1)) === JSON.stringify({ repositories: ["rocket"] }), "branch discovery mints a repository-scoped token");
   const pickerReposB = await json(port, "GET", "/account/hosted-github-repositories", undefined, tokenB);
   expect(pickerReposB.status === 409, "an account without a bound installation cannot discover another account's repos");
+  const pickerBranchesB = await json(port, "GET", "/account/hosted-github-repositories/acme/rocket/branches", undefined, tokenB);
+  expect(pickerBranchesB.status === 409, "an account without a bound installation cannot discover another account's branches");
   const reposB = await json(port, "GET", "/account/github/central-app/installations/42/repos", undefined, tokenB);
   expect(reposB.status === 404, "another account cannot list a foreign installation's repos");
 
