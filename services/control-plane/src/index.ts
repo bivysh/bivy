@@ -2360,8 +2360,10 @@ app.post("/account/hosted-github-app/connect", requireUser, asyncHandler(async (
   }
 }));
 
-// Repo discovery for the browser when no persistent node exists. Installation
-// tokens are minted just in time and never returned to the client.
+// Repo discovery for the browser when no persistent node exists. Resolve the
+// same account identity used by JIT git-token minting, then aggregate every
+// central-App installation so a user with personal + organization installs sees
+// one ordinary repo picker. Installation tokens stay server-side and ephemeral.
 app.get("/account/hosted-github-repositories", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   const hosted = await store.getHostedProvisioning(account.id);

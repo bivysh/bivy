@@ -168,6 +168,10 @@ async function main() {
   // --- Repo listing: account-scoped, server-side JWT → installation token. ---
   const reposA = await json(port, "GET", "/account/github/central-app/installations/42/repos", undefined, tokenA);
   expect(reposA.status === 200 && reposA.body.repositories?.[0]?.slug === "acme/rocket", "repo listing returns the installation's repos for the owner");
+  const pickerReposA = await json(port, "GET", "/account/hosted-github-repositories", undefined, tokenA);
+  expect(pickerReposA.status === 200 && pickerReposA.body.repos?.[0]?.slug === "acme/rocket", "the node-less ordinary repo picker resolves the central App identity");
+  const pickerReposB = await json(port, "GET", "/account/hosted-github-repositories", undefined, tokenB);
+  expect(pickerReposB.status === 409, "an account without a bound installation cannot discover another account's repos");
   const reposB = await json(port, "GET", "/account/github/central-app/installations/42/repos", undefined, tokenB);
   expect(reposB.status === 404, "another account cannot list a foreign installation's repos");
 
