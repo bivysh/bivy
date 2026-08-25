@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { AppState, CentralGithubAppView } from "@bivy/core";
+import { modelAuthApiKeyProvider, type AppState, type CentralGithubAppView } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { ProviderConnectForm } from "./ProviderConnect.js";
 
@@ -19,9 +19,19 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
     [state.catalogs.runtimes],
   );
   const selectedAgentId = state.catalogs.selectedAgentId || availableAgents[0]?.id || "";
-  const credentialProviderId = providerId === "openai-codex" ? "openai-codex" : providerId;
+  const providerOptions = useMemo(() => state.catalogs.providers.length > 0
+    ? state.catalogs.providers
+    : [
+        { id: "anthropic", name: "Anthropic / Claude" },
+        { id: "openai-codex", name: "OpenAI / Codex" },
+        { id: "openai", name: "OpenAI API" },
+      ], [state.catalogs.providers]);
+  const apiKeyProvider = modelAuthApiKeyProvider(providerId);
   const activeCredential = state.settings.credentialRecords.find(
-    (record) => record.provider === credentialProviderId || (providerId === "openai-codex" && record.provider === "openai"),
+    (record) => record.provider === providerId || record.provider === apiKeyProvider,
+  );
+  const selectedProviderConfigured = Boolean(
+    state.catalogs.providers.find((provider) => provider.id === providerId)?.configured || activeCredential,
   );
   const hasMachine = Boolean(state.connection.currentNodeId);
   const machineOnline = hasMachine && state.connection.status === "online";
@@ -43,8 +53,12 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
   useEffect(() => {
     if (configuredProviders.length && !configuredProviders.some((provider) => provider.id === providerId)) {
       setProviderId(configuredProviders[0]!.id);
+      return;
     }
-  }, [configuredProviders, providerId]);
+    if (state.catalogs.providers.length && !state.catalogs.providers.some((provider) => provider.id === providerId)) {
+      setProviderId(state.catalogs.providers[0]!.id);
+    }
+  }, [configuredProviders, providerId, state.catalogs.providers]);
   useEffect(() => {
     if (!claim) return;
     const timer = window.setInterval(() => {
@@ -56,7 +70,7 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
   }, [claim]);
 
   const step = !github ? "loading" : github.configured && !hasGithub ? "github" : !machineOnline ? "machine"
-    : configuredProviders.length === 0 ? "provider"
+    : !selectedProviderConfigured ? "provider"
       : managedAuthRunner && !activeCredential?.unattended ? "custody" : "ready";
   const startGithubInstall = useCallback(async () => {
     setBusy(true); setGithubError(null);
@@ -144,11 +158,9 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
           </select>
           <label className="field-label" htmlFor="onboarding-provider">Authentication provider</label>
           <select id="onboarding-provider" className="picker-search" value={providerId} onChange={(event) => setProviderId(event.target.value)}>
-            <option value="anthropic">Anthropic / Claude</option>
-            <option value="openai-codex">OpenAI / Codex</option>
-            <option value="openai">OpenAI API</option>
+            {providerOptions.map((provider) => <option key={provider.id} value={provider.id}>{provider.name || provider.id}</option>)}
           </select>
-          <ProviderConnectForm state={state} providerId={providerId} apiKeyProvider={providerId === "openai-codex" ? "openai" : undefined} />
+          <ProviderConnectForm state={state} providerId={providerId} apiKeyProvider={apiKeyProvider !== providerId ? apiKeyProvider : undefined} />
         </section>
       )}
       {step === "custody" && (
