@@ -22,7 +22,7 @@ available under advanced settings.
   the ordinary repository picker when no personal Machine is connected.
 - [x] Add node-less branch discovery for central App repositories.
 - [x] Persist an idempotent default managed compute profile after hosted onboarding.
-- [ ] Default the first-session surface to Repository + Agent + Prompt; keep Machine
+- [x] Default the first-session surface to Repository + Agent + Prompt; keep Machine
   and provider controls in advanced/BYO settings.
 
 ### 2. Interactive managed launch
