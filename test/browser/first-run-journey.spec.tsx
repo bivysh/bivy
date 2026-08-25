@@ -88,6 +88,14 @@ test("provider readiness ('Test connection') is wired end to end: web action -> 
   expect(handler).toContain('async "credential.test"(msg, ctx) {');
 });
 
+test("managed first prompts render quiet provisioning milestones in the session", async () => {
+  const controller = await read("../../packages/web/src/store/controller.ts");
+  expect(controller).toContain("Reserving secure managed compute…");
+  expect(controller).toContain("Credentials are ready; preparing the repository and agent…");
+  expect(controller).toContain("Repository and agent are ready. Sending your prompt…");
+  expect(controller).toContain("Setup · ${message}");
+});
+
 test("progress survives a reload because it's derived from authoritative signals, not a client-only wizard flag", async () => {
   const app = await read("../../packages/web/src/App.tsx");
   // The activation projection is computed fresh from live state every render
