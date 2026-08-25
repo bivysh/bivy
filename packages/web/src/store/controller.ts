@@ -17,6 +17,8 @@ import {
   fetchCentralGithubApp,
   createCentralGithubInstall,
   createManagedAuthRunner,
+  ensureManagedSessionDefaults,
+  launchManagedSessionMachine,
   createAccountNodeClaim,
   fetchAccountNodeClaims,
   revokeAccountNodeClaim,
@@ -55,6 +57,7 @@ import {
   rotateHostedProvisioning as apiRotateHostedProvisioning,
   connectHostedGithubApp as apiConnectHostedGithubApp,
   fetchHostedGithubRepositories,
+  fetchHostedGithubBranches,
   type HostedGithubAppConnection,
   triggerHostedProvision as apiTriggerHostedProvision,
   type EphemeralNodeConfig,
@@ -815,6 +818,7 @@ export class AppController {
   centralGithubApp() { return fetchCentralGithubApp(this.local); }
   createCentralGithubInstall(returnPath = "/") { return createCentralGithubInstall(this.local, returnPath); }
   createManagedAuthRunner() { return createManagedAuthRunner(this.local); }
+  ensureManagedSessionDefaults() { return ensureManagedSessionDefaults(this.local); }
   createNodeClaim() { return createAccountNodeClaim(this.local); }
   listNodeClaims() { return fetchAccountNodeClaims(this.local); }
   revokeNodeClaim(id: string) { return revokeAccountNodeClaim(this.local, id); }
@@ -1927,17 +1931,19 @@ export class AppController {
       }
     };
     try {
-      const machine = await this.launchEphemeral({
-        provider: config.provider,
-        region: config.region ?? undefined,
-        size: config.size ?? undefined,
-        image: config.image ?? undefined,
-        ttlMinutes: config.ttlMinutes ?? undefined,
-        teardownOnAgentFinish: config.teardownOnAgentFinish === true,
-        name: config.name,
-        setupId: config.id,
-        onProgress: logSetup,
-      });
+      const machine = config.computeSource === "managed"
+        ? await launchManagedSessionMachine(this.local, config.id)
+        : await this.launchEphemeral({
+            provider: config.provider,
+            region: config.region ?? undefined,
+            size: config.size ?? undefined,
+            image: config.image ?? undefined,
+            ttlMinutes: config.ttlMinutes ?? undefined,
+            teardownOnAgentFinish: config.teardownOnAgentFinish === true,
+            name: config.name,
+            setupId: config.id,
+            onProgress: logSetup,
+          });
       if (!machine.nodeId) throw new Error("machine launched without a node id");
       task.machine = machine;
       task.phase = "booting";
@@ -2168,7 +2174,8 @@ export class AppController {
    *  refreshes it in the background instead of flashing a spinner. */
   listRepos(): void {
     if (this.store.getState().catalogs.repos.length === 0) this.store.setReposLoading(true);
-    if (!this.direct && this.signedIn && !this.local.cur) {
+    const managedDraft = this.store.getState().draft.ephemeralConfig?.computeSource === "managed";
+    if (!this.direct && this.signedIn && (!this.local.cur || managedDraft)) {
       void fetchHostedGithubRepositories(this.local)
         .then((repos) => this.store.apply({ type: "repos.list", repos, authed: true } as never))
         .catch((error) => this.store.apply({ type: "repos.list", repos: [], authed: false, error: String((error as Error)?.message || error) } as never));
@@ -2227,6 +2234,13 @@ export class AppController {
     const s = this.store.getState();
     const haveThisRepo = s.catalogs.branchesRepo === repo && s.catalogs.branches.length > 0;
     if (!haveThisRepo) this.store.setBranchesLoading(true);
+    const managedDraft = s.draft.ephemeralConfig?.computeSource === "managed";
+    if (!this.direct && this.signedIn && (!this.local.cur || managedDraft)) {
+      void fetchHostedGithubBranches(this.local, repo)
+        .then((branches) => this.store.apply({ type: "branches.list", repo, branches } as never))
+        .catch((error) => this.store.apply({ type: "branches.list", repo, branches: [], error: String((error as Error)?.message || error) } as never));
+      return;
+    }
     this.send({ kind: "branches.list", repo });
   }
 

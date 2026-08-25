@@ -565,6 +565,7 @@ export async function provisionEphemeralForAccount(
   nowMs = Date.now(),
   purpose: EphemeralMachine["purpose"] = "queue-default",
   retry?: { attemptId: string; nodeId?: string; retryCount: number },
+  onRoomKey?: (nodeId: string, roomKeyB64: string) => void,
 ): Promise<EphemeralMachine> {
   const hosted = await store.getHostedProvisioning(accountId);
   const computeSource = normalizeComputeSource(config.computeSource);
@@ -624,10 +625,11 @@ export async function provisionEphemeralForAccount(
         size: config.size,
         image: config.image,
         ttlMinutes: config.ttlMinutes,
+        teardownOnAgentFinish: config.teardownOnAgentFinish,
         // Authentication runners exist only to establish encrypted provider
         // credentials. They must never poll or claim queued work, so no agent
         // event can accidentally consume a managed trial.
-        hostedTasks: purpose !== "auth-runner",
+        hostedTasks: purpose !== "auth-runner" && purpose !== "interactive",
         githubToken,
         hostedMint: useHostedMint,
         setupId: config.id,
@@ -651,6 +653,7 @@ export async function provisionEphemeralForAccount(
     if (roomKeyB64 && machine.nodeId) {
       await store.setNodeRoomKeyEnc(accountId, machine.nodeId, encryptSecret(accountId, roomKeyB64));
       await audit(store, accountId, { action: "room_key_escrowed", provider: config.provider, configId: config.id, nodeId: machine.nodeId });
+      onRoomKey?.(machine.nodeId, roomKeyB64);
     }
     return machine;
   } catch (e) {

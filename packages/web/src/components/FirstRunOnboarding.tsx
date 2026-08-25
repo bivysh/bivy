@@ -169,10 +169,20 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
         <section className="settings-section">
           <h3>Ready for your first task</h3>
           <p className="muted">GitHub, {state.connection.nodes.find((node) => node.id === state.connection.currentNodeId)?.name || "your machine"}, and {configuredProviders[0]?.name || "your provider"} are connected.</p>
-          <button type="button" className="btn primary" onClick={() => {
-            sessionStorage.removeItem("bivy:managed-auth-runner");
-            onDone();
-          }}>Choose a repository and start</button>
+          <button type="button" className="btn primary" disabled={busy} onClick={() => {
+            setBusy(true); setGithubError(null);
+            const target = managedAuthRunner
+              ? controller.ensureManagedSessionDefaults()
+              : controller.listEphemeralConfigs().then((configs) => configs.find((config) => config.computeSource === "managed") ?? null);
+            target
+              .then((config) => {
+                if (config) controller.pickDraftEphemeralRunner(config);
+                sessionStorage.removeItem("bivy:managed-auth-runner");
+                onDone();
+              })
+              .catch((error) => setGithubError(String((error as Error)?.message || error)))
+              .finally(() => setBusy(false));
+          }}>{busy ? "Preparing…" : "Choose a repository and start"}</button>
         </section>
       )}
       {step !== "ready" && <button type="button" className="btn ghost" onClick={onDone}>Finish setup later</button>}

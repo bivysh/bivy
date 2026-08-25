@@ -19,7 +19,7 @@ export interface EphemeralLifecycleMilestones {
 
 export interface EphemeralLifecycleFacts {
   milestones?: EphemeralLifecycleMilestones;
-  purpose?: "queue-item" | "queue-default" | "ready-capacity";
+  purpose?: "queue-item" | "queue-default" | "ready-capacity" | "auth-runner" | "interactive";
   claimedAt?: string;
 }
 

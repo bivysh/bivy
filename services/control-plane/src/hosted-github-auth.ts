@@ -36,6 +36,10 @@ export interface GithubRepository {
   defaultBranch?: string;
 }
 
+export interface GithubBranch {
+  name: string;
+}
+
 const githubHeaders = (authorization: string) => ({
   authorization,
   accept: "application/vnd.github+json",
@@ -195,4 +199,30 @@ export async function listInstallationRepositories(
     if (data.repositories.length < 100) break;
   }
   return repositories;
+}
+
+/** Branches of one installation-owned repository. The minted token is narrowed
+ * to this repository and never returned to the browser. */
+export async function listInstallationBranches(
+  creds: GithubAppCreds,
+  repo: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<GithubBranch[]> {
+  const [owner, name] = repo.split("/");
+  if (!owner || !name) throw new Error("Repository must be owner/name");
+  const { token } = await mintInstallationToken(creds, fetchImpl, undefined, { repositories: [name] });
+  const branches: GithubBranch[] = [];
+  for (let page = 1; ; page += 1) {
+    const res = await fetchImpl(`${githubApiBase()}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/branches?per_page=100&page=${page}`, {
+      headers: githubHeaders(`Bearer ${token}`),
+    });
+    const data = (await res.json().catch(() => [])) as Array<{ name?: string }> | { message?: string };
+    if (!res.ok || !Array.isArray(data)) {
+      const message = !Array.isArray(data) && typeof data.message === "string" ? data.message : "unknown error";
+      throw new Error(`GitHub branch listing failed (${res.status}): ${message}`);
+    }
+    for (const branch of data) if (branch.name) branches.push({ name: branch.name });
+    if (data.length < 100) break;
+  }
+  return branches;
 }

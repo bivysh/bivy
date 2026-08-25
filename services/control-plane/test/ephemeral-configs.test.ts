@@ -237,6 +237,22 @@ async function main() {
   const enableOk = await req(port2, "PUT", "/account/hosted-provisioning", { enabled: true }, token2);
   expect(enableOk.status === 200 && enableOk.json?.encryptionReady === false, "the enable flag alone is still allowed without a key");
 
+  // Managed onboarding establishes one durable operator-owned profile without
+  // touching queue routing or making a provider call. Repeating it is idempotent.
+  const port3 = await startControlPlane({
+    HOSTED_CREDENTIAL_KEY: Buffer.alloc(32, 9).toString("base64"),
+    MANAGED_COMPUTE_ENABLED: "1",
+    MANAGED_PROVIDER_TOKEN_FLY: "operator-token-not-used-by-default-setup",
+  });
+  const token3 = (await req(port3, "POST", "/auth/dev-login", { email: "managed-default@example.com" })).json.token;
+  const managedDefault = await req(port3, "POST", "/account/onboarding/managed-defaults", undefined, token3);
+  expect(managedDefault.status === 200 && managedDefault.json?.config?.computeSource === "managed", "managed onboarding creates an operator-owned profile");
+  const managedDefaultAgain = await req(port3, "POST", "/account/onboarding/managed-defaults", undefined, token3);
+  const managedConfigs = await req(port3, "GET", "/account/ephemeral-configs", undefined, token3);
+  expect(managedDefaultAgain.json?.config?.id === managedDefault.json?.config?.id && managedConfigs.json?.length === 1, "managed default setup is idempotent");
+  const managedRouting = await req(port3, "GET", "/account/queue-routing", undefined, token3);
+  expect(managedRouting.json?.primary?.kind === "shared", "interactive managed setup does not silently enable unattended queue routing");
+
   // Delete removes the config.
   const del = await req(port, "DELETE", `/account/ephemeral-configs/${id}`, undefined, token);
   expect(del.status === 200 && Array.isArray(del.json?.configs) && del.json.configs.length === 0, "delete removes the config");

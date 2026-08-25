@@ -23,6 +23,9 @@ import {
   fetchAutomationRun,
   RunFetchError,
   recordProductMetric,
+  createManagedAuthRunner,
+  launchManagedSessionMachine,
+  fetchEphemeralConfigs,
 } from "../src/index.js";
 
 describe("recordProductMetric", () => {
@@ -446,6 +449,39 @@ describe("paired devices", () => {
     }) as unknown as typeof fetch;
     await logout(store, undefined, fakeFetch);
     expect(JSON.parse(seenBody)).toEqual({});
+  });
+});
+
+describe("managed account Machines", () => {
+  it("preserves managed profiles and adopts the auth runner room key", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.s = "tok";
+    store.cp = "https://app.bivy.sh";
+    const fakeFetch = (async (url: string) => {
+      if (String(url).endsWith("/account/ephemeral-configs")) {
+        return new Response(JSON.stringify([{ id: "managed-default", name: "Bivy Cloud", provider: "fly", computeSource: "managed" }]), { status: 200 });
+      }
+      return new Response(JSON.stringify({ machine: { id: "m-auth", provider: "fly", name: "Auth", region: "iad", status: "running", ip: null, createdAt: "", nodeId: "eph-auth" }, roomKey: "room-auth" }), { status: 201 });
+    }) as typeof fetch;
+    const configs = await fetchEphemeralConfigs(store, fakeFetch);
+    expect(configs[0]?.computeSource).toBe("managed");
+    await createManagedAuthRunner(store, fakeFetch);
+    expect(store.keys()["eph-auth"]).toBe("room-auth");
+  });
+
+  it("launches an interactive managed Machine and adopts its one-time room key", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.s = "tok";
+    store.cp = "https://app.bivy.sh";
+    let body = "";
+    const fakeFetch = (async (_url: string, init?: RequestInit) => {
+      body = String(init?.body || "");
+      return new Response(JSON.stringify({ machine: { id: "m-1", provider: "fly", name: "Cloud", region: "iad", status: "running", ip: null, createdAt: "", nodeId: "eph-1" }, roomKey: "room-1" }), { status: 201 });
+    }) as typeof fetch;
+    const machine = await launchManagedSessionMachine(store, "managed-default", fakeFetch);
+    expect(JSON.parse(body)).toEqual({ configId: "managed-default" });
+    expect(machine.nodeId).toBe("eph-1");
+    expect(store.keys()["eph-1"]).toBe("room-1");
   });
 });
 

@@ -62,6 +62,7 @@ function fakeLauncher(seen: { token?: string; hostedTasks?: boolean }) {
   return (async (args, deps) => {
     seen.token = await deps.keys.getToken(args.provider);
     seen.hostedTasks = args.hostedTasks;
+    deps.store.addKey("eph-managed-1", "managed-room-key");
     await args.onLifecycle?.({ attemptId: args.attemptId, phase: "requested", nodeId: "eph-managed-1" });
     const machine = {
       id: "fly-m1", provider: args.provider, nodeId: "eph-managed-1", attemptId: args.attemptId,
@@ -210,6 +211,22 @@ try {
     assert.equal(machine.purpose, "auth-runner");
     const attempt = await store.getHostedMachineAttempt(acctId, String(machine.attemptId));
     assert.equal(attempt?.desired.purpose, "auth-runner");
+  });
+
+  await test("interactive managed launch returns its E2E key and never polls unattended queues", async () => {
+    process.env.MANAGED_COMPUTE_ENABLED = "1";
+    process.env.MANAGED_PROVIDER_TOKEN_FLY = OPERATOR_TOKEN;
+    const { store, acctId } = await managedAccount();
+    const seen: { token?: string; hostedTasks?: boolean } = {};
+    let delivered: { nodeId: string; key: string } | undefined;
+    const machine = await provisionEphemeralForAccount(
+      store, acctId, MANAGED_CONFIG, env, fakeLauncher(seen), Date.now(), "interactive",
+      undefined, (nodeId, key) => { delivered = { nodeId, key }; },
+    );
+    assert.equal(seen.hostedTasks, false, "interactive work is driven only by its attached browser");
+    assert.equal(machine.purpose, "interactive");
+    assert.deepEqual(delivered, { nodeId: "eph-managed-1", key: "managed-room-key" });
+    assert.ok(await store.getNodeRoomKeyEnc(acctId, "eph-managed-1"), "the same key remains escrowed for later server-side rebuild");
   });
 
   await test("the operator token never appears in stored records, audit, or API-shaped views", async () => {
