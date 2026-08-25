@@ -22,6 +22,7 @@ import {
   retryAutomationRun,
   fetchAutomationRun,
   RunFetchError,
+  ManagedLaunchError,
   recordProductMetric,
   createManagedAuthRunner,
   launchManagedSessionMachine,
@@ -483,6 +484,31 @@ describe("managed account Machines", () => {
     expect(JSON.parse(body)).toEqual({ configId: "managed-default" });
     expect(machine.nodeId).toBe("eph-1");
     expect(store.keys()["eph-1"]).toBe("room-1");
+  });
+
+  it("preserves deployment-owned remediation actions on launch denial", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.s = "tok";
+    store.cp = "https://app.bivy.sh";
+    const fakeFetch = (async () => new Response(JSON.stringify({
+      reason: "Trial capacity exhausted",
+      code: "quota_exhausted",
+      actions: [
+        { id: "upgrade", label: "Upgrade", kind: "primary" },
+        { id: "byo", label: "Use my Machine", kind: "secondary" },
+        { id: "", label: "invalid" },
+      ],
+    }), { status: 403 })) as typeof fetch;
+    await expect(launchManagedSessionMachine(store, "managed-default", fakeFetch)).rejects.toMatchObject({
+      name: "ManagedLaunchError",
+      message: "Trial capacity exhausted",
+      status: 403,
+      code: "quota_exhausted",
+      actions: [
+        { id: "upgrade", label: "Upgrade", kind: "primary" },
+        { id: "byo", label: "Use my Machine", kind: "secondary" },
+      ],
+    } satisfies Partial<ManagedLaunchError>);
   });
 
   it("restores a managed Machine and adopts escrowed key material on a fresh device", async () => {

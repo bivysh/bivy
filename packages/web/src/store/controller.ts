@@ -19,6 +19,7 @@ import {
   createManagedAuthRunner,
   ensureManagedSessionDefaults,
   launchManagedSessionMachine,
+  ManagedLaunchError,
   restoreManagedSessionMachine,
   createAccountNodeClaim,
   fetchAccountNodeClaims,
@@ -1962,7 +1963,8 @@ export class AppController {
       if (this.pendingPrompt?.provisionalId === provisionalId) this.pendingPrompt = null;
       this.store.failPendingSession(provisionalId);
       if (this.store.getState().activeSession.activeSessionId === provisionalId) this.store.pushSystemMessage(`Setup · ${message}`);
-      this.store.setError(`Couldn't start ${config.name}: ${(e as Error)?.message || e}`);
+      const actions = e instanceof ManagedLaunchError ? e.actions : [];
+      this.store.setError(`Couldn't start ${config.name}: ${(e as Error)?.message || e}`, actions);
     }
   }
 

@@ -762,6 +762,7 @@ export interface PresentationState {
   prResult: { sessionId?: string; url?: string; error?: string } | null;
   prRefreshAllResult: { scanned: number; changed: number; error?: string } | null;
   error: string | null;
+  errorActions: Array<{ id: string; label: string; kind?: "primary" | "secondary" }>;
   notice: string | null;
 }
 
@@ -869,7 +870,7 @@ export function initialState(): AppState {
     },
     presentation: {
       oauth: null, needsModelAuth: null, githubApp: null, prResult: null,
-      prRefreshAllResult: null, error: null, notice: null,
+      prRefreshAllResult: null, error: null, errorActions: [], notice: null,
     },
     draft: { ...EMPTY_SESSION_DRAFT },
   };
@@ -1732,8 +1733,8 @@ export class SessionStore {
     });
   }
 
-  setError(message: string): void {
-    this.set({ error: message });
+  setError(message: string, actions: Array<{ id: string; label: string; kind?: "primary" | "secondary" }> = []): void {
+    this.set({ error: message, errorActions: message ? actions : [] });
   }
 
   /** Show (or clear, with "") a transient success/confirmation banner. */

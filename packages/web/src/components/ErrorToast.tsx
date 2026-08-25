@@ -16,15 +16,16 @@ function dismissDelay(raw: string): number {
 }
 
 export function ErrorToast() {
-  const { presentation: { error } } = useAppState();
+  const { presentation: { error, errorActions } } = useAppState();
   const [expanded, setExpanded] = useState(false);
+  const [openingAction, setOpeningAction] = useState<string | null>(null);
 
   useEffect(() => {
     setExpanded(false);
-    if (!error) return;
+    if (!error || errorActions.length > 0) return;
     const t = setTimeout(() => controller.store.setError(""), dismissDelay(error));
     return () => clearTimeout(t);
-  }, [error]);
+  }, [error, errorActions]);
 
   if (!error) return null;
   const message = error.trim();
@@ -39,6 +40,24 @@ export function ErrorToast() {
             {expanded ? "Hide details" : "Show details"}
           </button>
         )}
+        {errorActions.length > 0 && <div className="error-toast-actions">
+          {errorActions.map((action) => <button
+            key={action.id}
+            className={`btn small${action.kind === "primary" ? " primary" : ""}`}
+            type="button"
+            disabled={openingAction !== null}
+            onClick={() => {
+              setOpeningAction(action.id);
+              controller.invokeAccountExtensionAction(action.id)
+                .then(({ url }) => {
+                  if (url) window.location.assign(url);
+                  else controller.store.setError("");
+                })
+                .catch((cause) => controller.store.setError(cause instanceof Error ? cause.message : String(cause)))
+                .finally(() => setOpeningAction(null));
+            }}
+          >{openingAction === action.id ? "Opening…" : action.label}</button>)}
+        </div>}
       </div>
       <button className="error-toast-close" onClick={() => controller.store.setError("")} aria-label="Dismiss">
         ×

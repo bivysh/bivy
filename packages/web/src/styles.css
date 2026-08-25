@@ -2660,7 +2660,8 @@ select.picker-search { appearance: auto; }
 /* Only expanded diagnostics scroll. The default toast stays compact instead of
    turning raw command output into a screen-covering panel on mobile. */
 .error-toast.expanded { max-height: min(60vh, calc(100dvh - 160px)); overflow-y: auto; }
-.error-toast-content { flex: 1; min-width: 0; display: grid; gap: 5px; }
+.error-toast-content { flex: 1; min-width: 0; display: grid; gap: var(--space-1); }
+.error-toast-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .error-toast-text { min-width: 0; font-size: 13px; line-height: 1.4; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
 .error-toast.expanded .error-toast-text { display: block; overflow: visible; }
 .error-toast-details { justify-self: start; border: 0; background: transparent; color: var(--accent); padding: 0; font: inherit; font-size: 12px; font-weight: 600; }
