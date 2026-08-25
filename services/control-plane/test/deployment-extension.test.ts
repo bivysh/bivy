@@ -14,9 +14,17 @@ test("configured policy forwards opaque operations and fails closed", async () =
   const requests: Array<{ url: string; init?: RequestInit }> = [];
   const extension = new DeploymentExtension("https://policy.example", "secret", async (url, init) => {
     requests.push({ url: String(url), init });
-    return new Response(JSON.stringify({ allowed: false, code: "quota_exhausted", actions: [{ id: "checkout-cloud", label: "Buy Cloud", kind: "primary" }] }), { status: 429, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({
+      allowed: false,
+      code: "quota_exhausted",
+      actions: [{ id: "upgrade", label: "Upgrade", kind: "primary" }],
+    }), { status: 429, headers: { "content-type": "application/json" } });
   });
-  assert.deepEqual(await extension.authorize("a", "automation.run", "r1", { computeSource: "managed", sizeId: "large", memoryMiB: 16384 }), { allowed: false, code: "quota_exhausted", actions: [{ id: "checkout-cloud", label: "Buy Cloud", kind: "primary" }] });
+  assert.deepEqual(await extension.authorize("a", "automation.run", "r1", { computeSource: "managed", sizeId: "large", memoryMiB: 16384 }), {
+    allowed: false,
+    code: "quota_exhausted",
+    actions: [{ id: "upgrade", label: "Upgrade", kind: "primary" }],
+  });
   assert.equal(requests[0]?.url, "https://policy.example/v1/policy/check");
   assert.deepEqual(JSON.parse(String(requests[0]?.init?.body)), {
     subject: { accountId: "a" }, operation: "automation.run", idempotencyKey: "r1",

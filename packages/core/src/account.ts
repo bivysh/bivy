@@ -324,6 +324,42 @@ export interface ManagedMachineLaunch {
   duplicate?: boolean;
 }
 
+export interface ManagedLaunchAction {
+  id: string;
+  label: string;
+  kind?: "primary" | "secondary";
+}
+
+/** Structured admission failure; commercial meaning remains deployment-owned. */
+export class ManagedLaunchError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code?: string,
+    readonly actions: ManagedLaunchAction[] = [],
+  ) {
+    super(message);
+    this.name = "ManagedLaunchError";
+  }
+}
+
+function managedLaunchError(
+  value: { error?: string; reason?: string; code?: string; actions?: unknown },
+  status: number,
+  fallback: string,
+): ManagedLaunchError {
+  const actions = Array.isArray(value.actions) ? value.actions.flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object") return [];
+    const raw = candidate as Record<string, unknown>;
+    const id = typeof raw.id === "string" ? raw.id.trim() : "";
+    const label = typeof raw.label === "string" ? raw.label.trim() : "";
+    if (!id || !label) return [];
+    const kind: ManagedLaunchAction["kind"] = raw.kind === "primary" || raw.kind === "secondary" ? raw.kind : undefined;
+    return [{ id, label, ...(kind ? { kind } : {}) }];
+  }) : [];
+  return new ManagedLaunchError(value.reason || value.error || fallback, status, value.code, actions);
+}
+
 function adoptManagedMachineKey(store: LocalStore, value: { machine?: EphemeralMachine; roomKey?: string }): void {
   if (value.machine?.nodeId && value.roomKey) store.addKey(value.machine.nodeId, value.roomKey);
 }
@@ -332,8 +368,8 @@ export async function createManagedAuthRunner(store: LocalStore, fetchImpl: type
   const res = await fetchImpl(`${cpBase(store)}/account/onboarding/auth-runner`, {
     method: "POST", headers: { authorization: `Bearer ${store.s}` },
   });
-  const value = await res.json().catch(() => ({})) as ManagedMachineLaunch & { roomKey?: string; error?: string; reason?: string };
-  if (!res.ok || !value.machine) throw new Error(value.reason || value.error || `managed authentication Machine request failed: ${res.status}`);
+  const value = await res.json().catch(() => ({})) as ManagedMachineLaunch & { roomKey?: string; error?: string; reason?: string; code?: string; actions?: unknown };
+  if (!res.ok || !value.machine) throw managedLaunchError(value, res.status, `managed authentication Machine request failed: ${res.status}`);
   adoptManagedMachineKey(store, value);
   return { machine: value.machine, ...(value.duplicate ? { duplicate: true } : {}) };
 }
@@ -357,8 +393,8 @@ export async function launchManagedSessionMachine(
   const res = await fetchImpl(`${cpBase(store)}/account/managed-machines`, {
     method: "POST", headers: authHeaders(store), body: JSON.stringify({ configId }),
   });
-  const value = await res.json().catch(() => ({})) as { machine?: EphemeralMachine; roomKey?: string; error?: string; reason?: string };
-  if (!res.ok || !value.machine) throw new Error(value.reason || value.error || `managed Machine launch failed: ${res.status}`);
+  const value = await res.json().catch(() => ({})) as { machine?: EphemeralMachine; roomKey?: string; error?: string; reason?: string; code?: string; actions?: unknown };
+  if (!res.ok || !value.machine) throw managedLaunchError(value, res.status, `managed Machine launch failed: ${res.status}`);
   adoptManagedMachineKey(store, value);
   return value.machine;
 }
@@ -372,8 +408,8 @@ export async function restoreManagedSessionMachine(
   const res = await fetchImpl(`${cpBase(store)}/account/managed-machines/restore`, {
     method: "POST", headers: authHeaders(store), body: JSON.stringify(input),
   });
-  const value = await res.json().catch(() => ({})) as { machine?: EphemeralMachine; roomKey?: string; error?: string; reason?: string };
-  if (!res.ok || !value.machine) throw new Error(value.reason || value.error || `managed Machine restore failed: ${res.status}`);
+  const value = await res.json().catch(() => ({})) as { machine?: EphemeralMachine; roomKey?: string; error?: string; reason?: string; code?: string; actions?: unknown };
+  if (!res.ok || !value.machine) throw managedLaunchError(value, res.status, `managed Machine restore failed: ${res.status}`);
   adoptManagedMachineKey(store, value);
   return value.machine;
 }

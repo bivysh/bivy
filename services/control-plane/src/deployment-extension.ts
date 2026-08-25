@@ -15,12 +15,20 @@ export type DeploymentOperation =
   | "ephemeral.provision"
   | "session.create";
 
+export interface DeploymentDecisionAction {
+  /** Opaque deployment-owned action handled by /account/extension/actions/:id. */
+  id: string;
+  label: string;
+  kind?: "primary" | "secondary";
+}
+
 export interface DeploymentDecision {
   allowed: boolean;
   code?: string;
   reason?: string;
   usage?: { used: number; limit?: number };
-  actions?: Array<{ id: string; label: string; kind?: "primary" | "secondary" }>;
+  /** Optional remediation such as upgrade, add payment, or switch to BYO. */
+  actions?: DeploymentDecisionAction[];
 }
 
 /** Opaque technical facts an operator may use for admission. Core never puts
