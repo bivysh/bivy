@@ -51,7 +51,8 @@ available under advanced settings.
   gone, including from a different signed-in device.
 - [x] Let a fork/handoff target a managed profile, exporting first, provisioning the
   destination, then transferring the snapshot and normalized history.
-- [ ] Complete inbound issue/thread restore-and-continue.
+- [x] Complete inbound issue/thread restore-and-continue through account-scoped
+  existing-session targets, durable correlations, escrowed keys, and hosted rebuild.
 - [ ] Certify reconstructed and native runtime-resume behavior per maintained agent.
 
 ### 5. Latency and production readiness
