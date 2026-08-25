@@ -155,6 +155,7 @@ function genericCliInfo(): RuntimeInfo {
     capabilities: { toolInterception: false, modelSelection: false, resume, packages: false, fork: false },
     supportTier: "experimental",
     authOwner: "agent",
+    credentialRequirements: { owner: "agent", strategy: "agent-login", providers: [] },
     notes: configured
       ? `Configured through BIVY_AGENT_COMMAND / BIVY_AGENT_ARGS / BIVY_AGENT_PROMPT_MODE. Provides universal streaming but not structured approvals unless the agent speaks Bivy protocol.${resume ? " Resumable via BIVY_AGENT_RESUME_TEMPLATE." : " Set BIVY_AGENT_RESUME_TEMPLATE (a JSON arg array with {id}) if the configured agent has its own \"continue session <id>\" flag."}`
       : "Set BIVY_AGENT_COMMAND to enable this universal CLI runtime.",
@@ -618,6 +619,8 @@ function cliAgentInfo(id: string, spec: AgentProfile): RuntimeInfo {
       modelSelection = refined.modelSelection;
     }
   }
+  const authOwner = spec.authOwner ?? "agent";
+  const credentialProviders = [...new Set((spec.model?.models ?? []).flatMap((model) => model.provider ? [model.provider] : []))];
   return {
     id,
     executionMode,
@@ -653,7 +656,12 @@ function cliAgentInfo(id: string, spec: AgentProfile): RuntimeInfo {
     nativeSandbox: Boolean(spec.nativeSandbox),
     supportTier: spec.supportTier ?? "experimental",
     testedVersion: spec.testedVersion,
-    authOwner: spec.authOwner ?? "agent",
+    authOwner,
+    credentialRequirements: {
+      owner: authOwner,
+      strategy: credentialProviders.length > 0 ? "one-of" : "agent-login",
+      providers: credentialProviders,
+    },
     notes: installed
       ? acpActive
         // Promoted to ACP: the description must match the governed path actually in
@@ -870,6 +878,7 @@ function acpInfo(): RuntimeInfo {
     capabilities: { toolInterception: true, modelSelection: false, resume: true, packages: false, fork: false },
     supportTier: "experimental",
     authOwner: "agent",
+    credentialRequirements: { owner: "agent", strategy: "agent-login", providers: [] },
     notes: configured
       ? "Drives an ACP agent via bin/acp-shim.mjs → ProtocolRuntime: Approve/Deny for blocking permission requests, observed activity, streaming transcript, and session/load resume — no per-agent code. Validate against your agent, then promote it into the picker as data."
       : "Set BIVY_ACP_COMMAND (and optional BIVY_ACP_ARGS, a JSON array) to the ACP agent's launch command, e.g. BIVY_ACP_COMMAND=gemini BIVY_ACP_ARGS='[\"--experimental-acp\"]'.",
@@ -924,6 +933,7 @@ function openClawInfo(): RuntimeInfo {
     capabilities: { toolInterception: false, modelSelection: false, resume: false, packages: false, fork: false },
     supportTier: "experimental",
     authOwner: "agent",
+    credentialRequirements: { owner: "agent", strategy: "agent-login", providers: [] },
     notes: installed
       ? "Available on PATH. This phase-1 CLI adapter streams stdout/stderr only; Gateway RPC and structured tool approvals require a future OpenClaw protocol bridge. Configure with BIVY_OPENCLAW_COMMAND, BIVY_OPENCLAW_ARGS, and BIVY_OPENCLAW_AGENT."
       : `${options.command} was not found on PATH. Install OpenClaw on this node, use the PWA install button, or set BIVY_OPENCLAW_COMMAND to its CLI path.`,
@@ -952,6 +962,7 @@ function protocolInfo(): RuntimeInfo {
     capabilities: { toolInterception: true, modelSelection: true, resume: true, packages: false, fork: false, ...(commands ? { commands } : {}) },
     supportTier: "experimental",
     authOwner: "mixed",
+    credentialRequirements: { owner: "mixed", strategy: "one-of", providers: [] },
     notes: configured
       ? "Configured through BIVY_PROTOCOL_COMMAND / BIVY_PROTOCOL_ARGS. Advertise agent-native slash commands with BIVY_PROTOCOL_COMMANDS (JSON [{name,description}]); other capability flags are finalized by the agent handshake."
       : "Set BIVY_PROTOCOL_COMMAND to enable a JSONL Bivy Agent Protocol runtime.",

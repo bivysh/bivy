@@ -281,6 +281,12 @@ export interface RuntimeInfo {
         verified: boolean;
       };
   testedVersion?: string;
+  /** Runtime-declared authentication contract used by generic onboarding. */
+  credentialRequirements?: {
+    owner: "bivy" | "agent" | "mixed";
+    strategy: "one-of" | "all" | "agent-login";
+    providers: string[];
+  };
   [k: string]: unknown;
 }
 

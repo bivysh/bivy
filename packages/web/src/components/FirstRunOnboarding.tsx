@@ -20,13 +20,22 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
     [state.catalogs.runtimes],
   );
   const selectedAgentId = state.catalogs.selectedAgentId || availableAgents[0]?.id || "";
-  const providerOptions = useMemo(() => state.catalogs.providers.length > 0
-    ? state.catalogs.providers
-    : [
-        { id: "anthropic", name: "Anthropic / Claude" },
-        { id: "openai-codex", name: "OpenAI / Codex" },
-        { id: "openai", name: "OpenAI API" },
-      ], [state.catalogs.providers]);
+  const selectedRuntime = availableAgents.find((runtime) => runtime.id === selectedAgentId);
+  const providerOptions = useMemo(() => {
+    const live = state.catalogs.providers.length > 0
+      ? state.catalogs.providers
+      : [
+          { id: "anthropic", name: "Anthropic / Claude" },
+          { id: "openai-codex", name: "OpenAI / Codex" },
+          { id: "openai", name: "OpenAI API" },
+        ];
+    const declared = selectedRuntime?.credentialRequirements?.providers ?? [];
+    if (declared.length === 0) return live;
+    const matching = live.filter((provider) => declared.includes(provider.id) || declared.includes(modelAuthApiKeyProvider(provider.id)));
+    // Runtime switches and provider-list refreshes are independent relay events;
+    // keep the live list during that brief mismatch rather than painting empty.
+    return matching.length > 0 ? matching : live;
+  }, [state.catalogs.providers, selectedRuntime]);
   const apiKeyProvider = modelAuthApiKeyProvider(providerId);
   const activeCredential = state.settings.credentialRecords.find(
     (record) => record.provider === providerId || record.provider === apiKeyProvider,
