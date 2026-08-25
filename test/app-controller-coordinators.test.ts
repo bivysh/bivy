@@ -66,12 +66,50 @@ test("session coordinator correlates and completes a local fork", async () => {
     addUserMessage: () => {},
     transcriptUrl: () => "https://app/sessions/source",
     refreshAccountSessions: () => {},
+    launchManagedDestination: async () => "managed-node",
   });
   const result = coordinator.fork("source", {});
   assert.equal(command.kind, "session.fork.local");
   assert.equal(coordinator.handleEvent({ type: "session.fork.done", requestId: "request-1", sessionId: "forked", fidelity: "full" } as any), true);
   assert.deepEqual(await result, { sessionId: "forked", fidelity: "full", missing: [] });
   assert.equal(opened, "forked");
+});
+
+test("session coordinator provisions a managed fork only after export and before import", async () => {
+  const events: string[] = [];
+  const commands: any[] = [];
+  let request = 0;
+  const coordinator = new SessionOrchestrator({
+    send: (command) => events.push(`send:${command.kind}`),
+    sendRequest: (command) => { commands.push(command); events.push(`request:${command.kind}`); },
+    createRequestId: () => `request-${++request}`,
+    createClientMessageId: () => "message-1",
+    currentNodeId: () => "source-node",
+    isDirect: () => false,
+    sessionRuntime: () => "claude",
+    switchNode: (nodeId) => events.push(`switch:${nodeId}`),
+    waitForOnline: async () => { events.push("online"); },
+    openSession: (id) => events.push(`open:${id}`),
+    addUserMessage: () => {},
+    transcriptUrl: () => "https://app/sessions/source",
+    refreshAccountSessions: () => {},
+    launchManagedDestination: async (configId) => { events.push(`launch:${configId}`); return "managed-node"; },
+  });
+  const result = coordinator.fork("source", { managedConfigId: "managed-default", agentId: "codex", sourceAgentId: "claude" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(commands[0]?.kind, "session.fork.export");
+  coordinator.handleEvent({ type: "session.fork.exported", requestId: "request-1", bundle: { version: 1 } } as any);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(events.slice(0, 5), [
+    "request:session.fork.export",
+    "launch:managed-default",
+    "switch:managed-node",
+    "online",
+    "request:session.fork.import",
+  ]);
+  coordinator.handleEvent({ type: "session.fork.done", requestId: "request-2", sessionId: "forked", runtimeId: "codex", fidelity: "seeded" } as any);
+  assert.deepEqual(await result, { sessionId: "forked", fidelity: "seeded", missing: [] });
+  assert.ok(events.includes("open:forked"));
 });
 
 test("session coordinator owns draft creation ordering and first prompt framing", () => {
@@ -91,6 +129,7 @@ test("session coordinator owns draft creation ordering and first prompt framing"
     send: () => {}, sendRequest: () => {}, createRequestId: () => "r1", createClientMessageId: () => "m1",
     currentNodeId: () => "n1", isDirect: () => false, sessionRuntime: () => undefined, switchNode: () => {},
     waitForOnline: async () => {}, openSession: () => {}, addUserMessage: () => {}, transcriptUrl: () => "", refreshAccountSessions: () => {},
+    launchManagedDestination: async () => "managed-node",
   }, workflow);
   coordinator.newSession();
   assert.deepEqual(events, ["navigate", "focus", "clear", "reset", "defaults", "runtimes", "models", "settings", "repos", "branches"]);

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useMemo, useState } from "react";
-import type { ModelInfo } from "@bivy/core";
+import type { EphemeralNodeConfig, ModelInfo } from "@bivy/core";
 import { controller, useAppState } from "../store/useStore.js";
 import { Sheet } from "./Sheet.js";
 
@@ -26,6 +26,7 @@ export function ForkSheet({ sessionId, onClose }: { sessionId: string; onClose: 
     : sessions.find((s) => s.sessionId === sessionId)?.runtimeId ?? null;
 
   const [destNodeId, setDestNodeId] = useState<string>(currentNodeId ?? "");
+  const [managedConfig, setManagedConfig] = useState<EphemeralNodeConfig | null>(null);
   const [agentId, setAgentId] = useState<string | null>(sourceAgentId);
   const [model, setModel] = useState<ModelInfo | null>(currentModel);
   const [retireTouched, setRetireTouched] = useState(false);
@@ -39,8 +40,14 @@ export function ForkSheet({ sessionId, onClose }: { sessionId: string; onClose: 
   useEffect(() => {
     if (agentId == null && sourceAgentId) setAgentId(sourceAgentId);
   }, [agentId, sourceAgentId]);
+  useEffect(() => {
+    void controller.listEphemeralConfigs()
+      .then((configs) => setManagedConfig(configs.find((config) => config.computeSource === "managed") ?? null))
+      .catch(() => setManagedConfig(null));
+  }, []);
 
-  const crossNode = Boolean(currentNodeId) && destNodeId !== currentNodeId;
+  const managedDestination = destNodeId === "__managed__";
+  const crossNode = managedDestination || (Boolean(currentNodeId) && destNodeId !== currentNodeId);
   // Context-aware default until the user picks: move across nodes, copy in place.
   const willRetire = retireTouched ? retire : crossNode;
   // A model only round-trips within one agent; only offer it when the agent is
@@ -58,7 +65,8 @@ export function ForkSheet({ sessionId, onClose }: { sessionId: string; onClose: 
     setErrorMsg("");
     try {
       const result = await controller.forkSession(sessionId, {
-        destNodeId: crossNode ? destNodeId : undefined,
+        destNodeId: crossNode && !managedDestination ? destNodeId : undefined,
+        managedConfigId: managedDestination ? managedConfig?.id : undefined,
         // Pass the selected target explicitly. The controller compares it with
         // the source session's runtime; treating this as only an "agent change"
         // made the target ambiguous and allowed forks to fall back to the source.
@@ -86,7 +94,7 @@ export function ForkSheet({ sessionId, onClose }: { sessionId: string; onClose: 
 
   return (
     <Sheet title={willRetire ? "Move session" : "Fork session"} onClose={onClose} autoFocusSearch={false}>
-      {nodeList.length > 1 && (
+      {(nodeList.length > 1 || managedConfig) && (
         <div className="picker-section fork-select-field">
           <label htmlFor="fork-destination-node">Destination machine</label>
           <select
@@ -104,6 +112,7 @@ export function ForkSheet({ sessionId, onClose }: { sessionId: string; onClose: 
                 {n.name || n.id} ({n.id === currentNodeId ? "current" : n.online ? "online" : "offline"})
               </option>
             ))}
+            {managedConfig && <option value="__managed__">{managedConfig.name || "Bivy Cloud"} (managed · starts on demand)</option>}
           </select>
         </div>
       )}

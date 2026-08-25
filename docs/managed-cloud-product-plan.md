@@ -49,8 +49,8 @@ available under advanced settings.
 
 - [x] Route an interactive message to server-side restore when its managed Machine is
   gone, including from a different signed-in device.
-- [ ] Let a fork/handoff target a managed profile, provisioning the destination before
-  transferring the snapshot and normalized history.
+- [x] Let a fork/handoff target a managed profile, exporting first, provisioning the
+  destination, then transferring the snapshot and normalized history.
 - [ ] Complete inbound issue/thread restore-and-continue.
 - [ ] Certify reconstructed and native runtime-resume behavior per maintained agent.
 
