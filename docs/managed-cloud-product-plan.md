@@ -42,7 +42,8 @@ available under advanced settings.
   Claude/Codex string checks.
 - [x] Verify the selected runtime's testable credential before declaring onboarding
   complete.
-- [ ] Support multiple user-owned credentials and explicit managed-reuse grants.
+- [x] Support multiple user-owned credentials and explicit per-item managed-reuse
+  grants.
 
 ### 4. Resume and agent fork
 
