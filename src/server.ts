@@ -3062,6 +3062,10 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
       gateNow,
     );
     persistSessionMetadata(record);
+    // Session creation returns only after the selected repository/workspace and
+    // runtime are usable. On ephemeral nodes this records a content-free latency
+    // milestone; ordinary personal nodes have no hosted Machine and ignore it.
+    void reportEphemeralMilestone("repositoryReadyAt");
     relay?.sendEvent({
       ...transcripts.buildHistoryEvent({
         sessionId: record.id,
@@ -3864,7 +3868,7 @@ const NODE_HEARTBEAT_MS = 30_000;
 let nodeHeartbeatTimer: ReturnType<typeof setInterval> | undefined;
 const reportedEphemeralMilestones = new Set<string>();
 
-async function reportEphemeralMilestone(milestone: "credentialsReadyAt" | "snapshotReadyAt" | "firstAgentEventAt"): Promise<void> {
+async function reportEphemeralMilestone(milestone: "credentialsReadyAt" | "repositoryReadyAt" | "snapshotReadyAt" | "firstAgentEventAt" | "firstTokenAt"): Promise<void> {
   if (!sessionAdvertiseTarget || reportedEphemeralMilestones.has(milestone)) return;
   try {
     const res = await fetch(`${sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "")}/node/ephemeral-milestone`, {
@@ -7500,6 +7504,7 @@ function attachSessionListeners(record: SessionRecord) {
     // that was fixed (or newly broke) is re-evaluated on the next prompt.
     if (event.type === "turn_start") record.authRequiredSignaled = false;
     if (event.type === "message_update" && (event as Record<string, unknown>).message && ((event as Record<string, { role?: unknown }>).message?.role === "assistant")) {
+      void reportEphemeralMilestone("firstTokenAt");
       transcripts.persistIntermediateFromEvent(record, event as Record<string, unknown>, false);
     }
     if (event.type === "message_end" && (event as Record<string, unknown>).message && ((event as Record<string, { role?: unknown }>).message?.role === "assistant")) {

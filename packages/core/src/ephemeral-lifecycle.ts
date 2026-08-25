@@ -13,8 +13,10 @@ export interface EphemeralLifecycleMilestones {
   providerAcceptedAt?: string;
   nodeReadyAt?: string;
   credentialsReadyAt?: string;
+  repositoryReadyAt?: string;
   snapshotReadyAt?: string;
   firstAgentEventAt?: string;
+  firstTokenAt?: string;
 }
 
 export interface EphemeralLifecycleFacts {

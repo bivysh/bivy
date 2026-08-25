@@ -158,7 +158,14 @@ export async function hostedExecutionReadiness(store: EphemeralProvisioningPort,
   return { ready: true, reason: "hosted ephemeral execution is ready", configId: config.id };
 }
 
-export const EPHEMERAL_MILESTONES = ["nodeReadyAt", "credentialsReadyAt", "snapshotReadyAt", "firstAgentEventAt"] as const;
+export const EPHEMERAL_MILESTONES = [
+  "nodeReadyAt",
+  "credentialsReadyAt",
+  "repositoryReadyAt",
+  "snapshotReadyAt",
+  "firstAgentEventAt",
+  "firstTokenAt",
+] as const;
 export type EphemeralMilestone = (typeof EPHEMERAL_MILESTONES)[number];
 
 /** Server-stamp a hosted runner milestone. First write wins so reconnects and
