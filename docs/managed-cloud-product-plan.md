@@ -58,8 +58,8 @@ available under advanced settings.
 
 - [ ] Add a platform-level pool of credential-free managed runners, or prove cold start
   meets the initial prompt-to-first-token SLO without one.
-- [ ] Record request, node-ready, credentials-ready, repository-ready, and first-token
-  timings for interactive launches.
+- [x] Record request, provider-accepted, node-ready, credentials-ready,
+  repository-ready, agent-start, and first-token timings for interactive launches.
 - [ ] Live-test staging GitHub App, KMS, Fly launch/restore/teardown, and settlement.
 - [ ] Add spend ceilings, provider budgets, concurrency, egress, mining/process abuse,
   and account-suspension controls before broad trial access.

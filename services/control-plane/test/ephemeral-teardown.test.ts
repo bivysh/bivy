@@ -168,8 +168,19 @@ const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
   const { store, audits } = fakeStore([{ id: "srv8", provider: "fly", nodeId: "eph-8", createdAt: iso(0), milestones: { requestedAt: "2026-08-12T00:00:00.000Z" } }], {});
   assert.equal(await markHostedMachineMilestone(store, "acct", "eph-8", "nodeReadyAt", "2026-08-12T00:00:02.000Z"), true);
   assert.equal(await markHostedMachineMilestone(store, "acct", "eph-8", "nodeReadyAt", "2026-08-12T00:00:09.000Z"), true);
+  assert.equal(await markHostedMachineMilestone(store, "acct", "eph-8", "credentialsReadyAt", "2026-08-12T00:00:03.000Z"), true);
+  assert.equal(await markHostedMachineMilestone(store, "acct", "eph-8", "repositoryReadyAt", "2026-08-12T00:00:04.000Z"), true);
+  assert.equal(await markHostedMachineMilestone(store, "acct", "eph-8", "firstAgentEventAt", "2026-08-12T00:00:05.000Z"), true);
+  assert.equal(await markHostedMachineMilestone(store, "acct", "eph-8", "firstTokenAt", "2026-08-12T00:00:06.000Z"), true);
   const machine = (await store.getHostedMachines("acct"))[0];
-  assert.deepEqual(machine.milestones, { requestedAt: "2026-08-12T00:00:00.000Z", nodeReadyAt: "2026-08-12T00:00:02.000Z" });
+  assert.deepEqual(machine.milestones, {
+    requestedAt: "2026-08-12T00:00:00.000Z",
+    nodeReadyAt: "2026-08-12T00:00:02.000Z",
+    credentialsReadyAt: "2026-08-12T00:00:03.000Z",
+    repositoryReadyAt: "2026-08-12T00:00:04.000Z",
+    firstAgentEventAt: "2026-08-12T00:00:05.000Z",
+    firstTokenAt: "2026-08-12T00:00:06.000Z",
+  });
   assert.ok(audits.some((event) => event.action === "machine_milestone" && event.detail === "nodeReadyAt elapsedMs=2000"));
   assert.equal(await markHostedMachineMilestone(store, "acct", "eph-missing", "nodeReadyAt"), false);
 }
