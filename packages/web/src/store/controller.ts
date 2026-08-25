@@ -353,6 +353,11 @@ export class AppController {
       addUserMessage: (text, id) => this.store.addUserMessage(text, id),
       transcriptUrl: (sessionId) => `${location.origin}${routePath({ kind: "session", id: sessionId })}`,
       refreshAccountSessions: () => { void this.refreshAccountSessions(); },
+      launchManagedDestination: async (configId) => {
+        const machine = await launchManagedSessionMachine(this.local, configId);
+        if (!machine.nodeId) throw new Error("Managed fork destination launched without a node id");
+        return machine.nodeId;
+      },
     }, {
       navigateNew: () => navigate({ kind: "new" }),
       focusComposer: () => this.focusComposer(),
@@ -1387,7 +1392,7 @@ export class AppController {
   /** Fork/copy/move orchestration is owned by SessionOrchestrator. */
   forkSession(
     sourceSessionId: string,
-    opts: { destNodeId?: string; agentId?: string; sourceAgentId?: string; model?: { provider: string; id: string }; retireSource?: boolean } = {},
+    opts: { destNodeId?: string; managedConfigId?: string; agentId?: string; sourceAgentId?: string; model?: { provider: string; id: string }; retireSource?: boolean } = {},
   ): Promise<{ sessionId: string; fidelity: string; missing: Array<{ label?: string; detail?: string }> }> {
     return this.sessionCoordinator.fork(sourceSessionId, opts);
   }
