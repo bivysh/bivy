@@ -63,8 +63,9 @@ available under advanced settings.
 - [x] Record request, provider-accepted, node-ready, credentials-ready,
   repository-ready, agent-start, and first-token timings for interactive launches.
 - [ ] Live-test staging GitHub App, KMS, Fly launch/restore/teardown, and settlement.
-- [ ] Add spend ceilings, provider budgets, concurrency, egress, mining/process abuse,
-  and account-suspension controls before broad trial access.
+- [x] Gate production managed compute on deployment-owned spend/provider-budget/
+  suspension policy, an enforced per-account concurrency ceiling, and explicit
+  egress/process/mining guest-hardening attestation before broad trial access.
 - [ ] Run the full fresh-account acceptance journey on desktop and mobile without a
   CLI, personal Machine, or user cloud token.
 
