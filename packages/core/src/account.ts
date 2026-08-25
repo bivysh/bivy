@@ -290,6 +290,8 @@ export interface CentralGithubAppView {
   configured: boolean;
   appId?: string;
   slug?: string;
+  /** Whether this deployment can offer the no-install managed setup path. */
+  managedComputeAvailable?: boolean;
   installations: CentralGithubAppInstallationView[];
 }
 
