@@ -3666,6 +3666,7 @@ app.get("/account/github/central-app", asyncHandler(async (req, res) => {
     configured: Boolean(central),
     appId: central?.appId,
     slug: central?.slug,
+    managedComputeAvailable: ephemeralMachinesEnabled() && process.env.MANAGED_COMPUTE_ENABLED === "1" && Boolean(managedSessionConfig()),
     installations: installations.map(({ installationId, githubAccount, githubAccountType, repositorySelection, createdAt }) => ({
       installationId, githubAccount, githubAccountType, repositorySelection, createdAt,
     })),

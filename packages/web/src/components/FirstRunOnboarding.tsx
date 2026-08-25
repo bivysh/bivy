@@ -36,6 +36,7 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
   const hasMachine = Boolean(state.connection.currentNodeId);
   const machineOnline = hasMachine && state.connection.status === "online";
   const hasGithub = Boolean(github?.installations.length);
+  const managedAvailable = github?.managedComputeAvailable === true;
 
   const refreshGithub = () => controller.centralGithubApp().then(setGithub).catch((error) => setGithubError(String((error as Error)?.message || error)));
   useEffect(() => {
@@ -82,6 +83,19 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
       setBusy(false);
     }
   }, []);
+  const startManagedAuthRunner = useCallback(async () => {
+    setBusy(true); setGithubError(null);
+    try {
+      await controller.createManagedAuthRunner();
+      sessionStorage.setItem("bivy:managed-auth-runner", "1");
+      setManagedAuthRunner(true);
+      await controller.refreshNodes();
+    } catch (error) {
+      setGithubError(String((error as Error)?.message || error));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
   // GitHub signup flows directly into App installation. A session-scoped guard
   // prevents a cancel/denial redirect from bouncing the browser back forever;
   // the explicit button remains available for retry.
@@ -90,6 +104,15 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
     sessionStorage.setItem("bivy:github-install-attempted", "1");
     void startGithubInstall();
   }, [step, startGithubInstall]);
+  // Managed hosting is the default no-install path. Start its short-lived auth
+  // runner as soon as GitHub setup completes; policy remains the abuse/cost gate.
+  // A session guard prevents retries on every render while the explicit button
+  // remains available after a transient failure.
+  useEffect(() => {
+    if (step !== "machine" || hasMachine || !managedAvailable || sessionStorage.getItem("bivy:managed-auth-attempted")) return;
+    sessionStorage.setItem("bivy:managed-auth-attempted", "1");
+    void startManagedAuthRunner();
+  }, [step, hasMachine, managedAvailable, startManagedAuthRunner]);
 
   return (
     <div className="connect-runner">
@@ -116,24 +139,16 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
       )}
       {step === "machine" && (
         <section className="settings-section">
-          <h3>Choose a setup Machine</h3>
+          <h3>{managedAvailable ? "Preparing secure provider sign-in" : "Connect a Machine"}</h3>
           {hasMachine ? (
-            <p className="muted">Your authentication Machine is starting and connecting…</p>
+            <p className="muted">Your secure sign-in environment is starting and connecting…</p>
           ) : (
             <>
-              <p className="muted">Use a short-lived managed Machine to sign in without installing the CLI. It cannot run tasks, expires after 15 minutes, and does not consume a trial session.</p>
-              <button type="button" className="btn primary" disabled={busy} onClick={() => {
-                setBusy(true); setGithubError(null);
-                controller.createManagedAuthRunner()
-                  .then(() => {
-                    sessionStorage.setItem("bivy:managed-auth-runner", "1");
-                    setManagedAuthRunner(true);
-                    return controller.refreshNodes();
-                  })
-                  .catch((error) => setGithubError(String((error as Error)?.message || error)))
-                  .finally(() => setBusy(false));
-              }}>{busy ? "Starting…" : "Use managed setup Machine"}</button>
-              <p className="muted small">Or enroll your own macOS/Linux Machine with a one-time command:</p>
+              {managedAvailable && <>
+                <p className="muted">Bivy is starting a short-lived sign-in environment. It cannot run tasks, expires after 15 minutes, and does not consume a trial session.</p>
+                <button type="button" className="btn primary" disabled={busy} onClick={() => void startManagedAuthRunner()}>{busy ? "Starting…" : "Try managed setup again"}</button>
+              </>}
+              <p className="muted small">{managedAvailable ? "Prefer your own computer? Enroll macOS/Linux with a one-time command:" : "Enroll your macOS/Linux Machine with a one-time command:"}</p>
               {!claim?.command ? <button type="button" className="btn" disabled={busy} onClick={() => {
                 setBusy(true);
                 controller.createNodeClaim().then(setClaim).catch((error) => setGithubError(String((error as Error)?.message || error))).finally(() => setBusy(false));
