@@ -1935,6 +1935,7 @@ export class AppController {
       }
     };
     try {
+      if (config.computeSource === "managed") logSetup("Reserving secure managed compute…");
       const machine = config.computeSource === "managed"
         ? await launchManagedSessionMachine(this.local, config.id)
         : await this.launchEphemeral({
@@ -2008,7 +2009,7 @@ export class AppController {
       handlers: {
         onStatus: (status) => {
           if (status !== "online") return;
-          log(`${task.config.name} is online. Creating the session…`);
+          log(`${task.config.name} is online. Credentials are ready; preparing the repository and agent…`);
           this.clearBootProgress(nodeId);
           void transport.send(task.prompt.frame);
         },
@@ -2033,6 +2034,9 @@ export class AppController {
     const task = this.pendingLaunches.get(provisionalId);
     const nodeId = task?.machine?.nodeId;
     if (!task || !nodeId) return;
+    if (this.store.getState().activeSession.activeSessionId === provisionalId) {
+      this.store.pushSystemMessage("Setup · Repository and agent are ready. Sending your prompt…");
+    }
     await transport.send({ kind: "prompt", sessionId, text: task.prompt.text, clientMessageId: task.prompt.clientMessageId, attachments: task.prompt.attachments });
     for (const followup of task.followups) {
       await transport.send({ kind: "prompt", sessionId, ...followup });
@@ -2090,7 +2094,7 @@ export class AppController {
       booting: "The machine booted and cloud-init started.",
       installing: "Cloud-init is installing Bivy…",
       starting: "Bivy is installed. Starting its secure service…",
-      ready: "Bivy reported ready.",
+      ready: "The secure Bivy service and encrypted credentials are ready.",
       failed: "Cloud-init reported that the Bivy install failed.",
     };
     const poll = async () => {

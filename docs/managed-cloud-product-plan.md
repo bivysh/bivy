@@ -32,7 +32,7 @@ available under advanced settings.
 - [x] Return/bind the minimum E2E material required by the requesting device without
   exposing provider or GitHub credentials.
 - [x] Make the first prompt the launch trigger and replay it after secure enrollment.
-- [ ] Render the existing provisioning milestones as quiet session progress.
+- [x] Render the existing provisioning milestones as quiet session progress.
 - [x] Make launch denial return deployment-extension upgrade/BYO actions.
 
 ### 3. Credential and runtime generality
