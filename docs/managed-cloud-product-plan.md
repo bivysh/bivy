@@ -53,7 +53,8 @@ available under advanced settings.
   destination, then transferring the snapshot and normalized history.
 - [x] Complete inbound issue/thread restore-and-continue through account-scoped
   existing-session targets, durable correlations, escrowed keys, and hosted rebuild.
-- [ ] Certify reconstructed and native runtime-resume behavior per maintained agent.
+- [x] Certify native resume for every maintained pinned agent through the release
+  certification matrix, and reconstructed continuity through snapshot/fork fault tests.
 
 ### 5. Latency and production readiness
 
