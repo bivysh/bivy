@@ -37,7 +37,7 @@ available under advanced settings.
 
 ### 3. Credential and runtime generality
 
-- [ ] Describe each runtime's credential requirements in the runtime catalog.
+- [x] Describe each runtime's credential requirements in the runtime catalog.
 - [x] Build provider onboarding from the live runtime provider catalog rather than
   Claude/Codex string checks.
 - [x] Verify the selected runtime's testable credential before declaring onboarding
