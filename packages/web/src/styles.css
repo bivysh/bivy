@@ -783,7 +783,23 @@ button.sheet-action:last-child { border-bottom: 0; }
 .composer-gh { align-items: center; gap: 6px; }
 /* The draft lead row carries more than one pick (repo + sandbox), so space them
    and let them wrap on a narrow phone instead of squashing. */
-.composer-lead { gap: 6px; flex-wrap: wrap; }
+.composer-lead { gap: var(--space-2); flex-wrap: wrap; }
+.composer-advanced { position: relative; }
+.composer-advanced > summary { cursor: pointer; list-style: none; user-select: none; }
+.composer-advanced > summary::-webkit-details-marker { display: none; }
+.composer-advanced-options {
+  display: flex;
+  gap: var(--space-2);
+  position: absolute;
+  z-index: 4;
+  inset-block-start: calc(100% + var(--space-1));
+  inset-inline-start: 0;
+  padding: var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+}
 .composer-gh:empty { display: none; }
 .pill-gh { flex: none; }
 
