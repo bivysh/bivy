@@ -16,6 +16,7 @@ import { listAppInstallations, listInstallationRepositories, listInstallationBra
 import { correlateHostedSessions } from "./hosted-correlation.js";
 import { countActiveAccountSessions } from "./session-count.js";
 import { usageFromManagedMachine } from "./compute-metering.js";
+import { activeManagedMachineCount, managedConcurrencyLimit } from "./managed-admission.js";
 import { createStore } from "./store-factory.js";
 import { AutomationScheduler, nextOccurrence, normalizeSchedule } from "./schedule.js";
 import { parseShardUrls, shardForNode } from "./relay-shards.js";
@@ -107,6 +108,17 @@ function assertProductionConfig() {
     // believes it is on — refuse to boot instead.
     problems.push("BIVY_CENTRAL_GITHUB_APP_ID and BIVY_CENTRAL_GITHUB_APP_PRIVATE_KEY must be configured together");
   }
+  if (process.env.MANAGED_COMPUTE_ENABLED === "1") {
+    if (!process.env.DEPLOYMENT_EXTENSION_URL || !process.env.DEPLOYMENT_EXTENSION_TOKEN) {
+      problems.push("production managed compute requires a deployment extension for spend, provider-budget, and account-suspension policy");
+    }
+    if (!managedConcurrencyLimit()) {
+      problems.push("MANAGED_COMPUTE_MAX_ACTIVE_PER_ACCOUNT must be a positive integer");
+    }
+    if (process.env.MANAGED_GUEST_HARDENING_ATTESTED !== "1") {
+      problems.push("MANAGED_GUEST_HARDENING_ATTESTED=1 is required after validating egress and process/mining controls in the production guest image");
+    }
+  }
   if (problems.length > 0) {
     console.error("Refusing to start: insecure production configuration:\n  - " + problems.join("\n  - "));
     process.exit(1);
@@ -137,6 +149,21 @@ async function deploymentDecision(
   context?: DeploymentPolicyContext,
 ) {
   const decision = await deploymentExtension.authorize(accountId, operation, idempotencyKey, context);
+  if (!decision.allowed || operation !== "ephemeral.provision" || context?.computeSource !== "managed") return decision;
+  const limit = managedConcurrencyLimit();
+  if (limit !== undefined) {
+    const active = activeManagedMachineCount(await store.getHostedMachines(accountId));
+    if (active >= limit) {
+      const presentation = await deploymentExtension.account(accountId).catch(() => undefined);
+      return {
+        allowed: false,
+        code: "managed_concurrency_limit",
+        reason: `This account already has ${active} active managed Machine${active === 1 ? "" : "s"}.`,
+        usage: { used: active, limit },
+        actions: presentation?.actions,
+      };
+    }
+  }
   return decision;
 }
 

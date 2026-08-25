@@ -175,6 +175,17 @@ create, inspect, and destroy Machines, then configure the control plane:
 MANAGED_COMPUTE_ENABLED=1
 MANAGED_PROVIDER_TOKEN_FLY=<operator Fly token>
 
+# Required when NODE_ENV=production. The deployment extension owns spend,
+# provider-budget, upgrade, and suspension policy; Core enforces this additional
+# per-account ceiling even when that service admits a launch.
+MANAGED_COMPUTE_MAX_ACTIVE_PER_ACCOUNT=3
+DEPLOYMENT_EXTENSION_URL=https://policy.example.internal
+DEPLOYMENT_EXTENSION_TOKEN=<service token>
+
+# Set only after the exact production guest image has passed egress and
+# process/mining-abuse validation. Production refuses managed launches otherwise.
+MANAGED_GUEST_HARDENING_ATTESTED=1
+
 # Optional interactive managed-session defaults. The first prompt launches this
 # profile through the control plane; users never receive the provider token.
 MANAGED_SESSION_PROVIDER=fly
