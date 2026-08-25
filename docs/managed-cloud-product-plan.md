@@ -38,9 +38,10 @@ available under advanced settings.
 ### 3. Credential and runtime generality
 
 - [ ] Describe each runtime's credential requirements in the runtime catalog.
-- [ ] Build provider onboarding from those descriptions rather than Claude/Codex
-  string checks.
-- [ ] Verify the selected runtime's credential before declaring onboarding complete.
+- [x] Build provider onboarding from the live runtime provider catalog rather than
+  Claude/Codex string checks.
+- [x] Verify the selected runtime's testable credential before declaring onboarding
+  complete.
 - [ ] Support multiple user-owned credentials and explicit managed-reuse grants.
 
 ### 4. Resume and agent fork

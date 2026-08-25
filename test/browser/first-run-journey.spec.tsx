@@ -82,6 +82,9 @@ test("provider readiness ('Test connection') is wired end to end: web action -> 
   const handler = await read("../../src/controllers/credential-commands.ts");
   expect(controller).toContain("async testCredential(provider: string, label: string)");
   expect(vault).toContain("controller.testCredential(selected.provider, selected.label)");
+  const onboarding = await read("../../packages/web/src/components/FirstRunOnboarding.tsx");
+  expect(onboarding).toContain("controller.testCredential(activeCredential.provider, activeCredential.label)");
+  expect(onboarding).not.toMatch(/runtime\.id\.includes\(["'](?:codex|claude)["']\)/);
   expect(handler).toContain('async "credential.test"(msg, ctx) {');
 });
 
