@@ -54,6 +54,12 @@ describe("buildBootstrapUserData — hosted queue opt-in", () => {
     expect(userData).toContain("curl -fsSL");
   });
 
+  it("enables hosted credential custody without enabling unattended queue polling", () => {
+    const userData = buildBootstrapUserData({ ...base, hostedCredentialCustody: true });
+    expect(userData).toContain("export BIVY_HOSTED_CREDENTIAL_CUSTODY=1");
+    expect(userData).not.toContain("BIVY_GITHUB_HOSTED_TASKS");
+  });
+
   it("single-quotes a token so shell metacharacters can't break out of the export", () => {
     const userData = buildBootstrapUserData({ ...base, hostedTasks: true, githubToken: "a'b$(rm -rf /)" });
     // shq() escapes embedded single quotes as '\'' — the token must never appear

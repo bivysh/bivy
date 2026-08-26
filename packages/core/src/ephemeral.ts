@@ -196,6 +196,9 @@ export interface LaunchOpts {
    *  `BootstrapOpts.hostedTasks`). Off by default so a plain "Launch machine"
    *  from the Ephemeral sheet keeps its pre-#532 behavior. */
   hostedTasks?: boolean;
+  /** Use the separately encrypted hosted credential snapshot without implying
+   * that this Machine may poll unattended task queues. */
+  hostedCredentialCustody?: boolean;
   /** A GitHub token the booted node uses for repo clone/push/PR work (see
    *  `BootstrapOpts.githubToken`). Queue workers and first-run interactive
    *  machines both need it because a disposable node has no native login. */

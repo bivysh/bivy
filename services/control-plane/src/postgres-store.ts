@@ -2736,7 +2736,7 @@ export class PostgresStore implements ControlPlaneStore {
     // that a crash after INSERT but before UPDATE cannot duplicate the run.
     const { rowCount } = await this.query(
       `UPDATE automation_definitions SET last_scheduled_at=$4, next_run_at=$5,
-       enabled=CASE WHEN $5::text IS NULL THEN false ELSE enabled END, updated_at=now()
+       enabled=CASE WHEN $5::timestamptz IS NULL THEN false ELSE enabled END, updated_at=now()
        WHERE account_id=$1 AND id=$2 AND enabled=true AND next_run_at=$3`,
       [accountId, definitionId, new Date(occurrenceIso), new Date(occurrenceIso), nextRunAt ? new Date(nextRunAt) : null],
     );
