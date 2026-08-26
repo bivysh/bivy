@@ -250,7 +250,7 @@ export class AppController {
   /** Ephemeral cold starts outlive the pane that launched them. Each first
    *  message gets a sidebar placeholder immediately, and its launch continues
    *  here even if the user presses New and starts another session. */
-  private pendingLaunches = new Map<string, PendingEphemeralLaunch & { transport?: Transport; sessionId?: string; promptSent?: boolean }>();
+  private pendingLaunches = new Map<string, PendingEphemeralLaunch & { transport?: Transport; sessionId?: string; promptSent?: boolean; promptSending?: boolean }>();
   /** Timed, factual boot updates. Provider creation returning only means the VM
    *  exists; these heartbeats make the otherwise silent cloud-init wait visible. */
   private bootProgressTimers = new Map<string, ReturnType<typeof setTimeout>[]>();
@@ -2210,13 +2210,35 @@ export class AppController {
 
   private async sendPendingLaunchPrompt(provisionalId: string, sessionId: string, transport: Transport): Promise<void> {
     const task = this.pendingLaunches.get(provisionalId);
-    if (!task || task.promptSent) return;
+    if (!task || task.promptSending) return;
     task.sessionId = sessionId;
-    task.promptSent = true;
+    task.promptSending = true;
     if (this.store.getState().activeSession.activeSessionId === provisionalId) {
       this.store.pushSystemMessage("Setup · Repository and agent are ready. Sending your prompt…");
     }
-    await transport.send({ kind: "prompt", sessionId, text: task.prompt.text, clientMessageId: task.prompt.clientMessageId, attachments: task.prompt.attachments });
+    try {
+      // Keep this retryable until session.user_message acknowledges the exact
+      // stable clientMessageId. A reconnect replays session.new (same requestId),
+      // receives history again, and safely resends this frame; node-side message
+      // dedupe prevents a duplicate turn. Merely resolving transport.send is not
+      // delivery confirmation and must not consume the preserved first prompt.
+      await transport.send({ kind: "prompt", sessionId, text: task.prompt.text, clientMessageId: task.prompt.clientMessageId, attachments: task.prompt.attachments });
+      task.promptSent = true;
+      task.updatedAt = new Date().toISOString();
+      await this.pendingLaunchStore.put(task);
+    } catch (error) {
+      task.logs.push(`First-message delivery retry: ${(error as Error)?.message || error}`);
+      task.updatedAt = new Date().toISOString();
+      await this.pendingLaunchStore.put(task);
+    } finally {
+      task.promptSending = false;
+      setTimeout(() => {
+        const current = this.pendingLaunches.get(provisionalId);
+        if (current && current.phase !== "failed" && current.sessionId === sessionId) {
+          void this.sendPendingLaunchPrompt(provisionalId, sessionId, transport);
+        }
+      }, 3_000);
+    }
   }
 
   private async finishPendingLaunch(provisionalId: string, sessionId: string, transport: Transport): Promise<void> {
