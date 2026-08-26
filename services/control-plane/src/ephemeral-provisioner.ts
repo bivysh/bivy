@@ -638,6 +638,9 @@ export async function provisionEphemeralForAccount(
         // credentials. They must never poll or claim queued work, so no agent
         // event can accidentally consume a managed trial.
         hostedTasks: purpose !== "auth-runner" && purpose !== "interactive",
+        // Interactive managed sessions must receive the explicit hosted-custody
+        // snapshot without becoming unattended queue pollers.
+        hostedCredentialCustody: computeSource === "managed",
         githubToken,
         hostedMint: useHostedMint,
         setupId: config.id,

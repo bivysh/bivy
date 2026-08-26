@@ -41,6 +41,11 @@ RUN apt-get update -qq \
   && apt-get install -y -qq --no-install-recommends ca-certificates curl git openssh-client tini \
   && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/bivy-latest.tar.gz /tmp/bivy.tar.gz
+# Maintained agents bundled as Bivy dependencies expose their CLIs here. npm
+# does not promote transitive bins into /usr/local/bin when installing Bivy
+# globally, so include the package-local bin directory for every such agent
+# rather than adding one bespoke symlink per integration.
+ENV PATH="/usr/local/lib/node_modules/@bivy/bivy/node_modules/.bin:${PATH}"
 # node-pty compiles from source (same toolchain install.sh requires on
 # Debian/Ubuntu). Install it, build, and purge it in one layer so the runtime
 # image ships no compiler.

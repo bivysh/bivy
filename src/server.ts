@@ -3001,19 +3001,27 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     // resolves to afterward.
     const acknowledgeReducedProtections = msg.acknowledgeReducedProtections === true;
     const gateNow = new Date().toISOString();
-    const rt = getRuntime(agentFrom(msg) ?? defaultRuntimeId);
-    const gateContract = computeSessionContract(
-      { runtime: rt as SessionContractRuntimeFacts, preview: false, sandbox: sandboxFrom(msg), acknowledgedAt: acknowledgeReducedProtections ? gateNow : undefined },
-      gateNow,
-    );
-    if (gateContract.requiresAcknowledgement) {
-      relay?.sendEvent({
-        type: "session.error",
-        code: "reduced_protections_ack_required",
-        error: `${rt.displayName || rt.id} would run this session with reduced protections for a certified profile. Confirm to continue.`,
-        contract: gateContract,
-        requestId,
-      });
+    try {
+      const rt = getRuntime(agentFrom(msg) ?? defaultRuntimeId);
+      const gateContract = computeSessionContract(
+        { runtime: rt as SessionContractRuntimeFacts, preview: false, sandbox: sandboxFrom(msg), acknowledgedAt: acknowledgeReducedProtections ? gateNow : undefined },
+        gateNow,
+      );
+      if (gateContract.requiresAcknowledgement) {
+        relay?.sendEvent({
+          type: "session.error",
+          code: "reduced_protections_ack_required",
+          error: `${rt.displayName || rt.id} would run this session with reduced protections for a certified profile. Confirm to continue.`,
+          contract: gateContract,
+          requestId,
+        });
+        return;
+      }
+    } catch (error) {
+      // Agent availability is checked before workspace creation. Return a real
+      // terminal response to the requesting client instead of letting the relay's
+      // outer console-only catch strand an invisible pending session forever.
+      relay?.sendEvent({ type: "session.error", requestId, error: error instanceof Error ? error.message : String(error) });
       return;
     }
     const remoteSessionRequestId = requestId ?? randomUUID();
@@ -3051,7 +3059,7 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
         return rec;
       });
     } catch (error) {
-      relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
+      relay?.sendEvent({ type: "session.error", requestId, error: error instanceof Error ? error.message : String(error) });
       return;
     }
     // Resolve once from the session's actual, now-known launch facts (final
@@ -3185,7 +3193,7 @@ const hostedImportedRecordsPath = path.join(appDir, "model-auth-hosted-records.j
 let lastPushedModelAuthCiphertext = "";
 let lastPushedHostedModelAuthCiphertext = "";
 let lastPushedHostedModelAuthRevision = -1;
-const isHostedCustodyNode = () => Boolean(process.env.BIVY_GITHUB_HOSTED_TASKS);
+const isHostedCustodyNode = () => Boolean(process.env.BIVY_HOSTED_CREDENTIAL_CUSTODY || process.env.BIVY_GITHUB_HOSTED_TASKS);
 
 function readLocalModelAuthVaultKey(): string | undefined {
   try {
