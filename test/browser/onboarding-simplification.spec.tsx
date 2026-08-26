@@ -41,6 +41,25 @@ test("Bivy Cloud is a first-class unattended automation target", async () => {
   expect(provisioner).toContain("hasManagedAutomation");
 });
 
+test("new accounts flow from GitHub and provider setup into a Bivy Cloud draft", async () => {
+  const onboarding = await read("../../packages/web/src/components/FirstRunOnboarding.tsx");
+  expect(onboarding).toContain("Connect GitHub and a model provider. Your first session will open on Bivy Cloud.");
+  expect(onboarding).toContain("Sign in with a model provider");
+  expect(onboarding).toContain("controller.ensureManagedSessionDefaults()");
+  expect(onboarding).toContain("controller.pickDraftEphemeralRunner(config)");
+  expect(onboarding).not.toContain('readiness-label">Machine');
+});
+
+test("Add a machine mints a one-time account enrollment command", async () => {
+  const sheet = await read("../../packages/web/src/components/AddNodeSheet.tsx");
+  const controlPlane = await read("../../services/control-plane/src/index.ts");
+  expect(sheet).toContain("setClaim(await controller.createNodeClaim())");
+  expect(sheet).toContain("expires after 10 minutes and can enroll only one machine");
+  expect(sheet).not.toContain('href="/install.sh"');
+  expect(controlPlane).toContain("command: `curl -fsSL ${shellSingleQuote(claimUrl)} | sh`");
+  expect(controlPlane).toContain("BIVY_NODE_CLAIM_CODE");
+});
+
 test("voice input remains available after the user types a message", async () => {
   const composer = await read("../../packages/web/src/components/Composer.tsx");
   const mic = composer.indexOf('className="composer-btn mic"');
