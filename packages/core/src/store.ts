@@ -126,6 +126,29 @@ export interface RunTerminalSummary {
   nodeId?: string;
 }
 
+export type SessionLaunchCheckpointId =
+  | "account"
+  | "capacity"
+  | "machine"
+  | "service"
+  | "credentials"
+  | "repository"
+  | "agent"
+  | "message";
+
+export type SessionLaunchCheckpointState = "waiting" | "active" | "done" | "skipped" | "failed";
+
+export interface SessionLaunchProgress {
+  startedAt: number;
+  firstResponseAt?: number;
+  failedAt?: number;
+  checkpoints: Partial<Record<SessionLaunchCheckpointId, {
+    state: SessionLaunchCheckpointState;
+    at?: number;
+    error?: string;
+  }>>;
+}
+
 export interface SessionSummary {
   sessionId: string;
   /** On-disk session file path — required to open a not-yet-loaded session. */
@@ -160,6 +183,10 @@ export interface SessionSummary {
   /** Intended Machine/profile while a cold start is pending or failed before a
    * real node id exists. Prevents UI fallback to an unrelated current node. */
   pendingNodeName?: string;
+  /** Device-local, structured cold-start progress. It survives the provisional
+   * id → canonical session id replacement so time-to-first-response can finish
+   * after the first prompt has been accepted. */
+  launchProgress?: SessionLaunchProgress;
   /** This session's ephemeral node was torn down (unenrolled, gone from the
    *  registry) but is REBUILDABLE from a durable correlation + the room key this
    *  device still holds — so the row stays in the sidebar as offline-but-rebuildable
@@ -1990,7 +2017,7 @@ export class SessionStore {
    *  lets the user leave it running and start another session without discarding
    *  the launch. The controller replaces this row with the node's canonical id
    *  as soon as session.new completes. */
-  persistPendingSession(sessionId: string, name: string, activate = true, pendingNodeName?: string): void {
+  persistPendingSession(sessionId: string, name: string, activate = true, pendingNodeName?: string, startedAt = Date.now()): void {
     const existing = this.state.sessionIndex.sessions.find((s) => s.sessionId === sessionId);
     const row: SessionSummary = {
       ...existing,
@@ -1999,6 +2026,10 @@ export class SessionStore {
       status: existing?.status === "failed" ? "failed" : "working",
       pendingLaunch: true,
       pendingNodeName: pendingNodeName || existing?.pendingNodeName,
+      launchProgress: existing?.launchProgress ?? {
+        startedAt,
+        checkpoints: { account: { state: "active", at: startedAt } },
+      },
       updatedAt: existing?.updatedAt || Date.now(),
     };
     this.set({
@@ -2008,13 +2039,59 @@ export class SessionStore {
   }
 
   retryPendingSession(sessionId: string): void {
-    this.set({ sessions: this.state.sessionIndex.sessions.map((s) => s.sessionId === sessionId ? { ...s, status: "working", updatedAt: Date.now() } : s) });
+    this.set({ sessions: this.state.sessionIndex.sessions.map((s) => {
+      if (s.sessionId !== sessionId) return s;
+      const checkpoints = s.launchProgress
+        ? Object.fromEntries(Object.entries(s.launchProgress.checkpoints).map(([id, checkpoint]) => [
+            id,
+            checkpoint?.state === "failed" ? { state: "active", at: Date.now() } : checkpoint,
+          ])) as SessionLaunchProgress["checkpoints"]
+        : undefined;
+      return {
+        ...s,
+        status: "working",
+        updatedAt: Date.now(),
+        launchProgress: s.launchProgress ? { ...s.launchProgress, failedAt: undefined, checkpoints: checkpoints ?? {} } : undefined,
+      };
+    }) });
   }
 
   dismissPendingSession(sessionId: string): void {
     this.set({
       activeSessionId: this.state.activeSession.activeSessionId === sessionId ? null : this.state.activeSession.activeSessionId,
       sessions: this.state.sessionIndex.sessions.filter((s) => s.sessionId !== sessionId),
+    });
+  }
+
+  updateLaunchCheckpoint(
+    sessionId: string,
+    id: SessionLaunchCheckpointId,
+    state: SessionLaunchCheckpointState,
+    error?: string,
+  ): void {
+    const at = Date.now();
+    this.set({
+      sessions: this.state.sessionIndex.sessions.map((session) => session.sessionId === sessionId && session.launchProgress
+        ? {
+            ...session,
+            launchProgress: {
+              ...session.launchProgress,
+              ...(state === "failed" ? { failedAt: at } : {}),
+              checkpoints: {
+                ...session.launchProgress.checkpoints,
+                [id]: { state, at, ...(error ? { error } : {}) },
+              },
+            },
+          }
+        : session),
+    });
+  }
+
+  markLaunchFirstResponse(sessionId: string, at = Date.now()): void {
+    this.set({
+      sessions: this.state.sessionIndex.sessions.map((session) => session.sessionId === sessionId && session.launchProgress && !session.launchProgress.firstResponseAt
+        ? { ...session, launchProgress: { ...session.launchProgress, firstResponseAt: at } }
+        : session),
     });
   }
 
@@ -2045,7 +2122,13 @@ export class SessionStore {
   /** Keep a failed cold start visible and clearly settled so its setup log can
    *  still be opened, instead of leaving an endless working spinner. */
   failPendingSession(sessionId: string): void {
-    this.set({ sessions: this.state.sessionIndex.sessions.map((s) => s.sessionId === sessionId ? { ...s, status: "failed" } : s) });
+    this.set({ sessions: this.state.sessionIndex.sessions.map((s) => s.sessionId === sessionId
+      ? {
+          ...s,
+          status: "failed",
+          launchProgress: s.launchProgress ? { ...s.launchProgress, failedAt: s.launchProgress.failedAt ?? Date.now() } : undefined,
+        }
+      : s) });
   }
 
   setActiveTitle(name: string): void {

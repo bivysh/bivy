@@ -547,6 +547,7 @@ export function ChatView({
   sessionKey,
   collapsed,
   onAction,
+  header,
   footer,
 }: {
   entries: TranscriptEntry[];
@@ -568,6 +569,8 @@ export function ChatView({
   collapsed?: boolean;
   /** Run a slash command from an inline notice action button (e.g. "/new"). */
   onAction?: (action: string) => void;
+  /** Structured session startup state rendered before transcript entries. */
+  header?: ReactNode;
   /** Rendered at the tail of the scroll area so approval/question cards flow
    *  inline with the transcript and scroll with it, rather than sitting in a
    *  pinned region between the chat and the composer. A newly-arrived card grows
@@ -689,13 +692,14 @@ export function ChatView({
     <div className="chat-wrap">
       <div className="chat" ref={scrollRef} onScroll={rememberScroll}>
         <div className="chat-inner" ref={contentRef}>
-          {total === 0 && !draftRoute && opening && (
+          {header}
+          {total === 0 && !header && !draftRoute && opening && (
             <div className="chat-loading" role="status" aria-live="polite">
               <Spinner size="lg" />
               <p>Fetching transcript…</p>
             </div>
           )}
-          {total === 0 && !draftRoute && !opening && (
+          {total === 0 && !header && !draftRoute && !opening && (
             <div className="chat-empty">
               <p className="chat-empty-title">No messages yet</p>
               <p className="chat-empty-sub">
@@ -704,7 +708,7 @@ export function ChatView({
               </p>
             </div>
           )}
-          {total === 0 && draftRoute && (
+          {total === 0 && !header && draftRoute && (
             <div className="chat-empty">
               <p className="chat-empty-title">Start a new session</p>
               <p className="chat-empty-sub">
