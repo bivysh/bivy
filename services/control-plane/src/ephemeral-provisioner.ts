@@ -14,7 +14,7 @@
 //
 // SECURITY: this path depends on credentials held on the control plane (see
 // HostedProvisioning in store.ts). It is gated per account and off by default.
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   launchEphemeralMachine,
   destroyEphemeralMachine,
@@ -571,7 +571,7 @@ export async function provisionEphemeralForAccount(
   launcher = launchEphemeralMachine,
   nowMs = Date.now(),
   purpose: EphemeralMachine["purpose"] = "queue-default",
-  retry?: { attemptId: string; nodeId?: string; retryCount: number },
+  retry?: { attemptId: string; nodeId?: string; roomKeyB64?: string; retryCount: number },
   onRoomKey?: (nodeId: string, roomKeyB64: string) => void,
 ): Promise<EphemeralMachine> {
   const hosted = await store.getHostedProvisioning(accountId);
@@ -626,6 +626,7 @@ export async function provisionEphemeralForAccount(
         attemptId,
         onLifecycle,
         reuseNodeId: retry?.nodeId,
+        reuseRoomKeyB64: retry?.roomKeyB64,
         externalTeardownGuaranteed: true,
         ownershipTag,
         region: config.region,
@@ -1580,10 +1581,21 @@ export async function maybeAutoProvision(
     // server-side rather than launching a blank machine. Best-effort — any gap
     // (no correlation / no escrowed key) falls back to a normal fresh provision.
     const restore = await planRestoreProvision(store, accountId).catch(() => null);
+    // Managed automations encrypt to a stable account-scoped virtual node. A
+    // fresh queue Machine adopts that identity and escrowed key, so unattended
+    // instructions remain E2E ciphertext until the guest receives them.
+    const automationNodeId = `eph-managed-auto-${createHash("sha256").update(accountId).digest("hex").slice(0, 16)}`;
+    const sourceLabel = routing.primary.kind === "node" ? `bivy/${routing.primary.node}` : "bivy";
+    const hasManagedAutomation = normalizeComputeSource(plannedTarget.computeSource) === "managed"
+      && (await store.listWorkItems(accountId, 100)).some((item) => item.status === "pending"
+        && item.label === sourceLabel && item.body?.startsWith(`bivy-room-v1:${automationNodeId}:`));
+    const automationKeyEnc = hasManagedAutomation ? await store.getNodeRoomKeyEnc(accountId, automationNodeId) : undefined;
     const machine = restore
       ? await provisionEphemeralRestore(store, accountId, plannedTarget, env, { ...restore, attemptId: managedAttemptId }, launcher)
       : await provisionEphemeralForAccount(store, accountId, plannedTarget, env, launcher, Date.now(), "queue-default", {
-          attemptId: managedAttemptId, retryCount: 0,
+          attemptId: managedAttemptId,
+          retryCount: 0,
+          ...(automationKeyEnc ? { nodeId: automationNodeId, roomKeyB64: decryptSecret(accountId, automationKeyEnc) } : {}),
         });
     // A hosted runner serves its unique `bivy/<eph suffix>` label. Move only
     // work that was waiting on the routing target which caused this launch;

@@ -252,6 +252,10 @@ async function main() {
   expect(adoptedConfigs.status === 200 && adopted?.name === "Bivy Cloud", "existing account config listing adopts the managed profile");
   const managedDefault = await req(port3, "POST", "/account/onboarding/managed-defaults", undefined, token3);
   expect(managedDefault.status === 200 && managedDefault.json?.config?.id === adopted.id, "explicit managed onboarding remains idempotent");
+  const automationTarget = await req(port3, "POST", "/account/managed-automation-target", undefined, token3);
+  const automationTargetAgain = await req(port3, "POST", "/account/managed-automation-target", undefined, token3);
+  expect(automationTarget.status === 200 && automationTarget.json?.nodeId?.startsWith("eph-managed-auto-") && typeof automationTarget.json?.roomKey === "string", "managed automations receive a stable E2E target");
+  expect(automationTargetAgain.json?.nodeId === automationTarget.json?.nodeId && automationTargetAgain.json?.roomKey === automationTarget.json?.roomKey, "managed automation identity is idempotent");
   await req(port3, "PUT", `/account/ephemeral-configs/${adopted.id}`, { image: "stale-image", ttlMinutes: 999 }, token3);
   const managedConfigs = await req(port3, "GET", "/account/ephemeral-configs", undefined, token3);
   const reconciled = managedConfigs.json?.find((config: { computeSource?: string }) => config.computeSource === "managed");

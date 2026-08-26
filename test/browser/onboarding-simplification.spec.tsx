@@ -32,6 +32,15 @@ test("a managed repository picker offers the central App to established accounts
   expect(pickers).toContain("Add another GitHub account or organization…");
 });
 
+test("Bivy Cloud is a first-class unattended automation target", async () => {
+  const editor = await read("../../packages/web/src/components/AutomationsView.tsx");
+  const provisioner = await read("../../services/control-plane/src/ephemeral-provisioner.ts");
+  expect(editor).toContain("Bivy Cloud · managed");
+  expect(editor).toContain("managedAutomationTarget");
+  expect(provisioner).toContain("reuseRoomKeyB64: retry?.roomKeyB64");
+  expect(provisioner).toContain("hasManagedAutomation");
+});
+
 test("voice input remains available after the user types a message", async () => {
   const composer = await read("../../packages/web/src/components/Composer.tsx");
   const mic = composer.indexOf('className="composer-btn mic"');
