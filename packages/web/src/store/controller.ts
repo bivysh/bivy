@@ -1817,7 +1817,15 @@ export class AppController {
   /** Draft repo/branch/agent/model to thread into the next session.new. */
   private draftSessionFields(): Record<string, unknown> {
     const s = this.store.getState();
-    const model = s.catalogs.currentModel ? { provider: (s.catalogs.currentModel as any).provider, id: s.catalogs.currentModel.id } : undefined;
+    // Model catalogs and their `configured` flags belong to the connected
+    // Machine. A Cloud/ephemeral draft targets a different, not-yet-booted
+    // Machine, so forwarding the current Machine's model selection can make an
+    // otherwise healthy launch fail with "Model is not available on this
+    // node." Let the destination runtime choose its credential-backed default;
+    // its own catalog becomes authoritative once it connects.
+    const model = !s.draft.ephemeralConfig && s.catalogs.currentModel
+      ? { provider: (s.catalogs.currentModel as any).provider, id: s.catalogs.currentModel.id }
+      : undefined;
     return {
       repo: s.draft.repo || undefined,
       // Only meaningful alongside `repo` — a branch is only ever set together
