@@ -90,6 +90,24 @@ describe("draftEphemeralConfig (pick-a-runner-then-send)", () => {
     });
   });
 
+  it("keeps the canonical startup row through a stale empty session refresh", () => {
+    const store = new SessionStore();
+    store.persistPendingSession("starting-request-1", "Fix the flaky test", true, "Bivy Cloud", 1_000);
+    store.completePendingSession("starting-request-1", "session-real", "eph-node");
+
+    // session.new can finish before the node/control-plane index includes the
+    // new session. The startup checklist must remain visible during that gap.
+    store.setSessions([]);
+
+    expect(store.getState().activeSession.activeSessionId).toBe("session-real");
+    expect(store.getState().sessionIndex.sessions).toHaveLength(1);
+    expect(store.getState().sessionIndex.sessions[0]).toMatchObject({
+      sessionId: "session-real",
+      nodeId: "eph-node",
+      launchProgress: { startedAt: 1_000 },
+    });
+  });
+
   it("settles a failed placeholder without losing its intended Machine", () => {
     const store = new SessionStore();
     store.persistPendingSession("starting-request-1", "Fix the flaky test", true, "Bivy Cloud");

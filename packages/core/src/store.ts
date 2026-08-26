@@ -1690,8 +1690,17 @@ export class SessionStore {
   setSessions(list: unknown): void {
     const sessions = this.withoutRecentlyDeleted(normalizeSessions(list, this.state.sessionIndex.sessions));
     const ids = new Set(sessions.map((s) => s.sessionId));
-    const pending = this.state.sessionIndex.sessions.filter((s) => s.pendingLaunch && !ids.has(s.sessionId));
-    const merged = [...pending, ...sessions];
+    // Binding a cold-start placeholder to its canonical session id happens as
+    // soon as session.new succeeds, before the first prompt has produced a
+    // response. At that point pendingLaunch is false, but the node/account
+    // session index can still lag behind. Keep that locally-owned startup row
+    // until the first response so an empty/stale refresh cannot erase both the
+    // sidebar entry and the startup checklist while the launch is still live.
+    const launching = this.state.sessionIndex.sessions.filter((s) =>
+      !ids.has(s.sessionId) && (
+        s.pendingLaunch || Boolean(s.launchProgress && !s.launchProgress.firstResponseAt)
+      ));
+    const merged = [...launching, ...sessions];
     const activeId = this.state.activeSession.activeSessionId;
     this.set({
       sessions: activeId
