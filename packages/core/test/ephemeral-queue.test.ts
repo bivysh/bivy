@@ -84,6 +84,11 @@ describe("buildBootstrapUserData — hosted queue opt-in", () => {
     // start.sh runs the daemon in the foreground so the process supervisor keeps
     // it alive; `bivy setup` is never involved.
     expect(userData).toContain("exec bivy start");
+    // Login shells used by providers may discard the image's ENV PATH. Resolve
+    // Bivy's package-local executable directory again in start.sh so bundled
+    // agents such as Pi remain discoverable without a separate installation.
+    expect(userData).toContain('BIVY_CLI="$(readlink -f "$(command -v bivy)")"');
+    expect(userData).toContain('export PATH="$BIVY_PACKAGE_DIR/node_modules/.bin:$PATH"');
     // A transient systemd unit survives cloud-init's own unit exiting; the
     // setsid fallback covers an image without systemd-run.
     expect(userData).toContain("systemd-run --unit=bivy");

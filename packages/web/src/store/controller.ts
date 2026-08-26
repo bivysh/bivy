@@ -2275,11 +2275,20 @@ export class AppController {
 
   listModels(): void {
     const s = this.store.getState();
-    const sessionId = s.activeSession.activeSessionId ?? undefined;
-    // On a draft, hint the agent we're previewing so the node answers for THAT
-    // runtime (and tags the reply for the per-runtime cache) even if its default
-    // runtime hasn't flipped yet. A live session answers for itself — no hint.
-    const runtimeId = sessionId ? undefined : (s.catalogs.selectedAgentId ?? undefined);
+    const activeId = s.activeSession.activeSessionId;
+    // A managed launch installs a provisional UI identity before session.new is
+    // accepted by the guest. Never send that placeholder as a real session id:
+    // the newly connected Machine correctly has no such session and would
+    // answer "Session not found" while it is still booting.
+    const provisional = activeId
+      ? s.sessionIndex.sessions.find((session) => session.sessionId === activeId)?.pendingLaunch === true
+      : false;
+    const sessionId = activeId && !provisional ? activeId : undefined;
+    // On a draft/provisional launch, hint the agent we're previewing so the node
+    // answers for THAT runtime. A live session answers for itself — no hint.
+    const runtimeId = sessionId
+      ? undefined
+      : (s.activeSession.activeRuntimeId ?? s.catalogs.selectedAgentId ?? undefined);
     this.send({ kind: "models.list", sessionId, runtimeId });
   }
 
