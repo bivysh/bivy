@@ -115,6 +115,7 @@ import {
   type EphemeralMachine,
   type PendingEphemeralLaunch,
   type PendingEphemeralLaunchStore,
+  type SessionLaunchCheckpointId,
   type GithubTaskTokenStore,
   type EphemeralQueueDefault,
   type LaunchOpts,
@@ -690,6 +691,14 @@ export class AppController {
         const before = this.store.getState();
         const appliedEvent = this.eventWithNodeScope(event);
         this.store.apply(appliedEvent);
+        const activeAfter = this.store.getState().activeSession;
+        if (
+          activeAfter.activeSessionId &&
+          !before.activeSession.transcript.some((entry) => entry.role === "assistant" && Boolean(entry.text) && !entry.tool) &&
+          activeAfter.transcript.some((entry) => entry.role === "assistant" && Boolean(entry.text) && !entry.tool)
+        ) {
+          this.store.markLaunchFirstResponse(activeAfter.activeSessionId);
+        }
         this.observeActivationMilestones(before, appliedEvent);
         if (appliedEvent.type === "session.deleted") this.persistDeletedSessionTombstones();
         this.maybeFlushPendingPrompt(appliedEvent);
@@ -1947,11 +1956,13 @@ export class AppController {
       task.logs.push(message);
       task.updatedAt = new Date().toISOString();
       void this.pendingLaunchStore.put(task);
-      if (this.store.getState().activeSession.activeSessionId === provisionalId || this.pendingPrompt?.provisionalId === provisionalId) {
-        this.store.pushSystemMessage(`Setup · ${message}`);
-      }
     };
     try {
+      this.store.updateLaunchCheckpoint(provisionalId, "account", "done");
+      this.store.updateLaunchCheckpoint(provisionalId, "capacity", "active");
+      if (!task.prompt.frame || !("repo" in task.prompt.frame) || !task.prompt.frame.repo) {
+        this.store.updateLaunchCheckpoint(provisionalId, "repository", "skipped");
+      }
       if (config.computeSource === "managed") logSetup("Reserving secure managed compute…");
       const machine = config.computeSource === "managed"
         ? await launchManagedSessionMachine(this.local, config.id)
@@ -1967,6 +1978,9 @@ export class AppController {
             onProgress: logSetup,
           });
       if (!machine.nodeId) throw new Error("machine launched without a node id");
+      this.store.updateLaunchCheckpoint(provisionalId, "capacity", "done");
+      this.store.updateLaunchCheckpoint(provisionalId, "machine", "done");
+      this.store.updateLaunchCheckpoint(provisionalId, "service", "active");
       task.machine = machine;
       task.phase = "booting";
       task.updatedAt = new Date().toISOString();
@@ -1980,11 +1994,20 @@ export class AppController {
       task.updatedAt = new Date().toISOString();
       void this.pendingLaunchStore.put(task);
       if (this.pendingPrompt?.provisionalId === provisionalId) this.pendingPrompt = null;
+      this.failLaunchCheckpoint(provisionalId, message);
       this.store.failPendingSession(provisionalId);
-      if (this.store.getState().activeSession.activeSessionId === provisionalId) this.store.pushSystemMessage(`Setup · ${message}`);
       const actions = e instanceof ManagedLaunchError ? e.actions : [];
       this.store.setError(`Couldn't start ${config.name}: ${(e as Error)?.message || e}`, actions);
     }
+  }
+
+  private failLaunchCheckpoint(provisionalId: string, message: string): void {
+    const progress = this.store.getState().sessionIndex.sessions.find((session) => session.sessionId === provisionalId)?.launchProgress;
+    const order: SessionLaunchCheckpointId[] = ["account", "capacity", "machine", "service", "credentials", "repository", "agent", "message"];
+    const id = order.find((checkpoint) => progress?.checkpoints[checkpoint]?.state === "active")
+      ?? order.find((checkpoint) => !progress?.checkpoints[checkpoint] || progress.checkpoints[checkpoint]?.state === "waiting")
+      ?? "message";
+    this.store.updateLaunchCheckpoint(provisionalId, id, "failed", message);
   }
 
   private openPendingLaunch(provisionalId: string, opts: { navigate?: boolean } = {}): void {
@@ -1993,7 +2016,6 @@ export class AppController {
     if (opts.navigate !== false) navigate({ kind: "session", id: provisionalId });
     this.store.beginOpen(provisionalId);
     this.store.addUserMessage(task.prompt.text, task.prompt.clientMessageId, task.prompt.attachments);
-    for (const line of task.logs) this.store.pushSystemMessage(`Setup · ${line}`);
     this.pendingPrompt = task.prompt;
   }
 
@@ -2008,7 +2030,6 @@ export class AppController {
       task.logs.push(message);
       task.updatedAt = new Date().toISOString();
       void this.pendingLaunchStore.put(task);
-      if (this.store.getState().activeSession.activeSessionId === provisionalId) this.store.pushSystemMessage(`Setup · ${message}`);
     };
     log("Machine accepted. Waiting for its secure Bivy service to come online…");
     this.startBootProgress(nodeId, provisionalId, log);
@@ -2026,7 +2047,9 @@ export class AppController {
       handlers: {
         onStatus: (status) => {
           if (status !== "online") return;
-          log(`${task.config.name} is online. Credentials are ready; preparing the repository and agent…`);
+          log(`${task.config.name} is online. Preparing credentials, repository, and agent…`);
+          this.store.updateLaunchCheckpoint(provisionalId, "service", "done");
+          this.store.updateLaunchCheckpoint(provisionalId, "credentials", "active");
           this.clearBootProgress(nodeId);
           void transport.send(task.prompt.frame);
         },
@@ -2036,6 +2059,11 @@ export class AppController {
             return;
           }
           if (event.type === "session.history" && event.requestId === task.prompt.requestId && event.sessionId) {
+            if (task.prompt.frame && "repo" in task.prompt.frame && task.prompt.frame.repo) {
+              this.store.updateLaunchCheckpoint(provisionalId, "repository", "done");
+            }
+            this.store.updateLaunchCheckpoint(provisionalId, "agent", "done");
+            this.store.updateLaunchCheckpoint(provisionalId, "message", "active");
             void this.sendPendingLaunchPrompt(provisionalId, String(event.sessionId), transport);
             return;
           }
@@ -2077,6 +2105,7 @@ export class AppController {
     const task = this.pendingLaunches.get(provisionalId);
     const nodeId = task?.machine?.nodeId;
     if (!task || !nodeId) return;
+    this.store.updateLaunchCheckpoint(provisionalId, "message", "done");
     for (const followup of task.followups) {
       await transport.send({ kind: "prompt", sessionId, ...followup });
     }
@@ -2102,8 +2131,8 @@ export class AppController {
     task.phase = "failed";
     task.updatedAt = new Date().toISOString();
     void this.pendingLaunchStore.put(task);
+    this.failLaunchCheckpoint(provisionalId, message);
     this.store.failPendingSession(provisionalId);
-    if (this.store.getState().activeSession.activeSessionId === provisionalId) this.store.pushSystemMessage(`Setup · Startup failed: ${message}`);
     this.store.setError(`Couldn't start ${task.config.name}: ${message}`);
   }
 
@@ -2145,6 +2174,10 @@ export class AppController {
         if (phase && phase !== this.bootstrapPhaseByNode.get(nodeId)) {
           this.bootstrapPhaseByNode.set(nodeId, phase);
           log(labels[phase] || `Bootstrap: ${phase}`);
+          if (phase === "ready") {
+            this.store.updateLaunchCheckpoint(provisionalId, "service", "done");
+            this.store.updateLaunchCheckpoint(provisionalId, "credentials", "done");
+          }
           if (phase === "failed") this.failPendingLaunch(provisionalId, labels.failed!);
         }
       } catch {
@@ -2162,8 +2195,15 @@ export class AppController {
     const launches = await this.pendingLaunchStore.list();
     for (const launch of launches) {
       this.pendingLaunches.set(launch.id, launch);
-      this.store.persistPendingSession(launch.id, launch.prompt.text, false, launch.config.name);
+      this.store.persistPendingSession(launch.id, launch.prompt.text, false, launch.config.name, Date.parse(launch.createdAt) || Date.now());
       if (launch.machine?.nodeId && launch.phase !== "failed") {
+        this.store.updateLaunchCheckpoint(launch.id, "account", "done");
+        this.store.updateLaunchCheckpoint(launch.id, "capacity", "done");
+        this.store.updateLaunchCheckpoint(launch.id, "machine", "done");
+        this.store.updateLaunchCheckpoint(launch.id, "service", "active");
+        if (!launch.prompt.frame || !("repo" in launch.prompt.frame) || !launch.prompt.frame.repo) {
+          this.store.updateLaunchCheckpoint(launch.id, "repository", "skipped");
+        }
         this.store.bindPendingSessionNode(launch.id, launch.machine.nodeId);
         this.startPendingRunner(launch.id);
       } else if (launch.phase === "provisioning") {

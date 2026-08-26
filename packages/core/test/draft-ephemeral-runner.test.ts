@@ -69,6 +69,27 @@ describe("draftEphemeralConfig (pick-a-runner-then-send)", () => {
     });
   });
 
+  it("keeps structured startup checkpoints and time-to-first-response across canonical binding", () => {
+    const store = new SessionStore();
+    store.persistPendingSession("starting-request-1", "Fix the flaky test", true, "Bivy Cloud", 1_000);
+    store.updateLaunchCheckpoint("starting-request-1", "account", "done");
+    store.updateLaunchCheckpoint("starting-request-1", "capacity", "done");
+    store.updateLaunchCheckpoint("starting-request-1", "service", "active");
+    store.completePendingSession("starting-request-1", "session-real", "eph-node");
+    store.setSessions([{ sessionId: "session-real", name: "Fix the flaky test", nodeId: "eph-node" }]);
+    store.markLaunchFirstResponse("session-real", 43_000);
+
+    expect(store.getState().sessionIndex.sessions[0]?.launchProgress).toMatchObject({
+      startedAt: 1_000,
+      firstResponseAt: 43_000,
+      checkpoints: {
+        account: { state: "done" },
+        capacity: { state: "done" },
+        service: { state: "active" },
+      },
+    });
+  });
+
   it("settles a failed placeholder without losing its intended Machine", () => {
     const store = new SessionStore();
     store.persistPendingSession("starting-request-1", "Fix the flaky test", true, "Bivy Cloud");

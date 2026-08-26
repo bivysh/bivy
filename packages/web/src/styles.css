@@ -2839,3 +2839,55 @@ select.picker-search { appearance: auto; }
 .readiness-label { font-weight: 500; }
 .readiness-detail { color: var(--muted); font-size: 0.82rem; }
 .readiness-next { margin-top: 10px; }
+
+/* One structured, durable view of a managed session cold start. Checkpoints
+   replace repeated setup transcript messages and remain visible through the
+   first assistant output so time-to-first-response is measurable. */
+.session-launch-progress {
+  margin: var(--space-4) 0 var(--space-5);
+  padding: var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+.session-launch-progress-title {
+  margin-bottom: var(--space-3);
+  color: var(--ink);
+  font-size: var(--text-md);
+  line-height: var(--lh-md);
+  font-weight: 650;
+}
+.session-launch-checkpoints {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.session-launch-checkpoint {
+  display: grid;
+  grid-template-columns: var(--space-5) minmax(0, 1fr);
+  align-items: start;
+  color: var(--muted);
+  font-size: var(--text-base);
+  line-height: var(--lh-base);
+}
+.session-launch-checkpoint-mark {
+  display: flex;
+  min-height: var(--lh-base);
+  align-items: center;
+  color: var(--muted);
+  font-weight: 700;
+}
+.session-launch-checkpoint.state-active,
+.session-launch-checkpoint.state-done { color: var(--ink); }
+.session-launch-checkpoint.state-done .session-launch-checkpoint-mark { color: var(--ok); }
+.session-launch-checkpoint.state-failed,
+.session-launch-checkpoint.state-failed .session-launch-checkpoint-mark { color: var(--danger); }
+.session-launch-checkpoint-error {
+  display: block;
+  margin-top: var(--space-1);
+  color: var(--danger);
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+}

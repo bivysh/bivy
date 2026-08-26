@@ -288,6 +288,7 @@ export function normalizeSessions(list: any, prev: SessionSummary[] = []): Sessi
       lastSeenAt: previous?.lastSeenAt,
       finishedAt: previous?.finishedAt,
       failedAt: previous?.failedAt,
+      launchProgress: previous?.launchProgress,
     });
   }
   return [...byId.values()];
