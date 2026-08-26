@@ -13,6 +13,7 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
   const [copied, setCopied] = useState(false);
   const [, setManagedAuthRunner] = useState(() => sessionStorage.getItem("bivy:managed-auth-runner") === "1");
   const [verifiedCredential, setVerifiedCredential] = useState<string | null>(null);
+  const [managedCredentialReady, setManagedCredentialReady] = useState(false);
   const [finishing, setFinishing] = useState(false);
   const configuredProviders = useMemo(() => state.catalogs.providers.filter((provider) => provider.configured), [state.catalogs.providers]);
   const [providerId, setProviderId] = useState("anthropic");
@@ -55,6 +56,10 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
 
   const refreshGithub = () => controller.centralGithubApp().then(setGithub).catch((error) => setGithubError(String((error as Error)?.message || error)));
   useEffect(() => {
+    if (!managedAvailable) return;
+    void controller.managedCredentialReady().then(setManagedCredentialReady).catch(() => setManagedCredentialReady(false));
+  }, [managedAvailable]);
+  useEffect(() => {
     void refreshGithub();
     const onFocus = () => void refreshGithub();
     window.addEventListener("focus", onFocus);
@@ -87,7 +92,7 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
 
   const step = !github ? "loading" : github.configured && !hasGithub ? "github" : !machineOnline ? "machine"
     : !selectedProviderConfigured ? "provider"
-      : managedAvailable && !activeCredential?.unattended ? "custody"
+      : managedAvailable && (!activeCredential?.unattended || !managedCredentialReady) ? "custody"
         : !credentialVerified ? "verify" : "ready";
   const startGithubInstall = useCallback(async () => {
     setBusy(true); setGithubError(null);
@@ -117,6 +122,8 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
     setBusy(true); setGithubError(null);
     try {
       await controller.setCredentialUnattended(activeCredential.provider, activeCredential.label, true);
+      await controller.waitForManagedCredential();
+      setManagedCredentialReady(true);
       controller.listCredentialRecords();
     } catch (error) {
       setGithubError(String((error as Error)?.message || error));

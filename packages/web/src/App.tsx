@@ -793,7 +793,10 @@ export function App() {
               sessionKey={state.activeSession.activeSessionId}
               collapsed={collapsed}
               onAction={runCommand}
-              header={activeSession?.launchProgress ? <SessionLaunchProgressView progress={activeSession.launchProgress} /> : undefined}
+              header={activeSession?.launchProgress ? <SessionLaunchProgressView
+                progress={activeSession.launchProgress}
+                onSetupCredentials={() => { void controller.setupManagedCredentials().catch((error) => controller.store.setError(error instanceof Error ? error.message : String(error))); }}
+              /> : undefined}
               footer={
                 <>
                   <ApprovalStack approvals={activeApprovals} onResolve={(id, ok, remember) => controller.resolveApproval(id, ok, remember)} />

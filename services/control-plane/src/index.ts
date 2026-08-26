@@ -1384,6 +1384,15 @@ function managedLaunchPublicMessage(error: unknown, attemptId: string): string {
   return `Bivy Cloud failed while ${stage}. Reference ${attemptId.slice(0, 8)}. Please retry; no Machine was left assigned to this session.`;
 }
 
+// Browser-visible readiness contains no credential material: it only confirms
+// whether the separately encrypted Cloud snapshot has been published. Onboarding
+// waits for this authoritative edge instead of trusting a node-local toggle.
+app.get("/account/managed-credential-status", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const vault = await store.getHostedModelAuthVault(account.id);
+  res.json({ ready: Boolean(vault?.ciphertext), generation: vault?.generation ?? 0 });
+}));
+
 // Interactive managed launch. The account chooses only a server-authored managed
 // profile; provider credentials remain operator-only. The room key is returned
 // once over the authenticated no-store response so this browser can establish
