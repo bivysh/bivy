@@ -248,7 +248,7 @@ export class AppController {
   /** Ephemeral cold starts outlive the pane that launched them. Each first
    *  message gets a sidebar placeholder immediately, and its launch continues
    *  here even if the user presses New and starts another session. */
-  private pendingLaunches = new Map<string, PendingEphemeralLaunch & { transport?: Transport }>();
+  private pendingLaunches = new Map<string, PendingEphemeralLaunch & { transport?: Transport; sessionId?: string; promptSent?: boolean }>();
   /** Timed, factual boot updates. Provider creation returning only means the VM
    *  exists; these heartbeats make the otherwise silent cloud-init wait visible. */
   private bootProgressTimers = new Map<string, ReturnType<typeof setTimeout>[]>();
@@ -2034,8 +2034,23 @@ export class AppController {
             this.failPendingLaunch(provisionalId, String(event.error || "Session creation failed."));
             return;
           }
-          if (event.type !== "session.history" || event.requestId !== task.prompt.requestId || !event.sessionId) return;
-          void this.finishPendingLaunch(provisionalId, String(event.sessionId), transport);
+          if (event.type === "session.history" && event.requestId === task.prompt.requestId && event.sessionId) {
+            void this.sendPendingLaunchPrompt(provisionalId, String(event.sessionId), transport);
+            return;
+          }
+          // Do not replace the provisional row or close this transport merely
+          // because session.new succeeded. The first prompt can still fail its
+          // credential/runtime preflight; keep ownership until the node confirms
+          // that exact user message, otherwise the prompt disappears and its
+          // subsequent session.error is lost with the temporary transport.
+          if (
+            event.type === "session.user_message" &&
+            task.promptSent &&
+            event.sessionId === task.sessionId &&
+            event.clientMessageId === task.prompt.clientMessageId
+          ) {
+            void this.finishPendingLaunch(provisionalId, String(task.sessionId), transport);
+          }
         },
         onError: (message) => {
           if (!/^node offline$/i.test(message.trim())) log(`Connection retry: ${message}`);
@@ -2046,14 +2061,21 @@ export class AppController {
     void transport.connect();
   }
 
-  private async finishPendingLaunch(provisionalId: string, sessionId: string, transport: Transport): Promise<void> {
+  private async sendPendingLaunchPrompt(provisionalId: string, sessionId: string, transport: Transport): Promise<void> {
     const task = this.pendingLaunches.get(provisionalId);
-    const nodeId = task?.machine?.nodeId;
-    if (!task || !nodeId) return;
+    if (!task || task.promptSent) return;
+    task.sessionId = sessionId;
+    task.promptSent = true;
     if (this.store.getState().activeSession.activeSessionId === provisionalId) {
       this.store.pushSystemMessage("Setup · Repository and agent are ready. Sending your prompt…");
     }
     await transport.send({ kind: "prompt", sessionId, text: task.prompt.text, clientMessageId: task.prompt.clientMessageId, attachments: task.prompt.attachments });
+  }
+
+  private async finishPendingLaunch(provisionalId: string, sessionId: string, transport: Transport): Promise<void> {
+    const task = this.pendingLaunches.get(provisionalId);
+    const nodeId = task?.machine?.nodeId;
+    if (!task || !nodeId) return;
     for (const followup of task.followups) {
       await transport.send({ kind: "prompt", sessionId, ...followup });
     }

@@ -3457,9 +3457,13 @@ async function syncModelAuthFromControlPlane() {
     }
 
     await processModelAuthKeyRequests(data.requests ?? []);
-    // Ready means there is no encrypted vault to hydrate, or this node has the
-    // key needed to consume it. Ciphertext with no key remains not-ready.
-    if (!targetVault?.ciphertext || (hostedCustody ? readHostedModelAuthVaultKey() : readLocalModelAuthVaultKey())) void reportEphemeralMilestone("credentialsReadyAt");
+    // A personal node with no vault has nothing to hydrate and is ready. A
+    // hosted-custody guest is different: an absent filtered snapshot means it
+    // has no model credential at all, not that hydration succeeded.
+    const credentialsReady = hostedCustody
+      ? Boolean(targetVault?.ciphertext && readHostedModelAuthVaultKey())
+      : Boolean(!targetVault?.ciphertext || readLocalModelAuthVaultKey());
+    if (credentialsReady) void reportEphemeralMilestone("credentialsReadyAt");
   } catch (error) {
     console.warn("[auth-sync] model auth sync failed:", (error as Error).message);
   }
@@ -7353,7 +7357,9 @@ function actionableAgentError(runtimeId: string, error: unknown): string {
   if (isModelAuthError(raw) || /reading ['"]provider['"]|no api key found/i.test(raw)) {
     if (id.includes("claude")) return "Claude Code is not signed in. Run `claude` once, complete sign-in, then retry; the same login works from Bivy and the PWA.";
     if (id.startsWith("codex")) return "Codex is not signed in. Run `codex login`, then retry; the same login works from Bivy and the PWA.";
-    if (id === "pi" || id === "aider") return "No model credential is configured. Run `bivy login`, then retry. This is only required once and compatible credentials sync E2E-encrypted to your other Bivy nodes.";
+    if (id === "pi" || id === "aider") return isHostedCustodyNode()
+      ? "No model credential is available to this Bivy Cloud Machine. Connect a provider and enable it for Bivy Cloud, then retry."
+      : "No model credential is configured. Run `bivy login`, then retry. This is only required once and compatible credentials sync E2E-encrypted to your other Bivy nodes.";
     return "The selected agent needs model authentication. Sign in through its native CLI, then retry.";
   }
   return raw;

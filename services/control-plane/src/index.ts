@@ -1364,6 +1364,17 @@ app.post("/account/managed-machines", requireUser, asyncHandler(async (req, res)
     return res.status(503).json({ error: "Managed session Machines are not available." });
   }
   const configId = String(req.body?.configId ?? "").trim();
+  const hostedCredentialVault = await store.getHostedModelAuthVault(account.id);
+  // A managed guest intentionally cannot inherit a personal Machine's local
+  // credential vault. Fail before reserving/billing/provisioning when the user
+  // has not explicitly created the separately encrypted Cloud snapshot; letting
+  // the VM boot only defers this into a misleading `bivy login` runtime error.
+  if (!hostedCredentialVault?.ciphertext) {
+    return res.status(409).json({
+      error: "Connect a model provider and enable it for Bivy Cloud before starting a session.",
+      code: "managed_credentials_required",
+    });
+  }
   const config = (await store.getEphemeralConfigs(account.id)).find((candidate) => candidate.id === configId);
   if (!config || config.computeSource !== "managed") return res.status(404).json({ error: "Managed session profile not found." });
   const adapter = ephemeralAdapter(config.provider);
