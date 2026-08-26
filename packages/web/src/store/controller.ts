@@ -1993,7 +1993,12 @@ export class AppController {
       task.updatedAt = new Date().toISOString();
       void this.pendingLaunchStore.put(task);
       if (this.pendingPrompt?.provisionalId === provisionalId) this.pendingPrompt = null;
-      this.failLaunchCheckpoint(provisionalId, message);
+      if (e instanceof ManagedLaunchError && e.code === "managed_credentials_required") {
+        this.store.updateLaunchCheckpoint(provisionalId, "capacity", "waiting");
+        this.store.updateLaunchCheckpoint(provisionalId, "account", "failed", (e as Error).message);
+      } else {
+        this.failLaunchCheckpoint(provisionalId, message);
+      }
       this.store.failPendingSession(provisionalId);
       const actions = e instanceof ManagedLaunchError ? e.actions : [];
       this.store.setError(`Couldn't start ${config.name}: ${(e as Error)?.message || e}`, actions);
