@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { EventLog, foldIntermediate, foldTool, replayExtras, baseReplay, parseLog, type EventLogEntry, type LogRecord } from "../src/session/event-log.js";
+import { EventLog, foldIntermediate, foldTool, replayExtras, baseReplay, mergeBases, parseLog, type EventLogEntry, type LogRecord } from "../src/session/event-log.js";
 import { mergeTranscript, normalizedIntermediateText, thinkingTextFromContent, type SidecarMessage } from "../src/session/transcript-merge.js";
 
 // --- Faithful re-implementation of the LEGACY two-sidecar fold ------------------
@@ -106,6 +106,24 @@ const STREAMS: Record<string, EventLogEntry[]> = {
 };
 
 const BASE = [baseMsg("user", "q1", 100), baseMsg("assistant", "a1", 200), baseMsg("user", "q2", 300), baseMsg("assistant", "final", 400)];
+
+test("mergeBases replaces an in-place streaming revision instead of duplicating it", () => {
+  const partial = baseMsg("assistant", "Both counts", 200);
+  const final = baseMsg("assistant", "Both counts agreed: 2.", 200);
+  assert.deepEqual(mergeBases([baseMsg("user", "count", 100), partial], [baseMsg("user", "count", 100), final]), [baseMsg("user", "count", 100), final]);
+});
+
+test("mergeBases repairs streaming revisions already duplicated in the log", () => {
+  const partial = baseMsg("assistant", "Both counts", 200);
+  const final = baseMsg("assistant", "Both counts agreed: 2.", 200);
+  assert.deepEqual(mergeBases([baseMsg("user", "count", 100), partial, final], [final]), [baseMsg("user", "count", 100), final]);
+});
+
+test("mergeBases still appends a disjoint resumed turn", () => {
+  const logged = [baseMsg("user", "old", 100), baseMsg("assistant", "answer", 200)];
+  const resumed = [baseMsg("user", "new", 300), baseMsg("assistant", "reply", 400)];
+  assert.deepEqual(mergeBases(logged, resumed), [...logged, ...resumed]);
+});
 
 test("replayExtras reproduces the legacy two-sidecar fold for every stream", () => {
   for (const [name, events] of Object.entries(STREAMS)) {

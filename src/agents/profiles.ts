@@ -215,7 +215,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     // Approve/Deny + session/load resume + a real model picker), the same bar Pi,
     // Claude Code, and Codex clear. See `acp` below for the version fallback.
     supportTier: "supported",
-    testedVersion: "1.18.18",
+    testedVersion: "1.18.23",
     blurb: "The most widely used open-source coding harness (OpenCode CLI).",
     // `opencode run -s <id> "<prompt>"` continues a prior session by its own id
     // (`-s, --session  session id to continue`, per `opencode run --help`).
@@ -239,7 +239,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     // `opencode acp` ("start ACP (Agent Client Protocol) server") drives OpenCode
     // through the governed ProtocolRuntime instead of the one-shot pipe: per-tool
     // Approve/Deny, streaming, `session/load` resume, and `session/set_model`.
-    // Validated against opencode 1.18.18, so it is ON by default (`preferred`) —
+    // Validated against opencode 1.18.23, so it is ON by default (`preferred`) —
     // gated on the binary actually listing the `acp` subcommand, so an older
     // OpenCode falls back to the pipe path rather than opening a dead session.
     // Force the pipe path back with BIVY_OPENCODE_ACP=0.

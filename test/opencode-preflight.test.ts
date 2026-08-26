@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { opencodeCredentialPreflight, opencodeNoCredentialMessage } from "../src/runtime/opencode-preflight.js";
 
 // `opencode run` boots OpenCode's own server, which 500s with an opaque
@@ -34,6 +37,14 @@ check("passes for anthropic via a Claude Code OAuth token", () => {
 
 check("passes for google via GEMINI_API_KEY", () => {
   assert.equal(opencodeCredentialPreflight({ GEMINI_API_KEY: "g-key" }, { provider: "google" }), undefined);
+});
+
+check("honors the agent-owned opencode auth store", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-opencode-auth-"));
+  const authPath = path.join(dir, "auth.json");
+  fs.writeFileSync(authPath, JSON.stringify({ opencode: { type: "api", key: "not-read-by-bivy" } }));
+  assert.equal(opencodeCredentialPreflight({}, { provider: "opencode", authPath }), undefined);
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 check("blocks with an actionable message when the selected provider's key is missing", () => {

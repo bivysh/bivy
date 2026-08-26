@@ -20,11 +20,33 @@
 // It's provider-aware: OpenCode models are `provider/model` ids, so the run's
 // selected provider tells us exactly which key var must be present.
 
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { apiKeyEnvVar } from "./credentials.js";
 
 export interface PreflightContext {
   /** The session's selected model provider (e.g. "openai", "anthropic"), lowercased. */
   provider?: string;
+  /** Override for deterministic tests. */
+  authPath?: string;
+}
+
+function nativeAuthPath(ctx: PreflightContext): string {
+  if (ctx.authPath) return ctx.authPath;
+  const data = process.env.XDG_DATA_HOME?.trim() || (process.platform === "win32" ? process.env.APPDATA?.trim() : "") || path.join(os.homedir(), ".local", "share");
+  return path.join(data, "opencode", "auth.json");
+}
+
+/** OpenCode owns an encrypted/on-disk provider login independently of Bivy's
+ * env-var vault. Only inspect provider keys — never copy credential values. */
+function hasNativeCredential(provider: string, ctx: PreflightContext): boolean {
+  try {
+    const auth = JSON.parse(fs.readFileSync(nativeAuthPath(ctx), "utf8")) as Record<string, unknown>;
+    return Boolean(auth[provider]);
+  } catch {
+    return false;
+  }
 }
 
 /** Actionable message shown when OpenCode's selected provider has no credential. */
@@ -58,6 +80,6 @@ export function opencodeCredentialPreflight(
   // Anthropic can authenticate via the Claude Code OAuth token, not just a key.
   if (provider === "anthropic" && env.CLAUDE_CODE_OAUTH_TOKEN?.trim()) return undefined;
   const envVar = apiKeyEnvVar(provider);
-  if (env[envVar]?.trim()) return undefined;
+  if (env[envVar]?.trim() || hasNativeCredential(provider, ctx)) return undefined;
   return opencodeNoCredentialMessage(provider, envVar);
 }

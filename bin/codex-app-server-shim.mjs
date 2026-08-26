@@ -16,7 +16,7 @@
 // `approvalPolicy: "untrusted"` Codex escalates every model-proposed action, so
 // Bivy's guardianInterceptor sees — and can veto — each one.
 //
-// Protocol surfaces (verified against codex-cli 0.147.0):
+// Protocol surfaces (verified against codex-cli 0.150.0):
 //   • initialize                              → handshake
 //   • thread/start {cwd, approvalPolicy, sandbox}  → threadId
 //   • thread/resume {threadId, cwd, approvalPolicy, sandbox} → threadId
@@ -86,12 +86,20 @@ function commandText(command) {
 }
 
 function paramsItemId(params, fallback) {
-  return String(params?.itemId || params?.callId || params?.item?.id || fallback || "");
+  const item = params?.item;
+  // Codex emits a new item id for each lifecycle revision of the same child
+  // agent (`started`, `completed`, …). Normalize those revisions onto the child
+  // thread id so the transcript updates one sub-agent card instead of showing a
+  // misleading second delegation for completion.
+  if (item?.type === "subAgentActivity" && item.agentThreadId) return `subagent-${item.agentThreadId}`;
+  return String(params?.itemId || params?.callId || item?.id || fallback || "");
 }
 
 function rememberItem(item) {
   if (!item || typeof item !== "object") return;
-  const id = String(item.id || "");
+  const id = item.type === "subAgentActivity" && item.agentThreadId
+    ? `subagent-${item.agentThreadId}`
+    : String(item.id || "");
   if (!id) return;
   if (item.type === "commandExecution") {
     itemInputs.set(id, {
@@ -174,8 +182,21 @@ function finishCompletedTurn() {
   else bivy({ type: "session.done" });
 }
 
+// Codex may publish turn/completed before the final parent agentMessage starts
+// streaming (especially after a child agent finishes). Debounce completion while
+// the parent stream is still arriving instead of sealing immediately: sealing
+// early makes ProtocolRuntime treat every later token as a separate late
+// message_end, producing dozens of full transcript snapshots and visible bubble
+// churn. The delay is also the bounded fallback for a CLI that omits a final
+// prose item entirely.
+function scheduleCompletedTurn() {
+  if (!pendingTurnCompletion || activeObservedItems.size > 0) return;
+  if (turnCompletionTimer) clearTimeout(turnCompletionTimer);
+  turnCompletionTimer = setTimeout(finishCompletedTurn, 500);
+}
+
 function maybeFinishCompletedTurn() {
-  if (pendingTurnCompletion && activeObservedItems.size === 0) finishCompletedTurn();
+  scheduleCompletedTurn();
 }
 
 function handleCompletedItem(params) {
@@ -334,6 +355,9 @@ function onNotification(m) {
       if (itemId) agentMessageItems.add(itemId);
       if (fromCurrentThread && typeof params.delta === "string" && params.delta) {
         bivy({ type: "message.delta", text: params.delta });
+        // A parent token arriving after turn/completed proves the response is
+        // not actually drained yet. Keep one quiet-period timer behind it.
+        scheduleCompletedTurn();
       }
       return;
     }
@@ -397,8 +421,7 @@ function onNotification(m) {
       // tool_result. Drain known started items first, with a bounded fallback
       // for runtimes that omit a completion notification.
       pendingTurnCompletion = true;
-      if (activeObservedItems.size === 0) finishCompletedTurn();
-      else turnCompletionTimer = setTimeout(finishCompletedTurn, 500);
+      scheduleCompletedTurn();
       return;
     }
     case "turn/failed": {
@@ -537,7 +560,7 @@ async function onBivyCommand(msg) {
 
 // Announce capabilities; ProtocolRuntime finalizes them from this handshake.
 // resume: true — thread/resume reconnects a prior thread by its rollout id
-// (verified against codex-cli 0.147.0); the resume plumbing is Bivy-side.
+// (verified against codex-cli 0.150.0); the resume plumbing is Bivy-side.
 async function announceHello() {
   try {
     await ensureInitialized();

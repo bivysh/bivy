@@ -40,7 +40,7 @@ rl.on("line", (line) => {
       agentThreadId: "child-thread", agentPath: "explorer",
     };
     send({ jsonrpc: "2.0", method: "item/started", params: { item: activity } });
-    send({ jsonrpc: "2.0", method: "item/completed", params: { item: activity } });
+    send({ jsonrpc: "2.0", method: "item/completed", params: { item: { ...activity, id: "activity-completed" } } });
     const shell = {
       type: "commandExecution", id: "shell-1", command: "false", commandActions: [], cwd: "/tmp",
       status: "failed", aggregatedOutput: "command failed", exitCode: 7,
@@ -50,8 +50,11 @@ rl.on("line", (line) => {
     send({ jsonrpc: "2.0", method: "item/completed", params: { threadId: "child-thread", item: { type: "agentMessage", id: "child-complete-only", text: "CHILD_COMPLETION_MUST_NOT_LEAK" } } });
     send({ jsonrpc: "2.0", method: "item/completed", params: { threadId: "thread-fixture", item: { type: "agentMessage", id: "parent-message", text: "Parent answer." } } });
     send({ jsonrpc: "2.0", method: "turn/completed", params: { turn: { status: "completed" } } });
-    // Codex 0.147 may deliver this final collaboration completion just after the
-    // turn boundary. The shim must drain it before publishing session.done.
+    // Codex may deliver collaboration completion and then begin the final parent
+    // answer after turn/completed. The shim must drain both before publishing
+    // session.done; otherwise each late token becomes its own transcript reset.
     setTimeout(() => send({ jsonrpc: "2.0", method: "item/completed", params: { item: { ...collab, status: "completed" } } }), 20);
+    setTimeout(() => send({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { threadId: "thread-fixture", turnId: "turn-fixture", itemId: "late-parent-message", delta: " Late answer." } }), 100);
+    setTimeout(() => send({ jsonrpc: "2.0", method: "item/completed", params: { threadId: "thread-fixture", item: { type: "agentMessage", id: "late-parent-message", text: " Late answer." } } }), 120);
   }
 });
