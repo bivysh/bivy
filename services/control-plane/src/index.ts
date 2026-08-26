@@ -1227,8 +1227,29 @@ async function ensureManagedDefaultForAccount(accountId: string): Promise<Epheme
   if (!desired) throw Object.assign(new Error("Managed session provider is not configured."), { status: 503 });
   const configs = await store.getEphemeralConfigs(accountId);
   const existing = configs.find((config) => config.computeSource === "managed");
-  const config = existing ?? desired;
-  if (!existing) await store.setEphemeralConfigs(accountId, [...configs, config]);
+  let config = desired;
+  if (!existing) {
+    await store.setEphemeralConfigs(accountId, [...configs, config]);
+  } else {
+    // This profile is deployment-owned. Reconcile image/size/TTL on every read
+    // so existing accounts follow the exact control-plane SHA instead of
+    // retaining whichever managed image was current when they first onboarded.
+    const candidate: EphemeralNodeConfig = {
+      ...desired,
+      id: existing.id,
+      createdAt: existing.createdAt,
+      updatedAt: existing.updatedAt,
+    };
+    const fields: Array<keyof EphemeralNodeConfig> = [
+      "name", "provider", "region", "size", "image", "ttlMinutes",
+      "teardownOnAgentFinish", "computeSource",
+    ];
+    const changed = fields.some((field) => candidate[field] !== existing[field]);
+    config = changed ? { ...candidate, updatedAt: new Date().toISOString() } : existing;
+    if (changed) {
+      await store.setEphemeralConfigs(accountId, configs.map((item) => item.id === existing.id ? config : item));
+    }
+  }
   await store.setHostedProvisioning(accountId, { enabled: true });
   return config;
 }
@@ -3422,6 +3443,13 @@ app.put("/account/ephemeral-default", asyncHandler(async (req, res) => {
 app.get("/account/ephemeral-configs", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
+  // Existing users may have completed onboarding before managed Cloud existed.
+  // Listing the picker is the universal idempotent adoption seam: self-hosted
+  // and disabled deployments stay untouched, while every eligible account sees
+  // the deployment-owned Bivy Cloud destination alongside personal Machines.
+  if (ephemeralMachinesEnabled() && process.env.MANAGED_COMPUTE_ENABLED === "1") {
+    await ensureManagedDefaultForAccount(client.accountId);
+  }
   res.json(await store.getEphemeralConfigs(client.accountId));
 }));
 
