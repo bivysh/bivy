@@ -28,6 +28,8 @@ test("a managed repository picker offers the central App to established accounts
   expect(pickers).toContain("Use my GitHub App");
   expect(pickers).toContain("Use this App on hosted Machines");
   expect(pickers).toContain("separate from any custom GitHub App connected to a personal Machine");
+  expect(pickers).toContain("managedDraft && state.catalogs.reposAuthed && <AddHostedGithubInstallation />");
+  expect(pickers).toContain("Add another GitHub account or organization…");
 });
 
 test("voice input remains available after the user types a message", async () => {
