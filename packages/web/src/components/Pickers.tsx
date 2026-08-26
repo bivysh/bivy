@@ -327,7 +327,7 @@ function HostedRepoConnectPrompt({ error }: { error?: string | null }) {
             {busy ? "Connecting…" : "Use Bivy GitHub App"}
           </button>
           <button type="button" className="btn link" disabled={busy} onClick={() => void install()}>
-            Change repository access
+            Add another GitHub account or organization…
           </button>
         </>
       ) : (
@@ -355,6 +355,34 @@ function HostedRepoConnectPrompt({ error }: { error?: string | null }) {
         </form>
       )}
       {(setupError || error) && <p className="repo-connect-alt">{setupError || error}</p>}
+    </div>
+  );
+}
+
+/** Repo discovery succeeds after the first installation, so its empty-state
+ * setup disappears. Keep the repeat-install action in the populated picker;
+ * GitHub's installations/new flow lets the user select another personal
+ * account or organization, and the control plane aggregates every binding. */
+function AddHostedGithubInstallation() {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const add = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await controller.createCentralGithubInstall("/");
+      window.location.assign(next.installUrl);
+    } catch (cause) {
+      setError(String((cause as Error)?.message || cause));
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="repo-connect-note">
+      <button type="button" className="btn link" disabled={busy} onClick={() => void add()}>
+        {busy ? "Opening GitHub…" : "Add another GitHub account or organization…"}
+      </button>
+      {error && <p className="repo-connect-alt">{error}</p>}
     </div>
   );
 }
@@ -450,6 +478,7 @@ export function RepoPicker({ state, onClose }: { state: AppState; onClose: () =>
         {repoTotal > repos.length && (
           <div className="picker-empty">Showing first {repos.length} of {repoTotal} — search to narrow.</div>
         )}
+        {managedDraft && state.catalogs.reposAuthed && <AddHostedGithubInstallation />}
       </div>
     </Sheet>
   );
