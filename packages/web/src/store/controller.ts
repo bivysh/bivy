@@ -2000,7 +2000,14 @@ export class AppController {
       let managedCredentialsReady = true;
       if (config.computeSource === "managed") {
         managedCredentialsReady = await this.managedCredentialReady().catch(() => false);
-        if (!managedCredentialsReady) managedCredentialsReady = await this.tryPublishManagedCredential();
+        const requestedAgent = task.prompt.frame && "agent" in task.prompt.frame
+          ? String(task.prompt.frame.agent || "")
+          : "";
+        // Account readiness means the hosted snapshot contains at least one
+        // credential, not necessarily the one this draft's agent needs. Always
+        // check the requested provider before treating the snapshot as ready.
+        managedCredentialsReady = await this.tryPublishManagedCredential(requestedAgent, managedCredentialsReady)
+          || managedCredentialsReady;
       }
       this.store.updateLaunchCheckpoint(provisionalId, "account", "done");
       this.store.updateLaunchCheckpoint(provisionalId, "capacity", "active");
@@ -2054,12 +2061,20 @@ export class AppController {
     }
   }
 
-  private async tryPublishManagedCredential(): Promise<boolean> {
+  private async tryPublishManagedCredential(agentId: string, hostedReady: boolean): Promise<boolean> {
     if (this.store.getState().connection.status !== "online") return false;
+    const provider = agentId.startsWith("codex")
+      ? "openai-codex"
+      : agentId.startsWith("claude")
+        ? "anthropic"
+        : null;
     const candidate = this.store.getState().settings.credentialRecords.find(
-      (record) => record.sync === "account" && record.kind !== "reference",
+      (record) => record.sync === "account" && record.kind !== "reference"
+        && (!provider || record.provider === provider),
     );
     if (!candidate) return false;
+    // A granted credential is already part of a healthy filtered snapshot.
+    if (candidate.unattended && hostedReady) return true;
     try {
       // Sending an interactive Bivy Cloud task is the user's request to make
       // their existing account-scoped model login available to that isolated

@@ -67,6 +67,8 @@ test("managed-only cold start performs provider setup on the original interactiv
   expect(wizard).not.toContain("controller.createManagedAuthRunner()");
   expect(controller).toContain("beginManagedCredentialSetup");
   expect(controller).toContain("tryPublishManagedCredential");
+  expect(controller).toContain('agentId.startsWith("codex")');
+  expect(controller).toContain('record.provider === provider');
   expect(controller).toContain('record.sync === "account" && record.kind !== "reference"');
   expect(controller).not.toContain('record.kind !== "reference" && record.unattended');
   expect(controller).toContain("Stay on the original provisional session route");
