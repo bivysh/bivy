@@ -251,6 +251,70 @@ function RepoConnectPrompt({ state }: { state: AppState }) {
   );
 }
 
+// Managed Machines cannot use a private key held by one of the user's personal
+// Machines. Offer the deployment's central App directly in the repo picker,
+// including for established accounts that already connected a custom App.
+function HostedRepoConnectPrompt({ error }: { error?: string | null }) {
+  const [status, setStatus] = useState<Awaited<ReturnType<typeof controller.centralGithubApp>> | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [setupError, setSetupError] = useState<string | null>(null);
+
+  useEffect(() => {
+    controller.centralGithubApp().then(setStatus).catch((cause) => setSetupError(String((cause as Error)?.message || cause)));
+  }, []);
+
+  const install = async () => {
+    setBusy(true);
+    setSetupError(null);
+    try {
+      const next = await controller.createCentralGithubInstall("/");
+      window.location.assign(next.installUrl);
+    } catch (cause) {
+      setSetupError(String((cause as Error)?.message || cause));
+      setBusy(false);
+    }
+  };
+  const activateExisting = async () => {
+    setBusy(true);
+    setSetupError(null);
+    try {
+      await controller.setHostedProvisioning({ githubIdentity: "central-app" });
+      controller.listRepos();
+    } catch (cause) {
+      setSetupError(String((cause as Error)?.message || cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const hasInstallation = Boolean(status?.installations.length);
+
+  return (
+    <div className="repo-connect">
+      <p className="repo-connect-lead">Connect the Bivy GitHub App for hosted Machines.</p>
+      <p className="repo-connect-sub">
+        Choose which repositories Bivy Cloud may access. This is separate from any custom GitHub App connected to a personal Machine.
+      </p>
+      {status && !status.configured ? (
+        <p className="repo-connect-alt">The hosted GitHub App is not available on this deployment.</p>
+      ) : hasInstallation ? (
+        <>
+          <button type="button" className="btn primary block" disabled={busy} onClick={() => void activateExisting()}>
+            {busy ? "Connecting…" : "Use Bivy GitHub App"}
+          </button>
+          <button type="button" className="btn link" disabled={busy} onClick={() => void install()}>
+            Change repository access
+          </button>
+        </>
+      ) : (
+        <button type="button" className="btn primary block" disabled={busy || status === null} onClick={() => void install()}>
+          {busy ? "Opening GitHub…" : status === null ? "Checking GitHub App…" : "Install Bivy GitHub App"}
+        </button>
+      )}
+      {(setupError || error) && <p className="repo-connect-alt">{setupError || error}</p>}
+    </div>
+  );
+}
+
 // ---- Repo picker (new session) ----
 export function RepoPicker({ state, onClose }: { state: AppState; onClose: () => void }) {
   const [q, setQ] = useState("");
@@ -258,6 +322,7 @@ export function RepoPicker({ state, onClose }: { state: AppState; onClose: () =>
   // by the ›-arrow on a repo row (#466). Tapping a repo row itself picks it on
   // its default branch; the arrow is the "…but from a specific branch" path.
   const [branchFor, setBranchFor] = useState<string | null>(null);
+  const managedDraft = state.draft.ephemeralConfig?.computeSource === "managed";
   useEffect(() => {
     controller.listRepos();
     // Warm the branch list for the already-picked repo so drilling into it via
@@ -292,10 +357,13 @@ export function RepoPicker({ state, onClose }: { state: AppState; onClose: () =>
           }}
         />
         {state.catalogs.reposLoading && <div className="picker-empty">Loading repos…</div>}
-        {!state.catalogs.reposLoading && !state.catalogs.reposAuthed && !state.catalogs.reposError && (
+        {!state.catalogs.reposLoading && !state.catalogs.reposAuthed && managedDraft && (
+          <HostedRepoConnectPrompt error={state.catalogs.reposError} />
+        )}
+        {!state.catalogs.reposLoading && !state.catalogs.reposAuthed && !managedDraft && !state.catalogs.reposError && (
           <RepoConnectPrompt state={state} />
         )}
-        {!state.catalogs.reposLoading && state.catalogs.reposError && <div className="picker-empty">{state.catalogs.reposError}</div>}
+        {!state.catalogs.reposLoading && state.catalogs.reposError && !managedDraft && <div className="picker-empty">{state.catalogs.reposError}</div>}
         {repos.map((r) => {
           const picked = r.slug === state.draft.repo;
           return (

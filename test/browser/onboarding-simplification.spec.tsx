@@ -11,11 +11,21 @@ test("isolated first use recommends one cloud and hides the rest behind progress
   expect(view).toContain("<Badge>Available</Badge>");
 });
 
-test("the first isolated Run offers a safe task and names the billable launch action", async () => {
+test("the first isolated Run keeps session controls visible without a canned starter task", async () => {
   const composer = await read("../../packages/web/src/components/Composer.tsx");
-  expect(composer).toContain("Start with a safe read-only task");
-  expect(composer).toContain("Inspect this repository and explain how to run its tests. Do not change files.");
+  expect(composer).not.toContain("Start with a safe read-only task");
+  expect(composer).not.toContain("composer-advanced");
+  expect(composer).toContain('className="pill sandbox-pill"');
+  expect(composer).toContain('className="pill agent-pill"');
+  expect(composer).toContain('className="pill model-pill"');
   expect(composer).toContain("Launch Machine and send task");
+});
+
+test("a managed repository picker offers the central App to established accounts", async () => {
+  const pickers = await read("../../packages/web/src/components/Pickers.tsx");
+  expect(pickers).toContain("Install Bivy GitHub App");
+  expect(pickers).toContain("Use Bivy GitHub App");
+  expect(pickers).toContain("separate from any custom GitHub App connected to a personal Machine");
 });
 
 test("voice input remains available after the user types a message", async () => {

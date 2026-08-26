@@ -147,6 +147,7 @@ async function main() {
   // --- Install flow: state binds the callback to the initiating account. ---
   const status = await json(port, "GET", "/account/github/central-app", undefined, tokenA);
   expect(status.body.configured === true && status.body.installations.length === 0, "central app reports configured with no installations yet");
+  await json(port, "PUT", "/account/hosted-provisioning", { githubIdentity: "own-app" }, tokenA);
 
   const stateRes = await json(port, "POST", "/account/github/central-app/install-state", { returnPath: "/settings" }, tokenA);
   expect(typeof stateRes.body.state === "string" && String(stateRes.body.installUrl).includes("bivy-central-test"), "install-state mints a state and install URL");
@@ -166,7 +167,7 @@ async function main() {
   expect(afterB.body.installations.length === 0, "account B sees no installations (cross-account isolation)");
 
   const identityA = await json(port, "GET", "/account/hosted-provisioning", undefined, tokenA);
-  expect(identityA.body.githubIdentity === "central-app", "first bind selects the central-app identity for the account");
+  expect(identityA.body.githubIdentity === "central-app", "explicit central App setup replaces an established account's hosted identity selection");
 
   // --- Repo listing: account-scoped, server-side JWT → installation token. ---
   const reposA = await json(port, "GET", "/account/github/central-app/installations/42/repos", undefined, tokenA);

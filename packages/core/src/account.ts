@@ -824,6 +824,8 @@ export interface HostedProvisioningStatus {
 
 export interface HostedProvisioningPatch {
   enabled?: boolean;
+  /** Select which account GitHub identity hosted Machines use. */
+  githubIdentity?: "central-app" | "own-app" | "token" | null;
   githubToken?: string;
   githubApp?: { appId: string; installationId: string; privateKeyPem: string } | null;
   providerTokens?: Record<string, string>;

@@ -545,45 +545,29 @@ export function Composer({
       : state.settings.nodeSettings?.defaultSandbox ?? "";
   const sandboxTitle = draftTier ? draftTier.hint : "Sandbox mode for this session (machine default)";
   const canSend = !disabled && (Boolean(text.trim()) || attachments.length > 0);
-  // B2 — a first session exposes exactly four decisions: machine, repo,
-  // agent/model, protection. On a draft we render a single explicit summary of
-  // them (the machine otherwise lives only in the topbar switcher), so a new user
-  // sees the whole decision set at a glance rather than inferring it from pills.
-  const machineLabel = state.connection.nodes.find((n) => n.id === state.connection.currentNodeId)?.name
+  // A draft renders a compact summary of its session choices; the actual
+  // controls remain in their stable positions around the composer.
+  const machineLabel = state.draft.ephemeralConfig?.name
+    || state.connection.nodes.find((n) => n.id === state.connection.currentNodeId)?.name
     || (controller.direct ? "This machine" : "Default machine");
-  const managedDraft = isDraft && state.draft.ephemeralConfig?.computeSource === "managed";
-  const firstSessionLine = managedDraft
-    ? `${state.draft.repo || "No repo"}  ·  ${state.catalogs.currentAgentName || "Agent"}`
-    : firstSessionSummary({
-        machine: machineLabel,
-        repo: state.draft.repo || "No repo",
-        agent: state.catalogs.currentAgentName || "Agent",
-        model: modelLabel,
-        modelManagedByAgent: !modelSelectable,
-        protection: sandboxLabel || state.draft.sandbox || undefined,
-      });
+  const firstSessionLine = firstSessionSummary({
+    machine: machineLabel,
+    repo: state.draft.repo || "No repo",
+    agent: state.catalogs.currentAgentName || "Agent",
+    model: modelLabel,
+    modelManagedByAgent: !modelSelectable,
+    protection: sandboxLabel || state.draft.sandbox || undefined,
+  });
   const firstIsolatedRun = isDraft && Boolean(state.draft.ephemeralConfig);
-  const starterTask = "Inspect this repository and explain how to run its tests. Do not change files.";
 
   return (
     <>
       {isDraft && (
         <div
           className="composer-first-session"
-          title={managedDraft ? "Choose a repository and agent, then send your prompt. Managed compute starts automatically." : "A first session decides just four things: machine, repository, agent/model, and protection."}
+          title="Machine, repository, agent, model, and protection for this session"
         >
           Starting on <span className="fs-decisions">{firstSessionLine}</span>
-        </div>
-      )}
-      {firstIsolatedRun && !text.trim() && attachments.length === 0 && (
-        <div className="composer-starter" role="note">
-          <div>
-            <strong>Start with a safe read-only task</strong>
-            <span>Verify the Machine, repository, agent, and model before asking it to edit code.</span>
-          </div>
-          <button type="button" className="btn small" onClick={() => setText(starterTask)}>
-            Use starter task
-          </button>
         </div>
       )}
       {isDraft && (
@@ -592,29 +576,10 @@ export function Composer({
             <GhGlyph />
             <span className="pill-label">{repoLabel}</span>
           </button>
-          {!managedDraft && <button type="button" className="pill sandbox-pill" onClick={() => setPicker("sandbox")} title={sandboxTitle} aria-label="Sandbox mode">
+          <button type="button" className="pill sandbox-pill" onClick={() => setPicker("sandbox")} title={sandboxTitle} aria-label="Sandbox mode">
             <span className="pill-glyph">◈</span>
             {sandboxLabel && <span className="pill-label">{sandboxLabel}</span>}
-          </button>}
-          {managedDraft && <details className="composer-advanced">
-            <summary className="pill">Advanced</summary>
-            <div className="composer-advanced-options">
-              <button type="button" className="pill sandbox-pill" onClick={() => setPicker("sandbox")} title={sandboxTitle} aria-label="Sandbox mode">
-                <span className="pill-glyph">◈</span>
-                <span className="pill-label">{sandboxLabel || "Protection"}</span>
-              </button>
-              <button
-                type="button"
-                className="pill model-pill"
-                onClick={() => { if (modelSelectable) setPicker("model"); }}
-                disabled={!modelSelectable}
-                title={modelSelectable ? "Model" : "This agent uses its own default model"}
-              >
-                <span className="pill-glyph"><ModelGlyph /></span>
-                <span className="pill-label">{modelLabel}</span>
-              </button>
-            </div>
-          </details>}
+          </button>
         </div>
       )}
       {state.activeSession.activeSessionId && (
@@ -812,7 +777,7 @@ export function Composer({
                 <span className="pill-glyph"><AgentGlyph /></span>
                 <span className="pill-label">{state.catalogs.currentAgentName || "Agent"}</span>
               </button>
-              {!managedDraft && <button
+              <button
                 type="button"
                 className="pill model-pill"
                 onClick={() => { if (modelSelectable) setPicker("model"); }}
@@ -821,7 +786,7 @@ export function Composer({
               >
                 <span className="pill-glyph"><ModelGlyph /></span>
                 <span className="pill-label">{modelLabel}</span>
-              </button>}
+              </button>
             </div>
 
             {/* Voice input sits just left of Send — tap to dictate (server
