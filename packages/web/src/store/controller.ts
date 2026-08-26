@@ -1898,7 +1898,24 @@ export class AppController {
    * session (bound to those choices) is created lazily by the first sendPrompt.
    */
   newSession(opts: { navigate?: boolean } = {}): void {
+    const before = this.store.getState();
+    const departingNodeId = before.activeSession.activeSessionId
+      ? before.sessionIndex.sessions.find((session) => session.sessionId === before.activeSession.activeSessionId)?.nodeId ?? this.local.cur
+      : this.local.cur;
+    const departingNodeName = before.connection.nodes.find((node) => node.id === departingNodeId)?.name ?? "";
+    const setupId = this.ephemeralCorrelations.find((correlation) => correlation.nodeId === departingNodeId)?.setupId;
     this.sessionCoordinator.newSession(opts);
+    // A disposable Machine is a concrete session runtime, not the default for
+    // the next session. Resolve its profile asynchronously and target a fresh
+    // Machine; a deliberate Machine/profile choice made meanwhile always wins.
+    if (!departingNodeId?.startsWith("eph-")) return;
+    void this.listEphemeralConfigs().then((configs) => {
+      const state = this.store.getState();
+      if (state.activeSession.activeSessionId || state.draft.ephemeralConfig || this.local.cur !== departingNodeId) return;
+      const profile = (setupId ? configs.find((config) => config.id === setupId) : undefined)
+        ?? (/^Hosted\s+/i.test(departingNodeName) ? configs.find((config) => config.computeSource === "managed") : undefined);
+      if (profile) this.pickDraftEphemeralRunner(profile);
+    }).catch(() => {});
   }
 
   /** Load the remembered composer defaults into the store so the next fresh
@@ -2208,7 +2225,12 @@ export class AppController {
     task.phase = "failed";
     task.updatedAt = new Date().toISOString();
     void this.pendingLaunchStore.put(task);
-    this.failLaunchCheckpoint(provisionalId, message);
+    if (/not available on this node|command not found|agent is not installed/i.test(message)) {
+      this.store.updateLaunchCheckpoint(provisionalId, "credentials", "done");
+      this.store.updateLaunchCheckpoint(provisionalId, "agent", "failed", message);
+    } else {
+      this.failLaunchCheckpoint(provisionalId, message);
+    }
     this.store.failPendingSession(provisionalId);
     this.store.setError(`Couldn't start ${task.config.name}: ${message}`);
   }
@@ -2308,6 +2330,26 @@ export class AppController {
     await this.pendingLaunchStore.put(task);
     if (task.machine?.nodeId) this.startPendingRunner(id);
     else await this.launchDraftRunnerAndBind(id);
+  }
+
+  /** Preserve the pending prompt but replace a guest whose immutable image is
+   * missing an agent or otherwise cannot recover in place. */
+  async retryPendingLaunchOnFreshMachine(id: string): Promise<void> {
+    const task = this.pendingLaunches.get(id);
+    if (!task) return;
+    task.transport?.close();
+    task.transport = undefined;
+    const nodeId = task.machine?.nodeId;
+    if (nodeId) await this.destroyHostedMachine(nodeId).catch(() => {});
+    task.machine = undefined;
+    task.sessionId = undefined;
+    task.promptSent = false;
+    task.logs.push("Replacing the Cloud Machine and retrying the preserved first message…");
+    task.phase = "provisioning";
+    task.updatedAt = new Date().toISOString();
+    this.store.retryPendingSession(id);
+    await this.pendingLaunchStore.put(task);
+    await this.launchDraftRunnerAndBind(id);
   }
 
   async dismissPendingLaunch(id: string): Promise<void> {

@@ -10,7 +10,7 @@ import { StatusDot } from "./StatusDot.js";
 import { Badge } from "./Badge.js";
 import { useModalEscape } from "../modalStack.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
-import { ephemeralCatalogEntry, type EphemeralNodeConfig, type EphemeralMachine } from "@bivy/core";
+import { ephemeralCatalogEntry, type EphemeralNodeConfig, type HostedMachineSummary } from "@bivy/core";
 
 /**
  * Header control (relay mode): shows the current node and a menu to switch nodes,
@@ -21,7 +21,7 @@ export function NodeSwitcher() {
   const { connection: { nodes, currentNodeId, status }, activeSession: { activeSessionId }, sessionIndex: { sessions }, draft } = useAppState();
   const [open, setOpen] = useState(false);
   const [ephemeralConfigs, setEphemeralConfigs] = useState<EphemeralNodeConfig[]>([]);
-  const [ephemeralMachines, setEphemeralMachines] = useState<EphemeralMachine[]>([]);
+  const [hostedMachines, setHostedMachines] = useState<HostedMachineSummary[]>([]);
   const [addNodeOpen, setAddNodeOpen] = useState(false);
   const [confirmSignOut, setConfirmSignOut] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -41,7 +41,7 @@ export function NodeSwitcher() {
       controller.listEphemeralConfigs()
         .then((configs) => setEphemeralConfigs(configs.filter((config) => Boolean(ephemeralCatalogEntry(config.provider)))))
         .catch(() => {});
-      controller.listEphemeralMachines().then(setEphemeralMachines).catch(() => {});
+      controller.listHostedMachines().then(setHostedMachines).catch(() => {});
     }
     const onDoc = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
@@ -57,7 +57,8 @@ export function NodeSwitcher() {
   // A runner picked for the (not-yet-created) draft session shows as the current
   // selection — offline/pending until the first message launches it.
   const draftRunner = !activeSessionId ? draft.ephemeralConfig : null;
-  const label = draftRunner ? draftRunner.name : pendingNodeName || current?.name || sessionNodeId || "Machine";
+  const concreteName = current?.name?.replace(/^Hosted\s+/i, "") || sessionNodeId || "Machine";
+  const label = draftRunner ? draftRunner.name : pendingNodeName || (current?.id.startsWith("eph-") ? `${concreteName} — running` : concreteName);
   const showOnline = draftRunner ? false : current?.online;
   // Ephemeral machines enroll as real account nodes (id `eph-…`) once they boot,
   // so they'd otherwise show up twice: here under "Your nodes" AND under the
@@ -65,18 +66,20 @@ export function NodeSwitcher() {
   // persistent list — the ephemeral section is their only home. Applies to every
   // provider (Fly/Hetzner/AWS), which all mint `eph-` node ids at launch.
   const persistentNodes = nodes.filter((n) => !n.id.startsWith("eph-"));
-  // An ephemeral config is a node *template*: picking it for a new session
-  // launches a fresh machine bound to that session. A config whose machine is
-  // already initialized and owned by a session is "in use" and unavailable to
-  // another session until that machine is torn down — one machine per session,
-  // so a running machine is never offered to a second session. Reconnecting to a
-  // running ephemeral session happens from the session list, not here.
-  const sessionBoundNodeIds = useMemo(
-    () => new Set(sessions.map((s) => s.nodeId).filter((id): id is string => Boolean(id))),
-    [sessions],
-  );
-  const configInUse = (setupId: string) =>
-    ephemeralMachines.some((m) => m.setupId === setupId && m.nodeId && sessionBoundNodeIds.has(m.nodeId));
+  // Profiles are reusable templates: every selection launches a fresh Machine.
+  // Running managed Machines are listed separately below as an explicit reuse
+  // choice, so a template is never disabled merely because it already launched.
+  const runningCloudMachines = useMemo(() => hostedMachines.filter((machine) =>
+    machine.purpose === "interactive" && machine.desiredState !== "deleted" && machine.nodeId && nodes.some((node) => node.id === machine.nodeId),
+  ), [hostedMachines, nodes]);
+  const runningLabel = (machine: HostedMachineSummary) => {
+    const profile = ephemeralConfigs.find((config) => config.id === machine.setupId);
+    const name = (profile?.name || machine.name || "Bivy Cloud").replace(/^Hosted\s+/i, "");
+    const createdAt = Date.parse(machine.createdAt);
+    if (!machine.ttlMinutes || !Number.isFinite(createdAt)) return `${name} — running`;
+    const remaining = Math.max(0, Math.ceil((createdAt + machine.ttlMinutes * 60_000 - Date.now()) / 60_000));
+    return `${name} — running · ${remaining} min remaining`;
+  };
   // A draft may choose its node. Once the session exists, its owning node is
   // immutable: this control becomes a label rather than a global node switcher.
   const locked = Boolean(activeSessionId);
@@ -130,34 +133,49 @@ export function NodeSwitcher() {
               </button>
             </div>
           ))}
+          {EPHEMERAL_MACHINES_ENABLED && runningCloudMachines.length > 0 && (
+            <>
+              <div className="node-menu-head">Running Cloud machines</div>
+              {runningCloudMachines.map((machine) => {
+                const node = nodes.find((candidate) => candidate.id === machine.nodeId);
+                return (
+                  <button
+                    key={machine.id}
+                    className={`menu-item node-menu-item${machine.nodeId === currentNodeId && !draftRunner ? " active" : ""}`}
+                    role="menuitem"
+                    onClick={() => {
+                      if (!machine.nodeId) return;
+                      setOpen(false);
+                      controller.switchNode(machine.nodeId);
+                    }}
+                  >
+                    <StatusDot status={node?.online ? "online" : "idle"} label={`${node?.online ? "Online" : "Offline"} — `} />
+                    <span className="node-menu-name">{runningLabel(machine)}</span>
+                    {machine.nodeId === currentNodeId && !draftRunner && <span className="node-menu-check">✓</span>}
+                  </button>
+                );
+              })}
+            </>
+          )}
           {EPHEMERAL_MACHINES_ENABLED && ephemeralConfigs.length > 0 && (
             <>
-              <div className="node-menu-head">Cloud machine profiles</div>
+              <div className="node-menu-head">Start a new Cloud machine</div>
               {ephemeralConfigs.map((config) => {
-                // Each runner is a template. Picking it just targets the draft at
-                // it — the first message launches a fresh machine bound to the new
-                // session (no "launch" button). If its machine is already owned by
-                // a session, it's "in use" and can't be picked for another.
-                const inUse = configInUse(config.id);
                 const picked = config.id === draftRunner?.id;
+                const name = config.computeSource === "managed" ? `Start a new ${config.name} Machine` : config.name;
                 return (
                   <button
                     key={config.id}
                     className={`menu-item node-menu-item${picked ? " active" : ""}`}
                     role="menuitem"
-                    disabled={inUse}
-                    title={inUse ? "In use by another session — each profile runs one machine per session" : undefined}
                     onClick={() => {
-                      if (inUse) return;
                       setOpen(false);
                       controller.pickDraftEphemeralRunner(config);
                     }}
                   >
-                    <StatusDot status="idle" label={inUse ? "In use — " : picked ? "Selected — " : "Available — "} />
-                    <span className="node-menu-name">{config.name}</span>
-                    {inUse
-                      ? <Badge title="This machine belongs to another session">In use</Badge>
-                      : <Badge>{config.provider}</Badge>}
+                    <StatusDot status="idle" label={picked ? "Selected — " : "Available — "} />
+                    <span className="node-menu-name">{name}</span>
+                    <Badge>{config.provider}</Badge>
                     {picked && <span className="node-menu-check">✓</span>}
                   </button>
                 );

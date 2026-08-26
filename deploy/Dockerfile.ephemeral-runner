@@ -51,11 +51,13 @@ ENV PATH="/usr/local/lib/node_modules/@bivy/bivy/node_modules/.bin:${PATH}"
 # image ships no compiler.
 RUN apt-get update -qq \
   && apt-get install -y -qq --no-install-recommends python3 make g++ \
-  && npm install -g /tmp/bivy.tar.gz \
+  && npm install -g /tmp/bivy.tar.gz @openai/codex@0.147.0 @anthropic-ai/claude-code@2.1.246 \
   && rm /tmp/bivy.tar.gz \
   && apt-get purge -y -qq --auto-remove python3 make g++ \
   && rm -rf /var/lib/apt/lists/* /root/.npm \
   && command -v bivy \
+  && command -v codex \
+  && command -v claude \
   && node -e "require('/usr/local/lib/node_modules/@bivy/bivy/node_modules/node-pty')"
 RUN mkdir -p /etc/bivy /workspace \
   && chmod 700 /etc/bivy

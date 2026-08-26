@@ -24,9 +24,11 @@ function elapsedLabel(startedAt: number, endedAt: number): string {
 export function SessionLaunchProgressView({
   progress,
   onSetupCredentials,
+  onRetryFreshMachine,
 }: {
   progress: SessionLaunchProgress;
   onSetupCredentials?: () => Promise<void>;
+  onRetryFreshMachine?: () => Promise<void>;
 }) {
   const terminalAt = progress.firstResponseAt ?? progress.failedAt;
   const [now, setNow] = useState(() => terminalAt ?? Date.now());
@@ -81,6 +83,19 @@ export function SessionLaunchProgressView({
           }}
         >
           {startingSetup ? "Starting Bivy Cloud…" : "Continue setup in this Cloud session"}
+        </button>
+      )}
+      {progress.failedAt && progress.checkpoints.account?.state !== "failed" && onRetryFreshMachine && (
+        <button
+          type="button"
+          className="btn primary session-launch-action"
+          disabled={startingSetup}
+          onClick={() => {
+            setStartingSetup(true);
+            void onRetryFreshMachine().finally(() => setStartingSetup(false));
+          }}
+        >
+          {startingSetup ? "Replacing Cloud Machine…" : "Retry on a new Cloud Machine"}
         </button>
       )}
     </section>
