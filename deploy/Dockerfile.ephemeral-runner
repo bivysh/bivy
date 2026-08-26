@@ -11,6 +11,14 @@ WORKDIR /repo
 # own package-lock.json — which is what `npm install -g` consumes below.
 RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY packages/automation-core/package.json ./packages/automation-core/package.json
+COPY packages/core/package.json ./packages/core/package.json
+COPY packages/plugin-sdk/package.json ./packages/plugin-sdk/package.json
+COPY packages/ui/package.json ./packages/ui/package.json
+COPY packages/web/package.json ./packages/web/package.json
+# Dependency resolution changes only with manifests/lockfiles. Keep source out of
+# this layer so normal Core changes reuse the expensive full-workspace install.
+RUN pnpm install --frozen-lockfile --ignore-scripts
 COPY tsconfig.json ./
 COPY packages/ ./packages/
 COPY src/ ./src/
@@ -18,10 +26,9 @@ COPY bin/ ./bin/
 COPY public/qr.js ./public/qr.js
 COPY scripts/ ./scripts/
 COPY README.md LICENSE ./
-# This stage only type-checks and packs; it never runs the node, so skip
-# install scripts (notably node-pty's node-gyp build, which needs a toolchain
-# the slim image lacks). The runtime stage below compiles node-pty for real.
-RUN pnpm install --frozen-lockfile --ignore-scripts
+# This stage only type-checks and packs; install scripts were skipped above
+# (notably node-pty's node-gyp build, which needs a toolchain the slim image
+# lacks). The runtime stage below compiles node-pty for real.
 # The context has no .git, so the packed manifest's `commit` comes from this
 # build-arg (the workflow passes the pushed SHA); it is empty for local builds.
 ARG GITHUB_SHA=

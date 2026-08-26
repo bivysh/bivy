@@ -2,7 +2,9 @@ name: Ephemeral runner image
 
 on:
   push:
-    branches: [main]
+    # Prebuild on review branches too. Staging deploys can then retag/use the
+    # exact Core SHA immediately instead of spending several minutes compiling
+    # node-pty and exporting the runner image on the deployment critical path.
     paths:
       - deploy/Dockerfile.ephemeral-runner
       - src/**
@@ -50,7 +52,10 @@ jobs:
       - name: Build and push image
         run: |
           set -euo pipefail
-          tags=(--tag "$IMAGE:sha-${GITHUB_SHA::7}")
+          tags=(
+            --tag "$IMAGE:sha-${GITHUB_SHA::7}"
+            --tag "$IMAGE:prebuild-${GITHUB_SHA}"
+          )
           if [ "$GITHUB_REF" = "refs/heads/main" ]; then
             tags+=(--tag "$IMAGE:main")
           fi
@@ -61,6 +66,7 @@ jobs:
             "${tags[@]}" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
             --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --label "service=bivy-staging-managed-runner" \
             --cache-from "type=registry,ref=$IMAGE:buildcache" \
             --cache-to "type=registry,ref=$IMAGE:buildcache,mode=max" \
             .
