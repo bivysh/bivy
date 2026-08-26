@@ -863,8 +863,15 @@ export class AppController {
   }
 
   async setupManagedCredentials(): Promise<void> {
-    const activeId = this.store.getState().activeSession.activeSessionId;
+    const before = this.store.getState();
+    const activeId = before.activeSession.activeSessionId;
     if (activeId && this.pendingLaunches.has(activeId)) this.managedCredentialReturnSessionId = activeId;
+    // Prefer the provider the user already configured on a personal Machine.
+    // The auth runner cannot decrypt that ordinary vault, but it can present the
+    // matching sign-in/API-key form instead of arbitrarily forcing Anthropic.
+    const providerId = before.settings.credentialRecords.find(
+      (record) => record.sync === "account" && record.kind !== "reference",
+    )?.provider ?? before.catalogs.providers.find((provider) => provider.configured)?.id ?? "anthropic";
     // Leave the failed session route before switching Machines. Otherwise the
     // route synchronizer immediately reopens that session on its owning node and
     // silently undoes the auth-runner switch, making the button appear inert.
@@ -873,6 +880,12 @@ export class AppController {
     await this.waitForOnline(120_000);
     this.listProviders();
     this.listCredentialRecords();
+    const nodeId = this.local.cur;
+    if (!nodeId) throw new Error("The secure provider setup Machine did not connect.");
+    // Open the provider form deterministically. The generic first-run heuristic
+    // is intentionally delayed and can be suppressed by stale catalog state;
+    // this button is an explicit setup request, so no heuristic is needed.
+    this.store.setNeedsModelAuth({ nodeId, provider: providerId });
   }
   ensureManagedSessionDefaults() { return ensureManagedSessionDefaults(this.local); }
   createNodeClaim() { return createAccountNodeClaim(this.local); }
