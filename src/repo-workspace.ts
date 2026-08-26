@@ -372,7 +372,11 @@ export async function cloneOrUpdateRepo(opts: { owner: string; repo: string; tok
   // that now-unlinked cwd makes git abort before it can even process `clone`
   // ("Unable to read current working directory"). The repos root is durable
   // across package updates and was created immediately above.
-  await exec("git", [...cc, "clone", url, dest], { cwd: opts.root, timeout: 600_000, env });
+  // Preserve the full ref/history graph needed by worktrees and PR bases, but
+  // defer file blobs until checkout/tooling actually reads them. GitHub supports
+  // protocol-v2 partial clones; this removes large historical assets from the
+  // managed session's first-message critical path without shallow-history bugs.
+  await exec("git", [...cc, "clone", "--filter=blob:none", url, dest], { cwd: opts.root, timeout: 600_000, env });
   // Persist the helper config so agent-run git in this clone authenticates too.
   // These follow-up processes need an explicit cwd for the same reason.
   await configureRepoCredentialHelper((a) => exec("git", a, { cwd: dest }), dest);

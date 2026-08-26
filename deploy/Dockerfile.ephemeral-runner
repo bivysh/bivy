@@ -46,19 +46,33 @@ COPY --from=build /out/bivy-latest.tar.gz /tmp/bivy.tar.gz
 # globally, so include the package-local bin directory for every such agent
 # rather than adding one bespoke symlink per integration.
 ENV PATH="/usr/local/lib/node_modules/@bivy/bivy/node_modules/.bin:${PATH}"
-# node-pty compiles from source (same toolchain install.sh requires on
-# Debian/Ubuntu). Install it, build, and purge it in one layer so the runtime
-# image ships no compiler.
+# Install the common Bivy layer once for every runtime-specific image. node-pty
+# compiles from source (same toolchain install.sh requires on Debian/Ubuntu), so
+# install and purge the compiler in one layer rather than shipping it.
 RUN apt-get update -qq \
   && apt-get install -y -qq --no-install-recommends python3 make g++ \
-  && npm install -g /tmp/bivy.tar.gz @openai/codex@0.147.0 @anthropic-ai/claude-code@2.1.246 \
+  && npm install -g /tmp/bivy.tar.gz \
   && rm /tmp/bivy.tar.gz \
   && apt-get purge -y -qq --auto-remove python3 make g++ \
   && rm -rf /var/lib/apt/lists/* /root/.npm \
   && command -v bivy \
-  && command -v codex \
-  && command -v claude \
+  && command -v pi \
   && node -e "require('/usr/local/lib/node_modules/@bivy/bivy/node_modules/node-pty')"
+# `all` is the compatibility/auth image. Interactive sessions can use the much
+# smaller `claude`, `codex`, or `pi` variants selected by the requested runtime,
+# avoiding a cold pull of unrelated agent binaries.
+ARG BIVY_RUNNER_AGENT=all
+RUN case "$BIVY_RUNNER_AGENT" in \
+      all) npm install -g @openai/codex@0.147.0 @anthropic-ai/claude-code@2.1.246 ;; \
+      codex) npm install -g @openai/codex@0.147.0 ;; \
+      claude) npm install -g @anthropic-ai/claude-code@2.1.246 ;; \
+      pi) : ;; \
+      *) echo "unsupported BIVY_RUNNER_AGENT=$BIVY_RUNNER_AGENT" >&2; exit 1 ;; \
+    esac \
+  && rm -rf /root/.npm \
+  && { [ "$BIVY_RUNNER_AGENT" != all ] && [ "$BIVY_RUNNER_AGENT" != codex ] || command -v codex; } \
+  && { [ "$BIVY_RUNNER_AGENT" != all ] && [ "$BIVY_RUNNER_AGENT" != claude ] || command -v claude; } \
+  && command -v pi
 RUN mkdir -p /etc/bivy /workspace \
   && chmod 700 /etc/bivy
 ENV BIVY_DATA_DIR=/etc/bivy

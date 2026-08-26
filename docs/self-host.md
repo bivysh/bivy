@@ -186,21 +186,30 @@ DEPLOYMENT_EXTENSION_TOKEN=<service token>
 # process/mining-abuse validation. Production refuses managed launches otherwise.
 MANAGED_GUEST_HARDENING_ATTESTED=1
 
-# Optional interactive managed-session defaults. The first prompt launches this
-# profile through the control plane; users never receive the provider token.
+# Interactive managed-session defaults. Production requires an immutable,
+# prebuilt baseline image: managed compute never silently installs onto a generic
+# provider image during boot. Users never receive the provider token.
 MANAGED_SESSION_PROVIDER=fly
 MANAGED_SESSION_TTL_MINUTES=60
+MANAGED_SESSION_IMAGE=ghcr.io/your-org/bivy-ephemeral-runner:sha-<commit>
 # MANAGED_SESSION_REGION=<adapter default>
 # MANAGED_SESSION_SIZE=<adapter default>
-# MANAGED_SESSION_IMAGE=<provider default>
 
-# Optional first-run authentication Machine overrides (defaults shown).
-# Provider falls back to MANAGED_SESSION_PROVIDER when omitted.
+# Optional smaller runtime-specific images. The managed launch endpoint chooses
+# one from the requested agent and falls back to MANAGED_SESSION_IMAGE for a
+# custom runtime. Bivy's official GHCR baseline automatically derives these
+# `sha-<commit>-<runtime>` tags; custom registries can set them explicitly.
+# MANAGED_SESSION_IMAGE_CLAUDE=ghcr.io/your-org/bivy-ephemeral-runner:sha-<commit>-claude
+# MANAGED_SESSION_IMAGE_CODEX=ghcr.io/your-org/bivy-ephemeral-runner:sha-<commit>-codex
+# MANAGED_SESSION_IMAGE_PI=ghcr.io/your-org/bivy-ephemeral-runner:sha-<commit>-pi
+
+# Optional first-run authentication Machine overrides. It falls back to the
+# baseline MANAGED_SESSION_IMAGE because provider selection happens after boot.
 MANAGED_AUTH_RUNNER_PROVIDER=fly
 MANAGED_AUTH_RUNNER_TTL_MINUTES=15
 # MANAGED_AUTH_RUNNER_REGION=<adapter default>
 # MANAGED_AUTH_RUNNER_SIZE=<adapter default>
-# MANAGED_AUTH_RUNNER_IMAGE=<provider default>
+# MANAGED_AUTH_RUNNER_IMAGE=<defaults to MANAGED_SESSION_IMAGE>
 ```
 
 Restart the control plane after changing these values. The token is read only by

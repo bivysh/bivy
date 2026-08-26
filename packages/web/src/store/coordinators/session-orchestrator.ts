@@ -27,7 +27,7 @@ export interface SessionOrchestrationDependencies {
   addUserMessage(text: string, clientMessageId: string): void;
   transcriptUrl(sessionId: string): string;
   refreshAccountSessions(): void;
-  launchManagedDestination(configId: string): Promise<string>;
+  launchManagedDestination(configId: string, runtimeId?: string): Promise<string>;
 }
 
 export type SessionOrchestrationResult =
@@ -265,7 +265,7 @@ export class SessionOrchestrator {
       // Export first while the source transport is authoritative. Provisioning
       // happens only after a complete bundle exists, and source retirement stays
       // confirmation-gated below, so every failure leaves the original intact.
-      destNodeId = await this.deps.launchManagedDestination(opts.managedConfigId);
+      destNodeId = await this.deps.launchManagedDestination(opts.managedConfigId, opts.agentId);
     }
     if (crossNode) {
       this.deps.switchNode(destNodeId!);

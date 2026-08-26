@@ -305,8 +305,11 @@ so it cannot satisfy a request-to-agent target under ten seconds. The fast lane
 uses the credential-free image built by
 `deploy/Dockerfile.ephemeral-runner` and published as
 `ghcr.io/bivysh/bivy-ephemeral-runner:sha-<commit>` (and `:main`) by
-`.github/workflows/ephemeral-runner-image.yml` on every push to `main`. The
-GHCR package must be public: providers pull it without registry credentials.
+`.github/workflows/ephemeral-runner-image.yml`. It also publishes `-claude`,
+`-codex`, and `-pi` variants so an interactive launch does not cold-pull other
+agents' platform binaries. The unsuffixed compatibility image contains every
+maintained agent and serves authentication/custom-runtime sessions. The GHCR
+package must be public: providers pull it without registry credentials.
 
 The image contains only public runtime material (Node, Bivy, git, SSH/certificate
 tools, and installed agent dependencies). Enrollment tokens, E2E room keys,
@@ -316,9 +319,10 @@ identifier: the GHCR reference for Fly, a snapshot/image id for Hetzner, or an A
 id for AWS.
 
 Every bootstrap now checks `command -v bivy` first. A prebuilt image starts the
-daemon immediately; a generic/old image falls back to the existing installer.
-This makes image rollout reversible and prevents a missing image pipeline from
-removing the compatibility path. Cold-start success is still measured from
+daemon immediately; a generic/old image falls back to the existing installer for
+BYO compatibility. Production managed compute instead fails deployment startup
+unless `MANAGED_SESSION_IMAGE` identifies a prebuilt image, preventing an
+accidental multi-minute install path. Cold-start success is still measured from
 request to the first agent event—not image pull or provider “running.” A warm
 ready-capacity pool is the next latency layer after this image baseline.
 

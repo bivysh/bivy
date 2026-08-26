@@ -31,6 +31,42 @@ export function managedComputeEnabled(env: NodeJS.ProcessEnv = process.env): boo
   return env.MANAGED_COMPUTE_ENABLED === "1";
 }
 
+const MANAGED_RUNTIME_IMAGES = [
+  { prefix: "claude", env: "MANAGED_SESSION_IMAGE_CLAUDE" },
+  { prefix: "codex", env: "MANAGED_SESSION_IMAGE_CODEX" },
+  { prefix: "pi", env: "MANAGED_SESSION_IMAGE_PI" },
+] as const;
+
+function nonEmpty(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
+}
+
+/** Resolve the immutable prebuilt image for an interactive managed session.
+ * Runtime-specific images keep the cold pull small; the baseline image remains
+ * the compatibility fallback for unknown/custom runtimes and auth runners. */
+export function managedSessionImage(env: NodeJS.ProcessEnv = process.env, runtimeId?: string): string | undefined {
+  const runtime = String(runtimeId || "").trim().toLowerCase();
+  const runtimeImage = MANAGED_RUNTIME_IMAGES.find(({ prefix }) => runtime.startsWith(prefix));
+  const explicit = nonEmpty(runtimeImage ? env[runtimeImage.env] : undefined);
+  const baseline = nonEmpty(env.MANAGED_SESSION_IMAGE);
+  if (explicit || !runtimeImage || !baseline) return explicit ?? baseline;
+  // The official workflow publishes every immutable/main tag with a runtime
+  // suffix. Derive it automatically so an existing deployment only has to set
+  // the required baseline image; custom registries can provide explicit vars.
+  if (baseline.startsWith("ghcr.io/bivysh/bivy-ephemeral-runner:") && !baseline.includes("@")) {
+    return `${baseline}-${runtimeImage.prefix}`;
+  }
+  return baseline;
+}
+
+/** Authentication runners need several CLIs because the provider is selected
+ * after boot. Reuse the baseline session image unless an explicit auth image is
+ * supplied; never silently drop to a provider's generic OS image. */
+export function managedAuthRunnerImage(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return nonEmpty(env.MANAGED_AUTH_RUNNER_IMAGE) ?? nonEmpty(env.MANAGED_SESSION_IMAGE);
+}
+
 /**
  * Server-side source of operator-owned provider tokens. Deliberately an
  * interface so the env-backed implementation below can be replaced by a

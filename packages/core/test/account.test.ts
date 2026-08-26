@@ -480,8 +480,8 @@ describe("managed account Machines", () => {
       body = String(init?.body || "");
       return new Response(JSON.stringify({ machine: { id: "m-1", provider: "fly", name: "Cloud", region: "iad", status: "running", ip: null, createdAt: "", nodeId: "eph-1" }, roomKey: "room-1" }), { status: 201 });
     }) as typeof fetch;
-    const machine = await launchManagedSessionMachine(store, "managed-default", fakeFetch);
-    expect(JSON.parse(body)).toEqual({ configId: "managed-default" });
+    const machine = await launchManagedSessionMachine(store, "managed-default", { runtimeId: "codex", fetchImpl: fakeFetch });
+    expect(JSON.parse(body)).toEqual({ configId: "managed-default", runtimeId: "codex" });
     expect(machine.nodeId).toBe("eph-1");
     expect(store.keys()["eph-1"]).toBe("room-1");
   });

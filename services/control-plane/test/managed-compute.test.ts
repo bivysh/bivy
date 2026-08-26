@@ -20,7 +20,7 @@ import {
   type DestroyFn,
   type ObserveFn,
 } from "../src/ephemeral-provisioner.js";
-import { managedComputeEnabled, normalizeComputeSource, envOperatorTokenSource } from "../src/managed-compute.js";
+import { managedAuthRunnerImage, managedComputeEnabled, managedSessionImage, normalizeComputeSource, envOperatorTokenSource } from "../src/managed-compute.js";
 import type { launchEphemeralMachine } from "@bivy/core";
 
 const env = { cpBaseUrl: "https://cp", relayUrl: "wss://relay" };
@@ -83,6 +83,24 @@ await test("managedComputeEnabled: default OFF, only exact '1' enables", () => {
   assert.equal(managedComputeEnabled({ MANAGED_COMPUTE_ENABLED: "1" } as never), true, "=1 → on");
   assert.equal(managedComputeEnabled({ MANAGED_COMPUTE_ENABLED: "0" } as never), false, "=0 → off");
   assert.equal(managedComputeEnabled({ MANAGED_COMPUTE_ENABLED: "true" } as never), false, "only exact '1' enables");
+});
+
+await test("managed images: runtime-specific images fall back to the required baseline", () => {
+  const images = {
+    MANAGED_SESSION_IMAGE: " runner:all ",
+    MANAGED_SESSION_IMAGE_CLAUDE: "runner:claude",
+    MANAGED_SESSION_IMAGE_CODEX: "runner:codex",
+    MANAGED_AUTH_RUNNER_IMAGE: "runner:auth",
+  } as NodeJS.ProcessEnv;
+  assert.equal(managedSessionImage(images, "claude"), "runner:claude");
+  assert.equal(managedSessionImage(images, "claude-code"), "runner:claude");
+  assert.equal(managedSessionImage(images, "codex"), "runner:codex");
+  assert.equal(managedSessionImage(images, "pi"), "runner:all", "missing runtime variant uses compatibility image");
+  assert.equal(managedSessionImage(images, "custom"), "runner:all");
+  assert.equal(managedAuthRunnerImage(images), "runner:auth");
+  assert.equal(managedAuthRunnerImage({ MANAGED_SESSION_IMAGE: "runner:all" } as NodeJS.ProcessEnv), "runner:all");
+  assert.equal(managedSessionImage({ MANAGED_SESSION_IMAGE: "ghcr.io/bivysh/bivy-ephemeral-runner:sha-abc1234" } as NodeJS.ProcessEnv, "codex"), "ghcr.io/bivysh/bivy-ephemeral-runner:sha-abc1234-codex");
+  assert.equal(managedSessionImage({} as NodeJS.ProcessEnv, "codex"), undefined);
 });
 
 await test("normalizeComputeSource: absent/unknown → user (backward compatible)", () => {

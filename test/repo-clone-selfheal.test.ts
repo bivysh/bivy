@@ -61,7 +61,9 @@ async function main() {
 state=0
 for arg in "$@"; do
   if [ "$state" = 2 ]; then mkdir -p "$arg/.git"; printf '[core]\\n' > "$arg/.git/config"; exit 0; fi
-  if [ "$state" = 1 ]; then state=2; elif [ "$arg" = clone ]; then state=1; fi
+  if [ "$state" = 1 ]; then
+    case "$arg" in --*) continue ;; *) state=2 ;; esac
+  elif [ "$arg" = clone ]; then state=1; fi
 done
 exit 0
 `, { mode: 0o755 });

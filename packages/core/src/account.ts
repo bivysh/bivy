@@ -419,10 +419,12 @@ export async function ensureManagedSessionDefaults(store: LocalStore, fetchImpl:
 export async function launchManagedSessionMachine(
   store: LocalStore,
   configId: string,
-  fetchImpl: typeof fetch = fetch,
+  fetchOrOptions: typeof fetch | { runtimeId?: string; fetchImpl?: typeof fetch } = fetch,
 ): Promise<EphemeralMachine> {
+  const fetchImpl = typeof fetchOrOptions === "function" ? fetchOrOptions : fetchOrOptions.fetchImpl ?? fetch;
+  const runtimeId = typeof fetchOrOptions === "function" ? undefined : fetchOrOptions.runtimeId;
   const res = await fetchImpl(`${cpBase(store)}/account/managed-machines`, {
-    method: "POST", headers: authHeaders(store), body: JSON.stringify({ configId }),
+    method: "POST", headers: authHeaders(store), body: JSON.stringify({ configId, ...(runtimeId ? { runtimeId } : {}) }),
   });
   const value = await res.json().catch(() => ({})) as { machine?: EphemeralMachine; roomKey?: string; error?: string; reason?: string; code?: string; actions?: unknown };
   if (!res.ok || !value.machine) throw managedLaunchError(value, res.status, `managed Machine launch failed: ${res.status}`);

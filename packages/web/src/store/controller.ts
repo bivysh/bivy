@@ -356,8 +356,8 @@ export class AppController {
       addUserMessage: (text, id) => this.store.addUserMessage(text, id),
       transcriptUrl: (sessionId) => `${location.origin}${routePath({ kind: "session", id: sessionId })}`,
       refreshAccountSessions: () => { void this.refreshAccountSessions(); },
-      launchManagedDestination: async (configId) => {
-        const machine = await launchManagedSessionMachine(this.local, configId);
+      launchManagedDestination: async (configId, runtimeId) => {
+        const machine = await launchManagedSessionMachine(this.local, configId, { runtimeId });
         if (!machine.nodeId) throw new Error("Managed fork destination launched without a node id");
         return machine.nodeId;
       },
@@ -1997,27 +1997,24 @@ export class AppController {
       void this.pendingLaunchStore.put(task);
     };
     try {
-      let managedCredentialsReady = true;
-      if (config.computeSource === "managed") {
-        managedCredentialsReady = await this.managedCredentialReady().catch(() => false);
-        const requestedAgent = task.prompt.frame && "agent" in task.prompt.frame
-          ? String(task.prompt.frame.agent || "")
-          : "";
-        // Account readiness means the hosted snapshot contains at least one
-        // credential, not necessarily the one this draft's agent needs. Always
-        // check the requested provider before treating the snapshot as ready.
-        managedCredentialsReady = await this.tryPublishManagedCredential(requestedAgent, managedCredentialsReady)
-          || managedCredentialsReady;
-      }
-      this.store.updateLaunchCheckpoint(provisionalId, "account", "done");
+      const requestedAgent = task.prompt.frame && "agent" in task.prompt.frame
+        ? String(task.prompt.frame.agent || "")
+        : "";
+      // Credential publication can wait for a control-plane generation edge.
+      // Start it before capacity allocation and await both together so that wait
+      // overlaps the provider create/image pull instead of adding up to 20s in
+      // front of every managed cold start.
+      const managedCredentialReadiness = config.computeSource === "managed"
+        ? this.prepareManagedCredential(requestedAgent)
+        : Promise.resolve(true);
       this.store.updateLaunchCheckpoint(provisionalId, "capacity", "active");
       if (!task.prompt.frame || !("repo" in task.prompt.frame) || !task.prompt.frame.repo) {
         this.store.updateLaunchCheckpoint(provisionalId, "repository", "skipped");
       }
       if (config.computeSource === "managed") logSetup("Reserving secure managed compute…");
-      const machine = config.computeSource === "managed"
-        ? await launchManagedSessionMachine(this.local, config.id)
-        : await this.launchEphemeral({
+      const machineLaunch = config.computeSource === "managed"
+        ? launchManagedSessionMachine(this.local, config.id, { runtimeId: requestedAgent })
+        : this.launchEphemeral({
             provider: config.provider,
             region: config.region ?? undefined,
             size: config.size ?? undefined,
@@ -2028,6 +2025,8 @@ export class AppController {
             setupId: config.id,
             onProgress: logSetup,
           });
+      const [machine, managedCredentialsReady] = await Promise.all([machineLaunch, managedCredentialReadiness]);
+      this.store.updateLaunchCheckpoint(provisionalId, "account", "done");
       if (!machine.nodeId) throw new Error("machine launched without a node id");
       this.store.updateLaunchCheckpoint(provisionalId, "capacity", "done");
       this.store.updateLaunchCheckpoint(provisionalId, "machine", "done");
@@ -2059,6 +2058,14 @@ export class AppController {
       const actions = e instanceof ManagedLaunchError ? e.actions : [];
       this.store.setError(`Couldn't start ${config.name}: ${(e as Error)?.message || e}`, actions);
     }
+  }
+
+  private async prepareManagedCredential(agentId: string): Promise<boolean> {
+    const hostedReady = await this.managedCredentialReady().catch(() => false);
+    // Account readiness means the hosted snapshot contains at least one
+    // credential, not necessarily the one this draft's agent needs. Always
+    // check the requested provider before treating the snapshot as ready.
+    return await this.tryPublishManagedCredential(agentId, hostedReady) || hostedReady;
   }
 
   private async tryPublishManagedCredential(agentId: string, hostedReady: boolean): Promise<boolean> {

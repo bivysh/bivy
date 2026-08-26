@@ -17,6 +17,7 @@ import { correlateHostedSessions } from "./hosted-correlation.js";
 import { countActiveAccountSessions } from "./session-count.js";
 import { usageFromManagedMachine } from "./compute-metering.js";
 import { activeManagedMachineCount, managedConcurrencyLimit } from "./managed-admission.js";
+import { managedAuthRunnerImage, managedSessionImage } from "./managed-compute.js";
 import { createStore } from "./store-factory.js";
 import { AutomationScheduler, nextOccurrence, normalizeSchedule } from "./schedule.js";
 import { parseShardUrls, shardForNode } from "./relay-shards.js";
@@ -117,6 +118,9 @@ function assertProductionConfig() {
     }
     if (process.env.MANAGED_GUEST_HARDENING_ATTESTED !== "1") {
       problems.push("MANAGED_GUEST_HARDENING_ATTESTED=1 is required after validating egress and process/mining controls in the production guest image");
+    }
+    if (!managedSessionImage()) {
+      problems.push("MANAGED_SESSION_IMAGE is required for production managed compute (generic provider images install at boot and cannot meet the startup SLO)");
     }
   }
   if (problems.length > 0) {
@@ -1248,7 +1252,7 @@ function managedSessionConfig(now = new Date().toISOString()): EphemeralNodeConf
     provider,
     region: String(process.env.MANAGED_SESSION_REGION || adapter.defaultRegion),
     size: String(process.env.MANAGED_SESSION_SIZE || adapter.defaultSize),
-    image: process.env.MANAGED_SESSION_IMAGE || undefined,
+    image: managedSessionImage(),
     ttlMinutes: Math.max(5, Math.min(24 * 60, Number(process.env.MANAGED_SESSION_TTL_MINUTES) || 60)),
     teardownOnAgentFinish: true,
     computeSource: "managed",
@@ -1316,7 +1320,7 @@ app.post("/account/onboarding/auth-runner", requireUser, asyncHandler(async (req
   const config: EphemeralNodeConfig = {
     id: "managed-auth-runner", name: "Authentication Machine", provider,
     region: String(process.env.MANAGED_AUTH_RUNNER_REGION || adapter.defaultRegion), size,
-    image: process.env.MANAGED_AUTH_RUNNER_IMAGE || undefined,
+    image: managedAuthRunnerImage(),
     ttlMinutes, computeSource: "managed", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   };
   const attemptId = randomUUID();
@@ -1404,11 +1408,15 @@ app.post("/account/managed-machines", requireUser, asyncHandler(async (req, res)
     return res.status(503).json({ error: "Managed session Machines are not available." });
   }
   const configId = String(req.body?.configId ?? "").trim();
+  const runtimeId = String(req.body?.runtimeId ?? "").trim().slice(0, 120);
   // Missing hosted credentials no longer reject the session before allocation.
   // The intended interactive Machine starts in credential-setup mode; agent
   // execution remains paused until its initial filtered snapshot is confirmed.
-  const config = (await store.getEphemeralConfigs(account.id)).find((candidate) => candidate.id === configId);
-  if (!config || config.computeSource !== "managed") return res.status(404).json({ error: "Managed session profile not found." });
+  const storedConfig = (await store.getEphemeralConfigs(account.id)).find((candidate) => candidate.id === configId);
+  if (!storedConfig || storedConfig.computeSource !== "managed") return res.status(404).json({ error: "Managed session profile not found." });
+  // Select the smallest prebuilt image that contains the requested runtime. The
+  // deployment-owned baseline remains the fallback for custom/unknown agents.
+  const config = { ...storedConfig, image: managedSessionImage(process.env, runtimeId) ?? storedConfig.image };
   const adapter = ephemeralAdapter(config.provider);
   if (!adapter) return res.status(503).json({ error: "Managed session provider is not configured." });
   const sizeId = config.size || adapter.defaultSize;
