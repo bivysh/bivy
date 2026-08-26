@@ -64,8 +64,9 @@ test("managed-only cold start provisions a short-lived auth Machine before provi
   const controlPlane = await read("../../services/control-plane/src/index.ts");
   const provisioner = await read("../../services/control-plane/src/ephemeral-provisioner.ts");
   expect(wizard).toContain("controller.createManagedAuthRunner()");
-  expect(wizard).toContain("Enable managed credential reuse");
+  expect(wizard).toContain("Securing your provider login");
   expect(wizard).toContain("controller.setCredentialUnattended");
+  expect(wizard).toContain('if (step !== "custody"');
   expect(accountApi).toContain("/account/onboarding/auth-runner");
   expect(controlPlane).toContain('purpose: "auth-runner"');
   expect(controlPlane).toContain("Math.min(15");
