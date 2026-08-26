@@ -18,10 +18,10 @@ await test("validates the App key and returns installable owners", async () => {
   const calls: Array<{ url: string; authorization: string }> = [];
   const fakeFetch = (async (url: string | URL | Request, init?: RequestInit) => {
     calls.push({ url: String(url), authorization: String((init?.headers as Record<string, string>)?.authorization) });
-    return new Response(JSON.stringify([{ id: 42, account: { login: "acme", type: "Organization" } }]), { status: 200 });
+    return new Response(JSON.stringify([{ id: 42, account: { id: 9001, login: "acme", type: "Organization" } }]), { status: 200 });
   }) as typeof fetch;
   const installations = await listAppInstallations("123", pem, fakeFetch, 1_700_000_000);
-  assert.deepEqual(installations, [{ id: "42", account: "acme", accountType: "Organization" }]);
+  assert.deepEqual(installations, [{ id: "42", account: "acme", accountId: "9001", accountType: "Organization" }]);
   assert.match(calls[0]!.url, /\/app\/installations/);
   assert.match(calls[0]!.authorization, /^Bearer [^.]+\.[^.]+\.[^.]+$/);
 });

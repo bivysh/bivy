@@ -549,6 +549,10 @@ export interface GithubAppEntry {
   servingNodeSeenAt?: string;
   /** App key is held by the encrypted hosted executor, not a persistent node. */
   hosted?: boolean;
+  /** Deployment-owned central App rather than an account-created custom App. */
+  central?: boolean;
+  /** Account/org installations bound to a central App. */
+  installations?: CentralGithubAppInstallationView[];
 }
 
 export interface GithubAppInfo extends GithubAppEntry {

@@ -26,6 +26,7 @@ export interface InstallationToken {
 export interface GithubInstallation {
   id: string;
   account: string;
+  accountId?: string;
   accountType?: string;
 }
 
@@ -114,14 +115,19 @@ export async function listAppInstallations(
     });
     const data = (await res.json().catch(() => ([]))) as Array<{
       id?: number | string;
-      account?: { login?: string; type?: string };
+      account?: { id?: number | string; login?: string; type?: string };
     }> & { message?: string };
     if (!res.ok || !Array.isArray(data)) {
       throw new Error(`GitHub App validation failed (${res.status}): ${(data as { message?: string }).message ?? "unknown error"}`);
     }
     for (const item of data) {
       if (item.id == null || !item.account?.login) continue;
-      installations.push({ id: String(item.id), account: item.account.login, accountType: item.account.type });
+      installations.push({
+        id: String(item.id),
+        account: item.account.login,
+        ...(item.account.id != null ? { accountId: String(item.account.id) } : {}),
+        accountType: item.account.type,
+      });
     }
     if (data.length < 100) break;
   }

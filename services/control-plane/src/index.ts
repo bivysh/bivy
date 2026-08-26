@@ -2361,7 +2361,9 @@ app.get("/account/github-app", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const hooks = await store.listGithubAppHooks(client.accountId);
-  if (!hooks.length) return res.json({ connected: false, apps: [] });
+  const central = centralGithubAppConfig();
+  const centralInstallations = central ? await syncCentralInstallationsForAccount(client.accountId) : [];
+  if (!hooks.length && !centralInstallations.length) return res.json({ connected: false, apps: [] });
   // Which node holds each app's key and is servicing it. The control plane can't
   // run an app itself, so "connected" (a hook exists) is not the same as "a live
   // node is serving it" — a deleted/reinstalled node clears servingNodeId.
@@ -2407,10 +2409,45 @@ app.get("/account/github-app", asyncHandler(async (req, res) => {
       servingNodeSeenAt: hook.servingNodeSeenAt,
       // A hosted App is served on demand by ephemeral runners; it intentionally
       // has no servingNodeId and must not be presented as broken for that reason.
-      hosted: Boolean(hostedAppId && hook.appId === hostedAppId),
+      hosted: Boolean((hostedAppId && hook.appId === hostedAppId) || (central && centralInstallations.length && hook.appId === central.appId)),
+      central: Boolean(central && centralInstallations.length && hook.appId === central.appId),
+      ...(central && hook.appId === central.appId ? {
+        installed: centralInstallations.length > 0,
+        installations: centralInstallations.map(({ installationId, githubAccount, githubAccountType, repositorySelection, createdAt }) => ({
+          installationId, githubAccount, githubAccountType, repositorySelection, createdAt,
+        })),
+      } : {}),
     };
   };
   const apps = hooks.map(describe);
+  // Installation binding is itself a connected source. Do not wait for the first
+  // webhook to lazily create a hook row before showing the central App in
+  // Automations; doing so made a newly-installed hosted source look absent.
+  if (central && centralInstallations.length && !apps.some((entry) => entry.appId === central.appId)) {
+    apps.push({
+      connected: true,
+      name: central.slug || "Bivy GitHub App",
+      slug: central.slug || "",
+      mention: central.slug || "",
+      appId: central.appId,
+      hookId: `central:${central.appId}`,
+      editUrl: `https://github.com/apps/${encodeURIComponent(central.slug || "")}`,
+      installUrl: central.slug ? `https://github.com/apps/${encodeURIComponent(central.slug)}/installations/new` : "https://github.com/settings/installations",
+      installed: true,
+      installCount: undefined,
+      defaultNode: undefined,
+      triggerAccess: undefined,
+      servingNodeSeenAt: undefined,
+      hosted: true,
+      central: true,
+      servedBy: null,
+      owner: centralInstallations.length === 1 ? centralInstallations[0].githubAccount : undefined,
+      ownerType: centralInstallations.length === 1 ? centralInstallations[0].githubAccountType : undefined,
+      installations: centralInstallations.map(({ installationId, githubAccount, githubAccountType, repositorySelection, createdAt }) => ({
+        installationId, githubAccount, githubAccountType, repositorySelection, createdAt,
+      })),
+    });
+  }
   // Flat top-level fields describe the first app, so clients written against the
   // single-app shape keep working against a multi-app account.
   res.json({ ...apps[0], apps });
@@ -2485,7 +2522,7 @@ app.get("/account/hosted-github-repositories", requireUser, asyncHandler(async (
   const account = (req as Request & { account: Account }).account;
   const hosted = await store.getHostedProvisioning(account.id);
   const central = centralGithubAppConfig();
-  const centralInstallations = central ? await store.listCentralGithubInstallations(account.id) : [];
+  const centralInstallations = central ? await syncCentralInstallationsForAccount(account.id) : [];
   const identity = resolveGithubIdentity({ hosted, central, centralInstallations });
   if (identity?.kind !== "app") return res.status(409).json({ error: "No hosted GitHub App is configured" });
   try {
@@ -2510,7 +2547,7 @@ app.get("/account/hosted-github-repositories/:owner/:repo/branches", requireUser
   const repo = `${String(req.params.owner)}/${String(req.params.repo)}`;
   const hosted = await store.getHostedProvisioning(account.id);
   const central = centralGithubAppConfig();
-  const centralInstallations = central ? await store.listCentralGithubInstallations(account.id) : [];
+  const centralInstallations = central ? await syncCentralInstallationsForAccount(account.id) : [];
   const identity = resolveGithubIdentity({ hosted, central, centralInstallations }, repo);
   if (identity?.kind !== "app") return res.status(409).json({ error: "No hosted GitHub App is configured" });
   try {
@@ -3597,6 +3634,52 @@ app.get("/account/hosted-audit", asyncHandler(async (req, res) => {
 }));
 
 // ── Central GitHub App (managed tier) ───────────────────────────────────────
+// Reconcile installations from GitHub as well as from the Setup callback.
+// GitHub sends an already-installed target to its Configure screen and may not
+// revisit our Setup URL, so callback-only binding incorrectly reports that App
+// as absent. Account ids come from the signed-in user's OAuth identity and only
+// include organizations where that user is an administrator.
+async function syncCentralInstallationsForAccount(accountId: string) {
+  const central = centralGithubAppConfig();
+  if (!central) return [];
+  const account = await store.getAccount(accountId);
+  const allowed = new Set(account?.githubInstallTargetIds ?? []);
+  if (allowed.size > 0) {
+    const discovered = await listAppInstallations(central.appId, central.privateKeyPem);
+    for (const installation of discovered) {
+      if (!installation.accountId || !allowed.has(installation.accountId)) continue;
+      const existing = await store.getCentralGithubInstallation(installation.id);
+      if (existing && existing.accountId !== accountId) continue;
+      if (!existing) {
+        const detail = await getAppInstallation(central.appId, central.privateKeyPem, installation.id);
+        await store.putCentralGithubInstallation({
+          installationId: installation.id,
+          accountId,
+          githubAccount: detail.account || installation.account,
+          githubAccountType: detail.accountType || installation.accountType,
+          repositorySelection: detail.repositorySelection,
+        });
+        await store.appendHostedAudit(accountId, {
+          at: new Date().toISOString(),
+          action: "central_install_reconciled",
+          detail: `installation ${installation.id} on ${detail.account || installation.account}`,
+        });
+      }
+    }
+  }
+  const bound = await store.listCentralGithubInstallations(accountId);
+  if (bound.length > 0) {
+    const hosted = await store.getHostedProvisioning(accountId);
+    // An old custom App held only by a personal Machine is not a usable hosted
+    // identity. Once this account has explicitly installed the central App,
+    // select it unless a complete hosted own-App credential was also granted.
+    if (!hosted.githubIdentity || (hosted.githubIdentity === "own-app" && !hosted.githubApp)) {
+      await store.setHostedProvisioning(accountId, { githubIdentity: "central-app" });
+    }
+  }
+  return bound;
+}
+
 // The operator's ONE centrally-owned app: users install it and pick repos
 // instead of creating their own app or pasting a PAT. Everything returned here
 // is non-secret; the app's private key lives only in operator env config
@@ -3606,7 +3689,7 @@ app.get("/account/github/central-app", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const central = centralGithubAppConfig();
-  const installations = central ? await store.listCentralGithubInstallations(client.accountId) : [];
+  const installations = central ? await syncCentralInstallationsForAccount(client.accountId) : [];
   res.json({
     configured: Boolean(central),
     appId: central?.appId,
