@@ -26,10 +26,11 @@ export function SessionLaunchProgressView({
   onSetupCredentials,
 }: {
   progress: SessionLaunchProgress;
-  onSetupCredentials?: () => void;
+  onSetupCredentials?: () => Promise<void>;
 }) {
   const terminalAt = progress.firstResponseAt ?? progress.failedAt;
   const [now, setNow] = useState(() => terminalAt ?? Date.now());
+  const [startingSetup, setStartingSetup] = useState(false);
 
   useEffect(() => {
     if (terminalAt) {
@@ -70,8 +71,16 @@ export function SessionLaunchProgressView({
         })}
       </ol>
       {progress.checkpoints.account?.state === "failed" && onSetupCredentials && (
-        <button type="button" className="btn primary session-launch-action" onClick={onSetupCredentials}>
-          Set up model provider for Bivy Cloud
+        <button
+          type="button"
+          className="btn primary session-launch-action"
+          disabled={startingSetup}
+          onClick={() => {
+            setStartingSetup(true);
+            void onSetupCredentials().finally(() => setStartingSetup(false));
+          }}
+        >
+          {startingSetup ? "Starting secure provider setup…" : "Set up model provider for Bivy Cloud"}
         </button>
       )}
     </section>
