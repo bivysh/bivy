@@ -123,12 +123,19 @@ export function createCredentialCommands(deps: CredentialCommandDeps): CommandEn
       }
     },
     async "credential.unattended.set"(msg, ctx) {
+      const provider = String(msg.provider ?? "");
+      const label = String(msg.label ?? "");
+      const previous = (await listCredentialRecords(credsDir)).find((record) => record.provider === provider.trim().toLowerCase() && record.label === label)?.unattended === true;
       try {
-        await setCredentialUnattended(credsDir, String(msg.provider ?? ""), String(msg.label ?? ""), msg.unattended === true);
+        await setCredentialUnattended(credsDir, provider, label, msg.unattended === true);
         await deps.pushModelAuthToControlPlane();
         deps.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
         ctx.reply({ type: "credential.unattended.set.ok", requestId: msg.requestId });
       } catch (error) {
+        // The UI must never claim an encrypted Cloud copy exists when custody
+        // publication failed. Restore the prior local grant before rejecting.
+        await setCredentialUnattended(credsDir, provider, label, previous).catch(() => {});
+        deps.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
         const message = error instanceof Error ? error.message : String(error);
         ctx.reply({ type: "credential.unattended.set.error", requestId: msg.requestId, error: message });
       }

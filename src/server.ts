@@ -3512,6 +3512,10 @@ async function processModelAuthKeyRequests(requests: Array<{ nodeId: string; pub
 
 async function pushHostedModelAuthToControlPlane() {
   const [records, revision] = await Promise.all([exportUnattendedRecords(credsDir), unattendedCredentialRevision(credsDir)]);
+  // A setup guest must not establish an empty snapshot when the credential is
+  // first saved (before the explicit grant command follows). Otherwise its
+  // one allowed initial write would be consumed by an unusable vault.
+  if (isHostedCustodyNode() && Object.keys(records).length === 0) return;
   if (revision === lastPushedHostedModelAuthRevision) return;
   const key = ensureHostedModelAuthVaultKey();
   const ciphertext = encryptModelAuthProviders({}, {}, {}, key, records, {});
@@ -3520,7 +3524,7 @@ async function pushHostedModelAuthToControlPlane() {
     body: JSON.stringify({ ciphertext, vaultKeyB64: key, expectedGeneration, revision }),
   });
   const currentResponse = await modelAuthFetch("/node/model-auth-hosted-vault");
-  if (currentResponse?.status === 403) return; // hosted provisioning is disabled
+  if (currentResponse?.status === 403) throw new Error("hosted credential custody is not enabled for this account");
   const current = currentResponse?.ok
     ? (await currentResponse.json().catch(() => ({}))) as HostedModelAuthVaultResponse
     : {};
@@ -3534,12 +3538,12 @@ async function pushHostedModelAuthToControlPlane() {
   if (response?.ok) {
     lastPushedHostedModelAuthCiphertext = ciphertext;
     lastPushedHostedModelAuthRevision = revision;
-  } else if (response?.status !== 403 && response?.status !== 409) {
+  } else {
     throw new Error(`hosted model-auth push failed (${response?.status ?? "offline"})`);
   }
 }
 
-async function pushModelAuthToControlPlane(rotateKey = false) {
+async function pushModelAuthToControlPlane(rotateKey = false, throwOnFailure = false) {
   if (!sessionAdvertiseTarget) return;
   // Piggyback the (plaintext, non-secret) provider status summary on every
   // trigger that already pushes the encrypted model-auth vault — one "creds
@@ -3551,8 +3555,10 @@ async function pushModelAuthToControlPlane(rotateKey = false) {
     // A hosted runner holds only the explicitly granted snapshot and must never
     // overwrite the peer-to-peer account vault with that filtered subset.
     if (isHostedCustodyNode()) {
-      // Hosted runners are recipients, never authorities for the custody set.
-      // Letting one republish its stale filtered copy could undo a revocation.
+      // A credential-setup guest may establish the initial filtered snapshot.
+      // The control plane refuses managed-guest replacement after that first
+      // write, so normal hosted runners remain recipients rather than authorities.
+      if (process.env.BIVY_HOSTED_CREDENTIAL_PUBLISH === "1") await pushHostedModelAuthToControlPlane();
       return;
     }
     // Only push credentials on the account-sync tier; a `sync: "node"` credential
@@ -3591,6 +3597,7 @@ async function pushModelAuthToControlPlane(rotateKey = false) {
     await pushHostedModelAuthToControlPlane();
   } catch (error) {
     console.warn("[auth-sync] could not push model auth:", (error as Error).message);
+    if (throwOnFailure) throw error;
   }
 }
 
@@ -8611,7 +8618,7 @@ const runTerms = createRunTerminals({
   loadRunLog: (termId) => runLogs.load(termId),
   listAllSessions,
   listProvidersUnified,
-  pushModelAuthToControlPlane: () => pushModelAuthToControlPlane(),
+  pushModelAuthToControlPlane: () => pushModelAuthToControlPlane(false, true),
   listPiSessions: () => runtimeHost.listSessions(getRuntime("pi")),
   resolveAuthOwner: (agent) => {
     const integrationId = agent ? canonicalAgentId(agent) : undefined;

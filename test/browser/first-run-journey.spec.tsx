@@ -58,19 +58,18 @@ test("every failed readiness check maps to exactly one wired, real remediation �
   expect(app).not.toContain("sign_in: () =>");
 });
 
-test("managed-only cold start provisions a short-lived auth Machine before provider login", async () => {
+test("managed-only cold start performs provider setup on the original interactive Machine", async () => {
   const wizard = await read("../../packages/web/src/components/FirstRunOnboarding.tsx");
+  const controller = await read("../../packages/web/src/store/controller.ts");
   const accountApi = await read("../../packages/core/src/account.ts");
   const controlPlane = await read("../../services/control-plane/src/index.ts");
   const provisioner = await read("../../services/control-plane/src/ephemeral-provisioner.ts");
-  expect(wizard).toContain("controller.createManagedAuthRunner()");
-  expect(wizard).toContain("Securing your provider login");
-  expect(wizard).toContain("controller.setCredentialUnattended");
-  expect(wizard).toContain('if (step !== "custody"');
-  expect(accountApi).toContain("/account/onboarding/auth-runner");
-  expect(controlPlane).toContain('purpose: "auth-runner"');
-  expect(controlPlane).toContain("Math.min(15");
-  expect(provisioner).toContain('hostedTasks: purpose !== "auth-runner" && purpose !== "interactive"');
+  expect(wizard).not.toContain("controller.createManagedAuthRunner()");
+  expect(controller).toContain("beginManagedCredentialSetup");
+  expect(controller).toContain("tryRepublishManagedCredential");
+  expect(controller).toContain("Stay on the original provisional session route");
+  expect(provisioner).toContain("hostedCredentialPublisher");
+  expect(controlPlane).toContain("managed guests cannot replace hosted credentials");
   expect(wizard).toContain("controller.ensureManagedSessionDefaults()");
   expect(accountApi).toContain("/account/managed-machines");
   expect(controlPlane).toContain('purpose: "interactive"');
@@ -92,9 +91,9 @@ test("provider readiness ('Test connection') is wired end to end: web action -> 
 test("managed first prompts render quiet provisioning milestones in the session", async () => {
   const controller = await read("../../packages/web/src/store/controller.ts");
   expect(controller).toContain("Reserving secure managed compute…");
-  expect(controller).toContain("Credentials are ready; preparing the repository and agent…");
+  expect(controller).toContain('updateLaunchCheckpoint(provisionalId, "credentials", "active")');
   expect(controller).toContain("Repository and agent are ready. Sending your prompt…");
-  expect(controller).toContain("Setup · ${message}");
+  expect(controller).toContain("beginManagedCredentialSetup");
 });
 
 test("progress survives a reload because it's derived from authoritative signals, not a client-only wizard flag", async () => {
