@@ -344,6 +344,16 @@ export async function ensureManagedAutomationTarget(
   return data as ManagedAutomationTarget;
 }
 
+export async function managedCredentialStatus(
+  store: LocalStore,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ ready: boolean; generation: number }> {
+  const res = await fetchImpl(`${cpBase(store)}/account/managed-credential-status`, { headers: authHeaders(store) });
+  const value = await res.json().catch(() => ({})) as { ready?: boolean; generation?: number; error?: string };
+  if (!res.ok) throw new Error(value.error || `managed credential status failed: ${res.status}`);
+  return { ready: value.ready === true, generation: Number(value.generation) || 0 };
+}
+
 export interface ManagedLaunchAction {
   id: string;
   label: string;

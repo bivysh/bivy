@@ -21,7 +21,13 @@ function elapsedLabel(startedAt: number, endedAt: number): string {
   return minutes ? `${minutes}:${String(remainder).padStart(2, "0")}` : `${remainder}s`;
 }
 
-export function SessionLaunchProgressView({ progress }: { progress: SessionLaunchProgress }) {
+export function SessionLaunchProgressView({
+  progress,
+  onSetupCredentials,
+}: {
+  progress: SessionLaunchProgress;
+  onSetupCredentials?: () => void;
+}) {
   const terminalAt = progress.firstResponseAt ?? progress.failedAt;
   const [now, setNow] = useState(() => terminalAt ?? Date.now());
 
@@ -63,6 +69,11 @@ export function SessionLaunchProgressView({ progress }: { progress: SessionLaunc
           );
         })}
       </ol>
+      {progress.checkpoints.account?.state === "failed" && onSetupCredentials && (
+        <button type="button" className="btn primary session-launch-action" onClick={onSetupCredentials}>
+          Set up model provider for Bivy Cloud
+        </button>
+      )}
     </section>
   );
 }

@@ -17,6 +17,7 @@ import {
   fetchCentralGithubApp,
   createCentralGithubInstall,
   createManagedAuthRunner,
+  managedCredentialStatus,
   ensureManagedSessionDefaults,
   ensureManagedAutomationTarget,
   launchManagedSessionMachine,
@@ -699,6 +700,7 @@ export class AppController {
           this.store.markLaunchFirstResponse(activeAfter.activeSessionId);
         }
         this.observeActivationMilestones(before, appliedEvent);
+        if (appliedEvent.type === "credentials.records") void this.maybeGrantManagedCredential();
         if (appliedEvent.type === "session.deleted") this.persistDeletedSessionTombstones();
         this.maybeFlushPendingPrompt(appliedEvent);
         this.followupCoordinator.confirm(appliedEvent);
@@ -836,7 +838,37 @@ export class AppController {
   centralGithubApp() { return fetchCentralGithubApp(this.local); }
   createCentralGithubInstall(returnPath = "/") { return createCentralGithubInstall(this.local, returnPath); }
   managedAutomationTarget() { return ensureManagedAutomationTarget(this.local); }
-  createManagedAuthRunner() { return createManagedAuthRunner(this.local); }
+  async createManagedAuthRunner() {
+    const launch = await createManagedAuthRunner(this.local);
+    if (launch.machine.nodeId) {
+      await this.ephemeralMachines.add(launch.machine);
+      this.managedAuthRunnerNodes.add(launch.machine.nodeId);
+      this.switchNode(launch.machine.nodeId);
+    }
+    return launch;
+  }
+
+  async managedCredentialReady(): Promise<boolean> {
+    return (await managedCredentialStatus(this.local)).ready;
+  }
+
+  async waitForManagedCredential(timeoutMs = 20_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if ((await managedCredentialStatus(this.local)).ready) return;
+      await new Promise((resolve) => setTimeout(resolve, 750));
+    }
+    throw new Error("The encrypted Bivy Cloud credential was not published. Try provider setup again.");
+  }
+
+  async setupManagedCredentials(): Promise<void> {
+    const activeId = this.store.getState().activeSession.activeSessionId;
+    if (activeId && this.pendingLaunches.has(activeId)) this.managedCredentialReturnSessionId = activeId;
+    await this.createManagedAuthRunner();
+    await this.waitForOnline(120_000);
+    this.listProviders();
+    this.listCredentialRecords();
+  }
   ensureManagedSessionDefaults() { return ensureManagedSessionDefaults(this.local); }
   createNodeClaim() { return createAccountNodeClaim(this.local); }
   listNodeClaims() { return fetchAccountNodeClaims(this.local); }
@@ -2677,6 +2709,11 @@ export class AppController {
   /** Launched ephemeral node ids we've already run the first-run model-auth
    *  check for this session, so a reconnect doesn't re-schedule it. */
   private firstRunAuthNodes = new Set<string>();
+  /** Managed credential-only Machines this browser launched. Credentials saved
+   * there are explicitly intended for the separately encrypted Cloud snapshot. */
+  private managedAuthRunnerNodes = new Set<string>();
+  private managedCredentialGrantInFlight = false;
+  private managedCredentialReturnSessionId: string | null = null;
   listEphemeralKeys(): Promise<ProviderKeyInfo[]> {
     return this.ephemeralKeys.list();
   }
@@ -2861,6 +2898,30 @@ export class AppController {
    * lands during the grace just means the prompt never shows (or briefly shows
    * then clears), never a wrong dead-end.
    */
+  private async maybeGrantManagedCredential(): Promise<void> {
+    const nodeId = this.local.cur;
+    if (!nodeId || !this.managedAuthRunnerNodes.has(nodeId) || this.managedCredentialGrantInFlight) return;
+    const candidate = this.store.getState().settings.credentialRecords.find(
+      (record) => record.sync === "account" && record.kind !== "reference" && !record.unattended,
+    );
+    if (!candidate) return;
+    this.managedCredentialGrantInFlight = true;
+    try {
+      await this.setCredentialUnattended(candidate.provider, candidate.label, true);
+      await this.waitForManagedCredential();
+      const returnId = this.managedCredentialReturnSessionId;
+      this.managedCredentialReturnSessionId = null;
+      if (returnId && this.pendingLaunches.has(returnId)) {
+        this.openPendingLaunch(returnId);
+        await this.retryPendingLaunch(returnId);
+      }
+    } catch (error) {
+      this.store.setError(error instanceof Error ? error.message : String(error));
+    } finally {
+      this.managedCredentialGrantInFlight = false;
+    }
+  }
+
   private async maybePromptFirstRunModelAuth(): Promise<void> {
     if (!EPHEMERAL_MACHINES_ENABLED || this.direct) return;
     const nodeId = this.local.cur;

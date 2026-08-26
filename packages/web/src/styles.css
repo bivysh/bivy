@@ -2888,3 +2888,4 @@ select.picker-search { appearance: auto; }
   font-size: var(--text-sm);
   line-height: var(--lh-sm);
 }
+.session-launch-action { margin-top: var(--space-4); }
