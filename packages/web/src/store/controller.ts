@@ -865,6 +865,10 @@ export class AppController {
   async setupManagedCredentials(): Promise<void> {
     const activeId = this.store.getState().activeSession.activeSessionId;
     if (activeId && this.pendingLaunches.has(activeId)) this.managedCredentialReturnSessionId = activeId;
+    // Leave the failed session route before switching Machines. Otherwise the
+    // route synchronizer immediately reopens that session on its owning node and
+    // silently undoes the auth-runner switch, making the button appear inert.
+    navigate({ kind: "new" });
     await this.createManagedAuthRunner();
     await this.waitForOnline(120_000);
     this.listProviders();

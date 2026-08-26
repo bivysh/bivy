@@ -795,7 +795,13 @@ export function App() {
               onAction={runCommand}
               header={activeSession?.launchProgress ? <SessionLaunchProgressView
                 progress={activeSession.launchProgress}
-                onSetupCredentials={() => { void controller.setupManagedCredentials().catch((error) => controller.store.setError(error instanceof Error ? error.message : String(error))); }}
+                onSetupCredentials={async () => {
+                  try {
+                    await controller.setupManagedCredentials();
+                  } catch (error) {
+                    controller.store.setError(error instanceof Error ? error.message : String(error));
+                  }
+                }}
               /> : undefined}
               footer={
                 <>
