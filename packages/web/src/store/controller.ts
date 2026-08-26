@@ -1178,8 +1178,10 @@ export class AppController {
     this.store.setDraftEphemeralConfig(config);
   }
 
-  /** Switch to another node without a full reload. */
+  /** Switch to another node without a full reload. Selecting a concrete node
+   *  also withdraws any Cloud profile previously targeted by the unsent draft. */
   switchNode(nodeId: string): void {
+    this.store.setDraftEphemeralConfig(null);
     this.nodeCoordinator.switchNode(nodeId);
   }
 

@@ -258,9 +258,17 @@ function HostedRepoConnectPrompt({ error }: { error?: string | null }) {
   const [status, setStatus] = useState<Awaited<ReturnType<typeof controller.centralGithubApp>> | null>(null);
   const [busy, setBusy] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
+  const [showOwnApp, setShowOwnApp] = useState(false);
+  const [ownAppId, setOwnAppId] = useState("");
+  const [ownInstallationId, setOwnInstallationId] = useState("");
+  const [ownPrivateKey, setOwnPrivateKey] = useState("");
 
   useEffect(() => {
     controller.centralGithubApp().then(setStatus).catch((cause) => setSetupError(String((cause as Error)?.message || cause)));
+    controller.fetchGithubApp().then((info) => {
+      const own = info.apps.find((app) => app.appId && !app.hosted);
+      if (own?.appId) setOwnAppId(own.appId);
+    }).catch(() => {});
   }, []);
 
   const install = async () => {
@@ -279,6 +287,23 @@ function HostedRepoConnectPrompt({ error }: { error?: string | null }) {
     setSetupError(null);
     try {
       await controller.setHostedProvisioning({ githubIdentity: "central-app" });
+      controller.listRepos();
+    } catch (cause) {
+      setSetupError(String((cause as Error)?.message || cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const connectOwnApp = async () => {
+    setBusy(true);
+    setSetupError(null);
+    try {
+      await controller.connectHostedGithubApp({
+        appId: ownAppId.trim(),
+        privateKeyPem: ownPrivateKey.trim(),
+        ...(ownInstallationId.trim() ? { installationId: ownInstallationId.trim() } : {}),
+      });
+      setOwnPrivateKey("");
       controller.listRepos();
     } catch (cause) {
       setSetupError(String((cause as Error)?.message || cause));
@@ -309,6 +334,25 @@ function HostedRepoConnectPrompt({ error }: { error?: string | null }) {
         <button type="button" className="btn primary block" disabled={busy || status === null} onClick={() => void install()}>
           {busy ? "Opening GitHub…" : status === null ? "Checking GitHub App…" : "Install Bivy GitHub App"}
         </button>
+      )}
+      <button type="button" className="btn link" disabled={busy} onClick={() => setShowOwnApp((shown) => !shown)}>
+        {showOwnApp ? "Cancel custom App setup" : "Use my GitHub App"}
+      </button>
+      {showOwnApp && (
+        <form onSubmit={(event) => { event.preventDefault(); void connectOwnApp(); }}>
+          <p className="repo-connect-note muted">
+            Hosted Machines need an encrypted server-side copy of this App key to mint short-lived, repository-scoped tokens. Your personal Machine's copy is unchanged.
+          </p>
+          <label className="field-label" htmlFor="hosted-own-app-id">GitHub App ID</label>
+          <input id="hosted-own-app-id" className="picker-search" inputMode="numeric" required value={ownAppId} onChange={(event) => setOwnAppId(event.target.value)} />
+          <label className="field-label" htmlFor="hosted-own-app-key">Private key (.pem contents)</label>
+          <textarea id="hosted-own-app-key" className="picker-search" required rows={4} value={ownPrivateKey} onChange={(event) => setOwnPrivateKey(event.target.value)} />
+          <label className="field-label" htmlFor="hosted-own-installation-id">Installation ID (only when the App has multiple installations)</label>
+          <input id="hosted-own-installation-id" className="picker-search" inputMode="numeric" value={ownInstallationId} onChange={(event) => setOwnInstallationId(event.target.value)} />
+          <button type="submit" className="btn primary block" disabled={busy || !ownAppId.trim() || !ownPrivateKey.trim()}>
+            {busy ? "Connecting…" : "Use this App on hosted Machines"}
+          </button>
+        </form>
       )}
       {(setupError || error) && <p className="repo-connect-alt">{setupError || error}</p>}
     </div>
