@@ -2455,6 +2455,10 @@ app.post("/account/hosted-github-app/connect", requireUser, asyncHandler(async (
     await store.setInboundHookInstallStatus(account.id, hook.id, repositories.length);
     await store.setHostedProvisioning(account.id, {
       githubApp,
+      // Supplying this key is an explicit choice to use the account's own App
+      // for hosted discovery and managed Machines, even if a central App was
+      // selected previously.
+      githubIdentity: "own-app",
     });
     await store.appendHostedAudit(account.id, {
       at: new Date().toISOString(),

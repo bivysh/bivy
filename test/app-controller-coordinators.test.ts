@@ -207,9 +207,30 @@ test("follow-up coordinator owns queue timing and delivery", () => {
   assert.equal(coordinator.steer("urgent"), false, "steer is unavailable until the runtime advertises it");
 });
 
+test("steering follows the active conversation rather than the next draft agent", () => {
+  const store: any = {
+    getState: () => ({
+      activeSession: { activeSessionId: "s-pi", activeRuntimeId: "pi", working: true },
+      catalogs: {
+        selectedAgentId: "codex",
+        runtimes: [
+          { id: "pi", capabilities: { streamingBehaviors: ["steer", "followUp"] } },
+          { id: "codex", capabilities: { streamingBehaviors: [] } },
+        ],
+      },
+    }),
+    getFollowups: () => [],
+  };
+  const coordinator = new FollowupCoordinator(store, {
+    send: () => {}, createClientMessageId: () => "new", now: () => 10,
+    persistBackstop: () => {}, cancelBackstop: () => {},
+  });
+  assert.equal(coordinator.supportsSteering(), true);
+});
+
 test("AppController keeps public compatibility while workflow decisions live outside it", async () => {
   const source = await readFile(new URL("../packages/web/src/store/controller.ts", import.meta.url), "utf8");
-  assert.match(source, /switchNode\(nodeId: string\): void \{\s*this\.nodeCoordinator\.switchNode\(nodeId\);/);
+  assert.match(source, /switchNode\(nodeId: string\): void \{\s*this\.store\.setDraftEphemeralConfig\(null\);\s*this\.nodeCoordinator\.switchNode\(nodeId\);/);
   assert.match(source, /return this\.sessionCoordinator\.fork\(sourceSessionId, opts\)/);
   assert.match(source, /return this\.credentialsModelsCoordinator\.testCredential\(provider, label\)/);
   assert.match(source, /this\.sessionCoordinator\.sendPrompt\(text, attachments\)/);

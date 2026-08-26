@@ -25,6 +25,8 @@ test("a managed repository picker offers the central App to established accounts
   const pickers = await read("../../packages/web/src/components/Pickers.tsx");
   expect(pickers).toContain("Install Bivy GitHub App");
   expect(pickers).toContain("Use Bivy GitHub App");
+  expect(pickers).toContain("Use my GitHub App");
+  expect(pickers).toContain("Use this App on hosted Machines");
   expect(pickers).toContain("separate from any custom GitHub App connected to a personal Machine");
 });
 
