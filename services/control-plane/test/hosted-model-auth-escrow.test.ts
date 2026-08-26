@@ -52,10 +52,13 @@ await test("generation and revision reject stale hosted snapshots", async () => 
   assert.deepEqual(await store.getHostedModelAuthVault(acct.id), { ciphertext: "v2", generation: 2, revision: 22 });
 });
 
-await test("hosted recipients apply authoritative removals and never republish", async () => {
+await test("hosted recipients apply removals while setup guests can publish only the initial snapshot", async () => {
   const source = fs.readFileSync(new URL("../../../src/server.ts", import.meta.url), "utf8");
+  const controlPlane = fs.readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
   assert.match(source, /readHostedImportedRecords\(\)/);
-  assert.match(source, /Hosted runners are recipients, never authorities/);
+  assert.match(source, /BIVY_HOSTED_CREDENTIAL_PUBLISH/);
+  assert.match(source, /Object\.keys\(records\)\.length === 0/);
+  assert.match(controlPlane, /managed guests cannot replace hosted credentials/);
   assert.match(source, /modelAuthFetch\("\/node\/model-auth-hosted-vault"\)/, "hosted custody uses its versioned endpoint");
 });
 

@@ -41,9 +41,9 @@ test("Bivy Cloud is a first-class unattended automation target", async () => {
   expect(provisioner).toContain("hasManagedAutomation");
 });
 
-test("new accounts flow from GitHub and provider setup into a Bivy Cloud draft", async () => {
+test("new accounts flow from GitHub into a Bivy Cloud draft with provider setup in that session", async () => {
   const onboarding = await read("../../packages/web/src/components/FirstRunOnboarding.tsx");
-  expect(onboarding).toContain("Connect GitHub and a model provider. Your first session will open on Bivy Cloud.");
+  expect(onboarding).toContain("If provider setup is needed, it happens inside that same session.");
   expect(onboarding).toContain("Sign in with a model provider");
   expect(onboarding).toContain("controller.ensureManagedSessionDefaults()");
   expect(onboarding).toContain("controller.pickDraftEphemeralRunner(config)");

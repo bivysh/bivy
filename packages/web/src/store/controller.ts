@@ -16,7 +16,6 @@ import {
   fetchAccountNodes,
   fetchCentralGithubApp,
   createCentralGithubInstall,
-  createManagedAuthRunner,
   managedCredentialStatus,
   ensureManagedSessionDefaults,
   ensureManagedAutomationTarget,
@@ -838,53 +837,27 @@ export class AppController {
   centralGithubApp() { return fetchCentralGithubApp(this.local); }
   createCentralGithubInstall(returnPath = "/") { return createCentralGithubInstall(this.local, returnPath); }
   managedAutomationTarget() { return ensureManagedAutomationTarget(this.local); }
-  async createManagedAuthRunner() {
-    const launch = await createManagedAuthRunner(this.local);
-    if (launch.machine.nodeId) {
-      await this.ephemeralMachines.add(launch.machine);
-      this.managedAuthRunnerNodes.add(launch.machine.nodeId);
-      this.switchNode(launch.machine.nodeId);
-    }
-    return launch;
-  }
-
   async managedCredentialReady(): Promise<boolean> {
     return (await managedCredentialStatus(this.local)).ready;
   }
 
-  async waitForManagedCredential(timeoutMs = 20_000): Promise<void> {
+  async waitForManagedCredential(timeoutMs = 20_000, afterGeneration = -1): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      if ((await managedCredentialStatus(this.local)).ready) return;
+      const status = await managedCredentialStatus(this.local);
+      if (status.ready && status.generation > afterGeneration) return;
       await new Promise((resolve) => setTimeout(resolve, 750));
     }
     throw new Error("The encrypted Bivy Cloud credential was not published. Try provider setup again.");
   }
 
   async setupManagedCredentials(): Promise<void> {
-    const before = this.store.getState();
-    const activeId = before.activeSession.activeSessionId;
-    if (activeId && this.pendingLaunches.has(activeId)) this.managedCredentialReturnSessionId = activeId;
-    // Prefer the provider the user already configured on a personal Machine.
-    // The auth runner cannot decrypt that ordinary vault, but it can present the
-    // matching sign-in/API-key form instead of arbitrarily forcing Anthropic.
-    const providerId = before.settings.credentialRecords.find(
-      (record) => record.sync === "account" && record.kind !== "reference",
-    )?.provider ?? before.catalogs.providers.find((provider) => provider.configured)?.id ?? "anthropic";
-    // Leave the failed session route before switching Machines. Otherwise the
-    // route synchronizer immediately reopens that session on its owning node and
-    // silently undoes the auth-runner switch, making the button appear inert.
-    navigate({ kind: "new" });
-    await this.createManagedAuthRunner();
-    await this.waitForOnline(120_000);
-    this.listProviders();
-    this.listCredentialRecords();
-    const nodeId = this.local.cur;
-    if (!nodeId) throw new Error("The secure provider setup Machine did not connect.");
-    // Open the provider form deterministically. The generic first-run heuristic
-    // is intentionally delayed and can be suppressed by stale catalog state;
-    // this button is an explicit setup request, so no heuristic is needed.
-    this.store.setNeedsModelAuth({ nodeId, provider: providerId });
+    const activeId = this.store.getState().activeSession.activeSessionId;
+    if (!activeId || !this.pendingLaunches.has(activeId)) throw new Error("The original Cloud session is no longer available.");
+    // Retry the original provisional session. The managed launch path first
+    // republishes an existing grant, then falls back to provider setup on that
+    // session's regular interactive Machine — never a separate auth session.
+    await this.retryPendingLaunch(activeId);
   }
   ensureManagedSessionDefaults() { return ensureManagedSessionDefaults(this.local); }
   createNodeClaim() { return createAccountNodeClaim(this.local); }
@@ -2006,6 +1979,11 @@ export class AppController {
       void this.pendingLaunchStore.put(task);
     };
     try {
+      let managedCredentialsReady = true;
+      if (config.computeSource === "managed") {
+        managedCredentialsReady = await this.managedCredentialReady().catch(() => false);
+        if (!managedCredentialsReady) managedCredentialsReady = await this.tryRepublishManagedCredential();
+      }
       this.store.updateLaunchCheckpoint(provisionalId, "account", "done");
       this.store.updateLaunchCheckpoint(provisionalId, "capacity", "active");
       if (!task.prompt.frame || !("repo" in task.prompt.frame) || !task.prompt.frame.repo) {
@@ -2034,7 +2012,11 @@ export class AppController {
       task.updatedAt = new Date().toISOString();
       await this.pendingLaunchStore.put(task);
       this.store.bindPendingSessionNode(provisionalId, machine.nodeId);
-      this.startPendingRunner(provisionalId);
+      if (config.computeSource === "managed" && !managedCredentialsReady) {
+        await this.beginManagedCredentialSetup(provisionalId, machine.nodeId);
+      } else {
+        this.startPendingRunner(provisionalId);
+      }
     } catch (e) {
       const message = `Launch failed: ${(e as Error)?.message || e}`;
       task.logs.push(message);
@@ -2052,6 +2034,48 @@ export class AppController {
       const actions = e instanceof ManagedLaunchError ? e.actions : [];
       this.store.setError(`Couldn't start ${config.name}: ${(e as Error)?.message || e}`, actions);
     }
+  }
+
+  private async tryRepublishManagedCredential(): Promise<boolean> {
+    if (this.store.getState().connection.status !== "online") return false;
+    const candidate = this.store.getState().settings.credentialRecords.find(
+      (record) => record.sync === "account" && record.kind !== "reference" && record.unattended,
+    );
+    if (!candidate) return false;
+    try {
+      // Compatibility repair for nodes that predate an explicit republish
+      // command: changing the grant advances its revision and invokes their
+      // existing encrypted hosted-vault publisher.
+      await this.setCredentialUnattended(candidate.provider, candidate.label, false);
+      const disabledGeneration = (await managedCredentialStatus(this.local)).generation;
+      await this.setCredentialUnattended(candidate.provider, candidate.label, true);
+      await this.waitForManagedCredential(20_000, disabledGeneration);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async beginManagedCredentialSetup(provisionalId: string, nodeId: string): Promise<void> {
+    const task = this.pendingLaunches.get(provisionalId);
+    if (!task) return;
+    task.phase = "credential-setup";
+    task.updatedAt = new Date().toISOString();
+    await this.pendingLaunchStore.put(task);
+    this.managedCredentialSetupNodes.add(nodeId);
+    this.managedCredentialReturnSessionId = provisionalId;
+    this.store.updateLaunchCheckpoint(provisionalId, "credentials", "active");
+    // Stay on the original provisional session route. Switching its bound node
+    // connects the regular interactive Machine without creating a fake session.
+    this.switchNode(nodeId);
+    await this.waitForOnline(120_000);
+    this.store.updateLaunchCheckpoint(provisionalId, "service", "done");
+    this.listProviders();
+    this.listCredentialRecords();
+    const provider = this.store.getState().settings.credentialRecords.find(
+      (record) => record.sync === "account" && record.kind !== "reference",
+    )?.provider ?? "anthropic";
+    this.store.setNeedsModelAuth({ nodeId, provider });
   }
 
   private failLaunchCheckpoint(provisionalId: string, message: string): void {
@@ -2258,7 +2282,8 @@ export class AppController {
           this.store.updateLaunchCheckpoint(launch.id, "repository", "skipped");
         }
         this.store.bindPendingSessionNode(launch.id, launch.machine.nodeId);
-        this.startPendingRunner(launch.id);
+        if (launch.phase === "credential-setup") void this.beginManagedCredentialSetup(launch.id, launch.machine.nodeId);
+        else this.startPendingRunner(launch.id);
       } else if (launch.phase === "provisioning") {
         launch.phase = "failed";
         launch.logs.push("Startup was interrupted before the cloud provider confirmed the machine.");
@@ -2726,9 +2751,8 @@ export class AppController {
   /** Launched ephemeral node ids we've already run the first-run model-auth
    *  check for this session, so a reconnect doesn't re-schedule it. */
   private firstRunAuthNodes = new Set<string>();
-  /** Managed credential-only Machines this browser launched. Credentials saved
-   * there are explicitly intended for the separately encrypted Cloud snapshot. */
-  private managedAuthRunnerNodes = new Set<string>();
+  /** Interactive Cloud Machines paused for provider setup before agent launch. */
+  private managedCredentialSetupNodes = new Set<string>();
   private managedCredentialGrantInFlight = false;
   private managedCredentialReturnSessionId: string | null = null;
   listEphemeralKeys(): Promise<ProviderKeyInfo[]> {
@@ -2917,7 +2941,7 @@ export class AppController {
    */
   private async maybeGrantManagedCredential(): Promise<void> {
     const nodeId = this.local.cur;
-    if (!nodeId || !this.managedAuthRunnerNodes.has(nodeId) || this.managedCredentialGrantInFlight) return;
+    if (!nodeId || !this.managedCredentialSetupNodes.has(nodeId) || this.managedCredentialGrantInFlight) return;
     const candidate = this.store.getState().settings.credentialRecords.find(
       (record) => record.sync === "account" && record.kind !== "reference" && !record.unattended,
     );

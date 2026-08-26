@@ -8,10 +8,7 @@ import { ProviderConnectForm } from "./ProviderConnect.js";
 export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone: () => void }) {
   const [github, setGithub] = useState<CentralGithubAppView | null>(null);
   const [githubError, setGithubError] = useState<string | null>(null);
-  const [claim, setClaim] = useState<Awaited<ReturnType<typeof controller.createNodeClaim>> | null>(null);
   const [busy, setBusy] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const [, setManagedAuthRunner] = useState(() => sessionStorage.getItem("bivy:managed-auth-runner") === "1");
   const [verifiedCredential, setVerifiedCredential] = useState<string | null>(null);
   const [managedCredentialReady, setManagedCredentialReady] = useState(false);
   const [finishing, setFinishing] = useState(false);
@@ -80,20 +77,10 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
       setProviderId(state.catalogs.providers[0]!.id);
     }
   }, [configuredProviders, providerId, state.catalogs.providers]);
-  useEffect(() => {
-    if (!claim) return;
-    const timer = window.setInterval(() => {
-      void controller.listNodeClaims().then((claims) => {
-        if (claims.find((item) => item.id === claim.id)?.status !== "pending") setClaim(null);
-      });
-    }, 3000);
-    return () => window.clearInterval(timer);
-  }, [claim]);
-
-  const step = !github ? "loading" : github.configured && !hasGithub ? "github" : !machineOnline ? "machine"
-    : !selectedProviderConfigured ? "provider"
-      : managedAvailable && (!activeCredential?.unattended || !managedCredentialReady) ? "custody"
-        : !credentialVerified ? "verify" : "ready";
+  const step = !github ? "loading" : github.configured && !hasGithub ? "github"
+    : machineOnline && !selectedProviderConfigured ? "provider"
+      : machineOnline && managedAvailable && (!activeCredential?.unattended || !managedCredentialReady) ? "custody"
+        : machineOnline && !credentialVerified ? "verify" : "ready";
   const startGithubInstall = useCallback(async () => {
     setBusy(true); setGithubError(null);
     try {
@@ -101,19 +88,6 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
       window.location.assign(install.installUrl);
     } catch (error) {
       setGithubError(String((error as Error)?.message || error));
-      setBusy(false);
-    }
-  }, []);
-  const startManagedAuthRunner = useCallback(async () => {
-    setBusy(true); setGithubError(null);
-    try {
-      await controller.createManagedAuthRunner();
-      sessionStorage.setItem("bivy:managed-auth-runner", "1");
-      setManagedAuthRunner(true);
-      await controller.refreshNodes();
-    } catch (error) {
-      setGithubError(String((error as Error)?.message || error));
-    } finally {
       setBusy(false);
     }
   }, []);
@@ -153,15 +127,6 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
     sessionStorage.setItem("bivy:github-install-attempted", "1");
     void startGithubInstall();
   }, [step, startGithubInstall]);
-  // Managed hosting is the default no-install path. Start its short-lived auth
-  // runner as soon as GitHub setup completes; policy remains the abuse/cost gate.
-  // A session guard prevents retries on every render while the explicit button
-  // remains available after a transient failure.
-  useEffect(() => {
-    if (step !== "machine" || hasMachine || !managedAvailable || sessionStorage.getItem("bivy:managed-auth-attempted")) return;
-    sessionStorage.setItem("bivy:managed-auth-attempted", "1");
-    void startManagedAuthRunner();
-  }, [step, hasMachine, managedAvailable, startManagedAuthRunner]);
   useEffect(() => {
     if (step !== "custody" || !activeCredentialKey || sessionStorage.getItem(`bivy:managed-credential:${activeCredentialKey}`)) return;
     sessionStorage.setItem(`bivy:managed-credential:${activeCredentialKey}`, "attempted");
@@ -181,7 +146,6 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
     void target
       .then((config) => {
         if (config) controller.pickDraftEphemeralRunner(config);
-        sessionStorage.removeItem("bivy:managed-auth-runner");
         onDone();
       })
       .catch((error) => {
@@ -195,11 +159,11 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
       <div>
         <p className="connect-eyebrow">Welcome to Bivy</p>
         <h2 className="connect-title">Set up your first session</h2>
-        <p className="connect-sub">Connect GitHub and a model provider. Your first session will open on Bivy Cloud.</p>
+        <p className="connect-sub">Connect GitHub, then open your first session on Bivy Cloud. If provider setup is needed, it happens inside that same session.</p>
       </div>
       <ol className="readiness-checks" aria-label="Onboarding progress">
         <li className={`readiness-check ${hasGithub ? "state-passed" : "state-pending"}`}><span className={`readiness-mark ${hasGithub ? "mark-passed" : ""}`}>{hasGithub ? "✓" : "1"}</span><span><span className="readiness-label">GitHub App</span><span className="readiness-detail"> · repository access</span></span></li>
-        <li className={`readiness-check ${selectedProviderConfigured && credentialVerified ? "state-passed" : "state-pending"}`}><span className={`readiness-mark ${selectedProviderConfigured && credentialVerified ? "mark-passed" : ""}`}>{selectedProviderConfigured && credentialVerified ? "✓" : "2"}</span><span><span className="readiness-label">Model provider</span><span className="readiness-detail"> · sign in or add an API key</span></span></li>
+        <li className={`readiness-check ${selectedProviderConfigured && credentialVerified ? "state-passed" : "state-pending"}`}><span className={`readiness-mark ${selectedProviderConfigured && credentialVerified ? "mark-passed" : ""}`}>{selectedProviderConfigured && credentialVerified ? "✓" : "2"}</span><span><span className="readiness-label">Model provider</span><span className="readiness-detail"> · confirmed in your Cloud session</span></span></li>
       </ol>
 
       {githubError && <div className="banner inline" data-tone="danger" role="alert">{githubError}</div>}
@@ -210,26 +174,6 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
           <p className="muted">Choose the repositories Bivy may use. The installation target must match the GitHub identity you used to sign in.</p>
           <button type="button" className="btn primary" disabled={busy} onClick={() => void startGithubInstall()}>{busy ? "Opening GitHub…" : "Continue to GitHub"}</button>
           {githubError?.includes("Sign in with GitHub again") && <a className="btn" href="/auth/github/start?return=%2F%3Fonboarding%3Dgithub">Verify GitHub identity</a>}
-        </section>
-      )}
-      {step === "machine" && (
-        <section className="settings-section">
-          <h3>{managedAvailable ? "Preparing secure provider sign-in" : "Connect a Machine"}</h3>
-          {hasMachine ? (
-            <p className="muted">Your secure sign-in environment is starting and connecting…</p>
-          ) : (
-            <>
-              {managedAvailable && <>
-                <p className="muted">Bivy is starting a short-lived sign-in environment. It cannot run tasks, expires after 15 minutes, and does not consume a trial session.</p>
-                <button type="button" className="btn primary" disabled={busy} onClick={() => void startManagedAuthRunner()}>{busy ? "Starting…" : "Try managed setup again"}</button>
-              </>}
-              <p className="muted small">{managedAvailable ? "Prefer your own computer? Enroll macOS/Linux with a one-time command:" : "Enroll your macOS/Linux Machine with a one-time command:"}</p>
-              {!claim?.command ? <button type="button" className="btn" disabled={busy} onClick={() => {
-                setBusy(true);
-                controller.createNodeClaim().then(setClaim).catch((error) => setGithubError(String((error as Error)?.message || error))).finally(() => setBusy(false));
-              }}>{busy ? "Creating…" : "Create personal install command"}</button> : <div className="repo-connect-command"><code>{claim.command}</code><button type="button" className={`repo-connect-copy${copied ? " is-copied" : ""}`} onClick={() => void navigator.clipboard.writeText(claim.command || "").then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1500); })}>{copied ? "Copied" : "Copy"}</button></div>}
-            </>
-          )}
         </section>
       )}
       {step === "provider" && (

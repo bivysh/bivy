@@ -58,11 +58,12 @@ async function managedAccount() {
 // Injected launcher that behaves like the production one: emits a lifecycle
 // event, registers the machine, and returns it — while capturing which
 // provider credential the launch deps carry.
-function fakeLauncher(seen: { token?: string; hostedTasks?: boolean; hostedCredentialCustody?: boolean; reuseNodeId?: string; reuseRoomKeyB64?: string }) {
+function fakeLauncher(seen: { token?: string; hostedTasks?: boolean; hostedCredentialCustody?: boolean; hostedCredentialPublisher?: boolean; reuseNodeId?: string; reuseRoomKeyB64?: string }) {
   return (async (args, deps) => {
     seen.token = await deps.keys.getToken(args.provider);
     seen.hostedTasks = args.hostedTasks;
     seen.hostedCredentialCustody = args.hostedCredentialCustody;
+    seen.hostedCredentialPublisher = args.hostedCredentialPublisher;
     seen.reuseNodeId = args.reuseNodeId;
     seen.reuseRoomKeyB64 = args.reuseRoomKeyB64;
     deps.store.addKey("eph-managed-1", "managed-room-key");
@@ -233,7 +234,7 @@ try {
     process.env.MANAGED_COMPUTE_ENABLED = "1";
     process.env.MANAGED_PROVIDER_TOKEN_FLY = OPERATOR_TOKEN;
     const { store, acctId } = await managedAccount();
-    const seen: { token?: string; hostedTasks?: boolean; hostedCredentialCustody?: boolean } = {};
+    const seen: { token?: string; hostedTasks?: boolean; hostedCredentialCustody?: boolean; hostedCredentialPublisher?: boolean } = {};
     let delivered: { nodeId: string; key: string } | undefined;
     const machine = await provisionEphemeralForAccount(
       store, acctId, MANAGED_CONFIG, env, fakeLauncher(seen), Date.now(), "interactive",
@@ -241,6 +242,7 @@ try {
     );
     assert.equal(seen.hostedTasks, false, "interactive work is driven only by its attached browser");
     assert.equal(seen.hostedCredentialCustody, true, "interactive managed work consumes only the separately granted hosted credential snapshot");
+    assert.equal(seen.hostedCredentialPublisher, true, "the same interactive Machine can establish the initial snapshot during setup");
     assert.equal(machine.purpose, "interactive");
     assert.deepEqual(delivered, { nodeId: "eph-managed-1", key: "managed-room-key" });
     assert.ok(await store.getNodeRoomKeyEnc(acctId, "eph-managed-1"), "the same key remains escrowed for later server-side rebuild");

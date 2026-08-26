@@ -641,6 +641,10 @@ export async function provisionEphemeralForAccount(
         // Interactive managed sessions must receive the explicit hosted-custody
         // snapshot without becoming unattended queue pollers.
         hostedCredentialCustody: computeSource === "managed",
+        // Interactive/auth setup guests may establish the initial filtered
+        // snapshot. Server + control plane both refuse guest replacement once
+        // one exists, preserving the recipient-only rule after setup.
+        hostedCredentialPublisher: computeSource === "managed" && (purpose === "interactive" || purpose === "auth-runner"),
         githubToken,
         hostedMint: useHostedMint,
         setupId: config.id,

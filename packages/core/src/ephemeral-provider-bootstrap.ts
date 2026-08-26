@@ -39,6 +39,7 @@ function bivyBootstrapExports(opts: BootstrapOpts): string[] {
     opts.repo ? `export BIVY_REPO=${shq(opts.repo)}` : "",
     opts.hostedTasks ? `export BIVY_GITHUB_HOSTED_TASKS=1` : "",
     opts.hostedCredentialCustody ? `export BIVY_HOSTED_CREDENTIAL_CUSTODY=1` : "",
+    opts.hostedCredentialPublisher ? `export BIVY_HOSTED_CREDENTIAL_PUBLISH=1` : "",
     opts.nodeLabel ? `export BIVY_NODE_LABEL=${shq(opts.nodeLabel)}` : "",
     opts.githubToken ? `export BIVY_GITHUB_TOKEN=${shq(opts.githubToken)}` : "",
     opts.hostedMint ? `export BIVY_HOSTED_MINT=1` : "",

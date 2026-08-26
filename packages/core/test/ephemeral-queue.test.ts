@@ -60,6 +60,12 @@ describe("buildBootstrapUserData — hosted queue opt-in", () => {
     expect(userData).not.toContain("BIVY_GITHUB_HOSTED_TASKS");
   });
 
+  it("allows an interactive setup guest to publish only its initial hosted credential snapshot", () => {
+    const userData = buildBootstrapUserData({ ...base, hostedCredentialCustody: true, hostedCredentialPublisher: true });
+    expect(userData).toContain("export BIVY_HOSTED_CREDENTIAL_CUSTODY=1");
+    expect(userData).toContain("export BIVY_HOSTED_CREDENTIAL_PUBLISH=1");
+  });
+
   it("single-quotes a token so shell metacharacters can't break out of the export", () => {
     const userData = buildBootstrapUserData({ ...base, hostedTasks: true, githubToken: "a'b$(rm -rf /)" });
     // shq() escapes embedded single quotes as '\'' — the token must never appear

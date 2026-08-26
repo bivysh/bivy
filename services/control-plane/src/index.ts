@@ -1373,17 +1373,9 @@ app.post("/account/managed-machines", requireUser, asyncHandler(async (req, res)
     return res.status(503).json({ error: "Managed session Machines are not available." });
   }
   const configId = String(req.body?.configId ?? "").trim();
-  const hostedCredentialVault = await store.getHostedModelAuthVault(account.id);
-  // A managed guest intentionally cannot inherit a personal Machine's local
-  // credential vault. Fail before reserving/billing/provisioning when the user
-  // has not explicitly created the separately encrypted Cloud snapshot; letting
-  // the VM boot only defers this into a misleading `bivy login` runtime error.
-  if (!hostedCredentialVault?.ciphertext) {
-    return res.status(409).json({
-      error: "Connect a model provider and enable it for Bivy Cloud before starting a session.",
-      code: "managed_credentials_required",
-    });
-  }
+  // Missing hosted credentials no longer reject the session before allocation.
+  // The intended interactive Machine starts in credential-setup mode; agent
+  // execution remains paused until its initial filtered snapshot is confirmed.
   const config = (await store.getEphemeralConfigs(account.id)).find((candidate) => candidate.id === configId);
   if (!config || config.computeSource !== "managed") return res.status(404).json({ error: "Managed session profile not found." });
   const adapter = ephemeralAdapter(config.provider);
@@ -2057,6 +2049,14 @@ app.put("/node/model-auth-hosted-vault", requireNode, asyncHandler(async (req, r
   }
   if (!(await store.getHostedProvisioning(node.accountId)).enabled) {
     return res.status(403).json({ error: "hosted provisioning not enabled for this account" });
+  }
+  const currentVault = await store.getHostedModelAuthVault(node.accountId);
+  const managedGuest = (await store.listHostedMachineAttempts(node.accountId, false)).some((attempt) => attempt.nodeId === node.id);
+  // A managed setup guest can create the first filtered snapshot, but must
+  // never replace/revoke custody after an agent could have run on it. Personal
+  // Machines remain the authorities for all subsequent changes.
+  if (managedGuest && currentVault) {
+    return res.status(403).json({ error: "managed guests cannot replace hosted credentials" });
   }
   const generation = await store.setHostedModelAuthVault(node.accountId, ciphertext, encryptSecret(node.accountId, vaultKeyB64), expectedGeneration, revision);
   if (generation === undefined) {

@@ -80,7 +80,7 @@ export function SessionLaunchProgressView({
             void onSetupCredentials().finally(() => setStartingSetup(false));
           }}
         >
-          {startingSetup ? "Starting secure provider setup…" : "Set up model provider for Bivy Cloud"}
+          {startingSetup ? "Starting Bivy Cloud…" : "Continue setup in this Cloud session"}
         </button>
       )}
     </section>
