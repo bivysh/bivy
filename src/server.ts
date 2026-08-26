@@ -3558,7 +3558,7 @@ async function pushModelAuthToControlPlane(rotateKey = false, throwOnFailure = f
       // A credential-setup guest may establish the initial filtered snapshot.
       // The control plane refuses managed-guest replacement after that first
       // write, so normal hosted runners remain recipients rather than authorities.
-      if (process.env.BIVY_HOSTED_CREDENTIAL_PUBLISH === "1") await pushHostedModelAuthToControlPlane();
+      if (process.env.BIVY_HOSTED_CREDENTIAL_PUBLISH === "1" && !lastPushedHostedModelAuthCiphertext) await pushHostedModelAuthToControlPlane();
       return;
     }
     // Only push credentials on the account-sync tier; a `sync: "node"` credential

@@ -56,7 +56,7 @@ test("primary PWA surfaces use the canonical product vocabulary", () => {
     assert.equal(source.includes(fragment), false, `legacy customer copy returned: ${fragment}`);
   }
 
-  for (const canonical of ['label: "Runs"', ">Run details<", 'label: "Machines"', "Cloud machine profiles", "Run automations while I'm offline"]) {
+  for (const canonical of ['label: "Runs"', ">Run details<", 'label: "Machines"', "Running Cloud machines", "Start a new Cloud machine", "Run automations while I'm offline"]) {
     assert.equal(source.includes(canonical), true, `canonical customer copy missing: ${canonical}`);
   }
 });

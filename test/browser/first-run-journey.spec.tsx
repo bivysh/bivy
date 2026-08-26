@@ -96,6 +96,17 @@ test("managed first prompts render quiet provisioning milestones in the session"
   expect(controller).toContain("beginManagedCredentialSetup");
 });
 
+test("managed runner images contain every supported selectable external agent and failed starts stay actionable", async () => {
+  const dockerfile = await read("../../deploy/Dockerfile.ephemeral-runner");
+  const controller = await read("../../packages/web/src/store/controller.ts");
+  const progress = await read("../../packages/web/src/components/SessionLaunchProgress.tsx");
+  expect(dockerfile).toContain("@openai/codex@0.147.0");
+  expect(dockerfile).toContain("@anthropic-ai/claude-code@2.1.246");
+  expect(dockerfile).toContain("command -v codex");
+  expect(controller).toContain("retryPendingLaunchOnFreshMachine");
+  expect(progress).toContain("Retry on a new Cloud Machine");
+});
+
 test("progress survives a reload because it's derived from authoritative signals, not a client-only wizard flag", async () => {
   const app = await read("../../packages/web/src/App.tsx");
   // The activation projection is computed fresh from live state every render

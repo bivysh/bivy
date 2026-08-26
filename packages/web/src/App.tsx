@@ -802,6 +802,13 @@ export function App() {
                     controller.store.setError(error instanceof Error ? error.message : String(error));
                   }
                 }}
+                onRetryFreshMachine={async () => {
+                  try {
+                    await controller.retryPendingLaunchOnFreshMachine(activeSession.sessionId);
+                  } catch (error) {
+                    controller.store.setError(error instanceof Error ? error.message : String(error));
+                  }
+                }}
               /> : undefined}
               footer={
                 <>
