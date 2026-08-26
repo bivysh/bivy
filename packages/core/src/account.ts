@@ -323,6 +323,27 @@ export interface ManagedMachineLaunch {
   duplicate?: boolean;
 }
 
+export interface ManagedAutomationTarget {
+  nodeId: string;
+  roomKey: string;
+  config: EphemeralNodeConfig;
+}
+
+export async function ensureManagedAutomationTarget(
+  store: LocalStore,
+  fetchImpl: typeof fetch = fetch,
+): Promise<ManagedAutomationTarget> {
+  const res = await fetchImpl(`${cpBase(store)}/account/managed-automation-target`, {
+    method: "POST",
+    headers: authHeaders(store),
+  });
+  const data = await res.json().catch(() => ({})) as Partial<ManagedAutomationTarget> & { error?: string };
+  if (!res.ok || !data.nodeId || !data.roomKey || !data.config) {
+    throw new Error(data.error || `managed automation setup failed: ${res.status}`);
+  }
+  return data as ManagedAutomationTarget;
+}
+
 export interface ManagedLaunchAction {
   id: string;
   label: string;

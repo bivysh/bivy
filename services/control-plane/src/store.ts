@@ -1461,6 +1461,8 @@ export interface SessionStateRepository {
   // device-only and never escrow. Never exposed to any client.
   getNodeRoomKeyEnc(accountId: string, nodeId: string): Promise<SecretEnvelope | undefined>;
   setNodeRoomKeyEnc(accountId: string, nodeId: string, enc: SecretEnvelope): Promise<void>;
+  /** Atomically preserve the first E2E identity created by concurrent devices. */
+  setNodeRoomKeyEncIfAbsent(accountId: string, nodeId: string, enc: SecretEnvelope): Promise<SecretEnvelope>;
 
 }
 

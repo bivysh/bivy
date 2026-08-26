@@ -18,6 +18,7 @@ import {
   createCentralGithubInstall,
   createManagedAuthRunner,
   ensureManagedSessionDefaults,
+  ensureManagedAutomationTarget,
   launchManagedSessionMachine,
   ManagedLaunchError,
   restoreManagedSessionMachine,
@@ -392,7 +393,7 @@ export class AppController {
         const task: PendingEphemeralLaunch = { id: provisionalId, prompt, config, logs: [], followups: [], phase: "provisioning", createdAt: now, updatedAt: now };
         this.pendingLaunches.set(provisionalId, task);
         void this.pendingLaunchStore.put(task);
-        this.store.persistPendingSession(provisionalId, prompt.text);
+        this.store.persistPendingSession(provisionalId, prompt.text, true, config.name);
         void this.launchDraftRunnerAndBind(provisionalId);
       },
       send: (command) => this.send(command),
@@ -825,6 +826,7 @@ export class AppController {
 
   centralGithubApp() { return fetchCentralGithubApp(this.local); }
   createCentralGithubInstall(returnPath = "/") { return createCentralGithubInstall(this.local, returnPath); }
+  managedAutomationTarget() { return ensureManagedAutomationTarget(this.local); }
   createManagedAuthRunner() { return createManagedAuthRunner(this.local); }
   ensureManagedSessionDefaults() { return ensureManagedSessionDefaults(this.local); }
   createNodeClaim() { return createAccountNodeClaim(this.local); }
@@ -2129,7 +2131,7 @@ export class AppController {
     const launches = await this.pendingLaunchStore.list();
     for (const launch of launches) {
       this.pendingLaunches.set(launch.id, launch);
-      this.store.persistPendingSession(launch.id, launch.prompt.text, false);
+      this.store.persistPendingSession(launch.id, launch.prompt.text, false, launch.config.name);
       if (launch.machine?.nodeId && launch.phase !== "failed") {
         this.store.bindPendingSessionNode(launch.id, launch.machine.nodeId);
         this.startPendingRunner(launch.id);

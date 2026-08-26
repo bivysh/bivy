@@ -1203,6 +1203,10 @@ function presentNodeClaim(claim: NodeClaim) {
   return { ...claim, status };
 }
 
+function managedAutomationNodeId(accountId: string): string {
+  return `eph-managed-auto-${createHash("sha256").update(accountId).digest("hex").slice(0, 16)}`;
+}
+
 function managedSessionConfig(now = new Date().toISOString()): EphemeralNodeConfig | null {
   const provider = String(process.env.MANAGED_SESSION_PROVIDER || process.env.MANAGED_AUTH_RUNNER_PROVIDER || "fly").trim();
   const adapter = ephemeralAdapter(provider);
@@ -1315,6 +1319,40 @@ app.post("/account/onboarding/managed-defaults", requireUser, asyncHandler(async
   res.json({ ok: true, config: await ensureManagedDefaultForAccount(account.id) });
 }));
 
+// Stable E2E identity for unattended managed automations. The browser encrypts
+// instructions to this room key; a future Bivy Cloud queue Machine adopts the
+// same node id + key at launch. This is account-authenticated, no-store, and
+// separate from interactive session keys.
+app.post("/account/managed-automation-target", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  res.setHeader("cache-control", "no-store");
+  if (!ephemeralMachinesEnabled() || process.env.MANAGED_COMPUTE_ENABLED !== "1") {
+    return res.status(503).json({ error: "Bivy Cloud automations are not available." });
+  }
+  const config = await ensureManagedDefaultForAccount(account.id);
+  const nodeId = managedAutomationNodeId(account.id);
+  let encrypted = await store.getNodeRoomKeyEnc(account.id, nodeId);
+  if (!encrypted) {
+    encrypted = await store.setNodeRoomKeyEncIfAbsent(
+      account.id,
+      nodeId,
+      encryptSecret(account.id, randomBytes(32).toString("base64url")),
+    );
+  }
+  res.json({ ok: true, nodeId, roomKey: decryptSecret(account.id, encrypted), config });
+}));
+
+function managedLaunchPublicMessage(error: unknown, attemptId: string): string {
+  const message = String((error as Error)?.message || error);
+  const stage = /create machine/i.test(message) ? "creating the Machine"
+    : /create app/i.test(message) ? "creating its isolated Fly App"
+      : /organization|list organizations/i.test(message) ? "selecting the managed Fly organization"
+        : /enroll/i.test(message) ? "enrolling its secure Bivy node"
+          : /image|manifest/i.test(message) ? "loading the managed runner image"
+            : "starting managed compute";
+  return `Bivy Cloud failed while ${stage}. Reference ${attemptId.slice(0, 8)}. Please retry; no Machine was left assigned to this session.`;
+}
+
 // Interactive managed launch. The account chooses only a server-authored managed
 // profile; provider credentials remain operator-only. The room key is returned
 // once over the authenticated no-store response so this browser can establish
@@ -1348,7 +1386,11 @@ app.post("/account/managed-machines", requireUser, asyncHandler(async (req, res)
     res.status(201).json({ ok: true, machine, ...(roomKey ? { roomKey } : {}) });
   } catch (error) {
     await managedLaunchFailureRecorder(account.id)(attemptId).catch(() => {});
-    throw error;
+    console.error(`[managed-launch] account=${account.id} attempt=${attemptId}`, (error as Error)?.message || error);
+    return res.status(502).json({
+      error: managedLaunchPublicMessage(error, attemptId),
+      code: "managed_launch_failed",
+    });
   }
 }));
 

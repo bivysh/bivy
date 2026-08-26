@@ -157,6 +157,9 @@ export interface SessionSummary {
    *  preserved across authoritative session-list refreshes until the controller
    *  replaces it with the node's canonical session id. */
   pendingLaunch?: boolean;
+  /** Intended Machine/profile while a cold start is pending or failed before a
+   * real node id exists. Prevents UI fallback to an unrelated current node. */
+  pendingNodeName?: string;
   /** This session's ephemeral node was torn down (unenrolled, gone from the
    *  registry) but is REBUILDABLE from a durable correlation + the room key this
    *  device still holds — so the row stays in the sidebar as offline-but-rebuildable
@@ -1987,7 +1990,7 @@ export class SessionStore {
    *  lets the user leave it running and start another session without discarding
    *  the launch. The controller replaces this row with the node's canonical id
    *  as soon as session.new completes. */
-  persistPendingSession(sessionId: string, name: string, activate = true): void {
+  persistPendingSession(sessionId: string, name: string, activate = true, pendingNodeName?: string): void {
     const existing = this.state.sessionIndex.sessions.find((s) => s.sessionId === sessionId);
     const row: SessionSummary = {
       ...existing,
@@ -1995,6 +1998,7 @@ export class SessionStore {
       name: name.trim() || existing?.name || "New session",
       status: existing?.status === "failed" ? "failed" : "working",
       pendingLaunch: true,
+      pendingNodeName: pendingNodeName || existing?.pendingNodeName,
       updatedAt: existing?.updatedAt || Date.now(),
     };
     this.set({
@@ -2029,6 +2033,7 @@ export class SessionStore {
       name: pending?.name || "New session",
       status: "working",
       pendingLaunch: false,
+      pendingNodeName: undefined,
       updatedAt: Date.now(),
     };
     this.set({

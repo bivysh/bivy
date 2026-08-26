@@ -53,10 +53,11 @@ export function NodeSwitcher() {
   const activeSession = sessions.find((s) => s.sessionId === activeSessionId);
   const sessionNodeId = activeSession?.nodeId || currentNodeId;
   const current = nodes.find((n) => n.id === sessionNodeId);
+  const pendingNodeName = activeSession?.pendingLaunch ? activeSession.pendingNodeName : undefined;
   // A runner picked for the (not-yet-created) draft session shows as the current
   // selection — offline/pending until the first message launches it.
   const draftRunner = !activeSessionId ? draft.ephemeralConfig : null;
-  const label = draftRunner ? draftRunner.name : current?.name || sessionNodeId || "Machine";
+  const label = draftRunner ? draftRunner.name : pendingNodeName || current?.name || sessionNodeId || "Machine";
   const showOnline = draftRunner ? false : current?.online;
   // Ephemeral machines enroll as real account nodes (id `eph-…`) once they boot,
   // so they'd otherwise show up twice: here under "Your nodes" AND under the

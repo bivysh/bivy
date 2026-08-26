@@ -2370,6 +2370,18 @@ export class PostgresStore implements ControlPlaneStore {
     );
   }
 
+  async setNodeRoomKeyEncIfAbsent(accountId: string, nodeId: string, enc: SecretEnvelope): Promise<SecretEnvelope> {
+    const { rows } = await this.query(
+      `INSERT INTO node_room_keys (account_id, node_id, room_key_enc, updated_at)
+       VALUES ($1, $2, $3, now())
+       ON CONFLICT (account_id, node_id) DO UPDATE SET node_id = EXCLUDED.node_id
+       RETURNING room_key_enc`,
+      [accountId, nodeId, JSON.stringify(enc)],
+    );
+    const raw = rows[0]?.room_key_enc;
+    return (typeof raw === "string" ? JSON.parse(raw) : raw) as SecretEnvelope;
+  }
+
   async findSessionByIssue(accountId: string, repo: string, issueNumber: number): Promise<{ sessionId: string; nodeId: string } | undefined> {
     // The node advertises issue sessions with source "issue:owner/repo#N".
     const source = `issue:${repo}#${issueNumber}`;

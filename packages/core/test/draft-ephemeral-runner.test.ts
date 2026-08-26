@@ -69,10 +69,10 @@ describe("draftEphemeralConfig (pick-a-runner-then-send)", () => {
     });
   });
 
-  it("settles a failed placeholder instead of spinning forever", () => {
+  it("settles a failed placeholder without losing its intended Machine", () => {
     const store = new SessionStore();
-    store.persistPendingSession("starting-request-1", "Fix the flaky test");
+    store.persistPendingSession("starting-request-1", "Fix the flaky test", true, "Bivy Cloud");
     store.failPendingSession("starting-request-1");
-    expect(store.getState().sessionIndex.sessions[0]?.status).toBe("failed");
+    expect(store.getState().sessionIndex.sessions[0]).toMatchObject({ status: "failed", pendingNodeName: "Bivy Cloud" });
   });
 });

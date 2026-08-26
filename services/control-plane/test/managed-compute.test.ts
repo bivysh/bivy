@@ -58,10 +58,12 @@ async function managedAccount() {
 // Injected launcher that behaves like the production one: emits a lifecycle
 // event, registers the machine, and returns it — while capturing which
 // provider credential the launch deps carry.
-function fakeLauncher(seen: { token?: string; hostedTasks?: boolean }) {
+function fakeLauncher(seen: { token?: string; hostedTasks?: boolean; reuseNodeId?: string; reuseRoomKeyB64?: string }) {
   return (async (args, deps) => {
     seen.token = await deps.keys.getToken(args.provider);
     seen.hostedTasks = args.hostedTasks;
+    seen.reuseNodeId = args.reuseNodeId;
+    seen.reuseRoomKeyB64 = args.reuseRoomKeyB64;
     deps.store.addKey("eph-managed-1", "managed-room-key");
     await args.onLifecycle?.({ attemptId: args.attemptId, phase: "requested", nodeId: "eph-managed-1" });
     const machine = {
@@ -197,6 +199,19 @@ try {
     assert.equal(attempt?.desired.computeSource, "managed", "compute source rides on the durable attempt row");
     const actions = (await store.listHostedAudit(acctId, 20)).map((e) => e.action);
     assert.ok(actions.includes("provision_attempt") && actions.includes("provision_launched"), "same audit events as a hosted launch");
+  });
+
+  await test("managed queue launch can adopt a stable automation E2E identity", async () => {
+    process.env.MANAGED_COMPUTE_ENABLED = "1";
+    process.env.MANAGED_PROVIDER_TOKEN_FLY = OPERATOR_TOKEN;
+    const { store, acctId } = await managedAccount();
+    const seen: { reuseNodeId?: string; reuseRoomKeyB64?: string } = {};
+    await provisionEphemeralForAccount(
+      store, acctId, MANAGED_CONFIG, env, fakeLauncher(seen), Date.now(), "queue-default",
+      { attemptId: "managed-automation-attempt", nodeId: "eph-managed-auto-stable", roomKeyB64: "stable-room-key", retryCount: 0 },
+    );
+    assert.equal(seen.reuseNodeId, "eph-managed-auto-stable");
+    assert.equal(seen.reuseRoomKeyB64, "stable-room-key");
   });
 
   await test("managed authentication runner is credential-only and never polls task queues", async () => {
