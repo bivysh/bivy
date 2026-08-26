@@ -3685,10 +3685,11 @@ app.get("/github/central-app/setup", asyncHandler(async (req, res) => {
     action: "central_install_bound",
     detail: `installation ${installationId}${detail.account ? ` on ${detail.account}` : ""}`,
   });
-  // First bind selects the central identity, unless the account already chose.
+  // Completing this explicit install/configure flow selects the central identity
+  // even for established accounts that previously used their own App or token.
+  // Their old credential remains intact and usable by personal Machines.
   try {
-    const hosted = await store.getHostedProvisioning(bound.accountId);
-    if (!hosted.githubIdentity) await store.setHostedProvisioning(bound.accountId, { githubIdentity: "central-app" });
+    await store.setHostedProvisioning(bound.accountId, { githubIdentity: "central-app" });
   } catch {
     // best-effort: sealed BYO credentials without a configured key still bind
   }

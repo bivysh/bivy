@@ -784,22 +784,6 @@ button.sheet-action:last-child { border-bottom: 0; }
 /* The draft lead row carries more than one pick (repo + sandbox), so space them
    and let them wrap on a narrow phone instead of squashing. */
 .composer-lead { gap: var(--space-2); flex-wrap: wrap; }
-.composer-advanced { position: relative; }
-.composer-advanced > summary { cursor: pointer; list-style: none; user-select: none; }
-.composer-advanced > summary::-webkit-details-marker { display: none; }
-.composer-advanced-options {
-  display: flex;
-  gap: var(--space-2);
-  position: absolute;
-  z-index: 4;
-  inset-block-start: calc(100% + var(--space-1));
-  inset-inline-start: 0;
-  padding: var(--space-2);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-  box-shadow: var(--shadow-md);
-}
 .composer-gh:empty { display: none; }
 .pill-gh { flex: none; }
 
@@ -1952,20 +1936,6 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 /* First-session decision summary (B2): the four decisions a new session makes. */
 .composer-first-session { font-size: 11px; color: var(--muted); padding: 2px 4px 4px; }
 .composer-first-session .fs-decisions { color: var(--fg); }
-.composer-starter {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  margin: 0 0 8px; padding: 10px 12px; border: 1px solid var(--line);
-  border-radius: 8px; background: var(--surface);
-}
-.composer-starter > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.composer-starter strong { font-size: 12px; color: var(--fg); }
-.composer-starter span { font-size: 11px; line-height: 1.4; color: var(--muted); }
-.composer-starter .btn { flex: none; }
-@media (max-width: 520px) {
-  .composer-starter { align-items: stretch; flex-direction: column; }
-  .composer-starter .btn { min-height: 40px; }
-}
-
 /* Review surface (C3): state badges, checks strip, view-mode toggle, file tree,
    per-file actions, and the split (side-by-side) diff layout. */
 .changes-meta { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line); }
