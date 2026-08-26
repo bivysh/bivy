@@ -2000,7 +2000,7 @@ export class AppController {
       let managedCredentialsReady = true;
       if (config.computeSource === "managed") {
         managedCredentialsReady = await this.managedCredentialReady().catch(() => false);
-        if (!managedCredentialsReady) managedCredentialsReady = await this.tryRepublishManagedCredential();
+        if (!managedCredentialsReady) managedCredentialsReady = await this.tryPublishManagedCredential();
       }
       this.store.updateLaunchCheckpoint(provisionalId, "account", "done");
       this.store.updateLaunchCheckpoint(provisionalId, "capacity", "active");
@@ -2054,20 +2054,28 @@ export class AppController {
     }
   }
 
-  private async tryRepublishManagedCredential(): Promise<boolean> {
+  private async tryPublishManagedCredential(): Promise<boolean> {
     if (this.store.getState().connection.status !== "online") return false;
     const candidate = this.store.getState().settings.credentialRecords.find(
-      (record) => record.sync === "account" && record.kind !== "reference" && record.unattended,
+      (record) => record.sync === "account" && record.kind !== "reference",
     );
     if (!candidate) return false;
     try {
-      // Compatibility repair for nodes that predate an explicit republish
-      // command: changing the grant advances its revision and invokes their
-      // existing encrypted hosted-vault publisher.
-      await this.setCredentialUnattended(candidate.provider, candidate.label, false);
-      const disabledGeneration = (await managedCredentialStatus(this.local)).generation;
+      // Sending an interactive Bivy Cloud task is the user's request to make
+      // their existing account-scoped model login available to that isolated
+      // Machine. A credential can predate Cloud and therefore be signed in but
+      // not yet granted/published. Grant it here instead of incorrectly opening
+      // the provider login flow and asking the user to authenticate again.
+      //
+      // Already-granted records can still lack a hosted snapshot (nodes from
+      // before publishing was introduced). Toggle those to advance the revision
+      // and invoke the node's existing encrypted hosted-vault publisher.
+      if (candidate.unattended) {
+        await this.setCredentialUnattended(candidate.provider, candidate.label, false);
+      }
+      const previousGeneration = (await managedCredentialStatus(this.local)).generation;
       await this.setCredentialUnattended(candidate.provider, candidate.label, true);
-      await this.waitForManagedCredential(20_000, disabledGeneration);
+      await this.waitForManagedCredential(20_000, previousGeneration);
       return true;
     } catch {
       return false;

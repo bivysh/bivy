@@ -66,7 +66,9 @@ test("managed-only cold start performs provider setup on the original interactiv
   const provisioner = await read("../../services/control-plane/src/ephemeral-provisioner.ts");
   expect(wizard).not.toContain("controller.createManagedAuthRunner()");
   expect(controller).toContain("beginManagedCredentialSetup");
-  expect(controller).toContain("tryRepublishManagedCredential");
+  expect(controller).toContain("tryPublishManagedCredential");
+  expect(controller).toContain('record.sync === "account" && record.kind !== "reference"');
+  expect(controller).not.toContain('record.kind !== "reference" && record.unattended');
   expect(controller).toContain("Stay on the original provisional session route");
   expect(provisioner).toContain("hostedCredentialPublisher");
   expect(controlPlane).toContain("managed guests cannot replace hosted credentials");
