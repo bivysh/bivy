@@ -478,7 +478,11 @@ export function App() {
   // itself to its native TUI on the node (capability `interactiveTui`) — the
   // analog of the terminal's capability-gated "continue in chat". Absent caps
   // (older node / runtime not yet loaded) default to hidden.
-  const activeRuntimeCaps = state.catalogs.runtimes.find((r) => r.id === activeSession?.runtimeId)?.capabilities as
+  // Prefer the live session's runtime identity. Older/remote session summaries
+  // can omit `runtimeId` even though the active-session projection has it; in
+  // that case the capability lookup must still be able to expose the handoff.
+  const activeRuntimeId = activeSession?.runtimeId ?? state.activeSession.activeRuntimeId;
+  const activeRuntimeCaps = state.catalogs.runtimes.find((r) => r.id === activeRuntimeId)?.capabilities as
     | { interactiveTui?: boolean }
     | undefined;
   const canContinueInTerminal = online && Boolean(activeRuntimeCaps?.interactiveTui);
