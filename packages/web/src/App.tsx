@@ -35,6 +35,7 @@ import { FirstRunModelAuthSheet } from "./components/FirstRunModelAuth.js";
 import { NodePicker } from "./components/Pickers.js";
 import { ConnectRunner } from "./components/ConnectRunner.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "./flags.js";
+import { useCloudMachinesEnabled } from "./cloudMachines.js";
 import { PwaLifecycleNotice } from "./components/PwaLifecycleNotice.js";
 import { clearQueuedPrompts, markPromptQueued, setFollowupQueuedPrompts, setTurnActive } from "./pwaLifecycle.js";
 // The terminal pulls in xterm + its GPU/search/link addons (~a third of the JS
@@ -76,6 +77,8 @@ export function App() {
   useEffect(() => {
     if (githubAppReturning) openAutomations({ setup: "github" });
   }, [githubAppReturning]);
+  const cloudMachinesOptIn = useCloudMachinesEnabled();
+  const cloudMachinesEnabled = EPHEMERAL_MACHINES_ENABLED && cloudMachinesOptIn;
   const [ephemeralOpen, setEphemeralOpen] = useState(false);
   // Full-session file changes sheet — opened from the run pill / summary sheet
   // ("N files edited"), not a card stacked above the composer.
@@ -726,7 +729,7 @@ export function App() {
           <div className="connect-runner-scroll">
             <ConnectRunner
               nodes={state.connection.nodes}
-              ephemeralEnabled={EPHEMERAL_MACHINES_ENABLED}
+              ephemeralEnabled={cloudMachinesEnabled}
               onPickNode={(nodeId) => controller.switchNode(nodeId)}
               onEphemeral={() => setEphemeralOpen(true)}
               onRefresh={() => controller.refreshNodes()}
@@ -982,7 +985,7 @@ export function App() {
         />
         </Suspense>
       )}
-      {ephemeralOpen && <EphemeralSheet onClose={() => setEphemeralOpen(false)} firstRun={needsNode} />}
+      {ephemeralOpen && cloudMachinesEnabled && <EphemeralSheet onClose={() => setEphemeralOpen(false)} firstRun={needsNode} />}
       {state.presentation.needsModelAuth && <FirstRunModelAuthSheet state={state} />}
       {terminalNodePicker && (
         <NodePicker

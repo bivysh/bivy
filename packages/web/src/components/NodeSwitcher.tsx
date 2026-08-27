@@ -10,6 +10,7 @@ import { StatusDot } from "./StatusDot.js";
 import { Badge } from "./Badge.js";
 import { useModalEscape } from "../modalStack.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
+import { useCloudMachinesEnabled } from "../cloudMachines.js";
 import { ephemeralCatalogEntry, type EphemeralNodeConfig, type EphemeralMachine } from "@bivy/core";
 
 /**
@@ -19,6 +20,8 @@ import { ephemeralCatalogEntry, type EphemeralNodeConfig, type EphemeralMachine 
  */
 export function NodeSwitcher() {
   const { connection: { nodes, currentNodeId, status }, activeSession: { activeSessionId }, sessionIndex: { sessions }, draft } = useAppState();
+  const cloudMachinesOptIn = useCloudMachinesEnabled();
+  const cloudMachinesEnabled = EPHEMERAL_MACHINES_ENABLED && cloudMachinesOptIn;
   const [open, setOpen] = useState(false);
   const [ephemeralConfigs, setEphemeralConfigs] = useState<EphemeralNodeConfig[]>([]);
   const [ephemeralMachines, setEphemeralMachines] = useState<EphemeralMachine[]>([]);
@@ -37,7 +40,7 @@ export function NodeSwitcher() {
 
   useEffect(() => {
     if (!open) return;
-    if (EPHEMERAL_MACHINES_ENABLED) {
+    if (cloudMachinesEnabled) {
       controller.listEphemeralConfigs()
         .then((configs) => setEphemeralConfigs(configs.filter((config) => Boolean(ephemeralCatalogEntry(config.provider)))))
         .catch(() => {});
@@ -48,14 +51,14 @@ export function NodeSwitcher() {
     };
     document.addEventListener("click", onDoc);
     return () => document.removeEventListener("click", onDoc);
-  }, [open]);
+  }, [open, cloudMachinesEnabled]);
 
   const activeSession = sessions.find((s) => s.sessionId === activeSessionId);
   const sessionNodeId = activeSession?.nodeId || currentNodeId;
   const current = nodes.find((n) => n.id === sessionNodeId);
   // A runner picked for the (not-yet-created) draft session shows as the current
   // selection — offline/pending until the first message launches it.
-  const draftRunner = !activeSessionId ? draft.ephemeralConfig : null;
+  const draftRunner = cloudMachinesEnabled && !activeSessionId ? draft.ephemeralConfig : null;
   const label = draftRunner ? draftRunner.name : current?.name || sessionNodeId || "Machine";
   const showOnline = draftRunner ? false : current?.online;
   // Ephemeral machines enroll as real account nodes (id `eph-…`) once they boot,
@@ -129,7 +132,7 @@ export function NodeSwitcher() {
               </button>
             </div>
           ))}
-          {EPHEMERAL_MACHINES_ENABLED && ephemeralConfigs.length > 0 && (
+          {cloudMachinesEnabled && ephemeralConfigs.length > 0 && (
             <>
               <div className="node-menu-head">Cloud machine profiles</div>
               {ephemeralConfigs.map((config) => {

@@ -139,6 +139,7 @@ import {
 } from "@bivy/core";
 import { navigate, parseRoute, routePath, type Route } from "../router.js";
 import { EPHEMERAL_MACHINES_ENABLED, EPHEMERAL_KEEP_FAILED_MACHINES } from "../flags.js";
+import { cloudMachinesEnabled } from "../cloudMachines.js";
 import { markFirstSuccessfulResponse } from "../pwaLifecycle.js";
 import { SessionOrchestrator } from "./coordinators/session-orchestrator.js";
 import { NodeConnectionCoordinator } from "./coordinators/node-connection-coordinator.js";
@@ -370,7 +371,7 @@ export class AppController {
       appendPendingFollowup: (prompt) => { this.pendingFollowups.push(prompt); },
       draftSessionFields: () => this.draftSessionFields(),
       setPendingPrompt: (prompt) => { this.pendingPrompt = prompt; },
-      draftEphemeralRunner: () => this.store.getState().draft.ephemeralConfig,
+      draftEphemeralRunner: () => (EPHEMERAL_MACHINES_ENABLED && cloudMachinesEnabled() ? this.store.getState().draft.ephemeralConfig : null),
       startEphemeralLaunch: (provisionalId, prompt, config) => {
         const now = new Date().toISOString();
         const task: PendingEphemeralLaunch = { id: provisionalId, prompt, config, logs: [], followups: [], phase: "provisioning", createdAt: now, updatedAt: now };
