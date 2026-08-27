@@ -33,7 +33,7 @@ export function ConnectRunner({
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Hosted: the one-line installer. Self-hosted: point `bivy setup` at this
   // deployment, since only bivy.sh serves install.sh (see installCommand.ts).
-  const install = installCommand(location.origin, controller.local.relay);
+  const install = installCommand(location.origin, controller.local.relay, controller.local.s);
 
   useEffect(() => () => {
     if (copyTimer.current) clearTimeout(copyTimer.current);
@@ -84,6 +84,7 @@ export function ConnectRunner({
               <h3>Connect your workstation</h3>
               <p>
                 Run one command on your Mac or Linux computer to use the environment where your work already lives.
+                {install.authenticated && " It will connect to this same account automatically."}
                 {!install.hosted && " Needs Node.js 22.19 or newer; setup will point the Machine at this control plane."}
               </p>
             </div>

@@ -16,13 +16,14 @@ export function AddNodeSheet({ onClose }: { onClose: () => void }) {
   const [copied, setCopied] = useState(false);
   // Same command the first-run screen shows — hosted installer, or a
   // self-hosted `bivy setup` pointed at this control plane (installCommand.ts).
-  const install = installCommand(location.origin, controller.local.relay);
+  const install = installCommand(location.origin, controller.local.relay, controller.local.s);
 
   return (
     <Sheet title="Add a Machine" onClose={onClose}>
       <div className="settings-form">
         <p className="muted">
           Run this on any Mac or Linux computer to install Bivy there and connect it as a new Machine on your account.
+          {install.authenticated && " It will use this signed-in account automatically."}
           {!install.hosted && " Needs Node.js 22.19 or newer; setup will point the Machine at this control plane."}
         </p>
         <pre className="code-snippet">

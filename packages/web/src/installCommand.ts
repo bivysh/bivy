@@ -6,7 +6,10 @@
 // no `install.sh` of its own, so the copied command must instead point `bivy
 // setup` at *this* deployment (BIVY_CONTROL_PLANE_URL / BIVY_RELAY_URL are the
 // env vars the setup wizard pre-fills from) — otherwise a self-hoster's node
-// would enroll on app.bivy.sh. Pure so it's testable without a DOM.
+// would enroll on app.bivy.sh. When the app is already signed in, include the
+// current account session as BIVY_SESSION_TOKEN so `bivy setup` can enroll the
+// new Machine without asking the user to authenticate again. Pure so it's
+// testable without a DOM.
 
 /** The one-line installer, hosted control plane only. */
 export const HOSTED_INSTALL_CMD = "curl -fsSL https://bivy.sh/install.sh | bash";
@@ -26,6 +29,8 @@ export interface InstallCommand {
   command: string;
   /** True on the hosted control plane, where `/install.sh` is also downloadable. */
   hosted: boolean;
+  /** True when the command carries the current account session for no-repeat sign-in. */
+  authenticated: boolean;
 }
 
 /**
@@ -33,11 +38,28 @@ export interface InstallCommand {
  * `relayUrl` (the relay this client was told to use, if known) is included so
  * the node dials the same relay without a prompt.
  */
-export function installCommand(origin: string, relayUrl?: string | null): InstallCommand {
-  if (isHostedControlPlane(origin)) return { command: HOSTED_INSTALL_CMD, hosted: true };
-  const env = [`BIVY_CONTROL_PLANE_URL=${shellQuote(origin.replace(/\/$/, ""))}`];
-  if (relayUrl) env.push(`BIVY_RELAY_URL=${shellQuote(relayUrl.replace(/\/$/, ""))}`);
-  return { command: `npm install -g @bivy/bivy && ${env.join(" ")} bivy setup`, hosted: false };
+export function installCommand(origin: string, relayUrl?: string | null, sessionToken?: string | null): InstallCommand {
+  const cp = origin.replace(/\/$/, "");
+  const relay = relayUrl?.replace(/\/$/, "");
+  const env = [
+    ...(sessionToken ? [`BIVY_SESSION_TOKEN=${shellQuote(sessionToken)}`] : []),
+    `BIVY_CONTROL_PLANE_URL=${shellQuote(cp)}`,
+    ...(relay ? [`BIVY_RELAY_URL=${shellQuote(relay)}`] : []),
+  ];
+  if (isHostedControlPlane(origin)) {
+    // Put env on the `bash` side of the pipe. `VAR=… curl … | bash` would only
+    // scope it to curl, so setup would still prompt for sign-in.
+    return {
+      command: env.length ? `curl -fsSL https://bivy.sh/install.sh | ${env.join(" ")} bash` : HOSTED_INSTALL_CMD,
+      hosted: true,
+      authenticated: Boolean(sessionToken),
+    };
+  }
+  return {
+    command: `npm install -g @bivy/bivy && ${env.join(" ")} bivy setup`,
+    hosted: false,
+    authenticated: Boolean(sessionToken),
+  };
 }
 
 /** Quote a value for a POSIX shell only when it needs it (URLs rarely do). */
