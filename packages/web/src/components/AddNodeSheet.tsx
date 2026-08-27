@@ -29,6 +29,9 @@ export function AddNodeSheet({ onClose }: { onClose: () => void }) {
         <pre className="code-snippet">
           <code>{install.command}</code>
         </pre>
+        {install.authenticated && (
+          <p className="muted">Auto sign-in includes an account token. Paste it only into a Machine you trust, or copy the plain command below.</p>
+        )}
         <div className="row-actions">
           <button
             className="btn primary"

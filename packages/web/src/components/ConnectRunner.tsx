@@ -65,9 +65,9 @@ export function ConnectRunner({
         <div className="connect-kicker">Signed in — connect a Machine</div>
         <h2 className="connect-title" id="connect-runner-title">Choose where your agent runs</h2>
         <p className="connect-sub">
-          Start on a trusted workstation with your real repo, services, and warm caches,
-          or launch an isolated Machine in your cloud account. Interactive traffic stays
-          end-to-end encrypted; any optional hosted credential custody is disclosed before you enable it.
+          {ephemeralEnabled
+            ? "Start on a trusted workstation with your real repo, services, and warm caches, or launch an isolated Machine in your cloud account. Interactive traffic stays end-to-end encrypted; any optional hosted credential custody is disclosed before you enable it."
+            : "Connect a trusted workstation with your real repo, services, and warm caches. Interactive traffic stays end-to-end encrypted between your Machine and your devices."}
         </p>
       </div>
 
@@ -115,6 +115,9 @@ export function ConnectRunner({
               )}
             </button>
           </div>
+          {install.authenticated && (
+            <p className="connect-token-note">Auto sign-in includes an account token. Paste it only into a Machine you trust, or use the plain install instead.</p>
+          )}
           <div className="connect-option-links">
             {install.authenticated && (
               <button type="button" className="btn link" onClick={() => copyCommand(install.plainCommand, "plain")}>
