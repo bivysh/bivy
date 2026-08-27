@@ -16,7 +16,7 @@ both published from CI via the single `release.yml` workflow:
 | Channel | dist-tag | Version shape | When it publishes | Install |
 |---|---|---|---|---|
 | **Production** | `latest` | `X.Y.Z` | on a deliberate "Promote" dispatch | `npm i -g @bivy/bivy` (default) |
-| **Staging** | `staging` | `X.Y.Z-staging.<run#>` | automatically on every merge to `main` | `BIVY_CHANNEL=staging` / `npm i -g @bivy/bivy@staging` |
+| **Staging** | `staging` | `X.Y.Z-staging.N` | automatically on every merge to `main` | `BIVY_CHANNEL=staging` / `npm i -g @bivy/bivy@staging` |
 
 The flow is trunk-based: every change lands on `main` through a PR, and each merge
 immediately publishes a unique, provenance-signed **staging** build that the dev
@@ -119,8 +119,10 @@ npm versions are immutable and a hand publish carries no provenance.
 ## Staging (automatic)
 
 Nothing to do. Every merge to `main` runs the `staging` job in `release.yml`,
-which stamps `X.Y.Z-staging.<run_number>` onto the package, publishes it to the
-`staging` dist-tag with provenance, and moves on. There is no tag, no changelog
+which stamps the next `X.Y.Z-staging.N` for the current clean base version onto
+the package, publishes it to the `staging` dist-tag with provenance, and moves
+on. The staging counter resets for each new base (for example,
+`0.15.0-staging.1`). There is no tag, no changelog
 requirement, and no approval — it is meant to be invisible. Install/verify a
 staging build with:
 
@@ -141,7 +143,7 @@ holds on `main`, to the `latest` dist-tag.
      `package.json` (`packages/*`, `services/*`) so they all agree — there is no
      sync script — to a clean `X.Y.Z` (no prerelease suffix);
    - moves `CHANGELOG.md`'s `[Unreleased]` into a `## [X.Y.Z]` section.
-   Merge it. (This merge also publishes one more `X.Y.Z-staging.<run#>` build —
+   Merge it. (This merge also publishes one more `X.Y.Z-staging.N` build —
    harmless; it's a release candidate for exactly this version.)
 2. Run the **Promote** button: Actions → **Release** → *Run workflow* (from
    `main`), and type the exact `X.Y.Z` into the confirmation field. Or from the

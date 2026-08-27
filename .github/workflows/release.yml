@@ -4,7 +4,7 @@ name: Release
 # single trusted publisher (one workflow file) per package, so staging and
 # production must live here together -- see docs/releasing.md.
 #
-#   push to main       -> STAGING (automatic). Publishes X.Y.Z-staging.<run#> to
+#   push to main       -> STAGING (automatic). Publishes X.Y.Z-staging.N to
 #                         the `staging` dist-tag on every merge. No approval, no
 #                         git tag, never moves `latest`. This is the dev channel
 #                         every change lands on.
@@ -71,17 +71,27 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # Stamp a unique, immutable prerelease version for this build. github's
-      # run_number is monotonic, so versions never collide (npm versions are
-      # immutable). main must carry a clean X.Y.Z base -- a prerelease base would
-      # produce a nonsense double-prerelease like 0.1.0-rc.1-staging.7.
+      # Stamp a unique, immutable prerelease version for this build. The counter
+      # is scoped to the clean base version in package.json, so a new development
+      # minor starts at a readable version like 0.15.0-staging.1 instead of using
+      # GitHub's repository-wide run number. npm versions are immutable, so we
+      # derive the next suffix from already-published versions for this base.
       - name: Stamp a unique staging prerelease version
         run: |
           base="$(node -p "require('./package.json').version")"
           case "$base" in
             *-*) echo "::error::package.json version '$base' is already a prerelease; main must hold a clean X.Y.Z."; exit 1 ;;
           esac
-          version="${base}-staging.${GITHUB_RUN_NUMBER}"
+          next="$(npm view @bivy/bivy versions --json | node -e '
+            const versions = JSON.parse(require("fs").readFileSync(0, "utf8"));
+            const prefix = `${process.argv[1]}-staging.`;
+            const suffixes = versions
+              .filter((version) => version.startsWith(prefix))
+              .map((version) => Number(version.slice(prefix.length)))
+              .filter(Number.isSafeInteger);
+            console.log(Math.max(0, ...suffixes) + 1);
+          ' "$base")"
+          version="${base}-staging.${next}"
           pnpm version --no-git-tag-version --allow-same-version "$version"
           echo "Publishing staging version: $version"
 
