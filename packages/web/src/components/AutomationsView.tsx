@@ -59,6 +59,7 @@ import { HostedMachinesPanel } from "./HostedMachines.js";
 import { takeAutomationsSetupFocus } from "../automationsRoute.js";
 import { requestSignIn } from "../signInRequest.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
+import { useCloudMachinesEnabled } from "../cloudMachines.js";
 import type { AutomationsSection } from "../router.js";
 import type { GithubQueueItem } from "@bivy/core";
 import { ConfirmDialog } from "./AppDialog.js";
@@ -475,6 +476,8 @@ export function AutomationsView({
   // session — every account fetch below would 401. Skip them and render the
   // signpost branch instead of surfacing a raw error.
   const accountless = !controller.signedIn;
+  const cloudMachinesOptIn = useCloudMachinesEnabled();
+  const cloudMachinesEnabled = EPHEMERAL_MACHINES_ENABLED && cloudMachinesOptIn;
 
   const refreshRuns = useCallback(async () => {
     if (accountless) return;
@@ -1071,7 +1074,7 @@ export function AutomationsView({
         {section === "queue" && (
           <>
             {cancelError && <div className="banner inline" data-tone="danger">Could not cancel run: {cancelError}</div>}
-            {EPHEMERAL_MACHINES_ENABLED && (
+            {cloudMachinesEnabled && (
               <details className="runs-setup">
                 <summary>
                   <span>
@@ -1105,7 +1108,7 @@ export function AutomationsView({
                 showHistory={false}
               />
             </section>
-            {EPHEMERAL_MACHINES_ENABLED && <HostedMachinesPanel />}
+            {cloudMachinesEnabled && <HostedMachinesPanel />}
           </>
         )}
 
