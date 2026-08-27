@@ -316,6 +316,42 @@ export async function createCentralGithubInstall(
   return value as { state: string; installUrl: string };
 }
 
+export interface AccountNodeClaim {
+  id: string;
+  createdAt: string;
+  expiresAt: string;
+  usedAt?: string;
+  revokedAt?: string;
+  nodeId?: string;
+  status: "pending" | "used" | "revoked" | "expired";
+  claimUrl?: string;
+  command?: string;
+}
+
+export async function createAccountNodeClaim(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<AccountNodeClaim> {
+  const res = await fetchImpl(`${cpBase(store)}/account/node-claims`, {
+    method: "POST", headers: { authorization: `Bearer ${store.s}` },
+  });
+  if (!res.ok) throw new Error(`machine claim request failed: ${res.status}`);
+  return await res.json() as AccountNodeClaim;
+}
+
+export async function fetchAccountNodeClaims(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<AccountNodeClaim[]> {
+  const res = await fetchImpl(`${cpBase(store)}/account/node-claims`, {
+    headers: { authorization: `Bearer ${store.s}` },
+  });
+  if (!res.ok) throw new Error(`machine claims request failed: ${res.status}`);
+  const value: unknown = await res.json();
+  return Array.isArray(value) ? value as AccountNodeClaim[] : [];
+}
+
+export async function revokeAccountNodeClaim(store: LocalStore, id: string, fetchImpl: typeof fetch = fetch): Promise<void> {
+  const res = await fetchImpl(`${cpBase(store)}/account/node-claims/${encodeURIComponent(id)}`, {
+    method: "DELETE", headers: { authorization: `Bearer ${store.s}` },
+  });
+  if (!res.ok) throw new Error(`machine claim revoke failed: ${res.status}`);
+}
+
 /** List encrypted session adverts across all nodes on the signed-in account. */
 export async function fetchAccountSessions(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<AccountSessionAdvert[]> {
   const res = await fetchImpl(`${cpBase(store)}/sessions`, {

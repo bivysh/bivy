@@ -16,6 +16,9 @@ import {
   fetchAccountNodes,
   fetchCentralGithubApp,
   createCentralGithubInstall,
+  createAccountNodeClaim,
+  fetchAccountNodeClaims,
+  revokeAccountNodeClaim,
   fetchAccountSessions,
   fetchMe,
   invokeAccountExtensionAction,
@@ -811,6 +814,9 @@ export class AppController {
 
   centralGithubApp() { return fetchCentralGithubApp(this.local); }
   createCentralGithubInstall(returnPath = "/") { return createCentralGithubInstall(this.local, returnPath); }
+  createNodeClaim() { return createAccountNodeClaim(this.local); }
+  listNodeClaims() { return fetchAccountNodeClaims(this.local); }
+  revokeNodeClaim(id: string) { return revokeAccountNodeClaim(this.local, id); }
 
   /** Pick a node and connect to it over the relay (initial selection). */
   selectNode(nodeId: string): void {
