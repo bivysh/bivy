@@ -66,6 +66,7 @@ import { CloseIcon, PlusIcon } from "./UiIcons.js";
 import { AutomationSourcesPanel } from "./AutomationSourcesPanel.js";
 import { RunHistory } from "./RunHistory.js";
 import { compactCronSummary, formatAutomationMoment, formatNextAutomationRun } from "../automationPresentation.js";
+import { isListedAutomation } from "../automationList.js";
 import { Badge } from "./Badge.js";
 
 const TEMPLATE_PREFIX = "bivy-room-v1";
@@ -543,7 +544,8 @@ export function AutomationsView({
   }, [menuId]);
 
   const defaultNodeId = state.connection.currentNodeId || controller.local.cur || "";
-  const isEmpty = !loading && items.length === 0;
+  const listedItems = useMemo(() => items.filter(isListedAutomation), [items]);
+  const isEmpty = !loading && listedItems.length === 0;
 
   function openSetup(focus: SourceSetupFocus) {
     setSetupFocus(focus);
@@ -965,14 +967,14 @@ export function AutomationsView({
         )}
 
         {/* Populated layout — your automations first. */}
-        {items.length > 0 && (
+        {listedItems.length > 0 && (
           <>
             <section className="autom-section">
               <div className="autom-section-head">
                 <h2 className="autom-section-label">Your automations</h2>
               </div>
               <div className="automation-list">
-                {items.map((item) => {
+                {listedItems.map((item) => {
                   const chip = isSourceTrigger(item.trigger)
                     ? sourceAutomationChip(item, sources)
                     : { tone: item.enabled ? "on" as const : "off" as const, label: item.enabled ? "Active" : "Paused" };
