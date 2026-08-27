@@ -36,7 +36,11 @@ set -euo pipefail
 if [ "\${1:-}" = "prefix" ]; then echo "$WORK/npm-prefix"; exit 0; fi
 if [ "\${1:-}" = "install" ]; then
   mkdir -p "$WORK/npm-prefix/bin"
-  printf '#!/usr/bin/env bash\nexit 0\n' > "$WORK/npm-prefix/bin/bivy"
+  {
+    echo '#!/usr/bin/env bash'
+    echo "printf '%s\\\\n' \"\\\$*\" >> '$WORK/bivy-calls.log'"
+    echo 'exit 0'
+  } > "$WORK/npm-prefix/bin/bivy"
   chmod +x "$WORK/npm-prefix/bin/bivy"
   exit 0
 fi
@@ -57,6 +61,7 @@ run_installer() {
     HOME="$WORK/home" \
     BIVY_DATA_DIR="$1" \
     BIVY_HOME="$2" \
+    BIVY_SESSION_TOKEN="${BIVY_SESSION_TOKEN:-}" \
     bash "$INSTALLER" >"$WORK/out.log" 2>&1
 }
 
@@ -86,6 +91,11 @@ check "stale symlink into old tree removed" "$([ -L "$WORK/home/.local/bin/bivy"
 echo '{"service":true,"port":9999}' > "$DATA/cli.json"
 run_installer "$DATA" "$LEGACY" || true
 check "second run leaves current state alone" "$(cat "$DATA/cli.json")" '{"service":true,"port":9999}'
+
+# -------------------------------------- existing config + browser account token
+: > "$WORK/bivy-calls.log"
+BIVY_SESSION_TOKEN=sess_test run_installer "$DATA" "$LEGACY" || true
+check "account-token reinstall re-enrolls before restart" "$(tr '\n' ',' < "$WORK/bivy-calls.log")" 'relay:setup,restart,'
 
 # ------------------------------------------------- fresh install, no legacy
 FRESH_HOME="$WORK/fresh"
