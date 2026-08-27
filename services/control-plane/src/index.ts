@@ -135,6 +135,40 @@ async function requireDeploymentAdmission(accountId: string, operation: Deployme
     throw error;
   }
 }
+
+async function parkAutomationRunForDeploymentDenial(accountId: string, item: { id: string }, decision: Awaited<ReturnType<typeof deploymentDecision>>) {
+  const reason = decision.reason || "Hosted automation is blocked by this account plan.";
+  const run = await store.transitionAutomationRun(accountId, item.id, "needs_attention", { failure: reason });
+  const now = new Date().toISOString();
+  const patched = await store.appendRunEvidence(accountId, item.id, {
+    events: [{
+      at: now,
+      kind: "policy_denial",
+      summary: reason,
+      status: "denied",
+      reasonCode: decision.code || "deployment_policy",
+      milestoneId: `${item.id}:deployment-policy-denial`,
+    }],
+    attention: { severity: "warning", reason, since: now },
+  });
+  const current = patched ?? run;
+  if (current) {
+    void notifyRelaysRunUpdated(accountId, {
+      id: current.id, events: current.events, completedAt: current.completedAt,
+      startedAt: current.startedAt, claimedAt: current.claimedAt, createdAt: current.createdAt,
+    });
+  }
+}
+
+async function notifyWorkAvailableOrParkForPlan(accountId: string, item: { id: string; label: string }): Promise<{ blocked: boolean; reason?: string }> {
+  const decision = await deploymentDecision(accountId, "automation.run", item.id);
+  if (decision.allowed) {
+    void notifyRelaysWorkAvailable(accountId, item);
+    return { blocked: false };
+  }
+  await parkAutomationRunForDeploymentDenial(accountId, item, decision);
+  return { blocked: true, reason: decision.reason };
+}
 try {
   await store.init();
 } catch (error) {
@@ -153,7 +187,7 @@ try {
 const automationScheduler = new AutomationScheduler(
   store,
   Math.max(1_000, Number(process.env.AUTOMATION_SCHEDULER_INTERVAL_MS) || 15_000),
-  (accountId, run) => void notifyRelaysWorkAvailable(accountId, { id: run.id, label: run.routing.nodeLabel }),
+  (accountId, run) => void notifyWorkAvailableOrParkForPlan(accountId, { id: run.id, label: run.routing.nodeLabel }).catch((error) => console.error("automation schedule admission failed", error)),
 );
 automationScheduler.start();
 
@@ -3364,11 +3398,10 @@ app.post("/webhooks/automation/run/:definitionId", asyncHandler(async (req, res)
   if (!result.created) {
     return res.status(200).json({ code: "duplicate", id: result.run.id });
   }
-  void notifyRelaysWorkAvailable(def.accountId, {
-    id: result.run.id,
-    label: result.run.routing.nodeLabel,
-  });
-  res.status(202).json({ code: "accepted", id: result.run.id, label: result.run.routing.nodeLabel });
+  const admission = await notifyWorkAvailableOrParkForPlan(def.accountId, { id: result.run.id, label: result.run.routing.nodeLabel });
+  res.status(202).json(admission.blocked
+    ? { code: "blocked", id: result.run.id, label: result.run.routing.nodeLabel, reason: admission.reason }
+    : { code: "accepted", id: result.run.id, label: result.run.routing.nodeLabel });
 }));
 
 app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(async (req, res) => {
@@ -3439,8 +3472,10 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
       approvalMode: matched.approvalMode,
       sandbox: matched.sandbox,
     });
-    void notifyRelaysWorkAvailable(hook.accountId, item);
-    return res.json({ ok: true, enqueued: true, id: item.id, label, definitionId: matched.id });
+    const admission = await notifyWorkAvailableOrParkForPlan(hook.accountId, item);
+    return res.json(admission.blocked
+      ? { ok: true, enqueued: true, blocked: true, id: item.id, label, definitionId: matched.id, reason: admission.reason }
+      : { ok: true, enqueued: true, id: item.id, label, definitionId: matched.id });
   }
 
   // ── issue_comment (issues + PR conversation) @mention ───────────────────
@@ -3481,8 +3516,10 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
       approvalMode: matched.approvalMode,
       sandbox: matched.sandbox,
     });
-    void notifyRelaysWorkAvailable(hook.accountId, item);
-    return res.json({ ok: true, enqueued: true, id: item.id, label, definitionId: matched.id });
+    const admission = await notifyWorkAvailableOrParkForPlan(hook.accountId, item);
+    return res.json(admission.blocked
+      ? { ok: true, enqueued: true, blocked: true, id: item.id, label, definitionId: matched.id, reason: admission.reason }
+      : { ok: true, enqueued: true, id: item.id, label, definitionId: matched.id });
   }
 
   // ── pull_request_review_comment @mention ────────────────────────────────
@@ -3523,8 +3560,10 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
       approvalMode: matched.approvalMode,
       sandbox: matched.sandbox,
     });
-    void notifyRelaysWorkAvailable(hook.accountId, item);
-    return res.json({ ok: true, enqueued: true, id: item.id, label, definitionId: matched.id });
+    const admission = await notifyWorkAvailableOrParkForPlan(hook.accountId, item);
+    return res.json(admission.blocked
+      ? { ok: true, enqueued: true, blocked: true, id: item.id, label, definitionId: matched.id, reason: admission.reason }
+      : { ok: true, enqueued: true, id: item.id, label, definitionId: matched.id });
   }
 
   // ── pull_request labeled / body @mention ────────────────────────────────
@@ -3568,8 +3607,10 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
       approvalMode: matched.approvalMode,
       sandbox: matched.sandbox,
     });
-    void notifyRelaysWorkAvailable(hook.accountId, item);
-    return res.json({ ok: true, enqueued: true, id: item.id, label, definitionId: matched.id });
+    const admission = await notifyWorkAvailableOrParkForPlan(hook.accountId, item);
+    return res.json(admission.blocked
+      ? { ok: true, enqueued: true, blocked: true, id: item.id, label, definitionId: matched.id, reason: admission.reason }
+      : { ok: true, enqueued: true, id: item.id, label, definitionId: matched.id });
   }
 
   // ── issues labeled / body @mention ──────────────────────────────────────
@@ -3613,8 +3654,10 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
       approvalMode: matched.approvalMode,
       sandbox: matched.sandbox,
     });
-    void notifyRelaysWorkAvailable(hook.accountId, item);
-    return res.json({ ok: true, enqueued: true, id: item.id, label, definitionId: matched.id });
+    const admission = await notifyWorkAvailableOrParkForPlan(hook.accountId, item);
+    return res.json(admission.blocked
+      ? { ok: true, enqueued: true, blocked: true, id: item.id, label, definitionId: matched.id, reason: admission.reason }
+      : { ok: true, enqueued: true, id: item.id, label, definitionId: matched.id });
   }
 
   // Unhandled event family — ack so GitHub doesn't retry forever.
@@ -3671,8 +3714,10 @@ app.post("/webhooks/linear/:id", asyncHandler(async (req, res) => {
     approvalMode: matched.approvalMode,
     sandbox: matched.sandbox,
   });
-  void notifyRelaysWorkAvailable(hook.accountId, item);
-  res.json({ ok: true, enqueued: true, id: item.id, label, definitionId: matched.id });
+  const admission = await notifyWorkAvailableOrParkForPlan(hook.accountId, item);
+  res.json(admission.blocked
+    ? { ok: true, enqueued: true, blocked: true, id: item.id, label, definitionId: matched.id, reason: admission.reason }
+    : { ok: true, enqueued: true, id: item.id, label, definitionId: matched.id });
 }));
 
 // Slack slash command (`/bivy on <node> <prompt>`). Verifies the Slack signing
@@ -3703,9 +3748,14 @@ app.post("/webhooks/slack/:id", asyncHandler(async (req, res) => {
     dedupeKey: triggerId ? `slack:${triggerId}` : undefined,
     defaultRouted: !node,
   });
-  void notifyRelaysWorkAvailable(hook.accountId, item);
+  const admission = await notifyWorkAvailableOrParkForPlan(hook.accountId, item);
   const destination = repo ? `${repo} on ${label}` : label;
-  res.json({ response_type: "ephemeral", text: `On it — queued for ${destination}.${repo ? " I'll bring back a pull request." : ""}` });
+  res.json({
+    response_type: "ephemeral",
+    text: admission.blocked
+      ? `Queued for ${destination}, but Bivy Cloud must be upgraded before hosted automations can run.`
+      : `On it — queued for ${destination}.${repo ? " I'll bring back a pull request." : ""}`,
+  });
 }));
 
 // A node pulls its pending work. `labels` (comma-separated) is the set it serves
@@ -3726,7 +3776,11 @@ app.post("/node/work/:id/claim", requireNode, asyncHandler(async (req, res) => {
   const id = String(req.params.id);
   const pending = await store.getAutomationRun(node.accountId, id);
   if (!pending || ["succeeded", "failed", "cancelled", "needs_attention"].includes(pending.status)) return res.status(409).json({ error: "Already claimed or unknown" });
-  await requireDeploymentAdmission(node.accountId, "automation.run", id);
+  const admission = await deploymentDecision(node.accountId, "automation.run", id);
+  if (!admission.allowed) {
+    await parkAutomationRunForDeploymentDenial(node.accountId, { id }, admission);
+    return res.status(409).json({ error: admission.reason || "Automation run is blocked by account policy", code: admission.code || "policy_denial" });
+  }
   const item = await store.claimWorkItem(node.accountId, node.id, id);
   if (!item) return res.status(409).json({ error: "Already claimed or unknown" });
   void notifyRelaysRunUpdated(node.accountId, {

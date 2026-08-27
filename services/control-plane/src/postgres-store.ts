@@ -2733,7 +2733,7 @@ export class PostgresStore implements ControlPlaneStore {
       claimed: [],
       running: ["claimed", "waiting"],
       waiting: ["claimed", "running"],
-      needs_attention: ["running", "waiting"],
+      needs_attention: ["pending", "running", "waiting"],
       succeeded: ["running", "needs_attention"],
       // Allow failure straight from "claimed": a node can throw before the
       // best-effort /running transition lands, and the run must still terminate
