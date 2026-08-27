@@ -29,7 +29,7 @@ export function ConnectRunner({
   onEphemeral: () => void;
   onRefresh: () => void;
 }) {
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<"auto" | "plain" | null>(null);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Hosted: the one-line installer. Self-hosted: point `bivy setup` at this
   // deployment, since only bivy.sh serves install.sh (see installCommand.ts).
@@ -44,12 +44,12 @@ export function ConnectRunner({
   // isn't offered here as if it were a regular enrolled node.
   const persistentNodes = nodes.filter((n) => !n.id.startsWith("eph-"));
 
-  const copyCommand = async () => {
-    const ok = await writeClipboard(install.command);
+  const copyCommand = async (command: string, kind: "auto" | "plain") => {
+    const ok = await writeClipboard(command);
     if (!ok) return;
-    setCopied(true);
+    setCopied(kind);
     if (copyTimer.current) clearTimeout(copyTimer.current);
-    copyTimer.current = setTimeout(() => setCopied(false), 1800);
+    copyTimer.current = setTimeout(() => setCopied(null), 1800);
   };
 
   return (
@@ -93,11 +93,11 @@ export function ConnectRunner({
             <code>{install.command}</code>
             <button
               type="button"
-              className={`connect-copy${copied ? " is-copied" : ""}`}
-              onClick={copyCommand}
-              aria-label={copied ? "Command copied" : "Copy install command"}
+              className={`connect-copy${copied === "auto" ? " is-copied" : ""}`}
+              onClick={() => copyCommand(install.command, "auto")}
+              aria-label={copied === "auto" ? "Command copied" : "Copy auto sign-in install command"}
             >
-              {copied ? (
+              {copied === "auto" ? (
                 <>
                   <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                     <path d="m20 6-11 11-5-5" />
@@ -110,16 +110,23 @@ export function ConnectRunner({
                     <rect x="9" y="9" width="11" height="11" rx="2" />
                     <path d="M5 15V5a2 2 0 0 1 2-2h10" />
                   </svg>
-                  Copy
+                  {install.authenticated ? "Copy auto sign-in" : "Copy"}
                 </>
               )}
             </button>
           </div>
-          {install.hosted && (
-            <a className="connect-option-link" href="/install.sh">
-              Prefer a file? Download the installer
-            </a>
-          )}
+          <div className="connect-option-links">
+            {install.authenticated && (
+              <button type="button" className="btn link" onClick={() => copyCommand(install.plainCommand, "plain")}>
+                {copied === "plain" ? "Plain command copied" : "Copy plain install instead"}
+              </button>
+            )}
+            {install.hosted && (
+              <a className="connect-option-link" href="/install.sh">
+                Prefer a file? Download the installer
+              </a>
+            )}
+          </div>
         </div>
 
         {ephemeralEnabled && (

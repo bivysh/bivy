@@ -13,7 +13,7 @@ import { controller } from "../store/useStore.js";
  * more can be added, short of remembering the install command from setup.
  */
 export function AddNodeSheet({ onClose }: { onClose: () => void }) {
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<"auto" | "plain" | null>(null);
   // Same command the first-run screen shows — hosted installer, or a
   // self-hosted `bivy setup` pointed at this control plane (installCommand.ts).
   const install = installCommand(location.origin, controller.local.relay, controller.local.s);
@@ -35,13 +35,27 @@ export function AddNodeSheet({ onClose }: { onClose: () => void }) {
             onClick={async () => {
               const ok = await writeClipboard(install.command);
               if (ok) {
-                setCopied(true);
-                setTimeout(() => setCopied(false), 1500);
+                setCopied("auto");
+                setTimeout(() => setCopied(null), 1500);
               }
             }}
           >
-            {copied ? "Copied!" : "Copy command"}
+            {copied === "auto" ? "Copied!" : install.authenticated ? "Copy auto sign-in" : "Copy command"}
           </button>
+          {install.authenticated && (
+            <button
+              className="btn ghost"
+              onClick={async () => {
+                const ok = await writeClipboard(install.plainCommand);
+                if (ok) {
+                  setCopied("plain");
+                  setTimeout(() => setCopied(null), 1500);
+                }
+              }}
+            >
+              {copied === "plain" ? "Copied plain!" : "Copy plain"}
+            </button>
+          )}
           {install.hosted && <a className="btn ghost" href="/install.sh">Download script</a>}
         </div>
         <p className="muted">The new Machine shows up in this switcher as soon as it connects — no need to close this.</p>
