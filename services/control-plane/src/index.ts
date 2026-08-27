@@ -3947,7 +3947,11 @@ async function processGithubEvent(hook: InboundHook, event: string, deliveryId: 
 }
 
 app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(async (req, res) => {
-  const hook = await store.getInboundHook(String(req.params.id));
+  const hookId = String(req.params.id);
+  if (await store.rateLimitExceeded("webhook-github", `${hookId}:${clientIp(req)}`, 600, 60_000)) {
+    return res.status(429).json({ error: "Too many webhook requests" });
+  }
+  const hook = await store.getInboundHook(hookId);
   if (!hook || (hook.kind !== "github" && hook.kind !== "github_app")) return res.status(404).json({ error: "Unknown hook" });
   const raw: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from("");
   if (!verifyGithubSignature(hook.secret, raw, req.headers["x-hub-signature-256"] as string | undefined)) {
@@ -3970,6 +3974,9 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
 // installation id to the bound account's enqueue path. An installation nobody
 // has bound (via the state-signed setup callback) is acked and dropped.
 app.post("/webhooks/central-github", asyncHandler(async (req, res) => {
+  if (await store.rateLimitExceeded("webhook-central-github", clientIp(req), 1_200, 60_000)) {
+    return res.status(429).json({ error: "Too many webhook requests" });
+  }
   const central = centralGithubAppConfig();
   if (!central?.webhookSecret) return res.status(404).json({ error: "Central GitHub App is not configured" });
   const raw: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from("");
