@@ -161,6 +161,7 @@ export function codexIntegration(origin: AgentIntegrationOrigin) {
         testedVersion: CODEX_TESTED_VERSION,
         source: origin,
         authOwner: "agent",
+        credentialRequirements: { owner: "agent", strategy: "agent-login", providers: ["openai-codex", "openai"] },
         notes: installed
           ? "Uses Codex's native app-server, login, configuration, rollouts, model selection, and sandbox while Bivy mediates structured tool approvals."
           : "Install and sign in to Codex on this node; Bivy will connect to that existing agent.",

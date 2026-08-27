@@ -23,6 +23,9 @@ import type { SecretEnvelope } from "./hosted-crypto.js";
 export interface Account {
   id: string;
   email: string;
+  /** Commercial entitlement projected by the billing system. Unknown stored
+   * values normalize to free at the compute gate. */
+  plan: "free" | "individual" | "pro" | "team";
   /** GitHub user + admin-org ids proven during the latest GitHub OAuth login.
    * Central App installation is accepted only for one of these targets. */
   githubUserId?: string;
@@ -218,6 +221,11 @@ export interface EphemeralNodeConfig {
   readyCapacity?: number;
   ttlMinutes?: number;
   teardownOnAgentFinish?: boolean;
+  /** Which credential lane launches this config: "user" (default — the
+   * account's own hosted provider token) or "managed" (the deployment
+   * operator's token, see services/control-plane/src/managed-compute.ts).
+   * Absent means "user", so stored configs are fully backward compatible. */
+  computeSource?: "user" | "managed";
   createdAt: string;
   updatedAt: string;
 }
@@ -245,6 +253,7 @@ export function normalizeEphemeralConfigs(value: unknown): EphemeralNodeConfig[]
     if (typeof v.readyCapacity === "number" && Number.isFinite(v.readyCapacity)) cfg.readyCapacity = Math.max(0, Math.min(1, Math.floor(v.readyCapacity)));
     if (typeof v.ttlMinutes === "number" && Number.isFinite(v.ttlMinutes)) cfg.ttlMinutes = Math.max(5, Math.min(24 * 60, Math.floor(v.ttlMinutes)));
     if (v.teardownOnAgentFinish === true) cfg.teardownOnAgentFinish = true;
+    if (v.computeSource === "managed") cfg.computeSource = "managed";
     // A five-minute runner would enter the pre-claim rotation window as soon as
     // it launched. Ready capacity needs enough useful life to accept real work.
     if ((cfg.readyCapacity ?? 0) > 0 && (cfg.ttlMinutes ?? 60) < 15) cfg.ttlMinutes = 15;
@@ -458,7 +467,7 @@ export function ownershipTagFor(accountId: string): string {
 /** An audit event recording a use of hosted credentials (never contains a secret). */
 export interface HostedAuditEvent {
   at: string;
-  action: "credential_updated" | "credential_rotated" | "credential_validation_failed" | "github_app_connected" | "github_app_disconnected" | "provision_attempt" | "provision_launched" | "provision_failed" | "token_minted" | "machine_reaped" | "machine_milestone" | "reconcile_failed" | "room_key_escrowed" | "room_key_reused" | "work_routed" | "capacity_ready" | "capacity_claimed" | "orphan_reaped" | "orphan_detected" | "attempt_abandoned" | "force_destroy_requested" | "model_credential_escrowed" | "model_credential_used" | "central_install_bound" | "central_install_updated" | "central_install_unbound" | "central_install_reconciled";
+  action: "credential_updated" | "credential_rotated" | "credential_validation_failed" | "github_app_connected" | "github_app_disconnected" | "provision_attempt" | "provision_launched" | "provision_failed" | "token_minted" | "machine_reaped" | "machine_milestone" | "reconcile_failed" | "room_key_escrowed" | "room_key_reused" | "work_routed" | "capacity_ready" | "capacity_claimed" | "orphan_reaped" | "orphan_detected" | "attempt_abandoned" | "force_destroy_requested" | "model_credential_escrowed" | "model_credential_used" | "central_install_bound" | "central_install_updated" | "central_install_unbound" | "central_install_reconciled" | "compute_cap_denied";
   provider?: string;
   configId?: string;
   nodeId?: string;
@@ -546,6 +555,7 @@ export interface SessionCorrelation {
   setupId?: string;
   machineId?: string;
   app?: string;
+  computeSource?: "user" | "managed";
   updatedAt: string;
 }
 export type SessionCorrelationInput = Omit<SessionCorrelation, "updatedAt">;
@@ -1161,6 +1171,20 @@ export interface UsageMetrics {
   sessionsByStatus: Record<string, number>;
 }
 
+export interface SessionUsageRecord {
+  accountId: string;
+  /** Stable launch/attempt identity; the idempotency key for settlement. */
+  usageId: string;
+  sessionId?: string;
+  machineId?: string;
+  nodeId?: string;
+  launchedAt: string;
+  firstAgentEventAt?: string;
+  settledAt: string;
+  machineSeconds: number;
+  activeAgentSeconds: number;
+}
+
 export interface StoreLifecycle {
   init(): Promise<void>;
   // Lightweight liveness check for the backing store. Resolves when the store is
@@ -1363,6 +1387,14 @@ export interface HostedMachineRepository {
 
 }
 
+export interface ComputeUsageRepository {
+  /** Idempotently persist a settled launch. The first settlement boundary wins,
+   * so repeated teardown callbacks cannot extend or double-charge the machine. */
+  upsertSessionUsage(record: SessionUsageRecord): Promise<SessionUsageRecord>;
+  /** Rows overlapping [startsAt, endsAt), oldest boundaries included. */
+  listSessionUsage(accountId: string, startsAt: string, endsAt: string, limit?: number): Promise<SessionUsageRecord[]>;
+}
+
 export interface VaultRepository {
   // Account-wide model provider credentials, shared across enrolled nodes.
   getModelAuthVault(accountId: string): Promise<ModelAuthVault | undefined>;
@@ -1429,6 +1461,8 @@ export interface SessionStateRepository {
   // device-only and never escrow. Never exposed to any client.
   getNodeRoomKeyEnc(accountId: string, nodeId: string): Promise<SecretEnvelope | undefined>;
   setNodeRoomKeyEnc(accountId: string, nodeId: string, enc: SecretEnvelope): Promise<void>;
+  /** Atomically preserve the first E2E identity created by concurrent devices. */
+  setNodeRoomKeyEncIfAbsent(accountId: string, nodeId: string, enc: SecretEnvelope): Promise<SecretEnvelope>;
 
 }
 
@@ -1646,6 +1680,7 @@ export interface ControlPlaneStore
     NotificationRepository,
     EphemeralConfigurationRepository,
     HostedMachineRepository,
+    ComputeUsageRepository,
     VaultRepository,
     SessionStateRepository,
     GithubAppVaultRepository,

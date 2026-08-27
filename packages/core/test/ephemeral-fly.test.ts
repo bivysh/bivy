@@ -28,6 +28,7 @@ type FlyMachineBody = {
     image?: string;
     auto_destroy: boolean;
     restart: { policy: string };
+    guest?: { cpu_kind: string; cpus: number; memory_mb: number };
     init: { exec?: string[]; user_data?: string };
     files?: FlyFile[];
   };
@@ -118,6 +119,25 @@ describe("fly adapter — provision", () => {
     expect(script).toContain("apt-get install -y -qq curl ca-certificates");
     expect(script).toContain("curl -fsSL");
     expect(script).toContain("exec timeout 5400 bash /etc/bivy/start.sh");
+  });
+
+  it("derives guest cpu_kind/cpus/memory from the size row, so a new lane is a data row", async () => {
+    const { exec, calls } = fakeFlyExec();
+    const adapter = ephemeralAdapter("fly")!;
+    await adapter.provision({
+      exec,
+      token: "fly-token",
+      userData: "",
+      bootstrap: BOOTSTRAP,
+      config: { slug: "abc123", region: "iad", size: "shared-8x-16gb", ttlMinutes: 60 },
+    });
+    const create = calls.find((c) => /\/machines$/.test(c.url))!;
+    expect(machineConfig(create).guest).toEqual({ cpu_kind: "shared", cpus: 8, memory_mb: 16384 });
+  });
+
+  it("catalogs the 8 vCPU / 16 GB size with an indicative price", () => {
+    const size = ephemeralAdapter("fly")!.sizes.find((s) => s.id === "shared-8x-16gb")!;
+    expect(size).toMatchObject({ vcpus: 8, memoryMiB: 16384, architecture: "x86_64", pricePerHour: 0.1234, priceSource: "indicative" });
   });
 
   it("falls back to cloud-init user_data when no structured bootstrap is given", async () => {

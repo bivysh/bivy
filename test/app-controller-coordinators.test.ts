@@ -66,12 +66,50 @@ test("session coordinator correlates and completes a local fork", async () => {
     addUserMessage: () => {},
     transcriptUrl: () => "https://app/sessions/source",
     refreshAccountSessions: () => {},
+    launchManagedDestination: async () => "managed-node",
   });
   const result = coordinator.fork("source", {});
   assert.equal(command.kind, "session.fork.local");
   assert.equal(coordinator.handleEvent({ type: "session.fork.done", requestId: "request-1", sessionId: "forked", fidelity: "full" } as any), true);
   assert.deepEqual(await result, { sessionId: "forked", fidelity: "full", missing: [] });
   assert.equal(opened, "forked");
+});
+
+test("session coordinator provisions a managed fork only after export and before import", async () => {
+  const events: string[] = [];
+  const commands: any[] = [];
+  let request = 0;
+  const coordinator = new SessionOrchestrator({
+    send: (command) => events.push(`send:${command.kind}`),
+    sendRequest: (command) => { commands.push(command); events.push(`request:${command.kind}`); },
+    createRequestId: () => `request-${++request}`,
+    createClientMessageId: () => "message-1",
+    currentNodeId: () => "source-node",
+    isDirect: () => false,
+    sessionRuntime: () => "claude",
+    switchNode: (nodeId) => events.push(`switch:${nodeId}`),
+    waitForOnline: async () => { events.push("online"); },
+    openSession: (id) => events.push(`open:${id}`),
+    addUserMessage: () => {},
+    transcriptUrl: () => "https://app/sessions/source",
+    refreshAccountSessions: () => {},
+    launchManagedDestination: async (configId) => { events.push(`launch:${configId}`); return "managed-node"; },
+  });
+  const result = coordinator.fork("source", { managedConfigId: "managed-default", agentId: "codex", sourceAgentId: "claude" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(commands[0]?.kind, "session.fork.export");
+  coordinator.handleEvent({ type: "session.fork.exported", requestId: "request-1", bundle: { version: 1 } } as any);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(events.slice(0, 5), [
+    "request:session.fork.export",
+    "launch:managed-default",
+    "switch:managed-node",
+    "online",
+    "request:session.fork.import",
+  ]);
+  coordinator.handleEvent({ type: "session.fork.done", requestId: "request-2", sessionId: "forked", runtimeId: "codex", fidelity: "seeded" } as any);
+  assert.deepEqual(await result, { sessionId: "forked", fidelity: "seeded", missing: [] });
+  assert.ok(events.includes("open:forked"));
 });
 
 test("session coordinator owns draft creation ordering and first prompt framing", () => {
@@ -91,6 +129,7 @@ test("session coordinator owns draft creation ordering and first prompt framing"
     send: () => {}, sendRequest: () => {}, createRequestId: () => "r1", createClientMessageId: () => "m1",
     currentNodeId: () => "n1", isDirect: () => false, sessionRuntime: () => undefined, switchNode: () => {},
     waitForOnline: async () => {}, openSession: () => {}, addUserMessage: () => {}, transcriptUrl: () => "", refreshAccountSessions: () => {},
+    launchManagedDestination: async () => "managed-node",
   }, workflow);
   coordinator.newSession();
   assert.deepEqual(events, ["navigate", "focus", "clear", "reset", "defaults", "runtimes", "models", "settings", "repos", "branches"]);
@@ -111,6 +150,25 @@ test("ephemeral coordinator assigns queue work only after launch", async () => {
   } as any);
   await coordinator.runWorkItem("work-1", { provider: "fly" });
   assert.deepEqual(events, ["launch", "refresh", "assign", "refresh"]);
+});
+
+test("ephemeral coordinator restores managed sessions without a device cloud token or room key", async () => {
+  const events: string[] = [];
+  const coordinator = new EphemeralCoordinator({
+    currentNodeId: () => "eph-managed",
+    roomKey: () => undefined,
+    correlations: () => [{ sessionId: "s1", nodeId: "eph-managed", provider: "fly", setupId: "managed-default", computeSource: "managed" }],
+    restoreManagedMachine: async (input: unknown) => { events.push(`restore:${JSON.stringify(input)}`); return { nodeId: "eph-managed" } as any; },
+    connectToNode: async (nodeId: string) => { events.push(`connect:${nodeId}`); },
+    direct: () => false,
+    reportError: (error: Error) => { throw error; },
+  } as any);
+  assert.equal(coordinator.isCurrentNodeResumable(), true, "hosted escrow makes a managed correlation rebuildable on a fresh device");
+  await coordinator.reprovision("eph-managed", "s1");
+  assert.deepEqual(events, [
+    'restore:{"configId":"managed-default","nodeId":"eph-managed","sessionId":"s1"}',
+    "connect:eph-managed",
+  ]);
 });
 
 test("account coordinator refreshes both automation projections after cancellation", async () => {
@@ -149,9 +207,30 @@ test("follow-up coordinator owns queue timing and delivery", () => {
   assert.equal(coordinator.steer("urgent"), false, "steer is unavailable until the runtime advertises it");
 });
 
+test("steering follows the active conversation rather than the next draft agent", () => {
+  const store: any = {
+    getState: () => ({
+      activeSession: { activeSessionId: "s-pi", activeRuntimeId: "pi", working: true },
+      catalogs: {
+        selectedAgentId: "codex",
+        runtimes: [
+          { id: "pi", capabilities: { streamingBehaviors: ["steer", "followUp"] } },
+          { id: "codex", capabilities: { streamingBehaviors: [] } },
+        ],
+      },
+    }),
+    getFollowups: () => [],
+  };
+  const coordinator = new FollowupCoordinator(store, {
+    send: () => {}, createClientMessageId: () => "new", now: () => 10,
+    persistBackstop: () => {}, cancelBackstop: () => {},
+  });
+  assert.equal(coordinator.supportsSteering(), true);
+});
+
 test("AppController keeps public compatibility while workflow decisions live outside it", async () => {
   const source = await readFile(new URL("../packages/web/src/store/controller.ts", import.meta.url), "utf8");
-  assert.match(source, /switchNode\(nodeId: string\): void \{\s*this\.nodeCoordinator\.switchNode\(nodeId\);/);
+  assert.match(source, /switchNode\(nodeId: string\): void \{\s*this\.store\.setDraftEphemeralConfig\(null\);\s*this\.nodeCoordinator\.switchNode\(nodeId\);/);
   assert.match(source, /return this\.sessionCoordinator\.fork\(sourceSessionId, opts\)/);
   assert.match(source, /return this\.credentialsModelsCoordinator\.testCredential\(provider, label\)/);
   assert.match(source, /this\.sessionCoordinator\.sendPrompt\(text, attachments\)/);

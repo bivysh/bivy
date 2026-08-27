@@ -38,6 +38,8 @@ function bivyBootstrapExports(opts: BootstrapOpts): string[] {
     "export BIVY_DATA_DIR=/etc/bivy",
     opts.repo ? `export BIVY_REPO=${shq(opts.repo)}` : "",
     opts.hostedTasks ? `export BIVY_GITHUB_HOSTED_TASKS=1` : "",
+    opts.hostedCredentialCustody ? `export BIVY_HOSTED_CREDENTIAL_CUSTODY=1` : "",
+    opts.hostedCredentialPublisher ? `export BIVY_HOSTED_CREDENTIAL_PUBLISH=1` : "",
     opts.nodeLabel ? `export BIVY_NODE_LABEL=${shq(opts.nodeLabel)}` : "",
     opts.githubToken ? `export BIVY_GITHUB_TOKEN=${shq(opts.githubToken)}` : "",
     opts.hostedMint ? `export BIVY_HOSTED_MINT=1` : "",
@@ -64,6 +66,13 @@ export function bivyStartScript(opts: BootstrapOpts): string {
   return (
     "#!/bin/bash\n" +
     'export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.local/bin:$PATH"\n' +
+    // npm keeps dependency executables beside Bivy's package, not necessarily
+    // in the global bin directory. A login shell may also replace the image's
+    // ENV PATH, so derive this location from the installed bivy executable at
+    // boot instead of relying on Docker environment inheritance.
+    'BIVY_CLI="$(readlink -f "$(command -v bivy)")"\n' +
+    'BIVY_PACKAGE_DIR="$(dirname "$(dirname "$BIVY_CLI")")"\n' +
+    'if [ -d "$BIVY_PACKAGE_DIR/node_modules/.bin" ]; then export PATH="$BIVY_PACKAGE_DIR/node_modules/.bin:$PATH"; fi\n' +
     exports +
     "exec bivy start\n"
   );

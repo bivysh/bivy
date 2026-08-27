@@ -13,13 +13,15 @@ export interface EphemeralLifecycleMilestones {
   providerAcceptedAt?: string;
   nodeReadyAt?: string;
   credentialsReadyAt?: string;
+  repositoryReadyAt?: string;
   snapshotReadyAt?: string;
   firstAgentEventAt?: string;
+  firstTokenAt?: string;
 }
 
 export interface EphemeralLifecycleFacts {
   milestones?: EphemeralLifecycleMilestones;
-  purpose?: "queue-item" | "queue-default" | "ready-capacity";
+  purpose?: "queue-item" | "queue-default" | "ready-capacity" | "auth-runner" | "interactive";
   claimedAt?: string;
 }
 

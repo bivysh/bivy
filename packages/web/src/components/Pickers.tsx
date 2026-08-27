@@ -251,6 +251,142 @@ function RepoConnectPrompt({ state }: { state: AppState }) {
   );
 }
 
+// Managed Machines cannot use a private key held by one of the user's personal
+// Machines. Offer the deployment's central App directly in the repo picker,
+// including for established accounts that already connected a custom App.
+function HostedRepoConnectPrompt({ error }: { error?: string | null }) {
+  const [status, setStatus] = useState<Awaited<ReturnType<typeof controller.centralGithubApp>> | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [setupError, setSetupError] = useState<string | null>(null);
+  const [showOwnApp, setShowOwnApp] = useState(false);
+  const [ownAppId, setOwnAppId] = useState("");
+  const [ownInstallationId, setOwnInstallationId] = useState("");
+  const [ownPrivateKey, setOwnPrivateKey] = useState("");
+
+  useEffect(() => {
+    controller.centralGithubApp().then(setStatus).catch((cause) => setSetupError(String((cause as Error)?.message || cause)));
+    controller.fetchGithubApp().then((info) => {
+      const own = info.apps.find((app) => app.appId && !app.hosted);
+      if (own?.appId) setOwnAppId(own.appId);
+    }).catch(() => {});
+  }, []);
+
+  const install = async () => {
+    setBusy(true);
+    setSetupError(null);
+    try {
+      const next = await controller.createCentralGithubInstall("/");
+      window.location.assign(next.installUrl);
+    } catch (cause) {
+      setSetupError(String((cause as Error)?.message || cause));
+      setBusy(false);
+    }
+  };
+  const activateExisting = async () => {
+    setBusy(true);
+    setSetupError(null);
+    try {
+      await controller.setHostedProvisioning({ githubIdentity: "central-app" });
+      controller.listRepos();
+    } catch (cause) {
+      setSetupError(String((cause as Error)?.message || cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const connectOwnApp = async () => {
+    setBusy(true);
+    setSetupError(null);
+    try {
+      await controller.connectHostedGithubApp({
+        appId: ownAppId.trim(),
+        privateKeyPem: ownPrivateKey.trim(),
+        ...(ownInstallationId.trim() ? { installationId: ownInstallationId.trim() } : {}),
+      });
+      setOwnPrivateKey("");
+      controller.listRepos();
+    } catch (cause) {
+      setSetupError(String((cause as Error)?.message || cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const hasInstallation = Boolean(status?.installations.length);
+
+  return (
+    <div className="repo-connect">
+      <p className="repo-connect-lead">Connect the Bivy GitHub App for hosted Machines.</p>
+      <p className="repo-connect-sub">
+        Choose which repositories Bivy Cloud may access. This is separate from any custom GitHub App connected to a personal Machine.
+      </p>
+      {status && !status.configured ? (
+        <p className="repo-connect-alt">The hosted GitHub App is not available on this deployment.</p>
+      ) : hasInstallation ? (
+        <>
+          <button type="button" className="btn primary block" disabled={busy} onClick={() => void activateExisting()}>
+            {busy ? "Connecting…" : "Use Bivy GitHub App"}
+          </button>
+          <button type="button" className="btn link" disabled={busy} onClick={() => void install()}>
+            Add another GitHub account or organization…
+          </button>
+        </>
+      ) : (
+        <button type="button" className="btn primary block" disabled={busy || status === null} onClick={() => void install()}>
+          {busy ? "Opening GitHub…" : status === null ? "Checking GitHub App…" : "Install Bivy GitHub App"}
+        </button>
+      )}
+      <button type="button" className="btn link" disabled={busy} onClick={() => setShowOwnApp((shown) => !shown)}>
+        {showOwnApp ? "Cancel custom App setup" : "Use my GitHub App"}
+      </button>
+      {showOwnApp && (
+        <form onSubmit={(event) => { event.preventDefault(); void connectOwnApp(); }}>
+          <p className="repo-connect-note muted">
+            Hosted Machines need an encrypted server-side copy of this App key to mint short-lived, repository-scoped tokens. Your personal Machine's copy is unchanged.
+          </p>
+          <label className="field-label" htmlFor="hosted-own-app-id">GitHub App ID</label>
+          <input id="hosted-own-app-id" className="picker-search" inputMode="numeric" required value={ownAppId} onChange={(event) => setOwnAppId(event.target.value)} />
+          <label className="field-label" htmlFor="hosted-own-app-key">Private key (.pem contents)</label>
+          <textarea id="hosted-own-app-key" className="picker-search" required rows={4} value={ownPrivateKey} onChange={(event) => setOwnPrivateKey(event.target.value)} />
+          <label className="field-label" htmlFor="hosted-own-installation-id">Installation ID (only when the App has multiple installations)</label>
+          <input id="hosted-own-installation-id" className="picker-search" inputMode="numeric" value={ownInstallationId} onChange={(event) => setOwnInstallationId(event.target.value)} />
+          <button type="submit" className="btn primary block" disabled={busy || !ownAppId.trim() || !ownPrivateKey.trim()}>
+            {busy ? "Connecting…" : "Use this App on hosted Machines"}
+          </button>
+        </form>
+      )}
+      {(setupError || error) && <p className="repo-connect-alt">{setupError || error}</p>}
+    </div>
+  );
+}
+
+/** Repo discovery succeeds after the first installation, so its empty-state
+ * setup disappears. Keep the repeat-install action in the populated picker;
+ * GitHub's installations/new flow lets the user select another personal
+ * account or organization, and the control plane aggregates every binding. */
+function AddHostedGithubInstallation() {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const add = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await controller.createCentralGithubInstall("/");
+      window.location.assign(next.installUrl);
+    } catch (cause) {
+      setError(String((cause as Error)?.message || cause));
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="repo-connect-note">
+      <button type="button" className="btn link" disabled={busy} onClick={() => void add()}>
+        {busy ? "Opening GitHub…" : "Add another GitHub account or organization…"}
+      </button>
+      {error && <p className="repo-connect-alt">{error}</p>}
+    </div>
+  );
+}
+
 // ---- Repo picker (new session) ----
 export function RepoPicker({ state, onClose }: { state: AppState; onClose: () => void }) {
   const [q, setQ] = useState("");
@@ -258,6 +394,7 @@ export function RepoPicker({ state, onClose }: { state: AppState; onClose: () =>
   // by the ›-arrow on a repo row (#466). Tapping a repo row itself picks it on
   // its default branch; the arrow is the "…but from a specific branch" path.
   const [branchFor, setBranchFor] = useState<string | null>(null);
+  const managedDraft = state.draft.ephemeralConfig?.computeSource === "managed";
   useEffect(() => {
     controller.listRepos();
     // Warm the branch list for the already-picked repo so drilling into it via
@@ -292,10 +429,13 @@ export function RepoPicker({ state, onClose }: { state: AppState; onClose: () =>
           }}
         />
         {state.catalogs.reposLoading && <div className="picker-empty">Loading repos…</div>}
-        {!state.catalogs.reposLoading && !state.catalogs.reposAuthed && !state.catalogs.reposError && (
+        {!state.catalogs.reposLoading && !state.catalogs.reposAuthed && managedDraft && (
+          <HostedRepoConnectPrompt error={state.catalogs.reposError} />
+        )}
+        {!state.catalogs.reposLoading && !state.catalogs.reposAuthed && !managedDraft && !state.catalogs.reposError && (
           <RepoConnectPrompt state={state} />
         )}
-        {!state.catalogs.reposLoading && state.catalogs.reposError && <div className="picker-empty">{state.catalogs.reposError}</div>}
+        {!state.catalogs.reposLoading && state.catalogs.reposError && !managedDraft && <div className="picker-empty">{state.catalogs.reposError}</div>}
         {repos.map((r) => {
           const picked = r.slug === state.draft.repo;
           return (
@@ -338,6 +478,7 @@ export function RepoPicker({ state, onClose }: { state: AppState; onClose: () =>
         {repoTotal > repos.length && (
           <div className="picker-empty">Showing first {repos.length} of {repoTotal} — search to narrow.</div>
         )}
+        {managedDraft && state.catalogs.reposAuthed && <AddHostedGithubInstallation />}
       </div>
     </Sheet>
   );

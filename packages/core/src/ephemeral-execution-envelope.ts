@@ -15,6 +15,8 @@ export interface EphemeralExecutionEnvelopeInput {
   ttlMinutes?: number;
   repo?: string;
   hostedTasks?: boolean;
+  hostedCredentialCustody?: boolean;
+  hostedCredentialPublisher?: boolean;
   githubToken?: string;
   hostedMint?: boolean;
   teardownOnAgentFinish?: boolean;
@@ -38,6 +40,8 @@ export function createEphemeralExecutionEnvelope(input: EphemeralExecutionEnvelo
       ttlMinutes: input.ttlMinutes,
       repo: input.repo,
       hostedTasks: input.hostedTasks,
+      hostedCredentialCustody: input.hostedCredentialCustody,
+      hostedCredentialPublisher: input.hostedCredentialPublisher,
       nodeLabel: input.hostedTasks ? label : undefined,
       githubToken: input.githubToken,
       hostedMint: input.hostedMint,

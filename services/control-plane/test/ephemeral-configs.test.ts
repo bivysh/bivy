@@ -108,6 +108,8 @@ async function main() {
   const claims = await req(port, "GET", "/account/node-claims", undefined, token);
   expect(claims.json?.[0]?.status === "used" && claims.json?.[0]?.nodeId === "claimed-machine", "claim status records only the enrolled node identity");
   expect(!JSON.stringify(claims.json).includes(code), "raw machine claim is never returned after creation");
+  const authRunnerOff = await req(port, "POST", "/account/onboarding/auth-runner", undefined, token);
+  expect(authRunnerOff.status === 503, "managed authentication Machine fails closed when the operator lane is disabled");
 
   // Fresh account: no configs, shared-queue routing.
   const empty = await req(port, "GET", "/account/ephemeral-configs", undefined, token);
@@ -234,6 +236,34 @@ async function main() {
   expect(refused.status === 503, `no encryption key → secret writes refused (got ${refused.status})`);
   const enableOk = await req(port2, "PUT", "/account/hosted-provisioning", { enabled: true }, token2);
   expect(enableOk.status === 200 && enableOk.json?.encryptionReady === false, "the enable flag alone is still allowed without a key");
+
+  // Existing users who predate managed onboarding receive the deployment-owned
+  // profile when their ordinary Machine picker lists configs. Explicit first-run
+  // setup remains idempotent, and later reads reconcile a stale image.
+  const port3 = await startControlPlane({
+    HOSTED_CREDENTIAL_KEY: Buffer.alloc(32, 9).toString("base64"),
+    MANAGED_COMPUTE_ENABLED: "1",
+    MANAGED_PROVIDER_TOKEN_FLY: "operator-token-not-used-by-default-setup",
+    MANAGED_SESSION_IMAGE: "ghcr.io/bivysh/bivy-ephemeral-runner:current-staging-sha",
+  });
+  const token3 = (await req(port3, "POST", "/auth/dev-login", { email: "managed-default@example.com" })).json.token;
+  const adoptedConfigs = await req(port3, "GET", "/account/ephemeral-configs", undefined, token3);
+  const adopted = adoptedConfigs.json?.find((config: { computeSource?: string }) => config.computeSource === "managed");
+  expect(adoptedConfigs.status === 200 && adopted?.name === "Bivy Cloud", "existing account config listing adopts the managed profile");
+  const managedDefault = await req(port3, "POST", "/account/onboarding/managed-defaults", undefined, token3);
+  expect(managedDefault.status === 200 && managedDefault.json?.config?.id === adopted.id, "explicit managed onboarding remains idempotent");
+  const automationTarget = await req(port3, "POST", "/account/managed-automation-target", undefined, token3);
+  const automationTargetAgain = await req(port3, "POST", "/account/managed-automation-target", undefined, token3);
+  expect(automationTarget.status === 200 && automationTarget.json?.nodeId?.startsWith("eph-managed-auto-") && typeof automationTarget.json?.roomKey === "string", "managed automations receive a stable E2E target");
+  expect(automationTargetAgain.json?.nodeId === automationTarget.json?.nodeId && automationTargetAgain.json?.roomKey === automationTarget.json?.roomKey, "managed automation identity is idempotent");
+  await req(port3, "PUT", `/account/ephemeral-configs/${adopted.id}`, { image: "stale-image", ttlMinutes: 999 }, token3);
+  const managedConfigs = await req(port3, "GET", "/account/ephemeral-configs", undefined, token3);
+  const reconciled = managedConfigs.json?.find((config: { computeSource?: string }) => config.computeSource === "managed");
+  expect(managedConfigs.json?.length === 1 && reconciled?.image === "ghcr.io/bivysh/bivy-ephemeral-runner:current-staging-sha" && reconciled?.ttlMinutes === 60, "managed config reads reconcile deployment-owned image and TTL");
+  const managedRouting = await req(port3, "GET", "/account/queue-routing", undefined, token3);
+  expect(managedRouting.json?.primary?.kind === "shared", "interactive managed setup does not silently enable unattended queue routing");
+  const forgedRestore = await req(port3, "POST", "/account/managed-machines/restore", { configId: managedDefault.json.config.id, nodeId: "eph-other", sessionId: "s-other" }, token3);
+  expect(forgedRestore.status === 404, "managed restore requires an account-scoped durable session correlation");
 
   // Delete removes the config.
   const del = await req(port, "DELETE", `/account/ephemeral-configs/${id}`, undefined, token);

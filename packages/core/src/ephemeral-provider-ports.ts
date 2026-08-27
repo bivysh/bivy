@@ -34,6 +34,14 @@ export interface BootstrapOpts {
    *  src/control-plane-tasks.ts. Lets the machine serve queue items with no
    *  persistent node required (issue #532). */
   hostedTasks?: boolean;
+  /** Consume only the separately encrypted, explicitly granted hosted credential
+   * snapshot. Interactive managed Machines need this even though they must not
+   * poll the unattended hosted task queue. */
+  hostedCredentialCustody?: boolean;
+  /** Allow a credential-setup guest to publish the account's initial filtered
+   * hosted snapshot. The control plane accepts this from managed guests only
+   * while no snapshot exists, so an agent-bearing guest cannot replace one. */
+  hostedCredentialPublisher?: boolean;
   /** The routing-label suffix this node should additionally serve, e.g.
    *  "ab12cd34" so it also polls `bivy/ab12cd34` (see `BIVY_NODE_LABEL` in
    *  src/control-plane-tasks.ts). Lets a queue item be targeted at THIS

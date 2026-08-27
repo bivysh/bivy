@@ -5,6 +5,7 @@ import { buildInboxItems, deriveActivation, cancelAutomationRun, deriveArtifacts
 import { useAppState } from "./store/useStore.js";
 import { SessionList } from "./components/SessionList.js";
 import { ChatView } from "./components/ChatView.js";
+import { SessionLaunchProgressView } from "./components/SessionLaunchProgress.js";
 import { Composer } from "./components/Composer.js";
 import { ApprovalStack } from "./components/ApprovalCard.js";
 import { QuestionStack } from "./components/QuestionCard.js";
@@ -792,6 +793,23 @@ export function App() {
               sessionKey={state.activeSession.activeSessionId}
               collapsed={collapsed}
               onAction={runCommand}
+              header={activeSession?.launchProgress ? <SessionLaunchProgressView
+                progress={activeSession.launchProgress}
+                onSetupCredentials={async () => {
+                  try {
+                    await controller.setupManagedCredentials();
+                  } catch (error) {
+                    controller.store.setError(error instanceof Error ? error.message : String(error));
+                  }
+                }}
+                onRetryFreshMachine={async () => {
+                  try {
+                    await controller.retryPendingLaunchOnFreshMachine(activeSession.sessionId);
+                  } catch (error) {
+                    controller.store.setError(error instanceof Error ? error.message : String(error));
+                  }
+                }}
+              /> : undefined}
               footer={
                 <>
                   <ApprovalStack approvals={activeApprovals} onResolve={(id, ok, remember) => controller.resolveApproval(id, ok, remember)} />

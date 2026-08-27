@@ -53,12 +53,15 @@ async function resolveFlyOrg(exec: ExecFn, token: string, preferred?: string): P
   return String(chosen?.slug || FLY_DEFAULT_ORG);
 }
 
-// Maps a Fly size id to the guest spec sent in the machine config.
-const FLY_GUEST: Record<string, { cpus: number; memoryMb: number }> = {
-  "shared-1x-1gb": { cpus: 1, memoryMb: 1024 },
-  "shared-1x-2gb": { cpus: 1, memoryMb: 2048 },
-  "shared-2x-4gb": { cpus: 2, memoryMb: 4096 },
-  "shared-4x-8gb": { cpus: 4, memoryMb: 8192 },
+// Maps a Fly size id to the guest spec sent in the machine config. `cpuKind`
+// lives on the row (not hardcoded at the create call) so a performance lane is
+// a new data row, not new code.
+const FLY_GUEST: Record<string, { cpus: number; memoryMb: number; cpuKind: string }> = {
+  "shared-1x-1gb": { cpus: 1, memoryMb: 1024, cpuKind: "shared" },
+  "shared-1x-2gb": { cpus: 1, memoryMb: 2048, cpuKind: "shared" },
+  "shared-2x-4gb": { cpus: 2, memoryMb: 4096, cpuKind: "shared" },
+  "shared-4x-8gb": { cpus: 4, memoryMb: 8192, cpuKind: "shared" },
+  "shared-8x-16gb": { cpus: 8, memoryMb: 16384, cpuKind: "shared" },
 };
 
 /** Build the Fly Machine `config` fragment (`files` + `init.exec`) that boots a
@@ -121,6 +124,7 @@ export const flyProvider: ProviderAdapter = {
     { id: "shared-1x-2gb", label: "shared · 1 vCPU · 2 GB", vcpus: 1, memoryMiB: 2048, architecture: "x86_64", pricePerHour: 0.0136, priceSource: "indicative" },
     { id: "shared-2x-4gb", label: "shared · 2 vCPU · 4 GB", vcpus: 2, memoryMiB: 4096, architecture: "x86_64", pricePerHour: 0.0273, priceSource: "indicative" },
     { id: "shared-4x-8gb", label: "shared · 4 vCPU · 8 GB", vcpus: 4, memoryMiB: 8192, architecture: "x86_64", pricePerHour: 0.0546, priceSource: "indicative" },
+    { id: "shared-8x-16gb", label: "shared · 8 vCPU · 16 GB", vcpus: 8, memoryMiB: 16384, architecture: "x86_64", pricePerHour: 0.1234, priceSource: "indicative" },
   ],
   // A normal coding agent routinely runs installs, compilers, tests and tool
   // subprocesses. 1–2 GB is an opt-in economy choice, not a safe default.
@@ -140,7 +144,7 @@ export const flyProvider: ProviderAdapter = {
   async provision({ exec, token, config, userData, bootstrap }) {
     const app = `bivy-${config.slug}`;
     const org = await resolveFlyOrg(exec, token, config.org);
-    const guest = FLY_GUEST[config.size as string] || FLY_GUEST[flyProvider.defaultSize] || { cpus: 1, memoryMb: 2048 };
+    const guest = FLY_GUEST[config.size as string] || FLY_GUEST[flyProvider.defaultSize] || { cpus: 1, memoryMb: 2048, cpuKind: "shared" };
     const created = await call(exec, {
       method: "POST",
       url: "https://api.machines.dev/v1/apps",
@@ -186,7 +190,7 @@ export const flyProvider: ProviderAdapter = {
           // failure then stops the machine (logs retained) instead of vanishing.
           auto_destroy: bootstrap?.debugKeepMachine ? false : true,
           restart: { policy: "no" },
-          guest: { cpu_kind: "shared", cpus: Number(config.cpus) || guest.cpus, memory_mb: Number(config.memoryMb) || guest.memoryMb },
+          guest: { cpu_kind: guest.cpuKind, cpus: Number(config.cpus) || guest.cpus, memory_mb: Number(config.memoryMb) || guest.memoryMb },
           metadata: {
             bivy: "ephemeral",
             ...(config.attemptId ? { "bivy-attempt": String(config.attemptId) } : {}),

@@ -14,7 +14,7 @@
 //
 // SECURITY: this path depends on credentials held on the control plane (see
 // HostedProvisioning in store.ts). It is gated per account and off by default.
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   launchEphemeralMachine,
   destroyEphemeralMachine,
@@ -36,27 +36,37 @@ import {
   ConcurrentAttemptUpdateError,
   type EphemeralConfigurationRepository,
   type HostedMachineRepository,
+  type ComputeUsageRepository,
   type EphemeralNodeConfig,
   type QueueRouting,
   type HostedAuditEvent,
   type HostedMachineAttempt,
   type HostedMachineAttemptState,
+  type HostedProvisioning,
   type NodeRecord,
   type SessionCorrelation,
   type WorkItem,
 } from "./store.js";
+import {
+  managedComputeEnabled,
+  normalizeComputeSource,
+  operatorTokenSource,
+  type ComputeSource,
+} from "./managed-compute.js";
 import type { SecretEnvelope } from "./hosted-crypto.js";
 import { mintInstallationToken } from "./hosted-github-auth.js";
 import { encryptSecret, decryptSecret } from "./hosted-crypto.js";
 import { centralGithubAppConfig, resolveGithubIdentity, type ResolvedGithubIdentity } from "./central-github-app.js";
-import type { CentralGithubInstallation, HostedProvisioning } from "./store.js";
+import type { CentralGithubInstallation } from "./store.js";
+import { usageFromManagedMachine } from "./compute-metering.js";
 
 /** Persistence needed by unattended machine orchestration. Deliberately omits
  * account administration, notifications, device vaults, and automation
  * definition management even though the concrete adapter provides them. */
 export interface EphemeralProvisioningPort
-  extends EphemeralConfigurationRepository, HostedMachineRepository {
+  extends EphemeralConfigurationRepository, HostedMachineRepository, ComputeUsageRepository {
   createSession(accountId: string): Promise<string>;
+  getAccount(accountId: string): Promise<import("./store.js").Account | undefined>;
   listNodes(accountId: string): Promise<NodeRecord[]>;
   removeNode(accountId: string, nodeId: string): Promise<boolean>;
   listWorkItems(accountId: string, limit?: number): Promise<WorkItem[]>;
@@ -94,10 +104,32 @@ export interface ProvisionEnv {
   relayUrl: string;
 }
 
+export interface ManagedProvisionRequest {
+  attemptId?: string;
+  computeSource: "managed";
+  provider: string;
+  sizeId?: string;
+  vcpus?: number;
+  memoryMiB?: number;
+  ttlMinutes: number;
+  configId: string;
+  purpose?: string;
+}
+
+export interface ProvisionAdmissionDecision {
+  allowed: boolean;
+  code?: string;
+  reason?: string;
+}
+
+export type ManagedProvisionAdmission = (request: ManagedProvisionRequest) => Promise<ProvisionAdmissionDecision>;
+const allowManagedProvision: ManagedProvisionAdmission = async () => ({ allowed: true });
+
 export interface ProvisionPlan {
   willProvision: boolean;
   targetConfigId: string | null;
   reason: string;
+  policyDenial?: ProvisionAdmissionDecision;
 }
 
 export interface HostedExecutionReadiness { ready: boolean; reason: string; configId?: string }
@@ -112,6 +144,12 @@ export async function hostedExecutionReadiness(store: EphemeralProvisioningPort,
   const config = resolveAutoProvisionTarget(routing, await store.getEphemeralConfigs(accountId));
   if (!config) return { ready: false, reason: "automation routing has no ephemeral config" };
   if (!ephemeralAdapter(config.provider)) return { ready: false, reason: `provider ${config.provider} is no longer supported`, configId: config.id };
+  if (normalizeComputeSource(config.computeSource) === "managed") {
+    if (!managedComputeEnabled()) return { ready: false, reason: "managed compute is disabled (MANAGED_COMPUTE_ENABLED)", configId: config.id };
+    const cred = await resolveProviderCredential(hosted, config.provider, "managed");
+    if (!cred.token) return { ready: false, reason: cred.reason, configId: config.id };
+    return { ready: true, reason: "hosted ephemeral execution is ready", configId: config.id };
+  }
   const token = hosted.providerTokens?.[config.provider];
   if (!token) return { ready: false, reason: `no hosted ${config.provider} credential` };
   if (hosted.validatedProviders?.[config.provider] !== providerCredentialFingerprint(token)) {
@@ -120,7 +158,14 @@ export async function hostedExecutionReadiness(store: EphemeralProvisioningPort,
   return { ready: true, reason: "hosted ephemeral execution is ready", configId: config.id };
 }
 
-export const EPHEMERAL_MILESTONES = ["nodeReadyAt", "credentialsReadyAt", "snapshotReadyAt", "firstAgentEventAt"] as const;
+export const EPHEMERAL_MILESTONES = [
+  "nodeReadyAt",
+  "credentialsReadyAt",
+  "repositoryReadyAt",
+  "snapshotReadyAt",
+  "firstAgentEventAt",
+  "firstTokenAt",
+] as const;
 export type EphemeralMilestone = (typeof EPHEMERAL_MILESTONES)[number];
 
 /** Server-stamp a hosted runner milestone. First write wins so reconnects and
@@ -240,6 +285,49 @@ export function ephemeralMachinesEnabled(env: NodeJS.ProcessEnv = process.env): 
   return env.EPHEMERAL_MACHINES_ENABLED !== "0";
 }
 
+/**
+ * Resolve the transient provider credential for one launch/teardown by compute
+ * source — the ONE place the user and managed lanes differ. "user" reads the
+ * account's hosted token (optionally requiring the onboarding validation
+ * fingerprint, as planAutoProvision always has); "managed" reads the
+ * deployment's operator token source. The returned token is used exactly like
+ * hosted.providerTokens always was: transiently, never persisted, never logged,
+ * never baked into machine user-data, never returned by an API.
+ */
+async function resolveProviderCredential(
+  hosted: HostedProvisioning,
+  provider: string,
+  source: ComputeSource,
+  opts: { requireValidated?: boolean } = {},
+): Promise<{ token?: string; reason: string }> {
+  if (source === "managed") {
+    const token = await operatorTokenSource().getToken(provider);
+    if (!token) return { reason: `no operator token for provider ${provider} (managed lane)` };
+    return { token, reason: "ok" };
+  }
+  const token = hosted.providerTokens?.[provider];
+  if (!token) return { reason: `no hosted token for provider ${provider}` };
+  if (opts.requireValidated && hosted.validatedProviders?.[provider] !== providerCredentialFingerprint(token)) {
+    return { reason: `provider credential for ${provider} has not been validated` };
+  }
+  return { token, reason: "ok" };
+}
+
+/** Compute source of an already-created machine, for teardown-token selection.
+ * The attempt row's `desired.computeSource` is authoritative (durable from
+ * before provider acceptance); the config is the fallback for records that
+ * predate attempts. Legacy records resolve to "user". */
+function machineComputeSource(
+  machine: Record<string, unknown>,
+  attempt: HostedMachineAttempt | undefined,
+  configs: EphemeralNodeConfig[],
+): ComputeSource {
+  if (attempt?.desired && "computeSource" in attempt.desired) return normalizeComputeSource(attempt.desired.computeSource);
+  const setupId = typeof machine.setupId === "string" ? machine.setupId : "";
+  const config = setupId ? configs.find((c) => c.id === setupId) : undefined;
+  return normalizeComputeSource(config?.computeSource);
+}
+
 function withinMs(iso: unknown, ms: number, nowMs: number): boolean {
   if (typeof iso !== "string") return false;
   const t = Date.parse(iso);
@@ -272,7 +360,13 @@ export function resolveAutoProvisionTarget(
 }
 
 /** Decide whether to provision, without launching. Safe to expose for dry-runs. */
-export async function planAutoProvision(store: EphemeralProvisioningPort, accountId: string, nowMs = Date.now()): Promise<ProvisionPlan> {
+export async function planAutoProvision(
+  store: EphemeralProvisioningPort,
+  accountId: string,
+  nowMs = Date.now(),
+  admitManaged: ManagedProvisionAdmission = allowManagedProvision,
+  managedAttemptId?: string,
+): Promise<ProvisionPlan> {
   // Deployment emergency gate: exact `0` disables new launches; otherwise the
   // per-account hosted opt-in is authoritative. This is the single choke point
   // for ALL server-initiated auto-launches — both maybeAutoProvision
@@ -287,14 +381,47 @@ export async function planAutoProvision(store: EphemeralProvisioningPort, accoun
   const configs = await store.getEphemeralConfigs(accountId);
   const target = resolveAutoProvisionTarget(routing, configs);
   if (!target) return { willProvision: false, targetConfigId: null, reason: "routing does not point at an ephemeral config" };
-  if (!ephemeralAdapter(target.provider)) {
+  const adapter = ephemeralAdapter(target.provider);
+  if (!adapter) {
     return { willProvision: false, targetConfigId: target.id, reason: `provider ${target.provider} is no longer supported` };
   }
-  if (!hosted.providerTokens?.[target.provider]) {
-    return { willProvision: false, targetConfigId: target.id, reason: `no hosted token for provider ${target.provider}` };
+  const computeSource = normalizeComputeSource(target.computeSource);
+  // Managed-lane kill switch: default OFF, gates NEW launches only. Cleanup /
+  // reconcile / orphan sweeps intentionally do not consult it (mirroring
+  // EPHEMERAL_MACHINES_ENABLED above), so flipping it off never strands a
+  // billing machine.
+  if (computeSource === "managed" && !managedComputeEnabled()) {
+    return { willProvision: false, targetConfigId: target.id, reason: "managed compute disabled (MANAGED_COMPUTE_ENABLED)" };
   }
-  if (hosted.validatedProviders?.[target.provider] !== providerCredentialFingerprint(hosted.providerTokens[target.provider])) {
-    return { willProvision: false, targetConfigId: target.id, reason: `provider credential for ${target.provider} has not been validated` };
+  const cred = await resolveProviderCredential(hosted, target.provider, computeSource, { requireValidated: true });
+  if (!cred.token) {
+    return { willProvision: false, targetConfigId: target.id, reason: cred.reason };
+  }
+  // The one operator-policy seam for Bivy-paid compute. Core supplies only
+  // technical facts; a configured deployment extension owns tiers, trials,
+  // commercial usage and upgrade actions. BYO never crosses this gate.
+  if (computeSource === "managed") {
+    const sizeId = target.size ?? adapter.defaultSize;
+    const size = sizeId ? adapter.sizes.find((entry) => entry.id === sizeId) : undefined;
+    const decision = await admitManaged({
+      attemptId: managedAttemptId,
+      computeSource: "managed",
+      provider: target.provider,
+      sizeId,
+      vcpus: size?.vcpus,
+      memoryMiB: size?.memoryMiB,
+      ttlMinutes: target.ttlMinutes ?? 60,
+      configId: target.id,
+      purpose: "queue-work",
+    });
+    if (!decision.allowed) {
+      return {
+        willProvision: false,
+        targetConfigId: target.id,
+        reason: decision.reason ?? "Managed compute was denied by deployment policy",
+        policyDenial: decision,
+      };
+    }
   }
   // A config primary is the designated runner (provision regardless of node
   // liveness). A node primary only falls back to its config when nothing online.
@@ -353,13 +480,19 @@ function serverKeyStore(providerToken: string): EphemeralKeyStore {
 // Machine records persisted to the account's hosted_machines JSONB. On add we
 // prune to a recent window so the list can't grow unbounded (TTL destroys the
 // real VMs; this is only bookkeeping for dedupe/teardown).
-function serverMachineStore(store: EphemeralProvisioningPort, accountId: string, nowMs: number): MachineStore {
+function serverMachineStore(
+  store: EphemeralProvisioningPort,
+  accountId: string,
+  nowMs: number,
+  computeSource?: ComputeSource,
+): MachineStore {
   return {
     list: async () => (await store.getHostedMachines(accountId)) as unknown as EphemeralMachine[],
     add: async (m) => {
       const cur = await store.getHostedMachines(accountId);
       const recent = cur.filter((x) => withinMs(x.createdAt, 6 * 60 * 60 * 1000, nowMs));
-      await store.setHostedMachines(accountId, [...recent, m as unknown as Record<string, unknown>]);
+      const record = computeSource ? { ...m, computeSource } : m;
+      await store.setHostedMachines(accountId, [...recent, record as unknown as Record<string, unknown>]);
       return m;
     },
     update: async (id, patch) => {
@@ -438,12 +571,18 @@ export async function provisionEphemeralForAccount(
   launcher = launchEphemeralMachine,
   nowMs = Date.now(),
   purpose: EphemeralMachine["purpose"] = "queue-default",
-  retry?: { attemptId: string; nodeId: string; retryCount: number },
+  retry?: { attemptId: string; nodeId?: string; roomKeyB64?: string; retryCount: number },
+  onRoomKey?: (nodeId: string, roomKeyB64: string) => void,
 ): Promise<EphemeralMachine> {
   const hosted = await store.getHostedProvisioning(accountId);
-  const providerToken = hosted.providerTokens?.[config.provider];
-  if (!providerToken) throw new Error(`No hosted provider token for ${config.provider}`);
-  await audit(store, accountId, { action: "provision_attempt", provider: config.provider, configId: config.id });
+  const computeSource = normalizeComputeSource(config.computeSource);
+  const cred = await resolveProviderCredential(hosted, config.provider, computeSource);
+  const providerToken = cred.token;
+  if (!providerToken) throw new Error(computeSource === "managed" ? cred.reason : `No hosted provider token for ${config.provider}`);
+  await audit(store, accountId, {
+    action: "provision_attempt", provider: config.provider, configId: config.id,
+    ...(computeSource === "managed" ? { detail: "computeSource=managed" } : {}),
+  });
 
   // With an app identity (the account's own app OR the central app), the
   // machine self-mints a fresh, short-lived installation token from the control
@@ -472,7 +611,9 @@ export async function provisionEphemeralForAccount(
       observedState: attempt?.observedState,
       deadlineAt: computeAttemptDeadline(phase, eventCreatedAt ?? attempt?.machine?.createdAt as string | undefined, config.ttlMinutes, Date.now()),
       ownershipTag,
-      desired: { region: config.region, size: config.size, image: config.image, ttlMinutes: config.ttlMinutes, purpose, setupId: config.id },
+      // computeSource rides in `desired` so teardown/reconcile can pick the
+      // right credential lane even after the config itself is deleted.
+      desired: { region: config.region, size: config.size, image: config.image, ttlMinutes: config.ttlMinutes, purpose, setupId: config.id, computeSource },
       machine: event.machine as unknown as Record<string, unknown> | undefined,
       lastError: event.error, retryCount: retry?.retryCount ?? 0,
       createdAt: attempt?.createdAt ?? createdAt, updatedAt: new Date().toISOString(),
@@ -485,20 +626,32 @@ export async function provisionEphemeralForAccount(
         attemptId,
         onLifecycle,
         reuseNodeId: retry?.nodeId,
+        reuseRoomKeyB64: retry?.roomKeyB64,
         externalTeardownGuaranteed: true,
         ownershipTag,
         region: config.region,
         size: config.size,
         image: config.image,
         ttlMinutes: config.ttlMinutes,
-        hostedTasks: true,
+        teardownOnAgentFinish: config.teardownOnAgentFinish,
+        // Authentication runners exist only to establish encrypted provider
+        // credentials. They must never poll or claim queued work, so no agent
+        // event can accidentally consume a managed trial.
+        hostedTasks: purpose !== "auth-runner" && purpose !== "interactive",
+        // Interactive managed sessions must receive the explicit hosted-custody
+        // snapshot without becoming unattended queue pollers.
+        hostedCredentialCustody: computeSource === "managed",
+        // Interactive/auth setup guests may establish the initial filtered
+        // snapshot. Server + control plane both refuse guest replacement once
+        // one exists, preserving the recipient-only rule after setup.
+        hostedCredentialPublisher: computeSource === "managed" && (purpose === "interactive" || purpose === "auth-runner"),
         githubToken,
         hostedMint: useHostedMint,
         setupId: config.id,
         purpose,
         name: `Hosted ${config.name}`,
       },
-      { store: localStore, exec: directExec(), keys: serverKeyStore(providerToken), machines: serverMachineStore(store, accountId, nowMs) },
+      { store: localStore, exec: directExec(), keys: serverKeyStore(providerToken), machines: serverMachineStore(store, accountId, nowMs, computeSource) },
     );
     // Custom/injected launchers may not emit callbacks. Production launchers do;
     // once accepted, preserve the provider identity before any later bookkeeping.
@@ -515,8 +668,9 @@ export async function provisionEphemeralForAccount(
     if (roomKeyB64 && machine.nodeId) {
       await store.setNodeRoomKeyEnc(accountId, machine.nodeId, encryptSecret(accountId, roomKeyB64));
       await audit(store, accountId, { action: "room_key_escrowed", provider: config.provider, configId: config.id, nodeId: machine.nodeId });
+      onRoomKey?.(machine.nodeId, roomKeyB64);
     }
-    return machine;
+    return { ...machine, computeSource };
   } catch (e) {
     if (attempt && attempt.state !== "failed") {
       await store.putHostedMachineAttempt({ ...attempt, state: "failed", lastError: String((e as Error)?.message || e).slice(0, 500), updatedAt: new Date().toISOString() }).catch(() => {});
@@ -555,7 +709,12 @@ export async function ensureReadyCapacity(
     if (!hosted.enabled) return null;
     const configs = await store.getEphemeralConfigs(accountId);
     let machines = await store.getHostedMachines(accountId);
-    const eligible = configs.filter((c) => (c.readyCapacity ?? 0) > 0 && ephemeralCatalogEntry(c.provider)?.computeClass === "byo-cloud");
+    // Ready capacity stays a BYO/user-lane feature: pre-warming operator-paid
+    // managed machines is idle spend on Bivy's bill, a call that belongs to the
+    // metering/caps workstream (see the CAP GATE in planAutoProvision).
+    const eligible = configs.filter((c) => (c.readyCapacity ?? 0) > 0
+      && ephemeralCatalogEntry(c.provider)?.computeClass === "byo-cloud"
+      && normalizeComputeSource(c.computeSource) === "user");
     for (const candidate of eligible) {
       const existing = machines.find((m) => m.setupId === candidate.id && m.purpose === "ready-capacity");
       if (!existing || readyMachineUsable(existing)) continue;
@@ -601,20 +760,25 @@ export async function provisionEphemeralRestore(
   accountId: string,
   config: EphemeralNodeConfig,
   env: ProvisionEnv,
-  opts: { reuseNodeId: string; restoreSessionId: string; attemptId?: string; retryCount?: number },
+  opts: { reuseNodeId: string; restoreSessionId: string; attemptId?: string; retryCount?: number; purpose?: EphemeralMachine["purpose"] },
   launcher = launchEphemeralMachine,
   nowMs = Date.now(),
 ): Promise<EphemeralMachine> {
   const hosted = await store.getHostedProvisioning(accountId);
-  const providerToken = hosted.providerTokens?.[config.provider];
-  if (!providerToken) throw new Error(`No hosted provider token for ${config.provider}`);
+  const computeSource = normalizeComputeSource(config.computeSource);
+  const cred = await resolveProviderCredential(hosted, config.provider, computeSource);
+  const providerToken = cred.token;
+  if (!providerToken) throw new Error(computeSource === "managed" ? cred.reason : `No hosted provider token for ${config.provider}`);
   const enc = await store.getNodeRoomKeyEnc(accountId, opts.reuseNodeId);
   if (!enc) throw new Error(`No escrowed room key for ${opts.reuseNodeId} — cannot rebuild this session server-side`);
   const reuseRoomKeyB64 = decryptSecret(accountId, enc);
   const identity = await resolveAccountGithubIdentity(store, accountId, hosted);
   const useHostedMint = identity?.kind === "app";
   const githubToken = identity?.kind === "token" ? identity.token : undefined;
-  await audit(store, accountId, { action: "provision_attempt", provider: config.provider, configId: config.id });
+  await audit(store, accountId, {
+    action: "provision_attempt", provider: config.provider, configId: config.id,
+    ...(computeSource === "managed" ? { detail: "computeSource=managed" } : {}),
+  });
 
   const sessionToken = await store.createSession(accountId);
   const localStore = serverLocalStore({ sessionToken, env, onAddKey: () => {} });
@@ -632,7 +796,7 @@ export async function provisionEphemeralRestore(
       observedState: attempt?.observedState,
       deadlineAt: computeAttemptDeadline(phase, eventCreatedAt ?? attempt?.machine?.createdAt as string | undefined, config.ttlMinutes, Date.now()),
       ownershipTag,
-      desired: { region: config.region, size: config.size, image: config.image, ttlMinutes: config.ttlMinutes, purpose: "queue-default", setupId: config.id, restoreSessionId: opts.restoreSessionId },
+      desired: { region: config.region, size: config.size, image: config.image, ttlMinutes: config.ttlMinutes, purpose: opts.purpose ?? "queue-default", setupId: config.id, restoreSessionId: opts.restoreSessionId, computeSource },
       machine: event.machine as unknown as Record<string, unknown> | undefined,
       lastError: event.error, retryCount: opts.retryCount ?? 0,
       createdAt: attempt?.createdAt ?? createdAt, updatedAt: new Date().toISOString(),
@@ -649,24 +813,25 @@ export async function provisionEphemeralRestore(
         size: config.size,
         image: config.image,
         ttlMinutes: config.ttlMinutes,
-        hostedTasks: true,
+        teardownOnAgentFinish: config.teardownOnAgentFinish,
+        hostedTasks: opts.purpose !== "interactive",
         externalTeardownGuaranteed: true,
         githubToken,
         hostedMint: useHostedMint,
         setupId: config.id,
-        purpose: "queue-default",
+        purpose: opts.purpose ?? "queue-default",
         name: `Hosted ${config.name}`,
         // Rebuild the torn-down session in place: same node id + room key + session.
         reuseNodeId: opts.reuseNodeId,
         reuseRoomKeyB64,
         restoreSessionId: opts.restoreSessionId,
       },
-      { store: localStore, exec: directExec(), keys: serverKeyStore(providerToken), machines: serverMachineStore(store, accountId, nowMs) },
+      { store: localStore, exec: directExec(), keys: serverKeyStore(providerToken), machines: serverMachineStore(store, accountId, nowMs, computeSource) },
     );
     if (attempt) await store.putHostedMachineAttempt({ ...attempt, state: "tracked", machine: machine as unknown as Record<string, unknown>, updatedAt: new Date().toISOString() });
     await audit(store, accountId, { action: "room_key_reused", provider: config.provider, configId: config.id, nodeId: machine.nodeId });
     await audit(store, accountId, { action: "provision_launched", provider: config.provider, configId: config.id, nodeId: machine.nodeId });
-    return machine;
+    return { ...machine, computeSource };
   } catch (e) {
     if (attempt && attempt.state !== "failed") await store.putHostedMachineAttempt({ ...attempt, state: "failed", lastError: String((e as Error)?.message || e).slice(0, 500), updatedAt: new Date().toISOString() }).catch(() => {});
     await audit(store, accountId, { action: "provision_failed", provider: config.provider, configId: config.id, detail: String((e as Error)?.message || e).slice(0, 200) });
@@ -763,6 +928,19 @@ async function destroyOneHostedMachine(
  * node (device-launched machines aren't tracked server-side → false, and the
  * endpoint simply 200s).
  */
+export async function settleManagedMachineUsage(
+  store: Pick<EphemeralProvisioningPort, "upsertSessionUsage">,
+  accountId: string,
+  machine: Record<string, unknown>,
+  settledAt = new Date().toISOString(),
+): Promise<boolean> {
+  if (normalizeComputeSource(machine.computeSource) !== "managed") return false;
+  const usage = usageFromManagedMachine(accountId, machine, settledAt);
+  if (!usage) return false;
+  await store.upsertSessionUsage(usage);
+  return true;
+}
+
 export async function reapSettledHostedMachine(
   store: EphemeralProvisioningPort,
   accountId: string,
@@ -777,7 +955,21 @@ export async function reapSettledHostedMachine(
   if (!record) return false;
   const machine = record as unknown as EphemeralMachine;
   const hosted = await store.getHostedProvisioning(accountId);
-  const providerToken = hosted.providerTokens?.[machine.provider];
+  // Teardown resolves its credential by the machine's compute source — the CP
+  // holds the operator token, so managed machines get the same full
+  // server-side destroy authority as hosted ones. Never gated by the
+  // MANAGED_COMPUTE_ENABLED launch switch.
+  const sourceAttempt = machine.attemptId ? await store.getHostedMachineAttempt(accountId, machine.attemptId).catch(() => undefined) : undefined;
+  const sourceConfigs = typeof store.getEphemeralConfigs === "function"
+    ? await store.getEphemeralConfigs(accountId).catch(() => [] as EphemeralNodeConfig[])
+    : [];
+  const computeSource = machineComputeSource(record, sourceAttempt, sourceConfigs);
+  const providerToken = (await resolveProviderCredential(hosted, machine.provider, computeSource)).token;
+  // Settlement is independent of provider deletion success. A failed teardown
+  // still consumed compute and remains idempotently metered on every retry.
+  await settleManagedMachineUsage(store, accountId, { ...record, computeSource }, new Date(nowMs).toISOString()).catch(async () => {
+    await audit(store, accountId, { action: "reconcile_failed", provider: machine.provider, nodeId, detail: "usage settlement persistence failed" });
+  });
   try {
     if (providerToken) {
       if (machine.attemptId) {
@@ -844,7 +1036,23 @@ export async function reapSettledHostedMachine(
  * node — the VM self-destructs at its own TTL for Fly/EC2). Returns the number
  * reaped. Safe to run lazily or on a timer.
  */
-export async function reconcileHostedMachines(store: EphemeralProvisioningPort, accountId: string, nowMs = Date.now(), env?: ProvisionEnv, destroy: DestroyFn = destroyEphemeralMachine, observe: ObserveFn = observeProviderMachine): Promise<number> {
+export interface ManagedSettlementEvent {
+  attemptId: string;
+  at: string;
+  machineSeconds: number;
+  activeAgentSeconds: number;
+}
+export type ManagedSettlementReporter = (accountId: string, event: ManagedSettlementEvent) => Promise<void>;
+
+export async function reconcileHostedMachines(
+  store: EphemeralProvisioningPort,
+  accountId: string,
+  nowMs = Date.now(),
+  env?: ProvisionEnv,
+  destroy: DestroyFn = destroyEphemeralMachine,
+  observe: ObserveFn = observeProviderMachine,
+  reportManagedSettlement?: ManagedSettlementReporter,
+): Promise<number> {
   let machines = await store.getHostedMachines(accountId);
   // Older self-hosted/test store shims may not expose the new attempt table
   // until their migration completes; legacy tracked-machine cleanup must still run.
@@ -893,6 +1101,12 @@ export async function reconcileHostedMachines(store: EphemeralProvisioningPort, 
       const age = nowMs - Date.parse(attempt.updatedAt);
       const backoff = Math.min(15 * 60_000, 30_000 * 2 ** Math.min(attempt.retryCount, 5));
       if (!Number.isFinite(age) || age < backoff) continue;
+      // A creation retry that never reached the provider is a NEW managed
+      // launch: while the managed kill switch is off, hold it untouched (it
+      // resumes when the switch returns). Placed after the abandonment check
+      // above so hopeless attempts are still cleaned up, and everything
+      // deletion-side below is untouched — cleanup never turns off.
+      if (normalizeComputeSource(attempt.desired?.computeSource) === "managed" && !managedComputeEnabled()) continue;
       const config = configs.find((c) => c.id === attempt.configId) ?? {
         id: attempt.configId || `recovered-${attempt.attemptId}`,
         name: "Recovered ephemeral runner",
@@ -901,6 +1115,7 @@ export async function reconcileHostedMachines(store: EphemeralProvisioningPort, 
         size: typeof attempt.desired.size === "string" ? attempt.desired.size : undefined,
         image: typeof attempt.desired.image === "string" ? attempt.desired.image : undefined,
         ttlMinutes: typeof attempt.desired.ttlMinutes === "number" ? attempt.desired.ttlMinutes : 60,
+        ...(normalizeComputeSource(attempt.desired.computeSource) === "managed" ? { computeSource: "managed" as const } : {}),
         createdAt: attempt.createdAt,
         updatedAt: attempt.updatedAt,
       };
@@ -908,7 +1123,10 @@ export async function reconcileHostedMachines(store: EphemeralProvisioningPort, 
       await store.putHostedMachineAttempt({ ...attempt, state: "requested", retryCount, lastError: undefined, updatedAt: new Date(nowMs).toISOString() });
       const restoreSessionId = typeof attempt.desired.restoreSessionId === "string" ? attempt.desired.restoreSessionId : "";
       if (restoreSessionId) {
-        await provisionEphemeralRestore(store, accountId, config, env, { reuseNodeId: attempt.nodeId, restoreSessionId, attemptId: attempt.attemptId, retryCount }, launchEphemeralMachine, nowMs).catch(() => {});
+        await provisionEphemeralRestore(store, accountId, config, env, {
+          reuseNodeId: attempt.nodeId, restoreSessionId, attemptId: attempt.attemptId, retryCount,
+          purpose: attempt.desired.purpose === "interactive" ? "interactive" : "queue-default",
+        }, launchEphemeralMachine, nowMs).catch(() => {});
       } else {
         await provisionEphemeralForAccount(store, accountId, config, env, launchEphemeralMachine, nowMs, (attempt.desired.purpose as EphemeralMachine["purpose"]) || "queue-default", { attemptId: attempt.attemptId, nodeId: attempt.nodeId, retryCount }).catch(() => {});
       }
@@ -918,6 +1136,11 @@ export async function reconcileHostedMachines(store: EphemeralProvisioningPort, 
 
   if (!machines.length && !attempts.length) return 0;
   const hosted = env ? await store.getHostedProvisioning(accountId) : null;
+  // For per-machine credential-lane resolution below (managed machines tear
+  // down with the operator token, regardless of the managed launch switch).
+  const accountConfigs = env && typeof store.getEphemeralConfigs === "function"
+    ? await store.getEphemeralConfigs(accountId).catch(() => [] as EphemeralNodeConfig[])
+    : [];
   // Looked up per machine to decide whether a force-destroy (desiredState
   // "deleted" — a PWA teardown, or an attempt abandoned above) should skip
   // the "still within TTL grace" retention below and be retried immediately
@@ -932,7 +1155,8 @@ export async function reconcileHostedMachines(store: EphemeralProvisioningPort, 
     const ttlMin = typeof m.ttlMinutes === "number" ? m.ttlMinutes : 60;
     const nodeId = typeof m.nodeId === "string" ? m.nodeId : "";
     const provider = typeof m.provider === "string" ? m.provider : "";
-    const providerToken = env && provider ? hosted?.providerTokens?.[provider] : undefined;
+    const computeSource = machineComputeSource(m, typeof m.attemptId === "string" ? attemptById.get(m.attemptId) : undefined, accountConfigs);
+    const providerToken = env && provider && hosted ? (await resolveProviderCredential(hosted, provider, computeSource)).token : undefined;
     const forceDelete = typeof m.attemptId === "string" && attemptById.get(m.attemptId)?.desiredState === "deleted";
 
     // Attempts opt into active observation. Legacy rows remain TTL-reconciled so
@@ -941,6 +1165,20 @@ export async function reconcileHostedMachines(store: EphemeralProvisioningPort, 
       try {
         const observed = await observe(m as unknown as EphemeralMachine, providerToken);
         if (observed === "gone") {
+          const settledAt = new Date(nowMs).toISOString();
+          const meteredMachine = { ...m, computeSource };
+          await settleManagedMachineUsage(store, accountId, meteredMachine, settledAt).catch(async () => {
+            await audit(store, accountId, { action: "reconcile_failed", provider, nodeId: nodeId || undefined, detail: "usage settlement persistence failed" });
+          });
+          const usage = usageFromManagedMachine(accountId, meteredMachine, settledAt);
+          const attemptId = typeof m.attemptId === "string" ? m.attemptId : "";
+          if (usage && attemptId && reportManagedSettlement) {
+            await reportManagedSettlement(accountId, {
+              attemptId, at: settledAt, machineSeconds: usage.machineSeconds, activeAgentSeconds: usage.activeAgentSeconds,
+            }).catch(async () => {
+              await audit(store, accountId, { action: "reconcile_failed", provider, nodeId: nodeId || undefined, detail: "managed settlement event failed" });
+            });
+          }
           if (nodeId) await store.removeNode(accountId, nodeId).catch(() => {});
           const attempt = await store.getHostedMachineAttempt(accountId, m.attemptId).catch(() => undefined);
           if (attempt) await store.putHostedMachineAttempt({ ...attempt, state: "deleted", machine: m, updatedAt: new Date(nowMs).toISOString() }).catch(() => {});
@@ -1050,8 +1288,21 @@ export async function reconcileHostedMachines(store: EphemeralProvisioningPort, 
         /* best effort — Fly/EC2 self-destruct regardless */
       }
     }
-    reaped++;
+    const settledAt = new Date(nowMs).toISOString();
+    const meteredMachine = { ...m, computeSource };
+    await settleManagedMachineUsage(store, accountId, meteredMachine, settledAt).catch(async () => {
+      await audit(store, accountId, { action: "reconcile_failed", provider: provider || undefined, nodeId: nodeId || undefined, detail: "usage settlement persistence failed" });
+    });
+    const usage = usageFromManagedMachine(accountId, meteredMachine, settledAt);
     const attemptId = typeof m.attemptId === "string" ? m.attemptId : "";
+    if (usage && attemptId && reportManagedSettlement) {
+      await reportManagedSettlement(accountId, {
+        attemptId, at: settledAt, machineSeconds: usage.machineSeconds, activeAgentSeconds: usage.activeAgentSeconds,
+      }).catch(async () => {
+        await audit(store, accountId, { action: "reconcile_failed", provider: provider || undefined, nodeId: nodeId || undefined, detail: "managed settlement event failed" });
+      });
+    }
+    reaped++;
     if (attemptId) {
       const attempt = await store.getHostedMachineAttempt(accountId, attemptId).catch(() => undefined);
       if (attempt) await store.putHostedMachineAttempt({ ...attempt, state: "deleted", machine: m, updatedAt: new Date(nowMs).toISOString() }).catch(() => {});
@@ -1077,12 +1328,13 @@ export async function reconcileAllHostedMachines(
   env: ProvisionEnv,
   nowMs = Date.now(),
   destroy: DestroyFn = destroyEphemeralMachine,
+  reportManagedSettlement?: ManagedSettlementReporter,
 ): Promise<ReconcileAllResult> {
   const accountIds = await store.listHostedMachineAccountIds();
   const result: ReconcileAllResult = { accounts: accountIds.length, reaped: 0, failed: 0 };
   for (const accountId of accountIds) {
     try {
-      result.reaped += await reconcileHostedMachines(store, accountId, nowMs, env, destroy);
+      result.reaped += await reconcileHostedMachines(store, accountId, nowMs, env, destroy, observeProviderMachine, reportManagedSettlement);
     } catch (error) {
       result.failed++;
       await audit(store, accountId, {
@@ -1156,8 +1408,26 @@ export async function sweepOrphanProviderResources(
   ]);
   const tracked = trackedResourceIds(machines, attempts);
   const ownershipTag = ownershipTagFor(accountId);
-  for (const [provider, token] of Object.entries(hosted.providerTokens ?? {})) {
-    if (hosted.validatedProviders?.[provider] !== providerCredentialFingerprint(token)) continue;
+  // One scan lane per (provider, credential): every validated user token, plus
+  // the operator token for any provider this account has a managed config or
+  // attempt on — a managed orphan lives in the OPERATOR's provider account and
+  // is invisible to user credentials. Runs regardless of the managed launch
+  // kill switch (cleanup never turns off).
+  const lanes: Array<{ provider: string; token: string }> = Object.entries(hosted.providerTokens ?? {})
+    .filter(([provider, token]) => hosted.validatedProviders?.[provider] === providerCredentialFingerprint(token))
+    .map(([provider, token]) => ({ provider, token }));
+  const managedProviders = new Set<string>();
+  for (const config of await store.getEphemeralConfigs(accountId).catch(() => [] as EphemeralNodeConfig[])) {
+    if (normalizeComputeSource(config.computeSource) === "managed") managedProviders.add(config.provider);
+  }
+  for (const attempt of attempts) {
+    if (normalizeComputeSource(attempt.desired?.computeSource) === "managed") managedProviders.add(attempt.provider);
+  }
+  for (const provider of managedProviders) {
+    const token = await operatorTokenSource().getToken(provider);
+    if (token) lanes.push({ provider, token });
+  }
+  for (const { provider, token } of lanes) {
     let discovered: EphemeralMachine[] | undefined;
     try {
       discovered = await discover(provider, token, ownershipTag);
@@ -1251,16 +1521,22 @@ export async function maybeAutoProvision(
   accountId: string,
   env: ProvisionEnv,
   launcher = launchEphemeralMachine,
+  admitManaged: ManagedProvisionAdmission = allowManagedProvision,
+  onManagedLaunchFailed: (attemptId: string) => Promise<void> = async () => {},
+  reportManagedSettlement?: ManagedSettlementReporter,
 ): Promise<EphemeralMachine | null> {
   const leaseHolder = randomUUID();
   let replenish = false;
+  let admittedManagedAttemptId: string | undefined;
   let heartbeat: { stop: () => void; isLost: () => boolean } | undefined;
   try {
     // Lazy lifecycle reconciliation: prune (and actively destroy leak-prone)
     // machines past TTL before deciding, so dedupe/rate-cap see fresh state and
     // node slots are freed. Passing env lets it DELETE the provider resource
     // (Hetzner) rather than only forgetting the record.
-    await reconcileHostedMachines(store, accountId, Date.now(), env).catch(() => {});
+    await reconcileHostedMachines(
+      store, accountId, Date.now(), env, destroyEphemeralMachine, observeProviderMachine, reportManagedSettlement,
+    ).catch(() => {});
     // Planning and launching must be one cross-replica critical section. Without
     // this lease, two webhook/control-plane workers can both observe no active
     // machine and each create a separately billed VM. Five minutes covers slow
@@ -1301,24 +1577,40 @@ export async function maybeAutoProvision(
         return claimed as unknown as EphemeralMachine;
       }
     }
-    const plan = await planAutoProvision(store, accountId);
+    const managedAttemptId = randomUUID();
+    const plan = await planAutoProvision(store, accountId, Date.now(), admitManaged, managedAttemptId);
     if (!plan.willProvision || !plan.targetConfigId) return null;
     const plannedTarget = configs.find((c) => c.id === plan.targetConfigId);
     if (!plannedTarget) return null;
+    if (normalizeComputeSource(plannedTarget.computeSource) === "managed") admittedManagedAttemptId = managedAttemptId;
     // Case B + Gap 3: if a pending item wants to CONTINUE an existing session whose
     // (torn-down) node still has an escrowed room key, rebuild that session in place
     // server-side rather than launching a blank machine. Best-effort — any gap
     // (no correlation / no escrowed key) falls back to a normal fresh provision.
     const restore = await planRestoreProvision(store, accountId).catch(() => null);
+    // Managed automations encrypt to a stable account-scoped virtual node. A
+    // fresh queue Machine adopts that identity and escrowed key, so unattended
+    // instructions remain E2E ciphertext until the guest receives them.
+    const automationNodeId = `eph-managed-auto-${createHash("sha256").update(accountId).digest("hex").slice(0, 16)}`;
+    const sourceLabel = routing.primary.kind === "node" ? `bivy/${routing.primary.node}` : "bivy";
+    const hasManagedAutomation = normalizeComputeSource(plannedTarget.computeSource) === "managed"
+      && (await store.listWorkItems(accountId, 100)).some((item) => item.status === "pending"
+        && item.label === sourceLabel && item.body?.startsWith(`bivy-room-v1:${automationNodeId}:`));
+    const automationKeyEnc = hasManagedAutomation ? await store.getNodeRoomKeyEnc(accountId, automationNodeId) : undefined;
     const machine = restore
-      ? await provisionEphemeralRestore(store, accountId, plannedTarget, env, restore, launcher)
-      : await provisionEphemeralForAccount(store, accountId, plannedTarget, env, launcher);
+      ? await provisionEphemeralRestore(store, accountId, plannedTarget, env, { ...restore, attemptId: managedAttemptId }, launcher)
+      : await provisionEphemeralForAccount(store, accountId, plannedTarget, env, launcher, Date.now(), "queue-default", {
+          attemptId: managedAttemptId,
+          retryCount: 0,
+          ...(automationKeyEnc ? { nodeId: automationNodeId, roomKeyB64: decryptSecret(accountId, automationKeyEnc) } : {}),
+        });
     // A hosted runner serves its unique `bivy/<eph suffix>` label. Move only
     // work that was waiting on the routing target which caused this launch;
     // explicit items for another node/config must remain untouched.
     await routePendingWorkToMachine(store, accountId, plannedTarget, machine);
     return machine;
   } catch (e) {
+    if (admittedManagedAttemptId) await onManagedLaunchFailed(admittedManagedAttemptId).catch(() => {});
     console.error(`[hosted-provision] account ${accountId}:`, (e as Error)?.message || e);
     return null;
   } finally {

@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { AppState, CentralGithubAppView } from "@bivy/core";
+import { modelAuthApiKeyProvider, type AppState, type CentralGithubAppView } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { ProviderConnectForm } from "./ProviderConnect.js";
 
 export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone: () => void }) {
   const [github, setGithub] = useState<CentralGithubAppView | null>(null);
   const [githubError, setGithubError] = useState<string | null>(null);
-  const [claim, setClaim] = useState<Awaited<ReturnType<typeof controller.createNodeClaim>> | null>(null);
   const [busy, setBusy] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [verifiedCredential, setVerifiedCredential] = useState<string | null>(null);
+  const [managedCredentialReady, setManagedCredentialReady] = useState(false);
+  const [finishing, setFinishing] = useState(false);
   const configuredProviders = useMemo(() => state.catalogs.providers.filter((provider) => provider.configured), [state.catalogs.providers]);
   const [providerId, setProviderId] = useState("anthropic");
   const availableAgents = useMemo(
@@ -18,10 +19,43 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
     [state.catalogs.runtimes],
   );
   const selectedAgentId = state.catalogs.selectedAgentId || availableAgents[0]?.id || "";
+  const selectedRuntime = availableAgents.find((runtime) => runtime.id === selectedAgentId);
+  const providerOptions = useMemo(() => {
+    const live = state.catalogs.providers.length > 0
+      ? state.catalogs.providers
+      : [
+          { id: "anthropic", name: "Anthropic / Claude" },
+          { id: "openai-codex", name: "OpenAI / Codex" },
+          { id: "openai", name: "OpenAI API" },
+        ];
+    const declared = selectedRuntime?.credentialRequirements?.providers ?? [];
+    if (declared.length === 0) return live;
+    const matching = live.filter((provider) => declared.includes(provider.id) || declared.includes(modelAuthApiKeyProvider(provider.id)));
+    // Runtime switches and provider-list refreshes are independent relay events;
+    // keep the live list during that brief mismatch rather than painting empty.
+    return matching.length > 0 ? matching : live;
+  }, [state.catalogs.providers, selectedRuntime]);
+  const apiKeyProvider = modelAuthApiKeyProvider(providerId);
+  const activeCredential = state.settings.credentialRecords.find(
+    (record) => record.provider === providerId || record.provider === apiKeyProvider,
+  );
+  const selectedProviderConfigured = Boolean(
+    state.catalogs.providers.find((provider) => provider.id === providerId)?.configured || activeCredential,
+  );
+  const activeCredentialKey = activeCredential ? `${activeCredential.provider}:${activeCredential.label}` : null;
+  const credentialVerified = !activeCredential?.testable
+    || activeCredential.lastVerifiedOk === true
+    || (activeCredentialKey !== null && activeCredentialKey === verifiedCredential);
   const hasMachine = Boolean(state.connection.currentNodeId);
+  const machineOnline = hasMachine && state.connection.status === "online";
   const hasGithub = Boolean(github?.installations.length);
+  const managedAvailable = github?.managedComputeAvailable === true;
 
   const refreshGithub = () => controller.centralGithubApp().then(setGithub).catch((error) => setGithubError(String((error as Error)?.message || error)));
+  useEffect(() => {
+    if (!managedAvailable) return;
+    void controller.managedCredentialReady().then(setManagedCredentialReady).catch(() => setManagedCredentialReady(false));
+  }, [managedAvailable]);
   useEffect(() => {
     void refreshGithub();
     const onFocus = () => void refreshGithub();
@@ -29,19 +63,24 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
     return () => window.removeEventListener("focus", onFocus);
   }, []);
   useEffect(() => {
-    if (hasMachine) controller.listProviders();
+    if (hasMachine) {
+      controller.listProviders();
+      controller.listCredentialRecords();
+    }
   }, [hasMachine]);
   useEffect(() => {
-    if (!claim) return;
-    const timer = window.setInterval(() => {
-      void controller.listNodeClaims().then((claims) => {
-        if (claims.find((item) => item.id === claim.id)?.status !== "pending") setClaim(null);
-      });
-    }, 3000);
-    return () => window.clearInterval(timer);
-  }, [claim]);
-
-  const step = !github ? "loading" : github.configured && !hasGithub ? "github" : !hasMachine ? "machine" : configuredProviders.length === 0 ? "provider" : "ready";
+    if (configuredProviders.length && !configuredProviders.some((provider) => provider.id === providerId)) {
+      setProviderId(configuredProviders[0]!.id);
+      return;
+    }
+    if (state.catalogs.providers.length && !state.catalogs.providers.some((provider) => provider.id === providerId)) {
+      setProviderId(state.catalogs.providers[0]!.id);
+    }
+  }, [configuredProviders, providerId, state.catalogs.providers]);
+  const step = !github ? "loading" : github.configured && !hasGithub ? "github"
+    : machineOnline && !selectedProviderConfigured ? "provider"
+      : machineOnline && managedAvailable && (!activeCredential?.unattended || !managedCredentialReady) ? "custody"
+        : machineOnline && !credentialVerified ? "verify" : "ready";
   const startGithubInstall = useCallback(async () => {
     setBusy(true); setGithubError(null);
     try {
@@ -52,6 +91,34 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
       setBusy(false);
     }
   }, []);
+  const enableManagedCredential = useCallback(async () => {
+    if (!activeCredential) return;
+    setBusy(true); setGithubError(null);
+    try {
+      await controller.setCredentialUnattended(activeCredential.provider, activeCredential.label, true);
+      await controller.waitForManagedCredential();
+      setManagedCredentialReady(true);
+      controller.listCredentialRecords();
+    } catch (error) {
+      setGithubError(String((error as Error)?.message || error));
+    } finally {
+      setBusy(false);
+    }
+  }, [activeCredential]);
+  const verifyActiveCredential = useCallback(async () => {
+    if (!activeCredential || !activeCredential.testable) return;
+    setBusy(true); setGithubError(null);
+    try {
+      const result = await controller.testCredential(activeCredential.provider, activeCredential.label);
+      if (!result.ok) throw new Error(result.reason || "The provider rejected this credential.");
+      setVerifiedCredential(`${activeCredential.provider}:${activeCredential.label}`);
+      controller.listCredentialRecords();
+    } catch (error) {
+      setGithubError(String((error as Error)?.message || error));
+    } finally {
+      setBusy(false);
+    }
+  }, [activeCredential]);
   // GitHub signup flows directly into App installation. A session-scoped guard
   // prevents a cancel/denial redirect from bouncing the browser back forever;
   // the explicit button remains available for retry.
@@ -60,18 +127,43 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
     sessionStorage.setItem("bivy:github-install-attempted", "1");
     void startGithubInstall();
   }, [step, startGithubInstall]);
+  useEffect(() => {
+    if (step !== "custody" || !activeCredentialKey || sessionStorage.getItem(`bivy:managed-credential:${activeCredentialKey}`)) return;
+    sessionStorage.setItem(`bivy:managed-credential:${activeCredentialKey}`, "attempted");
+    void enableManagedCredential();
+  }, [step, activeCredentialKey, enableManagedCredential]);
+  useEffect(() => {
+    if (step !== "verify" || !activeCredentialKey || sessionStorage.getItem(`bivy:credential-verified:${activeCredentialKey}`)) return;
+    sessionStorage.setItem(`bivy:credential-verified:${activeCredentialKey}`, "attempted");
+    void verifyActiveCredential();
+  }, [step, activeCredentialKey, verifyActiveCredential]);
+  useEffect(() => {
+    if (step !== "ready" || finishing || githubError) return;
+    setFinishing(true); setGithubError(null);
+    const target = managedAvailable
+      ? controller.ensureManagedSessionDefaults()
+      : controller.listEphemeralConfigs().then((configs) => configs.find((config) => config.computeSource === "managed") ?? null);
+    void target
+      .then((config) => {
+        if (config) controller.pickDraftEphemeralRunner(config);
+        onDone();
+      })
+      .catch((error) => {
+        setGithubError(String((error as Error)?.message || error));
+        setFinishing(false);
+      });
+  }, [finishing, githubError, managedAvailable, onDone, step]);
 
   return (
     <div className="connect-runner">
       <div>
         <p className="connect-eyebrow">Welcome to Bivy</p>
         <h2 className="connect-title">Set up your first session</h2>
-        <p className="connect-sub">Connect GitHub, choose where agents run, and authenticate a model provider.</p>
+        <p className="connect-sub">Connect GitHub, then open your first session on Bivy Cloud. If provider setup is needed, it happens inside that same session.</p>
       </div>
       <ol className="readiness-checks" aria-label="Onboarding progress">
         <li className={`readiness-check ${hasGithub ? "state-passed" : "state-pending"}`}><span className={`readiness-mark ${hasGithub ? "mark-passed" : ""}`}>{hasGithub ? "✓" : "1"}</span><span><span className="readiness-label">GitHub App</span><span className="readiness-detail"> · repository access</span></span></li>
-        <li className={`readiness-check ${hasMachine ? "state-passed" : "state-pending"}`}><span className={`readiness-mark ${hasMachine ? "mark-passed" : ""}`}>{hasMachine ? "✓" : "2"}</span><span><span className="readiness-label">Machine</span><span className="readiness-detail"> · personal or managed compute</span></span></li>
-        <li className={`readiness-check ${configuredProviders.length ? "state-passed" : "state-pending"}`}><span className={`readiness-mark ${configuredProviders.length ? "mark-passed" : ""}`}>{configuredProviders.length ? "✓" : "3"}</span><span><span className="readiness-label">Model provider</span><span className="readiness-detail"> · agent authentication</span></span></li>
+        <li className={`readiness-check ${selectedProviderConfigured && credentialVerified ? "state-passed" : "state-pending"}`}><span className={`readiness-mark ${selectedProviderConfigured && credentialVerified ? "mark-passed" : ""}`}>{selectedProviderConfigured && credentialVerified ? "✓" : "2"}</span><span><span className="readiness-label">Model provider</span><span className="readiness-detail"> · confirmed in your Cloud session</span></span></li>
       </ol>
 
       {githubError && <div className="banner inline" data-tone="danger" role="alert">{githubError}</div>}
@@ -84,45 +176,43 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
           {githubError?.includes("Sign in with GitHub again") && <a className="btn" href="/auth/github/start?return=%2F%3Fonboarding%3Dgithub">Verify GitHub identity</a>}
         </section>
       )}
-      {step === "machine" && (
-        <section className="settings-section">
-          <h3>Connect your machine</h3>
-          <p className="muted">Run a one-time command on macOS or Linux. It can enroll one machine and expires after 10 minutes.</p>
-          {!claim?.command ? <button type="button" className="btn primary" disabled={busy} onClick={() => {
-            setBusy(true);
-            controller.createNodeClaim().then(setClaim).catch((error) => setGithubError(String((error as Error)?.message || error))).finally(() => setBusy(false));
-          }}>{busy ? "Creating…" : "Create install command"}</button> : <div className="repo-connect-command"><code>{claim.command}</code><button type="button" className={`repo-connect-copy${copied ? " is-copied" : ""}`} onClick={() => void navigator.clipboard.writeText(claim.command || "").then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1500); })}>{copied ? "Copied" : "Copy"}</button></div>}
-          <p className="muted small">Your first managed trial session can also be selected from the composer after setup.</p>
-        </section>
-      )}
       {step === "provider" && (
         <section className="settings-section">
-          <h3>Authenticate your agent</h3>
-          <p className="muted">Credentials are sent to your connected machine and encrypted for account sync. Bivy does not store them as plaintext.</p>
+          <h3>Sign in with a model provider</h3>
+          <p className="muted">Sign in or add an API key. Bivy encrypts the credential for your account and makes it available only when your Bivy Cloud Machine starts.</p>
           <label className="field-label" htmlFor="onboarding-agent">Agent</label>
           <select id="onboarding-agent" className="picker-search" value={selectedAgentId} onChange={(event) => {
             const runtime = availableAgents.find((candidate) => candidate.id === event.target.value);
-            if (!runtime) return;
-            controller.chooseAgent(runtime);
-            if (runtime.id.includes("codex")) setProviderId("openai-codex");
-            else if (runtime.id.includes("claude")) setProviderId("anthropic");
+            if (runtime) controller.chooseAgent(runtime);
           }}>
             {availableAgents.map((runtime) => <option key={runtime.id} value={runtime.id}>{runtime.name || runtime.id}</option>)}
           </select>
           <label className="field-label" htmlFor="onboarding-provider">Authentication provider</label>
           <select id="onboarding-provider" className="picker-search" value={providerId} onChange={(event) => setProviderId(event.target.value)}>
-            <option value="anthropic">Anthropic / Claude</option>
-            <option value="openai-codex">OpenAI / Codex</option>
-            <option value="openai">OpenAI API</option>
+            {providerOptions.map((provider) => <option key={provider.id} value={provider.id}>{provider.name || provider.id}</option>)}
           </select>
-          <ProviderConnectForm state={state} providerId={providerId} apiKeyProvider={providerId === "openai-codex" ? "openai" : undefined} />
+          <ProviderConnectForm state={state} providerId={providerId} apiKeyProvider={apiKeyProvider !== providerId ? apiKeyProvider : undefined} />
+        </section>
+      )}
+      {step === "custody" && (
+        <section className="settings-section">
+          <h3>Securing your provider login</h3>
+          <p className="muted" role="status">Encrypting this credential for Bivy Cloud. It remains isolated from GitHub and other users, and can be revoked in Providers &amp; credentials.</p>
+          {githubError && <button type="button" className="btn" disabled={busy || !activeCredential} onClick={() => void enableManagedCredential()}>{busy ? "Encrypting…" : "Try again"}</button>}
+        </section>
+      )}
+      {step === "verify" && (
+        <section className="settings-section">
+          <h3>Verify provider access</h3>
+          <p className="muted">Bivy checks this login with the selected provider before declaring setup complete. No model request is sent.</p>
+          <button type="button" className="btn primary" disabled={busy || !activeCredential} onClick={() => void verifyActiveCredential()}>{busy ? "Checking…" : "Test connection again"}</button>
         </section>
       )}
       {step === "ready" && (
         <section className="settings-section">
-          <h3>Ready for your first task</h3>
-          <p className="muted">GitHub, {state.connection.nodes.find((node) => node.id === state.connection.currentNodeId)?.name || "your machine"}, and {configuredProviders[0]?.name || "your provider"} are connected.</p>
-          <button type="button" className="btn primary" onClick={onDone}>Choose a repository and start</button>
+          <h3>Opening your first session</h3>
+          <p className="muted" role="status">GitHub and {providerOptions.find((provider) => provider.id === providerId)?.name || "your provider"} are ready. Selecting Bivy Cloud…</p>
+          {githubError && <button type="button" className="btn" onClick={() => setGithubError(null)}>Try again</button>}
         </section>
       )}
       {step !== "ready" && <button type="button" className="btn ghost" onClick={onDone}>Finish setup later</button>}

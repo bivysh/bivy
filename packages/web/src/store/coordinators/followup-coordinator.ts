@@ -12,7 +12,7 @@ import {
 
 export interface FollowupStorePort {
   getState(): {
-    activeSession: { activeSessionId: string | null; working: boolean };
+    activeSession: { activeSessionId: string | null; activeRuntimeId?: string | null; working: boolean };
     catalogs: { selectedAgentId: string | null; runtimes: Array<{ id: string; capabilities?: unknown }> };
   };
   getFollowups(sessionId: string): PendingFollowup[];
@@ -47,7 +47,11 @@ export class FollowupCoordinator {
 
   supportsSteering(): boolean {
     const state = this.store.getState();
-    const runtime = state.catalogs.runtimes.find((item) => item.id === state.catalogs.selectedAgentId);
+    // A draft agent selection is global, but steering belongs to the active
+    // conversation. Prefer its pinned runtime so choosing a different agent for
+    // the next session cannot hide (or falsely enable) this session's action.
+    const runtimeId = state.activeSession.activeRuntimeId ?? state.catalogs.selectedAgentId;
+    const runtime = state.catalogs.runtimes.find((item) => item.id === runtimeId);
     return runtimeSupportsSteering(runtime?.capabilities as { streamingBehaviors?: unknown } | undefined);
   }
 

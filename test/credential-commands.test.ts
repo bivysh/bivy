@@ -77,6 +77,18 @@ test("credential.set surfaces a failure as an error reply (no crash)", async () 
   } finally { h.cleanup(); }
 });
 
+test("unattended grant rolls back instead of claiming Cloud custody after publication fails", async () => {
+  const h = harness({ pushModelAuthToControlPlane: async () => { throw new Error("custody unavailable"); } });
+  try {
+    await createCredentialVault(h.credsDir).modify("openai", async () => ({ type: "api_key", key: "sk-test" }));
+    await (h.cmds["credential.unattended.set"] as any)({ kind: "credential.unattended.set", provider: "openai", label: "default", unattended: true, requestId: "grant" }, h.ctx);
+    assert.match(h.replies.find((e) => e.type === "credential.unattended.set.error")?.error ?? "", /custody unavailable/);
+    const records = await createCredentialVault(h.credsDir).listRecords();
+    assert.equal(records[0]?.unattended, false);
+    assert.equal(h.events.at(-1)?.records?.[0]?.unattended, false);
+  } finally { h.cleanup(); }
+});
+
 test("presets.setActive emits presets and refreshes", async () => {
   const h = harness();
   try {

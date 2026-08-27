@@ -58,6 +58,27 @@ test("every failed readiness check maps to exactly one wired, real remediation �
   expect(app).not.toContain("sign_in: () =>");
 });
 
+test("managed-only cold start performs provider setup on the original interactive Machine", async () => {
+  const wizard = await read("../../packages/web/src/components/FirstRunOnboarding.tsx");
+  const controller = await read("../../packages/web/src/store/controller.ts");
+  const accountApi = await read("../../packages/core/src/account.ts");
+  const controlPlane = await read("../../services/control-plane/src/index.ts");
+  const provisioner = await read("../../services/control-plane/src/ephemeral-provisioner.ts");
+  expect(wizard).not.toContain("controller.createManagedAuthRunner()");
+  expect(controller).toContain("beginManagedCredentialSetup");
+  expect(controller).toContain("tryPublishManagedCredential");
+  expect(controller).toContain('agentId.startsWith("codex")');
+  expect(controller).toContain('record.provider === provider');
+  expect(controller).toContain('record.sync === "account" && record.kind !== "reference"');
+  expect(controller).not.toContain('record.kind !== "reference" && record.unattended');
+  expect(controller).toContain("Stay on the original provisional session route");
+  expect(provisioner).toContain("hostedCredentialPublisher");
+  expect(controlPlane).toContain("managed guests cannot replace hosted credentials");
+  expect(wizard).toContain("controller.ensureManagedSessionDefaults()");
+  expect(accountApi).toContain("/account/managed-machines");
+  expect(controlPlane).toContain('purpose: "interactive"');
+});
+
 test("provider readiness ('Test connection') is wired end to end: web action -> relay command -> node handler", async () => {
   const controller = await read("../../packages/web/src/store/coordinators/credentials-models-coordinator.ts");
   const vault = await read("../../packages/web/src/components/CredentialVault.tsx");
@@ -65,7 +86,32 @@ test("provider readiness ('Test connection') is wired end to end: web action -> 
   const handler = await read("../../src/controllers/credential-commands.ts");
   expect(controller).toContain("async testCredential(provider: string, label: string)");
   expect(vault).toContain("controller.testCredential(selected.provider, selected.label)");
+  const onboarding = await read("../../packages/web/src/components/FirstRunOnboarding.tsx");
+  expect(onboarding).toContain("controller.testCredential(activeCredential.provider, activeCredential.label)");
+  expect(onboarding).not.toMatch(/runtime\.id\.includes\(["'](?:codex|claude)["']\)/);
   expect(handler).toContain('async "credential.test"(msg, ctx) {');
+});
+
+test("managed first prompts render quiet provisioning milestones in the session", async () => {
+  const controller = await read("../../packages/web/src/store/controller.ts");
+  expect(controller).toContain("Reserving secure managed compute…");
+  expect(controller).toContain('updateLaunchCheckpoint(provisionalId, "credentials", "active")');
+  expect(controller).toContain("Repository and agent are ready. Sending your prompt…");
+  expect(controller).toContain("beginManagedCredentialSetup");
+  expect(controller).toContain("if (!task || task.promptSending) return");
+  expect(controller).not.toContain("if (!task || task.promptSent) return");
+  expect(controller).toContain("session.user_message acknowledges the exact");
+});
+
+test("managed runner images contain every supported selectable external agent and failed starts stay actionable", async () => {
+  const dockerfile = await read("../../deploy/Dockerfile.ephemeral-runner");
+  const controller = await read("../../packages/web/src/store/controller.ts");
+  const progress = await read("../../packages/web/src/components/SessionLaunchProgress.tsx");
+  expect(dockerfile).toContain("@openai/codex@0.147.0");
+  expect(dockerfile).toContain("@anthropic-ai/claude-code@2.1.246");
+  expect(dockerfile).toContain("command -v codex");
+  expect(controller).toContain("retryPendingLaunchOnFreshMachine");
+  expect(progress).toContain("Retry on a new Cloud Machine");
 });
 
 test("progress survives a reload because it's derived from authoritative signals, not a client-only wizard flag", async () => {

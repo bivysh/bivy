@@ -39,6 +39,7 @@ import {
   type CentralGithubInstallationInput,
   type HostedAuditEvent,
   type HostedMachineAttempt,
+  type SessionUsageRecord,
   ConcurrentAttemptUpdateError,
   type ModelAuthVault,
   type ModelAuthWrappedKey,
@@ -127,6 +128,7 @@ export class PostgresStore implements ControlPlaneStore {
         email               TEXT UNIQUE NOT NULL,
         created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
       );
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS plan TEXT NOT NULL DEFAULT 'free';
       ALTER TABLE accounts ADD COLUMN IF NOT EXISTS github_user_id TEXT;
       ALTER TABLE accounts ADD COLUMN IF NOT EXISTS github_install_target_ids JSONB NOT NULL DEFAULT '[]';
 
@@ -216,6 +218,21 @@ export class PostgresStore implements ControlPlaneStore {
       );
       CREATE INDEX IF NOT EXISTS hosted_machine_attempts_active_idx
         ON hosted_machine_attempts (account_id, state, updated_at);
+      CREATE TABLE IF NOT EXISTS session_usage (
+        account_id            TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        usage_id              TEXT NOT NULL,
+        session_id            TEXT,
+        machine_id            TEXT,
+        node_id               TEXT,
+        launched_at           TIMESTAMPTZ NOT NULL,
+        first_agent_event_at  TIMESTAMPTZ,
+        settled_at            TIMESTAMPTZ NOT NULL,
+        machine_seconds       BIGINT NOT NULL,
+        active_agent_seconds  BIGINT NOT NULL,
+        PRIMARY KEY (account_id, usage_id)
+      );
+      CREATE INDEX IF NOT EXISTS session_usage_month_idx
+        ON session_usage (account_id, settled_at DESC, launched_at);
       -- Durable lifecycle hardening: explicit desired vs. observed state, a
       -- persisted next-deadline, the per-account ownership tag applied to
       -- provider resources, and an optimistic-concurrency version so a
@@ -497,9 +514,11 @@ export class PostgresStore implements ControlPlaneStore {
         setup_id    TEXT,
         machine_id  TEXT,
         app         TEXT,
+        compute_source TEXT,
         updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
         PRIMARY KEY (account_id, session_id)
       );
+      ALTER TABLE session_correlation ADD COLUMN IF NOT EXISTS compute_source TEXT;
 
       -- Escrowed session ROOM KEY for HOSTED (device-offline) rebuild (Gap 3).
       -- Sealed at rest with the per-account hosted-provisioning key (hosted-crypto),
@@ -1834,6 +1853,46 @@ export class PostgresStore implements ControlPlaneStore {
     return rows.map((row) => this.hostedAttemptFromRow(row));
   }
 
+  async upsertSessionUsage(record: SessionUsageRecord): Promise<SessionUsageRecord> {
+    const { rows } = await this.query(
+      `INSERT INTO session_usage
+         (account_id, usage_id, session_id, machine_id, node_id, launched_at, first_agent_event_at,
+          settled_at, machine_seconds, active_agent_seconds)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+       ON CONFLICT (account_id, usage_id) DO UPDATE SET
+         usage_id=session_usage.usage_id
+       RETURNING *`,
+      [record.accountId, record.usageId, record.sessionId ?? null, record.machineId ?? null,
+       record.nodeId ?? null, record.launchedAt, record.firstAgentEventAt ?? null, record.settledAt,
+       record.machineSeconds, record.activeAgentSeconds],
+    );
+    return this.sessionUsageFromRow(rows[0]);
+  }
+
+  async listSessionUsage(accountId: string, startsAt: string, endsAt: string, limit?: number): Promise<SessionUsageRecord[]> {
+    const boundedLimit = limit == null ? undefined : Math.max(1, Math.min(10_000, Math.floor(limit)));
+    const { rows } = await this.query(
+      `SELECT * FROM session_usage
+       WHERE account_id=$1 AND settled_at > $2 AND launched_at < $3
+       ORDER BY settled_at DESC${boundedLimit == null ? "" : " LIMIT $4"}`,
+      boundedLimit == null ? [accountId, startsAt, endsAt] : [accountId, startsAt, endsAt, boundedLimit],
+    );
+    return rows.map((row) => this.sessionUsageFromRow(row));
+  }
+
+  private sessionUsageFromRow(row: Record<string, any>): SessionUsageRecord {
+    return {
+      accountId: String(row.account_id), usageId: String(row.usage_id),
+      sessionId: row.session_id || undefined, machineId: row.machine_id || undefined,
+      nodeId: row.node_id || undefined,
+      launchedAt: new Date(row.launched_at).toISOString(),
+      firstAgentEventAt: row.first_agent_event_at ? new Date(row.first_agent_event_at).toISOString() : undefined,
+      settledAt: new Date(row.settled_at).toISOString(),
+      machineSeconds: Number(row.machine_seconds) || 0,
+      activeAgentSeconds: Number(row.active_agent_seconds) || 0,
+    };
+  }
+
   async listHostedMachineAccountIds(): Promise<string[]> {
     // Filter in JS: pg-mem (the dev/test backend) does not implement Postgres's
     // jsonb_typeof/jsonb_array_length functions, and this scan runs only on the
@@ -2257,6 +2316,7 @@ export class PostgresStore implements ControlPlaneStore {
       setupId: row.setup_id ?? undefined,
       machineId: row.machine_id ?? undefined,
       app: row.app ?? undefined,
+      computeSource: row.compute_source === "managed" ? "managed" : undefined,
       updatedAt: new Date(row.updated_at).toISOString(),
     };
   }
@@ -2274,17 +2334,17 @@ export class PostgresStore implements ControlPlaneStore {
   async setSessionCorrelation(accountId: string, input: SessionCorrelationInput): Promise<SessionCorrelation> {
     const { rows } = await this.query(
       `INSERT INTO session_correlation
-         (account_id, session_id, node_id, provider, region, ttl_minutes, repo, setup_id, machine_id, app, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+         (account_id, session_id, node_id, provider, region, ttl_minutes, repo, setup_id, machine_id, app, compute_source, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
        ON CONFLICT (account_id, session_id) DO UPDATE SET
          node_id = EXCLUDED.node_id, provider = EXCLUDED.provider, region = EXCLUDED.region,
          ttl_minutes = EXCLUDED.ttl_minutes, repo = EXCLUDED.repo, setup_id = EXCLUDED.setup_id,
-         machine_id = EXCLUDED.machine_id, app = EXCLUDED.app, updated_at = now()
+         machine_id = EXCLUDED.machine_id, app = EXCLUDED.app, compute_source = EXCLUDED.compute_source, updated_at = now()
        RETURNING *`,
       [
         accountId, input.sessionId, input.nodeId, input.provider,
         input.region ?? null, input.ttlMinutes ?? null, input.repo ?? null,
-        input.setupId ?? null, input.machineId ?? null, input.app ?? null,
+        input.setupId ?? null, input.machineId ?? null, input.app ?? null, input.computeSource === "managed" ? "managed" : null,
       ],
     );
     return this.mapSessionCorrelation(rows[0]);
@@ -2308,6 +2368,18 @@ export class PostgresStore implements ControlPlaneStore {
        ON CONFLICT (account_id, node_id) DO UPDATE SET room_key_enc = EXCLUDED.room_key_enc, updated_at = now()`,
       [accountId, nodeId, JSON.stringify(enc)],
     );
+  }
+
+  async setNodeRoomKeyEncIfAbsent(accountId: string, nodeId: string, enc: SecretEnvelope): Promise<SecretEnvelope> {
+    const { rows } = await this.query(
+      `INSERT INTO node_room_keys (account_id, node_id, room_key_enc, updated_at)
+       VALUES ($1, $2, $3, now())
+       ON CONFLICT (account_id, node_id) DO UPDATE SET node_id = EXCLUDED.node_id
+       RETURNING room_key_enc`,
+      [accountId, nodeId, JSON.stringify(enc)],
+    );
+    const raw = rows[0]?.room_key_enc;
+    return (typeof raw === "string" ? JSON.parse(raw) : raw) as SecretEnvelope;
   }
 
   async findSessionByIssue(accountId: string, repo: string, issueNumber: number): Promise<{ sessionId: string; nodeId: string } | undefined> {
@@ -2664,7 +2736,7 @@ export class PostgresStore implements ControlPlaneStore {
     // that a crash after INSERT but before UPDATE cannot duplicate the run.
     const { rowCount } = await this.query(
       `UPDATE automation_definitions SET last_scheduled_at=$4, next_run_at=$5,
-       enabled=CASE WHEN $5::text IS NULL THEN false ELSE enabled END, updated_at=now()
+       enabled=CASE WHEN $5::timestamptz IS NULL THEN false ELSE enabled END, updated_at=now()
        WHERE account_id=$1 AND id=$2 AND enabled=true AND next_run_at=$3`,
       [accountId, definitionId, new Date(occurrenceIso), new Date(occurrenceIso), nextRunAt ? new Date(nextRunAt) : null],
     );
@@ -3439,6 +3511,7 @@ function mapAccount(row: any): Account {
   return {
     id: row.id,
     email: row.email,
+    plan: ["individual", "pro", "team"].includes(row.plan) ? row.plan : "free",
     githubUserId: row.github_user_id || undefined,
     githubInstallTargetIds: Array.isArray(row.github_install_target_ids) ? row.github_install_target_ids.map(String) : [],
     createdAt: new Date(row.created_at).toISOString(),

@@ -11,6 +11,7 @@
 import { linkPayloadFromText } from "./linking.js";
 import type { LocalStore } from "./local-store.js";
 import type { InboxAdvert } from "./inbox.js";
+import type { EphemeralMachine } from "./ephemeral-machine.js";
 
 export interface LinkPayload {
   session?: string;
@@ -290,6 +291,8 @@ export interface CentralGithubAppView {
   configured: boolean;
   appId?: string;
   slug?: string;
+  /** Whether this deployment can offer the no-install managed setup path. */
+  managedComputeAvailable?: boolean;
   installations: CentralGithubAppInstallationView[];
 }
 
@@ -314,6 +317,134 @@ export async function createCentralGithubInstall(
   const value = await res.json().catch(() => ({})) as { state?: string; installUrl?: string; error?: string };
   if (!res.ok || !value.installUrl) throw new Error(value.error || `GitHub App install request failed: ${res.status}`);
   return value as { state: string; installUrl: string };
+}
+
+export interface ManagedMachineLaunch {
+  machine: EphemeralMachine;
+  duplicate?: boolean;
+}
+
+export interface ManagedAutomationTarget {
+  nodeId: string;
+  roomKey: string;
+  config: EphemeralNodeConfig;
+}
+
+export async function ensureManagedAutomationTarget(
+  store: LocalStore,
+  fetchImpl: typeof fetch = fetch,
+): Promise<ManagedAutomationTarget> {
+  const res = await fetchImpl(`${cpBase(store)}/account/managed-automation-target`, {
+    method: "POST",
+    headers: authHeaders(store),
+  });
+  const data = await res.json().catch(() => ({})) as Partial<ManagedAutomationTarget> & { error?: string };
+  if (!res.ok || !data.nodeId || !data.roomKey || !data.config) {
+    throw new Error(data.error || `managed automation setup failed: ${res.status}`);
+  }
+  return data as ManagedAutomationTarget;
+}
+
+export async function managedCredentialStatus(
+  store: LocalStore,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ ready: boolean; generation: number }> {
+  const res = await fetchImpl(`${cpBase(store)}/account/managed-credential-status`, { headers: authHeaders(store) });
+  const value = await res.json().catch(() => ({})) as { ready?: boolean; generation?: number; error?: string };
+  if (!res.ok) throw new Error(value.error || `managed credential status failed: ${res.status}`);
+  return { ready: value.ready === true, generation: Number(value.generation) || 0 };
+}
+
+export interface ManagedLaunchAction {
+  id: string;
+  label: string;
+  kind?: "primary" | "secondary";
+}
+
+/** Structured admission failure; commercial meaning remains deployment-owned. */
+export class ManagedLaunchError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code?: string,
+    readonly actions: ManagedLaunchAction[] = [],
+  ) {
+    super(message);
+    this.name = "ManagedLaunchError";
+  }
+}
+
+function managedLaunchError(
+  value: { error?: string; reason?: string; code?: string; actions?: unknown },
+  status: number,
+  fallback: string,
+): ManagedLaunchError {
+  const actions = Array.isArray(value.actions) ? value.actions.flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object") return [];
+    const raw = candidate as Record<string, unknown>;
+    const id = typeof raw.id === "string" ? raw.id.trim() : "";
+    const label = typeof raw.label === "string" ? raw.label.trim() : "";
+    if (!id || !label) return [];
+    const kind: ManagedLaunchAction["kind"] = raw.kind === "primary" || raw.kind === "secondary" ? raw.kind : undefined;
+    return [{ id, label, ...(kind ? { kind } : {}) }];
+  }) : [];
+  return new ManagedLaunchError(value.reason || value.error || fallback, status, value.code, actions);
+}
+
+function adoptManagedMachineKey(store: LocalStore, value: { machine?: EphemeralMachine; roomKey?: string }): void {
+  if (value.machine?.nodeId && value.roomKey) store.addKey(value.machine.nodeId, value.roomKey);
+}
+
+export async function createManagedAuthRunner(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<ManagedMachineLaunch> {
+  const res = await fetchImpl(`${cpBase(store)}/account/onboarding/auth-runner`, {
+    method: "POST", headers: { authorization: `Bearer ${store.s}` },
+  });
+  const value = await res.json().catch(() => ({})) as ManagedMachineLaunch & { roomKey?: string; error?: string; reason?: string; code?: string; actions?: unknown };
+  if (!res.ok || !value.machine) throw managedLaunchError(value, res.status, `managed authentication Machine request failed: ${res.status}`);
+  adoptManagedMachineKey(store, value);
+  return { machine: value.machine, ...(value.duplicate ? { duplicate: true } : {}) };
+}
+
+/** Idempotently create the account's default operator-owned session profile. */
+export async function ensureManagedSessionDefaults(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<EphemeralNodeConfig> {
+  const res = await fetchImpl(`${cpBase(store)}/account/onboarding/managed-defaults`, {
+    method: "POST", headers: authHeaders(store),
+  });
+  const value = await res.json().catch(() => ({})) as { config?: unknown; error?: string; reason?: string };
+  if (!res.ok) throw new Error(value.reason || value.error || `managed session setup failed: ${res.status}`);
+  return coerceConfig(value.config);
+}
+
+/** Launch one interactive operator-owned Machine and adopt its one-time room key. */
+export async function launchManagedSessionMachine(
+  store: LocalStore,
+  configId: string,
+  fetchOrOptions: typeof fetch | { runtimeId?: string; fetchImpl?: typeof fetch } = fetch,
+): Promise<EphemeralMachine> {
+  const fetchImpl = typeof fetchOrOptions === "function" ? fetchOrOptions : fetchOrOptions.fetchImpl ?? fetch;
+  const runtimeId = typeof fetchOrOptions === "function" ? undefined : fetchOrOptions.runtimeId;
+  const res = await fetchImpl(`${cpBase(store)}/account/managed-machines`, {
+    method: "POST", headers: authHeaders(store), body: JSON.stringify({ configId, ...(runtimeId ? { runtimeId } : {}) }),
+  });
+  const value = await res.json().catch(() => ({})) as { machine?: EphemeralMachine; roomKey?: string; error?: string; reason?: string; code?: string; actions?: unknown };
+  if (!res.ok || !value.machine) throw managedLaunchError(value, res.status, `managed Machine launch failed: ${res.status}`);
+  adoptManagedMachineKey(store, value);
+  return value.machine;
+}
+
+/** Rebuild a torn-down managed session and adopt its escrowed room key. */
+export async function restoreManagedSessionMachine(
+  store: LocalStore,
+  input: { configId: string; nodeId: string; sessionId: string },
+  fetchImpl: typeof fetch = fetch,
+): Promise<EphemeralMachine> {
+  const res = await fetchImpl(`${cpBase(store)}/account/managed-machines/restore`, {
+    method: "POST", headers: authHeaders(store), body: JSON.stringify(input),
+  });
+  const value = await res.json().catch(() => ({})) as { machine?: EphemeralMachine; roomKey?: string; error?: string; reason?: string; code?: string; actions?: unknown };
+  if (!res.ok || !value.machine) throw managedLaunchError(value, res.status, `managed Machine restore failed: ${res.status}`);
+  adoptManagedMachineKey(store, value);
+  return value.machine;
 }
 
 export interface AccountNodeClaim {
@@ -605,6 +736,9 @@ export interface EphemeralNodeConfig {
   readyCapacity?: number;
   ttlMinutes?: number;
   teardownOnAgentFinish?: boolean;
+  /** Operator-owned compute is launched by the control plane; absent means the
+   * user's provider credential and preserves existing BYO profiles. */
+  computeSource?: "user" | "managed";
   createdAt: string;
   updatedAt: string;
 }
@@ -618,6 +752,7 @@ export type EphemeralConfigInput = {
   readyCapacity?: number | null;
   ttlMinutes?: number | null;
   teardownOnAgentFinish?: boolean;
+  computeSource?: "user" | "managed";
 };
 
 // How the account routes queued work by default. `primary` names the runner;
@@ -645,6 +780,7 @@ function coerceConfig(v: any): EphemeralNodeConfig {
     readyCapacity: typeof v?.readyCapacity === "number" ? Math.max(0, Math.min(1, Math.floor(v.readyCapacity))) : undefined,
     ttlMinutes: typeof v?.ttlMinutes === "number" ? v.ttlMinutes : undefined,
     teardownOnAgentFinish: Boolean(v?.teardownOnAgentFinish) || undefined,
+    computeSource: v?.computeSource === "managed" ? "managed" : undefined,
     createdAt: String(v?.createdAt ?? ""),
     updatedAt: String(v?.updatedAt ?? ""),
   };
@@ -721,6 +857,8 @@ export interface HostedProvisioningStatus {
 
 export interface HostedProvisioningPatch {
   enabled?: boolean;
+  /** Select which account GitHub identity hosted Machines use. */
+  githubIdentity?: "central-app" | "own-app" | "token" | null;
   githubToken?: string;
   githubApp?: { appId: string; installationId: string; privateKeyPem: string } | null;
   providerTokens?: Record<string, string>;
@@ -759,6 +897,20 @@ export async function fetchHostedGithubRepositories(
   const data: any = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data?.error || `hosted repository request failed: ${res.status}`);
   return Array.isArray(data?.repos) ? data.repos : [];
+}
+
+/** Remote branches available through the hosted/central App without a node. */
+export async function fetchHostedGithubBranches(
+  store: LocalStore,
+  repo: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<Array<{ name: string }>> {
+  const [owner, name] = repo.split("/");
+  if (!owner || !name) throw new Error("Repository must be owner/name");
+  const res = await fetchImpl(`${cpBase(store)}/account/hosted-github-repositories/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/branches`, { headers: authHeaders(store) });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `hosted branch request failed: ${res.status}`);
+  return Array.isArray(data?.branches) ? data.branches : [];
 }
 
 export async function validateHostedProviderCredential(
@@ -800,7 +952,7 @@ export interface HostedMachineSummary {
   createdAt: string;
   ttlMinutes?: number;
   setupId?: string;
-  purpose?: "queue-item" | "queue-default" | "ready-capacity";
+  purpose?: "queue-item" | "queue-default" | "ready-capacity" | "auth-runner" | "interactive";
   claimedAt?: string;
   milestones?: Record<string, string>;
   /** Durable controller lifecycle phase from the attempt record (see

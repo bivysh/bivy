@@ -69,6 +69,7 @@ export function piIntegration(origin: AgentIntegrationOrigin) {
         testedVersion: PI_TESTED_VERSION,
         source: origin,
         authOwner: "agent",
+        credentialRequirements: { owner: "agent", strategy: "one-of", providers: [] },
         notes: installed
           ? "Uses the Pi command and agent-owned auth/configuration already on this node, and hands sessions back to that native TUI."
           : "Install and sign in to Pi on this node; Bivy will connect to that existing agent.",

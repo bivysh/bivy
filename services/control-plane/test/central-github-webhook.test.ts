@@ -94,6 +94,9 @@ async function startFakeGithub(): Promise<number> {
       if (url.startsWith("/installation/repositories")) {
         return reply(200, { repositories: [{ full_name: "acme/rocket", private: true, default_branch: "main" }] });
       }
+      if (url.startsWith("/repos/acme/rocket/branches")) {
+        return reply(200, [{ name: "main" }, { name: "feature/mobile" }]);
+      }
       return reply(404, { message: "not found" });
     });
   });
@@ -105,7 +108,10 @@ async function startFakeGithub(): Promise<number> {
 async function main() {
   const githubPort = await startFakeGithub();
   const port = await freePort();
-  const proc = spawn("npx", ["tsx", "src/index.ts"], {
+  // Spawn Node directly rather than through `npx`: killing an npx wrapper can
+  // leave its control-plane grandchild alive and keep the test process' stdio
+  // open after every assertion has passed.
+  const proc = spawn(process.execPath, ["--import", "tsx", "src/index.ts"], {
     cwd: cpDir,
     env: {
       ...process.env,
@@ -125,7 +131,9 @@ async function main() {
   });
   procs.push(proc);
   let ready = false;
-  for (let i = 0; i < 100; i++) {
+  // A cold control-plane TypeScript startup can exceed ten seconds on the
+  // small CI/self-host runners used for the full sequential suite.
+  for (let i = 0; i < 300; i++) {
     try {
       if ((await fetch(`http://localhost:${port}/healthz`)).ok) { ready = true; break; }
     } catch {}
@@ -139,6 +147,7 @@ async function main() {
   // --- Install flow: state binds the callback to the initiating account. ---
   const status = await json(port, "GET", "/account/github/central-app", undefined, tokenA);
   expect(status.body.configured === true && status.body.installations.length === 0, "central app reports configured with no installations yet");
+  await json(port, "PUT", "/account/hosted-provisioning", { githubIdentity: "own-app" }, tokenA);
 
   const stateRes = await json(port, "POST", "/account/github/central-app/install-state", { returnPath: "/settings" }, tokenA);
   expect(typeof stateRes.body.state === "string" && String(stateRes.body.installUrl).includes("bivy-central-test"), "install-state mints a state and install URL");
@@ -158,11 +167,20 @@ async function main() {
   expect(afterB.body.installations.length === 0, "account B sees no installations (cross-account isolation)");
 
   const identityA = await json(port, "GET", "/account/hosted-provisioning", undefined, tokenA);
-  expect(identityA.body.githubIdentity === "central-app", "first bind selects the central-app identity for the account");
+  expect(identityA.body.githubIdentity === "central-app", "explicit central App setup replaces an established account's hosted identity selection");
 
   // --- Repo listing: account-scoped, server-side JWT → installation token. ---
   const reposA = await json(port, "GET", "/account/github/central-app/installations/42/repos", undefined, tokenA);
   expect(reposA.status === 200 && reposA.body.repositories?.[0]?.slug === "acme/rocket", "repo listing returns the installation's repos for the owner");
+  const pickerReposA = await json(port, "GET", "/account/hosted-github-repositories", undefined, tokenA);
+  expect(pickerReposA.status === 200 && pickerReposA.body.repos?.[0]?.slug === "acme/rocket", "the node-less ordinary repo picker resolves the central App identity");
+  const pickerBranchesA = await json(port, "GET", "/account/hosted-github-repositories/acme/rocket/branches", undefined, tokenA);
+  expect(pickerBranchesA.status === 200 && pickerBranchesA.body.branches?.[1]?.name === "feature/mobile", "the node-less branch picker uses the central App identity");
+  expect(JSON.stringify(mintBodies.at(-1)) === JSON.stringify({ repositories: ["rocket"] }), "branch discovery mints a repository-scoped token");
+  const pickerReposB = await json(port, "GET", "/account/hosted-github-repositories", undefined, tokenB);
+  expect(pickerReposB.status === 409, "an account without a bound installation cannot discover another account's repos");
+  const pickerBranchesB = await json(port, "GET", "/account/hosted-github-repositories/acme/rocket/branches", undefined, tokenB);
+  expect(pickerBranchesB.status === 409, "an account without a bound installation cannot discover another account's branches");
   const reposB = await json(port, "GET", "/account/github/central-app/installations/42/repos", undefined, tokenB);
   expect(reposB.status === 404, "another account cannot list a foreign installation's repos");
 

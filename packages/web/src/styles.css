@@ -783,7 +783,7 @@ button.sheet-action:last-child { border-bottom: 0; }
 .composer-gh { align-items: center; gap: 6px; }
 /* The draft lead row carries more than one pick (repo + sandbox), so space them
    and let them wrap on a narrow phone instead of squashing. */
-.composer-lead { gap: 6px; flex-wrap: wrap; }
+.composer-lead { gap: var(--space-2); flex-wrap: wrap; }
 .composer-gh:empty { display: none; }
 .pill-gh { flex: none; }
 
@@ -1936,20 +1936,6 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 /* First-session decision summary (B2): the four decisions a new session makes. */
 .composer-first-session { font-size: 11px; color: var(--muted); padding: 2px 4px 4px; }
 .composer-first-session .fs-decisions { color: var(--fg); }
-.composer-starter {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  margin: 0 0 8px; padding: 10px 12px; border: 1px solid var(--line);
-  border-radius: 8px; background: var(--surface);
-}
-.composer-starter > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.composer-starter strong { font-size: 12px; color: var(--fg); }
-.composer-starter span { font-size: 11px; line-height: 1.4; color: var(--muted); }
-.composer-starter .btn { flex: none; }
-@media (max-width: 520px) {
-  .composer-starter { align-items: stretch; flex-direction: column; }
-  .composer-starter .btn { min-height: 40px; }
-}
-
 /* Review surface (C3): state badges, checks strip, view-mode toggle, file tree,
    per-file actions, and the split (side-by-side) diff layout. */
 .changes-meta { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line); }
@@ -2647,7 +2633,8 @@ select.picker-search { appearance: auto; }
 /* Only expanded diagnostics scroll. The default toast stays compact instead of
    turning raw command output into a screen-covering panel on mobile. */
 .error-toast.expanded { max-height: min(60vh, calc(100dvh - 160px)); overflow-y: auto; }
-.error-toast-content { flex: 1; min-width: 0; display: grid; gap: 5px; }
+.error-toast-content { flex: 1; min-width: 0; display: grid; gap: var(--space-1); }
+.error-toast-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .error-toast-text { min-width: 0; font-size: 13px; line-height: 1.4; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
 .error-toast.expanded .error-toast-text { display: block; overflow: visible; }
 .error-toast-details { justify-self: start; border: 0; background: transparent; color: var(--accent); padding: 0; font: inherit; font-size: 12px; font-weight: 600; }
@@ -2852,3 +2839,56 @@ select.picker-search { appearance: auto; }
 .readiness-label { font-weight: 500; }
 .readiness-detail { color: var(--muted); font-size: 0.82rem; }
 .readiness-next { margin-top: 10px; }
+
+/* One structured, durable view of a managed session cold start. Checkpoints
+   replace repeated setup transcript messages and remain visible through the
+   first assistant output so time-to-first-response is measurable. */
+.session-launch-progress {
+  margin: var(--space-4) 0 var(--space-5);
+  padding: var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+.session-launch-progress-title {
+  margin-bottom: var(--space-3);
+  color: var(--ink);
+  font-size: var(--text-md);
+  line-height: var(--lh-md);
+  font-weight: 650;
+}
+.session-launch-checkpoints {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.session-launch-checkpoint {
+  display: grid;
+  grid-template-columns: var(--space-5) minmax(0, 1fr);
+  align-items: start;
+  color: var(--muted);
+  font-size: var(--text-base);
+  line-height: var(--lh-base);
+}
+.session-launch-checkpoint-mark {
+  display: flex;
+  min-height: var(--lh-base);
+  align-items: center;
+  color: var(--muted);
+  font-weight: 700;
+}
+.session-launch-checkpoint.state-active,
+.session-launch-checkpoint.state-done { color: var(--ink); }
+.session-launch-checkpoint.state-done .session-launch-checkpoint-mark { color: var(--ok); }
+.session-launch-checkpoint.state-failed,
+.session-launch-checkpoint.state-failed .session-launch-checkpoint-mark { color: var(--danger); }
+.session-launch-checkpoint-error {
+  display: block;
+  margin-top: var(--space-1);
+  color: var(--danger);
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+}
+.session-launch-action { margin-top: var(--space-4); }

@@ -5,6 +5,8 @@ const FORK_IMPORT_TIMEOUT_MS = 11 * 60 * 1000;
 
 export interface SessionForkOptions {
   destNodeId?: string;
+  /** Provision this managed profile as the destination after source export. */
+  managedConfigId?: string;
   agentId?: string;
   sourceAgentId?: string;
   model?: { provider: string; id: string };
@@ -25,6 +27,7 @@ export interface SessionOrchestrationDependencies {
   addUserMessage(text: string, clientMessageId: string): void;
   transcriptUrl(sessionId: string): string;
   refreshAccountSessions(): void;
+  launchManagedDestination(configId: string, runtimeId?: string): Promise<string>;
 }
 
 export type SessionOrchestrationResult =
@@ -229,8 +232,9 @@ export class SessionOrchestrator {
     missing: Array<{ label?: string; detail?: string }>;
   }> {
     const sourceNodeId = this.deps.currentNodeId();
-    const destNodeId = opts.destNodeId ?? sourceNodeId;
-    const crossNode = !this.deps.isDirect() && Boolean(destNodeId) && destNodeId !== sourceNodeId;
+    let destNodeId = opts.destNodeId ?? sourceNodeId;
+    const managedDestination = Boolean(opts.managedConfigId);
+    const crossNode = managedDestination || (!this.deps.isDirect() && Boolean(destNodeId) && destNodeId !== sourceNodeId);
     const sourceAgentId = opts.sourceAgentId ?? this.deps.sessionRuntime(sourceSessionId);
     const targetAgentId = opts.agentId ?? sourceAgentId;
     const crossAgent = Boolean(targetAgentId && (!sourceAgentId || targetAgentId !== sourceAgentId));
@@ -257,9 +261,15 @@ export class SessionOrchestrator {
     const bundle = (exported as { bundle?: unknown }).bundle;
     if (!bundle) throw new Error("Fork export returned no bundle");
 
+    if (opts.managedConfigId) {
+      // Export first while the source transport is authoritative. Provisioning
+      // happens only after a complete bundle exists, and source retirement stays
+      // confirmation-gated below, so every failure leaves the original intact.
+      destNodeId = await this.deps.launchManagedDestination(opts.managedConfigId, opts.agentId);
+    }
     if (crossNode) {
       this.deps.switchNode(destNodeId!);
-      await this.deps.waitForOnline();
+      await this.deps.waitForOnline(managedDestination ? 120_000 : undefined);
     }
     const done = await this.request({
       kind: "session.fork.import",

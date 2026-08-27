@@ -8,7 +8,7 @@ import type { EphemeralLifecycleMilestones } from "./ephemeral-lifecycle.js";
 
 export type EphemeralMilestones = EphemeralLifecycleMilestones;
 
-export type EphemeralMachinePurpose = "queue-item" | "queue-default" | "ready-capacity";
+export type EphemeralMachinePurpose = "queue-item" | "queue-default" | "ready-capacity" | "auth-runner" | "interactive";
 
 export interface EphemeralMachine {
   id: string;
@@ -30,6 +30,8 @@ export interface EphemeralMachine {
   repo?: string;
   workItemId?: string;
   purpose?: EphemeralMachinePurpose;
+  /** Credential lane that created the Machine. Absent means user/BYO. */
+  computeSource?: "user" | "managed";
 }
 
 export interface SessionCorrelation {
@@ -42,6 +44,7 @@ export interface SessionCorrelation {
   setupId?: string;
   machineId?: string;
   app?: string;
+  computeSource?: "user" | "managed";
 }
 
 export function ephemeralMachineFromCorrelation(correlation: SessionCorrelation): EphemeralMachine {
@@ -58,6 +61,7 @@ export function ephemeralMachineFromCorrelation(correlation: SessionCorrelation)
     nodeId: correlation.nodeId,
     setupId: correlation.setupId,
     repo: correlation.repo,
+    computeSource: correlation.computeSource,
   };
 }
 

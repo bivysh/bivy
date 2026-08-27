@@ -16,6 +16,12 @@ import {
   fetchAccountNodes,
   fetchCentralGithubApp,
   createCentralGithubInstall,
+  managedCredentialStatus,
+  ensureManagedSessionDefaults,
+  ensureManagedAutomationTarget,
+  launchManagedSessionMachine,
+  ManagedLaunchError,
+  restoreManagedSessionMachine,
   createAccountNodeClaim,
   fetchAccountNodeClaims,
   revokeAccountNodeClaim,
@@ -54,6 +60,7 @@ import {
   rotateHostedProvisioning as apiRotateHostedProvisioning,
   connectHostedGithubApp as apiConnectHostedGithubApp,
   fetchHostedGithubRepositories,
+  fetchHostedGithubBranches,
   type HostedGithubAppConnection,
   triggerHostedProvision as apiTriggerHostedProvision,
   type EphemeralNodeConfig,
@@ -108,6 +115,7 @@ import {
   type EphemeralMachine,
   type PendingEphemeralLaunch,
   type PendingEphemeralLaunchStore,
+  type SessionLaunchCheckpointId,
   type GithubTaskTokenStore,
   type EphemeralQueueDefault,
   type LaunchOpts,
@@ -242,7 +250,7 @@ export class AppController {
   /** Ephemeral cold starts outlive the pane that launched them. Each first
    *  message gets a sidebar placeholder immediately, and its launch continues
    *  here even if the user presses New and starts another session. */
-  private pendingLaunches = new Map<string, PendingEphemeralLaunch & { transport?: Transport }>();
+  private pendingLaunches = new Map<string, PendingEphemeralLaunch & { transport?: Transport; sessionId?: string; promptSent?: boolean; promptSending?: boolean }>();
   /** Timed, factual boot updates. Provider creation returning only means the VM
    *  exists; these heartbeats make the otherwise silent cloud-init wait visible. */
   private bootProgressTimers = new Map<string, ReturnType<typeof setTimeout>[]>();
@@ -348,6 +356,11 @@ export class AppController {
       addUserMessage: (text, id) => this.store.addUserMessage(text, id),
       transcriptUrl: (sessionId) => `${location.origin}${routePath({ kind: "session", id: sessionId })}`,
       refreshAccountSessions: () => { void this.refreshAccountSessions(); },
+      launchManagedDestination: async (configId, runtimeId) => {
+        const machine = await launchManagedSessionMachine(this.local, configId, { runtimeId });
+        if (!machine.nodeId) throw new Error("Managed fork destination launched without a node id");
+        return machine.nodeId;
+      },
     }, {
       navigateNew: () => navigate({ kind: "new" }),
       focusComposer: () => this.focusComposer(),
@@ -382,7 +395,7 @@ export class AppController {
         const task: PendingEphemeralLaunch = { id: provisionalId, prompt, config, logs: [], followups: [], phase: "provisioning", createdAt: now, updatedAt: now };
         this.pendingLaunches.set(provisionalId, task);
         void this.pendingLaunchStore.put(task);
-        this.store.persistPendingSession(provisionalId, prompt.text);
+        this.store.persistPendingSession(provisionalId, prompt.text, true, config.name);
         void this.launchDraftRunnerAndBind(provisionalId);
       },
       send: (command) => this.send(command),
@@ -428,6 +441,7 @@ export class AppController {
       nodes: () => this.store.getState().connection.nodes,
       correlations: () => this.ephemeralCorrelations,
       launchMachine: (opts) => launchEphemeralMachine({ ...opts, debugKeepMachine: EPHEMERAL_KEEP_FAILED_MACHINES }, { store: this.local, exec: cloudExec(this.local), keys: this.ephemeralKeys, machines: this.ephemeralMachines }),
+      restoreManagedMachine: (input) => restoreManagedSessionMachine(this.local, input),
       destroyMachine: (machine) => destroyEphemeralMachine(machine, { store: this.local, exec: cloudExec(this.local), keys: this.ephemeralKeys, machines: this.ephemeralMachines }),
       machineFromNode: (node) => ephemeralMachineFromNode(node),
       machineFromCorrelation: ephemeralMachineFromCorrelation,
@@ -677,7 +691,16 @@ export class AppController {
         const before = this.store.getState();
         const appliedEvent = this.eventWithNodeScope(event);
         this.store.apply(appliedEvent);
+        const activeAfter = this.store.getState().activeSession;
+        if (
+          activeAfter.activeSessionId &&
+          !before.activeSession.transcript.some((entry) => entry.role === "assistant" && Boolean(entry.text) && !entry.tool) &&
+          activeAfter.transcript.some((entry) => entry.role === "assistant" && Boolean(entry.text) && !entry.tool)
+        ) {
+          this.store.markLaunchFirstResponse(activeAfter.activeSessionId);
+        }
         this.observeActivationMilestones(before, appliedEvent);
+        if (appliedEvent.type === "credentials.records") void this.maybeGrantManagedCredential();
         if (appliedEvent.type === "session.deleted") this.persistDeletedSessionTombstones();
         this.maybeFlushPendingPrompt(appliedEvent);
         this.followupCoordinator.confirm(appliedEvent);
@@ -814,6 +837,30 @@ export class AppController {
 
   centralGithubApp() { return fetchCentralGithubApp(this.local); }
   createCentralGithubInstall(returnPath = "/") { return createCentralGithubInstall(this.local, returnPath); }
+  managedAutomationTarget() { return ensureManagedAutomationTarget(this.local); }
+  async managedCredentialReady(): Promise<boolean> {
+    return (await managedCredentialStatus(this.local)).ready;
+  }
+
+  async waitForManagedCredential(timeoutMs = 20_000, afterGeneration = -1): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const status = await managedCredentialStatus(this.local);
+      if (status.ready && status.generation > afterGeneration) return;
+      await new Promise((resolve) => setTimeout(resolve, 750));
+    }
+    throw new Error("The encrypted Bivy Cloud credential was not published. Try provider setup again.");
+  }
+
+  async setupManagedCredentials(): Promise<void> {
+    const activeId = this.store.getState().activeSession.activeSessionId;
+    if (!activeId || !this.pendingLaunches.has(activeId)) throw new Error("The original Cloud session is no longer available.");
+    // Retry the original provisional session. The managed launch path first
+    // republishes an existing grant, then falls back to provider setup on that
+    // session's regular interactive Machine — never a separate auth session.
+    await this.retryPendingLaunch(activeId);
+  }
+  ensureManagedSessionDefaults() { return ensureManagedSessionDefaults(this.local); }
   createNodeClaim() { return createAccountNodeClaim(this.local); }
   listNodeClaims() { return fetchAccountNodeClaims(this.local); }
   revokeNodeClaim(id: string) { return revokeAccountNodeClaim(this.local, id); }
@@ -1164,8 +1211,10 @@ export class AppController {
     this.store.setDraftEphemeralConfig(config);
   }
 
-  /** Switch to another node without a full reload. */
+  /** Switch to another node without a full reload. Selecting a concrete node
+   *  also withdraws any Cloud profile previously targeted by the unsent draft. */
   switchNode(nodeId: string): void {
+    this.store.setDraftEphemeralConfig(null);
     this.nodeCoordinator.switchNode(nodeId);
   }
 
@@ -1379,7 +1428,7 @@ export class AppController {
   /** Fork/copy/move orchestration is owned by SessionOrchestrator. */
   forkSession(
     sourceSessionId: string,
-    opts: { destNodeId?: string; agentId?: string; sourceAgentId?: string; model?: { provider: string; id: string }; retireSource?: boolean } = {},
+    opts: { destNodeId?: string; managedConfigId?: string; agentId?: string; sourceAgentId?: string; model?: { provider: string; id: string }; retireSource?: boolean } = {},
   ): Promise<{ sessionId: string; fidelity: string; missing: Array<{ label?: string; detail?: string }> }> {
     return this.sessionCoordinator.fork(sourceSessionId, opts);
   }
@@ -1799,7 +1848,15 @@ export class AppController {
   /** Draft repo/branch/agent/model to thread into the next session.new. */
   private draftSessionFields(): Record<string, unknown> {
     const s = this.store.getState();
-    const model = s.catalogs.currentModel ? { provider: (s.catalogs.currentModel as any).provider, id: s.catalogs.currentModel.id } : undefined;
+    // Model catalogs and their `configured` flags belong to the connected
+    // Machine. A Cloud/ephemeral draft targets a different, not-yet-booted
+    // Machine, so forwarding the current Machine's model selection can make an
+    // otherwise healthy launch fail with "Model is not available on this
+    // node." Let the destination runtime choose its credential-backed default;
+    // its own catalog becomes authoritative once it connects.
+    const model = !s.draft.ephemeralConfig && s.catalogs.currentModel
+      ? { provider: (s.catalogs.currentModel as any).provider, id: s.catalogs.currentModel.id }
+      : undefined;
     return {
       repo: s.draft.repo || undefined,
       // Only meaningful alongside `repo` — a branch is only ever set together
@@ -1842,7 +1899,24 @@ export class AppController {
    * session (bound to those choices) is created lazily by the first sendPrompt.
    */
   newSession(opts: { navigate?: boolean } = {}): void {
+    const before = this.store.getState();
+    const departingNodeId = before.activeSession.activeSessionId
+      ? before.sessionIndex.sessions.find((session) => session.sessionId === before.activeSession.activeSessionId)?.nodeId ?? this.local.cur
+      : this.local.cur;
+    const departingNodeName = before.connection.nodes.find((node) => node.id === departingNodeId)?.name ?? "";
+    const setupId = this.ephemeralCorrelations.find((correlation) => correlation.nodeId === departingNodeId)?.setupId;
     this.sessionCoordinator.newSession(opts);
+    // A disposable Machine is a concrete session runtime, not the default for
+    // the next session. Resolve its profile asynchronously and target a fresh
+    // Machine; a deliberate Machine/profile choice made meanwhile always wins.
+    if (!departingNodeId?.startsWith("eph-")) return;
+    void this.listEphemeralConfigs().then((configs) => {
+      const state = this.store.getState();
+      if (state.activeSession.activeSessionId || state.draft.ephemeralConfig || this.local.cur !== departingNodeId) return;
+      const profile = (setupId ? configs.find((config) => config.id === setupId) : undefined)
+        ?? (/^Hosted\s+/i.test(departingNodeName) ? configs.find((config) => config.computeSource === "managed") : undefined);
+      if (profile) this.pickDraftEphemeralRunner(profile);
+    }).catch(() => {});
   }
 
   /** Load the remembered composer defaults into the store so the next fresh
@@ -1921,29 +1995,52 @@ export class AppController {
       task.logs.push(message);
       task.updatedAt = new Date().toISOString();
       void this.pendingLaunchStore.put(task);
-      if (this.store.getState().activeSession.activeSessionId === provisionalId || this.pendingPrompt?.provisionalId === provisionalId) {
-        this.store.pushSystemMessage(`Setup · ${message}`);
-      }
     };
     try {
-      const machine = await this.launchEphemeral({
-        provider: config.provider,
-        region: config.region ?? undefined,
-        size: config.size ?? undefined,
-        image: config.image ?? undefined,
-        ttlMinutes: config.ttlMinutes ?? undefined,
-        teardownOnAgentFinish: config.teardownOnAgentFinish === true,
-        name: config.name,
-        setupId: config.id,
-        onProgress: logSetup,
-      });
+      const requestedAgent = task.prompt.frame && "agent" in task.prompt.frame
+        ? String(task.prompt.frame.agent || "")
+        : "";
+      // Credential publication can wait for a control-plane generation edge.
+      // Start it before capacity allocation and await both together so that wait
+      // overlaps the provider create/image pull instead of adding up to 20s in
+      // front of every managed cold start.
+      const managedCredentialReadiness = config.computeSource === "managed"
+        ? this.prepareManagedCredential(requestedAgent)
+        : Promise.resolve(true);
+      this.store.updateLaunchCheckpoint(provisionalId, "capacity", "active");
+      if (!task.prompt.frame || !("repo" in task.prompt.frame) || !task.prompt.frame.repo) {
+        this.store.updateLaunchCheckpoint(provisionalId, "repository", "skipped");
+      }
+      if (config.computeSource === "managed") logSetup("Reserving secure managed compute…");
+      const machineLaunch = config.computeSource === "managed"
+        ? launchManagedSessionMachine(this.local, config.id, { runtimeId: requestedAgent })
+        : this.launchEphemeral({
+            provider: config.provider,
+            region: config.region ?? undefined,
+            size: config.size ?? undefined,
+            image: config.image ?? undefined,
+            ttlMinutes: config.ttlMinutes ?? undefined,
+            teardownOnAgentFinish: config.teardownOnAgentFinish === true,
+            name: config.name,
+            setupId: config.id,
+            onProgress: logSetup,
+          });
+      const [machine, managedCredentialsReady] = await Promise.all([machineLaunch, managedCredentialReadiness]);
+      this.store.updateLaunchCheckpoint(provisionalId, "account", "done");
       if (!machine.nodeId) throw new Error("machine launched without a node id");
+      this.store.updateLaunchCheckpoint(provisionalId, "capacity", "done");
+      this.store.updateLaunchCheckpoint(provisionalId, "machine", "done");
+      this.store.updateLaunchCheckpoint(provisionalId, "service", "active");
       task.machine = machine;
       task.phase = "booting";
       task.updatedAt = new Date().toISOString();
       await this.pendingLaunchStore.put(task);
       this.store.bindPendingSessionNode(provisionalId, machine.nodeId);
-      this.startPendingRunner(provisionalId);
+      if (config.computeSource === "managed" && !managedCredentialsReady) {
+        await this.beginManagedCredentialSetup(provisionalId, machine.nodeId);
+      } else {
+        this.startPendingRunner(provisionalId);
+      }
     } catch (e) {
       const message = `Launch failed: ${(e as Error)?.message || e}`;
       task.logs.push(message);
@@ -1951,10 +2048,91 @@ export class AppController {
       task.updatedAt = new Date().toISOString();
       void this.pendingLaunchStore.put(task);
       if (this.pendingPrompt?.provisionalId === provisionalId) this.pendingPrompt = null;
+      if (e instanceof ManagedLaunchError && e.code === "managed_credentials_required") {
+        this.store.updateLaunchCheckpoint(provisionalId, "capacity", "waiting");
+        this.store.updateLaunchCheckpoint(provisionalId, "account", "failed", (e as Error).message);
+      } else {
+        this.failLaunchCheckpoint(provisionalId, message);
+      }
       this.store.failPendingSession(provisionalId);
-      if (this.store.getState().activeSession.activeSessionId === provisionalId) this.store.pushSystemMessage(`Setup · ${message}`);
-      this.store.setError(`Couldn't start ${config.name}: ${(e as Error)?.message || e}`);
+      const actions = e instanceof ManagedLaunchError ? e.actions : [];
+      this.store.setError(`Couldn't start ${config.name}: ${(e as Error)?.message || e}`, actions);
     }
+  }
+
+  private async prepareManagedCredential(agentId: string): Promise<boolean> {
+    const hostedReady = await this.managedCredentialReady().catch(() => false);
+    // Account readiness means the hosted snapshot contains at least one
+    // credential, not necessarily the one this draft's agent needs. Always
+    // check the requested provider before treating the snapshot as ready.
+    return await this.tryPublishManagedCredential(agentId, hostedReady) || hostedReady;
+  }
+
+  private async tryPublishManagedCredential(agentId: string, hostedReady: boolean): Promise<boolean> {
+    if (this.store.getState().connection.status !== "online") return false;
+    const provider = agentId.startsWith("codex")
+      ? "openai-codex"
+      : agentId.startsWith("claude")
+        ? "anthropic"
+        : null;
+    const candidate = this.store.getState().settings.credentialRecords.find(
+      (record) => record.sync === "account" && record.kind !== "reference"
+        && (!provider || record.provider === provider),
+    );
+    if (!candidate) return false;
+    // A granted credential is already part of a healthy filtered snapshot.
+    if (candidate.unattended && hostedReady) return true;
+    try {
+      // Sending an interactive Bivy Cloud task is the user's request to make
+      // their existing account-scoped model login available to that isolated
+      // Machine. A credential can predate Cloud and therefore be signed in but
+      // not yet granted/published. Grant it here instead of incorrectly opening
+      // the provider login flow and asking the user to authenticate again.
+      //
+      // Already-granted records can still lack a hosted snapshot (nodes from
+      // before publishing was introduced). Toggle those to advance the revision
+      // and invoke the node's existing encrypted hosted-vault publisher.
+      if (candidate.unattended) {
+        await this.setCredentialUnattended(candidate.provider, candidate.label, false);
+      }
+      const previousGeneration = (await managedCredentialStatus(this.local)).generation;
+      await this.setCredentialUnattended(candidate.provider, candidate.label, true);
+      await this.waitForManagedCredential(20_000, previousGeneration);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async beginManagedCredentialSetup(provisionalId: string, nodeId: string): Promise<void> {
+    const task = this.pendingLaunches.get(provisionalId);
+    if (!task) return;
+    task.phase = "credential-setup";
+    task.updatedAt = new Date().toISOString();
+    await this.pendingLaunchStore.put(task);
+    this.managedCredentialSetupNodes.add(nodeId);
+    this.managedCredentialReturnSessionId = provisionalId;
+    this.store.updateLaunchCheckpoint(provisionalId, "credentials", "active");
+    // Stay on the original provisional session route. Switching its bound node
+    // connects the regular interactive Machine without creating a fake session.
+    this.switchNode(nodeId);
+    await this.waitForOnline(120_000);
+    this.store.updateLaunchCheckpoint(provisionalId, "service", "done");
+    this.listProviders();
+    this.listCredentialRecords();
+    const provider = this.store.getState().settings.credentialRecords.find(
+      (record) => record.sync === "account" && record.kind !== "reference",
+    )?.provider ?? "anthropic";
+    this.store.setNeedsModelAuth({ nodeId, provider });
+  }
+
+  private failLaunchCheckpoint(provisionalId: string, message: string): void {
+    const progress = this.store.getState().sessionIndex.sessions.find((session) => session.sessionId === provisionalId)?.launchProgress;
+    const order: SessionLaunchCheckpointId[] = ["account", "capacity", "machine", "service", "credentials", "repository", "agent", "message"];
+    const id = order.find((checkpoint) => progress?.checkpoints[checkpoint]?.state === "active")
+      ?? order.find((checkpoint) => !progress?.checkpoints[checkpoint] || progress.checkpoints[checkpoint]?.state === "waiting")
+      ?? "message";
+    this.store.updateLaunchCheckpoint(provisionalId, id, "failed", message);
   }
 
   private openPendingLaunch(provisionalId: string, opts: { navigate?: boolean } = {}): void {
@@ -1963,7 +2141,6 @@ export class AppController {
     if (opts.navigate !== false) navigate({ kind: "session", id: provisionalId });
     this.store.beginOpen(provisionalId);
     this.store.addUserMessage(task.prompt.text, task.prompt.clientMessageId, task.prompt.attachments);
-    for (const line of task.logs) this.store.pushSystemMessage(`Setup · ${line}`);
     this.pendingPrompt = task.prompt;
   }
 
@@ -1978,7 +2155,6 @@ export class AppController {
       task.logs.push(message);
       task.updatedAt = new Date().toISOString();
       void this.pendingLaunchStore.put(task);
-      if (this.store.getState().activeSession.activeSessionId === provisionalId) this.store.pushSystemMessage(`Setup · ${message}`);
     };
     log("Machine accepted. Waiting for its secure Bivy service to come online…");
     this.startBootProgress(nodeId, provisionalId, log);
@@ -1996,7 +2172,9 @@ export class AppController {
       handlers: {
         onStatus: (status) => {
           if (status !== "online") return;
-          log(`${task.config.name} is online. Creating the session…`);
+          log(`${task.config.name} is online. Preparing credentials, repository, and agent…`);
+          this.store.updateLaunchCheckpoint(provisionalId, "service", "done");
+          this.store.updateLaunchCheckpoint(provisionalId, "credentials", "active");
           this.clearBootProgress(nodeId);
           void transport.send(task.prompt.frame);
         },
@@ -2005,8 +2183,28 @@ export class AppController {
             this.failPendingLaunch(provisionalId, String(event.error || "Session creation failed."));
             return;
           }
-          if (event.type !== "session.history" || event.requestId !== task.prompt.requestId || !event.sessionId) return;
-          void this.finishPendingLaunch(provisionalId, String(event.sessionId), transport);
+          if (event.type === "session.history" && event.requestId === task.prompt.requestId && event.sessionId) {
+            if (task.prompt.frame && "repo" in task.prompt.frame && task.prompt.frame.repo) {
+              this.store.updateLaunchCheckpoint(provisionalId, "repository", "done");
+            }
+            this.store.updateLaunchCheckpoint(provisionalId, "agent", "done");
+            this.store.updateLaunchCheckpoint(provisionalId, "message", "active");
+            void this.sendPendingLaunchPrompt(provisionalId, String(event.sessionId), transport);
+            return;
+          }
+          // Do not replace the provisional row or close this transport merely
+          // because session.new succeeded. The first prompt can still fail its
+          // credential/runtime preflight; keep ownership until the node confirms
+          // that exact user message, otherwise the prompt disappears and its
+          // subsequent session.error is lost with the temporary transport.
+          if (
+            event.type === "session.user_message" &&
+            task.promptSent &&
+            event.sessionId === task.sessionId &&
+            event.clientMessageId === task.prompt.clientMessageId
+          ) {
+            void this.finishPendingLaunch(provisionalId, String(task.sessionId), transport);
+          }
         },
         onError: (message) => {
           if (!/^node offline$/i.test(message.trim())) log(`Connection retry: ${message}`);
@@ -2017,11 +2215,44 @@ export class AppController {
     void transport.connect();
   }
 
+  private async sendPendingLaunchPrompt(provisionalId: string, sessionId: string, transport: Transport): Promise<void> {
+    const task = this.pendingLaunches.get(provisionalId);
+    if (!task || task.promptSending) return;
+    task.sessionId = sessionId;
+    task.promptSending = true;
+    if (this.store.getState().activeSession.activeSessionId === provisionalId) {
+      this.store.pushSystemMessage("Setup · Repository and agent are ready. Sending your prompt…");
+    }
+    try {
+      // Keep this retryable until session.user_message acknowledges the exact
+      // stable clientMessageId. A reconnect replays session.new (same requestId),
+      // receives history again, and safely resends this frame; node-side message
+      // dedupe prevents a duplicate turn. Merely resolving transport.send is not
+      // delivery confirmation and must not consume the preserved first prompt.
+      await transport.send({ kind: "prompt", sessionId, text: task.prompt.text, clientMessageId: task.prompt.clientMessageId, attachments: task.prompt.attachments });
+      task.promptSent = true;
+      task.updatedAt = new Date().toISOString();
+      await this.pendingLaunchStore.put(task);
+    } catch (error) {
+      task.logs.push(`First-message delivery retry: ${(error as Error)?.message || error}`);
+      task.updatedAt = new Date().toISOString();
+      await this.pendingLaunchStore.put(task);
+    } finally {
+      task.promptSending = false;
+      setTimeout(() => {
+        const current = this.pendingLaunches.get(provisionalId);
+        if (current && current.phase !== "failed" && current.sessionId === sessionId) {
+          void this.sendPendingLaunchPrompt(provisionalId, sessionId, transport);
+        }
+      }, 3_000);
+    }
+  }
+
   private async finishPendingLaunch(provisionalId: string, sessionId: string, transport: Transport): Promise<void> {
     const task = this.pendingLaunches.get(provisionalId);
     const nodeId = task?.machine?.nodeId;
     if (!task || !nodeId) return;
-    await transport.send({ kind: "prompt", sessionId, text: task.prompt.text, clientMessageId: task.prompt.clientMessageId, attachments: task.prompt.attachments });
+    this.store.updateLaunchCheckpoint(provisionalId, "message", "done");
     for (const followup of task.followups) {
       await transport.send({ kind: "prompt", sessionId, ...followup });
     }
@@ -2047,8 +2278,13 @@ export class AppController {
     task.phase = "failed";
     task.updatedAt = new Date().toISOString();
     void this.pendingLaunchStore.put(task);
+    if (/not available on this node|command not found|agent is not installed/i.test(message)) {
+      this.store.updateLaunchCheckpoint(provisionalId, "credentials", "done");
+      this.store.updateLaunchCheckpoint(provisionalId, "agent", "failed", message);
+    } else {
+      this.failLaunchCheckpoint(provisionalId, message);
+    }
     this.store.failPendingSession(provisionalId);
-    if (this.store.getState().activeSession.activeSessionId === provisionalId) this.store.pushSystemMessage(`Setup · Startup failed: ${message}`);
     this.store.setError(`Couldn't start ${task.config.name}: ${message}`);
   }
 
@@ -2078,7 +2314,7 @@ export class AppController {
       booting: "The machine booted and cloud-init started.",
       installing: "Cloud-init is installing Bivy…",
       starting: "Bivy is installed. Starting its secure service…",
-      ready: "Bivy reported ready.",
+      ready: "The secure Bivy service and encrypted credentials are ready.",
       failed: "Cloud-init reported that the Bivy install failed.",
     };
     const poll = async () => {
@@ -2090,6 +2326,10 @@ export class AppController {
         if (phase && phase !== this.bootstrapPhaseByNode.get(nodeId)) {
           this.bootstrapPhaseByNode.set(nodeId, phase);
           log(labels[phase] || `Bootstrap: ${phase}`);
+          if (phase === "ready") {
+            this.store.updateLaunchCheckpoint(provisionalId, "service", "done");
+            this.store.updateLaunchCheckpoint(provisionalId, "credentials", "done");
+          }
           if (phase === "failed") this.failPendingLaunch(provisionalId, labels.failed!);
         }
       } catch {
@@ -2107,10 +2347,18 @@ export class AppController {
     const launches = await this.pendingLaunchStore.list();
     for (const launch of launches) {
       this.pendingLaunches.set(launch.id, launch);
-      this.store.persistPendingSession(launch.id, launch.prompt.text, false);
+      this.store.persistPendingSession(launch.id, launch.prompt.text, false, launch.config.name, Date.parse(launch.createdAt) || Date.now());
       if (launch.machine?.nodeId && launch.phase !== "failed") {
+        this.store.updateLaunchCheckpoint(launch.id, "account", "done");
+        this.store.updateLaunchCheckpoint(launch.id, "capacity", "done");
+        this.store.updateLaunchCheckpoint(launch.id, "machine", "done");
+        this.store.updateLaunchCheckpoint(launch.id, "service", "active");
+        if (!launch.prompt.frame || !("repo" in launch.prompt.frame) || !launch.prompt.frame.repo) {
+          this.store.updateLaunchCheckpoint(launch.id, "repository", "skipped");
+        }
         this.store.bindPendingSessionNode(launch.id, launch.machine.nodeId);
-        this.startPendingRunner(launch.id);
+        if (launch.phase === "credential-setup") void this.beginManagedCredentialSetup(launch.id, launch.machine.nodeId);
+        else this.startPendingRunner(launch.id);
       } else if (launch.phase === "provisioning") {
         launch.phase = "failed";
         launch.logs.push("Startup was interrupted before the cloud provider confirmed the machine.");
@@ -2135,6 +2383,26 @@ export class AppController {
     await this.pendingLaunchStore.put(task);
     if (task.machine?.nodeId) this.startPendingRunner(id);
     else await this.launchDraftRunnerAndBind(id);
+  }
+
+  /** Preserve the pending prompt but replace a guest whose immutable image is
+   * missing an agent or otherwise cannot recover in place. */
+  async retryPendingLaunchOnFreshMachine(id: string): Promise<void> {
+    const task = this.pendingLaunches.get(id);
+    if (!task) return;
+    task.transport?.close();
+    task.transport = undefined;
+    const nodeId = task.machine?.nodeId;
+    if (nodeId) await this.destroyHostedMachine(nodeId).catch(() => {});
+    task.machine = undefined;
+    task.sessionId = undefined;
+    task.promptSent = false;
+    task.logs.push("Replacing the Cloud Machine and retrying the preserved first message…");
+    task.phase = "provisioning";
+    task.updatedAt = new Date().toISOString();
+    this.store.retryPendingSession(id);
+    await this.pendingLaunchStore.put(task);
+    await this.launchDraftRunnerAndBind(id);
   }
 
   async dismissPendingLaunch(id: string): Promise<void> {
@@ -2167,7 +2435,8 @@ export class AppController {
    *  refreshes it in the background instead of flashing a spinner. */
   listRepos(): void {
     if (this.store.getState().catalogs.repos.length === 0) this.store.setReposLoading(true);
-    if (!this.direct && this.signedIn && !this.local.cur) {
+    const managedDraft = this.store.getState().draft.ephemeralConfig?.computeSource === "managed";
+    if (!this.direct && this.signedIn && (!this.local.cur || managedDraft)) {
       void fetchHostedGithubRepositories(this.local)
         .then((repos) => this.store.apply({ type: "repos.list", repos, authed: true } as never))
         .catch((error) => this.store.apply({ type: "repos.list", repos: [], authed: false, error: String((error as Error)?.message || error) } as never));
@@ -2226,6 +2495,13 @@ export class AppController {
     const s = this.store.getState();
     const haveThisRepo = s.catalogs.branchesRepo === repo && s.catalogs.branches.length > 0;
     if (!haveThisRepo) this.store.setBranchesLoading(true);
+    const managedDraft = s.draft.ephemeralConfig?.computeSource === "managed";
+    if (!this.direct && this.signedIn && (!this.local.cur || managedDraft)) {
+      void fetchHostedGithubBranches(this.local, repo)
+        .then((branches) => this.store.apply({ type: "branches.list", repo, branches } as never))
+        .catch((error) => this.store.apply({ type: "branches.list", repo, branches: [], error: String((error as Error)?.message || error) } as never));
+      return;
+    }
     this.send({ kind: "branches.list", repo });
   }
 
@@ -2243,11 +2519,20 @@ export class AppController {
 
   listModels(): void {
     const s = this.store.getState();
-    const sessionId = s.activeSession.activeSessionId ?? undefined;
-    // On a draft, hint the agent we're previewing so the node answers for THAT
-    // runtime (and tags the reply for the per-runtime cache) even if its default
-    // runtime hasn't flipped yet. A live session answers for itself — no hint.
-    const runtimeId = sessionId ? undefined : (s.catalogs.selectedAgentId ?? undefined);
+    const activeId = s.activeSession.activeSessionId;
+    // A managed launch installs a provisional UI identity before session.new is
+    // accepted by the guest. Never send that placeholder as a real session id:
+    // the newly connected Machine correctly has no such session and would
+    // answer "Session not found" while it is still booting.
+    const provisional = activeId
+      ? s.sessionIndex.sessions.find((session) => session.sessionId === activeId)?.pendingLaunch === true
+      : false;
+    const sessionId = activeId && !provisional ? activeId : undefined;
+    // On a draft/provisional launch, hint the agent we're previewing so the node
+    // answers for THAT runtime. A live session answers for itself — no hint.
+    const runtimeId = sessionId
+      ? undefined
+      : (s.activeSession.activeRuntimeId ?? s.catalogs.selectedAgentId ?? undefined);
     this.send({ kind: "models.list", sessionId, runtimeId });
   }
 
@@ -2561,6 +2846,10 @@ export class AppController {
   /** Launched ephemeral node ids we've already run the first-run model-auth
    *  check for this session, so a reconnect doesn't re-schedule it. */
   private firstRunAuthNodes = new Set<string>();
+  /** Interactive Cloud Machines paused for provider setup before agent launch. */
+  private managedCredentialSetupNodes = new Set<string>();
+  private managedCredentialGrantInFlight = false;
+  private managedCredentialReturnSessionId: string | null = null;
   listEphemeralKeys(): Promise<ProviderKeyInfo[]> {
     return this.ephemeralKeys.list();
   }
@@ -2745,6 +3034,30 @@ export class AppController {
    * lands during the grace just means the prompt never shows (or briefly shows
    * then clears), never a wrong dead-end.
    */
+  private async maybeGrantManagedCredential(): Promise<void> {
+    const nodeId = this.local.cur;
+    if (!nodeId || !this.managedCredentialSetupNodes.has(nodeId) || this.managedCredentialGrantInFlight) return;
+    const candidate = this.store.getState().settings.credentialRecords.find(
+      (record) => record.sync === "account" && record.kind !== "reference" && !record.unattended,
+    );
+    if (!candidate) return;
+    this.managedCredentialGrantInFlight = true;
+    try {
+      await this.setCredentialUnattended(candidate.provider, candidate.label, true);
+      await this.waitForManagedCredential();
+      const returnId = this.managedCredentialReturnSessionId;
+      this.managedCredentialReturnSessionId = null;
+      if (returnId && this.pendingLaunches.has(returnId)) {
+        this.openPendingLaunch(returnId);
+        await this.retryPendingLaunch(returnId);
+      }
+    } catch (error) {
+      this.store.setError(error instanceof Error ? error.message : String(error));
+    } finally {
+      this.managedCredentialGrantInFlight = false;
+    }
+  }
+
   private async maybePromptFirstRunModelAuth(): Promise<void> {
     if (!EPHEMERAL_MACHINES_ENABLED || this.direct) return;
     const nodeId = this.local.cur;
@@ -2840,6 +3153,7 @@ export class AppController {
       setupId: machine.setupId,
       machineId: machine.id,
       app: machine.app,
+      computeSource: machine.computeSource,
     };
     try {
       const { base, auth } = this.correlationApi();

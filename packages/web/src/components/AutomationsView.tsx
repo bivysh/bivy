@@ -1957,6 +1957,7 @@ function AutomationEditor({
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState<{ url: string; secret: string; name: string } | null>(null);
   const [allowDangerous, setAllowDangerous] = useState(false);
+  const [managedTarget, setManagedTarget] = useState<Awaited<ReturnType<typeof controller.managedAutomationTarget>> | null>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setD((prev) => ({ ...prev, [k]: v }));
   const preflight = useAutomationPreflight(d.id || undefined);
@@ -1964,12 +1965,20 @@ function AutomationEditor({
   const tzList = useMemo(() => timezoneOptions(d.timezone), [d.timezone]);
   const cronHuman = useMemo(() => describeCron(d.cron), [d.cron]);
   const selectedNode = state.connection.nodes.find((n) => n.id === d.nodeId);
+  const selectedManaged = Boolean(managedTarget && d.nodeId === managedTarget.nodeId);
   const selectedNodeHasKey = Boolean(d.nodeId && controller.local.keys()[d.nodeId]);
   const pairedNodes = state.connection.nodes.filter((n) => Boolean(controller.local.keys()[n.id]));
   const pick = d.hasTrigger ? matchTriggerPick(d) : null;
   const canEditTrigger = !d.id;
 
   useEffect(() => { setD(initial); }, [initial]);
+  useEffect(() => {
+    if (!EPHEMERAL_MACHINES_ENABLED || controller.direct || !controller.signedIn) return;
+    controller.managedAutomationTarget().then((target) => {
+      controller.local.addKey(target.nodeId, target.roomKey);
+      setManagedTarget(target);
+    }).catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!pickerOpen) return;
@@ -1979,6 +1988,16 @@ function AutomationEditor({
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
   }, [pickerOpen]);
+
+  async function chooseRunner(nodeId: string) {
+    set("nodeId", nodeId);
+    if (!managedTarget || nodeId !== managedTarget.nodeId) return;
+    try {
+      await controller.setQueueRouting({ primary: { kind: "config", configId: managedTarget.config.id } });
+    } catch (cause) {
+      setError(String((cause as Error)?.message || cause));
+    }
+  }
 
   function onNlChange(value: string) {
     set("nlText", value);
@@ -2051,7 +2070,7 @@ function AutomationEditor({
       trigger: d.trigger,
       enabled: true,
       templateCiphertext,
-      nodeLabel: selectedNode?.name ? `bivy/${selectedNode.name}` : undefined,
+      nodeLabel: selectedManaged ? undefined : selectedNode?.name ? `bivy/${selectedNode.name}` : undefined,
       runtimeId: d.runtimeId.trim() || undefined,
       model: d.model.trim() || undefined,
       approvalMode: d.approvalMode,
@@ -2075,7 +2094,10 @@ function AutomationEditor({
       const roomKey = d.nodeId ? controller.local.keys()[d.nodeId] : undefined;
       if (!d.nodeId || !roomKey) throw new Error("Connect to the assigned machine before saving encrypted instructions.");
       const encrypted = await seal(await importRoomKey(unb64url(roomKey)), d.instructions.trim());
-      const nodeName = selectedNode?.name;
+      const nodeName = selectedManaged ? undefined : selectedNode?.name;
+      if (selectedManaged && managedTarget) {
+        await controller.setQueueRouting({ primary: { kind: "config", configId: managedTarget.config.id } });
+      }
       const repo = d.repo.trim();
       const labels = d.labels.split(/[,\n]/).map((value) => value.trim()).filter(Boolean);
       const repos = d.repos.split(/[,\n]/).map((value) => value.trim()).filter(Boolean);
@@ -2429,20 +2451,23 @@ function AutomationEditor({
                   <label className="autom-runner-select-row">
                     <span className="autom-runner-icon" aria-hidden="true">⌁</span>
                     <span className="autom-runner-select-copy">
-                      <strong>{selectedNode ? String(selectedNode.name || selectedNode.id) : "Choose a paired machine"}</strong>
+                      <strong>{selectedManaged ? "Bivy Cloud" : selectedNode ? String(selectedNode.name || selectedNode.id) : "Choose a paired machine"}</strong>
                       <span>
-                        {selectedNode
-                          ? `${selectedNode.online ? "Online" : "Offline — the run will wait or use your configured fallback"}${selectedNodeHasKey ? " · encryption ready" : " · key missing on this device"}`
-                          : "The instructions are encrypted before they leave this device."}
+                        {selectedManaged
+                          ? "Starts an isolated managed Machine when this automation fires · encryption ready"
+                          : selectedNode
+                            ? `${selectedNode.online ? "Online" : "Offline — the run will wait or use your configured fallback"}${selectedNodeHasKey ? " · encryption ready" : " · key missing on this device"}`
+                            : "The instructions are encrypted before they leave this device."}
                       </span>
                     </span>
-                    <select className="autom-inline-select" value={d.nodeId} onChange={(e) => set("nodeId", e.target.value)} aria-label="Run on machine">
+                    <select className="autom-inline-select" value={d.nodeId} onChange={(e) => void chooseRunner(e.target.value)} aria-label="Run on machine">
                       <option value="">Select…</option>
+                      {managedTarget && <option value={managedTarget.nodeId}>Bivy Cloud · managed</option>}
                       {state.connection.nodes.map((n) => {
                         const hasKey = Boolean(controller.local.keys()[n.id]);
                         return <option key={n.id} value={n.id}>{String(n.name || n.id)}{hasKey ? n.online ? " · online" : " · offline" : " · key unavailable"}</option>;
                       })}
-                      {d.nodeId && !state.connection.nodes.some((n) => n.id === d.nodeId) && <option value={d.nodeId}>{d.nodeId} · unavailable</option>}
+                      {d.nodeId && !selectedManaged && !state.connection.nodes.some((n) => n.id === d.nodeId) && <option value={d.nodeId}>{d.nodeId} · unavailable</option>}
                     </select>
                   </label>
                   {!selectedNodeHasKey && (
@@ -2454,7 +2479,9 @@ function AutomationEditor({
                   )}
                 </div>
                 <p className="settings-hint">
-                  Persistent machine: runs there whenever it is online. Ephemeral-only setup: pair once to establish encryption, then set an isolated profile as the default or fallback under <strong>Runs → Queue routing</strong>. Cloud and model sign-ins are separate and are injected only when the runner starts.
+                  {selectedManaged
+                    ? "Bivy Cloud starts on demand for this account's queued work and adopts this automation's E2E encryption identity. Model and GitHub credentials are injected only when the managed runner starts."
+                    : <>Persistent machine: runs there whenever it is online. An isolated fallback can be configured under <strong>Runs → Queue routing</strong>. Cloud and model sign-ins are separate and injected only when that runner starts.</>}
                 </p>
               </div>
 

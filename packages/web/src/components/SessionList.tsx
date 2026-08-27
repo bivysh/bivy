@@ -541,7 +541,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
           const groupHeading = group !== previousGroup
             ? <li className="session-group-label" role="separator">{group}</li>
             : null;
-          const meta = sessionMeta(s, nodeName(s.nodeId));
+          const meta = sessionMeta(s, nodeName(s.nodeId) || s.pendingNodeName || null);
           const label = statusLabel(s);
           const src = classifySource(s.source);
           // A one-word exception hint on failed / waiting-on-you runs, so those

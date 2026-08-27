@@ -177,7 +177,11 @@ export function Composer({
   const currentCaps = currentRuntime?.capabilities as
     | { modelSelection?: boolean; commands?: SlashCommand[] }
     | undefined;
-  const modelSelectable = currentCaps?.modelSelection !== false;
+  // A Cloud draft has no destination catalog until its Machine starts. Never
+  // present the connected personal Machine's model list as if it belonged to
+  // that future runner; it may contain models or credentials Cloud cannot use.
+  const destinationCatalogPending = !state.activeSession.activeSessionId && Boolean(state.draft.ephemeralConfig);
+  const modelSelectable = !destinationCatalogPending && currentCaps?.modelSelection !== false;
   // The active agent's own slash commands (e.g. Claude Code's `/compact`). These
   // are advertised PER SESSION (session.created / session.capabilities → the
   // store's commandsBySession), so we read the *active session's* set — never a
@@ -516,7 +520,9 @@ export function Composer({
     requestAnimationFrame(autosize);
   }
 
-  const modelLabel = state.catalogs.currentModel?.label || state.catalogs.currentModel?.id || "Default";
+  const modelLabel = destinationCatalogPending
+    ? "Default"
+    : state.catalogs.currentModel?.label || state.catalogs.currentModel?.id || "Default";
   // The repo pill also carries the chosen remote branch (#466) — picked from
   // the arrow on a repo row in the repo picker, not a separate pill. A blank
   // branch means "the repo's default branch", so we only append "@ <branch>"
@@ -545,11 +551,10 @@ export function Composer({
       : state.settings.nodeSettings?.defaultSandbox ?? "";
   const sandboxTitle = draftTier ? draftTier.hint : "Sandbox mode for this session (machine default)";
   const canSend = !disabled && (Boolean(text.trim()) || attachments.length > 0);
-  // B2 — a first session exposes exactly four decisions: machine, repo,
-  // agent/model, protection. On a draft we render a single explicit summary of
-  // them (the machine otherwise lives only in the topbar switcher), so a new user
-  // sees the whole decision set at a glance rather than inferring it from pills.
-  const machineLabel = state.connection.nodes.find((n) => n.id === state.connection.currentNodeId)?.name
+  // A draft renders a compact summary of its session choices; the actual
+  // controls remain in their stable positions around the composer.
+  const machineLabel = state.draft.ephemeralConfig?.name
+    || state.connection.nodes.find((n) => n.id === state.connection.currentNodeId)?.name
     || (controller.direct ? "This machine" : "Default machine");
   const firstSessionLine = firstSessionSummary({
     machine: machineLabel,
@@ -560,24 +565,15 @@ export function Composer({
     protection: sandboxLabel || state.draft.sandbox || undefined,
   });
   const firstIsolatedRun = isDraft && Boolean(state.draft.ephemeralConfig);
-  const starterTask = "Inspect this repository and explain how to run its tests. Do not change files.";
 
   return (
     <>
       {isDraft && (
-        <div className="composer-first-session" title="A first session decides just four things: machine, repository, agent/model, and protection.">
+        <div
+          className="composer-first-session"
+          title="Machine, repository, agent, model, and protection for this session"
+        >
           Starting on <span className="fs-decisions">{firstSessionLine}</span>
-        </div>
-      )}
-      {firstIsolatedRun && !text.trim() && attachments.length === 0 && (
-        <div className="composer-starter" role="note">
-          <div>
-            <strong>Start with a safe read-only task</strong>
-            <span>Verify the Machine, repository, agent, and model before asking it to edit code.</span>
-          </div>
-          <button type="button" className="btn small" onClick={() => setText(starterTask)}>
-            Use starter task
-          </button>
         </div>
       )}
       {isDraft && (
@@ -792,7 +788,7 @@ export function Composer({
                 className="pill model-pill"
                 onClick={() => { if (modelSelectable) setPicker("model"); }}
                 disabled={!modelSelectable}
-                title={modelSelectable ? "Model" : "This agent uses its own default model"}
+                title={modelSelectable ? "Model" : destinationCatalogPending ? "Model options load when Bivy Cloud starts" : "This agent uses its own default model"}
               >
                 <span className="pill-glyph"><ModelGlyph /></span>
                 <span className="pill-label">{modelLabel}</span>
