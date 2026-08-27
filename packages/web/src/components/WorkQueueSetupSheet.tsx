@@ -104,6 +104,8 @@ export function WorkQueueSetupSheet({
   const appEditorRef = useRef<HTMLDivElement>(null);
   const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
   const [disconnectErr, setDisconnectErr] = useState<string | null>(null);
+  const [centralBusy, setCentralBusy] = useState(false);
+  const [centralError, setCentralError] = useState<string | null>(null);
   const [triggerAccess, setTriggerAccess] = useState<"everyone" | "contributor" | "collaborator">("everyone");
   const [savingAccess, setSavingAccess] = useState(false);
   const [accessMsg, setAccessMsg] = useState<string | null>(null);
@@ -174,6 +176,18 @@ export function WorkQueueSetupSheet({
   const anyServed = apps.some((a) => a.hosted || a.servedBy?.online);
   const hostedReady = Boolean(hosted?.execution.ready);
   const readyToRun = apps.length > 0 && anyInstalled && (hostedReady || anyServed || apps.some((a) => a.servedBy));
+
+  async function addCentralInstallation() {
+    setCentralBusy(true);
+    setCentralError(null);
+    try {
+      const next = await controller.createCentralGithubInstall("/automations");
+      window.location.assign(next.installUrl);
+    } catch (error) {
+      setCentralError(String((error as Error)?.message || error));
+      setCentralBusy(false);
+    }
+  }
 
   async function saveDefaultNode() {
     setSavingNode(true);
@@ -531,7 +545,16 @@ export function WorkQueueSetupSheet({
                         {entry.mention && (
                           <span className="settings-hint">Trigger with <code>@{entry.mention}</code></span>
                         )}
-                        {entry.installed === false ? (
+                        {entry.central ? (
+                          <>
+                            <span className="settings-hint">
+                              Hosted Bivy App · {(entry.installations ?? []).map((installation) => installation.githubAccount).filter(Boolean).join(", ") || "installed"}
+                            </span>
+                            <button type="button" className="btn link" disabled={centralBusy} onClick={() => void addCentralInstallation()}>
+                              {centralBusy ? "Opening GitHub…" : "Add another account or organization →"}
+                            </button>
+                          </>
+                        ) : entry.installed === false ? (
                           <p className="schedule-hint warn">
                             Not installed on any repo yet.{" "}
                             <a href={installHref(entry)} target="_blank" rel="noreferrer">Install it now →</a>
@@ -557,7 +580,7 @@ export function WorkQueueSetupSheet({
                             {entry.servedBy.online ? "" : " (offline)"}.
                           </span>
                         )}
-                        <div className="row-actions" style={{ marginTop: 6 }}>
+                        {!entry.central && <div className="row-actions" style={{ marginTop: 6 }}>
                           <button
                             type="button"
                             className="btn sm danger-ghost"
@@ -566,12 +589,12 @@ export function WorkQueueSetupSheet({
                           >
                             {disconnectingId === appKey(entry) ? "Disconnecting…" : "Disconnect"}
                           </button>
-                        </div>
+                        </div>}
                       </div>
                     </div>
                   ))}
 
-                  {disconnectErr && <p className="settings-error">{disconnectErr}</p>}
+                  {(disconnectErr || centralError) && <p className="settings-error">{disconnectErr || centralError}</p>}
 
                   <div className="settings-field" style={{ marginTop: 4 }}>
                     <label className="field-label" htmlFor="wq-default-node">Default machine for untagged work</label>
@@ -616,7 +639,7 @@ export function WorkQueueSetupSheet({
 
                   {!addAppOpen ? (
                     <button type="button" className="btn sm" onClick={() => { setAddAppOpen(true); setShowExisting(false); setCeApp(null); }}>
-                      + Add another GitHub App
+                      + Connect another custom GitHub App
                     </button>
                   ) : (
                     <div ref={appEditorRef} className="card wq-status-card" data-tone="muted" style={{ marginTop: 4 }}>

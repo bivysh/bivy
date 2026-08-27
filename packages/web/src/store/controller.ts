@@ -14,6 +14,8 @@ import {
   createLocalStore,
   consumeLinkPayload,
   fetchAccountNodes,
+  fetchCentralGithubApp,
+  createCentralGithubInstall,
   fetchAccountSessions,
   fetchMe,
   invokeAccountExtensionAction,
@@ -806,6 +808,9 @@ export class AppController {
   listNodes(): Promise<AccountNode[]> {
     return fetchAccountNodes(this.local);
   }
+
+  centralGithubApp() { return fetchCentralGithubApp(this.local); }
+  createCentralGithubInstall(returnPath = "/") { return createCentralGithubInstall(this.local, returnPath); }
 
   /** Pick a node and connect to it over the relay (initial selection). */
   selectNode(nodeId: string): void {
