@@ -113,7 +113,7 @@ key to encrypt that credential at rest. Until then the toggle is disabled and th
 profile shows *"Not available yet: this Bivy server has no encryption key for
 stored credentials"* — this is a **server-side setting, not something in the app**.
 
-There is no UI for it. Set one environment variable on the control plane:
+There is no UI for it. The default `env` keyring source uses one environment variable on the control plane:
 
 ```bash
 # 1. Generate a 32-byte master key
@@ -258,22 +258,65 @@ docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d control
 
 (The `DATABASE_URL` in the compose file is derived from `POSTGRES_PASSWORD`, so you only edit the one variable.)
 
-### `HOSTED_CREDENTIAL_KEY` (encrypted credential storage)
+### Hosted credential keyring (encrypted credential storage)
 
-Only relevant if you enabled [offline automations](#offline-automations-encrypted-credential-storage). Every stored envelope records the id of the key it was sealed with, so you can introduce a new key without breaking existing ciphertext:
+Only relevant if you enabled [offline automations](#offline-automations-encrypted-credential-storage). Every stored envelope records the id of the data key that sealed it. **Never remove an id while any database envelope still references it.** Source errors make hosted-credential endpoints unavailable (503); an `aws-kms` selection never falls back to env keys.
 
-1. Generate a new key: `openssl rand -base64 32`
-2. Switch `deploy/.env` to the keyring form. The old single key keeps the id `default`; give the new one any id and mark it primary:
+#### Rotate the env source
+
+1. Generate a new key: `openssl rand -base64 32`.
+2. Switch `deploy/.env` to the keyring form. The old single key keeps id `default`:
    ```env
+   HOSTED_KEYRING_SOURCE=env
    HOSTED_CREDENTIAL_KEYS=v2:<NEW_KEY>,default:<OLD_KEY>
    HOSTED_CREDENTIAL_KEY_PRIMARY=v2
-   # HOSTED_CREDENTIAL_KEY=   (remove or leave blank)
+   # remove HOSTED_CREDENTIAL_KEY
    ```
-3. Restart the control plane (`... up -d control-plane`). New writes are sealed under `v2`; old ciphertext still decrypts under `default`.
-4. Re-seal each account's stored credentials under the new primary — a signed-in device calls `POST /account/hosted-provisioning/rotate` (`rotateHostedProvisioning` in `packages/core`); the response's `keyId` shows the key now in use, and the account's hosted audit log records `credential_rotated`.
-5. Once no envelope references `default` any more, drop it from `HOSTED_CREDENTIAL_KEYS` and restart again.
+3. Restart the control plane. New writes use `v2`; old envelopes still open with `default`.
+4. For each account, have a signed-in device call `POST /account/hosted-provisioning/rotate`. Confirm the response `keyId` and `credential_rotated` audit event.
+5. After verifying no envelope references `default`, remove that entry and restart.
 
-Never delete a key that still has ciphertext sealed under it — those credentials become unrecoverable and the account has to re-enter them.
+#### Use and rotate the AWS KMS source
+
+The control plane makes a dependency-free, SigV4-signed KMS `Decrypt` call at boot. KMS protects **encrypted 32-byte data-key blobs**; plaintext data keys exist only in control-plane memory. Its IAM identity needs `kms:Decrypt` on the configured key. Standard `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and optional `AWS_SESSION_TOKEN` supply credentials (prefer your platform's short-lived injected credentials where available).
+
+Create the first blob with the AWS CLI (`CiphertextBlob` is already base64):
+
+```bash
+aws kms generate-data-key --key-id alias/bivy-hosted --key-spec AES_256 \
+  --query CiphertextBlob --output text
+```
+
+Discard the command's plaintext output if you did not query only `CiphertextBlob`, then configure:
+
+```env
+HOSTED_KEYRING_SOURCE=aws-kms
+BIVY_HOSTED_KEY_KMS_REGION=us-east-1
+BIVY_HOSTED_KEY_KMS_KEY_ID=alias/bivy-hosted
+BIVY_HOSTED_KEY_KMS_CIPHERTEXT=v1:<BASE64_CIPHERTEXT_BLOB>
+HOSTED_CREDENTIAL_KEY_PRIMARY=v1
+```
+
+Restart and check for `[hosted-keyring] loaded AWS KMS keyring`; any KMS/configuration error instead logs one clear fail-closed line.
+
+To rotate the **data key**, generate another blob under the same KMS key and retain both while re-sealing:
+
+```env
+BIVY_HOSTED_KEY_KMS_CIPHERTEXT=v2:<NEW_BLOB>,v1:<OLD_BLOB>
+HOSTED_CREDENTIAL_KEY_PRIMARY=v2
+```
+
+Restart, invoke each account's rotation endpoint, verify no envelope references `v1`, then remove `v1`. Rotating/re-wrapping the KMS customer-managed key itself is an AWS operation and does not change envelope `kid`s as long as KMS can still decrypt each configured blob.
+
+#### Migrate env → AWS KMS without losing ciphertext
+
+1. Stop writes or use a maintenance window. Base64-decode every current env data key to a temporary mode-`600` binary file.
+2. Encrypt each file with `aws kms encrypt --key-id alias/bivy-hosted --plaintext fileb://KEY.bin --query CiphertextBlob --output text`, preserving its existing `kid` (`default`, `v1`, etc.). Securely delete the plaintext files.
+3. Configure `HOSTED_KEYRING_SOURCE=aws-kms` and list the resulting `kid:<blob>` entries in `BIVY_HOSTED_KEY_KMS_CIPHERTEXT`; keep the same primary id initially. Remove `HOSTED_CREDENTIAL_KEY[S]` so plaintext keys are no longer present.
+4. Restart and verify readiness plus a decrypt/read of existing hosted configuration. Because the `kid` and underlying 32 bytes are unchanged, no envelope rewrite is needed for the source migration.
+5. Optionally perform the KMS data-key rotation procedure above to move to a newly generated data key.
+
+Keep the KMS blobs and KMS key recoverable with the database backup. Losing either makes the corresponding credentials unrecoverable.
 
 ### Provider credentials (optional features)
 
