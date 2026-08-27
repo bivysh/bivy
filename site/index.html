@@ -4,16 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Bivy — Agent workspace for machines you own</title>
-  <meta name="description" content="Bivy is an open-source agent workspace for coding agents on your own machines: live Sessions, unattended Runs, Automations, routing, checks, and Receipts across Claude Code, Codex, Pi, OpenCode, and more.">
+  <meta name="description" content="Bivy is an open-source agent workspace for coding agents on your own machines: live Sessions, Automations, routing, checks, and Receipts across Claude Code, Codex, Pi, OpenCode, and more.">
   <meta name="theme-color" content="#fbfaf8">
   <meta property="og:title" content="Bivy — Agent workspace for machines you own">
-  <meta property="og:description" content="Run coding agents where real work lives — then use live Sessions, unattended Runs, Automations, checks, and Receipts from terminal, browser, or phone.">
+  <meta property="og:description" content="Run coding agents where real work lives — then use live Sessions, Automations, checks, and Receipts from terminal, browser, or phone.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://bivy.sh">
   <meta property="og:image" content="https://bivy.sh/screenshots/app-session.png">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Bivy — Agent workspace for machines you own">
-  <meta name="twitter:description" content="Run coding agents where real work lives — live Sessions, unattended Runs, Automations, checks, and Receipts across your machines.">
+  <meta name="twitter:description" content="Run coding agents where real work lives — live Sessions, Automations, checks, and Receipts across your machines.">
   <meta name="twitter:image" content="https://bivy.sh/screenshots/app-session.png">
   <link rel="icon" href="./tent.svg">
   <link rel="icon" type="image/png" href="./tent.png">
@@ -448,8 +448,8 @@
       <p class="lede">
         Bivy turns your workstations and servers into an open-source agent workspace.
         Start Claude Code, Codex, Pi, OpenCode, or another agent where your repo and
-        tools already live; continue from phone or browser; queue unattended Runs from
-        issues, CI, schedules, or webhooks; and review checks, diffs, PRs, and Receipts
+        tools already live; continue from phone or browser; automate work from issues,
+        CI, schedules, or webhooks; and review checks, diffs, PRs, and Receipts
         before you trust the result.
       </p>
 
@@ -468,7 +468,7 @@
 
       <div class="hero-cta">
         <a href="https://app.bivy.sh" class="btn btn-primary">Start free</a>
-        <a href="#github" class="btn btn-ghost">See Runs &amp; automations</a>
+        <a href="#github" class="btn btn-ghost">See automations</a>
       </div>
 
       <p class="sub" style="margin:22px 0 0">
@@ -497,13 +497,13 @@
   <section id="app">
     <div class="wrap">
       <p class="kicker">The app</p>
-      <h2>One surface for live Sessions and background Runs.</h2>
+      <h2>One surface for live Sessions and Automations.</h2>
       <p class="prose">
         The phone/browser app is the place you check in, but it is not just a remote
         terminal. Open a live Session to read the transcript, scan diffs, answer a
         question, approve the tool it is waiting on, attach a screenshot, or take over in a
-        real terminal. Open a Run to see the source event, routing, attempts, checks,
-        branch, PR, artifacts, and Receipt. The work keeps happening on your Machine.
+        real terminal. Open an Automation to see the source event, routing, attempts,
+        checks, branch, PR, artifacts, and Receipt. The work keeps happening on your Machine.
       </p>
 
       <div class="app-split">
@@ -589,7 +589,7 @@
       <p class="kicker">What Bivy adds</p>
       <h2>The machine-native workspace around agents you already use.</h2>
       <p class="prose">Bivy does not replace agent CLIs. It runs them where real work lives
-      and adds the system layer around them: live Sessions, unattended Runs, routing,
+      and adds the system layer around them: live Sessions, Automations, routing,
       checks, Receipts, approvals, and recovery.</p>
 
       <div class="pillars">
@@ -608,7 +608,7 @@
           over in a real terminal when chat is not enough.</p>
         </div>
         <div class="pillar">
-          <p class="eyebrow">Checked Runs</p>
+          <p class="eyebrow">Checked Automations</p>
           <h3>Turn prompts and events into accountable background work</h3>
           <p>Queue work from the app, GitHub, Linear, Slack, CI, schedules, or signed
           webhooks. Bivy routes it to the right Machine, agent, model, sandbox, and attempt
@@ -639,8 +639,8 @@
         <div class="feature">
           <h3>Automations with a Session behind every job</h3>
           <p>Label an issue, route a failed CI job, or send a signed webhook. The work is
-          not an opaque cloud task: Bivy creates a Run with a live Session you can open if
-          it gets stuck, needs approval, or produces a change you want to inspect.</p>
+          not an opaque cloud task: Bivy creates a live Session you can open if it gets
+          stuck, needs approval, or produces a change you want to inspect.</p>
         </div>
         <div class="feature">
           <h3>Terminal takeover</h3>
@@ -762,8 +762,8 @@
   <!-- RUNS -->
   <section id="github">
     <div class="wrap">
-      <p class="kicker">Unattended Runs</p>
-      <h2>Automations with a live session behind every job.</h2>
+      <p class="kicker">Automations</p>
+      <h2>A live session behind every job.</h2>
       <p class="prose">
         Queue work from issues, CI, schedules, Slack, Linear, or signed webhooks. Work
         happens on a Machine you control, with its local toolchain and credentials. If the
@@ -778,7 +778,7 @@
           run on a schedule, or send a signed webhook.</span>
         </li>
         <li>
-          <b>Bivy queues and routes the Run</b>
+          <b>Bivy queues and routes the job</b>
           <span>The control plane verifies the event, de-duplicates redeliveries, and picks
           the configured Machine, agent, model, sandbox, approval mode, and attempt limit.</span>
         </li>
@@ -795,8 +795,8 @@
       </ol>
 
       <p class="upgrade-line">
-        Runs are free to start — they draw from your 10 runs a week, shared across every
-        source. Go <a href="#pricing">Pro — $15/mo</a> for unlimited runs.
+        Automations are free to start — they draw from your 10 runs a week, shared across
+        every source. Go <a href="#pricing">Pro — $15/mo</a> for unlimited runs.
       </p>
     </div>
   </section>
@@ -958,7 +958,7 @@
           <summary>What is Bivy?</summary>
           <p>Bivy is an open-source agent workspace for machines you control. It runs coding
           agents in your real environments, lets you steer live Sessions from terminal,
-          browser, or phone, and turns events into checked unattended Runs with visible
+          browser, or phone, and turns events into checked Automations with visible
           outcomes and Receipts. Bivy Cloud is the hosted app and relay for people who do
           not want to run the control plane themselves.</p>
         </details>
