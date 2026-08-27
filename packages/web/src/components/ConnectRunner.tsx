@@ -9,9 +9,9 @@ import { installCommand } from "../installCommand.js";
 import { controller } from "../store/useStore.js";
 
 /**
- * The "no runner connected" onboarding screen shown on a fresh session before a
- * node is selected. Presents the two ways to get a runner online — install on
- * your own machine, or (when enabled) spin up an ephemeral cloud server — plus,
+ * The "no Machine connected" onboarding screen shown on a fresh session before a
+ * node is selected. Presents the two ways to get a Machine online — install on
+ * your own computer, or (when enabled) spin up an ephemeral cloud server — plus,
  * when the account already has enrolled nodes, a list of them: picking one opens
  * a new session on that node. A live "waiting to connect" indicator sits at the
  * bottom.
@@ -29,11 +29,11 @@ export function ConnectRunner({
   onEphemeral: () => void;
   onRefresh: () => void;
 }) {
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<"auto" | "plain" | null>(null);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Hosted: the one-line installer. Self-hosted: point `bivy setup` at this
   // deployment, since only bivy.sh serves install.sh (see installCommand.ts).
-  const install = installCommand(location.origin, controller.local.relay);
+  const install = installCommand(location.origin, controller.local.relay, controller.local.s);
 
   useEffect(() => () => {
     if (copyTimer.current) clearTimeout(copyTimer.current);
@@ -44,12 +44,12 @@ export function ConnectRunner({
   // isn't offered here as if it were a regular enrolled node.
   const persistentNodes = nodes.filter((n) => !n.id.startsWith("eph-"));
 
-  const copyCommand = async () => {
-    const ok = await writeClipboard(install.command);
+  const copyCommand = async (command: string, kind: "auto" | "plain") => {
+    const ok = await writeClipboard(command);
     if (!ok) return;
-    setCopied(true);
+    setCopied(kind);
     if (copyTimer.current) clearTimeout(copyTimer.current);
-    copyTimer.current = setTimeout(() => setCopied(false), 1800);
+    copyTimer.current = setTimeout(() => setCopied(null), 1800);
   };
 
   return (
@@ -62,12 +62,12 @@ export function ConnectRunner({
             <path d="M7 8h.01M7 17h.01" />
           </svg>
         </span>
-        <div className="connect-kicker">Signed in — one step left</div>
-        <h2 className="connect-title" id="connect-runner-title">Choose where your first agent runs</h2>
+        <div className="connect-kicker">Signed in — connect a Machine</div>
+        <h2 className="connect-title" id="connect-runner-title">Choose where your agent runs</h2>
         <p className="connect-sub">
-          Use a trusted workstation you control, or launch an isolated Machine
-          in your cloud account. Interactive traffic stays end-to-end encrypted;
-          any optional hosted credential custody is disclosed before you enable it.
+          {ephemeralEnabled
+            ? "Start on a trusted workstation with your real repo, services, and warm caches, or launch an isolated Machine in your cloud account. Interactive traffic stays end-to-end encrypted; any optional hosted credential custody is disclosed before you enable it."
+            : "Connect a trusted workstation with your real repo, services, and warm caches. Interactive traffic stays end-to-end encrypted between your Machine and your devices."}
         </p>
       </div>
 
@@ -81,10 +81,11 @@ export function ConnectRunner({
               </svg>
             </span>
             <div className="connect-option-copy">
-              <h3>Set up a trusted workstation</h3>
+              <h3>Connect your workstation</h3>
               <p>
-                Run one command on your Mac or Linux computer for persistent, always-ready work.
-                {!install.hosted && " Needs Node.js 22.19 or newer; setup will point the machine at this control plane."}
+                Run one command on your Mac or Linux computer to use the environment where your work already lives.
+                {install.authenticated && " It will connect to this same account automatically."}
+                {!install.hosted && " Needs Node.js 22.19 or newer; setup will point the Machine at this control plane."}
               </p>
             </div>
           </div>
@@ -92,11 +93,11 @@ export function ConnectRunner({
             <code>{install.command}</code>
             <button
               type="button"
-              className={`connect-copy${copied ? " is-copied" : ""}`}
-              onClick={copyCommand}
-              aria-label={copied ? "Command copied" : "Copy install command"}
+              className={`connect-copy${copied === "auto" ? " is-copied" : ""}`}
+              onClick={() => copyCommand(install.command, "auto")}
+              aria-label={copied === "auto" ? "Command copied" : "Copy auto sign-in install command"}
             >
-              {copied ? (
+              {copied === "auto" ? (
                 <>
                   <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                     <path d="m20 6-11 11-5-5" />
@@ -109,16 +110,26 @@ export function ConnectRunner({
                     <rect x="9" y="9" width="11" height="11" rx="2" />
                     <path d="M5 15V5a2 2 0 0 1 2-2h10" />
                   </svg>
-                  Copy
+                  {install.authenticated ? "Copy auto sign-in" : "Copy"}
                 </>
               )}
             </button>
           </div>
-          {install.hosted && (
-            <a className="connect-option-link" href="/install.sh">
-              Prefer a file? Download the installer
-            </a>
+          {install.authenticated && (
+            <p className="connect-token-note">Auto sign-in includes an account token. Paste it only into a Machine you trust, or use the plain install instead.</p>
           )}
+          <div className="connect-option-links">
+            {install.authenticated && (
+              <button type="button" className="btn link" onClick={() => copyCommand(install.plainCommand, "plain")}>
+                {copied === "plain" ? "Plain command copied" : "Copy plain install instead"}
+              </button>
+            )}
+            {install.hosted && (
+              <a className="connect-option-link" href="/install.sh">
+                Prefer a file? Download the installer
+              </a>
+            )}
+          </div>
         </div>
 
         {ephemeralEnabled && (
@@ -131,12 +142,12 @@ export function ConnectRunner({
                 </svg>
               </span>
               <div className="connect-option-copy">
-                <h3>Set up an isolated Machine</h3>
-                <p>Fastest if you don't want to install anything. Start with the recommended cloud, review its estimated cost and teardown policy, then launch explicitly with your first task. Bivy adds no fee.</p>
+                <h3>Launch an isolated Machine</h3>
+                <p>Fastest if you don't want to install locally. Start with the recommended cloud, review its estimated cost and teardown policy, then launch explicitly with your first task. Bivy adds no fee.</p>
               </div>
             </div>
             <button type="button" className="btn primary connect-option-cta" onClick={onEphemeral}>
-              Set up isolated Machine
+              Launch isolated Machine
             </button>
           </div>
         )}
@@ -171,7 +182,7 @@ export function ConnectRunner({
       <div className="connect-waiting">
         <Spinner size="sm" />
         <span className="connect-waiting-text">
-          {persistentNodes.length > 0 ? "Or wait for another machine to connect…" : "Waiting for a machine to connect…"}
+          {persistentNodes.length > 0 ? "Or wait for another Machine to connect…" : "Waiting for a Machine to connect…"}
         </span>
         <button type="button" className="connect-refresh" onClick={onRefresh}>
           Refresh now

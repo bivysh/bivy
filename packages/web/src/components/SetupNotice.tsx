@@ -255,7 +255,7 @@ export function SetupNotice({ onDismiss }: { onDismiss?: () => void } = {}) {
         )}
         <div className="setup-glyph">⛺</div>
         <h1>Bivy</h1>
-        <p>Sign in or create an account, then connect a machine or launch your first cloud runner.</p>
+        <p>Run Claude Code, Codex, or another coding agent on a Machine you control — then continue it from your browser or phone.</p>
         {signInError && (
           <div className="setup-error" role="alert">
             {signInError}

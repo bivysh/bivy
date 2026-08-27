@@ -13,37 +13,55 @@ import { controller } from "../store/useStore.js";
  * more can be added, short of remembering the install command from setup.
  */
 export function AddNodeSheet({ onClose }: { onClose: () => void }) {
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<"auto" | "plain" | null>(null);
   // Same command the first-run screen shows — hosted installer, or a
   // self-hosted `bivy setup` pointed at this control plane (installCommand.ts).
-  const install = installCommand(location.origin, controller.local.relay);
+  const install = installCommand(location.origin, controller.local.relay, controller.local.s);
 
   return (
-    <Sheet title="Add a machine" onClose={onClose}>
+    <Sheet title="Add a Machine" onClose={onClose}>
       <div className="settings-form">
         <p className="muted">
-          Run this on any Mac or Linux computer to install Bivy there and connect it as a new machine on your account.
-          {!install.hosted && " Needs Node.js 22.19 or newer; setup will point the machine at this control plane."}
+          Run this on any Mac or Linux computer to install Bivy there and connect it as a new Machine on your account.
+          {install.authenticated && " It will use this signed-in account automatically."}
+          {!install.hosted && " Needs Node.js 22.19 or newer; setup will point the Machine at this control plane."}
         </p>
         <pre className="code-snippet">
           <code>{install.command}</code>
         </pre>
+        {install.authenticated && (
+          <p className="muted">Auto sign-in includes an account token. Paste it only into a Machine you trust, or copy the plain command below.</p>
+        )}
         <div className="row-actions">
           <button
             className="btn primary"
             onClick={async () => {
               const ok = await writeClipboard(install.command);
               if (ok) {
-                setCopied(true);
-                setTimeout(() => setCopied(false), 1500);
+                setCopied("auto");
+                setTimeout(() => setCopied(null), 1500);
               }
             }}
           >
-            {copied ? "Copied!" : "Copy command"}
+            {copied === "auto" ? "Copied!" : install.authenticated ? "Copy auto sign-in" : "Copy command"}
           </button>
+          {install.authenticated && (
+            <button
+              className="btn ghost"
+              onClick={async () => {
+                const ok = await writeClipboard(install.plainCommand);
+                if (ok) {
+                  setCopied("plain");
+                  setTimeout(() => setCopied(null), 1500);
+                }
+              }}
+            >
+              {copied === "plain" ? "Copied plain!" : "Copy plain"}
+            </button>
+          )}
           {install.hosted && <a className="btn ghost" href="/install.sh">Download script</a>}
         </div>
-        <p className="muted">The new machine shows up in this switcher as soon as it connects — no need to close this.</p>
+        <p className="muted">The new Machine shows up in this switcher as soon as it connects — no need to close this.</p>
       </div>
     </Sheet>
   );
