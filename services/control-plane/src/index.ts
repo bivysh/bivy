@@ -177,12 +177,6 @@ async function notifyWorkAvailableOrParkForPlan(accountId: string, item: { id: s
   return { blocked: true, reason: decision.reason };
 }
 
-function managedSettlementRecorder(
-  accountId: string,
-  event: { attemptId: string; at: string; machineSeconds: number; activeAgentSeconds: number },
-) {
-  return deploymentExtension.record(accountId, { type: "ephemeral.settled", ...event });
-}
 try {
   await store.init();
 } catch (error) {
@@ -378,9 +372,7 @@ setInterval(pruneExpiredAuthTokens, 60 * 60_000).unref();
 const HOSTED_MACHINE_RECONCILE_MS = Math.max(60_000, Number(process.env.HOSTED_MACHINE_RECONCILE_MS) || 60_000);
 async function reconcileHostedMachineFleet() {
   try {
-    const result = await reconcileAllHostedMachines(
-      store, provisionEnv(), Date.now(), undefined, managedSettlementRecorder,
-    );
+    const result = await reconcileAllHostedMachines(store, provisionEnv());
     if (result.reaped || result.failed) {
       console.log(`[hosted-reconcile] accounts=${result.accounts} reaped=${result.reaped} failed=${result.failed}`);
     }
