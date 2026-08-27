@@ -31,6 +31,7 @@ import {
   nlToCron,
   isNlCronOk,
   type AppState,
+  type AccountMe,
   type AccountAutomation,
   type AccountAutomationRun,
   type AccountNode,
@@ -431,6 +432,13 @@ const AUTOMATIONS_TABS: Array<{ label: string; section: AutomationsSection | nul
   { label: "Rulesets", section: "rulesets" },
 ];
 
+function automationCloudGate(me: AccountMe | null): { actions: NonNullable<NonNullable<AccountMe["extension"]>["actions"]> } | null {
+  const extension = me?.extension;
+  const automationFact = extension?.facts?.find((fact) => fact.id === "automations");
+  if (!extension || !automationFact || !/cloud required/i.test(automationFact.value)) return null;
+  return { actions: extension.actions ?? [] };
+}
+
 export function AutomationsView({
   state,
   onClose,
@@ -457,6 +465,7 @@ export function AutomationsView({
   const [items, setItems] = useState<AccountAutomation[]>([]);
   const [runs, setRuns] = useState<AccountAutomationRun[]>([]);
   const [sources, setSources] = useState<SourcesSnapshot>(emptySources);
+  const [me, setMe] = useState<AccountMe | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -491,9 +500,10 @@ export function AutomationsView({
       return;
     }
     const canQuery = !controller.direct;
-    const [definitions, recent, gh, lin, slack, nodes, hosted] = await Promise.all([
+    const [definitions, recent, account, gh, lin, slack, nodes, hosted] = await Promise.all([
       fetchAutomations(controller.local),
       fetchAutomationRuns(controller.local, 30),
+      canQuery ? controller.fetchMe().catch(() => null) : Promise.resolve(null),
       canQuery ? fetchGithubApp(controller.local).catch(() => null) : Promise.resolve(null),
       canQuery ? fetchLinearHook(controller.local).catch(() => null) : Promise.resolve(null),
       canQuery ? fetchSlackHook(controller.local).catch(() => null) : Promise.resolve(null),
@@ -502,6 +512,7 @@ export function AutomationsView({
     ]);
     setItems(definitions);
     setRuns(recent);
+    setMe(account);
     setSources({ github: gh, linear: lin, slack, nodes, hosted });
     setLoading(false);
   }, [accountless]);
@@ -819,6 +830,12 @@ export function AutomationsView({
   }
 
   const definitionRuns = runs;
+  const cloudAutomationGate = useMemo(() => automationCloudGate(me), [me]);
+  const invokeCloudGateAction = useCallback((actionId: string) => {
+    controller.invokeAccountExtensionAction(actionId)
+      .then(({ url }) => { window.location.assign(url); })
+      .catch((e) => setError(String(e?.message || e)));
+  }, []);
   const ghStatus = githubSourceStatus(sources.github);
   const linStatus = linearSourceStatus(sources.linear);
   const slackStatus = slackSourceStatus(sources.slack);
@@ -903,6 +920,28 @@ export function AutomationsView({
       </nav>
 
       <div className="automations-view-body">
+        {cloudAutomationGate && (
+          <div className="autom-notice warn" role="status">
+            <div className="autom-notice-text">
+              <strong>Hosted automations require Cloud</strong>
+              <span>GitHub, schedules, and other hosted triggers can be configured, but incoming events are shown as blocked until this account is upgraded. Self-hosted control planes are not limited by Bivy Cloud billing.</span>
+            </div>
+            {cloudAutomationGate.actions.length > 0 && (
+              <div className="autom-notice-actions">
+                {cloudAutomationGate.actions.map((action) => (
+                  <button
+                    type="button"
+                    key={action.id}
+                    className={`btn sm ${action.kind === "primary" ? "primary" : ""}`}
+                    onClick={() => invokeCloudGateAction(action.id)}
+                  >
+                    {action.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         {error && (
           <div className="autom-notice warn" role="alert">
             <div className="autom-notice-text"><strong>Something went wrong</strong><span>{error}</span></div>

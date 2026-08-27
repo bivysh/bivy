@@ -1994,7 +1994,7 @@ function AccountPanel() {
       <div className="stat-grid">
         <Stat label="Machines" value={String(counts?.nodes ?? nodes.length)} />
         <Stat label="Devices" value={String(counts?.devices ?? devices.length)} />
-        <Stat label="Sessions" value={counts?.sessions == null ? "—" : String(counts.sessions)} />
+        <Stat label="Visible sessions" value={counts?.sessions == null ? "—" : String(counts.sessions)} />
       </div>
       {me?.extension && (
         <div className="settings-section">

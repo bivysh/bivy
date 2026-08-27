@@ -19,6 +19,7 @@ export interface DeploymentDecision {
   code?: string;
   reason?: string;
   usage?: { used: number; limit?: number };
+  actions?: Array<{ id: string; label: string; kind?: "primary" | "secondary" }>;
 }
 
 export interface AccountExtensionView {
