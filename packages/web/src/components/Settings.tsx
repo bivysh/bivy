@@ -16,6 +16,7 @@ import { currentThemeSetting, setTheme, type ThemeSetting } from "../theme.js";
 import { useModalEscape } from "../modalStack.js";
 import type { SettingsView } from "../router.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
+import { setCloudMachinesEnabled, useCloudMachinesEnabled } from "../cloudMachines.js";
 import { requestSignIn } from "../signInRequest.js";
 import { ChevronRightIcon, CloseIcon } from "./UiIcons.js";
 import { CredentialVault } from "./CredentialVault.js";
@@ -147,7 +148,7 @@ const SEARCH_TERMS: Record<View, string> = {
   queue: "work queue issue run evidence outcome retry lease checks",
   webhooks: "webhook trigger secret event",
   rulesets: "rules policy routing agent runtime model sandbox",
-  nodes: "node daemon online offline diagnostics version update storage disk",
+  nodes: "node daemon online offline diagnostics version update storage disk cloud machines experimental unstable",
   ephemeral: "cloud machine profiles automation offline teardown retention",
   account: "account email devices machines usage",
   link: "device qr code phone mobile pair",
@@ -214,6 +215,9 @@ export function Settings({
     return () => { opener?.focus?.(); };
   }, []);
 
+  const cloudMachinesOptIn = useCloudMachinesEnabled();
+  const cloudMachinesEnabled = EPHEMERAL_MACHINES_ENABLED && cloudMachinesOptIn;
+
   const groups: NavGroup[] = [
     {
       label: "Models & keys",
@@ -225,7 +229,7 @@ export function Settings({
       label: "Machines",
       items: [
         { id: "nodes", label: "Machines", icon: <IconServer /> },
-        ...(EPHEMERAL_MACHINES_ENABLED
+        ...(cloudMachinesEnabled
           ? [{ id: "ephemeral" as View, label: "Cloud machine profiles", icon: <IconBolt /> }]
           : []),
       ],
@@ -340,8 +344,8 @@ export function Settings({
             {/* github / linear / slack / queue / webhooks / rulesets moved to the
                 Automations hub — a deep link to any of them redirects there (see
                 the redirect effect above), so they render nothing here. */}
-            {activeView === "nodes" && <NodesPanel state={state} />}
-            {activeView === "ephemeral" && EPHEMERAL_MACHINES_ENABLED && <EphemeralPanel />}
+            {activeView === "nodes" && <NodesPanel state={state} cloudMachinesEnabled={cloudMachinesEnabled} />}
+            {activeView === "ephemeral" && EPHEMERAL_MACHINES_ENABLED && (cloudMachinesEnabled ? <EphemeralPanel /> : <CloudMachinesDisabledPanel />)}
             {activeView === "account" && <AccountPanel />}
             {activeView === "link" && <LinkPanel onDone={onClose} />}
           </div>
@@ -405,6 +409,36 @@ function Toggle({ checked, onChange, disabled, label }: { checked: boolean; onCh
     >
       <span className="settings-toggle-knob" aria-hidden />
     </button>
+  );
+}
+
+function CloudMachinesToggleRow({ enabled }: { enabled: boolean }) {
+  return (
+    <div className="settings-toggle-row">
+      <div className="settings-toggle-text">
+        <span className="settings-toggle-title">Cloud machines <Badge tone="warn">Experimental</Badge></span>
+        <span className="muted small">
+          Show cloud machine profiles and automation routing. This feature is experimental and unstable;
+          machines may fail to boot or require manual cleanup in your cloud provider account.
+        </span>
+      </div>
+      <Toggle
+        checked={enabled}
+        onChange={setCloudMachinesEnabled}
+        label="Enable experimental cloud machines"
+      />
+    </div>
+  );
+}
+
+function CloudMachinesDisabledPanel() {
+  const enabled = useCloudMachinesEnabled();
+  return (
+    <div className="settings-form">
+      <section className="settings-section">
+        <CloudMachinesToggleRow enabled={enabled} />
+      </section>
+    </div>
   );
 }
 
@@ -888,7 +922,7 @@ function LocalModelsPanel({ state, onStartWork }: { state: AppState; onStartWork
 }
 
 // ---- Nodes (per-node defaults) ----
-function NodesPanel({ state }: { state: AppState }) {
+function NodesPanel({ state, cloudMachinesEnabled }: { state: AppState; cloudMachinesEnabled: boolean }) {
   const hosted = !controller.direct;
   const [nodes, setNodes] = useState<Awaited<ReturnType<typeof controller.listNodes>>>([]);
   const [form, setForm] = useState<NodeSettings | null>(null);
@@ -1008,6 +1042,12 @@ function NodesPanel({ state }: { state: AppState }) {
           </select>
           {selectedNode && <p className={`muted small${selectedNode.online ? "" : " warn-text"}`}>{selectedHealth}</p>}
           <p className="muted small">Run <code>bivy update</code> on the machine to update or repair its service, then refresh this list.</p>
+        </section>
+      )}
+
+      {EPHEMERAL_MACHINES_ENABLED && (
+        <section className="settings-section">
+          <CloudMachinesToggleRow enabled={cloudMachinesEnabled} />
         </section>
       )}
 
@@ -1337,6 +1377,7 @@ function EphemeralPanel() {
         <div className="vault-title-row">
           <div><h3>Cloud machine profiles</h3></div>
         </div>
+        <div className="banner inline" data-tone="warn">Experimental and unstable — cloud machines may fail to boot or require manual cleanup.</div>
         <div className="vault-empty">
           <h4>Cloud machines need an account</h4>
           <p className="muted">
@@ -1407,6 +1448,7 @@ function EphemeralPanel() {
         <div><h3>Cloud machine profiles</h3></div>
         <button className="btn primary" onClick={() => setView({ k: "add" })}>Add profile</button>
       </div>
+      <div className="banner inline" data-tone="warn">Experimental and unstable — cloud machines may fail to boot or require manual cleanup.</div>
       <p className="muted">
         A profile tells Bivy where to create a temporary machine. Pick one for a chat, or let an
         automation use it while you're offline. Your cloud provider bills the compute directly.

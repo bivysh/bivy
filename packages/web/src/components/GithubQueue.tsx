@@ -17,6 +17,7 @@ import { statusDotState, statusLabel } from "../sessionStatus.js";
 import { classifySource } from "../sessionSource.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
+import { useCloudMachinesEnabled } from "../cloudMachines.js";
 import { writeClipboard } from "../clipboard.js";
 import { Badge, type BadgeTone } from "./Badge.js";
 import { isTerminalRun, projectRunDetail } from "../runDetail.js";
@@ -87,6 +88,8 @@ export function GithubQueuePanel({
   showHistory?: boolean;
 }) {
   const { sessionIndex: { sessions }, activeSession: { activeSessionId }, presentation: { prRefreshAllResult }, catalogs: { runtimes } } = useAppState();
+  const cloudMachinesOptIn = useCloudMachinesEnabled();
+  const cloudMachinesEnabled = EPHEMERAL_MACHINES_ENABLED && cloudMachinesOptIn;
   const canQuery = !controller.direct;
 
   // The "Run…" agent picker offers the same picker-visible runtimes shown
@@ -226,9 +229,9 @@ export function GithubQueuePanel({
     controller.fetchGithubApp().then(setAppInfo).catch(() => setAppInfo(null));
     controller.listNodes().then(setNodes).catch(() => {});
     controller.listEphemeralKeys().then(setEphemeralKeys).catch(() => {});
-    if (EPHEMERAL_MACHINES_ENABLED) controller.listEphemeralConfigs().then(setEphemeralConfigs).catch(() => {});
+    if (cloudMachinesEnabled) controller.listEphemeralConfigs().then(setEphemeralConfigs).catch(() => {});
     controller.getGithubTaskToken().then((t) => setHasGithubTaskToken(Boolean(t))).catch(() => {});
-  }, [canQuery]);
+  }, [canQuery, cloudMachinesEnabled]);
 
   const configuredProviders = useMemo(() => ephemeralKeys.filter((k) => k.configured), [ephemeralKeys]);
   // Persistent nodes only — a booted ephemeral machine enrolls as an `eph-…`
@@ -525,7 +528,7 @@ export function GithubQueuePanel({
                           <a className="queue-item-main link" href={w.url} target="_blank" rel="noopener noreferrer" title={title}>
                             <span className="queue-item-title">
                               {title}
-                              {EPHEMERAL_MACHINES_ENABLED && w.ephemeral && <Badge title="Dispatched to an ephemeral server">⚡ ephemeral</Badge>}
+                              {cloudMachinesEnabled && w.ephemeral && <Badge title="Dispatched to an ephemeral server">⚡ ephemeral</Badge>}
                             </span>
                             <span className="queue-item-meta">{meta}</span>
                           </a>
@@ -533,7 +536,7 @@ export function GithubQueuePanel({
                           <div className="queue-item-main" title={title}>
                             <span className="queue-item-title">
                               {title}
-                              {EPHEMERAL_MACHINES_ENABLED && w.ephemeral && <Badge title="Dispatched to an ephemeral server">⚡ ephemeral</Badge>}
+                              {cloudMachinesEnabled && w.ephemeral && <Badge title="Dispatched to an ephemeral server">⚡ ephemeral</Badge>}
                             </span>
                             <span className="queue-item-meta">{meta}</span>
                           </div>
@@ -572,7 +575,7 @@ export function GithubQueuePanel({
                                   ))}
                                 </optgroup>
                               )}
-                              {EPHEMERAL_MACHINES_ENABLED && ephemeralConfigs.length > 0 && (
+                              {cloudMachinesEnabled && ephemeralConfigs.length > 0 && (
                                 <optgroup label="Cloud machine profiles">
                                   {ephemeralConfigs.map((s) => (
                                     <option key={s.id} value={`config:${s.id}`}>{s.name} · {s.provider}</option>
@@ -586,7 +589,7 @@ export function GithubQueuePanel({
                           </label>
                           {/* Only a persistent-node primary can go offline; an ephemeral
                               config is provisioned on demand, so it needs no fallback. */}
-                          {EPHEMERAL_MACHINES_ENABLED && primarySel.kind === "node" && ephemeralConfigs.length > 0 && (
+                          {cloudMachinesEnabled && primarySel.kind === "node" && ephemeralConfigs.length > 0 && (
                             <label className="queue-run-field">
                               <span>Fallback if machine is offline</span>
                               <select value={assignFallback} onChange={(e) => setAssignFallback(e.target.value)}>
