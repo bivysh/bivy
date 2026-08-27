@@ -173,7 +173,7 @@
     }
     section > .wrap > p, .prose p { color: var(--ink-2); }
 
-    /* ---------- feature pillars (the 3 headline features) ---------- */
+    /* ---------- feature pillars (the headline features) ---------- */
     .pillars {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
@@ -473,9 +473,10 @@
 
       <p class="sub" style="margin:22px 0 0">
         Phone/browser continuity is the hook, not the whole system. Bivy also gives each
-        task a durable Session, routes work to the Machine and agent you choose, runs
-        deterministic checks where configured, and reports an explicit outcome instead of
-        treating "the agent exited" as success.
+        task a durable Session, routes work to the Machine and agent you choose, lets you
+        fork supported Sessions when another setup fits better, runs deterministic checks
+        where configured, and reports an explicit outcome instead of treating "the agent
+        exited" as success.
       </p>
 
       <p class="runs-on">
@@ -528,9 +529,9 @@
           </li>
           <li class="promo">
             <span class="eyebrow">Only in Bivy</span>
-            <b>Change agent, model, or machine mid-run</b>
-            Swap Claude Code for Codex, move to a bigger model, or fork the whole session
-            onto another node — transcript and uncommitted work included.
+            <b>Fork work to another setup</b>
+            When the next step needs a different Machine, model, or supported agent, fork
+            the Session instead of starting over — transcript and uncommitted work included.
           </li>
           <li>
             <b>See the work, not a summary</b>
@@ -606,6 +607,13 @@
           <p>A Session survives terminal detach and daemon restarts. Reopen it from another
           device to answer questions, approve tools, attach files, inspect diffs, or take
           over in a real terminal when chat is not enough.</p>
+        </div>
+        <div class="pillar">
+          <p class="eyebrow">Forks and handoffs</p>
+          <h3>Move work when another setup fits better</h3>
+          <p>Fork supported Sessions to a different Machine, model, or agent without
+          starting from scratch. Keep the conversation and uncommitted work together when a
+          task needs more compute, a private network, or a second opinion.</p>
         </div>
         <div class="pillar">
           <p class="eyebrow">Checked Automations</p>
