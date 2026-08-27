@@ -173,7 +173,7 @@ export function NodeSwitcher() {
             }}
           >
             <span className="node-menu-glyph">+</span>
-            <span className="node-menu-name">Add a machine…</span>
+            <span className="node-menu-name">Add a Machine…</span>
           </button>
           <div className="node-menu-sep" />
           {/* Confirm first — signing out here used to be a single tap with no

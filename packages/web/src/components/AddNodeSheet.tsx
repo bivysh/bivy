@@ -19,11 +19,11 @@ export function AddNodeSheet({ onClose }: { onClose: () => void }) {
   const install = installCommand(location.origin, controller.local.relay);
 
   return (
-    <Sheet title="Add a machine" onClose={onClose}>
+    <Sheet title="Add a Machine" onClose={onClose}>
       <div className="settings-form">
         <p className="muted">
-          Run this on any Mac or Linux computer to install Bivy there and connect it as a new machine on your account.
-          {!install.hosted && " Needs Node.js 22.19 or newer; setup will point the machine at this control plane."}
+          Run this on any Mac or Linux computer to install Bivy there and connect it as a new Machine on your account.
+          {!install.hosted && " Needs Node.js 22.19 or newer; setup will point the Machine at this control plane."}
         </p>
         <pre className="code-snippet">
           <code>{install.command}</code>
@@ -43,7 +43,7 @@ export function AddNodeSheet({ onClose }: { onClose: () => void }) {
           </button>
           {install.hosted && <a className="btn ghost" href="/install.sh">Download script</a>}
         </div>
-        <p className="muted">The new machine shows up in this switcher as soon as it connects — no need to close this.</p>
+        <p className="muted">The new Machine shows up in this switcher as soon as it connects — no need to close this.</p>
       </div>
     </Sheet>
   );

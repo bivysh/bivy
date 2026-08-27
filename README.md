@@ -14,9 +14,13 @@ your phone: read what the agent did, answer its question, approve the migration
 
 ```bash
 curl -fsSL https://bivy.sh/install.sh | bash   # install + guided setup
-bivy run claude                                 # start an agent in your repo
+cd your-repo
+bivy run claude                                 # start an agent where your work lives
 bivy open                                        # pick it up from your phone or browser
 ```
+
+First thing to try: ask the agent to explain the repository, make one small safe
+change, then open the same Session in the web app or on your phone while it runs.
 
 **[Quickstart](docs/quickstart.md)** ·
 **[Docs](docs/README.md)** ·
@@ -152,11 +156,14 @@ origin with `npm audit signatures`. See [`docs/releasing.md`](docs/releasing.md)
 
 ### Your first session
 
-Once `bivy setup` finishes, the whole loop is three commands — start local,
-reconnect remote:
+Once `bivy setup` finishes, use Bivy from inside an existing repo. The first win
+is simple: start the local agent, give it a real task in that environment, then
+reopen the same Session from another surface.
 
 ```bash
+cd your-repo
 bivy run claude    # start an agent as a durable session in the current repo
+# Try: "Explain this repo and suggest one small, safe improvement."
 bivy open          # open that same session in the web app (needs relay setup)
 bivy resume        # or pick it back up here in the terminal
 ```

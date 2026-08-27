@@ -3880,7 +3880,8 @@ function printFirstRunSteps(modelReady = false, setupAgent = null) {
   }
   const agent = setupAgent?.command || setupAgent?.runtimeId || resolveDefaultAgent();
   const remoteApp = String(loadRelayConfig()?.clientBaseUrl || "https://app.bivy.sh").replace(/\/+$/, "");
-  console.log(`    • In the terminal: ${c.cyan(`bivy run ${agent}`)}`);
+  console.log(`    • In the terminal: ${c.cyan(`cd your-repo && bivy run ${agent}`)}`);
+  console.log(`      Try: ${c.cyan('"Explain this repository and suggest one small, safe improvement."')}`);
   console.log(`      Then use the remote app to watch the session or take over in chat.`);
   console.log(`    • Or start in chat: ${c.cyan(remoteApp)}\n`);
 }

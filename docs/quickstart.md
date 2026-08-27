@@ -100,8 +100,17 @@ Keys stay on the node. Never paste one into a chat or a support thread.
 
 ## 4. Run your first agent
 
+Start inside a real repository so the agent immediately has useful context:
+
 ```bash
+cd your-repo
 bivy run claude
+```
+
+First prompt to try:
+
+```text
+Explain this repository and suggest one small, safe improvement.
 ```
 
 `bivy run <agent>` launches that agent as a managed, relay-visible session in
