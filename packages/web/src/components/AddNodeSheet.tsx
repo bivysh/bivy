@@ -48,7 +48,7 @@ export function AddNodeSheet({ onClose }: { onClose: () => void }) {
             ? "Run this on any Mac or Linux computer. Bivy is installed, signed in to this account, and enrolled as a new Machine automatically."
             : "Run this on any Mac or Linux computer. Needs Node.js 22.19 or newer; setup will point the Machine at this control plane."}
         </p>
-        {install.hosted && <p className="muted small">This one-time command expires after 10 minutes and can enroll only one Machine.</p>}
+        {install.hosted && <p className="muted small">This one-time command expires after 10 minutes and can enroll only one machine.</p>}
         {error && <div className="banner inline" data-tone="danger" role="alert">{error}</div>}
         {command ? (
           <pre className="code-snippet">
@@ -87,7 +87,6 @@ export function AddNodeSheet({ onClose }: { onClose: () => void }) {
             </button>
           )}
           {install.hosted && !command && !busy && <button className="btn" onClick={() => void createClaim()}>Try again</button>}
-          {install.hosted && <a className="btn ghost" href="/install.sh">Download script</a>}
         </div>
         <p className="muted">The new Machine shows up in this switcher as soon as it connects — no additional setup or sign-in required.</p>
       </div>
