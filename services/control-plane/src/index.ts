@@ -1293,7 +1293,16 @@ async function ensureManagedDefaultForAccount(accountId: string): Promise<Epheme
   return config;
 }
 
-app.post("/account/onboarding/auth-runner", requireUser, asyncHandler(async (req, res) => {
+const managedOnboardingRateLimit = rateLimit({
+  windowMs: 60_000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => ipKeyGenerator(clientIp(req)),
+  message: { error: "Too many onboarding requests" },
+});
+
+app.post("/account/onboarding/auth-runner", managedOnboardingRateLimit, requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   res.setHeader("cache-control", "no-store");
   if (!ephemeralMachinesEnabled() || process.env.MANAGED_COMPUTE_ENABLED !== "1") {
@@ -1346,7 +1355,7 @@ app.post("/account/onboarding/auth-runner", requireUser, asyncHandler(async (req
 // Idempotent across redirects/devices; it never persists or returns the operator
 // provider token. Queue routing remains independent because interactive prompts
 // launch directly and Free hosted automations are separately policy-gated.
-app.post("/account/onboarding/managed-defaults", requireUser, asyncHandler(async (req, res) => {
+app.post("/account/onboarding/managed-defaults", managedOnboardingRateLimit, requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   if (!ephemeralMachinesEnabled() || process.env.MANAGED_COMPUTE_ENABLED !== "1") {
     return res.status(503).json({ error: "Managed session Machines are not available." });
