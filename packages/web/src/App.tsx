@@ -627,8 +627,8 @@ export function App() {
                   <StatusDot status={statusDotState(activeSession)} label={statusLabel(activeSession)} />
                 </span>
               )}
-              <h1 className="title" title={state.activeSession.activeTitle}>
-                {state.activeSession.activeTitle}
+              <h1 className="title" title={needsNode ? "Connect a Machine" : state.activeSession.activeTitle}>
+                {needsNode ? "Connect a Machine" : state.activeSession.activeTitle}
               </h1>
             </div>
             {/* Node stays below the title as a plain subtitle line — but it's

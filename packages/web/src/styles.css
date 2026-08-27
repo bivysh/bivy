@@ -2199,7 +2199,7 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
    mobile Safari. Hide the inactive session UI so it cannot consume height. */
 .main.needs-node > :not(.topbar):not(.banner):not(.connect-runner-scroll) { display: none; }
 .connect-runner-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
-.connect-runner { width: min(560px, 100%); margin: 4px auto 0; padding: 20px 16px max(24px, env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 20px; }
+.connect-runner { width: min(560px, 100%); margin: 0 auto; padding: 18px 16px max(24px, env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 14px; }
 .connect-hero { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 6px; }
 .connect-hero-icon {
   width: 56px; height: 56px; margin-bottom: 6px; display: grid; place-items: center;
@@ -2209,7 +2209,7 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 }
 .connect-kicker { color: var(--accent); font-size: 11px; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; }
 .connect-title { margin: 0; font-size: 22px; line-height: 1.2; letter-spacing: -0.01em; }
-.connect-sub { margin: 2px 0 0; max-width: 42ch; color: var(--muted); font-size: 13.5px; line-height: 1.5; }
+.connect-sub { margin: 0; max-width: 36ch; color: var(--muted); font-size: 13.5px; line-height: 1.45; }
 
 .connect-options { display: flex; flex-direction: column; gap: 12px; }
 .connect-option {
@@ -2245,6 +2245,7 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
   transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
 .connect-copy:hover { background: var(--surface-3); }
+.connect-copy.icon-only { width: 36px; height: 36px; justify-content: center; padding: 0; }
 .connect-copy.is-copied { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--line-strong)); }
 .connect-copy svg { display: block; }
 
