@@ -54,22 +54,42 @@ export function ConnectRunner({
 
   return (
     <section className="connect-runner" aria-labelledby="connect-runner-title">
-      <div className="connect-hero">
-        <span className="connect-hero-icon" aria-hidden>
-          <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-            <rect x="3" y="4" width="18" height="8" rx="2" />
-            <rect x="3" y="14" width="18" height="6" rx="2" />
-            <path d="M7 8h.01M7 17h.01" />
-          </svg>
-        </span>
-        <div className="connect-kicker">Signed in — connect a Machine</div>
-        <h2 className="connect-title" id="connect-runner-title">Choose where your agent runs</h2>
+      <div className="connect-hero compact">
+        <h2 className="connect-title" id="connect-runner-title">{persistentNodes.length > 0 ? "Choose a Machine" : "Connect a Machine"}</h2>
         <p className="connect-sub">
-          {ephemeralEnabled
-            ? "Start on a trusted workstation with your real repo, services, and warm caches, or launch an isolated Machine in your cloud account. Interactive traffic stays end-to-end encrypted; any optional hosted credential custody is disclosed before you enable it."
-            : "Connect a trusted workstation with your real repo, services, and warm caches. Interactive traffic stays end-to-end encrypted between your Machine and your devices."}
+          {persistentNodes.length > 0
+            ? "Pick an online Machine to start, or add another workstation."
+            : ephemeralEnabled
+              ? "Use a workstation with your real repo, services, and warm caches, or launch an isolated Machine. Any hosted credential custody is disclosed before enablement."
+              : "Use the workstation where your repo, services, and warm caches already live."}
         </p>
       </div>
+
+      {persistentNodes.length > 0 && (
+        <div className="connect-nodes">
+          <div className="connect-nodes-head">Your machines</div>
+          <div className="connect-nodes-list">
+            {persistentNodes.map((n) => (
+              <button
+                key={n.id}
+                type="button"
+                className="connect-node"
+                onClick={() => onPickNode(n.id)}
+                title={n.online ? "Start on this Machine" : "This Machine is offline — selecting it will try to reconnect"}
+              >
+                <StatusDot status={n.online ? "online" : "idle"} />
+                <span className="connect-node-name">{n.name || n.id}</span>
+                <span className={`connect-node-status${n.online ? " is-online" : ""}`}>
+                  {n.online ? "Online" : "Offline"}
+                </span>
+                <svg className="connect-node-caret" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="m9 6 6 6-6 6" />
+                </svg>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="connect-options">
         <div className="connect-option">
@@ -81,11 +101,11 @@ export function ConnectRunner({
               </svg>
             </span>
             <div className="connect-option-copy">
-              <h3>Connect your workstation</h3>
+              <h3>{persistentNodes.length > 0 ? "Add another workstation" : "Connect your workstation"}</h3>
               <p>
-                Run one command on your Mac or Linux computer to use the environment where your work already lives.
-                {install.authenticated && " It will connect to this same account automatically."}
-                {!install.hosted && " Needs Node.js 22.19 or newer; setup will point the Machine at this control plane."}
+                Paste this on the Mac or Linux computer where your repo lives.
+                {install.authenticated && " It can use this account automatically."}
+                {!install.hosted && " Needs Node.js 22.19 or newer."}
               </p>
             </div>
           </div>
@@ -93,43 +113,34 @@ export function ConnectRunner({
             <code>{install.command}</code>
             <button
               type="button"
-              className={`connect-copy${copied === "auto" ? " is-copied" : ""}`}
+              className={`connect-copy icon-only${copied === "auto" ? " is-copied" : ""}`}
               onClick={() => copyCommand(install.command, "auto")}
-              aria-label={copied === "auto" ? "Command copied" : "Copy auto sign-in install command"}
+              aria-label={copied === "auto" ? "Command copied" : install.authenticated ? "Copy auto sign-in install command" : "Copy install command"}
+              title={copied === "auto" ? "Copied" : install.authenticated ? "Copy auto sign-in" : "Copy"}
             >
               {copied === "auto" ? (
-                <>
-                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                    <path d="m20 6-11 11-5-5" />
-                  </svg>
-                  Copied
-                </>
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="m20 6-11 11-5-5" />
+                </svg>
               ) : (
-                <>
-                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                    <rect x="9" y="9" width="11" height="11" rx="2" />
-                    <path d="M5 15V5a2 2 0 0 1 2-2h10" />
-                  </svg>
-                  {install.authenticated ? "Copy auto sign-in" : "Copy"}
-                </>
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <rect x="9" y="9" width="11" height="11" rx="2" />
+                  <path d="M5 15V5a2 2 0 0 1 2-2h10" />
+                </svg>
               )}
             </button>
           </div>
-          {install.authenticated && (
-            <p className="connect-token-note">Auto sign-in includes an account token. Paste it only into a Machine you trust, or use the plain install instead.</p>
-          )}
           <div className="connect-option-links">
             {install.authenticated && (
               <button type="button" className="btn link" onClick={() => copyCommand(install.plainCommand, "plain")}>
-                {copied === "plain" ? "Plain command copied" : "Copy plain install instead"}
+                {copied === "plain" ? "Plain command copied" : "Use plain install"}
               </button>
             )}
-            {install.hosted && (
-              <a className="connect-option-link" href="/install.sh">
-                Prefer a file? Download the installer
-              </a>
-            )}
+            {install.hosted && <a className="connect-option-link" href="/install.sh">Download script</a>}
           </div>
+          {install.authenticated && (
+            <p className="connect-token-note">Auto sign-in includes an account token. Use only on a Machine you trust.</p>
+          )}
         </div>
 
         {ephemeralEnabled && (
@@ -153,31 +164,6 @@ export function ConnectRunner({
         )}
       </div>
 
-      {persistentNodes.length > 0 && (
-        <div className="connect-nodes">
-          <div className="connect-nodes-head">Your machines</div>
-          <div className="connect-nodes-list">
-            {persistentNodes.map((n) => (
-              <button
-                key={n.id}
-                type="button"
-                className="connect-node"
-                onClick={() => onPickNode(n.id)}
-                title={n.online ? "Start a new session on this machine" : "This machine is offline — selecting it will try to reconnect"}
-              >
-                <StatusDot status={n.online ? "online" : "idle"} />
-                <span className="connect-node-name">{n.name || n.id}</span>
-                <span className={`connect-node-status${n.online ? " is-online" : ""}`}>
-                  {n.online ? "Online" : "Offline"}
-                </span>
-                <svg className="connect-node-caret" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                  <path d="m9 6 6 6-6 6" />
-                </svg>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
 
       <div className="connect-waiting">
         <Spinner size="sm" />
