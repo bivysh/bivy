@@ -17,7 +17,7 @@
 // to the model — and `opencode session list` / `opencode export` read the same
 // snapshot, so those three rows are all a replay fork needs.
 //
-// IMPORTANT — best-effort, verified against opencode 1.18.18 (the version
+// IMPORTANT — best-effort, verified against opencode 1.18.23 (the version
 // pin in AGENT_PROFILES): the schema is version-variable, so the writer checks
 // for the `session`/`message`/`part` tables and throws (never corrupts) when a
 // node's OpenCode layout doesn't match. The fork engine calls this only as its
@@ -33,7 +33,7 @@ import { DatabaseSync } from "node:sqlite";
 import type { ForkHistoryMessage, ForkImportContext, ForkNativePayload, RuntimeMessage } from "./types.js";
 
 /** Fallback when the DB has no session row to learn the running version from. */
-const FALLBACK_VERSION = "1.18.18";
+const FALLBACK_VERSION = "1.18.23";
 
 /** The project every OpenCode install seeds; used for fork sessions so no
  *  per-directory project row has to be synthesised. */
@@ -449,7 +449,7 @@ export function deleteOpenCodeSession(sessionRef: string): boolean {
  * top-level session whose `directory` is `cwd` and that was created at/after
  * `since` (the run-terminal's creation time, minus a small skew). Mirrors
  * discoverCodexSessionForCwd; best-effort — a missing store or no match is
- * undefined, never a throw. Verified against opencode 1.18.18's `session` table
+ * undefined, never a throw. Verified against opencode 1.18.23's `session` table
  * (`directory`, `time_created`, `parent_id`).
  */
 export function discoverOpenCodeSessionForCwd(cwd: string, since = 0): { id: string } | undefined {

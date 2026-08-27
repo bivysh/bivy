@@ -14,8 +14,8 @@ per-agent pages under [docs/agents/](agents/README.md).
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | [Pi](agents/pi.md) | `pi` | Supported | Yes | Yes | Yes | Yes | Yes | Yes | No | Pi | Uses the operator-installed `pi` command and Pi-owned auth/config through the richer bridge under `src/agents/pi`. |
 | [Claude Code](agents/claude-code.md) | `claude-code-sdk` | Supported | Yes | Yes | Yes | Yes | Yes | Yes | **Yes** | Claude Code | SDK protocol bridge explicitly targets the operator-installed `claude` command and reuses its native auth/config/sessions. |
-| [Codex (approvals)](agents/codex.md) | `codex-approvals` | Supported | Yes | Yes | Partial | Yes | Yes | Yes | **Yes** | Codex CLI/OpenAI | App-server shim: per-tool Approve/Deny, model + reasoning-effort selection, thread resume, usage reporting, native discovery. The single "Codex" surfaced in the picker. Release-tested against Codex CLI 0.147.0. |
-| [OpenCode](agents/opencode.md) | `opencode` | Supported | Yes | Yes | Yes | Yes | Yes (ACP) | **Per-tool (Approve/Deny)** | No | OpenCode CLI | Driven through its native `opencode acp` server by default → the governed `ProtocolRuntime`: per-tool approvals, `session/load` resume, and a model list read from the live session. Falls back to the `opencode run` pipe (effect-level governance, `--model`, `-s <id>` resume) when the installed binary has no `acp` subcommand. Release-tested against OpenCode 1.18.18. |
+| [Codex (approvals)](agents/codex.md) | `codex-approvals` | Supported | Yes | Yes | Partial | Yes | Yes | Yes | **Yes** | Codex CLI/OpenAI | App-server shim: per-tool Approve/Deny, model + reasoning-effort selection, thread resume, usage reporting, native discovery. The single "Codex" surfaced in the picker. Release-tested against Codex CLI 0.150.0. |
+| [OpenCode](agents/opencode.md) | `opencode` | Supported | Yes | Yes | Yes | Yes | Yes (ACP) | **Per-tool (Approve/Deny)** | No | OpenCode CLI | Driven through its native `opencode acp` server by default → the governed `ProtocolRuntime`: per-tool approvals, `session/load` resume, and a model list read from the live session. Falls back to the `opencode run` pipe (effect-level governance, `--model`, `-s <id>` resume) when the installed binary has no `acp` subcommand. Release-tested against OpenCode 1.18.23. |
 | [Gemini CLI](agents/gemini-cli.md) | `gemini` | Beta | Yes | Yes | Yes | Yes | Yes (`-m`) | Native sandbox (`--approval-mode`) | No | Gemini CLI | `gemini-json` final-object parser; native auth; resumes via `-r <id>` (tier-aware `--approval-mode`). |
 | [Qwen Code](agents/qwen-code.md) | `qwen` | Beta | Yes | Yes | Yes | Yes | Yes (`-m`) | Native sandbox (`--approval-mode`) | No | Qwen Code CLI | Gemini-CLI fork: reuses the `gemini-json` parser, approval-mode containment, and `--resume <id>` form. |
 | [Goose](agents/goose.md) | `goose` | Beta | Yes | Yes | Yes | Yes | No | Effect-level (FS/MCP/net) | No | Goose CLI | `goose-stream-json` streaming parser; resumes via `--resume --session-id <id>`. |
@@ -75,7 +75,7 @@ Code** (`--experimental-acp` / newer `--acp`), **OpenCode** (`acp`), **Goose**
 **GitHub Copilot** (`--acp`).
 
 **OpenCode is promoted by default** (`acp.preferred`), having been validated
-end-to-end against 1.18.18 — that governed path is what earns it the Supported
+end-to-end against 1.18.23 — that governed path is what earns it the Supported
 tier. The rest stay opt-in with `BIVY_<ID>_ACP=1` (or `BIVY_PREFER_ACP=1` for all
 at once) until they're validated the same way.
 

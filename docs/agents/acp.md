@@ -68,7 +68,7 @@ validated and promoted **by default**; the rest are opt-in with `BIVY_<ID>_ACP=1
 
 | Agent | id | Launch flag | Default | Control |
 | --- | --- | --- | --- | --- |
-| OpenCode | `opencode` | `acp` | **On** (validated 1.18.18) | `BIVY_OPENCODE_ACP=0` to force the pipe |
+| OpenCode | `opencode` | `acp` | **On** (validated 1.18.23) | `BIVY_OPENCODE_ACP=0` to force the pipe |
 | Gemini CLI | `gemini` | `--experimental-acp` | Off | `BIVY_GEMINI_ACP=1` |
 | Qwen Code | `qwen` | `--experimental-acp` (newer builds: `--acp`) | Off | `BIVY_QWEN_ACP=1` |
 | Goose | `goose` | `acp` | Off | `BIVY_GOOSE_ACP=1` |

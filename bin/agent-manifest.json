@@ -22,7 +22,7 @@
       "hidden": false,
       "supportTier": "supported",
       "certification": "release-tested",
-      "testedVersion": "1.18.18",
+      "testedVersion": "1.18.23",
       "headlessFlags": [
         "run",
         "-s"

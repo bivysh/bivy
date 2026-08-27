@@ -41,20 +41,44 @@ import type { AttachmentRef } from "./attachment-store.js";
  * A resumed runtime that reconnected blank and only re-saw post-resume turns
  * reports a strict prefix of the persisted base, so the union keeps the persisted
  * copy. Disjoint inputs (a resumed runtime whose new turns aren't in the log yet)
- * concatenate in log-then-runtime order. Duplicates are collapsed by message
- * identity, so the same conversation serialized twice never double-appears.
+ * concatenate in log-then-runtime order. Exact duplicates are collapsed, and a
+ * provider-id/timestamp-identical message replaces its earlier streaming revision,
+ * so the same conversation serialized twice never double-appears.
  */
 export function mergeBases(logged: RuntimeMessage[], runtime: readonly RuntimeMessage[]): RuntimeMessage[] {
   if (!logged.length) return runtime as RuntimeMessage[];
-  const known = new Set(logged.map((m) => JSON.stringify(m)));
-  const merged = [...logged];
-  for (const m of runtime) {
+  // Streaming runtimes can refine a message in place after an early completion
+  // boundary. Match those revisions by provider message id, or by the timestamp
+  // and role Bivy assigned when the message was first stored. Without this, each
+  // longer text revision is treated as a new assistant turn and the web transcript
+  // shows one bubble per token. Apply the same fold to `logged` first so sessions
+  // persisted by an older affected node repair themselves when next opened.
+  const merged: RuntimeMessage[] = [];
+  const keys: string[] = [];
+  const known = new Set<string>();
+  const identities = new Map<string, number>();
+  const add = (m: RuntimeMessage) => {
     const key = JSON.stringify(m);
-    if (!known.has(key)) {
+    if (known.has(key)) return;
+    const identified = m as RuntimeMessage & { id?: unknown; timestamp?: unknown };
+    const identity = typeof identified.id === "string" && identified.id
+      ? `id:${identified.id}`
+      : typeof identified.timestamp === "number" ? `time:${identified.role}:${identified.timestamp}` : "";
+    const index = identity ? identities.get(identity) : undefined;
+    if (index !== undefined) {
+      known.delete(keys[index]!);
+      keys[index] = key;
       known.add(key);
-      merged.push(m);
+      merged[index] = m;
+      return;
     }
-  }
+    known.add(key);
+    keys.push(key);
+    merged.push(m);
+    if (identity) identities.set(identity, merged.length - 1);
+  };
+  for (const m of logged) add(m);
+  for (const m of runtime) add(m);
   return merged;
 }
 

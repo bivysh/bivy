@@ -47,7 +47,9 @@ const calls = events.filter((event) => event.type === "tool_call") as Array<Runt
 const delegation = calls.find((event) => event.toolName === "spawn_agent");
 assert.equal(delegation?.detail?.kind, "delegation", "collabAgentToolCall becomes a sub-agent card");
 assert.equal(delegation?.detail?.label, "gpt-5.6-sol", "sub-agent model labels the card");
-const activity = calls.find((event) => event.toolName === "subagent_activity");
+const activities = calls.filter((event) => event.toolName === "subagent_activity");
+const activity = activities[0];
+assert.equal(activities.length, 1, "child lifecycle revisions update one sub-agent card");
 assert.equal(activity?.detail?.kind, "delegation", "Codex subAgentActivity becomes visible child-agent activity");
 assert.equal(activity?.detail?.label, "explorer", "child agent path labels its activity card");
 const activityResult = events.find((event) => event.type === "tool_result" && (event as { toolName?: string }).toolName === "subagent_activity") as (RuntimeEvent & { detail?: { result?: { text?: string } } }) | undefined;
@@ -64,6 +66,8 @@ assert.equal(shellResult?.detail?.result?.isError, true, "failed Codex command i
 
 const history = JSON.stringify(session.getMessages());
 assert.match(history, /Parent answer\./, "parent-thread prose reaches the transcript");
+assert.match(history, /Late answer\./, "parent prose arriving after turn/completed is drained before session.done");
+assert.equal(events.filter((event) => event.type === "message_end").length, 1, "a late parent stream seals one assistant message, not one transcript snapshot per token");
 assert.doesNotMatch(history, /CHILD_(?:PROSE|REASONING|COMPLETION)_MUST_NOT_LEAK/, "child-thread prose never corrupts the parent answer");
 assert.match(history, /spawn_agent/, "sub-agent activity persists across reopen");
 assert.match(history, /commandExecution|false/, "command activity persists across reopen");

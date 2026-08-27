@@ -8,7 +8,7 @@ import type { AgentInfo, AgentInstallCommand, AgentSessionOptions } from "../typ
 import { withExactCapabilitySurface, type AgentRuntime, type RuntimeCapabilities } from "../../runtime/types.js";
 import { PiRuntime } from "./runtime.js";
 
-export const PI_TESTED_VERSION = "0.84.2";
+export const PI_TESTED_VERSION = "0.84.3";
 
 const PI_CAPABILITIES: RuntimeCapabilities = withExactCapabilitySurface({
   toolInterception: true,
