@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-08-27
+
+### Changed
+
+- One-off automations are hidden from the main overview so recurring automation
+  management stays focused.
+- Supported agent certification was refreshed for the latest Codex and OpenCode
+  runtimes.
+
+### Fixed
+
+- Active web terminal sessions preserve their handoff path instead of dropping
+  terminal continuity.
+- Codex transcript repair keeps resumed conversations faithful after runtime
+  certification updates.
+- Revoked OAuth credentials are refreshed automatically instead of leaving
+  connected integrations stuck until manual reconnect.
+
 ## [0.11.0] - 2026-08-19
 
 ### Added
