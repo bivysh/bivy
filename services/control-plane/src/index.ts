@@ -5,6 +5,7 @@ import fs from "node:fs";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import express, { type Request, type Response, type NextFunction } from "express";
+import { ipKeyGenerator, rateLimit } from "express-rate-limit";
 import webpush from "web-push";
 import { validateCapabilityTags } from "@bivy/core";
 import { providerCredentialFingerprint, type Account, type NodeRecord, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, type AutomationRun, type InboundHook, GITHUB_IDENTITY_MODES, type GithubIdentityMode, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
@@ -3946,11 +3947,26 @@ async function processGithubEvent(hook: InboundHook, event: string, deliveryId: 
   return res.json({ ok: true, enqueued: false, reason: "ignored_event" });
 }
 
-app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(async (req, res) => {
+const githubWebhookRateLimit = rateLimit({
+  windowMs: 60_000,
+  limit: 600,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `${String(req.params.id ?? "unknown")}:${ipKeyGenerator(clientIp(req))}`,
+  message: { error: "Too many webhook requests" },
+});
+
+const centralGithubWebhookRateLimit = rateLimit({
+  windowMs: 60_000,
+  limit: 1_200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => ipKeyGenerator(clientIp(req)),
+  message: { error: "Too many webhook requests" },
+});
+
+app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], githubWebhookRateLimit, asyncHandler(async (req, res) => {
   const hookId = String(req.params.id);
-  if (await store.rateLimitExceeded("webhook-github", `${hookId}:${clientIp(req)}`, 600, 60_000)) {
-    return res.status(429).json({ error: "Too many webhook requests" });
-  }
   const hook = await store.getInboundHook(hookId);
   if (!hook || (hook.kind !== "github" && hook.kind !== "github_app")) return res.status(404).json({ error: "Unknown hook" });
   const raw: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from("");
@@ -3973,10 +3989,7 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
 // installation→account binding table, and everything else routes by
 // installation id to the bound account's enqueue path. An installation nobody
 // has bound (via the state-signed setup callback) is acked and dropped.
-app.post("/webhooks/central-github", asyncHandler(async (req, res) => {
-  if (await store.rateLimitExceeded("webhook-central-github", clientIp(req), 1_200, 60_000)) {
-    return res.status(429).json({ error: "Too many webhook requests" });
-  }
+app.post("/webhooks/central-github", centralGithubWebhookRateLimit, asyncHandler(async (req, res) => {
   const central = centralGithubAppConfig();
   if (!central?.webhookSecret) return res.status(404).json({ error: "Central GitHub App is not configured" });
   const raw: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from("");
