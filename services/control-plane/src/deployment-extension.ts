@@ -12,7 +12,8 @@ export type DeploymentOperation =
   | "relay.connect"
   | "push.deliver"
   | "automation.run"
-  | "ephemeral.provision";
+  | "ephemeral.provision"
+  | "session.create";
 
 export interface DeploymentDecision {
   allowed: boolean;
