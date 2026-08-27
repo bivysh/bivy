@@ -1137,6 +1137,14 @@ app.post("/account/extension/actions/:action", requireUser, asyncHandler(async (
   res.json(await deploymentExtension.accountAction(account.id, account.email, String(req.params.action)));
 }));
 
+app.post("/node/policy/check", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const operation = String(req.body?.operation ?? "");
+  if (operation !== "session.create") return res.status(400).json({ error: "Unsupported node policy operation" });
+  const idempotencyKey = typeof req.body?.idempotencyKey === "string" ? req.body.idempotencyKey.trim() : undefined;
+  res.json(await deploymentDecision(node.accountId, operation, idempotencyKey));
+}));
+
 // --- Node registry ------------------------------------------------------
 
 // A signed-in user enrolls a node (by its self-generated nodeId). Returns an

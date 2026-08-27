@@ -3016,6 +3016,17 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
       });
       return;
     }
+    const remoteSessionRequestId = requestId ?? randomUUID();
+    const sessionAdmission = await admitRelaySessionCreate(remoteSessionRequestId);
+    if (!sessionAdmission.allowed) {
+      relay?.sendEvent({
+        type: "session.error",
+        code: sessionAdmission.code || "remote_session_limit",
+        error: sessionAdmission.error,
+        requestId,
+      });
+      return;
+    }
     let record: SessionRecord;
     try {
       // Deduped by requestId so a client's post-reconnect retry adopts the
@@ -3296,6 +3307,23 @@ async function modelAuthFetch(pathname: string, init: RequestInit = {}) {
   headers.set("authorization", `Bearer ${sessionAdvertiseTarget.enrollmentToken}`);
   if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
   return fetch(`${sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "")}${pathname}`, { ...init, headers });
+}
+
+async function admitRelaySessionCreate(idempotencyKey: string): Promise<{ allowed: true } | { allowed: false; error: string; code?: string }> {
+  // Self-hosted/direct deployments without an account extension stay unrestricted:
+  // the control plane answers allowed when no deployment extension is configured.
+  const res = await modelAuthFetch("/node/policy/check", {
+    method: "POST",
+    body: JSON.stringify({ operation: "session.create", idempotencyKey }),
+  });
+  if (!res) return { allowed: true };
+  const decision = await res.json().catch(() => ({})) as { allowed?: boolean; reason?: string; code?: string; error?: string };
+  if (res.ok && decision.allowed !== false) return { allowed: true };
+  return {
+    allowed: false,
+    code: decision.code,
+    error: decision.reason || decision.error || "This account has reached its remote session allowance.",
+  };
 }
 
 // Debounced model-auth sync trigger. A relay wake (`work.available`) fires this
