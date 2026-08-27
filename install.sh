@@ -532,14 +532,23 @@ if [ "${BIVY_INSTALL_ALL_AGENTS:-}" = "1" ]; then
 fi
 
 if [ -f "$STATE_DIR/cli.json" ]; then
-  info "Existing Bivy configuration found; applying the update."
+  if [ -n "${BIVY_SESSION_TOKEN:-}${BIVY_NODE_CLAIM_CODE:-}" ]; then
+    info "Existing Bivy configuration found; enrolling with the provided account token."
+    # The hosted "Connect a Machine" command intentionally includes a fresh
+    # account session/claim. Treat that as an explicit re-pair request even when
+    # this machine already has local Bivy state; otherwise the installer would
+    # only update/restart the old enrollment and the browser would keep waiting.
+    "$BIVY_BIN" relay:setup || warn "Could not enroll with the provided account token. Existing configuration was left in place."
+  else
+    info "Existing Bivy configuration found; applying the update."
+  fi
   # A Bivy node is remote-only — it has to keep running to stay reachable through
-  # the relay — so an update RESTARTS the background service to pick up the new
-  # build and reconnect. It never drops you at a local 'bivy start'. `bivy
-  # restart` exits non-zero when there is no service to restart; in that case
-  # install one so the node keeps running. (Don't gate on cli.json's `service`
-  # flag: a box can have an active service while that flag is unset, which is
-  # exactly how an update used to silently do nothing.)
+  # the relay — so an update/re-enroll RESTARTS the background service to pick up
+  # the new build and reconnect. It never drops you at a local 'bivy start'.
+  # `bivy restart` exits non-zero when there is no service to restart; in that
+  # case install one so the node keeps running. (Don't gate on cli.json's
+  # `service` flag: a box can have an active service while that flag is unset,
+  # which is exactly how an update used to silently do nothing.)
   if "$BIVY_BIN" restart; then
     :
   else
