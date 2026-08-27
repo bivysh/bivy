@@ -38,5 +38,5 @@ Render picks up [`render.yaml`](../render.yaml) at the repo root and publishes
 this directory. The only build step is the `install.sh` copy. No environment
 variables, no secrets.
 
-Bivy is distributed on [npm](https://www.npmjs.com/package/bivy), so this site
+Bivy is distributed on [npm](https://www.npmjs.com/package/@bivy/bivy), so this site
 hosts no release tarball or manifest. See [`docs/releasing.md`](../docs/releasing.md).

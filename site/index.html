@@ -3,17 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Bivy — Run coding agents on machines you own</title>
-  <meta name="description" content="Bivy runs Claude Code, Codex, Gemini CLI, Aider and other coding agents on your own hardware, with your own keys — then gives you a real chat app for every session, reachable from anywhere: transcript, diffs, approvals, and a terminal when you need one. Free, 10 runs a week. Source-available and self-hostable.">
+  <title>Bivy — Agent workspace for machines you own</title>
+  <meta name="description" content="Bivy is an open-source agent workspace for coding agents on your own machines: live Sessions, unattended Runs, Automations, routing, checks, and Receipts across Claude Code, Codex, Pi, OpenCode, and more.">
   <meta name="theme-color" content="#fbfaf8">
-  <meta property="og:title" content="Bivy — Run coding agents on machines you own">
-  <meta property="og:description" content="Coding agents on your hardware, with your keys — a real chat app for every session, reachable anywhere: diffs, approvals, a terminal when you need it. Free, 10 runs a week, no repo upload.">
+  <meta property="og:title" content="Bivy — Agent workspace for machines you own">
+  <meta property="og:description" content="Run coding agents where real work lives — then use live Sessions, unattended Runs, Automations, checks, and Receipts from terminal, browser, or phone.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://bivy.sh">
   <meta property="og:image" content="https://bivy.sh/screenshots/app-session.png">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="Bivy — Run coding agents on machines you own">
-  <meta name="twitter:description" content="Coding agents on your hardware, with your keys — a real chat app for every session, reachable anywhere: diffs, approvals, a terminal when you need it. Free, 10 runs a week, no repo upload.">
+  <meta name="twitter:title" content="Bivy — Agent workspace for machines you own">
+  <meta name="twitter:description" content="Run coding agents where real work lives — live Sessions, unattended Runs, Automations, checks, and Receipts across your machines.">
   <meta name="twitter:image" content="https://bivy.sh/screenshots/app-session.png">
   <link rel="icon" href="./tent.svg">
   <link rel="icon" type="image/png" href="./tent.png">
@@ -444,14 +444,13 @@
   <!-- HERO -->
   <section class="hero">
     <div class="wrap">
-      <h1>The Claude Code experience — for any agent, on hardware you own.</h1>
+      <h1>Run coding agents on your own machines — from live sessions to checked automations.</h1>
       <p class="lede">
-        The terminal-and-app experience of a hosted coding agent — but for <em>any</em>
-        agent (Claude Code, Codex, Gemini CLI or nine others), running on your own laptop
-        or server, with your keys, your sign-ins and your repo, and none of the run caps,
-        token markup, or repo uploads the cloud providers make you accept. Every session
-        also lands in a real chat app on your phone: the full transcript, the diffs, the
-        approval it's waiting on, and a terminal only when you want one.
+        Bivy turns your workstations and servers into an open-source agent workspace.
+        Start Claude Code, Codex, Pi, OpenCode, or another agent where your repo and
+        tools already live; continue from phone or browser; queue unattended Runs from
+        issues, CI, schedules, or webhooks; and review checks, diffs, PRs, and Receipts
+        before you trust the result.
       </p>
 
       <div class="install">
@@ -463,21 +462,20 @@
         if it's missing. Want to read it first? <a href="https://bivy.sh/install.sh">View the script</a>.
       </p>
       <p class="install-note">
-        You'll run agents on your own Mac or Linux machine — the phone and browser app connect
-        to it. No spare machine? The app can launch a short-lived cloud runner for you.
+        You'll run agents on your own Mac or Linux Machine — the phone and browser app connect
+        to it. No repository upload, no vendor sandbox, no token markup.
       </p>
 
       <div class="hero-cta">
         <a href="https://app.bivy.sh" class="btn btn-primary">Start free</a>
-        <a href="#app" class="btn btn-ghost">See the app</a>
+        <a href="#github" class="btn btn-ghost">See Runs &amp; automations</a>
       </div>
 
       <p class="sub" style="margin:22px 0 0">
-        You own the machine, the keys, and the code — no vendor sandbox, no repository
-        upload, no token markup. Agents run in real terminals on hardware you control,
-        and Bivy adds the session layer, approvals, and remote access around them.
-        Free, 10 runs a week, forever: no credit card, no trial clock. Setup is one command
-        and a guided wizard, and uninstall is one command too.
+        Phone/browser continuity is the hook, not the whole system. Bivy also gives each
+        task a durable Session, routes work to the Machine and agent you choose, runs
+        deterministic checks where configured, and reports an explicit outcome instead of
+        treating "the agent exited" as success.
       </p>
 
       <p class="runs-on">
@@ -499,17 +497,13 @@
   <section id="app">
     <div class="wrap">
       <p class="kicker">The app</p>
-      <h2>The app a hosted agent keeps for itself — for any agent, on your hardware.</h2>
+      <h2>One surface for live Sessions and background Runs.</h2>
       <p class="prose">
-        This is the mobile companion most agent CLIs don't ship on their own: whichever
-        agent and model you're running — Claude Code, Codex, or nine others — on machines
-        you own, with your own keys, reachable from anywhere. Not a PTY squeezed onto a
-        small screen, but a real chat client — read the transcript, scan the diffs,
-        approve the one thing it's waiting on, and steer the run from a composer built for
-        it, with dictation and attachments. Kick work off from the couch and let it run on
-        the hardware in your pocket's reach — plus the same label-an-issue,
-        get-a-pull-request-back workflow other agents lock to their own hosted compute. See
-        <a href="#github" style="color:var(--accent);text-decoration:none">the GitHub work queue</a> below.
+        The phone/browser app is the place you check in, but it is not just a remote
+        terminal. Open a live Session to read the transcript, scan diffs, answer a
+        question, approve the tool it is waiting on, attach a screenshot, or take over in a
+        real terminal. Open a Run to see the source event, routing, attempts, checks,
+        branch, PR, artifacts, and Receipt. The work keeps happening on your Machine.
       </p>
 
       <div class="app-split">
@@ -592,35 +586,33 @@
   <!-- FEATURES -->
   <section>
     <div class="wrap">
-      <p class="kicker">What's in 0.1</p>
-      <h2>The session layer around agents you already use.</h2>
-      <p class="prose">Bivy does not replace agent CLIs. It runs them in real PTYs and adds
-      what they individually lack: durability, remote access, approvals, and a consistent
-      way to move between them.</p>
+      <p class="kicker">What Bivy adds</p>
+      <h2>The machine-native workspace around agents you already use.</h2>
+      <p class="prose">Bivy does not replace agent CLIs. It runs them where real work lives
+      and adds the system layer around them: live Sessions, unattended Runs, routing,
+      checks, Receipts, approvals, and recovery.</p>
 
       <div class="pillars">
         <div class="pillar">
-          <p class="eyebrow">Any local agent</p>
-          <h3>Ten agents supported today — and anything else you point it at</h3>
-          <p>Pi, Claude Code, Codex, OpenCode, Gemini CLI, Qwen Code, Goose, Aider, Cline
-          and Crush, each driven through its native CLI. Bivy installs the ones you pick.
-          Any other command works via <code>bivy run -- ./your-agent</code>.</p>
+          <p class="eyebrow">Real environments</p>
+          <h3>Use the repo, services, networks, caches, and GPUs already there</h3>
+          <p>Run Claude Code, Codex, Pi, OpenCode, Gemini CLI and more on a workstation,
+          server, or GPU box you control. The agent sees the actual checkout, local
+          services, private APIs, and toolchain — not a freshly cloned approximation.</p>
         </div>
         <div class="pillar">
-          <p class="eyebrow">Durable, movable sessions</p>
-          <h3>Sessions that survive — and fork to any node</h3>
-          <p>Every session has a durable append-only event log and its own git worktree, so
-          detaching your terminal or restarting the daemon never loses it. Fork a running
-          session onto a different agent, a different model, or a different machine,
-          carrying the transcript and any uncommitted work with it.</p>
+          <p class="eyebrow">Portable Sessions</p>
+          <h3>Start in terminal, continue in browser or phone</h3>
+          <p>A Session survives terminal detach and daemon restarts. Reopen it from another
+          device to answer questions, approve tools, attach files, inspect diffs, or take
+          over in a real terminal when chat is not enough.</p>
         </div>
         <div class="pillar">
-          <p class="eyebrow">Keys, synced</p>
-          <h3>Credentials synced across every node, end to end</h3>
-          <p>An encrypted local vault, plus <code>env://</code> and <code>op://</code>
-          (1Password) references resolved at start. Bivy-managed provider credentials sync
-          end-to-end across every node you own — add a key once. Agent-native CLI logins
-          (Claude Code, Codex, Gemini CLI) may need a one-time sign-in per node.</p>
+          <p class="eyebrow">Checked Runs</p>
+          <h3>Turn prompts and events into accountable background work</h3>
+          <p>Queue work from the app, GitHub, Linear, Slack, CI, schedules, or signed
+          webhooks. Bivy routes it to the right Machine, agent, model, sandbox, and attempt
+          policy, then reports checks, branches, PRs, artifacts, and a bounded Receipt.</p>
         </div>
       </div>
 
@@ -645,10 +637,10 @@
           asked about more, and approve from terminal, browser, or phone.</p>
         </div>
         <div class="feature">
-          <h3>GitHub issue to pull request</h3>
-          <p>Label an issue <code>bivy</code>, or mention the Bivy GitHub App in a comment.
-          A machine you own clones the repo, works in an isolated worktree, and opens the
-          pull request itself.</p>
+          <h3>Automations with a Session behind every job</h3>
+          <p>Label an issue, route a failed CI job, or send a signed webhook. The work is
+          not an opaque cloud task: Bivy creates a Run with a live Session you can open if
+          it gets stuck, needs approval, or produces a change you want to inspect.</p>
         </div>
         <div class="feature">
           <h3>Terminal takeover</h3>
@@ -662,10 +654,10 @@
           Azure, Ollama, LM Studio, vLLM or SGLang endpoints.</p>
         </div>
         <div class="feature">
-          <h3>Runs on any machine you own</h3>
-          <p>A laptop, a home server, a Raspberry Pi, or a VPS, droplet or EC2 instance you
-          already pay for — if you can install it there, Bivy runs there. Connect as many
-          machines as you like, on every plan.</p>
+          <h3>Routes across machines, agents, and models</h3>
+          <p>Pick the workstation, private-network server, GPU box, agent, model, sandbox,
+          and approval mode each task needs. Connect as many Machines as you like, on every
+          plan.</p>
         </div>
       </div>
     </div>
@@ -767,45 +759,44 @@
     </div>
   </section>
 
-  <!-- GITHUB QUEUE -->
+  <!-- RUNS -->
   <section id="github">
     <div class="wrap">
-      <p class="kicker">GitHub work queue</p>
-      <h2>Label an issue. Get a pull request back.</h2>
+      <p class="kicker">Unattended Runs</p>
+      <h2>Automations with a live session behind every job.</h2>
       <p class="prose">
-        Work happens on a machine you own, with your local toolchain and your
-        credentials. Bivy's control plane sees the issue title, body, and routing
-        label — never your repository contents.
+        Queue work from issues, CI, schedules, Slack, Linear, or signed webhooks. Work
+        happens on a Machine you control, with its local toolchain and credentials. If the
+        job stalls, asks for approval, or opens a change, you can open the underlying
+        Session instead of debugging a black box.
       </p>
 
       <ol class="steps">
         <li>
-          <b>Trigger it in GitHub</b>
-          <span>Add the <code>bivy</code> label to route to your default node, or
-          <code>bivy/mac-mini</code> to target one. Or mention the Bivy GitHub App in
-          a comment.</span>
+          <b>Trigger it from a real event</b>
+          <span>Add a GitHub label, mention the Bivy GitHub App, catch a failed CI job,
+          run on a schedule, or send a signed webhook.</span>
         </li>
         <li>
-          <b>Bivy queues the work</b>
-          <span>A signed webhook reaches the control plane, which verifies it and records
-          a work item. Redeliveries are de-duplicated.</span>
+          <b>Bivy queues and routes the Run</b>
+          <span>The control plane verifies the event, de-duplicates redeliveries, and picks
+          the configured Machine, agent, model, sandbox, approval mode, and attempt limit.</span>
         </li>
         <li>
-          <b>Your node claims it</b>
-          <span>Claiming is atomic, so only one machine runs a given issue. The node
-          comments on the issue naming itself, so you can see work has started.</span>
+          <b>Your Machine claims it</b>
+          <span>Claiming is atomic, so only one Machine runs a given item. The Machine does
+          the work where the repo, tools, network, and credentials live.</span>
         </li>
         <li>
-          <b>The agent opens the PR</b>
-          <span>It works in a <code>bivy/issue-&lt;n&gt;</code> worktree, runs your tests,
-          pushes a branch, and opens the pull request. Review it from your phone.</span>
+          <b>You review the outcome</b>
+          <span>Bivy tracks the live Session, worktree, checks, branch, PR, artifacts, and
+          Receipt. A successful process exit alone is never treated as proof of success.</span>
         </li>
       </ol>
 
       <p class="upgrade-line">
-        The GitHub work queue is free — it draws from your 10 runs a week, shared with
-        every other source. Go
-        <a href="#pricing">Pro — $15/mo</a> for unlimited runs.
+        Runs are free to start — they draw from your 10 runs a week, shared across every
+        source. Go <a href="#pricing">Pro — $15/mo</a> for unlimited runs.
       </p>
     </div>
   </section>
@@ -875,19 +866,17 @@
   <!-- SELF HOST -->
   <section>
     <div class="wrap">
-      <p class="kicker">Source available</p>
+      <p class="kicker">Open source</p>
       <h2>Yours to read, fork, and self-host.</h2>
       <div class="prose">
         <p>
-          Bivy Core — the node daemon, CLI, runtime adapters, web client, relay, and the
-          baseline control plane — is published under the Functional Source License
-          (FSL-1.1-ALv2). You may use, modify, and self-host it for any purpose except
-          offering a competing service. Each release becomes Apache-2.0 two years after
-          it ships.
+          Bivy Core — the node daemon, CLI, runtime adapters, web client, relay, and
+          control plane — is open source under AGPL-3.0.
         </p>
         <p>
           Remote access is not locked to us. Point the node at your own relay and control
-          plane and nothing about the product changes.
+          plane and nothing about the product changes. The CLI also works locally without
+          an account or hosted server.
         </p>
       </div>
 
@@ -966,6 +955,14 @@
       <h2>FAQ</h2>
       <div class="faq">
         <details open>
+          <summary>What is Bivy?</summary>
+          <p>Bivy is an open-source agent workspace for machines you control. It runs coding
+          agents in your real environments, lets you steer live Sessions from terminal,
+          browser, or phone, and turns events into checked unattended Runs with visible
+          outcomes and Receipts. Bivy Cloud is the hosted app and relay for people who do
+          not want to run the control plane themselves.</p>
+        </details>
+        <details>
           <summary>Does my code ever leave my machine?</summary>
           <p>No. Agents run in real terminals on the node you control. The relay forwards
           encrypted frames it cannot read. The control plane holds your account, your node
@@ -1033,11 +1030,9 @@
           You own TLS, backups, upgrades, and hardening.</p>
         </details>
         <details>
-          <summary>What does "source available" mean here?</summary>
-          <p>The Functional Source License lets you use, modify, and self-host the code
-          for any purpose except offering a competing commercial service. Two years after
-          each release, that version converts to Apache-2.0. It is not an OSI-approved
-          open source licence, and we do not describe it as one.</p>
+          <summary>Is Bivy open source?</summary>
+          <p>Yes. Bivy Core is open source under AGPL-3.0: node, CLI, runtime adapters,
+          web client, relay, and control plane.</p>
         </details>
         <details>
           <summary>How stable is 0.1?</summary>
@@ -1074,7 +1069,7 @@
   <div class="wrap foot">
     <div>
       <a class="brand" href="./index.html" style="margin-bottom:8px"><img src="./tent.png" alt="" width="22" height="22"> Bivy</a>
-      <div class="legal">© 2026 Bivy · Core under FSL-1.1-ALv2</div>
+      <div class="legal">© 2026 Bivy · Open source under AGPL-3.0</div>
     </div>
     <nav>
       <a href="#docs">Docs</a>
