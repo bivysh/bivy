@@ -5,12 +5,14 @@ import fs from "node:fs";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import express, { type Request, type Response, type NextFunction } from "express";
+import { ipKeyGenerator, rateLimit } from "express-rate-limit";
 import webpush from "web-push";
 import { validateCapabilityTags } from "@bivy/core";
-import { providerCredentialFingerprint, type Account, type NodeRecord, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, type AutomationRun, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
+import { providerCredentialFingerprint, type Account, type NodeRecord, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, type AutomationRun, type InboundHook, GITHUB_IDENTITY_MODES, type GithubIdentityMode, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
+import { centralGithubAppConfig, centralInstallUrl, applyCentralInstallationEvent, resolveGithubIdentity } from "./central-github-app.js";
 import { maybeAutoProvision, planAutoProvision, hostedExecutionReadiness, mintHostedInstallationToken, reapSettledHostedMachine, reconcileAllHostedMachines, reconcileAllReadyCapacity, sweepAllOrphanProviderResources, validateHostedProviderToken, markHostedMachineMilestone, EPHEMERAL_MILESTONES, ephemeralMachinesEnabled } from "./ephemeral-provisioner.js";
 import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecret } from "./hosted-crypto.js";
-import { listAppInstallations, listInstallationRepositories } from "./hosted-github-auth.js";
+import { listAppInstallations, listInstallationRepositories, listInstallationBranches, getAppInstallation } from "./hosted-github-auth.js";
 import { correlateHostedSessions } from "./hosted-correlation.js";
 import { countActiveAccountSessions } from "./session-count.js";
 import { createStore } from "./store-factory.js";
@@ -98,6 +100,11 @@ function assertProductionConfig() {
   }
   if (Boolean(process.env.JANITOR_SERVICE_URL) !== Boolean(process.env.JANITOR_PROXY_SECRET)) {
     problems.push("JANITOR_SERVICE_URL and JANITOR_PROXY_SECRET must be configured together");
+  }
+  if (Boolean(process.env.BIVY_CENTRAL_GITHUB_APP_ID) !== Boolean(process.env.BIVY_CENTRAL_GITHUB_APP_PRIVATE_KEY)) {
+    // Half-configured would silently disable the central app while the operator
+    // believes it is on — refuse to boot instead.
+    problems.push("BIVY_CENTRAL_GITHUB_APP_ID and BIVY_CENTRAL_GITHUB_APP_PRIVATE_KEY must be configured together");
   }
   if (problems.length > 0) {
     console.error("Refusing to start: insecure production configuration:\n  - " + problems.join("\n  - "));
@@ -742,9 +749,9 @@ function asyncHandler(fn: (req: Request, res: Response, next: NextFunction) => P
 // --- GitHub OAuth sign-in -----------------------------------------------------
 // Primary sign-in for the developer ICP. We resolve the account by the user's
 // PRIMARY VERIFIED GitHub email so a GitHub login and a magic-link login for the
-// same address land on the SAME account. Minimal scope at login (read:user,
-// user:email); repo scope is requested later, only when a repo is connected to
-// the work queue.
+// same address land on the SAME account. Login requests read:user/user:email
+// plus read:org solely to retain installer target ids; repository content stays
+// behind the separately-installed central GitHub App.
 // Accept the BIVY_-prefixed names as a fallback. GitHub reserves the `GITHUB_`
 // prefix for Actions secrets, so the canonical secrets are stored as
 // BIVY_GITHUB_OAUTH_CLIENT_ID / _SECRET (see scripts/sync-github-env.sh). A
@@ -774,7 +781,10 @@ type GithubEmailFailure = "token-exchange" | "no-verified-email";
  * ("could not read a verified email") and are impossible to diagnose from a fresh
  * install — which step actually broke never reaches the operator.
  */
-async function githubPrimaryEmail(code: string, redirectUri: string): Promise<{ email?: string; reason?: GithubEmailFailure }> {
+async function githubPrimaryEmail(
+  code: string,
+  redirectUri: string,
+): Promise<{ email?: string; installTargetIds?: string[]; reason?: GithubEmailFailure }> {
   let tokenRes: Awaited<ReturnType<typeof fetch>>;
   try {
     tokenRes = await fetch("https://github.com/login/oauth/access_token", {
@@ -796,26 +806,38 @@ async function githubPrimaryEmail(code: string, redirectUri: string): Promise<{ 
   }
 
   const ghHeaders = { authorization: `Bearer ${accessToken}`, accept: "application/vnd.github+json", "user-agent": "bivy" };
-  const emailsRes = await fetch("https://api.github.com/user/emails", { headers: ghHeaders });
+  const [emailsRes, userRes, membershipsRes] = await Promise.all([
+    fetch("https://api.github.com/user/emails", { headers: ghHeaders }),
+    fetch("https://api.github.com/user", { headers: ghHeaders }),
+    fetch("https://api.github.com/user/memberships/orgs?state=active&per_page=100", { headers: ghHeaders }),
+  ]);
+  const user = userRes.ok
+    ? await userRes.json().catch(() => ({})) as { id?: number | string; email?: string | null }
+    : {};
+  const installTargetIds = user.id == null ? [] : [String(user.id)];
+  if (membershipsRes.ok) {
+    const memberships = await membershipsRes.json().catch(() => []) as Array<{
+      state?: string; role?: string; organization?: { id?: number | string };
+    }>;
+    for (const membership of memberships) {
+      if (membership.state === "active" && membership.role === "admin" && membership.organization?.id != null) {
+        installTargetIds.push(String(membership.organization.id));
+      }
+    }
+  } else {
+    console.warn(`[auth] GitHub org membership lookup failed with status ${membershipsRes.status}; org App installs will require a fresh GitHub sign-in`);
+  }
   if (emailsRes.ok) {
     const emails = (await emailsRes.json().catch(() => [])) as Array<{ email: string; primary: boolean; verified: boolean }>;
     const chosen = emails.find((e) => e.primary && e.verified) ?? emails.find((e) => e.verified);
-    if (chosen?.email) return { email: chosen.email.toLowerCase() };
+    if (chosen?.email) return { email: chosen.email.toLowerCase(), installTargetIds };
     console.warn(`[auth] GitHub /user/emails returned ${emails.length} address(es) but none were verified`);
   } else {
-    // Non-OK here almost always means the granted token lacks the user:email scope
-    // (or the OAuth grant wasn't SSO-authorized for the org).
     console.warn(`[auth] GitHub /user/emails failed with status ${emailsRes.status} — the token is likely missing the user:email scope`);
   }
-  // Fallback to the public profile email if the emails endpoint returned nothing usable.
-  const userRes = await fetch("https://api.github.com/user", { headers: ghHeaders });
-  if (userRes.ok) {
-    const user = (await userRes.json().catch(() => ({}))) as { email?: string | null };
-    if (user.email) return { email: user.email.toLowerCase() };
-    console.warn("[auth] GitHub /user returned no public email (email set to private and no verified address was readable)");
-  } else {
-    console.warn(`[auth] GitHub /user failed with status ${userRes.status}`);
-  }
+  if (user.email) return { email: user.email.toLowerCase(), installTargetIds };
+  if (!userRes.ok) console.warn(`[auth] GitHub /user failed with status ${userRes.status}`);
+  else console.warn("[auth] GitHub /user returned no public email (email set to private and no verified address was readable)");
   return { reason: "no-verified-email" };
 }
 
@@ -946,7 +968,10 @@ app.get("/auth/github/start", asyncHandler(async (req, res) => {
   const url = new URL("https://github.com/login/oauth/authorize");
   url.searchParams.set("client_id", githubClientId!);
   url.searchParams.set("redirect_uri", `${baseUrl(req)}/auth/github/callback`);
-  url.searchParams.set("scope", "read:user user:email"); // minimal scope at login
+  // read:org lets the callback prove which organizations this GitHub identity
+  // administers. That proof is retained only as target ids (never the OAuth
+  // token) and prevents a different browser GitHub identity from binding an App.
+  url.searchParams.set("scope", "read:user user:email read:org");
   url.searchParams.set("state", state);
   url.searchParams.set("allow_signup", "true");
   res.redirect(url.toString());
@@ -963,7 +988,7 @@ app.get("/auth/github/callback", asyncHandler(async (req, res) => {
     // dead-end error page they'd have to navigate away from by hand.
     return res.redirect(`/?authError=expired`);
   }
-  const { email, reason } = await githubPrimaryEmail(code, `${baseUrl(req)}/auth/github/callback`);
+  const { email, installTargetIds, reason } = await githubPrimaryEmail(code, `${baseUrl(req)}/auth/github/callback`);
   if (!email || !validEmail(email)) {
     const errCode = reason === "token-exchange" ? "github-config" : "github-email";
     // The device (CLI/app) flow finishes in a throwaway browser tab that never
@@ -985,6 +1010,8 @@ app.get("/auth/github/callback", asyncHandler(async (req, res) => {
   }
   // Resolve by verified email → links GitHub and magic-link to one account.
   const account = await store.findOrCreateAccount(email);
+  const githubUserId = installTargetIds?.[0];
+  if (githubUserId) await store.setGithubIdentity(account.id, githubUserId, installTargetIds ?? []);
   if (stored.deviceId) {
     await store.completeDeviceLogin(stored.deviceId, account.id);
     recordFunnelEvent("sign_in_completed", "github_device");
@@ -2040,7 +2067,9 @@ app.get("/account/github-app", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const hooks = await store.listGithubAppHooks(client.accountId);
-  if (!hooks.length) return res.json({ connected: false, apps: [] });
+  const central = centralGithubAppConfig();
+  const centralInstallations = central ? await syncCentralInstallationsForAccount(client.accountId) : [];
+  if (!hooks.length && !centralInstallations.length) return res.json({ connected: false, apps: [] });
   // Which node holds each app's key and is servicing it. The control plane can't
   // run an app itself, so "connected" (a hook exists) is not the same as "a live
   // node is serving it" — a deleted/reinstalled node clears servingNodeId.
@@ -2086,10 +2115,45 @@ app.get("/account/github-app", asyncHandler(async (req, res) => {
       servingNodeSeenAt: hook.servingNodeSeenAt,
       // A hosted App is served on demand by ephemeral runners; it intentionally
       // has no servingNodeId and must not be presented as broken for that reason.
-      hosted: Boolean(hostedAppId && hook.appId === hostedAppId),
+      hosted: Boolean((hostedAppId && hook.appId === hostedAppId) || (central && centralInstallations.length && hook.appId === central.appId)),
+      central: Boolean(central && centralInstallations.length && hook.appId === central.appId),
+      ...(central && hook.appId === central.appId ? {
+        installed: centralInstallations.length > 0,
+        installations: centralInstallations.map(({ installationId, githubAccount, githubAccountType, repositorySelection, createdAt }) => ({
+          installationId, githubAccount, githubAccountType, repositorySelection, createdAt,
+        })),
+      } : {}),
     };
   };
   const apps = hooks.map(describe);
+  // Installation binding is itself a connected source. Do not wait for the first
+  // webhook to lazily create a hook row before showing the central App in
+  // Automations; doing so made a newly-installed hosted source look absent.
+  if (central && centralInstallations.length && !apps.some((entry) => entry.appId === central.appId)) {
+    apps.push({
+      connected: true,
+      name: central.slug || "Bivy GitHub App",
+      slug: central.slug || "",
+      mention: central.slug || "",
+      appId: central.appId,
+      hookId: `central:${central.appId}`,
+      editUrl: `https://github.com/apps/${encodeURIComponent(central.slug || "")}`,
+      installUrl: central.slug ? `https://github.com/apps/${encodeURIComponent(central.slug)}/installations/new` : "https://github.com/settings/installations",
+      installed: true,
+      installCount: undefined,
+      defaultNode: undefined,
+      triggerAccess: undefined,
+      servingNodeSeenAt: undefined,
+      hosted: true,
+      central: true,
+      servedBy: null,
+      owner: centralInstallations.length === 1 ? centralInstallations[0].githubAccount : undefined,
+      ownerType: centralInstallations.length === 1 ? centralInstallations[0].githubAccountType : undefined,
+      installations: centralInstallations.map(({ installationId, githubAccount, githubAccountType, repositorySelection, createdAt }) => ({
+        installationId, githubAccount, githubAccountType, repositorySelection, createdAt,
+      })),
+    });
+  }
   // Flat top-level fields describe the first app, so clients written against the
   // single-app shape keep working against a multi-app account.
   res.json({ ...apps[0], apps });
@@ -2157,9 +2221,42 @@ app.post("/account/hosted-github-app/connect", requireUser, asyncHandler(async (
 app.get("/account/hosted-github-repositories", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   const hosted = await store.getHostedProvisioning(account.id);
-  if (!hosted.githubApp) return res.status(409).json({ error: "No hosted GitHub App is configured" });
+  const central = centralGithubAppConfig();
+  const centralInstallations = central ? await syncCentralInstallationsForAccount(account.id) : [];
+  const identity = resolveGithubIdentity({ hosted, central, centralInstallations });
+  if (identity?.kind !== "app") return res.status(409).json({ error: "No hosted GitHub App is configured" });
   try {
-    res.json({ repos: await listInstallationRepositories(hosted.githubApp) });
+    const installations = identity.mode === "central-app"
+      ? centralInstallations.map((installation) => ({
+          appId: identity.appId,
+          installationId: installation.installationId,
+          privateKeyPem: identity.privateKeyPem,
+        }))
+      : [{ appId: identity.appId, installationId: identity.installationId, privateKeyPem: identity.privateKeyPem }];
+    const lists = await Promise.all(installations.map((installation) => listInstallationRepositories(installation)));
+    const repos = [...new Map(lists.flat().map((repo) => [repo.slug, repo])).values()]
+      .sort((a, b) => a.slug.localeCompare(b.slug));
+    res.json({ repos });
+  } catch (error) {
+    res.status(502).json({ error: String((error as Error)?.message || error).slice(0, 240) });
+  }
+}));
+
+app.get("/account/hosted-github-repositories/:owner/:repo/branches", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const repo = `${String(req.params.owner)}/${String(req.params.repo)}`;
+  const hosted = await store.getHostedProvisioning(account.id);
+  const central = centralGithubAppConfig();
+  const centralInstallations = central ? await syncCentralInstallationsForAccount(account.id) : [];
+  const identity = resolveGithubIdentity({ hosted, central, centralInstallations }, repo);
+  if (identity?.kind !== "app") return res.status(409).json({ error: "No hosted GitHub App is configured" });
+  try {
+    const branches = await listInstallationBranches({
+      appId: identity.appId,
+      installationId: identity.installationId,
+      privateKeyPem: identity.privateKeyPem,
+    }, repo);
+    res.json({ repo, branches });
   } catch (error) {
     res.status(502).json({ error: String((error as Error)?.message || error).slice(0, 240) });
   }
@@ -3181,6 +3278,13 @@ app.put("/account/hosted-provisioning", asyncHandler(async (req, res) => {
   }
   const patch: Partial<HostedProvisioning> = {};
   if (typeof body.enabled === "boolean") patch.enabled = body.enabled;
+  // GitHub identity mode: a non-secret selector (central-app | own-app | token);
+  // null resets to the default resolution order.
+  if (typeof body.githubIdentity === "string" && (GITHUB_IDENTITY_MODES as readonly string[]).includes(body.githubIdentity)) {
+    patch.githubIdentity = body.githubIdentity as GithubIdentityMode;
+  } else if (body.githubIdentity === null) {
+    patch.githubIdentity = undefined;
+  }
   if (typeof body.githubToken === "string") patch.githubToken = body.githubToken;
   if (body.githubApp != null && typeof body.githubApp === "object") patch.githubApp = body.githubApp as HostedProvisioning["githubApp"];
   if (providerTokens && typeof providerTokens === "object") patch.providerTokens = providerTokens as Record<string, string>;
@@ -3218,6 +3322,190 @@ app.get("/account/hosted-audit", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   res.json(await store.listHostedAudit(client.accountId, 50));
+}));
+
+// ── Central GitHub App (managed tier) ───────────────────────────────────────
+// Reconcile installations from GitHub as well as from the Setup callback.
+// GitHub sends an already-installed target to its Configure screen and may not
+// revisit our Setup URL, so callback-only binding incorrectly reports that App
+// as absent. Account ids come from the signed-in user's OAuth identity and only
+// include organizations where that user is an administrator.
+async function syncCentralInstallationsForAccount(accountId: string) {
+  const central = centralGithubAppConfig();
+  if (!central) return [];
+  const account = await store.getAccount(accountId);
+  const allowed = new Set(account?.githubInstallTargetIds ?? []);
+  if (allowed.size > 0) {
+    const discovered = await listAppInstallations(central.appId, central.privateKeyPem);
+    for (const installation of discovered) {
+      if (!installation.accountId || !allowed.has(installation.accountId)) continue;
+      const existing = await store.getCentralGithubInstallation(installation.id);
+      if (existing && existing.accountId !== accountId) continue;
+      if (!existing) {
+        const detail = await getAppInstallation(central.appId, central.privateKeyPem, installation.id);
+        await store.putCentralGithubInstallation({
+          installationId: installation.id,
+          accountId,
+          githubAccount: detail.account || installation.account,
+          githubAccountType: detail.accountType || installation.accountType,
+          repositorySelection: detail.repositorySelection,
+        });
+        await store.appendHostedAudit(accountId, {
+          at: new Date().toISOString(),
+          action: "central_install_reconciled",
+          detail: `installation ${installation.id} on ${detail.account || installation.account}`,
+        });
+      }
+    }
+  }
+  const bound = await store.listCentralGithubInstallations(accountId);
+  if (bound.length > 0) {
+    const hosted = await store.getHostedProvisioning(accountId);
+    // An old custom App held only by a personal Machine is not a usable hosted
+    // identity. Once this account has explicitly installed the central App,
+    // select it unless a complete hosted own-App credential was also granted.
+    if (!hosted.githubIdentity || (hosted.githubIdentity === "own-app" && !hosted.githubApp)) {
+      await store.setHostedProvisioning(accountId, { githubIdentity: "central-app" });
+    }
+  }
+  return bound;
+}
+
+// The operator's ONE centrally-owned app: users install it and pick repos
+// instead of creating their own app or pasting a PAT. Everything returned here
+// is non-secret; the app's private key lives only in operator env config
+// (see central-github-app.ts).
+
+app.get("/account/github/central-app", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const central = centralGithubAppConfig();
+  const installations = central ? await syncCentralInstallationsForAccount(client.accountId) : [];
+  res.json({
+    configured: Boolean(central),
+    appId: central?.appId,
+    slug: central?.slug,
+    installations: installations.map(({ installationId, githubAccount, githubAccountType, repositorySelection, createdAt }) => ({
+      installationId, githubAccount, githubAccountType, repositorySelection, createdAt,
+    })),
+  });
+}));
+
+// Start an install: mint the single-use state nonce that binds the GitHub
+// setup callback to THIS account, plus the install URL to open. The state is
+// the only proof of account ownership in the whole flow.
+app.post("/account/github/central-app/install-state", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const central = centralGithubAppConfig();
+  if (!central) return res.status(404).json({ error: "Central GitHub App is not configured" });
+  if (process.env.BIVY_GITHUB_INSTALLER_IDENTITY_REQUIRED !== "0") {
+    const account = await store.getAccount(client.accountId);
+    if (!account?.githubInstallTargetIds.length) {
+      return res.status(409).json({ error: "Sign in with GitHub again before installing the GitHub App." });
+    }
+  }
+  const returnPath = safeReturnPath(typeof req.body?.returnPath === "string" ? req.body.returnPath : undefined);
+  const state = await store.createCentralInstallState(client.accountId, returnPath);
+  res.json({ state, installUrl: centralInstallUrl(central, state) });
+}));
+
+// GitHub redirects the installing browser here (the app's Setup URL) with
+// ?installation_id&state. The single-use state names the account; the
+// installation id is enumerable and NEVER trusted alone — it is verified to
+// belong to the central app via an app-JWT lookup (which also yields the GitHub
+// org/user login used to match repo owners at mint time), and an id already
+// bound to a different account is refused.
+app.get("/github/central-app/setup", asyncHandler(async (req, res) => {
+  const central = centralGithubAppConfig();
+  if (!central) return res.status(404).send("Central GitHub App is not configured.");
+  const bound = await store.consumeCentralInstallState(String(req.query.state ?? ""));
+  if (!bound) return res.status(403).send("This install link has expired — restart the install from Bivy settings.");
+  const installationId = String(req.query.installation_id ?? "").trim();
+  if (!/^\d+$/.test(installationId)) return res.status(400).send("Missing installation id.");
+  const existing = await store.getCentralGithubInstallation(installationId);
+  if (existing && existing.accountId !== bound.accountId) {
+    return res.status(409).send("This installation is already linked to another Bivy account.");
+  }
+  let detail;
+  try {
+    detail = await getAppInstallation(central.appId, central.privateKeyPem, installationId);
+  } catch {
+    return res.status(400).send("GitHub does not recognize this installation for the Bivy app.");
+  }
+  if (process.env.BIVY_GITHUB_INSTALLER_IDENTITY_REQUIRED !== "0") {
+    const account = await store.getAccount(bound.accountId);
+    const targetAllowed = Boolean(detail.accountId && account?.githubInstallTargetIds.includes(detail.accountId));
+    let exactInstaller = detail.accountId === account?.githubUserId; // personal-account install
+    // Organization installs identify the clicking user only on the signed
+    // installation.created webhook. Give normal webhook delivery a short race
+    // window, then fail closed; restarting onboarding mints fresh state.
+    if (targetAllowed && !exactInstaller && account?.githubUserId) {
+      for (let attempt = 0; attempt < 25 && !exactInstaller; attempt += 1) {
+        exactInstaller = await store.getCentralGithubInstallerAttestation(installationId) === account.githubUserId;
+        if (!exactInstaller) await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+    }
+    if (!targetAllowed || !exactInstaller) {
+      return res.status(403).send("This GitHub installation was made by a different identity. Sign in to Bivy with the GitHub user that owns or administers this target, then try again.");
+    }
+  }
+  await store.putCentralGithubInstallation({
+    installationId,
+    accountId: bound.accountId,
+    githubAccount: detail.account,
+    githubAccountType: detail.accountType,
+    repositorySelection: detail.repositorySelection,
+  });
+  await store.appendHostedAudit(bound.accountId, {
+    at: new Date().toISOString(),
+    action: "central_install_bound",
+    detail: `installation ${installationId}${detail.account ? ` on ${detail.account}` : ""}`,
+  });
+  // First bind selects the central identity, unless the account already chose.
+  try {
+    const hosted = await store.getHostedProvisioning(bound.accountId);
+    if (!hosted.githubIdentity) await store.setHostedProvisioning(bound.accountId, { githubIdentity: "central-app" });
+  } catch {
+    // best-effort: sealed BYO credentials without a configured key still bind
+  }
+  res.redirect(safeReturnPath(bound.returnPath));
+}));
+
+// The repos one bound installation can reach — feeds the repo picker. The
+// installation must belong to the calling account (cross-account reads 404),
+// and the listing uses an on-demand app JWT → installation token, server-side
+// only; nothing is persisted.
+app.get("/account/github/central-app/installations/:installationId/repos", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const central = centralGithubAppConfig();
+  if (!central) return res.status(404).json({ error: "Central GitHub App is not configured" });
+  const installationId = String(req.params.installationId || "").trim();
+  const binding = await store.getCentralGithubInstallation(installationId);
+  if (!binding || binding.accountId !== client.accountId) return res.status(404).json({ error: "No such installation" });
+  const repositories = await listInstallationRepositories({
+    appId: central.appId,
+    installationId,
+    privateKeyPem: central.privateKeyPem,
+  });
+  res.json({ installationId, repositories });
+}));
+
+// Unlink an installation from this account (does not uninstall on GitHub —
+// that side is handled by the installation.deleted webhook when it happens).
+app.delete("/account/github/central-app/installations/:installationId", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const installationId = String(req.params.installationId || "").trim();
+  const removed = await store.deleteCentralGithubInstallation(installationId, client.accountId);
+  if (!removed) return res.status(404).json({ error: "No such installation" });
+  await store.appendHostedAudit(client.accountId, {
+    at: new Date().toISOString(),
+    action: "central_install_unbound",
+    detail: `installation ${installationId} unlinked`,
+  });
+  res.json({ ok: true });
 }));
 
 // Redacted inventory for unattended runners. Provider credentials and escrowed
@@ -3306,7 +3594,12 @@ app.post("/account/hosted-provision-now", asyncHandler(async (req, res) => {
 // token). Authenticated by the node's enrollment token.
 app.post("/node/hosted-git-credential", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
-  const minted = await mintHostedInstallationToken(store, node.accountId);
+  // Optional session-repo hint ("owner/name"): picks the right central-app
+  // installation and scopes the minted token down to that repo where the API
+  // allows. Malformed values are ignored, not errors — the unscoped mint is
+  // the long-standing behavior.
+  const repo = typeof req.body?.repo === "string" && /^[\w.-]+\/[\w.-]+$/.test(req.body.repo) ? req.body.repo : undefined;
+  const minted = await mintHostedInstallationToken(store, node.accountId, { repo });
   if (!minted) return res.status(404).json({ error: "No hosted GitHub App configured" });
   res.json({ token: minted.token, expiresAt: minted.expiresAt });
 }));
@@ -3412,25 +3705,15 @@ app.post("/webhooks/automation/run/:definitionId", asyncHandler(async (req, res)
     : { code: "accepted", id: result.run.id, label: result.run.routing.nodeLabel });
 }));
 
-app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(async (req, res) => {
-  const hook = await store.getInboundHook(String(req.params.id));
-  if (!hook || (hook.kind !== "github" && hook.kind !== "github_app")) return res.status(404).json({ error: "Unknown hook" });
-  const raw: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from("");
-  if (!verifyGithubSignature(hook.secret, raw, req.headers["x-hub-signature-256"] as string | undefined)) {
-    return res.status(401).json({ error: "Bad signature" });
-  }
-  const event = String(req.headers["x-github-event"] ?? "");
-  if (event === "ping") return res.json({ ok: true, pong: true });
+// Shared GitHub-event → work-item pipeline. Serves BOTH per-account hooks
+// (/webhooks/github[_app]/:id — signature already verified with the hook's own
+// secret) and the central app's fan-in (/webhooks/central-github — verified
+// with the operator's central webhook secret, then routed here with the bound
+// account's github_app hook so per-account settings apply unchanged).
+async function processGithubEvent(hook: InboundHook, event: string, deliveryId: string, payload: unknown, res: Response): Promise<Response | void> {
   // GitHub reuses the delivery GUID on redelivery, so it's a natural idempotency
   // key: a redelivered webhook returns the existing item instead of duplicating.
-  const deliveryId = String(req.headers["x-github-delivery"] ?? "");
   const dedupeKey = deliveryId ? `gh:${deliveryId}` : undefined;
-  let payload: unknown;
-  try {
-    payload = JSON.parse(raw.toString("utf8"));
-  } catch {
-    return res.status(400).json({ error: "Invalid JSON" });
-  }
   // For a GitHub App, the payload names the installation the node mints a token
   // for. Classic per-repo webhooks have none (the node uses its PAT).
   const installationId = parseInstallationId(payload);
@@ -3670,6 +3953,82 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
 
   // Unhandled event family — ack so GitHub doesn't retry forever.
   return res.json({ ok: true, enqueued: false, reason: "ignored_event" });
+}
+
+const githubWebhookRateLimit = rateLimit({
+  windowMs: 60_000,
+  limit: 600,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `${String(req.params.id ?? "unknown")}:${ipKeyGenerator(clientIp(req))}`,
+  message: { error: "Too many webhook requests" },
+});
+
+const centralGithubWebhookRateLimit = rateLimit({
+  windowMs: 60_000,
+  limit: 1_200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => ipKeyGenerator(clientIp(req)),
+  message: { error: "Too many webhook requests" },
+});
+
+app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], githubWebhookRateLimit, asyncHandler(async (req, res) => {
+  const hookId = String(req.params.id);
+  const hook = await store.getInboundHook(hookId);
+  if (!hook || (hook.kind !== "github" && hook.kind !== "github_app")) return res.status(404).json({ error: "Unknown hook" });
+  const raw: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from("");
+  if (!verifyGithubSignature(hook.secret, raw, req.headers["x-hub-signature-256"] as string | undefined)) {
+    return res.status(401).json({ error: "Bad signature" });
+  }
+  const event = String(req.headers["x-github-event"] ?? "");
+  if (event === "ping") return res.json({ ok: true, pong: true });
+  let payload: unknown;
+  try {
+    payload = JSON.parse(raw.toString("utf8"));
+  } catch {
+    return res.status(400).json({ error: "Invalid JSON" });
+  }
+  return processGithubEvent(hook, event, String(req.headers["x-github-delivery"] ?? ""), payload, res);
+}));
+
+// The ONE central GitHub App's webhook. Every account's deliveries arrive on
+// this single endpoint; installation lifecycle events maintain the
+// installation→account binding table, and everything else routes by
+// installation id to the bound account's enqueue path. An installation nobody
+// has bound (via the state-signed setup callback) is acked and dropped.
+app.post("/webhooks/central-github", centralGithubWebhookRateLimit, asyncHandler(async (req, res) => {
+  const central = centralGithubAppConfig();
+  if (!central?.webhookSecret) return res.status(404).json({ error: "Central GitHub App is not configured" });
+  const raw: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from("");
+  if (!verifyGithubSignature(central.webhookSecret, raw, req.headers["x-hub-signature-256"] as string | undefined)) {
+    return res.status(401).json({ error: "Bad signature" });
+  }
+  const event = String(req.headers["x-github-event"] ?? "");
+  if (event === "ping") return res.json({ ok: true, pong: true });
+  let payload: unknown;
+  try {
+    payload = JSON.parse(raw.toString("utf8"));
+  } catch {
+    return res.status(400).json({ error: "Invalid JSON" });
+  }
+  const lifecycle = await applyCentralInstallationEvent(store, event, payload);
+  if (lifecycle.handled) return res.json({ ok: true, enqueued: false, installation: lifecycle.action });
+  const installationId = parseInstallationId(payload);
+  const binding = installationId ? await store.getCentralGithubInstallation(installationId) : undefined;
+  if (!binding) return res.json({ ok: true, enqueued: false, reason: "unbound_installation" });
+  // Per-account webhook settings (default node, trigger access, automations)
+  // ride on the account's github_app hook row for the central app id — created
+  // on first delivery so the existing Settings surface applies unchanged.
+  let hook = await store.getGithubAppHook(binding.accountId, central.appId);
+  if (!hook) {
+    hook = await store.createInboundHook(binding.accountId, "github_app");
+    hook = (await store.setInboundHookAppMeta(binding.accountId, hook.id, {
+      appId: central.appId,
+      ...(central.slug ? { mention: central.slug, name: central.slug } : {}),
+    })) ?? hook;
+  }
+  return processGithubEvent(hook, event, String(req.headers["x-github-delivery"] ?? ""), payload, res);
 }));
 
 // Linear Issue webhook. Applying `bivy` or `bivy/<node>` dispatches the issue.

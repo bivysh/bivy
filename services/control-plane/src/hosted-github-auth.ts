@@ -26,6 +26,7 @@ export interface InstallationToken {
 export interface GithubInstallation {
   id: string;
   account: string;
+  accountId?: string;
   accountType?: string;
 }
 
@@ -36,12 +37,22 @@ export interface GithubRepository {
   defaultBranch?: string;
 }
 
+export interface GithubBranch {
+  name: string;
+}
+
 const githubHeaders = (authorization: string) => ({
   authorization,
   accept: "application/vnd.github+json",
   "x-github-api-version": "2022-11-28",
   "user-agent": "bivy-control-plane",
 });
+
+/** GitHub API base — overridable for GitHub Enterprise and for tests that run
+ *  a local stand-in API. Read per call so a test can set it after import. */
+function githubApiBase(): string {
+  return (process.env.GITHUB_API_BASE_URL || "https://api.github.com").replace(/\/$/, "");
+}
 
 function b64url(input: Buffer | string): string {
   return Buffer.from(input).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -59,21 +70,28 @@ export function createAppJwt(appId: string, privateKeyPem: string, nowSec = Math
   return `${signingInput}.${signature}`;
 }
 
-/** Exchange the app JWT for a ~1h installation access token. */
+/** Exchange the app JWT for a ~1h installation access token. When
+ *  `opts.repositories` names repos (bare names, no owner), the token is scoped
+ *  down to just those — GitHub rejects names outside the installation, so
+ *  callers that scope should be prepared to retry unscoped. */
 export async function mintInstallationToken(
   creds: GithubAppCreds,
   fetchImpl: typeof fetch = fetch,
   nowSec = Math.floor(Date.now() / 1000),
+  opts?: { repositories?: string[] },
 ): Promise<InstallationToken> {
   const jwt = createAppJwt(creds.appId, creds.privateKeyPem, nowSec);
-  const res = await fetchImpl(`https://api.github.com/app/installations/${encodeURIComponent(creds.installationId)}/access_tokens`, {
+  const scoped = opts?.repositories?.length ? { repositories: opts.repositories } : undefined;
+  const res = await fetchImpl(`${githubApiBase()}/app/installations/${encodeURIComponent(creds.installationId)}/access_tokens`, {
     method: "POST",
     headers: {
       authorization: `Bearer ${jwt}`,
       accept: "application/vnd.github+json",
       "x-github-api-version": "2022-11-28",
       "user-agent": "bivy-control-plane",
+      ...(scoped ? { "content-type": "application/json" } : {}),
     },
+    ...(scoped ? { body: JSON.stringify(scoped) } : {}),
   });
   const data = (await res.json().catch(() => ({}))) as { token?: string; expires_at?: string; message?: string };
   if (!res.ok || !data.token) {
@@ -92,23 +110,69 @@ export async function listAppInstallations(
   const jwt = createAppJwt(appId, privateKeyPem, nowSec);
   const installations: GithubInstallation[] = [];
   for (let page = 1; ; page += 1) {
-    const res = await fetchImpl(`https://api.github.com/app/installations?per_page=100&page=${page}`, {
+    const res = await fetchImpl(`${githubApiBase()}/app/installations?per_page=100&page=${page}`, {
       headers: githubHeaders(`Bearer ${jwt}`),
     });
     const data = (await res.json().catch(() => ([]))) as Array<{
       id?: number | string;
-      account?: { login?: string; type?: string };
+      account?: { id?: number | string; login?: string; type?: string };
     }> & { message?: string };
     if (!res.ok || !Array.isArray(data)) {
       throw new Error(`GitHub App validation failed (${res.status}): ${(data as { message?: string }).message ?? "unknown error"}`);
     }
     for (const item of data) {
       if (item.id == null || !item.account?.login) continue;
-      installations.push({ id: String(item.id), account: item.account.login, accountType: item.account.type });
+      installations.push({
+        id: String(item.id),
+        account: item.account.login,
+        ...(item.account.id != null ? { accountId: String(item.account.id) } : {}),
+        accountType: item.account.type,
+      });
     }
     if (data.length < 100) break;
   }
   return installations;
+}
+
+export interface GithubInstallationDetail {
+  id: string;
+  account?: string;
+  accountId?: string;
+  accountType?: string;
+  repositorySelection?: string;
+}
+
+/** One installation's metadata (owner login, repo selection), via the app JWT.
+ *  Used by the central-app setup callback to record which GitHub org/user an
+ *  installation covers — a 404 here also proves the id does NOT belong to the
+ *  app, so a forged installation_id can never be bound. */
+export async function getAppInstallation(
+  appId: string,
+  privateKeyPem: string,
+  installationId: string,
+  fetchImpl: typeof fetch = fetch,
+  nowSec = Math.floor(Date.now() / 1000),
+): Promise<GithubInstallationDetail> {
+  const jwt = createAppJwt(appId, privateKeyPem, nowSec);
+  const res = await fetchImpl(`${githubApiBase()}/app/installations/${encodeURIComponent(installationId)}`, {
+    headers: githubHeaders(`Bearer ${jwt}`),
+  });
+  const data = (await res.json().catch(() => ({}))) as {
+    id?: number | string;
+    account?: { id?: number | string; login?: string; type?: string };
+    repository_selection?: string;
+    message?: string;
+  };
+  if (!res.ok || data.id == null) {
+    throw new Error(`GitHub installation lookup failed (${res.status}): ${data.message ?? "unknown error"}`);
+  }
+  return {
+    id: String(data.id),
+    account: data.account?.login,
+    accountId: data.account?.id == null ? undefined : String(data.account.id),
+    accountType: data.account?.type,
+    repositorySelection: typeof data.repository_selection === "string" ? data.repository_selection : undefined,
+  };
 }
 
 /** Repositories visible to one installation, using only an on-demand token. */
@@ -119,7 +183,7 @@ export async function listInstallationRepositories(
   const { token } = await mintInstallationToken(creds, fetchImpl);
   const repositories: GithubRepository[] = [];
   for (let page = 1; ; page += 1) {
-    const res = await fetchImpl(`https://api.github.com/installation/repositories?per_page=100&page=${page}`, {
+    const res = await fetchImpl(`${githubApiBase()}/installation/repositories?per_page=100&page=${page}`, {
       headers: githubHeaders(`Bearer ${token}`),
     });
     const data = (await res.json().catch(() => ({}))) as {
@@ -141,4 +205,30 @@ export async function listInstallationRepositories(
     if (data.repositories.length < 100) break;
   }
   return repositories;
+}
+
+/** Branches of one installation-owned repository. The minted token is narrowed
+ * to this repository and never returned to the browser. */
+export async function listInstallationBranches(
+  creds: GithubAppCreds,
+  repo: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<GithubBranch[]> {
+  const [owner, name] = repo.split("/");
+  if (!owner || !name) throw new Error("Repository must be owner/name");
+  const { token } = await mintInstallationToken(creds, fetchImpl, undefined, { repositories: [name] });
+  const branches: GithubBranch[] = [];
+  for (let page = 1; ; page += 1) {
+    const res = await fetchImpl(`${githubApiBase()}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/branches?per_page=100&page=${page}`, {
+      headers: githubHeaders(`Bearer ${token}`),
+    });
+    const data = (await res.json().catch(() => [])) as Array<{ name?: string }> | { message?: string };
+    if (!res.ok || !Array.isArray(data)) {
+      const message = !Array.isArray(data) && typeof data.message === "string" ? data.message : "unknown error";
+      throw new Error(`GitHub branch listing failed (${res.status}): ${message}`);
+    }
+    for (const branch of data) if (branch.name) branches.push({ name: branch.name });
+    if (data.length < 100) break;
+  }
+  return branches;
 }
