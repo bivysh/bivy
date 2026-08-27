@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-08-27
+
+### Added
+
+- Hosted GitHub App support was extracted into the Cloud integration path.
+- Personal machine claims and first-run onboarding now give new installs a
+  clearer account-linked setup path.
+
+### Changed
+
+- Machine onboarding is more app-first, first-run launch messaging is sharper,
+  Cloud machines are gated behind an explicit settings opt-in, and Free Cloud
+  remote sessions now respect plan limits.
+
+### Fixed
+
+- Existing installs re-enroll with an account token so they stay connected after
+  the account-linked onboarding changes.
+- Blocked hosted automations now surface clearly instead of failing silently.
+
 ## [0.12.0] - 2026-08-27
 
 ### Changed
