@@ -48,9 +48,12 @@ MANIFEST_URL="${BIVY_MANIFEST_URL:-https://bivy.sh/downloads/bivy-latest.json}"
 # because a tarball install keeps a different layout.
 INSTALL_MODE="npm"
 
-info() { printf '\033[36m==>\033[0m %s\n' "$1"; }
-warn() { printf '\033[33m==>\033[0m %s\n' "$1"; }
-die()  { printf '\033[31mError:\033[0m %s\n' "$1" >&2; exit 1; }
+INSTALL_STARTED_SECONDS=$SECONDS
+
+elapsed() { printf '%ss' "$((SECONDS - INSTALL_STARTED_SECONDS))"; }
+info() { printf '\033[36m==>\033[0m [%s] %s\n' "$(elapsed)" "$1"; }
+warn() { printf '\033[33m==>\033[0m [%s] %s\n' "$(elapsed)" "$1"; }
+die()  { printf '\033[31mError:\033[0m [%s] %s\n' "$(elapsed)" "$1" >&2; exit 1; }
 
 run_sudo() {
   if [ "$(id -u)" -eq 0 ]; then "$@";
@@ -157,6 +160,7 @@ if ! node_is_supported; then
   die "Node.js 20+ is required but was not found. Install it from https://nodejs.org and re-run."
 fi
 command -v npm >/dev/null 2>&1 || die "npm is required (it ships with Node.js)."
+info "Node $(node -v) and npm $(npm -v) ready"
 
 if command -v apt-get >/dev/null 2>&1 && { ! command -v make >/dev/null 2>&1 || ! command -v g++ >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; }; then
   warn "Build tools are missing. Interactive terminal support may be unavailable if node-pty cannot use a prebuilt binary. Install them with: sudo apt-get update && sudo apt-get install -y build-essential python3"
@@ -362,8 +366,12 @@ trap 'rm -f "$ERR_LOG"; rm -rf "$TMP_DIR"' EXIT
 # install gets corrupted (half-written deps / leftover temp dirs) in the first
 # place. Best-effort and only when a bivy is already on PATH; a fresh install has
 # nothing to stop, and the existing-config branch below restarts it afterward.
-if command -v bivy >/dev/null 2>&1; then bivy stop >/dev/null 2>&1 || true; fi
+if command -v bivy >/dev/null 2>&1; then
+  info "Stopping any existing Bivy node before updating"
+  bivy stop >/dev/null 2>&1 || true
+fi
 install_globally
+info "Bivy package installed"
 
 # A tarball fallback has already set BIN_DIR/BIVY_BIN to the install it made.
 if [ "$INSTALL_MODE" = "npm" ]; then
@@ -573,3 +581,5 @@ else
     echo "  bivy setup"
   fi
 fi
+
+info "Installer finished in $(elapsed)"
