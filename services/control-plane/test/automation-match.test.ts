@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   effectiveEventRules,
   eventRuleMatches,
+  evaluateAccountAutomation,
   findAutomationOverlaps,
   labelsMatch,
   matchSourceAutomation,
@@ -340,6 +341,16 @@ assert.equal(
   matchSourceAutomation(priorityDefs, { kind: "github", githubEvent: "issues", repo: undefined, labels: ["bivy"] })?.id,
   "new",
   "explicit configOrder controls first-match priority for UI-managed automations too",
+);
+assert.equal(
+  evaluateAccountAutomation(
+    priorityDefs[0]!,
+    priorityDefs,
+    { kind: "github", event: "issues", labels: ["bivy"] },
+    { hooks: [], nodes: [] },
+  ).match?.matched?.id,
+  "new",
+  "simulate/preflight evaluation uses the same configOrder priority as live intake",
 );
 
 console.log("automation-match tests passed");

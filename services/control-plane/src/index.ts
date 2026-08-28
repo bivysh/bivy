@@ -3724,12 +3724,12 @@ app.post("/webhooks/automation/run/:definitionId", asyncHandler(async (req, res)
   const def = await store.getAutomationDefinitionById(String(req.params.definitionId));
   if (!def || def.trigger !== "webhook") return res.status(404).json({ code: "not_found" });
   if (def.enabled === false) return res.status(410).json({ code: "disabled" });
-  if (!consumeAutomationRate(`def:${def.id}`, 60)) {
-    return res.status(429).json({ code: "quota_exhausted", retryAfterSeconds: 60 });
-  }
   const raw: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from("");
   if (!def.webhookSecret || !verifyAutomationSignature(def.webhookSecret, raw, req.headers["x-bivy-signature-256"] as string | undefined)) {
     return res.status(401).json({ code: "invalid_signature" });
+  }
+  if (!consumeAutomationRate(`def:${def.id}`, 60)) {
+    return res.status(429).json({ code: "quota_exhausted", retryAfterSeconds: 60 });
   }
   if (!consumeAutomationRate(`account:${def.accountId}`, 300)) {
     return res.status(429).json({ code: "quota_exhausted", retryAfterSeconds: 60 });
@@ -4153,7 +4153,7 @@ app.post("/webhooks/linear/:id", asyncHandler(async (req, res) => {
     collapseKey: `linear-issue:${issue.id}`,
     defaultRouted: rawLabel === "bivy" && !matched.nodeLabel,
     definitionId: matched.id,
-    triggerKind: "webhook",
+    triggerKind: "linear",
     body: matched.templateCiphertext,
     runtimeId: matched.runtimeId,
     model: matched.model,

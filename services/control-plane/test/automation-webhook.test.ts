@@ -234,6 +234,14 @@ async function main() {
 
   const badSig = await trigger(port, auto.body.webhookUrl, "nope", evtRaw, "evt-2");
   expect(badSig.status === 401, "a bad signature is rejected on the definition path");
+  let rejectedBadSignatures = 0;
+  for (let i = 0; i < 65; i += 1) {
+    const bad = await trigger(port, auto.body.webhookUrl, "nope", evtRaw, `bad-sig-${i}`);
+    if (bad.status === 401) rejectedBadSignatures += 1;
+  }
+  expect(rejectedBadSignatures === 65, "unsigned webhook attempts are rejected before quota accounting");
+  const afterBadSigs = await trigger(port, auto.body.webhookUrl, auto.body.webhookSecret, evtRaw, "evt-after-bad-sigs");
+  expect(afterBadSigs.status === 202, "valid signed webhook still works after many bad signatures");
 
   const rot = await json(port, "POST", `/account/automations/${auto.body.id}/webhook/rotate`, undefined, token);
   expect(rot.status === 200 && rot.body.webhookSecret && rot.body.webhookSecret !== auto.body.webhookSecret, "rotate returns a fresh secret");
