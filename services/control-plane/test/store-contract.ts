@@ -606,7 +606,9 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     const again = await store.enqueueWorkItem(acct.id, { source: "github:issue", title: "Fix (redeliver)", dedupeKey: "gh:1" });
     assert.equal(again.id, first.id);
     assert.equal(again.title, "Fix");
-    assert.equal((await store.listWorkItems(acct.id)).length, 1);
+    const linear = await store.enqueueWorkItem(acct.id, { source: "linear:issue", title: "Linear" });
+    assert.equal(linear.triggerKind, "linear");
+    assert.equal((await store.listWorkItems(acct.id)).length, 2);
   });
 
   await test("automation hooks configure safely and report replay deduplication", async (store) => {

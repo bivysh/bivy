@@ -615,7 +615,7 @@ export interface RetryAutomationRunResult {
   transitioned: boolean;
   reason?: "not_retryable" | "attempt_limit";
 }
-export type AutomationTriggerKind = "github" | "slack" | "manual" | "webhook" | "schedule";
+export type AutomationTriggerKind = "github" | "linear" | "slack" | "manual" | "webhook" | "schedule";
 
 // --- Privacy-safe run evidence (issue #153) -----------------------------------
 // A run's routing/status/output above already carry most of an outcome report.

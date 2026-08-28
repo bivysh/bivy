@@ -717,6 +717,7 @@ export class PostgresStore implements ControlPlaneStore {
       INSERT INTO trigger_events (id, account_id, kind, created_at)
         SELECT 'legacy:' || id, account_id,
           CASE WHEN source LIKE 'github:%' THEN 'github'
+               WHEN source LIKE 'linear:%' THEN 'linear'
                WHEN source = 'slack' THEN 'slack'
                WHEN source = 'manual' THEN 'manual'
                ELSE 'webhook' END,
@@ -730,6 +731,7 @@ export class PostgresStore implements ControlPlaneStore {
         trigger_id = COALESCE(trigger_id, 'legacy:' || id),
         trigger_kind = COALESCE(trigger_kind,
           CASE WHEN source LIKE 'github:%' THEN 'github'
+               WHEN source LIKE 'linear:%' THEN 'linear'
                WHEN source = 'slack' THEN 'slack'
                WHEN source = 'manual' THEN 'manual'
                ELSE 'webhook' END),
@@ -3311,7 +3313,7 @@ function withResumeTarget(item: WorkItem): WorkItem {
 function triggerKindForSource(explicit: AutomationTriggerKind | undefined, source: string): AutomationTriggerKind {
   if (explicit) return explicit;
   if (source.startsWith("github:")) return "github";
-  if (source.startsWith("linear:")) return "webhook";
+  if (source.startsWith("linear:")) return "linear";
   if (source === "slack") return "slack";
   if (source === "manual") return "manual";
   return "webhook";

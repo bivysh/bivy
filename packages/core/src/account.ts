@@ -908,7 +908,7 @@ export interface GithubQueueItem {
   leaseExpiresAt?: string;
   completedAt?: string;
   triggerId?: string;
-  triggerKind?: "github" | "slack" | "manual" | "webhook" | "schedule";
+  triggerKind?: "github" | "linear" | "slack" | "manual" | "webhook" | "schedule";
   definitionId?: string;
   attempt?: number;
   targetKind?: "new_session" | "existing_session";

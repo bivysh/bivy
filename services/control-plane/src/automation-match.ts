@@ -144,6 +144,20 @@ export function isGithubEventName(value: string): value is GithubEventName {
   );
 }
 
+/** Canonical first-match order for source automations. UI-managed and
+ *  config-as-code rows both use configOrder when present; rows without it keep
+ *  historical oldest-first behavior after ordered rows. */
+function sourceAutomationOrder(
+  a: Pick<AutomationDefinition, "createdAt" | "configOrder">,
+  b: Pick<AutomationDefinition, "createdAt" | "configOrder">,
+): number {
+  if (a.configOrder !== undefined || b.configOrder !== undefined) {
+    return (a.configOrder ?? Number.MAX_SAFE_INTEGER) - (b.configOrder ?? Number.MAX_SAFE_INTEGER)
+      || a.createdAt.localeCompare(b.createdAt);
+  }
+  return a.createdAt.localeCompare(b.createdAt);
+}
+
 /**
  * Adapt a stored definition to the shape the shared evaluator understands.
  * `github_ci` is a control-plane-only legacy alias (config-as-code never had
@@ -230,15 +244,7 @@ export function explainSourceAutomationMatch(
       return d.trigger === "github" || d.trigger === "github_ci";
     })
     .map(toEvaluable)
-    .sort((a, b) => {
-      // Explicit priority wins for both file-managed and UI-managed rows; rows
-      // without it retain the historical oldest-first contract.
-      if (a.configOrder !== undefined || b.configOrder !== undefined) {
-        return (a.configOrder ?? Number.MAX_SAFE_INTEGER) - (b.configOrder ?? Number.MAX_SAFE_INTEGER)
-          || a.createdAt.localeCompare(b.createdAt);
-      }
-      return a.createdAt.localeCompare(b.createdAt);
-    });
+    .sort(sourceAutomationOrder);
 
   const { matched, trail } = matchFirst(candidates, toEvaluationEvent(event));
   return { matched: matched ? byId.get(matched.id) : undefined, trail };
@@ -250,13 +256,7 @@ export function findAutomationOverlaps(definitions: AutomationDefinition[]): Ove
   const candidates = definitions
     .filter((d) => d.enabled !== false && (d.trigger === "github" || d.trigger === "linear" || d.trigger === "github_ci"))
     .map(toEvaluable)
-    .sort((a, b) => {
-      if (a.configOrder !== undefined || b.configOrder !== undefined) {
-        return (a.configOrder ?? Number.MAX_SAFE_INTEGER) - (b.configOrder ?? Number.MAX_SAFE_INTEGER)
-          || a.createdAt.localeCompare(b.createdAt);
-      }
-      return a.createdAt.localeCompare(b.createdAt);
-    });
+    .sort(sourceAutomationOrder);
   return sharedFindOverlaps(candidates);
 }
 
@@ -395,12 +395,7 @@ export function evaluateAccountAutomation(
   signalContext: PreflightSignalContext,
 ): AutomationEvaluation<EvaluableAutomation> {
   const others = definitions.filter((d) => d.id !== subject.id);
-  const merged = [...others, subject].sort((a, b) => {
-    if (a.configKey && b.configKey && a.configOrder !== undefined && b.configOrder !== undefined) {
-      return a.configOrder - b.configOrder || a.createdAt.localeCompare(b.createdAt);
-    }
-    return a.createdAt.localeCompare(b.createdAt);
-  });
+  const merged = [...others, subject].sort(sourceAutomationOrder);
   const candidates = merged
     .filter((d) => {
       if (d.enabled === false) return false;
