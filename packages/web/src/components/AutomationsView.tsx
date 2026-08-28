@@ -465,14 +465,12 @@ export function AutomationsView({
   const [sourceEdit, setSourceEdit] = useState<AccountAutomation | null>(null);
   const [rotated, setRotated] = useState<{ id: string; secret: string } | null>(null);
   const [setupFocus, setSetupFocus] = useState<SourceSetupFocus | null>(null);
-  const [menuId, setMenuId] = useState<string | null>(null);
   const [cancelRun, setCancelRun] = useState<AccountAutomationRun | null>(null);
   const [cancelBusyId, setCancelBusyId] = useState<string | null>(null);
   const [cancelError, setCancelError] = useState<string | null>(null);
   /** Create chooser (scratch + templates). Opens from New automation. */
   const [chooserOpen, setChooserOpen] = useState(false);
   const [historyAutomationId, setHistoryAutomationId] = useState<string | null>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
 
   // Solo (account-free QR) and direct (loopback) pairings have no account
   // session — every account fetch below would 401. Skip them and render the
@@ -533,22 +531,6 @@ export function AutomationsView({
     if (focus) setSetupFocus(focus);
   }, []);
 
-  // Close overflow menus on outside click / Escape.
-  useEffect(() => {
-    if (!menuId) return;
-    function onDoc(e: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuId(null);
-    }
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setMenuId(null);
-    }
-    document.addEventListener("mousedown", onDoc);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDoc);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [menuId]);
 
   const defaultNodeId = state.connection.currentNodeId || controller.local.cur || "";
   const listedItems = useMemo(() => items.filter(isListedAutomation).sort(automationPrioritySort), [items]);
@@ -742,7 +724,6 @@ export function AutomationsView({
 
   async function edit(item: AccountAutomation) {
     setError("");
-    setMenuId(null);
     if (item.trigger === "github" || item.trigger === "linear") {
       await continueWithSource(item.trigger, emptyDraft(defaultNodeId), { keepExistingName: true });
       return;
@@ -784,7 +765,6 @@ export function AutomationsView({
   }
 
   async function toggle(item: AccountAutomation) {
-    setMenuId(null);
     try {
       await updateAutomation(controller.local, item.id, { enabled: !item.enabled });
       await refresh();
@@ -796,7 +776,6 @@ export function AutomationsView({
   }
 
   async function moveSourceAutomation(item: AccountAutomation, direction: -1 | 1) {
-    setMenuId(null);
     const sourceItems = items.filter((i) => isSourceTrigger(i.trigger) && !i.configKey).sort(automationPrioritySort);
     const index = sourceItems.findIndex((i) => i.id === item.id);
     const swap = sourceItems[index + direction];
@@ -813,7 +792,6 @@ export function AutomationsView({
   }
 
   async function runNow(item: AccountAutomation) {
-    setMenuId(null);
     try {
       const run = await runAutomationNow(controller.local, item.id);
       controller.recordProductMilestone("run_accepted");
@@ -848,7 +826,6 @@ export function AutomationsView({
   }
 
   async function rotate(item: AccountAutomation) {
-    setMenuId(null);
     setError("");
     try {
       const result = await rotateAutomationWebhook(controller.local, item.id);
@@ -862,14 +839,14 @@ export function AutomationsView({
     } catch (e) { setError(String((e as Error).message || e)); }
   }
 
-  async function remove(item: AccountAutomation) {
-    setMenuId(null);
-    if (!confirm(`Delete “${item.name}”? This cannot be undone.`)) return;
+  async function remove(item: AccountAutomation): Promise<boolean> {
+    if (!confirm(`Delete “${item.name}”? This cannot be undone.`)) return false;
     try {
       await deleteAutomation(controller.local, item.id);
       await refresh();
       setNotice({ tone: "ok", title: `Deleted “${item.name}”` });
-    } catch (e) { setError(String((e as Error).message || e)); }
+      return true;
+    } catch (e) { setError(String((e as Error).message || e)); return false; }
   }
 
   const definitionRuns = runs;
@@ -1076,10 +1053,21 @@ export function AutomationsView({
                     ? formatNextAutomationRun(item.nextRunAt)
                     : null;
                   const meta = [scheduleSummary(item), item.configKey ? "Managed by file" : null, isSourceTrigger(item.trigger) ? "Priority: first match wins" : null, nextRun].filter(Boolean).join(" · ");
-                  const sourceItems = items.filter((i) => isSourceTrigger(i.trigger) && !i.configKey).sort(automationPrioritySort);
-                  const sourceIndex = sourceItems.findIndex((i) => i.id === item.id);
                   return (
-                    <div className={`automation-row${item.enabled ? "" : " is-paused"}`} key={item.id}>
+                    <div
+                      className={`automation-row${item.enabled ? "" : " is-paused"}`}
+                      key={item.id}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => void edit(item)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          void edit(item);
+                        }
+                      }}
+                      aria-label={`Edit ${item.name}`}
+                    >
                       <span className="automation-row-icon" aria-hidden="true">
                         {item.trigger === "webhook" ? <IconWebhook /> : isSourceTrigger(item.trigger) ? <IconPr /> : <IconClock />}
                       </span>
@@ -1092,7 +1080,7 @@ export function AutomationsView({
                         {item.trigger === "webhook" && rotated?.id === item.id && (
                           <div className="reveal-row">
                             <code className="reveal-value">{rotated.secret}</code>
-                            <button type="button" className="btn sm" onClick={() => copyText(rotated.secret)}>Copy secret</button>
+                            <button type="button" className="btn sm" onClick={(event) => { event.stopPropagation(); void copyText(rotated.secret); }}>Copy secret</button>
                             <span className="settings-hint">New signing secret — shown once.</span>
                           </div>
                         )}
@@ -1102,69 +1090,16 @@ export function AutomationsView({
                           const activeRun = runs.find((run) => run.definitionId === item.id && ["pending", "claimed", "running", "waiting", "needs_attention"].includes(run.status));
                           return activeRun ? <span className="automation-row-run-status" role="status">{activeRun.status === "running" ? "Running now" : "Queued"}</span> : null;
                         })()}
-                        <button type="button" className="btn sm automation-history-btn" onClick={() => setHistoryAutomationId(item.id)}>History</button>
+                        <button type="button" className="btn sm automation-history-btn" onClick={(event) => { event.stopPropagation(); setHistoryAutomationId(item.id); }}>History</button>
                         {needsConnect && (
                           <button
                             type="button"
                             className="btn sm primary"
-                            onClick={() => openSetup(item.trigger === "linear" ? "linear" : "work-queue")}
+                            onClick={(event) => { event.stopPropagation(); openSetup(item.trigger === "linear" ? "linear" : "work-queue"); }}
                           >
                             Connect
                           </button>
                         )}
-                        {(!item.configKey || isSourceTrigger(item.trigger)) && <div className="row-menu" ref={menuId === item.id ? menuRef : undefined}>
-                          <button
-                            type="button"
-                            className="row-menu-btn"
-                            aria-label={`More actions for ${item.name}`}
-                            aria-expanded={menuId === item.id}
-                            onClick={() => setMenuId((cur) => (cur === item.id ? null : item.id))}
-                          >
-                            …
-                          </button>
-                          {menuId === item.id && (
-                            <div className="menu row-menu-pop" role="menu">
-                              {!isSourceTrigger(item.trigger) && (
-                                <button type="button" className="menu-item row-menu-item" role="menuitem" onClick={() => { setMenuId(null); void runNow(item); }}>
-                                  {item.trigger === "webhook" ? "Test run" : "Run now"}
-                                </button>
-                              )}
-                              {!item.configKey && <button type="button" className="menu-item row-menu-item" role="menuitem" onClick={() => { setMenuId(null); void edit(item); }}>Edit</button>}
-                              {isSourceTrigger(item.trigger) && !item.configKey && sourceIndex > 0 && (
-                                <button type="button" className="menu-item row-menu-item" role="menuitem" onClick={() => void moveSourceAutomation(item, -1)}>Move earlier</button>
-                              )}
-                              {isSourceTrigger(item.trigger) && !item.configKey && sourceIndex >= 0 && sourceIndex < sourceItems.length - 1 && (
-                                <button type="button" className="menu-item row-menu-item" role="menuitem" onClick={() => void moveSourceAutomation(item, 1)}>Move later</button>
-                              )}
-                              {item.trigger === "webhook" && item.webhookUrl && (
-                                <button type="button" className="menu-item row-menu-item" role="menuitem" onClick={() => {
-                                  setMenuId(null);
-                                  void copyText(item.webhookUrl!);
-                                  setNotice({ tone: "ok", title: "Webhook URL copied" });
-                                }}>Copy webhook URL</button>
-                              )}
-                              {item.trigger === "webhook" && (
-                                <button type="button" className="menu-item row-menu-item" role="menuitem" onClick={() => { setMenuId(null); void rotate(item); }}>Rotate secret</button>
-                              )}
-                              {!item.configKey && <button type="button" className="menu-item row-menu-item" role="menuitem" onClick={() => void toggle(item)}>
-                                {item.enabled ? "Pause" : "Resume"}
-                              </button>}
-                              {isSourceTrigger(item.trigger) && (
-                                <button
-                                  type="button"
-                                  className="menu-item row-menu-item"
-                                  role="menuitem"
-                                  onClick={() => { setMenuId(null); openSetup(item.trigger === "linear" ? "linear" : "github"); }}
-                                >
-                                  Source setup
-                                </button>
-                              )}
-                              {!item.configKey && <button type="button" className="menu-item row-menu-item danger" role="menuitem" onClick={() => void remove(item)}>
-                                Delete
-                              </button>}
-                            </div>
-                          )}
-                        </div>}
                       </div>
                     </div>
                   );
@@ -1263,6 +1198,14 @@ export function AutomationsView({
           state={state}
           sources={sources}
           initial={draft}
+          existing={draft.id ? items.find((item) => item.id === draft.id) : undefined}
+          onRunNow={runNow}
+          onToggle={toggle}
+          onDelete={async (item) => { if (await remove(item)) setDraft(null); }}
+          onHistory={(id) => { setDraft(null); setHistoryAutomationId(id); }}
+          onRotate={rotate}
+          onSourceSetup={(item) => openSetup(item.trigger === "linear" ? "linear" : "github")}
+          onMove={moveSourceAutomation}
           onCancel={() => setDraft(null)}
           onSaved={async (result) => {
             setDraft(null);
@@ -1297,6 +1240,12 @@ export function AutomationsView({
           state={state}
           sources={sources}
           onClose={() => setSourceEdit(null)}
+          onRunNow={(item) => runNow(item)}
+          onToggle={(item) => toggle(item)}
+          onDelete={async (item) => { if (await remove(item)) setSourceEdit(null); }}
+          onHistory={(id) => { setSourceEdit(null); setHistoryAutomationId(id); }}
+          onSourceSetup={(item) => openSetup(item.trigger === "linear" ? "linear" : "github")}
+          onMove={moveSourceAutomation}
           onSaved={async () => {
             setSourceEdit(null);
             await refresh().catch((e) => setError(String(e)));
@@ -1341,6 +1290,12 @@ function SourceAutomationEditor({
   state,
   sources,
   onClose,
+  onRunNow,
+  onToggle,
+  onDelete,
+  onHistory,
+  onSourceSetup,
+  onMove,
   onSaved,
   onConnect,
 }: {
@@ -1348,6 +1303,12 @@ function SourceAutomationEditor({
   state: AppState;
   sources: SourcesSnapshot;
   onClose: () => void;
+  onRunNow?: (item: AccountAutomation) => void | Promise<void>;
+  onToggle?: (item: AccountAutomation) => void | Promise<void>;
+  onDelete?: (item: AccountAutomation) => void | Promise<void>;
+  onHistory?: (id: string) => void;
+  onSourceSetup?: (item: AccountAutomation) => void;
+  onMove?: (item: AccountAutomation, direction: -1 | 1) => void | Promise<void>;
   onSaved: () => void | Promise<void>;
   onConnect: () => void;
 }) {
@@ -1506,6 +1467,18 @@ function SourceAutomationEditor({
         <div className="wizard-head">
           <strong>{title}</strong>
           <button type="button" className="btn ghost icon" onClick={onClose} aria-label="Cancel">✕</button>
+        </div>
+        <div className="autom-editor-tools" aria-label="Automation actions">
+          <span className="autom-editor-tools-label">Actions</span>
+          {onRunNow && <button type="button" className="btn sm" onClick={() => void onRunNow(item)}>Run now</button>}
+          {onToggle && <button type="button" className="btn sm" onClick={() => void onToggle(item)}>{enabled ? "Pause" : "Resume"}</button>}
+          {onHistory && <button type="button" className="btn sm" onClick={() => onHistory(item.id)}>History</button>}
+          {onSourceSetup && <button type="button" className="btn sm" onClick={() => onSourceSetup(item)}>Source setup</button>}
+          {onMove && (existing?.trigger === "github" || existing?.trigger === "linear") && <>
+            <button type="button" className="btn sm" onClick={() => void onMove(item, -1)}>Move earlier</button>
+            <button type="button" className="btn sm" onClick={() => void onMove(item, 1)}>Move later</button>
+          </>}
+          {onDelete && !item.configKey && <button type="button" className="btn sm danger" onClick={() => void onDelete(item)}>Delete</button>}
         </div>
         <div className="wizard-body">
           {needsConnect && (
@@ -1752,6 +1725,14 @@ function AutomationEditor({
   state,
   sources,
   initial,
+  existing,
+  onRunNow,
+  onToggle,
+  onDelete,
+  onHistory,
+  onRotate,
+  onSourceSetup,
+  onMove,
   onCancel,
   onSaved,
   onSelectSource,
@@ -1759,6 +1740,14 @@ function AutomationEditor({
   state: AppState;
   sources: SourcesSnapshot;
   initial: Draft;
+  existing?: AccountAutomation;
+  onRunNow?: (item: AccountAutomation) => void | Promise<void>;
+  onToggle?: (item: AccountAutomation) => void | Promise<void>;
+  onDelete?: (item: AccountAutomation) => void | Promise<void>;
+  onHistory?: (id: string) => void;
+  onRotate?: (item: AccountAutomation) => void | Promise<void>;
+  onSourceSetup?: (item: AccountAutomation) => void;
+  onMove?: (item: AccountAutomation, direction: -1 | 1) => void | Promise<void>;
   onCancel: () => void;
   onSaved: (result?: SaveResult) => void;
   onSelectSource: (source: "github" | "linear", current: Draft) => void;
@@ -1986,6 +1975,23 @@ function AutomationEditor({
           <strong>{created ? "Webhook ready" : d.id ? "Edit automation" : "New automation"}</strong>
           <button type="button" className="btn ghost icon" onClick={onCancel} aria-label="Cancel">✕</button>
         </div>
+
+        {existing && !created && (
+          <div className="autom-editor-tools" aria-label="Automation actions">
+            <span className="autom-editor-tools-label">Actions</span>
+            {onRunNow && <button type="button" className="btn sm" onClick={() => void onRunNow(existing)}>{existing.trigger === "webhook" ? "Test run" : "Run now"}</button>}
+            {onToggle && <button type="button" className="btn sm" onClick={() => void onToggle(existing)}>{existing.enabled ? "Pause" : "Resume"}</button>}
+            {onHistory && <button type="button" className="btn sm" onClick={() => onHistory(existing.id)}>History</button>}
+            {existing.webhookUrl && <button type="button" className="btn sm" onClick={() => { void copyText(existing.webhookUrl!); }}>Copy URL</button>}
+            {existing.trigger === "webhook" && onRotate && <button type="button" className="btn sm" onClick={() => void onRotate(existing)}>Rotate secret</button>}
+            {onSourceSetup && (existing.trigger === "github" || existing.trigger === "linear") && <button type="button" className="btn sm" onClick={() => onSourceSetup(existing)}>Source setup</button>}
+            {onMove && (existing.trigger === "github" || existing.trigger === "linear") && <>
+              <button type="button" className="btn sm" onClick={() => void onMove(existing, -1)}>Move earlier</button>
+              <button type="button" className="btn sm" onClick={() => void onMove(existing, 1)}>Move later</button>
+            </>}
+            {onDelete && !existing.configKey && <button type="button" className="btn sm danger" onClick={() => void onDelete(existing)}>Delete</button>}
+          </div>
+        )}
 
         {created ? (
           <>
