@@ -43,10 +43,17 @@ export function RunHistory({
     if (filter === "attention") return needsAttention(run);
     return runHistoryCategory(run) === filter;
   }), [filter, runs]);
+  const countFor = (id: RunHistoryFilter): number => {
+    if (id === "all") return runs.length;
+    if (id === "attention") return attentionCount;
+    return runs.filter((run) => runHistoryCategory(run) === id).length;
+  };
   const filters: Array<{ id: RunHistoryFilter; label: string }> = [
-    { id: "all", label: "All" }, { id: "active", label: "Active" },
-    { id: "attention", label: `Attention${attentionCount ? ` (${attentionCount})` : ""}` },
-    { id: "parked", label: "Parked" }, { id: "dead_letter", label: "Dead letter" },
+    { id: "all", label: `All · ${countFor("all")}` },
+    { id: "active", label: `Active · ${countFor("active")}` },
+    { id: "attention", label: `Attention · ${attentionCount}` },
+    { id: "parked", label: `Parked · ${countFor("parked")}` },
+    { id: "dead_letter", label: `Dead letter · ${countFor("dead_letter")}` },
   ];
 
   return (

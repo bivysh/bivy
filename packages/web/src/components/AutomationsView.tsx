@@ -421,7 +421,6 @@ interface Notice {
  *  and routing, then execution policy. The URL owns the selected tab. */
 const AUTOMATIONS_TABS: Array<{ label: string; section: AutomationsSection | null }> = [
   { label: "Automations", section: null },
-  { label: "Runs", section: "queue" },
   { label: "Rulesets", section: "rulesets" },
 ];
 
@@ -472,6 +471,7 @@ export function AutomationsView({
   const [cancelError, setCancelError] = useState<string | null>(null);
   /** Create chooser (scratch + templates). Opens from New automation. */
   const [chooserOpen, setChooserOpen] = useState(false);
+  const [historyAutomationId, setHistoryAutomationId] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Solo (account-free QR) and direct (loopback) pairings have no account
@@ -1008,7 +1008,7 @@ export function AutomationsView({
           </div>
         )}
 
-        {section === null && (
+        {section === null && !historyAutomationId && (
         <>
         {/* Sources collapse to one overview row. Connection details stay nearby
             without making three setup cards the first thing on every visit. */}
@@ -1025,7 +1025,7 @@ export function AutomationsView({
             <strong>Fix failed CI is on.</strong>{" "}
             New GitHub Apps created in Bivy receive <code>workflow_run</code> events automatically.
             Existing apps need <code>workflow_run</code> + Actions/Checks read on the app in GitHub.
-            <button type="button" className="btn sm" style={{ marginLeft: 8 }} onClick={() => openSetup("github")}>
+            <button type="button" className="btn sm autom-banner-action" onClick={() => openSetup("github")}>
               Review GitHub setup
             </button>
           </div>
@@ -1037,17 +1037,25 @@ export function AutomationsView({
 
         {/* Empty state is the create chooser itself — no buried templates. */}
         {isEmpty && (
-          <section className="autom-hero">
+          <section className="autom-hero autom-empty-state">
+            <div className="autom-empty-icon" aria-hidden="true"><IconClock /></div>
             <div className="autom-hero-copy">
-              <h2 className="autom-hero-title">Put work on autopilot</h2>
+              <h2 className="autom-hero-title">Start by adding an automation</h2>
               <p className="autom-hero-body">
-                Start from a template or build your own. Setup stays here until it&apos;s running.
+                Schedule an automation to run any prompt and get reminded when it completes.
               </p>
             </div>
-            <NewAutomationPicker
-              onScratch={startFromScratch}
-              onTemplate={startFromTemplate}
-            />
+            <div className="autom-empty-action">
+              <button type="button" className="btn primary autom-empty-new-btn" onClick={openChooser}>
+                <PlusIcon size={22} /> New automation
+              </button>
+            </div>
+            <div className="autom-empty-picker">
+              <NewAutomationPicker
+                onScratch={startFromScratch}
+                onTemplate={startFromTemplate}
+              />
+            </div>
           </section>
         )}
 
@@ -1072,6 +1080,9 @@ export function AutomationsView({
                   const sourceIndex = sourceItems.findIndex((i) => i.id === item.id);
                   return (
                     <div className={`automation-row${item.enabled ? "" : " is-paused"}`} key={item.id}>
+                      <span className="automation-row-icon" aria-hidden="true">
+                        {item.trigger === "webhook" ? <IconWebhook /> : isSourceTrigger(item.trigger) ? <IconPr /> : <IconClock />}
+                      </span>
                       <div className="automation-row-main">
                         <div className="automation-row-title">
                           <strong>{item.name}</strong>
@@ -1087,6 +1098,11 @@ export function AutomationsView({
                         )}
                       </div>
                       <div className="automation-row-actions">
+                        {(() => {
+                          const activeRun = runs.find((run) => run.definitionId === item.id && ["pending", "claimed", "running", "waiting", "needs_attention"].includes(run.status));
+                          return activeRun ? <span className="automation-row-run-status" role="status">{activeRun.status === "running" ? "Running now" : "Queued"}</span> : null;
+                        })()}
+                        <button type="button" className="btn sm automation-history-btn" onClick={() => setHistoryAutomationId(item.id)}>History</button>
                         {needsConnect && (
                           <button
                             type="button"
@@ -1159,6 +1175,24 @@ export function AutomationsView({
           </>
         )}
         </>
+        )}
+
+        {section === null && historyAutomationId && (
+          <section className="autom-section automation-history-view">
+            <div className="autom-section-head">
+              <button type="button" className="btn link" onClick={() => setHistoryAutomationId(null)}>‹ Automations</button>
+              <strong>{listedItems.find((item) => item.id === historyAutomationId)?.name || "Automation"} history</strong>
+            </div>
+            <RunHistory
+              runs={runs.filter((run) => run.definitionId === historyAutomationId)}
+              definitions={items}
+              cancelBusyId={cancelBusyId}
+              onRefresh={() => void refresh().catch((e) => setError(String((e as Error).message || e)))}
+              onCancel={(run) => { setCancelError(null); setCancelRun(run); }}
+              onOpenRun={onOpenRun}
+              onOpenSession={(sessionId) => { onOpenSession(sessionId); onClose(); }}
+            />
+          </section>
         )}
 
         {section === "queue" && (
