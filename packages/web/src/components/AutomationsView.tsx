@@ -373,6 +373,7 @@ interface Draft {
   model: string;
   approvalMode: "never" | "risky" | "always" | "autonomous";
   sandbox: "read-only" | "workspace-write" | "danger-full-access";
+  requireSigning: boolean;
 }
 
 function emptyDraft(nodeId: string): Draft {
@@ -398,6 +399,7 @@ function emptyDraft(nodeId: string): Draft {
     model: "",
     approvalMode: "autonomous",
     sandbox: "workspace-write",
+    requireSigning: true,
   };
 }
 
@@ -1903,6 +1905,7 @@ function AutomationEditor({
         allowDangerous,
         enabled: true,
         trigger: d.trigger,
+        ...(d.trigger === "webhook" ? { requireSigning: d.requireSigning } : {}),
         repo: repo || (d.id ? "" : undefined),
         ...(d.trigger === "github" || d.trigger === "linear" ? {
           labels,
@@ -1941,6 +1944,8 @@ function AutomationEditor({
         const result = await createAutomation(controller.local, input);
         if (d.trigger === "webhook" && result.webhookSecret) {
           setCreated({ url: result.webhookUrl ?? "", secret: result.webhookSecret, name: d.name.trim() });
+        } else if (d.trigger === "webhook") {
+          onSaved({ kind: "created-webhook", name: d.name.trim(), id: result.id });
         } else {
           const nextHint = d.trigger === "schedule"
             ? (d.kind === "cron"
@@ -2159,11 +2164,13 @@ function AutomationEditor({
                   </div>
                 )}
                 {d.hasTrigger && d.trigger === "webhook" && (
-                  <p className="settings-hint autom-trigger-config">
-                    {d.id
-                      ? "Fires on a signed POST to its webhook URL. Copy the URL from the automation row; rotate the secret there if needed."
-                      : "You'll get the signed URL and a one-time signing secret after you save."}
-                  </p>
+                  <div className="autom-trigger-config">
+                    <label className="settings-toggle">
+                      <input type="checkbox" checked={d.requireSigning} onChange={(event) => set("requireSigning", event.target.checked)} />
+                      <span><strong>Require signing headers</strong><small>Turn this off for providers that cannot configure a signing secret or custom headers.</small></span>
+                    </label>
+                    <p className="settings-hint">{d.requireSigning ? "You'll get the signed URL and a one-time signing secret after you save." : "Requests may be sent without a signing secret or Bivy headers."}</p>
+                  </div>
                 )}
                 {d.hasTrigger && (d.trigger === "github" || d.trigger === "linear") && (
                   <div className="autom-trigger-config">

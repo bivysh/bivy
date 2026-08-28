@@ -1046,7 +1046,11 @@ export interface AccountAutomation {
 export type CreateAutomationInput = Omit<
   AccountAutomation,
   "id" | "createdAt" | "updatedAt" | "lastScheduledAt" | "schedule" | "webhookUrl"
-> & { schedule?: AutomationSchedule };
+> & {
+  schedule?: AutomationSchedule;
+  /** Allow providers without configurable signing secrets/headers to use an unsigned webhook. */
+  requireSigning?: boolean;
+};
 
 export interface AccountAutomationRun {
   id: string;

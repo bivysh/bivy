@@ -2605,7 +2605,9 @@ app.put("/node/automation-config/:key", requireNode, asyncHandler(async (req, re
     const updated = await store.updateAutomationDefinition(node.accountId, current.id, common);
     return res.json(publicAutomation(updated!, req));
   }
-  const webhookSecret = trigger === "webhook" ? randomBytes(32).toString("base64url") : undefined;
+  const webhookSecret = trigger === "webhook" && req.body?.requireSigning !== false
+    ? randomBytes(32).toString("base64url")
+    : undefined;
   const created = await store.createAutomationDefinition(node.accountId, { ...common, webhookSecret });
   return res.status(201).json({ ...publicAutomation(created, req), ...(webhookSecret ? { webhookSecret } : {}) });
 }));
@@ -2742,7 +2744,12 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
     nextRunAt = enabled ? nextOccurrence(schedule, new Date(Date.now() - 1)) : undefined;
     if (enabled && !nextRunAt) return res.status(400).json({ error: "The one-time timestamp must be in the future." });
   }
-  const webhookSecret = trigger === "webhook" ? randomBytes(32).toString("base64url") : undefined;
+  // Some providers cannot configure a signing secret or custom headers. Keep
+  // signing enabled by default, but allow explicitly unsigned webhook
+  // endpoints for those providers.
+  const webhookSecret = trigger === "webhook" && req.body?.requireSigning !== false
+    ? randomBytes(32).toString("base64url")
+    : undefined;
   let repo: string | undefined;
   let labels: string[] | undefined;
   let repos: string[] | undefined;
@@ -3735,7 +3742,7 @@ app.post("/webhooks/automation/run/:definitionId", asyncHandler(async (req, res)
   if (!def || def.trigger !== "webhook") return res.status(404).json({ code: "not_found" });
   if (def.enabled === false) return res.status(410).json({ code: "disabled" });
   const raw: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from("");
-  if (!def.webhookSecret || !verifyAutomationSignature(def.webhookSecret, raw, req.headers["x-bivy-signature-256"] as string | undefined)) {
+  if (def.webhookSecret && !verifyAutomationSignature(def.webhookSecret, raw, req.headers["x-bivy-signature-256"] as string | undefined)) {
     return res.status(401).json({ code: "invalid_signature" });
   }
   if (!consumeAutomationRate(`def:${def.id}`, 60)) {
@@ -3744,10 +3751,13 @@ app.post("/webhooks/automation/run/:definitionId", asyncHandler(async (req, res)
   if (!consumeAutomationRate(`account:${def.accountId}`, 300)) {
     return res.status(429).json({ code: "quota_exhausted", retryAfterSeconds: 60 });
   }
-  const idempotencyKey = String(req.headers["x-bivy-idempotency-key"] ?? "").trim();
-  if (!idempotencyKey || idempotencyKey.length > 200 || /[^\x21-\x7e]/.test(idempotencyKey)) {
-    return res.status(400).json({ code: "invalid_request", error: "A valid X-Bivy-Idempotency-Key header is required." });
+  const suppliedIdempotencyKey = String(req.headers["x-bivy-idempotency-key"] ?? "").trim();
+  if (suppliedIdempotencyKey.length > 200 || /[^\x21-\x7e]/.test(suppliedIdempotencyKey)) {
+    return res.status(400).json({ code: "invalid_request", error: "X-Bivy-Idempotency-Key must be printable ASCII and no longer than 200 characters." });
   }
+  // Idempotency is recommended, but cannot be required from providers that do
+  // not let users add headers. Requests without one are still processed.
+  const idempotencyKey = suppliedIdempotencyKey || randomUUID();
   let payload: unknown;
   try {
     payload = JSON.parse(raw.toString("utf8"));
