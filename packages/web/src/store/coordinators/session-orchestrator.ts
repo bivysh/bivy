@@ -55,6 +55,7 @@ export interface SessionWorkflowPort {
   listBranches(repo: string): void;
   activeSessionId(): string | null;
   isPendingLaunch(id: string): boolean;
+  sessionIsSaved(sessionId: string): boolean;
   appendPendingLaunchFollowup(id: string, prompt: { text: string; clientMessageId: string; attachments?: PromptAttachment[] }): void;
   addUserMessage(text: string, clientMessageId: string, attachments?: PromptAttachment[]): void;
   mustQueue(sessionId: string): boolean;
@@ -150,6 +151,12 @@ export class SessionOrchestrator {
       return;
     }
     if (active) {
+      // A completed agent turn is no longer kept in memory by the node. Re-open it
+      // before delivering the next prompt instead of treating the composer as a
+      // new-session surface. The prompt remains explicitly session-scoped below;
+      // opening first also gives the node a deterministic resume target when a
+      // close event and a tap happen in the same reconnect window.
+      if (port.sessionIsSaved?.(active)) port.openSession(active);
       if (port.mustQueue(active)) {
         port.enqueueFollowup(active, { id: clientMessageId, text: trimmed, attachments: files });
         port.persistFollowup(active, clientMessageId, trimmed);
