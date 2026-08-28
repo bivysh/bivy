@@ -105,18 +105,29 @@ function isMetaText(text: string): boolean {
 
 export function contentToText(content: any): string {
   if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter(isTextBlock)
-    .map((b) => String(b?.text ?? b?.content ?? ""))
-    .join("\n");
+  if (Array.isArray(content)) {
+    return content
+      .filter(isTextBlock)
+      .map((b) => String(b?.text ?? b?.content ?? ""))
+      .join("\n");
+  }
+  // Tool output is not consistently typed across agents: ACP commonly sends a
+  // content block, while some CLIs return `{ output }` or a structured JSON
+  // value. Do not silently turn those successful results into an empty card.
+  if (content && typeof content === "object") {
+    const value = content.text ?? content.content ?? content.output ?? content.result;
+    if (typeof value === "string") return value;
+    if (value !== undefined) return contentToText(value);
+    try { return JSON.stringify(content); } catch { return String(content); }
+  }
+  return content == null ? "" : String(content);
 }
 
 export function contentThinking(content: any): string {
   if (!Array.isArray(content)) return "";
   return content
-    .filter((b) => String(b?.type || b?.kind || "").toLowerCase() === "thinking")
-    .map((b) => String(b?.text ?? b?.thinking ?? ""))
+    .filter(isThinkingBlock)
+    .map((b) => String(b?.text ?? b?.thinking ?? b?.reasoning ?? ""))
     .join("\n");
 }
 
@@ -134,8 +145,15 @@ export function toolEntriesFromContent(content: any): ToolActivity[] {
       });
     } else if (isToolResultBlock(block)) {
       const id = toolCallId(block);
-      const result = typeof block?.content === "string" ? block.content : contentToText(block?.content);
-      out.push({ callId: id, name: toolName(block), input: {}, status: "done", result, detail: toolDetail(block) });
+      const result = contentToText(block?.content);
+      const existingDetail = toolDetail(block);
+      // Some runtimes persist the failure only on the tool_result block. Carry
+      // that outcome into the normalized detail so a reloaded card is marked
+      // failed just like its live counterpart (without an agent-specific path).
+      const detail = (block?.isError || block?.is_error) && existingDetail
+        ? { ...existingDetail, result: { ...(existingDetail.result ?? {}), isError: true } }
+        : existingDetail;
+      out.push({ callId: id, name: toolName(block), input: {}, status: "done", result, ...(detail ? { detail } : {}) });
     }
   }
   return out;

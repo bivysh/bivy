@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { describe, expect, it } from "vitest";
-import { renderHistory } from "../src/store-render.js";
+import { contentToText, renderHistory } from "../src/store-render.js";
 
 describe("renderHistory block interleaving", () => {
   it("keeps text → tool → text order within one assistant message (the Codex shape)", () => {
@@ -103,6 +103,18 @@ describe("renderHistory block interleaving", () => {
     expect(entries).toHaveLength(2);
     expect(entries[0]).toMatchObject({ role: "user", text: "<div> how do I center this?" });
     expect(entries[1]).toMatchObject({ role: "assistant", text: "You can use flexbox." });
+  });
+
+  it("keeps object-shaped tool output and reasoning blocks visible", () => {
+    expect(contentToText({ output: "compiled successfully" })).toBe("compiled successfully");
+    expect(contentToText({ code: 0, files: ["a.ts"] })).toBe('{"code":0,"files":["a.ts"]}');
+    const entries = renderHistory([
+      { role: "assistant", content: [{ type: "reasoning", reasoning: "Checking the result" }] },
+      { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "bash", input: { command: "npm test" } }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: { output: "all tests passed" } }] },
+    ]);
+    expect(entries.find((entry) => entry.role === "thinking")?.text).toBe("Checking the result");
+    expect(entries.find((entry) => entry.tool?.callId === "t1")?.tool?.result).toBe("all tests passed");
   });
 
   it("handles string content and text-only assistant messages unchanged", () => {
