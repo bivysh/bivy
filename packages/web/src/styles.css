@@ -2581,7 +2581,8 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 .btn.link.danger { background: transparent; color: var(--danger); }
 .btn.sm { padding: var(--space-1) 10px; font-size: var(--text-xs); }
 .btn.lg { padding: 11px 18px; font-size: var(--text-md); }
-.btn.icon { padding: var(--space-1); font-size: var(--text-xl); line-height: 1; }
+.btn.icon { padding: var(--space-1); min-width: var(--space-7); min-height: var(--space-7); font-size: var(--text-xl); line-height: 1; }
+.btn[aria-busy="true"] { cursor: wait; }
 /* ---- Sidebar settings gear (single entry point, ChatGPT-style) ---- */
 .settings-gear {
   display: inline-flex; align-items: center; justify-content: flex-start; gap: 10px; position: relative;

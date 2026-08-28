@@ -97,8 +97,8 @@ function ArtifactRow({ artifact, onJump }: { artifact: ArtifactEntry; onJump: (e
         )}
       </div>
       <div className="artifact-actions">
-        <button type="button" className="btn sm" onClick={() => void download()} disabled={downloading}>
-          {downloading ? "…" : "Download"}
+        <button type="button" className="btn sm" onClick={() => void download()} disabled={downloading} aria-busy={downloading}>
+          {downloading ? "Downloading…" : "Download"}
         </button>
         <button type="button" className="btn sm ghost" onClick={() => onJump(artifact.entryId)}>
           Jump to turn
