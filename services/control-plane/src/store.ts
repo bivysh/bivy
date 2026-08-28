@@ -771,6 +771,8 @@ export interface AutomationDefinition {
   labels?: string[];
   /** Repo allowlist for github/linear (`owner/name`). Empty/undefined → all. */
   repos?: string[];
+  /** Optional GitHub App id filter for github source automations. Empty/undefined → every connected app. */
+  appId?: string;
   /**
    * GitHub event rules ("when"). Any matching rule fires the job. Outcomes are
    * whatever the instructions say — not a special PR path. Legacy rows without

@@ -563,6 +563,16 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
 
   await test("automation definitions: webhook trigger fields and event context round-trip", async (store) => {
     const acct = await store.findOrCreateAccount("contract-webhook-def@example.com");
+    const appScoped = await store.createAutomationDefinition(acct.id, {
+      name: "App-scoped GitHub",
+      trigger: "github",
+      appId: "12345",
+      templateCiphertext: "bivy-room-v1:node-x:opaque",
+      enabled: true,
+      schedule: { kind: "once", at: "9999-12-31T00:00:00.000Z" },
+    });
+    assert.equal(appScoped.appId, "12345");
+    assert.equal((await store.getAutomationDefinition(acct.id, appScoped.id))?.appId, "12345");
     const def = await store.createAutomationDefinition(acct.id, {
       name: "Fix CI",
       trigger: "webhook",

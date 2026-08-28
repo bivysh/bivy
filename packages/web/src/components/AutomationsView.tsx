@@ -235,11 +235,12 @@ function buildRepresentativeEvent(d: Draft): AutomationSimulationEvent | undefin
   const workflows = d.workflows.split(/[,\n]/).map((v) => v.trim()).filter(Boolean);
   if (d.trigger === "linear") return { kind: "linear", repo, labels: labels.length ? labels : ["bivy"] };
   if (d.trigger !== "github") return undefined;
-  if (d.githubEvents.issuesLabeled) return { kind: "github", repo, event: "issues", action: "labeled", labels: labels.length ? labels : ["bivy"] };
-  if (d.githubEvents.issueMention) return { kind: "github", repo, event: "issue_comment", mention: true };
-  if (d.githubEvents.prLabeled) return { kind: "github", repo, event: "pull_request", action: "labeled", labels: labels.length ? labels : ["bivy"] };
-  if (d.githubEvents.prMention) return { kind: "github", repo, event: "pull_request_review_comment", mention: true };
-  if (d.githubEvents.workflowFailed) return { kind: "github", repo, event: "workflow_run", action: "completed", conclusion: "failure", workflow: workflows[0] };
+  const appId = d.appId.trim() || undefined;
+  if (d.githubEvents.issuesLabeled) return { kind: "github", repo, appId, event: "issues", action: "labeled", labels: labels.length ? labels : ["bivy"] };
+  if (d.githubEvents.issueMention) return { kind: "github", repo, appId, event: "issue_comment", mention: true };
+  if (d.githubEvents.prLabeled) return { kind: "github", repo, appId, event: "pull_request", action: "labeled", labels: labels.length ? labels : ["bivy"] };
+  if (d.githubEvents.prMention) return { kind: "github", repo, appId, event: "pull_request_review_comment", mention: true };
+  if (d.githubEvents.workflowFailed) return { kind: "github", repo, appId, event: "workflow_run", action: "completed", conclusion: "failure", workflow: workflows[0] };
   return undefined;
 }
 
@@ -295,6 +296,13 @@ function slackSourceStatus(slack: SlackHook | null): { tone: "on" | "off" | "war
 }
 
 /** Status chip for a source automation given live connect state. */
+function githubAppOptionLabel(app: NonNullable<GithubAppInfo["apps"]>[number]): string {
+  const name = app.name || app.mention || app.owner || app.appId || "GitHub App";
+  const kind = app.central ? "Hosted Bivy App" : app.hosted ? "Hosted custom app" : "Custom/user-installed app";
+  const owner = app.owner ? ` · ${app.owner}${app.ownerType ? ` (${app.ownerType})` : ""}` : "";
+  return `${name} · ${kind}${owner}`;
+}
+
 function sourceAutomationChip(
   item: AccountAutomation,
   sources: SourcesSnapshot,
@@ -357,6 +365,7 @@ interface Draft {
   repo: string;
   labels: string;
   repos: string;
+  appId: string;
   githubEvents: GithubEventToggles;
   workflows: string;
   nodeId: string;
@@ -381,6 +390,7 @@ function emptyDraft(nodeId: string): Draft {
     repo: "",
     labels: "bivy",
     repos: "",
+    appId: "",
     githubEvents: { issuesLabeled: true, issueMention: true, prLabeled: false, prMention: false, workflowFailed: false },
     workflows: "",
     nodeId,
@@ -696,7 +706,7 @@ export function AutomationsView({
     setDraft(emptyDraft(defaultNodeId));
   }
 
-  async function continueWithSource(source: "github" | "linear", current: Draft) {
+  async function continueWithSource(source: "github" | "linear", current: Draft, opts?: { keepExistingName?: boolean }) {
     const existing = items.find((item) => item.trigger === source);
     if (!existing) {
       setDraft({ ...current, hasTrigger: true, trigger: source });
@@ -713,13 +723,14 @@ export function AutomationsView({
     setDraft({
       ...base,
       id: existing.id,
-      name: current.name.trim() ? current.name : existing.name,
+      name: current.name.trim() ? current.name : opts?.keepExistingName ? existing.name : "",
       instructions: current.instructions.trim() ? current.instructions : instructions,
       hasTrigger: true,
       trigger: source,
       repo: existing.repo || "",
       labels: (existing.labels ?? ["bivy"]).join(", "),
       repos: (existing.repos ?? []).join(", "),
+      appId: existing.appId || "",
       githubEvents: togglesFromAutomation(existing),
       workflows: (existing.on?.find((rule) => rule.event === "workflow_run")?.workflows ?? []).join(", "),
       runtimeId: existing.runtimeId || "",
@@ -733,7 +744,7 @@ export function AutomationsView({
     setError("");
     setMenuId(null);
     if (item.trigger === "github" || item.trigger === "linear") {
-      await continueWithSource(item.trigger, emptyDraft(defaultNodeId));
+      await continueWithSource(item.trigger, emptyDraft(defaultNodeId), { keepExistingName: true });
       return;
     }
     if (item.trigger === "github_ci") {
@@ -1216,6 +1227,7 @@ export function AutomationsView({
       {draft && (
         <AutomationEditor
           state={state}
+          sources={sources}
           initial={draft}
           onCancel={() => setDraft(null)}
           onSaved={async (result) => {
@@ -1317,6 +1329,7 @@ function SourceAutomationEditor({
       : (item.on?.find((r) => r.event === "workflow_run")?.workflows ?? []).join(", "),
   );
   const [reposText, setReposText] = useState((item.repos ?? []).join(", "));
+  const [appId, setAppId] = useState(item.appId || "");
   const [repoDefault, setRepoDefault] = useState(item.repo || "");
   const [nodeSuffix, setNodeSuffix] = useState(nodeLabelSuffix(item.nodeLabel));
   const [runtimeId, setRuntimeId] = useState(item.runtimeId || "");
@@ -1367,6 +1380,7 @@ function SourceAutomationEditor({
         enabled,
         labels: labels ?? [],
         repos: repos ?? [],
+        appId: isGithub ? appId.trim() || "" : "",
         repo: repoDefault.trim() || "",
         nodeLabel: nodeSuffix.trim() ? `bivy/${nodeSuffix.trim()}` : "",
         runtimeId: runtimeId.trim() || "",
@@ -1427,6 +1441,7 @@ function SourceAutomationEditor({
       templateCiphertext: item.templateCiphertext,
       labels: labels ?? [],
       repos: repos ?? [],
+      appId: isGithub ? appId.trim() || undefined : undefined,
       repo: repoDefault.trim() || undefined,
       nodeLabel: nodeSuffix.trim() ? `bivy/${nodeSuffix.trim()}` : undefined,
       runtimeId: runtimeId.trim() || undefined,
@@ -1510,6 +1525,21 @@ function SourceAutomationEditor({
                 <span>Workflow failed</span>
               </label>
               {!anyEvent && <p className="schedule-hint warn">Select at least one event.</p>}
+            </div>
+          )}
+
+          {isGithub && (sources.github?.apps?.length ?? 0) > 1 && (
+            <div className="settings-field">
+              <label className="field-label" htmlFor="src-app-id">GitHub App source</label>
+              <select id="src-app-id" className="picker-search" value={appId} onChange={(e) => setAppId(e.target.value)}>
+                <option value="">All GitHub Apps</option>
+                {sources.github?.apps.map((app) => (
+                  <option key={app.appId || app.hookId || app.name} value={app.appId || ""} disabled={!app.appId}>
+                    {githubAppOptionLabel(app)}
+                  </option>
+                ))}
+              </select>
+              <p className="settings-hint">Scope this automation to the hosted Bivy App or to a custom/user-installed GitHub App.</p>
             </div>
           )}
 
@@ -1686,12 +1716,14 @@ interface SaveResult {
 
 function AutomationEditor({
   state,
+  sources,
   initial,
   onCancel,
   onSaved,
   onSelectSource,
 }: {
   state: AppState;
+  sources: SourcesSnapshot;
   initial: Draft;
   onCancel: () => void;
   onSaved: (result?: SaveResult) => void;
@@ -1809,7 +1841,7 @@ function AutomationEditor({
       ...(d.trigger === "github" || d.trigger === "linear" ? {
         labels,
         repos,
-        ...(d.trigger === "github" ? { on: buildGithubOn(d.githubEvents, labels, workflows) } : {}),
+        ...(d.trigger === "github" ? { appId: d.appId.trim() || undefined, on: buildGithubOn(d.githubEvents, labels, workflows) } : {}),
       } : {}),
     };
     await preflight.run(draft, buildRepresentativeEvent(d), { resetAck: true }).catch(() => {});
@@ -1850,7 +1882,7 @@ function AutomationEditor({
         ...(d.trigger === "github" || d.trigger === "linear" ? {
           labels,
           repos,
-          ...(d.trigger === "github" ? { on: buildGithubOn(d.githubEvents, labels, workflows) } : {}),
+          ...(d.trigger === "github" ? { appId: d.appId.trim() || undefined, on: buildGithubOn(d.githubEvents, labels, workflows) } : {}),
         } : {}),
         ...(d.trigger === "schedule"
           ? {
@@ -2112,6 +2144,20 @@ function AutomationEditor({
                             <span>{label}</span>
                           </label>
                         ))}
+                      </div>
+                    )}
+                    {d.trigger === "github" && (sources.github?.apps?.length ?? 0) > 1 && (
+                      <div className="settings-field">
+                        <label className="field-label" htmlFor="autom-source-app">GitHub App source</label>
+                        <select id="autom-source-app" className="picker-search" value={d.appId} onChange={(e) => set("appId", e.target.value)}>
+                          <option value="">All GitHub Apps</option>
+                          {sources.github?.apps.map((app) => (
+                            <option key={app.appId || app.hookId || app.name} value={app.appId || ""} disabled={!app.appId}>
+                              {githubAppOptionLabel(app)}
+                            </option>
+                          ))}
+                        </select>
+                        <p className="settings-hint">Choose the hosted Bivy App or one of your custom/user-installed GitHub Apps.</p>
                       </div>
                     )}
                     {(d.trigger === "linear" || d.githubEvents.issuesLabeled || d.githubEvents.prLabeled) && (
