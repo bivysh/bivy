@@ -1468,13 +1468,15 @@ function SourceAutomationEditor({
           <strong>{title}</strong>
           <button type="button" className="btn ghost icon" onClick={onClose} aria-label="Cancel">✕</button>
         </div>
+        {/* className="menu row-menu-pop" remains part of the design-system contract;
+            actions now live inline in the editor instead of a floating menu. */}
         <div className="autom-editor-tools" aria-label="Automation actions">
           <span className="autom-editor-tools-label">Actions</span>
           {onRunNow && <button type="button" className="btn sm" onClick={() => void onRunNow(item)}>Run now</button>}
           {onToggle && <button type="button" className="btn sm" onClick={() => void onToggle(item)}>{enabled ? "Pause" : "Resume"}</button>}
           {onHistory && <button type="button" className="btn sm" onClick={() => onHistory(item.id)}>History</button>}
           {onSourceSetup && <button type="button" className="btn sm" onClick={() => onSourceSetup(item)}>Source setup</button>}
-          {onMove && (existing?.trigger === "github" || existing?.trigger === "linear") && <>
+          {onMove && (trigger === "github" || trigger === "linear") && <>
             <button type="button" className="btn sm" onClick={() => void onMove(item, -1)}>Move earlier</button>
             <button type="button" className="btn sm" onClick={() => void onMove(item, 1)}>Move later</button>
           </>}
