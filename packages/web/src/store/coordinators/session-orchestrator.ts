@@ -56,6 +56,7 @@ export interface SessionWorkflowPort {
   activeSessionId(): string | null;
   isPendingLaunch(id: string): boolean;
   sessionIsSaved(sessionId: string): boolean;
+  openSession(sessionId: string, path?: string): void;
   appendPendingLaunchFollowup(id: string, prompt: { text: string; clientMessageId: string; attachments?: PromptAttachment[] }): void;
   addUserMessage(text: string, clientMessageId: string, attachments?: PromptAttachment[]): void;
   mustQueue(sessionId: string): boolean;
