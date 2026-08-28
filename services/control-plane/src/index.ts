@@ -2777,6 +2777,14 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
     return res.status(400).json({ error: (error as Error).message });
   }
   const templateId = typeof req.body?.templateId === "string" ? req.body.templateId.trim() || undefined : undefined;
+  const requestedConfigOrder = Number(req.body?.configOrder);
+  if (req.body?.configOrder !== undefined && (!Number.isInteger(requestedConfigOrder) || requestedConfigOrder < 0 || requestedConfigOrder > 999)) {
+    return res.status(400).json({ error: "configOrder must be an integer from 0 to 999" });
+  }
+  const existingDefinitions = await store.listAutomationDefinitions(client.accountId);
+  const nextConfigOrder = req.body?.configOrder !== undefined
+    ? requestedConfigOrder
+    : Math.max(-1, ...existingDefinitions.map((d) => d.configOrder ?? -1)) + 1;
   const input: Omit<AutomationDefinition, "id" | "accountId" | "createdAt" | "updatedAt"> = {
     name,
     templateCiphertext: typeof req.body?.templateCiphertext === "string" ? req.body.templateCiphertext : undefined,
@@ -2788,6 +2796,7 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
     sandbox: ["read-only", "workspace-write", "danger-full-access"].includes(req.body?.sandbox) ? req.body.sandbox : undefined,
     allowDangerous: req.body?.allowDangerous === true,
     maxAttempts: Number.isInteger(req.body?.maxAttempts) && req.body.maxAttempts >= 1 && req.body.maxAttempts <= 10 ? req.body.maxAttempts : undefined,
+    configOrder: nextConfigOrder,
     enabled,
     trigger,
     webhookSecret,
@@ -2899,6 +2908,10 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
   } catch (error) {
     return res.status(400).json({ error: (error as Error).message });
   }
+  const requestedConfigOrder = Number(req.body?.configOrder);
+  if (req.body?.configOrder !== undefined && (!Number.isInteger(requestedConfigOrder) || requestedConfigOrder < 0 || requestedConfigOrder > 999)) {
+    return res.status(400).json({ error: "configOrder must be an integer from 0 to 999" });
+  }
   const patch = {
     name: typeof req.body?.name === "string" ? req.body.name.trim() || current.name : current.name,
     templateCiphertext: typeof req.body?.templateCiphertext === "string" ? req.body.templateCiphertext : current.templateCiphertext,
@@ -2909,6 +2922,7 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
     sandbox: ["read-only", "workspace-write", "danger-full-access"].includes(req.body?.sandbox) ? req.body.sandbox : current.sandbox,
     allowDangerous: typeof req.body?.allowDangerous === "boolean" ? req.body.allowDangerous : current.allowDangerous,
     maxAttempts: Number.isInteger(req.body?.maxAttempts) && req.body.maxAttempts >= 1 && req.body.maxAttempts <= 10 ? req.body.maxAttempts : current.maxAttempts,
+    configOrder: req.body?.configOrder !== undefined ? requestedConfigOrder : current.configOrder,
     enabled,
     schedule,
     nextRunAt,

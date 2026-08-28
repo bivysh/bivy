@@ -231,11 +231,11 @@ export function explainSourceAutomationMatch(
     })
     .map(toEvaluable)
     .sort((a, b) => {
-      // Definitions from one automations-as-code file preserve file order even
-      // after an update (createdAt cannot represent a reorder). UI-managed and
-      // mixed definitions retain the historical oldest-first contract.
-      if (a.configKey && b.configKey && a.configOrder !== undefined && b.configOrder !== undefined) {
-        return a.configOrder - b.configOrder || a.createdAt.localeCompare(b.createdAt);
+      // Explicit priority wins for both file-managed and UI-managed rows; rows
+      // without it retain the historical oldest-first contract.
+      if (a.configOrder !== undefined || b.configOrder !== undefined) {
+        return (a.configOrder ?? Number.MAX_SAFE_INTEGER) - (b.configOrder ?? Number.MAX_SAFE_INTEGER)
+          || a.createdAt.localeCompare(b.createdAt);
       }
       return a.createdAt.localeCompare(b.createdAt);
     });
@@ -251,8 +251,9 @@ export function findAutomationOverlaps(definitions: AutomationDefinition[]): Ove
     .filter((d) => d.enabled !== false && (d.trigger === "github" || d.trigger === "linear" || d.trigger === "github_ci"))
     .map(toEvaluable)
     .sort((a, b) => {
-      if (a.configKey && b.configKey && a.configOrder !== undefined && b.configOrder !== undefined) {
-        return a.configOrder - b.configOrder || a.createdAt.localeCompare(b.createdAt);
+      if (a.configOrder !== undefined || b.configOrder !== undefined) {
+        return (a.configOrder ?? Number.MAX_SAFE_INTEGER) - (b.configOrder ?? Number.MAX_SAFE_INTEGER)
+          || a.createdAt.localeCompare(b.createdAt);
       }
       return a.createdAt.localeCompare(b.createdAt);
     });

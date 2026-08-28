@@ -151,6 +151,13 @@ function isSourceTrigger(t: AccountAutomation["trigger"]): t is "github" | "line
   return t === "github" || t === "linear" || t === "github_ci";
 }
 
+function automationPrioritySort(a: AccountAutomation, b: AccountAutomation): number {
+  const ao = a.configOrder ?? Number.MAX_SAFE_INTEGER;
+  const bo = b.configOrder ?? Number.MAX_SAFE_INTEGER;
+  if (ao !== bo) return ao - bo;
+  return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+}
+
 /** Human summary of GitHub `on` rules (or legacy defaults). */
 function summarizeGithubEvents(item: AccountAutomation): string {
   const on = item.on;
@@ -562,7 +569,7 @@ export function AutomationsView({
   }, [menuId]);
 
   const defaultNodeId = state.connection.currentNodeId || controller.local.cur || "";
-  const listedItems = useMemo(() => items.filter(isListedAutomation), [items]);
+  const listedItems = useMemo(() => items.filter(isListedAutomation).sort(automationPrioritySort), [items]);
   const isEmpty = !loading && listedItems.length === 0;
 
   function openSetup(focus: SourceSetupFocus) {
@@ -802,6 +809,23 @@ export function AutomationsView({
         tone: "ok",
         title: item.enabled ? `Paused “${item.name}”` : `Resumed “${item.name}”`,
       });
+    } catch (e) { setError(String((e as Error).message || e)); }
+  }
+
+  async function moveSourceAutomation(item: AccountAutomation, direction: -1 | 1) {
+    setMenuId(null);
+    const sourceItems = items.filter((i) => isSourceTrigger(i.trigger) && !i.configKey).sort(automationPrioritySort);
+    const index = sourceItems.findIndex((i) => i.id === item.id);
+    const swap = sourceItems[index + direction];
+    if (!swap) return;
+    const orders = sourceItems.map((i, n) => i.configOrder ?? n);
+    try {
+      await Promise.all([
+        updateAutomation(controller.local, item.id, { configOrder: orders[index + direction] }),
+        updateAutomation(controller.local, swap.id, { configOrder: orders[index] }),
+      ]);
+      await refresh();
+      setNotice({ tone: "ok", title: `Moved “${item.name}” ${direction < 0 ? "earlier" : "later"}` });
     } catch (e) { setError(String((e as Error).message || e)); }
   }
 
@@ -1060,7 +1084,9 @@ export function AutomationsView({
                   const nextRun = item.enabled && item.nextRunAt && item.schedule?.kind !== "once"
                     ? formatNextAutomationRun(item.nextRunAt)
                     : null;
-                  const meta = [scheduleSummary(item), item.configKey ? "Managed by file" : null, nextRun].filter(Boolean).join(" · ");
+                  const meta = [scheduleSummary(item), item.configKey ? "Managed by file" : null, isSourceTrigger(item.trigger) ? "Priority: first match wins" : null, nextRun].filter(Boolean).join(" · ");
+                  const sourceItems = items.filter((i) => isSourceTrigger(i.trigger) && !i.configKey).sort(automationPrioritySort);
+                  const sourceIndex = sourceItems.findIndex((i) => i.id === item.id);
                   return (
                     <div className={`automation-row${item.enabled ? "" : " is-paused"}`} key={item.id}>
                       <div className="automation-row-main">
@@ -1105,6 +1131,12 @@ export function AutomationsView({
                                 </button>
                               )}
                               {!item.configKey && <button type="button" className="menu-item row-menu-item" role="menuitem" onClick={() => { setMenuId(null); void edit(item); }}>Edit</button>}
+                              {isSourceTrigger(item.trigger) && !item.configKey && sourceIndex > 0 && (
+                                <button type="button" className="menu-item row-menu-item" role="menuitem" onClick={() => void moveSourceAutomation(item, -1)}>Move earlier</button>
+                              )}
+                              {isSourceTrigger(item.trigger) && !item.configKey && sourceIndex >= 0 && sourceIndex < sourceItems.length - 1 && (
+                                <button type="button" className="menu-item row-menu-item" role="menuitem" onClick={() => void moveSourceAutomation(item, 1)}>Move later</button>
+                              )}
                               {item.trigger === "webhook" && item.webhookUrl && (
                                 <button type="button" className="menu-item row-menu-item" role="menuitem" onClick={() => {
                                   setMenuId(null);
