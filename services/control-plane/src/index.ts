@@ -318,6 +318,7 @@ function parseSimulationEventBody(value: unknown): EvaluationEvent {
   return {
     kind,
     repo,
+    appId: typeof o.appId === "string" ? o.appId.trim() || undefined : undefined,
     labels,
     mention: o.mention === true,
     event,
@@ -2558,6 +2559,7 @@ app.put("/node/automation-config/:key", requireNode, asyncHandler(async (req, re
   let repos: string[] | undefined;
   let labels: string[] | undefined;
   let on: AutomationDefinition["on"] | undefined;
+  const appId = typeof req.body?.appId === "string" ? req.body.appId.trim() || undefined : undefined;
   let schedule = SENTINEL_SCHEDULE as AutomationDefinition["schedule"];
   let nextRunAt: string | undefined;
   try {
@@ -2597,7 +2599,7 @@ app.put("/node/automation-config/:key", requireNode, asyncHandler(async (req, re
     ephemeral: req.body?.ephemeral === true || undefined,
     approvalMode, sandbox, maxAttempts,
     enabled: req.body?.enabled !== false,
-    trigger, repo, repos: repos?.length ? repos : repo && (trigger === "github" || trigger === "linear") ? [repo] : repos, labels, on, schedule, nextRunAt,
+    trigger, repo, repos: repos?.length ? repos : repo && (trigger === "github" || trigger === "linear") ? [repo] : repos, labels, appId, on, schedule, nextRunAt,
   };
   if (current) {
     const updated = await store.updateAutomationDefinition(node.accountId, current.id, common);
@@ -2745,6 +2747,7 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
   let labels: string[] | undefined;
   let repos: string[] | undefined;
   let on: AutomationDefinition["on"] | undefined;
+  const appId = typeof req.body?.appId === "string" ? req.body.appId.trim() || undefined : undefined;
   let target: AutomationDefinition["target"];
   let requiredCapabilities: string[] | undefined;
   let preferredCapabilities: string[] | undefined;
@@ -2803,6 +2806,7 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
     repo,
     labels,
     repos,
+    appId,
     on,
     target,
     templateId: templateId || (isSourceTrigger(trigger) ? "issue-to-pr" : undefined),
@@ -2860,6 +2864,7 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
   let labels = current.labels;
   let repos = current.repos;
   let on = current.on;
+  let appId = current.appId;
   let target = current.target;
   let requiredCapabilities = current.requiredCapabilities;
   let preferredCapabilities = current.preferredCapabilities;
@@ -2879,6 +2884,9 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
     }
     if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "on")) {
       on = req.body.on === null ? undefined : normalizeEventRules(req.body.on);
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "appId")) {
+      appId = typeof req.body.appId === "string" && req.body.appId.trim() ? req.body.appId.trim() : undefined;
     }
     if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "targetKind")) {
       if (req.body.targetKind === "existing_session") {
@@ -2929,6 +2937,7 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
     repo,
     labels,
     repos,
+    appId,
     on,
     target,
     templateId: typeof req.body?.templateId === "string" ? req.body.templateId.trim() || undefined : current.templateId,
@@ -2993,6 +3002,7 @@ function draftAutomationPatch(body: Record<string, unknown>): Partial<Automation
     if (patch.repos) for (const r of patch.repos) normalizeAutomationRepo(r);
   }
   if (body.labels !== undefined) patch.labels = body.labels === null ? undefined : normalizeStringList(body.labels);
+  if (body.appId !== undefined) patch.appId = typeof body.appId === "string" && body.appId.trim() ? body.appId.trim() : undefined;
   if (body.on !== undefined) patch.on = body.on === null ? undefined : normalizeEventRules(body.on);
   if (typeof body.templateCiphertext === "string") patch.templateCiphertext = body.templateCiphertext;
   if (typeof body.runtimeId === "string") patch.runtimeId = body.runtimeId.trim() || undefined;
@@ -3724,12 +3734,12 @@ app.post("/webhooks/automation/run/:definitionId", asyncHandler(async (req, res)
   const def = await store.getAutomationDefinitionById(String(req.params.definitionId));
   if (!def || def.trigger !== "webhook") return res.status(404).json({ code: "not_found" });
   if (def.enabled === false) return res.status(410).json({ code: "disabled" });
-  if (!consumeAutomationRate(`def:${def.id}`, 60)) {
-    return res.status(429).json({ code: "quota_exhausted", retryAfterSeconds: 60 });
-  }
   const raw: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from("");
   if (!def.webhookSecret || !verifyAutomationSignature(def.webhookSecret, raw, req.headers["x-bivy-signature-256"] as string | undefined)) {
     return res.status(401).json({ code: "invalid_signature" });
+  }
+  if (!consumeAutomationRate(`def:${def.id}`, 60)) {
+    return res.status(429).json({ code: "quota_exhausted", retryAfterSeconds: 60 });
   }
   if (!consumeAutomationRate(`account:${def.accountId}`, 300)) {
     return res.status(429).json({ code: "quota_exhausted", retryAfterSeconds: 60 });
@@ -3806,6 +3816,7 @@ async function processGithubEvent(hook: InboundHook, event: string, deliveryId: 
     if (!failure) return res.json({ ok: true, enqueued: false });
     const matched = matchSourceAutomation(automations, {
       kind: "github",
+      appId: hook.appId,
       githubEvent: "workflow_run",
       action: "completed",
       repo: failure.repo,
@@ -3852,6 +3863,7 @@ async function processGithubEvent(hook: InboundHook, event: string, deliveryId: 
     }
     const matched = matchSourceAutomation(automations, {
       kind: "github",
+      appId: hook.appId,
       githubEvent: "issue_comment",
       action: String((payload as any)?.action ?? ""),
       repo: comment.repo,
@@ -3897,6 +3909,7 @@ async function processGithubEvent(hook: InboundHook, event: string, deliveryId: 
     }
     const matched = matchSourceAutomation(automations, {
       kind: "github",
+      appId: hook.appId,
       githubEvent: "pull_request_review_comment",
       action: String((payload as any)?.action ?? ""),
       repo: review.repo,
@@ -3945,6 +3958,7 @@ async function processGithubEvent(hook: InboundHook, event: string, deliveryId: 
     const bodyMention = !isLabelRouted; // routed via @mention in body
     const matched = matchSourceAutomation(automations, {
       kind: "github",
+      appId: hook.appId,
       githubEvent: "pull_request",
       action: String((payload as any)?.action ?? ""),
       repo: pr.repo,
@@ -3993,6 +4007,7 @@ async function processGithubEvent(hook: InboundHook, event: string, deliveryId: 
     }
     const matched = matchSourceAutomation(automations, {
       kind: "github",
+      appId: hook.appId,
       githubEvent: "issues",
       action: String((payload as any)?.action ?? ""),
       repo: issue.repo,
@@ -4153,7 +4168,7 @@ app.post("/webhooks/linear/:id", asyncHandler(async (req, res) => {
     collapseKey: `linear-issue:${issue.id}`,
     defaultRouted: rawLabel === "bivy" && !matched.nodeLabel,
     definitionId: matched.id,
-    triggerKind: "webhook",
+    triggerKind: "linear",
     body: matched.templateCiphertext,
     runtimeId: matched.runtimeId,
     model: matched.model,

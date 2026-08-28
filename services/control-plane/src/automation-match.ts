@@ -67,6 +67,8 @@ export interface SourceTriggerEvent {
   kind: "github" | "linear";
   /** owner/name when known */
   repo?: string;
+  /** GitHub App id that delivered the event. */
+  appId?: string;
   /** Labels on the issue / PR / ticket. */
   labels: string[];
   /** @-mention of the app was present. */
@@ -144,13 +146,27 @@ export function isGithubEventName(value: string): value is GithubEventName {
   );
 }
 
+/** Canonical first-match order for source automations. UI-managed and
+ *  config-as-code rows both use configOrder when present; rows without it keep
+ *  historical oldest-first behavior after ordered rows. */
+function sourceAutomationOrder(
+  a: Pick<AutomationDefinition, "createdAt" | "configOrder">,
+  b: Pick<AutomationDefinition, "createdAt" | "configOrder">,
+): number {
+  if (a.configOrder !== undefined || b.configOrder !== undefined) {
+    return (a.configOrder ?? Number.MAX_SAFE_INTEGER) - (b.configOrder ?? Number.MAX_SAFE_INTEGER)
+      || a.createdAt.localeCompare(b.createdAt);
+  }
+  return a.createdAt.localeCompare(b.createdAt);
+}
+
 /**
  * Adapt a stored definition to the shape the shared evaluator understands.
  * `github_ci` is a control-plane-only legacy alias (config-as-code never had
  * it) that expands to an explicit workflow_run rule here, at the boundary,
  * rather than teaching the shared matcher a control-plane-specific trigger.
  */
-function toEvaluable(def: AutomationDefinition): EvaluableAutomation & { createdAt: string; configOrder?: number; configKey?: string } {
+function toEvaluable(def: AutomationDefinition): EvaluableAutomation & { createdAt: string; configOrder?: number; configKey?: string; appId?: string } {
   const legacyCiOn: AutomationEventRule[] | undefined = def.trigger === "github_ci" && !(def.on && def.on.length > 0)
     ? [{
         event: "workflow_run",
@@ -166,6 +182,7 @@ function toEvaluable(def: AutomationDefinition): EvaluableAutomation & { created
     trigger: def.trigger === "github_ci" ? "github" : (def.trigger ?? "schedule"),
     repo: def.repo,
     repos: def.repos,
+    appId: def.appId,
     labels: def.labels,
     on: legacyCiOn ?? def.on,
     createdAt: def.createdAt,
@@ -227,18 +244,11 @@ export function explainSourceAutomationMatch(
       if (d.enabled === false) return false;
       if (event.kind === "linear") return d.trigger === "linear";
       // GitHub deliveries match both modern github and legacy github_ci rows.
-      return d.trigger === "github" || d.trigger === "github_ci";
+      if (d.trigger !== "github" && d.trigger !== "github_ci") return false;
+      return !d.appId || !event.appId || d.appId === event.appId;
     })
     .map(toEvaluable)
-    .sort((a, b) => {
-      // Explicit priority wins for both file-managed and UI-managed rows; rows
-      // without it retain the historical oldest-first contract.
-      if (a.configOrder !== undefined || b.configOrder !== undefined) {
-        return (a.configOrder ?? Number.MAX_SAFE_INTEGER) - (b.configOrder ?? Number.MAX_SAFE_INTEGER)
-          || a.createdAt.localeCompare(b.createdAt);
-      }
-      return a.createdAt.localeCompare(b.createdAt);
-    });
+    .sort(sourceAutomationOrder);
 
   const { matched, trail } = matchFirst(candidates, toEvaluationEvent(event));
   return { matched: matched ? byId.get(matched.id) : undefined, trail };
@@ -250,14 +260,20 @@ export function findAutomationOverlaps(definitions: AutomationDefinition[]): Ove
   const candidates = definitions
     .filter((d) => d.enabled !== false && (d.trigger === "github" || d.trigger === "linear" || d.trigger === "github_ci"))
     .map(toEvaluable)
-    .sort((a, b) => {
-      if (a.configOrder !== undefined || b.configOrder !== undefined) {
-        return (a.configOrder ?? Number.MAX_SAFE_INTEGER) - (b.configOrder ?? Number.MAX_SAFE_INTEGER)
-          || a.createdAt.localeCompare(b.createdAt);
-      }
-      return a.createdAt.localeCompare(b.createdAt);
-    });
-  return sharedFindOverlaps(candidates);
+    .sort(sourceAutomationOrder);
+  const appIds = [...new Set(candidates.map((c) => c.appId).filter((v): v is string => Boolean(v)))];
+  if (appIds.length === 0) return sharedFindOverlaps(candidates);
+
+  // A GitHub automation scoped to one app cannot shadow/overlap a different
+  // scoped app. Unscoped rules still participate in every app's lane.
+  const byKey = new Map<string, OverlapFinding>();
+  const linear = candidates.filter((c) => c.trigger === "linear");
+  for (const finding of sharedFindOverlaps(linear)) byKey.set(`${finding.kind}:${finding.beforeId}:${finding.afterId}`, finding);
+  for (const appId of appIds) {
+    const lane = candidates.filter((c) => c.trigger === "linear" || !c.appId || c.appId === appId);
+    for (const finding of sharedFindOverlaps(lane)) byKey.set(`${finding.kind}:${finding.beforeId}:${finding.afterId}`, finding);
+  }
+  return [...byKey.values()];
 }
 
 /** `bivy/<name>` -> `<name>`; the bare shared queue label (`bivy` or unset) -> undefined. */
@@ -276,7 +292,7 @@ export interface PreflightSignalContext {
 
 type SignalDefinitionInput = Pick<
   AutomationDefinition,
-  "trigger" | "repo" | "repos" | "templateCiphertext" | "nodeLabel" | "runtimeId" | "model" | "approvalMode" | "sandbox" | "allowDangerous" | "requiredCapabilities"
+  "trigger" | "repo" | "repos" | "appId" | "templateCiphertext" | "nodeLabel" | "runtimeId" | "model" | "approvalMode" | "sandbox" | "allowDangerous" | "requiredCapabilities"
 >;
 
 /**
@@ -395,16 +411,14 @@ export function evaluateAccountAutomation(
   signalContext: PreflightSignalContext,
 ): AutomationEvaluation<EvaluableAutomation> {
   const others = definitions.filter((d) => d.id !== subject.id);
-  const merged = [...others, subject].sort((a, b) => {
-    if (a.configKey && b.configKey && a.configOrder !== undefined && b.configOrder !== undefined) {
-      return a.configOrder - b.configOrder || a.createdAt.localeCompare(b.createdAt);
-    }
-    return a.createdAt.localeCompare(b.createdAt);
-  });
+  const merged = [...others, subject].sort(sourceAutomationOrder);
   const candidates = merged
     .filter((d) => {
       if (d.enabled === false) return false;
       if (!isSourceTrigger(d.trigger)) return false;
+      if (event?.kind === "github" && (d.trigger === "github" || d.trigger === "github_ci")) {
+        return !d.appId || !event.appId || d.appId === event.appId;
+      }
       return true;
     })
     .map(toEvaluable);

@@ -646,6 +646,7 @@ export class PostgresStore implements ControlPlaneStore {
       -- Source-trigger filters (github/linear) + built-in template id.
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS labels JSONB;
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS repos JSONB;
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS app_id TEXT;
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS template_id TEXT;
       -- GitHub event rules ("when"). JSON array of { event, actions?, labels?, mention?, … }.
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS on_events JSONB;
@@ -717,6 +718,7 @@ export class PostgresStore implements ControlPlaneStore {
       INSERT INTO trigger_events (id, account_id, kind, created_at)
         SELECT 'legacy:' || id, account_id,
           CASE WHEN source LIKE 'github:%' THEN 'github'
+               WHEN source LIKE 'linear:%' THEN 'linear'
                WHEN source = 'slack' THEN 'slack'
                WHEN source = 'manual' THEN 'manual'
                ELSE 'webhook' END,
@@ -730,6 +732,7 @@ export class PostgresStore implements ControlPlaneStore {
         trigger_id = COALESCE(trigger_id, 'legacy:' || id),
         trigger_kind = COALESCE(trigger_kind,
           CASE WHEN source LIKE 'github:%' THEN 'github'
+               WHEN source LIKE 'linear:%' THEN 'linear'
                WHEN source = 'slack' THEN 'slack'
                WHEN source = 'manual' THEN 'manual'
                ELSE 'webhook' END),
@@ -2525,8 +2528,8 @@ export class PostgresStore implements ControlPlaneStore {
       `INSERT INTO automation_definitions
       (id, account_id, name, template_ciphertext, runtime_id, model, node_label, ephemeral,
        approval_mode, sandbox, enabled, schedule, next_run_at, trigger, webhook_secret, repo,
-       labels, repos, template_id, on_events, target_kind, target_session_id, message, config_key, config_order, max_attempts, allow_dangerous, required_capabilities, preferred_capabilities)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29) RETURNING *`,
+       labels, repos, app_id, template_id, on_events, target_kind, target_session_id, message, config_key, config_order, max_attempts, allow_dangerous, required_capabilities, preferred_capabilities)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30) RETURNING *`,
       [`automation_${randomUUID()}`, accountId, input.name, input.templateCiphertext ?? null,
         input.runtimeId ?? null, input.model ?? null, input.nodeLabel ?? null, input.ephemeral ?? null,
         input.approvalMode ?? null, input.sandbox ?? null, input.enabled ?? false,
@@ -2534,6 +2537,7 @@ export class PostgresStore implements ControlPlaneStore {
         input.trigger ?? null, input.webhookSecret ?? null, input.repo ?? null,
         input.labels ? JSON.stringify(input.labels) : null,
         input.repos ? JSON.stringify(input.repos) : null,
+        input.appId ?? null,
         input.templateId ?? null,
         input.on ? JSON.stringify(input.on) : null,
         input.target?.kind === "existing_session" ? input.target.kind : null,
@@ -2577,9 +2581,9 @@ export class PostgresStore implements ControlPlaneStore {
       `UPDATE automation_definitions SET name=$3, template_ciphertext=$4, runtime_id=$5,
        model=$6, node_label=$7, ephemeral=$8, approval_mode=$9, sandbox=$10,
        enabled=$11, schedule=$12, next_run_at=$13, trigger=$14, webhook_secret=$15,
-       repo=$16, labels=$17, repos=$18, template_id=$19, on_events=$20,
-       target_kind=$21, target_session_id=$22, message=$23, config_key=$24,
-       config_order=$25, max_attempts=$26, allow_dangerous=$27, required_capabilities=$28, preferred_capabilities=$29, updated_at=now()
+       repo=$16, labels=$17, repos=$18, app_id=$19, template_id=$20, on_events=$21,
+       target_kind=$22, target_session_id=$23, message=$24, config_key=$25,
+       config_order=$26, max_attempts=$27, allow_dangerous=$28, required_capabilities=$29, preferred_capabilities=$30, updated_at=now()
        WHERE account_id=$1 AND id=$2 RETURNING *`,
       [accountId, id, next.name, next.templateCiphertext ?? null, next.runtimeId ?? null,
         next.model ?? null, next.nodeLabel ?? null, next.ephemeral ?? null,
@@ -2588,6 +2592,7 @@ export class PostgresStore implements ControlPlaneStore {
         next.trigger ?? null, next.webhookSecret ?? null, next.repo ?? null,
         next.labels ? JSON.stringify(next.labels) : null,
         next.repos ? JSON.stringify(next.repos) : null,
+        next.appId ?? null,
         next.templateId ?? null,
         next.on ? JSON.stringify(next.on) : null,
         next.target?.kind === "existing_session" ? next.target.kind : null,
@@ -3311,7 +3316,7 @@ function withResumeTarget(item: WorkItem): WorkItem {
 function triggerKindForSource(explicit: AutomationTriggerKind | undefined, source: string): AutomationTriggerKind {
   if (explicit) return explicit;
   if (source.startsWith("github:")) return "github";
-  if (source.startsWith("linear:")) return "webhook";
+  if (source.startsWith("linear:")) return "linear";
   if (source === "slack") return "slack";
   if (source === "manual") return "manual";
   return "webhook";
@@ -3355,6 +3360,7 @@ function mapAutomationDefinition(row: any): AutomationDefinition {
     repo: row.repo ?? undefined,
     labels: mapStringList(row.labels),
     repos: mapStringList(row.repos),
+    appId: row.app_id ?? undefined,
     on: mapEventRules(row.on_events),
     templateId: row.template_id ?? undefined,
     target: row.target_kind === "existing_session" && row.target_session_id

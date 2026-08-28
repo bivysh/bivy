@@ -908,7 +908,7 @@ export interface GithubQueueItem {
   leaseExpiresAt?: string;
   completedAt?: string;
   triggerId?: string;
-  triggerKind?: "github" | "slack" | "manual" | "webhook" | "schedule";
+  triggerKind?: "github" | "linear" | "slack" | "manual" | "webhook" | "schedule";
   definitionId?: string;
   attempt?: number;
   targetKind?: "new_session" | "existing_session";
@@ -1010,6 +1010,8 @@ export interface AccountAutomation {
   labels?: string[];
   /** Repo allowlist for github/linear. */
   repos?: string[];
+  /** Optional GitHub App id filter for github source automations. Empty/undefined → every connected app. */
+  appId?: string;
   /**
    * GitHub event rules ("when any of these fire"). Outcomes are whatever the
    * instructions say — not a special-cased PR path.
@@ -1128,6 +1130,7 @@ export function updateAutomation(
 export interface AutomationSimulationEvent {
   kind: "github" | "linear" | "schedule" | "webhook" | "manual";
   repo?: string;
+  appId?: string;
   labels?: string[];
   mention?: boolean;
   event?: "issues" | "issue_comment" | "pull_request" | "pull_request_review_comment" | "workflow_run";

@@ -32,11 +32,16 @@ test("the automation editor runs the shared evaluator before every save, not jus
 });
 
 test("Test event / Check readiness renders match trail, overlaps, and the preflight checklist", async () => {
-  const view = await read("../../packages/web/src/components/AutomationsView.tsx");
-  expect(view).toContain("function useAutomationPreflight(");
-  expect(view).toContain("function AutomationPreflightPanel(");
-  expect(view).toContain("Rule evaluation (first match wins)");
-  expect(view).toContain("I understand the warnings above and want to save anyway.");
+  const [view, preflight] = await Promise.all([
+    read("../../packages/web/src/components/AutomationsView.tsx"),
+    read("../../packages/web/src/components/AutomationPreflight.tsx"),
+  ]);
+  expect(view).toContain("useAutomationPreflight");
+  expect(view).toContain("AutomationPreflightPanel");
+  expect(preflight).toContain("export function useAutomationPreflight(");
+  expect(preflight).toContain("export function AutomationPreflightPanel(");
+  expect(preflight).toContain("Rule evaluation (first match wins)");
+  expect(preflight).toContain("I understand the warnings above and want to save anyway.");
   expect(view).toContain('{preflight.busy ? "Checking…" : (d.trigger === "github" || d.trigger === "linear") ? "Test event" : "Check readiness"}');
   expect(view).toContain('{preflight.busy ? "Checking…" : "Check readiness"}');
 });
@@ -44,7 +49,7 @@ test("Test event / Check readiness renders match trail, overlaps, and the prefli
 test("a representative event is auto-derived from whichever trigger is configured, first enabled wins", async () => {
   const view = await read("../../packages/web/src/components/AutomationsView.tsx");
   expect(view).toContain("function buildRepresentativeEvent(d: Draft): AutomationSimulationEvent | undefined {");
-  expect(view).toContain('if (d.githubEvents.issuesLabeled) return { kind: "github", repo, event: "issues", action: "labeled"');
+  expect(view).toContain('if (d.githubEvents.issuesLabeled) return { kind: "github", repo, appId, event: "issues", action: "labeled"');
   expect(view).toContain('if (d.trigger === "linear") return { kind: "linear", repo, labels: labels.length ? labels : ["bivy"] };');
 });
 
@@ -90,6 +95,12 @@ test("account automation creation rejects unsupported trigger values instead of 
   expect(index).toContain('configOrder: req.body?.configOrder !== undefined ? requestedConfigOrder : current.configOrder,');
 });
 
+test("choosing a GitHub trigger does not auto-title a scratch automation", async () => {
+  const view = await read("../../packages/web/src/components/AutomationsView.tsx");
+  expect(view).toContain('name: current.name.trim() ? current.name : opts?.keepExistingName ? existing.name : ""');
+  expect(view).toContain('{ keepExistingName: true }');
+});
+
 test("source automation priority is visible and reorderable because first match wins", async () => {
   const [view, match] = await Promise.all([
     read("../../packages/web/src/components/AutomationsView.tsx"),
@@ -99,5 +110,8 @@ test("source automation priority is visible and reorderable because first match 
   expect(view).toContain("Priority: first match wins");
   expect(view).toContain("Move earlier");
   expect(view).toContain("Move later");
-  expect(match).toContain("Explicit priority wins for both file-managed and UI-managed rows");
+  expect(view).toContain("GitHub App source");
+  expect(view).toContain("Hosted Bivy App");
+  expect(match).toContain("UI-managed and");
+  expect(match).toContain("config-as-code rows both use configOrder when present");
 });

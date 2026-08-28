@@ -615,7 +615,7 @@ export interface RetryAutomationRunResult {
   transitioned: boolean;
   reason?: "not_retryable" | "attempt_limit";
 }
-export type AutomationTriggerKind = "github" | "slack" | "manual" | "webhook" | "schedule";
+export type AutomationTriggerKind = "github" | "linear" | "slack" | "manual" | "webhook" | "schedule";
 
 // --- Privacy-safe run evidence (issue #153) -----------------------------------
 // A run's routing/status/output above already carry most of an outcome report.
@@ -771,6 +771,8 @@ export interface AutomationDefinition {
   labels?: string[];
   /** Repo allowlist for github/linear (`owner/name`). Empty/undefined → all. */
   repos?: string[];
+  /** Optional GitHub App id filter for github source automations. Empty/undefined → every connected app. */
+  appId?: string;
   /**
    * GitHub event rules ("when"). Any matching rule fires the job. Outcomes are
    * whatever the instructions say — not a special PR path. Legacy rows without

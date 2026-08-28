@@ -7,7 +7,7 @@
 // Settings and loses the thread. Creating/editing uses one form modal
 // (name → trigger → instructions → machine); templates pre-fill it. Everything
 // still writes the same POST /account/automations definition.
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import cronstrue from "cronstrue";
 import {
@@ -22,7 +22,6 @@ import {
   fetchSlackHook,
   runAutomationNow,
   rotateAutomationWebhook,
-  simulateAutomation,
   updateAutomation,
   importRoomKey,
   seal,
@@ -35,10 +34,8 @@ import {
   type AccountAutomation,
   type AccountAutomationRun,
   type AccountNode,
-  type AutomationPreflightSeverity,
   type AutomationSimulationDraft,
   type AutomationSimulationEvent,
-  type AutomationSimulationResult,
   type GithubAppInfo,
   type LinearHook,
   type SlackHook,
@@ -46,7 +43,6 @@ import {
 } from "@bivy/core";
 import { controller } from "../store/controller.js";
 import {
-  AUTOMATION_TEMPLATES,
   type AutomationTemplate,
   type ScheduleTemplate,
   type SourceTemplate,
@@ -70,6 +66,9 @@ import { RunHistory } from "./RunHistory.js";
 import { compactCronSummary, formatAutomationMoment, formatNextAutomationRun } from "../automationPresentation.js";
 import { isListedAutomation } from "../automationList.js";
 import { Badge } from "./Badge.js";
+import { NewAutomationChooser, NewAutomationPicker } from "./NewAutomationChooser.js";
+import { AutomationPreflightPanel, useAutomationPreflight } from "./AutomationPreflight.js";
+import { IconBolt, IconClock, IconPr, IconWebhook } from "./AutomationIcons.js";
 
 const TEMPLATE_PREFIX = "bivy-room-v1";
 
@@ -236,28 +235,18 @@ function buildRepresentativeEvent(d: Draft): AutomationSimulationEvent | undefin
   const workflows = d.workflows.split(/[,\n]/).map((v) => v.trim()).filter(Boolean);
   if (d.trigger === "linear") return { kind: "linear", repo, labels: labels.length ? labels : ["bivy"] };
   if (d.trigger !== "github") return undefined;
-  if (d.githubEvents.issuesLabeled) return { kind: "github", repo, event: "issues", action: "labeled", labels: labels.length ? labels : ["bivy"] };
-  if (d.githubEvents.issueMention) return { kind: "github", repo, event: "issue_comment", mention: true };
-  if (d.githubEvents.prLabeled) return { kind: "github", repo, event: "pull_request", action: "labeled", labels: labels.length ? labels : ["bivy"] };
-  if (d.githubEvents.prMention) return { kind: "github", repo, event: "pull_request_review_comment", mention: true };
-  if (d.githubEvents.workflowFailed) return { kind: "github", repo, event: "workflow_run", action: "completed", conclusion: "failure", workflow: workflows[0] };
+  const appId = d.appId.trim() || undefined;
+  if (d.githubEvents.issuesLabeled) return { kind: "github", repo, appId, event: "issues", action: "labeled", labels: labels.length ? labels : ["bivy"] };
+  if (d.githubEvents.issueMention) return { kind: "github", repo, appId, event: "issue_comment", mention: true };
+  if (d.githubEvents.prLabeled) return { kind: "github", repo, appId, event: "pull_request", action: "labeled", labels: labels.length ? labels : ["bivy"] };
+  if (d.githubEvents.prMention) return { kind: "github", repo, appId, event: "pull_request_review_comment", mention: true };
+  if (d.githubEvents.workflowFailed) return { kind: "github", repo, appId, event: "workflow_run", action: "completed", conclusion: "failure", workflow: workflows[0] };
   return undefined;
 }
 
 function nodeLabelSuffix(nodeLabel?: string): string {
   if (!nodeLabel) return "";
   return nodeLabel.startsWith("bivy/") ? nodeLabel.slice("bivy/".length) : nodeLabel;
-}
-
-function triggerBadge(template: AutomationTemplate): { label: string; tone: string } {
-  if (template.kind === "schedule") return { label: "Schedule", tone: "schedule" };
-  if (template.kind === "webhook") return { label: "Webhook", tone: "webhook" };
-  if (template.kind === "source") {
-    if (template.trigger === "linear") return { label: "Linear", tone: "linear" };
-    if (template.trigger === "github_ci") return { label: "CI", tone: "github" };
-    return { label: "GitHub", tone: "github" };
-  }
-  return { label: "Setup", tone: "manual" };
 }
 
 interface SourcesSnapshot {
@@ -307,6 +296,13 @@ function slackSourceStatus(slack: SlackHook | null): { tone: "on" | "off" | "war
 }
 
 /** Status chip for a source automation given live connect state. */
+function githubAppOptionLabel(app: NonNullable<GithubAppInfo["apps"]>[number]): string {
+  const name = app.name || app.mention || app.owner || app.appId || "GitHub App";
+  const kind = app.central ? "Hosted Bivy App" : app.hosted ? "Hosted custom app" : "Custom/user-installed app";
+  const owner = app.owner ? ` · ${app.owner}${app.ownerType ? ` (${app.ownerType})` : ""}` : "";
+  return `${name} · ${kind}${owner}`;
+}
+
 function sourceAutomationChip(
   item: AccountAutomation,
   sources: SourcesSnapshot,
@@ -369,6 +365,7 @@ interface Draft {
   repo: string;
   labels: string;
   repos: string;
+  appId: string;
   githubEvents: GithubEventToggles;
   workflows: string;
   nodeId: string;
@@ -393,6 +390,7 @@ function emptyDraft(nodeId: string): Draft {
     repo: "",
     labels: "bivy",
     repos: "",
+    appId: "",
     githubEvents: { issuesLabeled: true, issueMention: true, prLabeled: false, prMention: false, workflowFailed: false },
     workflows: "",
     nodeId,
@@ -410,22 +408,6 @@ function rememberedRepo(state: AppState): string {
 
 function defaultSourceInstructions(): string {
   return "Handle the incoming item using its event context. Investigate the request, make the smallest safe change, run the relevant checks, and report the outcome with links to any pull request or follow-up.";
-}
-
-// Soft glyph for each suggested template card.
-function templateIcon(key: string): ReactNode {
-  switch (key) {
-    case "upgrade-dependencies": return <IconPackage />;
-    case "dependency-security-audit": return <IconShield />;
-    case "lint-format-autofix": return <IconSpark />;
-    case "flaky-test-triage": return <IconFlask />;
-    case "fix-failed-ci": return <IconCi />;
-    case "fix-error-tracker-issue": return <IconBug />;
-    case "investigate-production-errors": return <IconRadar />;
-    case "work-issues-into-prs":
-    case "work-linear-issues-into-prs": return <IconPr />;
-    default: return <IconBolt />;
-  }
 }
 
 interface Notice {
@@ -724,7 +706,7 @@ export function AutomationsView({
     setDraft(emptyDraft(defaultNodeId));
   }
 
-  async function continueWithSource(source: "github" | "linear", current: Draft) {
+  async function continueWithSource(source: "github" | "linear", current: Draft, opts?: { keepExistingName?: boolean }) {
     const existing = items.find((item) => item.trigger === source);
     if (!existing) {
       setDraft({ ...current, hasTrigger: true, trigger: source });
@@ -741,13 +723,14 @@ export function AutomationsView({
     setDraft({
       ...base,
       id: existing.id,
-      name: current.name.trim() ? current.name : existing.name,
+      name: current.name.trim() ? current.name : opts?.keepExistingName ? existing.name : "",
       instructions: current.instructions.trim() ? current.instructions : instructions,
       hasTrigger: true,
       trigger: source,
       repo: existing.repo || "",
       labels: (existing.labels ?? ["bivy"]).join(", "),
       repos: (existing.repos ?? []).join(", "),
+      appId: existing.appId || "",
       githubEvents: togglesFromAutomation(existing),
       workflows: (existing.on?.find((rule) => rule.event === "workflow_run")?.workflows ?? []).join(", "),
       runtimeId: existing.runtimeId || "",
@@ -761,7 +744,7 @@ export function AutomationsView({
     setError("");
     setMenuId(null);
     if (item.trigger === "github" || item.trigger === "linear") {
-      await continueWithSource(item.trigger, emptyDraft(defaultNodeId));
+      await continueWithSource(item.trigger, emptyDraft(defaultNodeId), { keepExistingName: true });
       return;
     }
     if (item.trigger === "github_ci") {
@@ -1244,6 +1227,7 @@ export function AutomationsView({
       {draft && (
         <AutomationEditor
           state={state}
+          sources={sources}
           initial={draft}
           onCancel={() => setDraft(null)}
           onSaved={async (result) => {
@@ -1316,299 +1300,7 @@ function copyText(value: string): void {
   void navigator.clipboard?.writeText(value);
 }
 
-// ── New automation chooser ──────────────────────────────────────────────────
-// Linear / Notion-style: one primary "from scratch" row, then a browsable
-// template gallery. Used both as the empty-state body and as the New sheet.
-
-const TEMPLATE_GROUPS: Array<{ id: string; label: string; match: (t: AutomationTemplate) => boolean }> = [
-  {
-    id: "events",
-    label: "From GitHub & Linear",
-    match: (t) => t.kind === "source",
-  },
-  {
-    id: "schedule",
-    label: "On a schedule",
-    match: (t) => t.kind === "schedule",
-  },
-  {
-    id: "webhook",
-    label: "From a webhook",
-    match: (t) => t.kind === "webhook",
-  },
-];
-
-function NewAutomationChooser({
-  onClose,
-  onScratch,
-  onTemplate,
-}: {
-  onClose: () => void;
-  onScratch: () => void;
-  onTemplate: (t: AutomationTemplate) => void;
-}) {
-  return (
-    <div className="wizard-scrim" onClick={onClose}>
-      <div
-        className="wizard autom-editor autom-chooser"
-        role="dialog"
-        aria-modal="true"
-        aria-label="New automation"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="wizard-head">
-          <div className="wq-head-text">
-            <strong>New automation</strong>
-            <span className="wq-head-sub">Pick a starting point</span>
-          </div>
-          <button type="button" className="btn ghost icon" onClick={onClose} aria-label="Close">✕</button>
-        </div>
-        <div className="wizard-body autom-chooser-body">
-          <NewAutomationPicker onScratch={onScratch} onTemplate={onTemplate} />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function NewAutomationPicker({
-  onScratch,
-  onTemplate,
-}: {
-  onScratch: () => void;
-  onTemplate: (t: AutomationTemplate) => void;
-}) {
-  const [query, setQuery] = useState("");
-  const q = query.trim().toLowerCase();
-
-  const filtered = useMemo(() => {
-    if (!q) return AUTOMATION_TEMPLATES;
-    return AUTOMATION_TEMPLATES.filter((t) => {
-      const hay = `${t.title} ${t.tagline} ${t.key}`.toLowerCase();
-      return hay.includes(q);
-    });
-  }, [q]);
-
-  const groups = useMemo(() => {
-    return TEMPLATE_GROUPS
-      .map((g) => ({ ...g, items: filtered.filter(g.match) }))
-      .filter((g) => g.items.length > 0);
-  }, [filtered]);
-
-  // Anything that didn't land in a group (future kinds) still shows.
-  const ungrouped = useMemo(() => {
-    const claimed = new Set(groups.flatMap((g) => g.items.map((t) => t.key)));
-    return filtered.filter((t) => !claimed.has(t.key));
-  }, [filtered, groups]);
-
-  return (
-    <div className="autom-picker">
-      <button type="button" className="autom-scratch-row" onClick={onScratch}>
-        <span className="autom-scratch-icon" aria-hidden="true"><IconBolt /></span>
-        <span className="autom-scratch-text">
-          <strong>Start from scratch</strong>
-          <span>Blank automation — pick the trigger, write the instructions</span>
-        </span>
-        <span className="autom-scratch-chevron" aria-hidden="true">→</span>
-      </button>
-
-      <div className="autom-picker-templates-head">
-        <h3 className="autom-section-label" style={{ margin: 0 }}>Templates</h3>
-        <input
-          className="autom-picker-search"
-          type="search"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search templates…"
-          aria-label="Search templates"
-          autoComplete="off"
-        />
-      </div>
-
-      {filtered.length === 0 ? (
-        <p className="settings-hint autom-empty-hint">No templates match “{query.trim()}”.</p>
-      ) : (
-        <>
-          {groups.map((g) => (
-            <div className="autom-picker-group" key={g.id}>
-              <h4 className="autom-picker-group-label">{g.label}</h4>
-              <div className="automation-templates">
-                {g.items.map((template) => (
-                  <TemplateCard
-                    key={template.key}
-                    template={template}
-                    onUse={() => onTemplate(template)}
-                  />
-                ))}
-              </div>
-            </div>
-          ))}
-          {ungrouped.length > 0 && (
-            <div className="autom-picker-group">
-              <div className="automation-templates">
-                {ungrouped.map((template) => (
-                  <TemplateCard
-                    key={template.key}
-                    template={template}
-                    onUse={() => onTemplate(template)}
-                  />
-                ))}
-              </div>
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
-// ── Template card ───────────────────────────────────────────────────────────
-
-function TemplateCard({
-  template,
-  onUse,
-  featured = false,
-}: {
-  template: AutomationTemplate;
-  onUse: () => void;
-  featured?: boolean;
-}) {
-  const badge = triggerBadge(template);
-  const cta = template.kind === "source" ? (template.cta || "Set up") : "Use";
-  return (
-    <button
-      type="button"
-      className={`template-card${featured ? " is-featured" : ""}`}
-      onClick={onUse}
-    >
-      <div className="template-card-top">
-        <span className="template-card-icon" aria-hidden="true">{templateIcon(template.key)}</span>
-        <span className={`template-card-badge tone-${badge.tone}`}>{badge.label}</span>
-      </div>
-      <strong className="template-card-title">{template.title}</strong>
-      <p className="template-card-tagline">{template.tagline}</p>
-      <span className="template-card-cta">{cta} →</span>
-    </button>
-  );
-}
-
 // ── Source automation editor (GitHub / Linear / CI) ─────────────────────────
-
-// ── Test event / preflight — shared by both editors ────────────────────────
-// Explains, without creating a run, which automation a representative event
-// would fire (and why the rest didn't), overlap/shadow warnings across the
-// account's rules, and the six-check preflight — the same contract
-// `bivy automation test` and the control-plane's live intake use (see
-// docs/automation-evaluator.md). Every Save also runs this silently (no
-// event) so a hard failure never reaches the API, and a non-blocking warning
-// always requires the explicit acknowledgement checkbox below before Save
-// is enabled — the draft/gate can change between runs, so a fresh result
-// always clears any prior acknowledgement.
-function useAutomationPreflight(automationId: string | undefined) {
-  const [result, setResult] = useState<AutomationSimulationResult | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [ack, setAck] = useState(false);
-
-  const run = useCallback(async (
-    draft: AutomationSimulationDraft,
-    event?: AutomationSimulationEvent,
-    opts?: { resetAck?: boolean },
-  ) => {
-    setBusy(true);
-    setError("");
-    try {
-      const r = await simulateAutomation(controller.local, { automationId, draft, event });
-      setResult(r);
-      // An explicit Test event / Check readiness click always clears a stale
-      // acknowledgement (new warnings deserve a fresh look). Save's own
-      // silent pre-check passes resetAck: false so a user who already ticked
-      // the box doesn't get it cleared out from under them by the very same
-      // click that's supposed to consume it.
-      if (opts?.resetAck !== false) setAck(false);
-      return r;
-    } catch (e) {
-      setResult(null);
-      setError(String((e as Error).message || e));
-      throw e;
-    } finally {
-      setBusy(false);
-    }
-  }, [automationId]);
-
-  return { result, busy, error, ack, setAck, run };
-}
-
-function preflightIcon(severity: AutomationPreflightSeverity): string {
-  if (severity === "ok") return "✓";
-  if (severity === "block") return "✗";
-  if (severity === "warn") return "⚠";
-  if (severity === "skipped") return "·";
-  return "ℹ";
-}
-
-function AutomationPreflightPanel({
-  result,
-  error,
-  ack,
-  onAckChange,
-  showTrail,
-}: {
-  result: AutomationSimulationResult | null;
-  error: string;
-  ack: boolean;
-  onAckChange: (value: boolean) => void;
-  showTrail: boolean;
-}) {
-  if (error) return <p className="settings-error">{error}</p>;
-  if (!result) return null;
-  const ownOverlaps = result.overlaps.filter((o) => o.beforeId === result.subjectId || o.afterId === result.subjectId);
-  const visibleChecks = result.preflight.filter((c) => c.severity !== "skipped");
-  return (
-    <div className="autom-preflight" role="status">
-      {showTrail && result.trail.length > 0 && (
-        <div className="autom-preflight-trail">
-          <div className="autom-field-label">Rule evaluation (first match wins)</div>
-          <ul className="autom-preflight-list">
-            {result.trail.map((t) => (
-              <li key={t.id} className={t.matched ? "ok" : undefined}>
-                <span>{t.matched ? "✓" : "·"}</span>{" "}
-                {t.id === result.subjectId ? <strong>this automation</strong> : t.id}: {t.reason}
-              </li>
-            ))}
-          </ul>
-          {!result.matchedId && <p className="schedule-hint warn">No automation — including this one — would fire for this event.</p>}
-        </div>
-      )}
-      {ownOverlaps.map((o, i) => (
-        <p key={i} className={o.kind === "shadowed" ? "settings-error" : "schedule-hint warn"}>{o.detail}</p>
-      ))}
-      {visibleChecks.length > 0 && (
-        <div className="autom-preflight-checks">
-          <div className="autom-field-label">Preflight</div>
-          <ul className="autom-preflight-list">
-            {visibleChecks.map((c) => (
-              <li key={c.id} className={`preflight-${c.severity}`}>
-                <span>{preflightIcon(c.severity)}</span> <strong>{c.label}</strong>: {c.detail}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-      {result.gate.blocked && (
-        <p className="settings-error">
-          Can&apos;t save yet — {result.gate.blockingChecks.map((c) => c.label).join(", ")}.
-        </p>
-      )}
-      {!result.gate.blocked && result.gate.requiresAck && (
-        <label className="autom-check-row">
-          <input type="checkbox" checked={ack} onChange={(e) => onAckChange(e.target.checked)} />
-          <span>I understand the warnings above and want to save anyway.</span>
-        </label>
-      )}
-    </div>
-  );
-}
 
 function SourceAutomationEditor({
   item,
@@ -1637,6 +1329,7 @@ function SourceAutomationEditor({
       : (item.on?.find((r) => r.event === "workflow_run")?.workflows ?? []).join(", "),
   );
   const [reposText, setReposText] = useState((item.repos ?? []).join(", "));
+  const [appId, setAppId] = useState(item.appId || "");
   const [repoDefault, setRepoDefault] = useState(item.repo || "");
   const [nodeSuffix, setNodeSuffix] = useState(nodeLabelSuffix(item.nodeLabel));
   const [runtimeId, setRuntimeId] = useState(item.runtimeId || "");
@@ -1687,6 +1380,7 @@ function SourceAutomationEditor({
         enabled,
         labels: labels ?? [],
         repos: repos ?? [],
+        appId: isGithub ? appId.trim() || "" : "",
         repo: repoDefault.trim() || "",
         nodeLabel: nodeSuffix.trim() ? `bivy/${nodeSuffix.trim()}` : "",
         runtimeId: runtimeId.trim() || "",
@@ -1747,6 +1441,7 @@ function SourceAutomationEditor({
       templateCiphertext: item.templateCiphertext,
       labels: labels ?? [],
       repos: repos ?? [],
+      appId: isGithub ? appId.trim() || undefined : undefined,
       repo: repoDefault.trim() || undefined,
       nodeLabel: nodeSuffix.trim() ? `bivy/${nodeSuffix.trim()}` : undefined,
       runtimeId: runtimeId.trim() || undefined,
@@ -1830,6 +1525,21 @@ function SourceAutomationEditor({
                 <span>Workflow failed</span>
               </label>
               {!anyEvent && <p className="schedule-hint warn">Select at least one event.</p>}
+            </div>
+          )}
+
+          {isGithub && (sources.github?.apps?.length ?? 0) > 1 && (
+            <div className="settings-field">
+              <label className="field-label" htmlFor="src-app-id">GitHub App source</label>
+              <select id="src-app-id" className="picker-search" value={appId} onChange={(e) => setAppId(e.target.value)}>
+                <option value="">All GitHub Apps</option>
+                {sources.github?.apps.map((app) => (
+                  <option key={app.appId || app.hookId || app.name} value={app.appId || ""} disabled={!app.appId}>
+                    {githubAppOptionLabel(app)}
+                  </option>
+                ))}
+              </select>
+              <p className="settings-hint">Scope this automation to the hosted Bivy App or to a custom/user-installed GitHub App.</p>
             </div>
           )}
 
@@ -2006,12 +1716,14 @@ interface SaveResult {
 
 function AutomationEditor({
   state,
+  sources,
   initial,
   onCancel,
   onSaved,
   onSelectSource,
 }: {
   state: AppState;
+  sources: SourcesSnapshot;
   initial: Draft;
   onCancel: () => void;
   onSaved: (result?: SaveResult) => void;
@@ -2129,7 +1841,7 @@ function AutomationEditor({
       ...(d.trigger === "github" || d.trigger === "linear" ? {
         labels,
         repos,
-        ...(d.trigger === "github" ? { on: buildGithubOn(d.githubEvents, labels, workflows) } : {}),
+        ...(d.trigger === "github" ? { appId: d.appId.trim() || undefined, on: buildGithubOn(d.githubEvents, labels, workflows) } : {}),
       } : {}),
     };
     await preflight.run(draft, buildRepresentativeEvent(d), { resetAck: true }).catch(() => {});
@@ -2148,10 +1860,11 @@ function AutomationEditor({
       const labels = d.labels.split(/[,\n]/).map((value) => value.trim()).filter(Boolean);
       const repos = d.repos.split(/[,\n]/).map((value) => value.trim()).filter(Boolean);
       const workflows = d.workflows.split(/[,\n]/).map((value) => value.trim()).filter(Boolean);
-      if (repo && !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) {
+      const repoPattern = /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/;
+      if (repo && (!repoPattern.test(repo) || repo.includes(".."))) {
         throw new Error("Repository must look like owner/name");
       }
-      if (repos.some((value) => !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(value))) {
+      if (repos.some((value) => !repoPattern.test(value) || value.includes(".."))) {
         throw new Error("Every repository allowlist entry must look like owner/name");
       }
       const input = {
@@ -2169,7 +1882,7 @@ function AutomationEditor({
         ...(d.trigger === "github" || d.trigger === "linear" ? {
           labels,
           repos,
-          ...(d.trigger === "github" ? { on: buildGithubOn(d.githubEvents, labels, workflows) } : {}),
+          ...(d.trigger === "github" ? { appId: d.appId.trim() || undefined, on: buildGithubOn(d.githubEvents, labels, workflows) } : {}),
         } : {}),
         ...(d.trigger === "schedule"
           ? {
@@ -2433,6 +2146,20 @@ function AutomationEditor({
                         ))}
                       </div>
                     )}
+                    {d.trigger === "github" && (sources.github?.apps?.length ?? 0) > 1 && (
+                      <div className="settings-field">
+                        <label className="field-label" htmlFor="autom-source-app">GitHub App source</label>
+                        <select id="autom-source-app" className="picker-search" value={d.appId} onChange={(e) => set("appId", e.target.value)}>
+                          <option value="">All GitHub Apps</option>
+                          {sources.github?.apps.map((app) => (
+                            <option key={app.appId || app.hookId || app.name} value={app.appId || ""} disabled={!app.appId}>
+                              {githubAppOptionLabel(app)}
+                            </option>
+                          ))}
+                        </select>
+                        <p className="settings-hint">Choose the hosted Bivy App or one of your custom/user-installed GitHub Apps.</p>
+                      </div>
+                    )}
                     {(d.trigger === "linear" || d.githubEvents.issuesLabeled || d.githubEvents.prLabeled) && (
                       <div className="settings-field">
                         <label className="field-label" htmlFor="autom-source-labels">Labels</label>
@@ -2460,20 +2187,32 @@ function AutomationEditor({
                       <label className="field-label" htmlFor="autom-repo">
                         {d.trigger === "schedule" ? "Repository" : "Repository (optional default)"}
                       </label>
-                      <select
-                        id="autom-repo"
-                        className="picker-search"
-                        value={d.repo}
-                        onChange={(e) => set("repo", e.target.value)}
-                      >
-                        <option value="">{d.trigger === "schedule" ? "Select a GitHub repo…" : "Event may supply the repo"}</option>
-                        {d.repo && !state.catalogs.repos.some((r) => r.slug === d.repo) && (
-                          <option value={d.repo}>{d.repo}</option>
-                        )}
-                        {state.catalogs.repos.map((r) => (
-                          <option key={r.slug} value={r.slug}>{r.slug}</option>
-                        ))}
-                      </select>
+                      {state.catalogs.repos.length > 0 ? (
+                        <select
+                          id="autom-repo"
+                          className="picker-search"
+                          value={d.repo}
+                          onChange={(e) => set("repo", e.target.value)}
+                        >
+                          <option value="">{d.trigger === "schedule" ? "Select a GitHub repo…" : "Event may supply the repo"}</option>
+                          {d.repo && !state.catalogs.repos.some((r) => r.slug === d.repo) && (
+                            <option value={d.repo}>{d.repo}</option>
+                          )}
+                          {state.catalogs.repos.map((r) => (
+                            <option key={r.slug} value={r.slug}>{r.slug}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          id="autom-repo"
+                          className="picker-search"
+                          value={d.repo}
+                          onChange={(e) => set("repo", e.target.value)}
+                          placeholder={d.trigger === "schedule" ? "owner/repo" : "Event may supply the repo"}
+                          autoComplete="off"
+                          spellCheck={false}
+                        />
+                      )}
                       <p className="settings-hint">
                         {d.trigger === "schedule"
                           ? "The machine clones this repo before the session starts."
@@ -2482,7 +2221,7 @@ function AutomationEditor({
                       {!d.repo && d.trigger === "schedule" && (
                         <p className="schedule-hint warn">
                           {state.catalogs.repos.length === 0
-                            ? "No repos listed yet — connect GitHub on the machine, or type nothing and pick after the list loads."
+                            ? "No repos listed yet — enter owner/name, or connect GitHub on the machine to populate this list."
                             : "Pick a repository so scheduled runs land in the right project."}
                         </p>
                       )}
@@ -2644,86 +2383,5 @@ function AutomationEditor({
         )}
       </div>
     </div>
-  );
-}
-
-// ── Icons (inline SVG, 18–20px) ─────────────────────────────────────────────
-
-function IconBolt() {
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M13 2 3 14h9l-1 8 10-12h-9z" />
-    </svg>
-  );
-}
-function IconClock() {
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" />
-    </svg>
-  );
-}
-function IconWebhook() {
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M18 16a3 3 0 1 0-2.8-4H9.8A3 3 0 1 0 12 16h6Z" /><path d="M8.5 9.5 12 4l3.5 5.5" />
-    </svg>
-  );
-}
-function IconPackage() {
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M21 8 12 3 3 8l9 5 9-5Z" /><path d="M3 8v8l9 5 9-5V8" /><path d="M12 13v8" />
-    </svg>
-  );
-}
-function IconShield() {
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M12 3 5 6v6c0 5 3.5 8 7 9 3.5-1 7-4 7-9V6l-7-3Z" />
-    </svg>
-  );
-}
-function IconSpark() {
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8" />
-    </svg>
-  );
-}
-function IconFlask() {
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.7 3h10.6a2 2 0 0 0 1.7-3l-5-9V3" />
-    </svg>
-  );
-}
-function IconCi() {
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M4 6h16v12H4z" /><path d="m8 10 2 2-2 2M12 14h4" />
-    </svg>
-  );
-}
-function IconBug() {
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M8 9a4 4 0 0 1 8 0v7a4 4 0 0 1-8 0V9Z" /><path d="M8 12H4M20 12h-4M9 5 7 3M15 5l2-2M9 19l-2 2M15 19l2 2" />
-    </svg>
-  );
-}
-function IconRadar() {
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="12" cy="12" r="9" /><path d="M12 12 17 7" /><circle cx="12" cy="12" r="3" />
-    </svg>
-  );
-}
-function IconPr() {
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="7" cy="6" r="2" /><circle cx="7" cy="18" r="2" /><circle cx="17" cy="18" r="2" />
-      <path d="M7 8v8M17 16V9a2 2 0 0 0-2-2h-3" />
-    </svg>
   );
 }
