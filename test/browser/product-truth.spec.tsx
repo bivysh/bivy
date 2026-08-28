@@ -32,11 +32,11 @@ test("settings use task-oriented groups and search panel concepts", async () => 
   expect(source).toContain("SEARCH_TERMS[item.id]");
 });
 
-test("automations is the single hub for connections, Runs and rulesets", async () => {
+test("automations is the single hub for connections, history and rulesets", async () => {
   const source = await readFile(new URL("../../packages/web/src/components/AutomationsView.tsx", import.meta.url), "utf8");
-  for (const tab of ["Automations", "Runs", "Rulesets"]) {
-    expect(source).toContain(`label: "${tab}"`);
-  }
+  expect(source).toContain('label: "Automations"');
+  expect(source).toContain('label: "Rulesets"');
+  expect(source).toContain("automation-history-btn");
   // The standalone Webhooks tab was removed — a webhook is just an automation
   // whose trigger is "webhook" (configured in Triggers), and its signed
   // endpoint + secret now live inline on the automation's Overview row.

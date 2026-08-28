@@ -4,19 +4,20 @@ import { readFile } from "node:fs/promises";
 
 const read = (rel: string) => readFile(new URL(rel, import.meta.url), "utf8");
 
-test("Automations and Runs have distinct, task-focused destinations", async () => {
+test("Automations keeps run history scoped to each automation", async () => {
   const [view, history] = await Promise.all([
     read("../../packages/web/src/components/AutomationsView.tsx"),
     read("../../packages/web/src/components/RunHistory.tsx"),
   ]);
   expect(view).toContain('{ label: "Automations", section: null }');
-  expect(view).toContain('{ label: "Runs", section: "queue" }');
+  expect(view).toContain("automation-history-btn");
+  expect(view).toContain("automation-row-run-status");
   expect(view).toContain("<RunHistory");
   expect(history).toContain('className="autom-section runs-overview"');
   expect(history).toContain("Live status and recent outcomes.");
   expect(history).toContain('className="run-row-chevron"');
   expect(history).toContain("onClick={() => onOpenRun(run.id)}");
-  expect(view.indexOf('className="runs-setup"')).toBeLessThan(view.indexOf("<RunHistory"));
+  expect(view).toContain("automation-history-view");
   expect(view).toContain("showHistory={false}");
   // Creation remains reachable while reviewing Runs or policy.
   expect(view).not.toContain("{section === null && (\n            <button type=\"button\" className=\"btn autom-new-btn\"");
