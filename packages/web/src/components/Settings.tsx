@@ -13,7 +13,7 @@ import { MachineCapabilitiesSection } from "./MachineCapabilities.js";
 import { Segmented } from "./Segmented.js";
 import { Badge } from "./Badge.js";
 import { currentThemeSetting, setTheme, type ThemeSetting } from "../theme.js";
-import { useModalEscape } from "../modalStack.js";
+import { useModalBack, useModalEscape } from "../modalStack.js";
 import type { SettingsView } from "../router.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import { setCloudMachinesEnabled, useCloudMachinesEnabled } from "../cloudMachines.js";
@@ -200,9 +200,11 @@ export function Settings({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view]);
 
-  // Escape closes; focus starts inside the panel and restores to the opener on
-  // close (parity with the Sheet primitive this replaced).
-  const onCloseRef = useRef(onClose);
+  // Escape and browser Back close Settings before navigating the underlying app.
+  const closeWithBack = useModalBack(onClose);
+  // Focus starts inside the panel and restores to the opener on close (parity
+  // with the Sheet primitive this replaced).
+  const onCloseRef = useRef(closeWithBack);
   onCloseRef.current = onClose;
   // Escape closes the modal — but only when Settings is the topmost layer.
   // A confirm dialog or sheet opened from within a panel registers above this,
@@ -267,12 +269,12 @@ export function Settings({
 
   return createPortal(
     <div className="settings-modal" role="dialog" aria-modal="true" aria-label="Settings">
-      <div className="settings-scrim" onClick={onClose} />
+      <div className="settings-scrim" onClick={closeWithBack} />
       <div className="settings-panel" data-mode={activeView ? "panel" : "menu"}>
         <aside className="settings-nav">
           <div className="settings-nav-top">
             <span className="settings-nav-heading">Settings</span>
-            <button className="settings-x" onClick={onClose} aria-label="Close settings"><CloseIcon /></button>
+            <button className="settings-x" onClick={closeWithBack} aria-label="Close settings"><CloseIcon /></button>
           </div>
           <div className="settings-search-wrap">
             <svg className="settings-search-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
@@ -325,7 +327,7 @@ export function Settings({
               </button>
             )}
             <h2 className="settings-head-title">{title}</h2>
-            <button className="settings-x settings-x-content" onClick={onClose} aria-label="Close settings"><CloseIcon /></button>
+            <button className="settings-x settings-x-content" onClick={closeWithBack} aria-label="Close settings"><CloseIcon /></button>
           </header>
           <div className="settings-body" key={activeView ?? "menu"}>
             {activeView === "appearance" && <AppearancePanel />}

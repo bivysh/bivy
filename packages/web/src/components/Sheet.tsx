@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { useModalEscape } from "../modalStack.js";
+import { useModalBack, useModalEscape } from "../modalStack.js";
 import { CheckIcon, CloseIcon } from "./UiIcons.js";
 
 const FOCUSABLE = 'a[href],button:not(:disabled),textarea:not(:disabled),input:not(:disabled),select:not(:disabled),[tabindex]:not([tabindex="-1"])';
@@ -66,14 +66,15 @@ export function Sheet({
     const shouldClose = dragYRef.current > 96;
     dragStartY.current = null;
     dragYRef.current = 0;
-    if (shouldClose) requestClose();
+    if (shouldClose) closeWithBack();
     else setDragY(0);
   };
 
+  const closeWithBack = useModalBack(requestClose);
   // Escape closes — coordinated so only the topmost open layer responds (a
   // popover or dialog raised from inside the sheet cancels itself first, rather
   // than this sheet closing out from under it).
-  useModalEscape(requestClose);
+  useModalEscape(closeWithBack);
 
   // Modal focus management: move focus into the sheet on open, keep Tab inside
   // it, and restore focus to the opener on close so keyboard / screen-reader
@@ -128,7 +129,7 @@ export function Sheet({
     <div className={`sheet${isClosing ? " is-closing" : ""}`} data-variant={variant} role="dialog" aria-modal="true" aria-label={ariaLabel}>
       <div
         className="sheet-backdrop"
-        onClick={requestClose}
+        onClick={closeWithBack}
         style={dragY > 0 ? { opacity: Math.max(0.25, 1 - dragY / 320) } : undefined}
       />
       <div
@@ -158,7 +159,7 @@ export function Sheet({
         >
           <span className="sheet-title">{title}</span>
           {headExtra}
-          <button className="sheet-close" onClick={requestClose} aria-label="Close">
+          <button className="sheet-close" onClick={closeWithBack} aria-label="Close">
             <CloseIcon />
           </button>
         </div>
