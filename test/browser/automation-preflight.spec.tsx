@@ -110,8 +110,10 @@ test("source automation priority is visible and reorderable because first match 
   expect(view).toContain("Priority: first match wins");
   expect(view).toContain("Move earlier");
   expect(view).toContain("Move later");
+
   expect(view).toContain("GitHub App source");
   expect(view).toContain("Hosted Bivy App");
+
   expect(match).toContain("UI-managed and");
   expect(match).toContain("config-as-code rows both use configOrder when present");
 });

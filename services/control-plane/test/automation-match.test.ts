@@ -353,6 +353,7 @@ assert.equal(
   "simulate/preflight evaluation uses the same configOrder priority as live intake",
 );
 
+
 const appScopedDefs: AutomationDefinition[] = [
   def({ id: "hosted", trigger: "github", appId: "hosted-app", createdAt: "2026-01-01T00:00:00.000Z", on: [{ event: "issues" }] }),
   def({ id: "custom", trigger: "github", appId: "custom-app", createdAt: "2026-01-02T00:00:00.000Z", on: [{ event: "issues" }] }),
@@ -362,5 +363,6 @@ assert.equal(
   "custom",
   "GitHub source automations can be scoped to a specific hosted or custom app",
 );
+
 
 console.log("automation-match tests passed");

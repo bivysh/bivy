@@ -261,6 +261,7 @@ export function findAutomationOverlaps(definitions: AutomationDefinition[]): Ove
     .filter((d) => d.enabled !== false && (d.trigger === "github" || d.trigger === "linear" || d.trigger === "github_ci"))
     .map(toEvaluable)
     .sort(sourceAutomationOrder);
+
   const appIds = [...new Set(candidates.map((c) => c.appId).filter((v): v is string => Boolean(v)))];
   if (appIds.length === 0) return sharedFindOverlaps(candidates);
 
@@ -274,6 +275,7 @@ export function findAutomationOverlaps(definitions: AutomationDefinition[]): Ove
     for (const finding of sharedFindOverlaps(lane)) byKey.set(`${finding.kind}:${finding.beforeId}:${finding.afterId}`, finding);
   }
   return [...byKey.values()];
+
 }
 
 /** `bivy/<name>` -> `<name>`; the bare shared queue label (`bivy` or unset) -> undefined. */
