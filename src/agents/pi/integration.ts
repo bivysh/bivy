@@ -5,8 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { defineAgentIntegration, type AgentIntegrationOrigin } from "../definition.js";
 import type { AgentInfo, AgentInstallCommand, AgentSessionOptions } from "../types.js";
-import { withExactCapabilitySurface, type AgentRuntime, type RuntimeCapabilities } from "../../runtime/types.js";
-import { PiRuntime } from "./runtime.js";
+import { withExactCapabilitySurface, type AgentRuntime, type RuntimeCapabilities, type OpenSessionOptions, type OpenSessionResult, type SessionSummary, type ForkNativePayload, type ForkImportContext, type ForkHistoryMessage, type DiscoveredNativeSession, type CatalogProvider } from "../../runtime/types.js";
 
 export const PI_TESTED_VERSION = "0.84.3";
 
@@ -49,6 +48,49 @@ export function invalidatePiCommandProbe(): void {
   PI_COMMAND_CACHE.clear();
 }
 
+type PiRuntimeOptions = AgentSessionOptions & { piDir: string; credentialOwner: "agent" | "bivy" };
+
+function unsupportedNodeMessage(): string {
+  return `Pi requires Node.js 22.19+ (found ${process.version}). Upgrade Node, or select another agent such as Claude Code/Codex/OpenCode.`;
+}
+
+function nodeSupportsPi(): boolean {
+  const [major, minor] = process.versions.node.split(".").map(Number);
+  return major > 22 || (major === 22 && minor >= 19);
+}
+
+export class LazyPiRuntime implements AgentRuntime {
+  readonly id = "pi";
+  readonly displayName = "Pi";
+  readonly capabilities = PI_CAPABILITIES;
+  private inner?: Promise<AgentRuntime>;
+
+  constructor(private readonly options: PiRuntimeOptions) {}
+
+  private async runtime(): Promise<AgentRuntime> {
+    if (!nodeSupportsPi()) throw new Error(unsupportedNodeMessage());
+    this.inner ??= import("./runtime.js").then(({ PiRuntime }) => new PiRuntime(this.options));
+    return this.inner;
+  }
+
+  async createSession(options: OpenSessionOptions): Promise<OpenSessionResult> { return (await this.runtime()).createSession(options); }
+  async openSession(options: OpenSessionOptions & { sessionFile: string }): Promise<OpenSessionResult> { return (await this.runtime()).openSession(options); }
+  async listSessions(): Promise<SessionSummary[]> { return (await this.runtime()).listSessions(); }
+  async importForFork(payload: ForkNativePayload, ctx: ForkImportContext): Promise<{ sessionFile: string; id: string }> {
+    const rt = await this.runtime();
+    if (!rt.importForFork) throw new Error("Pi fork import is unavailable");
+    return rt.importForFork(payload, ctx);
+  }
+  async importHistoryForFork(history: ForkHistoryMessage[], ctx: ForkImportContext): Promise<{ sessionFile: string; id: string }> {
+    const rt = await this.runtime();
+    if (!rt.importHistoryForFork) throw new Error("Pi fork history import is unavailable");
+    return rt.importHistoryForFork(history, ctx);
+  }
+  async deleteSession(sessionId: string, sessionFile?: string): Promise<boolean> { return (await this.runtime()).deleteSession?.(sessionId, sessionFile) ?? false; }
+  async discoverNativeSessions(): Promise<DiscoveredNativeSession[]> { return (await this.runtime()).discoverNativeSessions?.() ?? []; }
+  async listCatalog(): Promise<CatalogProvider[]> { return (await this.runtime()).listCatalog?.() ?? []; }
+}
+
 export function piIntegration(origin: AgentIntegrationOrigin) {
   return defineAgentIntegration<AgentInfo, AgentSessionOptions, AgentRuntime, AgentInstallCommand>({
     id: "pi",
@@ -61,7 +103,7 @@ export function piIntegration(origin: AgentIntegrationOrigin) {
         executionMode: "protocol",
         displayName: "Pi",
         description: "The operator-installed Pi coding agent connected to Bivy for durable sessions, governance, packages, and model selection.",
-        status: installed ? "available" : "external",
+        status: installed && nodeSupportsPi() ? "available" : "external",
         packageName: "@earendil-works/pi-coding-agent",
         language: "TypeScript",
         capabilities: PI_CAPABILITIES,
@@ -69,9 +111,11 @@ export function piIntegration(origin: AgentIntegrationOrigin) {
         testedVersion: PI_TESTED_VERSION,
         source: origin,
         authOwner: "agent",
-        notes: installed
-          ? "Uses the Pi command and agent-owned auth/configuration already on this node, and hands sessions back to that native TUI."
-          : "Install and sign in to Pi on this node; Bivy will connect to that existing agent.",
+        notes: !nodeSupportsPi()
+          ? unsupportedNodeMessage()
+          : installed
+            ? "Uses the Pi command and agent-owned auth/configuration already on this node, and hands sessions back to that native TUI."
+            : "Install and sign in to Pi on this node; Bivy will connect to that existing agent.",
         install: installed ? undefined : {
           label: "Install Pi",
           description: "Installs the upstream Pi coding agent on this node.",
@@ -84,7 +128,7 @@ export function piIntegration(origin: AgentIntegrationOrigin) {
       // Vault-backed credentials (see catalogRuntimes): the daemon-hosted Pi
       // session reads the shared vault the user signed in to, not Pi's own
       // plaintext auth.json. The agent dir still supplies config/models/packages.
-      return new PiRuntime({ ...options, piDir: piAgentDir(), credentialOwner: "bivy" });
+      return new LazyPiRuntime({ ...options, piDir: piAgentDir(), credentialOwner: "bivy" });
     },
     install: (prefix) => ({
       command: "npm",

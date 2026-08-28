@@ -9,14 +9,15 @@ by a control plane — see [remote-access.md](remote-access.md).
 
 ## Prerequisites
 
-- **Node.js 22.19 or newer.** Check with `node -v`. `npm` ships with it.
+- **Node.js 20 or newer.** Check with `node -v`. `npm` ships with it.
 - **macOS or Linux.** The installer is a bash script, and the background service
   supports launchd (macOS) and `systemd --user` (Linux) only. Windows is not
   supported.
 - **git** — recommended. Repo-backed sessions, worktrees, and `--clone` need it.
-- **Build tools**, because Bivy compiles the native `node-pty` module if no
-  prebuilt binary matches: `xcode-select --install` on macOS,
-  `sudo apt-get install -y build-essential python3` on Debian/Ubuntu.
+- **Build tools** are optional. Interactive terminal support uses `node-pty`;
+  if no prebuilt binary matches, install `xcode-select --install` on macOS or
+  `sudo apt-get install -y build-essential python3` on Debian/Ubuntu and re-run
+  the installer.
 
 On Debian/Ubuntu the installer can install Node.js 22 for you if it is missing.
 

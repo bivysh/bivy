@@ -29,8 +29,32 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { DatabaseSync } from "node:sqlite";
+import { createRequire } from "node:module";
 import type { ForkHistoryMessage, ForkImportContext, ForkNativePayload, RuntimeMessage } from "./types.js";
+
+type DatabaseSync = {
+  exec(sql: string): void;
+  prepare(sql: string): { get(...args: unknown[]): unknown; all(...args: unknown[]): unknown[]; run(...args: unknown[]): { changes?: number } };
+  close(): void;
+};
+type DatabaseSyncCtor = new (file: string, opts?: { readOnly?: boolean }) => DatabaseSync;
+
+let databaseSyncCtor: DatabaseSyncCtor | null | undefined;
+
+function loadDatabaseSync(): DatabaseSyncCtor {
+  if (databaseSyncCtor) return databaseSyncCtor;
+  if (databaseSyncCtor === null) throw new Error("OpenCode SQLite replay requires Node.js with node:sqlite support");
+  try {
+    const mod = createRequire(import.meta.url)("node:sqlite") as { DatabaseSync?: DatabaseSyncCtor };
+    if (!mod.DatabaseSync) throw new Error("node:sqlite did not export DatabaseSync");
+    databaseSyncCtor = mod.DatabaseSync;
+    return databaseSyncCtor;
+  } catch (error) {
+    databaseSyncCtor = null;
+    const detail = error instanceof Error && error.message ? `: ${error.message.split("\n")[0]}` : "";
+    throw new Error(`OpenCode SQLite replay requires Node.js with node:sqlite support${detail}`);
+  }
+}
 
 /** Fallback when the DB has no session row to learn the running version from. */
 const FALLBACK_VERSION = "1.18.23";
@@ -73,6 +97,7 @@ function openOpenCodeDb(readWrite: boolean): DatabaseSync {
     }
   })();
   if (!present) throw new Error(`OpenCode store not found at ${file} (run OpenCode once to create it)`);
+  const DatabaseSync = loadDatabaseSync();
   const db = readWrite ? new DatabaseSync(file) : new DatabaseSync(file, { readOnly: true });
   if (readWrite) {
     // Cascade deletes (message/part/event rows under a session) need FK enforcement.
@@ -433,7 +458,7 @@ export function deleteOpenCodeSession(sessionRef: string): boolean {
       db.prepare("DELETE FROM message WHERE session_id = ?").run(sessionRef);
       const result = db.prepare("DELETE FROM session WHERE id = ?").run(sessionRef);
       db.exec("COMMIT");
-      return result.changes > 0;
+      return (result.changes ?? 0) > 0;
     } catch (error) {
       db.exec("ROLLBACK");
       throw error;

@@ -14,7 +14,7 @@ import {
   codexIntegration,
   invalidateCodexCommandProbe,
 } from "../agents/codex/integration.js";
-import { invalidatePiCommandProbe, piAgentDir, piCommandAvailable, piIntegration } from "../agents/pi/integration.js";
+import { invalidatePiCommandProbe, piAgentDir, piCommandAvailable, piIntegration, LazyPiRuntime } from "../agents/pi/integration.js";
 import { deleteCodexSession, loadCodexTranscript } from "./codex-sessions.js";
 import { deleteOpenCodeSession, exportOpenCodeSession, importOpenCodeSession, loadOpenCodeTranscript, writeOpenCodeHistory } from "./opencode-sessions.js";
 import { discoverNativeGrokSessions, listGrokSessions, loadGrokTranscript } from "./grok-sessions.js";
@@ -57,7 +57,6 @@ function codexResumeArgs(sessionId: string, tier: string): string[] {
   return ["exec", "--json", "--sandbox", tier, "resume", sessionId];
 }
 import type { ModelInfo, ForkHistoryMessage, ForkImportContext, ForkNativePayload } from "./types.js";
-import { PiRuntime } from "../agents/pi/runtime.js";
 import { ProcessRuntime, processRuntimeFromEnv, type ProcessModelConfig, type ProcessPromptMode, type ProcessThinkingConfig } from "./process.js";
 import { codexCredentialPreflight } from "./codex-preflight.js";
 import { opencodeCredentialPreflight } from "./opencode-preflight.js";
@@ -696,7 +695,7 @@ export function catalogRuntimes(credsDir: string, piDir: string, sessionsDir: st
   // (piAgentDir) still supplies the operator's models cache / config / packages.
   // credentialOwner "agent" here would make Pi read piAgentDir/auth.json — a file
   // the vault never populates — so the picker shows every provider "Not connected".
-  if (piCommandAvailable()) runtimes.unshift(new PiRuntime({ credsDir, piDir: piAgentDir(), sessionsDir, credentialOwner: "bivy" }));
+  if (piCommandAvailable()) runtimes.unshift(new LazyPiRuntime({ credsDir, piDir: piAgentDir(), sessionsDir, credentialOwner: "bivy" }));
   const claudeOptions = claudeRuntimeFromEnv();
   if (claudeSdkInstalled() && claudeOptions.executablePath) runtimes.push(new ClaudeCodeRuntime(claudeOptions));
   return runtimes;

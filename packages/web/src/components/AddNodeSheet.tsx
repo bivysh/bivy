@@ -24,7 +24,7 @@ export function AddNodeSheet({ onClose }: { onClose: () => void }) {
         <p className="muted">
           Run this on any Mac or Linux computer to install Bivy there and connect it as a new Machine on your account.
           {install.authenticated && " It will use this signed-in account automatically."}
-          {!install.hosted && " Needs Node.js 22.19 or newer; setup will point the Machine at this control plane."}
+          {!install.hosted && " Needs Node.js 20 or newer; setup will point the Machine at this control plane."}
         </p>
         <pre className="code-snippet">
           <code>{install.command}</code>
