@@ -543,6 +543,11 @@ function commandExists(cmd) {
   return runQuiet("sh", ["-lc", "command -v -- \"$1\" >/dev/null 2>&1", "sh", cmd]).code === 0;
 }
 
+function commandOnPath(cmd) {
+  const result = runQuiet("sh", ["-lc", "command -v -- \"$1\"", "sh", cmd]);
+  return result.code === 0 ? result.stdout.trim().split(/\r?\n/)[0] || "" : "";
+}
+
 function npmGlobalBinCommand(cmd) {
   if (!commandExists("npm")) return "";
   const prefix = runQuiet("npm", ["prefix", "-g"]);
@@ -613,7 +618,10 @@ function nodePackageInstalled(packageName) {
 }
 
 async function ensureNodePackage(packageName) {
-  if (nodePackageInstalled(packageName)) return true;
+  if (nodePackageInstalled(packageName)) {
+    console.log(c.green(`  ✓ Found Bivy bridge package ${packageName}`));
+    return true;
+  }
   // Add with the package manager that owns this tree. Running `npm install` in a
   // pnpm workspace would write a competing package-lock.json and a hoisted
   // node_modules over pnpm's symlink layout, leaving the checkout in a state
@@ -626,7 +634,7 @@ async function ensureNodePackage(packageName) {
     console.error(c.red(`${cmd} is required to install ${packageName}.`));
     return false;
   }
-  console.log(c.dim(`Installing ${packageName}…`));
+  console.log(c.dim(`Installing Bivy bridge package ${packageName}…`));
   const code = await run(cmd, [...baseArgs, packageName], { cwd: repoRoot });
   return code === 0 && nodePackageInstalled(packageName);
 }
@@ -634,13 +642,18 @@ async function ensureNodePackage(packageName) {
 const userLocalPrefix = process.env.BIVY_NPM_GLOBAL_PREFIX || path.join(os.homedir(), ".local");
 
 async function ensureNpmCommand(command, packageName, label) {
-  if (commandExists(command)) return true;
+  const existing = commandOnPath(command);
+  if (existing) {
+    console.log(c.green(`  ✓ Found existing ${label}: ${existing}`));
+    console.log(c.dim(`    Bivy will use your installed ${label}; it will not replace its auth or configuration.`));
+    return true;
+  }
   if (!commandExists("npm")) {
     console.log(c.yellow(`Skipping ${label}: npm is not available.`));
     return false;
   }
   fs.mkdirSync(path.join(userLocalPrefix, "bin"), { recursive: true });
-  console.log(c.dim(`Installing ${label} (${packageName})…`));
+  console.log(c.dim(`Installing ${label} (${packageName}) because it was not found on PATH…`));
   const code = await run("npm", ["install", "--global", "--prefix", userLocalPrefix, packageName, "--no-audit", "--no-fund"]);
   return code === 0 && commandExists(command);
 }

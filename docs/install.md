@@ -14,6 +14,14 @@ The recommended path is:
 curl -fsSL https://bivy.sh/install.sh | bash
 ```
 
+Prefer to inspect the installer first?
+
+```bash
+curl -fsSL https://bivy.sh/install.sh -o install.sh
+less install.sh
+bash install.sh
+```
+
 If you are already signed in at `app.bivy.sh`, **Connect a machine** creates a
 short-lived, single-use command instead:
 
@@ -36,7 +44,10 @@ The installer:
    terminal support (`node-pty`) cannot use a prebuilt binary, the installer
    prints the exact build-tool command to run. Bring your own Node.js 20+ and
    none of this runs,
-2. runs `npm install -g @bivy/bivy --omit=optional` (never under `sudo` — see below), then installs only the agent bridge/CLI you choose in setup,
+2. runs `npm install -g @bivy/bivy --omit=optional` (never under `sudo` — see
+   below), then installs only the agent bridge/CLI you choose in setup. If that
+   agent is already on `PATH`, setup prints the path and uses the existing CLI,
+   login, and configuration rather than replacing it,
 3. migrates state from a previous tarball install, if it finds one (see below),
 4. launches the interactive `bivy setup` wizard, or restarts the background
    service on an existing install.

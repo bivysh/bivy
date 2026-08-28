@@ -117,10 +117,16 @@ curl -fsSL https://bivy.sh/install.sh | bash
 
 macOS and Linux. Requires Node.js 20 or newer. The installer puts the
 [`@bivy/bivy`](https://www.npmjs.com/package/@bivy/bivy) npm package and the
-`bivy` command on your `PATH` with optional bridges skipped for speed, then runs the guided `bivy setup` wizard — agent
-choice, selected-agent install if needed, remote access, and an auto-start background service (launchd on macOS,
-systemd on Linux). Re-running it on a machine that already has Bivy just applies
-the latest build and restarts the service.
+`bivy` command on your `PATH` with optional bridges skipped for speed, then runs
+`bivy setup` — agent choice, selected-agent install if needed, remote access,
+and an auto-start background service (launchd on macOS, systemd on Linux).
+
+If Claude Code, Codex, OpenCode, Gemini, or another agent is already installed,
+setup says so and uses that existing CLI, login, and configuration. Bivy does
+not replace the agent or copy its native credentials; it adds remote continuity
+and governance around the agent you already use. Re-running the installer on a
+machine that already has Bivy just applies the latest build and restarts the
+service.
 
 **What needs an account, and what doesn't.** The CLI alone — `bivy run`,
 `bivy resume`, `bivy sessions` — needs no account and no server; `bivy setup`
@@ -131,11 +137,19 @@ UI needs a control plane, because the node hosts none: use the hosted one at
 [self-host your own](docs/self-host-quickstart.md). Switch any time with
 `bivy relay:setup`.
 
+Prefer to inspect the installer first?
+
+```bash
+curl -fsSL https://bivy.sh/install.sh -o install.sh
+less install.sh
+bash install.sh
+```
+
 **What the installer does with sudo.** It escalates only when it must, and
 tells you when it does:
 
-- Debian/Ubuntu without a suitable Node.js: `sudo apt-get install build-essential
-  python3 curl`, then NodeSource's Node 22 setup script via `sudo`.
+- Debian/Ubuntu without a suitable Node.js: `sudo apt-get install curl
+  ca-certificates`, then NodeSource's Node 22 setup script via `sudo`.
 - Other Linux, or macOS, without a suitable Node.js: downloads the official
   Node 22 tarball from nodejs.org (sha256-checked) and installs it under
   `/usr/local` with `sudo`.
