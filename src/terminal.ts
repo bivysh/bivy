@@ -4,8 +4,27 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import * as pty from "node-pty";
 import { depCacheEnv } from "./harness/dep-cache.js";
+
+type NodePty = typeof import("node-pty");
+type PtyProcess = import("node-pty").IPty;
+
+let ptyModule: NodePty | null | undefined;
+
+function loadPty(): NodePty {
+  if (ptyModule) return ptyModule;
+  if (ptyModule === null) {
+    throw new Error("PTY support is unavailable because the optional node-pty dependency is not installed. Reinstall Bivy after installing build tools, or use governed chat/exec sessions instead of interactive terminals.");
+  }
+  try {
+    ptyModule = createRequire(import.meta.url)("node-pty") as NodePty;
+    return ptyModule;
+  } catch (error) {
+    ptyModule = null;
+    const detail = error instanceof Error && error.message ? ` (${error.message.split("\n")[0]})` : "";
+    throw new Error(`PTY support is unavailable because the optional node-pty dependency could not be loaded${detail}. Reinstall Bivy after installing build tools, or use governed chat/exec sessions instead of interactive terminals.`);
+  }
+}
 
 /**
  * Terminal sessions — the "jump in and take over" escape hatch.
@@ -116,7 +135,7 @@ export interface TerminalSummary {
 }
 
 interface TerminalEntry {
-  proc: pty.IPty;
+  proc: PtyProcess;
   workspace: string;
   createdAt: number;
   lastActivityAt: number;
@@ -325,6 +344,7 @@ export class TerminalManager {
     // "posix_spawnp failed." See ensureSpawnHelperExecutable().
     ensureSpawnHelperExecutable();
 
+    const pty = loadPty();
     const proc = pty.spawn(resolved, shellArgs, {
       name: "xterm-256color",
       cols: clampDim(options.cols, 80),

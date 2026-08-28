@@ -14,6 +14,14 @@ The recommended path is:
 curl -fsSL https://bivy.sh/install.sh | bash
 ```
 
+Prefer to inspect the installer first?
+
+```bash
+curl -fsSL https://bivy.sh/install.sh -o install.sh
+less install.sh
+bash install.sh
+```
+
 If you are already signed in at `app.bivy.sh`, **Connect a machine** creates a
 short-lived, single-use command instead:
 
@@ -29,13 +37,17 @@ identity.
 
 The installer:
 
-1. checks for Node.js 22.19+ and installs it if missing — on Debian/Ubuntu via
-   `sudo apt-get` (build tools) and NodeSource's setup script; on other
-   Linux/macOS by downloading the official Node 22 tarball from nodejs.org and
-   installing it under `/usr/local` with `sudo`. On macOS it warns if Xcode
-   Command Line Tools are missing, which the native `node-pty` module needs to
-   build. Bring your own Node.js 22.19+ and none of this runs,
-2. runs `npm install -g @bivy/bivy` (never under `sudo` — see below),
+1. checks for Node.js 20+ and installs it if missing — on Debian/Ubuntu via
+   NodeSource's setup script; on other Linux/macOS by downloading the official
+   Node 22 tarball from nodejs.org and installing it under `/usr/local` with
+   `sudo`. Build tools are not installed on the fast path; if optional native
+   terminal support (`node-pty`) cannot use a prebuilt binary, the installer
+   prints the exact build-tool command to run. Bring your own Node.js 20+ and
+   none of this runs,
+2. runs `npm install -g @bivy/bivy --omit=optional` (never under `sudo` — see
+   below), then installs only the agent bridge/CLI you choose in setup. If that
+   agent is already on `PATH`, setup prints the path and uses the existing CLI,
+   login, and configuration rather than replacing it,
 3. migrates state from a previous tarball install, if it finds one (see below),
 4. launches the interactive `bivy setup` wizard, or restarts the background
    service on an existing install.
@@ -44,7 +56,7 @@ Bivy is distributed on npm. npm verifies each package's integrity hash on
 install, and releases published from CI carry a provenance attestation you can
 check with `npm audit signatures`. See [releasing.md](releasing.md).
 
-If you already have Node.js 22.19+, the installer is optional:
+If you already have Node.js 20+, the installer is optional:
 
 ```bash
 npm install -g @bivy/bivy
@@ -62,6 +74,9 @@ BIVY_NPM_PREFIX=~/.local bash install.sh
 
 # Preinstall every known upstream agent rather than just your default.
 BIVY_INSTALL_ALL_AGENTS=1 bash install.sh
+
+# Install Bivy's optional bundled bridges/native terminal dependency up front.
+BIVY_INSTALL_OPTIONAL_DEPS=1 bash install.sh
 
 # Don't touch ~/.bashrc or ~/.zshrc; just print the PATH line to add yourself.
 BIVY_NO_RC_UPDATE=1 bash install.sh

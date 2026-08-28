@@ -48,9 +48,12 @@ MANIFEST_URL="${BIVY_MANIFEST_URL:-https://bivy.sh/downloads/bivy-latest.json}"
 # because a tarball install keeps a different layout.
 INSTALL_MODE="npm"
 
-info() { printf '\033[36m==>\033[0m %s\n' "$1"; }
-warn() { printf '\033[33m==>\033[0m %s\n' "$1"; }
-die()  { printf '\033[31mError:\033[0m %s\n' "$1" >&2; exit 1; }
+INSTALL_STARTED_SECONDS=$SECONDS
+
+elapsed() { printf '%ss' "$((SECONDS - INSTALL_STARTED_SECONDS))"; }
+info() { printf '\033[36m==>\033[0m [%s] %s\n' "$(elapsed)" "$1"; }
+warn() { printf '\033[33m==>\033[0m [%s] %s\n' "$(elapsed)" "$1"; }
+die()  { printf '\033[31mError:\033[0m [%s] %s\n' "$(elapsed)" "$1" >&2; exit 1; }
 
 run_sudo() {
   if [ "$(id -u)" -eq 0 ]; then "$@";
@@ -133,10 +136,12 @@ install_node22_tarball() {
 
 node_is_supported() {
   command -v node >/dev/null 2>&1 || return 1
-  [ "$(node -p 'const [M,m]=process.versions.node.split(".").map(Number); +(M>22 || (M===22 && m>=19))' 2>/dev/null)" = "1" ]
+  [ "$(node -p 'const [M]=process.versions.node.split(".").map(Number); +(M>=20)' 2>/dev/null)" = "1" ]
 }
 
-install_ubuntu_prereqs || true
+# Keep the common path fast: build tools are needed only when optional native
+# dependencies (notably node-pty) cannot use a prebuilt binary, so do not run an
+# unconditional apt-get update here.
 command -v curl >/dev/null 2>&1 || die "curl is required. Install it and re-run."
 
 if ! node_is_supported; then
@@ -150,14 +155,15 @@ if ! node_is_supported; then
 fi
 if ! node_is_supported; then
   if command -v node >/dev/null 2>&1; then
-    die "Node.js 22.19+ is required (found $(node -v)). Upgrade from https://nodejs.org and re-run."
+    die "Node.js 20+ is required (found $(node -v)). Upgrade from https://nodejs.org and re-run."
   fi
-  die "Node.js 22.19+ is required but was not found. Install it from https://nodejs.org and re-run."
+  die "Node.js 20+ is required but was not found. Install it from https://nodejs.org and re-run."
 fi
 command -v npm >/dev/null 2>&1 || die "npm is required (it ships with Node.js)."
+info "Node $(node -v) and npm $(npm -v) ready"
 
 if command -v apt-get >/dev/null 2>&1 && { ! command -v make >/dev/null 2>&1 || ! command -v g++ >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; }; then
-  die "Build tools are missing. Install them with: sudo apt-get update && sudo apt-get install -y build-essential python3"
+  warn "Build tools are missing. Interactive terminal support may be unavailable if node-pty cannot use a prebuilt binary. Install them with: sudo apt-get update && sudo apt-get install -y build-essential python3"
 fi
 
 # macOS: node-pty may need to compile, which requires the Xcode Command Line
@@ -240,7 +246,11 @@ install_from_tarball() {
   chmod +x "$staged/bin/bivy.mjs"
 
   info "Installing production dependencies"
-  if ! ( cd "$staged" && if [ -f package-lock.json ]; then npm ci --omit=dev --no-audit --no-fund; else npm install --omit=dev --no-audit --no-fund; fi ); then
+  local omit_flags=(--omit=dev)
+  if [ "${BIVY_INSTALL_OPTIONAL_DEPS:-}" != "1" ]; then
+    omit_flags+=(--omit=optional)
+  fi
+  if ! ( cd "$staged" && if [ -f package-lock.json ]; then npm ci "${omit_flags[@]}" --no-audit --no-fund; else npm install "${omit_flags[@]}" --no-audit --no-fund; fi ); then
     rm -rf "$stage"
     die "Could not install Bivy's dependencies. Your current install was left untouched."
   fi
@@ -306,6 +316,9 @@ clear_stale_npm_temp() {
 
 install_globally() {
   local args=(install -g "${NPM_PACKAGE}@${PKG_VERSION}" --no-audit --no-fund)
+  if [ "${BIVY_INSTALL_OPTIONAL_DEPS:-}" != "1" ]; then
+    args+=(--omit=optional)
+  fi
   if [ -n "${BIVY_NPM_PREFIX:-}" ]; then
     info "Installing ${NPM_PACKAGE}@${PKG_VERSION} into ${BIVY_NPM_PREFIX}"
     clear_stale_npm_temp "$BIVY_NPM_PREFIX"
@@ -353,8 +366,12 @@ trap 'rm -f "$ERR_LOG"; rm -rf "$TMP_DIR"' EXIT
 # install gets corrupted (half-written deps / leftover temp dirs) in the first
 # place. Best-effort and only when a bivy is already on PATH; a fresh install has
 # nothing to stop, and the existing-config branch below restarts it afterward.
-if command -v bivy >/dev/null 2>&1; then bivy stop >/dev/null 2>&1 || true; fi
+if command -v bivy >/dev/null 2>&1; then
+  info "Stopping any existing Bivy node before updating"
+  bivy stop >/dev/null 2>&1 || true
+fi
 install_globally
+info "Bivy package installed"
 
 # A tarball fallback has already set BIN_DIR/BIVY_BIN to the install it made.
 if [ "$INSTALL_MODE" = "npm" ]; then
@@ -564,3 +581,5 @@ else
     echo "  bivy setup"
   fi
 fi
+
+info "Installer finished in $(elapsed)"

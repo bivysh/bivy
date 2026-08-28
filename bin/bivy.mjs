@@ -543,6 +543,11 @@ function commandExists(cmd) {
   return runQuiet("sh", ["-lc", "command -v -- \"$1\" >/dev/null 2>&1", "sh", cmd]).code === 0;
 }
 
+function commandOnPath(cmd) {
+  const result = runQuiet("sh", ["-lc", "command -v -- \"$1\"", "sh", cmd]);
+  return result.code === 0 ? result.stdout.trim().split(/\r?\n/)[0] || "" : "";
+}
+
 function npmGlobalBinCommand(cmd) {
   if (!commandExists("npm")) return "";
   const prefix = runQuiet("npm", ["prefix", "-g"]);
@@ -553,13 +558,13 @@ function npmGlobalBinCommand(cmd) {
 }
 
 function hasSupportedNode() {
-  const [major, minor] = process.versions.node.split(".").map(Number);
-  return major > 22 || (major === 22 && minor >= 19);
+  const [major] = process.versions.node.split(".").map(Number);
+  return major >= 20;
 }
 
 async function ensureDeps() {
   if (!hasSupportedNode()) {
-    console.error(c.red(`Node.js 22.19+ is required (found ${process.version}). Please upgrade and try again.`));
+    console.error(c.red(`Node.js 20+ is required (found ${process.version}). Please upgrade and try again.`));
     return false;
   }
   const dependencyMarker = packaged
@@ -576,13 +581,13 @@ async function ensureDeps() {
     return false;
   }
   if (process.platform === "linux" && (!commandExists("make") || !commandExists("g++") || !commandExists("python3"))) {
-    console.error(c.red("Build tools are missing. On Ubuntu/Debian run: sudo apt-get update && sudo apt-get install -y build-essential python3"));
-    return false;
+    console.error(c.yellow("Build tools are missing. On Ubuntu/Debian run: sudo apt-get update && sudo apt-get install -y build-essential python3"));
+    console.error(c.dim("Continuing; Bivy can run without them, but interactive terminal support may be unavailable if node-pty cannot use a prebuilt binary."));
   }
   console.log(c.dim(`Installing dependencies (${cmd} ${args.join(" ")})…`));
   const code = await run(cmd, args, { cwd: repoRoot });
   if (code !== 0 || !fs.existsSync(dependencyMarker)) {
-    console.error(c.red(`${cmd} install failed. Install Node.js 22.19+ and build tools (make/g++/python3), then try again.`));
+    console.error(c.red(`${cmd} install failed. Install Node.js 20+ and, if native optional dependencies failed, build tools (make/g++/python3), then try again.`));
     return false;
   }
   return true;
@@ -613,7 +618,10 @@ function nodePackageInstalled(packageName) {
 }
 
 async function ensureNodePackage(packageName) {
-  if (nodePackageInstalled(packageName)) return true;
+  if (nodePackageInstalled(packageName)) {
+    console.log(c.green(`  ✓ Found Bivy bridge package ${packageName}`));
+    return true;
+  }
   // Add with the package manager that owns this tree. Running `npm install` in a
   // pnpm workspace would write a competing package-lock.json and a hoisted
   // node_modules over pnpm's symlink layout, leaving the checkout in a state
@@ -626,7 +634,7 @@ async function ensureNodePackage(packageName) {
     console.error(c.red(`${cmd} is required to install ${packageName}.`));
     return false;
   }
-  console.log(c.dim(`Installing ${packageName}…`));
+  console.log(c.dim(`Installing Bivy bridge package ${packageName}…`));
   const code = await run(cmd, [...baseArgs, packageName], { cwd: repoRoot });
   return code === 0 && nodePackageInstalled(packageName);
 }
@@ -634,13 +642,18 @@ async function ensureNodePackage(packageName) {
 const userLocalPrefix = process.env.BIVY_NPM_GLOBAL_PREFIX || path.join(os.homedir(), ".local");
 
 async function ensureNpmCommand(command, packageName, label) {
-  if (commandExists(command)) return true;
+  const existing = commandOnPath(command);
+  if (existing) {
+    console.log(c.green(`  ✓ Found existing ${label}: ${existing}`));
+    console.log(c.dim(`    Bivy will use your installed ${label}; it will not replace its auth or configuration.`));
+    return true;
+  }
   if (!commandExists("npm")) {
     console.log(c.yellow(`Skipping ${label}: npm is not available.`));
     return false;
   }
   fs.mkdirSync(path.join(userLocalPrefix, "bin"), { recursive: true });
-  console.log(c.dim(`Installing ${label} (${packageName})…`));
+  console.log(c.dim(`Installing ${label} (${packageName}) because it was not found on PATH…`));
   const code = await run("npm", ["install", "--global", "--prefix", userLocalPrefix, packageName, "--no-audit", "--no-fund"]);
   return code === 0 && commandExists(command);
 }
@@ -3598,7 +3611,7 @@ async function cmdSetup(args = []) {
     saveDefaultAgentSetting(setupAgent.runtimeId);
   }
   let agentReady = true;
-  if (setupAgent && setupAgent.runtimeId !== "pi") {
+  if (setupAgent) {
     agentReady = await ensureSetupAgent(setupAgent);
     if (!agentReady) console.log(c.yellow(`${setupAgent.label} was not fully installed. Install it later from the app or with 'bivy agents:install'.`));
   }
@@ -4120,7 +4133,7 @@ async function cmdDoctor(args = []) {
   const mark = (good, soft = false) => (good ? ok : soft ? warn : bad);
 
   console.log(c.bold("\n  Bivy doctor\n"));
-  console.log(`  ${mark(hasSupportedNode())} Node ${process.version}${hasSupportedNode() ? "" : c.dim("  (needs >= 22.19.0)")}`);
+  console.log(`  ${mark(hasSupportedNode())} Node ${process.version}${hasSupportedNode() ? "" : c.dim("  (needs >= 20.0.0)")}`);
   console.log(`  ${mark(commandExists("git"), true)} git${commandExists("git") ? "" : c.dim("  (recommended for repo-backed sessions)")}`);
   // GitHub is optional (a "No repo" session needs none), so this only ever warns.
   // `gh` is NOT required — it's a token fallback; the primary path is Bivy's own
