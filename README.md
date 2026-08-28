@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/@bivy/bivy?color=2b6cb0&label=%40bivy%2Fbivy)](https://www.npmjs.com/package/@bivy/bivy)
 [![license: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-2b6cb0)](LICENSE)
-[![node](https://img.shields.io/badge/node-%E2%89%A522.19-2b6cb0)](https://nodejs.org)
+[![node](https://img.shields.io/badge/node-%E2%89%A520-2b6cb0)](https://nodejs.org)
 
 **Run coding agents on the machines you already own — then reach them from your
 phone, browser, or another terminal.**
@@ -115,10 +115,10 @@ bivy agent add       # register an existing ACP or process agent
 curl -fsSL https://bivy.sh/install.sh | bash
 ```
 
-macOS and Linux. Requires Node.js 22.19 or newer. The installer puts the
+macOS and Linux. Requires Node.js 20 or newer. The installer puts the
 [`@bivy/bivy`](https://www.npmjs.com/package/@bivy/bivy) npm package and the
-`bivy` command on your `PATH`, then runs the guided `bivy setup` wizard — agent
-choice, remote access, and an auto-start background service (launchd on macOS,
+`bivy` command on your `PATH` with optional bridges skipped for speed, then runs the guided `bivy setup` wizard — agent
+choice, selected-agent install if needed, remote access, and an auto-start background service (launchd on macOS,
 systemd on Linux). Re-running it on a machine that already has Bivy just applies
 the latest build and restarts the service.
 
@@ -144,7 +144,7 @@ tells you when it does:
 - It appends a marked PATH block to `~/.bashrc` or `~/.zshrc`
   (`BIVY_NO_RC_UPDATE=1` to opt out).
 
-Want no sudo at all? Bring your own Node.js 22.19+ and skip the script:
+Want no sudo at all? Bring your own Node.js 20+ and skip the script:
 
 ```bash
 npm install -g @bivy/bivy && bivy setup     # install globally
@@ -181,6 +181,7 @@ Environment variables passed to the one-line installer change what it does:
 | Pin an exact version | `BIVY_VERSION=0.1.0` |
 | Install the npm package into a user-owned prefix | `BIVY_NPM_PREFIX=~/.local` |
 | Preinstall every known upstream agent | `BIVY_INSTALL_ALL_AGENTS=1` |
+| Install optional Bivy bridges/native terminal dependency up front | `BIVY_INSTALL_OPTIONAL_DEPS=1` |
 | Don't touch `~/.bashrc` / `~/.zshrc`; print the PATH line instead | `BIVY_NO_RC_UPDATE=1` |
 
 For example: `BIVY_CHANNEL=staging curl -fsSL https://bivy.sh/install.sh | bash`.

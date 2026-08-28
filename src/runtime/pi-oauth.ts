@@ -10,7 +10,7 @@
 // for Bivy; it only enumerates models and (as an agent) reads through the store.
 
 import path from "node:path";
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { CredentialStore } from "@earendil-works/pi-ai";
 import { BivyCredentialStore, createCredentialVault } from "./credential-store.js";
 import { isNativeOAuthProvider } from "./oauth/model-oauth-providers.js";
@@ -39,10 +39,11 @@ export function piCredentialStore(store: BivyCredentialStore): CredentialStore {
  * to false for the catalog paths (fast, offline); the pi *session* runtime
  * (pi.ts) allows network so dynamic model lists load.
  */
-export function createPiModelRuntime(
+export async function createPiModelRuntime(
   opts: { credsDir: string; piDir: string; allowModelNetwork?: boolean; store?: BivyCredentialStore },
 ): Promise<ModelRuntime> {
   const store = opts.store ?? createCredentialVault(opts.credsDir);
+  const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
   return ModelRuntime.create({
     credentials: piCredentialStore(store),
     modelsPath: path.join(opts.piDir, "models.json"),

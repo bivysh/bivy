@@ -105,7 +105,7 @@ export function ConnectRunner({
               <p>
                 Paste this on the Mac or Linux computer where your repo lives.
                 {install.authenticated && " It can use this account automatically."}
-                {!install.hosted && " Needs Node.js 22.19 or newer."}
+                {!install.hosted && " Needs Node.js 20 or newer."}
               </p>
             </div>
           </div>
