@@ -2722,11 +2722,10 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
   const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
   if (!name) return res.status(400).json({ error: "name is required" });
   const rawTrigger = typeof req.body?.trigger === "string" ? req.body.trigger : "schedule";
-  const trigger: NonNullable<AutomationDefinition["trigger"]> =
-    rawTrigger === "webhook" || rawTrigger === "github" || rawTrigger === "linear"
-      || rawTrigger === "github_ci" || rawTrigger === "manual"
-      ? rawTrigger
-      : "schedule";
+  if (!["schedule", "webhook", "github", "linear", "github_ci", "manual"].includes(rawTrigger)) {
+    return res.status(400).json({ error: "unsupported automation trigger" });
+  }
+  const trigger = rawTrigger as NonNullable<AutomationDefinition["trigger"]>;
   const enabled = req.body?.enabled !== false;
   // Webhook + source triggers have no schedule: park on the sentinel so the
   // scheduler never fires them. Only schedule-triggered rows get nextRunAt.
@@ -3863,6 +3862,7 @@ async function processGithubEvent(hook: InboundHook, event: string, deliveryId: 
       appId: hook.appId,
       definitionId: matched.id,
       triggerKind: "github",
+      body: matched.templateCiphertext,
       runtimeId: matched.runtimeId,
       model: matched.model,
       approvalMode: matched.approvalMode,
@@ -3907,6 +3907,7 @@ async function processGithubEvent(hook: InboundHook, event: string, deliveryId: 
       appId: hook.appId,
       definitionId: matched.id,
       triggerKind: "github",
+      body: matched.templateCiphertext,
       runtimeId: matched.runtimeId,
       model: matched.model,
       approvalMode: matched.approvalMode,
@@ -3954,6 +3955,7 @@ async function processGithubEvent(hook: InboundHook, event: string, deliveryId: 
       appId: hook.appId,
       definitionId: matched.id,
       triggerKind: "github",
+      body: matched.templateCiphertext,
       runtimeId: matched.runtimeId,
       model: matched.model,
       approvalMode: matched.approvalMode,
@@ -4001,6 +4003,7 @@ async function processGithubEvent(hook: InboundHook, event: string, deliveryId: 
       appId: hook.appId,
       definitionId: matched.id,
       triggerKind: "github",
+      body: matched.templateCiphertext,
       runtimeId: matched.runtimeId,
       model: matched.model,
       approvalMode: matched.approvalMode,
@@ -4137,6 +4140,7 @@ app.post("/webhooks/linear/:id", asyncHandler(async (req, res) => {
     defaultRouted: rawLabel === "bivy" && !matched.nodeLabel,
     definitionId: matched.id,
     triggerKind: "webhook",
+    body: matched.templateCiphertext,
     runtimeId: matched.runtimeId,
     model: matched.model,
     approvalMode: matched.approvalMode,

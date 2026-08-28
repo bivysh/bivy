@@ -401,6 +401,10 @@ function rememberedRepo(state: AppState): string {
   return state.draft.repo || "";
 }
 
+function defaultSourceInstructions(): string {
+  return "Handle the incoming item using its event context. Investigate the request, make the smallest safe change, run the relevant checks, and report the outcome with links to any pull request or follow-up.";
+}
+
 // Soft glyph for each suggested template card.
 function templateIcon(key: string): ReactNode {
   switch (key) {
@@ -623,6 +627,38 @@ export function AutomationsView({
       const needsLinear = template.trigger === "linear" && linearSourceStatus(linear).tone !== "on";
       const sourceReady = !needsGithub && !needsLinear;
 
+      if (template.trigger !== "github_ci") {
+        const existing = items.find((i) => i.trigger === template.trigger);
+        if (existing) {
+          await continueWithSource(template.trigger, emptyDraft(defaultNodeId));
+        } else {
+          const base = emptyDraft(defaultNodeId);
+          setDraft({
+            ...base,
+            name: template.prefill.name,
+            instructions: defaultSourceInstructions(),
+            hasTrigger: true,
+            trigger: template.trigger,
+            labels: (template.prefill.labels ?? ["bivy"]).join(", "),
+            githubEvents: template.trigger === "github"
+              ? { issuesLabeled: true, issueMention: true, prLabeled: true, prMention: true, workflowFailed: false }
+              : base.githubEvents,
+            approvalMode: "autonomous",
+            sandbox: "workspace-write",
+          });
+        }
+        if (needsGithub) openSetup("work-queue");
+        if (needsLinear) openSetup("linear");
+        setNotice({
+          tone: sourceReady ? "info" : "warn",
+          title: sourceReady ? `${template.title} ready to review` : `${template.title} needs setup`,
+          body: sourceReady
+            ? "Review the encrypted instructions and turn it on when ready."
+            : "Finish connecting the source, then review and turn on the Automation. It cannot receive events yet.",
+        });
+        return;
+      }
+
       const existing = items.find((i) => i.trigger === template.trigger);
       if (existing) {
         if (sourceReady && !existing.enabled) await updateAutomation(controller.local, existing.id, { enabled: true });
@@ -688,7 +724,7 @@ export function AutomationsView({
       return;
     }
 
-    let instructions = "Handle the incoming item using its event context. Investigate the request, make the smallest safe change, run the relevant checks, and report the outcome with links to any pull request or follow-up.";
+    let instructions = defaultSourceInstructions();
     const parts = existing.templateCiphertext?.split(":");
     if (parts?.[0] === TEMPLATE_PREFIX && parts[1] && parts.slice(2).length) {
       const roomKey = controller.local.keys()[parts[1]];
