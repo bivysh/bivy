@@ -363,6 +363,7 @@ export class AppController {
       listBranches: (repo) => this.listBranches(repo),
       activeSessionId: () => this.store.getState().activeSession.activeSessionId,
       isPendingLaunch: (id) => this.pendingLaunches.has(id),
+      openSession: (sessionId, path) => this.openSession(sessionId, path),
       sessionIsSaved: (id) => this.store.getState().sessionIndex.sessions.some((session) => session.sessionId === id && session.status === "saved"),
       appendPendingLaunchFollowup: (id, prompt) => { this.pendingLaunches.get(id)?.followups.push(prompt); },
       addUserMessage: (text, id, attachments) => this.store.addUserMessage(text, id, attachments),
