@@ -557,9 +557,13 @@ function npmGlobalBinCommand(cmd) {
   return fs.existsSync(candidate) ? candidate : "";
 }
 
+function nodeAtLeast(minMajor, minMinor = 0) {
+  const [major, minor] = process.versions.node.split(".").map(Number);
+  return major > minMajor || (major === minMajor && minor >= minMinor);
+}
+
 function hasSupportedNode() {
-  const [major] = process.versions.node.split(".").map(Number);
-  return major >= 20;
+  return nodeAtLeast(20);
 }
 
 async function ensureDeps() {
@@ -615,6 +619,10 @@ function installCommandFor(dir) {
 
 function nodePackageInstalled(packageName) {
   return runQuiet(nodeBin, ["-e", "require.resolve(process.argv[1], { paths: [process.argv[2]] })", packageName, repoRoot]).code === 0;
+}
+
+function nodePackageLoadable(packageName) {
+  return runQuiet(nodeBin, ["-e", "require(require.resolve(process.argv[1], { paths: [process.argv[2]] }))", packageName, repoRoot]).code === 0;
 }
 
 async function ensureNodePackage(packageName) {
@@ -4134,6 +4142,14 @@ async function cmdDoctor(args = []) {
 
   console.log(c.bold("\n  Bivy doctor\n"));
   console.log(`  ${mark(hasSupportedNode())} Node ${process.version}${hasSupportedNode() ? "" : c.dim("  (needs >= 20.0.0)")}`);
+  const ptyInstalled = nodePackageInstalled("node-pty");
+  const ptyUsable = ptyInstalled && nodePackageLoadable("node-pty");
+  console.log(`  ${mark(ptyUsable, true)} terminal PTY ${ptyUsable ? c.green("available") : ptyInstalled ? c.yellow("installed but not loadable — reinstall after installing build tools") : c.dim("optional dependency missing — interactive terminals unavailable; chat/exec still work")}`);
+  const claudeBridge = nodePackageInstalled("@anthropic-ai/claude-agent-sdk");
+  console.log(`  ${mark(claudeBridge, true)} Claude bridge ${claudeBridge ? c.green("installed") : c.dim("optional — installed on first Claude setup/use")}`);
+  const piBridge = nodePackageInstalled("@earendil-works/pi-coding-agent");
+  const piNodeOk = nodeAtLeast(22, 19);
+  console.log(`  ${mark(piBridge && piNodeOk, true)} Pi bridge ${piBridge ? (piNodeOk ? c.green("installed") : c.yellow("installed but needs Node >=22.19")) : c.dim("optional — installed only if you choose Pi")}`);
   console.log(`  ${mark(commandExists("git"), true)} git${commandExists("git") ? "" : c.dim("  (recommended for repo-backed sessions)")}`);
   // GitHub is optional (a "No repo" session needs none), so this only ever warns.
   // `gh` is NOT required — it's a token fallback; the primary path is Bivy's own
@@ -5104,8 +5120,10 @@ Unlike 'bivy run', these commands operate on governed background Runs with check
       }
       const remote = await openRemoteApp();
       if (!remote) {
-        console.log("No remote access configured yet.");
-        console.log(`Run ${c.cyan("bivy relay:setup")} to enable the web/PWA app, then ${c.cyan("bivy open")}.`);
+        console.log(c.yellow("Remote access is not configured on this machine yet."));
+        console.log("The local node hosts only an API/WebSocket, not the Bivy PWA.");
+        console.log(`Run ${c.cyan("bivy relay:setup")} to connect this node to the hosted or self-hosted remote web/PWA app, then run ${c.cyan("bivy open")} again.`);
+        process.exitCode = 1;
       } else if (!canOpenBrowser()) {
         console.log(`Open the Bivy app here: ${c.cyan(remote.remoteBase)}`);
       }
