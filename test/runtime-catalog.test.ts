@@ -59,8 +59,7 @@ for (const runtime of listRuntimes()) {
   assert.ok(runtime.protectionLevel, `${runtime.id} must declare its effective protection mechanism`);
   assert.ok(runtime.protectionLabel && runtime.protectionDetail, `${runtime.id} must explain its protection in customer language`);
   assert.ok(runtime.certification, `${runtime.id} must report certification confidence`);
-  if (runtime.supportTier === "supported") {
-    assert.equal(runtime.certification, "release-tested", `${runtime.id} cannot be Recommended without release certification`);
+  if (runtime.certification === "release-tested") {
     assert.ok(runtime.testedVersion, `${runtime.id} must name the exact release-tested dependency version`);
   }
 }
@@ -233,12 +232,10 @@ for (const id of ["opencode", "cursor", "gemini"]) {
 if (priorMcpProxy === undefined) delete process.env.BIVY_MCP_PROXY;
 else process.env.BIVY_MCP_PROXY = priorMcpProxy;
 
-// The Supported tier is the paid-support promise. This file pins OpenCode to its
-// non-ACP fallback, so certification must downgrade that configured path even
-// though its static profile says supported. The governed ACP path is checked below.
-const SUPPORTED_IN_CURRENT_MODES = ["pi", "claude-code-sdk", "codex-approvals"].sort();
+// Supported is the maintained-wrapper promise. This file pins OpenCode to its
+// non-ACP fallback, so only the release-tested capability signal is downgraded.
 const listedSupported = listRuntimes().filter((r) => r.supportTier === "supported").map((r) => r.id).sort();
-assert.deepEqual(listedSupported, SUPPORTED_IN_CURRENT_MODES, `Supported tier membership changed: ${listedSupported.join(", ")}`);
+assert.deepEqual(listedSupported, EXPECTED_PICKER, `Supported tier membership changed: ${listedSupported.join(", ")}`);
 assert.equal(listRuntimes().find((r) => r.id === "opencode")!.certification, "adapter-tested");
 
 // Codex earns the tier on the pipe-free app-server path: approvals, model

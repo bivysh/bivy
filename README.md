@@ -281,9 +281,9 @@ See [`docs/remote-access.md`](docs/remote-access.md) and
 
 ## Supported agents
 
-**Claude Code and Codex are the recommended, release-certified paths.** The
-broader catalog stays available under **More agents**; capabilities and fidelity
-vary by runtime.
+**Bivy maintains wrappers for the popular coding agents below.** Claude Code,
+Codex, Pi, and OpenCode have the richest release-tested capability sets today;
+capabilities and fidelity still vary by runtime.
 
 | Agent | Command | Notes |
 |---|---|---|

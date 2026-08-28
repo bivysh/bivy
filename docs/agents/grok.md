@@ -3,7 +3,7 @@
 xAI's official Grok coding agent (`grok`), run under Bivy as one headless prompt
 per turn (`grok -p` / `--single`).
 
-- **Runtime id:** `grok` · **Tier:** Beta · **In picker:** Yes
+- **Runtime id:** `grok` · **Tier:** Supported · **In picker:** Yes
 
 ## Install
 

@@ -254,7 +254,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     // git-aware turn and exits instead of dropping into the REPL.
     args: ["--yes-always", "--message"],
     promptMode: "argv",
-    supportTier: "beta",
+    supportTier: "supported",
     authOwner: "mixed",
     blurb: "Popular git-native pair-programming agent (Aider).",
     // `aider --model <id> …` — a leading option (insertAt: 0). Aider resolves its
@@ -288,6 +288,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     // Hidden from the picker: dumb-pipe adapter with no validated JSON parser or
     // documented session/resume flag (still runnable via BIVY_RUNTIME=hermes).
     hidden: true,
+    supportTier: "experimental",
     // No `resume`: no documented session/resume flag.
     install: { kind: "npm", pkg: "hermes-agent" },
   },
@@ -309,7 +310,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     // BIVY_GOOSE_ACP=1 (or global BIVY_PREFER_ACP=1); off by default until validated.
     acp: { args: ["acp"] },
     promptMode: "argv",
-    supportTier: "beta",
+    supportTier: "supported",
     blurb: "Block's open-source agent with a structured stream-json protocol (Goose).",
     // Homebrew isn't present on stock Linux nodes (brew → ENOENT); the official
     // download script installs the goose binary on both Linux and macOS.
@@ -326,7 +327,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     displayName: "Gemini CLI",
     command: "gemini",
     packageName: "@google/gemini-cli",
-    supportTier: "beta",
+    supportTier: "supported",
     blurb: "Google's terminal coding agent (Gemini CLI).",
     // `gemini -m <id> … -p "<prompt>"` — a leading option before the trailing `-p`
     // (insertAt: 0). The prompt flag stays last, so prepending is safe.
@@ -369,7 +370,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     displayName: "Qwen Code",
     command: "qwen",
     packageName: "@qwen-code/qwen-code",
-    supportTier: "beta",
+    supportTier: "supported",
     blurb: "Alibaba's Qwen Code CLI (a Gemini-CLI fork tuned for Qwen-Coder models).",
     // Gemini-CLI fork: same `-m <id> … -p` model flag (insertAt: 0).
     model: {
@@ -413,7 +414,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     displayName: "Cline",
     command: "cline",
     packageName: "cline",
-    supportTier: "beta",
+    supportTier: "supported",
     blurb: "Cline's standalone terminal agent (the CLI sibling of the Cline IDE extension).",
     // `cline -y "<prompt>"` runs one autonomous, non-interactive task (‑y/‑‑yolo
     // skips per-tool prompts so a piped run doesn't wedge on approval). Bivy's
@@ -436,7 +437,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     displayName: "Crush",
     command: "crush",
     packageName: "@charmland/crush",
-    supportTier: "beta",
+    supportTier: "supported",
     blurb: "Charm's glamourous open-source coding agent (Crush).",
     // `crush run "<prompt>"` runs a single non-interactive prompt and exits;
     // `-q/--quiet` suppresses the spinner UI so stdout is just the reply.
@@ -458,7 +459,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     displayName: "Cursor",
     command: "cursor-agent",
     packageName: "cursor (curl https://cursor.com/install)",
-    supportTier: "beta",
+    supportTier: "supported",
     blurb: "Cursor's standalone terminal coding agent (cursor-agent) — the editor's engine on the CLI.",
     // `cursor-agent --force -p "<prompt>"` runs one non-interactive print turn and
     // exits (`-p/--print`); `--force` auto-approves tool/command execution so a
@@ -493,7 +494,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     displayName: "GitHub Copilot",
     command: "copilot",
     packageName: "@github/copilot",
-    supportTier: "beta",
+    supportTier: "supported",
     blurb: "GitHub's official terminal coding agent (Copilot CLI).",
     // `copilot --allow-all-tools -p "<prompt>"` runs one programmatic turn and
     // exits; --allow-all-tools skips per-tool approval so a piped run doesn't
@@ -525,7 +526,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     behaviors: { preflight: "grok", prepare: "grok-auth", nativeSessions: "grok" },
     command: "grok",
     packageName: "grok (curl -fsSL https://x.ai/cli/install.sh | bash)",
-    supportTier: "beta",
+    supportTier: "supported",
     authOwner: "mixed",
     blurb: "xAI's official Grok coding agent (Grok CLI) — SuperGrok/X subscription or API key.",
     // Official CLI: `grok -p "<prompt>"` (alias `--single`) runs one headless
@@ -565,7 +566,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     displayName: "Amp",
     command: "amp",
     packageName: "@sourcegraph/amp",
-    supportTier: "beta",
+    supportTier: "supported",
     blurb: "Sourcegraph's autonomous coding agent with persistent threads (Amp).",
     // `amp -x "<prompt>"` (`--execute`) runs one thread turn and streams to stdout;
     // Amp doesn't gate tools per-run (governed by its own allowlist config), so no
@@ -587,7 +588,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     displayName: "Auggie",
     command: "auggie",
     packageName: "@augmentcode/auggie",
-    supportTier: "beta",
+    supportTier: "supported",
     blurb: "Augment Code's terminal agent backed by its codebase context engine (Auggie).",
     // `auggie --quiet --print "<prompt>"` runs one non-interactive turn and prints
     // the final reply (`--print`); `--quiet` drops the UI chatter. Prompt trails.
@@ -601,7 +602,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     displayName: "Droid",
     command: "droid",
     packageName: "droid (curl https://app.factory.ai/cli)",
-    supportTier: "beta",
+    supportTier: "supported",
     blurb: "Factory AI's autonomous terminal coding agent (Droid).",
     // `droid exec --auto high "<prompt>"` runs one headless task at high autonomy
     // (auto-approves) and streams to stdout. Prompt trails the `exec` subcommand.
@@ -629,7 +630,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     displayName: "Continue",
     command: "cn",
     packageName: "@continuedev/cli",
-    supportTier: "beta",
+    supportTier: "supported",
     blurb: "Continue's headless terminal agent (cn) driving configurable assistants.",
     // `cn --auto -p "<prompt>"` runs one headless turn (`-p` = no TUI) and prints
     // the final response; `--auto` allows all tools without prompting. Prompt
@@ -657,7 +658,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     displayName: "Kilo Code",
     command: "kilo",
     packageName: "@kilocode/cli",
-    supportTier: "beta",
+    supportTier: "supported",
     blurb: "Kilo Code's terminal CLI (an OpenCode fork) for pipeline-friendly agentic coding.",
     // `kilo run --auto "<prompt>"` runs one non-interactive turn (`run`) with
     // auto-approved permissions (`--auto`) and streams to stdout. Prompt trails.
@@ -691,7 +692,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     displayName: "Rovo Dev",
     command: "acli",
     packageName: "atlassian acli (rovodev)",
-    supportTier: "beta",
+    supportTier: "supported",
     blurb: "Atlassian's Rovo Dev terminal coding agent, run through the acli CLI.",
     // `acli rovodev run --yolo "<prompt>"` runs one instruction headlessly; --yolo
     // skips tool-approval prompts. Prompt trails the `rovodev run` subcommand.

@@ -4,7 +4,7 @@ Charm's open-source coding agent (`@charmland/crush`), run under Bivy as one
 non-interactive prompt per turn (`crush run -q`, which suppresses Crush's
 spinner UI so stdout is just the reply).
 
-- **Runtime id:** `crush` · **Tier:** Beta · **In picker:** Yes
+- **Runtime id:** `crush` · **Tier:** Supported · **In picker:** Yes
 
 ## Install
 

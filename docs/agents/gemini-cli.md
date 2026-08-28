@@ -3,7 +3,7 @@
 Google's terminal coding agent (`@google/gemini-cli`), run headlessly under
 Bivy with structured JSON output.
 
-- **Runtime id:** `gemini` · **Tier:** Beta · **In picker:** Yes
+- **Runtime id:** `gemini` · **Tier:** Supported · **In picker:** Yes
 
 ## Install
 

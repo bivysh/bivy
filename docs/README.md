@@ -72,7 +72,7 @@ which subsystem or command you need.
 | [configuration.md](configuration.md) | Complete environment-variable and internal state reference. |
 | [cli-reference.md](cli-reference.md) | Anyone looking up a `bivy` command, flag, or subcommand. |
 | [runtime-support-matrix.md](runtime-support-matrix.md) | Users deciding which agent to run and what works with it today. |
-| [supported-agents.md](supported-agents.md) | The certified agent list and pins the picker's **Supported** badge is derived from (generated). |
+| [supported-agents.md](supported-agents.md) | Generated release-tested capability matrix for richer agent-fidelity claims and version pins. |
 | [fork-matrix.md](fork-matrix.md) | What fidelity a fork keeps between any two agents (generated). |
 
 ## Security

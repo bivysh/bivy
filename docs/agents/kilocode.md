@@ -4,7 +4,7 @@ Kilo Code's terminal CLI (`@kilocode/cli`, the `kilo` command — an OpenCode fo
 run under Bivy as one non-interactive turn per prompt (`kilo run --auto`, which
 auto-approves permissions and streams to stdout).
 
-- **Runtime id:** `kilocode` · **Tier:** Beta · **In picker:** Yes
+- **Runtime id:** `kilocode` · **Tier:** Supported · **In picker:** Yes
 
 ## Install
 
