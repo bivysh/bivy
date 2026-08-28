@@ -4199,7 +4199,7 @@ app.post("/webhooks/slack/:id", asyncHandler(async (req, res) => {
   res.json({
     response_type: "ephemeral",
     text: admission.blocked
-      ? `Queued for ${destination}, but Bivy Cloud must be upgraded before hosted automations can run.`
+      ? `Queued for ${destination}, but Bivy Cloud must be upgraded before its trigger queue can dispatch Runs.`
       : `On it — queued for ${destination}.${repo ? " I'll bring back a pull request." : ""}`,
   });
 }));

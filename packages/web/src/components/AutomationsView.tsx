@@ -983,8 +983,8 @@ export function AutomationsView({
         {cloudAutomationGate && (
           <div className="autom-notice warn" role="status">
             <div className="autom-notice-text">
-              <strong>Hosted automations require Cloud</strong>
-              <span>GitHub, schedules, and other hosted triggers can be configured, but incoming events are shown as blocked until this account is upgraded. Self-hosted control planes are not limited by Bivy Cloud billing.</span>
+              <strong>Cloud trigger queue requires an upgrade</strong>
+              <span>The agent still runs on your machine or your isolated runner. Bivy Cloud only stores triggers and queues Runs while you are offline; incoming events are shown as blocked until this account is upgraded. Self-hosted control planes are not limited by Bivy Cloud billing.</span>
             </div>
             {cloudAutomationGate.actions.length > 0 && (
               <div className="autom-notice-actions">
