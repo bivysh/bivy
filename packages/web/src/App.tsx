@@ -541,6 +541,22 @@ export function App() {
             </button>
           </div>
         </div>
+        <nav className="sidebar-nav" aria-label="Workspace">
+          <button
+            className={`sidebar-nav-item${automationsOpen ? " active" : ""}`}
+            onClick={() => {
+              openAutomations();
+              closeDrawer();
+            }}
+            title="Automations"
+          >
+            <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M13 2 3 14h9l-1 8 10-12h-9z" />
+            </svg>
+            <span>Automations</span>
+            <span className="sidebar-nav-chevron" aria-hidden="true">›</span>
+          </button>
+        </nav>
         <SessionList
           runEvidence={runEvidence}
           onPick={(id, path, nodeId) => {
@@ -573,23 +589,9 @@ export function App() {
           }}
           onPickTerminal={pickTerminal}
         />
-        {/* One entry point now — a ChatGPT-style gear. Theme, GitHub Queue, and
-            everything else moved inside the Settings modal. */}
+        {/* Settings stays pinned below the session stream; Automations is a
+            primary workspace destination above it. */}
         <div className="sidebar-foot">
-          <button
-            className="settings-gear automations-launch"
-            onClick={() => {
-              openAutomations();
-              closeDrawer();
-            }}
-            title="Automations"
-            aria-label="Automations"
-          >
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M13 2 3 14h9l-1 8 10-12h-9z" />
-            </svg>
-            <span>Automations</span>
-          </button>
           <button
             className="settings-gear"
             onClick={() => {

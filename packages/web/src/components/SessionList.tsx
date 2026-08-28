@@ -404,6 +404,10 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
 
   return (
     <div className="session-list">
+      <div className="session-list-heading">
+        <span>Sessions</span>
+        {filtered.length > 0 && <span className="session-list-count">{filtered.length}</span>}
+      </div>
       <div className="session-list-tools">
         <input
           className="field session-search"

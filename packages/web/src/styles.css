@@ -201,7 +201,20 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 }
 .sidebar-head-actions { display: flex; align-items: center; gap: 8px; }
 .brand { font-family: var(--font-serif); font-weight: 500; font-size: 17px; letter-spacing: 0; }
-.sidebar-foot { margin-top: auto; padding: 8px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; }
+/* Primary destinations sit above the session stream. Keeping Automations here
+   makes it discoverable without competing with the quieter Settings footer. */
+.sidebar-nav { padding: var(--space-3) var(--space-2) var(--space-2); border-bottom: 1px solid var(--line); }
+.sidebar-nav-item {
+  display: flex; align-items: center; gap: var(--space-3); width: 100%; min-height: 42px;
+  padding: var(--space-2) var(--space-3); border: 1px solid transparent; border-radius: var(--radius-md);
+  background: transparent; color: var(--ink); font: inherit; font-size: var(--text-sm); font-weight: var(--weight-semibold);
+  text-align: left; cursor: pointer; transition: background var(--dur) var(--ease-standard), border-color var(--dur) var(--ease-standard);
+}
+.sidebar-nav-item svg { color: var(--accent); flex: none; }
+.sidebar-nav-item:hover, .sidebar-nav-item.active { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 25%, var(--line)); }
+.sidebar-nav-item.active { color: var(--accent); }
+.sidebar-nav-chevron { margin-left: auto; color: var(--muted); font-size: var(--text-xl); font-weight: var(--weight-normal); line-height: 1; }
+.sidebar-foot { margin-top: auto; padding: var(--space-2); border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: var(--space-1); }
 /* Red dot on the mobile ☰ burger when something needs the user that they
    haven't seen (an agent blocked on approval/question, an unseen finished run,
    a provider needing auth). Replaces the old separate inbox surface — the
@@ -243,7 +256,9 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
    that doesn't shrink to fit would otherwise turn the whole list into a
    sideways-scrollable pane instead of just clipping. */
 .session-list { display: flex; flex-direction: column; min-height: 0; flex: 1; overflow-y: auto; overflow-x: hidden; padding: 8px; }
-.session-list-tools { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.session-list-heading { display: flex; align-items: baseline; justify-content: space-between; padding: var(--space-3) var(--space-2) var(--space-2); color: var(--ink); font-size: var(--text-md); font-weight: var(--weight-semibold); }
+.session-list-count { color: var(--muted); font-size: var(--text-xs); font-weight: var(--weight-normal); font-variant-numeric: tabular-nums; }
+.session-list-tools { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-2); }
 .session-search { flex: 1; min-width: 0; }
 .session-filter { position: relative; flex: none; }
 .session-filter-btn {
