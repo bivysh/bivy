@@ -48,6 +48,15 @@ export function invalidatePiCommandProbe(): void {
   PI_COMMAND_CACHE.clear();
 }
 
+export function piBridgeInstalled(): boolean {
+  try {
+    import.meta.resolve("@earendil-works/pi-coding-agent");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 type PiRuntimeOptions = AgentSessionOptions & { piDir: string; credentialOwner: "agent" | "bivy" };
 
 function unsupportedNodeMessage(): string {
@@ -97,13 +106,15 @@ export function piIntegration(origin: AgentIntegrationOrigin) {
     visible: true,
     origin,
     describe: () => {
-      const installed = piCommandAvailable();
+      const commandInstalled = piCommandAvailable();
+      const bridgeInstalled = piBridgeInstalled();
+      const installed = commandInstalled && bridgeInstalled && nodeSupportsPi();
       return {
         id: "pi",
         executionMode: "protocol",
         displayName: "Pi",
         description: "The operator-installed Pi coding agent connected to Bivy for durable sessions, governance, packages, and model selection.",
-        status: installed && nodeSupportsPi() ? "available" : "external",
+        status: installed ? "available" : "external",
         packageName: "@earendil-works/pi-coding-agent",
         language: "TypeScript",
         capabilities: PI_CAPABILITIES,
@@ -115,7 +126,9 @@ export function piIntegration(origin: AgentIntegrationOrigin) {
           ? unsupportedNodeMessage()
           : installed
             ? "Uses the Pi command and agent-owned auth/configuration already on this node, and hands sessions back to that native TUI."
-            : "Install and sign in to Pi on this node; Bivy will connect to that existing agent.",
+            : commandInstalled
+              ? "Pi is on PATH, but Bivy's optional Pi bridge is not installed. Select Pi in setup or run 'bivy agents:install'."
+              : "Install and sign in to Pi on this node; Bivy will connect to that existing agent.",
         install: installed ? undefined : {
           label: "Install Pi",
           description: "Installs the upstream Pi coding agent on this node.",
@@ -125,6 +138,7 @@ export function piIntegration(origin: AgentIntegrationOrigin) {
     },
     create: (options) => {
       if (!piCommandAvailable()) throw new Error(`Pi command not found on PATH: ${piCommand()}`);
+      if (!piBridgeInstalled()) throw new Error("Bivy's optional Pi bridge is not installed. Run 'bivy setup' and choose Pi, or run 'bivy agents:install'.");
       // Vault-backed credentials (see catalogRuntimes): the daemon-hosted Pi
       // session reads the shared vault the user signed in to, not Pi's own
       // plaintext auth.json. The agent dir still supplies config/models/packages.

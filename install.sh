@@ -548,6 +548,19 @@ if [ "${BIVY_INSTALL_ALL_AGENTS:-}" = "1" ]; then
   "$BIVY_BIN" agents:install || warn "Could not install every bundled agent runtime. Bivy still works; run 'bivy agents:install' later to retry."
 fi
 
+first_agent_command() {
+  node -e '
+    const fs = require("fs");
+    const file = process.argv[1];
+    const map = { "claude-code-sdk": "claude", "codex-approvals": "codex", opencode: "opencode", gemini: "gemini", qwen: "qwen", pi: "pi", aider: "aider", cline: "cline", crush: "crush" };
+    try {
+      const cfg = JSON.parse(fs.readFileSync(file, "utf8"));
+      const id = String(cfg.env?.BIVY_RUNTIME || cfg.defaults?.agent || "claude-code-sdk").toLowerCase();
+      process.stdout.write(map[id] || id || "claude");
+    } catch { process.stdout.write("claude"); }
+  ' "$STATE_DIR/cli.json" 2>/dev/null || printf 'claude'
+}
+
 if [ -f "$STATE_DIR/cli.json" ]; then
   if [ -n "${BIVY_SESSION_TOKEN:-}${BIVY_NODE_CLAIM_CODE:-}" ]; then
     info "Existing Bivy configuration found; enrolling with the provided account token."
@@ -582,4 +595,7 @@ else
   fi
 fi
 
+AGENT_CMD="$(first_agent_command)"
+echo ""
+info "First thing to try: cd your-repo && bivy run $AGENT_CMD   (then: bivy open)"
 info "Installer finished in $(elapsed)"
