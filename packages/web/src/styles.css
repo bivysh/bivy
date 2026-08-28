@@ -38,6 +38,24 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 button { font: inherit; cursor: pointer; }
+/* Touch controls should feel immediate rather than selecting text or waiting for
+   the browser's delayed click gesture. */
+button, a { -webkit-tap-highlight-color: transparent; }
+button:not(:disabled), a.btn { touch-action: manipulation; }
+.btn:not(:disabled), .menu-item:not(:disabled), .sheet-action,
+.session-item, .picker-item, .settings-nav-item, .queue-action-btn:not(:disabled) {
+  transition: background var(--dur-fast) var(--ease-standard), color var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard), transform var(--dur-fast) var(--ease-standard);
+}
+.btn:not(:disabled):active, .menu-item:not(:disabled):active,
+.sheet-action:active, .session-item:active, .picker-item:active,
+.settings-nav-item:active, .queue-action-btn:not(:disabled):active {
+  transform: scale(0.98);
+}
+.btn.primary:not(:disabled):active, .btn.danger:not(:disabled):active {
+  background: var(--accent-active);
+}
+.btn.danger:not(:disabled):active { background: color-mix(in srgb, var(--danger), var(--ink) 18%); }
 /* Baseline keyboard-focus visibility. Most custom rows/buttons in this app
    (session rows, picker items, menu items, sheet actions, …) never set
    their own focus style, so keyboard/switch-control users got only the
@@ -775,6 +793,10 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .row-hint.danger { color: var(--danger); }
 .row-hint.warn { color: var(--accent); }
 @keyframes sheet-up { from { transform: translateY(10px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes sheet-down { from { transform: none; opacity: 1; } to { transform: translateY(18px); opacity: 0; } }
+@keyframes sheet-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes sheet-backdrop-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes settings-panel-in { from { transform: translateX(var(--space-2)); opacity: 0; } to { transform: none; opacity: 1; } }
 .sheet-action { display: block; padding: 14px 16px; color: var(--ink); text-decoration: none; border-bottom: 1px solid var(--line); }
 .sheet-action:last-child { border-bottom: 0; }
 .sheet-action:hover { background: var(--surface-2); }
@@ -1038,7 +1060,8 @@ button.sheet-action:last-child { border-bottom: 0; }
    below .app-dialog (80) so a ConfirmDialog raised from within a sheet still
    layers above that. */
 .sheet { position: fixed; top: var(--app-top, 0px); left: 0; width: 100%; height: var(--app-h, 100dvh); z-index: 76; display: flex; align-items: flex-end; justify-content: center; }
-.sheet-backdrop { position: absolute; inset: 0; background: var(--overlay); }
+.sheet-backdrop { position: absolute; inset: 0; background: var(--overlay); animation: sheet-backdrop-in var(--dur) var(--ease-standard); }
+.sheet.is-closing .sheet-backdrop { animation: sheet-backdrop-out var(--dur) var(--ease-standard) forwards; }
 .sheet-body {
   /* Sit clear of the composer: --composer-h (published by Composer) is the live
      height of the input strip at the bottom of the screen, so reserve it as the
@@ -1070,13 +1093,21 @@ button.sheet-action:last-child { border-bottom: 0; }
      so the body always sits just above it; the floor clears the home indicator. */
   max-height: calc(var(--app-h, 100dvh) - var(--sheet-clear) - 20px); display: flex; flex-direction: column; min-height: 0;
   background: var(--surface); border: 1px solid var(--line-strong); border-radius: 16px; overflow: hidden;
-  box-shadow: var(--shadow-lg); animation: sheet-up 0.16s ease;
+  box-shadow: var(--shadow-lg); animation: sheet-up var(--dur) var(--ease-standard);
+  will-change: transform;
 }
+.sheet-body.is-closing { animation: sheet-down var(--dur) var(--ease-standard) forwards; }
+.sheet-grabber {
+  align-self: center; flex: none; width: var(--space-7); height: var(--space-1); margin: var(--space-2) 0 var(--space-1);
+  border-radius: var(--radius-full); background: var(--line-strong); cursor: grab; touch-action: none;
+}
+.sheet-grabber:active { cursor: grabbing; }
 .sheet[data-variant="action"] .sheet-body { --sheet-clear: calc(12px + env(safe-area-inset-bottom)); max-width: 480px; }
 .sheet[data-variant="action"] .sheet-content { padding: 0; }
-.sheet-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); flex: none; }
+.sheet-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); flex: none; touch-action: none; }
 .sheet-title { font-weight: 700; flex: 1; }
-.sheet-close { border: 0; background: transparent; color: var(--muted); font-size: 22px; line-height: 1; }
+.sheet-close { border: 0; background: transparent; color: var(--muted); font-size: 22px; line-height: 1; min-width: var(--space-7); min-height: var(--space-7); }
+.sheet-close:active { transform: scale(0.9); }
 /* flex:1 so the content fills the bounded body and its own scroll (not the
    page) handles a long tool list; touch scrolling + overscroll containment keep
    the fling smooth on iOS and stop it chaining to the chat underneath. */
@@ -2068,7 +2099,7 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .settings-back span { font-size: 22px; line-height: 1; }
 .settings-x { border: 0; background: transparent; color: var(--muted); font-size: 26px; line-height: 1; padding: 0 4px; }
 .settings-x:hover { color: var(--ink); }
-.settings-body { flex: 1; overflow-y: auto; min-height: 0; padding: 14px 18px 28px; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+.settings-body { flex: 1; overflow-y: auto; min-height: 0; padding: 14px 18px 28px; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; animation: settings-panel-in var(--dur) var(--ease-standard); }
 .settings-body .settings-form { padding: 0; }
 
 /* Canonical selectable — the shared "active-accent-tint" choice control. Its
@@ -2565,7 +2596,8 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 .btn.link.danger { background: transparent; color: var(--danger); }
 .btn.sm { padding: var(--space-1) 10px; font-size: var(--text-xs); }
 .btn.lg { padding: 11px 18px; font-size: var(--text-md); }
-.btn.icon { padding: var(--space-1); font-size: var(--text-xl); line-height: 1; }
+.btn.icon { padding: var(--space-1); min-width: var(--space-7); min-height: var(--space-7); font-size: var(--text-xl); line-height: 1; }
+.btn[aria-busy="true"] { cursor: wait; }
 /* ---- Sidebar settings gear (single entry point, ChatGPT-style) ---- */
 .settings-gear {
   display: inline-flex; align-items: center; justify-content: flex-start; gap: 10px; position: relative;

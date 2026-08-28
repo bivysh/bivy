@@ -65,3 +65,44 @@ export function useModalEscape(onEscape: () => void, active = true): void {
     return pushModal(() => ref.current());
   }, [active]);
 }
+
+/**
+ * Give an overlay its own history entry so the browser Back gesture behaves
+ * like a native mobile back button: it closes the topmost overlay first and
+ * only then navigates the underlying app. Programmatic closes consume the
+ * entry too, keeping Back from reopening the overlay later.
+ */
+export function useModalBack(onBack: () => void): () => void {
+  const callback = useRef(onBack);
+  callback.current = onBack;
+  const active = useRef(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    history.pushState({ __bivyModal: true }, "", location.href);
+    active.current = true;
+    const onPopState = () => {
+      if (!active.current) return;
+      active.current = false;
+      callback.current();
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => {
+      window.removeEventListener("popstate", onPopState);
+      // If the overlay was removed by some other route/state change, remove
+      // its sentinel entry so the next Back gesture does not land on a stale
+      // copy of the current page.
+      if (active.current) {
+        active.current = false;
+        history.back();
+      }
+    };
+  }, []);
+
+  return () => {
+    if (!active.current) return;
+    active.current = false;
+    history.back();
+    callback.current();
+  };
+}

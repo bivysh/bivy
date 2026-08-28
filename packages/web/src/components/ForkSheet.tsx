@@ -162,7 +162,7 @@ export function ForkSheet({ sessionId, onClose }: { sessionId: string; onClose: 
         </div>
       ) : (
         <div className="picker-section">
-          <button className="btn primary fork-submit" onClick={doFork} disabled={busy}>
+          <button className="btn primary fork-submit" onClick={doFork} disabled={busy} aria-busy={busy}>
             {busy ? "Forking…" : willRetire ? "Move session" : "Create fork"}
           </button>
         </div>

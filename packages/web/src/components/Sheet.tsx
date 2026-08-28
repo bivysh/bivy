@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { useModalEscape } from "../modalStack.js";
+import { useModalBack, useModalEscape } from "../modalStack.js";
 import { CheckIcon, CloseIcon } from "./UiIcons.js";
 
 const FOCUSABLE = 'a[href],button:not(:disabled),textarea:not(:disabled),input:not(:disabled),select:not(:disabled),[tabindex]:not([tabindex="-1"])';
@@ -29,11 +29,52 @@ export function Sheet({
   autoFocusSearch?: boolean;
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dragStartY = useRef<number | null>(null);
+  const dragYRef = useRef(0);
+  const [isClosing, setIsClosing] = useState(false);
+  const [dragY, setDragY] = useState(0);
 
+  // Let the sheet finish its dismissal motion before the parent unmounts it.
+  // This makes taps, backdrop clicks, Escape, and swipe dismissal feel like the
+  // same native interaction instead of disappearing synchronously.
+  const requestClose = () => {
+    if (isClosing) return;
+    setIsClosing(true);
+    dragYRef.current = 0;
+    setDragY(0);
+    closeTimer.current = setTimeout(onClose, 200);
+  };
+
+  useEffect(() => () => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+  }, []);
+
+  const onHandlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (isClosing) return;
+    dragStartY.current = event.clientY;
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const onHandlePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (dragStartY.current == null || isClosing) return;
+    const nextY = Math.max(0, Math.min(event.clientY - dragStartY.current, 320));
+    dragYRef.current = nextY;
+    setDragY(nextY);
+  };
+  const onHandlePointerUp = () => {
+    if (dragStartY.current == null) return;
+    const shouldClose = dragYRef.current > 96;
+    dragStartY.current = null;
+    dragYRef.current = 0;
+    if (shouldClose) closeWithBack();
+    else setDragY(0);
+  };
+
+  const closeWithBack = useModalBack(requestClose);
   // Escape closes — coordinated so only the topmost open layer responds (a
   // popover or dialog raised from inside the sheet cancels itself first, rather
   // than this sheet closing out from under it).
-  useModalEscape(onClose);
+  useModalEscape(closeWithBack);
 
   // Modal focus management: move focus into the sheet on open, keep Tab inside
   // it, and restore focus to the opener on close so keyboard / screen-reader
@@ -85,13 +126,40 @@ export function Sheet({
   // whenever new content pinned the chat to the bottom. At <body> it is truly
   // viewport-fixed and independent of the transcript's scroll and windowing.
   return createPortal(
-    <div className="sheet" data-variant={variant} role="dialog" aria-modal="true" aria-label={ariaLabel}>
-      <div className="sheet-backdrop" onClick={onClose} />
-      <div className="sheet-body" ref={bodyRef} tabIndex={-1}>
-        <div className="sheet-head">
+    <div className={`sheet${isClosing ? " is-closing" : ""}`} data-variant={variant} role="dialog" aria-modal="true" aria-label={ariaLabel}>
+      <div
+        className="sheet-backdrop"
+        onClick={closeWithBack}
+        style={dragY > 0 ? { opacity: Math.max(0.25, 1 - dragY / 320) } : undefined}
+      />
+      <div
+        className={`sheet-body${isClosing ? " is-closing" : ""}`}
+        ref={bodyRef}
+        tabIndex={-1}
+        style={dragY > 0 ? { transform: `translateY(${dragY}px)` } : undefined}
+      >
+        <div
+          className="sheet-grabber"
+          aria-hidden="true"
+          onPointerDown={onHandlePointerDown}
+          onPointerMove={onHandlePointerMove}
+          onPointerUp={onHandlePointerUp}
+          onPointerCancel={onHandlePointerUp}
+        />
+        <div
+          className="sheet-head"
+          onPointerDown={(event) => {
+            const target = event.target as HTMLElement;
+            if (target.closest("button, a, input, textarea, select")) return;
+            onHandlePointerDown(event);
+          }}
+          onPointerMove={onHandlePointerMove}
+          onPointerUp={onHandlePointerUp}
+          onPointerCancel={onHandlePointerUp}
+        >
           <span className="sheet-title">{title}</span>
           {headExtra}
-          <button className="sheet-close" onClick={onClose} aria-label="Close">
+          <button className="sheet-close" onClick={closeWithBack} aria-label="Close">
             <CloseIcon />
           </button>
         </div>
