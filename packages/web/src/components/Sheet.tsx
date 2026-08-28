@@ -126,7 +126,11 @@ export function Sheet({
   // viewport-fixed and independent of the transcript's scroll and windowing.
   return createPortal(
     <div className={`sheet${isClosing ? " is-closing" : ""}`} data-variant={variant} role="dialog" aria-modal="true" aria-label={ariaLabel}>
-      <div className="sheet-backdrop" onClick={requestClose} />
+      <div
+        className="sheet-backdrop"
+        onClick={requestClose}
+        style={dragY > 0 ? { opacity: Math.max(0.25, 1 - dragY / 320) } : undefined}
+      />
       <div
         className={`sheet-body${isClosing ? " is-closing" : ""}`}
         ref={bodyRef}
@@ -141,7 +145,17 @@ export function Sheet({
           onPointerUp={onHandlePointerUp}
           onPointerCancel={onHandlePointerUp}
         />
-        <div className="sheet-head">
+        <div
+          className="sheet-head"
+          onPointerDown={(event) => {
+            const target = event.target as HTMLElement;
+            if (target.closest("button, a, input, textarea, select")) return;
+            onHandlePointerDown(event);
+          }}
+          onPointerMove={onHandlePointerMove}
+          onPointerUp={onHandlePointerUp}
+          onPointerCancel={onHandlePointerUp}
+        >
           <span className="sheet-title">{title}</span>
           {headExtra}
           <button className="sheet-close" onClick={requestClose} aria-label="Close">

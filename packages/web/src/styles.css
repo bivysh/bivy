@@ -781,6 +781,7 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 @keyframes sheet-down { from { transform: none; opacity: 1; } to { transform: translateY(18px); opacity: 0; } }
 @keyframes sheet-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes sheet-backdrop-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes settings-panel-in { from { transform: translateX(var(--space-2)); opacity: 0; } to { transform: none; opacity: 1; } }
 .sheet-action { display: block; padding: 14px 16px; color: var(--ink); text-decoration: none; border-bottom: 1px solid var(--line); }
 .sheet-action:last-child { border-bottom: 0; }
 .sheet-action:hover { background: var(--surface-2); }
@@ -1088,7 +1089,7 @@ button.sheet-action:last-child { border-bottom: 0; }
 .sheet-grabber:active { cursor: grabbing; }
 .sheet[data-variant="action"] .sheet-body { --sheet-clear: calc(12px + env(safe-area-inset-bottom)); max-width: 480px; }
 .sheet[data-variant="action"] .sheet-content { padding: 0; }
-.sheet-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); flex: none; }
+.sheet-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); flex: none; touch-action: none; }
 .sheet-title { font-weight: 700; flex: 1; }
 .sheet-close { border: 0; background: transparent; color: var(--muted); font-size: 22px; line-height: 1; min-width: var(--space-7); min-height: var(--space-7); }
 .sheet-close:active { transform: scale(0.9); }
@@ -2083,7 +2084,7 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .settings-back span { font-size: 22px; line-height: 1; }
 .settings-x { border: 0; background: transparent; color: var(--muted); font-size: 26px; line-height: 1; padding: 0 4px; }
 .settings-x:hover { color: var(--ink); }
-.settings-body { flex: 1; overflow-y: auto; min-height: 0; padding: 14px 18px 28px; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+.settings-body { flex: 1; overflow-y: auto; min-height: 0; padding: 14px 18px 28px; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; animation: settings-panel-in var(--dur) var(--ease-standard); }
 .settings-body .settings-form { padding: 0; }
 
 /* Canonical selectable — the shared "active-accent-tint" choice control. Its

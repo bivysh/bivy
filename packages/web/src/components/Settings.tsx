@@ -327,7 +327,7 @@ export function Settings({
             <h2 className="settings-head-title">{title}</h2>
             <button className="settings-x settings-x-content" onClick={onClose} aria-label="Close settings"><CloseIcon /></button>
           </header>
-          <div className="settings-body">
+          <div className="settings-body" key={activeView ?? "menu"}>
             {activeView === "appearance" && <AppearancePanel />}
             {activeView === "notifications" && <NotificationsPanel />}
             {activeView === "import" && <ImportPanel onImported={(id) => onImported?.(id)} />}
