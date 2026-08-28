@@ -4192,6 +4192,9 @@ interface RunIssueOverrides {
    *  plane's run-evidence endpoint. Only set for control-plane-dispatched runs
    *  (self-hosted direct GitHub polling has no control-plane run to attach to). */
   onEvidence?: (patch: Record<string, unknown>) => void | Promise<void>;
+  /** Automation-level instructions from a matched source trigger. When absent,
+   *  the node's GitHub issue default prompt is used. */
+  instructions?: string;
   /** Cancellation for a control-plane-dispatched Run. Aborts the active runtime
    * turn; callers must still rely on the durable control-plane status. */
   signal?: AbortSignal;
@@ -4372,7 +4375,7 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
   try {
     recordRunAuditCorrelation(record, overrides.correlation);
     emit(record, "started", `Started work on ${cfg.owner}/${cfg.repo}#${issue.number}.`);
-    await runSessionTurn(record, buildTaskPrompt(issue, nodeGithubIssuePrompt()), overrides.signal);
+    await runSessionTurn(record, buildTaskPrompt(issue, overrides.instructions ?? nodeGithubIssuePrompt()), overrides.signal);
     if (overrides.signal?.aborted) throw overrides.signal.reason ?? new Error("Run cancelled");
     emit(record, "agent_done", `Agent finished issue #${issue.number}; running deterministic checks.`);
     await reportIssueOutcome(cfg, issue, record, emit, { followUp: false, onEvidence: overrides.onEvidence });
@@ -5102,6 +5105,7 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
       sandbox: normalizeSandboxTier(item.sandbox),
       approvalMode: approvalModeFrom(item.approvalMode),
       onEvidence: report,
+      instructions: item.body,
       signal,
       correlation: { runId: item.id, attempt: item.attempt ?? 1, machineId: identity.nodeId },
     });
@@ -5118,7 +5122,7 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
     if (!parsed) throw new Error(`Linear work item has an invalid repo "${repoSlug}"`);
     // Case B: a re-dispatch the control plane correlated to an existing session
     // continues it as a normal chat instead of starting cold (mirrors GitHub).
-    if (await continueCorrelatedSession(item, buildLinearTaskPrompt(issue), report, { resumeOnMissing: item.targetKind === "existing_session", signal })) return;
+    if (await continueCorrelatedSession(item, buildLinearTaskPrompt(issue, item.body), report, { resumeOnMissing: item.targetKind === "existing_session", signal })) return;
     const githubToken = await resolveGitHubToken();
     if (!githubToken) throw new Error("no GitHub token available to clone the Linear issue repository");
     const repoDir = await cloneOrUpdateRepo({ owner: parsed.owner, repo: parsed.repo, token: githubToken, root: reposRoot });
@@ -5138,7 +5142,7 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
     sessionNamer.setSessionName(record, `${issue.identifier}: ${issue.title}`);
     if (item.model) { try { await record.session.setModel("", item.model); } catch {} }
     await report({ output: { sessionId: record.id, branch }, events: [{ at: new Date().toISOString(), kind: "branch", summary: "Linear issue working branch and session created.", ref: branch, url: issue.url }] });
-    await runSessionTurn(record, buildLinearTaskPrompt(issue), signal);
+    await runSessionTurn(record, buildLinearTaskPrompt(issue, item.body), signal);
     if (signal.aborted) throw signal.reason ?? new Error("Run cancelled");
     await branchPublish.maybePushWorktreeBranch(record);
     await prDetection.maybeDetectPullRequest(record);

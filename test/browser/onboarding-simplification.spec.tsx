@@ -25,11 +25,11 @@ test("voice input remains available after the user types a message", async () =>
   expect(composer.slice(mic - 250, mic)).not.toContain("!canSend &&");
 });
 
-test("source Automations remain drafts until their source is connected", async () => {
+test("source Automation templates enter the encrypted review flow before going live", async () => {
   const view = await read("../../packages/web/src/components/AutomationsView.tsx");
-  expect(view).toContain("enabled: sourceReady");
-  expect(view).toContain("saved as a draft");
-  expect(view).toContain("It cannot receive events yet.");
+  expect(view).toContain('if (template.trigger !== "github_ci")');
+  expect(view).toContain("Review the encrypted instructions and turn it on when ready.");
+  expect(view).toContain("Finish connecting the source, then review and turn on the Automation.");
   expect(view).toContain("Draft · needs GitHub");
 });
 

@@ -68,3 +68,36 @@ test("legacy github_ci automations are exempt from requiring encrypted instructi
   expect(match).toContain('required: def.trigger !== "github_ci",');
   expect(index).toContain("body: matched.templateCiphertext || DEFAULT_FIX_CI_PROMPT");
 });
+
+test("source-triggered GitHub and Linear runs carry encrypted automation instructions when configured", async () => {
+  const [index, server, linear] = await Promise.all([
+    read("../../services/control-plane/src/index.ts"),
+    read("../../src/server.ts"),
+    read("../../src/linear-tasks.ts"),
+  ]);
+  expect((index.match(/body: matched\.templateCiphertext/g) ?? []).length).toBeGreaterThanOrEqual(5);
+  expect(server).toContain("instructions: item.body,");
+  expect(server).toContain("buildTaskPrompt(issue, overrides.instructions ?? nodeGithubIssuePrompt())");
+  expect(linear).toContain("export function buildLinearTaskPrompt(issue: LinearIssue, instructions?: string)");
+  expect(server).toContain("buildLinearTaskPrompt(issue, item.body)");
+});
+
+test("account automation creation rejects unsupported trigger values instead of silently scheduling", async () => {
+  const index = await read("../../services/control-plane/src/index.ts");
+  expect(index).toContain('return res.status(400).json({ error: "unsupported automation trigger" });');
+  expect(index).toContain('const trigger = rawTrigger as NonNullable<AutomationDefinition["trigger"]>;');
+  expect(index).toContain('configOrder: nextConfigOrder,');
+  expect(index).toContain('configOrder: req.body?.configOrder !== undefined ? requestedConfigOrder : current.configOrder,');
+});
+
+test("source automation priority is visible and reorderable because first match wins", async () => {
+  const [view, match] = await Promise.all([
+    read("../../packages/web/src/components/AutomationsView.tsx"),
+    read("../../services/control-plane/src/automation-match.ts"),
+  ]);
+  expect(view).toContain("function automationPrioritySort(");
+  expect(view).toContain("Priority: first match wins");
+  expect(view).toContain("Move earlier");
+  expect(view).toContain("Move later");
+  expect(match).toContain("Explicit priority wins for both file-managed and UI-managed rows");
+});

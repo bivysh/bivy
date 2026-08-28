@@ -151,6 +151,13 @@ function isSourceTrigger(t: AccountAutomation["trigger"]): t is "github" | "line
   return t === "github" || t === "linear" || t === "github_ci";
 }
 
+function automationPrioritySort(a: AccountAutomation, b: AccountAutomation): number {
+  const ao = a.configOrder ?? Number.MAX_SAFE_INTEGER;
+  const bo = b.configOrder ?? Number.MAX_SAFE_INTEGER;
+  if (ao !== bo) return ao - bo;
+  return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+}
+
 /** Human summary of GitHub `on` rules (or legacy defaults). */
 function summarizeGithubEvents(item: AccountAutomation): string {
   const on = item.on;
@@ -401,6 +408,10 @@ function rememberedRepo(state: AppState): string {
   return state.draft.repo || "";
 }
 
+function defaultSourceInstructions(): string {
+  return "Handle the incoming item using its event context. Investigate the request, make the smallest safe change, run the relevant checks, and report the outcome with links to any pull request or follow-up.";
+}
+
 // Soft glyph for each suggested template card.
 function templateIcon(key: string): ReactNode {
   switch (key) {
@@ -558,7 +569,7 @@ export function AutomationsView({
   }, [menuId]);
 
   const defaultNodeId = state.connection.currentNodeId || controller.local.cur || "";
-  const listedItems = useMemo(() => items.filter(isListedAutomation), [items]);
+  const listedItems = useMemo(() => items.filter(isListedAutomation).sort(automationPrioritySort), [items]);
   const isEmpty = !loading && listedItems.length === 0;
 
   function openSetup(focus: SourceSetupFocus) {
@@ -622,6 +633,38 @@ export function AutomationsView({
       const needsGithub = Boolean(github && githubSourceStatus(github).tone !== "on") || ((template.trigger === "github" || template.trigger === "github_ci") && !github);
       const needsLinear = template.trigger === "linear" && linearSourceStatus(linear).tone !== "on";
       const sourceReady = !needsGithub && !needsLinear;
+
+      if (template.trigger !== "github_ci") {
+        const existing = items.find((i) => i.trigger === template.trigger);
+        if (existing) {
+          await continueWithSource(template.trigger, emptyDraft(defaultNodeId));
+        } else {
+          const base = emptyDraft(defaultNodeId);
+          setDraft({
+            ...base,
+            name: template.prefill.name,
+            instructions: defaultSourceInstructions(),
+            hasTrigger: true,
+            trigger: template.trigger,
+            labels: (template.prefill.labels ?? ["bivy"]).join(", "),
+            githubEvents: template.trigger === "github"
+              ? { issuesLabeled: true, issueMention: true, prLabeled: true, prMention: true, workflowFailed: false }
+              : base.githubEvents,
+            approvalMode: "autonomous",
+            sandbox: "workspace-write",
+          });
+        }
+        if (needsGithub) openSetup("work-queue");
+        if (needsLinear) openSetup("linear");
+        setNotice({
+          tone: sourceReady ? "info" : "warn",
+          title: sourceReady ? `${template.title} ready to review` : `${template.title} needs setup`,
+          body: sourceReady
+            ? "Review the encrypted instructions and turn it on when ready."
+            : "Finish connecting the source, then review and turn on the Automation. It cannot receive events yet.",
+        });
+        return;
+      }
 
       const existing = items.find((i) => i.trigger === template.trigger);
       if (existing) {
@@ -688,7 +731,7 @@ export function AutomationsView({
       return;
     }
 
-    let instructions = "Handle the incoming item using its event context. Investigate the request, make the smallest safe change, run the relevant checks, and report the outcome with links to any pull request or follow-up.";
+    let instructions = defaultSourceInstructions();
     const parts = existing.templateCiphertext?.split(":");
     if (parts?.[0] === TEMPLATE_PREFIX && parts[1] && parts.slice(2).length) {
       const roomKey = controller.local.keys()[parts[1]];
@@ -766,6 +809,23 @@ export function AutomationsView({
         tone: "ok",
         title: item.enabled ? `Paused “${item.name}”` : `Resumed “${item.name}”`,
       });
+    } catch (e) { setError(String((e as Error).message || e)); }
+  }
+
+  async function moveSourceAutomation(item: AccountAutomation, direction: -1 | 1) {
+    setMenuId(null);
+    const sourceItems = items.filter((i) => isSourceTrigger(i.trigger) && !i.configKey).sort(automationPrioritySort);
+    const index = sourceItems.findIndex((i) => i.id === item.id);
+    const swap = sourceItems[index + direction];
+    if (!swap) return;
+    const orders = sourceItems.map((i, n) => i.configOrder ?? n);
+    try {
+      await Promise.all([
+        updateAutomation(controller.local, item.id, { configOrder: orders[index + direction] }),
+        updateAutomation(controller.local, swap.id, { configOrder: orders[index] }),
+      ]);
+      await refresh();
+      setNotice({ tone: "ok", title: `Moved “${item.name}” ${direction < 0 ? "earlier" : "later"}` });
     } catch (e) { setError(String((e as Error).message || e)); }
   }
 
@@ -1024,7 +1084,9 @@ export function AutomationsView({
                   const nextRun = item.enabled && item.nextRunAt && item.schedule?.kind !== "once"
                     ? formatNextAutomationRun(item.nextRunAt)
                     : null;
-                  const meta = [scheduleSummary(item), item.configKey ? "Managed by file" : null, nextRun].filter(Boolean).join(" · ");
+                  const meta = [scheduleSummary(item), item.configKey ? "Managed by file" : null, isSourceTrigger(item.trigger) ? "Priority: first match wins" : null, nextRun].filter(Boolean).join(" · ");
+                  const sourceItems = items.filter((i) => isSourceTrigger(i.trigger) && !i.configKey).sort(automationPrioritySort);
+                  const sourceIndex = sourceItems.findIndex((i) => i.id === item.id);
                   return (
                     <div className={`automation-row${item.enabled ? "" : " is-paused"}`} key={item.id}>
                       <div className="automation-row-main">
@@ -1069,6 +1131,12 @@ export function AutomationsView({
                                 </button>
                               )}
                               {!item.configKey && <button type="button" className="menu-item row-menu-item" role="menuitem" onClick={() => { setMenuId(null); void edit(item); }}>Edit</button>}
+                              {isSourceTrigger(item.trigger) && !item.configKey && sourceIndex > 0 && (
+                                <button type="button" className="menu-item row-menu-item" role="menuitem" onClick={() => void moveSourceAutomation(item, -1)}>Move earlier</button>
+                              )}
+                              {isSourceTrigger(item.trigger) && !item.configKey && sourceIndex >= 0 && sourceIndex < sourceItems.length - 1 && (
+                                <button type="button" className="menu-item row-menu-item" role="menuitem" onClick={() => void moveSourceAutomation(item, 1)}>Move later</button>
+                              )}
                               {item.trigger === "webhook" && item.webhookUrl && (
                                 <button type="button" className="menu-item row-menu-item" role="menuitem" onClick={() => {
                                   setMenuId(null);

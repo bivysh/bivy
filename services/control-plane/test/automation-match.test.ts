@@ -332,4 +332,14 @@ const overlapsShared = sharedFindOverlaps(parityEvaluable);
 assert.deepEqual(overlapsAdapter, overlapsShared, "overlap findings are identical, not just similarly-shaped");
 assert.equal(overlapsAdapter[0]?.kind, "shadowed");
 
+const priorityDefs: AutomationDefinition[] = [
+  def({ id: "old", trigger: "github", createdAt: "2026-01-01T00:00:00.000Z", configOrder: 2, on: [{ event: "issues" }] }),
+  def({ id: "new", trigger: "github", createdAt: "2026-01-02T00:00:00.000Z", configOrder: 1, on: [{ event: "issues" }] }),
+];
+assert.equal(
+  matchSourceAutomation(priorityDefs, { kind: "github", githubEvent: "issues", repo: undefined, labels: ["bivy"] })?.id,
+  "new",
+  "explicit configOrder controls first-match priority for UI-managed automations too",
+);
+
 console.log("automation-match tests passed");
