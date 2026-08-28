@@ -4234,6 +4234,51 @@ async function tailFiles(files, lines, follow) {
 // alive. Keeping stdout pointed directly at the log lets the update survive the
 // node restart; polling it here still gives the web terminal live progress up to
 // the moment its PTY disappears.
+function spawnDetachedUpdateProcess(args, logFd) {
+  const env = { ...process.env, BIVY_UPDATE_DETACHED: "1" };
+  const updateArgs = [selfScript, "update", ...args];
+  const { kind } = servicePaths();
+
+  // A Bivy web terminal is a child of bivy.service. A plain detached child still
+  // stays in that systemd cgroup, so the installer's early `bivy stop` would kill
+  // the updater along with the node before npm/install runs. When a user systemd
+  // manager is available, launch the updater as its own transient unit instead;
+  // stopping/restarting bivy.service then leaves the updater alive.
+  if (kind === "systemd" && commandExists("systemd-run")) {
+    const unit = `bivy-update-${process.pid}-${Date.now()}`.replace(/[^A-Za-z0-9_.@-]/g, "-");
+    const logProp = `append:${updateLogPath}`;
+    const child = spawn("systemd-run", [
+      "--user",
+      "--wait",
+      "--collect",
+      `--unit=${unit}`,
+      `--working-directory=${repoRoot}`,
+      `--property=StandardOutput=${logProp}`,
+      `--property=StandardError=${logProp}`,
+      "--setenv=BIVY_UPDATE_DETACHED=1",
+      `--setenv=BIVY_DATA_DIR=${appDir}`,
+      `--setenv=PATH=${process.env.PATH || ""}`,
+      nodeBin,
+      ...updateArgs,
+    ], {
+      detached: true,
+      stdio: ["ignore", logFd, logFd],
+      env: { ...env, ...systemdUserEnv() },
+    });
+    child.unref();
+    return child;
+  }
+
+  const child = spawn(nodeBin, updateArgs, {
+    cwd: repoRoot,
+    detached: true,
+    stdio: ["ignore", logFd, logFd],
+    env,
+  });
+  child.unref();
+  return child;
+}
+
 async function showDetachedUpdateProgress(child, start) {
   let offset = start;
   let finished = false;
@@ -4289,13 +4334,7 @@ async function cmdUpdate(args = []) {
     const logFd = fs.openSync(updateLogPath, "a");
     const logStart = fs.fstatSync(logFd).size;
     fs.writeSync(logFd, `\n=== bivy update started ${new Date().toISOString()} ===\n`);
-    const child = spawn(nodeBin, [selfScript, "update", ...args], {
-      cwd: repoRoot,
-      detached: true,
-      stdio: ["ignore", logFd, logFd],
-      env: { ...process.env, BIVY_UPDATE_DETACHED: "1" },
-    });
-    child.unref();
+    const child = spawnDetachedUpdateProcess(args, logFd);
     fs.closeSync(logFd);
     console.log(c.green("Update started in the background. Showing progress until the node restarts…"));
     console.log(c.dim(`The terminal will reconnect automatically. Run ${c.cyan("bivy update:log")} afterward for the final output.`));
