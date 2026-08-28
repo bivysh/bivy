@@ -344,8 +344,8 @@ export function cliAgentManifest(): Array<{
       label: spec.displayName,
       command: spec.command,
       hidden: Boolean(spec.hidden),
-      supportTier: spec.supportTier ?? "beta",
-      certification: spec.testedVersion ? "release-tested" : (spec.supportTier ?? "beta") === "beta" ? "adapter-tested" : "unverified",
+      supportTier: spec.supportTier ?? "supported",
+      certification: spec.testedVersion ? "release-tested" : (spec.supportTier ?? "supported") === "supported" || (spec.supportTier ?? "supported") === "beta" ? "adapter-tested" : "unverified",
       ...(spec.testedVersion ? { testedVersion: spec.testedVersion } : {}),
       headlessFlags: [...headless].filter((a) => !a.includes("{")),
       install: spec.install ?? null,
@@ -1117,7 +1117,7 @@ function runtimeCertification(runtime: RuntimeInfo): Pick<RuntimeInfo, "certific
     ...(runtime.testedVersion ? { testedVersion: runtime.testedVersion } : {}),
   };
   if (runtime.testedVersion) return { certification: "release-tested", testedVersion: runtime.testedVersion };
-  return { certification: runtime.supportTier === "beta" ? "adapter-tested" : "unverified" };
+  return { certification: runtime.supportTier === "supported" || runtime.supportTier === "beta" ? "adapter-tested" : "unverified" };
 }
 
 function runtimeProtection(runtime: RuntimeInfo): Pick<RuntimeInfo, "protectionLevel" | "protectionLabel" | "protectionDetail"> {

@@ -3,7 +3,7 @@
 The popular git-native pair-programming CLI (`aider-chat`), run under Bivy as
 one non-interactive turn per prompt (`aider --yes-always --message "<prompt>"`).
 
-- **Runtime id:** `aider` · **Tier:** Beta · **In picker:** Yes
+- **Runtime id:** `aider` · **Tier:** Supported · **In picker:** Yes
 
 ## Install
 

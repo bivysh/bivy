@@ -5,7 +5,7 @@ extension — run autonomously under Bivy (`cline -y`, which skips per-tool
 prompts so a piped run doesn't wedge on approval; Bivy's sandbox tier still
 bounds what it can actually do).
 
-- **Runtime id:** `cline` · **Tier:** Beta · **In picker:** Yes
+- **Runtime id:** `cline` · **Tier:** Supported · **In picker:** Yes
 
 ## Install
 

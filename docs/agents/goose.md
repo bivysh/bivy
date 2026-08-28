@@ -3,7 +3,7 @@
 Block's open-source agent (`block/goose`), run under Bivy with its
 `stream-json` output format for structured streaming.
 
-- **Runtime id:** `goose` · **Tier:** Beta · **In picker:** Yes
+- **Runtime id:** `goose` · **Tier:** Supported · **In picker:** Yes
 
 ## Install
 

@@ -6,7 +6,7 @@
       "command": "codex",
       "hidden": true,
       "supportTier": "supported",
-      "certification": "unverified",
+      "certification": "adapter-tested",
       "headlessFlags": [
         "exec"
       ],
@@ -37,7 +37,7 @@
       "label": "Aider",
       "command": "aider",
       "hidden": false,
-      "supportTier": "beta",
+      "supportTier": "supported",
       "certification": "adapter-tested",
       "headlessFlags": [
         "--yes-always",
@@ -53,8 +53,8 @@
       "label": "Hermes",
       "command": "hermes",
       "hidden": true,
-      "supportTier": "beta",
-      "certification": "adapter-tested",
+      "supportTier": "experimental",
+      "certification": "unverified",
       "headlessFlags": [],
       "install": {
         "kind": "npm",
@@ -66,7 +66,7 @@
       "label": "Goose",
       "command": "goose",
       "hidden": false,
-      "supportTier": "beta",
+      "supportTier": "supported",
       "certification": "adapter-tested",
       "headlessFlags": [
         "run",
@@ -87,7 +87,7 @@
       "label": "Gemini CLI",
       "command": "gemini",
       "hidden": false,
-      "supportTier": "beta",
+      "supportTier": "supported",
       "certification": "adapter-tested",
       "headlessFlags": [
         "-p",
@@ -105,7 +105,7 @@
       "label": "Qwen Code",
       "command": "qwen",
       "hidden": false,
-      "supportTier": "beta",
+      "supportTier": "supported",
       "certification": "adapter-tested",
       "headlessFlags": [
         "-p",
@@ -123,7 +123,7 @@
       "label": "Cline",
       "command": "cline",
       "hidden": false,
-      "supportTier": "beta",
+      "supportTier": "supported",
       "certification": "adapter-tested",
       "headlessFlags": [
         "-y",
@@ -139,7 +139,7 @@
       "label": "Crush",
       "command": "crush",
       "hidden": false,
-      "supportTier": "beta",
+      "supportTier": "supported",
       "certification": "adapter-tested",
       "headlessFlags": [
         "run",
@@ -155,7 +155,7 @@
       "label": "Cursor",
       "command": "cursor-agent",
       "hidden": false,
-      "supportTier": "beta",
+      "supportTier": "supported",
       "certification": "adapter-tested",
       "headlessFlags": [
         "--force",
@@ -172,7 +172,7 @@
       "label": "GitHub Copilot",
       "command": "copilot",
       "hidden": false,
-      "supportTier": "beta",
+      "supportTier": "supported",
       "certification": "adapter-tested",
       "headlessFlags": [
         "--allow-all-tools",
@@ -188,7 +188,7 @@
       "label": "Grok",
       "command": "grok",
       "hidden": false,
-      "supportTier": "beta",
+      "supportTier": "supported",
       "certification": "adapter-tested",
       "headlessFlags": [
         "-p",
@@ -205,7 +205,7 @@
       "label": "Amp",
       "command": "amp",
       "hidden": false,
-      "supportTier": "beta",
+      "supportTier": "supported",
       "certification": "adapter-tested",
       "headlessFlags": [
         "-x",
@@ -222,7 +222,7 @@
       "label": "Auggie",
       "command": "auggie",
       "hidden": false,
-      "supportTier": "beta",
+      "supportTier": "supported",
       "certification": "adapter-tested",
       "headlessFlags": [
         "--quiet",
@@ -238,7 +238,7 @@
       "label": "Droid",
       "command": "droid",
       "hidden": false,
-      "supportTier": "beta",
+      "supportTier": "supported",
       "certification": "adapter-tested",
       "headlessFlags": [
         "exec",
@@ -256,7 +256,7 @@
       "label": "Continue",
       "command": "cn",
       "hidden": false,
-      "supportTier": "beta",
+      "supportTier": "supported",
       "certification": "adapter-tested",
       "headlessFlags": [
         "--auto",
@@ -272,7 +272,7 @@
       "label": "Kilo Code",
       "command": "kilo",
       "hidden": false,
-      "supportTier": "beta",
+      "supportTier": "supported",
       "certification": "adapter-tested",
       "headlessFlags": [
         "run",
@@ -289,7 +289,7 @@
       "label": "Rovo Dev",
       "command": "acli",
       "hidden": false,
-      "supportTier": "beta",
+      "supportTier": "supported",
       "certification": "adapter-tested",
       "headlessFlags": [
         "rovodev",

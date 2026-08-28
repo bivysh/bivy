@@ -102,16 +102,14 @@ describe("resolveSessionContract", () => {
   });
 
   describe("requiresAcknowledgement gate", () => {
-    it("requires acknowledgement for a supported profile with a degraded protection area", () => {
+    it("requires acknowledgement for a release-tested profile with a degraded protection area", () => {
       const contract = resolveSessionContract(fullyGuaranteed({ runtimeEnforcement: "user-permissions" }));
       expect(contract.requiresAcknowledgement).toBe(true);
     });
 
-    it("does not require acknowledgement for the same degradation on a beta/experimental/planned profile — never promised the guarantee", () => {
-      for (const supportTier of ["beta", "experimental", "planned"] as const) {
-        const contract = resolveSessionContract(fullyGuaranteed({ supportTier, runtimeEnforcement: "user-permissions" }));
-        expect(contract.requiresAcknowledgement).toBe(false);
-      }
+    it("does not require acknowledgement for the same degradation on an adapter-tested wrapper — the gap is disclosed", () => {
+      const contract = resolveSessionContract(fullyGuaranteed({ certification: "adapter-tested", runtimeEnforcement: "user-permissions" }));
+      expect(contract.requiresAcknowledgement).toBe(false);
     });
 
     it("does not require acknowledgement for a supported profile whose only degradation is informational (agent version)", () => {

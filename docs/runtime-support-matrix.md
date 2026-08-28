@@ -1,6 +1,6 @@
 # Runtime support matrix
 
-Bivy supports multiple agents, but they are not all equally production-ready. The app exposes the same tiers in the agent picker. The **Supported** rows are derived and release-gated by the machine-readable certification matrix; see the generated [Certified Supported agents](supported-agents.md) page. Static profile metadata alone cannot confer Supported status.
+Bivy supports multiple agents, but they are not all equal in capability fidelity. The app exposes support and capability facts separately: **Supported** means Bivy maintains the wrapper, while the generated [release-tested capability matrix](supported-agents.md) records the pinned versions/ranges where richer claims (protocol governance, model picker, resume, attachments, cancellation, structured streaming, token refresh) were certified.
 
 The agent **picker** shows the most-used coding agents (the rows below with a
 non-italic tier). Everything else stays in the catalog and is runnable via
@@ -16,21 +16,21 @@ per-agent pages under [docs/agents/](agents/README.md).
 | [Claude Code](agents/claude-code.md) | `claude-code-sdk` | Supported | Yes | Yes | Yes | Yes | Yes | Yes | **Yes** | Claude Code | SDK protocol bridge explicitly targets the operator-installed `claude` command and reuses its native auth/config/sessions. |
 | [Codex (approvals)](agents/codex.md) | `codex-approvals` | Supported | Yes | Yes | Partial | Yes | Yes | Yes | **Yes** | Codex CLI/OpenAI | App-server shim: per-tool Approve/Deny, model + reasoning-effort selection, thread resume, usage reporting, native discovery. The single "Codex" surfaced in the picker. Release-tested against Codex CLI 0.150.0. |
 | [OpenCode](agents/opencode.md) | `opencode` | Supported | Yes | Yes | Yes | Yes | Yes (ACP) | **Per-tool (Approve/Deny)** | No | OpenCode CLI | Driven through its native `opencode acp` server by default → the governed `ProtocolRuntime`: per-tool approvals, `session/load` resume, and a model list read from the live session. Falls back to the `opencode run` pipe (effect-level governance, `--model`, `-s <id>` resume) when the installed binary has no `acp` subcommand. Release-tested against OpenCode 1.18.23. |
-| [Gemini CLI](agents/gemini-cli.md) | `gemini` | Beta | Yes | Yes | Yes | Yes | Yes (`-m`) | Native sandbox (`--approval-mode`) | No | Gemini CLI | `gemini-json` final-object parser; native auth; resumes via `-r <id>` (tier-aware `--approval-mode`). |
-| [Qwen Code](agents/qwen-code.md) | `qwen` | Beta | Yes | Yes | Yes | Yes | Yes (`-m`) | Native sandbox (`--approval-mode`) | No | Qwen Code CLI | Gemini-CLI fork: reuses the `gemini-json` parser, approval-mode containment, and `--resume <id>` form. |
-| [Goose](agents/goose.md) | `goose` | Beta | Yes | Yes | Yes | Yes | No | Effect-level (FS/MCP/net) | No | Goose CLI | `goose-stream-json` streaming parser; resumes via `--resume --session-id <id>`. |
-| [Aider](agents/aider.md) | `aider` | Beta | Yes | Yes | Yes | No | Yes (`--model`) | Effect-level (FS/MCP/net) | No | Bivy/provider or Aider config | `aider --message --yes-always`; git-native, single-turn per prompt. No native "continue session `<id>`" flag upstream — its own `--restore-chat-history` continuity is cwd-scoped, not id-based, so it can't plug into the generic primitive. |
-| [Cline](agents/cline.md) | `cline` | Beta | Yes | Yes | Yes | Yes | No | Effect-level (FS/MCP/net) | No | Cline CLI | Autonomous (`-y`) single task; best-effort flags, override with `BIVY_CLINE_ARGS`; resumes via `--id <id>`. |
-| [Crush](agents/crush.md) | `crush` | Beta | Yes | Yes | Yes | No | No | Effect-level (FS/MCP/net) | No | Crush CLI | `crush run -q`; best-effort flags, override with `BIVY_CRUSH_ARGS`. No resume flag upstream yet for `crush run` (tracked in charmbracelet/crush#1982, #1015). |
-| [Cursor](agents/cursor.md) | `cursor` | Beta | Yes | Yes | Yes | Yes | Yes (`-m`) | Effect-level (FS/MCP/net) | No | Cursor CLI | `cursor-agent --force -p`; resumes via `--resume=<id>`. |
-| [GitHub Copilot](agents/copilot.md) | `copilot` | Beta | Yes | Yes | Yes | No | Yes (`--model`) | Effect-level (FS/MCP/net) | No | Copilot CLI/GitHub | `copilot --allow-all-tools -p`; no pinned by-id resume flag yet (`BIVY_COPILOT_RESUME_TEMPLATE`). |
-| [Grok](agents/grok.md) | `grok` | Beta | Yes | Yes | Yes | Yes (`--resume`) | Yes (`-m`, default `grok-4.5`) | Effect-level (FS/MCP/net) | **Yes** | Grok CLI/xAI | Official `grok -p` / `grok --resume <id>` (install via `curl -fsSL https://x.ai/cli/install.sh \| bash`). SuperGrok/X subscription → `~/.grok/auth.json` materialization; API key → `XAI_API_KEY`/`GROK_API_KEY`. `bivy run grok` pins `--session-id` so sessions persist after the PTY exits and can be taken over as chat. |
-| [Amp](agents/amp.md) | `amp` | Beta | Yes | Yes | Yes | Yes | No | Effect-level (FS/MCP/net) | No | Amp CLI/Sourcegraph | `amp -x`; resumes threads via `amp threads continue <id>`. Model is Amp-managed. |
-| [Auggie](agents/auggie.md) | `auggie` | Beta | Yes | Yes | Yes | No | No | Effect-level (FS/MCP/net) | No | Augment CLI | `auggie --quiet --print`; model Augment-managed; no pinned resume flag (`BIVY_AUGGIE_RESUME_TEMPLATE`). |
-| [Droid](agents/droid.md) | `droid` | Beta | Yes | Yes | Yes | No | Yes (`--model`) | Effect-level (FS/MCP/net) | No | Factory CLI | `droid exec --auto high`; no pinned resume flag yet (`BIVY_DROID_RESUME_TEMPLATE`). |
-| [Continue](agents/continue.md) | `continue` | Beta | Yes | Yes | Yes | No | Yes (`--model`) | Effect-level (FS/MCP/net) | No | Continue CLI | `cn --auto -p`; `--resume` is last-session-only (no by-id form), so resume stays off. |
-| [Kilo Code](agents/kilocode.md) | `kilocode` | Beta | Yes | Yes | Yes | Yes | Yes (`-m`) | Effect-level (FS/MCP/net) | No | Kilo CLI | `kilo run --auto` (OpenCode fork); resumes via `-s <id>`. |
-| [Rovo Dev](agents/rovodev.md) | `rovodev` | Beta | Yes | Yes | Yes | Yes | No | Effect-level (FS/MCP/net) | No | Atlassian acli | `acli rovodev run --yolo`; resumes via `--restore <id>`. Installed out of band (no auto-install). |
+| [Gemini CLI](agents/gemini-cli.md) | `gemini` | Supported | Yes | Yes | Yes | Yes | Yes (`-m`) | Native sandbox (`--approval-mode`) | No | Gemini CLI | `gemini-json` final-object parser; native auth; resumes via `-r <id>` (tier-aware `--approval-mode`). |
+| [Qwen Code](agents/qwen-code.md) | `qwen` | Supported | Yes | Yes | Yes | Yes | Yes (`-m`) | Native sandbox (`--approval-mode`) | No | Qwen Code CLI | Gemini-CLI fork: reuses the `gemini-json` parser, approval-mode containment, and `--resume <id>` form. |
+| [Goose](agents/goose.md) | `goose` | Supported | Yes | Yes | Yes | Yes | No | Effect-level (FS/MCP/net) | No | Goose CLI | `goose-stream-json` streaming parser; resumes via `--resume --session-id <id>`. |
+| [Aider](agents/aider.md) | `aider` | Supported | Yes | Yes | Yes | No | Yes (`--model`) | Effect-level (FS/MCP/net) | No | Bivy/provider or Aider config | `aider --message --yes-always`; git-native, single-turn per prompt. No native "continue session `<id>`" flag upstream — its own `--restore-chat-history` continuity is cwd-scoped, not id-based, so it can't plug into the generic primitive. |
+| [Cline](agents/cline.md) | `cline` | Supported | Yes | Yes | Yes | Yes | No | Effect-level (FS/MCP/net) | No | Cline CLI | Autonomous (`-y`) single task; best-effort flags, override with `BIVY_CLINE_ARGS`; resumes via `--id <id>`. |
+| [Crush](agents/crush.md) | `crush` | Supported | Yes | Yes | Yes | No | No | Effect-level (FS/MCP/net) | No | Crush CLI | `crush run -q`; best-effort flags, override with `BIVY_CRUSH_ARGS`. No resume flag upstream yet for `crush run` (tracked in charmbracelet/crush#1982, #1015). |
+| [Cursor](agents/cursor.md) | `cursor` | Supported | Yes | Yes | Yes | Yes | Yes (`-m`) | Effect-level (FS/MCP/net) | No | Cursor CLI | `cursor-agent --force -p`; resumes via `--resume=<id>`. |
+| [GitHub Copilot](agents/copilot.md) | `copilot` | Supported | Yes | Yes | Yes | No | Yes (`--model`) | Effect-level (FS/MCP/net) | No | Copilot CLI/GitHub | `copilot --allow-all-tools -p`; no pinned by-id resume flag yet (`BIVY_COPILOT_RESUME_TEMPLATE`). |
+| [Grok](agents/grok.md) | `grok` | Supported | Yes | Yes | Yes | Yes (`--resume`) | Yes (`-m`, default `grok-4.5`) | Effect-level (FS/MCP/net) | **Yes** | Grok CLI/xAI | Official `grok -p` / `grok --resume <id>` (install via `curl -fsSL https://x.ai/cli/install.sh \| bash`). SuperGrok/X subscription → `~/.grok/auth.json` materialization; API key → `XAI_API_KEY`/`GROK_API_KEY`. `bivy run grok` pins `--session-id` so sessions persist after the PTY exits and can be taken over as chat. |
+| [Amp](agents/amp.md) | `amp` | Supported | Yes | Yes | Yes | Yes | No | Effect-level (FS/MCP/net) | No | Amp CLI/Sourcegraph | `amp -x`; resumes threads via `amp threads continue <id>`. Model is Amp-managed. |
+| [Auggie](agents/auggie.md) | `auggie` | Supported | Yes | Yes | Yes | No | No | Effect-level (FS/MCP/net) | No | Augment CLI | `auggie --quiet --print`; model Augment-managed; no pinned resume flag (`BIVY_AUGGIE_RESUME_TEMPLATE`). |
+| [Droid](agents/droid.md) | `droid` | Supported | Yes | Yes | Yes | No | Yes (`--model`) | Effect-level (FS/MCP/net) | No | Factory CLI | `droid exec --auto high`; no pinned resume flag yet (`BIVY_DROID_RESUME_TEMPLATE`). |
+| [Continue](agents/continue.md) | `continue` | Supported | Yes | Yes | Yes | No | Yes (`--model`) | Effect-level (FS/MCP/net) | No | Continue CLI | `cn --auto -p`; `--resume` is last-session-only (no by-id form), so resume stays off. |
+| [Kilo Code](agents/kilocode.md) | `kilocode` | Supported | Yes | Yes | Yes | Yes | Yes (`-m`) | Effect-level (FS/MCP/net) | No | Kilo CLI | `kilo run --auto` (OpenCode fork); resumes via `-s <id>`. |
+| [Rovo Dev](agents/rovodev.md) | `rovodev` | Supported | Yes | Yes | Yes | Yes | No | Effect-level (FS/MCP/net) | No | Atlassian acli | `acli rovodev run --yolo`; resumes via `--restore <id>`. Installed out of band (no auto-install). |
 | [Codebuff](agents/codebuff.md) | `codebuff` | *Experimental* | No | Yes | Yes | Yes | No | Effect-level (FS/MCP/net) | No | Codebuff CLI | Hidden: no verified non-TTY headless mode (`@codebuff/sdk` for automation). Resume `--continue <id>` wired for when a headless flag ships. |
 | [Codex (exec)](agents/codex.md) | `codex` | *Supported* | No | Yes | Yes | Yes | No | Effect-level sandbox | No | Codex CLI/OpenAI | Fast no-approval path; superseded in the picker by `codex-approvals`. Runnable via `BIVY_RUNTIME=codex`. Native discovery/adoption lives on `codex-approvals` instead, so an adopted session is governed from the moment it's imported. |
 | Hermes | `hermes` | *Experimental* | No | Yes | Yes | No | No | Boundary only | No | Hermes CLI | Generic process adapter, no structured parser, no documented resume flag. |
@@ -75,8 +75,8 @@ Code** (`--experimental-acp` / newer `--acp`), **OpenCode** (`acp`), **Goose**
 **GitHub Copilot** (`--acp`).
 
 **OpenCode is promoted by default** (`acp.preferred`), having been validated
-end-to-end against 1.18.23 — that governed path is what earns it the Supported
-tier. The rest stay opt-in with `BIVY_<ID>_ACP=1` (or `BIVY_PREFER_ACP=1` for all
+end-to-end against 1.18.23 — that governed path is what earns its release-tested
+capability signal. The rest stay opt-in with `BIVY_<ID>_ACP=1` (or `BIVY_PREFER_ACP=1` for all
 at once) until they're validated the same way.
 
 Because ACP is a hard switch — once a session opens over the protocol there is no
@@ -170,7 +170,7 @@ Four general, opt-in levers move an agent up that ladder without per-agent code:
 
 Definitions:
 
-- **Supported** — release-certified: the row earns the badge only while the configured execution path matches an active, pinned [agent certification](supported-agents.md), so a release ships only when those paths pass.
-- **Beta** — useful and visible, but has known capability gaps.
+- **Supported** — maintained by Bivy: the wrapper is expected to work, and the capability columns state what that path can actually do. Release-tested capability sets are tracked separately in [supported-agents.md](supported-agents.md).
+- **Beta** — useful but not yet considered a maintained default wrapper.
 - **Experimental** — available for advanced users; not release-gated and may change or break between versions.
 - **Boundary only** — Bivy can constrain workspace/sandbox/terminal channels, but cannot yet intercept every structured tool call from the agent.

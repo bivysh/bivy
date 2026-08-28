@@ -89,17 +89,22 @@ function RuntimeMeta({ runtime, text }: { runtime: RuntimeInfo; text?: string })
   const protectionLabel = runtime.protectionLabel || "Protection unknown";
   const tierTone: BadgeTone | undefined = tier === "supported" ? "ok" : tier === "beta" || tier === "experimental" ? "warn" : undefined;
   const protectionTone: BadgeTone = protectionLevel === "native-sandbox" || protectionLevel === "tool-controls" ? "ok" : protectionLevel === "mcp-controls" ? "warn" : "danger";
+  const certification = runtime.certification || (tier === "supported" ? "adapter-tested" : "unverified");
+  const certificationLabel = certification === "release-tested"
+    ? `Release-tested${runtime.testedVersion ? ` · ${runtime.testedVersion}` : ""}`
+    : certification === "adapter-tested" ? "Adapter-tested" : "Unverified";
+  const certificationTitle = certification === "release-tested"
+    ? `Release-tested capability set${runtime.testedVersion ? ` with version ${runtime.testedVersion}` : ""}`
+    : certification === "adapter-tested" ? "Bivy maintains this wrapper; this configured path is adapter-tested rather than release-tested" : "Not release-tested";
   return (
     <span className="runtime-meta">
       {text && <span className="runtime-meta-text">{text}</span>}
       <span className="runtime-capabilities" aria-label="Agent support tier, protection, and capabilities">
-        <Badge
-          tone={tierTone}
-          title={runtime.certification === "release-tested"
-            ? `Release-tested${runtime.testedVersion ? ` with version ${runtime.testedVersion}` : ""}`
-            : runtime.certification === "adapter-tested" ? "Adapter tests pass; live CLI compatibility is not release-certified" : "Not release-certified"}
-        >
-          {tierLabel(tier)}{runtime.testedVersion ? ` · ${runtime.testedVersion}` : ""}
+        <Badge tone={tierTone} title="Supported means Bivy maintains this wrapper; capability badges show the exact fidelity available.">
+          {tierLabel(tier)}
+        </Badge>
+        <Badge tone={certification === "release-tested" ? "ok" : certification === "adapter-tested" ? "warn" : undefined} title={certificationTitle}>
+          {certificationLabel}
         </Badge>
         {runtime.source?.kind === "package" && (
           <Badge
@@ -545,11 +550,11 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
     const installing = state.catalogs.installingRuntimeId === a.id;
     const active = a.id === selectedAgentId;
     // The Effective Session Contract preview (see previewContractForRuntime):
-    // requiresAcknowledgement fires ONLY for a "supported" (certified) profile
-    // whose live protection would be degraded — a broken promise, not merely
-    // an unprotected experimental agent. Union it with the existing raw
+    // requiresAcknowledgement fires only for a release-tested profile whose live
+    // protection would be degraded — a broken fidelity promise, not merely an
+    // adapter-tested wrapper with disclosed gaps. Union it with the existing raw
     // protection-level check (which already covers any tier's zero-isolation
-    // case) so a certified agent degraded in a DIFFERENT area (auth/resume/
+    // case) so a release-tested agent degraded in a DIFFERENT area (auth/resume/
     // tool interception, not just sandbox) still gets caught.
     const previewContract = !cloningActiveSession ? previewContractForRuntime(a) : undefined;
     const needsProtectionConfirmation = !cloningActiveSession
