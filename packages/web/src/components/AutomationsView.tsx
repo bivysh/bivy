@@ -910,7 +910,7 @@ export function AutomationsView({
   }
 
   return createPortal(
-    <div className="automations-view" role="dialog" aria-modal="true" aria-label="Automations">
+    <div className={`automations-view${historyAutomationId ? " is-history" : ""}`} role="dialog" aria-modal="true" aria-label="Automations">
       <header className="automations-view-head">
         <div className="automations-view-head-text">
           <h1 className="automations-view-heading">Automations</h1>
