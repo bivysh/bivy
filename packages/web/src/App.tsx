@@ -328,8 +328,9 @@ export function App() {
   // supported). Auto-opening the PTY was the regression that skipped that
   // handoff and hid "Continue in chat".
   const pickTerminal = useCallback(
-    (termId: string, nodeId?: string) => {
+    (termId: string, nodeId?: string, targetSessionId?: string, targetEpoch?: number) => {
       const select = () => {
+        if (targetSessionId && !controller.isCurrentSessionTarget(targetSessionId, targetEpoch)) return;
         setPendingRunTerm({ termId, nodeId });
         setTerminalOpen(false);
         setTerminalTarget(null);
@@ -339,7 +340,9 @@ export function App() {
       setDrawerOpen(false);
       if (!controller.direct && nodeId && nodeId !== state.connection.currentNodeId) {
         void controller.connectToNode(nodeId).then(select).catch((err) => {
-          controller.store.setError(err instanceof Error ? err.message : String(err));
+          if (!targetSessionId || controller.isCurrentSessionTarget(targetSessionId, targetEpoch)) {
+            controller.store.setError(err instanceof Error ? err.message : String(err));
+          }
         });
         return;
       }
@@ -354,8 +357,9 @@ export function App() {
   // shell is opened and nothing can be typed into it. Cross-node rows switch
   // first, like pickTerminal.
   const openRunLog = useCallback(
-    (sessionId: string, nodeId?: string) => {
+    (sessionId: string, nodeId?: string, targetEpoch?: number) => {
       const show = () => {
+        if (!controller.isCurrentSessionTarget(sessionId, targetEpoch)) return;
         setPendingRunTerm(null);
         setTerminalTarget(sessionId);
         setTerminalStandalone(true);
@@ -553,7 +557,7 @@ export function App() {
             // is asynchronous (and may switch machines), so waiting to call
             // openSessionOnNode would leave the composer targeting the old/top
             // session if the user sends during that handoff.
-            controller.selectSessionTarget(id);
+            const targetEpoch = controller.selectSessionTarget(id);
             setPendingRunTerm(null);
             closeDrawer();
             // A `bivy run` session whose PTY is still alive (advertised by its
@@ -567,16 +571,19 @@ export function App() {
             // log read-only in the terminal overlay (the node replays it on
             // attach), on the node that owns it.
             if (row && isRunLogSession(row)) {
-              openRunLog(id, nodeId);
+              openRunLog(id, nodeId, targetEpoch);
               return;
             }
             if (row && isLiveRunSession(row)) {
               void controller.findLiveRunTerminal(id, nodeId)
                 .then((term) => {
-                  if (term) pickTerminal(term.termId, term.nodeId ?? nodeId);
+                  if (!controller.isCurrentSessionTarget(id, targetEpoch)) return;
+                  if (term) pickTerminal(term.termId, term.nodeId ?? nodeId, id, targetEpoch);
                   else controller.openSessionOnNode(id, path, nodeId);
                 })
-                .catch((err) => controller.store.setError(err instanceof Error ? err.message : String(err)));
+                .catch((err) => {
+                  if (controller.isCurrentSessionTarget(id, targetEpoch)) controller.store.setError(err instanceof Error ? err.message : String(err));
+                });
               return;
             }
             controller.openSessionOnNode(id, path, nodeId);

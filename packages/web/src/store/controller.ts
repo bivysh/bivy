@@ -296,6 +296,7 @@ export class AppController {
    * session are asynchronous, and a prompt sent during that window must not
    * fall back to the node's `active` session (or create a new one). */
   private promptTargetSessionId: string | null = null;
+  private sessionSelectionEpoch = 0;
   /** Subscribers for content-free control-plane Run-change hints. The relay
    *  never carries the Run body/evidence here; subscribers refetch canonically. */
   private runUpdateListeners = new Set<(runId: string, revision?: string) => void>();
@@ -1675,9 +1676,16 @@ export class AppController {
    * during that window must still be scoped to the row the user picked. Keep
    * the route in sync too: reconnect recovery uses it to reopen the visible
    * session, and otherwise it could reopen the old session during the handoff. */
-  selectSessionTarget(sessionId: string): void {
+  selectSessionTarget(sessionId: string): number {
     this.promptTargetSessionId = sessionId;
+    this.sessionSelectionEpoch += 1;
     navigate({ kind: "session", id: sessionId });
+    return this.sessionSelectionEpoch;
+  }
+
+  /** Whether an asynchronous handoff still belongs to the user's latest pick. */
+  isCurrentSessionTarget(sessionId: string, epoch?: number): boolean {
+    return this.promptTargetSessionId === sessionId && (epoch === undefined || epoch === this.sessionSelectionEpoch);
   }
 
   openSessionOnNode(sessionId: string, path?: string, nodeId?: string): void {
