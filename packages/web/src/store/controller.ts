@@ -1670,10 +1670,20 @@ export class AppController {
     });
   }
 
+  /** Record a sidebar selection before any async handoff starts. In particular,
+   * live terminal detection may switch nodes and resolve later; a prompt typed
+   * during that window must still be scoped to the row the user picked. Keep
+   * the route in sync too: reconnect recovery uses it to reopen the visible
+   * session, and otherwise it could reopen the old session during the handoff. */
+  selectSessionTarget(sessionId: string): void {
+    this.promptTargetSessionId = sessionId;
+    navigate({ kind: "session", id: sessionId });
+  }
+
   openSessionOnNode(sessionId: string, path?: string, nodeId?: string): void {
     // Record intent before any node switch or async open work starts. Composer
     // sends made immediately after a sidebar tap must use this exact id.
-    this.promptTargetSessionId = sessionId;
+    this.selectSessionTarget(sessionId);
     if (this.pendingLaunches.has(sessionId)) {
       this.openPendingLaunch(sessionId);
       return;
