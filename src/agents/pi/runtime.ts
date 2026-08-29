@@ -52,7 +52,7 @@ import type {
   TuiLaunchSpec,
   UsageSnapshot,
 } from "../../runtime/types.js";
-import { withExactCapabilitySurface } from "../../runtime/types.js";
+import { PI_CAPABILITIES } from "./capabilities.js";
 import { mapToolCall, mapToolResult } from "../../runtime/tool-call-map.js";
 import { BackgroundShellTracker, createBackgroundAwareBashOperations } from "./background-shell.js";
 
@@ -478,28 +478,9 @@ class PiSession implements RuntimeSession {
 export class PiRuntime implements AgentRuntime {
   readonly id = "pi";
   readonly displayName = "Pi";
-  readonly capabilities: RuntimeCapabilities = withExactCapabilitySurface({
-    toolInterception: true,
-    modelSelection: true,
-    packages: true,
-    resume: true,
-    fork: false,
-    // pi resumes by session-file path (under the node's sessions dir), so the
-    // daemon applies its path-traversal guard to these refs.
-    sessionRefIsPath: true,
-    // pi's TUI ships with the node, so the chat<->TUI hand-off is always offered.
-    interactiveTui: true,
-    usageReporting: true,
-    // pi transcripts are structured messages that round-trip through the session
-    // store, so a pi->pi fork is full fidelity (see exportForFork/importForFork).
-    forkTransport: true,
-    // pi can also stand up a session from portable {role,text} history, so a fork
-    // FROM another agent INTO pi is a true replay, not a seeded summary.
-    forkHistoryImport: true,
-    // The pi-coding-agent SDK implements both explicitly: prompting mid-turn
-    // with no streamingBehavior hint throws, forcing every caller to choose.
-    streamingBehaviors: ["steer", "followUp"],
-  });
+  // Shared with LazyPiRuntime (the facade the registry actually hands out) —
+  // see capabilities.ts for why the two must never drift.
+  readonly capabilities: RuntimeCapabilities = PI_CAPABILITIES;
 
   constructor(private readonly options: PiRuntimeOptions) {}
 
