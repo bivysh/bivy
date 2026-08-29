@@ -1,0 +1,120 @@
+/* Mobile UX cleanup: hierarchy-first overrides for the shared shell. */
+@media (max-width: 720px) {
+  .sidebar {
+    width: min(88vw, 336px);
+    border-right: 1px solid var(--line-strong);
+    box-shadow: var(--shadow-xl);
+  }
+  .sidebar-head {
+    min-height: 56px;
+    padding: max(var(--space-3), env(safe-area-inset-top)) var(--space-4) var(--space-3);
+  }
+  .brand { font-size: var(--text-lg); }
+  .sidebar-head-actions { gap: var(--space-1); }
+  .sidebar-head-actions .btn { min-height: 40px; }
+  .sidebar-nav {
+    padding: var(--space-2) var(--space-3);
+    background: var(--surface-2);
+  }
+  .sidebar-nav-item { min-height: 44px; }
+  .sidebar-foot { padding: var(--space-3); background: var(--surface-2); }
+  .settings-gear { min-height: 44px; }
+  .session-list { padding: var(--space-2) var(--space-3); }
+  .session-list-heading { padding-inline: var(--space-1); }
+  .session-item { align-items: flex-start; padding: var(--space-3) var(--space-2); }
+  .session-name { line-height: var(--lh-md); }
+  .session-meta { line-height: var(--lh-sm); overflow-wrap: anywhere; }
+  .row-menu-btn { min-width: 44px; min-height: 44px; opacity: 1; }
+  .session-pr { flex: none; }
+
+  .automations-view-head {
+    min-height: 64px;
+    padding: max(var(--space-3), env(safe-area-inset-top)) var(--space-4) var(--space-3);
+    justify-content: flex-start;
+    text-align: left;
+  }
+  .automations-view-head-text { margin-left: var(--space-7); text-align: left; }
+  .automations-view-heading { font-size: var(--text-2xl); }
+  .automations-view-sub { display: none; }
+  .autom-close-btn {
+    left: var(--space-3);
+    top: max(var(--space-3), env(safe-area-inset-top));
+    width: 44px;
+    height: 44px;
+  }
+  .autom-new-btn {
+    position: static;
+    transform: none;
+    width: auto;
+    min-width: 0;
+    min-height: 44px;
+    height: 44px;
+    padding-inline: var(--space-3);
+    border: 1px solid var(--accent);
+    background: var(--accent);
+    color: var(--accent-contrast);
+    box-shadow: none;
+  }
+  .autom-new-btn-label { font-size: var(--text-sm); }
+  .automations-view-head-actions { margin-left: auto; }
+  .automations-view-body { padding: var(--space-4) var(--space-4) max(var(--space-6), env(safe-area-inset-bottom)); }
+  .autom-sources-summary { min-height: 52px; }
+  .autom-section { margin-top: var(--space-5); }
+  .autom-section-label { margin-bottom: var(--space-3); }
+  .automation-list { gap: var(--space-2); }
+  .automation-row:not(.run-row) {
+    grid-template-columns: 36px minmax(0, 1fr) 44px;
+    padding: var(--space-3);
+    border-radius: var(--radius-md);
+  }
+  .automation-row-title strong {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: var(--lh-lg);
+  }
+  .automation-row .settings-hint {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+  }
+  .automation-row-actions { justify-content: flex-end; }
+  .automation-row-actions .btn { min-height: 40px; }
+  .autom-empty-state { margin-top: var(--space-8); }
+  .autom-empty-action { display: block; }
+  .autom-empty-new-btn { min-height: 48px; background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); }
+
+  .autom-editor-actions {
+    align-self: stretch;
+    margin: 0 var(--space-4) var(--space-2);
+  }
+  .autom-editor-actions > summary { width: 100%; justify-content: space-between; min-height: 44px; }
+  .row-menu-pop {
+    left: 0;
+    right: 0;
+    min-width: 0;
+    padding: var(--space-1);
+  }
+  .row-menu-pop .menu-item { min-height: 44px; font-size: var(--text-md); }
+  .row-menu-pop .menu-item.danger {
+    margin-top: var(--space-1);
+    border-top: 1px solid var(--line);
+    padding-top: var(--space-3);
+    color: var(--danger);
+  }
+  .autom-editor .wizard-body { gap: var(--space-5); }
+  .autom-editor .autom-field-label { font-size: var(--text-md); }
+  .autom-editor .autom-instructions-input { min-height: 160px; }
+  .autom-editor .wizard-actions {
+    display: grid;
+    grid-template-columns: 1fr 2fr;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4) max(var(--space-4), env(safe-area-inset-bottom));
+  }
+  .autom-editor .wizard-actions .btn { min-height: 48px; }
+}
+
+@media (min-width: 721px) {
+  .row-menu-pop .menu-item { min-height: 36px; }
+}
