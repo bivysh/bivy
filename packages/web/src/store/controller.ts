@@ -361,9 +361,27 @@ export class AppController {
       listRepos: () => this.listRepos(),
       draftRepo: () => this.store.getState().draft.repo,
       listBranches: (repo) => this.listBranches(repo),
-      activeSessionId: () => this.store.getState().activeSession.activeSessionId,
+      activeSessionId: () => {
+        const active = this.store.getState().activeSession.activeSessionId;
+        if (active) return active;
+        // During a reconnect/open race the store can briefly clear the active
+        // projection even though the URL still points at the session being
+        // viewed. Never turn a send from that route into an unscoped prompt:
+        // the server treats an unscoped prompt as a request to create a new
+        // session. Only use the fallback when the row is known locally and
+        // belongs to the currently selected node.
+        const route = parseRoute();
+        if (route.kind !== "session") return null;
+        const row = this.store.getState().sessionIndex.sessions.find((s) => s.sessionId === route.id);
+        const nodeId = this.local.cur;
+        if (!row || (row.nodeId && nodeId && row.nodeId !== nodeId)) return null;
+        return route.id;
+      },
       isPendingLaunch: (id) => this.pendingLaunches.has(id),
-      openSession: (sessionId, path) => this.openSession(sessionId, path),
+      openSession: (sessionId, path) => {
+        const row = this.store.getState().sessionIndex.sessions.find((session) => session.sessionId === sessionId);
+        this.openSession(sessionId, path ?? row?.path);
+      },
       sessionIsSaved: (id) => this.store.getState().sessionIndex.sessions.some((session) => session.sessionId === id && session.status === "saved"),
       appendPendingLaunchFollowup: (id, prompt) => { this.pendingLaunches.get(id)?.followups.push(prompt); },
       addUserMessage: (text, id, attachments) => this.store.addUserMessage(text, id, attachments),
