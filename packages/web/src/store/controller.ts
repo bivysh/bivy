@@ -291,6 +291,11 @@ export class AppController {
   private pendingRouteNode: string | null = null;
   /** Session selected from another node in the all-node sidebar; opened after reconnecting to its owner node. */
   private pendingCrossNodeOpen: { sessionId: string; path?: string } | null = null;
+  /** The session the user most recently selected. This is deliberately separate
+   * from the store's active projection: switching nodes and opening a saved
+   * session are asynchronous, and a prompt sent during that window must not
+   * fall back to the node's `active` session (or create a new one). */
+  private promptTargetSessionId: string | null = null;
   /** Subscribers for content-free control-plane Run-change hints. The relay
    *  never carries the Run body/evidence here; subscribers refetch canonically. */
   private runUpdateListeners = new Set<(runId: string, revision?: string) => void>();
@@ -352,7 +357,10 @@ export class AppController {
       navigateNew: () => navigate({ kind: "new" }),
       focusComposer: () => this.focusComposer(),
       clearPendingPromptAndFollowups: () => { this.pendingPrompt = null; this.pendingFollowups = []; },
-      resetActiveSession: () => this.store.resetActiveSession(),
+      resetActiveSession: () => {
+        this.promptTargetSessionId = null;
+        this.store.resetActiveSession();
+      },
       seedDraftDefaults: () => this.seedDraftDefaults(),
       listRuntimes: () => this.listRuntimes(),
       listModels: () => this.listModels(),
@@ -362,6 +370,10 @@ export class AppController {
       draftRepo: () => this.store.getState().draft.repo,
       listBranches: (repo) => this.listBranches(repo),
       activeSessionId: () => {
+        // Selection is the strongest signal for a send. The URL and active
+        // projection can each lag while a drawer tap is opening a saved or
+        // cross-node session; neither should make the prompt unscoped.
+        if (this.promptTargetSessionId) return this.promptTargetSessionId;
         const state = this.store.getState();
         const route = parseRoute();
         // The route identifies what is actually on screen. Prefer it over a
@@ -1659,6 +1671,9 @@ export class AppController {
   }
 
   openSessionOnNode(sessionId: string, path?: string, nodeId?: string): void {
+    // Record intent before any node switch or async open work starts. Composer
+    // sends made immediately after a sidebar tap must use this exact id.
+    this.promptTargetSessionId = sessionId;
     if (this.pendingLaunches.has(sessionId)) {
       this.openPendingLaunch(sessionId);
       return;
@@ -1679,6 +1694,7 @@ export class AppController {
   }
 
   openSession(sessionId: string, path?: string, opts: { navigate?: boolean } = {}): void {
+    this.promptTargetSessionId = sessionId;
     if (this.pendingLaunches.has(sessionId)) {
       this.openPendingLaunch(sessionId, opts);
       return;
@@ -3332,6 +3348,7 @@ export class AppController {
   }
 
   deleteSession(sessionId: string, path?: string): void {
+    if (this.promptTargetSessionId === sessionId) this.promptTargetSessionId = null;
     this.sessionCoordinator.deleteSession(sessionId, path);
   }
 
