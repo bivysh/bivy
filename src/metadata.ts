@@ -223,7 +223,16 @@ export class MetadataStore {
     const prev = this.data.sessions[input.id];
     const createdAt = input.createdAt ?? prev?.createdAt ?? nowIso();
     const updatedAt = input.updatedAt ?? nowIso();
-    this.data.sessions[input.id] = { ...prev, ...input, createdAt, updatedAt };
+    // Runtime adapters do not all expose the same resume fields. In particular,
+    // an adapter can temporarily have no sessionFile while it is being rebuilt.
+    // Do not let that partial snapshot erase the durable resume ref (or any
+    // other field) already recorded for the session. The old object spread did
+    // exactly that: `{ path: undefined }` replaced the Pi transcript path, so
+    // reopening the saved row fell through to a fresh session.
+    const defined = Object.fromEntries(
+      Object.entries(input).filter(([, value]) => value !== undefined),
+    ) as Partial<MetadataSession> & { id: string };
+    this.data.sessions[input.id] = { ...prev, ...defined, createdAt, updatedAt };
     this.save();
   }
 
