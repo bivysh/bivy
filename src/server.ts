@@ -8274,6 +8274,12 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
  * of the same session onto one promise fixes both.
  */
 const resumingSessions = new Map<string, Promise<SessionRecord>>();
+// Keep an id index as well as the resolved runtime ref. A prompt can arrive
+// while session.open is still resolving and may not carry the session's path;
+// without this index it cannot discover the in-flight open from metadata and
+// is incorrectly reported as "Session not found". Both commands must join the
+// same resume operation by the identity the client actually supplied.
+const resumingSessionsById = new Map<string, Promise<SessionRecord>>();
 
 /**
  * Resolve the session a client command targets, resuming it from durable
@@ -8295,6 +8301,8 @@ async function resolveOrResumeSession(sessionId?: unknown, sessionPath?: unknown
   if (!id) return undefined;
   const open = openSessions.get(id);
   if (open) return open;
+  const byId = resumingSessionsById.get(id);
+  if (byId) return byId;
   const pathRef = typeof sessionPath === "string" && sessionPath.trim() ? sessionPath.trim() : undefined;
   const meta = metadata.getSession(id) ?? (pathRef ? metadata.getSession(pathRef) : undefined);
   // A run that only kept its terminal log has nothing to resume — it opens as a
@@ -8345,13 +8353,21 @@ async function resolveOrResumeSession(sessionId?: unknown, sessionPath?: unknown
     }
   }
   const inflight = resumingSessions.get(key);
-  if (inflight) return inflight;
+  if (inflight) {
+    resumingSessionsById.set(id, inflight);
+    return inflight;
+  }
   const resume = createSession(defaultWorkspace, ref, { runtimeId, makeActive: false });
   resumingSessions.set(key, resume);
+  resumingSessionsById.set(id, resume);
   try {
     return await resume;
   } finally {
     resumingSessions.delete(key);
+    // Only delete our promise. A future implementation may replace an entry
+    // after a failed resume, and must not have its newer attempt removed by an
+    // older finally block.
+    if (resumingSessionsById.get(id) === resume) resumingSessionsById.delete(id);
   }
 }
 

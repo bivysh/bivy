@@ -362,20 +362,25 @@ export class AppController {
       draftRepo: () => this.store.getState().draft.repo,
       listBranches: (repo) => this.listBranches(repo),
       activeSessionId: () => {
-        const active = this.store.getState().activeSession.activeSessionId;
-        if (active) return active;
-        // During a reconnect/open race the store can briefly clear the active
-        // projection even though the URL still points at the session being
-        // viewed. Never turn a send from that route into an unscoped prompt:
-        // the server treats an unscoped prompt as a request to create a new
-        // session. Only use the fallback when the row is known locally and
-        // belongs to the currently selected node.
+        const state = this.store.getState();
         const route = parseRoute();
-        if (route.kind !== "session") return null;
-        const row = this.store.getState().sessionIndex.sessions.find((s) => s.sessionId === route.id);
-        const nodeId = this.local.cur;
-        if (!row || (row.nodeId && nodeId && row.nodeId !== nodeId)) return null;
-        return route.id;
+        // The route identifies what is actually on screen. Prefer it over a
+        // stale active projection: during a session switch/reconnect the old
+        // session can remain in the store for a tick, and using it sends a new
+        // message into the other open chat. This is especially dangerous for a
+        // closed chat, whose open is asynchronous.
+        if (route.kind === "session") {
+          // The URL is still authoritative when the row is briefly absent
+          // during sessions.list refresh. Never turn that transient gap into
+          // an unscoped prompt (which means "create a new session" server-side).
+          // Do not return null for a row that belongs to another node: the
+          // caller treats null as a draft and would create a new chat. The
+          // server will reject a request sent before a cross-node switch has
+          // completed, which is safe and retryable; it cannot misroute it to
+          // the old active session because the id remains explicit.
+          return route.id;
+        }
+        return state.activeSession.activeSessionId;
       },
       isPendingLaunch: (id) => this.pendingLaunches.has(id),
       openSession: (sessionId, path) => {
