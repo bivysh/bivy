@@ -541,24 +541,13 @@ export function App() {
             </button>
           </div>
         </div>
-        <nav className="sidebar-nav" aria-label="Workspace">
-          <button
-            className={`sidebar-nav-item${automationsOpen ? " active" : ""}`}
-            onClick={() => {
-              openAutomations();
-              closeDrawer();
-            }}
-            title="Automations"
-          >
-            <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M13 2 3 14h9l-1 8 10-12h-9z" />
-            </svg>
-            <span>Automations</span>
-            <span className="sidebar-nav-chevron" aria-hidden="true">›</span>
-          </button>
-        </nav>
         <SessionList
           runEvidence={runEvidence}
+          automationsActive={Boolean(automationsOpen)}
+          onOpenAutomations={() => {
+            openAutomations();
+            closeDrawer();
+          }}
           onPick={(id, path, nodeId) => {
             setPendingRunTerm(null);
             closeDrawer();
@@ -589,8 +578,7 @@ export function App() {
           }}
           onPickTerminal={pickTerminal}
         />
-        {/* Settings stays pinned below the session stream; Automations is a
-            primary workspace destination above it. */}
+        {/* Settings is the low-attention utility below the scrollable sidebar content. */}
         <div className="sidebar-foot">
           <button
             className="settings-gear"

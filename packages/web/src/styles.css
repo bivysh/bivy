@@ -221,7 +221,7 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .brand { font-family: var(--font-serif); font-weight: 500; font-size: 17px; letter-spacing: 0; }
 /* Primary destinations sit above the session stream. Keeping Automations here
    makes it discoverable without competing with the quieter Settings footer. */
-.sidebar-nav { padding: var(--space-3) var(--space-2) var(--space-2); border-bottom: 1px solid var(--line); }
+.sidebar-nav { padding: var(--space-2) 0 var(--space-3); }
 .sidebar-nav-item {
   display: flex; align-items: center; gap: var(--space-3); width: 100%; min-height: 42px;
   padding: var(--space-2) var(--space-3); border: 1px solid transparent; border-radius: var(--radius-md);
@@ -229,7 +229,7 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
   text-align: left; cursor: pointer; transition: background var(--dur) var(--ease-standard), border-color var(--dur) var(--ease-standard);
 }
 .sidebar-nav-item svg { color: var(--accent); flex: none; }
-.sidebar-nav-item:hover, .sidebar-nav-item.active { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 25%, var(--line)); }
+.sidebar-nav-item:hover, .sidebar-nav-item.active { background: var(--surface-2); border-color: transparent; }
 .sidebar-nav-item.active { color: var(--accent); }
 .sidebar-nav-chevron { margin-left: auto; color: var(--muted); font-size: var(--text-xl); font-weight: var(--weight-normal); line-height: 1; }
 .sidebar-foot { margin-top: auto; padding: var(--space-2); border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: var(--space-1); }

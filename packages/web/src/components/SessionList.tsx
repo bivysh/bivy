@@ -130,7 +130,7 @@ function queueSourceMeta(source: string | undefined): string {
 // what's mounted and let the user page through the tail.
 const PAGE = 10;
 
-export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (sessionId: string, path?: string, nodeId?: string) => void; onPickTerminal: (termId: string, nodeId?: string) => void; runEvidence?: Map<string, GithubQueueItem> }) {
+export function SessionList({ onPick, onPickTerminal, runEvidence, onOpenAutomations, automationsActive }: { onPick: (sessionId: string, path?: string, nodeId?: string) => void; onPickTerminal: (termId: string, nodeId?: string) => void; runEvidence?: Map<string, GithubQueueItem>; onOpenAutomations?: () => void; automationsActive?: boolean }) {
   const { sessionIndex: { sessions, runTerminals }, activeSession: { activeSessionId }, connection: { nodes, currentNodeId } } = useAppState();
   const [query, setQuery] = useState("");
   const [repoFilter, setRepoFilter] = useState("");
@@ -257,6 +257,17 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
 
   return (
     <div className="session-list">
+      {onOpenAutomations && (
+        <nav className="sidebar-nav" aria-label="Workspace">
+          <button className={`sidebar-nav-item${automationsActive ? " active" : ""}`} onClick={onOpenAutomations} title="Automations">
+            <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M13 2 3 14h9l-1 8 10-12h-9z" />
+            </svg>
+            <span>Automations</span>
+            <span className="sidebar-nav-chevron" aria-hidden="true">›</span>
+          </button>
+        </nav>
+      )}
       <div className="session-list-heading">
         <span>Sessions</span>
         {filtered.length > 0 && <span className="session-list-count">{filtered.length}</span>}
