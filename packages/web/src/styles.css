@@ -327,15 +327,10 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 @keyframes dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
 .session-row { position: relative; display: flex; align-items: center; }
 .session-row .session-item { flex: 1; }
-.row-menu { position: relative; flex: none; }
-.row-menu-btn { border: 0; background: transparent; color: var(--muted); font-size: 16px; line-height: 1; padding: 4px 8px; border-radius: 8px; opacity: 0.35; }
-.session-row:hover .row-menu-btn { opacity: 1; }
-.row-menu-btn:hover { background: var(--surface-3); color: var(--ink); }
 .pending-launch-actions { display: flex; flex: none; gap: 4px; padding-right: 6px; }
 .pending-launch-actions button { border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface-2); color: var(--ink); padding: 5px 8px; font-size: 12px; cursor: pointer; }
 .pending-launch-actions button:last-child { color: var(--muted); background: transparent; }
 .pending-launch-actions button:hover { background: var(--surface-3); }
-@media (hover: none) { .row-menu-btn { opacity: 0.6; } }
 .row-menu-pop { position: absolute; right: 0; top: calc(100% + 2px); min-width: 180px; z-index: 20; }
 .session-empty { color: var(--muted); font-size: 13px; padding: 12px 10px; }
 .session-more {
