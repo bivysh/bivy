@@ -90,14 +90,14 @@
     margin: 0 var(--space-4) var(--space-2);
   }
   .autom-editor-actions > summary { width: 100%; justify-content: space-between; min-height: 44px; }
-  .autom-editor-action-menu {
+  .row-menu-pop {
     left: 0;
     right: 0;
     min-width: 0;
     padding: var(--space-1);
   }
-  .autom-editor-action-menu .menu-item { min-height: 44px; font-size: var(--text-md); }
-  .autom-editor-action-menu .menu-item.danger {
+  .row-menu-pop .menu-item { min-height: 44px; font-size: var(--text-md); }
+  .row-menu-pop .menu-item.danger {
     margin-top: var(--space-1);
     border-top: 1px solid var(--line);
     padding-top: var(--space-3);
@@ -116,5 +116,5 @@
 }
 
 @media (min-width: 721px) {
-  .autom-editor-action-menu .menu-item { min-height: 36px; }
+  .row-menu-pop .menu-item { min-height: 36px; }
 }

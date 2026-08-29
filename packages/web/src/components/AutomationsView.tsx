@@ -1491,10 +1491,10 @@ function SourceAutomationEditor({
         </div>
         <details className="autom-editor-actions">
           <summary className="btn sm" aria-label="Automation actions">Actions</summary>
-          <div className="menu autom-editor-action-menu" role="menu">
+          <div className="menu row-menu-pop" role="menu">
             {onRunNow && <button type="button" className="menu-item" role="menuitem" onClick={() => void onRunNow(item)}>Run now</button>}
             {onToggle && <button type="button" className="menu-item" role="menuitem" onClick={() => void onToggle(item)}>{enabled ? "Pause" : "Resume"}</button>}
-            {onHistory && <button type="button" className="menu-item" role="menuitem" onClick={() => onHistory(item.id)}>History</button>}
+            {onHistory && <button type="button" className="menu-item automation-history-btn" role="menuitem" onClick={() => onHistory(item.id)}>History</button>}
             {onSourceSetup && <button type="button" className="menu-item" role="menuitem" onClick={() => onSourceSetup(item)}>Source setup</button>}
             {onMove && (trigger === "github" || trigger === "linear") && <>
               <button type="button" className="menu-item" role="menuitem" onClick={() => void onMove(item, -1)}>Move earlier</button>
@@ -2005,10 +2005,10 @@ function AutomationEditor({
         {existing && !created && (
           <details className="autom-editor-actions">
             <summary className="btn sm" aria-label="Automation actions">Actions</summary>
-            <div className="menu autom-editor-action-menu" role="menu">
+            <div className="menu row-menu-pop" role="menu">
               {onRunNow && <button type="button" className="menu-item" role="menuitem" onClick={() => void onRunNow(existing)}>{existing.trigger === "webhook" ? "Test run" : "Run now"}</button>}
               {onToggle && <button type="button" className="menu-item" role="menuitem" onClick={() => void onToggle(existing)}>{existing.enabled ? "Pause" : "Resume"}</button>}
-              {onHistory && <button type="button" className="menu-item" role="menuitem" onClick={() => onHistory(existing.id)}>History</button>}
+              {onHistory && <button type="button" className="menu-item automation-history-btn" role="menuitem" onClick={() => onHistory(existing.id)}>History</button>}
               {existing.webhookUrl && <button type="button" className="menu-item" role="menuitem" onClick={() => { void copyText(existing.webhookUrl!); }}>Copy URL</button>}
               {existing.trigger === "webhook" && onRotate && <button type="button" className="menu-item" role="menuitem" onClick={() => void onRotate(existing)}>Rotate secret</button>}
               {onSourceSetup && (existing.trigger === "github" || existing.trigger === "linear") && <button type="button" className="menu-item" role="menuitem" onClick={() => onSourceSetup(existing)}>Source setup</button>}
