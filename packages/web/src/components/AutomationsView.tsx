@@ -754,6 +754,7 @@ export function AutomationsView({
       instructions,
       hasTrigger: true,
       trigger: item.trigger === "webhook" ? "webhook" : "schedule",
+      requireSigning: item.trigger === "webhook" ? item.requireSigning !== false : base.requireSigning,
       nodeId,
       repo: item.repo || "",
       runtimeId: item.runtimeId || "",
@@ -1781,7 +1782,7 @@ function AutomationEditor({
   const [nlError, setNlError] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [created, setCreated] = useState<{ url: string; secret: string; name: string } | null>(null);
+  const [created, setCreated] = useState<{ url: string; secret: string; name: string; updated?: boolean } | null>(null);
   const [allowDangerous, setAllowDangerous] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setD((prev) => ({ ...prev, [k]: v }));
@@ -1957,8 +1958,14 @@ function AutomationEditor({
       }
 
       if (d.id) {
-        await updateAutomation(controller.local, d.id, input);
-        onSaved({ kind: "updated", name: d.name.trim(), id: d.id });
+        const result = await updateAutomation(controller.local, d.id, input);
+        // Turning signing on for a previously unsigned webhook mints a secret
+        // that is disclosed only in this response — show it like a create.
+        if (d.trigger === "webhook" && result.webhookSecret) {
+          setCreated({ url: result.webhookUrl ?? existing?.webhookUrl ?? "", secret: result.webhookSecret, name: d.name.trim(), updated: true });
+        } else {
+          onSaved({ kind: "updated", name: d.name.trim(), id: d.id });
+        }
       } else {
         const result = await createAutomation(controller.local, input);
         if (d.trigger === "webhook" && result.webhookSecret) {
@@ -2025,7 +2032,7 @@ function AutomationEditor({
           <>
             <div className="wizard-body">
               <div className="autom-success" role="status">
-                <strong>“{created.name}” is live.</strong> Send signed events to this URL. Copy the signing secret now — it isn&apos;t shown again.
+                <strong>{created.updated ? `“${created.name}” now requires signing.` : `“${created.name}” is live.`}</strong> Send signed events to this URL. Copy the signing secret now — it isn&apos;t shown again.
               </div>
               <div className="settings-field">
                 <label className="field-label">Webhook URL</label>
@@ -2050,7 +2057,7 @@ function AutomationEditor({
               <button
                 type="button"
                 className="btn primary autom-save-btn"
-                onClick={() => onSaved({ kind: "created-webhook", name: created.name })}
+                onClick={() => onSaved(created.updated ? { kind: "updated", name: created.name, id: existing?.id } : { kind: "created-webhook", name: created.name })}
               >
                 Done
               </button>
@@ -2203,7 +2210,13 @@ function AutomationEditor({
                       <input className="sr-only" type="checkbox" checked={d.requireSigning} onChange={(event) => set("requireSigning", event.target.checked)} />
                       <span className={`settings-toggle${d.requireSigning ? " on" : ""}`} aria-hidden="true"><span className="settings-toggle-knob" /></span>
                     </label>
-                    <p className="settings-hint">{d.requireSigning ? "You'll get the signed URL and a one-time signing secret after you save." : "Requests may be sent without a signing secret or Bivy headers."}</p>
+                    <p className="settings-hint">
+                      {!d.requireSigning
+                        ? "Requests may be sent without a signing secret or Bivy headers."
+                        : existing?.trigger === "webhook" && existing.requireSigning
+                          ? "Requests must carry Bivy signing headers. Use “Rotate secret” in the automation menu to issue a new secret."
+                          : "You'll get the signed URL and a one-time signing secret after you save."}
+                    </p>
                   </div>
                 )}
                 {d.hasTrigger && (d.trigger === "github" || d.trigger === "linear") && (
