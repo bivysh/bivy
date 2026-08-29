@@ -1762,7 +1762,7 @@ button.template-card.is-featured .template-card-icon {
   border: 1px solid var(--line); border-radius: var(--radius-lg);
   background: var(--surface); box-shadow: var(--shadow-lg);
 }
-.autom-editor-action-menu .btn { width: 100%; justify-content: flex-start; white-space: nowrap; }
+.autom-editor-actions > .row-menu-pop .btn { width: 100%; justify-content: flex-start; white-space: nowrap; }
 .wizard-actions {
   display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
   padding: 14px 16px max(18px, env(safe-area-inset-bottom)); flex: none;
