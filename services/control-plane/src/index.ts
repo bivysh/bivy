@@ -2467,10 +2467,12 @@ const SENTINEL_SCHEDULE = { kind: "once" as const, at: "9999-12-31T00:00:00.000Z
 // webhook-triggered automation so the client can display it. The secret is
 // returned to the client exactly once, at create/rotate time.
 function publicAutomation(def: AutomationDefinition, req: Request) {
-  const { webhookSecret: _secret, target, ...rest } = def;
+  const { webhookSecret, target, ...rest } = def;
   const base = { ...rest, targetKind: target?.kind, targetSessionId: target?.sessionId };
+  // `requireSigning` mirrors whether a secret exists so the editor can show
+  // the toggle's real state without ever seeing the secret itself.
   return def.trigger === "webhook"
-    ? { ...base, webhookUrl: `${baseUrl(req)}/webhooks/automation/run/${def.id}` }
+    ? { ...base, webhookUrl: `${baseUrl(req)}/webhooks/automation/run/${def.id}`, requireSigning: Boolean(webhookSecret) }
     : base;
 }
 
@@ -2928,7 +2930,22 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
   if (req.body?.configOrder !== undefined && (!Number.isInteger(requestedConfigOrder) || requestedConfigOrder < 0 || requestedConfigOrder > 999)) {
     return res.status(400).json({ error: "configOrder must be an integer from 0 to 999" });
   }
+  // Signing toggle (webhook trigger only): `false` drops the HMAC secret so
+  // unsigned deliveries are accepted; `true` on an unsigned endpoint mints a
+  // fresh secret, disclosed once in this response exactly like create/rotate.
+  // Anything else leaves the current secret untouched.
+  let webhookSecret = current.webhookSecret;
+  let mintedSecret: string | undefined;
+  if (current.trigger === "webhook" && typeof req.body?.requireSigning === "boolean") {
+    if (!req.body.requireSigning) {
+      webhookSecret = undefined;
+    } else if (!current.webhookSecret) {
+      mintedSecret = randomBytes(32).toString("base64url");
+      webhookSecret = mintedSecret;
+    }
+  }
   const patch = {
+    webhookSecret,
     name: typeof req.body?.name === "string" ? req.body.name.trim() || current.name : current.name,
     templateCiphertext: typeof req.body?.templateCiphertext === "string" ? req.body.templateCiphertext : current.templateCiphertext,
     runtimeId: typeof req.body?.runtimeId === "string" ? req.body.runtimeId.trim() || undefined : current.runtimeId,
@@ -2961,7 +2978,7 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
     return res.status(400).json({ error: gate.blockingChecks.map((c) => `${c.label}: ${c.detail}`).join("; "), preflight: gate.blockingChecks });
   }
   const updated = await store.updateAutomationDefinition(client.accountId, current.id, patch);
-  res.json(updated ? publicAutomation(updated, req) : updated);
+  res.json(updated ? { ...publicAutomation(updated, req), ...(mintedSecret ? { webhookSecret: mintedSecret } : {}) } : updated);
 }));
 
 // Rotate a webhook automation's signing secret. The new secret is returned once;

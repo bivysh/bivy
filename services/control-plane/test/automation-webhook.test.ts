@@ -254,6 +254,29 @@ async function main() {
   const whenDisabled = await trigger(port, auto.body.webhookUrl, rot.body.webhookSecret, evtRaw, "evt-4");
   expect(whenDisabled.status === 410 && whenDisabled.body.code === "disabled", "a disabled webhook automation refuses events");
 
+  // --- Signing toggle round-trips through update and is visible on read ---
+  expect(listedAuto.requireSigning === true, "a signed webhook automation reads back requireSigning=true");
+  const unsigned = await json(port, "PUT", `/account/automations/${auto.body.id}`, { enabled: true, requireSigning: false }, token);
+  expect(unsigned.status === 200 && unsigned.body.requireSigning === false && !unsigned.body.webhookSecret, "turning signing off persists and never echoes a secret");
+  const unsignedRead = (await json(port, "GET", "/account/automations", undefined, token)).body.find((d: any) => d.id === auto.body.id);
+  expect(unsignedRead.requireSigning === false, "the editor sees signing off after reopening");
+  const unsignedFire = await fetch(auto.body.webhookUrl.replace(/^https?:\/\/[^/]+/, `http://localhost:${port}`), {
+    method: "POST", headers: { "content-type": "application/json", "x-bivy-idempotency-key": "evt-unsigned" }, body: evtRaw,
+  });
+  expect(unsignedFire.status === 202, "an unsigned webhook automation accepts deliveries without signing headers");
+  const untouched = await json(port, "PUT", `/account/automations/${auto.body.id}`, { name: "Fix CI renamed" }, token);
+  expect(untouched.status === 200 && untouched.body.requireSigning === false, "an update that omits requireSigning leaves it alone");
+  const resigned = await json(port, "PUT", `/account/automations/${auto.body.id}`, { requireSigning: true }, token);
+  expect(resigned.status === 200 && resigned.body.requireSigning === true && typeof resigned.body.webhookSecret === "string", "turning signing back on mints a secret and discloses it once");
+  const resignedRead = (await json(port, "GET", "/account/automations", undefined, token)).body.find((d: any) => d.id === auto.body.id);
+  expect(resignedRead.requireSigning === true && !resignedRead.webhookSecret, "listing shows signing on without the secret");
+  const keepSecret = await json(port, "PUT", `/account/automations/${auto.body.id}`, { requireSigning: true }, token);
+  expect(keepSecret.status === 200 && !keepSecret.body.webhookSecret, "requireSigning=true on an already-signed endpoint keeps the existing secret");
+  const resignedFire = await trigger(port, auto.body.webhookUrl, resigned.body.webhookSecret, evtRaw, "evt-resigned");
+  expect(resignedFire.status === 202, "the minted secret signs new deliveries");
+  const staleFire = await trigger(port, auto.body.webhookUrl, rot.body.webhookSecret, evtRaw, "evt-stale");
+  expect(staleFire.status === 401, "the pre-toggle secret no longer signs deliveries");
+
   console.log("\nAll automation webhook checks passed.");
   finish(0);
 }
