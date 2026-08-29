@@ -1092,7 +1092,6 @@ export function AutomationsView({
                           const activeRun = runs.find((run) => run.definitionId === item.id && ["pending", "claimed", "running", "waiting", "needs_attention"].includes(run.status));
                           return activeRun ? <span className="automation-row-run-status" role="status">{activeRun.status === "running" ? "Running now" : "Queued"}</span> : null;
                         })()}
-                        <button type="button" className="btn sm automation-history-btn" onClick={(event) => { event.stopPropagation(); setHistoryAutomationId(item.id); }}>History</button>
                         {needsConnect && (
                           <button
                             type="button"
@@ -1470,20 +1469,20 @@ function SourceAutomationEditor({
           <strong>{title}</strong>
           <button type="button" className="btn ghost icon" onClick={onClose} aria-label="Cancel">✕</button>
         </div>
-        {/* className="menu row-menu-pop" remains part of the design-system contract;
-            actions now live inline in the editor instead of a floating menu. */}
-        <div className="autom-editor-tools" aria-label="Automation actions">
-          <span className="autom-editor-tools-label">Actions</span>
-          {onRunNow && <button type="button" className="btn sm" onClick={() => void onRunNow(item)}>Run now</button>}
-          {onToggle && <button type="button" className="btn sm" onClick={() => void onToggle(item)}>{enabled ? "Pause" : "Resume"}</button>}
-          {onHistory && <button type="button" className="btn sm" onClick={() => onHistory(item.id)}>History</button>}
-          {onSourceSetup && <button type="button" className="btn sm" onClick={() => onSourceSetup(item)}>Source setup</button>}
-          {onMove && (trigger === "github" || trigger === "linear") && <>
-            <button type="button" className="btn sm" onClick={() => void onMove(item, -1)}>Move earlier</button>
-            <button type="button" className="btn sm" onClick={() => void onMove(item, 1)}>Move later</button>
-          </>}
-          {onDelete && !item.configKey && <button type="button" className="btn sm danger" onClick={() => void onDelete(item)}>Delete</button>}
-        </div>
+        <details className="autom-editor-actions">
+          <summary className="btn sm" aria-label="Automation actions">Actions</summary>
+          <div className="autom-editor-action-menu" role="menu">
+            {onRunNow && <button type="button" className="btn sm" role="menuitem" onClick={() => void onRunNow(item)}>Run now</button>}
+            {onToggle && <button type="button" className="btn sm" role="menuitem" onClick={() => void onToggle(item)}>{enabled ? "Pause" : "Resume"}</button>}
+            {onHistory && <button type="button" className="btn sm" role="menuitem" onClick={() => onHistory(item.id)}>History</button>}
+            {onSourceSetup && <button type="button" className="btn sm" role="menuitem" onClick={() => onSourceSetup(item)}>Source setup</button>}
+            {onMove && (trigger === "github" || trigger === "linear") && <>
+              <button type="button" className="btn sm" role="menuitem" onClick={() => void onMove(item, -1)}>Move earlier</button>
+              <button type="button" className="btn sm" role="menuitem" onClick={() => void onMove(item, 1)}>Move later</button>
+            </>}
+            {onDelete && !item.configKey && <button type="button" className="btn sm danger" role="menuitem" onClick={() => void onDelete(item)}>Delete</button>}
+          </div>
+        </details>
         <div className="wizard-body">
           {needsConnect && (
             <div className="autom-banner" role="status">
@@ -1984,20 +1983,22 @@ function AutomationEditor({
         </div>
 
         {existing && !created && (
-          <div className="autom-editor-tools" aria-label="Automation actions">
-            <span className="autom-editor-tools-label">Actions</span>
-            {onRunNow && <button type="button" className="btn sm" onClick={() => void onRunNow(existing)}>{existing.trigger === "webhook" ? "Test run" : "Run now"}</button>}
-            {onToggle && <button type="button" className="btn sm" onClick={() => void onToggle(existing)}>{existing.enabled ? "Pause" : "Resume"}</button>}
-            {onHistory && <button type="button" className="btn sm" onClick={() => onHistory(existing.id)}>History</button>}
-            {existing.webhookUrl && <button type="button" className="btn sm" onClick={() => { void copyText(existing.webhookUrl!); }}>Copy URL</button>}
-            {existing.trigger === "webhook" && onRotate && <button type="button" className="btn sm" onClick={() => void onRotate(existing)}>Rotate secret</button>}
-            {onSourceSetup && (existing.trigger === "github" || existing.trigger === "linear") && <button type="button" className="btn sm" onClick={() => onSourceSetup(existing)}>Source setup</button>}
-            {onMove && (existing.trigger === "github" || existing.trigger === "linear") && <>
-              <button type="button" className="btn sm" onClick={() => void onMove(existing, -1)}>Move earlier</button>
-              <button type="button" className="btn sm" onClick={() => void onMove(existing, 1)}>Move later</button>
-            </>}
-            {onDelete && !existing.configKey && <button type="button" className="btn sm danger" onClick={() => void onDelete(existing)}>Delete</button>}
-          </div>
+          <details className="autom-editor-actions">
+            <summary className="btn sm" aria-label="Automation actions">Actions</summary>
+            <div className="autom-editor-action-menu" role="menu">
+              {onRunNow && <button type="button" className="btn sm" role="menuitem" onClick={() => void onRunNow(existing)}>{existing.trigger === "webhook" ? "Test run" : "Run now"}</button>}
+              {onToggle && <button type="button" className="btn sm" role="menuitem" onClick={() => void onToggle(existing)}>{existing.enabled ? "Pause" : "Resume"}</button>}
+              {onHistory && <button type="button" className="btn sm" role="menuitem" onClick={() => onHistory(existing.id)}>History</button>}
+              {existing.webhookUrl && <button type="button" className="btn sm" role="menuitem" onClick={() => { void copyText(existing.webhookUrl!); }}>Copy URL</button>}
+              {existing.trigger === "webhook" && onRotate && <button type="button" className="btn sm" role="menuitem" onClick={() => void onRotate(existing)}>Rotate secret</button>}
+              {onSourceSetup && (existing.trigger === "github" || existing.trigger === "linear") && <button type="button" className="btn sm" role="menuitem" onClick={() => onSourceSetup(existing)}>Source setup</button>}
+              {onMove && (existing.trigger === "github" || existing.trigger === "linear") && <>
+                <button type="button" className="btn sm" role="menuitem" onClick={() => void onMove(existing, -1)}>Move earlier</button>
+                <button type="button" className="btn sm" role="menuitem" onClick={() => void onMove(existing, 1)}>Move later</button>
+              </>}
+              {onDelete && !existing.configKey && <button type="button" className="btn sm danger" role="menuitem" onClick={() => void onDelete(existing)}>Delete</button>}
+            </div>
+          </details>
         )}
 
         {created ? (
@@ -2165,9 +2166,13 @@ function AutomationEditor({
                 )}
                 {d.hasTrigger && d.trigger === "webhook" && (
                   <div className="autom-trigger-config">
-                    <label className="settings-toggle">
-                      <input type="checkbox" checked={d.requireSigning} onChange={(event) => set("requireSigning", event.target.checked)} />
-                      <span><strong>Require signing headers</strong><small>Turn this off for providers that cannot configure a signing secret or custom headers.</small></span>
+                    <label className="settings-toggle-row webhook-signing-toggle">
+                      <span className="settings-toggle-text">
+                        <strong className="settings-toggle-title">Require signing headers</strong>
+                        <small className="muted">Recommended for authenticating webhook requests.</small>
+                      </span>
+                      <input className="sr-only" type="checkbox" checked={d.requireSigning} onChange={(event) => set("requireSigning", event.target.checked)} />
+                      <span className={`settings-toggle${d.requireSigning ? " on" : ""}`} aria-hidden="true"><span className="settings-toggle-knob" /></span>
                     </label>
                     <p className="settings-hint">{d.requireSigning ? "You'll get the signed URL and a one-time signing secret after you save." : "Requests may be sent without a signing secret or Bivy headers."}</p>
                   </div>
