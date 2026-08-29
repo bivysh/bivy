@@ -101,8 +101,11 @@ export function useModalBack(onBack: () => void): () => void {
 
   return () => {
     if (!active.current) return;
+    // Close the overlay's route before traversing history. The close callback
+    // replaces the sentinel URL with the underlying route; going back first
+    // races that replacement and lands on the overlay's original history entry.
     active.current = false;
-    history.back();
     callback.current();
+    history.back();
   };
 }
