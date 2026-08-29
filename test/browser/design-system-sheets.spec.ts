@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 const ROOT = new URL("../../packages/web/src/", import.meta.url);
 
 test("action menus compose the canonical Sheet", async () => {
-  for (const path of ["components/GithubPill.tsx", "components/SessionList.tsx", "components/RunPill.tsx"]) {
+  for (const path of ["components/GithubPill.tsx", "components/RunPill.tsx"]) {
     const source = await readFile(new URL(path, ROOT), "utf8");
     expect(source, path).toContain("<Sheet");
     expect(source, path).toContain('variant="action"');

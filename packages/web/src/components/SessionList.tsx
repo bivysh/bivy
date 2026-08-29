@@ -4,15 +4,13 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { githubIssueRefFromSource, primaryPr, repoFromSource, type GithubQueueItem, type PrRef, type RunTerminalSummary } from "@bivy/core";
 import { useAppState } from "../store/useStore.js";
 import { controller } from "../store/useStore.js";
-import { ConfirmDialog, RenameDialog } from "./AppDialog.js";
 import { attentionRank, statusDotState, statusLabel, type SessionDotState } from "../sessionStatus.js";
 import { SourceMark } from "./SourceMark.js";
 import { Badge } from "./Badge.js";
 import { classifySource, CLI_SOURCE, type SourceKind } from "../sessionSource.js";
 import { rowHint } from "../runEvidence.js";
 import { sessionDateGroup } from "../sessionPresentation.js";
-import { CheckIcon, MoreIcon } from "./UiIcons.js";
-import { Sheet } from "./Sheet.js";
+import { CheckIcon } from "./UiIcons.js";
 
 /** The leading indicator on a session row: a tinted source tile carrying the
  *  trigger's glyph, with the live status as a small dot badge on its corner.
@@ -30,13 +28,6 @@ export function RowMark({ kind, status, srLabel }: { kind: SourceKind; status: S
     </>
   );
 }
-
-// How long "Update GitHub status" stays in its busy state before giving up and
-// re-enabling the button — `controller.refreshPrStatus` is fire-and-forget
-// (there's no direct response, only the async `session.pr_result` event), so
-// without a cap a node that never replies would leave the button disabled
-// forever.
-const PR_BUSY_TIMEOUT_MS = 20000;
 
 // Exported for reuse by GithubQueue.tsx, which renders the same row anatomy
 // (status dot, PR badge, relative age) for the sessions the GitHub-app queue
@@ -68,13 +59,6 @@ export function PrBadge({ prs }: { prs?: PrRef[] }) {
       <span className="session-pr-text">{count ? `${label} ${count}` : label}</span>
     </Badge>
   );
-}
-
-/** Human-facing label for a PR link in a row's action sheet. */
-function prActionLabel(pr: PrRef): string {
-  const num = pr.number ? ` #${pr.number}` : "";
-  const state = pr.state === "merged" ? "merged" : pr.state === "closed" ? "closed" : "open";
-  return `Pull request${num} (${state})`;
 }
 
 /** Milliseconds for a row's last activity (0 when unknown, so it sorts last).
@@ -138,137 +122,6 @@ function queueSourceMeta(source: string | undefined): string {
     return rest || "Queue";
   }
   return "";
-}
-
-// A bottom action sheet, not an inline popover: the session list is a scroll
-// container (overflow-y:auto also clips overflow-x), so an absolutely-positioned
-// popover on a lower row was cut off and its actions became unreachable on small
-// screens. The sheet is fixed to the viewport and escapes that clipping entirely.
-function RowMenu({ sessionId, name, isRepo, prs }: { sessionId: string; name: string; isRepo: boolean; prs?: PrRef[] }) {
-  const [open, setOpen] = useState(false);
-  const [renaming, setRenaming] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [prBusy, setPrBusy] = useState(false);
-  // `controller.refreshPrStatus` is fire-and-forget — the only signal it
-  // finished (or errored) is the shared `prResult`/`error` state. Watch both so
-  // tapping "Update GitHub status" doesn't just look like nothing happened
-  // while the node is thinking.
-  const { presentation: { prResult, error } } = useAppState();
-  const prBusyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open]);
-
-  useEffect(() => {
-    if (!prBusy) return;
-    // Either outcome — a fresh prResult or a fresh error (ErrorToast will show
-    // it) — means the status round trip finished.
-    setPrBusy(false);
-    setOpen(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- react to either changing, not to prBusy itself
-  }, [prResult, error]);
-
-  useEffect(() => () => { if (prBusyTimer.current) clearTimeout(prBusyTimer.current); }, []);
-
-  const close = () => setOpen(false);
-  const rename = () => {
-    close();
-    setRenaming(true);
-  };
-  const del = () => {
-    close();
-    setDeleting(true);
-  };
-  const refreshPrStatus = () => {
-    setPrBusy(true);
-    controller.refreshPrStatus(sessionId);
-    if (prBusyTimer.current) clearTimeout(prBusyTimer.current);
-    prBusyTimer.current = setTimeout(() => { setPrBusy(false); setOpen(false); }, PR_BUSY_TIMEOUT_MS);
-  };
-  // Continue a warm-replicated session on THIS node when its owner is offline
-  // (docs/session-replication.md). The node runs the control-plane epoch CAS and
-  // materializes the replica; on failure the reply rejects and the toast surfaces.
-  const promote = () => {
-    setPrBusy(true);
-    controller.promoteSession(sessionId, controller.local.cur)
-      .catch(() => {})
-      .finally(() => { setPrBusy(false); setOpen(false); });
-  };
-
-  return (
-    <div className="row-menu">
-      <button
-        className="row-menu-btn"
-        aria-label="Session actions"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={(e) => {
-          e.stopPropagation();
-          setOpen((v) => !v);
-        }}
-      >
-        <MoreIcon />
-      </button>
-      {renaming && (
-        <RenameDialog
-          title="Rename session"
-          initialValue={name}
-          onCancel={() => setRenaming(false)}
-          onSave={(next) => { controller.renameSession(sessionId, next); setRenaming(false); }}
-        />
-      )}
-      {deleting && (
-        <ConfirmDialog
-          title="Delete session?"
-          message={`Delete “${name}”? This can't be undone.`}
-          confirmLabel="Delete"
-          danger
-          onCancel={() => setDeleting(false)}
-          onConfirm={() => { controller.deleteSession(sessionId); setDeleting(false); }}
-        />
-      )}
-      {/* The mobile sidebar is transformed into an off-canvas drawer. A fixed
-          descendant of a transformed element is fixed to that element, not the
-          viewport, so keep the full-screen sheet at the document root. */}
-      {open && (
-        <Sheet variant="action" ariaLabel={`Actions for ${name}`} title={name} onClose={close} autoFocusSearch={false}>
-          <button className="sheet-action" onClick={rename} disabled={prBusy}>
-            Rename
-          </button>
-          {/* Every PR the session has (open, merged, closed) as a direct link —
-              this is how multiple PRs on one session stay reachable without
-              cluttering the row. */}
-          {(prs ?? []).map((pr) => (
-            <a key={pr.url} className="sheet-action" href={pr.url} target="_blank" rel="noopener" onClick={close}>
-              {prActionLabel(pr)}
-            </a>
-          ))}
-          {/* Force a fresh GitHub check regardless of what this session last saw —
-              the badge only updates opportunistically (after a turn), so a
-              session that's finished or not attached keeps a stale `open` PR
-              until something nudges it. Always offered for a repo session, PR
-              or not, so a merge/close is one tap away from being reflected. */}
-          {isRepo && (
-            <button className="sheet-action" onClick={refreshPrStatus} disabled={prBusy}>
-              {prBusy ? "Checking GitHub status…" : "Update GitHub status"}
-            </button>
-          )}
-          <button className="sheet-action" onClick={promote} disabled={prBusy}>
-            Continue here (promote replica)
-          </button>
-          <button className="sheet-action danger" onClick={del} disabled={prBusy}>
-            Delete
-          </button>
-        </Sheet>
-      )}
-    </div>
-  );
 }
 
 // Only this many rows are shown at rest; the rest reveal in pages on demand.
@@ -586,13 +439,11 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
                   )}
                 </span>
               </button>
-              {failedLaunch ? (
+              {failedLaunch && (
                 <span className="pending-launch-actions">
                   <button type="button" onClick={() => void controller.retryPendingLaunch(s.sessionId)}>Retry</button>
                   <button type="button" onClick={() => void controller.dismissPendingLaunch(s.sessionId)}>Dismiss</button>
                 </span>
-              ) : (controller.direct || !s.nodeId || s.nodeId === currentNodeId) && (
-                <RowMenu sessionId={s.sessionId} name={s.name} isRepo={Boolean(repoFromSource(s.source))} prs={s.prs} />
               )}
               </li>
             </Fragment>
