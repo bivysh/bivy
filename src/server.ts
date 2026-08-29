@@ -10086,7 +10086,17 @@ app.get("/api/sessions", async (_req, res, next) => {
 
 app.post("/api/sessions/open", async (req, res, next) => {
   try {
-    const session = await createSession(defaultWorkspace, String(req.body?.path ?? ""), { runtimeId: agentFrom(req.body ?? {}) });
+    // Direct transports use this endpoint for both opening a saved session and
+    // the legacy path-only open flow.  The old path-only implementation ignored
+    // sessionId, so a direct client sending into a closed chat opened a brand-new
+    // session instead of reopening the selected conversation.
+    const requestedId = typeof req.body?.sessionId === "string" && req.body.sessionId.trim()
+      ? req.body.sessionId.trim()
+      : undefined;
+    const session = requestedId
+      ? await resolveOrResumeSession(requestedId, req.body?.path)
+      : await createSession(defaultWorkspace, String(req.body?.path ?? ""), { runtimeId: agentFrom(req.body ?? {}) });
+    if (!session) return res.status(404).json({ error: "Session not found" });
     res.json({
       id: session.id,
       workspace: session.workspace,

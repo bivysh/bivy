@@ -244,7 +244,7 @@ export class DirectTransport implements Transport {
         case "session.open": {
           const p: any = await this.directApi("/api/sessions/open", {
             method: "POST",
-            body: JSON.stringify({ path: obj.path, agent: obj.agent, runtimeId: obj.runtimeId }),
+            body: JSON.stringify({ sessionId: obj.sessionId, path: obj.path, agent: obj.agent, runtimeId: obj.runtimeId }),
           });
           this.emit({
             type: "session.history",
