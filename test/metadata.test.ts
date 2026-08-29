@@ -12,6 +12,14 @@ function run() {
     store.upsertSession({ id: "b", status: "idle" });
     store.upsertSession({ id: "c", status: "working" });
 
+    // Partial updates from a runtime must not erase its durable resume ref.
+    // This is especially important for Pi, whose transcript path is the native
+    // resume token, but applies to every adapter with optional resume metadata.
+    store.upsertSession({ id: "resume-me", path: "/sessions/original.jsonl", runtimeId: "pi", name: "Original" });
+    store.upsertSession({ id: "resume-me", status: "idle", path: undefined, name: undefined });
+    assert.equal(store.getSession("resume-me")?.path, "/sessions/original.jsonl", "partial metadata updates preserve the resume ref");
+    assert.equal(store.getSession("resume-me")?.name, "Original", "partial metadata updates preserve the session name");
+
     // Writes are coalesced/debounced now; flushSync() forces the pending write
     // so we can assert the fsync path produced a well-formed file on disk.
     store.flushSync();
