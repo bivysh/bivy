@@ -41,6 +41,31 @@ UI, CSS, or component:
 - Run **`pnpm run check:design`** before finishing UI work — it fails if a
   palette token is redeclared outside `tokens.css` and flags raw-color drift.
 
+## UI implementation workflow
+
+Good UI is not done when the TypeScript compiles. For any user-facing change:
+
+1. Read `packages/web/AGENTS.md`, inspect nearby screens/components, and check
+   `packages/ui/styleguide.html` before writing new markup or CSS.
+2. Reuse the existing component and token vocabulary. Do not create a second
+   button, card, badge, status, modal, or spacing/color system for a similar job.
+3. Design the complete state set, not only the happy path: loading, empty,
+   error, disabled, success, long text, narrow/mobile layout, and keyboard
+   interaction where applicable.
+4. Render the real app and inspect it at desktop and mobile widths in both
+   light and dark themes. Use the available browser/screenshot tooling when
+   possible; do not rely only on reading the source.
+5. Make at least one visual refinement pass based on the rendered result,
+   checking hierarchy, alignment, spacing, density, contrast, overflow, and
+   touch targets. Treat screenshots as test evidence, not decoration.
+6. Verify keyboard focus and accessible names; information conveyed by color
+   or shape must also have a textual or semantic equivalent.
+
+Before finishing UI work, run `pnpm run check:design` and
+`pnpm --filter @bivy/web run typecheck` (plus relevant tests). Report any
+visual or test limitation instead of claiming the UI was verified when it was
+not.
+
 ## Useful checks
 
 - `pnpm run check:design` — design-token single-source-of-truth guard
