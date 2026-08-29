@@ -117,6 +117,16 @@ describe("renderHistory block interleaving", () => {
     expect(entries.find((entry) => entry.tool?.callId === "t1")?.tool?.result).toBe("all tests passed");
   });
 
+  it("does not lose structured tool results or failed outcomes on reload", () => {
+    const entries = renderHistory([
+      { role: "assistant", content: [{ type: "tool_use", id: "t2", name: "search", input: { query: "TODO" } }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "t2", content: [{ type: "diagnostic", file: "a.ts", line: 4 }], is_error: true }] },
+    ]);
+    const tool = entries.find((entry) => entry.tool?.callId === "t2")?.tool;
+    expect(tool?.result).toBe('[{"type":"diagnostic","file":"a.ts","line":4}]');
+    expect(tool?.detail).toMatchObject({ kind: "unknown", result: { isError: true } });
+  });
+
   it("handles string content and text-only assistant messages unchanged", () => {
     const entries = renderHistory([{ role: "assistant", content: "just text" }]);
     expect(entries).toHaveLength(1);

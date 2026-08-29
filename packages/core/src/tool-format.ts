@@ -32,7 +32,9 @@ type ToolCallKindDetail =
   | { kind: "search"; query: string; path?: string }
   | { kind: "fetch"; url: string }
   | { kind: "plan"; text?: string }
-  | { kind: "delegation"; label?: string; description?: string };
+  | { kind: "delegation"; label?: string; description?: string }
+  /** Outcome-only metadata from a result whose matching call was not retained. */
+  | { kind: "unknown" };
 
 export type ToolCallDetail = ToolCallKindDetail & {
   meta?: {
@@ -54,6 +56,7 @@ const DETAIL_VERB: Record<ToolCallDetail["kind"], string> = {
   fetch: "Fetched",
   plan: "Planned",
   delegation: "Delegated",
+  unknown: "Tool",
 };
 
 export interface DiffHunk {

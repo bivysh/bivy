@@ -131,6 +131,19 @@ export function contentThinking(content: any): string {
     .join("\n");
 }
 
+/** Tool results can contain structured arrays (for example a list of files or
+ * diagnostics), not just text blocks. Unlike assistant content, a result has no
+ * prose/tool ordering to preserve, so stringify unknown values rather than
+ * silently rendering an empty card. */
+function toolResultText(content: any): string {
+  if (Array.isArray(content)) {
+    const text = content.filter(isTextBlock).map((b) => String(b?.text ?? b?.content ?? "")).join("\n");
+    if (text) return text;
+    try { return JSON.stringify(content); } catch { return String(content); }
+  }
+  return contentToText(content);
+}
+
 export function toolEntriesFromContent(content: any): ToolActivity[] {
   if (!Array.isArray(content)) return [];
   const out: ToolActivity[] = [];
@@ -145,14 +158,14 @@ export function toolEntriesFromContent(content: any): ToolActivity[] {
       });
     } else if (isToolResultBlock(block)) {
       const id = toolCallId(block);
-      const result = contentToText(block?.content);
+      const result = toolResultText(block?.content);
       const existingDetail = toolDetail(block);
       // Some runtimes persist the failure only on the tool_result block. Carry
       // that outcome into the normalized detail so a reloaded card is marked
       // failed just like its live counterpart (without an agent-specific path).
       const detail = (block?.isError || block?.is_error) && existingDetail
         ? { ...existingDetail, result: { ...(existingDetail.result ?? {}), isError: true } }
-        : existingDetail;
+        : (block?.isError || block?.is_error ? { kind: "unknown", result: { isError: true } } as ToolActivity["detail"] : existingDetail);
       out.push({ callId: id, name: toolName(block), input: {}, status: "done", result, ...(detail ? { detail } : {}) });
     }
   }
@@ -167,8 +180,10 @@ function toolEntryFromToolResultMessage(msg: any): ToolActivity | null {
     name: String(msg?.toolName || msg?.name || "tool").toLowerCase(),
     input: {},
     status: "done",
-    result: contentToText(msg?.content),
-    detail: toolDetail(msg),
+    result: toolResultText(msg?.content),
+    detail: (msg?.isError || msg?.is_error)
+      ? (toolDetail(msg) ?? ({ kind: "unknown", result: { isError: true } } as ToolActivity["detail"]))
+      : toolDetail(msg),
   };
 }
 
