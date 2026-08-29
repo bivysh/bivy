@@ -2186,6 +2186,15 @@ function AutomationEditor({
                 )}
                 {d.hasTrigger && d.trigger === "webhook" && (
                   <div className="autom-trigger-config">
+                    {existing?.trigger === "webhook" && existing.webhookUrl && (
+                      <div className="settings-field">
+                        <label className="field-label">Webhook URL</label>
+                        <div className="reveal-row">
+                          <code className="reveal-value">{existing.webhookUrl}</code>
+                          <button type="button" className="btn sm" onClick={() => void copyText(existing.webhookUrl!)}>Copy</button>
+                        </div>
+                      </div>
+                    )}
                     <label className="settings-toggle-row webhook-signing-toggle">
                       <span className="settings-toggle-text">
                         <strong className="settings-toggle-title">Require signing headers</strong>
