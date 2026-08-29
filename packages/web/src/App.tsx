@@ -560,6 +560,11 @@ export function App() {
         <SessionList
           runEvidence={runEvidence}
           onPick={(id, path, nodeId) => {
+            // Set the prompt destination synchronously. Live-run detection below
+            // is asynchronous (and may switch machines), so waiting to call
+            // openSessionOnNode would leave the composer targeting the old/top
+            // session if the user sends during that handoff.
+            controller.selectSessionTarget(id);
             setPendingRunTerm(null);
             closeDrawer();
             // A `bivy run` session whose PTY is still alive (advertised by its
