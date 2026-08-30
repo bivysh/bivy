@@ -945,9 +945,9 @@ export function AutomationsView({
           <p className="automations-view-sub">Jobs that run on your machines while you&apos;re away.</p>
         </div>
         <div className="automations-view-head-actions">
-          <button type="button" className="btn primary autom-new-btn" onClick={openChooser} aria-label="New automation">
+          <button type="button" className="btn primary" onClick={openChooser} aria-label="New automation">
             <PlusIcon size={18} />
-            <span className="autom-new-btn-label">New automation</span>
+            <span className="action-label">New automation</span>
           </button>
           <button type="button" className="btn ghost icon autom-close-btn" onClick={onClose} title="Close" aria-label="Close automations"><CloseIcon /></button>
         </div>
@@ -969,13 +969,13 @@ export function AutomationsView({
 
       <div className="automations-view-body">
         {cloudAutomationGate && (
-          <div className="autom-notice warn" role="status">
-            <div className="autom-notice-text">
+          <div className="banner" data-tone="warn" role="status">
+            <div className="banner-text">
               <strong>Hosted automations require Cloud</strong>
               <span>GitHub, schedules, and other hosted triggers can be configured, but incoming events are shown as blocked until this account is upgraded. Self-hosted control planes are not limited by Bivy Cloud billing.</span>
             </div>
             {cloudAutomationGate.actions.length > 0 && (
-              <div className="autom-notice-actions">
+              <div className="banner-actions">
                 {cloudAutomationGate.actions.map((action) => (
                   <button
                     type="button"
@@ -991,18 +991,18 @@ export function AutomationsView({
           </div>
         )}
         {error && (
-          <div className="autom-notice warn" role="alert">
-            <div className="autom-notice-text"><strong>Something went wrong</strong><span>{error}</span></div>
+          <div className="banner" data-tone="danger" role="alert">
+            <div className="banner-text"><strong>Something went wrong</strong><span>{error}</span></div>
             <button type="button" className="btn ghost icon" onClick={() => setError("")} aria-label="Dismiss">✕</button>
           </div>
         )}
         {notice && (
-          <div className={`autom-notice ${notice.tone}`} role="status">
-            <div className="autom-notice-text">
+          <div className="banner" data-tone={notice.tone === "info" ? "accent" : notice.tone} role="status">
+            <div className="banner-text">
               <strong>{notice.title}</strong>
               {notice.body && <span>{notice.body}</span>}
             </div>
-            <div className="autom-notice-actions">
+            <div className="banner-actions">
               {notice.action && (
                 <button type="button" className="btn sm primary" onClick={notice.action.onClick}>
                   {notice.action.label}
@@ -1026,11 +1026,11 @@ export function AutomationsView({
         />
 
         {items.some((i) => i.trigger === "github_ci" && i.enabled) && sources.github?.connected && (
-          <div className="autom-banner" role="status">
+          <div className="banner inline" data-tone="accent" role="status">
             <strong>Fix failed CI is on.</strong>{" "}
             New GitHub Apps created in Bivy receive <code>workflow_run</code> events automatically.
             Existing apps need <code>workflow_run</code> + Actions/Checks read on the app in GitHub.
-            <button type="button" className="btn sm autom-banner-action" onClick={() => openSetup("github")}>
+            <button type="button" className="btn sm banner-action" onClick={() => openSetup("github")}>
               Review GitHub setup
             </button>
           </div>
@@ -1051,7 +1051,7 @@ export function AutomationsView({
               </p>
             </div>
             <div className="autom-empty-action">
-              <button type="button" className="btn primary autom-empty-new-btn" onClick={openChooser}>
+              <button type="button" className="btn primary" onClick={openChooser}>
                 <PlusIcon size={22} /> New automation
               </button>
             </div>
@@ -1530,13 +1530,13 @@ function SourceAutomationEditor({
         </details>
         <div className="wizard-body">
           {needsConnect && (
-            <div className="autom-banner" role="status">
+            <div className="banner inline" data-tone="accent" role="status">
               Connect {trigger === "linear" ? "Linear" : "GitHub"} before this automation can fire.
               <button type="button" className="btn sm primary" style={{ marginLeft: 8 }} onClick={onConnect}>Connect here</button>
             </div>
           )}
           {events.workflowFailed && enabled && !needsConnect && isGithub && (
-            <div className="autom-banner" role="status">
+            <div className="banner inline" data-tone="accent" role="status">
               Failed CI needs <code>workflow_run</code> on the GitHub App (included for apps created in Bivy).
               Existing apps: add the event + Actions/Checks read in GitHub settings.
             </div>
@@ -1751,7 +1751,7 @@ function SourceAutomationEditor({
         </div>
         <div className="wizard-actions">
           <button type="button" className="btn" onClick={onClose}>Cancel</button>
-          <button type="button" className="btn primary autom-save-btn" disabled={busy} onClick={() => void save()}>
+          <button type="button" className="btn primary" disabled={busy} onClick={() => void save()}>
             {busy ? "Saving…" : "Save"}
           </button>
         </div>
@@ -2066,7 +2066,7 @@ function AutomationEditor({
         {created ? (
           <>
             <div className="wizard-body">
-              <div className="autom-success" role="status">
+              <div className="banner inline" data-tone="ok" role="status">
                 <strong>{created.updated ? `“${created.name}” now requires signing.` : `“${created.name}” is live.`}</strong> Send signed events to this URL. Copy the signing secret now — it isn&apos;t shown again.
               </div>
               <div className="settings-field">
@@ -2091,7 +2091,7 @@ function AutomationEditor({
               <span />
               <button
                 type="button"
-                className="btn primary autom-save-btn"
+                className="btn primary"
                 onClick={() => onSaved(created.updated ? { kind: "updated", name: created.name, id: existing?.id } : { kind: "created-webhook", name: created.name })}
               >
                 Done
@@ -2147,12 +2147,12 @@ function AutomationEditor({
                       + Add trigger
                     </button>
                     {pickerOpen && (
-                      <div className="autom-trigger-menu" role="listbox" aria-label="Trigger types">
+                      <div className="menu autom-trigger-picker" role="listbox" aria-label="Trigger types">
                         {TRIGGER_OPTIONS.map((opt) => (
                           <button
                             key={opt.id}
                             type="button"
-                            className="autom-trigger-option"
+                            className="menu-item autom-trigger-pick"
                             role="option"
                             onClick={() => applyTrigger(opt)}
                           >
@@ -2508,7 +2508,7 @@ function AutomationEditor({
               )}
               <button
                 type="button"
-                className="btn primary autom-save-btn"
+                className="btn primary"
                 onClick={() => void save()}
                 disabled={busy || !canSave}
               >

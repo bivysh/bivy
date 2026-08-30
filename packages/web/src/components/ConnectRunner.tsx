@@ -113,7 +113,7 @@ export function ConnectRunner({
             <code>{install.command}</code>
             <button
               type="button"
-              className={`connect-copy icon-only${copied === "auto" ? " is-copied" : ""}`}
+              className={`btn sm ghost icon-only${copied === "auto" ? " is-copied" : ""}`}
               onClick={() => copyCommand(install.command, "auto")}
               aria-label={copied === "auto" ? "Command copied" : install.authenticated ? "Copy auto sign-in install command" : "Copy install command"}
               title={copied === "auto" ? "Copied" : install.authenticated ? "Copy auto sign-in" : "Copy"}
@@ -170,7 +170,7 @@ export function ConnectRunner({
         <span className="connect-waiting-text">
           {persistentNodes.length > 0 ? "Or wait for another Machine to connect…" : "Waiting for a Machine to connect…"}
         </span>
-        <button type="button" className="connect-refresh" onClick={onRefresh}>
+        <button type="button" className="btn sm ghost" onClick={onRefresh}>
           Refresh now
         </button>
       </div>

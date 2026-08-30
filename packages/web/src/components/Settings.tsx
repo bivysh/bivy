@@ -1060,7 +1060,7 @@ function NodesPanel({ state, cloudMachinesEnabled }: { state: AppState; cloudMac
                 <code>{nodeClaim.command}</code>
                 <button
                   type="button"
-                  className={`repo-connect-copy${claimCopied ? " is-copied" : ""}`}
+                  className={`btn sm ghost${claimCopied ? " is-copied" : ""}`}
                   onClick={() => {
                     void navigator.clipboard.writeText(nodeClaim.command || "").then(() => {
                       setClaimCopied(true);
@@ -1098,7 +1098,7 @@ function NodesPanel({ state, cloudMachinesEnabled }: { state: AppState; cloudMac
                   right={claim.status === "pending" ? (
                     <button
                       type="button"
-                      className="picker-action danger"
+                      className="btn sm danger-ghost"
                       onClick={(event) => {
                         event.stopPropagation();
                         controller.revokeNodeClaim(claim.id)
@@ -1684,7 +1684,7 @@ function HostedRunnerActivity() {
               key={`${m.provider}:${m.id}`}
               title={<>{m.name || m.nodeId || m.id} <Badge tone={failure ? "danger" : phase === "ready" ? "ok" : undefined}>{phase.replaceAll("-", " ")}</Badge></>}
               meta={[m.provider, m.region, m.size, cost, m.ttlMinutes ? `TTL ${m.ttlMinutes}m` : null].filter(Boolean).join(" · ")}
-              right={<button type="button" className="picker-action danger" disabled={!m.nodeId || busy} onClick={(e) => { e.stopPropagation(); setConfirmDestroy(m); }}>Destroy</button>}
+              right={<button type="button" className="btn sm danger-ghost" disabled={!m.nodeId || busy} onClick={(e) => { e.stopPropagation(); setConfirmDestroy(m); }}>Destroy</button>}
             />;
           })}
         </div>}
@@ -2004,7 +2004,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
                 right={
                   <button
                     type="button"
-                    className="picker-action danger"
+                    className="btn sm danger-ghost"
                     onClick={(e) => {
                       e.stopPropagation();
                       setConfirm({
@@ -2141,7 +2141,7 @@ function AccountPanel() {
               right={
                 <button
                   type="button"
-                  className="picker-action danger"
+                  className="btn sm danger-ghost"
                   onClick={(e) => {
                     e.stopPropagation();
                     setConfirm({
@@ -2174,7 +2174,7 @@ function AccountPanel() {
                 right={
                   <button
                     type="button"
-                    className="picker-action danger"
+                    className="btn sm danger-ghost"
                     onClick={(e) => {
                       e.stopPropagation();
                       setConfirm({

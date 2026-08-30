@@ -33,7 +33,7 @@ test("migrated call-to-actions inherit the canonical button shell", async () => 
     ["components/ChatView.tsx", 'className="btn sm primary"'],
     ["components/ForkSheet.tsx", 'className="btn primary fork-submit"'],
     ["components/ImportSessionSheet.tsx", 'className="btn sm primary import-session-action"'],
-    ["components/AutomationsView.tsx", 'className="btn primary autom-new-btn"'],
+    ["components/AutomationsView.tsx", 'className="btn primary" onClick={openChooser}'],
   ] as const;
   for (const [path, className] of surfaces) {
     const source = await readFile(new URL(path, ROOT), "utf8");

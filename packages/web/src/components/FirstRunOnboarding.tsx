@@ -91,7 +91,7 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
           {!claim?.command ? <button type="button" className="btn primary" disabled={busy} onClick={() => {
             setBusy(true);
             controller.createNodeClaim().then(setClaim).catch((error) => setGithubError(String((error as Error)?.message || error))).finally(() => setBusy(false));
-          }}>{busy ? "Creating…" : "Create install command"}</button> : <div className="repo-connect-command"><code>{claim.command}</code><button type="button" className={`repo-connect-copy${copied ? " is-copied" : ""}`} onClick={() => void navigator.clipboard.writeText(claim.command || "").then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1500); })}>{copied ? "Copied" : "Copy"}</button></div>}
+          }}>{busy ? "Creating…" : "Create install command"}</button> : <div className="repo-connect-command"><code>{claim.command}</code><button type="button" className={`btn sm ghost${copied ? " is-copied" : ""}`} onClick={() => void navigator.clipboard.writeText(claim.command || "").then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1500); })}>{copied ? "Copied" : "Copy"}</button></div>}
           <p className="muted small">Your first managed trial session can also be selected from the composer after setup.</p>
         </section>
       )}

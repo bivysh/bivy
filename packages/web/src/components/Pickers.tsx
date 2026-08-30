@@ -117,7 +117,7 @@ function ConnectCommand({ cmd, label }: { cmd: string; label: string }) {
       <code>{cmd}</code>
       <button
         type="button"
-        className={`repo-connect-copy${copied ? " is-copied" : ""}`}
+        className={`btn sm ghost${copied ? " is-copied" : ""}`}
         onClick={copy}
         aria-label={copied ? "Command copied" : label}
       >
@@ -288,7 +288,7 @@ export function RepoPicker({ state, onClose }: { state: AppState; onClose: () =>
               right={
                 <button
                   type="button"
-                  className="picker-action repo-branch-arrow"
+                  className="btn ghost icon repo-branch-arrow"
                   title={`Choose a branch of ${r.slug}`}
                   aria-label={`Choose a branch of ${r.slug}`}
                   onClick={(e) => {
@@ -561,7 +561,7 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
           <>
             <button
               type="button"
-              className="picker-action"
+              className="btn sm ghost"
               onClick={(e) => {
                 e.stopPropagation();
                 setDetailsId((id) => id === a.id ? null : a.id);
@@ -573,7 +573,7 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
             {installable && !installing && (
               <button
                 type="button"
-                className="picker-action"
+                className="btn sm ghost"
                 onClick={(e) => {
                   e.stopPropagation();
                   controller.installAgent(a.id);
@@ -792,7 +792,7 @@ export function ModelPicker({ state, onClose }: { state: AppState; onClose: () =
                   right={
                     <button
                       type="button"
-                      className="picker-action"
+                      className="btn sm ghost"
                       onClick={(e) => {
                         e.stopPropagation();
                         setConnecting(provider);

@@ -241,8 +241,8 @@ export function RunDetails({
         {status === "loading" && <div className="run-details-state" role="status">Loading this Run…</div>}
 
         {status === "offline" && (
-          <div className="autom-notice warn" role="alert">
-            <div className="autom-notice-text">
+          <div className="banner" data-tone="warn" role="alert">
+            <div className="banner-text">
               <strong>Can&apos;t reach this Run right now</strong>
               <span>You appear to be offline. This Run is safe on the control plane; reconnect to see its current state.</span>
             </div>
@@ -251,8 +251,8 @@ export function RunDetails({
         )}
 
         {status === "unauthorized" && (
-          <div className="autom-notice warn" role="alert">
-            <div className="autom-notice-text">
+          <div className="banner" data-tone="warn" role="alert">
+            <div className="banner-text">
               <strong>Sign in to view this Run</strong>
               <span>Your session isn&apos;t authorized. Sign in again to open this Run.</span>
             </div>
@@ -347,8 +347,8 @@ function RunBody({
   return (
     <>
       {stale && (
-        <div className="autom-notice warn" role="status">
-          <div className="autom-notice-text">
+        <div className="banner" data-tone="warn" role="status">
+          <div className="banner-text">
             <strong>Showing the last known state</strong>
             <span>This Run couldn&apos;t be refreshed just now.</span>
           </div>
@@ -367,8 +367,8 @@ function RunBody({
       </div>
 
       {run.lifecycle === "needs_attention" && (
-        <div className="autom-notice warn" role="status">
-          <div className="autom-notice-text">
+        <div className="banner" data-tone="warn" role="status">
+          <div className="banner-text">
             <strong>Needs attention</strong>
             <span>This Run is waiting on a person before it can continue.</span>
           </div>

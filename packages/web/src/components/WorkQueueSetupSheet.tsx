@@ -499,12 +499,12 @@ export function WorkQueueSetupSheet({
                       </button>
                       {ceHostedError && <div className="banner inline" data-tone="danger" role="alert">{ceHostedError}</div>}
                       {ceNodeConnected && (
-                        <div className="autom-success" role="status">
+                        <div className="banner inline" data-tone="ok" role="status">
                           <strong>App connected.</strong> This machine now holds the key and can claim GitHub work.
                         </div>
                       )}
                       {ceHostedResult && (
-                        <div className="autom-success" role="status">
+                        <div className="banner inline" data-tone="ok" role="status">
                           <strong>Hosted App ready.</strong> Set its webhook URL to <code>{ceHostedResult.webhookUrl}</code> and secret to <code>{ceHostedResult.webhookSecret}</code>.
                         </div>
                       )}
@@ -512,7 +512,7 @@ export function WorkQueueSetupSheet({
                   )}
                   {phase === "completing" && <p className="settings-hint">Finishing on the machine…</p>}
                   {phase === "done" && (
-                    <div className="autom-success" role="status">
+                    <div className="banner inline" data-tone="ok" role="status">
                       <strong>App ready.</strong> Install it on a repository so it can receive issues.{" "}
                       <a href={app?.installUrl || "https://github.com/settings/installations"} target="_blank" rel="noreferrer">
                         Install on GitHub →
@@ -712,12 +712,12 @@ export function WorkQueueSetupSheet({
                           </button>
                           {ceHostedError && <div className="banner inline" data-tone="danger" role="alert">{ceHostedError}</div>}
                           {ceNodeConnected && (
-                            <div className="autom-success" role="status">
+                            <div className="banner inline" data-tone="ok" role="status">
                               <strong>App connected.</strong> This machine now holds the key and can claim GitHub work.
                             </div>
                           )}
                           {ceHostedResult && (
-                            <div className="autom-success" role="status">
+                            <div className="banner inline" data-tone="ok" role="status">
                               <strong>Hosted App ready.</strong> Set its webhook URL to <code>{ceHostedResult.webhookUrl}</code> and secret to <code>{ceHostedResult.webhookSecret}</code>.
                             </div>
                           )}
@@ -728,7 +728,7 @@ export function WorkQueueSetupSheet({
                   )}
 
                   {readyToRun && (
-                    <div className="autom-success" role="status">
+                    <div className="banner inline" data-tone="ok" role="status">
                       <strong>Ready.</strong> Label an issue <code>bivy</code> or comment{" "}
                       <code>@{mention}</code> with what to do.
                     </div>
@@ -748,7 +748,7 @@ export function WorkQueueSetupSheet({
               <div className="card wq-status-card" data-tone="muted">
                 {linErr && <p className="settings-error">{linErr}</p>}
                 {linJustEnabled && linear?.enabled && (
-                  <div className="autom-success" role="status">
+                  <div className="banner inline" data-tone="ok" role="status">
                     <strong>Linear is live.</strong> Label an issue <code>bivy</code> (or <code>{'bivy/<machine>'}</code>) to enqueue it.
                   </div>
                 )}
@@ -866,7 +866,7 @@ export function WorkQueueSetupSheet({
               <div className="card wq-status-card" data-tone="muted">
                 {slackErr && <p className="settings-error">{slackErr}</p>}
                 {slackJustConnected && slack?.enabled && (
-                  <div className="autom-success" role="status">
+                  <div className="banner inline" data-tone="ok" role="status">
                     <strong>Slack is live.</strong> Paste the Request URL into your slash command, then try{" "}
                     <code>/bivy fix the failing tests</code>.
                   </div>
@@ -952,7 +952,7 @@ export function WorkQueueSetupSheet({
 
         <div className="wizard-actions">
           <span className="settings-hint">Connections are managed only here</span>
-          <button type="button" className="btn primary autom-save-btn" onClick={closeWithBack}>
+          <button type="button" className="btn primary" onClick={closeWithBack}>
             {primaryDoneLabel}
           </button>
         </div>

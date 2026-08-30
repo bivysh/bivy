@@ -798,7 +798,7 @@ export function Composer({
             <div className="composer-meta">
               <button
                 type="button"
-                className="pill attach-pill"
+                className="btn sm ghost attach-pill"
                 onClick={() => fileRef.current?.click()}
                 disabled={disabled}
                 title="Attach files"
@@ -806,13 +806,13 @@ export function Composer({
               >
                 <span className="pill-glyph"><AttachGlyph /></span>
               </button>
-              <button type="button" className="pill agent-pill" onClick={() => setPicker("agent")} title="Agent">
+              <button type="button" className="btn sm ghost agent-pill" onClick={() => setPicker("agent")} title="Agent">
                 <span className="pill-glyph"><AgentGlyph /></span>
                 <span className="pill-label">{state.catalogs.currentAgentName || "Agent"}</span>
               </button>
               <button
                 type="button"
-                className="pill model-pill"
+                className="btn sm ghost model-pill"
                 onClick={() => { if (modelSelectable) setPicker("model"); }}
                 disabled={!modelSelectable}
                 title={modelSelectable ? "Model" : "This agent uses its own default model"}

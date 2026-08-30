@@ -161,7 +161,7 @@ function TemplateCard({ template, onUse }: { template: AutomationTemplate; onUse
     <button type="button" className="template-card" onClick={onUse}>
       <div className="template-card-top">
         <span className="template-card-icon" aria-hidden="true">{templateIcon(template.key)}</span>
-        <span className={`template-card-badge tone-${badge.tone}`}>{badge.label}</span>
+        <span className="badge" data-tone={badge.tone}>{badge.label}</span>
       </div>
       <strong className="template-card-title">{template.title}</strong>
       <p className="template-card-tagline">{template.tagline}</p>

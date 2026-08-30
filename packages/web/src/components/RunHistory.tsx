@@ -67,7 +67,7 @@ export function RunHistory({
           <button type="button" className="btn sm" onClick={onRefresh}>Refresh</button>
         </div>
       </div>
-      {attentionCount > 0 && <div className="autom-notice warn" role="alert"><div className="autom-notice-text"><strong>{attentionCount} Run{attentionCount === 1 ? "" : "s"} need attention</strong><span>Review parked work, failed notification delivery, or terminal failures before retrying.</span></div></div>}
+      {attentionCount > 0 && <div className="banner" data-tone="warn" role="alert"><div className="banner-text"><strong>{attentionCount} Run{attentionCount === 1 ? "" : "s"} need attention</strong><span>Review parked work, failed notification delivery, or terminal failures before retrying.</span></div></div>}
       <div className="run-history-filters" role="group" aria-label="Filter Runs">
         {filters.map((item) => <button type="button" key={item.id} className={`btn sm${filter === item.id ? " primary" : ""}`} aria-pressed={filter === item.id} onClick={() => setFilter(item.id)}>{item.label}</button>)}
       </div>
