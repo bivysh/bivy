@@ -207,9 +207,10 @@ export function RepoPicker({ state, onClose }: { state: AppState; onClose: () =>
     <Sheet title="Repository" onClose={onClose}>
       <input className="picker-search" placeholder="Search repos…" value={q} onChange={(e) => setQ(e.target.value)} />
       <div className="picker-list">
+        <div className="picker-section-label">This Machine</div>
         <PickerItem
           active={!state.draft.repo}
-          title="No repo"
+          title="Default workspace"
           meta="Work in the machine's default workspace"
           onClick={() => {
             controller.chooseRepo(null);
@@ -221,6 +222,7 @@ export function RepoPicker({ state, onClose }: { state: AppState; onClose: () =>
           <RepoConnectPrompt state={state} />
         )}
         {!state.catalogs.reposLoading && state.catalogs.reposError && <div className="picker-empty">{state.catalogs.reposError}</div>}
+        {repos.length > 0 && <div className="picker-section-label">GitHub repositories</div>}
         {repos.map((r) => {
           const picked = r.slug === state.draft.repo;
           return (

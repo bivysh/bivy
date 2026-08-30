@@ -12,7 +12,7 @@ import { readFile } from "node:fs/promises";
 
 const read = (rel: string) => readFile(new URL(rel, import.meta.url), "utf8");
 
-test("the journey gates in order: sign-in first, then cohesive onboarding, then the readiness strip", async () => {
+test("the journey gates in order: sign-in first, then machine connection, then the readiness strip", async () => {
   const app = await read("../../packages/web/src/App.tsx");
   const needsAuth = app.indexOf("if (needsAuth || signInRequested) {");
   const needsNodeDecl = app.indexOf("const needsNode =");
@@ -27,14 +27,12 @@ test("the journey gates in order: sign-in first, then cohesive onboarding, then 
   // Automations / cloud machine profiles) is dismissable — the boot-time auth
   // gate has no app behind it to return to, so it never gets onDismiss.
   expect(app).toContain("<SetupNotice onDismiss={needsAuth ? undefined : dismissSignInRequest} />");
-  // A fresh GitHub signup enters one authoritative wizard for App install,
-  // Machine enrollment, and model auth. Dismissing it deliberately falls back
-  // to the ordinary ConnectRunner; established users still get the readiness
-  // strip rather than being forced through a second wizard.
-  expect(app).toContain("{showFirstRunOnboarding && (");
-  expect(app).toContain("<FirstRunOnboarding");
-  expect(app).toContain("!showFirstRunOnboarding && needsNode");
+  // Machine connection is the only first-mile gate. Workspace selection comes
+  // afterward, with GitHub authorization deferred until the GitHub section is used.
+  expect(app).toContain("const needsNode =");
+  expect(app).toContain("{needsNode && (");
   expect(app).toContain("<ConnectRunner");
+  expect(app).toContain("ephemeralEnabled={false}");
 });
 
 test("direct/self-host mode never shows the sign-in gate — it has no account to sign into", async () => {
