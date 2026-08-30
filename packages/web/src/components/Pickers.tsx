@@ -9,10 +9,9 @@ import { useModalEscape } from "../modalStack.js";
 import { ProviderConnectForm } from "./ProviderConnect.js";
 import { runtimeEnforcesProtection, SANDBOX_TIERS } from "./sandboxTiers.js";
 import { writeClipboard } from "../clipboard.js";
+import { agentPickerLabel, filterAndSortAgentRuntimes, isTopAgent } from "../agentPickerCatalog.js";
 
-function agentLabel(a: RuntimeInfo): string {
-  return String(a.displayName || a.name || a.id || "Agent");
-}
+const agentLabel = agentPickerLabel;
 
 const THINKING_LABELS: Record<string, string> = {
   off: "Fastest",
@@ -21,10 +20,6 @@ const THINKING_LABELS: Record<string, string> = {
   medium: "Default",
   high: "Deep",
 };
-
-function runtimeTier(runtime: RuntimeInfo): string {
-  return String((runtime as { supportTier?: unknown }).supportTier || "experimental");
-}
 
 /**
  * Preview an Effective Session Contract for a runtime BEFORE a session
@@ -464,21 +459,16 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
     // session, whose agent is fixed).
     controller.prefetchModels();
   }, []);
-  const runtimes = useMemo(() => {
-    const query = q.trim().toLowerCase();
-    const matched = !query
-      ? state.catalogs.runtimes
-      : state.catalogs.runtimes.filter((a) =>
-          `${a.id} ${a.name || ""} ${a.displayName || ""} ${(a as any).description || ""} ${(a as any).language || ""} ${a.protectionLabel || ""}`.toLowerCase().includes(query),
-        );
-    return [...matched].sort((a, b) => agentLabel(a).localeCompare(agentLabel(b), undefined, { sensitivity: "base" }));
-  }, [state.catalogs.runtimes, q]);
-  const recommended = runtimes.filter((runtime) => runtimeTier(runtime) === "supported");
-  const more = runtimes.filter((runtime) => runtimeTier(runtime) !== "supported");
+  const runtimes = useMemo(
+    () => filterAndSortAgentRuntimes(state.catalogs.runtimes, q),
+    [state.catalogs.runtimes, q],
+  );
+  const recommended = runtimes.filter(isTopAgent);
+  const more = runtimes.filter((runtime) => !isTopAgent(runtime));
 
   const selectedRuntime = state.catalogs.runtimes.find((runtime) => runtime.id === selectedAgentId);
   useEffect(() => {
-    if (selectedRuntime && runtimeTier(selectedRuntime) !== "supported") setMoreOpen(true);
+    if (selectedRuntime && !isTopAgent(selectedRuntime)) setMoreOpen(true);
   }, [selectedRuntime]);
   useEffect(() => {
     if (!selectedAgentId || scrolledAgentRef.current === selectedAgentId) return;
