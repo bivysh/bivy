@@ -3808,7 +3808,7 @@ app.post("/webhooks/automation/run/:definitionId", asyncHandler(async (req, res)
     return res.status(400).json({ code: "invalid_request", error: "Invalid JSON." });
   }
   const event = parseAutomationEvent(payload);
-  if (!event) return res.status(400).json({ code: "invalid_request", error: "Event does not match automation schema version 1." });
+  if (!event) return res.status(400).json({ code: "invalid_request", error: "Webhook body must be a supported Bivy event envelope or a JSON object or array." });
   const dedupeKey = `automation:${def.id}:${idempotencyKey}`;
   const replay = await store.getAutomationRunBySourceKey(def.accountId, dedupeKey);
   if (replay) return res.status(200).json({ code: "duplicate", id: replay.id });

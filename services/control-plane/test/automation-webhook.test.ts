@@ -206,6 +206,14 @@ async function main() {
   const dupFired = await trigger(port, auto.body.webhookUrl, auto.body.webhookSecret, evtRaw, "evt-1");
   expect(dupFired.status === 200 && dupFired.body.code === "duplicate", "webhook redelivery to a definition is idempotent");
 
+  const providerRaw = JSON.stringify({
+    id: 17000492462,
+    kind: "todo_created",
+    recording: { id: 10252945882, title: "@bivy - prepare for Show HN" },
+  });
+  const providerFired = await trigger(port, auto.body.webhookUrl, auto.body.webhookSecret, providerRaw, "basecamp-17000492462");
+  expect(providerFired.status === 202 && providerFired.body.code === "accepted", "provider-native JSON fires without a Bivy-specific envelope");
+
   const oversized = await trigger(port, auto.body.webhookUrl, auto.body.webhookSecret, "x".repeat(70_000), "evt-oversized");
   expect(oversized.status === 413 && oversized.body.code === "payload_too_large", "oversized bodies receive a stable rejection");
 

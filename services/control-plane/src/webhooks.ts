@@ -71,6 +71,7 @@ export function normalizeAutomationRepo(value: unknown): string | undefined {
 
 const AUTOMATION_LIMITS = {
   instruction: 16_000,
+  genericPayload: 64_000,
   title: 200,
   sourceUrl: 2_048,
   externalId: 200,
@@ -80,10 +81,22 @@ const AUTOMATION_LIMITS = {
   metadataValue: 500,
 } as const;
 
-/** Validate the intentionally small, non-secret automation event schema. */
+/**
+ * Parse either Bivy's optional v1 envelope or an ordinary provider webhook.
+ *
+ * Providers such as Basecamp cannot reshape their payload into Bivy's envelope.
+ * Treat those objects/arrays entirely as untrusted event context: in particular,
+ * fields named `routing`, `repo`, or `command` in a provider payload never gain
+ * control-plane semantics. If a payload opts into the Bivy envelope by supplying
+ * `version` or `instruction`, the closed schema remains strict.
+ */
 export function parseAutomationEvent(payload: unknown): AutomationEvent | undefined {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+  if (!payload || typeof payload !== "object") return undefined;
+  if (Array.isArray(payload)) return parseGenericAutomationPayload(payload);
   const o = payload as Record<string, unknown>;
+  const isBivyEnvelope = Object.hasOwn(o, "version") || Object.hasOwn(o, "instruction");
+  if (!isBivyEnvelope) return parseGenericAutomationPayload(o);
+
   const allowed = new Set(["version", "instruction", "title", "sourceUrl", "externalId", "routing", "repo", "metadata"]);
   if (Object.keys(o).some((key) => !allowed.has(key)) || o.version !== "1") return undefined;
   if (typeof o.instruction !== "string" || !o.instruction.trim() || o.instruction.length > AUTOMATION_LIMITS.instruction) {
@@ -143,6 +156,18 @@ export function parseAutomationEvent(payload: unknown): AutomationEvent | undefi
     repo,
     metadata,
   };
+}
+
+function parseGenericAutomationPayload(payload: Record<string, unknown> | unknown[]): AutomationEvent | undefined {
+  // Pretty-print for readable agent context, but fall back to compact JSON when
+  // formatting pushes an otherwise bounded provider delivery over the limit.
+  const pretty = JSON.stringify(payload, null, 2);
+  if (!pretty) return undefined;
+  const instruction = pretty.length <= AUTOMATION_LIMITS.genericPayload
+    ? pretty
+    : JSON.stringify(payload);
+  if (!instruction || instruction.length > AUTOMATION_LIMITS.genericPayload) return undefined;
+  return { version: "1", instruction };
 }
 
 /** Render ONLY the event's untrusted fields (no operator template — that stays

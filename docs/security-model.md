@@ -93,14 +93,16 @@ senders call the control plane directly. The exceptions are:
   item is deleted. Do not put secrets in either. Generic hooks use a
   high-entropy signing secret; the control plane verifies
   `X-Bivy-Signature-256` as HMAC-SHA256 over the exact bytes before parsing or
-  persisting. Requests are capped at 64 KiB, require an account-scoped
-  idempotency key, and accept only the closed schema below. Metadata is bounded,
-  scalar, and untrusted. Payloads cannot select runtimes, models, shell commands,
-  JavaScript, or executable templates. Hook secrets and request bodies are never
-  logged. Rotation immediately invalidates the old secret, and revocation keeps
-  only a disabled endpoint with a newly randomized secret.
+  persisting. Requests are capped at 64 KiB. Stable account-scoped idempotency
+  keys are recommended; providers that cannot add one are assigned a unique key.
+  Payloads cannot select runtimes, models, shell commands, JavaScript, or
+  executable templates. Hook secrets and request bodies are never logged.
+  Rotation immediately invalidates the old secret, and revocation keeps only a
+  disabled endpoint with a newly randomized secret.
 
-Automation events use this closed schema (unknown fields are rejected):
+Provider-native JSON objects and arrays are accepted entirely as untrusted event
+context. Senders that need Bivy routing fields can opt into this closed envelope
+(unknown fields are rejected once `version` or `instruction` is present):
 
 ```json
 {
@@ -114,10 +116,11 @@ Automation events use this closed schema (unknown fields are rejected):
 }
 ```
 
-`instruction` is required. The other event fields are optional; `metadata`
-accepts at most 20 bounded scalar values and must not contain secrets. Every
-request also requires `X-Bivy-Idempotency-Key` and
-`X-Bivy-Signature-256: sha256=<hex HMAC>`. Responses are stable:
+`instruction` is required in the envelope. The other envelope fields are
+optional; `metadata` accepts at most 20 bounded scalar values and must not contain
+secrets. Signing can be disabled for providers that cannot set custom headers;
+when enabled, requests require `X-Bivy-Signature-256: sha256=<hex HMAC>`.
+Responses are stable:
 `202 accepted`, `200 duplicate`, `401 invalid_signature`, `410 disabled`,
 `413 payload_too_large`, and `429 quota_exhausted`.
 

@@ -240,6 +240,29 @@ await test("automation schema is versioned and bounded", () => {
   assert.throws(() => normalizeAutomationRepo("../etc"), /owner\/name/);
 });
 
+await test("automation schema accepts provider-native JSON as untrusted context", () => {
+  const basecamp = parseAutomationEvent({
+    id: 17000492462,
+    kind: "todo_created",
+    recording: {
+      id: 10252945882,
+      title: "@bivy - make the repository ready for Show HN",
+      app_url: "https://app.basecamp.com/4503167/buckets/17150151/todos/10252945882",
+    },
+  });
+  assert.match(basecamp?.instruction ?? "", /todo_created/);
+  assert.match(basecamp?.instruction ?? "", /Show HN/);
+  assert.equal(basecamp?.routing, undefined);
+
+  // Provider fields are data, not an alternate way to control execution.
+  const providerPayload = parseAutomationEvent({ routing: "other-node", repo: "other/repo", command: "do something" });
+  assert.equal(providerPayload?.routing, undefined);
+  assert.equal(providerPayload?.repo, undefined);
+  assert.match(providerPayload?.instruction ?? "", /other-node/);
+  assert.ok(parseAutomationEvent([{ event: "first" }, { event: "second" }]));
+  assert.equal(parseAutomationEvent(null), undefined);
+});
+
 await test("trigger access (issue #259): 'everyone' allows all, 'contributor'/'collaborator' gate on author_association", () => {
   // Unset (undefined) and the explicit "everyone" value both mean no restriction —
   // hooks created before this setting existed must keep working unchanged.
