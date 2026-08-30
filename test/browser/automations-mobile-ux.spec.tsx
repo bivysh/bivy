@@ -37,7 +37,7 @@ test("mobile Automations uses full-height editors and reachable touch targets", 
   expect(css).toContain("@media (max-width: 479px)");
   expect(css).toContain("height: 100dvh");
   expect(css).toContain(".wizard-actions .btn { min-height: 44px; }");
-  expect(css).toContain("flex: 1 0 auto; min-height: 44px; padding: 10px 14px;");
+  expect(css).toContain(".automations-tabs .seg-btn { flex: 1 0 auto; min-height: 44px; }");
   expect(css).toContain(".automation-row .row-menu-btn { min-width: 40px; min-height: 40px; opacity: 1; }");
   expect(css).toContain(".runs-overview .autom-section-head { align-items: stretch; flex-direction: column; }");
   expect(css).toContain(".runs-overview .autom-section-actions { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }");

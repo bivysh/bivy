@@ -60,7 +60,7 @@ export function ConnectRunner({
           {persistentNodes.length > 0
             ? "Pick an online machine to start, or add another machine."
             : ephemeralEnabled
-              ? "Use a machine with your real repository, services, and warm caches, or launch an isolated machine. Any hosted credential storage is disclosed before enablement."
+              ? "Use a machine with your real repository, services, and warm caches, or launch an isolated machine. Any hosted credential custody is disclosed before enablement."
               : "Use the machine where your repository, services, and warm caches already live."}
         </p>
       </div>

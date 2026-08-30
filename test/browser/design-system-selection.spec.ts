@@ -17,9 +17,10 @@ test("choice controls use the canonical selectable state", async () => {
   }
 });
 
-test("legacy segmented and ruleset choice recipes are removed", async () => {
+test("canonical selection recipes are the only choice controls", async () => {
   const css = await readFile(new URL("styles.css", ROOT), "utf8");
   expect(css).toContain('.selectable[aria-checked="true"]');
   expect(css).toContain('.selectable[aria-disabled="true"]');
-  expect(css).not.toMatch(/\.(?:seg-btn|ruleset-chip)(?:[ .:{[])/);
+  expect(css).toContain('.seg-btn[aria-selected="true"]');
+  expect(css).not.toMatch(/\.ruleset-chip(?:[ .:{[])/);
 });
