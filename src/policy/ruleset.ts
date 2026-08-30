@@ -131,7 +131,22 @@ export interface RulesetValidation {
  * human-readable errors — never throws.
  */
 export function validateRuleset(value: unknown): RulesetValidation {
-  if (Check(RulesetSchema, value)) return { ok: true, ruleset: value, errors: [] };
+  if (Check(RulesetSchema, value)) {
+    const ruleset = value as Ruleset;
+    const errors: string[] = [];
+    for (let ruleIndex = 0; ruleIndex < ruleset.rules.length; ruleIndex += 1) {
+      const rule = ruleset.rules[ruleIndex]!;
+      if (rule.action !== "reroute" || !rule.chain) continue;
+      for (let candidateIndex = 0; candidateIndex < rule.chain.length; candidateIndex += 1) {
+        const candidate = rule.chain[candidateIndex]!;
+        const hasRoute = [candidate.runtimeId, candidate.model, candidate.account]
+          .some((field) => typeof field === "string" && field.trim().length > 0);
+        if (!hasRoute) errors.push(`/rules/${ruleIndex}/chain/${candidateIndex}: fallback candidate must specify runtimeId, model, or account`);
+      }
+    }
+    if (errors.length) return { ok: false, errors };
+    return { ok: true, ruleset, errors: [] };
+  }
   const errors = [...Errors(RulesetSchema, value)]
     .slice(0, 20)
     .map((e) => `${(e as { path?: string }).path || "/"}: ${e.message}`);

@@ -463,7 +463,17 @@ export class ControlPlaneTaskPoller {
             ],
           });
           if (decision.action === "reroute") {
-            current = { ...current, runtimeId: decision.routing.runtimeId, model: decision.routing.model };
+            // A candidate changes only the routing dimensions it names. Preserve
+            // the existing runtime/model for partial fallback routes (for example
+            // a model-only fallback must not silently reset the selected agent).
+            current = {
+              ...current,
+              ...(decision.routing.runtimeId !== undefined ? { runtimeId: decision.routing.runtimeId } : {}),
+              ...(decision.routing.model !== undefined ? { model: decision.routing.model } : {}),
+              // Account routing is not yet represented by WorkItem. Do not claim
+              // that an account fallback was applied until the queue wire shape
+              // and credential resolver support it end-to-end.
+            };
             rerouteCount = decision.rerouteCount;
             await report({ routingReason: `fallback: ${decision.ref}` });
           }

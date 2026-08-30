@@ -4762,10 +4762,55 @@ async function reconcileInterruptedSessions(): Promise<void> {
   }
 }
 
+/** Run the legacy direct GitHub queue through the same failure policy as the
+ * hosted queue. There is no control-plane run/evidence endpoint on this path,
+ * so the policy is applied locally and terminal failures retain the poller's
+ * existing logging behavior. */
+async function runDirectGitHubIssueWithPolicy(cfg: GitHubTaskConfig, issue: GitHubIssue): Promise<void> {
+  let ruleset: Ruleset | undefined;
+  try {
+    // Repository policy has precedence, matching the hosted queue. An invalid
+    // project policy must not disable the direct poller; fall back to the
+    // node-global policy and leave the validation error visible in the log.
+    ruleset = loadProjectPolicy(cfg.repoDir)?.ruleset;
+  } catch (error) {
+    console.warn(`[policy] ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const policy = createRunPolicy({
+    context: "queue",
+    ruleset: ruleset ?? activeRulesetFor(rulesetsDir, "queue"),
+  });
+  let attempt = 1;
+  let rerouteCount = 0;
+  let routing: { runtimeId?: string; model?: string } = {};
+
+  for (;;) {
+    try {
+      await runIssueTask(cfg, issue, { ...routing });
+      return;
+    } catch (error) {
+      const decision = policy.decide({ routing, error, attempt, rerouteCount });
+      if (decision.action !== "retry" && decision.action !== "reroute") throw error;
+      attempt += 1;
+      if (decision.action === "reroute") {
+        routing = {
+          ...(routing.runtimeId !== undefined ? { runtimeId: routing.runtimeId } : {}),
+          ...(routing.model !== undefined ? { model: routing.model } : {}),
+          ...(decision.routing.runtimeId !== undefined ? { runtimeId: decision.routing.runtimeId } : {}),
+          ...(decision.routing.model !== undefined ? { model: decision.routing.model } : {}),
+        };
+        rerouteCount = decision.rerouteCount;
+      }
+      console.warn(`[github-tasks] issue #${issue.number} ${decision.action} (${decision.condition}): ${decision.summary}`);
+      if (decision.delayMs > 0) await new Promise<void>((resolve) => setTimeout(resolve, decision.delayMs));
+    }
+  }
+}
+
 async function startGitHubTasksIfConfigured() {
   const cfg = await resolveGitHubTaskConfig();
   if (!cfg) return;
-  githubPoller = new GitHubTaskPoller(cfg, (issue) => runIssueTask(cfg, issue), nodeGithubMaxConcurrent);
+  githubPoller = new GitHubTaskPoller(cfg, (issue) => runDirectGitHubIssueWithPolicy(cfg, issue), nodeGithubMaxConcurrent);
   githubPoller.start();
 }
 
