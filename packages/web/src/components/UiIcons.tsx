@@ -51,6 +51,11 @@ export function ClipboardIcon({ size = 20, ...props }: IconProps) {
   return <svg {...common} {...props} viewBox="0 0 24 24" width={size} height={size}><rect x="8" y="3" width="8" height="4" rx="1" /><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" /></svg>;
 }
 
+/** Overlapping documents — copy. */
+export function CopyIcon({ size = 20, ...props }: IconProps) {
+  return <svg {...common} {...props} viewBox="0 0 24 24" width={size} height={size}><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>;
+}
+
 /** Message bubble — the Composer toggle in the terminal toolbar. */
 export function ChatBubbleIcon({ size = 20, ...props }: IconProps) {
   return <svg {...common} {...props} viewBox="0 0 24 24" width={size} height={size}><path d="M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9l-4 3v-3H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z" /><path d="M8 9.5h8M8 13h5" /></svg>;

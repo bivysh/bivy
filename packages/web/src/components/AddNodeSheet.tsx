@@ -5,6 +5,7 @@ import { Sheet } from "./Sheet.js";
 import { writeClipboard } from "../clipboard.js";
 import { installCommand } from "../installCommand.js";
 import { controller } from "../store/useStore.js";
+import { CheckIcon, CopyIcon } from "./UiIcons.js";
 
 /**
  * Reached from the node switcher's "Add a node…" entry. Spells out how to
@@ -26,40 +27,52 @@ export function AddNodeSheet({ onClose }: { onClose: () => void }) {
           {install.authenticated && " It will use this signed-in account automatically."}
           {!install.hosted && " Needs Node.js 20 or newer; setup will point the Machine at this control plane."}
         </p>
-        <pre className="code-snippet">
-          <code>{install.command}</code>
-        </pre>
-        {install.authenticated && (
-          <p className="muted">Auto sign-in includes an account token. Paste it only into a Machine you trust, or copy the plain command below.</p>
-        )}
-        <div className="row-actions">
-          <button
-            className="btn primary"
-            onClick={async () => {
-              const ok = await writeClipboard(install.command);
-              if (ok) {
-                setCopied("auto");
-                setTimeout(() => setCopied(null), 1500);
-              }
-            }}
-          >
-            {copied === "auto" ? "Copied!" : install.authenticated ? "Copy auto sign-in" : "Copy command"}
-          </button>
+        <div className="install-command-list">
           {install.authenticated && (
-            <button
-              className="btn ghost"
-              onClick={async () => {
-                const ok = await writeClipboard(install.plainCommand);
-                if (ok) {
-                  setCopied("plain");
-                  setTimeout(() => setCopied(null), 1500);
-                }
-              }}
-            >
-              {copied === "plain" ? "Copied plain!" : "Copy plain"}
-            </button>
+            <div className="install-command-option">
+              <div className="install-command-label">Auto sign-in</div>
+              <div className="connect-command">
+                <code>{install.command}</code>
+                <button
+                  type="button"
+                  className={`btn sm ghost icon-only${copied === "auto" ? " is-copied" : ""}`}
+                  onClick={async () => {
+                    const ok = await writeClipboard(install.command);
+                    if (ok) {
+                      setCopied("auto");
+                      setTimeout(() => setCopied(null), 1500);
+                    }
+                  }}
+                  aria-label={copied === "auto" ? "Auto sign-in command copied" : "Copy auto sign-in command"}
+                  title={copied === "auto" ? "Copied" : "Copy auto sign-in command"}
+                >
+                  {copied === "auto" ? <CheckIcon size={16} /> : <CopyIcon size={16} />}
+                </button>
+              </div>
+              <p className="muted">Includes an account token. Paste it only into a Machine you trust.</p>
+            </div>
           )}
-          {install.hosted && <a className="btn ghost" href="/install.sh">Download script</a>}
+          <div className="install-command-option">
+            <div className="install-command-label">Regular sign-in</div>
+            <div className="connect-command">
+              <code>{install.plainCommand}</code>
+              <button
+                type="button"
+                className={`btn sm ghost icon-only${copied === "plain" ? " is-copied" : ""}`}
+                onClick={async () => {
+                  const ok = await writeClipboard(install.plainCommand);
+                  if (ok) {
+                    setCopied("plain");
+                    setTimeout(() => setCopied(null), 1500);
+                  }
+                }}
+                aria-label={copied === "plain" ? "Regular sign-in command copied" : "Copy regular sign-in command"}
+                title={copied === "plain" ? "Copied" : "Copy regular sign-in command"}
+              >
+                {copied === "plain" ? <CheckIcon size={16} /> : <CopyIcon size={16} />}
+              </button>
+            </div>
+          </div>
         </div>
         <p className="muted">The new Machine shows up in this switcher as soon as it connects — no need to close this.</p>
       </div>
