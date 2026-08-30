@@ -2385,7 +2385,13 @@ export class AppController {
     }
     const state = this.store.getState();
     const activeSessionId = state.activeSession.activeSessionId;
-    if (activeSessionId) {
+    // A session can briefly have an id before its first user message is sent
+    // (for example after an open/create race). It is still a new-session draft
+    // from the user's point of view. Forking it here makes merely browsing the
+    // agent picker create a child session, and a second pick forks that child.
+    // Only a conversation with a user message is eligible for handoff.
+    const hasConversation = state.activeSession.transcript.some((entry) => entry.role === "user");
+    if (activeSessionId && hasConversation) {
       // Agent handoff is a real cross-runtime fork, not a client-side summary in
       // a blank draft. The shared fork path carries normalized history, repo and
       // dirty files, creates the target runtime session, and opens it.
@@ -2399,6 +2405,16 @@ export class AppController {
         retireSource: false,
       }).catch((error) => this.store.setError(error instanceof Error ? error.message : String(error)));
       return;
+    }
+    if (activeSessionId) {
+      // Drop the premature/empty session id before applying the new draft
+      // choice. This also moves the URL back to /sessions/new, so subsequent
+      // agent picks remain ordinary draft changes rather than more handoffs.
+      this.pendingPrompt = null;
+      this.pendingFollowups = [];
+      this.promptTargetSessionId = null;
+      this.store.resetActiveSession();
+      navigate({ kind: "new" });
     }
 
     this.store.setSelectedAgentLocal(rt.id);
