@@ -121,6 +121,16 @@ export function indexedDbDeviceKeyStore(): DeviceKeyStore | null {
       }
     },
     async save(priv, pub) {
+      // Some Chromium/WebKit versions expose CryptoKey but cannot structured-
+      // clone X25519 keys into IndexedDB. Check before opening a transaction so
+      // the expected fallback in deviceKeypair does not produce a noisy
+      // DataCloneError in the console.
+      try {
+        const clone = (globalThis as { structuredClone?: (value: unknown) => unknown }).structuredClone;
+        if (clone) clone({ priv, pub });
+      } catch {
+        throw new Error("IndexedDB cannot clone this device key");
+      }
       const db = await openDb();
       try {
         const tx = db.transaction(STORE, "readwrite");
