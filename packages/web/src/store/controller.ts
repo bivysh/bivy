@@ -904,6 +904,7 @@ export class AppController {
   }
 
   private foregroundTimer: ReturnType<typeof setTimeout> | null = null;
+  private backgroundDisconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private livenessTimer: ReturnType<typeof setTimeout> | null = null;
   /** requestIds for explicit liveness pings awaiting their matching pong. */
   private pendingLivenessPings = new Set<string>();
@@ -918,9 +919,29 @@ export class AppController {
    */
   installLifecycleHandlers(): void {
     if (typeof document === "undefined") return;
-    const onForeground = (): void => this.refreshAfterForeground();
+    const onForeground = (): void => {
+      if (this.backgroundDisconnectTimer) {
+        clearTimeout(this.backgroundDisconnectTimer);
+        this.backgroundDisconnectTimer = null;
+      }
+      this.refreshAfterForeground();
+    };
     document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible") onForeground();
+      if (document.visibilityState === "visible") {
+        onForeground();
+        return;
+      }
+      // A hidden hosted PWA cannot render live session events, yet the relay
+      // otherwise keeps delivering every cumulative assistant update from every
+      // running session. Give quick app switches a grace period, then disconnect;
+      // Web Push still reports attention/completion and foreground reconnect uses
+      // the history cursor to fetch only the missed tail. Direct/LAN mode does not
+      // consume hosted/mobile data and stays connected.
+      if (this.direct || this.backgroundDisconnectTimer) return;
+      this.backgroundDisconnectTimer = setTimeout(() => {
+        this.backgroundDisconnectTimer = null;
+        if (document.visibilityState === "hidden") this.transport.close();
+      }, AppController.BACKGROUND_DISCONNECT_DELAY_MS);
     });
     window.addEventListener("pageshow", onForeground);
     window.addEventListener("focus", onForeground);
@@ -1068,6 +1089,10 @@ export class AppController {
       this.verifyLiveness();
     }, 150);
   }
+
+  /** A short grace avoids reconnecting for every quick app/tab switch while
+   *  bounding invisible relay streaming on mobile data. */
+  private static readonly BACKGROUND_DISCONNECT_DELAY_MS = 15_000;
 
   /** How long a foregrounded, "online" client waits for an explicit ping/pong
    *  before deciding the socket is a zombie and forcing a reconnect. */

@@ -160,10 +160,12 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, onOpenAutomat
   // but that only fires while something is actually happening. This is a
   // safety net so a session someone else closed/opened, or a status change
   // missed during a brief reconnect, doesn't leave a stale dot indefinitely.
+  // Push is authoritative during normal use; keep this recovery poll calm since
+  // each refresh traverses both the node relay and the account session index.
   useEffect(() => {
     const id = setInterval(() => {
       if (document.visibilityState !== "hidden") controller.refreshSessions();
-    }, 25000);
+    }, 60000);
     return () => clearInterval(id);
   }, []);
 
