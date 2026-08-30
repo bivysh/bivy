@@ -3,8 +3,9 @@
   .sidebar {
     width: min(88vw, 336px);
     border-right: 1px solid var(--line-strong);
-    box-shadow: var(--shadow-xl);
+    box-shadow: none;
   }
+  .sidebar.open { box-shadow: var(--shadow-xl); }
   .sidebar-head {
     min-height: 56px;
     padding: max(var(--space-3), env(safe-area-inset-top)) var(--space-4) var(--space-3);

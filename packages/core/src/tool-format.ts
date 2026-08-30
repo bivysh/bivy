@@ -107,6 +107,10 @@ function clip(v: unknown, max = 120): string {
   return s.length > max ? s.slice(0, max - 1) + "…" : s;
 }
 
+function oneLine(v: unknown, max = 120): string {
+  return clip(str(v).replace(/\s+/g, " ").trim(), max);
+}
+
 function basename(path: string): string {
   const trimmed = path.replace(/[/\\]+$/, "");
   const idx = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
@@ -358,7 +362,7 @@ export function formatTool(name: string, input: unknown, detail?: ToolCallDetail
 
 /** One-line label for a tool row: command, else path/target, else query. */
 export function toolRowLabel(f: ToolFormat): string {
-  return f.command || f.path || f.target || f.query || clip(f.output, 120) || "";
+  return oneLine(f.command || f.path || f.target || f.query || f.output, 120);
 }
 
 /** Plain-language summary of a batch of tools, e.g. "Read 2 files, ran a command". */

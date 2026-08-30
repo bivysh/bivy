@@ -2807,8 +2807,13 @@ select.picker-search { appearance: auto; }
     position: fixed; top: var(--app-top, 0px); left: 0; height: var(--app-h, 100dvh);
     width: 84%; max-width: 320px; z-index: 30;
     transform: translateX(-100%); transition: transform 0.2s ease;
+    visibility: hidden;
   }
-  .sidebar.open { transform: translateX(0); }
+  .sidebar.open { transform: translateX(0); visibility: visible; }
+  .pill, .composer-btn, .session-actions-btn, .session-filter-btn, .sheet-back {
+    min-height: 44px;
+  }
+  .session-actions-btn, .session-filter-btn, .sheet-back { min-width: 44px; }
 }
 
 /* Universal Agent Harness — files-changed / undo-turn card */

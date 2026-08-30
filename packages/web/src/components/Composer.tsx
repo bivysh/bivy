@@ -536,13 +536,13 @@ export function Composer({
   // session shows it read-only in Session settings.
   const draftTier = SANDBOX_TIERS.find((t) => t.id === state.draft.sandbox);
   const nodeDefaultTier = SANDBOX_TIERS.find((t) => t.id === state.settings.nodeSettings?.defaultSandbox);
-  // The ◈ glyph already reads as "sandbox", so we drop the redundant "Sandbox"
-  // word: show the chosen tier, else the node default's name, else glyph only.
+  // Keep this decision labelled on mobile: the glyph alone does not explain
+  // that the control chooses the session's protection level.
   const sandboxLabel = draftTier
     ? draftTier.label
     : nodeDefaultTier
       ? nodeDefaultTier.label
-      : state.settings.nodeSettings?.defaultSandbox ?? "";
+      : state.settings.nodeSettings?.defaultSandbox ?? "Default";
   const sandboxTitle = draftTier ? draftTier.hint : "Sandbox mode for this session (machine default)";
   const canSend = !disabled && (Boolean(text.trim()) || attachments.length > 0);
   // B2 — a first session exposes exactly four decisions: machine, repo,
@@ -586,7 +586,7 @@ export function Composer({
             <GhGlyph />
             <span className="pill-label">{repoLabel}</span>
           </button>
-          <button type="button" className="pill sandbox-pill" onClick={() => setPicker("sandbox")} title={sandboxTitle} aria-label="Sandbox mode">
+          <button type="button" className="pill sandbox-pill" onClick={() => setPicker("sandbox")} title={sandboxTitle} aria-label="Protection">
             <span className="pill-glyph">◈</span>
             {sandboxLabel && <span className="pill-label">{sandboxLabel}</span>}
           </button>
