@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useModalBack, useModalEscape } from "../modalStack.js";
 import { AUTOMATION_TEMPLATES, type AutomationTemplate } from "./automationTemplates.js";
 import { IconBolt, IconBug, IconCi, IconFlask, IconPackage, IconPr, IconRadar, IconShield, IconSpark } from "./AutomationIcons.js";
@@ -46,8 +46,22 @@ export function NewAutomationChooser({
   onScratch: () => void;
   onTemplate: (t: AutomationTemplate) => void;
 }) {
-  const closeWithBack = useModalBack(onClose);
+  const selectionAfterClose = useRef<(() => void) | null>(null);
+  const closeWithBack = useModalBack(() => {
+    const selection = selectionAfterClose.current;
+    selectionAfterClose.current = null;
+    onClose();
+    selection?.();
+  });
   useModalEscape(closeWithBack);
+
+  function selectAfterClose(selection: () => void) {
+    // Consume the chooser's history entry before mounting the editor. Mounting
+    // both in the same render lets the chooser cleanup's history.back() pop the
+    // new editor's entry too, immediately closing it on mobile browsers.
+    selectionAfterClose.current = selection;
+    closeWithBack();
+  }
   return (
     <div className="wizard-scrim" onClick={closeWithBack}>
       <div
@@ -65,7 +79,10 @@ export function NewAutomationChooser({
           <button type="button" className="btn ghost icon" onClick={closeWithBack} aria-label="Close">✕</button>
         </div>
         <div className="wizard-body autom-chooser-body">
-          <NewAutomationPicker onScratch={onScratch} onTemplate={onTemplate} />
+          <NewAutomationPicker
+            onScratch={() => selectAfterClose(onScratch)}
+            onTemplate={(template) => selectAfterClose(() => onTemplate(template))}
+          />
         </div>
       </div>
     </div>
