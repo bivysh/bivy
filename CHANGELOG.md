@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-08-31
+
+### Added
+
+- Self-hosted control planes can use AWS KMS as the hosted keyring source for
+  encrypted machine enrollment credentials.
+- Automation setup now includes source readiness checks, clearer trigger
+  templates, scoped run history, and a dedicated Runs destination.
+- Accounts can be permanently deleted from Accounts & Billing settings, including
+  deployment-owned billing data, after any hosted machines are removed.
+
+### Changed
+
+- Installation now supports Node.js 20+, skips optional agent bridges and native
+  terminal dependencies on the fast path, and installs only the selected agent
+  integration when needed while preserving existing agent installs and logins.
+- The PWA has a more focused mobile and desktop shell, simpler new-session and
+  automation flows, improved workspace navigation, and more consistent sheets,
+  menus, touch targets, and attention states.
+- First-session onboarding now starts by connecting a machine, offers its default
+  workspace without requiring GitHub, and limits the post-activation automation
+  suggestion to a one-time next step.
+- Add Machine now presents clearly labeled auto sign-in and regular sign-in
+  commands with separate copy actions and explicit token-safety guidance.
+- Maintained agent support is now reported separately from release-tested
+  capability certification, so support status does not disappear when an
+  upstream version moves beyond the latest certified range. Release-tested pins
+  were refreshed for Claude Agent SDK 0.3.251, Codex 0.151.0, Pi 0.84.4, and
+  OpenCode 1.18.25.
+- The agent picker prioritizes Claude Code, Codex, Grok, OpenCode, and Pi while
+  keeping the full catalog searchable, and uses an explicit confirmation when
+  switching to an agent whose sign-in or protection level cannot be verified.
+- Session and automation polling payloads are smaller to reduce routine control
+  plane traffic.
+- Direct GitHub queue runs now honor project and node rulesets for retries and
+  fallback routing, matching hosted queue behavior.
+
+### Fixed
+
+- Session switching, closed-session resume, and async handoffs now keep prompts
+  and follow-ups attached to the intended session and preserve native resume
+  references; changing agents in a blank session remains a draft instead of
+  creating an empty fork.
+- Reasoning, structured tool calls, tool results, failures, and workspace changes
+  are preserved consistently in stored and resumed transcripts.
+- Webhook automations preserve signing settings, accept provider-native JSON
+  payloads, and generate idempotency keys when providers cannot send custom
+  headers.
+- Signing out clears the account-bound browser device key and remote pairing, so
+  the same browser can sign in and pair successfully with a different account.
+- Concurrent automation and vault operations now share one device identity and
+  tolerate stale recipients, avoiding save races and spurious sync failures.
+- Token and claim-based machine installs now use the standard installer and a
+  non-interactive enrollment path that works correctly on headless machines.
+- Automations sidebar navigation and voice-provider key actions now open their
+  intended destinations directly.
+- Mobile overlays, modal history, Settings navigation, automation editor state,
+  agent picker selection, actionable authentication errors, and terminal-launched
+  updates no longer get stuck or lose user state; automation text fields also no
+  longer trigger browser zoom on focus.
+
 ## [0.13.0] - 2026-08-27
 
 ### Added
