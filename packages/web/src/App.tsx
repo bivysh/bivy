@@ -442,6 +442,19 @@ export function App() {
     target.focus({ preventScroll: true });
   }, [state.activeSession.activeSessionId, state.activeSession.approvals, state.activeSession.questions, state.activeSession.turnAttentions]);
 
+  // Approval/question cards render inline in the active session's chat scroll.
+  // Keep these hooks before the auth gate so every render calls hooks in the
+  // same order, including the sign-in → app-shell transition.
+  const activeApprovals = state.activeSession.approvals.filter((a) => !a.sessionId || a.sessionId === state.activeSession.activeSessionId);
+  const activeQuestions = state.activeSession.questions.filter((q) => !q.sessionId || q.sessionId === state.activeSession.activeSessionId);
+  const activeTurnAttention = state.activeSession.turnAttentions.find((a) => a.sessionId === state.activeSession.activeSessionId);
+  const attentionFooterRef = useRef<HTMLDivElement>(null);
+  const attentionKey = [activeApprovals[0]?.id, activeQuestions[0]?.id, activeTurnAttention?.sessionId].filter(Boolean).join(":");
+  useEffect(() => {
+    if (!attentionKey) return;
+    requestAnimationFrame(() => attentionFooterRef.current?.querySelector<HTMLElement>("[data-attention-card]")?.focus());
+  }, [attentionKey]);
+
   // Auth/setup gates, derived from reactive store fields (not read live off
   // localStorage) so signing in swaps the sign-in screen for the app shell the
   // instant the token lands — no page reload needed. `direct` (local/loopback
@@ -504,20 +517,6 @@ export function App() {
     | undefined;
   const canContinueInTerminal = online && Boolean(activeRuntimeCaps?.interactiveTui);
 
-  // Approval/question cards render inline in the active session's chat scroll, so
-  // only show the ones that belong to that session. Items are still kept globally
-  // in the store (for the sidebar "needs response" indicator); we just don't render
-  // another session's cards into whichever chat happens to be on screen. Items with
-  // no sessionId are treated as global and shown everywhere.
-  const activeApprovals = state.activeSession.approvals.filter((a) => !a.sessionId || a.sessionId === state.activeSession.activeSessionId);
-  const activeQuestions = state.activeSession.questions.filter((q) => !q.sessionId || q.sessionId === state.activeSession.activeSessionId);
-  const activeTurnAttention = state.activeSession.turnAttentions.find((a) => a.sessionId === state.activeSession.activeSessionId);
-  const attentionFooterRef = useRef<HTMLDivElement>(null);
-  const attentionKey = [activeApprovals[0]?.id, activeQuestions[0]?.id, activeTurnAttention?.sessionId].filter(Boolean).join(":");
-  useEffect(() => {
-    if (!attentionKey) return;
-    requestAnimationFrame(() => attentionFooterRef.current?.querySelector<HTMLElement>("[data-attention-card]")?.focus());
-  }, [attentionKey]);
   return (
     <div className="app">
       <aside className={`sidebar${drawerOpen ? " open" : ""}`}>
