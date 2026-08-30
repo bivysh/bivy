@@ -24,7 +24,7 @@ test("the readiness strip renders nothing once activated and never claims premat
 
 test("setup readiness is wired only into a first-ever draft and remediation stays in flow", async () => {
   const app = await read("../../packages/web/src/App.tsx");
-  expect(app).toContain("!state.activeSession.activeSessionId && state.activeSession.transcript.length === 0 && !state.sessionIndex.sessions.some((session) => session.bivyCreated)");
+  expect(app).toContain("!state.activeSession.activeSessionId && state.activeSession.transcript.length === 0 && state.sessionIndex.sessions.length === 0");
   expect(app).toContain("<ReadinessChecklist");
   expect(app).toContain("deriveActivation({");
   expect(app).toContain("state.catalogs.activationReadiness ? state.catalogs.activationReadiness.credential.ok : undefined");

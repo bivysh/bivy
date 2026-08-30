@@ -9,7 +9,6 @@ import { useModalEscape } from "../modalStack.js";
 import { ProviderConnectForm } from "./ProviderConnect.js";
 import { runtimeEnforcesProtection, SANDBOX_TIERS } from "./sandboxTiers.js";
 import { writeClipboard } from "../clipboard.js";
-import { Badge, type BadgeTone } from "./Badge.js";
 
 function agentLabel(a: RuntimeInfo): string {
   return String(a.displayName || a.name || a.id || "Agent");
@@ -22,24 +21,6 @@ const THINKING_LABELS: Record<string, string> = {
   medium: "Default",
   high: "Deep",
 };
-
-function runtimeCapabilityChips(a: RuntimeInfo): Array<{ label: string; ok: boolean }> {
-  const caps = (a.capabilities || {}) as Record<string, unknown>;
-  const mode = String((a as { executionMode?: unknown }).executionMode || "");
-  const modeLabel = mode === "protocol" ? "Protocol" : mode === "structured-pipe" ? "Structured" : mode === "pipe" ? "Chat pipe" : mode === "pty" ? "Terminal" : "";
-  // "Approvals" is on for native per-tool interception OR the MCP-proxy gate
-  // (which governs the agent's MCP tool calls through the same Approve/Deny flow).
-  return [
-    ...(modeLabel ? [{ label: modeLabel, ok: true }] : []),
-    { label: "Approvals", ok: Boolean(caps.toolInterception) || Boolean(caps.mcpToolApprovals) },
-    { label: "Resume", ok: Boolean(caps.resume) },
-    { label: "Models", ok: Boolean(caps.modelSelection) },
-    // Forking is a Bivy session-layer feature. Every agent can at least receive
-    // the portable seeded continuation; native capabilities only improve its
-    // fidelity and must not make the picker claim other agents cannot fork.
-    { label: "Fork", ok: true },
-  ];
-}
 
 function runtimeTier(runtime: RuntimeInfo): string {
   return String((runtime as { supportTier?: unknown }).supportTier || "experimental");
@@ -74,30 +55,6 @@ function previewContractForRuntime(a: RuntimeInfo): SessionContract {
     mcpToolApprovalsOnly: caps.mcpToolApprovals === true,
     runtimeEnforcement: a.protectionLevel,
   });
-}
-
-function RuntimeMeta({ text, readiness, tone }: { text?: string; readiness: string; tone?: BadgeTone }) {
-  return (
-    <span className="runtime-meta">
-      {text && <span className="runtime-meta-text">{text}</span>}
-      <span className="runtime-capabilities">
-        <Badge tone={tone}>{readiness}</Badge>
-      </span>
-    </span>
-  );
-}
-
-function RuntimeDetails({ runtime }: { runtime: RuntimeInfo }) {
-  return (
-    <div className="runtime-capabilities" aria-label={`${agentLabel(runtime)} capabilities`}>
-      <Badge>{runtime.protectionLabel || "Machine permissions"}</Badge>
-      {runtimeCapabilityChips(runtime).map((chip) => (
-        <Badge key={chip.label} tone={chip.ok ? "ok" : undefined}>
-          {chip.ok ? "✓" : "–"} {chip.label}
-        </Badge>
-      ))}
-    </div>
-  );
 }
 
 // A small copy-command row (mirrors ConnectRunner's install-command block) for
@@ -489,10 +446,17 @@ export function NodePicker({
 
 // ---- Agent picker ----
 export function AgentPicker({ state, onClose }: { state: AppState; onClose: () => void }) {
+  const cloningActiveSession = Boolean(state.activeSession.activeSessionId);
+  // For an active session, "current" means the runtime that owns that session,
+  // never the globally last-used/default runtime for new drafts.
+  const selectedAgentId = cloningActiveSession
+    ? state.activeSession.activeRuntimeId ?? state.sessionIndex.sessions.find((s) => s.sessionId === state.activeSession.activeSessionId)?.runtimeId ?? null
+    : state.catalogs.selectedAgentId ?? (state.catalogs.runtimes.find((r) => (r as any).current)?.id || null);
   const [q, setQ] = useState("");
   const [moreOpen, setMoreOpen] = useState(false);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
-  const [detailsId, setDetailsId] = useState<string | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const scrolledAgentRef = useRef<string | null>(null);
   useEffect(() => {
     controller.listRuntimes();
     // Warm each agent's model list in the background so the first switch lists
@@ -512,14 +476,19 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
   const recommended = runtimes.filter((runtime) => runtimeTier(runtime) === "supported");
   const more = runtimes.filter((runtime) => runtimeTier(runtime) !== "supported");
 
-  const cloningActiveSession = Boolean(state.activeSession.activeSessionId);
-  // For an active session, "current" means the runtime that owns that session,
-  // never the globally last-used/default runtime for new drafts.
-  const selectedAgentId = cloningActiveSession
-    ? state.activeSession.activeRuntimeId ?? state.sessionIndex.sessions.find((s) => s.sessionId === state.activeSession.activeSessionId)?.runtimeId ?? null
-    : state.catalogs.selectedAgentId ?? (state.catalogs.runtimes.find((r) => (r as any).current)?.id || null);
+  const selectedRuntime = state.catalogs.runtimes.find((runtime) => runtime.id === selectedAgentId);
+  useEffect(() => {
+    if (selectedRuntime && runtimeTier(selectedRuntime) !== "supported") setMoreOpen(true);
+  }, [selectedRuntime]);
+  useEffect(() => {
+    if (!selectedAgentId || scrolledAgentRef.current === selectedAgentId) return;
+    const selected = listRef.current?.querySelector<HTMLElement>(".picker-item-row.active");
+    if (!selected) return;
+    selected.scrollIntoView({ block: "center" });
+    scrolledAgentRef.current = selectedAgentId;
+  }, [selectedAgentId, runtimes.length, moreOpen]);
+
   const confirmingRuntime = confirmingId ? state.catalogs.runtimes.find((runtime) => runtime.id === confirmingId) : undefined;
-  const detailsRuntime = detailsId ? state.catalogs.runtimes.find((runtime) => runtime.id === detailsId) : undefined;
 
   const chooseRuntime = (runtime: RuntimeInfo) => {
     const contract = !cloningActiveSession ? previewContractForRuntime(runtime) : undefined;
@@ -547,44 +516,23 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
         key={a.id}
         active={active}
         title={agentLabel(a)}
-        meta={
-          <RuntimeMeta
-            text={cloningActiveSession
-              ? ["Fork and hand off", description].filter(Boolean).join(" · ")
-              : description}
-            readiness={installing ? "Setting up" : available ? "Ready" : installable ? "Install" : "Needs sign-in"}
-            tone={available ? "ok" : "warn"}
-          />
-        }
+        meta={[
+          installing ? "Setting up…" : !available ? (installable ? "Install required" : "Needs sign-in") : cloningActiveSession ? "Fork and hand off" : null,
+          description,
+        ].filter(Boolean).join(" · ")}
         disabled={installing || (!available && !installable)}
-        layout="actions"
-        right={
-          <>
-            <button
-              type="button"
-              className="btn sm ghost"
-              onClick={(e) => {
-                e.stopPropagation();
-                setDetailsId((id) => id === a.id ? null : a.id);
-              }}
-              aria-expanded={detailsId === a.id}
-            >
-              Details
-            </button>
-            {installable && !installing && (
-              <button
-                type="button"
-                className="btn sm ghost"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  controller.installAgent(a.id);
-                }}
-              >
-                Install
-              </button>
-            )}
-          </>
-        }
+        right={installable && !installing ? (
+          <button
+            type="button"
+            className="btn sm ghost"
+            onClick={(e) => {
+              e.stopPropagation();
+              controller.installAgent(a.id);
+            }}
+          >
+            Install
+          </button>
+        ) : undefined}
         onClick={() => {
           if (installable) {
             controller.installAgent(a.id);
@@ -609,7 +557,7 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
         </div>
       )}
       <input className="picker-search" placeholder="Search agents…" value={q} onChange={(e) => { setQ(e.target.value); setConfirmingId(null); }} />
-      <div className="picker-list">
+      <div className="picker-list" ref={listRef}>
         {runtimes.length === 0 && <div className="picker-empty">No agents available.</div>}
         {recommended.length > 0 && <div className="picker-section-label">Recommended</div>}
         {recommended.map(renderRuntime)}
@@ -620,14 +568,6 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
         )}
         {(moreOpen || Boolean(q.trim())) && more.map(renderRuntime)}
       </div>
-      {detailsRuntime && (
-        <details className="settings-disclosure" open>
-          <summary className="settings-disclosure-summary">{agentLabel(detailsRuntime)} details</summary>
-          <div className="settings-disclosure-body">
-            <RuntimeDetails runtime={detailsRuntime} />
-          </div>
-        </details>
-      )}
       {confirmingRuntime && (
         <div className="banner" data-tone="warn" role="note">
           <span className="banner-text">

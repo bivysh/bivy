@@ -16,26 +16,25 @@ test("closed mobile drawer has no shadow and cannot receive focus", async () => 
 
 test("primary mobile shell controls expose 44px hit areas", async () => {
   const styles = await readFile(new URL("styles.css", WEB), "utf8");
-  expect(styles).toContain(".composer-meta > .btn, .fs-decision, .composer-btn, .session-actions-btn, .session-filter-btn, .sheet-back");
-  expect(styles).toMatch(/\.composer-meta > \.btn, \.fs-decision, \.composer-btn,[\s\S]*min-height: 44px;/);
+  expect(styles).toContain(".composer-meta > .btn, .composer-btn, .session-actions-btn, .session-filter-btn, .sheet-back");
+  expect(styles).toMatch(/\.composer-meta > \.btn, \.composer-btn,[\s\S]*min-height: 44px;/);
 });
 
 test("protection control keeps a plain-language default label", async () => {
   const composer = await readFile(new URL("components/Composer.tsx", WEB), "utf8");
   const pickers = await readFile(new URL("components/Pickers.tsx", WEB), "utf8");
   expect(composer).toContain('?? "Default"');
-  expect(composer).toContain('decision.key === "protection" ? "Protection"');
+  expect(composer).toContain('aria-label={`Protection: ${sandboxLabel}`}');
   expect(pickers).toContain('<Sheet title="Protection"');
   expect(pickers).toContain("can't ask for approval — protection choices are treated as full access.");
 });
 
-test("agent actions do not squeeze the selectable row on mobile", async () => {
-  const sheet = await readFile(new URL("components/Sheet.tsx", WEB), "utf8");
+test("agent install actions stay inline with compact selectable rows", async () => {
   const pickers = await readFile(new URL("components/Pickers.tsx", WEB), "utf8");
   const styles = await readFile(new URL("styles.css", WEB), "utf8");
-  expect(sheet).toContain('layout?: "default" | "actions"');
-  expect(pickers).toContain('layout="actions"');
-  expect(styles).toContain(".picker-item-row.with-actions { display: grid;");
+  expect(pickers).not.toContain('layout="actions"');
+  expect(pickers).toContain("right={installable && !installing ? (");
+  expect(pickers).not.toContain("setDetailsId");
   expect(styles).toContain("overflow-x: hidden;");
   expect(styles).toContain(".sheet-backdrop { position: absolute; inset: 0; z-index: var(--z-base);");
   expect(styles).toContain("position: relative; z-index: var(--z-dropdown); width: 100%; max-width: 520px;");

@@ -6,12 +6,10 @@ import type { AppState, PromptAttachment, SlashCommand } from "@bivy/core";
 import { isSlashInput, parseSlash, matchSlashCommands, resolveSlash } from "@bivy/core";
 import { useModalEscape } from "../modalStack.js";
 import { RepoPicker, AgentPicker, ModelPicker, SandboxPicker } from "./Pickers.js";
-import { firstSessionDecisions, type FirstSessionDecisionKey } from "../firstSession.js";
 import { FollowupQueue } from "./FollowupQueue.js";
-import { SANDBOX_TIERS } from "./sandboxTiers.js";
+import { runtimeEnforcesProtection, SANDBOX_TIERS } from "./sandboxTiers.js";
 import { VoiceRecorder } from "./VoiceRecorder.js";
 import { Spinner } from "./Spinner.js";
-import { Badge } from "./Badge.js";
 import { WebSpeechRecorder, webSpeechSupported } from "./WebSpeechRecorder.js";
 import { controller } from "../store/useStore.js";
 import { clearComposerDraft, composerDraftKey, readComposerDraft, writeComposerDraft, type PendingAttachmentMetadata } from "../composerDraft.js";
@@ -86,6 +84,14 @@ function imageDataUrl(a: PromptAttachment): string | null {
  *  drop zone for actual file drops. */
 function hasFiles(dt: DataTransfer | null): boolean {
   return Boolean(dt && Array.from(dt.types || []).includes("Files"));
+}
+
+function GhGlyph() {
+  return (
+    <svg className="pill-gh" viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden>
+      <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z" />
+    </svg>
+  );
 }
 
 export function MicGlyph() {
@@ -535,6 +541,16 @@ export function Composer({
   }
 
   const modelLabel = state.catalogs.currentModel?.label || state.catalogs.currentModel?.id || "Choose a model";
+  const repoLabel = state.draft.repo
+    ? state.draft.branch
+      ? `${state.draft.repo} @ ${state.draft.branch}`
+      : state.draft.repo
+    : "Choose repository";
+  const repoTitle = state.draft.repo
+    ? state.draft.branch
+      ? `Repository ${state.draft.repo} (branch ${state.draft.branch})`
+      : `Repository ${state.draft.repo} (default branch)`
+    : "Choose repository";
   // The next session's sandbox tier: an explicit draft choice, else the node
   // default (shown by name when known). Chosen up front on the draft; a running
   // session shows it read-only in Session settings.
@@ -547,54 +563,16 @@ export function Composer({
     : nodeDefaultTier
       ? nodeDefaultTier.label
       : state.settings.nodeSettings?.defaultSandbox ?? "Default";
+  const selectedRuntime = state.catalogs.runtimes.find((runtime) => runtime.id === state.catalogs.selectedAgentId);
+  const sandboxTitle = runtimeEnforcesProtection(selectedRuntime)
+    ? (draftTier ? draftTier.hint : "Protection for this session (machine default)")
+    : `${state.catalogs.currentAgentName || "This agent"} can't ask for approval — treated as full access`;
   const canSend = !disabled && (Boolean(text.trim()) || attachments.length > 0);
-  // B2 — a first session exposes exactly four decisions: machine, repo,
-  // agent/model, protection. On a draft we render a single explicit summary of
-  // them (the machine otherwise lives only in the topbar switcher), so a new user
-  // sees the whole decision set at a glance rather than inferring it from pills.
-  const machineLabel = state.connection.nodes.find((n) => n.id === state.connection.currentNodeId)?.name
-    || (controller.direct ? "This machine" : "Default machine");
-  const decisions = firstSessionDecisions({
-    machine: machineLabel,
-    repo: state.draft.repo || "No repository",
-    agent: state.catalogs.currentAgentName || "Choose an agent",
-    model: modelLabel,
-    modelManagedByAgent: !modelSelectable,
-    protection: sandboxLabel || state.draft.sandbox || "Machine default",
-  }).filter((decision) => decision.key !== "machine" || (!controller.direct && !controller.solo));
-  const openDecision = (key: FirstSessionDecisionKey) => {
-    if (key === "machine") (document.querySelector(".node-switcher-btn") as HTMLButtonElement | null)?.click();
-    else if (key === "repo") setPicker("repo");
-    else if (key === "agent-model") setPicker(modelLabel === "Choose a model" && modelSelectable ? "model" : "agent");
-    else setPicker("sandbox");
-  };
   const firstIsolatedRun = isDraft && Boolean(state.draft.ephemeralConfig);
   const starterTask = "Inspect this repository and explain how to run its tests. Do not change files.";
 
   return (
     <>
-      {isDraft && (
-        <section className="composer-first-session" aria-label="Review before starting">
-          <strong>Review before starting</strong>
-          <div className="fs-decisions">
-            {decisions.map((decision) => {
-              const needsChoice = /^(Choose|Machine default)/.test(decision.value);
-              return (
-                <button
-                  type="button"
-                  key={decision.key}
-                  className={`fs-decision${decision.key === "repo" ? " repo-pill" : decision.key === "protection" ? " sandbox-pill" : ""}`}
-                  onClick={() => openDecision(decision.key)}
-                  aria-label={decision.key === "protection" ? "Protection" : `${decision.label}: ${decision.value}`}
-                >
-                  <span>{decision.label}</span>
-                  {needsChoice ? <Badge tone="accent">{decision.value}</Badge> : <b>{decision.value}</b>}
-                </button>
-              );
-            })}
-          </div>
-        </section>
-      )}
       {firstIsolatedRun && !text.trim() && attachments.length === 0 && (
         <div className="composer-starter" role="note">
           <div>
@@ -603,6 +581,18 @@ export function Composer({
           </div>
           <button type="button" className="btn sm" onClick={() => setText(starterTask)}>
             Use starter task
+          </button>
+        </div>
+      )}
+      {isDraft && (
+        <div className="composer-lead" aria-label="Session setup">
+          <button type="button" className="btn sm ghost repo-pill" onClick={() => setPicker("repo")} title={repoTitle}>
+            <GhGlyph />
+            <span className="pill-label">{repoLabel}</span>
+          </button>
+          <button type="button" className="btn sm ghost sandbox-pill" onClick={() => setPicker("sandbox")} title={sandboxTitle} aria-label={`Protection: ${sandboxLabel}`}>
+            <span className="pill-glyph">◈</span>
+            <span className="pill-label">{sandboxLabel}</span>
           </button>
         </div>
       )}

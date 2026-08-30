@@ -730,7 +730,7 @@ export function App() {
           </div>
         )}
 
-        {!showFirstRunOnboarding && !state.activeSession.activeSessionId && state.activeSession.transcript.length === 0 && !state.sessionIndex.sessions.some((session) => session.bivyCreated) && (
+        {!showFirstRunOnboarding && !state.activeSession.activeSessionId && state.activeSession.transcript.length === 0 && state.sessionIndex.sessions.length === 0 && (
           <Suspense fallback={null}>
             <ReadinessChecklist
               activation={activation}
