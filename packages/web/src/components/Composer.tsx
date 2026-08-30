@@ -601,7 +601,7 @@ export function Composer({
             <strong>Start with a safe read-only task</strong>
             <span>Verify the Machine, repository, agent, and model before asking it to edit code.</span>
           </div>
-          <button type="button" className="btn small" onClick={() => setText(starterTask)}>
+          <button type="button" className="btn sm" onClick={() => setText(starterTask)}>
             Use starter task
           </button>
         </div>

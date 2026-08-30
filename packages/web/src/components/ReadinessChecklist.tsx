@@ -58,7 +58,7 @@ export function ReadinessChecklist({
         ))}
       </ol>
       {next && handler && (
-        <button type="button" className="btn small primary readiness-next" onClick={handler}>
+        <button type="button" className="btn sm primary readiness-next" onClick={handler}>
           {next.label}
         </button>
       )}
