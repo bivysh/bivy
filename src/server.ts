@@ -1071,6 +1071,7 @@ function harnessDirFor(record: SessionRecord): string {
 function harnessBeginTurn(record: SessionRecord): void {
   const dir = harnessDirFor(record);
   record.harnessTurnReady = undefined;
+  record.harnessTurnFinished = false;
   if (!dir) return;
   const previous = record.workspaceState === "dirty" ? "dirty" : "clean";
   record.workspaceState = "checkpointing";
@@ -1093,6 +1094,14 @@ function harnessBeginTurn(record: SessionRecord): void {
 }
 
 /** After a turn, snapshot again and broadcast the structured diff it produced. */
+function finishHarnessTurn(record: SessionRecord): void {
+  if (record.harnessTurnFinished) return;
+  record.harnessTurnFinished = true;
+  void harnessEndTurn(record).finally(() => {
+    void replication.onTurnComplete(record.id);
+  });
+}
+
 async function harnessEndTurn(record: SessionRecord): Promise<void> {
   const previous = record.workspaceState === "dirty" ? "dirty" : "clean";
   try {
@@ -7539,6 +7548,7 @@ function attachSessionListeners(record: SessionRecord) {
     if (event.type === "turn_end") {
       eventLog.flush(record.id);
       clearSessionWorking(record);
+      finishHarnessTurn(record);
     }
     // AskUserQuestion is intercepted and answered by the daemon's guardian /
     // QuestionManager (see guardianInterceptor), which broadcasts
@@ -7572,14 +7582,9 @@ function attachSessionListeners(record: SessionRecord) {
       transcripts.clearLiveIntermediate(record.id);
       clearSessionWorking(record);
       void refreshSessionUsage(record);
-      // Snapshot the worktree and broadcast the structured diff this turn made —
-      // universal edit review + rewind target, for every runtime.
-      // Warm-replicate this turn to the standby AFTER the checkpoint is committed
-      // (so the shipped frame carries this turn's transcript AND its checkpoint).
-      // Gated on session sync — inert by default.
-      void harnessEndTurn(record).finally(() => {
-        void replication.onTurnComplete(record.id);
-      });
+      // Snapshot/diff at whichever completion boundary arrived first. Pi keeps
+      // its process alive after turn_end; other runtimes also emit agent_end.
+      finishHarnessTurn(record);
       // A turn that ended in a terminal model/provider error (e.g. an expired
       // credential or a 4xx from the API) otherwise vanished: working cleared,
       // no reply, no signal. Surface it as a session-scoped error so the client

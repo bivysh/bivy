@@ -8,6 +8,7 @@ test("turn completion and session index reconcile the composer working state", a
     readFile(new URL("../../packages/core/src/store.ts", import.meta.url), "utf8"),
   ]);
   expect(server).toMatch(/event\.type === "turn_end"[\s\S]*clearSessionWorking\(record\)/);
+  expect(server).toMatch(/event\.type === "turn_end"[\s\S]*finishHarnessTurn\(record\)/);
   expect(store).toContain('activeRow.status !== "working"');
   expect(store).toContain('working: false, workingLabel: ""');
 });
