@@ -1839,11 +1839,14 @@ function stampSessionEvent(payload: unknown): unknown {
 }
 
 // Collapse the burst of assistant `message_update`s (one per agent stdout line,
-// each carrying the FULL text so far) into ~1 fan-out per tick. See
-// session-event-coalescer.ts for the rationale (kills the O(n^2) re-serialize).
+// each carrying the FULL text so far) to a human-smooth 4 fps. A 16 ms window
+// still allowed up to 62 cumulative snapshots/second, making a long answer
+// quadratic and surprisingly expensive over a phone's relay connection. The
+// latest snapshot supersedes every skipped one, and non-update events flush it
+// immediately, so 250 ms changes neither final content nor event ordering.
 // The coalescer's emit stamps the surviving (latest) update, so only ~one seq is
-// spent per tick — the ring holds turn-scale events, not every stdout line.
-const SESSION_UPDATE_COALESCE_MS = 16;
+// spent per window — the ring holds turn-scale events, not every stdout line.
+const SESSION_UPDATE_COALESCE_MS = 250;
 const sessionEvents = new SessionEventCoalescer({
   coalesceMs: SESSION_UPDATE_COALESCE_MS,
   emit: (payload) => broadcastCoalesced(stampSessionEvent(payload)),
