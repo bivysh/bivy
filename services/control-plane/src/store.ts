@@ -1181,6 +1181,7 @@ export interface AccountAuthRepository {
   // Accounts & auth
   findOrCreateAccount(email: string): Promise<Account>;
   getAccount(accountId: string): Promise<Account | undefined>;
+  deleteAccount(accountId: string): Promise<boolean>;
   setGithubIdentity(accountId: string, githubUserId: string, targetIds: string[]): Promise<void>;
   createLoginToken(email: string): Promise<string>; // magic-link, returns raw token
   consumeLoginToken(token: string): Promise<Account | undefined>;

@@ -2216,26 +2216,24 @@ function AccountPanel() {
         >
           Sign out
         </button>
-        {me?.extension && (
-          <button
-            className="btn danger-ghost block"
-            disabled={accountAction !== null}
-            onClick={() => setConfirm({
-              title: "Delete account?",
-              message: "This permanently deletes your Bivy account and its data. This cannot be undone.",
-              label: "Delete account",
-              action: () => {
-                setAccountAction("delete-account");
-                controller.invokeAccountExtensionAction("delete-account")
-                  .then(({ url }) => { window.location.assign(url); })
-                  .catch((e) => setErr(String(e?.message || e)))
-                  .finally(() => setAccountAction(null));
-              },
-            })}
-          >
-            {accountAction === "delete-account" ? "Opening…" : "Delete account"}
-          </button>
-        )}
+        <button
+          className="btn danger-ghost block"
+          disabled={accountAction !== null}
+          onClick={() => setConfirm({
+            title: "Delete account?",
+            message: "This permanently deletes your Bivy account, billing subscription, and its data. This cannot be undone.",
+            label: "Delete account",
+            action: () => {
+              setAccountAction("delete-account");
+              controller.deleteAccount()
+                .then(() => controller.signOut())
+                .catch((e) => setErr(String(e?.message || e)))
+                .finally(() => setAccountAction(null));
+            },
+          })}
+        >
+          {accountAction === "delete-account" ? "Deleting…" : "Delete account"}
+        </button>
       </div>
     </div>
   );
