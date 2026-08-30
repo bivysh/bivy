@@ -2548,7 +2548,9 @@ export class AppController {
   invokeAccountExtensionAction(action: string): Promise<{ url: string }> { return invokeAccountExtensionAction(this.local, action); }
   fetchGithubApp(): ReturnType<typeof fetchGithubApp> { return this.accountCoordinator.fetchGithubApp() as ReturnType<typeof fetchGithubApp>; }
   fetchGithubQueue(limit = 30): ReturnType<typeof fetchGithubQueue> { return this.accountCoordinator.fetchGithubQueue(limit); }
-  fetchAutomationRuns(limit = 50): ReturnType<typeof fetchAutomationRuns> { return this.accountCoordinator.fetchAutomationRuns(limit); }
+  fetchAutomationRuns(limit = 50, options: { summary?: boolean } = {}): ReturnType<typeof fetchAutomationRuns> {
+    return this.accountCoordinator.fetchAutomationRuns(limit, options);
+  }
   cancelAutomationRun(id: string): Promise<{ runs: Awaited<ReturnType<typeof fetchAutomationRuns>>; queue: Awaited<ReturnType<typeof fetchGithubQueue>> }> {
     return this.accountCoordinator.cancelAutomationRun(id);
   }

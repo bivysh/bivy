@@ -21,6 +21,7 @@ import {
   cancelAutomationRun,
   retryAutomationRun,
   fetchAutomationRun,
+  fetchAutomationRuns,
   RunFetchError,
   recordProductMetric,
 } from "../src/index.js";
@@ -504,6 +505,21 @@ describe("retryAutomationRun", () => {
     const store = createLocalStore(mem(), mem());
     const fakeFetch = (async () => ({ ok: false, status: 409, json: async () => ({ error: "This Run has reached its attempt limit." }) }) as Response) as unknown as typeof fetch;
     await expect(retryAutomationRun(store, "run-1", fakeFetch)).rejects.toThrow("attempt limit");
+  });
+});
+
+describe("fetchAutomationRuns", () => {
+  it("requests the compact summary feed when used by an always-on shell", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.cp = "https://app.bivy.sh";
+    let seenUrl = "";
+    const fakeFetch = (async (url: string) => {
+      seenUrl = String(url);
+      return { ok: true, json: async () => [] } as Response;
+    }) as unknown as typeof fetch;
+
+    await fetchAutomationRuns(store, 50, { summary: true }, fakeFetch);
+    expect(seenUrl).toBe("https://app.bivy.sh/account/automation-runs?limit=50&summary=1");
   });
 });
 

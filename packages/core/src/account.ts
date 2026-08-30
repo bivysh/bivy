@@ -1244,9 +1244,12 @@ export function createOneOffRun(
 export function fetchAutomationRuns(
   store: LocalStore,
   limit = 50,
+  options: { summary?: boolean } = {},
   fetchImpl: typeof fetch = fetch,
 ): Promise<AccountAutomationRun[]> {
-  return automationRequest(store, `/account/automation-runs?limit=${encodeURIComponent(String(limit))}`, {}, fetchImpl);
+  const query = new URLSearchParams({ limit: String(limit) });
+  if (options.summary) query.set("summary", "1");
+  return automationRequest(store, `/account/automation-runs?${query}`, {}, fetchImpl);
 }
 
 /** A failed Run fetch that still tells the caller which explicit state to show:
