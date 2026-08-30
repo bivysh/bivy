@@ -7533,8 +7533,13 @@ function attachSessionListeners(record: SessionRecord) {
       transcripts.resolveInlineImages(record);
     }
     // Durably persist the throttled sidecars at the turn boundary so a crash
-    // loses at most the in-flight turn's UI detail, not the whole turn.
-    if (event.type === "turn_end") eventLog.flush(record.id);
+    // loses at most the in-flight turn's UI detail, not the whole turn. A
+    // runtime may keep its agent process alive and never emit agent_end (Pi),
+    // so turn_end is also authoritative for the interactive working state.
+    if (event.type === "turn_end") {
+      eventLog.flush(record.id);
+      clearSessionWorking(record);
+    }
     // AskUserQuestion is intercepted and answered by the daemon's guardian /
     // QuestionManager (see guardianInterceptor), which broadcasts
     // session.question(.resolved) from its own listeners — runtimes no longer

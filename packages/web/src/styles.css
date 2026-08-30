@@ -890,6 +890,7 @@ button.sheet-action:last-child { border-bottom: 0; }
 .composer-btn.send:not(:disabled):active { transform: scale(0.92); }
 .composer-btn.send:disabled { opacity: 0.35; cursor: default; }
 .composer-btn.stop { background: var(--danger); color: var(--danger-contrast); }
+.composer-btn.stop.is-stopping { width: auto; border-radius: var(--radius-full); padding-inline: var(--space-3); display: inline-flex; gap: var(--space-2); }
 .composer-btn.stop:active { transform: scale(0.92); }
 /* "Steer current turn": an explicit interrupt, distinct from the default Send
    (which queues while busy — see FollowupQueue). --accent is already a warm

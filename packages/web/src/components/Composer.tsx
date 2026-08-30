@@ -157,6 +157,8 @@ export function Composer({
   const [menuDismissed, setMenuDismissed] = useState(false);
   const [recording, setRecording] = useState<null | "server" | "webspeech">(null);
   const [dragging, setDragging] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const [stopTimedOut, setStopTimedOut] = useState(false);
   // Reading a large/multiple file(s) (base64-encoding images, slurping text)
   // can take a visible moment with zero prior feedback — the paperclip button
   // just sat there looking unresponsive. Tracks a plain count so multiple
@@ -165,6 +167,24 @@ export function Composer({
   const [readingCount, setReadingCount] = useState(0);
   const [viewing, setViewing] = useState<string | null>(null);
   const dragDepth = useRef(0);
+
+  useEffect(() => {
+    if (!working) {
+      setStopping(false);
+      setStopTimedOut(false);
+      return;
+    }
+    if (!stopping) return;
+    const timer = window.setTimeout(() => setStopTimedOut(true), 10_000);
+    return () => window.clearTimeout(timer);
+  }, [stopping, working]);
+
+  const requestStop = () => {
+    if (stopping) return;
+    setStopping(true);
+    setStopTimedOut(false);
+    onAbort();
+  };
 
   // Some runtimes (e.g. Codex / Codex approvals) own model selection themselves
   // and expose no in-app model list — advertised via
@@ -609,6 +629,14 @@ export function Composer({
           onError={onError}
         />
       )}
+      {stopTimedOut && (
+        <div className="banner" data-tone="warn" role="alert">
+          <span className="banner-text">The agent didn&apos;t confirm it stopped.</span>
+          <button type="button" className="btn sm banner-action" onClick={() => location.reload()}>
+            Reload
+          </button>
+        </div>
+      )}
       <form
         ref={formRef}
         className="composer"
@@ -845,8 +873,15 @@ export function Composer({
             {/* Keep Stop available for an empty composer; once the user has
                 entered a follow-up, the Send button takes its place. */}
             {working && !text.trim() && (
-              <button type="button" className="composer-btn stop" onClick={onAbort} title="Stop" aria-label="Stop current turn">
-                ■
+              <button
+                type="button"
+                className={`composer-btn stop${stopping ? " is-stopping" : ""}`}
+                onClick={requestStop}
+                title={stopping ? "Stopping" : "Stop"}
+                aria-label={stopping ? "Stopping current turn" : "Stop current turn"}
+                disabled={stopping}
+              >
+                {stopping ? <><span className="working-dots" aria-hidden><i /><i /><i /></span><span>Stopping…</span></> : "■"}
               </button>
             )}
             {(!working || canSend) && (

@@ -1659,10 +1659,13 @@ export class SessionStore {
     const pending = this.state.sessionIndex.sessions.filter((s) => s.pendingLaunch && !ids.has(s.sessionId));
     const merged = [...pending, ...sessions];
     const activeId = this.state.activeSession.activeSessionId;
+    const activeRow = activeId ? merged.find((session) => session.sessionId === activeId) : undefined;
+    const sessionStopped = Boolean(activeRow && activeRow.status !== "working" && activeRow.sessionState?.agent !== "working");
     this.set({
       sessions: activeId
         ? merged.map((s) => (s.sessionId === activeId ? { ...s, lastSeenAt: Date.now() } : s))
         : merged,
+      ...(sessionStopped ? { working: false, workingLabel: "" } : {}),
     });
   }
 

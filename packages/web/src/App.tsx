@@ -56,7 +56,7 @@ const AutomationsView = lazy(() =>
 );
 import { useEdgeSwipe } from "./useEdgeSwipe.js";
 import { controller } from "./store/useStore.js";
-import { statusClass, statusDotState, statusLabel } from "./sessionStatus.js";
+import { runStatusLabel, statusClass, statusDotState, statusLabel } from "./sessionStatus.js";
 
 export function App() {
   const state = useAppState();
@@ -841,7 +841,7 @@ export function App() {
                   anchorId={`attention-${activeSession.sessionId}`}
                   source={activeRunSource}
                   statusClass={statusClass(activeSession)}
-                  statusLabel={statusLabel(activeSession)}
+                  statusLabel={runStatusLabel(activeSession)}
                   gh={state.activeSession.github}
                   evidence={runEvidence.get(activeSession.sessionId)}
                   finishedAt={activeSession.finishedAt}

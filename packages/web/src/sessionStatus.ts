@@ -62,6 +62,15 @@ export function attentionRank(s: SessionStatusInput): number {
 
 /** Human-facing status text — the accessible (non-color) half of the signal,
  *  read by the dot's title/tooltip and screen readers. */
+export function runStatusLabel(s: SessionStatusInput): string {
+  if (s.needsAction || s.status === "needs_action") return "Waiting for you";
+  if (s.status === "working") return "Working";
+  if (s.status === "failed") return "Failed";
+  if (s.finishedAt != null) return "Finished";
+  if (s.status === "saved") return "Saved";
+  return "Open";
+}
+
 export function statusLabel(s: SessionStatusInput): string {
   if (s.needsAction || s.status === "needs_action") return "Needs your response";
   if (s.state?.agent === "waiting") return "Waiting for background tasks";
