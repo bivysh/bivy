@@ -32,7 +32,6 @@ import { Spinner } from "./components/Spinner.js";
 import { StatusDot } from "./components/StatusDot.js";
 import { EphemeralSheet } from "./components/Ephemeral.js";
 import { FirstRunModelAuthSheet } from "./components/FirstRunModelAuth.js";
-import { FirstRunOnboarding } from "./components/FirstRunOnboarding.js";
 import { NodePicker } from "./components/Pickers.js";
 import { ConnectRunner } from "./components/ConnectRunner.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "./flags.js";
@@ -61,7 +60,7 @@ import { runStatusLabel, statusClass, statusDotState, statusLabel } from "./sess
 export function App() {
   const state = useAppState();
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [onboardingDismissed, setOnboardingDismissed] = useState(() => localStorage.getItem("bivy:first-run-onboarding") === "done");
+  const [automationNextStepDismissed, setAutomationNextStepDismissed] = useState(() => localStorage.getItem("bivy:automation-next-step") === "done");
   // Settings is URL-backed (#78) — `settingsRoute` mirrors the `/settings` /
   // `/settings/:view` route the same way useAppState mirrors the session
   // store, and is null whenever the URL is on anything else (Settings closed).
@@ -467,11 +466,10 @@ export function App() {
   // (Automations, cloud machine profiles) can summon the sign-in screen on
   // demand — see signInRequest.ts. Dismissable, unlike the boot-time gate.
   const signInRequested = useSyncExternalStore(subscribeSignInRequest, getSignInRequest);
-  // Picking an ephemeral runner counts as having chosen where to run, even
-  // before its machine exists — show the composer, not the onboarding screen.
-  const needsNode = !controller.direct && state.connection.signedIn && !state.connection.currentNodeId && !state.draft.ephemeralConfig;
-  const showFirstRunOnboarding = !controller.direct && state.connection.signedIn && !onboardingDismissed
-    && state.sessionIndex.sessions.length === 0 && state.activeSession.transcript.length === 0;
+  // A first session starts by connecting a real machine. Workspace choice comes
+  // afterward: the default/local workspace needs no GitHub authorization, while
+  // the repo picker can authorize GitHub only when the user requests it.
+  const needsNode = !controller.direct && state.connection.signedIn && !state.connection.currentNodeId;
 
   // Hosted control plane, not signed in yet: show the sign-in screen instead of a
   // dead shell. Once signed in we always render the normal app — a node is picked
@@ -626,7 +624,7 @@ export function App() {
 
       {drawerOpen && <div className="scrim" onClick={closeDrawer} />}
 
-      <main className={`main${showFirstRunOnboarding ? " onboarding" : needsNode ? " needs-node" : ""}`}>
+      <main className={`main${needsNode ? " needs-node" : ""}`}>
         <header className="topbar">
           <button
             className="btn ghost icon only-mobile burger-btn"
@@ -730,7 +728,7 @@ export function App() {
           </div>
         )}
 
-        {!showFirstRunOnboarding && !state.activeSession.activeSessionId && state.activeSession.transcript.length === 0 && state.sessionIndex.sessions.length === 0 && (
+        {!needsNode && !state.activeSession.activeSessionId && state.activeSession.transcript.length === 0 && state.sessionIndex.sessions.length === 0 && (
           <Suspense fallback={null}>
             <ReadinessChecklist
               activation={activation}
@@ -745,20 +743,11 @@ export function App() {
           </Suspense>
         )}
 
-        {showFirstRunOnboarding && (
-          <div className="connect-runner-scroll">
-            <FirstRunOnboarding state={state} onDone={() => {
-              localStorage.setItem("bivy:first-run-onboarding", "done");
-              setOnboardingDismissed(true);
-            }} />
-          </div>
-        )}
-
-        {!showFirstRunOnboarding && needsNode && (
+        {needsNode && (
           <div className="connect-runner-scroll">
             <ConnectRunner
               nodes={state.connection.nodes}
-              ephemeralEnabled={cloudMachinesEnabled}
+              ephemeralEnabled={false}
               onPickNode={(nodeId) => controller.switchNode(nodeId)}
               onEphemeral={() => setEphemeralOpen(true)}
               onRefresh={() => controller.refreshNodes()}
@@ -825,6 +814,26 @@ export function App() {
                 </div>
               }
             />
+
+            {activation.activated && activeSession && !automationNextStepDismissed && (
+              <section className="card automation-next-step" aria-label="Next step">
+                <div>
+                  <strong>Make this repeatable</strong>
+                  <p>Create an automation to run work without you.</p>
+                </div>
+                <div className="automation-next-step-actions">
+                  <button type="button" className="btn sm primary" onClick={() => {
+                    localStorage.setItem("bivy:automation-next-step", "done");
+                    setAutomationNextStepDismissed(true);
+                    openAutomations();
+                  }}>Open Automations</button>
+                  <button type="button" className="btn sm ghost" aria-label="Dismiss" onClick={() => {
+                    localStorage.setItem("bivy:automation-next-step", "done");
+                    setAutomationNextStepDismissed(true);
+                  }}>Dismiss</button>
+                </div>
+              </section>
+            )}
 
             {changesSheetOpen && (
               <SessionChangesSheet
