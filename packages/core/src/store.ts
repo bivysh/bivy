@@ -136,6 +136,9 @@ export interface SessionSummary {
   worktree?: string;
   name: string;
   source?: string;
+  /** True for sessions created through Bivy, false for agent-native sessions
+   * discovered from existing history. */
+  bivyCreated?: boolean;
   /** Parent session's id, when this session was materialized from a fork
    *  bundle (see src/session/fork.ts on the node). Undefined for an ordinary
    *  session. The parent may live on a different node, so this is only ever
@@ -1656,10 +1659,13 @@ export class SessionStore {
     const pending = this.state.sessionIndex.sessions.filter((s) => s.pendingLaunch && !ids.has(s.sessionId));
     const merged = [...pending, ...sessions];
     const activeId = this.state.activeSession.activeSessionId;
+    const activeRow = activeId ? merged.find((session) => session.sessionId === activeId) : undefined;
+    const sessionStopped = Boolean(activeRow && activeRow.status !== "working" && activeRow.sessionState?.agent !== "working");
     this.set({
       sessions: activeId
         ? merged.map((s) => (s.sessionId === activeId ? { ...s, lastSeenAt: Date.now() } : s))
         : merged,
+      ...(sessionStopped ? { working: false, workingLabel: "" } : {}),
     });
   }
 
@@ -2261,6 +2267,7 @@ export class SessionStore {
             // undefined values, so an existing row keeps what it already had.
             name: e.name || (known ? undefined : "Untitled session"),
             source: e.source,
+            bivyCreated: e.bivyCreated === true,
             nodeId: e.nodeId,
             runtimeId: e.runtimeId,
             agentName: e.agentName,

@@ -79,15 +79,26 @@ export function useModalBack(onBack: () => void): () => void {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    history.pushState({ __bivyModal: true }, "", location.href);
-    active.current = true;
+    let cancelled = false;
     const onPopState = () => {
       if (!active.current) return;
       active.current = false;
       callback.current();
     };
     window.addEventListener("popstate", onPopState);
+
+    // React StrictMode immediately cleans up and re-runs effects in development.
+    // Deferring the sentinel means that simulated first run is cancelled before
+    // it mutates history; otherwise its cleanup queues a Back navigation that
+    // pops the second run's sentinel and closes the newly opened sheet.
+    queueMicrotask(() => {
+      if (cancelled) return;
+      history.pushState({ __bivyModal: true }, "", location.href);
+      active.current = true;
+    });
+
     return () => {
+      cancelled = true;
       window.removeEventListener("popstate", onPopState);
       // If the overlay was removed by some other route/state change, remove
       // its sentinel entry so the next Back gesture does not land on a stale

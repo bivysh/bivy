@@ -168,6 +168,7 @@ function MessageAttachments({ attachments }: { attachments: PromptAttachment[] }
 function actionLabel(action: string): string {
   if (action === "/new") return "New session";
   if (action === "/resume") return "Resume";
+  if (action.startsWith("connect-provider:")) return "Connect a provider";
   return `Run ${action}`;
 }
 
@@ -406,15 +407,26 @@ const EntryView = memo(function EntryView({
     );
   if (entry.role === "thinking")
     return <div className={`msg thinking${entry.streaming ? " streaming" : ""}`}>{entry.text}</div>;
-  if (entry.role === "error")
+  if (entry.role === "error") {
+    const [summary = "The agent hit an error", ...detailLines] = entry.text.split("\n");
+    const details = detailLines.join("\n").trim();
     return (
-      <div className="msg error" role="alert">
-        <span className="msg-error-icon" aria-hidden>
-          !
-        </span>
-        <span className="msg-error-text">{entry.text}</span>
+      <div className="card" data-tone="danger" role="alert">
+        <strong>{summary}</strong>
+        {entry.action && onAction && (
+          <button type="button" className="btn primary" onClick={() => onAction(entry.action!)}>
+            {actionLabel(entry.action)}
+          </button>
+        )}
+        {details && (
+          <details className="settings-disclosure">
+            <summary className="settings-disclosure-summary">Details</summary>
+            <pre className="settings-disclosure-body">{details}</pre>
+          </details>
+        )}
       </div>
     );
+  }
   if (entry.role === "user") {
     const hasAttachments = !!entry.attachments && entry.attachments.length > 0;
     // With the attachments shown as thumbnails/chips, the node's appended
@@ -706,16 +718,8 @@ export function ChatView({
           )}
           {total === 0 && draftRoute && (
             <div className="chat-empty">
-              <p className="chat-empty-title">Start a new session</p>
-              <p className="chat-empty-sub">
-                Choose the <b>machine</b> to run on in the header, then the{" "}
-                <b>agent</b> and <b>model</b> below. Describe your task to
-                begin.
-              </p>
-              <p className="chat-empty-sub chat-empty-note">
-                You can switch the model at any time, or hand off to a new
-                agent to continue in a fresh session.
-              </p>
+              <p className="chat-empty-title">Describe your task</p>
+              <p className="chat-empty-sub">Review where and how it will run, then send your instructions below.</p>
             </div>
           )}
           {start > 0 && (

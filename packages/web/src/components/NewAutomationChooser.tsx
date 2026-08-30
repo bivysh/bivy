@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { useMemo, useState } from "react";
+import { useModalBack, useModalEscape } from "../modalStack.js";
 import { AUTOMATION_TEMPLATES, type AutomationTemplate } from "./automationTemplates.js";
 import { IconBolt, IconBug, IconCi, IconFlask, IconPackage, IconPr, IconRadar, IconShield, IconSpark } from "./AutomationIcons.js";
 
@@ -45,8 +46,10 @@ export function NewAutomationChooser({
   onScratch: () => void;
   onTemplate: (t: AutomationTemplate) => void;
 }) {
+  const closeWithBack = useModalBack(onClose);
+  useModalEscape(closeWithBack);
   return (
-    <div className="wizard-scrim" onClick={onClose}>
+    <div className="wizard-scrim" onClick={closeWithBack}>
       <div
         className="wizard autom-editor autom-chooser"
         role="dialog"
@@ -59,7 +62,7 @@ export function NewAutomationChooser({
             <strong>New automation</strong>
             <span className="wq-head-sub">Pick a starting point</span>
           </div>
-          <button type="button" className="btn ghost icon" onClick={onClose} aria-label="Close">✕</button>
+          <button type="button" className="btn ghost icon" onClick={closeWithBack} aria-label="Close">✕</button>
         </div>
         <div className="wizard-body autom-chooser-body">
           <NewAutomationPicker onScratch={onScratch} onTemplate={onTemplate} />
@@ -158,7 +161,7 @@ function TemplateCard({ template, onUse }: { template: AutomationTemplate; onUse
     <button type="button" className="template-card" onClick={onUse}>
       <div className="template-card-top">
         <span className="template-card-icon" aria-hidden="true">{templateIcon(template.key)}</span>
-        <span className={`template-card-badge tone-${badge.tone}`}>{badge.label}</span>
+        <span className="badge" data-tone={badge.tone}>{badge.label}</span>
       </div>
       <strong className="template-card-title">{template.title}</strong>
       <p className="template-card-tagline">{template.tagline}</p>

@@ -3,8 +3,9 @@
   .sidebar {
     width: min(88vw, 336px);
     border-right: 1px solid var(--line-strong);
-    box-shadow: var(--shadow-xl);
+    box-shadow: none;
   }
+  .sidebar.open { box-shadow: var(--shadow-xl); }
   .sidebar-head {
     min-height: 56px;
     padding: max(var(--space-3), env(safe-area-inset-top)) var(--space-4) var(--space-3);
@@ -42,7 +43,7 @@
     width: 44px;
     height: 44px;
   }
-  .autom-new-btn {
+  .automations-view-head-actions > .btn.primary {
     position: static;
     transform: none;
     width: auto;
@@ -55,7 +56,7 @@
     color: var(--accent-contrast);
     box-shadow: none;
   }
-  .autom-new-btn-label { font-size: var(--text-sm); }
+  .automations-view-head-actions .action-label { font-size: var(--text-sm); }
   .automations-view-head-actions { margin-left: auto; }
   .automations-view-body { padding: var(--space-4) var(--space-4) max(var(--space-6), env(safe-area-inset-bottom)); }
   .autom-sources-summary { min-height: 52px; }
@@ -83,7 +84,7 @@
   .automation-row-actions .btn { min-height: 40px; }
   .autom-empty-state { margin-top: var(--space-8); }
   .autom-empty-action { display: block; }
-  .autom-empty-new-btn { min-height: 48px; background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); }
+  .autom-empty-action > .btn { min-height: 48px; }
 
   .autom-editor-actions {
     align-self: stretch;

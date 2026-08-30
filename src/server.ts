@@ -35,7 +35,7 @@ import { InMemoryLocationRegistry } from "./runtime/location-registry.js";
 import { ControlPlaneSessionLocationRegistry, LayeredSessionLocationRegistry, type NodeSessionRow } from "./runtime/control-plane-location.js";
 import { attachAdoptedSessions, classifyAttachFailure } from "./runtime/adoption.js";
 import { createCredentialStore, testProviderCredential } from "./runtime/credentials.js";
-import { isModelAuthError, authProviderForSession } from "./runtime/auth-errors.js";
+import { isModelAuthError, authProviderForSession, classifyModelAuthError } from "./runtime/auth-errors.js";
 import { createCredentialVault, migrateVaultDir } from "./runtime/credential-store.js";
 import { probeAnthropicAccess } from "./runtime/anthropic-preflight.js";
 import { provisionAgentRun } from "./runtime/credential-provisioning.js";
@@ -1071,6 +1071,7 @@ function harnessDirFor(record: SessionRecord): string {
 function harnessBeginTurn(record: SessionRecord): void {
   const dir = harnessDirFor(record);
   record.harnessTurnReady = undefined;
+  record.harnessTurnFinished = false;
   if (!dir) return;
   const previous = record.workspaceState === "dirty" ? "dirty" : "clean";
   record.workspaceState = "checkpointing";
@@ -1093,6 +1094,14 @@ function harnessBeginTurn(record: SessionRecord): void {
 }
 
 /** After a turn, snapshot again and broadcast the structured diff it produced. */
+function finishHarnessTurn(record: SessionRecord): void {
+  if (record.harnessTurnFinished) return;
+  record.harnessTurnFinished = true;
+  void harnessEndTurn(record).finally(() => {
+    void replication.onTurnComplete(record.id);
+  });
+}
+
 async function harnessEndTurn(record: SessionRecord): Promise<void> {
   const previous = record.workspaceState === "dirty" ? "dirty" : "clean";
   try {
@@ -2980,7 +2989,7 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
       // this the relay client (PWA) is stranded on "Working…" forever with
       // only a session.error toast. Clear working so a terminal state reaches it.
       clearSessionWorking(record);
-      broadcast({ type: "session.error", sessionId: record.id, error: actionableAgentError(record.runtimeId, error) });
+      broadcast({ type: "session.error", sessionId: record.id, error: sessionAgentError(record, error) });
     });
   },
   async "session.new"(msg) {
@@ -6152,6 +6161,7 @@ async function sessionListRows() {
       agent: meta?.runtimeId ?? s.agent,
       agentName: meta?.agentName ?? s.agentName,
       source: rec?.source ?? meta?.source,
+      bivyCreated: Boolean(meta),
       forkedFrom: rec?.forkedFrom ?? meta?.forkedFrom,
       branch: rec?.worktree?.branch ?? meta?.branch,
       sandbox: rec?.sandbox ?? normalizeSandboxTier(meta?.sandbox),
@@ -7382,6 +7392,12 @@ function actionableAgentError(runtimeId: string, error: unknown): string {
   return raw;
 }
 
+function sessionAgentError(record: SessionRecord, error: unknown): string | { kind: "model_auth"; provider: string } {
+  const raw = humanizeAgentError(error instanceof Error ? error.message : String(error));
+  return classifyModelAuthError(raw, record.runtimeId, record.session.getCurrentModel()?.provider)
+    ?? actionableAgentError(record.runtimeId, error);
+}
+
 /**
  * A turn that ended in a *terminal* model/provider failure the runtime would
  * otherwise swallow. `agent_end` carries the turn's messages and whether the
@@ -7435,7 +7451,7 @@ function attachSessionListeners(record: SessionRecord) {
       onNotice: (n) => broadcast({ type: "session.notice", sessionId: record.id, level: n.level, message: n.message }),
       onModelChanged: () =>
         broadcast({ type: "model.updated", sessionId: record.id, model: publicModel(record.session.getCurrentModel(), record.session.getCurrentModel()) }),
-      onFailed: (message) => broadcast({ type: "session.error", sessionId: record.id, error: message }),
+      onFailed: (message) => broadcast({ type: "session.error", sessionId: record.id, error: sessionAgentError(record, message) }),
     });
   }
   record.unsubscribe = record.session.subscribe((event) => {
@@ -7529,8 +7545,14 @@ function attachSessionListeners(record: SessionRecord) {
       transcripts.resolveInlineImages(record);
     }
     // Durably persist the throttled sidecars at the turn boundary so a crash
-    // loses at most the in-flight turn's UI detail, not the whole turn.
-    if (event.type === "turn_end") eventLog.flush(record.id);
+    // loses at most the in-flight turn's UI detail, not the whole turn. A
+    // runtime may keep its agent process alive and never emit agent_end (Pi),
+    // so turn_end is also authoritative for the interactive working state.
+    if (event.type === "turn_end") {
+      eventLog.flush(record.id);
+      clearSessionWorking(record);
+      finishHarnessTurn(record);
+    }
     // AskUserQuestion is intercepted and answered by the daemon's guardian /
     // QuestionManager (see guardianInterceptor), which broadcasts
     // session.question(.resolved) from its own listeners — runtimes no longer
@@ -7563,14 +7585,9 @@ function attachSessionListeners(record: SessionRecord) {
       transcripts.clearLiveIntermediate(record.id);
       clearSessionWorking(record);
       void refreshSessionUsage(record);
-      // Snapshot the worktree and broadcast the structured diff this turn made —
-      // universal edit review + rewind target, for every runtime.
-      // Warm-replicate this turn to the standby AFTER the checkpoint is committed
-      // (so the shipped frame carries this turn's transcript AND its checkpoint).
-      // Gated on session sync — inert by default.
-      void harnessEndTurn(record).finally(() => {
-        void replication.onTurnComplete(record.id);
-      });
+      // Snapshot/diff at whichever completion boundary arrived first. Pi keeps
+      // its process alive after turn_end; other runtimes also emit agent_end.
+      finishHarnessTurn(record);
       // A turn that ended in a terminal model/provider error (e.g. an expired
       // credential or a 4xx from the API) otherwise vanished: working cleared,
       // no reply, no signal. Surface it as a session-scoped error so the client
@@ -7631,7 +7648,7 @@ function attachSessionListeners(record: SessionRecord) {
         metadata.touchSession(record.id, "failed");
         scheduleAdvertise();
         broadcast({ type: "session.failed", sessionId: record.id, failedAt: record.lastFailureAt });
-        if (messageError) broadcast({ type: "session.error", sessionId: record.id, error: actionableAgentError(record.runtimeId, messageError) });
+        if (messageError) broadcast({ type: "session.error", sessionId: record.id, error: sessionAgentError(record, messageError) });
         // If the terminal error is an auth failure (expired key/token → 4xx),
         // also raise the sign-in sheet for the failing provider.
         maybeSignalAuthRequired(record, turnError);
@@ -8259,7 +8276,7 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
   void refreshSessionUsage(record);
 
   if (makeActive) active = record;
-  broadcast({ type: "session.created", sessionId, name: record.session.getName(), workspace: sessionWorkspace, sessionFile: record.sessionFile, source: record.source, branch: worktree?.branch, prUrl: record.prUrl, runtimeId: rt.id, agentName: rt.displayName, modelFallbackMessage, bivySession: bivySessionEnvelope(record), capabilities: capabilitiesWithCommands(rt.id, record.session) });
+  broadcast({ type: "session.created", sessionId, name: record.session.getName(), workspace: sessionWorkspace, sessionFile: record.sessionFile, source: record.source, bivyCreated: true, branch: worktree?.branch, prUrl: record.prUrl, runtimeId: rt.id, agentName: rt.displayName, modelFallbackMessage, bivySession: bivySessionEnvelope(record), capabilities: capabilitiesWithCommands(rt.id, record.session) });
   void maybeNotifyBivyUpdate();
   scheduleAdvertise();
   return record;
@@ -10084,6 +10101,7 @@ app.get("/api/sessions", async (_req, res, next) => {
         agent: meta?.runtimeId ?? s.agent,
         agentName: meta?.agentName ?? s.agentName,
         source: rec?.source ?? meta?.source,
+        bivyCreated: Boolean(meta),
         forkedFrom: rec?.forkedFrom ?? meta?.forkedFrom,
         branch: rec?.worktree?.branch ?? meta?.branch,
         prUrl: rec?.prUrl ?? meta?.prUrl,

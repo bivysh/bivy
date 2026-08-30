@@ -22,10 +22,15 @@ check("folds model into agent when the agent manages its own model", () => {
   assert.equal(d[2]!.value, "Codex", "no model half when the agent owns model selection");
 });
 
-check("missing values render as a dash, never a fifth or dropped decision", () => {
+check("missing values render as actionable defaults, never a fifth or dropped decision", () => {
   const d = firstSessionDecisions({});
   assert.equal(d.length, 4);
-  assert.deepEqual(d.map((x) => x.value), ["—", "—", "—", "—"]);
+  assert.deepEqual(d.map((x) => x.value), [
+    "Machine default",
+    "No repository",
+    "Choose an agent · Choose a model",
+    "Machine default",
+  ]);
 });
 
 check("summary is a single one-line join of the four", () => {

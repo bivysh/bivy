@@ -25,23 +25,21 @@ export interface FirstSessionInputs {
   protection?: string;
 }
 
-const DASH = "—";
-
 /**
  * The canonical four first-session decisions, in golden-path order. Agent and
  * model are one decision ("agent/model"); the model half is omitted when the
- * agent manages its own model. Missing values render as an em dash, never as a
- * fifth or vanished decision — the set is always exactly four.
+ * agent manages its own model. Missing values use actionable customer copy —
+ * never implementation placeholders such as "unknown" or an em dash.
  */
 export function firstSessionDecisions(input: FirstSessionInputs): FirstSessionDecision[] {
-  const agent = input.agent?.trim() || DASH;
-  const model = input.model?.trim();
+  const agent = input.agent?.trim() || "Choose an agent";
+  const model = input.model?.trim() && input.model.trim().toLowerCase() !== "unknown" ? input.model.trim() : "Choose a model";
   const agentModel = input.modelManagedByAgent || !model ? agent : `${agent} · ${model}`;
   return [
-    { key: "machine", label: "Machine", value: input.machine?.trim() || DASH },
-    { key: "repo", label: "Repository", value: input.repo?.trim() || DASH },
-    { key: "agent-model", label: "Agent/model", value: agentModel },
-    { key: "protection", label: "Protection", value: input.protection?.trim() || DASH },
+    { key: "machine", label: "Machine", value: input.machine?.trim() || "Machine default" },
+    { key: "repo", label: "Repository", value: input.repo?.trim() || "No repository" },
+    { key: "agent-model", label: "Agent / Model", value: agentModel },
+    { key: "protection", label: "Protection", value: input.protection?.trim() || "Machine default" },
   ];
 }
 

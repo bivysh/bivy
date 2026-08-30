@@ -6,11 +6,12 @@ import type { AppState, PromptAttachment, SlashCommand } from "@bivy/core";
 import { isSlashInput, parseSlash, matchSlashCommands, resolveSlash } from "@bivy/core";
 import { useModalEscape } from "../modalStack.js";
 import { RepoPicker, AgentPicker, ModelPicker, SandboxPicker } from "./Pickers.js";
-import { firstSessionSummary } from "../firstSession.js";
+import { firstSessionDecisions, type FirstSessionDecisionKey } from "../firstSession.js";
 import { FollowupQueue } from "./FollowupQueue.js";
 import { SANDBOX_TIERS } from "./sandboxTiers.js";
 import { VoiceRecorder } from "./VoiceRecorder.js";
 import { Spinner } from "./Spinner.js";
+import { Badge } from "./Badge.js";
 import { WebSpeechRecorder, webSpeechSupported } from "./WebSpeechRecorder.js";
 import { controller } from "../store/useStore.js";
 import { clearComposerDraft, composerDraftKey, readComposerDraft, writeComposerDraft, type PendingAttachmentMetadata } from "../composerDraft.js";
@@ -87,14 +88,6 @@ function hasFiles(dt: DataTransfer | null): boolean {
   return Boolean(dt && Array.from(dt.types || []).includes("Files"));
 }
 
-function GhGlyph() {
-  return (
-    <svg className="pill-gh" viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden>
-      <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z" />
-    </svg>
-  );
-}
-
 export function MicGlyph() {
   return (
     <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -157,6 +150,8 @@ export function Composer({
   const [menuDismissed, setMenuDismissed] = useState(false);
   const [recording, setRecording] = useState<null | "server" | "webspeech">(null);
   const [dragging, setDragging] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const [stopTimedOut, setStopTimedOut] = useState(false);
   // Reading a large/multiple file(s) (base64-encoding images, slurping text)
   // can take a visible moment with zero prior feedback — the paperclip button
   // just sat there looking unresponsive. Tracks a plain count so multiple
@@ -165,6 +160,24 @@ export function Composer({
   const [readingCount, setReadingCount] = useState(0);
   const [viewing, setViewing] = useState<string | null>(null);
   const dragDepth = useRef(0);
+
+  useEffect(() => {
+    if (!working) {
+      setStopping(false);
+      setStopTimedOut(false);
+      return;
+    }
+    if (!stopping) return;
+    const timer = window.setTimeout(() => setStopTimedOut(true), 10_000);
+    return () => window.clearTimeout(timer);
+  }, [stopping, working]);
+
+  const requestStop = () => {
+    if (stopping) return;
+    setStopping(true);
+    setStopTimedOut(false);
+    onAbort();
+  };
 
   // Some runtimes (e.g. Codex / Codex approvals) own model selection themselves
   // and expose no in-app model list — advertised via
@@ -494,6 +507,11 @@ export function Composer({
   function submit() {
     const value = text.trim();
     if ((!value && !attachments.length) || disabled) return;
+    const modelId = state.catalogs.currentModel?.id || state.catalogs.currentModelId;
+    if (isDraft && modelSelectable && (!modelId || modelId === "unknown")) {
+      setPicker("model");
+      return;
+    }
     // Dispatch a slash line (see resolveSlash): an advertised agent command is
     // invoked. An unknown slash is rejected with feedback WHEN the active session
     // advertised a command catalog — otherwise we stay permissive and forward the
@@ -516,34 +534,19 @@ export function Composer({
     requestAnimationFrame(autosize);
   }
 
-  const modelLabel = state.catalogs.currentModel?.label || state.catalogs.currentModel?.id || "Default";
-  // The repo pill also carries the chosen remote branch (#466) — picked from
-  // the arrow on a repo row in the repo picker, not a separate pill. A blank
-  // branch means "the repo's default branch", so we only append "@ <branch>"
-  // when a specific one was chosen.
-  const repoLabel = state.draft.repo
-    ? state.draft.branch
-      ? `${state.draft.repo} @ ${state.draft.branch}`
-      : state.draft.repo
-    : "No repo";
-  const repoTitle = state.draft.repo
-    ? state.draft.branch
-      ? `Repository ${state.draft.repo} (branch ${state.draft.branch})`
-      : `Repository ${state.draft.repo} (default branch)`
-    : "Repository";
+  const modelLabel = state.catalogs.currentModel?.label || state.catalogs.currentModel?.id || "Choose a model";
   // The next session's sandbox tier: an explicit draft choice, else the node
   // default (shown by name when known). Chosen up front on the draft; a running
   // session shows it read-only in Session settings.
   const draftTier = SANDBOX_TIERS.find((t) => t.id === state.draft.sandbox);
   const nodeDefaultTier = SANDBOX_TIERS.find((t) => t.id === state.settings.nodeSettings?.defaultSandbox);
-  // The ◈ glyph already reads as "sandbox", so we drop the redundant "Sandbox"
-  // word: show the chosen tier, else the node default's name, else glyph only.
+  // Keep this decision labelled on mobile: the glyph alone does not explain
+  // that the control chooses the session's protection level.
   const sandboxLabel = draftTier
     ? draftTier.label
     : nodeDefaultTier
       ? nodeDefaultTier.label
-      : state.settings.nodeSettings?.defaultSandbox ?? "";
-  const sandboxTitle = draftTier ? draftTier.hint : "Sandbox mode for this session (machine default)";
+      : state.settings.nodeSettings?.defaultSandbox ?? "Default";
   const canSend = !disabled && (Boolean(text.trim()) || attachments.length > 0);
   // B2 — a first session exposes exactly four decisions: machine, repo,
   // agent/model, protection. On a draft we render a single explicit summary of
@@ -551,23 +554,46 @@ export function Composer({
   // sees the whole decision set at a glance rather than inferring it from pills.
   const machineLabel = state.connection.nodes.find((n) => n.id === state.connection.currentNodeId)?.name
     || (controller.direct ? "This machine" : "Default machine");
-  const firstSessionLine = firstSessionSummary({
+  const decisions = firstSessionDecisions({
     machine: machineLabel,
-    repo: state.draft.repo || "No repo",
-    agent: state.catalogs.currentAgentName || "Agent",
+    repo: state.draft.repo || "No repository",
+    agent: state.catalogs.currentAgentName || "Choose an agent",
     model: modelLabel,
     modelManagedByAgent: !modelSelectable,
-    protection: sandboxLabel || state.draft.sandbox || undefined,
-  });
+    protection: sandboxLabel || state.draft.sandbox || "Machine default",
+  }).filter((decision) => decision.key !== "machine" || (!controller.direct && !controller.solo));
+  const openDecision = (key: FirstSessionDecisionKey) => {
+    if (key === "machine") (document.querySelector(".node-switcher-btn") as HTMLButtonElement | null)?.click();
+    else if (key === "repo") setPicker("repo");
+    else if (key === "agent-model") setPicker(modelLabel === "Choose a model" && modelSelectable ? "model" : "agent");
+    else setPicker("sandbox");
+  };
   const firstIsolatedRun = isDraft && Boolean(state.draft.ephemeralConfig);
   const starterTask = "Inspect this repository and explain how to run its tests. Do not change files.";
 
   return (
     <>
       {isDraft && (
-        <div className="composer-first-session" title="A first session decides just four things: machine, repository, agent/model, and protection.">
-          Starting on <span className="fs-decisions">{firstSessionLine}</span>
-        </div>
+        <section className="composer-first-session" aria-label="Review before starting">
+          <strong>Review before starting</strong>
+          <div className="fs-decisions">
+            {decisions.map((decision) => {
+              const needsChoice = /^(Choose|Machine default)/.test(decision.value);
+              return (
+                <button
+                  type="button"
+                  key={decision.key}
+                  className={`fs-decision${decision.key === "repo" ? " repo-pill" : decision.key === "protection" ? " sandbox-pill" : ""}`}
+                  onClick={() => openDecision(decision.key)}
+                  aria-label={decision.key === "protection" ? "Protection" : `${decision.label}: ${decision.value}`}
+                >
+                  <span>{decision.label}</span>
+                  {needsChoice ? <Badge tone="accent">{decision.value}</Badge> : <b>{decision.value}</b>}
+                </button>
+              );
+            })}
+          </div>
+        </section>
       )}
       {firstIsolatedRun && !text.trim() && attachments.length === 0 && (
         <div className="composer-starter" role="note">
@@ -575,23 +601,12 @@ export function Composer({
             <strong>Start with a safe read-only task</strong>
             <span>Verify the Machine, repository, agent, and model before asking it to edit code.</span>
           </div>
-          <button type="button" className="btn small" onClick={() => setText(starterTask)}>
+          <button type="button" className="btn sm" onClick={() => setText(starterTask)}>
             Use starter task
           </button>
         </div>
       )}
-      {isDraft && (
-        <div className="composer-lead">
-          <button type="button" className="pill repo-pill" onClick={() => setPicker("repo")} title={repoTitle}>
-            <GhGlyph />
-            <span className="pill-label">{repoLabel}</span>
-          </button>
-          <button type="button" className="pill sandbox-pill" onClick={() => setPicker("sandbox")} title={sandboxTitle} aria-label="Sandbox mode">
-            <span className="pill-glyph">◈</span>
-            {sandboxLabel && <span className="pill-label">{sandboxLabel}</span>}
-          </button>
-        </div>
-      )}
+
       {state.activeSession.activeSessionId && (
         <FollowupQueue
           sessionId={state.activeSession.activeSessionId}
@@ -600,6 +615,14 @@ export function Composer({
           busy={working}
           onError={onError}
         />
+      )}
+      {stopTimedOut && (
+        <div className="banner" data-tone="warn" role="alert">
+          <span className="banner-text">The agent didn&apos;t confirm it stopped.</span>
+          <button type="button" className="btn sm banner-action" onClick={() => location.reload()}>
+            Reload
+          </button>
+        </div>
       )}
       <form
         ref={formRef}
@@ -775,7 +798,7 @@ export function Composer({
             <div className="composer-meta">
               <button
                 type="button"
-                className="pill attach-pill"
+                className="btn sm ghost attach-pill"
                 onClick={() => fileRef.current?.click()}
                 disabled={disabled}
                 title="Attach files"
@@ -783,13 +806,13 @@ export function Composer({
               >
                 <span className="pill-glyph"><AttachGlyph /></span>
               </button>
-              <button type="button" className="pill agent-pill" onClick={() => setPicker("agent")} title="Agent">
+              <button type="button" className="btn sm ghost agent-pill" onClick={() => setPicker("agent")} title="Agent">
                 <span className="pill-glyph"><AgentGlyph /></span>
                 <span className="pill-label">{state.catalogs.currentAgentName || "Agent"}</span>
               </button>
               <button
                 type="button"
-                className="pill model-pill"
+                className="btn sm ghost model-pill"
                 onClick={() => { if (modelSelectable) setPicker("model"); }}
                 disabled={!modelSelectable}
                 title={modelSelectable ? "Model" : "This agent uses its own default model"}
@@ -837,8 +860,15 @@ export function Composer({
             {/* Keep Stop available for an empty composer; once the user has
                 entered a follow-up, the Send button takes its place. */}
             {working && !text.trim() && (
-              <button type="button" className="composer-btn stop" onClick={onAbort} title="Stop" aria-label="Stop current turn">
-                ■
+              <button
+                type="button"
+                className={`composer-btn stop${stopping ? " is-stopping" : ""}`}
+                onClick={requestStop}
+                title={stopping ? "Stopping" : "Stop"}
+                aria-label={stopping ? "Stopping current turn" : "Stop current turn"}
+                disabled={stopping}
+              >
+                {stopping ? <><span className="working-dots" aria-hidden><i /><i /><i /></span><span>Stopping…</span></> : "■"}
               </button>
             )}
             {(!working || canSend) && (

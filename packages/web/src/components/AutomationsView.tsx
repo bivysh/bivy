@@ -69,6 +69,8 @@ import { Badge } from "./Badge.js";
 import { NewAutomationChooser, NewAutomationPicker } from "./NewAutomationChooser.js";
 import { AutomationPreflightPanel, useAutomationPreflight } from "./AutomationPreflight.js";
 import { IconBolt, IconClock, IconPr, IconWebhook } from "./AutomationIcons.js";
+import { AddNodeSheet } from "./AddNodeSheet.js";
+import { useModalBack, useModalEscape } from "../modalStack.js";
 
 const TEMPLATE_PREFIX = "bivy-room-v1";
 
@@ -105,6 +107,20 @@ function describeCron(cron: string): string {
   } catch {
     return "";
   }
+}
+
+function cronChip(cron: string, timezone: string): { label: string; detail: string } {
+  const [minute, hour, dayOfMonth, month, dayOfWeek] = cron.trim().split(/\s+/);
+  const validTime = /^\d+$/.test(minute || "") && /^\d+$/.test(hour || "")
+    && Number(minute) < 60 && Number(hour) < 24;
+  const time = validTime ? `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}` : "";
+  if (validTime && dayOfMonth === "*" && month === "*" && dayOfWeek === "1-5") {
+    return { label: "Weekdays", detail: `Weekdays ${time} ${timezone}` };
+  }
+  if (validTime && dayOfMonth === "*" && month === "*" && dayOfWeek === "*") {
+    return { label: "Daily", detail: `Daily ${time} ${timezone}` };
+  }
+  return { label: "Schedule", detail: [time, timezone].filter(Boolean).join(" ") || timezone };
 }
 
 function timezoneOptions(current: string): string[] {
@@ -423,6 +439,7 @@ interface Notice {
  *  and routing, then execution policy. The URL owns the selected tab. */
 const AUTOMATIONS_TABS: Array<{ label: string; section: AutomationsSection | null }> = [
   { label: "Automations", section: null },
+  { label: "Runs", section: "runs" },
   { label: "Rulesets", section: "rulesets" },
 ];
 
@@ -520,7 +537,7 @@ export function AutomationsView({
     });
     // Polling is recovery only: a backgrounded browser or old relay can miss a
     // best-effort hint. Keep the interval deliberately calm.
-    const recovery = section === "queue" ? setInterval(() => void refreshRuns().catch(() => {}), 30_000) : null;
+    const recovery = section === "runs" ? setInterval(() => void refreshRuns().catch(() => {}), 30_000) : null;
     return () => { unsubscribe(); if (debounce) clearTimeout(debounce); if (recovery) clearInterval(recovery); };
   }, [refreshRuns, section]);
   useEffect(() => {
@@ -892,11 +909,10 @@ export function AutomationsView({
         <div className="automations-view-body">
           <section className="autom-hero">
             <div className="autom-hero-copy">
-              <h2 className="autom-hero-title">Automations need an account</h2>
+              <h2 className="autom-hero-title">Schedule work while you&apos;re away</h2>
               <p className="autom-hero-body">
-                Automations run through a control plane, which stores your triggers and queues Runs
-                even while this device and your machine are offline. Right now this device is paired
-                to your machine directly, without an account, so there&apos;s nowhere to keep them.
+                Sign in through Bivy Cloud or a self-hosted control plane to store triggers and Runs
+                while this device and your machine are offline.
               </p>
               <p className="autom-hero-body">
                 {controller.solo
@@ -929,21 +945,21 @@ export function AutomationsView({
           <p className="automations-view-sub">Jobs that run on your machines while you&apos;re away.</p>
         </div>
         <div className="automations-view-head-actions">
-          <button type="button" className="btn primary autom-new-btn" onClick={openChooser} aria-label="New automation">
+          <button type="button" className="btn primary" onClick={openChooser} aria-label="New automation">
             <PlusIcon size={18} />
-            <span className="autom-new-btn-label">New automation</span>
+            <span className="action-label">New automation</span>
           </button>
           <button type="button" className="btn ghost icon autom-close-btn" onClick={onClose} title="Close" aria-label="Close automations"><CloseIcon /></button>
         </div>
       </header>
 
-      <nav className="automations-tabs" aria-label="Automations sections">
+      <nav className="automations-tabs segmented" aria-label="Automations sections">
         {AUTOMATIONS_TABS.map((tab) => (
           <button
             key={tab.label}
             type="button"
-            className={`automations-tab${section === tab.section ? " active" : ""}`}
-            aria-current={section === tab.section ? "page" : undefined}
+            className="seg-btn"
+            aria-selected={section === tab.section}
             onClick={() => onSectionChange(tab.section)}
           >
             {tab.label}
@@ -953,13 +969,13 @@ export function AutomationsView({
 
       <div className="automations-view-body">
         {cloudAutomationGate && (
-          <div className="autom-notice warn" role="status">
-            <div className="autom-notice-text">
+          <div className="banner" data-tone="warn" role="status">
+            <div className="banner-text">
               <strong>Hosted automations require Cloud</strong>
               <span>GitHub, schedules, and other hosted triggers can be configured, but incoming events are shown as blocked until this account is upgraded. Self-hosted control planes are not limited by Bivy Cloud billing.</span>
             </div>
             {cloudAutomationGate.actions.length > 0 && (
-              <div className="autom-notice-actions">
+              <div className="banner-actions">
                 {cloudAutomationGate.actions.map((action) => (
                   <button
                     type="button"
@@ -975,18 +991,18 @@ export function AutomationsView({
           </div>
         )}
         {error && (
-          <div className="autom-notice warn" role="alert">
-            <div className="autom-notice-text"><strong>Something went wrong</strong><span>{error}</span></div>
+          <div className="banner" data-tone="danger" role="alert">
+            <div className="banner-text"><strong>Something went wrong</strong><span>{error}</span></div>
             <button type="button" className="btn ghost icon" onClick={() => setError("")} aria-label="Dismiss">✕</button>
           </div>
         )}
         {notice && (
-          <div className={`autom-notice ${notice.tone}`} role="status">
-            <div className="autom-notice-text">
+          <div className="banner" data-tone={notice.tone === "info" ? "accent" : notice.tone} role="status">
+            <div className="banner-text">
               <strong>{notice.title}</strong>
               {notice.body && <span>{notice.body}</span>}
             </div>
-            <div className="autom-notice-actions">
+            <div className="banner-actions">
               {notice.action && (
                 <button type="button" className="btn sm primary" onClick={notice.action.onClick}>
                   {notice.action.label}
@@ -1010,11 +1026,11 @@ export function AutomationsView({
         />
 
         {items.some((i) => i.trigger === "github_ci" && i.enabled) && sources.github?.connected && (
-          <div className="autom-banner" role="status">
+          <div className="banner inline" data-tone="accent" role="status">
             <strong>Fix failed CI is on.</strong>{" "}
             New GitHub Apps created in Bivy receive <code>workflow_run</code> events automatically.
             Existing apps need <code>workflow_run</code> + Actions/Checks read on the app in GitHub.
-            <button type="button" className="btn sm autom-banner-action" onClick={() => openSetup("github")}>
+            <button type="button" className="btn sm banner-action" onClick={() => openSetup("github")}>
               Review GitHub setup
             </button>
           </div>
@@ -1035,7 +1051,7 @@ export function AutomationsView({
               </p>
             </div>
             <div className="autom-empty-action">
-              <button type="button" className="btn primary autom-empty-new-btn" onClick={openChooser}>
+              <button type="button" className="btn primary" onClick={openChooser}>
                 <PlusIcon size={22} /> New automation
               </button>
             </div>
@@ -1100,7 +1116,15 @@ export function AutomationsView({
                       <div className="automation-row-actions">
                         {(() => {
                           const activeRun = runs.find((run) => run.definitionId === item.id && ["pending", "claimed", "running", "waiting", "needs_attention"].includes(run.status));
-                          return activeRun ? <span className="automation-row-run-status" role="status">{activeRun.status === "running" ? "Running now" : "Queued"}</span> : null;
+                          return activeRun ? (
+                            <button
+                              type="button"
+                              className="btn sm link automation-row-run-status"
+                              onClick={(event) => { event.stopPropagation(); onOpenRun?.(activeRun.id); }}
+                            >
+                              {activeRun.status === "running" ? "Running now" : "Queued"}
+                            </button>
+                          ) : null;
                         })()}
                         {needsConnect && (
                           <button
@@ -1141,7 +1165,7 @@ export function AutomationsView({
           </section>
         )}
 
-        {section === "queue" && (
+        {section === "runs" && (
           <>
             {cancelError && <div className="banner inline" data-tone="danger">Could not cancel run: {cancelError}</div>}
             {cloudMachinesEnabled && (
@@ -1506,13 +1530,13 @@ function SourceAutomationEditor({
         </details>
         <div className="wizard-body">
           {needsConnect && (
-            <div className="autom-banner" role="status">
+            <div className="banner inline" data-tone="accent" role="status">
               Connect {trigger === "linear" ? "Linear" : "GitHub"} before this automation can fire.
               <button type="button" className="btn sm primary" style={{ marginLeft: 8 }} onClick={onConnect}>Connect here</button>
             </div>
           )}
           {events.workflowFailed && enabled && !needsConnect && isGithub && (
-            <div className="autom-banner" role="status">
+            <div className="banner inline" data-tone="accent" role="status">
               Failed CI needs <code>workflow_run</code> on the GitHub App (included for apps created in Bivy).
               Existing apps: add the event + Actions/Checks read in GitHub settings.
             </div>
@@ -1727,7 +1751,7 @@ function SourceAutomationEditor({
         </div>
         <div className="wizard-actions">
           <button type="button" className="btn" onClick={onClose}>Cancel</button>
-          <button type="button" className="btn primary autom-save-btn" disabled={busy} onClick={() => void save()}>
+          <button type="button" className="btn primary" disabled={busy} onClick={() => void save()}>
             {busy ? "Saving…" : "Save"}
           </button>
         </div>
@@ -1784,12 +1808,22 @@ function AutomationEditor({
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState<{ url: string; secret: string; name: string; updated?: boolean } | null>(null);
   const [allowDangerous, setAllowDangerous] = useState(false);
+  const [pairMachineOpen, setPairMachineOpen] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
+  const editorRef = useRef<HTMLDivElement>(null);
+  const closeWithBack = useModalBack(onCancel);
+  useModalEscape(closeWithBack);
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    editorRef.current?.querySelector<HTMLElement>("input, textarea, select, button")?.focus();
+    return () => opener?.focus?.();
+  }, []);
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setD((prev) => ({ ...prev, [k]: v }));
   const preflight = useAutomationPreflight(d.id || undefined);
 
   const tzList = useMemo(() => timezoneOptions(d.timezone), [d.timezone]);
   const cronHuman = useMemo(() => describeCron(d.cron), [d.cron]);
+  const cronChipCopy = useMemo(() => cronChip(d.cron, d.timezone), [d.cron, d.timezone]);
   const selectedNode = state.connection.nodes.find((n) => n.id === d.nodeId);
   const selectedNodeHasKey = Boolean(d.nodeId && controller.local.keys()[d.nodeId]);
   const pairedNodes = state.connection.nodes.filter((n) => Boolean(controller.local.keys()[n.id]));
@@ -1923,7 +1957,7 @@ function AutomationEditor({
         approvalMode: d.approvalMode,
         sandbox: d.sandbox,
         allowDangerous,
-        enabled: true,
+        enabled: existing?.enabled ?? true,
         trigger: d.trigger,
         ...(d.trigger === "webhook" ? { requireSigning: d.requireSigning } : {}),
         repo: repo || (d.id ? "" : undefined),
@@ -1974,9 +2008,9 @@ function AutomationEditor({
           onSaved({ kind: "created-webhook", name: d.name.trim(), id: result.id });
         } else {
           const nextHint = d.trigger === "schedule"
-            ? (d.kind === "cron"
-                ? (cronHuman ? `Next: ${cronHuman.charAt(0).toLowerCase() + cronHuman.slice(1)} (${d.timezone}).` : "On the schedule you set.")
-                : `Once at ${new Date(d.onceAt).toLocaleString()}.`)
+            ? (result.nextRunAt
+                ? `${formatNextAutomationRun(result.nextRunAt)}.`
+                : d.kind === "once" ? `Once at ${new Date(d.onceAt).toLocaleString()}.` : "On the schedule you set.")
             : d.trigger === "github" ? "Matching GitHub events will start a run with these instructions."
               : d.trigger === "linear" ? "Matching Linear issues will start a run with these instructions."
                 : undefined;
@@ -1996,8 +2030,9 @@ function AutomationEditor({
   }
 
   return (
-    <div className="wizard-scrim" onClick={onCancel}>
+    <div className="wizard-scrim" onClick={closeWithBack}>
       <div
+        ref={editorRef}
         className="wizard autom-editor"
         role="dialog"
         aria-modal="true"
@@ -2006,7 +2041,7 @@ function AutomationEditor({
       >
         <div className="wizard-head">
           <strong>{created ? "Webhook ready" : d.id ? "Edit automation" : "New automation"}</strong>
-          <button type="button" className="btn ghost icon" onClick={onCancel} aria-label="Cancel">✕</button>
+          <button type="button" className="btn ghost icon" onClick={closeWithBack} aria-label="Cancel">✕</button>
         </div>
 
         {existing && !created && (
@@ -2031,7 +2066,7 @@ function AutomationEditor({
         {created ? (
           <>
             <div className="wizard-body">
-              <div className="autom-success" role="status">
+              <div className="banner inline" data-tone="ok" role="status">
                 <strong>{created.updated ? `“${created.name}” now requires signing.` : `“${created.name}” is live.`}</strong> Send signed events to this URL. Copy the signing secret now — it isn&apos;t shown again.
               </div>
               <div className="settings-field">
@@ -2056,7 +2091,7 @@ function AutomationEditor({
               <span />
               <button
                 type="button"
-                className="btn primary autom-save-btn"
+                className="btn primary"
                 onClick={() => onSaved(created.updated ? { kind: "updated", name: created.name, id: existing?.id } : { kind: "created-webhook", name: created.name })}
               >
                 Done
@@ -2086,7 +2121,7 @@ function AutomationEditor({
                       {pick.id === "webhook" ? <IconWebhook /> : pick.id === "github" || pick.id === "linear" ? <IconPr /> : <IconClock />}
                     </span>
                     <div className="autom-trigger-chip-text">
-                      <strong>{pick.label}</strong>
+                      <strong>{d.trigger === "schedule" && d.kind === "cron" ? cronChipCopy.label : pick.label}</strong>
                       <span>
                         {d.trigger === "webhook"
                           ? pick.hint
@@ -2094,7 +2129,7 @@ function AutomationEditor({
                             ? pick.hint
                           : d.kind === "once"
                             ? (d.onceAt ? new Date(d.onceAt).toLocaleString() : pick.hint)
-                            : (cronHuman || pick.hint)}
+                            : cronChipCopy.detail}
                       </span>
                     </div>
                     {canEditTrigger && (
@@ -2112,12 +2147,12 @@ function AutomationEditor({
                       + Add trigger
                     </button>
                     {pickerOpen && (
-                      <div className="autom-trigger-menu" role="listbox" aria-label="Trigger types">
+                      <div className="menu autom-trigger-picker" role="listbox" aria-label="Trigger types">
                         {TRIGGER_OPTIONS.map((opt) => (
                           <button
                             key={opt.id}
                             type="button"
-                            className="autom-trigger-option"
+                            className="menu-item autom-trigger-pick"
                             role="option"
                             onClick={() => applyTrigger(opt)}
                           >
@@ -2348,23 +2383,28 @@ function AutomationEditor({
                       {d.nodeId && !state.connection.nodes.some((n) => n.id === d.nodeId) && <option value={d.nodeId}>{d.nodeId} · unavailable</option>}
                     </select>
                   </label>
-                  {!selectedNodeHasKey && (
+                  {!selectedNodeHasKey && pairedNodes.length === 0 && (
                     <div className="autom-runner-help" role="status">
-                      {pairedNodes.length === 0
-                        ? "Pair this phone or browser with a machine first. That pairing key protects the instructions; account sign-in alone cannot decrypt them."
-                        : "Choose a machine marked online or offline (not key unavailable). Offline machines can still own the encrypted job and use an isolated fallback from the Runs tab."}
+                      <button type="button" className="btn primary" onClick={() => setPairMachineOpen(true)}>Pair this machine</button>
                     </div>
                   )}
+                  {!selectedNodeHasKey && pairedNodes.length > 0 && (
+                    <div className="autom-runner-help" role="status">Choose a machine without “key unavailable”. Offline machines can still own the encrypted job.</div>
+                  )}
                 </div>
-                <p className="settings-hint">
-                  Persistent machine: runs there whenever it is online. Ephemeral-only setup: pair once to establish encryption, then set an isolated profile as the default or fallback under <strong>Runs → Queue routing</strong>. Cloud and model sign-ins are separate and are injected only when the runner starts.
-                </p>
+                <details className="settings-disclosure">
+                  <summary className="settings-disclosure-summary">How pairing protects instructions</summary>
+                  <div className="settings-disclosure-body settings-hint">
+                    Instructions are encrypted for the paired machine. Account sign-in alone cannot decrypt them. Configure isolated fallback routing from Runs when needed.
+                  </div>
+                </details>
               </div>
 
               <div className="autom-field-block">
-                <div className="autom-field-label">Instructions</div>
+                <label className="autom-field-label" htmlFor="autom-instructions">Instructions</label>
                 <div className="autom-instructions">
                   <textarea
+                    id="autom-instructions"
                     className="autom-instructions-input"
                     rows={7}
                     value={d.instructions}
@@ -2459,16 +2499,16 @@ function AutomationEditor({
               )}
 
               {error && <p className="settings-error">{error}</p>}
-              {!canSave && missing.length > 0 && (
-                <p className="settings-hint autom-save-hint">Needs {missing.join(", ")} to save.</p>
-              )}
             </div>
 
             <div className="wizard-actions">
-              <button type="button" className="btn" onClick={onCancel} disabled={busy}>Cancel</button>
+              <button type="button" className="btn" onClick={closeWithBack} disabled={busy}>Cancel</button>
+              {!canSave && missing.length > 0 && (
+                <span className="settings-hint autom-save-hint">Needs {missing.join(", ")} to save.</span>
+              )}
               <button
                 type="button"
-                className="btn primary autom-save-btn"
+                className="btn primary"
                 onClick={() => void save()}
                 disabled={busy || !canSave}
               >
@@ -2478,6 +2518,7 @@ function AutomationEditor({
           </>
         )}
       </div>
+      {pairMachineOpen && <AddNodeSheet onClose={() => setPairMachineOpen(false)} />}
     </div>
   );
 }

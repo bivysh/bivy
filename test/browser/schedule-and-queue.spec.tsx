@@ -6,6 +6,7 @@ const STYLES = new URL("../../packages/web/src/styles.css", import.meta.url);
 const APP = new URL("../../packages/web/src/App.tsx", import.meta.url);
 const COMPOSER = new URL("../../packages/web/src/components/Composer.tsx", import.meta.url);
 const QUEUE = new URL("../../packages/web/src/components/FollowupQueue.tsx", import.meta.url);
+const AUTOMATIONS = new URL("../../packages/web/src/components/AutomationsView.tsx", import.meta.url);
 
 test("the composer uses one normal Send control without Run or Schedule alternatives", async () => {
   const source = await readFile(COMPOSER, "utf8");
@@ -52,6 +53,13 @@ test("every focused text entry inherits the canonical 16px field shell so iOS ne
   expect(ruleFor(css, ".field, .picker-search")).toContain("font-size: 16px");
   expect(queue).toContain('className="field followup-edit-input"');
   expect(question).toContain('className="field question-other-input"');
+});
+
+test("automation schedule chips show one concise timezone-aware line", async () => {
+  const source = await readFile(AUTOMATIONS, "utf8");
+  expect(source).toContain('return { label: "Weekdays", detail: `Weekdays ${time} ${timezone}` };');
+  expect(source).toContain("formatNextAutomationRun(result.nextRunAt)");
+  expect(source).not.toContain("Next: ${cronHuman");
 });
 
 test("queue rows show scheduled messages with a reschedule action, delivered by the automation", async () => {

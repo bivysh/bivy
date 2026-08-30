@@ -56,7 +56,7 @@ const AutomationsView = lazy(() =>
 );
 import { useEdgeSwipe } from "./useEdgeSwipe.js";
 import { controller } from "./store/useStore.js";
-import { statusClass, statusDotState, statusLabel } from "./sessionStatus.js";
+import { runStatusLabel, statusClass, statusDotState, statusLabel } from "./sessionStatus.js";
 
 export function App() {
   const state = useAppState();
@@ -269,6 +269,12 @@ export function App() {
   // identity too — controller is a singleton — so ChatView's memoized entries
   // aren't forced to re-render on every update).
   const runCommand = useCallback((name: string, _args?: string) => {
+    if (name.startsWith("connect-provider:")) {
+      const provider = name.slice("connect-provider:".length);
+      const nodeId = state.connection.currentNodeId;
+      if (provider && nodeId) controller.store.setNeedsModelAuth({ nodeId, provider });
+      return;
+    }
     switch (name) {
       case "/new": controller.newSession(); break;
       case "/resume":
@@ -279,7 +285,7 @@ export function App() {
         );
         break;
     }
-  }, []);
+  }, [state.connection.currentNodeId]);
 
   // Standalone (session-less) terminal: opened from the sidebar button, always
   // scoped to a node's default workspace rather than any chat session. Skips
@@ -439,6 +445,19 @@ export function App() {
     target.focus({ preventScroll: true });
   }, [state.activeSession.activeSessionId, state.activeSession.approvals, state.activeSession.questions, state.activeSession.turnAttentions]);
 
+  // Approval/question cards render inline in the active session's chat scroll.
+  // Keep these hooks before the auth gate so every render calls hooks in the
+  // same order, including the sign-in → app-shell transition.
+  const activeApprovals = state.activeSession.approvals.filter((a) => !a.sessionId || a.sessionId === state.activeSession.activeSessionId);
+  const activeQuestions = state.activeSession.questions.filter((q) => !q.sessionId || q.sessionId === state.activeSession.activeSessionId);
+  const activeTurnAttention = state.activeSession.turnAttentions.find((a) => a.sessionId === state.activeSession.activeSessionId);
+  const attentionFooterRef = useRef<HTMLDivElement>(null);
+  const attentionKey = [activeApprovals[0]?.id, activeQuestions[0]?.id, activeTurnAttention?.sessionId].filter(Boolean).join(":");
+  useEffect(() => {
+    if (!attentionKey) return;
+    requestAnimationFrame(() => attentionFooterRef.current?.querySelector<HTMLElement>("[data-attention-card]")?.focus());
+  }, [attentionKey]);
+
   // Auth/setup gates, derived from reactive store fields (not read live off
   // localStorage) so signing in swaps the sign-in screen for the app shell the
   // instant the token lands — no page reload needed. `direct` (local/loopback
@@ -501,14 +520,6 @@ export function App() {
     | undefined;
   const canContinueInTerminal = online && Boolean(activeRuntimeCaps?.interactiveTui);
 
-  // Approval/question cards render inline in the active session's chat scroll, so
-  // only show the ones that belong to that session. Items are still kept globally
-  // in the store (for the sidebar "needs response" indicator); we just don't render
-  // another session's cards into whichever chat happens to be on screen. Items with
-  // no sessionId are treated as global and shown everywhere.
-  const activeApprovals = state.activeSession.approvals.filter((a) => !a.sessionId || a.sessionId === state.activeSession.activeSessionId);
-  const activeQuestions = state.activeSession.questions.filter((q) => !q.sessionId || q.sessionId === state.activeSession.activeSessionId);
-  const activeTurnAttention = state.activeSession.turnAttentions.find((a) => a.sessionId === state.activeSession.activeSessionId);
   return (
     <div className="app">
       <aside className={`sidebar${drawerOpen ? " open" : ""}`}>
@@ -719,14 +730,14 @@ export function App() {
           </div>
         )}
 
-        {!showFirstRunOnboarding && !state.activeSession.activeSessionId && state.activeSession.transcript.length === 0 && state.sessionIndex.sessions.length === 0 && (
+        {!showFirstRunOnboarding && !state.activeSession.activeSessionId && state.activeSession.transcript.length === 0 && !state.sessionIndex.sessions.some((session) => session.bivyCreated) && (
           <Suspense fallback={null}>
             <ReadinessChecklist
               activation={activation}
               onRemediate={{
-                connect_machine: () => openSettings("nodes"),
+                connect_machine: () => (document.querySelector(".node-switcher-btn") as HTMLButtonElement | null)?.click(),
                 install_agent: () => (document.querySelector(".agent-pill") as HTMLButtonElement | null)?.click(),
-                authenticate_credential: () => openSettings("providers"),
+                authenticate_credential: () => (document.querySelector(".model-pill") as HTMLButtonElement | null)?.click(),
                 grant_repository: () => (document.querySelector(".repo-pill") as HTMLButtonElement | null)?.click(),
                 run_starter_task: () => (document.querySelector(".composer-input") as HTMLTextAreaElement | null)?.focus(),
               }}
@@ -798,7 +809,7 @@ export function App() {
               collapsed={collapsed}
               onAction={runCommand}
               footer={
-                <>
+                <div className="attention-footer" ref={attentionFooterRef} aria-live="polite" aria-label="Agent needs your response">
                   <ApprovalStack approvals={activeApprovals} onResolve={(id, ok, remember) => controller.resolveApproval(id, ok, remember)} />
                   <QuestionStack
                     questions={activeQuestions}
@@ -811,7 +822,7 @@ export function App() {
                       onResolve={(sessionId, action) => controller.resolveTurnAttention(sessionId, action)}
                     />
                   )}
-                </>
+                </div>
               }
             />
 
@@ -838,7 +849,7 @@ export function App() {
                   anchorId={`attention-${activeSession.sessionId}`}
                   source={activeRunSource}
                   statusClass={statusClass(activeSession)}
-                  statusLabel={statusLabel(activeSession)}
+                  statusLabel={runStatusLabel(activeSession)}
                   gh={state.activeSession.github}
                   evidence={runEvidence.get(activeSession.sessionId)}
                   finishedAt={activeSession.finishedAt}
@@ -988,7 +999,7 @@ export function App() {
             if (view === "github" || view === "linear" || view === "slack") {
               openAutomations({ setup: view });
             } else if (view === "queue" || view === "rulesets") {
-              openAutomations({ section: view });
+              openAutomations({ section: view === "queue" ? "runs" : view });
             } else {
               // Other stale sections (e.g. the removed Webhooks tab) land on Overview.
               openAutomations();

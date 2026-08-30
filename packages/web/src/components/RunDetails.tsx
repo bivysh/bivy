@@ -241,18 +241,18 @@ export function RunDetails({
         {status === "loading" && <div className="run-details-state" role="status">Loading this Run…</div>}
 
         {status === "offline" && (
-          <div className="autom-notice warn" role="alert">
-            <div className="autom-notice-text">
+          <div className="banner" data-tone="warn" role="alert">
+            <div className="banner-text">
               <strong>Can&apos;t reach this Run right now</strong>
               <span>You appear to be offline. This Run is safe on the control plane; reconnect to see its current state.</span>
             </div>
-            <button type="button" className="btn small" onClick={() => refresh()}>Retry</button>
+            <button type="button" className="btn sm" onClick={() => refresh()}>Retry</button>
           </div>
         )}
 
         {status === "unauthorized" && (
-          <div className="autom-notice warn" role="alert">
-            <div className="autom-notice-text">
+          <div className="banner" data-tone="warn" role="alert">
+            <div className="banner-text">
               <strong>Sign in to view this Run</strong>
               <span>Your session isn&apos;t authorized. Sign in again to open this Run.</span>
             </div>
@@ -347,12 +347,12 @@ function RunBody({
   return (
     <>
       {stale && (
-        <div className="autom-notice warn" role="status">
-          <div className="autom-notice-text">
+        <div className="banner" data-tone="warn" role="status">
+          <div className="banner-text">
             <strong>Showing the last known state</strong>
             <span>This Run couldn&apos;t be refreshed just now.</span>
           </div>
-          <button type="button" className="btn small" onClick={onRefresh}>Refresh</button>
+          <button type="button" className="btn sm" onClick={onRefresh}>Refresh</button>
         </div>
       )}
 
@@ -367,8 +367,8 @@ function RunBody({
       </div>
 
       {run.lifecycle === "needs_attention" && (
-        <div className="autom-notice warn" role="status">
-          <div className="autom-notice-text">
+        <div className="banner" data-tone="warn" role="status">
+          <div className="banner-text">
             <strong>Needs attention</strong>
             <span>This Run is waiting on a person before it can continue.</span>
           </div>
@@ -480,27 +480,27 @@ function RunBody({
       {(canCancel || canRetry || inspectChecks || (reviewSession && sessionOpenable) || (reauthenticate && onReauthenticate)) && (
         <div className="run-sheet-recovery" role="group" aria-label="Run actions">
           {inspectChecks && (
-            <button type="button" className="btn small primary recover-checks" onClick={() => { checksRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }); checksRef.current?.focus(); }}>
+            <button type="button" className="btn sm primary recover-checks" onClick={() => { checksRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }); checksRef.current?.focus(); }}>
               Review failed checks
             </button>
           )}
           {reauthenticate && onReauthenticate && (
-            <button type="button" className="btn small primary recover-auth" disabled={busyAction !== null} onClick={() => void startReauthentication()}>
+            <button type="button" className="btn sm primary recover-auth" disabled={busyAction !== null} onClick={() => void startReauthentication()}>
               {busyAction === "reauthenticate" ? "Connecting…" : reauthenticate.label}
             </button>
           )}
           {reviewSession && sessionOpenable && (
-            <button type="button" className="btn small primary recover-review" onClick={() => onOpenSession!(run.sessionId!)}>
+            <button type="button" className="btn sm primary recover-review" onClick={() => onOpenSession!(run.sessionId!)}>
               Review Session
             </button>
           )}
           {canRetry && (
-            <button type="button" className="btn small primary recover-retry" disabled={busyAction !== null} onClick={onRetry}>
+            <button type="button" className="btn sm primary recover-retry" disabled={busyAction !== null} onClick={onRetry}>
               {busyAction === "retry" ? "Retrying…" : "Retry Run"}
             </button>
           )}
           {canCancel && (
-            <button type="button" className="btn small recover-cancel" disabled={busyAction !== null} onClick={onCancel}>
+            <button type="button" className="btn sm recover-cancel" disabled={busyAction !== null} onClick={onCancel}>
               {busyAction === "cancel" ? "Cancelling…" : "Cancel Run"}
             </button>
           )}

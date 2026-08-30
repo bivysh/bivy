@@ -162,8 +162,8 @@ export function QueueRoutingSection({
 
   return (
     <>
-      <div className={`routing-readiness ${routeReady ? "ready" : "warn"}`} role="status">
-        <div className="routing-readiness-copy">
+      <div className="banner routing-status" data-tone={routeReady ? "ok" : "warn"} role="status">
+        <div className="banner-text routing-status-copy">
           <strong>{routing === null ? "Checking run readiness…" : routeReady ? "Ready for unattended runs" : "Setup needs attention"}</strong>
           <span>
             {routing === null

@@ -58,10 +58,10 @@ export function ConnectRunner({
         <h2 className="connect-title" id="connect-runner-title">{persistentNodes.length > 0 ? "Choose a Machine" : "Connect a Machine"}</h2>
         <p className="connect-sub">
           {persistentNodes.length > 0
-            ? "Pick an online Machine to start, or add another workstation."
+            ? "Pick an online machine to start, or add another machine."
             : ephemeralEnabled
-              ? "Use a workstation with your real repo, services, and warm caches, or launch an isolated Machine. Any hosted credential custody is disclosed before enablement."
-              : "Use the workstation where your repo, services, and warm caches already live."}
+              ? "Use a machine with your real repository, services, and warm caches, or launch an isolated machine. Any hosted credential custody is disclosed before enablement."
+              : "Use the machine where your repository, services, and warm caches already live."}
         </p>
       </div>
 
@@ -101,9 +101,9 @@ export function ConnectRunner({
               </svg>
             </span>
             <div className="connect-option-copy">
-              <h3>{persistentNodes.length > 0 ? "Add another workstation" : "Connect your workstation"}</h3>
+              <h3>{persistentNodes.length > 0 ? "Add another machine" : "Connect your machine"}</h3>
               <p>
-                Paste this on the Mac or Linux computer where your repo lives.
+                Paste this on the Mac or Linux machine where your repository lives.
                 {install.authenticated && " It can use this account automatically."}
                 {!install.hosted && " Needs Node.js 20 or newer."}
               </p>
@@ -113,7 +113,7 @@ export function ConnectRunner({
             <code>{install.command}</code>
             <button
               type="button"
-              className={`connect-copy icon-only${copied === "auto" ? " is-copied" : ""}`}
+              className={`btn sm ghost icon-only${copied === "auto" ? " is-copied" : ""}`}
               onClick={() => copyCommand(install.command, "auto")}
               aria-label={copied === "auto" ? "Command copied" : install.authenticated ? "Copy auto sign-in install command" : "Copy install command"}
               title={copied === "auto" ? "Copied" : install.authenticated ? "Copy auto sign-in" : "Copy"}
@@ -170,7 +170,7 @@ export function ConnectRunner({
         <span className="connect-waiting-text">
           {persistentNodes.length > 0 ? "Or wait for another Machine to connect…" : "Waiting for a Machine to connect…"}
         </span>
-        <button type="button" className="connect-refresh" onClick={onRefresh}>
+        <button type="button" className="btn sm ghost" onClick={onRefresh}>
           Refresh now
         </button>
       </div>
