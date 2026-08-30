@@ -416,6 +416,9 @@ function securityHeaders(_req: Request, res: Response, next: NextFunction) {
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Referrer-Policy", "no-referrer");
   res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  // Browsers only honor HSTS over HTTPS. Keep this host-scoped: operators may
+  // serve unrelated or non-HTTPS applications from sibling subdomains.
+  res.setHeader("Strict-Transport-Security", "max-age=31536000");
   res.setHeader("Permissions-Policy", "camera=(self), microphone=(), geolocation=(), payment=(), usb=(), serial=()");
   // The hosted PWA keeps JS/CSS in external static assets so CSP can avoid
   // unsafe-inline while still allowing API, relay, and push-notification flows.
