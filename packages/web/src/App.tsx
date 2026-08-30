@@ -129,7 +129,10 @@ export function App() {
   }, [state.connection.signedIn]);
   const refreshAutomationRuns = useCallback(() => {
     if (controller.direct || !state.connection.signedIn) return;
-    controller.fetchAutomationRuns().then(setAutomationRuns).catch(() => {});
+    // The shell only needs lifecycle/linkage fields for Inbox badges. Evidence,
+    // checks, and event timelines are fetched by the Run/Automations views when
+    // opened instead of transferring them every 30 seconds.
+    controller.fetchAutomationRuns(50, { summary: true }).then(setAutomationRuns).catch(() => {});
   }, [state.connection.signedIn]);
   useEffect(() => {
     if (controller.direct || !state.connection.signedIn) return;

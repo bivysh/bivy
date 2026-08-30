@@ -3116,7 +3116,32 @@ app.post("/account/automations/:id/run", asyncHandler(async (req, res) => {
 app.get("/account/automation-runs", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
-  res.json(await store.listAutomationRuns(client.accountId, Number(req.query.limit) || 50));
+  const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 50));
+  const runs = await store.listAutomationRuns(client.accountId, limit);
+  if (req.query.summary !== "1") return res.json(runs);
+
+  // The always-mounted PWA shell polls this feed for Inbox attention. It only
+  // needs lifecycle and session linkage; transferring each Run's checks, event
+  // timeline, receipt evidence, references, and routing detail every 30 seconds
+  // made idle mobile clients surprisingly data-hungry. Full list/detail calls
+  // remain unchanged for the Automations and Run views.
+  res.json(runs.map((run) => ({
+    id: run.id,
+    definitionId: run.definitionId,
+    triggerKind: run.triggerKind,
+    status: run.status,
+    title: run.title,
+    message: run.message,
+    targetKind: run.target.kind,
+    targetSessionId: run.target.kind === "existing_session" ? run.target.sessionId : undefined,
+    createdAt: run.createdAt,
+    startedAt: run.startedAt,
+    completedAt: run.completedAt,
+    leaseExpiresAt: run.leaseExpiresAt,
+    attempt: run.attempt,
+    maxAttempts: run.maxAttempts,
+    output: run.output?.sessionId ? { sessionId: run.output.sessionId } : undefined,
+  })));
 }));
 
 // Single Run by id, for the routable /runs/:runId detail screen. Account-scoped:
