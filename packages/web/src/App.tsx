@@ -985,7 +985,7 @@ export function App() {
             if (view === "github" || view === "linear" || view === "slack") {
               openAutomations({ setup: view });
             } else if (view === "queue" || view === "rulesets") {
-              openAutomations({ section: view });
+              openAutomations({ section: view === "queue" ? "runs" : view });
             } else {
               // Other stale sections (e.g. the removed Webhooks tab) land on Overview.
               openAutomations();

@@ -37,7 +37,10 @@ test("settings use task-oriented groups and search panel concepts", async () => 
 test("automations is the single hub for connections, history and rulesets", async () => {
   const source = await readFile(new URL("../../packages/web/src/components/AutomationsView.tsx", import.meta.url), "utf8");
   expect(source).toContain('label: "Automations"');
+  expect(source).toContain('label: "Runs", section: "runs"');
   expect(source).toContain('label: "Rulesets"');
+  expect(source).toContain('className="automations-tabs segmented"');
+  expect(source).not.toContain('className={`automations-tab');
   expect(source).toContain("automation-history-btn");
   // The standalone Webhooks tab was removed — a webhook is just an automation
   // whose trigger is "webhook" (configured in Triggers), and its signed
@@ -47,6 +50,12 @@ test("automations is the single hub for connections, history and rulesets", asyn
   // Source connections and the panels reused from Settings all live here now.
   expect(source).toContain("GithubQueuePanel");
   expect(source).toContain("RulesetsPanel");
+});
+
+test("legacy queue URLs redirect to the Runs destination", async () => {
+  const source = await readFile(new URL("../../packages/web/src/router.ts", import.meta.url), "utf8");
+  expect(source).toContain('if (v === "queue") return "runs";');
+  expect(source).toContain('readonly AutomationsSection[] = ["runs", "rulesets"]');
 });
 
 test("GitHub trigger creation stays in one complete automation editor", async () => {

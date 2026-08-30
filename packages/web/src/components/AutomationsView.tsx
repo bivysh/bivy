@@ -437,6 +437,7 @@ interface Notice {
  *  and routing, then execution policy. The URL owns the selected tab. */
 const AUTOMATIONS_TABS: Array<{ label: string; section: AutomationsSection | null }> = [
   { label: "Automations", section: null },
+  { label: "Runs", section: "runs" },
   { label: "Rulesets", section: "rulesets" },
 ];
 
@@ -534,7 +535,7 @@ export function AutomationsView({
     });
     // Polling is recovery only: a backgrounded browser or old relay can miss a
     // best-effort hint. Keep the interval deliberately calm.
-    const recovery = section === "queue" ? setInterval(() => void refreshRuns().catch(() => {}), 30_000) : null;
+    const recovery = section === "runs" ? setInterval(() => void refreshRuns().catch(() => {}), 30_000) : null;
     return () => { unsubscribe(); if (debounce) clearTimeout(debounce); if (recovery) clearInterval(recovery); };
   }, [refreshRuns, section]);
   useEffect(() => {
@@ -906,11 +907,10 @@ export function AutomationsView({
         <div className="automations-view-body">
           <section className="autom-hero">
             <div className="autom-hero-copy">
-              <h2 className="autom-hero-title">Automations need an account</h2>
+              <h2 className="autom-hero-title">Schedule work while you&apos;re away</h2>
               <p className="autom-hero-body">
-                Automations run through a control plane, which stores your triggers and queues Runs
-                even while this device and your machine are offline. Right now this device is paired
-                to your machine directly, without an account, so there&apos;s nowhere to keep them.
+                Sign in through Bivy Cloud or a self-hosted control plane to store triggers and Runs
+                while this device and your machine are offline.
               </p>
               <p className="autom-hero-body">
                 {controller.solo
@@ -951,13 +951,13 @@ export function AutomationsView({
         </div>
       </header>
 
-      <nav className="automations-tabs" aria-label="Automations sections">
+      <nav className="automations-tabs segmented" aria-label="Automations sections">
         {AUTOMATIONS_TABS.map((tab) => (
           <button
             key={tab.label}
             type="button"
-            className={`automations-tab${section === tab.section ? " active" : ""}`}
-            aria-current={section === tab.section ? "page" : undefined}
+            className="seg-btn"
+            aria-selected={section === tab.section}
             onClick={() => onSectionChange(tab.section)}
           >
             {tab.label}
@@ -1114,7 +1114,15 @@ export function AutomationsView({
                       <div className="automation-row-actions">
                         {(() => {
                           const activeRun = runs.find((run) => run.definitionId === item.id && ["pending", "claimed", "running", "waiting", "needs_attention"].includes(run.status));
-                          return activeRun ? <span className="automation-row-run-status" role="status">{activeRun.status === "running" ? "Running now" : "Queued"}</span> : null;
+                          return activeRun ? (
+                            <button
+                              type="button"
+                              className="btn sm link automation-row-run-status"
+                              onClick={(event) => { event.stopPropagation(); onOpenRun?.(activeRun.id); }}
+                            >
+                              {activeRun.status === "running" ? "Running now" : "Queued"}
+                            </button>
+                          ) : null;
                         })()}
                         {needsConnect && (
                           <button
@@ -1155,7 +1163,7 @@ export function AutomationsView({
           </section>
         )}
 
-        {section === "queue" && (
+        {section === "runs" && (
           <>
             {cancelError && <div className="banner inline" data-tone="danger">Could not cancel run: {cancelError}</div>}
             {cloudMachinesEnabled && (

@@ -67,12 +67,13 @@ function isSettingsView(v: string): v is SettingsView {
 /** Automations' navigable tabs. `null` (bare `/automations`) is the Overview
  *  tab. Kept here (like `SettingsView`) so the router can validate an
  *  `/automations/:section` path without importing the component module. */
-export type AutomationsSection = "queue" | "rulesets";
+export type AutomationsSection = "runs" | "rulesets";
 
-const AUTOMATIONS_SECTIONS: readonly AutomationsSection[] = ["queue", "rulesets"];
+const AUTOMATIONS_SECTIONS: readonly AutomationsSection[] = ["runs", "rulesets"];
 
-function isAutomationsSection(v: string): v is AutomationsSection {
-  return (AUTOMATIONS_SECTIONS as readonly string[]).includes(v);
+function parseAutomationsSection(v: string): AutomationsSection | null {
+  if (v === "queue") return "runs";
+  return (AUTOMATIONS_SECTIONS as readonly string[]).includes(v) ? v as AutomationsSection : null;
 }
 
 export type Route =
@@ -108,7 +109,7 @@ export function parseRoute(pathname: string = location.pathname): Route {
   const automationsMatch = AUTOMATIONS_PATH.exec(pathname);
   if (automationsMatch) {
     const raw = automationsMatch[1] ? decodeURIComponent(automationsMatch[1]) : "";
-    return { kind: "automations", section: isAutomationsSection(raw) ? raw : null };
+    return { kind: "automations", section: parseAutomationsSection(raw) };
   }
   return { kind: "root" };
 }
