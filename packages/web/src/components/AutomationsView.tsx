@@ -107,6 +107,20 @@ function describeCron(cron: string): string {
   }
 }
 
+function cronChip(cron: string, timezone: string): { label: string; detail: string } {
+  const [minute, hour, dayOfMonth, month, dayOfWeek] = cron.trim().split(/\s+/);
+  const validTime = /^\d+$/.test(minute || "") && /^\d+$/.test(hour || "")
+    && Number(minute) < 60 && Number(hour) < 24;
+  const time = validTime ? `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}` : "";
+  if (validTime && dayOfMonth === "*" && month === "*" && dayOfWeek === "1-5") {
+    return { label: "Weekdays", detail: `Weekdays ${time} ${timezone}` };
+  }
+  if (validTime && dayOfMonth === "*" && month === "*" && dayOfWeek === "*") {
+    return { label: "Daily", detail: `Daily ${time} ${timezone}` };
+  }
+  return { label: "Schedule", detail: [time, timezone].filter(Boolean).join(" ") || timezone };
+}
+
 function timezoneOptions(current: string): string[] {
   const supported = (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf;
   let zones: string[];
@@ -1790,6 +1804,7 @@ function AutomationEditor({
 
   const tzList = useMemo(() => timezoneOptions(d.timezone), [d.timezone]);
   const cronHuman = useMemo(() => describeCron(d.cron), [d.cron]);
+  const cronChipCopy = useMemo(() => cronChip(d.cron, d.timezone), [d.cron, d.timezone]);
   const selectedNode = state.connection.nodes.find((n) => n.id === d.nodeId);
   const selectedNodeHasKey = Boolean(d.nodeId && controller.local.keys()[d.nodeId]);
   const pairedNodes = state.connection.nodes.filter((n) => Boolean(controller.local.keys()[n.id]));
@@ -1974,9 +1989,9 @@ function AutomationEditor({
           onSaved({ kind: "created-webhook", name: d.name.trim(), id: result.id });
         } else {
           const nextHint = d.trigger === "schedule"
-            ? (d.kind === "cron"
-                ? (cronHuman ? `Next: ${cronHuman.charAt(0).toLowerCase() + cronHuman.slice(1)} (${d.timezone}).` : "On the schedule you set.")
-                : `Once at ${new Date(d.onceAt).toLocaleString()}.`)
+            ? (result.nextRunAt
+                ? `${formatNextAutomationRun(result.nextRunAt)}.`
+                : d.kind === "once" ? `Once at ${new Date(d.onceAt).toLocaleString()}.` : "On the schedule you set.")
             : d.trigger === "github" ? "Matching GitHub events will start a run with these instructions."
               : d.trigger === "linear" ? "Matching Linear issues will start a run with these instructions."
                 : undefined;
@@ -2086,7 +2101,7 @@ function AutomationEditor({
                       {pick.id === "webhook" ? <IconWebhook /> : pick.id === "github" || pick.id === "linear" ? <IconPr /> : <IconClock />}
                     </span>
                     <div className="autom-trigger-chip-text">
-                      <strong>{pick.label}</strong>
+                      <strong>{d.trigger === "schedule" && d.kind === "cron" ? cronChipCopy.label : pick.label}</strong>
                       <span>
                         {d.trigger === "webhook"
                           ? pick.hint
@@ -2094,7 +2109,7 @@ function AutomationEditor({
                             ? pick.hint
                           : d.kind === "once"
                             ? (d.onceAt ? new Date(d.onceAt).toLocaleString() : pick.hint)
-                            : (cronHuman || pick.hint)}
+                            : cronChipCopy.detail}
                       </span>
                     </div>
                     {canEditTrigger && (
