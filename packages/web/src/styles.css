@@ -2953,13 +2953,15 @@ select.picker-search { appearance: auto; }
 
   /* Keep the editor useful without making every control a billboard. */
   .autom-editor .wizard-body { gap: var(--space-5); }
-  .autom-editor .autom-name-input { height: 48px; border-radius: var(--radius-full); padding-inline: var(--space-4); font-size: var(--text-md); }
+  /* Text-entry controls keep the 16px iOS focus-zoom floor even though the
+     surrounding compact type uses the smaller --text-md token. */
+  .autom-editor .autom-name-input { height: 48px; border-radius: var(--radius-full); padding-inline: var(--space-4); font-size: 16px; }
   .autom-editor .autom-field-label { font-size: var(--text-sm); }
   .autom-editor .autom-trigger-add, .autom-editor .autom-trigger-chip { min-height: 48px; border-radius: var(--radius-lg); font-size: var(--text-md); }
   .autom-editor .autom-trigger-chip-text strong { font-size: var(--text-md); }
   .autom-editor .autom-trigger-chip-text span { font-size: var(--text-sm); }
   .autom-editor .autom-instructions { border-radius: var(--radius-lg); }
-  .autom-editor .autom-instructions-input { min-height: 144px; padding: var(--space-4); font-size: var(--text-md); }
+  .autom-editor .autom-instructions-input { min-height: 144px; padding: var(--space-4); font-size: 16px; }
   .autom-editor .autom-runner-card, .autom-editor .autom-trigger-config { border-radius: var(--radius-lg); }
 
   /* History reads as a feed, not a second oversized card stack. */
