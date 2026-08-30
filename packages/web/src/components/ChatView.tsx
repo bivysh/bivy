@@ -718,16 +718,8 @@ export function ChatView({
           )}
           {total === 0 && draftRoute && (
             <div className="chat-empty">
-              <p className="chat-empty-title">Start a new session</p>
-              <p className="chat-empty-sub">
-                Choose the <b>machine</b> to run on in the header, then the{" "}
-                <b>agent</b> and <b>model</b> below. Describe your task to
-                begin.
-              </p>
-              <p className="chat-empty-sub chat-empty-note">
-                You can switch the model at any time, or hand off to a new
-                agent to continue in a fresh session.
-              </p>
+              <p className="chat-empty-title">Describe your task</p>
+              <p className="chat-empty-sub">Review where and how it will run, then send your instructions below.</p>
             </div>
           )}
           {start > 0 && (

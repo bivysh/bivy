@@ -22,14 +22,15 @@ test("the readiness strip renders nothing once activated and never claims premat
   expect(view).toContain("activation.checks.map((check)");
 });
 
-test("setup readiness is wired only into a first-ever draft and credential repair opens Keys & OAuth", async () => {
+test("setup readiness is wired only into a first-ever draft and remediation stays in flow", async () => {
   const app = await read("../../packages/web/src/App.tsx");
   expect(app).toContain("!state.activeSession.activeSessionId && state.activeSession.transcript.length === 0 && !state.sessionIndex.sessions.some((session) => session.bivyCreated)");
   expect(app).toContain("<ReadinessChecklist");
   expect(app).toContain("deriveActivation({");
   expect(app).toContain("state.catalogs.activationReadiness ? state.catalogs.activationReadiness.credential.ok : undefined");
-  expect(app).toContain('authenticate_credential: () => openSettings("providers")');
-  expect(app).not.toContain('authenticate_credential: () => openSettings("models")');
+  expect(app).toContain('connect_machine: () => (document.querySelector(".node-switcher-btn")');
+  expect(app).toContain('authenticate_credential: () => (document.querySelector(".model-pill")');
+  expect(app).not.toContain('authenticate_credential: () => openSettings(');
 });
 
 test("the readiness UI uses only canonical customer vocabulary", async () => {

@@ -727,9 +727,9 @@ export function App() {
             <ReadinessChecklist
               activation={activation}
               onRemediate={{
-                connect_machine: () => openSettings("nodes"),
+                connect_machine: () => (document.querySelector(".node-switcher-btn") as HTMLButtonElement | null)?.click(),
                 install_agent: () => (document.querySelector(".agent-pill") as HTMLButtonElement | null)?.click(),
-                authenticate_credential: () => openSettings("providers"),
+                authenticate_credential: () => (document.querySelector(".model-pill") as HTMLButtonElement | null)?.click(),
                 grant_repository: () => (document.querySelector(".repo-pill") as HTMLButtonElement | null)?.click(),
                 run_starter_task: () => (document.querySelector(".composer-input") as HTMLTextAreaElement | null)?.focus(),
               }}

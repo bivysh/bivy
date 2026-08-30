@@ -2,6 +2,21 @@
 import { expect, test } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 
+test("the draft exposes one actionable first-session review", async () => {
+  const [composer, chat, decisions] = await Promise.all([
+    readFile(new URL("../../packages/web/src/components/Composer.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../../packages/web/src/components/ChatView.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../../packages/web/src/firstSession.ts", import.meta.url), "utf8"),
+  ]);
+  expect(chat).toContain("Describe your task");
+  expect(chat).not.toContain("Choose the <b>machine</b> to run on in the header");
+  expect(composer).toContain('aria-label="Review before starting"');
+  expect(composer).toContain("decisions.map((decision)");
+  expect(composer).toContain("openDecision(decision.key)");
+  expect(decisions).toContain('"Choose a model"');
+  expect(decisions).not.toContain('const DASH = "—"');
+});
+
 test("agent picker uses one readiness badge and plain-language confirmation", async () => {
   const source = await readFile(new URL("../../packages/web/src/components/Pickers.tsx", import.meta.url), "utf8");
   expect(source).toContain('className="picker-section-label">Recommended');
