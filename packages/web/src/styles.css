@@ -1169,9 +1169,6 @@ button.sheet-action:last-child { border-bottom: 0; }
   color: var(--muted); font-size: 12px; overflow: hidden; white-space: normal;
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
 }
-.runtime-meta { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
-.runtime-meta-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.runtime-capabilities { display: flex; flex-wrap: wrap; gap: 4px; }
 /* Disclosure chevron on a repo row: drills into that repo's branch list. */
 .repo-branch-arrow { color: var(--muted); }
 .repo-branch-arrow:hover { color: var(--accent); }
@@ -1928,17 +1925,6 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .run-sheet-recovery { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 .run-sheet-recovery .btn.sm { padding: var(--space-1) var(--space-3); }
 
-/* First-session decision summary (B2): the four decisions a new session makes. */
-.composer-first-session { display: grid; gap: var(--space-1); color: var(--muted); padding: 0 var(--space-1) var(--space-1); }
-.composer-first-session > strong { font-size: var(--text-xs); color: var(--ink); }
-.fs-decisions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-1); }
-.fs-decision {
-  display: flex; align-items: center; justify-content: space-between; gap: var(--space-1);
-  min-width: 0; border: 0; border-radius: var(--radius-sm); padding: var(--space-1) var(--space-2);
-  background: var(--surface-2); color: var(--muted); font: inherit; font-size: var(--text-xs); text-align: left;
-}
-.fs-decision:hover { background: var(--surface-3); }
-.fs-decision b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-weight: var(--weight-semibold); }
 .composer-starter {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   margin: 0 0 8px; padding: 10px 12px; border: 1px solid var(--line);
@@ -2735,7 +2721,7 @@ select.picker-search { appearance: auto; }
   }
   .picker-item-row.with-actions .picker-item-extra .btn { min-height: 40px; }
   .readiness-detail { display: none; }
-  .composer-meta > .btn, .fs-decision, .composer-btn, .session-actions-btn, .session-filter-btn, .sheet-back {
+  .composer-meta > .btn, .composer-btn, .session-actions-btn, .session-filter-btn, .sheet-back {
     min-height: 44px;
   }
   .session-actions-btn, .session-filter-btn, .sheet-back { min-width: 44px; }
