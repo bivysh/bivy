@@ -22,6 +22,7 @@ import {
 } from "@bivy/core";
 import { controller } from "../store/controller.js";
 import { Badge } from "./Badge.js";
+import { useModalBack, useModalEscape } from "../modalStack.js";
 
 export type SourceSetupFocus = "github" | "linear" | "slack" | "work-queue";
 
@@ -81,6 +82,8 @@ export function WorkQueueSetupSheet({
   onChanged?: () => void;
 }) {
   const canQuery = !controller.direct;
+  const closeWithBack = useModalBack(onClose);
+  useModalEscape(closeWithBack);
   const [info, setInfo] = useState<GithubAppInfo | null>(null);
   const [nodes, setNodes] = useState<AccountNode[]>([]);
   const [linear, setLinear] = useState<LinearHook | null>(null);
@@ -392,7 +395,7 @@ export function WorkQueueSetupSheet({
             : "Done";
 
   return (
-    <div className="wizard-scrim" onClick={onClose}>
+    <div className="wizard-scrim" onClick={closeWithBack}>
       <div
         className="wizard autom-editor wq-setup"
         role="dialog"
@@ -405,7 +408,7 @@ export function WorkQueueSetupSheet({
             <strong>{titleFor(focus)}</strong>
             <span className="wq-head-sub">Stays in Automations · nothing to find in Settings</span>
           </div>
-          <button type="button" className="btn ghost icon" onClick={onClose} aria-label="Close">✕</button>
+          <button type="button" className="btn ghost icon" onClick={closeWithBack} aria-label="Close">✕</button>
         </div>
 
         <div className="wizard-body">
@@ -949,7 +952,7 @@ export function WorkQueueSetupSheet({
 
         <div className="wizard-actions">
           <span className="settings-hint">Connections are managed only here</span>
-          <button type="button" className="btn primary autom-save-btn" onClick={onClose}>
+          <button type="button" className="btn primary autom-save-btn" onClick={closeWithBack}>
             {primaryDoneLabel}
           </button>
         </div>

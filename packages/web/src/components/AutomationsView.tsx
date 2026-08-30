@@ -69,6 +69,8 @@ import { Badge } from "./Badge.js";
 import { NewAutomationChooser, NewAutomationPicker } from "./NewAutomationChooser.js";
 import { AutomationPreflightPanel, useAutomationPreflight } from "./AutomationPreflight.js";
 import { IconBolt, IconClock, IconPr, IconWebhook } from "./AutomationIcons.js";
+import { AddNodeSheet } from "./AddNodeSheet.js";
+import { useModalBack, useModalEscape } from "../modalStack.js";
 
 const TEMPLATE_PREFIX = "bivy-room-v1";
 
@@ -1806,7 +1808,16 @@ function AutomationEditor({
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState<{ url: string; secret: string; name: string; updated?: boolean } | null>(null);
   const [allowDangerous, setAllowDangerous] = useState(false);
+  const [pairMachineOpen, setPairMachineOpen] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
+  const editorRef = useRef<HTMLDivElement>(null);
+  const closeWithBack = useModalBack(onCancel);
+  useModalEscape(closeWithBack);
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    editorRef.current?.querySelector<HTMLElement>("input, textarea, select, button")?.focus();
+    return () => opener?.focus?.();
+  }, []);
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setD((prev) => ({ ...prev, [k]: v }));
   const preflight = useAutomationPreflight(d.id || undefined);
 
@@ -1946,7 +1957,7 @@ function AutomationEditor({
         approvalMode: d.approvalMode,
         sandbox: d.sandbox,
         allowDangerous,
-        enabled: true,
+        enabled: existing?.enabled ?? true,
         trigger: d.trigger,
         ...(d.trigger === "webhook" ? { requireSigning: d.requireSigning } : {}),
         repo: repo || (d.id ? "" : undefined),
@@ -2019,8 +2030,9 @@ function AutomationEditor({
   }
 
   return (
-    <div className="wizard-scrim" onClick={onCancel}>
+    <div className="wizard-scrim" onClick={closeWithBack}>
       <div
+        ref={editorRef}
         className="wizard autom-editor"
         role="dialog"
         aria-modal="true"
@@ -2029,7 +2041,7 @@ function AutomationEditor({
       >
         <div className="wizard-head">
           <strong>{created ? "Webhook ready" : d.id ? "Edit automation" : "New automation"}</strong>
-          <button type="button" className="btn ghost icon" onClick={onCancel} aria-label="Cancel">✕</button>
+          <button type="button" className="btn ghost icon" onClick={closeWithBack} aria-label="Cancel">✕</button>
         </div>
 
         {existing && !created && (
@@ -2371,23 +2383,28 @@ function AutomationEditor({
                       {d.nodeId && !state.connection.nodes.some((n) => n.id === d.nodeId) && <option value={d.nodeId}>{d.nodeId} · unavailable</option>}
                     </select>
                   </label>
-                  {!selectedNodeHasKey && (
+                  {!selectedNodeHasKey && pairedNodes.length === 0 && (
                     <div className="autom-runner-help" role="status">
-                      {pairedNodes.length === 0
-                        ? "Pair this phone or browser with a machine first. That pairing key protects the instructions; account sign-in alone cannot decrypt them."
-                        : "Choose a machine marked online or offline (not key unavailable). Offline machines can still own the encrypted job and use an isolated fallback from the Runs tab."}
+                      <button type="button" className="btn primary" onClick={() => setPairMachineOpen(true)}>Pair this machine</button>
                     </div>
                   )}
+                  {!selectedNodeHasKey && pairedNodes.length > 0 && (
+                    <div className="autom-runner-help" role="status">Choose a machine without “key unavailable”. Offline machines can still own the encrypted job.</div>
+                  )}
                 </div>
-                <p className="settings-hint">
-                  Persistent machine: runs there whenever it is online. Ephemeral-only setup: pair once to establish encryption, then set an isolated profile as the default or fallback under <strong>Runs → Queue routing</strong>. Cloud and model sign-ins are separate and are injected only when the runner starts.
-                </p>
+                <details className="settings-disclosure">
+                  <summary className="settings-disclosure-summary">How pairing protects instructions</summary>
+                  <div className="settings-disclosure-body settings-hint">
+                    Instructions are encrypted for the paired machine. Account sign-in alone cannot decrypt them. Configure isolated fallback routing from Runs when needed.
+                  </div>
+                </details>
               </div>
 
               <div className="autom-field-block">
-                <div className="autom-field-label">Instructions</div>
+                <label className="autom-field-label" htmlFor="autom-instructions">Instructions</label>
                 <div className="autom-instructions">
                   <textarea
+                    id="autom-instructions"
                     className="autom-instructions-input"
                     rows={7}
                     value={d.instructions}
@@ -2482,13 +2499,13 @@ function AutomationEditor({
               )}
 
               {error && <p className="settings-error">{error}</p>}
-              {!canSave && missing.length > 0 && (
-                <p className="settings-hint autom-save-hint">Needs {missing.join(", ")} to save.</p>
-              )}
             </div>
 
             <div className="wizard-actions">
-              <button type="button" className="btn" onClick={onCancel} disabled={busy}>Cancel</button>
+              <button type="button" className="btn" onClick={closeWithBack} disabled={busy}>Cancel</button>
+              {!canSave && missing.length > 0 && (
+                <span className="settings-hint autom-save-hint">Needs {missing.join(", ")} to save.</span>
+              )}
               <button
                 type="button"
                 className="btn primary autom-save-btn"
@@ -2501,6 +2518,7 @@ function AutomationEditor({
           </>
         )}
       </div>
+      {pairMachineOpen && <AddNodeSheet onClose={() => setPairMachineOpen(false)} />}
     </div>
   );
 }

@@ -28,8 +28,8 @@ test("the automation editor makes runner and encryption readiness explicit", asy
   expect(view).toContain('className="autom-field-block autom-runner-block"');
   expect(view).toContain('aria-label="Run on machine"');
   expect(view).toContain("key missing on this device");
-  expect(view).toContain("account sign-in alone cannot decrypt them");
-  expect(view).toContain("Cloud and model sign-ins are separate");
+  expect(view).toContain("Account sign-in alone cannot decrypt them");
+  expect(view).toContain("Configure isolated fallback routing from Runs when needed");
 });
 
 test("mobile Automations uses full-height editors and reachable touch targets", async () => {
@@ -41,6 +41,21 @@ test("mobile Automations uses full-height editors and reachable touch targets", 
   expect(css).toContain(".automation-row .row-menu-btn { min-width: 40px; min-height: 40px; opacity: 1; }");
   expect(css).toContain(".runs-overview .autom-section-head { align-items: stretch; flex-direction: column; }");
   expect(css).toContain(".runs-overview .autom-section-actions { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }");
+});
+
+test("automation pairing and editor dismissal are actionable", async () => {
+  const [view, chooser, setup] = await Promise.all([
+    read("../../packages/web/src/components/AutomationsView.tsx"),
+    read("../../packages/web/src/components/NewAutomationChooser.tsx"),
+    read("../../packages/web/src/components/WorkQueueSetupSheet.tsx"),
+  ]);
+  expect(view).toContain("Pair this machine");
+  expect(view).toContain("<AddNodeSheet");
+  expect(view).toContain('htmlFor="autom-instructions"');
+  expect(view).toContain("enabled: existing?.enabled ?? true");
+  expect(view).toContain("useModalEscape(closeWithBack)");
+  expect(chooser).toContain("useModalEscape(closeWithBack)");
+  expect(setup).toContain("useModalEscape(closeWithBack)");
 });
 
 test("ephemeral-only routing reports credential readiness instead of failing later", async () => {
