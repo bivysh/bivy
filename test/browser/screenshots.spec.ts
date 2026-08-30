@@ -66,6 +66,17 @@ async function assertMobilePrimaryTargets(primary: Locator, testInfo: TestInfo) 
   }
 }
 
+async function assertMobileTextControlSizes(page: Page, testInfo: TestInfo) {
+  if (testInfo.project.name !== "mobile") return;
+  const undersized = await page.locator("input, textarea, select").evaluateAll((controls) => controls.flatMap((control) => {
+    if (control instanceof HTMLInputElement && ["button", "checkbox", "color", "file", "hidden", "image", "radio", "range", "reset", "submit"].includes(control.type)) return [];
+    const style = getComputedStyle(control);
+    if (style.display === "none" || style.visibility === "hidden" || Number.parseFloat(style.fontSize) >= 16) return [];
+    return [{ control: control.outerHTML, fontSize: style.fontSize }];
+  }));
+  expect(undersized, "mobile text controls below the 16px iOS focus-zoom floor").toEqual([]);
+}
+
 for (const [name, markup] of Object.entries(fixtures)) {
   test(`${name} fixture is reviewable in both themes`, async ({ page }, testInfo) => {
     for (const theme of THEMES) {
@@ -75,6 +86,7 @@ for (const [name, markup] of Object.entries(fixtures)) {
       }, { html: markup, selectedTheme: theme });
       await assertNamedControls(page);
       await assertMobilePrimaryTargets(page.locator(".btn.primary"), testInfo);
+      await assertMobileTextControlSizes(page, testInfo);
       await expect(page.locator("body")).toHaveScreenshot(`${name}-${testInfo.project.name}-${theme}.png`, {
         animations: "disabled",
         caret: "hide",
