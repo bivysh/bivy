@@ -8,7 +8,7 @@ import { Badge } from "./Badge.js";
 
 /** Voice settings are lazy-loaded because the voice lists and controls are not
  * needed on the initial chat route, keeping them out of the entry bundle. */
-export function VoiceSettings({ state }: { state: AppState }) {
+export function VoiceSettings({ state, onManageKey }: { state: AppState; onManageKey: (providerId: string) => void }) {
   const [speech, setSpeech] = useState<SpeechPreferences>(() => getSpeechPreferences());
   const [browserVoices, setBrowserVoices] = useState<SpeechSynthesisVoice[]>([]);
   useEffect(() => { controller.getSttConfig(); }, []);
@@ -34,8 +34,8 @@ export function VoiceSettings({ state }: { state: AppState }) {
       <section className="settings-section">
         <h3>Voice input</h3>
         <p className="muted settings-intro">
-          Dictate with the composer mic. Whisper converts speech to text using the same Groq or OpenAI key under
-          <strong> Keys &amp; OAuth</strong>. With no key, supported browsers use built-in dictation.
+          Dictate with the composer mic. Whisper converts speech to text using a Groq or OpenAI key. Add or manage
+          each provider's key below. With no key, supported browsers use built-in dictation.
         </p>
         <label className="field-label">Preferred transcription provider</label>
         <div className="seg-row">
@@ -52,7 +52,12 @@ export function VoiceSettings({ state }: { state: AppState }) {
               <span className="field-label">{provider.label}</span>
               {provider.configured ? <Badge tone="ok">Available</Badge> : <Badge>No account key</Badge>}
             </div>
-            <div className="muted small">{provider.model} · Manage this key under Keys &amp; OAuth.</div>
+            <div className="muted small">
+              {provider.model} ·{" "}
+              <button type="button" className="btn link voice-key-link" onClick={() => onManageKey(provider.id)}>
+                {provider.configured ? "Manage" : "Add"} {provider.label} key
+              </button>
+            </div>
           </div>
         ))}
       </section>

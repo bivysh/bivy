@@ -35,7 +35,7 @@ const titleFor = (item: VaultItem) => item.label === "default" ? item.providerNa
 const methodLabel = (kind: VaultItem["kind"]) => kind === "oauth" ? "Subscription sign-in" : kind === "reference" ? "Password-manager reference" : kind === "environment" ? "Environment" : "API key";
 const availabilityLabel = (value: Availability) => value === "account" ? "All my machines" : value === "node" ? "Only this machine" : "Only this device";
 
-export function CredentialVault({ state }: { state: AppState }) {
+export function CredentialVault({ state, initialProvider = null }: { state: AppState; initialProvider?: string | null }) {
   const status = state.connection.status;
   const currentNodeId = state.connection.currentNodeId;
   const nodes = state.connection.nodes;
@@ -46,10 +46,10 @@ export function CredentialVault({ state }: { state: AppState }) {
   const localModels = state.settings.localModels;
   const oauth = state.presentation.oauth;
   const [deviceKeys, setDeviceKeys] = useState<EphemeralModelKeyInfo[]>([]);
-  const [view, setView] = useState<"list" | "add" | "detail">("list");
+  const [view, setView] = useState<"list" | "add" | "detail">(() => initialProvider ? "add" : "list");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [provider, setProvider] = useState("");
+  const [provider, setProvider] = useState(() => initialProvider ?? "");
   const [method, setMethod] = useState<"api_key" | "oauth" | "reference">("api_key");
   const [label, setLabel] = useState("");
   const [secret, setSecret] = useState("");

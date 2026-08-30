@@ -6,7 +6,7 @@ const read = (rel: string) => readFile(new URL(rel, import.meta.url), "utf8");
 
 test("settings exposes one credential vault rather than device and machine forms", async () => {
   const settings = await read("../../packages/web/src/components/Settings.tsx");
-  expect(settings).toContain('<CredentialVault state={state} />');
+  expect(settings).toContain('<CredentialVault state={state} initialProvider={credentialProvider} />');
   expect(settings).not.toContain("AccountApiKeys");
   expect(settings).not.toContain("ProvidersPanel");
   expect(settings).not.toContain("PresetBar");

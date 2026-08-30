@@ -182,6 +182,7 @@ export function Settings({
   const isDesktop = useMediaQuery("(min-width: 721px)");
   const DEFAULT: View = "appearance";
   const [query, setQuery] = useState("");
+  const [credentialProvider, setCredentialProvider] = useState<string | null>(null);
 
   // null === the mobile root menu. On desktop we always resolve to a panel —
   // reflect that resolution back into the URL so `/settings` never lingers
@@ -300,7 +301,10 @@ export function Settings({
                     <button
                       key={it.id}
                       className={`settings-nav-item${activeView === it.id || (it.id === "providers" && activeView === "models") ? " active" : ""}`}
-                      onClick={() => onViewChange(it.id)}
+                      onClick={() => {
+                        if (it.id === "providers") setCredentialProvider(null);
+                        onViewChange(it.id);
+                      }}
                     >
                       <span className="settings-nav-icon">{it.icon}</span>
                       <span className="settings-nav-label">{it.label}</span>
@@ -333,14 +337,20 @@ export function Settings({
             {activeView === "appearance" && <AppearancePanel />}
             {activeView === "notifications" && <NotificationsPanel />}
             {activeView === "import" && <ImportPanel onImported={(id) => onImported?.(id)} />}
-            {activeView === "providers" && <CredentialVault state={state} />}
+            {activeView === "providers" && <CredentialVault state={state} initialProvider={credentialProvider} />}
             {/* Compatibility for old /settings/models links. New endpoints are
                 added from Models & keys; this keeps the full legacy endpoint
                 editor reachable without splitting the primary navigation. */}
             {activeView === "models" && <LocalModelsPanel state={state} onStartWork={onClose} />}
             {activeView === "voice" && (
               <Suspense fallback={<div className="muted">Loading voice settings…</div>}>
-                <VoiceSettings state={state} />
+                <VoiceSettings
+                  state={state}
+                  onManageKey={(providerId) => {
+                    setCredentialProvider(providerId);
+                    onViewChange("providers");
+                  }}
+                />
               </Suspense>
             )}
             {/* github / linear / slack / queue / webhooks / rulesets moved to the

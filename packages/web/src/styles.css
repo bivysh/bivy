@@ -223,14 +223,15 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
    makes it discoverable without competing with the quieter Settings footer. */
 .sidebar-nav { padding: var(--space-2) 0 var(--space-3); }
 .sidebar-nav-item {
-  display: flex; align-items: center; gap: var(--space-3); width: 100%; min-height: 42px;
-  padding: var(--space-2) var(--space-3); border: 1px solid transparent; border-radius: var(--radius-md);
-  background: transparent; color: var(--ink); font: inherit; font-size: var(--text-sm); font-weight: var(--weight-semibold);
-  text-align: left; cursor: pointer; transition: background var(--dur) var(--ease-standard), border-color var(--dur) var(--ease-standard);
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 40px;
+  padding: 9px 10px; border: 0; border-radius: var(--radius-sm);
+  background: transparent; color: var(--ink); font: inherit; font-size: var(--text-sm); font-weight: var(--weight-medium);
+  text-align: left; cursor: pointer; transition: color var(--dur) var(--ease-standard), background var(--dur) var(--ease-standard);
 }
 .sidebar-nav-item svg { color: var(--accent); flex: none; }
-.sidebar-nav-item:hover, .sidebar-nav-item.active { background: var(--surface-2); border-color: transparent; }
-.sidebar-nav-item.active { color: var(--accent); }
+.sidebar-nav-item:hover { background: var(--surface-2); }
+.sidebar-nav-item.active { background: transparent; color: var(--accent); }
+.sidebar-nav-item.active:hover { background: var(--surface-2); }
 .sidebar-nav-chevron { margin-left: auto; color: var(--muted); font-size: var(--text-xl); font-weight: var(--weight-normal); line-height: 1; }
 .sidebar-foot { margin-top: auto; padding: var(--space-2); border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: var(--space-1); }
 /* Red dot on the mobile ☰ burger when something needs the user that they
@@ -930,6 +931,7 @@ button.sheet-action:last-child { border-bottom: 0; }
 .seg-row { display: flex; gap: 8px; flex-wrap: wrap; margin: 2px 0 6px; }
 .voice-provider { border: 1px solid var(--line); border-radius: var(--radius-md); padding: 10px 12px; margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
 .voice-provider-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.voice-key-link { display: inline; padding: 0; font-size: inherit; vertical-align: baseline; }
 .small { font-size: 12px; }
 
 /* --- Rulesets (Settings → Rulesets) --- */
