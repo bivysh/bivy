@@ -58,10 +58,10 @@ export function ConnectRunner({
         <h2 className="connect-title" id="connect-runner-title">{persistentNodes.length > 0 ? "Choose a Machine" : "Connect a Machine"}</h2>
         <p className="connect-sub">
           {persistentNodes.length > 0
-            ? "Pick an online Machine to start, or add another workstation."
+            ? "Pick an online machine to start, or add another machine."
             : ephemeralEnabled
-              ? "Use a workstation with your real repo, services, and warm caches, or launch an isolated Machine. Any hosted credential custody is disclosed before enablement."
-              : "Use the workstation where your repo, services, and warm caches already live."}
+              ? "Use a machine with your real repository, services, and warm caches, or launch an isolated machine. Any hosted credential storage is disclosed before enablement."
+              : "Use the machine where your repository, services, and warm caches already live."}
         </p>
       </div>
 
@@ -101,9 +101,9 @@ export function ConnectRunner({
               </svg>
             </span>
             <div className="connect-option-copy">
-              <h3>{persistentNodes.length > 0 ? "Add another workstation" : "Connect your workstation"}</h3>
+              <h3>{persistentNodes.length > 0 ? "Add another machine" : "Connect your machine"}</h3>
               <p>
-                Paste this on the Mac or Linux computer where your repo lives.
+                Paste this on the Mac or Linux machine where your repository lives.
                 {install.authenticated && " It can use this account automatically."}
                 {!install.hosted && " Needs Node.js 20 or newer."}
               </p>

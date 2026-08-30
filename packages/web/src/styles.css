@@ -1169,11 +1169,14 @@ button.sheet-action:last-child { border-bottom: 0; }
 }
 .picker-item:hover:not(:disabled) { background: var(--surface-2); }
 .picker-item:disabled { opacity: 0.55; }
-.picker-item-extra { flex: none; padding-right: 12px; display: flex; align-items: center; }
+.picker-item-extra { flex: none; padding-right: 12px; display: flex; align-items: center; gap: var(--space-1); }
 .picker-check { width: 14px; flex: none; color: var(--accent); }
 .picker-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .picker-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; font-size: 14px; }
-.picker-meta { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picker-meta {
+  color: var(--muted); font-size: 12px; overflow: hidden; white-space: normal;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+}
 .runtime-meta { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
 .runtime-meta-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .runtime-capabilities { display: flex; flex-wrap: wrap; gap: 4px; }

@@ -76,60 +76,27 @@ function previewContractForRuntime(a: RuntimeInfo): SessionContract {
   });
 }
 
-function tierLabel(tier: string): string {
-  if (tier === "supported") return "Supported";
-  if (tier === "beta") return "Beta";
-  if (tier === "planned") return "Planned";
-  return "Experimental";
-}
-
-function RuntimeMeta({ runtime, text }: { runtime: RuntimeInfo; text?: string }) {
-  const tier = runtimeTier(runtime);
-  const protectionLevel = runtime.protectionLevel || "user-permissions";
-  const protectionLabel = runtime.protectionLabel || "Protection unknown";
-  const tierTone: BadgeTone | undefined = tier === "supported" ? "ok" : tier === "beta" || tier === "experimental" ? "warn" : undefined;
-  const protectionTone: BadgeTone = protectionLevel === "native-sandbox" || protectionLevel === "tool-controls" ? "ok" : protectionLevel === "mcp-controls" ? "warn" : "danger";
-  const certification = runtime.certification || (tier === "supported" ? "adapter-tested" : "unverified");
-  const certificationLabel = certification === "release-tested"
-    ? `Release-tested${runtime.testedVersion ? ` · ${runtime.testedVersion}` : ""}`
-    : certification === "adapter-tested" ? "Adapter-tested" : "Unverified";
-  const certificationTitle = certification === "release-tested"
-    ? `Release-tested capability set${runtime.testedVersion ? ` with version ${runtime.testedVersion}` : ""}`
-    : certification === "adapter-tested" ? "Bivy maintains this wrapper; this configured path is adapter-tested rather than release-tested" : "Not release-tested";
+function RuntimeMeta({ text, readiness, tone }: { text?: string; readiness: string; tone?: BadgeTone }) {
   return (
     <span className="runtime-meta">
       {text && <span className="runtime-meta-text">{text}</span>}
-      <span className="runtime-capabilities" aria-label="Agent support tier, protection, and capabilities">
-        <Badge tone={tierTone} title="Supported means Bivy maintains this wrapper; capability badges show the exact fidelity available.">
-          {tierLabel(tier)}
-        </Badge>
-        <Badge tone={certification === "release-tested" ? "ok" : certification === "adapter-tested" ? "warn" : undefined} title={certificationTitle}>
-          {certificationLabel}
-        </Badge>
-        {runtime.source?.kind === "package" && (
-          <Badge
-            tone={runtime.source.verified ? "ok" : "warn"}
-            title={`${runtime.source.publisher ? `${runtime.source.publisher} · ` : ""}${runtime.source.packageId}@${runtime.source.packageVersion}`}
-          >
-            {runtime.source.verified ? "Verified" : "Package"} · {runtime.source.packageId}
-          </Badge>
-        )}
-        {runtime.source?.kind === "config" && (
-          <Badge tone="warn" title="Configured explicitly on this node">Local integration</Badge>
-        )}
-        <Badge
-          tone={protectionTone}
-          title={runtime.protectionDetail || "This machine did not report a protection description."}
-        >
-          {protectionLabel}
-        </Badge>
-        {runtimeCapabilityChips(runtime).map((chip) => (
-          <Badge key={chip.label} tone={chip.ok ? "ok" : undefined} title={chip.ok ? `${chip.label} supported` : `${chip.label} not supported by this runtime`}>
-            {chip.ok ? "✓" : "–"} {chip.label}
-          </Badge>
-        ))}
+      <span className="runtime-capabilities">
+        <Badge tone={tone}>{readiness}</Badge>
       </span>
     </span>
+  );
+}
+
+function RuntimeDetails({ runtime }: { runtime: RuntimeInfo }) {
+  return (
+    <div className="runtime-capabilities" aria-label={`${agentLabel(runtime)} capabilities`}>
+      <Badge>{runtime.protectionLabel || "Machine permissions"}</Badge>
+      {runtimeCapabilityChips(runtime).map((chip) => (
+        <Badge key={chip.label} tone={chip.ok ? "ok" : undefined}>
+          {chip.ok ? "✓" : "–"} {chip.label}
+        </Badge>
+      ))}
+    </div>
   );
 }
 
@@ -454,7 +421,7 @@ export function SandboxPicker({ state, onClose }: { state: AppState; onClose: ()
         <PickerItem
           active={!state.draft.sandbox}
           title={`Machine default${nodeDefault ? ` (${nodeDefault})` : ""}`}
-          meta="Use this machine's configured sandbox mode"
+          meta="Use this machine's configured protection"
           onClick={() => {
             controller.setSessionSandbox(null);
             onClose();
@@ -525,6 +492,7 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
   const [q, setQ] = useState("");
   const [moreOpen, setMoreOpen] = useState(false);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [detailsId, setDetailsId] = useState<string | null>(null);
   useEffect(() => {
     controller.listRuntimes();
     // Warm each agent's model list in the background so the first switch lists
@@ -550,6 +518,15 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
   const selectedAgentId = cloningActiveSession
     ? state.activeSession.activeRuntimeId ?? state.sessionIndex.sessions.find((s) => s.sessionId === state.activeSession.activeSessionId)?.runtimeId ?? null
     : state.catalogs.selectedAgentId ?? (state.catalogs.runtimes.find((r) => (r as any).current)?.id || null);
+  const confirmingRuntime = confirmingId ? state.catalogs.runtimes.find((runtime) => runtime.id === confirmingId) : undefined;
+  const detailsRuntime = detailsId ? state.catalogs.runtimes.find((runtime) => runtime.id === detailsId) : undefined;
+
+  const chooseRuntime = (runtime: RuntimeInfo) => {
+    const contract = !cloningActiveSession ? previewContractForRuntime(runtime) : undefined;
+    if (contract?.requiresAcknowledgement) controller.acknowledgeSessionAgentReducedProtections(true);
+    controller.chooseAgent(runtime);
+    onClose();
+  };
 
   const renderRuntime = (a: RuntimeInfo) => {
     const status = String((a as any).status || "available");
@@ -557,55 +534,55 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
     const installable = !available && Boolean((a as any).install);
     const installing = state.catalogs.installingRuntimeId === a.id;
     const active = a.id === selectedAgentId;
-    // The Effective Session Contract preview (see previewContractForRuntime):
-    // requiresAcknowledgement fires only for a release-tested profile whose live
-    // protection would be degraded — a broken fidelity promise, not merely an
-    // adapter-tested wrapper with disclosed gaps. Union it with the existing raw
-    // protection-level check (which already covers any tier's zero-isolation
-    // case) so a release-tested agent degraded in a DIFFERENT area (auth/resume/
-    // tool interception, not just sandbox) still gets caught.
+    // Only a certified profile whose live contract is unexpectedly degraded
+    // needs a separate acknowledgement. Disclosed runtime limitations remain in
+    // Details and Protection; they must not turn every normal agent choice into
+    // a hidden two-tap interaction.
     const previewContract = !cloningActiveSession ? previewContractForRuntime(a) : undefined;
     const needsProtectionConfirmation = !cloningActiveSession
-      && (a.protectionLevel === "user-permissions" || Boolean(previewContract?.requiresAcknowledgement));
-    const confirming = needsProtectionConfirmation && confirmingId === a.id;
-    const confirmText = previewContract?.degradedReasons.length
-      ? `${previewContract.degradedReasons.map((r) => r.message).join(" ")} Select again to continue.`
-      : "Runs with your OS user permissions and no Bivy-owned isolation. Use a container/VM for unattended or untrusted work. Select again to continue.";
-    const chips = [
-      installing ? "setting up…" : null,
-      !available ? status : null,
-      (a as any).language,
-      (a as { authOwner?: string }).authOwner ? `auth: ${(a as { authOwner?: string }).authOwner}` : null,
-    ].filter(Boolean).join(" · ");
+      && Boolean(previewContract?.requiresAcknowledgement);
+    const description = String((a as { description?: unknown }).description || "");
     return (
       <PickerItem
         key={a.id}
         active={active}
-        title={confirming ? `Confirm ${agentLabel(a)}` : agentLabel(a)}
+        title={agentLabel(a)}
         meta={
           <RuntimeMeta
-            runtime={a}
-            text={confirming
-              ? confirmText
-              : cloningActiveSession
-                ? ["Fork + handoff", chips || (a as any).description].filter(Boolean).join(" · ")
-                : chips || (a as any).description}
+            text={cloningActiveSession
+              ? ["Fork and hand off", description].filter(Boolean).join(" · ")
+              : description}
+            readiness={installing ? "Setting up" : available ? "Ready" : installable ? "Install" : "Needs sign-in"}
+            tone={available ? "ok" : "warn"}
           />
         }
         disabled={installing || (!available && !installable)}
         right={
-          installable && !installing ? (
+          <>
             <button
               type="button"
               className="picker-action"
               onClick={(e) => {
                 e.stopPropagation();
-                controller.installAgent(a.id);
+                setDetailsId((id) => id === a.id ? null : a.id);
               }}
+              aria-expanded={detailsId === a.id}
             >
-              Install
+              Details
             </button>
-          ) : undefined
+            {installable && !installing && (
+              <button
+                type="button"
+                className="picker-action"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  controller.installAgent(a.id);
+                }}
+              >
+                Install
+              </button>
+            )}
+          </>
         }
         onClick={() => {
           if (installable) {
@@ -613,16 +590,11 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
             return;
           }
           if (!available) return;
-          if (needsProtectionConfirmation && !confirming) {
+          if (needsProtectionConfirmation) {
             setConfirmingId(a.id);
             return;
           }
-          // Certified-profile downgrades need a durable acknowledgement (the
-          // node re-checks it on session.new); the raw user-permissions warning
-          // above is UX-only and doesn't set it.
-          if (previewContract?.requiresAcknowledgement) controller.acknowledgeSessionAgentReducedProtections(true);
-          controller.chooseAgent(a);
-          onClose();
+          chooseRuntime(a);
         }}
       />
     );
@@ -647,6 +619,25 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
         )}
         {(moreOpen || Boolean(q.trim())) && more.map(renderRuntime)}
       </div>
+      {detailsRuntime && (
+        <details className="settings-disclosure" open>
+          <summary className="settings-disclosure-summary">{agentLabel(detailsRuntime)} details</summary>
+          <div className="settings-disclosure-body">
+            <RuntimeDetails runtime={detailsRuntime} />
+          </div>
+        </details>
+      )}
+      {confirmingRuntime && (
+        <div className="banner" data-tone="warn" role="note">
+          <span className="banner-text">
+            <strong>Check how {agentLabel(confirmingRuntime)} runs.</strong>{" "}
+            Bivy couldn't check which sign-in this agent will use or guarantee its protection level.
+          </span>
+          <button type="button" className="btn primary banner-action" onClick={() => chooseRuntime(confirmingRuntime)}>
+            Use {agentLabel(confirmingRuntime)}
+          </button>
+        </div>
+      )}
     </Sheet>
   );
 }

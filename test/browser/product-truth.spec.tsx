@@ -2,13 +2,15 @@
 import { expect, test } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 
-test("agent picker separates recommended agents and exposes protection", async () => {
+test("agent picker uses one readiness badge and plain-language confirmation", async () => {
   const source = await readFile(new URL("../../packages/web/src/components/Pickers.tsx", import.meta.url), "utf8");
   expect(source).toContain('className="picker-section-label">Recommended');
   expect(source).toContain('className="picker-section-toggle"');
   expect(source).toContain("More agents");
-  expect(source).toContain("runtime.protectionLevel");
-  expect(source).toContain("Runs with your OS user permissions and no Bivy-owned isolation");
+  expect(source).toContain('readiness={installing ? "Setting up" : available ? "Ready" : installable ? "Install" : "Needs sign-in"}');
+  expect(source).toContain("Bivy couldn't check which sign-in this agent will use");
+  expect(source).toContain("Use {agentLabel(confirmingRuntime)}");
+  expect(source).not.toContain("title={confirming ? `Confirm ${agentLabel(a)}`");
 });
 
 test("full computer access requires an informed second action", async () => {
