@@ -31,6 +31,22 @@ test("blocking interaction cards use the canonical card shell", async () => {
   }
 });
 
+test("new approval and question cards announce themselves and receive focus", async () => {
+  const [app, approval, question, attention] = await Promise.all([
+    readFile(new URL("App.tsx", ROOT), "utf8"),
+    readFile(new URL("components/ApprovalCard.tsx", ROOT), "utf8"),
+    readFile(new URL("components/QuestionCard.tsx", ROOT), "utf8"),
+    readFile(new URL("components/TurnAttentionCard.tsx", ROOT), "utf8"),
+  ]);
+  expect(app).toContain('aria-live="polite"');
+  expect(app).toContain('querySelector<HTMLElement>("[data-attention-card]")?.focus()');
+  for (const source of [approval, question, attention]) {
+    expect(source).toContain("data-attention-card");
+    expect(source).toContain("tabIndex={-1}");
+    expect(source).toContain("data-tone=");
+  }
+});
+
 test("interaction-specific card CSS only owns layout", async () => {
   const css = await readFile(new URL("styles.css", ROOT), "utf8");
   expect(ruleFor(css, ".card")).toContain("background: var(--surface)");

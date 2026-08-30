@@ -512,6 +512,12 @@ export function App() {
   const activeApprovals = state.activeSession.approvals.filter((a) => !a.sessionId || a.sessionId === state.activeSession.activeSessionId);
   const activeQuestions = state.activeSession.questions.filter((q) => !q.sessionId || q.sessionId === state.activeSession.activeSessionId);
   const activeTurnAttention = state.activeSession.turnAttentions.find((a) => a.sessionId === state.activeSession.activeSessionId);
+  const attentionFooterRef = useRef<HTMLDivElement>(null);
+  const attentionKey = [activeApprovals[0]?.id, activeQuestions[0]?.id, activeTurnAttention?.sessionId].filter(Boolean).join(":");
+  useEffect(() => {
+    if (!attentionKey) return;
+    requestAnimationFrame(() => attentionFooterRef.current?.querySelector<HTMLElement>("[data-attention-card]")?.focus());
+  }, [attentionKey]);
   return (
     <div className="app">
       <aside className={`sidebar${drawerOpen ? " open" : ""}`}>
@@ -801,7 +807,7 @@ export function App() {
               collapsed={collapsed}
               onAction={runCommand}
               footer={
-                <>
+                <div className="attention-footer" ref={attentionFooterRef} aria-live="polite" aria-label="Agent needs your response">
                   <ApprovalStack approvals={activeApprovals} onResolve={(id, ok, remember) => controller.resolveApproval(id, ok, remember)} />
                   <QuestionStack
                     questions={activeQuestions}
@@ -814,7 +820,7 @@ export function App() {
                       onResolve={(sessionId, action) => controller.resolveTurnAttention(sessionId, action)}
                     />
                   )}
-                </>
+                </div>
               }
             />
 
