@@ -387,6 +387,13 @@ export async function fetchMe(store: LocalStore, fetchImpl: typeof fetch = fetch
   return (await res.json()) as AccountMe;
 }
 
+/** Permanently delete the signed-in account and its deployment billing record. */
+export async function deleteAccount(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<void> {
+  const res = await fetchImpl(`${cpBase(store)}/account`, { method: "DELETE", headers: authHeaders(store) });
+  const data = await res.json().catch(() => ({})) as { error?: string };
+  if (!res.ok) throw new Error(data.error || `account deletion failed: ${res.status}`);
+}
+
 /** Invoke an opaque action contributed by the deployment's account extension. */
 export async function invokeAccountExtensionAction(store: LocalStore, action: string, fetchImpl: typeof fetch = fetch): Promise<{ url: string }> {
   const res = await fetchImpl(`${cpBase(store)}/account/extension/actions/${encodeURIComponent(action)}`, {

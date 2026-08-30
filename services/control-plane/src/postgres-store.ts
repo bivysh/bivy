@@ -813,6 +813,11 @@ export class PostgresStore implements ControlPlaneStore {
     return rows[0] ? mapAccount(rows[0]) : undefined;
   }
 
+  async deleteAccount(accountId: string): Promise<boolean> {
+    const result = await this.query(`DELETE FROM accounts WHERE id = $1`, [accountId]);
+    return (result.rowCount ?? 0) > 0;
+  }
+
   async setGithubIdentity(accountId: string, githubUserId: string, targetIds: string[]): Promise<void> {
     const normalized = [...new Set(targetIds.map(String).filter((id) => /^\d+$/.test(id)))].slice(0, 200);
     await this.query(

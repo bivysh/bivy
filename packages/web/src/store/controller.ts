@@ -21,6 +21,7 @@ import {
   revokeAccountNodeClaim,
   fetchAccountSessions,
   fetchMe,
+  deleteAccount as apiDeleteAccount,
   invokeAccountExtensionAction,
   fetchGithubApp,
   fetchGithubQueue,
@@ -2585,6 +2586,7 @@ export class AppController {
   // --- Settings: account / push -------------------------------------------
 
   fetchMe(): Promise<AccountMe> { return this.accountCoordinator.fetchMe(); }
+  deleteAccount(): Promise<void> { return apiDeleteAccount(this.local); }
   invokeAccountExtensionAction(action: string): Promise<{ url: string }> { return invokeAccountExtensionAction(this.local, action); }
   fetchGithubApp(): ReturnType<typeof fetchGithubApp> { return this.accountCoordinator.fetchGithubApp() as ReturnType<typeof fetchGithubApp>; }
   fetchGithubQueue(limit = 30): ReturnType<typeof fetchGithubQueue> { return this.accountCoordinator.fetchGithubQueue(limit); }

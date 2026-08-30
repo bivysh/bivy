@@ -1162,6 +1162,21 @@ app.get("/me", requireUser, asyncHandler(async (req, res) => {
 // Generic deployment-owned account actions. Core neither defines nor interprets
 // action ids; a configured extension returns presentation data from /me and
 // handles the selected action out of process.
+app.delete("/account", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  // Never remove the account row while a Bivy-managed machine is active: the
+  // reconciler needs that row to keep retrying provider deletion.
+  const activeMachines = await store.listHostedMachineAttempts(account.id, true);
+  if (activeMachines.length > 0) {
+    return void res.status(409).json({ error: "Delete your hosted machines before deleting your account" });
+  }
+  // Billing cleanup runs first. If it fails, retain the account so the user can
+  // retry without losing access to the deletion flow.
+  await deploymentExtension.deleteAccount(account.id, account.email);
+  const deleted = await store.deleteAccount(account.id);
+  res.json({ ok: deleted });
+}));
+
 app.post("/account/extension/actions/:action", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   res.json(await deploymentExtension.accountAction(account.id, account.email, String(req.params.action)));

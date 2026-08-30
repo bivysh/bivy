@@ -71,6 +71,11 @@ export class DeploymentExtension {
     return result.presentation;
   }
 
+  async deleteAccount(accountId: string, email: string): Promise<void> {
+    if (!this.url) return;
+    await this.request("/v1/account/delete", { subject: { accountId, email } });
+  }
+
   async accountAction(accountId: string, email: string, action: string): Promise<{ url: string }> {
     if (!this.url) throw new Error("No deployment account extension is configured");
     if (!/^[a-z0-9-]{1,64}$/.test(action)) throw new Error("Invalid account action");
