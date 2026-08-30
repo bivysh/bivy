@@ -444,7 +444,11 @@ export function NodePicker({
 
 // ---- Agent picker ----
 export function AgentPicker({ state, onClose }: { state: AppState; onClose: () => void }) {
-  const cloningActiveSession = Boolean(state.activeSession.activeSessionId);
+  // An id can exist transiently before the first prompt is persisted. That is
+  // still a draft for picker purposes; changing agents must not present or
+  // trigger the handoff/fork flow until the conversation has started.
+  const cloningActiveSession = Boolean(state.activeSession.activeSessionId)
+    && state.activeSession.transcript.some((entry) => entry.role === "user");
   // For an active session, "current" means the runtime that owns that session,
   // never the globally last-used/default runtime for new drafts.
   const selectedAgentId = cloningActiveSession
