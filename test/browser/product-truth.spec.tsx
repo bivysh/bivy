@@ -2,30 +2,28 @@
 import { expect, test } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 
-test("the draft exposes one actionable first-session review", async () => {
-  const [composer, chat, decisions] = await Promise.all([
+test("the draft exposes setup through the existing composer controls", async () => {
+  const [composer, chat] = await Promise.all([
     readFile(new URL("../../packages/web/src/components/Composer.tsx", import.meta.url), "utf8"),
     readFile(new URL("../../packages/web/src/components/ChatView.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../../packages/web/src/firstSession.ts", import.meta.url), "utf8"),
   ]);
-  // The composer already asks for the task; the empty transcript must not add a
-  // second instruction block above the same review controls.
   expect(chat).not.toContain("Describe your task");
   expect(composer).toContain("Describe your first task…");
   expect(chat).not.toContain("Choose the <b>machine</b> to run on in the header");
-  expect(composer).toContain('aria-label="Review before starting"');
-  expect(composer).toContain("decisions.map((decision)");
-  expect(composer).toContain("openDecision(decision.key)");
-  expect(decisions).toContain('"Choose a model"');
-  expect(decisions).not.toContain('const DASH = "—"');
+  expect(composer).toContain('className="composer-lead" aria-label="Session setup"');
+  expect(composer).toContain('className="btn sm ghost repo-pill"');
+  expect(composer).toContain('className="btn sm ghost sandbox-pill"');
+  expect(composer).not.toContain('aria-label="Review before starting"');
 });
 
-test("agent picker uses one readiness badge and plain-language confirmation", async () => {
+test("agent picker uses compact rows and plain-language confirmation", async () => {
   const source = await readFile(new URL("../../packages/web/src/components/Pickers.tsx", import.meta.url), "utf8");
   expect(source).toContain('className="picker-section-label">Recommended');
   expect(source).toContain('className="picker-section-toggle"');
   expect(source).toContain("More agents");
-  expect(source).toContain('readiness={installing ? "Setting up" : available ? "Ready" : installable ? "Install" : "Needs sign-in"}');
+  expect(source).toContain('installable ? "Install required" : "Needs sign-in"');
+  expect(source).toContain('selected.scrollIntoView({ block: "center" })');
+  expect(source).not.toContain("setDetailsId");
   expect(source).toContain("Bivy couldn't check which sign-in this agent will use");
   expect(source).toContain("Use {agentLabel(confirmingRuntime)}");
   expect(source).not.toContain("title={confirming ? `Confirm ${agentLabel(a)}`");
@@ -98,7 +96,7 @@ test("model auth failures render as an actionable card without stack frames", as
   expect(composer).toContain('setPicker("model")');
   expect(composer).toContain('modelId === "unknown"');
   const app = await readFile(new URL("../../packages/web/src/App.tsx", import.meta.url), "utf8");
-  expect(app).toContain("!state.sessionIndex.sessions.some((session) => session.bivyCreated)");
+  expect(app).toContain("state.sessionIndex.sessions.length === 0");
 });
 
 test("provider key save awaits an authoritative acknowledgement", async () => {

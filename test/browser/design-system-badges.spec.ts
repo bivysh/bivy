@@ -42,9 +42,8 @@ test("settings status labels use canonical badges", async () => {
   }
 });
 
-test("runtime and automation labels use canonical badges", async () => {
+test("automation labels use canonical badges", async () => {
   for (const path of [
-    "components/Pickers.tsx",
     "components/AutomationsView.tsx",
     "components/WorkQueueSetupSheet.tsx",
     "components/RunHistory.tsx",
