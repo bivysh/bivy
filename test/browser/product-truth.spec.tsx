@@ -25,7 +25,8 @@ test("agent picker uses compact rows and plain-language confirmation", async () 
   expect(source).toContain('selected.scrollIntoView({ block: "center" })');
   expect(source).not.toContain("setDetailsId");
   expect(source).toContain("Bivy couldn't check which sign-in this agent will use");
-  expect(source).toContain("Use {agentLabel(confirmingRuntime)}");
+  expect(source).toContain("<ConfirmDialog");
+  expect(source).toContain("confirmLabel={`Use ${agentLabel(confirmingRuntime)}`}");
   expect(source).not.toContain("title={confirming ? `Confirm ${agentLabel(a)}`");
 });
 
