@@ -67,6 +67,22 @@ test("GitHub trigger creation stays in one complete automation editor", async ()
   expect(source).toContain('on: buildGithubOn(d.githubEvents, labels, workflows)');
 });
 
+test("model auth failures render as an actionable card without stack frames", async () => {
+  const [chat, composer, fold] = await Promise.all([
+    readFile(new URL("../../packages/web/src/components/ChatView.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../../packages/web/src/components/Composer.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../../packages/core/src/active-session-event-fold.ts", import.meta.url), "utf8"),
+  ]);
+  expect(chat).toContain('className="card" data-tone="danger"');
+  expect(chat).toContain('return "Connect a provider"');
+  expect(chat).toContain('entry.text.split("\\n")');
+  expect(fold).toContain('structured?.kind === "model_auth"');
+  expect(composer).toContain('setPicker("model")');
+  expect(composer).toContain('modelId === "unknown"');
+  const app = await readFile(new URL("../../packages/web/src/App.tsx", import.meta.url), "utf8");
+  expect(app).toContain("!state.sessionIndex.sessions.some((session) => session.bivyCreated)");
+});
+
 test("provider key save awaits an authoritative acknowledgement", async () => {
   const source = await readFile(new URL("../../packages/web/src/components/ProviderConnect.tsx", import.meta.url), "utf8");
   expect(source).toContain("await controller.setCredential");

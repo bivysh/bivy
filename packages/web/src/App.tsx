@@ -266,6 +266,12 @@ export function App() {
   // identity too — controller is a singleton — so ChatView's memoized entries
   // aren't forced to re-render on every update).
   const runCommand = useCallback((name: string, _args?: string) => {
+    if (name.startsWith("connect-provider:")) {
+      const provider = name.slice("connect-provider:".length);
+      const nodeId = state.connection.currentNodeId;
+      if (provider && nodeId) controller.store.setNeedsModelAuth({ nodeId, provider });
+      return;
+    }
     switch (name) {
       case "/new": controller.newSession(); break;
       case "/resume":
@@ -276,7 +282,7 @@ export function App() {
         );
         break;
     }
-  }, []);
+  }, [state.connection.currentNodeId]);
 
   // Standalone (session-less) terminal: opened from the sidebar button, always
   // scoped to a node's default workspace rather than any chat session. Skips
@@ -716,7 +722,7 @@ export function App() {
           </div>
         )}
 
-        {!showFirstRunOnboarding && !state.activeSession.activeSessionId && state.activeSession.transcript.length === 0 && state.sessionIndex.sessions.length === 0 && (
+        {!showFirstRunOnboarding && !state.activeSession.activeSessionId && state.activeSession.transcript.length === 0 && !state.sessionIndex.sessions.some((session) => session.bivyCreated) && (
           <Suspense fallback={null}>
             <ReadinessChecklist
               activation={activation}

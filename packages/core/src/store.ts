@@ -136,6 +136,9 @@ export interface SessionSummary {
   worktree?: string;
   name: string;
   source?: string;
+  /** True for sessions created through Bivy, false for agent-native sessions
+   * discovered from existing history. */
+  bivyCreated?: boolean;
   /** Parent session's id, when this session was materialized from a fork
    *  bundle (see src/session/fork.ts on the node). Undefined for an ordinary
    *  session. The parent may live on a different node, so this is only ever
@@ -2261,6 +2264,7 @@ export class SessionStore {
             // undefined values, so an existing row keeps what it already had.
             name: e.name || (known ? undefined : "Untitled session"),
             source: e.source,
+            bivyCreated: e.bivyCreated === true,
             nodeId: e.nodeId,
             runtimeId: e.runtimeId,
             agentName: e.agentName,

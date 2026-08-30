@@ -76,3 +76,17 @@ export function authProviderForSession(runtimeId: string, modelProvider?: string
   if (KNOWN_KEY_PROVIDERS.has(provider)) return provider;
   return undefined;
 }
+
+export interface ModelAuthError {
+  kind: "model_auth";
+  provider: string;
+}
+
+/** Convert a provider failure into the safe wire shape consumed by clients.
+ * Raw provider text can contain stack frames, paths, or tokens and must never
+ * be used as the user-facing auth error. */
+export function classifyModelAuthError(raw: string, runtimeId: string, modelProvider?: string): ModelAuthError | null {
+  if (!isModelAuthError(raw)) return null;
+  const provider = authProviderForSession(runtimeId, modelProvider);
+  return provider ? { kind: "model_auth", provider } : null;
+}

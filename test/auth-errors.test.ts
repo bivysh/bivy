@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { isModelAuthError, authProviderForSession } from "../src/runtime/auth-errors.js";
+import { isModelAuthError, authProviderForSession, classifyModelAuthError } from "../src/runtime/auth-errors.js";
 
 // A runtime that lacks a usable model credential — or holds an expired/invalid
 // one — fails its first upstream request with a 401. The daemon classifies that
@@ -57,6 +57,14 @@ check("codex runtimes resolve to the openai-codex subscription provider", () => 
   // Runtime id wins over the model provider for codex (the model may report
   // "openai-codex" or nothing at all).
   assert.equal(authProviderForSession("codex-approvals", undefined), "openai-codex");
+});
+
+check("auth failures become a safe structured wire error", () => {
+  assert.deepEqual(
+    classifyModelAuthError(`${CODEX_WEBSOCKET_401}\n/home/user/node_modules/private.js:10`, "codex"),
+    { kind: "model_auth", provider: "openai-codex" },
+  );
+  assert.equal(classifyModelAuthError("file not found", "pi", "anthropic"), null);
 });
 
 check("a known model provider maps to itself", () => {

@@ -494,6 +494,11 @@ export function Composer({
   function submit() {
     const value = text.trim();
     if ((!value && !attachments.length) || disabled) return;
+    const modelId = state.catalogs.currentModel?.id || state.catalogs.currentModelId;
+    if (isDraft && modelSelectable && (!modelId || modelId === "unknown")) {
+      setPicker("model");
+      return;
+    }
     // Dispatch a slash line (see resolveSlash): an advertised agent command is
     // invoked. An unknown slash is rejected with feedback WHEN the active session
     // advertised a command catalog — otherwise we stay permissive and forward the
@@ -516,7 +521,7 @@ export function Composer({
     requestAnimationFrame(autosize);
   }
 
-  const modelLabel = state.catalogs.currentModel?.label || state.catalogs.currentModel?.id || "Default";
+  const modelLabel = state.catalogs.currentModel?.label || state.catalogs.currentModel?.id || "Choose a model";
   // The repo pill also carries the chosen remote branch (#466) — picked from
   // the arrow on a repo row in the repo picker, not a separate pill. A blank
   // branch means "the repo's default branch", so we only append "@ <branch>"
