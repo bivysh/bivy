@@ -73,3 +73,8 @@ not.
 - `pnpm run check:routes` — duplicate Express method/path guard
 - `pnpm --filter @bivy/web run typecheck` — web PWA types
 - `pnpm run lint` / `pnpm run typecheck`
+
+
+## PRs
+When you open a PR make sure the title and description gives a good overview of what these changes do. 
+Follow CI and fix any errors that come up until CI is green.
