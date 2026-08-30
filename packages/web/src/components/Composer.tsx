@@ -8,7 +8,7 @@ import { useModalEscape } from "../modalStack.js";
 import { RepoPicker, AgentPicker, ModelPicker, SandboxPicker } from "./Pickers.js";
 import { firstSessionSummary } from "../firstSession.js";
 import { FollowupQueue } from "./FollowupQueue.js";
-import { SANDBOX_TIERS } from "./sandboxTiers.js";
+import { runtimeEnforcesProtection, SANDBOX_TIERS } from "./sandboxTiers.js";
 import { VoiceRecorder } from "./VoiceRecorder.js";
 import { Spinner } from "./Spinner.js";
 import { WebSpeechRecorder, webSpeechSupported } from "./WebSpeechRecorder.js";
@@ -543,7 +543,10 @@ export function Composer({
     : nodeDefaultTier
       ? nodeDefaultTier.label
       : state.settings.nodeSettings?.defaultSandbox ?? "Default";
-  const sandboxTitle = draftTier ? draftTier.hint : "Sandbox mode for this session (machine default)";
+  const selectedRuntime = state.catalogs.runtimes.find((runtime) => runtime.id === state.catalogs.selectedAgentId);
+  const sandboxTitle = runtimeEnforcesProtection(selectedRuntime)
+    ? (draftTier ? draftTier.hint : "Protection for this session (machine default)")
+    : `${state.catalogs.currentAgentName || "This agent"} can't ask for approval — treated as full access`;
   const canSend = !disabled && (Boolean(text.trim()) || attachments.length > 0);
   // B2 — a first session exposes exactly four decisions: machine, repo,
   // agent/model, protection. On a draft we render a single explicit summary of

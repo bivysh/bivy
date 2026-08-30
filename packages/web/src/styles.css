@@ -2715,7 +2715,7 @@ select.picker-search { appearance: auto; }
    or two lines instead of collapsing to ~50vw and wrapping one word per line
    on a phone. */
 .toast-stack {
-  position: fixed; left: 50%; bottom: calc(84px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+  position: fixed; left: 50%; bottom: calc(var(--composer-h, 108px) + var(--space-2) + env(safe-area-inset-bottom)); transform: translateX(-50%);
   /* Above sheets (76), settings modal (75) and app dialogs (80): toasts are
      transient feedback that routinely fire *from* an open sheet — e.g. an agent
      install error triggered inside the agent-selector Sheet. At the old z-index

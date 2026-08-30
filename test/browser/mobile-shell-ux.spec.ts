@@ -20,6 +20,14 @@ test("primary mobile shell controls expose 44px hit areas", async () => {
 
 test("protection control keeps a plain-language default label", async () => {
   const composer = await readFile(new URL("components/Composer.tsx", WEB), "utf8");
+  const pickers = await readFile(new URL("components/Pickers.tsx", WEB), "utf8");
   expect(composer).toContain('?? "Default"');
   expect(composer).toContain('aria-label="Protection"');
+  expect(pickers).toContain('<Sheet title="Protection"');
+  expect(pickers).toContain("can't ask for approval — protection choices are treated as full access.");
+});
+
+test("toast stack clears the measured composer height", async () => {
+  const styles = await readFile(new URL("styles.css", WEB), "utf8");
+  expect(styles).toContain("bottom: calc(var(--composer-h, 108px) + var(--space-2) + env(safe-area-inset-bottom));");
 });

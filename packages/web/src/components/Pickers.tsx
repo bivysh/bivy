@@ -7,7 +7,7 @@ import { controller } from "../store/useStore.js";
 import { Sheet, PickerItem } from "./Sheet.js";
 import { useModalEscape } from "../modalStack.js";
 import { ProviderConnectForm } from "./ProviderConnect.js";
-import { SANDBOX_TIERS } from "./sandboxTiers.js";
+import { runtimeEnforcesProtection, SANDBOX_TIERS } from "./sandboxTiers.js";
 import { writeClipboard } from "../clipboard.js";
 import { Badge, type BadgeTone } from "./Badge.js";
 
@@ -440,8 +440,16 @@ function RepoBranchPicker({
 export function SandboxPicker({ state, onClose }: { state: AppState; onClose: () => void }) {
   const nodeDefault = state.settings.nodeSettings?.defaultSandbox;
   const [confirmFullAccess, setConfirmFullAccess] = useState(false);
+  const selectedRuntime = state.catalogs.runtimes.find((runtime) => runtime.id === state.catalogs.selectedAgentId);
+  const protectionEnforced = runtimeEnforcesProtection(selectedRuntime);
+  const agentName = state.catalogs.currentAgentName || "This agent";
   return (
-    <Sheet title="Sandbox mode" onClose={onClose} autoFocusSearch={false}>
+    <Sheet title="Protection" onClose={onClose} autoFocusSearch={false}>
+      {!protectionEnforced && (
+        <div className="banner" data-tone="warn" role="note">
+          {agentName} can't ask for approval — protection choices are treated as full access.
+        </div>
+      )}
       <div className="picker-list">
         <PickerItem
           active={!state.draft.sandbox}
