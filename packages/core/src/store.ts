@@ -2486,7 +2486,15 @@ export class SessionStore {
         // (which must runtime.select it so the node previews that agent's models),
         // not here — see AppController.maybeRestoreDraftAgent.
         const cur = e.current || runtimes.find((a) => a.id === (this.state.catalogs.selectedAgentId || e.activeAgent));
-        const selectedAgentId = cur?.id || e.activeAgent || this.state.catalogs.selectedAgentId;
+        // Opening the picker requests runtimes.list. That response can race a
+        // click made while the sheet is open and still describe the old node
+        // default. Keep an optimistic draft choice until runtime.updated
+        // confirms runtime.select; otherwise the stale list makes the selected
+        // agent (and its composer pill) immediately snap back.
+        const localDraftSelection = !this.state.activeSession.activeSessionId && e.type === "runtimes.list"
+          ? runtimes.find((a) => a.id === this.state.catalogs.selectedAgentId)
+          : undefined;
+        const selectedAgentId = localDraftSelection?.id || cur?.id || e.activeAgent || this.state.catalogs.selectedAgentId;
         // runtimes.list is also requested whenever the agent sheet opens. Its
         // `current` runtime is the default for the *next* session, not the owner
         // of the session on screen. Keep the pill tied to activeRuntimeId just

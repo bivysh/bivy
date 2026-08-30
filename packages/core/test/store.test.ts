@@ -1999,6 +1999,33 @@ describe("SessionStore", () => {
     expect(state.catalogs.currentAgentName).toBe("Claude Code");
   });
 
+  it("does not let a stale runtimes list undo an agent picked in the open sheet", () => {
+    const store = new SessionStore();
+    store.apply({
+      type: "runtimes.list",
+      current: { id: "codex", displayName: "Codex" },
+      runtimes: [
+        { id: "codex", displayName: "Codex" },
+        { id: "claude", displayName: "Claude Code" },
+      ],
+    });
+
+    store.setSelectedAgentLocal("claude");
+    // This is the response to the list request made when the picker opened. It
+    // was created before runtime.select landed and therefore still says Codex.
+    store.apply({
+      type: "runtimes.list",
+      current: { id: "codex", displayName: "Codex" },
+      runtimes: [
+        { id: "codex", displayName: "Codex" },
+        { id: "claude", displayName: "Claude Code" },
+      ],
+    });
+
+    expect(store.getState().catalogs.selectedAgentId).toBe("claude");
+    expect(store.getState().catalogs.currentAgentName).toBe("Claude Code");
+  });
+
   it("does not seed a draft model from a list that belongs to a different agent", () => {
     // Regression ("Claude shows Codex models"): a models.list resolved for one
     // agent (Codex → GPT models) lingered in state after the user switched
