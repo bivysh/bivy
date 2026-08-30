@@ -8,7 +8,10 @@ test("the draft exposes one actionable first-session review", async () => {
     readFile(new URL("../../packages/web/src/components/ChatView.tsx", import.meta.url), "utf8"),
     readFile(new URL("../../packages/web/src/firstSession.ts", import.meta.url), "utf8"),
   ]);
-  expect(chat).toContain("Describe your task");
+  // The composer already asks for the task; the empty transcript must not add a
+  // second instruction block above the same review controls.
+  expect(chat).not.toContain("Describe your task");
+  expect(composer).toContain("Describe your first task…");
   expect(chat).not.toContain("Choose the <b>machine</b> to run on in the header");
   expect(composer).toContain('aria-label="Review before starting"');
   expect(composer).toContain("decisions.map((decision)");
