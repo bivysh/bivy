@@ -66,10 +66,36 @@ function openDb(): Promise<IDBDatabase> {
 
 function idbRequest<T>(store: IDBObjectStore, run: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
-    const req = run(store);
+    let req: IDBRequest<T>;
+    try {
+      req = run(store);
+    } catch (error) {
+      reject(error);
+      return;
+    }
     req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.onerror = (event) => {
+      // Prevent Chromium from reporting a handled DataCloneError as an
+      // uncaught IndexedDB exception (some CryptoKey implementations cannot
+      // be structured-cloned even though IDB itself is available).
+      event.preventDefault();
+      reject(req.error);
+    };
   });
+}
+
+/** Remove the persisted browser device identity when signing out.
+ *
+ * Device keys must not be reused across accounts: the control plane deliberately
+ * rejects a public key that is already owned by another account. */
+export async function clearIndexedDbDeviceKey(): Promise<void> {
+  if (!idbAvailable()) return;
+  const db = await openDb();
+  try {
+    await idbRequest(db.transaction(STORE, "readwrite").objectStore(STORE), (s) => s.delete(RECORD_KEY));
+  } finally {
+    db.close();
+  }
 }
 
 /**
@@ -98,6 +124,10 @@ export function indexedDbDeviceKeyStore(): DeviceKeyStore | null {
       const db = await openDb();
       try {
         const tx = db.transaction(STORE, "readwrite");
+        // A failed structured clone aborts the transaction as well as the
+        // request. Handle that event before issuing the request so the browser
+        // does not surface a second unhandled transaction error.
+        tx.onerror = (event) => event.preventDefault();
         await idbRequest(tx.objectStore(STORE), (s) => s.put({ priv, pub }, RECORD_KEY));
         await new Promise<void>((resolve, reject) => {
           tx.oncomplete = () => resolve();

@@ -94,6 +94,7 @@ import {
   createDeviceVaultKeyStore,
   DeviceVaultConflictError,
   deviceKeypair,
+  clearIndexedDbDeviceKey,
   listEphemeralSizes,
   ephemeralNodeLabel,
   type TranscriptCache,
@@ -1245,12 +1246,26 @@ export class AppController {
     } catch {
       /* noop */
     }
-    // Best effort before we wipe the token locally: revoke the account session
-    // and drop this device's pairing so the account's device count reflects it.
+    // The secure device key lives in IndexedDB, so local.device() is usually
+    // empty. Load its public half before logout; otherwise the server keeps the
+    // pairing record and a later account sign-in is rejected as a different
+    // account trying to reuse this device identity.
+    let devicePub = this.local.device()?.pub;
     try {
-      await logout(this.local, this.local.device()?.pub);
+      devicePub = (await deviceKeypair(this.local)).pub;
+    } catch {
+      /* best effort; the session can still be revoked */
+    }
+    try {
+      await logout(this.local, devicePub);
     } catch {
       /* offline / already gone — clear locally regardless */
+    }
+    // A device identity is account-bound. Do not carry it into the next sign-in.
+    try {
+      await clearIndexedDbDeviceKey();
+    } catch {
+      /* a broken IDB must not prevent sign-out */
     }
     this.local.clear();
     this.store.setSignedIn(false);
