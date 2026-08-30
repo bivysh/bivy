@@ -2757,6 +2757,11 @@ export class AppController {
       },
       putWrapped: async (target: string, wrappedKey: string, wrappedByPublicKeyB64: string, generation?: number) => {
         const res = await fetch(`${base()}/device-vault/key/wrapped`, { method: "PUT", headers: jsonAuth(), body: JSON.stringify({ targetDevicePublicKeyB64: target, wrappedKey, wrappedByPublicKeyB64, generation }) });
+        // The recipient list can briefly contain a device that signed out (or
+        // was revoked) between the vault read and this fan-out. That stale
+        // recipient must not make the whole background sync fail or surface an
+        // unhandled promise rejection; the next sync gets the current list.
+        if (res.status === 403) return;
         if (!res.ok) throw new Error(`device-vault wrapped-key put failed (${res.status})`);
       },
     };
