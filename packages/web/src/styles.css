@@ -2083,8 +2083,8 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
   .topbar { padding-inline: 12px; }
   .topbar-title-row .status-dot[data-status="idle"],
   .topbar-title-row .status-dot[data-status="saved"] { display: none; }
-  .agent-pill .pill-label { display: none; }
-  .agent-pill { flex: none; }
+  /* Keep both selected values visible. Long agent/model names share the
+     available row and use the composer's standard ellipsis behavior. */
   .composer-meta { gap: 2px; }
   .automations-view-head { align-items: center; padding-bottom: 8px; }
   .automations-view-head-text { min-width: 0; }

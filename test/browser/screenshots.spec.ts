@@ -12,7 +12,7 @@ const fixtures = {
       <main class="main"><header class="topbar"><button class="btn ghost icon only-mobile" aria-label="Open navigation">☰</button><div class="topbar-title"><strong>New session</strong><span>My laptop</span></div></header>
         <section class="messages"></section>
         <div class="composer-lead" aria-label="Session setup"><button class="btn sm ghost repo-pill">Choose repository</button><button class="btn sm ghost sandbox-pill" aria-label="Protection: Workspace write">◈ Workspace write</button></div>
-        <section class="composer"><div class="composer-card"><textarea class="composer-input" aria-label="Message" placeholder="Describe your task"></textarea><div class="composer-actions"><div class="composer-meta"><button class="btn sm ghost attach-pill" aria-label="Attach file">＋</button><button class="btn sm ghost agent-pill">Pi</button><button class="btn sm ghost model-pill">Claude</button></div><button class="composer-btn send" aria-label="Send message">↑</button></div></div></section>
+        <section class="composer"><div class="composer-card"><textarea class="composer-input" aria-label="Message" placeholder="Describe your task"></textarea><div class="composer-actions"><div class="composer-meta"><button class="btn sm ghost attach-pill" aria-label="Attach file">＋</button><button class="btn sm ghost agent-pill"><span class="pill-label">Pi</span></button><button class="btn sm ghost model-pill"><span class="pill-label">Claude</span></button></div><button class="composer-btn send" aria-label="Send message">↑</button></div></div></section>
       </main>
     </div>`,
   pickers: `

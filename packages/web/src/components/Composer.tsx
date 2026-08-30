@@ -541,6 +541,7 @@ export function Composer({
   }
 
   const modelLabel = state.catalogs.currentModel?.label || state.catalogs.currentModel?.id || "Choose a model";
+  const agentLabel = String(currentRuntime?.displayName || currentRuntime?.name || currentRuntime?.id || state.catalogs.currentAgentName || "Choose an agent");
   const repoLabel = state.draft.repo
     ? state.draft.branch
       ? `${state.draft.repo} @ ${state.draft.branch}`
@@ -796,9 +797,9 @@ export function Composer({
               >
                 <span className="pill-glyph"><AttachGlyph /></span>
               </button>
-              <button type="button" className="btn sm ghost agent-pill" onClick={() => setPicker("agent")} title="Agent">
+              <button type="button" className="btn sm ghost agent-pill" onClick={() => setPicker("agent")} title={`Agent: ${agentLabel}`}>
                 <span className="pill-glyph"><AgentGlyph /></span>
-                <span className="pill-label">{state.catalogs.currentAgentName || "Agent"}</span>
+                <span className="pill-label">{agentLabel}</span>
               </button>
               <button
                 type="button"
