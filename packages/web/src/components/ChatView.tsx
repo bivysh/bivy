@@ -716,12 +716,6 @@ export function ChatView({
               </p>
             </div>
           )}
-          {total === 0 && draftRoute && (
-            <div className="chat-empty">
-              <p className="chat-empty-title">Describe your task</p>
-              <p className="chat-empty-sub">Review where and how it will run, then send your instructions below.</p>
-            </div>
-          )}
           {start > 0 && (
             <button
               className="load-earlier"

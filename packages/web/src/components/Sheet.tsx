@@ -178,6 +178,7 @@ export function PickerItem({
   right,
   onClick,
   disabled,
+  layout = "default",
 }: {
   active?: boolean;
   title: ReactNode;
@@ -185,6 +186,9 @@ export function PickerItem({
   right?: ReactNode;
   onClick?: () => void;
   disabled?: boolean;
+  /** Rows with multiple trailing actions stack those actions below the main
+   *  choice on narrow screens instead of squeezing the selectable content. */
+  layout?: "default" | "actions";
 }) {
   // `right` (a status chip, or an action like Revoke/Remove) used to render
   // *inside* the row's <button>. That's fine for inert content (a <span> chip)
@@ -194,8 +198,8 @@ export function PickerItem({
   // unreliable to tap. Render the select button and `right` as siblings
   // instead (same shape as SessionList's `.session-row` + row-menu button).
   return (
-    <div className={`picker-item-row${active ? " active" : ""}`}>
-      <button className="picker-item" onClick={onClick} disabled={disabled}>
+    <div className={`picker-item-row${active ? " active" : ""}${layout === "actions" ? " with-actions" : ""}`}>
+      <button type="button" className="picker-item" onClick={onClick} disabled={disabled}>
         <span className="picker-check">{active ? <CheckIcon size={15} /> : null}</span>
         <span className="picker-main">
           <span className="picker-name">{title}</span>

@@ -37,6 +37,7 @@ export function ReadinessChecklist({
 
   const next = activation.nextAction;
   const handler = next && onRemediate ? onRemediate[next.kind] : undefined;
+  const passedCount = activation.checks.filter((check) => check.state === "passed").length;
 
   return (
     <section className="card readiness" role="status" aria-label="Setup readiness">
@@ -48,6 +49,9 @@ export function ReadinessChecklist({
           </button>
         )}
       </header>
+      {passedCount > 0 && (
+        <p className="readiness-passed">✓ {passedCount} setup {passedCount === 1 ? "check" : "checks"} complete</p>
+      )}
       <ol className="readiness-checks">
         {activation.checks.map((check) => (
           <li key={check.id} className={`readiness-check state-${check.state}`}>

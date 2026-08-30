@@ -557,6 +557,7 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
           />
         }
         disabled={installing || (!available && !installable)}
+        layout="actions"
         right={
           <>
             <button

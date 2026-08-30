@@ -1052,7 +1052,7 @@ button.sheet-action:last-child { border-bottom: 0; }
    below .app-dialog (80) so a ConfirmDialog raised from within a sheet still
    layers above that. */
 .sheet { position: fixed; top: var(--app-top, 0px); left: 0; width: 100%; height: var(--app-h, 100dvh); z-index: var(--z-sheet); display: flex; align-items: flex-end; justify-content: center; }
-.sheet-backdrop { position: absolute; inset: 0; background: var(--overlay); animation: sheet-backdrop-in var(--dur) var(--ease-standard); }
+.sheet-backdrop { position: absolute; inset: 0; z-index: var(--z-base); background: var(--overlay); animation: sheet-backdrop-in var(--dur) var(--ease-standard); }
 .sheet.is-closing .sheet-backdrop { animation: sheet-backdrop-out var(--dur) var(--ease-standard) forwards; }
 .sheet-body {
   /* Sit clear of the composer: --composer-h (published by Composer) is the live
@@ -1075,7 +1075,7 @@ button.sheet-action:last-child { border-bottom: 0; }
      dominates and this floor is inert; with the keyboard up the inset reports 0,
      so the tuned ~8px keyboard gap is preserved. */
   --sheet-clear: max(calc(env(safe-area-inset-bottom, 0px) + 8px), calc(var(--composer-h, 108px) + 8px - var(--keyboard-h, 0px)));
-  position: relative; width: 100%; max-width: 520px; margin: 0 12px var(--sheet-clear);
+  position: relative; z-index: var(--z-dropdown); width: 100%; max-width: 520px; margin: 0 12px var(--sheet-clear);
   /* Bound the body to the SAME visual viewport the sheet is anchored to
      (--app-h from viewport.ts, the px value --sheet itself uses), never dvh —
      dynamic viewport units and the visual viewport disagree whenever the
@@ -1103,7 +1103,7 @@ button.sheet-action:last-child { border-bottom: 0; }
 /* flex:1 so the content fills the bounded body and its own scroll (not the
    page) handles a long tool list; touch scrolling + overscroll containment keep
    the fling smooth on iOS and stop it chaining to the chat underneath. */
-.sheet-content { flex: 1; overflow-y: auto; padding: 8px; min-height: 0; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+.sheet-content { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 8px; min-height: 0; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
 .picker-search { margin-bottom: 6px; }
 /* In a picker sheet the search is a direct child of the scroll container, so pin
    it to the top: the list scrolls beneath it and every option stays reachable
@@ -1151,8 +1151,10 @@ button.sheet-action:last-child { border-bottom: 0; }
   background: var(--surface-2); user-select: all;
 }
 .repo-connect-waiting { margin: 0; font-size: 12.5px; }
-.picker-item-row { display: flex; align-items: center; border-radius: var(--radius-md); }
+.picker-item-row { display: flex; align-items: center; min-width: 0; border-radius: var(--radius-md); }
 .picker-item-row.active { background: var(--surface-3); }
+.picker-item-row.with-actions { align-items: stretch; }
+.picker-item-row.with-actions .picker-item-extra { align-self: center; }
 .picker-item {
   display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; text-align: left;
   border: 0; background: transparent; color: var(--ink); border-radius: var(--radius-md); padding: 10px 12px;
@@ -2719,11 +2721,20 @@ select.picker-search { appearance: auto; }
   .only-mobile { display: inline-flex; }
   .sidebar {
     position: fixed; top: var(--app-top, 0px); left: 0; height: var(--app-h, 100dvh);
-    width: 84%; max-width: 320px; z-index: var(--z-dropdown);
+    width: 84%; max-width: 320px; z-index: var(--z-sticky);
     transform: translateX(-100%); transition: transform 0.2s ease;
     visibility: hidden;
   }
   .sidebar.open { transform: translateX(0); visibility: visible; }
+  /* Agent rows have two optional actions. Put them on their own line instead
+     of reducing the actual agent choice to a clipped sliver. */
+  .picker-item-row.with-actions { display: grid; grid-template-columns: minmax(0, 1fr); padding-bottom: var(--space-1); }
+  .picker-item-row.with-actions .picker-item { width: 100%; }
+  .picker-item-row.with-actions .picker-item-extra {
+    justify-content: flex-end; padding: 0 var(--space-2) var(--space-1);
+  }
+  .picker-item-row.with-actions .picker-item-extra .btn { min-height: 40px; }
+  .readiness-detail { display: none; }
   .composer-meta > .btn, .fs-decision, .composer-btn, .session-actions-btn, .session-filter-btn, .sheet-back {
     min-height: 44px;
   }
@@ -2843,7 +2854,11 @@ select.picker-search { appearance: auto; }
   font-size: var(--text-lg); line-height: 1; padding: 2px 6px; border-radius: var(--radius-sm);
 }
 .readiness-dismiss:hover { background: var(--surface-2); color: var(--ink); }
+.readiness-passed { margin: 0 0 var(--space-2); color: var(--ok); font-size: var(--text-sm); font-weight: var(--weight-medium); }
 .readiness-checks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+/* Completed setup is summarized above. Keeping six verbose rows after five are
+   already done buried the only useful state (waiting for the first answer). */
+.readiness-check.state-passed { display: none; }
 .readiness-check { display: flex; align-items: baseline; gap: 8px; font-size: var(--text-sm); }
 .readiness-mark {
   flex: none; width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center;
