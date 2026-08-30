@@ -3543,11 +3543,55 @@ function terminalQr(text) {
 
 // --- commands ---------------------------------------------------------------
 
+async function cmdTokenSetup() {
+  // A token-bearing installer command is an explicit "add this machine" flow,
+  // not a request to walk through first-run preferences. In particular, do not
+  // consume the account token after presenting the agent and login wizards:
+  // those prompts made the Connect a Machine command unusable on headless
+  // machines and made it look as if the token had been ignored.
+  if (!(await ensureDeps())) process.exit(1);
+
+  const config = loadConfig();
+  if (!config.workspace || config.workspace === repoRoot) {
+    config.workspace = firstSetupWorkspace(config);
+    if (!fs.existsSync(config.workspace)) fs.mkdirSync(config.workspace, { recursive: true });
+  }
+  const explicitPort = Number(process.env.PORT);
+  config.port = explicitPort || await findAvailablePort(Number(config.port) || 4317, nodeBindHost());
+  config.env = { ...config.env, BIVY_RUNTIME: config.env?.BIVY_RUNTIME || "pi" };
+  saveConfig(config);
+
+  const code = await run(nodeBin, [...nodeScriptArgs(relaySetupEntry)], {
+    cwd: repoRoot,
+    env: startEnv(config),
+  });
+  if (code !== 0) {
+    console.error(c.red("Machine enrollment failed; the token was not accepted."));
+    process.exitCode = code || 1;
+    return;
+  }
+
+  console.log(c.dim("\nInstalling the background service so the node keeps running…"));
+  const started = await installService(config);
+  if (!started) {
+    console.log(`Finish with ${c.cyan("bivy service install")} or start it with ${c.cyan("bivy start")}.`);
+    return;
+  }
+  console.log(c.bold(c.green("\n✓ Machine added and running. No interactive setup was needed.")));
+}
+
 async function cmdSetup(args = []) {
   if (args.includes("-h") || args.includes("--help")) {
     console.log("Usage: bivy setup\n\nFirst-run wizard: agent choice, model login, remote access + sign-in, and background service. Workspace and port get safe defaults. Re-run later to change the default agent or remote access.");
     return;
   }
+  // install.sh supplies these only for the Connect a Machine command. Keep
+  // this branch before creating a readline prompter: there may be no TTY.
+  if (process.env.BIVY_SESSION_TOKEN || process.env.BIVY_NODE_CLAIM_CODE) {
+    await cmdTokenSetup();
+    return;
+  }
+
   console.log(c.bold("\n  Bivy — node setup\n"));
   if (process.getuid?.() === 0) {
     console.log(c.yellow("You are running setup as root. For a real node, create a normal user (e.g. 'bivy') and install there."));

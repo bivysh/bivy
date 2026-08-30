@@ -1210,7 +1210,11 @@ app.post("/account/node-claims", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   const { claim, code } = await store.createNodeClaim(account.id);
   const claimUrl = `${baseUrl(req)}/claim/${code}`;
-  res.status(201).json({ ...presentNodeClaim(claim), claimUrl, command: `curl -fsSL ${shellSingleQuote(claimUrl)} | sh` });
+  // Keep machine enrollment on the same installer as every other install. The
+  // claim is passed as an environment variable to install.sh; do not make the
+  // claim URL itself a second installer entry point.
+  const command = `curl -fsSL https://bivy.sh/install.sh | BIVY_NODE_CLAIM_CODE=${shellSingleQuote(code)} BIVY_CONTROL_PLANE_URL=${shellSingleQuote(baseUrl(req))} bash`;
+  res.status(201).json({ ...presentNodeClaim(claim), claimUrl, command });
 }));
 
 app.get("/account/node-claims", requireUser, asyncHandler(async (req, res) => {
@@ -1234,7 +1238,10 @@ app.get("/claim/:code", (req, res) => {
   const controlPlaneUrl = baseUrl(req);
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("Referrer-Policy", "no-referrer");
-  res.type("text/x-shellscript").send(`#!/bin/sh\nset -eu\nexport BIVY_NODE_CLAIM_CODE=${shellSingleQuote(code)}\nexport BIVY_CONTROL_PLANE_URL=${shellSingleQuote(controlPlaneUrl)}\ncurl -fsSL https://bivy.sh/install.sh | sh\n`);
+  // Legacy claim URLs remain usable, but must invoke bash: install.sh uses
+  // bash arrays and cannot be piped into POSIX sh. -L also handles a proxy's
+  // canonical-host redirect before the script reaches the shell.
+  res.type("text/x-shellscript").send(`#!/usr/bin/env bash\nset -eu\nexport BIVY_NODE_CLAIM_CODE=${shellSingleQuote(code)}\nexport BIVY_CONTROL_PLANE_URL=${shellSingleQuote(controlPlaneUrl)}\ncurl -fsSL https://bivy.sh/install.sh | bash\n`);
 });
 
 app.post("/claim/:code/enroll", asyncHandler(async (req, res) => {
