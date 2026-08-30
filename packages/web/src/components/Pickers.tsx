@@ -4,15 +4,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { AppState, ModelInfo, RuntimeInfo, SessionContract } from "@bivy/core";
 import { resolveSessionContract } from "@bivy/core";
 import { controller } from "../store/useStore.js";
+import { ConfirmDialog } from "./AppDialog.js";
 import { Sheet, PickerItem } from "./Sheet.js";
 import { useModalEscape } from "../modalStack.js";
 import { ProviderConnectForm } from "./ProviderConnect.js";
 import { runtimeEnforcesProtection, SANDBOX_TIERS } from "./sandboxTiers.js";
 import { writeClipboard } from "../clipboard.js";
+import { agentPickerLabel, filterAndSortAgentRuntimes, isTopAgent } from "../agentPickerCatalog.js";
 
-function agentLabel(a: RuntimeInfo): string {
-  return String(a.displayName || a.name || a.id || "Agent");
-}
+const agentLabel = agentPickerLabel;
 
 const THINKING_LABELS: Record<string, string> = {
   off: "Fastest",
@@ -21,10 +21,6 @@ const THINKING_LABELS: Record<string, string> = {
   medium: "Default",
   high: "Deep",
 };
-
-function runtimeTier(runtime: RuntimeInfo): string {
-  return String((runtime as { supportTier?: unknown }).supportTier || "experimental");
-}
 
 /**
  * Preview an Effective Session Contract for a runtime BEFORE a session
@@ -464,21 +460,16 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
     // session, whose agent is fixed).
     controller.prefetchModels();
   }, []);
-  const runtimes = useMemo(() => {
-    const query = q.trim().toLowerCase();
-    const matched = !query
-      ? state.catalogs.runtimes
-      : state.catalogs.runtimes.filter((a) =>
-          `${a.id} ${a.name || ""} ${a.displayName || ""} ${(a as any).description || ""} ${(a as any).language || ""} ${a.protectionLabel || ""}`.toLowerCase().includes(query),
-        );
-    return [...matched].sort((a, b) => agentLabel(a).localeCompare(agentLabel(b), undefined, { sensitivity: "base" }));
-  }, [state.catalogs.runtimes, q]);
-  const recommended = runtimes.filter((runtime) => runtimeTier(runtime) === "supported");
-  const more = runtimes.filter((runtime) => runtimeTier(runtime) !== "supported");
+  const runtimes = useMemo(
+    () => filterAndSortAgentRuntimes(state.catalogs.runtimes, q),
+    [state.catalogs.runtimes, q],
+  );
+  const recommended = runtimes.filter(isTopAgent);
+  const more = runtimes.filter((runtime) => !isTopAgent(runtime));
 
   const selectedRuntime = state.catalogs.runtimes.find((runtime) => runtime.id === selectedAgentId);
   useEffect(() => {
-    if (selectedRuntime && runtimeTier(selectedRuntime) !== "supported") setMoreOpen(true);
+    if (selectedRuntime && !isTopAgent(selectedRuntime)) setMoreOpen(true);
   }, [selectedRuntime]);
   useEffect(() => {
     if (!selectedAgentId || scrolledAgentRef.current === selectedAgentId) return;
@@ -569,15 +560,13 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
         {(moreOpen || Boolean(q.trim())) && more.map(renderRuntime)}
       </div>
       {confirmingRuntime && (
-        <div className="banner" data-tone="warn" role="note">
-          <span className="banner-text">
-            <strong>Check how {agentLabel(confirmingRuntime)} runs.</strong>{" "}
-            Bivy couldn't check which sign-in this agent will use or guarantee its protection level.
-          </span>
-          <button type="button" className="btn primary banner-action" onClick={() => chooseRuntime(confirmingRuntime)}>
-            Use {agentLabel(confirmingRuntime)}
-          </button>
-        </div>
+        <ConfirmDialog
+          title={`Check how ${agentLabel(confirmingRuntime)} runs`}
+          message="Bivy couldn't check which sign-in this agent will use or guarantee its protection level."
+          confirmLabel={`Use ${agentLabel(confirmingRuntime)}`}
+          onCancel={() => setConfirmingId(null)}
+          onConfirm={() => chooseRuntime(confirmingRuntime)}
+        />
       )}
     </Sheet>
   );
