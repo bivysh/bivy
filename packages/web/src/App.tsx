@@ -60,6 +60,11 @@ import { runStatusLabel, statusClass, statusDotState, statusLabel } from "./sess
 export function App() {
   const state = useAppState();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  // The automation suggestion is a first-mile nudge, not a permanent session
+  // control. Once the user has reached activation (the first real assistant
+  // answer), consume it immediately so it cannot follow them into later turns
+  // or sessions. Keep the old key for backwards compatibility with users who
+  // already dismissed it.
   const [automationNextStepDismissed, setAutomationNextStepDismissed] = useState(() => localStorage.getItem("bivy:automation-next-step") === "done");
   // Settings is URL-backed (#78) — `settingsRoute` mirrors the `/settings` /
   // `/settings/:view` route the same way useAppState mirrors the session
@@ -216,6 +221,11 @@ export function App() {
     repositoryReady: state.catalogs.activationReadiness ? state.catalogs.activationReadiness.repository.ok : undefined,
     agentAnswered: state.activeSession.transcript.some((entry) => entry.role === "assistant" && Boolean(entry.text) && !entry.tool) ? true : undefined,
   }), [state.catalogs.activationReadiness, state.catalogs.runtimes, state.connection.signedIn, state.connection.status, state.activeSession.transcript]);
+  useEffect(() => {
+    if (!activation.activated || !state.activeSession.activeSessionId || automationNextStepDismissed) return;
+    localStorage.setItem("bivy:automation-next-step", "done");
+    setAutomationNextStepDismissed(true);
+  }, [activation.activated, state.activeSession.activeSessionId, automationNextStepDismissed]);
   // Latch: has this client ever had a live connection this run? Once true, we
   // treat the WHOLE transient reconnect window as still-composable — not just the
   // brief "reconnecting" beat, but the redial's "connecting" and any re-pair
