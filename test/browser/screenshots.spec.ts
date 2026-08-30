@@ -77,6 +77,10 @@ for (const [name, markup] of Object.entries(fixtures)) {
       await expect(page.locator("body")).toHaveScreenshot(`${name}-${testInfo.project.name}-${theme}.png`, {
         animations: "disabled",
         caret: "hide",
+        // Chromium's native form controls vary by a few anti-aliased pixels
+        // between the local and GitHub runner images. Keep the threshold far
+        // below a visible layout/copy regression while ignoring that noise.
+        maxDiffPixels: 100,
       });
     }
   });
