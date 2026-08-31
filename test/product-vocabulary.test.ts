@@ -79,7 +79,7 @@ test("primary public copy follows the product and trust contracts", () => {
 
   for (const required of [
     "Run agents where your environment lives",
-    "Bivy maintains wrappers for the popular coding agents below",
+    "are the release-tested paths",
     "credential custodian",
     "not a signed attestation",
   ]) {

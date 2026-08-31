@@ -4,20 +4,24 @@
 [![license: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-2b6cb0)](LICENSE)
 [![node](https://img.shields.io/badge/node-%E2%89%A520-2b6cb0)](https://nodejs.org)
 
-**Run coding agents on the machines you already own — then reach them from your
-phone, browser, or another terminal.**
+**Run coding agents on your machines and use them from anywhere — from a phone,
+browser, terminal, GitHub issue, Slack message, schedule, or webhook.**
 
-Start Claude Code on your workstation, right where the repo, the running dev
-server, and the staging database already live. Walk away. On the train, open
-your phone: read what the agent did, answer its question, approve the migration
-— over a link only your devices can decrypt. The work never left your machine.
+Start Claude Code on your workstation, next to the repo, dev server, and
+database you already use. Walk away. From your phone, you can see what it did,
+answer a question, or approve a migration. CI or a webhook can start the next
+job on the right Machine without waiting for you to return.
 
 ```bash
-curl -fsSL https://bivy.sh/install.sh | bash   # install + guided setup
+curl -fsSL https://bivy.sh/install.sh | bash  # install + guided setup
 cd your-repo
-bivy run claude                                 # start an agent where your work lives
-bivy open                                        # pick it up from your phone or browser
+bivy run claude                                # start an agent in this repo
+bivy open                                      # open it in a browser or on your phone
 ```
+
+Bivy does not replace Claude Code, Codex, or the other agents you use. It keeps
+their Sessions running, routes work to the right Machine, and gives you one place
+to start, join, approve, and review work.
 
 First thing to try: ask the agent to explain the repository, make one small safe
 change, then open the same Session in the web app or on your phone while it runs.
@@ -28,16 +32,16 @@ change, then open the same Session in the web app or on your phone while it runs
 **[Security model](docs/security-model.md)** ·
 **[bivy.sh](https://bivy.sh)**
 
-> **0.x software.** The core loop is solid and used daily. Interfaces and
-> cross-runtime fidelity still change between releases — check the
-> [runtime support matrix](docs/runtime-support-matrix.md) before you depend on
-> a specific agent capability.
+> **Bivy is 0.x software.** Claude Code, Codex, Pi, and OpenCode are the
+> release-tested paths. Support for other agents varies; check the
+> [runtime support matrix](docs/runtime-support-matrix.md) before relying on a
+> specific feature.
 
 ## Why not just a cloud sandbox?
 
-A hosted sandbox starts from an *approximation* of your environment. A Bivy
-Machine **is** your environment — the actual working tree, the services already
-running, the caches already warm.
+A hosted sandbox clones your repo into a clean environment. Bivy runs in the
+environment you already use: the current working tree, running services, and
+warm caches.
 
 |  | Cloud sandbox | Bivy Machine |
 |---|---|---|
@@ -48,62 +52,56 @@ running, the caches already warm.
 | GPUs / local inference | rented separately | the ones on your box |
 | Where your code sits | someone else's infrastructure | the machine you already trust |
 
-You keep the environment. Bivy adds the part that was missing: **reaching that
-environment from anywhere, and leaving it working while you're gone.**
+Bivy lets you leave that environment running and reach it from anywhere.
 
 ## What you can do
 
-Bivy gives you two ways to put an agent to work.
+Every task in Bivy becomes a Session on a Machine you choose. Start it from the
+terminal, browser, phone, or an external trigger. Join it while it runs, or let
+it finish in the background.
 
-### Sessions — interactive, and portable
+### Sessions
 
-Start an agent, watch it work, jump in to steer, stop, or approve. Then leave
-your desk and keep going:
+Start an agent, watch it work, steer it, stop it, or approve a tool call. You can
+leave your desk and keep the Session open:
 
 ```bash
 bivy run claude              # or codex, pi, gemini, and a dozen more
 bivy open                    # continue the same session in the browser or PWA
 bivy resume                  # pick it back up in the terminal
 bivy run claude --no-follow  # start it in the background instead of attaching
-bivy run claude --chat       # start the governed app session and open it in the browser
+bivy run claude --chat       # start a chat session and open it in the browser
 ```
 
-- **Reconnect from anywhere** — phone, browser, or another terminal — to the
-  same live Session. The PWA adds voice input, read-aloud, phone-to-agent
-  file/image uploads, and agent-to-phone attachments.
-- **Move work without starting over.** Import existing Claude Code and Codex
-  Sessions, or fork, copy, and move a Bivy Session to another agent, model, or
-  Machine.
-- **Run more than one Machine** — a workstation, a private-network server, a GPU
-  box — on one account, and pick the environment each Session needs.
+- Reconnect to the same Session from a phone, browser, or terminal.
+- Upload files and images from your phone, or download files the agent creates.
+- Import existing Claude Code and Codex Sessions.
+- Fork or move a Session to another agent, model, or Machine.
+- Connect several Machines, such as a workstation, server, or GPU box.
 
-### Runs — unattended, and accountable
+### Runs
 
-Queue one on demand, or let an event kick it off — either way it returns
-immediately and reports back:
+A Run is a Session started as a background job. Start one yourself or trigger it
+from another service; Bivy queues it and returns immediately:
 
 ```bash
 bivy runs start "..."    # queue a one-off unattended Run, then `bivy runs wait <id>`
-bivy automation init     # or define governed jobs in .bivy/automations.yaml
+bivy automation init     # define jobs in .bivy/automations.yaml
 ```
 
-- **Trigger from real events** — a failed CI job, a GitHub or Linear issue,
-  Slack, a schedule, or a signed webhook.
-- **Pin the guardrails** — Machine, agent, model, sandbox, approval mode, and a
-  hard attempt ceiling — right next to the job.
-- **Get a Receipt** — every Run reports the checks it ran and how it turned out,
-  not just a wall of output.
+- Trigger Runs from GitHub, Linear, Slack, a schedule, CI, or a signed webhook.
+- Choose the Machine, agent, model, sandbox, approval mode, and retry limit.
+- Review the changed files, checks, and final result in a Receipt.
 
-Try the [capability recipes](docs/capability-recipes.md) to see each of these
-end to end, or the [runtime support matrix](docs/runtime-support-matrix.md) for
-exactly what each agent supports.
+See the [capability recipes](docs/capability-recipes.md) for examples and the
+[runtime support matrix](docs/runtime-support-matrix.md) for per-agent support.
 
-## Bring your own stack
+## Bring your own agents and models
 
-Use provider subscriptions through native agent logins, API keys stored in
-Bivy's vault, or local / OpenAI-compatible inference. Claude Code, Codex, and Pi
-have first-class SDK integrations; any other ACP or headless agent needs no
-adapter at all — it's a data row you add with one command:
+Use your existing agent login, an API key in Bivy's vault, or a local
+OpenAI-compatible server. Claude Code, Codex, Pi, and OpenCode have release-tested
+integrations. Other agents run through ACP or a headless process adapter. Add
+your own with:
 
 ```bash
 bivy agent add       # register an existing ACP or process agent
@@ -115,27 +113,25 @@ bivy agent add       # register an existing ACP or process agent
 curl -fsSL https://bivy.sh/install.sh | bash
 ```
 
-macOS and Linux. Requires Node.js 20 or newer. The installer puts the
-[`@bivy/bivy`](https://www.npmjs.com/package/@bivy/bivy) npm package and the
-`bivy` command on your `PATH` with optional bridges skipped for speed, then runs
-`bivy setup` — agent choice, selected-agent install if needed, remote access,
-and an auto-start background service (launchd on macOS, systemd on Linux).
+Bivy supports macOS and Linux and requires Node.js 20 or newer. The installer
+adds the [`@bivy/bivy`](https://www.npmjs.com/package/@bivy/bivy) package and
+`bivy` command, then runs `bivy setup`. Setup asks which agent to use, installs
+it if needed, configures remote access, and starts a launchd or systemd service.
 
-If Claude Code, Codex, OpenCode, Gemini, or another agent is already installed,
-setup says so and uses that existing CLI, login, and configuration. Bivy does
-not replace the agent or copy its native credentials; it adds remote continuity
-and governance around the agent you already use. Re-running the installer on a
-machine that already has Bivy just applies the latest build and restarts the
-service.
+If an agent is already installed, Bivy uses its existing command, login, and
+configuration. Re-running the installer updates Bivy and restarts the service.
 
-**What needs an account, and what doesn't.** The CLI alone — `bivy run`,
-`bivy resume`, `bivy sessions` — needs no account and no server; `bivy setup`
-lets you pick **local only for now** and skip remote access. A browser or phone
-UI needs a control plane, because the node hosts none: use the hosted one at
-`app.bivy.sh` (sign in with GitHub or email; free tier plus a paid plan — see
-[bivy.sh#pricing](https://bivy.sh#pricing)) or
-[self-host your own](docs/self-host-quickstart.md). Switch any time with
+**Local and remote use.** `bivy run`, `bivy resume`, and `bivy sessions` work
+without an account or server. During setup, choose **local only for now** to skip
+remote access. The browser and phone apps need a control plane: use
+[app.bivy.sh](https://app.bivy.sh) or
+[self-host one](docs/self-host-quickstart.md). You can switch later with
 `bivy relay:setup`.
+
+Bivy Cloud's Free plan includes 10 new remote Sessions per rolling 7 days and a
+limited number of Bivy-hosted trial Sessions. Cloud adds unlimited remote
+Sessions and hosted automations. Self-hosted Core has no usage limits. See
+[bivy.sh#pricing](https://bivy.sh#pricing).
 
 Prefer to inspect the installer first?
 
@@ -145,8 +141,7 @@ less install.sh
 bash install.sh
 ```
 
-**What the installer does with sudo.** It escalates only when it must, and
-tells you when it does:
+**When the installer uses sudo:**
 
 - Debian/Ubuntu without a suitable Node.js: `sudo apt-get install curl
   ca-certificates`, then NodeSource's Node 22 setup script via `sudo`.
@@ -170,9 +165,7 @@ origin with `npm audit signatures`. See [`docs/releasing.md`](docs/releasing.md)
 
 ### Your first session
 
-Once `bivy setup` finishes, use Bivy from inside an existing repo. The first win
-is simple: start the local agent, give it a real task in that environment, then
-reopen the same Session from another surface.
+After setup, start Bivy inside an existing repo:
 
 ```bash
 cd your-repo
@@ -216,9 +209,8 @@ management, and uninstall.
 bivy update
 ```
 
-`bivy update` detects how Bivy was installed and does the right thing, then
-waits for any active session to finish its current turn and restarts the
-background service so the node reconnects on the new build:
+`bivy update` uses the same install method you used originally. It waits for an
+active turn to finish, updates Bivy, and restarts the background service:
 
 | Install kind | What `bivy update` does |
 |---|---|
@@ -238,12 +230,12 @@ bivy update --stable    # move back to production (latest)
 bivy update --force     # don't wait for an in-flight turn to finish
 ```
 
-The daemon also checks the registry periodically and posts an in-session notice
-when a newer build is available.
+The daemon checks for new releases and posts an update notice in the Session.
 
 ## Architecture
 
-Bivy has three parts. **Only the first one holds your data.**
+Bivy has three parts. For normal interactive Sessions, code, credentials, and
+transcripts stay on the node.
 
 ```text
   your machine                     hosted or self-hosted
@@ -266,24 +258,26 @@ Bivy has three parts. **Only the first one holds your data.**
 - **Control plane** — holds your account, node registry, and session index, and
   serves the web/PWA client. Use the hosted one or run your own.
 
-Because the node serves no UI, a browser or phone needs a control plane — hosted
-at `app.bivy.sh`, or one you deploy yourself. The terminal CLI needs neither.
-Interactive Session traffic is end-to-end encrypted between a Machine and its
-paired devices: the relay never sees plaintext and cannot decrypt it. Who can
-*authorize* a device depends on how you pair — with a QR / `bivy link` pairing,
-or on a self-hosted deployment, the control plane can't read your Sessions
-either; with hosted account sign-in you trust the control plane to authorize
-devices and to serve the web app that holds the keys. See
-[known limitations](docs/security-model.md#known-limitations-for-0x).
+The node has no web UI. The browser and phone apps come from `app.bivy.sh` or
+your own control plane; the terminal CLI needs neither. Session traffic is
+end-to-end encrypted between the node and paired devices, so the relay cannot
+read it.
+
+QR pairing with `bivy link` lets the node authorize the device directly. Hosted
+account pairing trusts the control plane to authorize devices and serve the web
+app that holds the keys. Read the
+[known limitations](docs/security-model.md#known-limitations-for-0x) before using
+Bivy with sensitive work.
 
 See [`docs/remote-access.md`](docs/remote-access.md) and
 [`docs/security-model.md`](docs/security-model.md).
 
 ## Supported agents
 
-**Bivy maintains wrappers for the popular coding agents below.** Claude Code,
-Codex, Pi, and OpenCode have the richest release-tested capability sets today;
-capabilities and fidelity still vary by runtime.
+**Claude Code, Codex, Pi, and OpenCode are the release-tested paths.** The other
+adapters are maintained, but their features vary. Check the
+[runtime support matrix](docs/runtime-support-matrix.md) for resume, models,
+approvals, sandboxing, and test status.
 
 | Agent | Command | Notes |
 |---|---|---|
@@ -307,20 +301,14 @@ capabilities and fidelity still vary by runtime.
 | Kilo Code | `bivy run kilocode` | ACP-capable |
 | Rovo Dev | `bivy run rovodev` | Installed out of band |
 
-Also defined but hidden from the picker as *Experimental* — runnable via
-`BIVY_RUNTIME=<id>`: Codebuff (`codebuff`, no verified headless mode upstream
-yet), Hermes (`hermes`, generic process adapter), and OpenClaw (`openclaw`,
-CLI adapter only, no resume yet).
+Codebuff, Hermes, and OpenClaw are experimental and hidden from the picker.
+Run them with `BIVY_RUNTIME=<id>`.
 
-Any other command works via `bivy run -- ./your-agent --flags`. ACP-capable
-agents can be promoted to Bivy's governed protocol path for per-tool approvals
-and native resume. To add a reusable process or ACP agent to both the CLI and web
-picker without changing Bivy, run `bivy agent add`, or scaffold and install a
-declarative [plugin manifest](docs/plugins.md) with `bivy plugin init`
-(declarative plugins are Experimental, `v1alpha1`, and run out of process).
+Run any command with `bivy run -- ./your-agent --flags`. For a reusable entry in
+the CLI and web picker, use `bivy agent add`. You can also create an experimental
+`v1alpha1` [plugin manifest](docs/plugins.md) with `bivy plugin init`.
 
-[`docs/runtime-support-matrix.md`](docs/runtime-support-matrix.md) lists exactly
-what each agent supports — resume, model selection, approvals, sandboxing.
+See the [runtime support matrix](docs/runtime-support-matrix.md) for details.
 
 ## Common commands
 
@@ -352,8 +340,7 @@ BIVY_SANDBOX=read-only          # read-only | workspace-write (default) | danger
 BIVY_APPROVAL_MODE=risky        # never | risky | always | autonomous (default)
 ```
 
-Create and inspect the typed node configuration, or add repository-owned
-safety/check/retry policy:
+Manage node settings or add repo-specific checks and safety rules:
 
 ```bash
 bivy config init
@@ -368,19 +355,18 @@ variable and precedence rule lives in
 
 ## Approvals and sandboxing
 
-The default approval mode is **`autonomous`**: agents act without per-action
-prompts. How much that actually protects you depends on the runtime. Native-sandbox
-agents enforce the chosen access tier; structured runtimes also pass tool calls
-through Bivy's policy and approval layer. Process agents that Bivy cannot
-intercept run with your OS user permissions — the picker flags this and requires
-confirmation before you pick that path.
+The default approval mode is **`autonomous`**, so most actions do not prompt.
+Protection depends on the agent. Some agents enforce Bivy's sandbox setting;
+others expose tool calls that Bivy can approve or deny. A process agent that
+Bivy cannot intercept runs with your user permissions. The picker shows which
+case applies and asks for confirmation on unprotected paths.
 
-Where Bivy receives structured shell/file calls, a heuristic floor blocks known
-catastrophic commands and structured writes outside the workspace, and a
-backstop set (force-push, publish, deploy, sudo) pauses for a human. This catches
-accidents; **it is not an adversarial isolation boundary.**
+For tool calls it can see, Bivy blocks destructive system commands and writes
+outside the workspace. It asks before force pushes, publishing, deployments,
+and `sudo`. These checks help prevent accidents. **They are not a security
+sandbox.**
 
-Want to be asked about more? Set the mode explicitly:
+To see more prompts, change the approval mode:
 
 ```bash
 BIVY_APPROVAL_MODE=risky    # prompt on risky shell commands and file edits
@@ -390,12 +376,11 @@ BIVY_APPROVAL_MODE=never    # no prompts; structured-tool heuristic blocks still
 
 Approve from the terminal, browser, or phone.
 
-Sandbox tiers (`read-only`, `workspace-write`, `danger-full-access`) are enforced
-natively by agents that support them — Codex, Claude Code, Gemini CLI, Qwen Code.
-Agents without a native sandbox may expose structured tool or MCP controls, but
-those don't cover activity the agent performs outside those channels; some
-process adapters run entirely with your user permissions. Check the picker's
-Protection label. **Bivy does not currently ship its own OS-level jail.**
+Codex, Claude Code, Gemini CLI, and Qwen Code enforce the `read-only`,
+`workspace-write`, and `danger-full-access` tiers themselves. Other agents may
+run with your full user permissions even when Bivy can inspect some tool calls.
+Check the Protection label in the picker. **Bivy does not provide an OS-level
+sandbox.**
 
 ## Credentials
 
@@ -409,20 +394,19 @@ bivy secrets ref github.repo-token op://Bivy/GitHub/repo-token
 bivy secrets doctor
 ```
 
-`secret://`, `env://`, and `op://` (1Password) references resolve on demand when
-the daemon provisions an agent run, so raw values never sit in your config.
+`secret://`, `env://`, and `op://` (1Password) references are resolved only when
+an agent needs them, so the raw values do not appear in config files.
 
-**One deliberate exception to relay blindness:** if you explicitly enable hosted
-unattended provisioning, Bivy Cloud may store encrypted cloud, repository,
-model, or key-escrow material that the service can technically access. Treat this
-as an explicit hosted-custody mode. See the
+Hosted unattended provisioning is different from normal interactive Sessions.
+If you enable it, Bivy Cloud may hold encrypted cloud, repository, model, or
+key-escrow data that the service can access. See the
 [security model](docs/security-model.md#what-the-control-plane-sees) and
-[`docs/key-management.md`](docs/key-management.md).
+[key-management guide](docs/key-management.md).
 
 ## Automations as code
 
-Define governed jobs in `.bivy/automations.yaml`, validate them, and simulate
-trigger events locally before applying anything:
+Define jobs in `.bivy/automations.yaml`, validate them, and test trigger events
+locally:
 
 ```bash
 bivy automation init
@@ -431,19 +415,18 @@ bivy automation test --event .bivy/events/failed-ci.yaml
 bivy automation apply
 ```
 
-Instructions are encrypted on the applying node before upload. Safety policy
-lives beside the job — sandbox, approval mode, and a hard attempt ceiling that
-retry/fallback rules cannot exceed. See
+Bivy encrypts instructions on the node before upload. Each job records its
+sandbox, approval mode, and maximum number of attempts. See
 [`docs/automations-as-code.md`](docs/automations-as-code.md).
 
 ## GitHub Runs
 
 Label an issue `bivy` (or `bivy/<machine>` to target a Machine), or mention the
 Bivy GitHub App in a comment. Bivy creates a Run on the selected Machine, uses an
-isolated worktree, executes configured checks, and reports an explicit outcome.
+isolated worktree, runs the configured checks, and posts the result.
 
-Core applies no commercial usage limits. Bivy Cloud billing and commercial
-policy live in the separate Cloud repository.
+Core has no usage limits. Hosted pricing is managed in the separate Cloud
+repository.
 
 A private GitHub App only installs on the account that owns it, so connect one
 app per GitHub account — one for your personal repos, one per organization
