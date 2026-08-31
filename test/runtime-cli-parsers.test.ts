@@ -59,6 +59,22 @@ async function main() {
     assert.equal((msgs[1] as any).content[0].type, "tool_result");
   });
 
+  await check("bivyProtocol: correlates tool results that omit ids", () => {
+    const p = bivyProtocolParser();
+    feed(p, [
+      JSON.stringify({ type: "tool.call", name: "bash", input: { command: "pwd" } }),
+      JSON.stringify({ type: "tool.result", name: "bash", result: "workspace" }),
+      JSON.stringify({ type: "session.done" }),
+    ]);
+    const messages = p.messages();
+    assert.equal(messages.length, 2);
+    const call = (messages[0] as any).content[0];
+    const result = (messages[1] as any).content[0];
+    assert.equal(call.type, "tool_use");
+    assert.ok(call.id);
+    assert.equal(result.tool_use_id, call.id);
+  });
+
   await check("bivyProtocol: close without session.done still finalizes once", () => {
     const p = bivyProtocolParser();
     const events = feed(p, [JSON.stringify({ type: "message.delta", text: "hi" })]);

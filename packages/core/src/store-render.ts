@@ -174,7 +174,8 @@ export function toolEntriesFromContent(content: any): ToolActivity[] {
 
 function toolEntryFromToolResultMessage(msg: any): ToolActivity | null {
   const callId = String(msg?.toolCallId || msg?.toolUseId || msg?.tool_use_id || msg?.id || "");
-  if (!callId) return null;
+  // Some providers omit ids from result envelopes. Keep the anonymous result
+  // so mergeToolInto can correlate it with the newest open call.
   return {
     callId,
     name: String(msg?.toolName || msg?.name || "tool").toLowerCase(),
@@ -372,7 +373,13 @@ function mergeToolInput(prev: unknown, next: unknown): unknown {
 }
 
 export function mergeToolInto(entries: TranscriptEntry[], tool: ToolActivity): void {
-  const existing = tool.callId ? entries.find((e) => e.tool && e.tool.callId === tool.callId) : undefined;
+  // A few CLIs omit the call id on result events. Pair an anonymous result with
+  // the newest still-running call of the same tool (or, when the tool name is
+  // the generic fallback, the newest running call). This keeps the universal
+  // transcript useful without teaching the daemon about another agent format.
+  const existing = tool.callId
+    ? entries.find((e) => e.tool && e.tool.callId === tool.callId)
+    : [...entries].reverse().find((e) => e.tool && e.tool.status === "running" && (tool.name === "tool" || e.tool.name === tool.name));
   if (existing && existing.tool) {
     existing.tool = {
       ...existing.tool,
@@ -385,6 +392,9 @@ export function mergeToolInto(entries: TranscriptEntry[], tool: ToolActivity): v
       // the row label for any tool the node couldn't classify into `detail`.
       // A later enriching update (e.g. opencode's late `rawInput`) still wins
       // per-key. On completion (`done`) the input is frozen as-is.
+      // Results commonly carry the placeholder name "tool" and no input;
+      // preserve the call's identity and display metadata in that case.
+      name: tool.status === "done" && tool.name === "tool" ? existing.tool.name : tool.name,
       input: tool.status === "running" ? mergeToolInput(existing.tool.input, tool.input) : existing.tool.input,
     };
   } else {

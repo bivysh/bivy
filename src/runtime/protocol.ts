@@ -329,6 +329,24 @@ class ProtocolSession implements RuntimeSession {
   // toolCallId -> the node's normalized classification, so a later tool.result
   // (or tool.update) can attach/refresh `detail` on the already-pushed block.
   private toolDetailsByCallId = new Map<string, ReturnType<typeof mapToolCall>>();
+  private openToolIds: string[] = [];
+  private anonymousToolId = 0;
+
+  /** Protocol is intentionally agent-neutral: if an upstream omits ids, give
+   * the exchange a local identity so live and persisted views can still pair it. */
+  private resolveToolId(raw: string, result = false): string {
+    if (raw) {
+      if (result) {
+        const index = this.openToolIds.indexOf(raw);
+        if (index >= 0) this.openToolIds.splice(index, 1);
+      }
+      return raw;
+    }
+    if (result) return this.openToolIds.shift() || `protocol-tool-result-${++this.anonymousToolId}`;
+    const id = `protocol-tool-${++this.anonymousToolId}`;
+    this.openToolIds.push(id);
+    return id;
+  }
 
   constructor(
     private readonly runtimeOptions: ProtocolRuntimeOptions,
@@ -788,6 +806,7 @@ class ProtocolSession implements RuntimeSession {
       this.turnTextFlushed = "";
       this.turnToolResults = [];
       this.toolDetailsByCallId.clear();
+      this.openToolIds = [];
       this.emit({ type: "agent_end" });
       return;
     }
@@ -798,12 +817,13 @@ class ProtocolSession implements RuntimeSession {
       this.turnTextFlushed = "";
       this.turnToolResults = [];
       this.toolDetailsByCallId.clear();
+      this.openToolIds = [];
       this.emit({ type: "session.error", error: String(msg.error || "Protocol agent error") });
       this.emit({ type: "agent_end" });
       return;
     }
     if (type === "tool.call" || type === "tool.observe") {
-      const toolCallId = String(msg.toolCallId || msg.id || "");
+      const toolCallId = this.resolveToolId(String(msg.toolCallId || msg.id || ""));
       const toolName = String(msg.name || "tool");
       const detail = mapToolCall(toolName, msg.input, { provider: this.runtimeOptions.id || "acp", protocol: "protocol" });
       if (detail) this.toolDetailsByCallId.set(toolCallId, detail);
@@ -859,7 +879,7 @@ class ProtocolSession implements RuntimeSession {
       return;
     }
     if (type === "tool.result") {
-      const toolCallId = String(msg.toolCallId || msg.tool_use_id || msg.id || "");
+      const toolCallId = this.resolveToolId(String(msg.toolCallId || msg.tool_use_id || msg.id || ""), true);
       const result = msg.result ?? msg.output ?? msg.content ?? msg.text ?? msg.summary ?? "";
       const isError = Boolean(msg.isError || msg.is_error);
       this.turnToolResults.push({
