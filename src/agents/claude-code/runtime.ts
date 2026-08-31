@@ -577,11 +577,18 @@ function findClaudeTranscript(sessionId: string): string | undefined {
       const projectsRoot = fs.realpathSync(path.resolve(projects));
       for (const project of fs.readdirSync(projectsRoot, { withFileTypes: true })) {
         if (!project.isDirectory()) continue;
-        const projectRoot = fs.realpathSync(path.resolve(projectsRoot, project.name));
-        if (!projectRoot.startsWith(`${projectsRoot}${path.sep}`)) continue;
-        const candidate = fs.realpathSync(path.resolve(projectRoot, fileName));
-        if (!candidate.startsWith(`${projectRoot}${path.sep}`)) continue;
-        if (path.basename(candidate) === fileName) return candidate;
+        try {
+          const projectRoot = fs.realpathSync(path.resolve(projectsRoot, project.name));
+          if (!projectRoot.startsWith(`${projectsRoot}${path.sep}`)) continue;
+          // Most project directories do not contain this session. Resolve each
+          // candidate independently: a missing file in the first project must
+          // not abort the whole store scan and hide a transcript in a later one.
+          const candidate = fs.realpathSync(path.resolve(projectRoot, fileName));
+          if (!candidate.startsWith(`${projectRoot}${path.sep}`)) continue;
+          if (path.basename(candidate) === fileName) return candidate;
+        } catch {
+          continue;
+        }
       }
     } catch {
       // ignore missing/unreadable Claude stores

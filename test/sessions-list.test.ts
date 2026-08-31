@@ -1,6 +1,6 @@
 import assert from "node:assert";
 // Pure list-sizing logic for `bivy sessions` / `bivy ls` (bin/sessions-list.mjs).
-import { resolveSessionsLimit, truncateSavedSessions } from "../bin/sessions-list.mjs";
+import { nativeResumeRef, resolveSessionsLimit, truncateSavedSessions } from "../bin/sessions-list.mjs";
 
 function run() {
   // --- resolveSessionsLimit -------------------------------------------------
@@ -39,6 +39,11 @@ function run() {
 
   // Empty input is safe.
   assert.deepEqual(truncateSavedSessions([], resolveSessionsLimit("")), [], "empty list stays empty");
+
+  // Native resume must prefer the provider ref over Bivy's canonical id. A
+  // forked/imported Codex chat commonly has both, and Codex only knows the ref.
+  assert.equal(nativeResumeRef({ id: "bivy-id", ref: "codex-rollout-id" }), "codex-rollout-id");
+  assert.equal(nativeResumeRef({ id: "same-id" }), "same-id", "legacy rows fall back to their canonical id");
 
   console.log("sessions-list: all tests passed");
 }

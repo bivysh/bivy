@@ -18,6 +18,7 @@ import { invalidatePiCommandProbe, piAgentDir, piCommandAvailable, piIntegration
 import { deleteCodexSession, loadCodexTranscript } from "./codex-sessions.js";
 import { deleteOpenCodeSession, exportOpenCodeSession, importOpenCodeSession, loadOpenCodeTranscript, writeOpenCodeHistory } from "./opencode-sessions.js";
 import { discoverNativeGrokSessions, listGrokSessions, loadGrokTranscript } from "./grok-sessions.js";
+import { discoverNativeGeminiFamilySessions, listGeminiFamilySessions, loadGeminiFamilyTranscript, type GeminiFamilyAgent } from "./gemini-sessions.js";
 import { createCredentialStore } from "./credentials.js";
 import { AgentRegistry } from "../agents/registry.js";
 import { applyCertification } from "../certification/index.js";
@@ -1293,7 +1294,11 @@ function makeCliRuntime(id: string, options: RuntimeFactoryOptions, spec: AgentP
         : resumeTemplate
           ? {
               resumable: true,
-              loadHistory: spec.resume?.historyLoader === "grok" ? loadGrokTranscript : undefined,
+              loadHistory: spec.resume?.historyLoader === "grok"
+                ? loadGrokTranscript
+                : spec.resume?.historyLoader === "gemini" || spec.resume?.historyLoader === "qwen"
+                  ? (sessionId: string) => loadGeminiFamilyTranscript(spec.resume!.historyLoader as GeminiFamilyAgent, sessionId)
+                  : undefined,
               // `{sandbox}` expands to that agent's native containment flags for
               // the tier (e.g. Gemini/Qwen's `--approval-mode <mode>`) — a whole
               // token, not a string substitution, since it can be multiple argv
@@ -1316,15 +1321,16 @@ function makeCliRuntime(id: string, options: RuntimeFactoryOptions, spec: AgentP
                 ),
             }
           : {};
-      // Grok-specific: on-disk session enumeration + interactive TUI hand-off so
-      // `bivy run grok` sessions persist after the PTY exits and can be taken
-      // over as chat or reopened in the native TUI.
-      const nativeSessionOpts =
-        behaviors?.nativeSessions === "grok"
-          ? {
-              sessionDiscovery: true,
-              listDiskSessions: () =>
-                listGrokSessions().map((s) => ({
+      // Profile-selected native session enumeration + interactive TUI hand-off.
+      // Store readers keep terminal-originated sessions resumable and let the
+      // generic ProcessRuntime preload their transcript during chat takeover.
+      const nativeSessionBehavior = behaviors?.nativeSessions;
+      const nativeSessionOpts = nativeSessionBehavior
+        ? {
+            sessionDiscovery: true,
+            listDiskSessions: () => {
+              if (nativeSessionBehavior === "grok") {
+                return listGrokSessions().map((s) => ({
                   id: s.id,
                   path: s.dir,
                   cwd: s.cwd,
@@ -1332,13 +1338,22 @@ function makeCliRuntime(id: string, options: RuntimeFactoryOptions, spec: AgentP
                   created: s.createdAt ? new Date(s.createdAt).toISOString() : undefined,
                   modified: s.updatedAt ? new Date(s.updatedAt).toISOString() : undefined,
                   firstMessage: s.firstMessage,
-                })),
-              interactiveTui: ({ sessionRef, env }: { sessionRef?: string; cwd: string; env: Record<string, string> }) =>
-                sessionRef ? { command: "grok", args: ["--resume", sessionRef], env } : null,
-              // discoverNativeSessions is on AgentRuntime; ProcessRuntime doesn't
-              // expose it as an option — wire via a thin subclass below when needed.
-            }
-          : {};
+                }));
+              }
+              return listGeminiFamilySessions(nativeSessionBehavior).map((s) => ({
+                id: s.id,
+                path: s.id,
+                cwd: s.cwd,
+                name: s.firstMessage,
+                created: s.createdAt ? new Date(s.createdAt).toISOString() : undefined,
+                modified: s.updatedAt ? new Date(s.updatedAt).toISOString() : undefined,
+                firstMessage: s.firstMessage,
+              }));
+            },
+            interactiveTui: ({ sessionRef, env }: { sessionRef?: string; cwd: string; env: Record<string, string> }) =>
+              sessionRef ? { command: spec.command, args: ["--resume", sessionRef], env } : null,
+          }
+        : {};
       const runtime = new ProcessRuntime({
         id,
         displayName: spec.displayName,
@@ -1356,10 +1371,12 @@ function makeCliRuntime(id: string, options: RuntimeFactoryOptions, spec: AgentP
         ...resumeOpts,
         ...nativeSessionOpts,
       });
-      if (behaviors?.nativeSessions === "grok") {
+      if (nativeSessionBehavior) {
         // Issue #156 discovery surface — ProcessRuntime has no options hook for
-        // this; attach it so collectDiscoveredSessions picks Grok sessions up.
-        (runtime as AgentRuntime).discoverNativeSessions = () => discoverNativeGrokSessions();
+        // this; attach the profile's native store reader to the generic runtime.
+        (runtime as AgentRuntime).discoverNativeSessions = () => nativeSessionBehavior === "grok"
+          ? discoverNativeGrokSessions()
+          : discoverNativeGeminiFamilySessions(nativeSessionBehavior);
       }
       return runtime;
 }

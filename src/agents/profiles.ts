@@ -18,7 +18,7 @@ export type AgentProfileBehaviors = {
   prepare?: "grok-auth";
   slashCommands?: "codex" | "opencode";
   sessionStore?: "codex" | "opencode";
-  nativeSessions?: "grok";
+  nativeSessions?: "grok" | "gemini" | "qwen";
 };
 
 export type AgentProfileId =
@@ -103,7 +103,7 @@ export type AgentProfile = {
     /** Optional fresh-launch recipe containing `{id}` for agents that accept a
      * caller-assigned conversation id. Subsequent turns use `template`. */
     newTemplate?: string[];
-    historyLoader?: "grok";
+    historyLoader?: "grok" | "gemini" | "qwen";
   };
   /**
    * Model selection, the data-driven way. `flag` is the CLI's model option (its
@@ -325,6 +325,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
   },
   gemini: {
     displayName: "Gemini CLI",
+    behaviors: { nativeSessions: "gemini" },
     command: "gemini",
     packageName: "@google/gemini-cli",
     supportTier: "supported",
@@ -357,7 +358,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     // most recent or index number (e.g. --resume 5)`, per `gemini --help`; a
     // session UUID also works). `{sandbox}` re-derives --approval-mode from the
     // tier so a resumed turn stays as contained as a fresh one.
-    resume: { template: ["-o", "json", "{sandbox}", "-r", "{id}", "-p"] },
+    resume: { template: ["-o", "json", "{sandbox}", "-r", "{id}", "-p"], historyLoader: "gemini" },
     // Gemini CLI speaks ACP (`--experimental-acp`), so it can be driven through the
     // governed ProtocolRuntime instead of the one-shot pipe — per-tool approvals +
     // streaming + resume. Opt in with BIVY_GEMINI_ACP=1 (or global BIVY_PREFER_ACP=1);
@@ -368,6 +369,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
   },
   qwen: {
     displayName: "Qwen Code",
+    behaviors: { nativeSessions: "qwen" },
     command: "qwen",
     packageName: "@qwen-code/qwen-code",
     supportTier: "supported",
@@ -397,7 +399,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     },
     // Gemini-CLI fork: same `--resume <id>` headless resume form (Qwen Code docs,
     // "Headless Mode"). `{sandbox}` re-derives --approval-mode from the tier.
-    resume: { template: ["--output-format", "json", "{sandbox}", "--resume", "{id}", "-p"] },
+    resume: { template: ["--output-format", "json", "{sandbox}", "--resume", "{id}", "-p"], historyLoader: "qwen" },
     // Qwen Code inherits Gemini CLI's ACP server (packages/cli/src/acp-integration),
     // so it can be driven through the governed ProtocolRuntime instead of the pipe —
     // per-tool approvals + streaming + resume. Newer builds graduated the flag to

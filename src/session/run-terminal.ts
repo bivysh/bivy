@@ -19,6 +19,7 @@ import { provisionAgentRun } from "../runtime/credential-provisioning.js";
 import { ingestAgentCredentials } from "../runtime/credential-ingest.js";
 import { discoverCodexSessionForCwd } from "../runtime/codex-sessions.js";
 import { discoverGrokSessionForCwd } from "../runtime/grok-sessions.js";
+import { discoverGeminiFamilySessionForCwd } from "../runtime/gemini-sessions.js";
 import { discoverOpenCodeSessionForCwd } from "../runtime/opencode-sessions.js";
 import { discoverPiSessionForCwd } from "../runtime/pi-session-discovery.js";
 import { listMultiplexerSessions, attachCommand, type MultiplexerKind } from "../multiplexer.js";
@@ -126,6 +127,7 @@ const TAKEOVER_RUNTIME_BY_AGENT: Record<string, string> = {
   // Pinned at launch (`gemini --session-id <uuid>`); the gemini runtime's resume
   // template (`-r {id}`) reopens it as a governed chat.
   gemini: "gemini",
+  qwen: "qwen",
   // Discovered at exit from OpenCode's own store (discoverOpenCodeSessionForCwd);
   // the opencode runtime's resume template (`run -s {id}`) continues it.
   opencode: "opencode",
@@ -136,6 +138,7 @@ const RESUME_CLI_BY_AGENT: Record<string, (id: string) => string> = {
   codex: (id) => `codex resume ${id}`,
   grok: (id) => `grok --resume ${id}`,
   gemini: (id) => `gemini --resume ${id}`,
+  qwen: (id) => `qwen --resume ${id}`,
   opencode: (id) => `opencode --session ${id}`,
 };
 // When no resumable session id can be found, why — and what to do about it.
@@ -143,6 +146,8 @@ const TAKEOVER_EMPTY_HINT_BY_AGENT: Record<string, string> = {
   codex: "Codex writes its session only after the first message. Send one message in the terminal, then continue as chat.",
   pi: "Pi assigns its session once the conversation starts. Send one message in the terminal, then continue as chat.",
   grok: "Grok writes its session once the conversation starts. Send one message in the terminal, then continue as chat.",
+  gemini: "Gemini records its session after the conversation starts. Send one message in the terminal, then continue as chat.",
+  qwen: "Qwen records its session after the conversation starts. Send one message in the terminal, then continue as chat.",
   opencode: "OpenCode records its session as the TUI starts; if it isn't found yet, give it a moment and try again.",
 };
 
@@ -157,6 +162,8 @@ const ACTIVITY_PING_INTERVAL = 2000;
 const IDLE_NOTIFY_INTERVAL = Number(process.env.BIVY_RUN_IDLE_NOTIFY_MS) || 30_000;
 const BELL_QUIET_INPUT_MS = Number(process.env.BIVY_TERM_BELL_QUIET_MS) || 8_000;
 const BELL_NOTIFY_COOLDOWN_MS = Number(process.env.BIVY_TERM_BELL_COOLDOWN_MS) || 45_000;
+const TAKEOVER_DISCOVERY_ATTEMPTS = 10;
+const TAKEOVER_DISCOVERY_DELAY_MS = 200;
 
 export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
   const { terminals } = deps;
@@ -169,6 +176,8 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
       return match?.path || match?.id;
     },
     grok: (cwd, since) => discoverGrokSessionForCwd(cwd, since)?.id,
+    gemini: (cwd, since) => discoverGeminiFamilySessionForCwd("gemini", cwd, since)?.id,
+    qwen: (cwd, since) => discoverGeminiFamilySessionForCwd("qwen", cwd, since)?.id,
     opencode: (cwd, since) => discoverOpenCodeSessionForCwd(cwd, since)?.id,
   };
 
@@ -401,6 +410,19 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
     }
   }
 
+  async function discoverForTakeover(agent: string, workspace: string, createdAt: number): Promise<string | undefined> {
+    const discover = SESSION_DISCOVERY_BY_AGENT[agent];
+    if (!discover) return undefined;
+    for (let attempt = 0; attempt < TAKEOVER_DISCOVERY_ATTEMPTS; attempt++) {
+      const ref = await discover(workspace, createdAt);
+      if (ref) return ref;
+      if (attempt + 1 < TAKEOVER_DISCOVERY_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, TAKEOVER_DISCOVERY_DELAY_MS));
+      }
+    }
+    return undefined;
+  }
+
   async function takeoverRunTerminal(opts: { termId?: string; sessionId?: string }): Promise<{ ok: true; sessionId: string; runtimeId: string; resumeCommand?: string } | { ok: false; status: number; error: string }> {
     const runs = terminals.list((m) => m.kind === "run").filter((t) => runTerminals.has(t.id));
     const entry = opts.termId
@@ -412,20 +434,25 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
     const agent = entry.meta.agent ?? "";
     const runtimeId = TAKEOVER_RUNTIME_BY_AGENT[agent];
     if (!runtimeId) return { ok: false, status: 409, error: `"Continue as chat" isn't supported for "${agent || "this agent"}" yet.` };
-    const discovered = entry.meta.sessionId ? undefined : await SESSION_DISCOVERY_BY_AGENT[agent]?.(entry.workspace, entry.createdAt);
+    // Several CLIs assign/persist their session id asynchronously after the
+    // first turn. Give their store a short bounded window to settle instead of
+    // making an immediate takeover spuriously fail.
+    const discovered = entry.meta.sessionId ? undefined : await discoverForTakeover(agent, entry.workspace, entry.createdAt);
     const pinned = entry.meta.sessionId ?? discovered;
     if (!pinned) {
       const hint = TAKEOVER_EMPTY_HINT_BY_AGENT[agent] ?? `Start it via the shim (or \`bivy run\`), or continue it in a terminal.`;
       return { ok: false, status: 409, error: `Couldn't find a ${agent || "session"} session to continue yet. ${hint}` };
     }
     const workspace = entry.workspace;
-    // 1. Stop the native TUI (the PTY this run-terminal owns is the kill target).
+    // Prepare and validate the governed resume BEFORE stopping the native TUI.
+    // Runtime openSession paths only read/bind durable state; they do not start a
+    // second agent process until the next prompt. If preparation fails, the
+    // terminal remains live and the user loses nothing.
+    const record = await deps.createSession(workspace, pinned, { runtimeId, makeActive: true, source: "takeover" });
     terminals.close(entry.id);
     runTerminals.delete(entry.id);
     runViewers.delete(entry.id);
     deps.broadcast({ type: "terminal.closed", termId: entry.id });
-    // 2. Reopen the session as a chat on its runtime.
-    const record = await deps.createSession(workspace, pinned, { runtimeId, makeActive: true, source: "takeover" });
     const resumeCommand = RESUME_CLI_BY_AGENT[agent]?.(pinned);
     return { ok: true, sessionId: record.id, runtimeId, resumeCommand };
   }

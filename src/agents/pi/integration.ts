@@ -18,6 +18,26 @@ export function piCommand(): string {
   return process.env.BIVY_PI_COMMAND?.trim() || "pi";
 }
 
+/** List sessions written by the operator's native `pi` TUI. Governed Pi chats
+ * use Bivy's own sessions directory, while `bivy run pi` intentionally keeps
+ * Pi's native auth/config untouched and therefore writes under
+ * PI_CODING_AGENT_DIR (normally ~/.pi/agent). Takeover discovery must inspect
+ * that native store rather than only the governed one. */
+export async function listNativePiSessions(): Promise<SessionSummary[]> {
+  const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+  const sessions = await SessionManager.listAll(path.join(piAgentDir(), "sessions"));
+  return sessions.map((session) => ({
+    id: session.id,
+    path: session.path,
+    cwd: session.cwd,
+    name: session.name,
+    created: session.created,
+    modified: session.modified,
+    messageCount: session.messageCount,
+    firstMessage: session.firstMessage,
+  }));
+}
+
 const PI_COMMAND_CACHE = new Map<string, boolean>();
 
 export function piCommandAvailable(): boolean {
