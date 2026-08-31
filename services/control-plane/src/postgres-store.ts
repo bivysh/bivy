@@ -2026,7 +2026,8 @@ export class PostgresStore implements ControlPlaneStore {
     await this.query(
       `INSERT INTO model_auth_node_keys (account_id, node_id, public_key, updated_at)
        VALUES ($1, $2, $3, now())
-       ON CONFLICT (account_id, node_id) DO UPDATE SET public_key = EXCLUDED.public_key, updated_at = now()`,
+       ON CONFLICT (account_id, node_id) DO UPDATE SET public_key = EXCLUDED.public_key, updated_at = now()
+       WHERE model_auth_node_keys.public_key <> EXCLUDED.public_key`,
       [accountId, nodeId, publicKey],
     );
   }
@@ -2037,16 +2038,31 @@ export class PostgresStore implements ControlPlaneStore {
     return row ? { nodeId: row.node_id, wrappedKey: row.wrapped_key, wrappedByNodeId: row.wrapped_by_node_id, wrappedByPublicKey: row.wrapped_by_public_key, updatedAt: new Date(row.updated_at).toISOString() } : undefined;
   }
 
-  async requestModelAuthWrappedKey(accountId: string, nodeId: string, publicKey: string): Promise<void> {
+  async requestModelAuthWrappedKey(accountId: string, nodeId: string, publicKey: string): Promise<boolean> {
     await this.setModelAuthNodePublicKey(accountId, nodeId, publicKey);
     const existing = await this.getModelAuthWrappedKey(accountId, nodeId);
-    if (existing) return;
-    await this.query(
+    if (existing) return false;
+    const pending = await this.query(
+      `SELECT public_key FROM model_auth_key_requests WHERE account_id=$1 AND node_id=$2`,
+      [accountId, nodeId],
+    );
+    if (pending.rows[0]?.public_key === publicKey) return false;
+    if (pending.rows[0]) {
+      await this.query(
+        `UPDATE model_auth_key_requests SET public_key=$3, created_at=now()
+         WHERE account_id=$1 AND node_id=$2`,
+        [accountId, nodeId, publicKey],
+      );
+      return true;
+    }
+    const inserted = await this.query(
       `INSERT INTO model_auth_key_requests (account_id, node_id, public_key, created_at)
        VALUES ($1, $2, $3, now())
-       ON CONFLICT (account_id, node_id) DO UPDATE SET public_key = EXCLUDED.public_key, created_at = now()`,
+       ON CONFLICT (account_id, node_id) DO NOTHING
+       RETURNING node_id`,
       [accountId, nodeId, publicKey],
     );
+    return inserted.rows.length > 0;
   }
 
   async listModelAuthKeyRequests(accountId: string, exceptNodeId: string): Promise<ModelAuthKeyRequest[]> {
@@ -2673,9 +2689,9 @@ export class PostgresStore implements ControlPlaneStore {
     // move this exact occurrence. The unique dedupe key separately guarantees
     // that a crash after INSERT but before UPDATE cannot duplicate the run.
     const { rowCount } = await this.query(
-      `UPDATE automation_definitions SET last_scheduled_at=$4, next_run_at=$5,
-       enabled=CASE WHEN $5::text IS NULL THEN false ELSE enabled END, updated_at=now()
-       WHERE account_id=$1 AND id=$2 AND enabled=true AND next_run_at=$3`,
+      `UPDATE automation_definitions SET last_scheduled_at=$4::timestamptz, next_run_at=$5::timestamptz,
+       enabled=CASE WHEN $5::timestamptz IS NULL THEN false ELSE enabled END, updated_at=now()
+       WHERE account_id=$1 AND id=$2 AND enabled=true AND next_run_at=$3::timestamptz`,
       [accountId, definitionId, new Date(occurrenceIso), new Date(occurrenceIso), nextRunAt ? new Date(nextRunAt) : null],
     );
     return (rowCount ?? 0) > 0 ? run : undefined;

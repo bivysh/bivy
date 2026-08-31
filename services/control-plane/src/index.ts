@@ -236,7 +236,7 @@ async function notifyRelaysRunUpdated(accountId: string, run: Pick<AutomationRun
 async function notifyRelaysWorkAvailable(
   accountId: string,
   item: { id: string; label: string },
-  options: { nodeId?: string; autoProvision?: boolean } = {},
+  options: { nodeId?: string; excludeNodeId?: string; autoProvision?: boolean } = {},
 ) {
   // Best-effort push: relay-connected nodes get an immediate hint and then fetch
   // + atomically claim via /node/work. A cancellation targets only the active
@@ -246,7 +246,7 @@ async function notifyRelaysWorkAvailable(
       await fetch(`${relayHttpUrl(url).replace(/\/$/, "")}/internal/work-available`, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${process.env.RELAY_SECRET ?? "dev-relay-secret"}` },
-        body: JSON.stringify({ accountId, id: item.id, label: item.label, nodeId: options.nodeId }),
+        body: JSON.stringify({ accountId, id: item.id, label: item.label, nodeId: options.nodeId, excludeNodeId: options.excludeNodeId }),
       });
     }),
   );
@@ -1815,19 +1815,36 @@ app.post("/node/model-auth-key/public", requireNode, asyncHandler(async (req, re
   res.json({ ok: true });
 }));
 
-app.post("/node/model-auth-key/request", requireNode, asyncHandler(async (req, res) => {
+const modelAuthKeyRequestRateLimit = rateLimit({
+  windowMs: 60_000,
+  // Cold-start retries run every 2s for at most a minute. Allow that bounded
+  // recovery cadence while containing buggy or stale clients before they can
+  // recreate a control-plane/relay feedback storm.
+  limit: 40,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => (req as Request & { node?: NodeRecord }).node?.id ?? ipKeyGenerator(clientIp(req)),
+  message: { error: "Too many model-auth key requests" },
+});
+
+app.post("/node/model-auth-key/request", requireNode, modelAuthKeyRequestRateLimit, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const publicKey = String(req.body?.publicKey ?? "").trim();
   if (!publicKey) return res.status(400).json({ error: "Missing publicKey" });
-  await store.requestModelAuthWrappedKey(node.accountId, node.id, publicKey);
+  const queued = await store.requestModelAuthWrappedKey(node.accountId, node.id, publicKey);
   // Event-driven vault-key hand-off: wake the account's other (peer) nodes over
   // the relay so one of them runs a model-auth sync and answers this request now,
-  // instead of on its 30s poll. Critical for short-lived ephemeral runners. Best
-  // effort — the requester's fast-retry + fallback poll still guarantee pickup if
-  // no relay/peer is reachable. Peer-only: the CP only relays a wake signal and
-  // never sees the vault key or any credential.
-  void notifyRelaysWorkAvailable(node.accountId, { id: "model-auth", label: "model-auth" }).catch(() => {});
-  res.json({ ok: true });
+  // instead of on its 30s poll. Notify only for a new/changed request and exclude
+  // the requester: waking it creates a request → wake → request feedback loop.
+  // A credential wake is not a queued Run and must never trigger auto-provisioning.
+  if (queued) {
+    void notifyRelaysWorkAvailable(
+      node.accountId,
+      { id: "model-auth", label: "model-auth" },
+      { excludeNodeId: node.id, autoProvision: false },
+    ).catch(() => {});
+  }
+  res.json({ ok: true, queued });
 }));
 
 app.put("/node/model-auth-key/wrapped", requireNode, asyncHandler(async (req, res) => {

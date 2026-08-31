@@ -1372,7 +1372,8 @@ export interface VaultRepository {
   setModelAuthVault(accountId: string, nodeId: string, ciphertext: string, rotated?: boolean): Promise<ModelAuthVault>;
   setModelAuthNodePublicKey(accountId: string, nodeId: string, publicKey: string): Promise<void>;
   getModelAuthWrappedKey(accountId: string, nodeId: string): Promise<ModelAuthWrappedKey | undefined>;
-  requestModelAuthWrappedKey(accountId: string, nodeId: string, publicKey: string): Promise<void>;
+  /** Queue a key request. Returns true only when peers need a new wake-up. */
+  requestModelAuthWrappedKey(accountId: string, nodeId: string, publicKey: string): Promise<boolean>;
   listModelAuthKeyRequests(accountId: string, exceptNodeId: string): Promise<ModelAuthKeyRequest[]>;
   setModelAuthWrappedKey(accountId: string, targetNodeId: string, wrappedByNodeId: string, wrappedByPublicKey: string, wrappedKey: string): Promise<ModelAuthWrappedKey>;
 
