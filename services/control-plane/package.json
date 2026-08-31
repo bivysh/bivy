@@ -19,7 +19,7 @@
   "dependencies": {
     "@sentry/node": "^10.69.0",
     "@types/web-push": "^3.6.4",
-    "cron-parser": "^5.8.1",
+    "cron-parser": "^5.10.0",
     "express": "^5.2.1",
     "express-rate-limit": "^8.6.2",
     "pg": "^8.22.0",
