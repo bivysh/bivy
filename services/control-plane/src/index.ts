@@ -1812,7 +1812,19 @@ app.post("/node/model-auth-key/public", requireNode, asyncHandler(async (req, re
   res.json({ ok: true });
 }));
 
-app.post("/node/model-auth-key/request", requireNode, asyncHandler(async (req, res) => {
+const modelAuthKeyRequestRateLimit = rateLimit({
+  windowMs: 60_000,
+  // Cold-start retries run every 2s for at most a minute. Allow that bounded
+  // recovery cadence while containing buggy or stale clients before they can
+  // recreate a control-plane/relay feedback storm.
+  limit: 40,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => (req as Request & { node?: NodeRecord }).node?.id ?? ipKeyGenerator(clientIp(req)),
+  message: { error: "Too many model-auth key requests" },
+});
+
+app.post("/node/model-auth-key/request", requireNode, modelAuthKeyRequestRateLimit, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const publicKey = String(req.body?.publicKey ?? "").trim();
   if (!publicKey) return res.status(400).json({ error: "Missing publicKey" });
