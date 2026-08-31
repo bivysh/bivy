@@ -15,7 +15,11 @@ function harness(over: Partial<CredentialCommandDeps> = {}) {
   const events: any[] = [];
   const broadcasts: any[] = [];
   const calls = { pushed: 0, refreshed: 0 };
-  const credsDir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-creds-"));
+  // credentials.config.json intentionally lives beside the vault directory.
+  // Give each harness an isolated parent too; using a mkdtemp directory as the
+  // vault itself would make every test share /tmp/credentials.config.json.
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-creds-"));
+  const credsDir = path.join(dataDir, "credentials");
   const deps: CredentialCommandDeps = {
     credsDir,
     sendEvent: (e) => events.push(e),
@@ -27,7 +31,7 @@ function harness(over: Partial<CredentialCommandDeps> = {}) {
   };
   const replies: any[] = [];
   const ctx = { reply: (e: unknown) => replies.push(e) } as any;
-  return { events, broadcasts, replies, calls, credsDir, ctx, cmds: createCredentialCommands(deps), cleanup: () => fs.rmSync(credsDir, { recursive: true, force: true }) };
+  return { events, broadcasts, replies, calls, credsDir, ctx, cmds: createCredentialCommands(deps), cleanup: () => fs.rmSync(dataDir, { recursive: true, force: true }) };
 }
 
 test("registers the full credential command cluster", () => {

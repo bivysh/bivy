@@ -235,10 +235,13 @@ fi
 
 # Fail early with a clear hint if the merged compose config is invalid — the most
 # likely cause in managed mode is a Docker Compose older than v2.24 (the
-# hosted-db overlay uses the `!reset` tag).
-if ! docker compose "${COMPOSE_ARGS[@]}" --env-file deploy/.env config -q 2>/tmp/bivy-compose-config.err; then
+# hosted-db overlay uses the `!reset` tag). Use a private temporary file rather
+# than a predictable shared /tmp path, which can collide across users or runs.
+COMPOSE_CONFIG_ERROR="$(mktemp "${TMPDIR:-/tmp}/bivy-compose-config.XXXXXX")"
+trap 'rm -f "${COMPOSE_CONFIG_ERROR}"' EXIT
+if ! docker compose "${COMPOSE_ARGS[@]}" --env-file deploy/.env config -q 2>"${COMPOSE_CONFIG_ERROR}"; then
   echo "Failed to parse the Docker Compose configuration:" >&2
-  cat /tmp/bivy-compose-config.err >&2 || true
+  cat "${COMPOSE_CONFIG_ERROR}" >&2 || true
   if [[ -n "${DATABASE_URL}" ]]; then
     echo >&2
     echo "Using a managed DATABASE_URL requires Docker Compose v2.24+ (for the '!reset' tag)." >&2
