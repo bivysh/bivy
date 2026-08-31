@@ -128,10 +128,9 @@ remote access. The browser and phone apps need a control plane: use
 [self-host one](docs/self-host-quickstart.md). You can switch later with
 `bivy relay:setup`.
 
-Bivy Cloud's Free plan includes 10 new remote Sessions per rolling 7 days and a
-limited number of Bivy-hosted trial Sessions. Cloud adds unlimited remote
-Sessions and hosted automations. Self-hosted Core has no usage limits. See
-[bivy.sh#pricing](https://bivy.sh#pricing).
+Self-hosted Bivy Core is open source and has no usage limits. Bivy Cloud offers
+a managed app, relay, and hosted Machines; see
+[bivy.sh#pricing](https://bivy.sh#pricing) for details.
 
 Prefer to inspect the installer first?
 
