@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-08-31
+
+### Changed
+
+- Control-plane and relay containers now run as an unprivileged user, drop Linux
+  capabilities, prevent privilege escalation, and serve a host-scoped HSTS policy.
+- Production dependencies were refreshed, including TypeBox, Highlight.js,
+  Mermaid, PostgreSQL, Sentry, and cron-parser.
+
+### Fixed
+
+- Model-auth key requests no longer create a relay feedback loop, repeatedly
+  write unchanged requests, or inadvertently trigger hosted machine provisioning.
+- Scheduled automations now update PostgreSQL timestamp fields without parameter
+  type-inference errors that caused due runs to retry indefinitely.
+
 ## [0.15.0] - 2026-08-31
 
 ### Added
