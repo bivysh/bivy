@@ -56,6 +56,10 @@ services:
       args:
         # Optional ephemeral-machine UI, paired with the runtime flag below.
         VITE_EPHEMERAL_MACHINES_ENABLED: "${VITE_EPHEMERAL_MACHINES_ENABLED:-}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     logging: *default-logging
     mem_limit: 512m
     cpus: 1.0
@@ -108,6 +112,10 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.relay
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     logging: *default-logging
     mem_limit: 512m
     cpus: 1.0

@@ -29,23 +29,27 @@ RUN pnpm --filter @bivy/web run build
 
 # Stage 2 — the control plane service.
 FROM node:22-slim
+# npm's prestart rebuild writes generated files under /repo, so give the
+# unprivileged runtime user ownership before installing or copying source.
+RUN mkdir -p /repo && chown node:node /repo
+USER node
 # Preserve the monorepo layout so the control-plane lockfile's
 # `file:../../packages/*` links resolve exactly as they did when it was created.
 WORKDIR /repo/services/control-plane
 # automation-core compiles canonical files under /repo/src with NodeNext
 # semantics; the root module marker ensures TypeScript emits ESM for them.
-COPY package.json /repo/package.json
+COPY --chown=node:node package.json /repo/package.json
 # Linked package manifests are required while npm validates the lockfile.
-COPY packages/core/package.json /repo/packages/core/package.json
-COPY packages/automation-core/package.json /repo/packages/automation-core/package.json
-COPY services/control-plane/package.json services/control-plane/package-lock.json ./
+COPY --chown=node:node packages/core/package.json /repo/packages/core/package.json
+COPY --chown=node:node packages/automation-core/package.json /repo/packages/automation-core/package.json
+COPY --chown=node:node services/control-plane/package.json services/control-plane/package-lock.json ./
 # postinstall builds automation-core, whose source is intentionally in the next
 # layer; prestart performs that same build before the service boots.
 RUN test -f package-lock.json && npm ci --ignore-scripts
-COPY packages/core /repo/packages/core
-COPY packages/automation-core /repo/packages/automation-core
+COPY --chown=node:node packages/core /repo/packages/core
+COPY --chown=node:node packages/automation-core /repo/packages/automation-core
 # automation-core's tsconfig compiles canonical sources from ../../src/automation.
-COPY src/automation /repo/src/automation
+COPY --chown=node:node src/automation /repo/src/automation
 # Keep the local package linked to its source directory. Build and verify it now
 # that its canonical source is present; prestart rebuilds it again on boot.
 RUN rm -rf node_modules/@bivy/automation-core \
@@ -53,9 +57,9 @@ RUN rm -rf node_modules/@bivy/automation-core \
     && npm run build:automation-core \
     && node --input-type=module -e \
       "import('@bivy/automation-core').then((m) => { if (typeof m.evaluateAutomation !== 'function') process.exit(1) })"
-COPY services/control-plane/ ./
+COPY --chown=node:node services/control-plane/ ./
 # Bundle the built React client so the control plane serves it at the root.
-COPY --from=webbuild /repo/packages/web/dist ./public/react
+COPY --chown=node:node --from=webbuild /repo/packages/web/dist ./public/react
 # Pin V8's old-space ceiling below the container's docker-compose mem_limit
 # (512m — see deploy/docker-compose.yml) instead of relying on Node's cgroup
 # auto-detection, which isn't guaranteed across every Docker/cgroup version and
