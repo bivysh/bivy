@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { spawnTestService, stopTestServices } from "../../test-service-process.js";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import net from "node:net";
@@ -31,23 +32,15 @@ async function freePort(): Promise<number> {
 }
 
 const procs: ChildProcess[] = [];
-function cleanup(code: number) {
-  for (const p of procs) p.kill("SIGTERM");
-  process.exit(code);
-}
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function startControlPlane(extraEnv: Record<string, string>): Promise<number> {
+async function startControlPlane(extraEnv: Record<string, string> = {}): Promise<number> {
   const port = await freePort();
-  const child = spawn("npx", ["tsx", "src/index.ts"], {
-    cwd: cpDir,
-    env: { ...process.env, PORT: String(port), RELAY_SECRET: "test-secret-prefs", ...extraEnv },
-    stdio: "inherit",
-  });
-  child.once("error", (error) => {
-    console.error("Failed to start control plane:", error);
-    cleanup(1);
+  const child = spawnTestService(cpDir, {
+    PORT: String(port),
+    RELAY_SECRET: "test-secret-prefs",
+    ...extraEnv,
   });
   procs.push(child);
   await waitForHttp(`http://localhost:${port}/healthz`);
@@ -78,10 +71,7 @@ async function req(port: number, method: string, pathname: string, body: unknown
 }
 
 function expect(cond: boolean, msg: string) {
-  if (!cond) {
-    console.error(`✗ FAIL: ${msg}`);
-    cleanup(1);
-  }
+  if (!cond) throw new Error(`✗ FAIL: ${msg}`);
   console.log(`✓ ${msg}`);
 }
 
@@ -121,10 +111,13 @@ async function main() {
   expect(ap.session_done === false && ap.terminal_bell === false && ap.question_asked === true, "preferences persist across requests");
 
   console.log("\nAll notification-preferences checks passed.");
-  cleanup(0);
 }
 
-main().catch((error) => {
+try {
+  await main();
+} catch (error) {
   console.error(error);
-  cleanup(1);
-});
+  process.exitCode = 1;
+} finally {
+  await stopTestServices(procs);
+}

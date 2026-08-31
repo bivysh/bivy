@@ -8,9 +8,10 @@
     "dev": "tsx src/index.ts",
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
+    "test:process": "tsx test/service-process.test.ts",
     "test:e2e": "tsx test/e2e.ts",
     "test:solo": "tsx test/solo-admission.test.ts",
-    "test:unit": "npm run test:e2e && npm run test:solo"
+    "test:unit": "npm run test:process && npm run test:e2e && npm run test:solo"
   },
   "dependencies": {
     "@sentry/node": "^10.71.0",

@@ -8,7 +8,8 @@
 // (installation id → account → enqueue; unbound installations dropped), and
 // the node mint path (per-account isolation, repo scoping).
 import { createHmac, generateKeyPairSync } from "node:crypto";
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { spawnTestService, stopTestServices } from "../../test-service-process.js";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import net from "node:net";
@@ -18,16 +19,8 @@ const cpDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const procs: ChildProcess[] = [];
 const servers: http.Server[] = [];
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-function finish(code: number): never {
-  for (const proc of procs) proc.kill("SIGTERM");
-  for (const server of servers) server.close();
-  process.exit(code);
-}
 function expect(condition: boolean, message: string) {
-  if (!condition) {
-    console.error(`✗ FAIL: ${message}`);
-    finish(1);
-  }
+  if (!condition) throw new Error(`✗ FAIL: ${message}`);
   console.log(`✓ ${message}`);
 }
 async function freePort(): Promise<number> {
@@ -105,23 +98,18 @@ async function startFakeGithub(): Promise<number> {
 async function main() {
   const githubPort = await startFakeGithub();
   const port = await freePort();
-  const proc = spawn("npx", ["tsx", "src/index.ts"], {
-    cwd: cpDir,
-    env: {
-      ...process.env,
-      PORT: String(port),
-      RELAY_SECRET: "central-app-test",
-      GITHUB_API_BASE_URL: `http://localhost:${githubPort}`,
-      BIVY_CENTRAL_GITHUB_APP_ID: "555",
-      BIVY_CENTRAL_GITHUB_APP_PRIVATE_KEY: Buffer.from(pem).toString("base64"),
-      BIVY_CENTRAL_GITHUB_APP_WEBHOOK_SECRET: WEBHOOK_SECRET,
-      BIVY_CENTRAL_GITHUB_APP_SLUG: "bivy-central-test",
-      // This legacy-flow fixture signs in through dev-login and therefore has no
-      // GitHub OAuth identity proof. Dedicated store/auth tests cover the
-      // production-default installer target check.
-      BIVY_GITHUB_INSTALLER_IDENTITY_REQUIRED: "0",
-    },
-    stdio: "inherit",
+  const proc = spawnTestService(cpDir, {
+    PORT: String(port),
+    RELAY_SECRET: "central-app-test",
+    GITHUB_API_BASE_URL: `http://localhost:${githubPort}`,
+    BIVY_CENTRAL_GITHUB_APP_ID: "555",
+    BIVY_CENTRAL_GITHUB_APP_PRIVATE_KEY: Buffer.from(pem).toString("base64"),
+    BIVY_CENTRAL_GITHUB_APP_WEBHOOK_SECRET: WEBHOOK_SECRET,
+    BIVY_CENTRAL_GITHUB_APP_SLUG: "bivy-central-test",
+    // This legacy-flow fixture signs in through dev-login and therefore has no
+    // GitHub OAuth identity proof. Dedicated store/auth tests cover the
+    // production-default installer target check.
+    BIVY_GITHUB_INSTALLER_IDENTITY_REQUIRED: "0",
   });
   procs.push(proc);
   let ready = false;
@@ -221,10 +209,14 @@ async function main() {
   expect(afterUninstall.body.installations.length === 0, "the binding is gone after uninstall");
 
   console.log("central-github-webhook: all tests passed");
-  finish(0);
 }
 
-main().catch((error) => {
+try {
+  await main();
+} catch (error) {
   console.error(error);
-  finish(1);
-});
+  process.exitCode = 1;
+} finally {
+  await stopTestServices(procs);
+  await Promise.all(servers.map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
+}

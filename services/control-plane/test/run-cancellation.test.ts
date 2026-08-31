@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { spawnTestService, stopTestServices } from "../../test-service-process.js";
 import { createServer, type Server } from "node:http";
 import net from "node:net";
 import path from "node:path";
@@ -44,16 +45,11 @@ try {
   });
   await new Promise<void>((resolve) => relay!.listen(relayPort, resolve));
 
-  proc = spawn("npx", ["tsx", "src/index.ts"], {
-    cwd: cpDir,
-    env: {
-      ...process.env,
-      PORT: String(port),
-      RELAY_PUBLIC_URL: `ws://localhost:${relayPort}`,
-      RELAY_SECRET: "cancel-test",
-      AUTOMATION_SCHEDULER_INTERVAL_MS: "60000",
-    },
-    stdio: "inherit",
+  proc = spawnTestService(cpDir, {
+    PORT: String(port),
+    RELAY_PUBLIC_URL: `ws://localhost:${relayPort}`,
+    RELAY_SECRET: "cancel-test",
+    AUTOMATION_SCHEDULER_INTERVAL_MS: "60000",
   });
   for (let i = 0; i < 100; i++) {
     try { if ((await fetch(`http://localhost:${port}/healthz`)).ok) break; } catch {}
@@ -146,6 +142,6 @@ try {
   assert.match(metrics, /bivy_run_lifecycle_results_total\{outcome="cancelled"\} 1(?:\n|$)/, "only the durable cancellation transition is counted");
   console.log("✓ authenticated Run cancel/retry APIs, owner wake, fencing, conflicts, and metric");
 } finally {
-  proc?.kill("SIGTERM");
+  await stopTestServices(proc ? [proc] : []);
   if (relay) await new Promise<void>((resolve) => relay!.close(() => resolve()));
 }
