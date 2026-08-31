@@ -53,6 +53,7 @@ import { listCodexSessions, loadCodexTranscript, discoverCodexSessionForCwd } fr
 import { discoverGrokSessionForCwd } from "./runtime/grok-sessions.js";
 import { dedupeSessionSummaries } from "./session-identity.js";
 import { discoverPiSessionForCwd } from "./runtime/pi-session-discovery.js";
+import { listNativePiSessions } from "./agents/pi/integration.js";
 import type { BivySessionRecord, BivySessionStatus } from "./session/bivy-session.js";
 import { deriveSessionState, type SessionState } from "./session/session-state.js";
 import type { SessionRecord, PromptOptions, StreamingBehavior, PromptImage } from "./session/record.js";
@@ -8678,7 +8679,18 @@ const runTerms = createRunTerminals({
   listAllSessions,
   listProvidersUnified,
   pushModelAuthToControlPlane: () => pushModelAuthToControlPlane(),
-  listPiSessions: () => runtimeHost.listSessions(getRuntime("pi")),
+  listPiSessions: async () => {
+    // `bivy run pi` is an agent-owned native TUI and writes to Pi's own store;
+    // governed Pi chats write to Bivy's isolated store. Search both so a native
+    // terminal can always be correlated and taken over after its first turn.
+    const [governed, native] = await Promise.all([
+      runtimeHost.listSessions(getRuntime("pi")).catch(() => []),
+      listNativePiSessions().catch(() => []),
+    ]);
+    const byRef = new Map<string, SessionSummary>();
+    for (const session of [...governed, ...native]) byRef.set(session.path || session.id, session);
+    return [...byRef.values()];
+  },
   resolveAuthOwner: (agent) => {
     const integrationId = agent ? canonicalAgentId(agent) : undefined;
     return listRuntimes(agent).find((a) => a.id === integrationId)?.authOwner ?? "agent";
@@ -10323,7 +10335,11 @@ app.post("/api/session", async (req, res, next) => {
     persistSessionMetadata(session);
     res.json({ id: session.id, workspace: session.workspace, source: session.source, branch: session.worktree?.branch, prUrl: session.prUrl, sessionFile: session.sessionFile, name: session.session.getName(), runtimeId: session.runtimeId, agentName: getRuntime(session.runtimeId).displayName, model: publicModel(session.session.getCurrentModel(), session.session.getCurrentModel()), sessionState: sessionState(session) });
   } catch (error) {
-    res.status(400).json({ error: actionableAgentError(agentFrom(req.body ?? {}) ?? defaultRuntimeId, error) });
+    // Creating an empty session does not contact the model provider. Failures
+    // here come from workspace/repository/runtime setup (for example Git remote
+    // authentication), so classifying a generic "authentication failed" as a
+    // Claude/Codex login problem sends the user to the wrong sign-in flow.
+    res.status(400).json({ error: humanizeAgentError(error instanceof Error ? error.message : String(error)) });
   }
 });
 

@@ -34,7 +34,7 @@ import { randomBytes, createCipheriv, createDecipheriv, randomUUID, createHash, 
 import { fileURLToPath, pathToFileURL } from "node:url";
 import vm from "node:vm";
 import { selectStaleSessions, sessionActivityMs } from "./prune-sessions.mjs";
-import { resolveSessionsLimit, truncateSavedSessions } from "./sessions-list.mjs";
+import { nativeResumeRef, resolveSessionsLimit, truncateSavedSessions } from "./sessions-list.mjs";
 import { renderManagedBlock, upsertManagedBlock, removeManagedBlock, rcFileForShell } from "./shim-path.mjs";
 import { removeInstallAndState } from "./uninstall-paths.mjs";
 import { findAvailablePort, reconcilePort } from "./port-picker.mjs";
@@ -2428,7 +2428,11 @@ async function resumeSessionItem(item, config, token) {
     console.log(c.yellow(`"${item.name}" (${item.agentName || item.agent}) has no native terminal resume; open it in the web app with 'bivy open'.`));
     return;
   }
-  const resumeArgs = agentResumeArgs(agentId, item.id || item.ref);
+  // Resume with the provider's durable ref, not Bivy's canonical id. They
+  // differ for imported/forked sessions (notably Codex), and passing the Bivy id
+  // makes the native CLI report "No saved session found".
+  const resumeRef = nativeResumeRef(item);
+  const resumeArgs = agentResumeArgs(agentId, resumeRef);
   const runArgs = [agentId, ...resumeArgs];
   if (item.workspace) runArgs.push("--workspace", item.workspace); // native resume finds the session by its original cwd
   console.log(c.dim(`Resuming ${c.cyan(item.name)} with ${agentId} ${resumeArgs.join(" ")}…`));
