@@ -1178,6 +1178,7 @@ const AGENT_RESUME_ARGS = {
   codex: (id) => ["resume", id],
   grok: (id) => ["--resume", id],
   gemini: (id) => ["--resume", id],
+  qwen: (id) => ["--resume", id],
   // `opencode -s, --session  session id to continue` (TUI), per `opencode --help`.
   opencode: (id) => ["--session", id],
 };
