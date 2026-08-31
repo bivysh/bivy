@@ -10,7 +10,7 @@ import {
   claudeSdkInstalled,
 } from "./runtime.js";
 
-export const CLAUDE_TESTED_VERSION = "0.3.246";
+export const CLAUDE_TESTED_VERSION = "0.3.251";
 
 const CLAUDE_CAPABILITIES: RuntimeCapabilities = withExactCapabilitySurface({
   toolInterception: true,

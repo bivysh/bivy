@@ -6,9 +6,9 @@
 
 | Agent | Runtime id | Validated range | Platforms | Required mode | Release-tested capabilities |
 | --- | --- | --- | --- | --- | --- |
-| Claude Code | `claude-code-sdk` | `>=0.3.246 <=0.3.246` (pin `0.3.246`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
-| Codex (governed) | `codex-approvals` | `>=0.150.0 <=0.150.0` (pin `0.150.0`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
-| Pi | `pi` | `>=0.84.3 <=0.84.3` (pin `0.84.3`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
-| OpenCode ACP | `opencode` | `>=1.18.23 <=1.18.23` (pin `1.18.23`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
+| Claude Code | `claude-code-sdk` | `>=0.3.251 <=0.3.251` (pin `0.3.251`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
+| Codex (governed) | `codex-approvals` | `>=0.151.0 <=0.151.0` (pin `0.151.0`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
+| Pi | `pi` | `>=0.84.4 <=0.84.4` (pin `0.84.4`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
+| OpenCode ACP | `opencode` | `>=1.18.25 <=1.18.25` (pin `1.18.25`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
 
 Deterministic normal-CI fixtures exercise: probe-install, auth-handoff, first-turn, structured-streaming, approval, denial, cancellation, resume, attachments, token-refresh, malformed-output, version-drift. Live credentials are tested only by explicit workflow dispatch. Nightly latest-upstream checks report drift for review and never update this file or the production pins.

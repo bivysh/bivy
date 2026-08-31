@@ -8,7 +8,7 @@ import type { AgentInfo, AgentInstallCommand, AgentSessionOptions } from "../typ
 import type { AgentRuntime, OpenSessionOptions, OpenSessionResult, SessionSummary, ForkNativePayload, ForkImportContext, ForkHistoryMessage, DiscoveredNativeSession, CatalogProvider } from "../../runtime/types.js";
 import { PI_CAPABILITIES } from "./capabilities.js";
 
-export const PI_TESTED_VERSION = "0.84.3";
+export const PI_TESTED_VERSION = "0.84.4";
 
 export function piAgentDir(): string {
   return process.env.PI_CODING_AGENT_DIR?.trim() || path.join(os.homedir(), ".pi", "agent");
