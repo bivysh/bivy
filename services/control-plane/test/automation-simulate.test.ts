@@ -5,7 +5,8 @@
 // POST /account/automations/simulate endpoint (the control-plane half of the
 // PWA Test event workflow — see docs/automation-evaluator.md) and the
 // save-time preflight gate on POST/PUT /account/automations.
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { spawnTestService, stopTestServices } from "../../test-service-process.js";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import net from "node:net";
@@ -13,15 +14,8 @@ import net from "node:net";
 const cpDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const procs: ChildProcess[] = [];
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-function finish(code: number): never {
-  for (const proc of procs) proc.kill("SIGTERM");
-  process.exit(code);
-}
 function expect(condition: boolean, message: string) {
-  if (!condition) {
-    console.error(`✗ FAIL: ${message}`);
-    finish(1);
-  }
+  if (!condition) throw new Error(`✗ FAIL: ${message}`);
   console.log(`✓ ${message}`);
 }
 async function freePort(): Promise<number> {
@@ -45,11 +39,7 @@ async function json(port: number, method: string, pathname: string, body?: unkno
 }
 async function main() {
   const port = await freePort();
-  const proc = spawn("npx", ["tsx", "src/index.ts"], {
-    cwd: cpDir,
-    env: { ...process.env, PORT: String(port), RELAY_SECRET: "simulate-test" },
-    stdio: "inherit",
-  });
+  const proc = spawnTestService(cpDir, { PORT: String(port), RELAY_SECRET: "simulate-test" });
   procs.push(proc);
   let ready = false;
   for (let i = 0; i < 100; i++) {
@@ -156,10 +146,13 @@ async function main() {
   expect(new Set(concurrent.map((r) => r.body.matchedId)).size === concurrent.length, "each concurrent request matches its own draft, not another request's");
 
   console.log("\nAll automation simulate/preflight checks passed.");
-  finish(0);
 }
 
-main().catch((error) => {
+try {
+  await main();
+} catch (error) {
   console.error(error);
-  finish(1);
-});
+  process.exitCode = 1;
+} finally {
+  await stopTestServices(procs);
+}

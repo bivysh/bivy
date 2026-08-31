@@ -9,7 +9,8 @@
 // magic-link consume against the live /metrics scrape, the same pattern
 // run-idempotency.test.ts uses for Run lifecycle counters.
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { spawnTestService, stopTestServices } from "../../test-service-process.js";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -49,10 +50,10 @@ async function scrape(port: number): Promise<string> {
 let proc: ChildProcess | undefined;
 try {
   const port = await freePort();
-  proc = spawn("npx", ["tsx", "src/index.ts"], {
-    cwd: cpDir,
-    env: { ...process.env, PORT: String(port), RELAY_PUBLIC_URL: "ws://localhost:1", RELAY_SECRET: "sign-in-funnel-test" },
-    stdio: "inherit",
+  proc = spawnTestService(cpDir, {
+    PORT: String(port),
+    RELAY_PUBLIC_URL: "ws://localhost:1",
+    RELAY_SECRET: "sign-in-funnel-test",
   });
   for (let i = 0; i < 100; i++) {
     try { if ((await fetch(`http://localhost:${port}/healthz`)).ok) break; } catch {}
@@ -80,5 +81,5 @@ try {
 
   console.log("✓ sign-in funnel: failed magic-link consume and successful dev sign-in record disjoint, low-cardinality counters");
 } finally {
-  proc?.kill("SIGTERM");
+  await stopTestServices(proc ? [proc] : []);
 }
