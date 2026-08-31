@@ -1,6 +1,6 @@
 {
   "name": "@bivy/plugin-sdk",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "description": "Types, validation, JSON Schema, and diagnostics for declarative Bivy plugins.",
   "type": "module",
   "license": "AGPL-3.0-only",
