@@ -59,6 +59,14 @@ await test("hosted recipients apply authoritative removals and never republish",
   assert.match(source, /modelAuthFetch\("\/node\/model-auth-hosted-vault"\)/, "hosted custody uses its versioned endpoint");
 });
 
+await test("model-auth key requests wake peers once without provisioning or self-notification", async () => {
+  const controlPlane = fs.readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
+  const relay = fs.readFileSync(new URL("../../relay/src/index.ts", import.meta.url), "utf8");
+  assert.match(controlPlane, /const queued = await store\.requestModelAuthWrappedKey/);
+  assert.match(controlPlane, /if \(queued\)[\s\S]*excludeNodeId: node\.id, autoProvision: false/);
+  assert.match(relay, /roomNodeId !== excludeNodeId/);
+});
+
 await test("legacy key-only writes cannot overwrite an active filtered snapshot", async () => {
   const source = fs.readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
   assert.match(source, /if \(await store\.getHostedModelAuthVault\(node\.accountId\)\) \{\s*return res\.status\(409\)/);

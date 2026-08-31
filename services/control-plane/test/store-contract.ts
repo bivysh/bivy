@@ -213,6 +213,15 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.deepEqual(requests.map((request) => request.nodeId), [a.id], "only another currently-enrolled survivor is queued for the new key");
   });
 
+  await test("model auth key requests: repeated requests are idempotent", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-model-auth-request@example.com");
+    const { node } = await store.enrollNode(acct.id, "node-mar-request", "Requester");
+
+    assert.equal(await store.requestModelAuthWrappedKey(acct.id, node.id, "pub-v1"), true);
+    assert.equal(await store.requestModelAuthWrappedKey(acct.id, node.id, "pub-v1"), false, "an unchanged pending request does not wake peers again");
+    assert.equal(await store.requestModelAuthWrappedKey(acct.id, node.id, "pub-v2"), true, "a changed node key requires a fresh peer wake");
+  });
+
   // --- GitHub App private-key vault (issue #88) -------------------------------
   await test("github app vault: push, request, and wrap round-trip per app", async (store) => {
     const acct = await store.findOrCreateAccount("contract-ghvault@example.com");

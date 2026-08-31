@@ -296,6 +296,7 @@ const httpServer = createServer((req, res) => {
       const id = typeof body?.id === "string" ? body.id : undefined;
       const label = typeof body?.label === "string" ? body.label : undefined;
       const nodeId = typeof body?.nodeId === "string" ? body.nodeId : undefined;
+      const excludeNodeId = typeof body?.excludeNodeId === "string" ? body.excludeNodeId : undefined;
       if (!accountId) {
         res.writeHead(400, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "accountId required" }));
@@ -303,7 +304,7 @@ const httpServer = createServer((req, res) => {
       }
       let delivered = 0;
       for (const [roomNodeId, r] of rooms) {
-        if ((!nodeId || roomNodeId === nodeId) && r.nodeAccountId === accountId && r.node?.readyState === WebSocket.OPEN) {
+        if ((!nodeId || roomNodeId === nodeId) && roomNodeId !== excludeNodeId && r.nodeAccountId === accountId && r.node?.readyState === WebSocket.OPEN) {
           send(r.node, { t: "work.available", id, label });
           delivered += 1;
         }
