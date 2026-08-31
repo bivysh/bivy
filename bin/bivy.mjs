@@ -39,6 +39,8 @@ import { renderManagedBlock, upsertManagedBlock, removeManagedBlock, rcFileForSh
 import { removeInstallAndState } from "./uninstall-paths.mjs";
 import { findAvailablePort, reconcilePort } from "./port-picker.mjs";
 import { resolveAttachSessionId } from "./attach-session-id.mjs";
+import { detectInstallKind as classifyInstallKind } from "./install-kind.mjs";
+import { hasConfiguredService as configuredServiceExists } from "./service-state.mjs";
 
 const selfScript = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(selfScript);
@@ -69,14 +71,10 @@ process.env.BIVY_DATA_DIR = appDir;
 // background service can point at repoRoot:
 //   - "git"        dev checkout (has .git)
 //   - "npx"        ephemeral `npx bivy` run (repoRoot under an npm _npx cache)
-//   - "npm-global" `npm i -g @bivy/bivy` (repoRoot's parent dir is node_modules)
+//   - "npm-global" `npm i -g @bivy/bivy` (repoRoot is below node_modules/@bivy)
 //   - "packaged"   install.sh tarball tree (user-owned, self-preserving)
 function detectInstallKind() {
-  if (fs.existsSync(path.join(repoRoot, ".git"))) return "git";
-  const inNodeModules = path.basename(path.dirname(repoRoot)) === "node_modules";
-  if (inNodeModules && /[\\/]_npx[\\/]/.test(repoRoot)) return "npx";
-  if (inNodeModules) return "npm-global";
-  return "packaged";
+  return classifyInstallKind(repoRoot);
 }
 const cliConfigPath = path.join(appDir, "cli.json");
 const canonicalConfigPath = path.join(appDir, "config.yaml");
@@ -3254,6 +3252,10 @@ async function reconcileNodePort(config) {
 // reloads/relaunches). Otherwise a plain restart. Returns true if the service
 // was (re)started. Used by `bivy restart` and `bivy update` — the paths that
 // previously trusted the saved port verbatim.
+function hasConfiguredService(config) {
+  return configuredServiceExists(config, servicePaths().file);
+}
+
 async function restartServiceReconciled(config) {
   const { kind, file } = servicePaths();
   if (!fs.existsSync(file)) return restartService();
@@ -4442,7 +4444,7 @@ async function runUpdate(args = []) {
     await ensureKnownAgents();
     const config = loadConfig();
     await waitForIdleSessions(config, { skip: skipWait });
-    if (config.service && (await restartServiceReconciled(config))) {
+    if (hasConfiguredService(config) && (await restartServiceReconciled(config))) {
       if (await verifyNodeCameUp(config)) {
         console.log(c.green("Updated and restarted the background service."));
       } else {
@@ -4474,7 +4476,7 @@ async function runUpdate(args = []) {
     });
     // install.sh restarts the service itself; verify the node actually came up
     // rather than trusting the installer's exit code over a crash-looping node.
-    if (code === 0 && config.service && !(await verifyNodeCameUp(config))) {
+    if (code === 0 && hasConfiguredService(config) && !(await verifyNodeCameUp(config))) {
       reportNodeDidNotStart();
       process.exit(1);
     }
@@ -4490,7 +4492,7 @@ async function runUpdate(args = []) {
   await ensureKnownAgents();
   const config = loadConfig();
   await waitForIdleSessions(config, { skip: skipWait });
-  if (config.service && (await restartServiceReconciled(config))) {
+  if (hasConfiguredService(config) && (await restartServiceReconciled(config))) {
     if (await verifyNodeCameUp(config)) {
       console.log(c.green("Updated and restarted the background service."));
     } else {
