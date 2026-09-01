@@ -49,7 +49,7 @@ function harness(over: any = {}) {
     sessionListChanged: () => { listChanged += 1; },
     saveRunLog: (termId, log) => { runLogs.set(termId, log); return `/logs/${termId}.json`; },
     loadRunLog: (termId) => runLogs.get(termId),
-    listAllSessions: async () => [],
+    listAllSessions: over.listAllSessions ?? (async () => []),
     listProvidersUnified: async () => [],
     pushModelAuthToControlPlane: async () => {},
     listPiSessions: over.listPiSessions ?? (async () => []),
@@ -137,6 +137,23 @@ test("a failed governed resume leaves the native terminal running", async () => 
   await assert.rejects(() => rt.takeoverRunTerminal({ termId: "t1" }), /resume failed/);
   assert.deepEqual(terminals.calls.close, [], "a failed preparation must not kill the user's working TUI");
   assert.equal(rt.hasRunTerminal("t1"), true);
+});
+
+test("an in-flight terminal list cannot resurrect a run closed by takeover", async () => {
+  const terminals = fakeTerminals({
+    list: () => [{ id: "t1", meta: { kind: "run", agent: "opencode", sessionId: "ses-1", autoName: true }, workspace: "/w", createdAt: 0 }],
+  });
+  let releaseList!: () => void;
+  const listing = new Promise<void>((resolve) => { releaseList = resolve; });
+  const { rt, emit } = harness({ terminals, listAllSessions: async () => { await listing; return []; } });
+  // Force runTerminalList to await its native-name lookup, reproducing the race
+  // where takeover closes the PTY while an older terminal.list is in flight.
+  await rt.openRunTerminal({ command: "opencode", args: [], agent: "opencode", sessionId: "ses-1" }, emit);
+  const pending = rt.runTerminalList();
+  const result = await rt.takeoverRunTerminal({ termId: "t1" });
+  assert.equal(result.ok, true);
+  releaseList();
+  assert.deepEqual(await pending, [], "the stale list drops the terminal removed during takeover");
 });
 
 test("takeover retries a lazily persisted Pi session", async () => {

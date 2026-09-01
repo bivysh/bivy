@@ -114,6 +114,9 @@ export function codexAppServerRuntime(tier?: SandboxTier): AgentRuntime {
       interactiveTui: codexCommandAvailable(),
       nativeSessionDiscovery: true,
       nativeSessionAdoption: true,
+      // `bivy run codex` learns the rollout id from Codex's on-disk store after
+      // launch, so an unpinned native terminal can be taken over as chat.
+      sessionDiscovery: true,
     },
     resumable: true,
     loadHistory: (sessionId) => loadCodexTranscript(sessionId),
@@ -155,6 +158,7 @@ export function codexIntegration(origin: AgentIntegrationOrigin) {
           interactiveTui: installed,
           nativeSessionDiscovery: true,
           nativeSessionAdoption: true,
+          sessionDiscovery: true,
         },
         nativeSandbox: true,
         supportTier: "supported",

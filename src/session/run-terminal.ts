@@ -218,7 +218,10 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
       const { autoName: _autoName, ...publicMeta } = t.meta;
       out.push({ termId: t.id, workspace: t.workspace, createdAt: t.createdAt, lastActivityAt: t.lastActivityAt, pid: terminals.pid(t.id), ...publicMeta, takeoverReady: Boolean(sessionRef) });
     }
-    return out;
+    // Discovery/name lookup above is asynchronous. A takeover can close a PTY
+    // while this list is being assembled; never let that older list resolve
+    // afterward and resurrect the closed terminal in the sidebar.
+    return out.filter((terminal) => runTerminals.has((terminal as { termId: string }).termId));
   }
 
   function broadcastRunTerminalList(): void {

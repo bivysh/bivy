@@ -30,7 +30,10 @@ process.env.PI_CODING_AGENT_DIR = nativeRoot;
 try {
   const nativeWorkspace = path.join(nativeRoot, "workspace");
   fs.mkdirSync(nativeWorkspace);
-  const manager = SessionManager.create(nativeWorkspace, path.join(nativeRoot, "sessions"));
+  // Use Pi's real default layout: sessions/<encoded-cwd>/*.jsonl. Passing the
+  // sessions root explicitly would create a flat test-only layout and miss the
+  // takeover regression where listAll(customRoot) does not scan subdirectories.
+  const manager = SessionManager.create(nativeWorkspace);
   manager.appendMessage({ role: "user", content: "hello from native pi", timestamp: Date.now() });
   manager.appendMessage({ role: "assistant", content: [{ type: "text", text: "hello" }], timestamp: Date.now() });
   const listed = await listNativePiSessions();
