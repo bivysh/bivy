@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.3] - 2026-09-01
+
+### Changed
+
+- The automation editor now uses a wider two-column layout for execution
+  settings, grows the instructions field with its content, surfaces agent,
+  model & safety settings as a first-class section, and keeps save errors
+  visible above the editor actions.
+
+### Fixed
+
+- Forking or moving a session across agents and machines now fails safe
+  against context loss: the live transcript is preferred over stale snapshots,
+  uncommitted changes are captured from unmanaged Git workspaces too, lossy
+  moves are rejected, and the source session is restored when a destination
+  import fails.
+- Native terminal-to-chat handoffs now discover Pi sessions in Pi's
+  per-workspace session layout, consistently offer Codex terminal takeover,
+  and no longer let stale terminal lists resurrect an OpenCode terminal after
+  takeover.
+
 ## [0.16.2] - 2026-09-01
 
 ### Changed
