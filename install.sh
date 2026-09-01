@@ -27,6 +27,7 @@
 #   BIVY_CHANNEL=staging          install the latest dev build off the `staging`
 #                                 dist-tag (every merge to main); default `latest`
 #   BIVY_NPM_PREFIX=~/.local      install into a user-owned npm prefix (no sudo)
+#   BIVY_NPM_LOGLEVEL=warn        reduce npm's live install output (default: info)
 #   BIVY_INSTALL_ALL_AGENTS=1     preinstall every bundled agent runtime
 #   BIVY_NO_TARBALL_FALLBACK=1    fail instead of falling back to the tarball
 #   BIVY_NO_RC_UPDATE=1           don't add BIN_DIR to ~/.bashrc or ~/.zshrc;
@@ -314,8 +315,17 @@ clear_stale_npm_temp() {
   { [ -n "${1:-}" ] && [ -d "$scope" ] && find "$scope" -maxdepth 1 -name '.bivy-*' -exec rm -rf {} + 2>/dev/null; } || true
 }
 
+# Keep npm's output visible while also retaining it for the permission/404
+# diagnostics below. Redirecting stderr only to ERR_LOG made a healthy install
+# look frozen for minutes because npm writes all fetch and lifecycle progress
+# there. `tee` gives the user live activity without sacrificing those checks.
+run_npm_install() {
+  npm "$@" 2>&1 | tee "$ERR_LOG"
+  return "${PIPESTATUS[0]}"
+}
+
 install_globally() {
-  local args=(install -g "${NPM_PACKAGE}@${PKG_VERSION}" --no-audit --no-fund)
+  local args=(install -g "${NPM_PACKAGE}@${PKG_VERSION}" --no-audit --no-fund --loglevel="${BIVY_NPM_LOGLEVEL:-info}")
   if [ "${BIVY_INSTALL_OPTIONAL_DEPS:-}" != "1" ]; then
     args+=(--omit=optional)
   fi
@@ -327,7 +337,7 @@ install_globally() {
   fi
   info "Installing ${NPM_PACKAGE}@${PKG_VERSION} from npm"
   clear_stale_npm_temp "$(npm prefix -g 2>/dev/null)"
-  if npm "${args[@]}" 2>"$ERR_LOG"; then
+  if run_npm_install "${args[@]}"; then
     return 0
   fi
   # The classic failure: the global prefix is root-owned. Rather than silently

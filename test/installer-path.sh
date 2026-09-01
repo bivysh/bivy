@@ -37,6 +37,7 @@ cat > "$WORK/stub/npm" <<STUB
 set -euo pipefail
 if [ "\${1:-}" = "prefix" ]; then echo "$WORK/npm-prefix"; exit 0; fi
 if [ "\${1:-}" = "install" ]; then
+  echo 'npm info install progress is visible' >&2
   mkdir -p "$WORK/npm-prefix/bin"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$WORK/npm-prefix/bin/bivy"
   chmod +x "$WORK/npm-prefix/bin/bivy"
@@ -119,6 +120,8 @@ check "unknown shell gets manual instructions, no rc file created" \
   "$([ -e "$HOME5/.bashrc" ] || [ -e "$HOME5/.zshrc" ] && echo present || echo absent)" 'absent'
 check "unknown shell manual export line still printed" \
   "$(grep -c 'export PATH=' "$WORK/out.log" 2>/dev/null || echo 0)" '1'
+check "npm install progress is streamed" \
+  "$(grep -c 'npm info install progress is visible' "$WORK/out.log" 2>/dev/null || echo 0)" '1'
 
 if [ "$FAILED" != "0" ]; then
   echo "installer-path: FAILED"
