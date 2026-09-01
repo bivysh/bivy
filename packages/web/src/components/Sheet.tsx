@@ -21,7 +21,7 @@ export function Sheet({
   onClose: () => void;
   children: ReactNode;
   headExtra?: ReactNode;
-  variant?: "default" | "action";
+  variant?: "default" | "action" | "centered";
   ariaLabel?: string;
   /** Focus the search input on open. Off for list-heavy pickers on mobile,
    *  where popping the keyboard collapses the list to a couple of rows — we'd
