@@ -352,7 +352,17 @@ export class AppController {
       sessionRuntime: (sessionId) => this.store.getState().sessionIndex.sessions.find((session) => session.sessionId === sessionId)?.runtimeId,
       switchNode: (nodeId) => this.switchNode(nodeId),
       waitForOnline: (timeoutMs) => this.waitForOnline(timeoutMs),
-      openSession: (sessionId, path) => this.openSession(sessionId, path),
+      openSession: (sessionId, path, snapshot) => {
+        this.openSession(sessionId, path);
+        if (snapshot) {
+          // A fork completion is built from the same canonical payload as
+          // session.history. The coordinator consumes correlated replies before
+          // the ordinary reducer sees them, so hydrate the newly-opened session
+          // explicitly rather than leaving the old session's agent/transcript on
+          // screen until the follow-up requests return.
+          this.store.apply({ ...snapshot, type: "session.history", sessionId });
+        }
+      },
       addUserMessage: (text, id) => this.store.addUserMessage(text, id),
       transcriptUrl: (sessionId) => `${location.origin}${routePath({ kind: "session", id: sessionId })}`,
       refreshAccountSessions: () => { void this.refreshAccountSessions(); },
