@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.5] - 2026-09-01
+
+### Fixed
+
+- Forked session handoffs now restore the source session when destination import
+  fails, retain live transcript and unmanaged-workspace changes, and reject
+  moves that would lose context.
+
 ## [0.16.4] - 2026-09-01
 
 ### Fixed
