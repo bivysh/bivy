@@ -25,7 +25,12 @@ export function piCommand(): string {
  * that native store rather than only the governed one. */
 export async function listNativePiSessions(): Promise<SessionSummary[]> {
   const { SessionManager } = await import("@earendil-works/pi-coding-agent");
-  const sessions = await SessionManager.listAll(path.join(piAgentDir(), "sessions"));
+  // Do not pass the sessions root here. Pi's default store is split into one
+  // encoded subdirectory per cwd, and SessionManager.listAll(customDir) scans
+  // only that directory itself. The no-argument form walks those cwd
+  // subdirectories under PI_CODING_AGENT_DIR; passing `<agentDir>/sessions`
+  // therefore made every normal native TUI session invisible to takeover.
+  const sessions = await SessionManager.listAll();
   return sessions.map((session) => ({
     id: session.id,
     path: session.path,

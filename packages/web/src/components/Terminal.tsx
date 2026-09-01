@@ -31,6 +31,7 @@ import {
 } from "./UiIcons.js";
 import { writeClipboard } from "../clipboard.js";
 import { useModalEscape } from "../modalStack.js";
+import { runtimeSupportsTerminalTakeover } from "../terminalTakeover.js";
 
 // The `ctrl` sheet's command keys — concrete escape sequences the shell reads
 // directly, so there's no sticky-modifier state to track (the old on-screen key
@@ -85,13 +86,7 @@ interface MuxSession {
 // are read elsewhere (e.g. Pickers.tsx `Boolean(caps.resume)`).
 function canContinueAsChat(t: RunTerminal, runtimes: RuntimeInfo[]): boolean {
   if (t.sessionId) return true;
-  // Match by runtime id (e.g. "grok") OR by agent alias — run-terminals store
-  // the short `bivy run <agent>` name, which is usually the same as the runtime
-  // id for process agents.
-  const agent = String(t.agent || "");
-  const runtime = runtimes.find((r) => r.id === agent || r.id === `${agent}-approvals` || r.id === `${agent}-code-sdk`);
-  const caps = runtime?.capabilities as { sessionDiscovery?: boolean } | undefined;
-  return Boolean(caps?.sessionDiscovery);
+  return runtimeSupportsTerminalTakeover(t.agent, runtimes);
 }
 
 // Whether a takeover would succeed *right now*. `canContinueAsChat` says the

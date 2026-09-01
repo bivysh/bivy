@@ -23,6 +23,7 @@ import { TuiLockedView } from "./components/TuiLockedView.js";
 import { GithubPill } from "./components/GithubPill.js";
 import { RunPill } from "./components/RunPill.js";
 import { classifySource, isLiveRunSession, isRunLogSession } from "./sessionSource.js";
+import { runtimeSupportsTerminalTakeover } from "./terminalTakeover.js";
 import { indexRunEvidence, failingCheckNames } from "./runEvidence.js";
 import { SessionChangesSheet, countUniqueEditedFiles } from "./components/SessionChangesSheet.js";
 import { ArtifactsSheet } from "./components/ArtifactsSheet.js";
@@ -771,9 +772,7 @@ export function App() {
             const runName = run?.name || run?.label || run?.agent || "Terminal session";
             const runNode = state.connection.nodes.find((n) => n.id === (run?.nodeId || pendingRunTerm.nodeId));
             // Same capability gate the Terminal overlay uses for "Continue in chat".
-            const runtime = state.catalogs.runtimes.find((r) => r.id === String(run?.agent || ""));
-            const caps = runtime?.capabilities as { sessionDiscovery?: boolean } | undefined;
-            const canTakeover = Boolean(run?.sessionId) || Boolean(caps?.sessionDiscovery);
+            const canTakeover = Boolean(run?.sessionId) || runtimeSupportsTerminalTakeover(run?.agent, state.catalogs.runtimes);
             return (
               <TuiLockedView
                 sessionName={runName}
