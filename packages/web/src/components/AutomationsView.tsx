@@ -1802,15 +1802,15 @@ function AutomationEditor({
 }) {
   const [d, setD] = useState<Draft>(initial);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [showAdvanced, setShowAdvanced] = useState(false);
   const [nlError, setNlError] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState<{ url: string; secret: string; name: string; updated?: boolean } | null>(null);
-  const [allowDangerous, setAllowDangerous] = useState(false);
+  const [allowDangerous, setAllowDangerous] = useState(existing?.allowDangerous ?? false);
   const [pairMachineOpen, setPairMachineOpen] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<HTMLDivElement>(null);
+  const instructionsRef = useRef<HTMLTextAreaElement>(null);
   const closeWithBack = useModalBack(onCancel);
   useModalEscape(closeWithBack);
   useEffect(() => {
@@ -1831,6 +1831,15 @@ function AutomationEditor({
   const canEditTrigger = !d.id;
 
   useEffect(() => { setD(initial); }, [initial]);
+  useEffect(() => {
+    setAllowDangerous(existing?.allowDangerous ?? false);
+  }, [initial.id, existing?.allowDangerous]);
+  useEffect(() => {
+    const input = instructionsRef.current;
+    if (!input) return;
+    input.style.height = "auto";
+    input.style.height = `${input.scrollHeight}px`;
+  }, [d.instructions]);
 
   useEffect(() => {
     if (!pickerOpen) return;
@@ -2404,6 +2413,7 @@ function AutomationEditor({
                 <label className="autom-field-label" htmlFor="autom-instructions">Instructions</label>
                 <div className="autom-instructions">
                   <textarea
+                    ref={instructionsRef}
                     id="autom-instructions"
                     className="autom-instructions-input"
                     rows={7}
@@ -2413,65 +2423,62 @@ function AutomationEditor({
                   />
                   <div className="autom-instructions-bar">
                     <span className="settings-hint">Encrypted end to end</span>
-                    <button
-                      type="button"
-                      className="autom-advanced-link"
-                      onClick={() => setShowAdvanced((v) => !v)}
-                      aria-expanded={showAdvanced}
-                    >
-                      {showAdvanced ? "Hide advanced" : "Agent, model & safety"}
-                    </button>
                   </div>
                 </div>
-                {showAdvanced && (
-                  <div className="wizard-advanced">
-                    <div className="settings-field">
-                      <label className="field-label" htmlFor="autom-runtime">Agent</label>
-                      <select id="autom-runtime" className="picker-search" value={d.runtimeId} onChange={(e) => set("runtimeId", e.target.value)}>
-                        <option value="">Machine default</option>
-                        {state.catalogs.runtimes.map((r) => <option key={r.id} value={r.id}>{String(r.displayName || r.name || r.id)}</option>)}
-                        {d.runtimeId && !state.catalogs.runtimes.some((r) => r.id === d.runtimeId) && (
-                          <option value={d.runtimeId}>{d.runtimeId} (not installed here)</option>
-                        )}
-                      </select>
-                    </div>
-                    <div className="settings-field">
-                      <label className="field-label" htmlFor="autom-model">Model</label>
-                      <select id="autom-model" className="picker-search" value={d.model} onChange={(e) => set("model", e.target.value)}>
-                        <option value="">Agent default</option>
-                        {state.catalogs.models.map((m) => (
-                          <option key={String((m as { provider?: string }).provider || "") + ":" + m.id} value={m.id}>{m.label || m.id}</option>
-                        ))}
-                        {d.model && !state.catalogs.models.some((m) => m.id === d.model) && <option value={d.model}>{d.model}</option>}
-                      </select>
-                    </div>
-                    <div className="settings-field">
-                      <label className="field-label" htmlFor="autom-approvals">Approvals</label>
-                      <select id="autom-approvals" className="picker-search" value={d.approvalMode} onChange={(e) => set("approvalMode", e.target.value as Draft["approvalMode"])}>
-                        <option value="autonomous">Autonomous (default; pauses only for high-risk actions)</option>
-                        <option value="risky">Ask before risky actions</option>
-                        <option value="always">Ask before every action</option>
-                        <option value="never">Never ask</option>
-                      </select>
-                    </div>
-                    <div className="settings-field">
-                      <label className="field-label" htmlFor="autom-sandbox">Sandbox</label>
-                      <select id="autom-sandbox" className="picker-search" value={d.sandbox} onChange={(e) => set("sandbox", e.target.value as Draft["sandbox"])}>
-                        <option value="read-only">Read only</option>
-                        <option value="workspace-write">Workspace write</option>
-                        <option value="danger-full-access">Full access</option>
-                      </select>
-                    </div>
-                    {unsafeCombo && (
-                      <label className="autom-check-row">
-                        <input type="checkbox" checked={allowDangerous} onChange={(e) => setAllowDangerous(e.target.checked)} />
-                        <span>I understand the risk of autonomous approval with full access — allow it anyway.</span>
-                      </label>
-                    )}
-                  </div>
-                )}
                 <p className="settings-hint">Encrypted for the assigned machine before upload. The hosted control plane never sees the prompt, your code, or credentials.</p>
               </div>
+
+              <section className="autom-field-block autom-safety-section" aria-labelledby="autom-safety-heading">
+                <div>
+                  <h2 className="autom-section-heading" id="autom-safety-heading">Agent, model &amp; safety</h2>
+                  <p className="settings-hint">Choose how the agent runs and which actions need approval.</p>
+                </div>
+                <div className="wizard-advanced">
+                  <div className="settings-field">
+                    <label className="field-label" htmlFor="autom-runtime">Agent</label>
+                    <select id="autom-runtime" className="picker-search" value={d.runtimeId} onChange={(e) => set("runtimeId", e.target.value)}>
+                      <option value="">Machine default</option>
+                      {state.catalogs.runtimes.map((r) => <option key={r.id} value={r.id}>{String(r.displayName || r.name || r.id)}</option>)}
+                      {d.runtimeId && !state.catalogs.runtimes.some((r) => r.id === d.runtimeId) && (
+                        <option value={d.runtimeId}>{d.runtimeId} (not installed here)</option>
+                      )}
+                    </select>
+                  </div>
+                  <div className="settings-field">
+                    <label className="field-label" htmlFor="autom-model">Model</label>
+                    <select id="autom-model" className="picker-search" value={d.model} onChange={(e) => set("model", e.target.value)}>
+                      <option value="">Agent default</option>
+                      {state.catalogs.models.map((m) => (
+                        <option key={String((m as { provider?: string }).provider || "") + ":" + m.id} value={m.id}>{m.label || m.id}</option>
+                      ))}
+                      {d.model && !state.catalogs.models.some((m) => m.id === d.model) && <option value={d.model}>{d.model}</option>}
+                    </select>
+                  </div>
+                  <div className="settings-field">
+                    <label className="field-label" htmlFor="autom-approvals">Approvals</label>
+                    <select id="autom-approvals" className="picker-search" value={d.approvalMode} onChange={(e) => set("approvalMode", e.target.value as Draft["approvalMode"])}>
+                      <option value="autonomous">Autonomous (default; pauses only for high-risk actions)</option>
+                      <option value="risky">Ask before risky actions</option>
+                      <option value="always">Ask before every action</option>
+                      <option value="never">Never ask</option>
+                    </select>
+                  </div>
+                  <div className="settings-field">
+                    <label className="field-label" htmlFor="autom-sandbox">Sandbox</label>
+                    <select id="autom-sandbox" className="picker-search" value={d.sandbox} onChange={(e) => set("sandbox", e.target.value as Draft["sandbox"])}>
+                      <option value="read-only">Read only</option>
+                      <option value="workspace-write">Workspace write</option>
+                      <option value="danger-full-access">Full access</option>
+                    </select>
+                  </div>
+                </div>
+                {unsafeCombo && (
+                  <label className="autom-check-row">
+                    <input type="checkbox" checked={allowDangerous} onChange={(e) => setAllowDangerous(e.target.checked)} />
+                    <span>I understand the risk of autonomous approval with full access — allow it anyway.</span>
+                  </label>
+                )}
+              </section>
 
               {d.hasTrigger && (
                 <div className="settings-field">
@@ -2498,9 +2505,9 @@ function AutomationEditor({
                 </div>
               )}
 
-              {error && <p className="settings-error">{error}</p>}
             </div>
 
+            {error && <div className="autom-save-error" role="alert">{error}</div>}
             <div className="wizard-actions">
               <button type="button" className="btn" onClick={closeWithBack} disabled={busy}>Cancel</button>
               {!canSave && missing.length > 0 && (

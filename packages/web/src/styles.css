@@ -1683,7 +1683,7 @@ button.template-card.is-featured .template-card-icon {
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-xl);
   overflow: hidden; box-shadow: var(--shadow-xl); min-width: 0;
 }
-.wizard.autom-editor { max-width: 540px; }
+.wizard.autom-editor { max-width: min(720px, 100%); }
 .wizard-head {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   padding: 18px 16px 8px; flex: none; min-width: 0;
@@ -1697,6 +1697,16 @@ button.template-card.is-featured .template-card-icon {
   display: flex; flex-direction: column; gap: 18px; min-width: 0;
 }
 .wizard-advanced { display: flex; flex-direction: column; gap: 12px; padding-top: 4px; }
+.autom-section-heading { margin: 0 0 var(--space-1); font-size: var(--text-lg); line-height: var(--lh-lg); }
+.autom-save-error {
+  flex: none; margin: 0 var(--space-5); padding: var(--space-3) var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--line));
+  border-radius: var(--radius-sm); background: var(--danger-soft); color: var(--danger);
+  font-size: var(--text-sm); overflow-wrap: anywhere;
+}
+@media (min-width: 721px) {
+  .autom-editor .wizard-advanced { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: var(--space-4); }
+}
 .autom-editor-actions {
   position: relative; align-self: flex-end; margin: 0 var(--space-4) var(--space-2);
   z-index: var(--z-sticky);
@@ -1805,7 +1815,7 @@ button.template-card.is-featured .template-card-icon {
   overflow: hidden;
 }
 .autom-instructions-input {
-  display: block; width: 100%; min-height: 140px; resize: vertical;
+  display: block; width: 100%; min-height: 140px; resize: none; overflow-y: hidden;
   padding: 14px 14px 8px; border: 0; background: transparent;
   /* 16px floor — iOS Safari zooms the viewport on focus below that. */
   color: var(--ink); font: inherit; font-size: 16px; line-height: 1.45;
@@ -1822,12 +1832,6 @@ button.template-card.is-featured .template-card-icon {
   /* 16px floor — iOS Safari zooms the viewport on focus below that. */
   background: var(--surface); color: var(--ink); font: inherit; font-size: 16px;
 }
-.autom-advanced-link {
-  border: 0; background: none; padding: 4px 2px;
-  color: var(--muted); font: inherit; font-size: 12px; font-weight: 650; cursor: pointer;
-}
-.autom-advanced-link:hover { color: var(--ink); }
-
 /* One-time reveal of a webhook URL / signing secret. */
 .reveal-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
 .reveal-value {
@@ -2944,6 +2948,7 @@ select.picker-search { appearance: auto; }
   .autom-editor .autom-instructions-bar { padding: 12px 18px 16px; border-top: 0; }
   .autom-editor .autom-runner-card, .autom-editor .autom-trigger-config { border-radius: var(--radius-xl); }
   .autom-editor .wizard-actions { background: var(--bg); }
+  .autom-editor .autom-save-error { margin-inline: var(--space-4); }
 
   /* Compact, thumb-friendly automation list: the row is the editor link. */
   .automation-list { gap: var(--space-2); border: 0; }
