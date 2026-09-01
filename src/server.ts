@@ -9361,6 +9361,10 @@ app.get("/api/commands", (_req, res) => {
 });
 
 function publicModel(model: any, current?: any) {
+  // A newly-created runtime is allowed to have no selected model yet (Claude
+  // Code chooses its default when the first query starts). Keep session
+  // creation/model events nullable instead of dereferencing that absence.
+  if (!model) return null;
   return {
     provider: model.provider,
     id: model.id,
