@@ -529,6 +529,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     command: "grok",
     packageName: "grok (curl -fsSL https://x.ai/cli/install.sh | bash)",
     supportTier: "supported",
+    testedVersion: "1.0.0",
     authOwner: "mixed",
     blurb: "xAI's official Grok coding agent (Grok CLI) — SuperGrok/X subscription or API key.",
     // Official CLI: `grok -p "<prompt>"` (alias `--single`) runs one headless
@@ -542,6 +543,13 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     // TUI uses the same store via `grok --resume <id>`. Model ids match
     // `grok models` for the official CLI (override with BIVY_GROK_MODELS).
     args: ["-p"],
+    // The current CLI's streaming-json mode is ACP's standard NDJSON envelope.
+    // The shared tolerant parser unwraps session/update notifications, including
+    // tool calls/results and sub-agent activity, so Grok gets faithful transcripts
+    // without a Grok-specific adapter. Keep the plain args as the explicit
+    // BIVY_AGENT_STRUCTURED=0 fallback.
+    jsonArgs: ["--output-format", "streaming-json", "-p"],
+    parserId: "generic-stream-json",
     resume: {
       template: ["--resume", "{id}", "-p"],
       historyLoader: "grok",

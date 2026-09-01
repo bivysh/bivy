@@ -189,7 +189,8 @@
       "command": "grok",
       "hidden": false,
       "supportTier": "supported",
-      "certification": "adapter-tested",
+      "certification": "release-tested",
+      "testedVersion": "1.0.0",
       "headlessFlags": [
         "-p",
         "--resume"
