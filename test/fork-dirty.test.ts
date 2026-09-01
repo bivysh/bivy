@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { captureDirtyPatch, applyDirtyPatch } from "../src/session/fork-dirty.js";
+import { captureDirtyPatch, captureWorkspaceDirtyPatch, applyDirtyPatch } from "../src/session/fork-dirty.js";
 
 // Verifies fork's uncommitted-work transport: capture a working tree's tracked
 // edits + untracked files as a patch, then re-apply it onto a fresh checkout at
@@ -64,6 +64,15 @@ test("capture + apply reproduces tracked edits and untracked files on a fresh ch
   assert.equal(fs.readFileSync(path.join(dst, "sub", "nested.txt"), "utf8"), "nested new\n", "nested untracked file recreated");
 });
 
+test("workspace capture finds an unmanaged checkout from a nested cwd", () => {
+  const src = initRepo();
+  const nested = path.join(src, "nested", "cwd");
+  fs.mkdirSync(nested, { recursive: true });
+  fs.writeFileSync(path.join(src, "tracked.txt"), "unmanaged workspace edit\n");
+  const dirty = captureWorkspaceDirtyPatch(nested);
+  assert.ok(dirty?.patch.includes("unmanaged workspace edit"));
+});
+
 test("a clean working tree captures an empty patch and applies as a no-op", () => {
   const src = initRepo();
   const dirty = captureDirtyPatch(src);
@@ -74,17 +83,19 @@ test("a clean working tree captures an empty patch and applies as a no-op", () =
   assert.equal(fs.readFileSync(path.join(dst, "tracked.txt"), "utf8"), "base line\n");
 });
 
-test("oversized working tree falls back to pushedInstead instead of inlining", () => {
+test("oversized working tree is explicitly marked so stand-up cannot silently lose it", () => {
   const src = initRepo();
   fs.writeFileSync(path.join(src, "big.bin"), Buffer.alloc(64 * 1024, 7));
   const dirty = captureDirtyPatch(src, { maxBytes: 1024 });
   assert.equal(dirty.pushedInstead, true);
   assert.equal(dirty.patch, "");
-  // Apply is a no-op on the pushedInstead signal.
+  assert.ok((dirty.byteLength ?? 0) > (dirty.maxBytes ?? Infinity));
+  // applyDirtyPatch is only a final defence; stand-up rejects this marker first.
   const dst = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-dirty-big-"));
   git(dst, ["clone", "-q", src, "."]);
-  applyDirtyPatch(dst, dirty);
-  assert.ok(!fs.existsSync(path.join(dst, "big.bin")), "no-op: destination reproduces from the pushed commit, not the patch");
+  const applied = applyDirtyPatch(dst, dirty);
+  assert.match(applied.warning ?? "", /stopped to prevent data loss/i);
+  assert.ok(!fs.existsSync(path.join(dst, "big.bin")), "oversized bytes were not falsely reported as transferred");
 });
 
 // --- diverged-base re-apply (fork bug #3): apply must degrade, never throw ----

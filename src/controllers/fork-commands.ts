@@ -12,7 +12,7 @@ import type { CommandEntries } from "../protocol/command-registry.js";
 import type { AgentRuntime } from "../runtime/index.js";
 import type { SessionRecord } from "../session/record.js";
 import { buildForkBundle, type ForkBundle, type ForkPlan, type ForkRecord } from "../session/fork.js";
-import { captureDirtyPatch } from "../session/fork-dirty.js";
+import { captureDirtyPatch, captureWorkspaceDirtyPatch } from "../session/fork-dirty.js";
 import type { ForkPrereq } from "../session/fork-prereqs.js";
 import type { StandUpForkOptions, StandUpForkOutcome } from "../session/fork-standup.js";
 import type { ForkRetireOutcome } from "../session/fork-retire.js";
@@ -78,10 +78,12 @@ export function createForkCommands(deps: ForkCommandDeps): CommandEntries<ForkCo
       }
       try {
         const forkRecord = deps.forkRecordFor(rec);
-        let dirtyPatch;
-        if (rec.worktree) {
-          try { dirtyPatch = captureDirtyPatch(rec.worktree.path); } catch { /* best effort — omit dirty state */ }
-        }
+        // A git workspace must be captured successfully, including sessions that
+        // were started in an unmanaged checkout rather than a Bivy worktree.
+        // Treating a git/read failure as "clean" could retire the only WIP copy.
+        const dirtyPatch = rec.worktree
+          ? captureDirtyPatch(rec.worktree.path)
+          : captureWorkspaceDirtyPatch(rec.session.cwd || rec.workspace);
         // Publish the source branch so a cross-node fork's COMMITTED work travels
         // via origin (the destination adopts `origin/<branch>`; see
         // resolveAdoptBaseRef). Uncommitted work rides the dirtyPatch above. Only
@@ -162,10 +164,11 @@ export function createForkCommands(deps: ForkCommandDeps): CommandEntries<ForkCo
         const forkRecord = deps.forkRecordFor(rec);
         // Carry uncommitted work: capture from the SOURCE worktree; standUpFork
         // re-applies it into the fork's fresh worktree. Local git ops only.
-        let dirtyPatch;
-        if (rec.worktree) {
-          try { dirtyPatch = captureDirtyPatch(rec.worktree.path); } catch { /* best effort */ }
-        }
+        // Include unmanaged git workspaces too. standUpFork will cut an isolated
+        // worktree for them, so their uncommitted state must ride with it.
+        const dirtyPatch = rec.worktree
+          ? captureDirtyPatch(rec.worktree.path)
+          : captureWorkspaceDirtyPatch(rec.session.cwd || rec.workspace);
         // Same runtime → the bundle carries the native payload → full fidelity.
         const bundle = buildForkBundle({ runtime, sessionFile: rec.sessionFile, record: forkRecord, dirtyPatch, targetRuntimeId: rec.runtimeId, liveMessages: rec.session.getMessages(), state: deps.forkInFlightState(rec) });
         // Cut a fresh fork branch (the source still holds its own); skip prereq

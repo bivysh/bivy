@@ -74,6 +74,42 @@ test("session coordinator correlates and completes a local fork", async () => {
   assert.equal(opened, "forked");
 });
 
+test("cross-node fork resolves source metadata before switching and restores source on import failure", async () => {
+  let current = "source-node";
+  let request = 0;
+  let command: any;
+  const switches: string[] = [];
+  const opened: string[] = [];
+  const transcriptNodes: string[] = [];
+  const coordinator = new SessionOrchestrator({
+    send: () => {},
+    sendRequest: (value) => { command = value; },
+    createRequestId: () => `request-${++request}`,
+    createClientMessageId: () => "message-1",
+    currentNodeId: () => current,
+    isDirect: () => false,
+    sessionRuntime: () => "pi",
+    switchNode: (id) => { current = id; switches.push(id); },
+    waitForOnline: async () => {},
+    openSession: (id) => { opened.push(id); },
+    addUserMessage: () => {},
+    transcriptUrl: (id) => { transcriptNodes.push(current); return `https://app/${current}/${id}`; },
+    refreshAccountSessions: () => {},
+  });
+
+  const result = coordinator.fork("source-session", { destNodeId: "dest-node", agentId: "claude", sourceAgentId: "pi" });
+  assert.equal(command.kind, "session.fork.export");
+  coordinator.handleEvent({ type: "session.fork.bundle", requestId: "request-1", bundle: { record: {}, normalized: { turns: [] } } } as any);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(command.kind, "session.fork.import");
+  assert.equal(command.transcriptUrl, "https://app/source-node/source-session");
+  coordinator.handleEvent({ type: "session.fork.error", requestId: "request-2", error: "destination failed" } as any);
+  await assert.rejects(result, /destination failed/);
+  assert.deepEqual(transcriptNodes, ["source-node"]);
+  assert.deepEqual(switches, ["dest-node", "source-node"]);
+  assert.deepEqual(opened, ["source-session"]);
+});
+
 test("session coordinator owns draft creation ordering and first prompt framing", () => {
   const events: string[] = [];
   let pending: any;
