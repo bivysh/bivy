@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-09-01
+
+### Changed
+
+- Documentation now distinguishes Bivy's local agent runtime, remote browser
+  access, and optional hosted control plane more clearly.
+
+### Fixed
+
+- Native terminal handoffs now discover and resume agent sessions reliably,
+  including Claude Code, Pi, Gemini CLI, and Qwen Code sessions.
+- `bivy update` now recognizes scoped global npm installs and restarts an
+  existing service even when its stored configuration hint is stale.
+- Tool calls and results from agents that omit correlation IDs now remain paired
+  in live and persisted transcripts instead of appearing as duplicate or
+  indefinitely running tool cards.
+
 ## [0.16.0] - 2026-08-31
 
 ### Changed
