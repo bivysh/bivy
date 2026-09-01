@@ -177,7 +177,7 @@ jobs:
   root-builds:
     needs: changes
     if: inputs.force_all || needs.changes.outputs.root == 'true'
-    name: Web + release builds
+    name: Web build
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -192,9 +192,34 @@ jobs:
       # raw/gzip ceiling. The long-transcript budget runs in test:unit.
       - run: pnpm run build:web
       - run: node scripts/check-bundle-size.mjs
-      # Exercise the emitted node RELEASE build and curated standalone package,
-      # which catches cross-boundary imports that tsc --noEmit can miss.
-      - run: pnpm run build:release
+
+  # Build the platform-independent release package in parallel with the PWA.
+  # Consumer installation is the longest downstream check, so making it wait
+  # for an unrelated web build adds directly to the overall critical path.
+  root-release:
+    needs: changes
+    if: inputs.force_all || needs.changes.outputs.root == 'true'
+    name: Release package
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.19.0'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Exercise emitted JavaScript and package curation, which catches
+      # cross-boundary imports that tsc --noEmit can miss.
+      - run: node scripts/build-release.mjs --pack release-artifact
+      - name: Upload release package for consumer tests
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-package
+          path: release-artifact/bivy-latest.tar.gz
+          if-no-files-found: error
+          retention-days: 1
 
   # The Supported promise is a release gate of its own. Run deterministic pinned
   # fixtures on every certified OS family; no live credentials or latest-version
@@ -224,7 +249,7 @@ jobs:
   # supported desktop OS families. This catches release-only dependency/audit,
   # native-module, README metadata, and built-in Pi discovery regressions.
   release-consumer:
-    needs: changes
+    needs: [changes, root-release]
     if: inputs.force_all || needs.changes.outputs.root == 'true'
     name: Release consumer (${{ matrix.os }})
     strategy:
@@ -235,13 +260,15 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22.19.0'
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm run test:release-smoke
+      - name: Download release package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-package
+          path: release-artifact
+      - run: node scripts/smoke-release.mjs --artifact release-artifact/bivy-latest.tar.gz
 
   # The PWA is a principal product client. Playwright parallelizes its test files
   # and desktop/mobile projects within this runner.
@@ -382,6 +409,7 @@ jobs:
       - root-quality
       - root-tests
       - root-builds
+      - root-release
       - agent-certification
       - release-consumer
       - browser
