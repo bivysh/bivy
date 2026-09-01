@@ -21,7 +21,11 @@ export interface SessionOrchestrationDependencies {
   sessionRuntime(sessionId: string): string | undefined;
   switchNode(nodeId: string): void;
   waitForOnline(timeoutMs?: number): Promise<void>;
-  openSession(sessionId: string, path?: string): void;
+  /** Open a session, optionally hydrating it from the correlated creation reply.
+   *  Fork replies already contain canonical history/runtime metadata; carrying
+   *  that snapshot through avoids briefly repainting the source session while a
+   *  second history request is in flight. */
+  openSession(sessionId: string, path?: string, snapshot?: ServerEvent): void;
   addUserMessage(text: string, clientMessageId: string): void;
   transcriptUrl(sessionId: string): string;
   refreshAccountSessions(): void;
@@ -251,7 +255,7 @@ export class SessionOrchestrator {
       const sessionId = String((done as { sessionId?: unknown }).sessionId || "");
       if (!sessionId) throw new Error("Local fork returned no session id");
       const result = this.forkResult(done, "full");
-      this.deps.openSession(sessionId);
+      this.deps.openSession(sessionId, undefined, done);
       if (opts.retireSource) this.deps.send({ kind: "session.delete", sessionId: sourceSessionId });
       return { sessionId, ...result };
     }
@@ -298,7 +302,10 @@ export class SessionOrchestrator {
     if (targetAgentId && actualAgentId && actualAgentId !== targetAgentId) {
       throw new Error(`Fork requested agent ${targetAgentId}, but the destination used ${actualAgentId}`);
     }
-    this.deps.openSession(sessionId);
+    // `session.fork.done` is also a complete history snapshot. Open from that
+    // exact reply so the URL, transcript, and active agent switch atomically to
+    // the fork instead of waiting for sessions.list/history to catch up.
+    this.deps.openSession(sessionId, undefined, done);
     const seedPrompt = (done as { seedPrompt?: unknown }).seedPrompt;
     if (typeof seedPrompt === "string" && seedPrompt.trim()) {
       const id = this.deps.createClientMessageId();
@@ -319,7 +326,7 @@ export class SessionOrchestrator {
         } finally {
           this.deps.switchNode(destNodeId!);
           await this.deps.waitForOnline().catch(() => {});
-          this.deps.openSession(sessionId);
+          this.deps.openSession(sessionId, undefined, done);
         }
       } else {
         this.deps.send(retire);
