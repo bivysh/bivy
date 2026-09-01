@@ -10,13 +10,22 @@ import type { ForkDirtyPatch } from "./fork.js";
  * checks it out); this carries the in-flight
  * edits on top so a fork never silently drops work-in-progress.
  *
- * The patch is size-capped. When the working tree is larger
- * than the cap (big or binary churn), we DON'T inline it — `capture` returns
- * `pushedInstead: true` and the caller commits & pushes the branch so the
- * destination reproduces from the pushed commit instead.
+ * The patch is size-capped. When the working tree is larger than the cap, the
+ * capture carries an explicit oversized marker. Fork stand-up rejects that
+ * bundle: pushing a branch cannot carry uncommitted files, and silently treating
+ * the marker as success would lose work-in-progress.
  */
 
 const DEFAULT_MAX_BYTES = 5 * 1024 * 1024; // 5 MiB of patch text
+
+/** Find the containing git checkout without throwing for ordinary non-git
+ * workspaces. A discovered checkout is captured fail-closed by the caller. */
+export function captureWorkspaceDirtyPatch(cwd: string, opts: { maxBytes?: number } = {}): ForkDirtyPatch | undefined {
+  const probe = spawnSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], { encoding: "utf8", timeout: 10_000 });
+  if (probe.status !== 0) return undefined;
+  const root = String(probe.stdout || "").trim();
+  return root ? captureDirtyPatch(root, opts) : undefined;
+}
 
 function git(repoDir: string, args: string[]): string {
   try {
@@ -48,8 +57,9 @@ export function captureDirtyPatch(repoDir: string, opts: { maxBytes?: number } =
     git(repoDir, ["diff", "--no-index", "--binary", "--", "/dev/null", rel]),
   );
   const patch = [tracked, ...untrackedPatches].filter(Boolean).join("");
-  if (Buffer.byteLength(patch, "utf8") > maxBytes) {
-    return { patch: "", untracked: [], pushedInstead: true };
+  const byteLength = Buffer.byteLength(patch, "utf8");
+  if (byteLength > maxBytes) {
+    return { patch: "", untracked, pushedInstead: true, byteLength, maxBytes };
   }
   return { patch, untracked };
 }
@@ -65,9 +75,10 @@ export interface ApplyDirtyResult {
 }
 
 /**
- * Re-apply a captured patch onto a fresh checkout at `repoDir`. A no-op when the
- * source pushed the branch instead (`pushedInstead`) or the working tree was
- * clean (empty patch). Uses `git apply` so both tracked hunks and untracked
+ * Re-apply a captured patch onto a fresh checkout at `repoDir`. An oversized
+ * marker produces a warning as a final defence; normal fork stand-up rejects it
+ * before reaching this function. A clean patch is a no-op. Uses `git apply` so
+ * both tracked hunks and untracked
  * new-file hunks (produced via `--no-index`) land correctly.
  *
  * NEVER throws: a fork's uncommitted changes are best-effort, and the source's
@@ -80,7 +91,13 @@ export interface ApplyDirtyResult {
  * succeeds, minus the un-appliable working-tree edits.
  */
 export function applyDirtyPatch(repoDir: string, dirty: ForkDirtyPatch | undefined): ApplyDirtyResult {
-  if (!dirty || dirty.pushedInstead || !dirty.patch.trim()) return { applied: false };
+  if (dirty?.pushedInstead) {
+    return {
+      applied: false,
+      warning: "The source working tree exceeded the fork transfer limit, so its uncommitted changes were not applied. The fork was stopped to prevent data loss.",
+    };
+  }
+  if (!dirty || !dirty.patch.trim()) return { applied: false };
   const tmp = path.join(os.tmpdir(), `bivy-fork-${Date.now()}-${Math.random().toString(36).slice(2)}.patch`);
   fs.writeFileSync(tmp, dirty.patch);
   try {

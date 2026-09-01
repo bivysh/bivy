@@ -64,8 +64,17 @@ export interface ForkDirtyPatch {
   patch: string;
   /** Relative paths of untracked files included in `patch` via --intent-to-add. */
   untracked: string[];
-  /** True when the working tree was too large to inline; branch was pushed instead. */
+  /**
+   * The snapshot exceeded the transport limit and was NOT captured. Importers
+   * must reject this bundle rather than silently creating a fork without WIP.
+   * `pushedInstead` is retained as the wire-compatible marker used by older
+   * nodes; despite its historical name, uncommitted files cannot be preserved
+   * by pushing the branch alone.
+   */
   pushedInstead?: boolean;
+  /** Actual and configured snapshot sizes, for an actionable error. */
+  byteLength?: number;
+  maxBytes?: number;
 }
 
 /**
@@ -132,17 +141,18 @@ export interface BuildForkBundleOptions {
  */
 export function buildForkBundle(opts: BuildForkBundleOptions): ForkBundle {
   const { runtime, sessionFile, record } = opts;
-  // Prefer the build-free readMessages fast path (pi/Claude); fall back to the
-  // live session's transcript for runtimes without one (the generic CLI runtime),
-  // so a fork *from* any agent still carries its real history.
+  // The live session is authoritative: a persisted native reader can lag the
+  // current turn (or return an empty-but-valid snapshot during a flush race).
+  // Prefer liveMessages whenever the caller has them, and use readMessages only
+  // when no live transcript was supplied. This avoids silently truncating a fork
+  // made while the source is open, while still supporting offline/native refs.
   let messages = opts.liveMessages;
-  if (sessionFile && runtime.readMessages) {
+  if (messages === undefined && sessionFile && runtime.readMessages) {
     try {
-      messages = runtime.readMessages(sessionFile) ?? messages;
+      messages = runtime.readMessages(sessionFile);
     } catch {
-      // Runtime-native readers are best-effort. The live transcript is the
-      // universal source fallback and keeps one broken adapter from blocking a
-      // fork out to every other agent.
+      // Runtime-native readers are best-effort. An unavailable reader yields an
+      // empty portable transcript, which still degrades safely to a seed.
     }
   }
   const normalized = normalizeMessages(messages, {

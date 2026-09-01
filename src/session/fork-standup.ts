@@ -88,7 +88,7 @@ export interface ForkStandUpDeps<R extends ForkStandUpSession> {
   /** Whether the source branch is on the remote — gates the adopt path so a
    *  never-pushed branch can't silently base off the destination default. */
   originBranchPresent(repoDir: string, branch: string): Promise<boolean>;
-  applyDirtyPatch(cwd: string, patch: ForkBundle["dirtyPatch"]): { warning?: string };
+  applyDirtyPatch(cwd: string, patch: ForkBundle["dirtyPatch"]): { applied?: boolean; warning?: string };
   gitRepoRoot(cwd: string): Promise<string | undefined>;
   materializeFork(args: MaterializeForkOptions): Promise<ForkPlan>;
   getRuntime(id: string, sandbox?: SandboxTier): AgentRuntime;
@@ -123,6 +123,20 @@ export function createForkStandUp<R extends ForkStandUpSession>(deps: ForkStandU
   async function standUpFork(opts: StandUpForkOptions): Promise<StandUpForkOutcome<R>> {
     const { bundle, targetRuntimeId } = opts;
     const fallback = opts.fallback ?? { workspace: deps.defaultWorkspace, cwd: deps.defaultWorkspace };
+    // An oversized dirty marker means no WIP bytes are present in the bundle.
+    // Never continue and pretend the pushed branch preserved them: git push only
+    // transports commits. The source remains untouched, so the user can commit,
+    // reduce the change set, or raise the configured transfer limit and retry.
+    if (bundle.dirtyPatch?.pushedInstead) {
+      const size = bundle.dirtyPatch.byteLength;
+      const limit = bundle.dirtyPatch.maxBytes;
+      const detail = size && limit ? ` (${Math.ceil(size / 1024)} KiB; limit ${Math.ceil(limit / 1024)} KiB)` : "";
+      return {
+        ok: false,
+        error: `The source has too many uncommitted changes to transfer safely${detail}. Commit them or reduce the working-tree changes, then retry; the source was not modified.`,
+        missing: [],
+      };
+    }
     // Carry the source's sandbox tier so a sandboxed session forks into a
     // sandboxed one, rather than defaulting to this node's tier (fork.ts).
     const forkSandbox = normalizeSandboxTier(bundle.record.sandbox);
@@ -216,6 +230,13 @@ export function createForkStandUp<R extends ForkStandUpSession>(deps: ForkStandU
         return deps.createWorktree({ repoDir, id: dirId, branch: srcBranch, base });
       });
       const applied = deps.applyDirtyPatch(wt.path, bundle.dirtyPatch);
+      if (bundle.dirtyPatch?.patch.trim() && applied.applied !== true) {
+        return {
+          ok: false,
+          error: applied.warning ?? "The source's uncommitted changes could not be applied safely. The source was not modified; retry after committing or reducing the changes.",
+          missing: [],
+        };
+      }
       if (applied.warning) dirtyWarning = applied.warning;
       workspace = repoDir;
       cwd = wt.path;
@@ -231,6 +252,13 @@ export function createForkStandUp<R extends ForkStandUpSession>(deps: ForkStandU
         const forkBranch = `bivy/fork-${randomBytes(6).toString("hex")}`;
         const wt = await deps.withRepoLock(forkRepoRoot, () => deps.createWorktree({ repoDir: forkRepoRoot, id: forkBranch, branch: forkBranch }));
         const applied = deps.applyDirtyPatch(wt.path, bundle.dirtyPatch);
+        if (bundle.dirtyPatch?.patch.trim() && applied.applied !== true) {
+          return {
+            ok: false,
+            error: applied.warning ?? "The source's uncommitted changes could not be applied safely. The source was not modified; retry after committing or reducing the changes.",
+            missing: [],
+          };
+        }
         if (applied.warning) dirtyWarning = applied.warning;
         workspace = forkRepoRoot;
         cwd = wt.path;

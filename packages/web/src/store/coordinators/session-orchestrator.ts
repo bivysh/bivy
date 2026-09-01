@@ -265,18 +265,33 @@ export class SessionOrchestrator {
     const bundle = (exported as { bundle?: unknown }).bundle;
     if (!bundle) throw new Error("Fork export returned no bundle");
 
-    if (crossNode) {
-      this.deps.switchNode(destNodeId!);
-      await this.deps.waitForOnline();
+    // Resolve source-addressed metadata before changing node identity. Besides
+    // producing the correct link, this keeps the entire export result independent
+    // of destination state. If destination stand-up fails, restore the source
+    // node/session so the user never gets stranded on an empty machine view.
+    const sourceTranscriptUrl = this.deps.transcriptUrl(sourceSessionId);
+    let done: ServerEvent;
+    try {
+      if (crossNode) {
+        this.deps.switchNode(destNodeId!);
+        await this.deps.waitForOnline();
+      }
+      done = await this.request({
+        kind: "session.fork.import",
+        bundle,
+        transcriptUrl: sourceTranscriptUrl,
+        sameNode: !crossNode,
+        ...(targetAgentId ? { agent: targetAgentId } : {}),
+        ...(opts.model ? { model: opts.model } : {}),
+      }, FORK_IMPORT_TIMEOUT_MS);
+    } catch (error) {
+      if (crossNode) {
+        this.deps.switchNode(sourceNodeId);
+        await this.deps.waitForOnline().catch(() => {});
+        this.deps.openSession(sourceSessionId);
+      }
+      throw error;
     }
-    const done = await this.request({
-      kind: "session.fork.import",
-      bundle,
-      transcriptUrl: this.deps.transcriptUrl(sourceSessionId),
-      sameNode: !crossNode,
-      ...(targetAgentId ? { agent: targetAgentId } : {}),
-      ...(opts.model ? { model: opts.model } : {}),
-    }, FORK_IMPORT_TIMEOUT_MS);
     const sessionId = String((done as { sessionId?: unknown }).sessionId || "");
     if (!sessionId) throw new Error("Fork import returned no session id");
     const actualAgentId = String((done as { runtimeId?: unknown }).runtimeId || "");
