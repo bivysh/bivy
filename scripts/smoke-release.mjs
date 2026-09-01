@@ -4,6 +4,9 @@
  * Clean-consumer smoke test for the exact curated npm artifact. CI runs this on
  * Ubuntu and macOS so release packaging cannot silently depend on the checkout,
  * devDependencies, or one operating system's node_modules layout.
+ *
+ * With no arguments it builds the artifact first. CI passes `--artifact <path>`
+ * so multiple consumer jobs can test one package without rebuilding it.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -13,6 +16,11 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const artifactIndex = process.argv.indexOf("--artifact");
+if (artifactIndex >= 0 && !process.argv[artifactIndex + 1]) {
+  throw new Error("--artifact requires a path to bivy-latest.tar.gz");
+}
+const providedArtifact = artifactIndex >= 0 ? path.resolve(process.argv[artifactIndex + 1]) : undefined;
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-release-smoke-"));
 const releaseDir = path.join(tmp, "release");
 const extracted = path.join(tmp, "extracted");
@@ -55,8 +63,17 @@ try {
   fs.mkdirSync(consumer, { recursive: true });
   fs.mkdirSync(globalPrefix, { recursive: true });
 
-  run(process.execPath, [path.join(root, "scripts/build-release.mjs"), "--pack", releaseDir]);
-  run("tar", ["-xzf", path.join(releaseDir, "bivy-latest.tar.gz"), "-C", extracted]);
+  // CI builds the platform-independent package once and passes the same artifact
+  // to both consumer OS jobs. Local runs still build it here for convenience.
+  // Besides avoiding duplicate compilation, this proves both OSes consume the
+  // exact same bytes that the build job produced.
+  const artifact = providedArtifact ?? path.join(releaseDir, "bivy-latest.tar.gz");
+  if (providedArtifact) {
+    if (!fs.existsSync(providedArtifact)) throw new Error(`release artifact does not exist: ${providedArtifact}`);
+  } else {
+    run(process.execPath, [path.join(root, "scripts/build-release.mjs"), "--pack", releaseDir]);
+  }
+  run("tar", ["-xzf", artifact, "-C", extracted]);
 
   const app = path.join(extracted, "bivy");
   const staged = JSON.parse(fs.readFileSync(path.join(app, "package.json"), "utf8"));
