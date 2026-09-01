@@ -62,6 +62,7 @@
     "certification:latest": "node scripts/certification.mjs --latest",
     "certification:live": "node scripts/certification.mjs --live",
     "check:links": "node scripts/check-links.mjs",
+    "release:version": "node scripts/set-release-version.mjs",
     "build:release": "node scripts/build-release.mjs",
     "test:release-smoke": "node scripts/smoke-release.mjs",
     "publish:npm": "node scripts/build-release.mjs --publish",
