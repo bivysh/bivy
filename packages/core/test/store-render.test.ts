@@ -127,6 +127,17 @@ describe("renderHistory block interleaving", () => {
     expect(tool?.detail).toMatchObject({ kind: "unknown", result: { isError: true } });
   });
 
+  it("pairs an id-less result with the newest matching running tool", () => {
+    const entries = renderHistory([
+      { role: "assistant", content: [{ type: "tool_use", name: "bash", input: { command: "pwd" } }] },
+      { role: "tool_result", name: "bash", content: "workspace" },
+    ]);
+    const tool = entries.find((entry) => entry.tool)?.tool;
+    expect(tool?.status).toBe("done");
+    expect(tool?.name).toBe("bash");
+    expect(tool?.result).toBe("workspace");
+  });
+
   it("handles string content and text-only assistant messages unchanged", () => {
     const entries = renderHistory([{ role: "assistant", content: "just text" }]);
     expect(entries).toHaveLength(1);

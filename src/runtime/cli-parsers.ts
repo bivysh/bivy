@@ -100,6 +100,12 @@ class TurnAccumulator {
   private textFlushed = "";
   private readonly out: RuntimeMessage[] = [];
   private readonly details = new Map<string, ReturnType<typeof mapToolCall>>();
+  // Not every CLI includes a stable id on both halves of a tool exchange.
+  // Keep a small FIFO of open calls so the universal parser can still pair an
+  // anonymous result with its call instead of creating a second, forever-running
+  // card in the transcript.
+  private readonly openToolIds: string[] = [];
+  private anonymousToolId = 0;
 
   private flushPendingText() {
     const pending = this.text.slice(this.textFlushed.length);
@@ -142,24 +148,33 @@ class TurnAccumulator {
   }
 
   addToolUse(id: string, name: string, input: unknown, events: RuntimeEvent[]) {
-    traceToolPayload({ phase: "call", context: this.toolContext, name, callId: id, payload: input });
+    const callId = id || `cli-tool-${++this.anonymousToolId}`;
+    this.openToolIds.push(callId);
+    traceToolPayload({ phase: "call", context: this.toolContext, name, callId, payload: input });
     // Attach a normalized ToolCallDetail (display-only) so the PWA renders this
     // call the same way it renders every other agent's equivalent call. Absent
     // when unrecognized — the block stays opaque and renders as before.
     const detail = mapToolCall(name, input, this.toolContext);
-    if (detail && id) this.details.set(id, detail);
+    if (detail) this.details.set(callId, detail);
     this.flushPendingText();
-    this.content.push({ type: "tool_use", id, name, input: input ?? {}, ...(detail ? { detail } : {}) });
-    events.push({ type: "tool_call", toolName: name, input, toolCallId: id, ...(detail ? { detail } : {}) });
+    this.content.push({ type: "tool_use", id: callId, name, input: input ?? {}, ...(detail ? { detail } : {}) });
+    events.push({ type: "tool_call", toolName: name, input, toolCallId: callId, ...(detail ? { detail } : {}) });
   }
 
   addToolResult(toolUseId: string, name: string, content: unknown, events: RuntimeEvent[], isError = false) {
-    traceToolPayload({ phase: "result", context: this.toolContext, name, callId: toolUseId, payload: content });
-    const prior = this.details.get(toolUseId);
+    // Prefer the explicit id. Otherwise close the oldest open call, which is
+    // the only generally safe correlation available from an id-less stream.
+    const callId = toolUseId || this.openToolIds.shift() || `cli-tool-result-${++this.anonymousToolId}`;
+    if (toolUseId) {
+      const index = this.openToolIds.indexOf(toolUseId);
+      if (index >= 0) this.openToolIds.splice(index, 1);
+    }
+    traceToolPayload({ phase: "result", context: this.toolContext, name, callId, payload: content });
+    const prior = this.details.get(callId);
     const detail = prior ? { ...prior, result: mapToolResult(content, isError) } : undefined;
-    if (detail) this.details.set(toolUseId, detail);
-    this.toolResults.push({ type: "tool_result", tool_use_id: toolUseId, content: content ?? "", ...(detail ? { detail } : {}) });
-    events.push({ type: "tool_result", toolName: name, result: { toolCallId: toolUseId, content }, ...(detail ? { detail } : {}) });
+    if (detail) this.details.set(callId, detail);
+    this.toolResults.push({ type: "tool_result", tool_use_id: callId, content: content ?? "", ...(detail ? { detail } : {}) });
+    events.push({ type: "tool_result", toolName: name, result: { toolCallId: callId, content }, ...(detail ? { detail } : {}) });
   }
 
   /** Finalize the turn: emit message_end/turn_end/agent_end and record history. */
