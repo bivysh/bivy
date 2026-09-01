@@ -58,7 +58,8 @@ test("the autonomous + full-access acknowledgement checkbox only appears for tha
   expect(view).toContain('const unsafeCombo = d.approvalMode === "autonomous" && d.sandbox === "danger-full-access";');
   expect(view).toContain("{unsafeCombo && (");
   expect(view).toContain("I understand the risk of autonomous approval with full access — allow it anyway.");
-  expect(view).toContain("const [allowDangerous, setAllowDangerous] = useState(false);");
+  expect(view).toContain("const [allowDangerous, setAllowDangerous] = useState(existing?.allowDangerous ?? false);");
+  expect(view).toContain("setAllowDangerous(existing?.allowDangerous ?? false);");
 });
 
 test("legacy github_ci automations are exempt from requiring encrypted instructions server-side", async () => {
