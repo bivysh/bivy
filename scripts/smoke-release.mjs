@@ -105,7 +105,15 @@ try {
   const bivy = path.join(consumer, "node_modules", ".bin", "bivy");
   const version = run(bivy, ["--version"], { cwd: consumer, capture: true }).trim();
   if (version !== staged.version) throw new Error(`CLI version ${version} != package ${staged.version}`);
-  const agents = run(bivy, ["agents", "--json"], { cwd: consumer, capture: true });
+  // Running a local bin directly (rather than through `npm exec`) does not add
+  // sibling bins to PATH. Model a real npm-script/npx consumer so Bivy can see
+  // the Pi executable installed from its optional dependency. Previously the
+  // repo-level pnpm setup supplied an unrelated Pi binary and masked this.
+  const consumerEnv = {
+    ...process.env,
+    PATH: `${path.dirname(bivy)}${path.delimiter}${process.env.PATH ?? ""}`,
+  };
+  const agents = run(bivy, ["agents", "--json"], { cwd: consumer, capture: true, env: consumerEnv });
   if (!agents.includes('"id": "pi"') || !agents.includes('"installed": true')) {
     throw new Error("packaged CLI did not discover its built-in Pi runtime");
   }
