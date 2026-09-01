@@ -10,9 +10,10 @@ name: Release
 #                         every change lands on.
 #   workflow_dispatch  -> PRODUCTION (deliberate). Promotes the current
 #                         package.json version to the `latest` dist-tag, gated by
-#                         the `release` environment approval and the full CI
-#                         suite, then tags the commit and creates the GitHub
-#                         release. This is the one-click "Promote" button.
+#                         the `release` environment approval. Promotion reuses
+#                         the merge's required CI and requires its staging publish
+#                         to have succeeded, then tags the commit and creates the
+#                         GitHub release. This is the one-click "Promote" button.
 #
 # Both jobs authenticate to npm with the job's GitHub Actions OIDC identity
 # (`id-token: write`) against the ONE trusted publisher configured for
@@ -100,27 +101,37 @@ jobs:
         run: pnpm run publish:npm -- --tag staging
 
   # --------------------------------------------------------------- PRODUCTION --
-  # Re-run the exact gate a PR must pass, on the commit about to be promoted.
-  ci:
-    if: github.event_name == 'workflow_dispatch'
-    uses: ./.github/workflows/ci.yml
-    with:
-      force_all: true
-    permissions:
-      contents: read
-      pull-requests: read
-
   production:
     if: github.event_name == 'workflow_dispatch'
     name: Promote to npm `latest` + tag + GitHub release
-    needs: ci
     runs-on: ubuntu-latest
     # Approval gate: a dispatch alone cannot publish to production.
     environment: release
     permissions:
+      actions: read # verify this exact commit published successfully to staging
       contents: write # push the tag + create the GitHub release
       id-token: write # OIDC: trusted publish + provenance
     steps:
+      # A release PR already passed the required full CI gate. Re-running that
+      # suite here made promotion slow without testing a different commit. The
+      # automatic staging publish is the post-merge canary for the exact main
+      # SHA; wait briefly for it when Promote is clicked immediately after merge.
+      - name: Require a successful staging publish for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in $(seq 1 40); do
+            count="$(gh api "/repos/$GITHUB_REPOSITORY/actions/workflows/release.yml/runs?head_sha=$GITHUB_SHA&event=push&status=success&per_page=1" --jq '.total_count')"
+            if [ "$count" -gt 0 ]; then
+              echo "The staging publish for $GITHUB_SHA succeeded."
+              exit 0
+            fi
+            echo "Waiting for the staging publish for $GITHUB_SHA ($attempt/40)..."
+            sleep 15
+          done
+          echo "::error::No successful staging publish found for $GITHUB_SHA. Wait for the push-triggered Release run (and the PR's required CI) to pass, then retry."
+          exit 1
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0

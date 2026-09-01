@@ -139,12 +139,11 @@ Production is a deliberate promotion of whatever version `package.json` currentl
 holds on `main`, to the `latest` dist-tag.
 
 1. Open a PR that, on `main`:
-   - sets the release version in the root `package.json` **and every workspace**
-     `package.json` (`packages/*`, `services/*`) so they all agree — there is no
-     sync script — to a clean `X.Y.Z` (no prerelease suffix);
+   - runs `pnpm run release:version -- X.Y.Z` to set the root, package, and
+     service manifests together to a clean release version;
    - moves `CHANGELOG.md`'s `[Unreleased]` into a `## [X.Y.Z]` section.
-   Merge it. (This merge also publishes one more `X.Y.Z-staging.N` build —
-   harmless; it's a release candidate for exactly this version.)
+   Merge it and wait for its required CI and automatic staging publish to pass.
+   (The staging build is a release candidate for exactly this commit.)
 2. Run the **Promote** button: Actions → **Release** → *Run workflow* (from
    `main`), and type the exact `X.Y.Z` into the confirmation field. Or from the
    CLI:
@@ -154,15 +153,18 @@ holds on `main`, to the `latest` dist-tag.
    ```
 3. Approve the run when it pauses on the `release` environment.
 
-The `production` job re-runs the full CI gate (`ci.yml` via `workflow_call`),
-validates that `package.json` is a clean version matching your confirmation and
-that `vX.Y.Z` was not already released, checks all workspaces agree, publishes to
-`latest` via Trusted Publishing (automatic provenance), then tags the commit
-`vX.Y.Z` and creates the GitHub release from the matching `## [X.Y.Z]` CHANGELOG
-section (`scripts/extract-changelog.mjs`).
+The release PR must pass the repository's full required CI before it can merge.
+Promotion does not run that same suite a second time: it verifies that the exact
+`main` commit completed its automatic staging publish, validates the version and
+workspace agreement, and publishes the stable build to `latest` via Trusted
+Publishing (automatic provenance). It then tags the commit `vX.Y.Z` and creates
+the GitHub release from the matching CHANGELOG section
+(`scripts/extract-changelog.mjs`). If Promote is clicked while staging is still
+running, it waits for up to ten minutes.
 
-After the release, bump `package.json` (all workspaces) to the next development
-version in a follow-up PR so subsequent staging builds carry the new number.
+After the release, use `pnpm run release:version -- X.Y.Z` in the development
+version PR as well; this replaces the previous manual edits across every
+manifest.
 
 ### Publishing by hand (discouraged)
 
