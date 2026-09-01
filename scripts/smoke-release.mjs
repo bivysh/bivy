@@ -11,7 +11,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
@@ -28,11 +28,9 @@ const packs = path.join(tmp, "packs");
 const consumer = path.join(tmp, "consumer");
 const globalPrefix = path.join(tmp, "global");
 
-// Every step here is a blocking spawnSync, so a wedged child (an npm install
-// that stalls on the registry in a sandboxed/offline environment) would hang the
-// whole smoke test indefinitely — the exact "packaged-install check never
-// returns" freeze. Give each command a hard timeout with a SIGKILL escalation so
-// a hang fails loudly in minutes instead of blocking forever.
+// A wedged child (an npm install that stalls on the registry in a
+// sandboxed/offline environment) must not hang the whole smoke test. Give each
+// command a hard timeout with a SIGKILL escalation so it fails loudly instead.
 const DEFAULT_STEP_TIMEOUT_MS = 10 * 60 * 1000;
 
 function run(command, args, options = {}) {
@@ -54,6 +52,40 @@ function run(command, args, options = {}) {
     throw new Error(`${command} ${args.join(" ")} failed (${result.status})${detail}`);
   }
   return result.stdout ?? "";
+}
+
+function runAsync(command, args, options = {}) {
+  const { timeout = DEFAULT_STEP_TIMEOUT_MS, ...spawnOptions } = options;
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: root,
+      stdio: "inherit",
+      detached: process.platform !== "win32",
+      ...spawnOptions,
+    });
+    let finished = false;
+    const finish = (error) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      if (error) reject(error);
+      else resolve();
+    };
+    child.once("error", (error) => finish(error));
+    child.once("close", (code, signal) => {
+      if (code === 0) finish();
+      else finish(new Error(`${command} ${args.join(" ")} failed (${code ?? signal ?? "unknown"})`));
+    });
+    const timer = setTimeout(() => {
+      try {
+        if (process.platform !== "win32" && child.pid) process.kill(-child.pid, "SIGKILL");
+        else child.kill("SIGKILL");
+      } catch {
+        // The process exited between the timeout and kill.
+      }
+      finish(new Error(`${command} ${args.join(" ")} timed out after ${timeout}ms`));
+    }, timeout);
+  });
 }
 
 try {
@@ -93,14 +125,20 @@ try {
   // install.sh uses npm's global layout. A project-local install can hoist an
   // embedded dependency and conceal missing files in its transitive packages,
   // which is how the broken thin Pi bundle escaped the original smoke test.
-  run("npm", ["install", "--global", tarball, "--prefix", globalPrefix, "--no-audit", "--no-fund", "--prefer-offline"]);
+  // The layouts are independent, so exercise both concurrently rather than
+  // putting two registry installs in CI's critical path one after the other.
+  const installs = await Promise.allSettled([
+    runAsync("npm", ["install", "--global", tarball, "--prefix", globalPrefix, "--no-audit", "--no-fund", "--prefer-offline"]),
+    runAsync("npm", ["install", tarball, "--no-fund", "--prefer-offline"], { cwd: consumer }),
+  ]);
+  const failedInstall = installs.find((result) => result.status === "rejected");
+  if (failedInstall?.status === "rejected") throw failedInstall.reason;
+
   const globalBivy = path.join(globalPrefix, "bin", "bivy");
   const globalVersion = run(globalBivy, ["--version"], { capture: true }).trim();
   if (globalVersion !== staged.version) throw new Error(`global CLI version ${globalVersion} != package ${staged.version}`);
   const globalPiManifest = path.join(globalPrefix, "lib", "node_modules", "@bivy", "bivy", "node_modules", "@earendil-works", "pi-coding-agent", "package.json");
   if (!fs.existsSync(globalPiManifest)) throw new Error("global install did not resolve Pi as an ordinary dependency");
-
-  run("npm", ["install", tarball, "--no-fund", "--prefer-offline"], { cwd: consumer });
 
   const bivy = path.join(consumer, "node_modules", ".bin", "bivy");
   const version = run(bivy, ["--version"], { cwd: consumer, capture: true }).trim();
