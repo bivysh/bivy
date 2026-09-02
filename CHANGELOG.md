@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.8] - 2026-09-02
+
+### Changed
+
+- Cross-machine forks now transfer plain and unmanaged workspaces into isolated
+  destinations, preserve files, symlinks, and modes, and support a configurable
+  workspace size limit.
+
+### Fixed
+
+- Workspace forks now fail safely on inspection errors and avoid stale native
+  transcripts while a transfer is in progress.
+
 ## [0.16.7] - 2026-09-02
 
 ### Added
