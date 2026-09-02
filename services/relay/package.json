@@ -1,6 +1,6 @@
 {
   "name": "bivy-relay",
-  "version": "0.16.8",
+  "version": "0.16.9",
   "private": true,
   "type": "module",
   "description": "Self-hostable/Bivy Cloud relay: routes opaque, E2E-encrypted frames between clients and nodes through NAT. Cannot read session content.",
