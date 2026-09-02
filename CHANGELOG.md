@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.7] - 2026-09-02
+
+### Added
+
+- Bivy account login and logout are now available from the CLI, including
+  interactive GitHub and email sign-in.
+
+### Changed
+
+- Model-provider authentication is now available through `bivy provider login`
+  (also aliased as `bivy model login`), leaving `bivy login` for account access.
+
 ## [0.16.6] - 2026-09-02
 
 ### Changed
