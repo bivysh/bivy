@@ -81,6 +81,7 @@ test("cross-node fork resolves source metadata before switching and restores sou
   const switches: string[] = [];
   const opened: string[] = [];
   const transcriptNodes: string[] = [];
+  const reports: Array<{ status: string; message: string }> = [];
   const coordinator = new SessionOrchestrator({
     send: () => {},
     sendRequest: (value) => { command = value; },
@@ -95,6 +96,7 @@ test("cross-node fork resolves source metadata before switching and restores sou
     addUserMessage: () => {},
     transcriptUrl: (id) => { transcriptNodes.push(current); return `https://app/${current}/${id}`; },
     refreshAccountSessions: () => {},
+    reportCrossNodeFork: (status, message) => { reports.push({ status, message }); },
   });
 
   const result = coordinator.fork("source-session", { destNodeId: "dest-node", agentId: "claude", sourceAgentId: "pi" });
@@ -108,6 +110,10 @@ test("cross-node fork resolves source metadata before switching and restores sou
   assert.deepEqual(transcriptNodes, ["source-node"]);
   assert.deepEqual(switches, ["dest-node", "source-node"]);
   assert.deepEqual(opened, ["source-session"]);
+  assert.deepEqual(reports, [
+    { status: "working", message: "Creating the fork on the destination machine…" },
+    { status: "error", message: "destination failed" },
+  ]);
 });
 
 test("session coordinator owns draft creation ordering and first prompt framing", () => {
