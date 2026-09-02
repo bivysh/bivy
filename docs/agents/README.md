@@ -36,7 +36,7 @@ hang on a pipe. It flips into the picker as a data-only change the moment a
 headless flag ships upstream.
 
 They all share one mechanism worth knowing up front: whenever you sign in to a
-model provider with `bivy login`, Bivy's vault forwards that credential to
+model provider with `bivy provider login`, Bivy's vault forwards that credential to
 *every* agent process as the provider's conventional environment variable
 (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, …) each turn — not
 just to Pi. That's on top of, not instead of, whatever native login an agent

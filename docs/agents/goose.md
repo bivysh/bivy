@@ -23,7 +23,7 @@ Goose's own configuration is set to read that provider from the environment —
 Bivy doesn't select a model or provider for Goose itself:
 
 ```bash
-bivy login   # sign in to whichever provider Goose is configured to use
+bivy provider login   # sign in to whichever provider Goose is configured to use
 ```
 
 ## Models

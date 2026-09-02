@@ -13,7 +13,9 @@
  *   bivy stop      stop the background service
  *   bivy restart   restart the background service (waits for active sessions to finish; --force to skip)
  *   bivy status    show config + whether the node is reachable
- *   bivy login     sign into a model provider (native Pi /login)
+ *   bivy login     sign this machine into a Bivy account
+ *   bivy logout    sign this machine out of its Bivy account
+ *   bivy provider login  sign into a model provider
  *   bivy update    update Bivy + install deps + restart service (waits for active sessions to finish; --force to skip)
  *   bivy update:log  show output of the last (or in-progress) update
  *   bivy open      open the browser UI
@@ -1802,7 +1804,7 @@ function cmdCompletions(args = []) {
   const shell = (args[0] || "").toLowerCase();
   const commands = [
     "run", "runs", "sessions", "ls", "resume", "promote", "rename", "nodes", "agent", "agents", "agents:install", "shim", "takeover", "token", "exec",
-    "send", "attach", "kill", "setup", "start", "stop", "restart", "status", "doctor", "diagnostics", "capabilities", "logs", "login",
+    "send", "attach", "kill", "setup", "start", "stop", "restart", "status", "doctor", "diagnostics", "capabilities", "logs", "login", "logout", "signout", "provider", "model",
     "update", "update:log", "audit", "automation", "config", "plugin", "open", "service", "secrets", "voice", "link", "relay:setup",
     "github:connect", "github:app-create", "github:app-connect", "github:app-sync", "prune", "uninstall", "help", "version",
   ];
@@ -1820,6 +1822,7 @@ _bivy_completions() {
   fi
   case "$prev" in
     run) COMPREPLY=( $(compgen -W "${agents.join(" ")}" -- "$cur") );;
+    provider|model) COMPREPLY=( $(compgen -W "login" -- "$cur") );;
   esac
 }
 complete -F _bivy_completions bivy`);
@@ -1835,6 +1838,8 @@ _bivy() {
     compadd -- $cmds
   elif [[ \${words[2]} == run ]]; then
     compadd -- $agents
+  elif [[ \${words[2]} == provider || \${words[2]} == model ]]; then
+    compadd -- login
   fi
 }
 compdef _bivy bivy`);
@@ -1844,7 +1849,8 @@ compdef _bivy bivy`);
     console.log(`# bivy fish completion — save to ~/.config/fish/completions/bivy.fish
 complete -c bivy -f
 complete -c bivy -n '__fish_use_subcommand' -a '${commands.join(" ")}'
-complete -c bivy -n '__fish_seen_subcommand_from run' -a '${agents.join(" ")}'`);
+complete -c bivy -n '__fish_seen_subcommand_from run' -a '${agents.join(" ")}'
+complete -c bivy -n '__fish_seen_subcommand_from provider model' -a 'login'`);
     return;
   }
   console.error(c.red("Usage: bivy completions <bash|zsh|fish>"));
@@ -3785,7 +3791,7 @@ async function cmdSetup(args = []) {
       const loginCode = await runSetupModelLogin(config);
       rl.resume();
       if (loginCode !== 0 || !hasModelConfig(loadConfig())) {
-        console.log(c.yellow("Model sign-in did not complete. The node can start, but an agent reply still requires 'bivy login'."));
+        console.log(c.yellow("Model sign-in did not complete. The node can start, but an agent reply still requires 'bivy provider login'."));
       }
       agentAuthReady = hasModelConfig(loadConfig());
     }
@@ -3848,7 +3854,7 @@ async function cmdSetup(args = []) {
   console.log(c.bold(c.green("\n  ✓ Node running. Check first-task readiness below.\n")));
   console.log(`  ${c.green("✓")} node reachable at ${url(finalConfig)}`);
   console.log(`  ${agentReady ? c.green("✓") : c.yellow("!")} runtime ${agentReady ? `${setupAgent?.label || "Pi"} available` : "not installed — run 'bivy agents:install'"}`);
-  console.log(`  ${modelReady ? c.green("✓") : c.yellow("!")} model ${modelReady ? (setupAgent?.needsBivyModel ? "credential configured" : "native agent login ready") : (setupAgent?.needsBivyModel ? "not configured — run 'bivy login'" : `${setupAgent?.loginHint || "sign in through the selected agent"}`)}`);
+  console.log(`  ${modelReady ? c.green("✓") : c.yellow("!")} model ${modelReady ? (setupAgent?.needsBivyModel ? "credential configured" : "native agent login ready") : (setupAgent?.needsBivyModel ? "not configured — run 'bivy provider login'" : `${setupAgent?.loginHint || "sign in through the selected agent"}`)}`);
   console.log(`  ${repoReady ? c.green("✓") : c.dim("○")} repository ${repoReady ? "accessible" : "choose one from the directory where you start Bivy or in the app"}`);
   const ghReady = githubConnected(finalConfig);
   console.log(`  ${ghReady ? c.green("✓") : c.dim("○")} GitHub ${ghReady ? "connected — your repos will list in the app" : c.dim("optional — connect later in the app under Settings → GitHub App")}`);
@@ -3951,7 +3957,7 @@ function printFirstRunSteps(modelReady = false, setupAgent = null) {
   console.log("  Start your first session:");
   if (!modelReady) {
     const login = setupAgent?.needsBivyModel
-      ? `${c.cyan("bivy login")}  ${c.dim("(stored in Bivy's encrypted vault)")}`
+      ? `${c.cyan("bivy provider login")}  ${c.dim("(stored in Bivy's encrypted vault)")}`
       : c.cyan(setupAgent?.command || "the selected agent's native CLI");
     console.log(`    Model access: ${login}`);
   }
@@ -4225,7 +4231,7 @@ async function cmdDoctor(args = []) {
   console.log(`  ${mark(agentAvailable, true)} agent ${runtimeInfo?.displayName || defaultAgent}${agentAvailable ? "" : c.dim(" not available — install it or run 'bivy setup'")}`);
   const credentialReady = readiness?.credential?.ok ?? hasModelConfig(config);
   const credentialKnown = readiness?.credential?.probed || readiness?.credential?.configured;
-  console.log(`  ${mark(credentialReady, authOwner !== "bivy" || !credentialKnown)} model ${credentialReady ? (readiness?.credential?.probed ? "access verified" : "configured") : authOwner === "bivy" ? c.dim("not ready — run 'bivy login'") : c.dim("agent-native auth — use the agent's CLI login if needed")}`);
+  console.log(`  ${mark(credentialReady, authOwner !== "bivy" || !credentialKnown)} model ${credentialReady ? (readiness?.credential?.probed ? "access verified" : "configured") : authOwner === "bivy" ? c.dim("not ready — run 'bivy provider login'") : c.dim("agent-native auth — use the agent's CLI login if needed")}`);
   const repositoryReady = Boolean(readiness?.repository?.ok);
   console.log(`  ${mark(repositoryReady, true)} repository ${repositoryReady ? "accessible" : c.dim("not selected or access could not be verified")}`);
   const firstTaskReady = reachable && agentAvailable && credentialReady && repositoryReady;
@@ -4642,9 +4648,9 @@ function cmdUpdateLog(args) {
   });
 }
 
-async function cmdLogin(args) {
+async function cmdProviderLogin(args) {
   if (args.includes("-h") || args.includes("--help")) {
-    console.log("Usage: bivy login [provider]\n\nSign into a model provider (Pi's native /login). With no provider, prompts interactively for the auth method and provider.");
+    console.log("Usage: bivy provider login [provider]\n       bivy model login [provider]\n\nSign into a model provider. With no provider, prompts interactively for the authentication method and provider.");
     return;
   }
   if (!(await ensureDeps())) process.exit(1);
@@ -4654,6 +4660,85 @@ async function cmdLogin(args) {
     env: startEnv(config),
   });
   process.exit(code);
+}
+
+async function cmdAccountLogin(args) {
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log("Usage: bivy login [--github|--email <email>]\n\nSign this machine into a Bivy account and enable remote access. With no flags, choose GitHub or an emailed magic link interactively.");
+    return;
+  }
+  if (args[0] && !args[0].startsWith("-")) {
+    console.error(c.red(`'bivy login ${args[0]}' is no longer a model-provider command. Use 'bivy provider login ${args[0]}'.`));
+    process.exitCode = 1;
+    return;
+  }
+  await cmdRelaySetup(args);
+}
+
+async function cmdAccountLogout(args = []) {
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log("Usage: bivy logout\n       bivy signout\n\nSign this machine out of its Bivy account. Local sessions and model-provider credentials are kept.");
+    return;
+  }
+  if (args.length) {
+    console.error(c.red(`Unknown logout option: ${args[0]}`));
+    process.exitCode = 1;
+    return;
+  }
+  if (!fs.existsSync(relayConfigPath)) {
+    console.log(c.dim("This machine is not signed into a Bivy account."));
+    return;
+  }
+
+  let relayConfig;
+  try {
+    relayConfig = JSON.parse(fs.readFileSync(relayConfigPath, "utf8"));
+  } catch (error) {
+    console.log(c.yellow(`Could not read the existing account configuration: ${error instanceof Error ? error.message : String(error)}`));
+  }
+
+  if (relayConfig?.controlPlaneUrl && relayConfig?.enrollmentToken) {
+    try {
+      const res = await fetch(`${String(relayConfig.controlPlaneUrl).replace(/\/$/, "")}/node`, {
+        method: "DELETE",
+        headers: { authorization: `Bearer ${relayConfig.enrollmentToken}` },
+      });
+      if (!res.ok && res.status !== 401 && res.status !== 404) {
+        console.log(c.yellow(`Could not remove the account's machine registration (${res.status}); signing out locally anyway.`));
+      }
+    } catch (error) {
+      console.log(c.yellow(`Could not reach the account service; signing out locally anyway (${error instanceof Error ? error.message : String(error)}).`));
+    }
+  } else if (relayConfig?.room && relayConfig?.roomToken) {
+    console.log(c.dim("This machine used account-free relay access; removing that local relay configuration."));
+  }
+
+  fs.rmSync(relayConfigPath, { force: true });
+  fs.rmSync(setupSessionPath, { force: true });
+  // This key wraps the account-level model credential vault. It must not cross
+  // an account boundary; the local provider credential store itself is kept.
+  fs.rmSync(path.join(appDir, "model-auth-vault.json"), { force: true });
+
+  const config = loadConfig();
+  if (restartService()) {
+    console.log(c.green("Signed out. Service restarted with remote account access disabled."));
+    return;
+  }
+  if (await isReachable(config)) {
+    try {
+      const token = await localDeviceToken(config);
+      await localApi(config, "/api/relay/reload", {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+        body: "{}",
+      });
+      console.log(c.green("Signed out. The running node disconnected from the remote account."));
+      return;
+    } catch (error) {
+      console.log(c.yellow(`Signed out locally, but could not disconnect the running node immediately: ${error instanceof Error ? error.message : String(error)}`));
+    }
+  }
+  console.log(c.green("Signed out of Bivy on this machine."));
 }
 
 async function cmdLinkPhone(args = []) {
@@ -4937,7 +5022,9 @@ ${c.bold("bivy")} — Bivy node CLI
   ${c.cyan("bivy doctor")}     Health check: deps, node, model, remote, agents
   ${c.cyan("bivy capabilities")} [--json]  What this Machine unlocks: OS, agents, providers, Docker/GPU, plugins, workspaces
   ${c.cyan("bivy logs")} [-f]   Tail the node logs (systemd journal, launchd, or background log)
-  ${c.cyan("bivy login")}      Sign into a model provider (Pi /login)
+  ${c.cyan("bivy login")}      Sign this machine into a Bivy account (GitHub or email)
+  ${c.cyan("bivy logout")}     Sign this machine out (alias: signout)
+  ${c.cyan("bivy provider login")}  Sign into a model provider (alias: model login)
   ${c.cyan("bivy update")}     Update Bivy + install deps + restart service (waits for active sessions to finish a turn; --force to skip)
   ${c.cyan("bivy update:log")} Show output of the last (or in-progress) update
   ${c.cyan("bivy agent add")}        Connect an existing user-owned agent
@@ -5144,8 +5231,25 @@ Unlike 'bivy run', these commands operate on governed background Runs with check
       await cmdLogs(args);
       break;
     case "login":
-      await cmdLogin(args);
+      await cmdAccountLogin(args);
       break;
+    case "logout":
+    case "signout":
+      await cmdAccountLogout(args);
+      break;
+    case "provider":
+    case "model": {
+      const [action, ...providerArgs] = args;
+      if (action === "login") {
+        await cmdProviderLogin(providerArgs);
+      } else if (!action || ["-h", "--help", "help"].includes(action)) {
+        console.log(`Usage: bivy ${command} login [provider]\n\nSign into a model provider. Both 'bivy provider login' and 'bivy model login' are equivalent.`);
+      } else {
+        console.error(c.red(`Unknown ${command} action: ${action}. Usage: bivy ${command} login [provider]`));
+        process.exitCode = 1;
+      }
+      break;
+    }
     case "update":
       await cmdUpdate(args);
       break;

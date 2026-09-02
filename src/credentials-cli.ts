@@ -56,7 +56,7 @@ Agent-native logins:
 Config file (${path.relative(process.cwd(), configPath) || configPath}):
   bivy credentials config path|show|edit             Print path, show, or open in $EDITOR
 
-Note: run 'bivy login' to add a provider's default OAuth/API-key login.`);
+Note: run 'bivy provider login' to add a provider's default OAuth/API-key login.`);
 }
 
 async function askHidden(question: string): Promise<string> {
@@ -90,7 +90,7 @@ function kindLabel(r: CredentialRecordSummary): string {
 async function cmdList(): Promise<void> {
   const records = [...(await listCredentialRecords(credsDir))].sort((a, b) =>
     `${a.provider}:${a.label}`.localeCompare(`${b.provider}:${b.label}`));
-  if (records.length === 0) { console.log("No credentials. Add one with 'bivy credentials add', or 'bivy login'."); return; }
+  if (records.length === 0) { console.log("No credentials. Add one with 'bivy credentials add', or 'bivy provider login'."); return; }
   const presets = getCredentialPresets(credsDir);
   for (const r of records) {
     const badges = [kindLabel(r), r.sync === "account" ? "sync" : "node-only", r.origin === "agent-native" ? "from agent" : null]

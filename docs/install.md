@@ -122,7 +122,7 @@ picks sensible defaults for everything and asks a few questions:
   `app.bivy.sh`, free tier plus a paid plan — see
   [bivy.sh#pricing](https://bivy.sh#pricing)), `self-hosted` (points this node
   at your own control plane + relay), or `local only for now` (skip enrollment;
-  the CLI works locally and `bivy open` tells you to run `bivy relay:setup`
+  the CLI works locally and `bivy open` tells you to run `bivy login`
   when you want a browser or phone). Execution and session history stay on
   your machine in every case.
 - **Remote login** (hosted / self-hosted only) — GitHub sign-in (default) or an
@@ -133,7 +133,7 @@ picks sensible defaults for everything and asks a few questions:
 A browser or phone UI needs a control plane, because the node hosts none — so
 without enrollment Bivy is a local CLI: durable Sessions, resume, Runs, and
 automations from the terminal, but no `bivy open`. If enrollment fails, setup
-offers to retry; run `bivy relay:setup` later to finish.
+offers to retry; run `bivy login` later to finish.
 
 Everything else is automatic and changeable later in Settings: a dedicated
 `~/bivy-workspace` folder and local port, and a background service
@@ -164,7 +164,7 @@ internet), and session traffic is **end-to-end encrypted** — the relay only
 routes opaque frames. You can enable this later on an already-set-up node with:
 
 ```bash
-bivy relay:setup            # one-click sign-in, then enroll this node
+bivy login                  # GitHub or email sign-in, then enroll this node
 ```
 
 The hosted endpoints are baked in. To point at your own deployment, set
@@ -317,7 +317,7 @@ sudo journalctl -u bivy -f
 
 ## Remote PWA
 
-1. Enable hosted relay access with `bivy relay:setup`.
+1. Enable hosted relay access with `bivy login`.
 2. Open the app (served by the control plane, not the node) with `bivy open`.
 3. Choose **Link remote device** and scan/open the hosted sign-in link.
 4. On iOS Safari, tap Share → Add to Home Screen.

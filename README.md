@@ -125,8 +125,8 @@ configuration. Re-running the installer updates Bivy and restarts the service.
 without an account or server. During setup, choose **local only for now** to skip
 remote access. The browser and phone apps need a control plane: use
 [app.bivy.sh](https://app.bivy.sh) or
-[self-host one](docs/self-host-quickstart.md). You can switch later with
-`bivy relay:setup`.
+[self-host one](docs/self-host-quickstart.md). You can sign in later with
+`bivy login` (or use `bivy relay:setup` for self-hosted endpoint options).
 
 Self-hosted Bivy Core is open source and has no usage limits. Bivy Cloud offers
 a managed app, relay, and hosted Machines; see
