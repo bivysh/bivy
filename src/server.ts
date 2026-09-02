@@ -1506,6 +1506,7 @@ function writeSettings(settings: Record<string, unknown>) {
     ...("syncStandbyNodeId" in settings ? { standbyNodeId: typeof settings.syncStandbyNodeId === "string" ? settings.syncStandbyNodeId || undefined : undefined } : {}),
     ...(settings.sessionResumeMode === "auto" || settings.sessionResumeMode === "manual" ? { resume: settings.sessionResumeMode } : {}),
     ...(typeof settings.autoAttachToolImages === "boolean" ? { autoAttachToolImages: settings.autoAttachToolImages } : {}),
+    ...(Number.isInteger(settings.forkWorkspaceMaxBytes) ? { forkWorkspaceMaxBytes: Number(settings.forkWorkspaceMaxBytes) } : {}),
   };
   next.github = {
     ...next.github,
@@ -1611,6 +1612,7 @@ type NodeSettings = {
    *  src/harness/tool-image-attachments.ts) so a chatty tool can't flood the
    *  transcript even once enabled. */
   autoAttachToolImages: boolean;
+  forkWorkspaceMaxBytes: number;
 };
 
 /** The node's default model for new sessions, or null (= use the runtime default). */
@@ -1671,6 +1673,7 @@ function nodeSettingsSnapshot(): NodeSettings {
     })(),
     sessionResumeMode: nodeSessionResumeMode(),
     autoAttachToolImages: readSettings().autoAttachToolImages === true,
+    forkWorkspaceMaxBytes: Number.isInteger(readSettings().forkWorkspaceMaxBytes) ? Number(readSettings().forkWorkspaceMaxBytes) : 50 * 1024 * 1024,
   };
 }
 
@@ -2160,6 +2163,7 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     modelFrom,
     pushModelAuthToControlPlane,
     pushForkSourceBranch: (rec) => branchPublish.pushForkSourceBranch(rec),
+    forkWorkspaceMaxBytes: () => nodeSettingsSnapshot().forkWorkspaceMaxBytes,
     standUpFork: (opts) => forkStandUp.standUpFork(opts),
     retireSource: (input) => forkRetire.retireSource(input),
   }),

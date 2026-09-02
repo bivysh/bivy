@@ -52,3 +52,20 @@ test("buildForkBundle omits state when none is provided", () => {
   });
   assert.equal(bundle.state, undefined);
 });
+
+test("an in-flight fork does not use a stale native snapshot", () => {
+  const runtime = {
+    id: "pi",
+    capabilities: { forkTransport: true },
+    exportForFork: () => ({ runtimeId: "pi", kind: "native", data: { stale: true } }),
+  } as unknown as AgentRuntime;
+  const bundle = buildForkBundle({
+    runtime,
+    sessionFile: "/source.json",
+    record: { sourceSessionId: "s", runtimeId: "pi", workspace: "/w", cwd: "/w" },
+    liveMessages: [{ role: "user", content: "latest prompt" }] as any,
+    state: { working: true },
+  });
+  assert.equal(bundle.native, undefined);
+  assert.equal(bundle.normalized.turns[0]?.text, "latest prompt");
+});
