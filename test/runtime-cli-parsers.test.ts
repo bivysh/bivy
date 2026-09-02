@@ -232,6 +232,21 @@ async function main() {
     assert.equal(p.usage?.()?.tokens?.input, 3);
   });
 
+  await check("genericStreamJson: unwraps ACP session updates and preserves tool activity", () => {
+    const p = genericStreamJsonParser();
+    const events = feed(p, [
+      JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Checking " } } } }),
+      JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call", toolCallId: "t1", title: "sub-agent", rawInput: { task: "inspect" } } } }),
+      JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call_update", toolCallId: "t1", status: "in_progress" } } }),
+      JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call_update", toolCallId: "t1", status: "completed", rawOutput: "done" } } }),
+      JSON.stringify({ jsonrpc: "2.0", method: "session_end" }),
+    ]);
+    assert.equal((events.filter((e) => e.type === "message_update").at(-1) as any).message.content, "Checking ");
+    assert.equal(events.filter((e) => e.type === "tool_call").length, 1);
+    assert.equal(events.filter((e) => e.type === "tool_result").length, 1);
+    assert.equal((p.messages()[0]?.content as any[]).some((part) => part.type === "tool_use"), true);
+  });
+
   await check("genericStreamJson: extracts OpenAI-style delta chunks", () => {
     const p = genericStreamJsonParser();
     const events = feed(p, [

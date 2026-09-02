@@ -517,8 +517,19 @@ export function geminiJsonParser(): CliParser {
  * event carries no assistant text (a control frame), so the caller can ignore it.
  */
 function textFromStreamEvent(msg: Record<string, unknown>): string {
+  // ACP session/update notifications nest the update below JSON-RPC params.
+  // Grok's streaming-json mode uses this standard shape, while other CLIs put
+  // the same content directly on the event. Unwrap it before applying the
+  // broad fallbacks below so ACP remains a generic capability, not an agent
+  // specific parser.
+  const nested = (msg.params as Record<string, unknown> | undefined)?.update
+    ?? (msg.update as Record<string, unknown> | undefined);
+  const source: Record<string, unknown> = nested && typeof nested === "object" ? nested as Record<string, unknown> : msg;
+  const nestedContent = (source.content as { text?: unknown } | undefined);
+  if (nestedContent && typeof nestedContent.text === "string") return nestedContent.text;
+
   // Claude / ACP assistant shape: { message: { content: [{type:"text",text}] } }.
-  const mc = (msg.message as { content?: unknown } | undefined)?.content;
+  const mc = (source.message as { content?: unknown } | undefined)?.content;
   if (Array.isArray(mc)) {
     return mc.map((b) => (b && typeof b === "object" && typeof (b as { text?: unknown }).text === "string" ? (b as { text: string }).text : "")).join("");
   }
@@ -541,8 +552,39 @@ function textFromStreamEvent(msg: Record<string, unknown>): string {
   return "";
 }
 
+/** Extract an ACP tool update from a JSON-RPC session/update notification.
+ * ACP deliberately calls these updates rather than tool calls; mapping the
+ * common fields here lets any ACP-speaking CLI show the same tool cards. */
+function acpToolUpdate(msg: Record<string, unknown>): {
+  kind: "call" | "result";
+  id: string;
+  name?: string;
+  input?: unknown;
+  output?: unknown;
+  error?: boolean;
+} | undefined {
+  const params = msg.params as Record<string, unknown> | undefined;
+  const update = (params?.update ?? msg.update) as Record<string, unknown> | undefined;
+  if (!update || typeof update !== "object") return undefined;
+  const type = String(update.sessionUpdate ?? update.type ?? "").toLowerCase();
+  const id = String(update.toolCallId ?? update.tool_call_id ?? update.id ?? "");
+  if (!id) return undefined;
+  if (type === "tool_call" || type === "tool_call_started" || type === "tool_call_start") {
+    return { kind: "call", id, name: String(update.title ?? update.name ?? "tool"), input: update.rawInput ?? update.input ?? update.arguments };
+  }
+  if (type === "tool_call_update" || type === "tool_result" || type === "tool_call_completed") {
+    const status = String(update.status ?? "").toLowerCase();
+    // ACP sends progress updates through the same envelope. Only close the
+    // card once it has a terminal status or an actual result payload.
+    const output = update.rawOutput ?? update.output ?? update.content ?? update.result;
+    if (type === "tool_call_update" && (status === "in_progress" || status === "pending" || (output === undefined && !["completed", "failed", "error"].includes(status)))) return undefined;
+    return { kind: "result", id, output, error: status === "failed" || status === "error" };
+  }
+  return undefined;
+}
+
 // Event `type` values that mean "the turn is finished" across the various CLIs.
-const STREAM_TERMINALS = new Set(["result", "done", "complete", "completed", "turn.completed", "session.done", "message_stop", "response.completed", "final"]);
+const STREAM_TERMINALS = new Set(["result", "done", "complete", "completed", "turn.completed", "session.done", "session_end", "session/ended", "message_stop", "response.completed", "final"]);
 
 /**
  * A TOLERANT line-delimited JSON parser for CLIs whose `--stream-json` /
@@ -570,7 +612,12 @@ export function genericStreamJsonParser(): CliParser {
         return events;
       }
       acc.addUsage(extractTokenUsage(msg.usage ?? msg.stats ?? msg));
-      const type = String(msg.type ?? "");
+      const nestedUpdate = ((msg.params as Record<string, unknown> | undefined)?.update
+        ?? (msg.update as Record<string, unknown> | undefined)) as Record<string, unknown> | undefined;
+      const type = String(msg.type ?? msg.method ?? nestedUpdate?.sessionUpdate ?? nestedUpdate?.type ?? "");
+      const tool = acpToolUpdate(msg);
+      if (tool?.kind === "call") acc.addToolUse(tool.id, tool.name ?? "tool", tool.input, events);
+      else if (tool?.kind === "result") acc.addToolResult(tool.id, tool.name ?? "tool", tool.output, events, tool.error);
       if (msg.error && !type.includes("delta")) {
         const m = (msg.error as { message?: unknown }).message ?? msg.error;
         events.push({ type: "session.error", error: String(m) });
