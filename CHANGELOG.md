@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.6] - 2026-09-02
+
+### Changed
+
+- Grok CLI sessions now preserve structured tool calls and results in live and
+  persisted transcripts.
+
+### Fixed
+
+- Cross-machine session forks now keep progress, success, setup warnings, and
+  failures visible while switching between source and destination machines.
+
 ## [0.16.5] - 2026-09-01
 
 ### Fixed
