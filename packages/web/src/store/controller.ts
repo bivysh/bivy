@@ -366,6 +366,10 @@ export class AppController {
       addUserMessage: (text, id) => this.store.addUserMessage(text, id),
       transcriptUrl: (sessionId) => `${location.origin}${routePath({ kind: "session", id: sessionId })}`,
       refreshAccountSessions: () => { void this.refreshAccountSessions(); },
+      reportCrossNodeFork: (status, message) => {
+        if (status === "error") this.store.setError(message);
+        else this.store.setNotice(message);
+      },
     }, {
       navigateNew: () => navigate({ kind: "new" }),
       focusComposer: () => this.focusComposer(),

@@ -29,6 +29,10 @@ export interface SessionOrchestrationDependencies {
   addUserMessage(text: string, clientMessageId: string): void;
   transcriptUrl(sessionId: string): string;
   refreshAccountSessions(): void;
+  /** Cross-node forks outlive the sheet that launched them because switching
+   *  machines clears the active session (and unmounts that sheet). Surface their
+   *  progress and outcome through app-level presentation instead. */
+  reportCrossNodeFork?(status: "working" | "success" | "error", message: string): void;
 }
 
 export type SessionOrchestrationResult =
@@ -278,6 +282,10 @@ export class SessionOrchestrator {
     try {
       if (crossNode) {
         this.deps.switchNode(destNodeId!);
+        // switchNode intentionally clears the source session, which also
+        // unmounts ForkSheet. Without app-level feedback a slow or failed import
+        // looks exactly like the button did nothing.
+        this.deps.reportCrossNodeFork?.("working", "Creating the fork on the destination machine…");
         await this.deps.waitForOnline();
       }
       done = await this.request({
@@ -293,14 +301,21 @@ export class SessionOrchestrator {
         this.deps.switchNode(sourceNodeId);
         await this.deps.waitForOnline().catch(() => {});
         this.deps.openSession(sourceSessionId);
+        this.deps.reportCrossNodeFork?.("error", error instanceof Error ? error.message : String(error));
       }
       throw error;
     }
     const sessionId = String((done as { sessionId?: unknown }).sessionId || "");
-    if (!sessionId) throw new Error("Fork import returned no session id");
+    if (!sessionId) {
+      const error = new Error("Fork import returned no session id");
+      if (crossNode) this.deps.reportCrossNodeFork?.("error", error.message);
+      throw error;
+    }
     const actualAgentId = String((done as { runtimeId?: unknown }).runtimeId || "");
     if (targetAgentId && actualAgentId && actualAgentId !== targetAgentId) {
-      throw new Error(`Fork requested agent ${targetAgentId}, but the destination used ${actualAgentId}`);
+      const error = new Error(`Fork requested agent ${targetAgentId}, but the destination used ${actualAgentId}`);
+      if (crossNode) this.deps.reportCrossNodeFork?.("error", error.message);
+      throw error;
     }
     // `session.fork.done` is also a complete history snapshot. Open from that
     // exact reply so the URL, transcript, and active agent switch atomically to
@@ -319,20 +334,42 @@ export class SessionOrchestrator {
       // unless the move actually produced `sessionId`, and is safe to re-send.
       const retire = { kind: "session.fork.retire-source" as const, sourceSessionId, newSessionId: sessionId };
       if (crossNode) {
+        let retireError: unknown;
         try {
           this.deps.switchNode(sourceNodeId);
           await this.deps.waitForOnline();
           this.deps.send(retire);
+        } catch (error) {
+          retireError = error;
         } finally {
           this.deps.switchNode(destNodeId!);
           await this.deps.waitForOnline().catch(() => {});
           this.deps.openSession(sessionId, undefined, done);
         }
+        if (retireError) {
+          this.deps.reportCrossNodeFork?.(
+            "error",
+            `Fork created, but the original session could not be retired: ${retireError instanceof Error ? retireError.message : String(retireError)}`,
+          );
+          throw retireError;
+        }
       } else {
         this.deps.send(retire);
       }
     }
-    return { sessionId, ...this.forkResult(done, "seeded") };
+    const result = this.forkResult(done, "seeded");
+    if (crossNode) {
+      const warning = result.missing.map((item) => item.detail || item.label).find(Boolean);
+      this.deps.reportCrossNodeFork?.(
+        "success",
+        warning
+          ? `Fork created on the destination machine. ${warning}`
+          : opts.retireSource
+            ? "Session moved to the destination machine."
+            : "Fork created on the destination machine.",
+      );
+    }
+    return { sessionId, ...result };
   }
 
   private workflowPort(): SessionWorkflowPort {
