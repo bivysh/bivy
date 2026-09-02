@@ -5,8 +5,9 @@
  * Ubuntu and macOS so release packaging cannot silently depend on the checkout,
  * devDependencies, or one operating system's node_modules layout.
  *
- * With no arguments it builds the artifact first. CI passes `--artifact <path>`
- * so multiple consumer jobs can test one package without rebuilding it.
+ * With no arguments it builds the self-hosted artifact first. CI passes
+ * `--artifact <path>` with the exact npm tarball so multiple consumer jobs can
+ * test one package without rebuilding it.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -107,7 +108,12 @@ try {
   }
   run("tar", ["-xzf", artifact, "-C", extracted]);
 
-  const app = path.join(extracted, "bivy");
+  // The fallback archive has a `bivy/` root; npm's canonical tarball uses
+  // `package/`. Accept both so local fallback checks remain convenient while CI
+  // exercises the exact registry payload.
+  const app = fs.existsSync(path.join(extracted, "package", "package.json"))
+    ? path.join(extracted, "package")
+    : path.join(extracted, "bivy");
   const staged = JSON.parse(fs.readFileSync(path.join(app, "package.json"), "utf8"));
   if (staged.readmeFilename !== "README.md" || !staged.readme?.includes("# Bivy")) {
     throw new Error("staged npm registry metadata is missing the README");

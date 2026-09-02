@@ -209,15 +209,16 @@ jobs:
         with:
           node-version: '22.19.0'
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm install --filter @bivy/bivy --frozen-lockfile
       # Exercise emitted JavaScript and package curation, which catches
-      # cross-boundary imports that tsc --noEmit can miss.
-      - run: node scripts/build-release.mjs --pack release-artifact
+      # cross-boundary imports that tsc --noEmit can miss. Pack the exact npm
+      # payload; unlike the fallback archive it needs no excluded package-lock.
+      - run: node scripts/build-release.mjs --npm-pack release-artifact
       - name: Upload release package for consumer tests
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-package
-          path: release-artifact/bivy-latest.tar.gz
+          path: release-artifact/bivy-npm.tgz
           if-no-files-found: error
           retention-days: 1
 
@@ -268,7 +269,7 @@ jobs:
         with:
           name: release-package
           path: release-artifact
-      - run: node scripts/smoke-release.mjs --artifact release-artifact/bivy-latest.tar.gz
+      - run: node scripts/smoke-release.mjs --artifact release-artifact/bivy-npm.tgz
 
   # The PWA is a principal product client. Playwright parallelizes its test files
   # and desktop/mobile projects within this runner.

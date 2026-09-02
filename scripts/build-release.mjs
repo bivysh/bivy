@@ -22,6 +22,8 @@
  *   node scripts/build-release.mjs --pack <dir>
  *                                  stage and write <dir>/bivy-latest.tar.gz +
  *                                  bivy-latest.json (self-hosted download channel)
+ *   node scripts/build-release.mjs --npm-pack <dir>
+ *                                  write <dir>/bivy-npm.tgz for consumer tests
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -40,6 +42,9 @@ function argValue(flag) {
 }
 // Where to emit the self-hosted tarball + manifest. Empty = don't (npm-only run).
 const packDir = argValue("--pack");
+// CI consumer tests need the npm payload, not the self-hosted archive. Keeping
+// this separate avoids generating a package-lock.json that npm pack excludes.
+const npmPackDir = argValue("--npm-pack");
 // npm dist-tag to publish under. Defaults to "latest" (a production release).
 // The staging channel passes `--tag staging` so continuous per-merge builds
 // land on the `staging` tag and never move `latest`. See docs/releasing.md.
@@ -103,7 +108,12 @@ const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
 const releaseReadme = fs.readFileSync(path.join(app, "README.md"), "utf8");
 const curatedPkg = curateManifest(pkg, releaseReadme);
 fs.writeFileSync(pkgPath, `${JSON.stringify(curatedPkg, null, 2)}\n`);
-run("npm", ["install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: app });
+// The fallback tarball is installed in place with `npm ci`, so it needs a lock.
+// npm excludes package-lock.json from registry packages; don't spend a registry
+// resolution on npm publishes or their clean-consumer smoke artifact.
+if (packDir) {
+  run("npm", ["install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: app });
+}
 
 const releasePkg = JSON.parse(fs.readFileSync(path.join(app, "package.json"), "utf8"));
 
@@ -151,6 +161,25 @@ if (doPublish) {
   );
 }
 
+// Exact registry-style payload used by clean-consumer CI. `npm pack` deliberately
+// omits package-lock.json, matching what `npm publish` sends to the registry.
+if (npmPackDir) {
+  fs.mkdirSync(npmPackDir, { recursive: true });
+  const result = spawnSync("npm", ["pack", app, "--pack-destination", npmPackDir, "--json"], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  if (result.status !== 0) {
+    process.stderr.write(result.stderr ?? result.stdout ?? "npm pack failed\n");
+    process.exit(result.status ?? 1);
+  }
+  const packed = JSON.parse(result.stdout)[0];
+  if (!packed?.filename) throw new Error("npm pack did not report a tarball");
+  const output = path.join(npmPackDir, "bivy-npm.tgz");
+  fs.renameSync(path.join(npmPackDir, packed.filename), output);
+  console.log(`Packed ${output}`);
+}
+
 // Self-hosted download channel: tar the staged `bivy/` dir and write a manifest
 // with a sha256 install.sh verifies. The archive MUST have a top-level `bivy/`
 // entry — install.sh extracts and then requires `<stage>/bivy` (see install.sh
@@ -185,7 +214,7 @@ if (packDir) {
 }
 
 console.log(`Built ${releasePkg.name}@${releasePkg.version}`);
-if (!doPublish && !packDir) {
+if (!doPublish && !packDir && !npmPackDir) {
   console.log("Not published. Use `pnpm run publish:npm` (or --dry-run) to publish.");
 }
 
