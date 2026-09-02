@@ -24,7 +24,7 @@ variable, in case Cline's own configuration reads a provider from the
 environment:
 
 ```bash
-bivy login   # sign in to whichever provider Cline is configured to use
+bivy provider login   # sign in to whichever provider Cline is configured to use
 ```
 
 ## Models

@@ -53,6 +53,29 @@ test("`bivy --help` exits 0 and lists core commands", () => {
   }
 });
 
+test("account and model-provider login commands have distinct help", () => {
+  const account = runCli(["login", "--help"]);
+  assert.equal(account.status, 0);
+  assert.match(account.stdout, /Bivy account/);
+  assert.match(account.stdout, /GitHub.*email/i);
+
+  const movedProvider = runCli(["login", "anthropic"]);
+  assert.notEqual(movedProvider.status, 0);
+  assert.match(movedProvider.stderr + movedProvider.stdout, /bivy provider login anthropic/);
+
+  for (const namespace of ["provider", "model"]) {
+    const provider = runCli([namespace, "login", "--help"]);
+    assert.equal(provider.status, 0);
+    assert.match(provider.stdout, /model provider/i);
+  }
+
+  for (const command of ["logout", "signout"]) {
+    const logout = runCli([command, "--help"]);
+    assert.equal(logout.status, 0);
+    assert.match(logout.stdout, /Sign this machine out/);
+  }
+});
+
 test("bare `bivy` shows the command overview without starting setup or an agent", () => {
   const r = runCli([]);
   assert.equal(r.status, 0, `expected exit 0, got ${r.status}: ${r.stderr}`);

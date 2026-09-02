@@ -3117,13 +3117,25 @@ async function handleRelayMessage(msg: ClientMessage) {
   }
 }
 
-function startRelayIfConfigured() {
-  const config = loadRelayConfig(appDir);
-  if (!config) return false;
+function stopRelayConnection() {
   relay?.stop();
-  // Reconnecting drops any remote clients the old tunnel carried; release the
+  relay = undefined;
+  // Disconnecting drops any remote clients the old tunnel carried; release the
   // shared relay size slot so local PTYs it may have shrunk grow back.
   terminals.dropClient(RELAY_CLIENT_ID);
+  sessionAdvertiseTarget = undefined;
+  if (advertiseResyncTimer) clearInterval(advertiseResyncTimer);
+  advertiseResyncTimer = undefined;
+  if (nodeHeartbeatTimer) clearInterval(nodeHeartbeatTimer);
+  nodeHeartbeatTimer = undefined;
+  controlPlanePoller?.stop();
+  controlPlanePoller = undefined;
+}
+
+function startRelayIfConfigured() {
+  stopRelayConnection();
+  const config = loadRelayConfig(appDir);
+  if (!config) return false;
   relay = new RelayConnector(config, (msg) => void handleRelayMessage(msg), {
     pairing: pairingStore,
     onWorkAvailable: (hint) => {
@@ -7432,7 +7444,7 @@ function actionableAgentError(runtimeId: string, error: unknown): string {
   if (isModelAuthError(raw) || /reading ['"]provider['"]|no api key found/i.test(raw)) {
     if (id.includes("claude")) return "Claude Code is not signed in. Run `claude` once, complete sign-in, then retry; the same login works from Bivy and the PWA.";
     if (id.startsWith("codex")) return "Codex is not signed in. Run `codex login`, then retry; the same login works from Bivy and the PWA.";
-    if (id === "pi" || id === "aider") return "No model credential is configured. Run `bivy login`, then retry. This is only required once and compatible credentials sync E2E-encrypted to your other Bivy nodes.";
+    if (id === "pi" || id === "aider") return "No model credential is configured. Run `bivy provider login`, then retry. This is only required once and compatible credentials sync E2E-encrypted to your other Bivy nodes.";
     return "The selected agent needs model authentication. Sign in through its native CLI, then retry.";
   }
   return raw;
@@ -8959,8 +8971,11 @@ app.use("/api", authMiddleware(identity));
 // Reload relay.json without forcing the user to restart the whole node. This is
 // used by `bivy relay:setup` after it enrolls the node.
 app.post("/api/relay/reload", (_req, res) => {
-  const ok = startRelayIfConfigured();
-  res.status(ok ? 200 : 400).json(ok ? { ok: true } : { error: "Relay not configured" });
+  const enabled = startRelayIfConfigured();
+  if (enabled) startControlPlaneTasksIfConfigured();
+  // A missing relay.json is a valid reload state: `bivy logout` removes it and
+  // calls this endpoint to disconnect a foreground node without restarting it.
+  res.json({ ok: true, enabled });
 });
 
 // Link a remote web/PWA device through the relay. Mints a short-lived,

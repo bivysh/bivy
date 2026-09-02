@@ -28,7 +28,7 @@ path; this hand-off only helps if your Qwen Code version reads `QWEN_API_KEY`
 from the environment:
 
 ```bash
-bivy login   # pick the Qwen entry from the menu, if present
+bivy provider login   # pick the Qwen entry from the menu, if present
 ```
 
 ## Models

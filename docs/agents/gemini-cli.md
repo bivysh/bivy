@@ -25,7 +25,7 @@ through Bivy's own vault, that credential is forwarded to the `gemini` process
 every turn as `GEMINI_API_KEY`:
 
 ```bash
-bivy login   # pick the Google/Gemini entry from the menu
+bivy provider login   # pick the Google/Gemini entry from the menu
 ```
 
 ## Models

@@ -66,7 +66,7 @@ Each record has:
 
 ## The three ways a credential gets in
 
-1. **You add it** (Bivy-first) — `bivy login`, or the PWA's **Credential vault**
+1. **You add it** (Bivy-first) — `bivy provider login`, or the PWA's **Credential vault**
    screen. Paste an API key, sign in via OAuth, or add a **password-manager
    reference** (`op://…` / `env://NAME`). Defaults to `sync: account`.
 2. **An agent's own login** (agent-native) — you ran `codex login`,

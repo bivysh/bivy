@@ -59,18 +59,17 @@ In practice this means:
 `bivy setup` does this for you. To enable it later, or to change it:
 
 ```bash
-bivy relay:setup
+bivy login
 ```
 
 With no flags it asks whether to sign in with GitHub (default) or by email link,
 then opens your browser. It health-checks the control plane first, signs you in,
-enrolls this node, and writes `.bivy/relay.json`.
-
-Flags, all optional:
+enrolls this node, and writes `.bivy/relay.json`. Use `bivy relay:setup` for the
+advanced self-hosted and existing-session options:
 
 ```bash
-bivy relay:setup --github                     # GitHub sign-in
-bivy relay:setup --email you@example.com      # email magic link
+bivy login --github                           # GitHub sign-in
+bivy login --email you@example.com            # email magic link
 bivy relay:setup --session-token <token>      # reuse an existing account session
 bivy relay:setup --control-plane https://app.example.com
 bivy relay:setup --relay wss://relay.example.com
@@ -88,7 +87,7 @@ bivy open
 
 Opens the control plane's web app in a local browser, and prints the URL if there
 is no browser to open (headless servers). Sign in with the same GitHub account or
-email you used during `relay:setup`, and your nodes are listed.
+email you used during `bivy login`, and your nodes are listed.
 
 ### 3. Pair another device
 
@@ -192,7 +191,7 @@ To report a vulnerability, follow [SECURITY.md](../SECURITY.md).
 ## Troubleshooting
 
 **`bivy open` says "No remote access configured yet."**
-`.bivy/relay.json` does not exist. Run `bivy relay:setup`.
+`.bivy/relay.json` does not exist. Run `bivy login`.
 
 **`bivy doctor` shows `relay configured` but never `relay connected`.**
 The node is not reaching the relay. Check `bivy logs -f` for `[relay]` lines.
@@ -215,6 +214,6 @@ first.
 **I signed in but see no nodes, or a different set of nodes.**
 You are signed into a different account than the one the node enrolled with, or
 into a node-scoped link grant rather than your account. Sign out in the app and
-sign in with the same GitHub account or email you used in `bivy relay:setup`.
+sign in with the same GitHub account or email you used in `bivy login`.
 
 More symptoms: [troubleshooting.md](troubleshooting.md).

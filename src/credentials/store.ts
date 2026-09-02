@@ -11,7 +11,7 @@
 // At rest the vault is encrypted (AES-256-GCM via the repo's own seal/open — no
 // third crypto implementation) under a 0600 key minted once. Writes are
 // serialized twice over: an in-process per-provider promise chain, and a
-// cross-process mkdir lock (the `bivy login` CLI writes the same file as the
+// cross-process mkdir lock (the `bivy provider login` CLI writes the same file as the
 // running daemon). `modify()` is the only write path, so every mutation is a
 // read-modify-write under the lock — the ordering OAuth refresh depends on
 // (rotated refresh tokens are single-use; a read-then-write loses that race).

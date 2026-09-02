@@ -439,7 +439,7 @@ or stable v1 contract yet. See [Plugins](plugins.md) and the generic
 Authentication belongs either to Bivy or to the upstream agent:
 
 ```bash
-bivy login             # Bivy-owned OAuth or API-key choices
+bivy provider login             # Bivy-owned OAuth or API-key choices
 claude                 # Claude Code: use /login; can reuse Claude Pro/Max
 codex login            # Codex: ChatGPT subscription or API key
 ```

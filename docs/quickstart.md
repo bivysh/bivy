@@ -62,7 +62,7 @@ The wizard asks:
    `self-hosted` (your own control plane + relay — it then asks for the
    **control plane URL** and **relay `ws(s)://` URL**), or `local only for now`
    (skip enrollment; the CLI works, `bivy open` will tell you to run
-   `bivy relay:setup` when you want a browser or phone). Skipped when remote
+   `bivy login` when you want a browser or phone). Skipped when remote
    access is already configured. Whatever you pick, execution and session
    history stay on your machine.
 3. **Remote login** (hosted / self-hosted only) — `GitHub` (default) or an
@@ -73,7 +73,7 @@ The wizard asks:
 For remote access, setup opens your browser (or prints the URL on a headless box)
 so you can authorize, waits for you to finish, enrolls this node, and writes
 `.bivy/relay.json`. If it fails it offers to retry; you can decline and run
-`bivy relay:setup` later. Finally, with no prompt, setup installs the background
+`bivy login` later. Finally, with no prompt, setup installs the background
 service so the node keeps running after you close the terminal. It prints the
 model-login and first-task commands, a pairing QR, and opens the app.
 
@@ -90,11 +90,11 @@ claude    # or: codex, pi, gemini, qwen
 A few integrations (Aider today) take credentials from Bivy's vault instead:
 
 ```bash
-bivy login
+bivy provider login
 ```
 
 It asks whether to use a subscription (OAuth) or an API key, then which
-provider. Skip the menu with `bivy login <provider>`. `bivy doctor` tells you
+provider. Skip the menu with `bivy provider login <provider>`. `bivy doctor` tells you
 which applies to your agent.
 
 Keys stay on the node. Never paste one into a chat or a support thread.
@@ -129,7 +129,7 @@ bivy resume                  # resume the most recent session
 ## 5. Reach it from a browser or phone
 
 The node has no web UI. To get one, use the control plane you signed into during
-setup (or, if you chose *local only*, run `bivy relay:setup` first):
+setup (or, if you chose *local only*, run `bivy login` first):
 
 ```bash
 bivy open     # open the web/PWA app in a browser

@@ -27,7 +27,7 @@ provider through Bivy's own vault, that credential is forwarded to the
 model you pick):
 
 ```bash
-bivy login anthropic   # or openai / google
+bivy provider login anthropic   # or openai / google
 ```
 
 Subscription (OAuth) logins other than Anthropic's aren't handed off this way
