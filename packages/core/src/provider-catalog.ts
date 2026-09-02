@@ -44,6 +44,7 @@ const reference: ProviderAuthMethod = { kind: "reference", label: "Password mana
 /** Authoritative common providers and the offline baseline models Bivy ships. */
 export const BIVY_PROVIDER_CATALOG: readonly BivyProviderDefinition[] = [
   { id: "anthropic", name: "Anthropic", authMethods: [oauth("Claude Pro / Max", "anthropic"), apiKey("Anthropic API key", "https://console.anthropic.com/settings/keys"), reference], env: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"], compatibility: "anthropic", helpUrl: "https://docs.anthropic.com/", models: [
+    { id: "claude-opus-4-8", name: "Claude Opus 4.8", reasoning: true },
     { id: "claude-opus-4-1", name: "Claude Opus 4.1", reasoning: true },
     { id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5", reasoning: true },
     { id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5" },
@@ -54,6 +55,7 @@ export const BIVY_PROVIDER_CATALOG: readonly BivyProviderDefinition[] = [
     { id: "gpt-4o", name: "GPT-4o" },
   ] },
   { id: "openai-codex", name: "OpenAI — ChatGPT subscription", aliases: ["codex"], authMethods: [oauth("ChatGPT Plus / Pro", "openai-codex")], compatibility: "openai", models: [
+    { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", reasoning: true },
     { id: "gpt-5.3-codex-spark", name: "GPT-5.3 Codex Spark", reasoning: true },
     { id: "gpt-5-codex", name: "GPT-5 Codex", reasoning: true },
   ] },
