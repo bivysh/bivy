@@ -17,11 +17,14 @@
 // returns is the caller's own record type, not a narrowed copy.
 
 import { randomBytes } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { normalizeSandboxTier, type SandboxTier } from "../harness/sandbox.js";
 import { parseRepo } from "../repo-workspace.js";
 import { evaluateForkPrereqs, blockingForkPrereqs, missingForkPrereqs, type ForkPrereq, type ForkPrereqInput } from "../session/fork-prereqs.js";
 import type { ForkBundle, ForkPlan, MaterializeForkOptions } from "../session/fork.js";
 import type { Worktree } from "../worktree.js";
+import { applyWorkspaceSnapshot } from "./fork-dirty.js";
 import type { AgentRuntime } from "../runtime/index.js";
 
 type ModelRef = { provider: string; id: string };
@@ -137,6 +140,13 @@ export function createForkStandUp<R extends ForkStandUpSession>(deps: ForkStandU
         missing: [],
       };
     }
+    if (bundle.workspaceSnapshot?.oversized) {
+      return {
+        ok: false,
+        error: `The source workspace is too large to transfer safely (${bundle.workspaceSnapshot.byteLength} bytes; limit ${bundle.workspaceSnapshot.maxBytes}). Reduce it and retry.`,
+        missing: [],
+      };
+    }
     // Carry the source's sandbox tier so a sandboxed session forks into a
     // sandboxed one, rather than defaulting to this node's tier (fork.ts).
     const forkSandbox = normalizeSandboxTier(bundle.record.sandbox);
@@ -242,12 +252,26 @@ export function createForkStandUp<R extends ForkStandUpSession>(deps: ForkStandU
       cwd = wt.path;
       worktree = wt;
     } else {
+      // Non-repo-backed source. Materialise the complete workspace into an
+      // isolated directory on the destination; this also prevents same-node
+      // plain-directory forks from running two agents in one cwd.
+      if (bundle.workspaceSnapshot) {
+        const root = path.resolve(deps.defaultWorkspace);
+        fs.mkdirSync(root, { recursive: true });
+        const isolated = fs.mkdtempSync(path.join(root, ".bivy-fork-"));
+        applyWorkspaceSnapshot(isolated, bundle.workspaceSnapshot);
+        workspace = isolated;
+        cwd = isolated;
+      }
       // Non-repo-backed source. The fork would otherwise reuse the PARENT's cwd,
       // putting two sessions in one working tree — so when that cwd is itself a git
       // checkout (a local repo without a GitHub origin), cut the fork its own
       // worktree on a fresh branch. Best-effort: a non-git workspace has no tree to
       // isolate, so the fork keeps the fallback cwd (no git collisions possible).
-      const forkRepoRoot = await deps.gitRepoRoot(cwd);
+      // A snapshot is authoritative for a machine-local source. Do not inspect
+      // the destination fallback cwd and accidentally turn it into a worktree
+      // fork of an unrelated repository.
+      const forkRepoRoot = bundle.workspaceSnapshot ? undefined : await deps.gitRepoRoot(cwd);
       if (forkRepoRoot) {
         const forkBranch = `bivy/fork-${randomBytes(6).toString("hex")}`;
         const wt = await deps.withRepoLock(forkRepoRoot, () => deps.createWorktree({ repoDir: forkRepoRoot, id: forkBranch, branch: forkBranch }));

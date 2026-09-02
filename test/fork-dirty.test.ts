@@ -73,6 +73,14 @@ test("workspace capture finds an unmanaged checkout from a nested cwd", () => {
   assert.ok(dirty?.patch.includes("unmanaged workspace edit"));
 });
 
+test("workspace capture fails closed when the workspace cannot be inspected", () => {
+  assert.throws(
+    () => captureWorkspaceDirtyPatch(path.join(os.tmpdir(), "bivy-workspace-does-not-exist")),
+    /inspect the session workspace|Could not inspect/,
+    "a failed git probe must not be mistaken for a clean workspace",
+  );
+});
+
 test("a clean working tree captures an empty patch and applies as a no-op", () => {
   const src = initRepo();
   const dirty = captureDirtyPatch(src);

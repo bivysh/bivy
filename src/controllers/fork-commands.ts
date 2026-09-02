@@ -12,7 +12,7 @@ import type { CommandEntries } from "../protocol/command-registry.js";
 import type { AgentRuntime } from "../runtime/index.js";
 import type { SessionRecord } from "../session/record.js";
 import { buildForkBundle, type ForkBundle, type ForkPlan, type ForkRecord } from "../session/fork.js";
-import { captureDirtyPatch, captureWorkspaceDirtyPatch } from "../session/fork-dirty.js";
+import { captureDirtyPatch, captureWorkspaceDirtyPatch, captureWorkspaceSnapshot } from "../session/fork-dirty.js";
 import type { ForkPrereq } from "../session/fork-prereqs.js";
 import type { StandUpForkOptions, StandUpForkOutcome } from "../session/fork-standup.js";
 import type { ForkRetireOutcome } from "../session/fork-retire.js";
@@ -40,6 +40,7 @@ export interface ForkCommandDeps {
   modelFrom(msg: Record<string, unknown>): { provider: string; id: string } | undefined;
   pushModelAuthToControlPlane(): Promise<void>;
   pushForkSourceBranch(rec: SessionRecord): Promise<void>;
+  forkWorkspaceMaxBytes(): number;
   standUpFork(opts: StandUpForkOptions): Promise<StandUpForkOutcome<SessionRecord>>;
   retireSource(input: { sourceSessionId: string; newSessionId: string }): Promise<ForkRetireOutcome>;
 }
@@ -81,9 +82,15 @@ export function createForkCommands(deps: ForkCommandDeps): CommandEntries<ForkCo
         // A git workspace must be captured successfully, including sessions that
         // were started in an unmanaged checkout rather than a Bivy worktree.
         // Treating a git/read failure as "clean" could retire the only WIP copy.
+        const sourceCwd = rec.session.cwd || rec.workspace;
         const dirtyPatch = rec.worktree
           ? captureDirtyPatch(rec.worktree.path)
-          : captureWorkspaceDirtyPatch(rec.session.cwd || rec.workspace);
+          : captureWorkspaceDirtyPatch(sourceCwd);
+        // Plain workspaces have no remote clone source, so carry their files in
+        // the E2E bundle instead of silently substituting the destination cwd.
+        const workspaceSnapshot = !forkRecord.repoSlug && (msg.crossNode === true || dirtyPatch === undefined)
+          ? captureWorkspaceSnapshot(sourceCwd, { maxBytes: deps.forkWorkspaceMaxBytes() })
+          : undefined;
         // Publish the source branch so a cross-node fork's COMMITTED work travels
         // via origin (the destination adopts `origin/<branch>`; see
         // resolveAdoptBaseRef). Uncommitted work rides the dirtyPatch above. Only
@@ -98,7 +105,7 @@ export function createForkCommands(deps: ForkCommandDeps): CommandEntries<ForkCo
         // When the client has already picked a target agent, pass it so the
         // bundle omits the native payload for a cross-runtime fork (it could
         // never be replayed there — see buildForkBundle). Unset => keep it.
-        const bundle = buildForkBundle({ runtime: deps.getRuntime(rec.runtimeId), sessionFile: rec.sessionFile, record: forkRecord, dirtyPatch, targetRuntimeId: deps.agentFrom(msg), liveMessages: rec.session.getMessages(), state: deps.forkInFlightState(rec) });
+        const bundle = buildForkBundle({ runtime: deps.getRuntime(rec.runtimeId), sessionFile: rec.sessionFile, record: forkRecord, dirtyPatch, workspaceSnapshot, targetRuntimeId: deps.agentFrom(msg), liveMessages: rec.session.getMessages(), state: deps.forkInFlightState(rec) });
         deps.sendEvent({ type: "session.fork.bundle", requestId, bundle });
       } catch (error) {
         deps.sendEvent({ type: "session.fork.error", requestId, error: error instanceof Error ? error.message : String(error) });
@@ -166,11 +173,15 @@ export function createForkCommands(deps: ForkCommandDeps): CommandEntries<ForkCo
         // re-applies it into the fork's fresh worktree. Local git ops only.
         // Include unmanaged git workspaces too. standUpFork will cut an isolated
         // worktree for them, so their uncommitted state must ride with it.
+        const sourceCwd = rec.session.cwd || rec.workspace;
         const dirtyPatch = rec.worktree
           ? captureDirtyPatch(rec.worktree.path)
-          : captureWorkspaceDirtyPatch(rec.session.cwd || rec.workspace);
+          : captureWorkspaceDirtyPatch(sourceCwd);
+        const workspaceSnapshot = dirtyPatch === undefined
+          ? captureWorkspaceSnapshot(sourceCwd, { maxBytes: deps.forkWorkspaceMaxBytes() })
+          : undefined;
         // Same runtime → the bundle carries the native payload → full fidelity.
-        const bundle = buildForkBundle({ runtime, sessionFile: rec.sessionFile, record: forkRecord, dirtyPatch, targetRuntimeId: rec.runtimeId, liveMessages: rec.session.getMessages(), state: deps.forkInFlightState(rec) });
+        const bundle = buildForkBundle({ runtime, sessionFile: rec.sessionFile, record: forkRecord, dirtyPatch, workspaceSnapshot, targetRuntimeId: rec.runtimeId, liveMessages: rec.session.getMessages(), state: deps.forkInFlightState(rec) });
         // Cut a fresh fork branch (the source still holds its own); skip prereq
         // detection (same node + same runtime ⇒ agent and repo are present).
         const outcome = await deps.standUpFork({

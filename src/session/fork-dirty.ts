@@ -17,12 +17,26 @@ import type { ForkDirtyPatch } from "./fork.js";
  */
 
 const DEFAULT_MAX_BYTES = 5 * 1024 * 1024; // 5 MiB of patch text
+const DEFAULT_WORKSPACE_MAX_BYTES = 50 * 1024 * 1024; // 50 MiB of files
+
+function workspaceMaxBytes(configured?: number): number {
+  return configured !== undefined ? configured : DEFAULT_WORKSPACE_MAX_BYTES;
+}
 
 /** Find the containing git checkout without throwing for ordinary non-git
  * workspaces. A discovered checkout is captured fail-closed by the caller. */
 export function captureWorkspaceDirtyPatch(cwd: string, opts: { maxBytes?: number } = {}): ForkDirtyPatch | undefined {
   const probe = spawnSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], { encoding: "utf8", timeout: 10_000 });
-  if (probe.status !== 0) return undefined;
+  if (probe.error) throw probe.error;
+  if (probe.signal === "SIGTERM") throw new Error("Timed out while inspecting the session workspace for uncommitted changes.");
+  if (probe.status !== 0) {
+    // A plain directory is a supported workspace. Do not, however, turn a
+    // broken/permission-denied git invocation into an apparent clean tree: for
+    // a MOVE that could discard the only copy of the user's edits.
+    const detail = String(probe.stderr || "").toLowerCase();
+    if (/not a git repository|outside a git work tree/.test(detail)) return undefined;
+    throw new Error(`Could not inspect the session workspace with git${probe.stderr ? `: ${String(probe.stderr).trim()}` : ""}`);
+  }
   const root = String(probe.stdout || "").trim();
   return root ? captureDirtyPatch(root, opts) : undefined;
 }
@@ -65,6 +79,66 @@ export function captureDirtyPatch(repoDir: string, opts: { maxBytes?: number } =
 }
 
 /** Outcome of re-applying a fork's captured working-tree changes. */
+export interface WorkspaceSnapshotEntry {
+  path: string;
+  kind: "file" | "symlink";
+  data?: string;
+  target?: string;
+  mode?: number;
+}
+
+export interface WorkspaceSnapshot {
+  entries: WorkspaceSnapshotEntry[];
+  byteLength: number;
+  maxBytes: number;
+  oversized?: boolean;
+}
+
+/** Capture a non-git workspace for a fork. Symlinks are recorded, never followed,
+ * and .git is excluded as it is a repository boundary rather than workspace data. */
+export function captureWorkspaceSnapshot(root: string, opts: { maxBytes?: number } = {}): WorkspaceSnapshot {
+  const maxBytes = workspaceMaxBytes(opts.maxBytes);
+  const entries: WorkspaceSnapshotEntry[] = [];
+  let byteLength = 0;
+  const walk = (dir: string, prefix: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (!prefix && (entry.name === ".git" || entry.name === ".bivy")) continue;
+      const rel = prefix ? path.join(prefix, entry.name) : entry.name;
+      const abs = path.join(dir, entry.name);
+      const stat = fs.lstatSync(abs);
+      if (stat.isDirectory()) { walk(abs, rel); continue; }
+      if (stat.isSymbolicLink()) {
+        const target = fs.readlinkSync(abs);
+        byteLength += Buffer.byteLength(target);
+        entries.push({ path: rel, kind: "symlink", target });
+      } else if (stat.isFile()) {
+        byteLength += stat.size;
+        entries.push({ path: rel, kind: "file", data: fs.readFileSync(abs).toString("base64"), mode: stat.mode & 0o777 });
+      }
+    }
+  };
+  walk(path.resolve(root), "");
+  if (byteLength > maxBytes) return { entries: [], byteLength, maxBytes, oversized: true };
+  return { entries, byteLength, maxBytes };
+}
+
+/** Materialise a captured workspace into a fresh destination directory. */
+export function applyWorkspaceSnapshot(root: string, snapshot: WorkspaceSnapshot | undefined): void {
+  if (!snapshot) return;
+  if (snapshot.oversized) throw new Error(`The workspace snapshot is ${snapshot.byteLength} bytes, above the ${snapshot.maxBytes}-byte transfer limit.`);
+  const destination = path.resolve(root);
+  for (const entry of snapshot.entries) {
+    const target = path.resolve(destination, entry.path);
+    if (target !== destination && !target.startsWith(`${destination}${path.sep}`)) throw new Error("Workspace snapshot contains an invalid path.");
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    if (entry.kind === "symlink") fs.symlinkSync(entry.target ?? "", target);
+    else {
+      fs.writeFileSync(target, Buffer.from(entry.data ?? "", "base64"));
+      if (entry.mode !== undefined) fs.chmodSync(target, entry.mode);
+    }
+  }
+}
+
 export interface ApplyDirtyResult {
   /** True when at least part of the patch landed on the destination tree. */
   applied: boolean;

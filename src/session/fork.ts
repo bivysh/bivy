@@ -97,6 +97,8 @@ export interface ForkBundle {
   /** Present only when the source runtime supports same-runtime full transport. */
   native?: ForkNativePayload;
   dirtyPatch?: ForkDirtyPatch;
+  /** Complete contents for a non-git workspace, transported over the E2E bundle. */
+  workspaceSnapshot?: import("./fork-dirty.js").WorkspaceSnapshot;
   /** In-flight turn/approval state, carried for disclosure (see the interface). */
   state?: ForkInFlightState;
 }
@@ -107,6 +109,7 @@ export interface BuildForkBundleOptions {
   sessionFile?: string;
   record: ForkRecord;
   dirtyPatch?: ForkDirtyPatch;
+  workspaceSnapshot?: import("./fork-dirty.js").WorkspaceSnapshot;
   /**
    * The runtime the fork is known to target, when the client has already chosen
    * a different agent. A native payload is only ever replayable by the SAME
@@ -164,7 +167,14 @@ export function buildForkBundle(opts: BuildForkBundleOptions): ForkBundle {
   // Only worth capturing when the target is the same runtime (or not yet known).
   const nativeCouldReplay = !opts.targetRuntimeId || opts.targetRuntimeId === runtime.id;
   let native: ForkNativePayload | undefined;
-  if (sessionFile && nativeCouldReplay && runtime.capabilities.forkTransport && runtime.exportForFork) {
+  // A native export reads the runtime's persisted store, which may lag the
+  // live session while a turn is streaming. Never prefer that stale snapshot
+  // for an in-flight fork: the normalized live transcript below is the only
+  // representation that includes the current turn. This is especially
+  // important for same-runtime forks, where a successful native import would
+  // otherwise prevent the portable fallback from being used.
+  const nativeSafe = !opts.state?.working;
+  if (sessionFile && nativeSafe && nativeCouldReplay && runtime.capabilities.forkTransport && runtime.exportForFork) {
     try {
       native = runtime.exportForFork(sessionFile);
     } catch {
@@ -172,7 +182,7 @@ export function buildForkBundle(opts: BuildForkBundleOptions): ForkBundle {
       // transcript below still supports replay or a seeded continuation.
     }
   }
-  return { record, normalized, ...(native ? { native } : {}), ...(opts.dirtyPatch ? { dirtyPatch: opts.dirtyPatch } : {}), ...(opts.state ? { state: opts.state } : {}) };
+  return { record, normalized, ...(native ? { native } : {}), ...(opts.dirtyPatch ? { dirtyPatch: opts.dirtyPatch } : {}), ...(opts.workspaceSnapshot ? { workspaceSnapshot: opts.workspaceSnapshot } : {}), ...(opts.state ? { state: opts.state } : {}) };
 }
 
 /**
