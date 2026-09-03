@@ -1474,7 +1474,14 @@ export class AppController {
     sourceSessionId: string,
     opts: { destNodeId?: string; agentId?: string; sourceAgentId?: string; model?: { provider: string; id: string }; retireSource?: boolean } = {},
   ): Promise<{ sessionId: string; fidelity: string; missing: Array<{ label?: string; detail?: string }> }> {
-    return this.sessionCoordinator.fork(sourceSessionId, opts);
+    return this.sessionCoordinator.fork(sourceSessionId, opts).then((result) => {
+      // The coordinator selects the fork as soon as its completion event arrives,
+      // but a cross-node move can switch transports again while retiring the
+      // source. Make the final selection after the whole operation so every
+      // caller (including recovery actions without a sheet) lands on the fork.
+      this.openSession(result.sessionId);
+      return result;
+    });
   }
 
   refreshSessions(): void {
