@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ModelInfo } from "@bivy/core";
 import { controller, useAppState } from "../store/useStore.js";
-import { navigate } from "../router.js";
 import { Sheet } from "./Sheet.js";
 
 /** Stable select value for a model; provider + id together identify it. */
@@ -68,11 +67,10 @@ export function ForkSheet({ sessionId, onClose }: { sessionId: string; onClose: 
         model: agentUnchanged && model ? { provider: String(model.provider), id: String(model.id) } : undefined,
         retireSource: willRetire,
       });
-      // Keep the URL in sync with the session the coordinator opened. This is
-      // intentionally done here as well as in openSession: a fork can switch
-      // nodes while this sheet is mounted, and the sheet's source route must
-      // not win when the async operation finishes.
-      navigate({ kind: "session", id: result.sessionId });
+      // Select the new session from the sheet after the fork promise resolves.
+      // This updates the PWA's active pane, not just the browser URL, and also
+      // covers a node switch that reset the pane during an async fork.
+      controller.openSession(result.sessionId);
       // The fork succeeded and its session is already open. If the destination
       // was missing a (non-blocking) prereq — a model login, GitHub access —
       // keep the sheet up to tell the user, otherwise just close.
