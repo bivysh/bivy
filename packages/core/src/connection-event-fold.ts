@@ -49,7 +49,13 @@ export function foldConnectionEvent<T extends ConnectionFoldValue>(
     };
   }
   if (event.type === "node.update.result") {
-    if (event.ok !== false) return { handled: true, value };
+    if (event.ok !== false) {
+      // The reply only confirms that the updater was started. The node.update
+      // event sent by the replacement process will clear the banner once the
+      // new version is actually running, but don't leave the button permanently
+      // disabled if the updater exits without restarting the service.
+      return { handled: true, value: { ...value, nodeUpdating: false } };
+    }
     return {
       handled: true,
       value: { ...value, nodeUpdating: false },
