@@ -1480,6 +1480,10 @@ export class AppController {
       // source. Make the final selection after the whole operation so every
       // caller (including recovery actions without a sheet) lands on the fork.
       this.openSession(result.sessionId);
+      // `navigate` updates the address bar, while the controller's popstate
+      // listener drives the SPA route. Notify it explicitly so fork completion
+      // transitions the PWA view as well as selecting the session in state.
+      if (typeof window !== "undefined") window.dispatchEvent(new PopStateEvent("popstate"));
       return result;
     });
   }
