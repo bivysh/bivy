@@ -23,6 +23,13 @@ describe("pure app event folds", () => {
     expect(value.nodes[0]?.name).toBe("Before");
   });
 
+  it("re-enables the update action after the updater acknowledges startup", () => {
+    const value = { nodes: [], currentNodeId: null, nodeUpdate: { current: "0.1.0", latest: "0.2.0" }, nodeUpdating: true };
+    const result = foldConnectionEvent(value, { type: "node.update.result", ok: true });
+    expect(result.value.nodeUpdating).toBe(false);
+    expect(result.value.nodeUpdate).toEqual(value.nodeUpdate);
+  });
+
   it("composes independent index and presentation projections", () => {
     const index = { pausedSessionIds: [] as string[] };
     const paused = foldSessionIndexEvent(index, { type: "session.paused", sessionId: "s1" });

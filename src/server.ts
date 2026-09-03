@@ -832,7 +832,12 @@ function runBivyUpdate(): { ok: boolean; error?: string } {
     const child = spawn(process.execPath, [script, "update"], {
       detached: true,
       stdio: "ignore",
-      env: process.env,
+      // The daemon is commonly itself managed by systemd/launchd. Mark this
+      // invocation as terminal-style so the CLI moves the real update into a
+      // process that survives the service restart (systemd-run on Linux).
+      // Otherwise stopping bivy.service kills the updater before it can install
+      // anything, leaving the client stuck on “Updating…”.
+      env: { ...process.env, BIVY_TERMINAL: "1" },
     });
     child.unref();
     return { ok: true };
