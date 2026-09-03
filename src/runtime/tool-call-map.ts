@@ -54,6 +54,19 @@ function canon(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
+/** Match both native names and namespaced MCP/ACP names. Providers commonly
+ * expose a tool as `mcp__server__read_file` or `functions.exec`; the final
+ * component still has the same portable meaning. Keep this exact (rather than
+ * substring) matching so `multitasker` cannot become a delegation by accident. */
+function inToolSet(set: Set<string>, rawName: string, key: string): boolean {
+  if (set.has(key)) return true;
+  const separator = rawName.lastIndexOf("__");
+  const dot = rawName.lastIndexOf(".");
+  const slash = rawName.lastIndexOf("/");
+  const index = Math.max(separator, dot, slash);
+  return index >= 0 && set.has(canon(rawName.slice(index + (separator === index ? 2 : 1))));
+}
+
 function asRecord(input: unknown): Record<string, unknown> {
   return input && typeof input === "object" && !Array.isArray(input)
     ? (input as Record<string, unknown>)
@@ -109,12 +122,12 @@ export function mapToolCall(toolName: string, input: unknown, context: ToolCallM
   const key = canon(toolName);
   const o = asRecord(input);
 
-  if (SHELL.has(key)) {
+  if (inToolSet(SHELL, toolName, key)) {
     const command = str(o, "command", "cmd", "script", "input", "args");
     return command ? decorate({ kind: "shell", command, ...(str(o, "cwd", "workdir", "workingDir", "directory") ? { cwd: str(o, "cwd", "workdir", "workingDir", "directory") } : {}) }, toolName, input, context) : undefined;
   }
 
-  if (EDIT.has(key)) {
+  if (inToolSet(EDIT, toolName, key)) {
     let path = str(o, ...PATH_KEYS);
     // Codex `apply_patch`/`file_change` carries a `changes` map keyed by path.
     if (!path) {
@@ -130,31 +143,31 @@ export function mapToolCall(toolName: string, input: unknown, context: ToolCallM
     return decorate({ kind: "edit", path, ...(oldText ? { oldText } : {}), ...(newText ? { newText } : {}) }, toolName, input, context);
   }
 
-  if (WRITE.has(key)) {
+  if (inToolSet(WRITE, toolName, key)) {
     const path = str(o, ...PATH_KEYS);
     return path ? decorate({ kind: "write", path }, toolName, input, context) : undefined;
   }
 
-  if (READ.has(key)) {
+  if (inToolSet(READ, toolName, key)) {
     const path = str(o, ...PATH_KEYS);
     return path ? decorate({ kind: "read", path }, toolName, input, context) : undefined;
   }
 
-  if (SEARCH.has(key)) {
+  if (inToolSet(SEARCH, toolName, key)) {
     const query = str(o, "pattern", "query", "q", "search", "regex", "searchTerm");
     return query ? decorate({ kind: "search", query, ...(str(o, "path", "dir", "directory", "include") ? { path: str(o, "path", "dir", "directory", "include") } : {}) }, toolName, input, context) : undefined;
   }
 
-  if (FETCH.has(key)) {
+  if (inToolSet(FETCH, toolName, key)) {
     const url = str(o, "url", "uri", "href", "link");
     return url ? decorate({ kind: "fetch", url }, toolName, input, context) : undefined;
   }
 
-  if (PLAN.has(key)) {
+  if (inToolSet(PLAN, toolName, key)) {
     return decorate({ kind: "plan", ...(str(o, "plan", "text", "content", "message") ? { text: str(o, "plan", "text", "content", "message") } : {}) }, toolName, input, context);
   }
 
-  if (DELEGATE.has(key)) {
+  if (inToolSet(DELEGATE, toolName, key)) {
     const label = str(o, "subagent_type", "subagentType", "agent", "agentType", "role", "name");
     const description = str(o, "description", "task", "prompt", "instructions", "goal", "message");
     return decorate({ kind: "delegation", ...(label ? { label } : {}), ...(description ? { description } : {}) }, toolName, input, context);

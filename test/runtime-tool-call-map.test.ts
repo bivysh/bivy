@@ -21,6 +21,12 @@ assert.deepEqual(shape(mapToolCall("read_file", { file_path: "a.ts" })), { kind:
 assert.deepEqual(shape(mapToolCall("Edit", { file_path: "a.ts", old_string: "x", new_string: "y" })), { kind: "edit", path: "a.ts", oldText: "x", newText: "y" });
 assert.deepEqual(shape(mapToolCall("grep", { pattern: "TODO", path: "src" })), { kind: "search", query: "TODO", path: "src" });
 assert.equal(mapToolCall("unknown", { value: 1 }), undefined);
+// Namespaced MCP/ACP tools retain their portable final component. This keeps
+// the mapper agent-agnostic instead of adding one branch per server namespace.
+assert.deepEqual(shape(mapToolCall("mcp__filesystem__read_file", { file_path: "a.ts" })), { kind: "read", path: "a.ts" });
+assert.deepEqual(shape(mapToolCall("functions.exec", { command: "pwd" })), { kind: "shell", command: "pwd" });
+assert.deepEqual(shape(mapToolCall("server.spawn_agent", { prompt: "inspect" })), { kind: "delegation", description: "inspect" });
+assert.equal(mapToolCall("multitasker", { value: 1 }), undefined);
 assert.equal((boundedToolPayload({ text: "x".repeat(5000) }) as { truncated?: boolean }).truncated, true);
 
 // Delegation / sub-agent dispatch normalizes into a first-class kind (Claude's
