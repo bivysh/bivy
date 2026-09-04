@@ -93,7 +93,7 @@ function sessionRepo(s: { source?: string }): string {
 }
 
 function sessionMeta(
-  s: { source?: string; branch?: string; agentName?: string; nodeId?: string; forkedFrom?: string },
+  s: { name?: string; source?: string; branch?: string; agentName?: string; nodeId?: string; forkedFrom?: string },
   nodeLabel: string | null,
 ): string {
   // Keep the title row for the human title + state badges. Agent/runtime names
@@ -104,7 +104,16 @@ function sessionMeta(
   // only useful context) — mirrors GithubQueue's queueSessionMeta.
   // A fork gets a one-word "Forked" flag up front — parity with the run pill's
   // own "Forked from" row (RunPill.tsx), for the rows that never open the pill.
-  const parts = [s.forkedFrom ? "Forked" : null, s.agentName, nodeLabel, s.branch || repoFromSource(s.source) || queueSourceMeta(s.source)];
+  const repo = repoFromSource(s.source) || githubIssueRefFromSource(s.source)?.repo || "";
+  const branch = s.branch || "";
+  // Repo and branch are separate identifiers: a branch must not hide which
+  // repository owns it. Suppress only a branch that is effectively a generated
+  // slug of the human title; it remains searchable below.
+  const titleSlug = String(s.name || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  const branchSlug = branch.toLowerCase().split("/").pop()?.replace(/-[a-f0-9]{5,}$/i, "") || "";
+  const usefulBranch = branch && branchSlug !== titleSlug ? branch : "";
+  const context = repo || queueSourceMeta(s.source);
+  const parts = [s.forkedFrom ? "Forked" : null, s.agentName, nodeLabel, context, usefulBranch];
   return parts.filter(Boolean).join(" · ");
 }
 
@@ -220,7 +229,9 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, onOpenAutomat
       const repo = sessionRepo(s);
       if (nodeFilter && s.nodeId !== nodeFilter) return false;
       if (repoFilter && repo !== repoFilter) return false;
-      return !q || `${s.name} ${s.source ?? ""} ${s.agentName ?? ""} ${repo}`.toLowerCase().includes(q);
+      const searchableNode = controller.direct || !s.nodeId ? "" : nodes.find((node) => node.id === s.nodeId)?.name || "";
+      const searchable = [s.name, s.source, s.agentName, repo, s.branch, s.nodeId, searchableNode].filter(Boolean).join(" ");
+      return !q || searchable.toLowerCase().includes(q);
     });
     // Sessions that need a human float to the top (an agent blocked on an
     // approval/question, then a finished run you haven't seen) — the old
@@ -231,7 +242,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, onOpenAutomat
     return [...matched].sort(
       (a, b) => attentionRank(b) - attentionRank(a) || toMs(b.updatedAt) - toMs(a.updatedAt),
     );
-  }, [sessions, runTerminals, query, repoFilter, nodeFilter]);
+  }, [sessions, runTerminals, nodes, query, repoFilter, nodeFilter]);
 
   // Search spans every session; pagination only bounds the unfiltered list, so a
   // query always reveals all of its matches, never just the first page.
@@ -286,7 +297,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, onOpenAutomat
           <button
             className={`session-filter-btn${activeFilterCount ? " active" : ""}`}
             type="button"
-            aria-label="Filter sessions"
+            aria-label={activeFilterCount ? `Filter sessions, ${filterSummary}` : "Filter sessions"}
             aria-haspopup="menu"
             aria-expanded={filterOpen}
             onClick={(e) => {
@@ -379,7 +390,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, onOpenAutomat
       </div>
       {filtered.length === 0 && filteredRuns.length === 0 && <div className="session-empty">{emptyText}</div>}
       <ul>
-        {filteredRuns.length > 0 && <li className="session-group-label" role="separator">Running</li>}
+        {filteredRuns.length > 0 && <li className="session-group-label">Running</li>}
         {filteredRuns.map((t) => {
           const title = t.name || t.label || t.agent || "Terminal session";
           const meta = runMeta(t);
@@ -409,7 +420,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, onOpenAutomat
             ? attentionRank(previous) > 0 ? "Needs attention" : sessionDateGroup(previous.updatedAt)
             : null;
           const groupHeading = group !== previousGroup
-            ? <li className="session-group-label" role="separator">{group}</li>
+            ? <li className="session-group-label">{group}</li>
             : null;
           const meta = sessionMeta(s, nodeName(s.nodeId));
           const label = statusLabel(s);
@@ -422,7 +433,12 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, onOpenAutomat
           // list itself says what needs you — no separate inbox required.
           const hint =
             rowHint(runEvidence?.get(s.sessionId)) ??
-            (attentionRank(s) > 0 ? { text: statusLabel(s), tone: "warn" as const } : null);
+            (attentionRank(s) > 0
+              ? {
+                  text: statusLabel(s),
+                  tone: (s.status === "failed" || s.status === "needs_action" || s.needsAction ? "danger" : "warn") as "danger" | "warn",
+                }
+              : null);
           const failedLaunch = s.pendingLaunch && s.status === "failed";
           return (
             <Fragment key={s.sessionId}>
@@ -430,6 +446,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, onOpenAutomat
               <li className="session-row">
               <button
                 className={`session-item${s.sessionId === activeSessionId ? " active" : ""}`}
+                aria-current={s.sessionId === activeSessionId ? "page" : undefined}
                 onClick={() => onPick(s.sessionId, s.path, s.nodeId)}
               >
                 <RowMark kind={src.kind} status={statusDotState(s)} srLabel={`${src.label} · ${label}`} />

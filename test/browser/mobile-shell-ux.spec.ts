@@ -8,10 +8,16 @@ test("closed mobile drawer has no shadow and cannot receive focus", async () => 
   const styles = await readFile(new URL("styles.css", WEB), "utf8");
   const cleanup = await readFile(new URL("ux-cleanup.css", WEB), "utf8");
   expect(styles).toContain("visibility: hidden;");
-  expect(styles).toContain(".sidebar.open { transform: translateX(0); visibility: visible; }");
+  expect(styles).toContain(".sidebar.open { transform: translateX(0); visibility: visible; box-shadow: var(--shadow-xl); }");
   expect(styles).toContain("max-width: 320px; z-index: var(--z-sticky);");
   expect(styles).toContain(".scrim { position: fixed; inset: 0; background: var(--overlay); z-index: var(--z-dropdown); }");
   expect(cleanup).toContain(".sidebar.open { box-shadow: var(--shadow-xl); }");
+  expect(styles).toContain("@media (max-width: 900px)");
+  const app = await readFile(new URL("App.tsx", WEB), "utf8");
+  expect(app).toContain("useModalEscape(closeDrawer, drawerOpen)");
+  expect(app).toContain('main?.setAttribute("inert", "")');
+  expect(app).toContain('aria-label="Close sessions"');
+  expect(app).toContain('role={drawerOpen ? "dialog" : "complementary"}');
 });
 
 test("primary mobile shell controls expose 44px hit areas", async () => {
@@ -43,6 +49,14 @@ test("agent install actions stay inline with compact selectable rows", async () 
 test("draft screen does not repeat the composer instruction in the chat", async () => {
   const chat = await readFile(new URL("components/ChatView.tsx", WEB), "utf8");
   expect(chat).not.toContain("Describe your task");
+});
+
+test("session navigation exposes valid list and current-item semantics", async () => {
+  const sessions = await readFile(new URL("components/SessionList.tsx", WEB), "utf8");
+  const app = await readFile(new URL("App.tsx", WEB), "utf8");
+  expect(sessions).not.toContain('role="separator"');
+  expect(sessions).toContain('aria-current={s.sessionId === activeSessionId ? "page" : undefined}');
+  expect(app).toContain('role="region" aria-live="polite" aria-label="Agent needs your response"');
 });
 
 test("toast stack clears the measured composer height", async () => {
