@@ -14,7 +14,7 @@
 // usage) — the card is the same, the information applies.
 
 import { useState } from "react";
-import { deriveRunOutcome, type GithubContext, type GithubQueueItem, type PrRef, type Usage } from "@bivy/core";
+import { deriveRunOutcome, toolGroupSummary, type GithubContext, type GithubQueueItem, type PrRef, type ToolActivity, type Usage } from "@bivy/core";
 import { SourceMark } from "./SourceMark.js";
 import { StatusDot, type StatusDotState } from "./StatusDot.js";
 import { Badge } from "./Badge.js";
@@ -22,6 +22,7 @@ import { Sheet } from "./Sheet.js";
 import { PrBadge, GhMark } from "./SessionList.js";
 import { shortSourceLabel, type SourceInfo } from "../sessionSource.js";
 import { checkCounts, retryReason, runDuration, artifactRef, recoveryActions, type RecoveryKind } from "../runEvidence.js";
+import { ToolActivitySheet } from "./ToolGroup.js";
 
 const RECOVERY_LABEL: Record<RecoveryKind, string> = { fix: "Fix", retry: "Retry checks", fork: "Fork" };
 
@@ -120,6 +121,7 @@ export function RunPill({
   onRecover,
   onOpenRun,
   anchorId,
+  activity = [],
 }: {
   source: SourceInfo;
   /** The row's status class (`working` / `needs-action` / `saved` / `idle`)
@@ -167,8 +169,12 @@ export function RunPill({
   /** DOM id (`attention-<sessionId>`) so an outcome deep-link from the Inbox or a
    *  push tap scrolls to this pill — the exact outcome — not just the session (B3). */
   anchorId?: string;
+  /** Durable mechanical work from the transcript. It is intentionally exposed
+   * through this receipt rather than interrupting the conversation. */
+  activity?: ToolActivity[];
 }) {
   const [open, setOpen] = useState(false);
+  const [workLogOpen, setWorkLogOpen] = useState(false);
   const actions = actionsFor(gh);
   const short = shortSourceLabel(source.kind);
   // The plain "Open" state means the session is still live on its node and can
@@ -202,6 +208,9 @@ export function RunPill({
     : null;
   const artifactsLabel = artifactsCount && artifactsCount > 0
     ? `${artifactsCount} artifact${artifactsCount === 1 ? "" : "s"}`
+    : null;
+  const activityLabel = activity.length > 0
+    ? `${activity.length} action${activity.length === 1 ? "" : "s"}`
     : null;
 
   return (
@@ -305,6 +314,18 @@ export function RunPill({
               </button>
             )}
 
+            {activityLabel && (
+              <button
+                type="button"
+                className="sheet-action run-sheet-changes"
+                onClick={() => { setOpen(false); setWorkLogOpen(true); }}
+              >
+                <span className="run-sheet-changes-icon" aria-hidden>↳</span>
+                <span>Work log</span>
+                <span className="run-sheet-changes-hint">{activityLabel}</span>
+              </button>
+            )}
+
             {artifactsLabel && onOpenArtifacts && (
               <button
                 type="button"
@@ -359,10 +380,17 @@ export function RunPill({
                 ))}
               </div>
             )}
-            {actions.length === 0 && !evidence && !hasUsage && !forkedFrom && !filesLabel && (
+            {actions.length === 0 && !evidence && !hasUsage && !forkedFrom && !filesLabel && !activityLabel && (
               <div className="sheet-action-empty">This session has nothing to report yet.</div>
             )}
         </Sheet>
+      )}
+      {workLogOpen && (
+        <ToolActivitySheet
+          tools={activity}
+          summary={toolGroupSummary(activity)}
+          onClose={() => setWorkLogOpen(false)}
+        />
       )}
     </>
   );

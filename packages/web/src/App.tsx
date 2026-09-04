@@ -868,6 +868,7 @@ export function App() {
                   filesEdited={countUniqueEditedFiles(state.activeSession.changesHistory)}
                   onOpenChanges={() => setChangesSheetOpen(true)}
                   artifactsCount={artifacts.length}
+                  activity={state.activeSession.transcript.flatMap((entry) => entry.tool ? [entry.tool] : [])}
                   onOpenArtifacts={() => setArtifactsSheetOpen(true)}
                   onOpenRun={(runId) => openRun(runId)}
                   onRecover={(kind) => {

@@ -183,7 +183,7 @@ function runningSummary(tool: ToolActivity): string {
  * every time the parent re-renders while a call is still streaming, and a
  * stale object reference would freeze the open card mid-run.
  */
-function ToolActivitySheet({ tools, summary, onClose }: { tools: ToolActivity[]; summary: string; onClose: () => void }) {
+export function ToolActivitySheet({ tools, summary, onClose }: { tools: ToolActivity[]; summary: string; onClose: () => void }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selected = selectedId ? tools.find((t) => t.callId === selectedId) : undefined;
   // One formatTool per tool per render, not per tool per *place it's used* —
