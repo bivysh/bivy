@@ -3,7 +3,9 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.js";
+import { ProductsView } from "./components/ProductsView.js";
 import { ErrorBoundary } from "./components/ErrorBoundary.js";
+import { parseRoute } from "./router.js";
 import { applyTheme } from "./theme.js";
 import { initPwa } from "./pwa.js";
 import { initViewport } from "./viewport.js";
@@ -27,19 +29,24 @@ void requestPersistentStorage();
 initializeInstallLifecycle();
 
 const root = document.getElementById("root");
+const route = parseRoute();
 if (root) {
   createRoot(root).render(
     <StrictMode>
       <ErrorBoundary>
-        <App />
+        {route.kind === "products" ? <ProductsView /> : <App />}
       </ErrorBoundary>
     </StrictMode>,
   );
 }
 
-// Kick off the connection and register the service worker after mount.
-controller.connect();
-// Re-sync (reconnect + refresh sessions/history/models) when the tab returns to
-// the foreground — mobile Safari can suspend the socket without a status cycle.
-controller.installLifecycleHandlers();
+// The product table is a standalone destination and does not need an agent
+// connection. Keep the session transport idle when it is opened directly.
+if (route.kind !== "products") {
+  controller.connect();
+  // Re-sync (reconnect + refresh sessions/history/models) when the tab returns
+  // to the foreground — mobile Safari can suspend the socket without a status
+  // cycle.
+  controller.installLifecycleHandlers();
+}
 initPwa();

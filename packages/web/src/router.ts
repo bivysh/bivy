@@ -9,6 +9,7 @@
 //   /settings/:view       — the Settings overlay, on a specific section
 //   /automations          — the Automations overlay, Overview tab
 //   /automations/:section — the Automations overlay, on a specific tab
+//   /products             — the product table
 // Anything else (notably `/`) is treated as the "root" home, which renders the
 // same empty/first-run shell a fresh draft does. Keeping this in one small
 // module means the controller owns *when* to navigate while the URL parsing and
@@ -82,6 +83,7 @@ export type Route =
   | { kind: "new" }
   | { kind: "settings"; view: SettingsView | null }
   | { kind: "automations"; section: AutomationsSection | null }
+  | { kind: "products" }
   | { kind: "root" };
 
 const SESSION_PATH = /^\/sessions\/([^/]+)\/?$/;
@@ -90,6 +92,7 @@ const AUTOMATIONS_PATH = /^\/automations(?:\/([^/]+))?\/?$/;
 
 /** Parse the current (or a given) pathname into a Route. */
 export function parseRoute(pathname: string = location.pathname): Route {
+  if (/^\/products\/?$/.test(pathname)) return { kind: "products" };
   const sessionMatch = SESSION_PATH.exec(pathname);
   if (sessionMatch && sessionMatch[1]) {
     const id = decodeURIComponent(sessionMatch[1]);
@@ -136,7 +139,9 @@ export function routePath(route: Route): string {
             ? route.section
               ? `/automations/${route.section}`
               : "/automations"
-            : "/";
+            : route.kind === "products"
+              ? "/products"
+              : "/";
   return base + location.search + location.hash;
 }
 
