@@ -251,10 +251,12 @@ export const ToolGroup = memo(function ToolGroup({ tools }: { tools: ToolActivit
       : running && tools.every((t) => t.status === "running") && tools.length === 1
         ? runningSummary(tools[0]!)
         : toolGroupSummary(tools);
+  const stateLabel = running ? "Working" : hasError ? "Needs attention" : "Activity";
   return (
     <div className="tool-group">
-      <button className={`tool-group-line${running ? " is-running" : ""}${hasError ? " is-error" : ""}`} onClick={() => setOpen(true)}>
+      <button className={`tool-group-line${running ? " is-running" : ""}${hasError ? " is-error" : ""}`} onClick={() => setOpen(true)} aria-label={`${stateLabel}: ${summary}. Open details`}>
         <span className="tool-group-state" aria-hidden />
+        <span className="tool-group-label">{stateLabel}</span>
         <span className="tool-group-summary">{summary}</span>
         <span className="tool-chevron"><ChevronRightIcon size={14} /></span>
       </button>

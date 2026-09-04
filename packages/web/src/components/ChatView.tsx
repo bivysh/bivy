@@ -477,37 +477,67 @@ type RenderItem =
   | { kind: "entry"; key: string; entry: TranscriptEntry }
   | { kind: "tools"; key: string; tools: ToolActivity[] };
 
-/**
- * Focus view: drop the interim chatter so the transcript reads as just the
- * conversation — user prompts, the agent's final answer for each turn, and any
- * system notice (errors, the inline "Create PR" action). "Interim" is the
- * agent's working-out: thinking blocks, tool-call cards, and the intermediate
- * assistant messages it emits between tool calls. Within each user-bounded
- * turn only the last assistant prose entry survives (the turn's conclusion); a
- * still-streaming reply is naturally that last entry, so it stays visible and
- * keeps updating. Pure filter over the array — the surviving entries keep their
- * object identity, so EntryView's memoization still skips unchanged rows.
- */
-function collapseInterim(entries: TranscriptEntry[]): TranscriptEntry[] {
-  const keep: TranscriptEntry[] = [];
-  let lastAssistant: TranscriptEntry | null = null;
+type RenderTurn = { kind: "turn"; key: string; user?: RenderItem; response: RenderItem[] };
+type RenderBlock = RenderTurn | { kind: "standalone"; key: string; item: RenderItem };
+
+/** Keep user prompts, essential notices, and only the final assistant message
+ * from each user-bounded turn. Activity, thinking, and interim prose remain in
+ * the durable transcript and reappear immediately when Focus is turned off. */
+function focusEntries(entries: TranscriptEntry[], working: boolean): TranscriptEntry[] {
+  const visible: TranscriptEntry[] = [];
+  let finalAssistant: TranscriptEntry | null = null;
   const flush = () => {
-    if (lastAssistant) keep.push(lastAssistant);
-    lastAssistant = null;
+    if (finalAssistant) visible.push(finalAssistant);
+    finalAssistant = null;
   };
-  for (const e of entries) {
-    if (e.tool || e.role === "thinking") continue; // interim working-out
-    if (e.role === "assistant") {
-      lastAssistant = e; // hold; only the turn's last assistant prose is kept
+  for (const entry of entries) {
+    if (entry.tool || entry.role === "thinking") continue;
+    if (entry.role === "assistant") {
+      finalAssistant = entry;
       continue;
     }
-    // user / system entry ends the current assistant run — emit the held final
-    // assistant prose before it so ordering is preserved.
     flush();
-    keep.push(e);
+    visible.push(entry);
   }
   flush();
-  return keep;
+  if (!working) return visible;
+  const currentTurn = visible.findLastIndex((entry) => entry.role === "user");
+  return currentTurn < 0
+    ? visible.filter((entry) => entry.role !== "assistant")
+    : visible.filter((entry, index) => index <= currentTurn || entry.role !== "assistant");
+}
+
+/**
+ * The wire transcript is entry-oriented, but people read it in turns. Group a
+ * user prompt with everything that follows until the next prompt so thinking,
+ * activity, the answer, and its actions share one visual rhythm. A window can
+ * begin mid-turn, hence the response-only first group.
+ */
+function groupTurns(items: RenderItem[]): RenderBlock[] {
+  const blocks: RenderBlock[] = [];
+  let current: RenderTurn | null = null;
+  for (const item of items) {
+    const isUser = item.kind === "entry" && item.entry.role === "user";
+    if (isUser) {
+      current = { kind: "turn", key: `turn-${item.key}`, user: item, response: [] };
+      blocks.push(current);
+      continue;
+    }
+    // System notices and errors are session-level events, not agent prose. Keep
+    // them in source order and outside the preceding conversation group.
+    const standalone = item.kind === "entry" && (item.entry.role === "system" || item.entry.role === "error");
+    if (standalone) {
+      blocks.push({ kind: "standalone", key: `standalone-${item.key}`, item });
+      current = null;
+      continue;
+    }
+    if (!current) {
+      current = { kind: "turn", key: `turn-${item.key}`, response: [] };
+      blocks.push(current);
+    }
+    current.response.push(item);
+  }
+  return blocks;
 }
 
 /** Stable React key for a tool-run group. Keyed on the first tool's runtime
@@ -557,7 +587,7 @@ export function ChatView({
   draftRoute,
   opening,
   sessionKey,
-  collapsed,
+  focusView,
   onAction,
   footer,
 }: {
@@ -575,9 +605,8 @@ export function ChatView({
   opening?: boolean;
   /** Identity of the open session; used to preserve its window and reading position. */
   sessionKey: string | null;
-  /** Focus view: hide thinking, tool cards, and interim assistant messages —
-   *  leaving user prompts, each turn's final answer, and system notices. */
-  collapsed?: boolean;
+  /** Show only user prompts, final assistant answers, and essential notices. */
+  focusView?: boolean;
   /** Run a slash command from an inline notice action button (e.g. "/new"). */
   onAction?: (action: string) => void;
   /** Rendered at the tail of the scroll area so approval/question cards flow
@@ -627,10 +656,7 @@ export function ChatView({
     setPinnedState(true);
   }, [setPinnedState]);
 
-  // In focus view the transcript is the interim-free projection; everything
-  // downstream (windowing, auto-scroll, "show earlier" counts) operates on that
-  // filtered list so the counts and the visible rows stay in agreement.
-  const source = useMemo(() => (collapsed ? collapseInterim(entries) : entries), [collapsed, entries]);
+  const source = useMemo(() => focusView ? focusEntries(entries, working) : entries, [entries, focusView, working]);
 
   // Remember a session's distance from the bottom rather than its absolute
   // scrollTop. If content grows while it is in the background, returning still
@@ -696,6 +722,18 @@ export function ChatView({
   const start = Math.max(0, total - limit);
   const visible = start > 0 ? source.slice(start) : source;
   const items = groupEntries(visible);
+  const blocks = groupTurns(items);
+  const tail = visible.at(-1);
+  // A streaming message or running tool is already the clearest possible live
+  // status. Do not stack the generic three-dot row beneath it and make the
+  // transcript say "working" twice.
+  const tailShowsProgress = Boolean(tail?.streaming || tail?.tool?.status === "running");
+
+  const renderItem = (it: RenderItem) => it.kind === "tools" ? (
+    <ToolGroup key={it.key} tools={it.tools} />
+  ) : (
+    <EntryView key={it.key} entry={it.entry} onAction={onAction} />
+  );
 
   return (
     <div className="chat-wrap">
@@ -724,14 +762,15 @@ export function ChatView({
               ↑ Show earlier messages ({start} more)
             </button>
           )}
-          {items.map((it) =>
-            it.kind === "tools" ? (
-              <ToolGroup key={it.key} tools={it.tools} />
-            ) : (
-              <EntryView key={it.key} entry={it.entry} onAction={onAction} />
-            ),
-          )}
-          {working && (
+          {blocks.map((block) => block.kind === "standalone" ? (
+            <div className="transcript-standalone" key={block.key}>{renderItem(block.item)}</div>
+          ) : (
+            <div className="transcript-turn" key={block.key}>
+              {block.user?.kind === "entry" && <EntryView entry={block.user.entry} onAction={onAction} />}
+              {block.response.length > 0 && <div className="turn-response-body">{block.response.map(renderItem)}</div>}
+            </div>
+          ))}
+          {working && !tailShowsProgress && (
             <div className="working-row">
               <span className="working-dots" aria-hidden>
                 <i />
