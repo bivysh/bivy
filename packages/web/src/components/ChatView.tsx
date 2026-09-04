@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { stripAttachmentPlaceholders, toHtml, type PromptAttachment, type ToolActivity, type TranscriptEntry } from "@bivy/core";
-import { ToolGroup } from "./ToolGroup.js";
+import { stripAttachmentPlaceholders, toHtml, type PromptAttachment, type TranscriptEntry } from "@bivy/core";
 import { Spinner } from "./Spinner.js";
+import { ToolGroup } from "./ToolGroup.js";
 import { ImageGallery } from "./ImageGallery.js";
 import { focusEntries } from "../focusTranscript.js";
 import { decorateCodeBlocks, highlightCode } from "../highlight.js";
@@ -476,7 +476,7 @@ const EntryView = memo(function EntryView({
 
 type RenderItem =
   | { kind: "entry"; key: string; entry: TranscriptEntry }
-  | { kind: "tools"; key: string; tools: ToolActivity[] };
+  | { kind: "tools"; key: string; tools: NonNullable<TranscriptEntry["tool"]>[] };
 
 type RenderTurn = { kind: "turn"; key: string; user?: RenderItem; response: RenderItem[] };
 type RenderBlock = RenderTurn | { kind: "standalone"; key: string; item: RenderItem };
@@ -511,40 +511,41 @@ function groupTurns(items: RenderItem[]): RenderBlock[] {
     }
     current.response.push(item);
   }
-  return blocks;
+  return blocks.map((block) => {
+    if (block.kind === "standalone") return block;
+    const toolItems = block.response.filter((item) => item.kind === "tools");
+    if (toolItems.length === 0) return block;
+    const prose: RenderItem[] = block.response.filter((item) => item.kind !== "tools");
+    const tools: NonNullable<TranscriptEntry["tool"]>[] = [];
+    for (const item of toolItems) tools.push(...item.tools);
+    const work: RenderItem = { kind: "tools", key: toolItems[0]!.key, tools };
+    const finalAnswer = prose.findLastIndex((item) => item.kind === "entry" && item.entry.role === "assistant");
+    prose.splice(finalAnswer < 0 ? prose.length : finalAnswer, 0, work);
+    return { ...block, response: prose };
+  });
 }
 
-/** Stable React key for a tool-run group. Keyed on the first tool's runtime
- *  `callId` — NOT the transcript entry `id` — because reconciling a live turn
- *  with canonical history (store.applyHistory → renderHistory) rebuilds the
- *  whole transcript with freshly-generated entry ids. Keying on those made an
- *  open ToolGroup remount on every such reconcile, resetting its local `open`
- *  state and slamming the activity sheet shut mid-run. `callId` comes from the
- *  runtime and is preserved across re-renders, so the group — and any sheet the
- *  user opened on it — stays put until they close it themselves. Falls back to
- *  the entry id for the rare tool with no callId. */
-function toolRunKey(first: TranscriptEntry): string {
-  return `g:${first.tool?.callId || first.id}`;
-}
-
-/** Collapse runs of consecutive tool entries into a single grouped item. */
+/** Keep each consecutive tool run stable; groupTurns folds all runs in one
+ * conversational turn into a single work chapter before the final answer. */
 function groupEntries(entries: TranscriptEntry[]): RenderItem[] {
-  const out: RenderItem[] = [];
-  let run: TranscriptEntry[] | null = null;
-  for (const e of entries) {
-    if (e.tool) {
-      if (!run) run = [];
-      run.push(e);
+  const items: RenderItem[] = [];
+  let tools: NonNullable<TranscriptEntry["tool"]>[] = [];
+  let key = "";
+  const flush = () => {
+    if (tools.length) items.push({ kind: "tools", key, tools });
+    tools = [];
+  };
+  for (const entry of entries) {
+    if (entry.tool) {
+      if (!tools.length) key = `tools-${entry.tool.callId || entry.id}`;
+      tools.push(entry.tool);
     } else {
-      if (run) {
-        out.push({ kind: "tools", key: toolRunKey(run[0]!), tools: run.map((r) => r.tool!) });
-        run = null;
-      }
-      out.push({ kind: "entry", key: e.id, entry: e });
+      flush();
+      items.push({ kind: "entry", key: entry.id, entry });
     }
   }
-  if (run) out.push({ kind: "tools", key: toolRunKey(run[0]!), tools: run.map((r) => r.tool!) });
-  return out;
+  flush();
+  return items;
 }
 
 // Cap the number of live DOM nodes. A session can have thousands of messages;
@@ -698,16 +699,14 @@ export function ChatView({
   const items = groupEntries(visible);
   const blocks = groupTurns(items);
   const tail = visible.at(-1);
-  // A streaming message or running tool is already the clearest possible live
-  // status. Do not stack the generic three-dot row beneath it and make the
-  // transcript say "working" twice.
-  const tailShowsProgress = Boolean(tail?.streaming || tail?.tool?.status === "running");
+  // Once the agent has communicated an interim update, let that message carry
+  // the conversational state while the run pill carries mechanical progress.
+  // The generic dots are only useful before the agent has said anything.
+  const tailShowsProgress = Boolean(tail?.role === "assistant");
 
-  const renderItem = (it: RenderItem) => it.kind === "tools" ? (
-    <ToolGroup key={it.key} tools={it.tools} />
-  ) : (
-    <EntryView key={it.key} entry={it.entry} onAction={onAction} />
-  );
+  const renderItem = (it: RenderItem) => it.kind === "tools"
+    ? <ToolGroup key={it.key} tools={it.tools} />
+    : <EntryView key={it.key} entry={it.entry} onAction={onAction} />;
 
   return (
     <div className="chat-wrap">
