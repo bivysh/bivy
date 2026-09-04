@@ -42,25 +42,26 @@ const AUDIT_CMD = "pnpm";
 const AUDIT_ARGS = ["audit", "--prod", "--json", "--ignore-registry-errors"];
 
 let report;
+let rawOutput = "";
 try {
-  const out = execFileSync(AUDIT_CMD, AUDIT_ARGS, {
+  rawOutput = execFileSync(AUDIT_CMD, AUDIT_ARGS, {
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
   });
-  report = JSON.parse(out);
+  report = JSON.parse(rawOutput);
 } catch (err) {
   // The audit exits non-zero when vulnerabilities exist; the JSON is still on
   // stdout. Only a genuinely unparseable result is a hard error.
-  if (err.stdout) {
+  const output = String(err.stdout || rawOutput || "");
+  if (output) {
     try {
-      report = JSON.parse(err.stdout);
+      report = JSON.parse(output);
     } catch {
       // pnpm occasionally prints the registry transport failure as plain text
       // even with --json (for example, "The operation was aborted"). Because
       // registry errors are explicitly ignored for this invocation, recognize
       // only those transport-shaped messages; malformed audit data still fails
       // closed below.
-      const output = String(err.stdout || err.message || "");
       if (/operation was aborted|timed?\s*out|eai_again|econn(reset|refused)|enotfound|registry.*(error|unavailable)|audit.*(endpoint|service).*failed/i.test(output)) {
         console.warn(`Production audit unavailable: ${output.trim()}`);
         console.warn("Continuing without advisory results; retry the audit when the registry is healthy.");
