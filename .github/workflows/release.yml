@@ -155,8 +155,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       # package.json is the single source of truth for the version to release.
-      # Validate it is a clean release version, that the dispatcher typed it
-      # exactly (a deliberate act), and that it was not already published.
+      # Validate it is clean and explicitly confirmed. A same-commit tag is
+      # accepted so a run interrupted after npm publication can resume safely.
       - name: Resolve and validate the release version
         id: ver
         env:
@@ -169,9 +169,12 @@ jobs:
           if [ "$CONFIRM" != "$version" ]; then
             echo "::error::Confirmation '$CONFIRM' does not match package.json version '$version'. Re-run and type the exact version to promote."; exit 1
           fi
-          if git rev-parse "v$version" >/dev/null 2>&1 \
-            || git ls-remote --exit-code --tags origin "v$version" >/dev/null 2>&1; then
-            echo "::error::Tag v$version already exists -- this version was already released. Bump the version in a PR first."; exit 1
+          git fetch --tags origin
+          if git rev-parse "v$version" >/dev/null 2>&1; then
+            tagged_commit="$(git rev-list -n 1 "v$version")"
+            [ "$tagged_commit" = "$GITHUB_SHA" ] \
+              || { echo "::error::Tag v$version points to $tagged_commit, not this commit $GITHUB_SHA."; exit 1; }
+            echo "Existing same-commit tag v$version found; resuming its release."
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
@@ -196,24 +199,43 @@ jobs:
           VERSION: ${{ steps.ver.outputs.version }}
         run: node scripts/extract-changelog.mjs "v$VERSION" > release-notes.md
 
-      - name: Require Core service images for this commit
+      - name: Require public Core service images for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker logout ghcr.io >/dev/null 2>&1 || true
           for attempt in $(seq 1 40); do
-            if docker buildx imagetools inspect "ghcr.io/bivysh/bivy-control-plane:$GITHUB_SHA" >/dev/null 2>&1 \
+            successful_runs="$(gh api "/repos/$GITHUB_REPOSITORY/actions/workflows/service-images.yml/runs?head_sha=$GITHUB_SHA&event=push&status=success&per_page=1" --jq '.total_count')"
+            if [ "$successful_runs" -gt 0 ] \
+              && docker buildx imagetools inspect "ghcr.io/bivysh/bivy-control-plane:$GITHUB_SHA" >/dev/null 2>&1 \
               && docker buildx imagetools inspect "ghcr.io/bivysh/bivy-relay:$GITHUB_SHA" >/dev/null 2>&1; then
-              echo "Core service images for $GITHUB_SHA are available."
+              echo "The successful image workflow's artifacts are anonymously pullable."
               exit 0
             fi
-            echo "Waiting for Core service images for $GITHUB_SHA ($attempt/40)..."
+            echo "Waiting for successful, public Core service images for $GITHUB_SHA ($attempt/40)..."
             sleep 15
           done
-          echo "::error::Core service images for $GITHUB_SHA were not published. Check the Core service images workflow."
+          echo "::error::The Core service image workflow did not publish anonymously pullable images for $GITHUB_SHA."
           exit 1
 
-      - name: Publish to npm (dist-tag `latest`)
-        run: pnpm run publish:npm
+      # npm versions are immutable. If a previous attempt published successfully
+      # and then failed while tagging images, verify `latest` and resume rather
+      # than trying the irreversible operation a second time.
+      - name: Publish or resume npm `latest`
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          published="$(npm view "@bivy/bivy@$VERSION" version 2>/dev/null || true)"
+          if [ "$published" = "$VERSION" ]; then
+            latest="$(npm view @bivy/bivy dist-tags.latest)"
+            [ "$latest" = "$VERSION" ] \
+              || { echo "::error::npm $VERSION exists but latest points to $latest; refusing an ambiguous recovery."; exit 1; }
+            echo "npm $VERSION is already published as latest; resuming promotion."
+          else
+            pnpm run publish:npm
+          fi
 
       # A release tag is an alias of the already-tested SHA manifests, not a
       # rebuild. `latest` therefore points to byte-identical service artifacts.
@@ -222,6 +244,7 @@ jobs:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
           set -euo pipefail
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           for image in bivy-control-plane bivy-relay; do
             source="ghcr.io/bivysh/$image:$GITHUB_SHA"
             docker buildx imagetools create \
@@ -246,6 +269,14 @@ jobs:
           # on npm with no tag and no GitHub release.
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "v$VERSION" -m "Bivy $VERSION"
-          git push origin "v$VERSION"
-          gh release create "v$VERSION" --title "v$VERSION" --notes-file release-notes.md
+          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+            echo "Tag v$VERSION already exists at this commit; preserving it."
+          else
+            git tag -a "v$VERSION" -m "Bivy $VERSION"
+            git push origin "v$VERSION"
+          fi
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "GitHub release v$VERSION already exists; promotion is complete."
+          else
+            gh release create "v$VERSION" --title "v$VERSION" --notes-file release-notes.md
+          fi

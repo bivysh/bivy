@@ -9,6 +9,21 @@ on:
   # pin always resolves; BuildKit reuses layers when image inputs did not change.
   push:
     branches: [main]
+  # Exercise both Dockerfiles before merge without publishing anything.
+  pull_request:
+    branches: [main]
+    paths:
+      - deploy/Dockerfile.control-plane
+      - deploy/Dockerfile.relay
+      - services/control-plane/**
+      - services/relay/**
+      - packages/**
+      - src/automation/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - .dockerignore
+      - .github/workflows/service-images.yml
   workflow_dispatch:
     inputs:
       core_ref:
@@ -18,7 +33,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: core-service-images-${{ inputs.core_ref || github.sha }}
@@ -28,8 +42,26 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  publish:
+  validate:
+    if: github.event_name == 'pull_request'
+    name: Build ${{ matrix.service }} image
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [control-plane, relay]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build image
+        run: docker build --file "deploy/Dockerfile.${{ matrix.service }}" --tag "bivy-${{ matrix.service }}:ci" .
+
+  publish:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -69,9 +101,6 @@ jobs:
               --cache-to "type=registry,ref=$IMAGE:buildcache,mode=max" \
               .
           fi
-          if [ "$GITHUB_REF" = "refs/heads/main" ] && [ -z "${{ inputs.core_ref }}" ]; then
-            docker buildx imagetools create --tag "$IMAGE:main" "$IMAGE:$CORE_SHA"
-          fi
 
       - name: Build and publish relay
         env:
@@ -94,9 +123,6 @@ jobs:
               --cache-from "type=registry,ref=$IMAGE:buildcache" \
               --cache-to "type=registry,ref=$IMAGE:buildcache,mode=max" \
               .
-          fi
-          if [ "$GITHUB_REF" = "refs/heads/main" ] && [ -z "${{ inputs.core_ref }}" ]; then
-            docker buildx imagetools create --tag "$IMAGE:main" "$IMAGE:$CORE_SHA"
           fi
 
       # GHCR container packages default to private unless the organization has

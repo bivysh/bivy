@@ -7,8 +7,8 @@ is a thin bootstrapper: it ensures a supported Node.js is present, runs
 
 The control plane and relay are distributed as public GHCR images built by
 `service-images.yml` from their source commit. Every Core commit on `main`
-receives an immutable full-SHA tag; `main` tracks the development branch. Production promotion aliases those existing manifests to
-`X.Y.Z`, `vX.Y.Z`, and `latest` without rebuilding them. Cloud deployment may
+receives an immutable full-SHA tag. Production promotion aliases those existing
+manifests to `X.Y.Z`, `vX.Y.Z`, and `latest` without rebuilding them. Cloud deployment may
 add deployment-specific metadata around these images, but does not rebuild Core.
 
 npm is the node/CLI distribution channel. `install.sh` retains a checksum-verified
@@ -189,14 +189,14 @@ warning when this happens. Prefer the workflow.
 ## Service container images
 
 ```text
-ghcr.io/bivysh/bivy-control-plane:<full-sha|version|main|latest>
-ghcr.io/bivysh/bivy-relay:<full-sha|version|main|latest>
+ghcr.io/bivysh/bivy-control-plane:<full-sha|version|latest>
+ghcr.io/bivysh/bivy-relay:<full-sha|version|latest>
 ```
 
 The full 40-character commit tag is write-once. Both images carry OCI source,
-revision, and AGPL license labels plus SBOM and provenance attestations. `main`
-is a development pointer; `latest` and version tags are created only by the
-production release job and all reference the exact full-SHA manifest built for
+revision, and AGPL license labels plus SBOM and provenance attestations.
+`latest` and version tags are created only by the production release job and all
+reference the exact full-SHA manifest built for
 that commit. A manual `service-images.yml` dispatch with `core_ref` can backfill
 an older tag or SHA.
 
