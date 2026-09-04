@@ -69,7 +69,7 @@ test.beforeEach(async ({ page }) => {
     readFile(new URL("packages/web/src/ux-cleanup.css", ROOT), "utf8"),
   ]);
   await page.setContent("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Bivy UX fixture</title></head><body></body></html>");
-  await page.addStyleTag({ content: `${tokens}\n${styles}\n${cleanup}\nhtml,body{margin:0;width:100%;height:100%;overflow:hidden}.review-fixture{min-height:100%}` });
+  await page.addStyleTag({ content: `${tokens}\n${styles}\n${cleanup}\nhtml,body{margin:0;width:100%;height:100%;overflow:hidden}.review-fixture{min-height:100%}.sheet-body,.sheet-backdrop{animation:none!important}` });
 });
 
 async function assertNamedControls(page: Page) {
