@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ModelInfo } from "@bivy/core";
 import { controller, useAppState } from "../store/useStore.js";
-import { Sheet } from "./Sheet.js";
+import { Sheet, type DismissSheet } from "./Sheet.js";
 
 /** Stable select value for a model; provider + id together identify it. */
 function modelKey(model: ModelInfo & { provider?: unknown }): string {
@@ -30,9 +30,7 @@ export function ForkSheet({ sessionId, onClose }: { sessionId: string; onClose: 
   const [model, setModel] = useState<ModelInfo | null>(currentModel);
   const [retireTouched, setRetireTouched] = useState(false);
   const [retire, setRetire] = useState(false);
-  const [status, setStatus] = useState<"idle" | "working" | "error" | "warn">("idle");
-  const [errorMsg, setErrorMsg] = useState<string>("");
-  const [warnings, setWarnings] = useState<Array<{ label?: string; detail?: string }>>([]);
+  const [status, setStatus] = useState<"idle" | "working">("idle");
 
   // A sheet can open while canonical history is still arriving. Adopt the
   // session runtime once known, but never overwrite a choice the user made.
@@ -53,11 +51,14 @@ export function ForkSheet({ sessionId, onClose }: { sessionId: string; onClose: 
     return rows;
   }, [nodes, currentNodeId]);
 
-  async function doFork() {
+  function doFork(dismiss: DismissSheet) {
     setStatus("working");
-    setErrorMsg("");
-    try {
-      const result = await controller.forkSession(sessionId, {
+    // A Sheet owns a temporary browser-history entry so mobile Back dismisses
+    // it. Consume that entry before navigating to the fork; navigating first
+    // leaves the modal sentinel behind the new URL, and Sheet cleanup then
+    // history.back()s the PWA straight into the source session again.
+    dismiss(() => {
+      void controller.forkSession(sessionId, {
         destNodeId: crossNode ? destNodeId : undefined,
         // Pass the selected target explicitly. The controller compares it with
         // the source session's runtime; treating this as only an "agent change"
@@ -66,27 +67,20 @@ export function ForkSheet({ sessionId, onClose }: { sessionId: string; onClose: 
         sourceAgentId: sourceAgentId ?? undefined,
         model: agentUnchanged && model ? { provider: String(model.provider), id: String(model.id) } : undefined,
         retireSource: willRetire,
+      }).then((result) => {
+        const warning = result.missing.map((item) => item.detail || item.label).find(Boolean);
+        if (warning) controller.store.setNotice(`Fork created. ${warning}`);
+      }).catch((err) => {
+        controller.store.setError(err instanceof Error ? err.message : String(err));
       });
-      // The controller guarantees the fork is selected before resolving. If
-      // the destination was missing a non-blocking prerequisite — a model login
-      // or GitHub access —
-      // keep the sheet up to tell the user, otherwise just close.
-      if (result.missing.length > 0) {
-        setWarnings(result.missing);
-        setStatus("warn");
-      } else {
-        onClose();
-      }
-    } catch (err) {
-      setStatus("error");
-      setErrorMsg(err instanceof Error ? err.message : String(err));
-    }
+    });
   }
 
   const busy = status === "working";
 
   return (
     <Sheet title={willRetire ? "Move session" : "Fork session"} onClose={onClose} autoFocusSearch={false}>
+      {(dismiss) => <>
       {nodeList.length > 1 && (
         <div className="picker-section fork-select-field">
           <label htmlFor="fork-destination-node">Destination machine</label>
@@ -151,23 +145,12 @@ export function ForkSheet({ sessionId, onClose }: { sessionId: string; onClose: 
         </label>
       </div>
 
-      {status === "error" && <div className="fork-error" role="alert">{errorMsg}</div>}
-
-      {status === "warn" ? (
-        <div className="picker-section">
-          <div className="picker-section-label">Fork created — finish setup on the destination</div>
-          {warnings.map((w, i) => (
-            <div key={i} className="fork-warn">{w.detail || w.label}</div>
-          ))}
-          <button className="btn primary fork-submit" onClick={onClose}>Done</button>
-        </div>
-      ) : (
-        <div className="picker-section">
-          <button className="btn primary fork-submit" onClick={doFork} disabled={busy} aria-busy={busy}>
-            {busy ? "Forking…" : willRetire ? "Move session" : "Create fork"}
-          </button>
-        </div>
-      )}
+      <div className="picker-section">
+        <button className="btn primary fork-submit" onClick={() => doFork(dismiss)} disabled={busy} aria-busy={busy}>
+          {busy ? "Forking…" : willRetire ? "Move session" : "Create fork"}
+        </button>
+      </div>
+      </>}
     </Sheet>
   );
 }

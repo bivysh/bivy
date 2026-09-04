@@ -20,3 +20,14 @@ test("the canonical Sheet owns action-menu shells", async () => {
   expect(css).toContain('.sheet[data-variant="action"] .sheet-body');
   expect(css).not.toMatch(/\.action-sheet(?:[ .:{[])/);
 });
+
+test("forking consumes the sheet history entry before navigating", async () => {
+  const source = await readFile(new URL("components/ForkSheet.tsx", ROOT), "utf8");
+  const dismiss = source.indexOf("dismiss(() => {");
+  const fork = source.indexOf("controller.forkSession", dismiss);
+
+  // Sheet's PWA Back sentinel must be gone before forkSession navigates. If the
+  // order is reversed, unmount cleanup returns the app to the source session.
+  expect(dismiss).toBeGreaterThan(-1);
+  expect(fork).toBeGreaterThan(dismiss);
+});
