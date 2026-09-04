@@ -5,6 +5,7 @@ import { stripAttachmentPlaceholders, toHtml, type PromptAttachment, type ToolAc
 import { ToolGroup } from "./ToolGroup.js";
 import { Spinner } from "./Spinner.js";
 import { ImageGallery } from "./ImageGallery.js";
+import { focusEntries } from "../focusTranscript.js";
 import { decorateCodeBlocks, highlightCode } from "../highlight.js";
 import { renderMermaidDiagrams } from "../mermaid.js";
 import { writeClipboard } from "../clipboard.js";
@@ -479,33 +480,6 @@ type RenderItem =
 
 type RenderTurn = { kind: "turn"; key: string; user?: RenderItem; response: RenderItem[] };
 type RenderBlock = RenderTurn | { kind: "standalone"; key: string; item: RenderItem };
-
-/** Keep user prompts, essential notices, and only the final assistant message
- * from each user-bounded turn. Activity, thinking, and interim prose remain in
- * the durable transcript and reappear immediately when Focus is turned off. */
-function focusEntries(entries: TranscriptEntry[], working: boolean): TranscriptEntry[] {
-  const visible: TranscriptEntry[] = [];
-  let finalAssistant: TranscriptEntry | null = null;
-  const flush = () => {
-    if (finalAssistant) visible.push(finalAssistant);
-    finalAssistant = null;
-  };
-  for (const entry of entries) {
-    if (entry.tool || entry.role === "thinking") continue;
-    if (entry.role === "assistant") {
-      finalAssistant = entry;
-      continue;
-    }
-    flush();
-    visible.push(entry);
-  }
-  flush();
-  if (!working) return visible;
-  const currentTurn = visible.findLastIndex((entry) => entry.role === "user");
-  return currentTurn < 0
-    ? visible.filter((entry) => entry.role !== "assistant")
-    : visible.filter((entry, index) => index <= currentTurn || entry.role !== "assistant");
-}
 
 /**
  * The wire transcript is entry-oriented, but people read it in turns. Group a
