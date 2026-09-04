@@ -215,7 +215,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     // Approve/Deny + session/load resume + a real model picker), the same bar Pi,
     // Claude Code, and Codex clear. See `acp` below for the version fallback.
     supportTier: "supported",
-    testedVersion: "1.18.25",
+    testedVersion: "1.18.27",
     blurb: "The most widely used open-source coding harness (OpenCode CLI).",
     // `opencode run -s <id> "<prompt>"` continues a prior session by its own id
     // (`-s, --session  session id to continue`, per `opencode run --help`).
