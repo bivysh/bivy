@@ -252,9 +252,7 @@ export const ToolGroup = memo(function ToolGroup({ tools }: { tools: ToolActivit
         ? runningSummary(tools[0]!)
         : toolGroupSummary(tools);
   const stateLabel = running ? "Working" : hasError ? "Needs attention" : "Worked";
-  const displaySummary = running || hasError
-    ? summary
-    : `${tools.length} action${tools.length === 1 ? "" : "s"}`;
+  const displaySummary = summary;
   const sheetSummary = `${running ? "Work in progress" : "Work log"} · ${tools.length} action${tools.length === 1 ? "" : "s"}`;
   return (
     <div className="tool-group">
