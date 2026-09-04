@@ -1474,16 +1474,33 @@ export class AppController {
     sourceSessionId: string,
     opts: { destNodeId?: string; agentId?: string; sourceAgentId?: string; model?: { provider: string; id: string }; retireSource?: boolean } = {},
   ): Promise<{ sessionId: string; fidelity: string; missing: Array<{ label?: string; detail?: string }> }> {
+    // Capture the source description before a cross-node fork swaps the session
+    // index to the destination machine. It is used for the confirmation toast
+    // after the new conversation has landed.
+    const state = this.store.getState();
+    const source = state.sessionIndex.sessions.find((session) => session.sessionId === sourceSessionId);
+    const sourceAgentId = opts.sourceAgentId || source?.runtimeId;
+    const targetAgentId = opts.agentId || sourceAgentId;
+    const runtimeLabel = (runtimeId: string | undefined, fallback?: string) => {
+      const runtime = state.catalogs.runtimes.find((item) => item.id === runtimeId);
+      return String(runtime?.displayName || runtime?.name || fallback || runtimeId || "agent");
+    };
+    const sourceName = source?.name || `session ${sourceSessionId.slice(0, 8)}`;
+    const sourceAgent = runtimeLabel(sourceAgentId, source?.agentName);
+    const targetAgent = runtimeLabel(targetAgentId, targetAgentId === sourceAgentId ? source?.agentName : undefined);
     return this.sessionCoordinator.fork(sourceSessionId, opts).then((result) => {
-      // The coordinator selects the fork as soon as its completion event arrives,
-      // but a cross-node move can switch transports again while retiring the
-      // source. Make the final selection after the whole operation so every
-      // caller (including recovery actions without a sheet) lands on the fork.
-      this.openSession(result.sessionId);
-      // `navigate` updates the address bar, while the controller's popstate
-      // listener drives the SPA route. Notify it explicitly so fork completion
-      // transitions the PWA view as well as selecting the session in state.
-      if (typeof window !== "undefined") window.dispatchEvent(new PopStateEvent("popstate"));
+      // SessionOrchestrator has already opened the completed fork from its
+      // canonical snapshot. Usually only the URL needs confirming here. A
+      // cross-node handoff can still reset the active projection after that
+      // open, though, so recover only when selection was genuinely lost. This
+      // keeps the canonical snapshot on the normal path while guaranteeing the
+      // success notice is never shown over the source session.
+      if (this.store.getState().activeSession.activeSessionId !== result.sessionId) {
+        this.openSession(result.sessionId);
+      } else {
+        navigate({ kind: "session", id: result.sessionId });
+      }
+      this.store.setNotice(`This session was forked from “${sourceName}” with ${sourceAgent} to ${targetAgent}.`);
       return result;
     });
   }

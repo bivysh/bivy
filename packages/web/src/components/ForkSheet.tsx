@@ -67,11 +67,7 @@ export function ForkSheet({ sessionId, onClose }: { sessionId: string; onClose: 
         model: agentUnchanged && model ? { provider: String(model.provider), id: String(model.id) } : undefined,
         retireSource: willRetire,
       });
-      // Select the new session from the sheet after the fork promise resolves.
-      // This updates the PWA's active pane, not just the browser URL, and also
-      // covers a node switch that reset the pane during an async fork.
-      controller.openSession(result.sessionId);
-      // The fork succeeded and its session is already open. If the destination
+      // The controller guarantees the fork is selected before resolving. If the destination
       // was missing a (non-blocking) prereq — a model login, GitHub access —
       // keep the sheet up to tell the user, otherwise just close.
       if (result.missing.length > 0) {
