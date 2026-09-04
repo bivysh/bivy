@@ -35,7 +35,11 @@ function ghsaFromUrl(url) {
 }
 
 const AUDIT_CMD = "pnpm";
-const AUDIT_ARGS = ["audit", "--prod", "--json"];
+// pnpm's audit endpoint is remote infrastructure. Keep the security gate
+// strict for advisories, but do not fail every CI run when the registry is
+// temporarily unavailable; pnpm documents this flag specifically for CI.
+// A malformed/non-audit response is still rejected by assertKnownShape below.
+const AUDIT_ARGS = ["audit", "--prod", "--json", "--ignore-registry-errors"];
 
 let report;
 try {
@@ -86,6 +90,20 @@ function assertKnownShape(r) {
     );
     process.exit(2);
   }
+}
+
+// With --ignore-registry-errors pnpm returns a small `{ error }` JSON report
+// when the advisory service is unavailable. This is an infrastructure result,
+// not a clean audit; warn loudly and let the separate lockfile/pin checks keep
+// enforcing the dependency policy. Do not treat arbitrary malformed JSON this
+// way — only pnpm's documented registry-error envelope is accepted here.
+if (report && typeof report === "object" && report.error && typeof report.error === "object") {
+  const error = report.error;
+  const code = typeof error.code === "string" ? error.code : "registry error";
+  const detail = typeof error.detail === "string" ? error.detail : typeof error.message === "string" ? error.message : "the registry did not return an audit report";
+  console.warn(`Production audit unavailable (${code}): ${detail}`);
+  console.warn("Continuing without advisory results; retry the audit when the registry is healthy.");
+  process.exit(0);
 }
 
 assertKnownShape(report);
