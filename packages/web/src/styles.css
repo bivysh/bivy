@@ -990,10 +990,16 @@ button.sheet-action:last-child { border-bottom: 0; }
    state. Reuses .queue-action-btn (GithubQueue's button look) for edit/
    remove/reorder/send-next so this reads as the same "manage a queue"
    pattern already established there, rather than inventing a new one. */
-.followup-queue { margin: 8px 10px 0; display: flex; flex-direction: column; gap: 6px; }
-.followup-queue-head { font-size: 12px; font-weight: 600; color: var(--muted); padding: 0 2px; }
-.followup-list { display: flex; flex-direction: column; gap: 6px; }
-.followup-card { padding: 0; overflow: hidden; }
+.followup-queue {
+  margin: var(--space-2) var(--space-3) 0; display: flex; flex-direction: column; gap: var(--space-2);
+  max-height: calc(var(--app-h, 100dvh) * 0.32); min-height: 0; overflow: hidden;
+}
+.followup-queue-head { flex: none; font-size: var(--text-xs); font-weight: var(--weight-semibold); color: var(--muted); padding: 0 var(--space-1); }
+.followup-list {
+  display: flex; flex-direction: column; gap: var(--space-2); min-height: 0; overflow-y: auto;
+  overscroll-behavior: contain; -webkit-overflow-scrolling: touch; padding: 0 var(--space-1) var(--space-1);
+}
+.followup-card { flex: none; padding: 0; overflow: hidden; }
 .followup-card.locked { opacity: 0.75; }
 .followup-card-row {
   display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px;
@@ -1108,6 +1114,16 @@ button.sheet-action:last-child { border-bottom: 0; }
   will-change: transform;
 }
 .sheet-body.is-closing { animation: sheet-down var(--dur) var(--ease-standard) forwards; }
+/* Agent/model catalogs should not collapse into a tiny strip when the composer
+   grows. Keep their normal composer clearance, but cap that reservation and
+   give the scrollable catalog a stable, roomy height. */
+.sheet[data-size="large"] .sheet-body {
+  --sheet-clear: max(
+    calc(env(safe-area-inset-bottom, 0px) + var(--space-2)),
+    min(calc(var(--composer-h, 108px) + var(--space-2) - var(--keyboard-h, 0px)), calc(var(--app-h, 100dvh) * 0.24))
+  );
+  height: min(calc(var(--app-h, 100dvh) * 0.72), calc(var(--app-h, 100dvh) - var(--sheet-clear) - var(--space-5)));
+}
 .sheet-grabber {
   align-self: center; flex: none; width: var(--space-7); height: var(--space-1); margin: var(--space-2) 0 var(--space-1);
   border-radius: var(--radius-full); background: var(--line-strong); cursor: grab; touch-action: none;
@@ -2766,9 +2782,12 @@ select.picker-search { appearance: auto; }
   }
   .picker-item-row.with-actions .picker-item-extra .btn { min-height: 40px; }
   .readiness-detail { display: none; }
-  .composer-meta > .btn, .composer-btn, .session-actions-btn, .session-filter-btn, .sheet-back {
+  .composer-meta > .btn, .session-actions-btn, .session-filter-btn, .sheet-back {
     min-height: 44px;
   }
+  /* Equal explicit axes prevent the icon controls becoming vertical pills when
+     the mobile tap-target rule increases only their minimum height. */
+  .composer-btn { width: 44px; height: 44px; min-width: 44px; min-height: 44px; }
   .session-actions-btn, .session-filter-btn, .sheet-back { min-width: 44px; }
   .chat-inner { padding: var(--space-4) var(--space-4) var(--space-5); gap: var(--space-5); }
   .transcript-turn { gap: var(--space-3); }
@@ -2856,6 +2875,11 @@ select.picker-search { appearance: auto; }
   background: var(--surface-2); border: 1px solid var(--line);
   display: flex; align-items: center; justify-content: center; font-size: 16px;
 }
+.artifact-thumb-button {
+  width: 44px; height: 44px; flex: none; border: 0; border-radius: var(--radius-sm);
+  padding: 0; background: transparent; cursor: zoom-in;
+}
+.artifact-thumb-button .artifact-thumb { display: block; }
 .artifact-thumb-loading { opacity: 0.4; }
 .artifact-thumb-unavailable { color: var(--danger); }
 .artifact-glyph { font-size: 18px; }
@@ -2863,7 +2887,7 @@ select.picker-search { appearance: auto; }
 .artifact-name-line { display: flex; align-items: center; gap: 6px; }
 .artifact-name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .artifact-meta { font-size: 11px; opacity: 0.6; }
-.artifact-caption { font-size: 12px; opacity: 0.8; }
+.artifact-caption { font-size: 12px; opacity: 0.8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .artifact-unavailable { font-size: 11px; color: var(--danger); }
 .artifact-actions { display: flex; flex-direction: column; gap: 4px; flex: none; }
 

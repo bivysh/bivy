@@ -17,6 +17,7 @@ export function Sheet({
   headExtra,
   autoFocusSearch = true,
   variant = "default",
+  size = "content",
   ariaLabel,
 }: {
   title: ReactNode;
@@ -24,6 +25,8 @@ export function Sheet({
   children: ReactNode | ((dismiss: DismissSheet) => ReactNode);
   headExtra?: ReactNode;
   variant?: "default" | "action" | "centered";
+  /** Keep list-heavy pickers predictably roomy even when the composer is tall. */
+  size?: "content" | "large";
   ariaLabel?: string;
   /** Focus the search input on open. Off for list-heavy pickers on mobile,
    *  where popping the keyboard collapses the list to a couple of rows — we'd
@@ -137,7 +140,7 @@ export function Sheet({
   // whenever new content pinned the chat to the bottom. At <body> it is truly
   // viewport-fixed and independent of the transcript's scroll and windowing.
   return createPortal(
-    <div className={`sheet${isClosing ? " is-closing" : ""}`} data-variant={variant} role="dialog" aria-modal="true" aria-label={ariaLabel}>
+    <div className={`sheet${isClosing ? " is-closing" : ""}`} data-variant={variant} data-size={size} role="dialog" aria-modal="true" aria-label={ariaLabel}>
       <div
         className="sheet-backdrop"
         onClick={closeWithBack}

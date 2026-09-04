@@ -24,6 +24,14 @@ test("obsolete split Send styles are removed", async () => {
   expect(css).not.toContain(".send-options-menu {");
 });
 
+test("a large follow-up queue is viewport-bounded and independently scrollable", async () => {
+  const css = await readFile(STYLES, "utf8");
+  expect(ruleFor(css, ".followup-queue")).toContain("max-height: calc(var(--app-h, 100dvh) * 0.32)");
+  expect(ruleFor(css, ".followup-list")).toContain("overflow-y: auto");
+  expect(ruleFor(css, ".followup-list")).toContain("overscroll-behavior: contain");
+  expect(ruleFor(css, ".followup-card")).toContain("flex: none");
+});
+
 test("slash commands remain available inline without a composer button", async () => {
   const [app, composer] = await Promise.all([
     readFile(APP, "utf8"),

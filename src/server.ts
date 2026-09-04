@@ -2334,8 +2334,20 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     scheduleAdvertise();
   },
   abort(msg, ctx) {
-    const record = resolveSession(msg.sessionId);
-    if (!record || !sessionBusy(record)) return;
+    const sessionId = String(msg.sessionId ?? "");
+    const record = resolveSession(sessionId);
+    // A Stop can race the turn settling (or arrive after another client already
+    // stopped it). Always answer that race with authoritative state so a client
+    // that still has a stale working dot does not leave the stopped session
+    // looking active until the next minute-long list refresh.
+    if (!record) {
+      if (sessionId) ctx.broadcast({ type: "session.closed", sessionId });
+      return;
+    }
+    if (!sessionBusy(record)) {
+      ctx.broadcast({ type: "session.state", sessionId: record.id, state: sessionState(record) });
+      return;
+    }
     if (record.turnAttention) turnWatchdog.resolveTurnAttention(record, "stop");
     else abortSessionRecord(record, ctx.broadcast);
   },

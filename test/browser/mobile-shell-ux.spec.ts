@@ -22,8 +22,8 @@ test("closed mobile drawer has no shadow and cannot receive focus", async () => 
 
 test("primary mobile shell controls expose 44px hit areas", async () => {
   const styles = await readFile(new URL("styles.css", WEB), "utf8");
-  expect(styles).toContain(".composer-meta > .btn, .composer-btn, .session-actions-btn, .session-filter-btn, .sheet-back");
-  expect(styles).toMatch(/\.composer-meta > \.btn, \.composer-btn,[\s\S]*min-height: 44px;/);
+  expect(styles).toContain(".composer-meta > .btn, .session-actions-btn, .session-filter-btn, .sheet-back");
+  expect(styles).toContain(".composer-btn { width: 44px; height: 44px; min-width: 44px; min-height: 44px; }");
 });
 
 test("protection control keeps a plain-language default label", async () => {

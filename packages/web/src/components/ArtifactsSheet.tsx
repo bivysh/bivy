@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Badge } from "./Badge.js";
-import type { ArtifactEntry } from "@bivy/core";
+import type { ArtifactEntry, PromptAttachment } from "@bivy/core";
 import { Sheet } from "./Sheet.js";
 import { relTime } from "./ChangesCard.js";
 import { controller } from "../store/useStore.js";
+import { ImageGallery } from "./ImageGallery.js";
 
 // Session/Run artifacts: everything deriveArtifacts(state.activeSession.transcript) found —
 // agent-sent attachments, user uploads, resolved inline images — grouped so a
@@ -32,10 +33,21 @@ function base64ToBlobUrl(base64: string, mimeType: string): string | null {
   }
 }
 
-/** Lazily fetches and renders an image artifact's thumbnail, honestly showing
- *  "not available" rather than a broken image when the node can't produce the
- *  bytes (offline, or the blob was pruned by the store's retention GC). */
-function ArtifactThumb({ artifact }: { artifact: ArtifactEntry }) {
+function toAttachment(artifact: ArtifactEntry): PromptAttachment {
+  return {
+    kind: artifact.kind,
+    name: artifact.name,
+    size: artifact.size,
+    mimeType: artifact.mimeType,
+    hash: artifact.hash,
+    createdAt: artifact.createdAt,
+    artifact: artifact.artifact,
+  };
+}
+
+/** Lazily resolves the thumbnail through the same authenticated attachment
+ * path as chat, while retaining an honest unavailable state. */
+function ArtifactThumb({ artifact, onOpen }: { artifact: ArtifactEntry; onOpen: () => void }) {
   const [state, setState] = useState<{ status: "loading" | "ready" | "unavailable"; url?: string }>({ status: "loading" });
   useEffect(() => {
     let cancelled = false;
@@ -51,7 +63,14 @@ function ArtifactThumb({ artifact }: { artifact: ArtifactEntry }) {
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [artifact.hash, artifact.mimeType]);
-  if (state.status === "ready") return <img className="artifact-thumb" src={state.url} alt={artifact.name} />;
+
+  if (state.status === "ready") {
+    return (
+      <button type="button" className="artifact-thumb-button" onClick={onOpen} aria-label={`View ${artifact.name}`}>
+        <img className="artifact-thumb" src={state.url} alt="" />
+      </button>
+    );
+  }
   return (
     <span className={`artifact-thumb artifact-thumb-${state.status}`} aria-hidden>
       {state.status === "unavailable" ? "⚠" : ""}
@@ -59,7 +78,7 @@ function ArtifactThumb({ artifact }: { artifact: ArtifactEntry }) {
   );
 }
 
-function ArtifactRow({ artifact, onJump }: { artifact: ArtifactEntry; onJump: (entryId: string) => void }) {
+function ArtifactRow({ artifact, onJump, onOpenImage }: { artifact: ArtifactEntry; onJump: (entryId: string) => void; onOpenImage?: () => void }) {
   const [downloading, setDownloading] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
 
@@ -84,14 +103,14 @@ function ArtifactRow({ artifact, onJump }: { artifact: ArtifactEntry; onJump: (e
 
   return (
     <div className="artifact-row">
-      {artifact.kind === "image" ? <ArtifactThumb artifact={artifact} /> : <span className="artifact-thumb artifact-glyph" aria-hidden>📄</span>}
+      {artifact.kind === "image" && onOpenImage ? <ArtifactThumb artifact={artifact} onOpen={onOpenImage} /> : <span className="artifact-thumb artifact-glyph" aria-hidden>📄</span>}
       <div className="artifact-main">
         <div className="artifact-name-line">
           <span className="artifact-name" title={artifact.name}>{artifact.name}</span>
           {artifact.artifact && <Badge tone="accent" variant="solid" upper>Artifact</Badge>}
         </div>
         <div className="artifact-meta">{meta}</div>
-        {artifact.caption && <div className="artifact-caption">{artifact.caption}</div>}
+        {artifact.caption && <div className="artifact-caption">{artifact.caption.split(/\r?\n/, 1)[0]}</div>}
         {unavailable && (
           <div className="artifact-unavailable">Not available right now — the Machine may be offline, or this file was pruned.</div>
         )}
@@ -109,6 +128,10 @@ function ArtifactRow({ artifact, onJump }: { artifact: ArtifactEntry; onJump: (e
 }
 
 export function ArtifactsSheet({ artifacts, onClose }: { artifacts: ArtifactEntry[]; onClose: () => void }) {
+  const images = useMemo(() => artifacts.filter((a) => a.kind === "image"), [artifacts]);
+  const imageAttachments = useMemo(() => images.map(toAttachment), [images]);
+  const [galleryIndex, setGalleryIndex] = useState<number | null>(null);
+
   // Best-effort: only scrolls to the turn if it's currently mounted in the
   // (windowed) transcript — an artifact from far enough back that "Load
   // earlier" hasn't been clicked yet simply doesn't jump. Still closes the
@@ -120,7 +143,6 @@ export function ArtifactsSheet({ artifacts, onClose }: { artifacts: ArtifactEntr
     });
   };
 
-  const images = artifacts.filter((a) => a.kind === "image");
   const files = artifacts.filter((a) => a.kind === "file");
   const title = artifacts.length > 0 ? `${artifacts.length} artifact${artifacts.length === 1 ? "" : "s"}` : "Artifacts";
 
@@ -130,7 +152,7 @@ export function ArtifactsSheet({ artifacts, onClose }: { artifacts: ArtifactEntr
       {images.length > 0 && (
         <div className="artifacts-group">
           <div className="artifacts-group-title">Images</div>
-          {images.map((a) => <ArtifactRow key={a.id} artifact={a} onJump={jumpToTurn} />)}
+          {images.map((a, index) => <ArtifactRow key={a.id} artifact={a} onJump={jumpToTurn} onOpenImage={() => setGalleryIndex(index)} />)}
         </div>
       )}
       {files.length > 0 && (
@@ -138,6 +160,9 @@ export function ArtifactsSheet({ artifacts, onClose }: { artifacts: ArtifactEntr
           <div className="artifacts-group-title">Files</div>
           {files.map((a) => <ArtifactRow key={a.id} artifact={a} onJump={jumpToTurn} />)}
         </div>
+      )}
+      {galleryIndex != null && (
+        <ImageGallery images={imageAttachments} index={galleryIndex} onClose={() => setGalleryIndex(null)} />
       )}
     </Sheet>
   );

@@ -547,7 +547,7 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
   };
 
   return (
-    <Sheet title={cloningActiveSession ? "Hand off to agent" : "Agent"} onClose={onClose} autoFocusSearch={false}>
+    <Sheet title={cloningActiveSession ? "Hand off to agent" : "Agent"} onClose={onClose} autoFocusSearch={false} size="large">
       {cloningActiveSession && (
         <div className="picker-empty">
           Choosing an agent forks this session with its transcript and working files, then opens the fork in that agent.
@@ -685,6 +685,7 @@ export function ModelPicker({ state, onClose }: { state: AppState; onClose: () =
       <Sheet
         title={providerName(connecting)}
         onClose={onClose}
+        size="large"
         headExtra={
           <button className="sheet-back" onClick={() => setConnecting(null)} aria-label="Back">
             ‹
@@ -697,7 +698,7 @@ export function ModelPicker({ state, onClose }: { state: AppState; onClose: () =
   }
 
   return (
-    <Sheet title="Model" onClose={onClose} headExtra={<ReasoningPill state={state} />} autoFocusSearch={false}>
+    <Sheet title="Model" onClose={onClose} headExtra={<ReasoningPill state={state} />} autoFocusSearch={false} size="large">
       <input className="picker-search" placeholder="Search models…" value={q} onChange={(e) => setQ(e.target.value)} />
       <div className="picker-list">
         {connectedModels.length === 0 && otherProviders.length === 0 && <div className="picker-empty">No models available.</div>}
