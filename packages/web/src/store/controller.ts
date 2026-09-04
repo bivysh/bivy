@@ -1490,9 +1490,16 @@ export class AppController {
     const targetAgent = runtimeLabel(targetAgentId, targetAgentId === sourceAgentId ? source?.agentName : undefined);
     return this.sessionCoordinator.fork(sourceSessionId, opts).then((result) => {
       // SessionOrchestrator has already opened the completed fork from its
-      // canonical snapshot. Reopening here used to clear that transcript, show
-      // a loading/blank frame, and trigger another history request; dispatching
-      // a synthetic popstate then repeated the cycle a third time.
+      // canonical snapshot. Usually only the URL needs confirming here. A
+      // cross-node handoff can still reset the active projection after that
+      // open, though, so recover only when selection was genuinely lost. This
+      // keeps the canonical snapshot on the normal path while guaranteeing the
+      // success notice is never shown over the source session.
+      if (this.store.getState().activeSession.activeSessionId !== result.sessionId) {
+        this.openSession(result.sessionId);
+      } else {
+        navigate({ kind: "session", id: result.sessionId });
+      }
       this.store.setNotice(`This session was forked from “${sourceName}” with ${sourceAgent} to ${targetAgent}.`);
       return result;
     });
