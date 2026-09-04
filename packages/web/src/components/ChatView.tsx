@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { stripAttachmentPlaceholders, toHtml, type PromptAttachment, type ToolActivity, type TranscriptEntry } from "@bivy/core";
-import { ToolGroup } from "./ToolGroup.js";
+import { stripAttachmentPlaceholders, toHtml, type PromptAttachment, type TranscriptEntry } from "@bivy/core";
 import { Spinner } from "./Spinner.js";
 import { ImageGallery } from "./ImageGallery.js";
 import { focusEntries } from "../focusTranscript.js";
@@ -475,8 +474,7 @@ const EntryView = memo(function EntryView({
 });
 
 type RenderItem =
-  | { kind: "entry"; key: string; entry: TranscriptEntry }
-  | { kind: "tools"; key: string; tools: ToolActivity[] };
+  { kind: "entry"; key: string; entry: TranscriptEntry };
 
 type RenderTurn = { kind: "turn"; key: string; user?: RenderItem; response: RenderItem[] };
 type RenderBlock = RenderTurn | { kind: "standalone"; key: string; item: RenderItem };
@@ -514,37 +512,9 @@ function groupTurns(items: RenderItem[]): RenderBlock[] {
   return blocks;
 }
 
-/** Stable React key for a tool-run group. Keyed on the first tool's runtime
- *  `callId` — NOT the transcript entry `id` — because reconciling a live turn
- *  with canonical history (store.applyHistory → renderHistory) rebuilds the
- *  whole transcript with freshly-generated entry ids. Keying on those made an
- *  open ToolGroup remount on every such reconcile, resetting its local `open`
- *  state and slamming the activity sheet shut mid-run. `callId` comes from the
- *  runtime and is preserved across re-renders, so the group — and any sheet the
- *  user opened on it — stays put until they close it themselves. Falls back to
- *  the entry id for the rare tool with no callId. */
-function toolRunKey(first: TranscriptEntry): string {
-  return `g:${first.tool?.callId || first.id}`;
-}
-
-/** Collapse runs of consecutive tool entries into a single grouped item. */
+/** Mechanical work belongs to the run receipt, not the conversation. */
 function groupEntries(entries: TranscriptEntry[]): RenderItem[] {
-  const out: RenderItem[] = [];
-  let run: TranscriptEntry[] | null = null;
-  for (const e of entries) {
-    if (e.tool) {
-      if (!run) run = [];
-      run.push(e);
-    } else {
-      if (run) {
-        out.push({ kind: "tools", key: toolRunKey(run[0]!), tools: run.map((r) => r.tool!) });
-        run = null;
-      }
-      out.push({ kind: "entry", key: e.id, entry: e });
-    }
-  }
-  if (run) out.push({ kind: "tools", key: toolRunKey(run[0]!), tools: run.map((r) => r.tool!) });
-  return out;
+  return entries.filter((entry) => !entry.tool).map((entry) => ({ kind: "entry", key: entry.id, entry }));
 }
 
 // Cap the number of live DOM nodes. A session can have thousands of messages;
@@ -630,7 +600,8 @@ export function ChatView({
     setPinnedState(true);
   }, [setPinnedState]);
 
-  const source = useMemo(() => focusView ? focusEntries(entries, working) : entries, [entries, focusView, working]);
+  const conversation = useMemo(() => entries.filter((entry) => !entry.tool), [entries]);
+  const source = useMemo(() => focusView ? focusEntries(conversation, working) : conversation, [conversation, focusView, working]);
 
   // Remember a session's distance from the bottom rather than its absolute
   // scrollTop. If content grows while it is in the background, returning still
@@ -698,16 +669,12 @@ export function ChatView({
   const items = groupEntries(visible);
   const blocks = groupTurns(items);
   const tail = visible.at(-1);
-  // A streaming message or running tool is already the clearest possible live
-  // status. Do not stack the generic three-dot row beneath it and make the
-  // transcript say "working" twice.
-  const tailShowsProgress = Boolean(tail?.streaming || tail?.tool?.status === "running");
+  // Once the agent has communicated an interim update, let that message carry
+  // the conversational state while the run pill carries mechanical progress.
+  // The generic dots are only useful before the agent has said anything.
+  const tailShowsProgress = Boolean(tail?.role === "assistant");
 
-  const renderItem = (it: RenderItem) => it.kind === "tools" ? (
-    <ToolGroup key={it.key} tools={it.tools} />
-  ) : (
-    <EntryView key={it.key} entry={it.entry} onAction={onAction} />
-  );
+  const renderItem = (it: RenderItem) => <EntryView key={it.key} entry={it.entry} onAction={onAction} />;
 
   return (
     <div className="chat-wrap">

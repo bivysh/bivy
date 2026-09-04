@@ -22,6 +22,21 @@ const activitySheet = `
     </div>
   </section>`;
 
+const receiptSheet = `
+  <section class="sheet" role="dialog" aria-modal="true" aria-label="Manual session">
+    <div class="sheet-backdrop"></div>
+    <div class="sheet-body" tabindex="-1">
+      <div class="sheet-grabber"></div>
+      <div class="sheet-head"><span class="sheet-title"><span class="run-sheet-title">Manual session</span></span><button class="sheet-close" aria-label="Close">×</button></div>
+      <div class="sheet-content">
+        <div class="run-sheet-status"><span class="status-dot" data-status="saved"></span>Completed</div>
+        <div class="run-sheet-rows"><div class="run-sheet-row"><span class="k">Finished</span><span class="v">Sep 4, 6:31 PM · ran 2m 18s</span></div></div>
+        <button class="sheet-action run-sheet-changes"><span class="run-sheet-changes-icon" aria-hidden="true">◈</span><span>3 files edited</span><span class="run-sheet-changes-hint">View diffs</span></button>
+        <button class="sheet-action run-sheet-changes"><span class="run-sheet-changes-icon" aria-hidden="true">↳</span><span>Work log</span><span class="run-sheet-changes-hint">10 actions</span></button>
+      </div>
+    </div>
+  </section>`;
+
 const fixtures = {
   draft: `
     <div class="app review-fixture">
@@ -49,7 +64,6 @@ const fixtures = {
             <div class="msg user">Make the first session easier to understand, then verify it on mobile.</div>
             <div class="turn-response-body">
               <div class="assistant-row"><div class="msg assistant"><p>I’ll simplify the first-session hierarchy and check the complete flow at phone width.</p></div></div>
-              <div class="tool-group"><button class="tool-group-line" aria-label="Activity: Reviewed the flow and updated three files. Open details"><span class="tool-group-label">Activity</span><span class="tool-group-summary">Reviewed the flow and updated three files</span><span class="tool-chevron">›</span></button></div>
               <div class="assistant-row"><div class="msg assistant"><p>The first session now explains each decision before launch and keeps advanced setup out of the primary path.</p><ul><li>One clear starting action</li><li>Machine and model context stay visible</li><li>Advanced controls remain available on demand</li></ul></div><div class="msg-actions"><button class="msg-copy-btn" aria-label="Copy message"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg></button><button class="msg-speak-btn" aria-label="Read aloud"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5 6 9H2v6h4l5 4zM15.5 8.5a5 5 0 0 1 0 7"></path></svg></button></div></div>
             </div>
           </div>
@@ -138,12 +152,13 @@ for (const [name, markup] of Object.entries(fixtures)) {
   });
 }
 
-test("expanded activity is reviewable in both themes", async ({ page }, testInfo) => {
+test("completed run receipt is reviewable in both themes", async ({ page }, testInfo) => {
   for (const theme of THEMES) {
     await page.evaluate(({ html, sheet, selectedTheme }) => {
       document.documentElement.dataset.theme = selectedTheme;
       document.body.innerHTML = html + sheet;
-    }, { html: fixtures.live, sheet: activitySheet, selectedTheme: theme });
+      document.querySelector(".run-pill-stat")!.textContent = "Completed";
+    }, { html: fixtures.live, sheet: receiptSheet, selectedTheme: theme });
     await assertNamedControls(page);
     await expect(page.locator("body")).toHaveScreenshot(`activity-${testInfo.project.name}-${theme}.png`, {
       animations: "disabled",
@@ -163,11 +178,6 @@ test("interim message and continuing work are reviewable in both themes", async 
       const replies = document.querySelectorAll(".assistant-row");
       replies[0]!.querySelector(".msg")!.innerHTML = "I’ve finished the layout pass. I’m running the final checks now and will report anything that needs another change.";
       replies[1]?.remove();
-      const activity = document.querySelector(".tool-group-line")!;
-      activity.classList.add("is-running");
-      activity.querySelector(".tool-group-label")!.textContent = "Working";
-      activity.querySelector(".tool-group-summary")!.textContent = "Running web typecheck and visual checks…";
-      activity.insertAdjacentHTML("afterbegin", '<span class="tool-group-state" aria-hidden="true"></span>');
     }, { html: fixtures.live, selectedTheme: theme });
     await assertNamedControls(page);
     await expect(page.locator("body")).toHaveScreenshot(`working-interim-${testInfo.project.name}-${theme}.png`, {
@@ -186,7 +196,7 @@ test("expanded activity stays useful after interim messages", async ({ page }, t
       const replies = document.querySelectorAll(".assistant-row");
       replies[0]!.querySelector(".msg")!.innerHTML = "I found the transcript hierarchy issue and finished the first layout pass. I’m checking long sessions and narrow screens now.";
       replies[1]?.remove();
-      document.querySelector(".sheet-title")!.textContent = "Working · 10 steps";
+      document.querySelector(".sheet-title")!.textContent = "Work log · 10 actions";
       const list = document.querySelector(".sheet-content > div")!;
       list.insertAdjacentHTML("beforeend", `
         <div class="activity"><button class="activity-row"><span class="activity-ic">⌕</span><span class="activity-verb">Searched</span><span class="activity-desc">transcript boundaries and working state</span><span class="tool-chevron">›</span></button></div>
