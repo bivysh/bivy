@@ -1,10 +1,17 @@
 # Releasing and distribution
 
-Bivy is distributed on npm as the [`@bivy/bivy`](https://www.npmjs.com/package/@bivy/bivy)
-package. `install.sh` is a thin bootstrapper: it ensures a supported Node.js is
-present, runs `npm install -g @bivy/bivy`, and then runs `bivy setup`.
+The Bivy node and CLI are distributed on npm as the
+[`@bivy/bivy`](https://www.npmjs.com/package/@bivy/bivy) package. `install.sh`
+is a thin bootstrapper: it ensures a supported Node.js is present, runs
+`npm install -g @bivy/bivy`, and then runs `bivy setup`.
 
-npm is the distribution channel. `install.sh` retains a checksum-verified
+The control plane and relay are distributed as public GHCR images built by
+`service-images.yml` from their source commit. Every Core commit on `main`
+receives an immutable full-SHA tag. Production promotion aliases those existing
+manifests to `X.Y.Z`, `vX.Y.Z`, and `latest` without rebuilding them. Cloud deployment may
+add deployment-specific metadata around these images, but does not rebuild Core.
+
+npm is the node/CLI distribution channel. `install.sh` retains a checksum-verified
 tarball fallback (`TARBALL_URL`/`MANIFEST_URL`/`install_from_tarball`) used only
 during the cutover — when the `bivy` package isn't yet on the registry.
 
@@ -153,6 +160,21 @@ holds on `main`, to the `latest` dist-tag.
    ```
 3. Approve the run when it pauses on the `release` environment.
 
+Before publishing, promotion creates the durable tag
+`release-intent-vX.Y.Z`, binding that version to the exact commit. The tag is
+kept after a successful release. If a run fails after creating the intent,
+resume from that ref—not from a newer `main`:
+
+```bash
+gh workflow run release.yml --ref release-intent-vX.Y.Z \
+  -f confirm_version=X.Y.Z
+```
+
+The workflow accepts an existing npm version only when the intent points to its
+current commit and npm's `latest` tag already names that version. Image aliases,
+the final `vX.Y.Z` tag, and the GitHub release are idempotent, so this recovery
+cannot mix artifacts from different commits.
+
 The release PR must pass the repository's full required CI before it can merge.
 Promotion does not run that same suite a second time: it verifies that the exact
 `main` commit completed its automatic staging publish, validates the version and
@@ -178,6 +200,30 @@ A hand publish produces **no** provenance attestation — npm can only attest to
 builds it can trace to a CI workflow — and needs a token or interactive 2FA that
 the trusted-publishing workflow exists precisely to avoid. The build prints a
 warning when this happens. Prefer the workflow.
+
+## Service container images
+
+```text
+ghcr.io/bivysh/bivy-control-plane:<full-sha|version|latest>
+ghcr.io/bivysh/bivy-relay:<full-sha|version|latest>
+```
+
+The full 40-character commit tag is write-once. Both images carry OCI source,
+revision, and AGPL license labels plus SBOM and provenance attestations.
+`latest` and version tags are created only by the production release job and all
+reference the exact full-SHA manifest built for
+that commit. A manual `service-images.yml` dispatch with `core_ref` can backfill
+an older tag or SHA.
+
+GHCR visibility cannot be changed through the Packages REST API. Before enabling
+the image workflow, use the package settings UI to make both packages **public**
+and grant `bivysh/bivy` Actions **admin** access. The workflow verifies anonymous
+pulls and records an exact-SHA commit status only after that check passes.
+
+The two package names historically originated in the Cloud deployment repository.
+Keep or remove that repository's access independently because it now publishes
+deployment wrappers under separate `bivy-cloud-*` package names. These one-time
+registry ACL and visibility changes cannot be represented in Git.
 
 ## What ships in the package
 

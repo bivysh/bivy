@@ -58,6 +58,8 @@ RUN rm -rf node_modules/@bivy/automation-core \
     && node --input-type=module -e \
       "import('@bivy/automation-core').then((m) => { if (typeof m.evaluateAutomation !== 'function') process.exit(1) })"
 COPY --chown=node:node services/control-plane/ ./
+# Keep the license and attribution beside the distributed AGPL service source.
+COPY --chown=node:node LICENSE NOTICE /repo/
 # Bundle the built React client so the control plane serves it at the root.
 COPY --chown=node:node --from=webbuild /repo/packages/web/dist ./public/react
 # Pin V8's old-space ceiling below the container's docker-compose mem_limit

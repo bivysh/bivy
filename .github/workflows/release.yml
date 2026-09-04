@@ -110,6 +110,7 @@ jobs:
     permissions:
       actions: read # verify this exact commit published successfully to staging
       contents: write # push the tag + create the GitHub release
+      packages: write # add stable tags to the already-built Core service images
       id-token: write # OIDC: trusted publish + provenance
     steps:
       # A release PR already passed the required full CI gate. Re-running that
@@ -136,10 +137,17 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Refuse to promote from anywhere but main
+      # Always use the peeled checkout commit below. This remains stable even
+      # when recovery is dispatched from a tag ref.
+      - name: Resolve release commit
+        run: echo "RELEASE_SHA=$(git rev-parse 'HEAD^{commit}')" >> "$GITHUB_ENV"
+
+      - name: Require main or a release-recovery ref
         run: |
-          test "$GITHUB_REF" = "refs/heads/main" \
-            || { echo "::error::Promotion must be dispatched from main (got $GITHUB_REF)."; exit 1; }
+          case "$GITHUB_REF" in
+            refs/heads/main|refs/tags/release-intent-v*) ;;
+            *) echo "::error::Promotion must start from main or its release-intent recovery tag (got $GITHUB_REF)."; exit 1 ;;
+          esac
 
       - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -154,8 +162,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       # package.json is the single source of truth for the version to release.
-      # Validate it is a clean release version, that the dispatcher typed it
-      # exactly (a deliberate act), and that it was not already published.
+      # Validate it is clean and explicitly confirmed. A same-commit tag is
+      # accepted so a run interrupted after npm publication can resume safely.
       - name: Resolve and validate the release version
         id: ver
         env:
@@ -168,9 +176,12 @@ jobs:
           if [ "$CONFIRM" != "$version" ]; then
             echo "::error::Confirmation '$CONFIRM' does not match package.json version '$version'. Re-run and type the exact version to promote."; exit 1
           fi
-          if git rev-parse "v$version" >/dev/null 2>&1 \
-            || git ls-remote --exit-code --tags origin "v$version" >/dev/null 2>&1; then
-            echo "::error::Tag v$version already exists -- this version was already released. Bump the version in a PR first."; exit 1
+          git fetch --tags origin
+          if git rev-parse "v$version" >/dev/null 2>&1; then
+            tagged_commit="$(git rev-list -n 1 "v$version")"
+            [ "$tagged_commit" = "$RELEASE_SHA" ] \
+              || { echo "::error::Tag v$version points to $tagged_commit, not this commit $RELEASE_SHA."; exit 1; }
+            echo "Existing same-commit tag v$version found; resuming its release."
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
@@ -187,14 +198,97 @@ jobs:
               || { echo "::error::$w is $wv but promoting $VERSION -- all workspace versions must match."; exit 1; }
           done
 
-      # Validate release notes BEFORE the irreversible publish.
+      # Validate release notes and require the immutable service artifacts BEFORE
+      # the irreversible npm publish. The image workflow runs independently on
+      # the same main commit and is normally already complete.
       - name: Extract CHANGELOG section for this version
         env:
           VERSION: ${{ steps.ver.outputs.version }}
         run: node scripts/extract-changelog.mjs "v$VERSION" > release-notes.md
 
-      - name: Publish to npm (dist-tag `latest`)
-        run: pnpm run publish:npm
+      - name: Require public Core service images for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          docker logout ghcr.io >/dev/null 2>&1 || true
+          for attempt in $(seq 1 40); do
+            published="$(gh api "/repos/$GITHUB_REPOSITORY/commits/$RELEASE_SHA/status" \
+              --jq '[.statuses[] | select(.context == "service-images/published" and .state == "success")] | length')"
+            if [ "$published" -gt 0 ] \
+              && docker buildx imagetools inspect "ghcr.io/bivysh/bivy-control-plane:$RELEASE_SHA" >/dev/null 2>&1 \
+              && docker buildx imagetools inspect "ghcr.io/bivysh/bivy-relay:$RELEASE_SHA" >/dev/null 2>&1; then
+              echo "The exact-SHA publication receipt and anonymous images are available."
+              exit 0
+            fi
+            echo "Waiting for successful, public Core service images for $RELEASE_SHA ($attempt/40)..."
+            sleep 15
+          done
+          echo "::error::Core service images were not successfully published for $RELEASE_SHA."
+          exit 1
+
+      # Bind this version to one commit before the first irreversible operation.
+      # The marker remains after success: if main advances after npm publishes but
+      # before image/tag promotion completes, a retry from the new main fails
+      # rather than combining npm from the old commit with newer images. Recovery
+      # must dispatch this workflow from the marker ref printed below.
+      - name: Establish immutable release intent
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          intent="release-intent-v$VERSION"
+          git fetch --tags origin
+          if git rev-parse "$intent" >/dev/null 2>&1; then
+            intent_commit="$(git rev-list -n 1 "$intent")"
+            if [ "$intent_commit" != "$RELEASE_SHA" ]; then
+              echo "::error::$intent is bound to $intent_commit, not $RELEASE_SHA. Resume with: gh workflow run release.yml --ref $intent -f confirm_version=$VERSION"
+              exit 1
+            fi
+            echo "Release intent already binds $VERSION to $RELEASE_SHA; resuming."
+          else
+            # Lightweight on purpose: workflow_dispatch and checkout both resolve
+            # this ref directly to the bound commit, avoiding annotated-tag object
+            # SHA ambiguity during recovery.
+            git tag "$intent"
+            git push origin "$intent"
+            echo "Bound $VERSION to $RELEASE_SHA in $intent."
+          fi
+
+      # npm versions are immutable. If a previous attempt published successfully
+      # and then failed while tagging images, the intent check above proves this
+      # is the original commit; verify `latest` and resume without republishing.
+      - name: Publish or resume npm `latest`
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          published="$(npm view "@bivy/bivy@$VERSION" version 2>/dev/null || true)"
+          if [ "$published" = "$VERSION" ]; then
+            latest="$(npm view @bivy/bivy dist-tags.latest)"
+            [ "$latest" = "$VERSION" ] \
+              || { echo "::error::npm $VERSION exists but latest points to $latest; refusing an ambiguous recovery."; exit 1; }
+            echo "npm $VERSION is already published as latest; resuming promotion."
+          else
+            pnpm run publish:npm
+          fi
+
+      # A release tag is an alias of the already-tested SHA manifests, not a
+      # rebuild. `latest` therefore points to byte-identical service artifacts.
+      - name: Promote Core service image tags
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          for image in bivy-control-plane bivy-relay; do
+            source="ghcr.io/bivysh/$image:$RELEASE_SHA"
+            docker buildx imagetools create \
+              --tag "ghcr.io/bivysh/$image:$VERSION" \
+              --tag "ghcr.io/bivysh/$image:v$VERSION" \
+              --tag "ghcr.io/bivysh/$image:latest" \
+              "$source"
+          done
 
       # Tag the promoted commit and cut the GitHub release. The tag push uses
       # GITHUB_TOKEN, which by design does not retrigger this workflow (and a tag
@@ -211,6 +305,14 @@ jobs:
           # on npm with no tag and no GitHub release.
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "v$VERSION" -m "Bivy $VERSION"
-          git push origin "v$VERSION"
-          gh release create "v$VERSION" --title "v$VERSION" --notes-file release-notes.md
+          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+            echo "Tag v$VERSION already exists at this commit; preserving it."
+          else
+            git tag -a "v$VERSION" -m "Bivy $VERSION"
+            git push origin "v$VERSION"
+          fi
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "GitHub release v$VERSION already exists; promotion is complete."
+          else
+            gh release create "v$VERSION" --title "v$VERSION" --notes-file release-notes.md
+          fi
