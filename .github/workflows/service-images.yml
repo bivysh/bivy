@@ -22,6 +22,8 @@ on:
       - package.json
       - pnpm-lock.yaml
       - pnpm-workspace.yaml
+      - LICENSE
+      - NOTICE
       - .dockerignore
       - .github/workflows/service-images.yml
   workflow_dispatch:

@@ -137,10 +137,12 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Refuse to promote from anywhere but main
+      - name: Require main or a release-recovery ref
         run: |
-          test "$GITHUB_REF" = "refs/heads/main" \
-            || { echo "::error::Promotion must be dispatched from main (got $GITHUB_REF)."; exit 1; }
+          case "$GITHUB_REF" in
+            refs/heads/main|refs/tags/release-intent-v*) ;;
+            *) echo "::error::Promotion must start from main or its release-intent recovery tag (got $GITHUB_REF)."; exit 1 ;;
+          esac
 
       - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -219,9 +221,36 @@ jobs:
           echo "::error::The Core service image workflow did not publish anonymously pullable images for $GITHUB_SHA."
           exit 1
 
+      # Bind this version to one commit before the first irreversible operation.
+      # The marker remains after success: if main advances after npm publishes but
+      # before image/tag promotion completes, a retry from the new main fails
+      # rather than combining npm from the old commit with newer images. Recovery
+      # must dispatch this workflow from the marker ref printed below.
+      - name: Establish immutable release intent
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          intent="release-intent-v$VERSION"
+          git fetch --tags origin
+          if git rev-parse "$intent" >/dev/null 2>&1; then
+            intent_commit="$(git rev-list -n 1 "$intent")"
+            if [ "$intent_commit" != "$GITHUB_SHA" ]; then
+              echo "::error::$intent is bound to $intent_commit, not $GITHUB_SHA. Resume with: gh workflow run release.yml --ref $intent -f confirm_version=$VERSION"
+              exit 1
+            fi
+            echo "Release intent already binds $VERSION to $GITHUB_SHA; resuming."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$intent" -m "Release intent for Bivy $VERSION"
+            git push origin "$intent"
+            echo "Bound $VERSION to $GITHUB_SHA in $intent."
+          fi
+
       # npm versions are immutable. If a previous attempt published successfully
-      # and then failed while tagging images, verify `latest` and resume rather
-      # than trying the irreversible operation a second time.
+      # and then failed while tagging images, the intent check above proves this
+      # is the original commit; verify `latest` and resume without republishing.
       - name: Publish or resume npm `latest`
         env:
           VERSION: ${{ steps.ver.outputs.version }}

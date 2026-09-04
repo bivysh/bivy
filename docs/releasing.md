@@ -160,6 +160,21 @@ holds on `main`, to the `latest` dist-tag.
    ```
 3. Approve the run when it pauses on the `release` environment.
 
+Before publishing, promotion creates the durable tag
+`release-intent-vX.Y.Z`, binding that version to the exact commit. The tag is
+kept after a successful release. If a run fails after creating the intent,
+resume from that ref—not from a newer `main`:
+
+```bash
+gh workflow run release.yml --ref release-intent-vX.Y.Z \
+  -f confirm_version=X.Y.Z
+```
+
+The workflow accepts an existing npm version only when the intent points to its
+current commit and npm's `latest` tag already names that version. Image aliases,
+the final `vX.Y.Z` tag, and the GitHub release are idempotent, so this recovery
+cannot mix artifacts from different commits.
+
 The release PR must pass the repository's full required CI before it can merge.
 Promotion does not run that same suite a second time: it verifies that the exact
 `main` commit completed its automatic staging publish, validates the version and
