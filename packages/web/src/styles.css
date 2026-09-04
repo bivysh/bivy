@@ -314,7 +314,10 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
   padding: 9px 8px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--ink);
 }
 .session-item:hover { background: var(--surface-2); }
-.session-item.active { background: var(--surface-2); }
+.session-item.active, .session-item[aria-current="page"] {
+  background: var(--surface-2);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
 /* Column wrapper for the two-line row (title row + meta row) so the dot can
    stay a single flex sibling, vertically centered across both lines. */
 .session-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
@@ -801,7 +804,7 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 /* One-word exception hint on a sidebar row's meta line (failed / needs-you). */
 .row-hint { font-weight: 600; }
 .row-hint.danger { color: var(--danger); }
-.row-hint.warn { color: var(--accent); }
+.row-hint.warn { color: var(--unseen); }
 @keyframes sheet-up { from { transform: translateY(10px); opacity: 0; } to { transform: none; opacity: 1; } }
 @keyframes sheet-down { from { transform: none; opacity: 1; } to { transform: translateY(18px); opacity: 0; } }
 @keyframes sheet-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
@@ -2739,7 +2742,7 @@ select.picker-search { appearance: auto; }
 /* ---- Responsive: drawer sidebar on mobile ---- */
 .only-mobile { display: none; }
 .scrim { position: fixed; inset: 0; background: var(--overlay); z-index: var(--z-dropdown); }
-@media (max-width: 720px) {
+@media (max-width: 900px) {
   .app { grid-template-columns: 1fr; }
   .only-mobile { display: inline-flex; }
   .sidebar {
@@ -2748,7 +2751,7 @@ select.picker-search { appearance: auto; }
     transform: translateX(-100%); transition: transform 0.2s ease;
     visibility: hidden;
   }
-  .sidebar.open { transform: translateX(0); visibility: visible; }
+  .sidebar.open { transform: translateX(0); visibility: visible; box-shadow: var(--shadow-xl); }
   /* Agent rows have two optional actions. Put them on their own line instead
      of reducing the actual agent choice to a clipped sliver. */
   .picker-item-row.with-actions { display: grid; grid-template-columns: minmax(0, 1fr); padding-bottom: var(--space-1); }
@@ -2767,6 +2770,7 @@ select.picker-search { appearance: auto; }
   .msg.user { max-width: 88%; }
   .focus-view-btn { width: 44px; height: 44px; padding: 0; }
   .focus-view-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+  .sidebar-close { min-width: 44px; min-height: 44px; }
 }
 
 /* Universal Agent Harness — files-changed / undo-turn card */

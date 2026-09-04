@@ -55,12 +55,19 @@ const AutomationsView = lazy(() =>
   import("./components/AutomationsView.js").then((m) => ({ default: m.AutomationsView })),
 );
 import { useEdgeSwipe } from "./useEdgeSwipe.js";
+import { useModalEscape } from "./modalStack.js";
+import { CloseIcon } from "./components/UiIcons.js";
 import { controller } from "./store/useStore.js";
 import { runStatusLabel, statusClass, statusDotState, statusLabel } from "./sessionStatus.js";
+
+const DRAWER_FOCUSABLE = 'a[href],button:not(:disabled),textarea:not(:disabled),input:not(:disabled),select:not(:disabled),[tabindex]:not([tabindex="-1"])';
 
 export function App() {
   const state = useAppState();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const drawerRef = useRef<HTMLDivElement>(null);
+  const mainRef = useRef<HTMLElement>(null);
+  const burgerRef = useRef<HTMLButtonElement>(null);
   // The automation suggestion is a first-mile nudge, not a permanent session
   // control. Once the user has reached activation (the first real assistant
   // answer), consume it immediately so it cannot follow them into later turns
@@ -167,6 +174,7 @@ export function App() {
     setDrawerOpen(true);
     setSeenAttn(new Set(inboxItems.map((it) => it.id)));
   }, [inboxItems]);
+  const closeDrawer = useCallback(() => setDrawerOpen(false), []);
   // Attention must remain visible when Bivy is a background tab or installed
   // PWA. The Inbox is authoritative; mirror only its content-free count into
   // browser chrome and the OS app badge.
@@ -269,7 +277,46 @@ export function App() {
   const canCompose = (online || transientReconnect || controller.isCurrentNodeResumable() || Boolean(state.draft.ephemeralConfig)) && !activeTuiLocked;
 
   // Left-edge swipe opens the sidebar drawer; swipe-left closes it (mobile).
-  useEdgeSwipe({ isOpen: drawerOpen, onOpen: openDrawer, onClose: () => setDrawerOpen(false) });
+  useEdgeSwipe({ isOpen: drawerOpen, onOpen: openDrawer, onClose: closeDrawer, maxWidth: 900 });
+  useModalEscape(closeDrawer, drawerOpen);
+
+  // The mobile sidebar obscures the main pane, so it behaves as a modal
+  // navigation drawer: focus enters it, cannot tab into the covered composer,
+  // and returns to the burger after dismissal. `inert` also removes the main
+  // pane from the accessibility tree while the drawer is open.
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const drawer = drawerRef.current;
+    const main = mainRef.current;
+    const burger = burgerRef.current;
+    main?.setAttribute("inert", "");
+    const focusables = () => drawer ? Array.from(drawer.querySelectorAll<HTMLElement>(DRAWER_FOCUSABLE)) : [];
+    const frame = requestAnimationFrame(() => {
+      (drawer?.querySelector<HTMLElement>(".sidebar-close") ?? drawer)?.focus();
+    });
+    const containFocus = (event: KeyboardEvent) => {
+      if (event.key !== "Tab") return;
+      const items = focusables();
+      if (!items.length) return;
+      const first = items[0]!;
+      const last = items[items.length - 1]!;
+      const active = document.activeElement;
+      if (event.shiftKey && (active === first || !drawer?.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (active === last || !drawer?.contains(active))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", containFocus);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("keydown", containFocus);
+      main?.removeAttribute("inert");
+      burger?.focus();
+    };
+  }, [drawerOpen]);
 
   // Run an inline notice action button (e.g. a node-emitted "/new"). Declared
   // before any early return so hook order stays stable across renders (stable
@@ -495,7 +542,6 @@ export function App() {
     );
   }
 
-  const closeDrawer = () => setDrawerOpen(false);
   const activeSession = state.sessionIndex.sessions.find((s) => s.sessionId === state.activeSession.activeSessionId);
   // Every active session shows the run card (source + live status) in the band
   // above the composer; `null` for a draft (no session yet) falls back to the
@@ -528,7 +574,14 @@ export function App() {
 
   return (
     <div className="app">
-      <aside className={`sidebar${drawerOpen ? " open" : ""}`}>
+      <div
+        ref={drawerRef}
+        className={`sidebar${drawerOpen ? " open" : ""}`}
+        role={drawerOpen ? "dialog" : "complementary"}
+        aria-modal={drawerOpen ? "true" : undefined}
+        aria-label="Sessions and workspace"
+        tabIndex={drawerOpen ? -1 : undefined}
+      >
         <div className="sidebar-head">
           <span className="brand">Bivy</span>
           <div className="sidebar-head-actions">
@@ -562,6 +615,9 @@ export function App() {
               title="New session"
             >
               + New
+            </button>
+            <button className="btn ghost icon only-mobile sidebar-close" onClick={closeDrawer} aria-label="Close sessions">
+              <CloseIcon />
             </button>
           </div>
         </div>
@@ -628,13 +684,14 @@ export function App() {
             <span>Settings</span>
           </button>
         </div>
-      </aside>
+      </div>
 
       {drawerOpen && <div className="scrim" onClick={closeDrawer} />}
 
-      <main className={`main${needsNode ? " needs-node" : ""}`}>
+      <main ref={mainRef} className={`main${needsNode ? " needs-node" : ""}`}>
         <header className="topbar">
           <button
+            ref={burgerRef}
             className="btn ghost icon only-mobile burger-btn"
             onClick={openDrawer}
             aria-label={attnUnseen ? "Open sessions — something needs your attention" : "Open sessions"}
@@ -799,7 +856,7 @@ export function App() {
               focusView={focusView}
               onAction={runCommand}
               footer={
-                <div className="attention-footer" ref={attentionFooterRef} aria-live="polite" aria-label="Agent needs your response">
+                <div className="attention-footer" ref={attentionFooterRef} role="region" aria-live="polite" aria-label="Agent needs your response">
                   <ApprovalStack approvals={activeApprovals} onResolve={(id, ok, remember) => controller.resolveApproval(id, ok, remember)} />
                   <QuestionStack
                     questions={activeQuestions}
