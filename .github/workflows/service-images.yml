@@ -37,6 +37,13 @@ on:
 permissions:
   contents: read
 
+# Publications are write-once and must not race, while superseded validation
+# runs only waste runner time. Keep publication serialization at workflow scope
+# so the per-service publish jobs below can still run in parallel.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('core-service-images-validate-{0}', github.event.pull_request.number) || 'core-service-images-publish' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   REGISTRY: ghcr.io
 
@@ -44,17 +51,26 @@ jobs:
   validate:
     if: github.event_name == 'pull_request'
     name: Build ${{ matrix.service }} image (${{ matrix.arch }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        service: [control-plane, relay]
-        arch: [amd64, arm64]
+        include:
+          - service: control-plane
+            arch: amd64
+            runner: ubuntu-latest
+          - service: control-plane
+            arch: arm64
+            runner: ubuntu-24.04-arm
+          - service: relay
+            arch: amd64
+            runner: ubuntu-latest
+          - service: relay
+            arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Enable ARM64 emulation
-        run: docker run --privileged --rm docker.io/tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0 --install arm64
       - name: Create Buildx builder
         run: docker buildx create --name bivy-services --driver docker-container --use
       - name: Build image
@@ -65,26 +81,40 @@ jobs:
             --output type=cacheonly \
             .
 
-  publish:
+  resolve:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    # Serialize every publication, regardless of whether the same commit was
-    # named by branch, tag, or SHA. Full-SHA tags are write-once below.
-    concurrency:
-      group: core-service-images-publish
-      cancel-in-progress: false
-    permissions:
-      contents: read
-      packages: write
-      statuses: write
+    outputs:
+      core_sha: ${{ steps.version.outputs.core_sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.core_ref || github.sha }}
-
       - name: Resolve immutable version
-        run: echo "CORE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+        id: version
+        run: echo "core_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  publish:
+    if: github.event_name != 'pull_request'
+    needs: resolve
+    name: Publish ${{ matrix.service }} image
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: control-plane
+            image: bivy-control-plane
+          - service: relay
+            image: bivy-relay
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.core_sha }}
 
       - name: Log in to GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login "$REGISTRY" -u "${{ github.actor }}" --password-stdin
@@ -98,16 +128,17 @@ jobs:
       # A full-SHA tag is write-once. A rerun can repair a partially completed
       # pair, but never silently replace an artifact for an existing commit after
       # a mutable base image has advanced.
-      - name: Build and publish control plane
+      - name: Build and publish
         env:
-          IMAGE: ghcr.io/bivysh/bivy-control-plane
+          CORE_SHA: ${{ needs.resolve.outputs.core_sha }}
+          IMAGE: ghcr.io/bivysh/${{ matrix.image }}
         run: |
           set -euo pipefail
           if docker buildx imagetools inspect "$IMAGE:$CORE_SHA" >/dev/null 2>&1; then
             echo "$IMAGE:$CORE_SHA already exists; preserving it."
           else
             docker buildx build \
-              --file deploy/Dockerfile.control-plane \
+              --file "deploy/Dockerfile.${{ matrix.service }}" \
               --platform linux/amd64,linux/arm64 \
               --push \
               --tag "$IMAGE:$CORE_SHA" \
@@ -121,35 +152,21 @@ jobs:
               .
           fi
 
-      - name: Build and publish relay
-        env:
-          IMAGE: ghcr.io/bivysh/bivy-relay
-        run: |
-          set -euo pipefail
-          if docker buildx imagetools inspect "$IMAGE:$CORE_SHA" >/dev/null 2>&1; then
-            echo "$IMAGE:$CORE_SHA already exists; preserving it."
-          else
-            docker buildx build \
-              --file deploy/Dockerfile.relay \
-              --platform linux/amd64,linux/arm64 \
-              --push \
-              --tag "$IMAGE:$CORE_SHA" \
-              --label "org.opencontainers.image.source=https://github.com/bivysh/bivy" \
-              --label "org.opencontainers.image.revision=$CORE_SHA" \
-              --label "org.opencontainers.image.licenses=AGPL-3.0-only" \
-              --provenance=true \
-              --sbom=true \
-              --cache-from "type=registry,ref=$IMAGE:buildcache" \
-              --cache-to "type=registry,ref=$IMAGE:buildcache,mode=max" \
-              .
-          fi
-
+  verify:
+    if: github.event_name != 'pull_request'
+    needs: [resolve, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: write
+    steps:
       # GHCR visibility is UI-only. Operators make both packages public once;
       # every publication verifies that property before recording success.
       - name: Verify anonymous multi-platform pulls
+        env:
+          CORE_SHA: ${{ needs.resolve.outputs.core_sha }}
         run: |
           set -euo pipefail
-          docker logout ghcr.io
           for image in bivy-control-plane bivy-relay; do
             manifest="$(docker buildx imagetools inspect --raw "ghcr.io/bivysh/$image:$CORE_SHA")"
             for arch in amd64 arm64; do
@@ -165,6 +182,7 @@ jobs:
       # core_ref while the workflow definition itself came from current main.
       - name: Record published SHA
         env:
+          CORE_SHA: ${{ needs.resolve.outputs.core_sha }}
           GH_TOKEN: ${{ github.token }}
         run: |
           gh api --method POST "/repos/$GITHUB_REPOSITORY/statuses/$CORE_SHA" \
