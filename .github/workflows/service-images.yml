@@ -36,10 +36,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: core-service-images-${{ inputs.core_ref || github.sha }}
-  cancel-in-progress: false
-
 env:
   REGISTRY: ghcr.io
 
@@ -61,9 +57,16 @@ jobs:
   publish:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Serialize every publication, regardless of whether the same commit was
+    # named by branch, tag, or SHA. Full-SHA tags are write-once below.
+    concurrency:
+      group: core-service-images-publish
+      cancel-in-progress: false
     permissions:
       contents: read
       packages: write
+      statuses: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -127,21 +130,25 @@ jobs:
               .
           fi
 
-      # GHCR container packages default to private unless the organization has
-      # changed its package default. Make distribution an enforced property of
-      # this workflow, rather than a one-time undocumented settings click.
-      - name: Make Core packages public
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          for package in bivy-control-plane bivy-relay; do
-            gh api --method PATCH "/orgs/bivysh/packages/container/$package" -f visibility=public >/dev/null
-          done
-
+      # GHCR visibility is UI-only. Operators make both packages public once;
+      # every publication verifies that property before recording success.
       - name: Verify anonymous pulls
         run: |
           set -euo pipefail
           docker logout ghcr.io
           docker buildx imagetools inspect "ghcr.io/bivysh/bivy-control-plane:$CORE_SHA" >/dev/null
           docker buildx imagetools inspect "ghcr.io/bivysh/bivy-relay:$CORE_SHA" >/dev/null
+
+      # A commit status is a durable, exact-SHA publication receipt. Unlike an
+      # Actions run query it also works when workflow_dispatch checked out an old
+      # core_ref while the workflow definition itself came from current main.
+      - name: Record published SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST "/repos/$GITHUB_REPOSITORY/statuses/$CORE_SHA" \
+            -f state=success \
+            -f context=service-images/published \
+            -f description="Public control-plane and relay images verified" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            >/dev/null

@@ -137,6 +137,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Always use the peeled checkout commit below. This remains stable even
+      # when recovery is dispatched from a tag ref.
+      - name: Resolve release commit
+        run: echo "RELEASE_SHA=$(git rev-parse 'HEAD^{commit}')" >> "$GITHUB_ENV"
+
       - name: Require main or a release-recovery ref
         run: |
           case "$GITHUB_REF" in
@@ -174,8 +179,8 @@ jobs:
           git fetch --tags origin
           if git rev-parse "v$version" >/dev/null 2>&1; then
             tagged_commit="$(git rev-list -n 1 "v$version")"
-            [ "$tagged_commit" = "$GITHUB_SHA" ] \
-              || { echo "::error::Tag v$version points to $tagged_commit, not this commit $GITHUB_SHA."; exit 1; }
+            [ "$tagged_commit" = "$RELEASE_SHA" ] \
+              || { echo "::error::Tag v$version points to $tagged_commit, not this commit $RELEASE_SHA."; exit 1; }
             echo "Existing same-commit tag v$version found; resuming its release."
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -208,17 +213,18 @@ jobs:
           set -euo pipefail
           docker logout ghcr.io >/dev/null 2>&1 || true
           for attempt in $(seq 1 40); do
-            successful_runs="$(gh api "/repos/$GITHUB_REPOSITORY/actions/workflows/service-images.yml/runs?head_sha=$GITHUB_SHA&event=push&status=success&per_page=1" --jq '.total_count')"
-            if [ "$successful_runs" -gt 0 ] \
-              && docker buildx imagetools inspect "ghcr.io/bivysh/bivy-control-plane:$GITHUB_SHA" >/dev/null 2>&1 \
-              && docker buildx imagetools inspect "ghcr.io/bivysh/bivy-relay:$GITHUB_SHA" >/dev/null 2>&1; then
-              echo "The successful image workflow's artifacts are anonymously pullable."
+            published="$(gh api "/repos/$GITHUB_REPOSITORY/commits/$RELEASE_SHA/status" \
+              --jq '[.statuses[] | select(.context == "service-images/published" and .state == "success")] | length')"
+            if [ "$published" -gt 0 ] \
+              && docker buildx imagetools inspect "ghcr.io/bivysh/bivy-control-plane:$RELEASE_SHA" >/dev/null 2>&1 \
+              && docker buildx imagetools inspect "ghcr.io/bivysh/bivy-relay:$RELEASE_SHA" >/dev/null 2>&1; then
+              echo "The exact-SHA publication receipt and anonymous images are available."
               exit 0
             fi
-            echo "Waiting for successful, public Core service images for $GITHUB_SHA ($attempt/40)..."
+            echo "Waiting for successful, public Core service images for $RELEASE_SHA ($attempt/40)..."
             sleep 15
           done
-          echo "::error::The Core service image workflow did not publish anonymously pullable images for $GITHUB_SHA."
+          echo "::error::Core service images were not successfully published for $RELEASE_SHA."
           exit 1
 
       # Bind this version to one commit before the first irreversible operation.
@@ -235,17 +241,18 @@ jobs:
           git fetch --tags origin
           if git rev-parse "$intent" >/dev/null 2>&1; then
             intent_commit="$(git rev-list -n 1 "$intent")"
-            if [ "$intent_commit" != "$GITHUB_SHA" ]; then
-              echo "::error::$intent is bound to $intent_commit, not $GITHUB_SHA. Resume with: gh workflow run release.yml --ref $intent -f confirm_version=$VERSION"
+            if [ "$intent_commit" != "$RELEASE_SHA" ]; then
+              echo "::error::$intent is bound to $intent_commit, not $RELEASE_SHA. Resume with: gh workflow run release.yml --ref $intent -f confirm_version=$VERSION"
               exit 1
             fi
-            echo "Release intent already binds $VERSION to $GITHUB_SHA; resuming."
+            echo "Release intent already binds $VERSION to $RELEASE_SHA; resuming."
           else
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git tag -a "$intent" -m "Release intent for Bivy $VERSION"
+            # Lightweight on purpose: workflow_dispatch and checkout both resolve
+            # this ref directly to the bound commit, avoiding annotated-tag object
+            # SHA ambiguity during recovery.
+            git tag "$intent"
             git push origin "$intent"
-            echo "Bound $VERSION to $GITHUB_SHA in $intent."
+            echo "Bound $VERSION to $RELEASE_SHA in $intent."
           fi
 
       # npm versions are immutable. If a previous attempt published successfully
@@ -275,7 +282,7 @@ jobs:
           set -euo pipefail
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           for image in bivy-control-plane bivy-relay; do
-            source="ghcr.io/bivysh/$image:$GITHUB_SHA"
+            source="ghcr.io/bivysh/$image:$RELEASE_SHA"
             docker buildx imagetools create \
               --tag "ghcr.io/bivysh/$image:$VERSION" \
               --tag "ghcr.io/bivysh/$image:v$VERSION" \

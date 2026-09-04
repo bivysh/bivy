@@ -215,13 +215,15 @@ reference the exact full-SHA manifest built for
 that commit. A manual `service-images.yml` dispatch with `core_ref` can backfill
 an older tag or SHA.
 
-GHCR package visibility is enforced by the image workflow and anonymous pulls
-are checked before it succeeds. The two package names historically originated
-in the Cloud deployment repository. In GHCR package settings, grant
-`bivysh/bivy` Actions **admin** access to both packages before enabling this
-workflow; keep or remove the Cloud repository's access independently because it
-now publishes deployment wrappers under separate `bivy-cloud-*` package names.
-This one-time registry ACL change cannot be represented in Git.
+GHCR visibility cannot be changed through the Packages REST API. Before enabling
+the image workflow, use the package settings UI to make both packages **public**
+and grant `bivysh/bivy` Actions **admin** access. The workflow verifies anonymous
+pulls and records an exact-SHA commit status only after that check passes.
+
+The two package names historically originated in the Cloud deployment repository.
+Keep or remove that repository's access independently because it now publishes
+deployment wrappers under separate `bivy-cloud-*` package names. These one-time
+registry ACL and visibility changes cannot be represented in Git.
 
 ## What ships in the package
 
