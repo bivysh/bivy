@@ -10,6 +10,8 @@ WORKDIR /app
 COPY --chown=node:node services/relay/package.json services/relay/package-lock.json ./
 RUN npm ci
 COPY --chown=node:node services/relay/ ./
+# Keep the license and attribution beside the distributed AGPL service source.
+COPY --chown=node:node LICENSE NOTICE ./
 # Pin V8's old-space ceiling below the container's docker-compose mem_limit
 # (512m — see deploy/docker-compose.yml) instead of relying on Node's cgroup
 # auto-detection, which isn't guaranteed across every Docker/cgroup version and

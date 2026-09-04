@@ -1,0 +1,119 @@
+name: Core service images
+
+# Build the distributable control-plane and relay artifacts in the repository
+# that owns their source. Cloud and self-hosted deployments consume these exact
+# images instead of rebuilding a Core commit in a deployment repository.
+on:
+  # Cloud pins every deployed Core commit, including commits that only touch
+  # docs or tooling. Publish a full-SHA artifact for every main commit so that
+  # pin always resolves; BuildKit reuses layers when image inputs did not change.
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      core_ref:
+        description: "Core ref to build (for backfills). Blank uses the selected workflow ref."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: core-service-images-${{ inputs.core_ref || github.sha }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.core_ref || github.sha }}
+
+      - name: Resolve immutable version
+        run: echo "CORE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login "$REGISTRY" -u "${{ github.actor }}" --password-stdin
+
+      - name: Create Buildx builder
+        run: docker buildx create --name bivy-services --driver docker-container --use
+
+      # A full-SHA tag is write-once. A rerun can repair a partially completed
+      # pair, but never silently replace an artifact for an existing commit after
+      # a mutable base image has advanced.
+      - name: Build and publish control plane
+        env:
+          IMAGE: ghcr.io/bivysh/bivy-control-plane
+        run: |
+          set -euo pipefail
+          if docker buildx imagetools inspect "$IMAGE:$CORE_SHA" >/dev/null 2>&1; then
+            echo "$IMAGE:$CORE_SHA already exists; preserving it."
+          else
+            docker buildx build \
+              --file deploy/Dockerfile.control-plane \
+              --platform linux/amd64 \
+              --push \
+              --tag "$IMAGE:$CORE_SHA" \
+              --label "org.opencontainers.image.source=https://github.com/bivysh/bivy" \
+              --label "org.opencontainers.image.revision=$CORE_SHA" \
+              --label "org.opencontainers.image.licenses=AGPL-3.0-only" \
+              --provenance=true \
+              --sbom=true \
+              --cache-from "type=registry,ref=$IMAGE:buildcache" \
+              --cache-to "type=registry,ref=$IMAGE:buildcache,mode=max" \
+              .
+          fi
+          if [ "$GITHUB_REF" = "refs/heads/main" ] && [ -z "${{ inputs.core_ref }}" ]; then
+            docker buildx imagetools create --tag "$IMAGE:main" "$IMAGE:$CORE_SHA"
+          fi
+
+      - name: Build and publish relay
+        env:
+          IMAGE: ghcr.io/bivysh/bivy-relay
+        run: |
+          set -euo pipefail
+          if docker buildx imagetools inspect "$IMAGE:$CORE_SHA" >/dev/null 2>&1; then
+            echo "$IMAGE:$CORE_SHA already exists; preserving it."
+          else
+            docker buildx build \
+              --file deploy/Dockerfile.relay \
+              --platform linux/amd64 \
+              --push \
+              --tag "$IMAGE:$CORE_SHA" \
+              --label "org.opencontainers.image.source=https://github.com/bivysh/bivy" \
+              --label "org.opencontainers.image.revision=$CORE_SHA" \
+              --label "org.opencontainers.image.licenses=AGPL-3.0-only" \
+              --provenance=true \
+              --sbom=true \
+              --cache-from "type=registry,ref=$IMAGE:buildcache" \
+              --cache-to "type=registry,ref=$IMAGE:buildcache,mode=max" \
+              .
+          fi
+          if [ "$GITHUB_REF" = "refs/heads/main" ] && [ -z "${{ inputs.core_ref }}" ]; then
+            docker buildx imagetools create --tag "$IMAGE:main" "$IMAGE:$CORE_SHA"
+          fi
+
+      # GHCR container packages default to private unless the organization has
+      # changed its package default. Make distribution an enforced property of
+      # this workflow, rather than a one-time undocumented settings click.
+      - name: Make Core packages public
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for package in bivy-control-plane bivy-relay; do
+            gh api --method PATCH "/orgs/bivysh/packages/container/$package" -f visibility=public >/dev/null
+          done
+
+      - name: Verify anonymous pulls
+        run: |
+          set -euo pipefail
+          docker logout ghcr.io
+          docker buildx imagetools inspect "ghcr.io/bivysh/bivy-control-plane:$CORE_SHA" >/dev/null
+          docker buildx imagetools inspect "ghcr.io/bivysh/bivy-relay:$CORE_SHA" >/dev/null

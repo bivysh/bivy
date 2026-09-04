@@ -1,10 +1,17 @@
 # Releasing and distribution
 
-Bivy is distributed on npm as the [`@bivy/bivy`](https://www.npmjs.com/package/@bivy/bivy)
-package. `install.sh` is a thin bootstrapper: it ensures a supported Node.js is
-present, runs `npm install -g @bivy/bivy`, and then runs `bivy setup`.
+The Bivy node and CLI are distributed on npm as the
+[`@bivy/bivy`](https://www.npmjs.com/package/@bivy/bivy) package. `install.sh`
+is a thin bootstrapper: it ensures a supported Node.js is present, runs
+`npm install -g @bivy/bivy`, and then runs `bivy setup`.
 
-npm is the distribution channel. `install.sh` retains a checksum-verified
+The control plane and relay are distributed as public GHCR images built by
+`service-images.yml` from their source commit. Every Core commit on `main`
+receives an immutable full-SHA tag; `main` tracks the development branch. Production promotion aliases those existing manifests to
+`X.Y.Z`, `vX.Y.Z`, and `latest` without rebuilding them. Cloud deployment may
+add deployment-specific metadata around these images, but does not rebuild Core.
+
+npm is the node/CLI distribution channel. `install.sh` retains a checksum-verified
 tarball fallback (`TARBALL_URL`/`MANIFEST_URL`/`install_from_tarball`) used only
 during the cutover — when the `bivy` package isn't yet on the registry.
 
@@ -178,6 +185,28 @@ A hand publish produces **no** provenance attestation — npm can only attest to
 builds it can trace to a CI workflow — and needs a token or interactive 2FA that
 the trusted-publishing workflow exists precisely to avoid. The build prints a
 warning when this happens. Prefer the workflow.
+
+## Service container images
+
+```text
+ghcr.io/bivysh/bivy-control-plane:<full-sha|version|main|latest>
+ghcr.io/bivysh/bivy-relay:<full-sha|version|main|latest>
+```
+
+The full 40-character commit tag is write-once. Both images carry OCI source,
+revision, and AGPL license labels plus SBOM and provenance attestations. `main`
+is a development pointer; `latest` and version tags are created only by the
+production release job and all reference the exact full-SHA manifest built for
+that commit. A manual `service-images.yml` dispatch with `core_ref` can backfill
+an older tag or SHA.
+
+GHCR package visibility is enforced by the image workflow and anonymous pulls
+are checked before it succeeds. The two package names historically originated
+in the Cloud deployment repository. In GHCR package settings, grant
+`bivysh/bivy` Actions **admin** access to both packages before enabling this
+workflow; keep or remove the Cloud repository's access independently because it
+now publishes deployment wrappers under separate `bivy-cloud-*` package names.
+This one-time registry ACL change cannot be represented in Git.
 
 ## What ships in the package
 

@@ -506,6 +506,18 @@ one-command VPS path in
 reference (backups, rotation, security boundary) is
 [`docs/self-host.md`](docs/self-host.md).
 
+Prebuilt Core service images are public on GHCR:
+
+```text
+ghcr.io/bivysh/bivy-control-plane:<version-or-full-commit-sha>
+ghcr.io/bivysh/bivy-relay:<version-or-full-commit-sha>
+```
+
+Use a release version for self-hosting or a full commit SHA for an immutable
+build. `main` tracks the latest merged development build; `latest` moves only
+when a production release is promoted. The images are built from this repository
+with SBOM and provenance attestations.
+
 ## Security
 
 Report vulnerabilities through [GitHub private vulnerability reporting](https://github.com/bivysh/bivy/security/advisories/new).

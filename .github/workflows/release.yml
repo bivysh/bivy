@@ -110,6 +110,7 @@ jobs:
     permissions:
       actions: read # verify this exact commit published successfully to staging
       contents: write # push the tag + create the GitHub release
+      packages: write # add stable tags to the already-built Core service images
       id-token: write # OIDC: trusted publish + provenance
     steps:
       # A release PR already passed the required full CI gate. Re-running that
@@ -187,14 +188,48 @@ jobs:
               || { echo "::error::$w is $wv but promoting $VERSION -- all workspace versions must match."; exit 1; }
           done
 
-      # Validate release notes BEFORE the irreversible publish.
+      # Validate release notes and require the immutable service artifacts BEFORE
+      # the irreversible npm publish. The image workflow runs independently on
+      # the same main commit and is normally already complete.
       - name: Extract CHANGELOG section for this version
         env:
           VERSION: ${{ steps.ver.outputs.version }}
         run: node scripts/extract-changelog.mjs "v$VERSION" > release-notes.md
 
+      - name: Require Core service images for this commit
+        run: |
+          set -euo pipefail
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          for attempt in $(seq 1 40); do
+            if docker buildx imagetools inspect "ghcr.io/bivysh/bivy-control-plane:$GITHUB_SHA" >/dev/null 2>&1 \
+              && docker buildx imagetools inspect "ghcr.io/bivysh/bivy-relay:$GITHUB_SHA" >/dev/null 2>&1; then
+              echo "Core service images for $GITHUB_SHA are available."
+              exit 0
+            fi
+            echo "Waiting for Core service images for $GITHUB_SHA ($attempt/40)..."
+            sleep 15
+          done
+          echo "::error::Core service images for $GITHUB_SHA were not published. Check the Core service images workflow."
+          exit 1
+
       - name: Publish to npm (dist-tag `latest`)
         run: pnpm run publish:npm
+
+      # A release tag is an alias of the already-tested SHA manifests, not a
+      # rebuild. `latest` therefore points to byte-identical service artifacts.
+      - name: Promote Core service image tags
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          for image in bivy-control-plane bivy-relay; do
+            source="ghcr.io/bivysh/$image:$GITHUB_SHA"
+            docker buildx imagetools create \
+              --tag "ghcr.io/bivysh/$image:$VERSION" \
+              --tag "ghcr.io/bivysh/$image:v$VERSION" \
+              --tag "ghcr.io/bivysh/$image:latest" \
+              "$source"
+          done
 
       # Tag the promoted commit and cut the GitHub release. The tag push uses
       # GITHUB_TOKEN, which by design does not retrigger this workflow (and a tag
