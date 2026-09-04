@@ -55,8 +55,19 @@ try {
     try {
       report = JSON.parse(err.stdout);
     } catch {
+      // pnpm occasionally prints the registry transport failure as plain text
+      // even with --json (for example, "The operation was aborted"). Because
+      // registry errors are explicitly ignored for this invocation, recognize
+      // only those transport-shaped messages; malformed audit data still fails
+      // closed below.
+      const output = String(err.stdout || err.message || "");
+      if (/operation was aborted|timed?\s*out|eai_again|econn(reset|refused)|enotfound|registry.*(error|unavailable)|audit.*(endpoint|service).*failed/i.test(output)) {
+        console.warn(`Production audit unavailable: ${output.trim()}`);
+        console.warn("Continuing without advisory results; retry the audit when the registry is healthy.");
+        process.exit(0);
+      }
       console.error(`Could not parse \`${AUDIT_CMD} ${AUDIT_ARGS.join(" ")}\` output.`);
-      console.error(err.stdout || err.message);
+      console.error(output);
       process.exit(2);
     }
   } else {
