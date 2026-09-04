@@ -435,6 +435,13 @@ interface Notice {
   action?: { label: string; onClick: () => void };
 }
 
+interface AutomationViewError {
+  title: string;
+  message: string;
+  steps?: string[];
+  help?: string;
+}
+
 /** Top-level destinations: definitions and source setup, the unified Run feed
  *  and routing, then execution policy. The URL owns the selected tab. */
 const AUTOMATIONS_TABS: Array<{ label: string; section: AutomationsSection | null }> = [
@@ -478,7 +485,7 @@ export function AutomationsView({
   const [sources, setSources] = useState<SourcesSnapshot>(emptySources);
   const [me, setMe] = useState<AccountMe | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<string | AutomationViewError>("");
   const [notice, setNotice] = useState<Notice | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [sourceEdit, setSourceEdit] = useState<AccountAutomation | null>(null);
@@ -757,7 +764,18 @@ export function AutomationsView({
     if (parts?.[0] === TEMPLATE_PREFIX && parts[1] && parts.slice(2).length) {
       const roomKey = controller.local.keys()[parts[1]];
       if (!roomKey) {
-        setError("This device does not hold the assigned machine's encryption key, so its instructions can't be shown here.");
+        const assignedNode = state.connection.nodes.find((node) => node.id === parts[1]);
+        const machine = assignedNode?.name ? `“${assignedNode.name}”` : "the assigned Machine";
+        setError({
+          title: "Instructions are locked on this device",
+          message: `This automation is encrypted for ${machine}, but this device does not have its key.`,
+          steps: [
+            `Bring ${machine} online.`,
+            `In Bivy, switch to ${machine} and wait until it shows Connected.`,
+            "Open this automation again.",
+          ],
+          help: "If that Machine no longer exists, use a device that was already paired with it or recreate the automation. The server key used for Cloud credentials cannot unlock end-to-end encrypted instructions.",
+        });
         return;
       }
       instructions = await open(await importRoomKey(unb64url(roomKey)), parts.slice(2).join(":"));
@@ -991,8 +1009,23 @@ export function AutomationsView({
           </div>
         )}
         {error && (
-          <div className="banner" data-tone="danger" role="alert">
-            <div className="banner-text"><strong>Something went wrong</strong><span>{error}</span></div>
+          <div className={`banner${typeof error === "string" ? "" : " with-steps"}`} data-tone="danger" role="alert">
+            <div className="banner-text">
+              <strong>{typeof error === "string" ? "Something went wrong" : error.title}</strong>
+              {typeof error === "string" ? (
+                <span>{error}</span>
+              ) : (
+                <>
+                  <span>{error.message}</span>
+                  {error.steps && (
+                    <ol className="banner-steps">
+                      {error.steps.map((step) => <li key={step}>{step}</li>)}
+                    </ol>
+                  )}
+                  {error.help && <span>{error.help}</span>}
+                </>
+              )}
+            </div>
             <button type="button" className="btn ghost icon" onClick={() => setError("")} aria-label="Dismiss">✕</button>
           </div>
         )}

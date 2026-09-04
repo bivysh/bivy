@@ -1396,6 +1396,11 @@ button.sheet-action:last-child { border-bottom: 0; }
 .automations-view-body > .banner { margin: var(--space-1) 0 var(--space-3); }
 .banner-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .banner-text span { color: var(--ink); opacity: 0.85; }
+.banner.with-steps { align-items: flex-start; }
+.banner-steps {
+  margin: var(--space-1) 0; padding-left: var(--space-5); display: grid; gap: var(--space-1);
+  color: var(--ink); opacity: 0.85;
+}
 .banner-actions { display: flex; align-items: center; gap: var(--space-1); flex: none; }
 
 /* Empty-state hero — the create chooser is the page body. */
