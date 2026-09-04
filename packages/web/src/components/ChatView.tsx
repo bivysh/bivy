@@ -3,6 +3,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { stripAttachmentPlaceholders, toHtml, type PromptAttachment, type TranscriptEntry } from "@bivy/core";
 import { Spinner } from "./Spinner.js";
+import { ToolGroup } from "./ToolGroup.js";
 import { ImageGallery } from "./ImageGallery.js";
 import { decorateCodeBlocks, highlightCode } from "../highlight.js";
 import { renderMermaidDiagrams } from "../mermaid.js";
@@ -473,7 +474,8 @@ const EntryView = memo(function EntryView({
 });
 
 type RenderItem =
-  { kind: "entry"; key: string; entry: TranscriptEntry };
+  | { kind: "entry"; key: string; entry: TranscriptEntry }
+  | { kind: "tools"; key: string; tools: NonNullable<TranscriptEntry["tool"]>[] };
 
 type RenderTurn = { kind: "turn"; key: string; user?: RenderItem; response: RenderItem[] };
 type RenderBlock = RenderTurn | { kind: "standalone"; key: string; item: RenderItem };
@@ -535,12 +537,41 @@ function groupTurns(items: RenderItem[]): RenderBlock[] {
     }
     current.response.push(item);
   }
-  return blocks;
+  return blocks.map((block) => {
+    if (block.kind === "standalone") return block;
+    const toolItems = block.response.filter((item) => item.kind === "tools");
+    if (toolItems.length === 0) return block;
+    const prose: RenderItem[] = block.response.filter((item) => item.kind !== "tools");
+    const tools: NonNullable<TranscriptEntry["tool"]>[] = [];
+    for (const item of toolItems) tools.push(...item.tools);
+    const work: RenderItem = { kind: "tools", key: toolItems[0]!.key, tools };
+    const finalAnswer = prose.findLastIndex((item) => item.kind === "entry" && item.entry.role === "assistant");
+    prose.splice(finalAnswer < 0 ? prose.length : finalAnswer, 0, work);
+    return { ...block, response: prose };
+  });
 }
 
-/** Mechanical work belongs to the run receipt, not the conversation. */
+/** Keep each consecutive tool run stable; groupTurns folds all runs in one
+ * conversational turn into a single work chapter before the final answer. */
 function groupEntries(entries: TranscriptEntry[]): RenderItem[] {
-  return entries.filter((entry) => !entry.tool).map((entry) => ({ kind: "entry", key: entry.id, entry }));
+  const items: RenderItem[] = [];
+  let tools: NonNullable<TranscriptEntry["tool"]>[] = [];
+  let key = "";
+  const flush = () => {
+    if (tools.length) items.push({ kind: "tools", key, tools });
+    tools = [];
+  };
+  for (const entry of entries) {
+    if (entry.tool) {
+      if (!tools.length) key = `tools-${entry.tool.callId || entry.id}`;
+      tools.push(entry.tool);
+    } else {
+      flush();
+      items.push({ kind: "entry", key: entry.id, entry });
+    }
+  }
+  flush();
+  return items;
 }
 
 // Cap the number of live DOM nodes. A session can have thousands of messages;
@@ -626,8 +657,7 @@ export function ChatView({
     setPinnedState(true);
   }, [setPinnedState]);
 
-  const conversation = useMemo(() => entries.filter((entry) => !entry.tool), [entries]);
-  const source = useMemo(() => focusView ? focusEntries(conversation, working) : conversation, [conversation, focusView, working]);
+  const source = useMemo(() => focusView ? focusEntries(entries, working) : entries, [entries, focusView, working]);
 
   // Remember a session's distance from the bottom rather than its absolute
   // scrollTop. If content grows while it is in the background, returning still
@@ -700,7 +730,9 @@ export function ChatView({
   // The generic dots are only useful before the agent has said anything.
   const tailShowsProgress = Boolean(tail?.role === "assistant");
 
-  const renderItem = (it: RenderItem) => <EntryView key={it.key} entry={it.entry} onAction={onAction} />;
+  const renderItem = (it: RenderItem) => it.kind === "tools"
+    ? <ToolGroup key={it.key} tools={it.tools} />
+    : <EntryView key={it.key} entry={it.entry} onAction={onAction} />;
 
   return (
     <div className="chat-wrap">
