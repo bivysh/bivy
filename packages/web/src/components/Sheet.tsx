@@ -7,6 +7,8 @@ import { CheckIcon, CloseIcon } from "./UiIcons.js";
 
 const FOCUSABLE = 'a[href],button:not(:disabled),textarea:not(:disabled),input:not(:disabled),select:not(:disabled),[tabindex]:not([tabindex="-1"])';
 
+export type DismissSheet = (afterClose?: () => void) => void;
+
 /** A bottom sheet / modal shell shared by the composer pickers and settings. */
 export function Sheet({
   title,
@@ -19,7 +21,7 @@ export function Sheet({
 }: {
   title: ReactNode;
   onClose: () => void;
-  children: ReactNode;
+  children: ReactNode | ((dismiss: DismissSheet) => ReactNode);
   headExtra?: ReactNode;
   variant?: "default" | "action" | "centered";
   ariaLabel?: string;
@@ -30,6 +32,7 @@ export function Sheet({
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const afterCloseRef = useRef<(() => void) | null>(null);
   const dragStartY = useRef<number | null>(null);
   const dragYRef = useRef(0);
   const [isClosing, setIsClosing] = useState(false);
@@ -43,7 +46,11 @@ export function Sheet({
     setIsClosing(true);
     dragYRef.current = 0;
     setDragY(0);
-    closeTimer.current = setTimeout(onClose, 200);
+    closeTimer.current = setTimeout(() => {
+      onClose();
+      afterCloseRef.current?.();
+      afterCloseRef.current = null;
+    }, 200);
   };
 
   useEffect(() => () => {
@@ -71,6 +78,10 @@ export function Sheet({
   };
 
   const closeWithBack = useModalBack(requestClose);
+  const dismiss: DismissSheet = (afterClose) => {
+    afterCloseRef.current = afterClose ?? null;
+    closeWithBack();
+  };
   // Escape closes — coordinated so only the topmost open layer responds (a
   // popover or dialog raised from inside the sheet cancels itself first, rather
   // than this sheet closing out from under it).
@@ -163,7 +174,7 @@ export function Sheet({
             <CloseIcon />
           </button>
         </div>
-        <div className="sheet-content">{children}</div>
+        <div className="sheet-content">{typeof children === "function" ? children(dismiss) : children}</div>
       </div>
     </div>,
     document.body,
