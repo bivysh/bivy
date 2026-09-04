@@ -18,3 +18,23 @@ export function detectInstallKind(repoRoot, existsSync = fs.existsSync) {
   if (inNodeModules) return "npm-global";
   return "packaged";
 }
+
+/**
+ * Return the npm prefix that owns a package installed below node_modules.
+ * npm uses <prefix>/lib/node_modules on Unix and <prefix>/node_modules on
+ * other platforms. The running npm process may have a different configured
+ * prefix, so deriving it from the package path is important for user-local
+ * installs.
+ */
+export function npmGlobalPrefix(repoRoot) {
+  let current = path.resolve(repoRoot);
+  while (true) {
+    if (path.basename(current) === "node_modules") {
+      const parent = path.dirname(current);
+      return path.basename(parent) === "lib" ? path.dirname(parent) : parent;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return undefined;
+    current = parent;
+  }
+}

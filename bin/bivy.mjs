@@ -41,7 +41,7 @@ import { renderManagedBlock, upsertManagedBlock, removeManagedBlock, rcFileForSh
 import { removeInstallAndState } from "./uninstall-paths.mjs";
 import { findAvailablePort, reconcilePort } from "./port-picker.mjs";
 import { resolveAttachSessionId } from "./attach-session-id.mjs";
-import { detectInstallKind as classifyInstallKind } from "./install-kind.mjs";
+import { detectInstallKind as classifyInstallKind, npmGlobalPrefix } from "./install-kind.mjs";
 import { hasConfiguredService as configuredServiceExists } from "./service-state.mjs";
 
 const selfScript = fileURLToPath(import.meta.url);
@@ -4447,7 +4447,13 @@ async function runUpdate(args = []) {
 
   if (kind === "npm-global") {
     console.log(c.dim(`Updating the globally-installed bivy package (channel: ${channel})…`));
-    const code = await run("npm", ["install", "-g", `@bivy/bivy@${channel}`, "--no-audit", "--no-fund"]);
+    // npm's configured global prefix may not be the prefix that owns this
+    // executable (for example, `npm config get prefix` can remain /usr after
+    // installing Bivy with --prefix ~/.local). Always update the installation
+    // that is actually running this command.
+    const prefix = npmGlobalPrefix(repoRoot);
+    const prefixArgs = prefix ? ["--prefix", prefix] : [];
+    const code = await run("npm", ["install", "-g", ...prefixArgs, `@bivy/bivy@${channel}`, "--no-audit", "--no-fund"]);
     if (code !== 0) {
       console.log(c.yellow(`npm reported an issue (exit ${code}). Try: sudo npm i -g @bivy/bivy@${channel}`));
       process.exit(code);
