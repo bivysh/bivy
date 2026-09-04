@@ -514,8 +514,9 @@ ghcr.io/bivysh/bivy-relay:<version-or-full-commit-sha>
 ```
 
 Use a release version for self-hosting or a full commit SHA for an immutable
-build. `latest` moves only when a production release is promoted. The images are
-built from this repository with SBOM and provenance attestations.
+build. `latest` moves only when a production release is promoted. Each tag
+supports `linux/amd64` and `linux/arm64`; the images are built from this
+repository with SBOM and provenance attestations.
 
 ## Security
 

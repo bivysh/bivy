@@ -10,6 +10,10 @@ RELAY_DOMAIN="${2:-${RELAY_DOMAIN:-}}"
 # the URL into deploy/.env, and layers deploy/docker-compose.hosted-db.yml so no
 # postgres container is started.
 DATABASE_URL="${DATABASE_URL:-}"
+# Public service images are immutable when pinned by a full Core commit SHA.
+# An explicit release version is also accepted. When omitted, a git checkout
+# uses its exact HEAD commit.
+BIVY_IMAGE_TAG="${BIVY_IMAGE_TAG:-}"
 
 usage() {
   cat <<'EOF'
@@ -17,6 +21,10 @@ Usage: bash deploy/self-host.sh <app-domain> <relay-domain>
 
 Example:
   bash deploy/self-host.sh app.example.com relay.example.com
+
+The public control-plane and relay images are pinned to the checkout's full git
+SHA. Override that with a release version or another full SHA when needed:
+  BIVY_IMAGE_TAG=0.17.0 bash deploy/self-host.sh app.example.com relay.example.com
 
 Use a managed/hosted Postgres instead of the bundled container by setting
 DATABASE_URL in the environment (keep the sslmode your provider gives you):
@@ -70,6 +78,22 @@ rand() {
 cd "${ROOT}"
 mkdir -p deploy
 
+if [[ -z "${BIVY_IMAGE_TAG}" ]]; then
+  if ! BIVY_IMAGE_TAG="$(git rev-parse 'HEAD^{commit}' 2>/dev/null)"; then
+    echo "Cannot resolve this checkout's image tag. Set BIVY_IMAGE_TAG to a release version or full Core commit SHA." >&2
+    exit 1
+  fi
+fi
+if [[ ! "${BIVY_IMAGE_TAG}" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+  echo "BIVY_IMAGE_TAG is not a valid container tag: ${BIVY_IMAGE_TAG}" >&2
+  exit 1
+fi
+export BIVY_IMAGE_TAG
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1 && [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
+  echo "Warning: using published image ${BIVY_IMAGE_TAG}; local tracked source changes are not included." >&2
+  echo "Use deploy/docker-compose.build.yml when you intend to run modified source." >&2
+fi
+
 # Re-runs should stay in the same DB mode as the first deploy: if DATABASE_URL
 # wasn't passed this time but the existing deploy/.env already pins one, adopt it
 # so we still layer the hosted-db overlay (otherwise we'd wrongly start a bundled
@@ -94,6 +118,7 @@ if [[ ! -f deploy/.env ]]; then
     # unset variable while interpolating its (overridden) derived DATABASE_URL.
     cat > deploy/.env <<EOF
 NODE_ENV=production
+BIVY_IMAGE_TAG=${BIVY_IMAGE_TAG}
 PUBLIC_CONTROL_PLANE_URL=https://${APP_DOMAIN}
 RELAY_PUBLIC_URL=wss://${RELAY_DOMAIN}
 DISABLE_DEV_LOGIN=1
@@ -126,6 +151,7 @@ EOF
     POSTGRES_PASSWORD="$(rand 32)"
     cat > deploy/.env <<EOF
 NODE_ENV=production
+BIVY_IMAGE_TAG=${BIVY_IMAGE_TAG}
 PUBLIC_CONTROL_PLANE_URL=https://${APP_DOMAIN}
 RELAY_PUBLIC_URL=wss://${RELAY_DOMAIN}
 DISABLE_DEV_LOGIN=1
@@ -154,6 +180,14 @@ EOF
   echo "Wrote deploy/.env"
 else
   echo "Keeping existing deploy/.env"
+  # Refresh the immutable image pin when the checked-out Core commit changes, or
+  # persist an explicit BIVY_IMAGE_TAG supplied by the operator.
+  if grep -qE '^[[:space:]]*BIVY_IMAGE_TAG=' deploy/.env; then
+    sed -i -E "s/^[[:space:]]*BIVY_IMAGE_TAG=.*/BIVY_IMAGE_TAG=${BIVY_IMAGE_TAG}/" deploy/.env
+  else
+    printf '\n# Public control-plane and relay image pin.\nBIVY_IMAGE_TAG=%s\n' "${BIVY_IMAGE_TAG}" >> deploy/.env
+  fi
+  echo "Pinned public service images to ${BIVY_IMAGE_TAG}"
   # Managed DB requested via env var but the existing .env doesn't pin it yet —
   # persist it so future re-runs (without the env var) stay in managed mode.
   if [[ -n "${DATABASE_URL}" ]] && ! grep -qE '^[[:space:]]*DATABASE_URL=' deploy/.env; then
@@ -250,7 +284,8 @@ if ! docker compose "${COMPOSE_ARGS[@]}" --env-file deploy/.env config -q 2>"${C
   exit 1
 fi
 
-docker compose "${COMPOSE_ARGS[@]}" --env-file deploy/.env up -d --build
+docker compose "${COMPOSE_ARGS[@]}" --env-file deploy/.env pull control-plane relay
+docker compose "${COMPOSE_ARGS[@]}" --env-file deploy/.env up -d
 
 echo
 echo "Bivy self-host stack started."

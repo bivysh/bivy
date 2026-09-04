@@ -208,7 +208,8 @@ ghcr.io/bivysh/bivy-control-plane:<full-sha|version|latest>
 ghcr.io/bivysh/bivy-relay:<full-sha|version|latest>
 ```
 
-The full 40-character commit tag is write-once. Both images carry OCI source,
+The full 40-character commit tag is write-once. Each tag is a multi-platform
+OCI index for `linux/amd64` and `linux/arm64`. Both images carry OCI source,
 revision, and AGPL license labels plus SBOM and provenance attestations.
 `latest` and version tags are created only by the production release job and all
 reference the exact full-SHA manifest built for

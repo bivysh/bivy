@@ -9,7 +9,12 @@
 #
 # Run:
 #   cd deploy && cp .env.example .env && $EDITOR .env Caddyfile
-#   docker compose up -d --build
+#   docker compose pull control-plane relay
+#   docker compose up -d
+#
+# BIVY_IMAGE_TAG must be a release version or immutable full commit SHA. The
+# self-host helper resolves and records the checked-out commit automatically.
+# To build modified source instead, layer docker-compose.build.yml.
 #
 # Then on your PC (the node):
 #   npm run relay:setup -- \
@@ -50,12 +55,7 @@ services:
     restart: unless-stopped
 
   control-plane:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile.control-plane
-      args:
-        # Optional ephemeral-machine UI, paired with the runtime flag below.
-        VITE_EPHEMERAL_MACHINES_ENABLED: "${VITE_EPHEMERAL_MACHINES_ENABLED:-}"
+    image: "ghcr.io/bivysh/bivy-control-plane:${BIVY_IMAGE_TAG:?set BIVY_IMAGE_TAG to a release version or full commit SHA}"
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -109,9 +109,7 @@ services:
     restart: unless-stopped
 
   relay:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile.relay
+    image: "ghcr.io/bivysh/bivy-relay:${BIVY_IMAGE_TAG:?set BIVY_IMAGE_TAG to a release version or full commit SHA}"
     security_opt:
       - no-new-privileges:true
     cap_drop:

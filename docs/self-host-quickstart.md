@@ -2,7 +2,8 @@
 
 This guide takes a new Linux VPS to a running Bivy control plane, relay, and web
 app — the AGPL control-plane and relay stack from this repo (Bivy Cloud layers
-billing on top of it in a private repository). Self-hosting
+billing on top of it in a private repository). The installer pulls public,
+multi-platform service images for `linux/amd64` or `linux/arm64`. Self-hosting
 is community-supported (no SLA; best-effort help via GitHub issues — you own
 TLS, backups, upgrades, and hardening) and intended for people comfortable
 operating their own server. If you only want to run agents on your computer, use
@@ -48,7 +49,8 @@ Replace the example domains with your DNS names:
 bash deploy/self-host.sh app.example.com relay.example.com
 ```
 
-The command creates a private `deploy/.env`, generates relay and database
+The command pins the public service images to the checkout's immutable full
+commit SHA, creates a private `deploy/.env`, generates relay and database
 secrets, and configures Caddy for automatic TLS. On the first run it stops before
 starting Docker so you can configure sign-in.
 
@@ -80,7 +82,7 @@ Run the deployment command again:
 bash deploy/self-host.sh app.example.com relay.example.com
 ```
 
-This starts Postgres, the control plane, relay, and Caddy. Open
+This pulls and starts Postgres, the control plane, relay, and Caddy. Open
 `https://app.example.com` in a browser.
 
 To use a managed Postgres database instead of the bundled container, provide its
@@ -107,6 +109,19 @@ bivy start
 ```
 
 Run `bivy link` to pair a phone or `bivy open` to open the web app.
+
+## Upgrade
+
+Check out the desired release (or pull the latest commit you intentionally want
+to run), then rerun the installer. It updates the immutable image pin and pulls
+the matching images without replacing your secrets or customized Caddyfile:
+
+```bash
+cd /opt/bivy
+git fetch --tags
+git checkout vX.Y.Z
+bash deploy/self-host.sh app.example.com relay.example.com
+```
 
 For backups, upgrades, secret rotation, and the security model, read
 [self-host.md](self-host.md).

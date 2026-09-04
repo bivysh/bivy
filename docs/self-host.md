@@ -45,6 +45,10 @@ bash deploy/self-host.sh app.example.com relay.example.com
 
 The script:
 
+- resolves the checkout to an immutable full commit SHA and stores it as
+  `BIVY_IMAGE_TAG`;
+- pulls the matching public `linux/amd64` or `linux/arm64` control-plane and
+  relay images from GHCR;
 - writes `deploy/.env` if missing;
 - replaces the untouched example Caddyfile with your domains, while preserving
   customized Caddyfiles on later runs;
@@ -55,7 +59,51 @@ The script:
 On a first run without auth settings, it writes the setup files and stops before
 Docker. Configure one sign-in path in `deploy/.env`, then run the command again.
 You can instead provide the auth variables through the environment on the first
-invocation. Existing `deploy/.env` files are never overwritten.
+invocation. Existing secrets in `deploy/.env` are never overwritten.
+
+### Image pins and source builds
+
+The default Compose stack pulls both services from this repository's public
+packages:
+
+```text
+ghcr.io/bivysh/bivy-control-plane:<version-or-full-commit-sha>
+ghcr.io/bivysh/bivy-relay:<version-or-full-commit-sha>
+```
+
+A full SHA is immutable and is the installer's default. Release versions are
+stable aliases of the same manifests. Avoid `latest` for operational deployments.
+To select a release explicitly, run:
+
+```bash
+BIVY_IMAGE_TAG=X.Y.Z bash deploy/self-host.sh app.example.com relay.example.com
+```
+
+The published tags are multi-platform OCI indexes for `linux/amd64` and
+`linux/arm64`; Docker selects the host architecture automatically.
+
+If you modify the AGPL service source, opt into local builds with the separate
+overlay:
+
+```bash
+BIVY_IMAGE_TAG=local docker compose \
+  -f deploy/docker-compose.yml \
+  -f deploy/docker-compose.build.yml \
+  --env-file deploy/.env up -d --build
+```
+
+### Upgrades
+
+Check out the release or Core commit you intend to run, then rerun the installer.
+It refreshes `BIVY_IMAGE_TAG`, pulls that immutable image pair, and recreates the
+services while preserving secrets, data volumes, and Caddy customization:
+
+```bash
+cd /opt/bivy
+git fetch --tags
+git checkout vX.Y.Z
+bash deploy/self-host.sh app.example.com relay.example.com
+```
 
 ## Connect a node
 
@@ -198,7 +246,7 @@ and points the control plane at your provider's connection string:
    docker compose \
      -f deploy/docker-compose.yml \
      -f deploy/docker-compose.hosted-db.yml \
-     --env-file deploy/.env up -d --build
+     --env-file deploy/.env up -d
    ```
 
 Notes:

@@ -25,7 +25,12 @@ function fixture() {
     `#!/usr/bin/env bash\nprintf called > ${JSON.stringify(dockerMarker)}\nexit 97\n`,
     { mode: 0o755 },
   );
-  return { root, deploy, dockerMarker, env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH ?? ""}` } };
+  return {
+    root,
+    deploy,
+    dockerMarker,
+    env: { ...process.env, BIVY_IMAGE_TAG: "test-sha", PATH: `${fakeBin}:${process.env.PATH ?? ""}` },
+  };
 }
 
 function run(root: string, env: NodeJS.ProcessEnv) {
@@ -44,6 +49,7 @@ try {
   assert.ok(fs.existsSync(path.join(firstFixture.deploy, ".env")), "first run should still write deploy/.env");
   assert.equal(fs.statSync(path.join(firstFixture.deploy, ".env")).mode & 0o777, 0o600, ".env must be private");
   assert.match(fs.readFileSync(path.join(firstFixture.deploy, ".env"), "utf8"), /^AUTH_EMAIL_FROM=$/m);
+  assert.match(fs.readFileSync(path.join(firstFixture.deploy, ".env"), "utf8"), /^BIVY_IMAGE_TAG=test-sha$/m);
   assert.equal(fs.existsSync(firstFixture.dockerMarker), false, "auth refusal must happen before Docker");
 
   const caddyPath = path.join(firstFixture.deploy, "Caddyfile");
@@ -74,9 +80,16 @@ try {
 
   const customized = `${fs.readFileSync(caddyPath, "utf8")}\n# operator customization\n`;
   fs.writeFileSync(caddyPath, customized);
-  const rerun = run(firstFixture.root, { ...firstFixture.env, BIVY_SELF_HOST_CONFIG_ONLY: "1" });
+  const rerun = run(firstFixture.root, {
+    ...firstFixture.env,
+    BIVY_IMAGE_TAG: "next-test-sha",
+    BIVY_SELF_HOST_CONFIG_ONLY: "1",
+  });
   assert.equal(rerun.status, 0);
   assert.equal(fs.readFileSync(caddyPath, "utf8"), customized, "re-runs must preserve a customized Caddyfile");
+  const rerunEnv = fs.readFileSync(path.join(firstFixture.deploy, ".env"), "utf8");
+  assert.match(rerunEnv, /^BIVY_IMAGE_TAG=next-test-sha$/m, "re-runs should refresh the image pin");
+  assert.equal((rerunEnv.match(/^BIVY_IMAGE_TAG=/gm) ?? []).length, 1, "image pin must remain unique");
 
   // A secret manager can provide auth on the first invocation, avoiding a
   // mandatory edit/re-run while still keeping dev login disabled.
