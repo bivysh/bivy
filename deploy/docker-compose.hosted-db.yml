@@ -21,7 +21,7 @@
 #        docker compose \
 #          -f deploy/docker-compose.yml \
 #          -f deploy/docker-compose.hosted-db.yml \
-#          --env-file deploy/.env up -d --build
+#          --env-file deploy/.env up -d
 #
 # The control plane creates its own tables on first boot (idempotent
 # CREATE TABLE IF NOT EXISTS), so there is no separate migration step — an empty

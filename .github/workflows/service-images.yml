@@ -9,7 +9,8 @@ on:
   # pin always resolves; BuildKit reuses layers when image inputs did not change.
   push:
     branches: [main]
-  # Exercise both Dockerfiles before merge without publishing anything.
+  # Exercise both Dockerfiles on every published architecture before merge
+  # without publishing anything.
   pull_request:
     branches: [main]
     paths:
@@ -42,22 +43,32 @@ env:
 jobs:
   validate:
     if: github.event_name == 'pull_request'
-    name: Build ${{ matrix.service }} image
+    name: Build ${{ matrix.service }} image (${{ matrix.arch }})
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         service: [control-plane, relay]
+        arch: [amd64, arm64]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Enable ARM64 emulation
+        run: docker run --privileged --rm docker.io/tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0 --install arm64
+      - name: Create Buildx builder
+        run: docker buildx create --name bivy-services --driver docker-container --use
       - name: Build image
-        run: docker build --file "deploy/Dockerfile.${{ matrix.service }}" --tag "bivy-${{ matrix.service }}:ci" .
+        run: |
+          docker buildx build \
+            --file "deploy/Dockerfile.${{ matrix.service }}" \
+            --platform "linux/${{ matrix.arch }}" \
+            --output type=cacheonly \
+            .
 
   publish:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     # Serialize every publication, regardless of whether the same commit was
     # named by branch, tag, or SHA. Full-SHA tags are write-once below.
     concurrency:
@@ -78,6 +89,9 @@ jobs:
       - name: Log in to GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login "$REGISTRY" -u "${{ github.actor }}" --password-stdin
 
+      - name: Enable ARM64 emulation
+        run: docker run --privileged --rm docker.io/tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0 --install arm64
+
       - name: Create Buildx builder
         run: docker buildx create --name bivy-services --driver docker-container --use
 
@@ -94,7 +108,7 @@ jobs:
           else
             docker buildx build \
               --file deploy/Dockerfile.control-plane \
-              --platform linux/amd64 \
+              --platform linux/amd64,linux/arm64 \
               --push \
               --tag "$IMAGE:$CORE_SHA" \
               --label "org.opencontainers.image.source=https://github.com/bivysh/bivy" \
@@ -117,7 +131,7 @@ jobs:
           else
             docker buildx build \
               --file deploy/Dockerfile.relay \
-              --platform linux/amd64 \
+              --platform linux/amd64,linux/arm64 \
               --push \
               --tag "$IMAGE:$CORE_SHA" \
               --label "org.opencontainers.image.source=https://github.com/bivysh/bivy" \
@@ -132,12 +146,19 @@ jobs:
 
       # GHCR visibility is UI-only. Operators make both packages public once;
       # every publication verifies that property before recording success.
-      - name: Verify anonymous pulls
+      - name: Verify anonymous multi-platform pulls
         run: |
           set -euo pipefail
           docker logout ghcr.io
-          docker buildx imagetools inspect "ghcr.io/bivysh/bivy-control-plane:$CORE_SHA" >/dev/null
-          docker buildx imagetools inspect "ghcr.io/bivysh/bivy-relay:$CORE_SHA" >/dev/null
+          for image in bivy-control-plane bivy-relay; do
+            manifest="$(docker buildx imagetools inspect --raw "ghcr.io/bivysh/$image:$CORE_SHA")"
+            for arch in amd64 arm64; do
+              jq -e --arg arch "$arch" \
+                '.manifests | any(.platform.os == "linux" and .platform.architecture == $arch)' \
+                <<<"$manifest" >/dev/null \
+                || { echo "::error::ghcr.io/bivysh/$image:$CORE_SHA has no linux/$arch manifest"; exit 1; }
+            done
+          done
 
       # A commit status is a durable, exact-SHA publication receipt. Unlike an
       # Actions run query it also works when workflow_dispatch checked out an old
