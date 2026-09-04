@@ -615,14 +615,24 @@ export function genericStreamJsonParser(): CliParser {
       const nestedUpdate = ((msg.params as Record<string, unknown> | undefined)?.update
         ?? (msg.update as Record<string, unknown> | undefined)) as Record<string, unknown> | undefined;
       const type = String(msg.type ?? msg.method ?? nestedUpdate?.sessionUpdate ?? nestedUpdate?.type ?? "");
+      // Typed error frame — `{type:"error", message}` (Grok's streaming-json and
+      // other ACP-style CLIs), `session/error`, `turn.error`, … — as opposed to
+      // the `{error:{message}}` envelope handled below. Recognize it as data
+      // (a suffix match, no per-agent branch) so the message is surfaced as a
+      // real turn error instead of leaking into the transcript as assistant
+      // prose via the broad `message` text fallback in textFromStreamEvent.
+      const isErrorFrame = /(^|[._:/])error$/.test(type.toLowerCase());
       const tool = acpToolUpdate(msg);
       if (tool?.kind === "call") acc.addToolUse(tool.id, tool.name ?? "tool", tool.input, events);
       else if (tool?.kind === "result") acc.addToolResult(tool.id, tool.name ?? "tool", tool.output, events, tool.error);
       if (msg.error && !type.includes("delta")) {
         const m = (msg.error as { message?: unknown }).message ?? msg.error;
         events.push({ type: "session.error", error: String(m) });
+      } else if (isErrorFrame) {
+        const m = msg.message ?? (msg.error as unknown) ?? msg.detail ?? msg.reason;
+        if (typeof m === "string" && m.trim()) events.push({ type: "session.error", error: m.trim() });
       }
-      const text = textFromStreamEvent(msg);
+      const text = isErrorFrame ? "" : textFromStreamEvent(msg);
       if (text && !STREAM_TERMINALS.has(type)) {
         acc.appendText(text, events);
         sawText = true;
