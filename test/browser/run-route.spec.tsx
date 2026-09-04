@@ -80,9 +80,9 @@ test("every Run surface links to the exact Run route, preserving the Run id", as
   expect(automations).toContain("onOpenRun={onOpenRun}");
   expect(history).toContain("onClick={() => onOpenRun(run.id)}");
   expect(queue).toContain("onClick={() => onOpenRun(item.id)}");
-  // Session → Run: the pill opens the correlated Run by its stable id (a retry
-  // keeps the same Run id).
-  expect(pill).toContain("onClick={() => { setOpen(false); onOpenRun(evidence.id); }}");
+  // Session → Run: the pill dismisses its sheet before opening the correlated
+  // Run by its stable id (a retry keeps the same Run id).
+  expect(pill).toContain("onClick={() => dismiss(() => onOpenRun(evidence.id))}");
   expect(app).toContain("openRun(runId)");
   expect(app).toContain("load={(id) => fetchAutomationRun(controller.local, id)}");
   expect(app).toContain("retryAutomationRun(controller.local, id)");
