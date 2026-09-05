@@ -87,13 +87,13 @@
     "@modelcontextprotocol/sdk": "1.30.0",
     "brace-expansion": "5.0.9",
     "express": "^5.2.1",
-    "express-rate-limit": "^8.6.2",
+    "express-rate-limit": "^8.7.0",
     "semver": "^7.7.2",
-    "typebox": "^1.3.19",
-    "undici": "8.10.0",
+    "typebox": "^1.3.25",
+    "undici": "8.10.1",
     "ws": "^8.21.3",
     "yaml": "^2.9.0",
-    "zod": "^4.0.0"
+    "zod": "^4.5.4"
   },
   "optionalDependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.258",
@@ -106,7 +106,7 @@
     "@modelcontextprotocol/sdk": "1.30.0",
     "@earendil-works/pi-coding-agent": {
       "brace-expansion": "5.0.9",
-      "undici": "8.10.0"
+      "undici": "8.10.1"
     },
     "brace-expansion": "5.0.9",
     "fast-uri": "4.1.4",
