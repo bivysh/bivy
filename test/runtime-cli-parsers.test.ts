@@ -272,6 +272,23 @@ async function main() {
     assert.ok(events.some((e) => e.type === "session.error" && (e as any).error === "boom"));
   });
 
+  await check("genericStreamJson: a typed {type:'error',message} frame is a session.error, not assistant text", () => {
+    // Grok's streaming-json (and other ACP-style CLIs) emit errors as a typed
+    // frame rather than the {error:{message}} envelope. It must not leak into
+    // the transcript as an assistant message via the broad `message` fallback.
+    const p = genericStreamJsonParser();
+    const events = feed(p, [JSON.stringify({ type: "error", message: "Not signed in. Run grok login." })]);
+    assert.ok(events.some((e) => e.type === "session.error" && /Not signed in/.test((e as any).error)), "error frame surfaced as session.error");
+    assert.equal(p.messages().length, 0, "error text must not become an assistant message");
+  });
+
+  await check("genericStreamJson: namespaced error frames (session/error) are recognized", () => {
+    const p = genericStreamJsonParser();
+    const events = feed(p, [JSON.stringify({ type: "session/error", message: "model overloaded" })]);
+    assert.ok(events.some((e) => e.type === "session.error" && /overloaded/.test((e as any).error)));
+    assert.equal(p.messages().length, 0);
+  });
+
   await check("genericJson: extracts the reply from a final JSON object + usage", () => {
     const p = genericJsonParser();
     const events = feed(p, [JSON.stringify({ response: "the answer", usage: { total_tokens: 9 } })]);
