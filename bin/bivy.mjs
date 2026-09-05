@@ -1791,11 +1791,28 @@ async function cmdExec(args = []) {
   let token;
   try { token = await localDeviceToken(config); }
   catch (error) { console.error(c.red(error?.message || String(error))); process.exit(1); return; }
-  const code = await run(nodeBin, [...nodeScriptArgs(execEntry), "--url", url(config), "--token", token, ...args], {
+  // Translate the friendly bridge names to their governed runtime ids (the same
+  // mapping `bivy run <agent> --chat` uses), so `bivy exec --agent codex` opens
+  // the governed Codex app-server session instead of the plain exec fallback.
+  // Other aliases (claude, gemini-cli, …) resolve server-side via the registry.
+  const execArgs = translateExecAgent(args);
+  const code = await run(nodeBin, [...nodeScriptArgs(execEntry), "--url", url(config), "--token", token, ...execArgs], {
     cwd: repoRoot,
     env: startEnv(config),
   });
   process.exit(code);
+}
+
+// Rewrite a `bivy exec` arg list's --agent/-a value through governedChatAgentId,
+// leaving everything else (the free-text prompt, --session, flags) untouched.
+function translateExecAgent(args = []) {
+  const out = [...args];
+  for (let i = 0; i < out.length; i++) {
+    const a = out[i];
+    if ((a === "--agent" || a === "-a") && out[i + 1]) { out[i + 1] = governedChatAgentId(out[i + 1]); i++; }
+    else if (typeof a === "string" && a.startsWith("--agent=")) out[i] = `--agent=${governedChatAgentId(a.slice("--agent=".length))}`;
+  }
+  return out;
 }
 
 // `bivy completions <bash|zsh|fish>` — print a shell completion script to eval or

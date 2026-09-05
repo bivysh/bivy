@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { listRuntimes, makeRuntime, type AgentRuntime, type RuntimeFactoryOptions, type RuntimeInfo } from "./index.js";
+import { canonicalAgentId, listRuntimes, makeRuntime, type AgentRuntime, type RuntimeFactoryOptions, type RuntimeInfo } from "./index.js";
 import { RemoteRuntime, connectSocketTransport } from "./remote.js";
 import type { SandboxTier } from "../harness/sandbox.js";
 import { withExactCapabilitySurface, type DiscoveredNativeSession, type OpenSessionOptions, type OpenSessionResult, type RuntimeCapabilities, type RuntimeMessage, type SessionSummary } from "./types.js";
@@ -73,10 +73,22 @@ export class RuntimeHost {
 
   resolveRuntimeId(requested: string | undefined, fallback: string): string {
     const wantId = (requested || fallback).toLowerCase();
-    const info = this.list().find((candidate) => candidate.id === wantId);
+    // Resolve declared aliases and historical ids through the one authoritative
+    // registry (e.g. `claude` → claude-code-sdk, `gemini-cli` → gemini,
+    // `open-code` → opencode) so the session/exec API accepts the same friendly
+    // names the picker and `bivy run` use — not only exact canonical ids. This
+    // honors the aliases integrations already declare as data, instead of making
+    // every caller know each canonical id (previously only the CLI's `--chat`
+    // path translated a couple by hand, so `bivy exec --agent claude` failed).
+    // Unknown names fall through to wantId and still raise "Unknown agent" below.
+    const canonical = canonicalAgentId(wantId) ?? wantId;
+    // Pass the resolved id as the "current" runtime so a hidden-but-runnable
+    // contribution is still resolvable to back a session (the profiles' "hidden
+    // from the picker, still runnable" contract; parity with makeRuntime).
+    const info = this.list(canonical).find((candidate) => candidate.id === canonical);
     if (!info) throw new Error(`Unknown agent: ${wantId}`);
     if (info.status !== "available") throw new Error(`${info.displayName} is not available on this node yet.`);
-    return wantId;
+    return canonical;
   }
 
   get(requested: string | undefined, fallback: string, sandbox?: SandboxTier): AgentRuntime {
@@ -85,7 +97,10 @@ export class RuntimeHost {
     // runtime the daemon can't run locally (e.g. the Claude SDK isn't installed
     // here) is still offloadable — remote availability is the service's business.
     const remote = remoteRuntimeSelection();
-    const wantId = (requested || fallback).toLowerCase();
+    const requestedId = (requested || fallback).toLowerCase();
+    // Canonicalize before the remote check too, so an alias (e.g. `claude`) is
+    // matched against BIVY_REMOTE_RUNTIME and drives the correct remote facade.
+    const wantId = canonicalAgentId(requestedId) ?? requestedId;
     if (remote && remote.enabled(wantId)) return this.getRemote(wantId, remote.addr, sandbox);
 
     const id = this.resolveRuntimeId(requested, fallback);
