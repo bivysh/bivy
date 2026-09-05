@@ -310,13 +310,16 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 }
 .session-group-label:first-child { padding-top: 6px; }
 .session-item {
-  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  position: relative; display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
   padding: 9px 8px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--ink);
 }
 .session-item:hover { background: var(--surface-2); }
 .session-item.active, .session-item[aria-current="page"] {
   background: var(--surface-2);
-  box-shadow: inset 2px 0 0 var(--accent);
+}
+.session-item.active::before, .session-item[aria-current="page"]::before {
+  content: ""; position: absolute; inset: 0 auto 0 0; width: 2px;
+  background: var(--accent);
 }
 /* Column wrapper for the two-line row (title row + meta row) so the dot can
    stay a single flex sibling, vertically centered across both lines. */
