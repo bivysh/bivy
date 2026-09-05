@@ -511,22 +511,13 @@ function groupTurns(items: RenderItem[]): RenderBlock[] {
     }
     current.response.push(item);
   }
-  return blocks.map((block) => {
-    if (block.kind === "standalone") return block;
-    const toolItems = block.response.filter((item) => item.kind === "tools");
-    if (toolItems.length === 0) return block;
-    const prose: RenderItem[] = block.response.filter((item) => item.kind !== "tools");
-    const tools: NonNullable<TranscriptEntry["tool"]>[] = [];
-    for (const item of toolItems) tools.push(...item.tools);
-    const work: RenderItem = { kind: "tools", key: toolItems[0]!.key, tools };
-    const finalAnswer = prose.findLastIndex((item) => item.kind === "entry" && item.entry.role === "assistant");
-    prose.splice(finalAnswer < 0 ? prose.length : finalAnswer, 0, work);
-    return { ...block, response: prose };
-  });
+  return blocks;
 }
 
-/** Keep each consecutive tool run stable; groupTurns folds all runs in one
- * conversational turn into a single work chapter before the final answer. */
+/** Keep consecutive tool calls together while preserving their chronological
+ * place among interim messages. This lets a live turn reveal meaningful work
+ * as it happens instead of moving it above newer prose or hiding it until the
+ * final answer arrives. */
 function groupEntries(entries: TranscriptEntry[]): RenderItem[] {
   const items: RenderItem[] = [];
   let tools: NonNullable<TranscriptEntry["tool"]>[] = [];
@@ -699,10 +690,9 @@ export function ChatView({
   const items = groupEntries(visible);
   const blocks = groupTurns(items);
   const tail = visible.at(-1);
-  // Once the agent has communicated an interim update, let that message carry
-  // the conversational state while the run pill carries mechanical progress.
-  // The generic dots are only useful before the agent has said anything.
-  const tailShowsProgress = Boolean(tail?.role === "assistant");
+  // Prose, streaming output, or a tool cluster already communicates progress;
+  // reserve the generic dots for the gap before the agent emits anything.
+  const tailShowsProgress = Boolean(tail?.role === "assistant" || tail?.tool);
 
   const renderItem = (it: RenderItem) => it.kind === "tools"
     ? <ToolGroup key={it.key} tools={it.tools} />
