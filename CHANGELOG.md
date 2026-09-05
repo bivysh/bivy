@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.9] - 2026-09-05
+
+### Added
+
+- Public, multi-platform control plane and relay images are now published from
+  Core for reproducible self-hosted deployments.
+
+### Changed
+
+- The session experience now groups agent work into chronological turns, keeps
+  the active session rail compact, and improves mobile composer, picker, queue,
+  artifact, and transcript layouts.
+- Cross-machine forks now navigate reliably to the destination session and keep
+  browser history aligned throughout the handoff.
+- Agent compatibility now covers current releases and preserves namespaced tool
+  transcripts.
+- npm-global updates now replace the installed package in place.
+
+### Fixed
+
+- Streaming JSON errors now surface as turn errors instead of leaving work in an
+  ambiguous state.
+- Machine updates, queued follow-ups, attachment visibility, artifact navigation,
+  and missing automation-key recovery now behave consistently.
+- Sidebar navigation and session controls now have improved keyboard and screen
+  reader behavior.
+
 ## [0.16.8] - 2026-09-02
 
 ### Changed
