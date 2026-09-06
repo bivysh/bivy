@@ -2,6 +2,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, type ViteDevServer } from "../../packages/web/node_modules/vite/dist/node/index.js";
 import { githubSourceStatus, githubMentionHandles, githubInstallationSettings } from "../../packages/web/src/components/githubSource.js";
 
@@ -10,15 +11,20 @@ const hosted = { connected: true, appId: "123", central: true, hosted: true, ins
 const custom = { connected: true, appId: "456", installed: true, mention: "acme-bot", name: "Acme custom app", servedBy: null };
 let server: ViteDevServer;
 let origin: string;
+let cacheDir: string;
 
 test.beforeAll(async () => {
-  server = await createServer({ root: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../packages/web"), logLevel: "silent", server: { host: "127.0.0.1", port: 0 } });
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../packages/web");
+  // Other browser suites start Vite concurrently. Give each worker its own
+  // optimizer cache instead of racing their dependency-bundle rewrites.
+  cacheDir = await mkdtemp(path.join(root, "node_modules/.vite-source-"));
+  server = await createServer({ root, cacheDir, logLevel: "silent", server: { host: "127.0.0.1", port: 0 } });
   await server.listen();
   const address = server.httpServer!.address();
   if (!address || typeof address === "string") throw new Error("No test port");
   origin = `http://127.0.0.1:${address.port}`;
 });
-test.afterAll(async () => { await server?.close(); });
+test.afterAll(async () => { await server?.close(); if (cacheDir) await rm(cacheDir, { recursive: true, force: true }); });
 
 test("connection status does not conflate hosted installation with executor readiness", () => {
   expect(githubSourceStatus({ connected: true, apps: [hosted] })).toMatchObject({ tone: "on", label: "Hosted Bivy App connected" });
@@ -44,8 +50,8 @@ async function openSetup(page: Page, theme: string, focus = "github", apps: Arra
   await page.route("**/nodes", (route) => route.fulfill({ json: [] }));
   const fixturePath = `/source-test-${theme}-${focus}-${apps.length}-${fail}`;
   const html = await server.transformIndexHtml(fixturePath, `<html data-theme="${theme}"><head><meta name="viewport" content="width=device-width, initial-scale=1" /></head><body><div id="root"></div><script type="module">
-    import React from '/node_modules/.vite/deps/react.js';
-    import ReactDOM from '/node_modules/.vite/deps/react-dom_client.js';
+    import React from 'react';
+    import { createRoot } from 'react-dom/client';
     import { WorkQueueSetupSheet } from '/src/components/WorkQueueSetupSheet.tsx';
     import { AutomationsView } from '/src/components/AutomationsView.tsx';
     import { controller } from '/src/store/controller.ts';
@@ -60,7 +66,7 @@ async function openSetup(page: Page, theme: string, focus = "github", apps: Arra
     controller.listNodes = async () => [];
     controller.centralGithubApp = async () => ({ configured: true, installations: [] });
     const state = controller.store.getState();
-    ReactDOM.createRoot(document.getElementById('root')).render(${focus === "automations"
+    createRoot(document.getElementById('root')).render(${focus === "automations"
       ? `React.createElement(AutomationsView, { state, section: null, onSectionChange: () => {}, onOpenSession: () => {}, onClose: () => {} })`
       : `React.createElement(WorkQueueSetupSheet, { state, focus: ${JSON.stringify(focus)}, onClose: () => document.getElementById('root').textContent = 'Closed' })`});
   </script></body></html>`);
