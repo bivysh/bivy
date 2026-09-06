@@ -70,7 +70,7 @@ export function useAttachmentUrl(attachment: PromptAttachment | null | undefined
     const mimeType = attachment.mimeType;
     let cancelled = false;
     let objectUrl: string | null = null;
-    void controller.fetchAttachment(attachment.hash).then((res) => {
+    void controller.fetchAttachment(attachment.hash, attachment.createdAt).then((res) => {
       if (cancelled || !res) return;
       objectUrl = base64ToBlobUrl(res.data, res.mimeType || mimeType);
       if (objectUrl) setFetchedUrl(objectUrl);
