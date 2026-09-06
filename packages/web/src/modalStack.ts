@@ -17,6 +17,9 @@ interface Layer {
 }
 
 const stack: Layer[] = [];
+// Back, like Escape, belongs only to the topmost modal. Each listener sees
+// the same popstate; without this guard closing nested setup discards its editor.
+const historyLayers: object[] = [];
 let installed = false;
 
 function install(): void {
@@ -80,8 +83,9 @@ export function useModalBack(onBack: () => void): () => void {
   useEffect(() => {
     if (typeof window === "undefined") return;
     let cancelled = false;
+    const layer = {};
     const onPopState = () => {
-      if (!active.current) return;
+      if (!active.current || historyLayers.at(-1) !== layer) return;
       active.current = false;
       callback.current();
     };
@@ -94,12 +98,15 @@ export function useModalBack(onBack: () => void): () => void {
     queueMicrotask(() => {
       if (cancelled) return;
       history.pushState({ __bivyModal: true }, "", location.href);
+      historyLayers.push(layer);
       active.current = true;
     });
 
     return () => {
       cancelled = true;
       window.removeEventListener("popstate", onPopState);
+      const index = historyLayers.indexOf(layer);
+      if (index >= 0) historyLayers.splice(index, 1);
       // If the overlay was removed by some other route/state change, remove
       // its sentinel entry so the next Back gesture does not land on a stale
       // copy of the current page.

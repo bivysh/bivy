@@ -1046,11 +1046,15 @@ export interface AccountAutomation {
   /** Present for a webhook-triggered automation: the signed endpoint to POST
    *  events to. The signing secret is returned only once (create/rotate). */
   webhookUrl?: string;
-  /** Webhook trigger only. On read: whether deliveries must carry Bivy signing
-   *  headers (a secret exists). On create/update: set `false` for providers that
-   *  cannot sign requests; `true` on an unsigned endpoint mints a secret that is
-   *  returned once in that response. */
+  /** Webhook trigger only. Whether authentication is required (a secret exists).
+   *  The legacy name also covers static header authentication. Set `false` for
+   *  unauthenticated delivery; `true` on an unsigned endpoint generates a secret
+   *  unless webhookSecret is supplied, returned once in the save response. */
   requireSigning?: boolean;
+  /** Default: x-bivy-signature-256. */
+  webhookHeader?: string;
+  /** Default: HMAC-SHA256; header uses a static shared secret instead. */
+  webhookAuthMode?: "hmac" | "header";
   createdAt: string;
   updatedAt: string;
 }
@@ -1058,7 +1062,7 @@ export interface AccountAutomation {
 export type CreateAutomationInput = Omit<
   AccountAutomation,
   "id" | "createdAt" | "updatedAt" | "lastScheduledAt" | "schedule" | "webhookUrl"
-> & { schedule?: AutomationSchedule };
+> & { schedule?: AutomationSchedule; webhookSecret?: string };
 
 export interface AccountAutomationRun {
   id: string;
@@ -1130,7 +1134,7 @@ export function rotateAutomationWebhook(
 export function updateAutomation(
   store: LocalStore,
   id: string,
-  patch: Partial<AccountAutomation>,
+  patch: Partial<AccountAutomation> & { webhookSecret?: string },
   fetchImpl: typeof fetch = fetch,
 ): Promise<AccountAutomation & { webhookSecret?: string }> {
   return automationRequest(store, `/account/automations/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(patch) }, fetchImpl);

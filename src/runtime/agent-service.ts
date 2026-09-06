@@ -106,6 +106,8 @@ interface ServiceSession {
   invokeSeq: number;
   pendingInvokes: Map<number, (result: ToolResult) => void>;
   lastSent: MirrorState;
+  /** End events can arrive before an SDK clears its streaming getter. */
+  turnEnded?: boolean;
   disposed: boolean;
   /** Wall-clock of the last activity (create/attach/forwarded event, and the
    *  moment of detach) — the idle-reaper's anchor for a detached session. */
@@ -432,6 +434,8 @@ export class AgentService<H = ReturnType<typeof setTimeout>> {
 
   private forward(svc: ServiceSession, event: RuntimeEvent): void {
     svc.lastActiveAt = this.now(); // any runtime event is activity (reaper anchor)
+    if (event.type === "agent_start" || event.type === "turn_start") svc.turnEnded = false;
+    if (event.type === "agent_end") svc.turnEnded = true;
     const conn = svc.conn;
     if (!conn) return; // detached: the daemon re-syncs full state on attach
     // agent_end is the boundary the daemon's post-turn logic reads (usage
@@ -466,6 +470,9 @@ export class AgentService<H = ReturnType<typeof setTimeout>> {
   private snapshotDelta(svc: ServiceSession, authoritative = false): PartialSnapshot | undefined {
     const s = svc.session;
     const now = this.mirror(s);
+    // Lifecycle events own the wire state, not the ordering of SDK cleanup.
+    // Keep late metadata events from reviving a completed turn, too.
+    if (svc.turnEnded) now.isStreaming = false;
     const prev = svc.lastSent;
     const delta: PartialSnapshot = {};
     let changed = false;
@@ -485,7 +492,7 @@ export class AgentService<H = ReturnType<typeof setTimeout>> {
     return {
       sessionId: s.id,
       cwd: s.cwd,
-      isStreaming: s.isStreaming,
+      isStreaming: !svc.turnEnded && s.isStreaming,
       sessionFile: s.sessionFile ?? null,
       name: s.getName() ?? null,
       currentModel: s.getCurrentModel() ?? null,

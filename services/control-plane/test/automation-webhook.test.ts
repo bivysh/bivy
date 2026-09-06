@@ -275,6 +275,37 @@ async function main() {
   const staleFire = await trigger(port, auto.body.webhookUrl, rot.body.webhookSecret, evtRaw, "evt-stale");
   expect(staleFire.status === 401, "the pre-toggle secret no longer signs deliveries");
 
+  // Custom names and write-only values work with HMAC or static headers.
+  const ownSecret = "my-provider-secret-with-at-least-32-characters";
+  const own = await json(port, "POST", "/account/automations", {
+    name: "Provider authentication", trigger: "webhook", templateCiphertext: "bivy-room-v1:node-x:opaque",
+    nodeLabel: "bivy/runner", webhookHeader: "X-Provider-Signature", webhookSecret: ownSecret,
+  }, token);
+  expect(own.status === 201 && own.body.webhookSecret === ownSecret && own.body.webhookHeader === "x-provider-signature", "create accepts a user-supplied secret and header name");
+  const ownUrl = own.body.webhookUrl.replace(/^https?:\/\/[^/]+/, `http://localhost:${port}`);
+  const deliver = (header: string, value: string, key: string) => fetch(ownUrl, {
+    method: "POST", headers: { "content-type": "application/json", [header]: value, "x-bivy-idempotency-key": key }, body: evtRaw,
+  });
+  const digest = `sha256=${createHmac("sha256", ownSecret).update(evtRaw).digest("hex")}`;
+  expect((await deliver("X-Provider-Signature", digest, "own-hmac")).status === 202, "custom HMAC header authenticates");
+  expect((await deliver("x-bivy-signature-256", digest, "wrong-header")).status === 401, "the default header cannot bypass the configured header");
+  expect((await deliver("X-Provider-Signature", ownSecret, "not-a-signature")).status === 401, "HMAC mode never accepts the raw secret");
+  const staticValue = "Bearer user-selected-header-value-long-enough";
+  const staticSaved = await json(port, "PUT", `/account/automations/${own.body.id}`, {
+    webhookAuthMode: "header", webhookHeader: "Authorization", webhookSecret: staticValue,
+  }, token);
+  expect(staticSaved.status === 200 && staticSaved.body.webhookSecret === staticValue, "update accepts a custom static header value");
+  expect((await deliver("Authorization", staticValue, "static-value")).status === 202, "the exact custom header value authenticates");
+  expect((await deliver("Authorization", "wrong", "static-wrong")).status === 401, "wrong static header values are rejected");
+  const ownRead = (await json(port, "GET", "/account/automations", undefined, token)).body.find((d: any) => d.id === own.body.id);
+  expect(ownRead.webhookAuthMode === "header" && ownRead.webhookHeader === "authorization" && !ownRead.webhookSecret, "read preserves mode/name without leaking the secret");
+  const ownRotate = await json(port, "POST", `/account/automations/${own.body.id}/webhook/rotate`, undefined, token);
+  expect((await deliver("Authorization", staticValue, "static-old")).status === 401, "rotation invalidates a custom static secret");
+  expect((await deliver("Authorization", ownRotate.body.webhookSecret, "static-new")).status === 202, "rotation preserves the custom header and mode");
+  for (const patch of [{ webhookHeader: "x-bad\r\ninjected" }, { webhookHeader: "Content-Length" }, { webhookSecret: "short" }, { webhookAuthMode: "invalid" }]) {
+    const invalid = await json(port, "PUT", `/account/automations/${own.body.id}`, patch, token);
+    expect(invalid.status === 400, "invalid authentication configuration is rejected");
+  }
   console.log("\nAll automation webhook checks passed.");
 }
 

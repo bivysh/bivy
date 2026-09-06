@@ -118,8 +118,12 @@ context. Senders that need Bivy routing fields can opt into this closed envelope
 
 `instruction` is required in the envelope. The other envelope fields are
 optional; `metadata` accepts at most 20 bounded scalar values and must not contain
-secrets. Signing can be disabled for providers that cannot set custom headers;
-when enabled, requests require `X-Bivy-Signature-256: sha256=<hex HMAC>`.
+secrets. Authentication can be disabled for providers that cannot set custom
+headers. The default is HMAC-SHA256 using `X-Bivy-Signature-256: sha256=<hex HMAC>`.
+Webhook-triggered automations may instead configure a custom header name and/or
+secret, or explicitly choose a static secret header (constant-time comparison).
+Static headers do not bind the credential to the payload; HMAC is recommended.
+Secrets remain write-only except for one-time create/replacement/rotation responses.
 Responses are stable:
 `202 accepted`, `200 duplicate`, `401 invalid_signature`, `410 disabled`,
 `413 payload_too_large`, and `429 quota_exhausted`.

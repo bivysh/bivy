@@ -49,6 +49,10 @@ import {
   type WebhookTemplate,
 } from "./automationTemplates.js";
 import { WorkQueueSetupSheet, type SourceSetupFocus } from "./WorkQueueSetupSheet.js";
+import { githubSourceStatus, githubMentionHandles } from "./githubSource.js";
+import { WebhookAuthFields } from "./WebhookAuthFields.js";
+import { GithubTriggerAccess } from "./GithubTriggerAccess.js";
+import { RepositoryEventFilter } from "./RepositoryEventFilter.js";
 import { GithubQueuePanel } from "./GithubQueue.js";
 import { RulesetsPanel } from "./Rulesets.js";
 import { QueueRoutingSection } from "./QueueRouting.js";
@@ -277,28 +281,6 @@ function emptySources(): SourcesSnapshot {
   return { github: null, linear: null, slack: null, nodes: [], hosted: null };
 }
 
-function githubSourceStatus(gh: GithubAppInfo | null, hostedReady = false): { tone: "on" | "off" | "warn"; label: string; detail: string } {
-  if (!gh?.connected || !gh.apps?.length) {
-    return { tone: "off", label: "Not connected", detail: "Connect a GitHub App to run issue and CI automations." };
-  }
-  const installed = gh.apps.some((a) => a.installed || (a.installCount ?? 0) > 0);
-  const served = gh.apps.some((a) => a.servedBy?.online);
-  const count = gh.apps.reduce((n, a) => n + (a.installCount ?? (a.installed ? 1 : 0)), 0);
-  if (!installed) {
-    return { tone: "warn", label: "App created · not installed", detail: "Install the app on at least one repository." };
-  }
-  if (hostedReady) return { tone: "on", label: `Installed${count ? ` · ${count} repo(s)` : ""} · ephemeral ready`, detail: "Hosted ephemeral execution can claim work without a persistent node." };
-  if (!served && !gh.apps.some((a) => a.servedBy)) {
-    return { tone: "warn", label: `Installed${count ? ` · ${count} repo(s)` : ""} · no machine`, detail: "No machine is serving the app key yet." };
-  }
-  const online = served ? "online" : "offline";
-  return {
-    tone: served ? "on" : "warn",
-    label: `${count || gh.apps.length} repo(s) · machine ${online}`,
-    detail: "Issues, @mentions, and (when enabled) Actions failures can start sessions.",
-  };
-}
-
 function linearSourceStatus(lin: LinearHook | null): { tone: "on" | "off" | "warn"; label: string; detail: string } {
   if (!lin) return { tone: "off", label: "Not connected", detail: "Connect Linear to turn labeled issues into sessions." };
   if (lin.enabled === false) return { tone: "warn", label: "Needs secret", detail: "Webhook URL exists — finish with Linear's signing secret." };
@@ -325,11 +307,15 @@ function sourceAutomationChip(
 ): { tone: "on" | "off" | "warn"; label: string } {
   const executorReady = sources.nodes.some((node) => node.online) || Boolean(sources.hosted?.execution.ready);
   if (item.trigger === "github" || item.trigger === "github_ci") {
-    const gh = githubSourceStatus(sources.github, Boolean(sources.hosted?.execution.ready));
+    const gh = githubSourceStatus(sources.github);
     if (gh.tone === "off") return { tone: "warn", label: item.enabled ? "Needs GitHub" : "Draft · needs GitHub" };
     if (gh.tone === "warn") return { tone: "warn", label: item.enabled ? gh.label : `Draft · ${gh.label}` };
     if (!item.enabled) return { tone: "off", label: "Paused" };
     if (!executorReady) return { tone: "warn", label: "Needs executor" };
+    const apps = sources.github?.apps.filter((app) => !item.appId || app.appId === item.appId) ?? [];
+    if (!apps.some((app) => app.central || (app.hosted && sources.hosted?.execution.ready) || app.servedBy?.online)) {
+      return { tone: "warn", label: "App connected · needs serving machine" };
+    }
     if (item.trigger === "github_ci") return { tone: "on", label: "Active · verify workflow_run" };
     return { tone: "on", label: "Active" };
   }
@@ -390,6 +376,8 @@ interface Draft {
   approvalMode: "never" | "risky" | "always" | "autonomous";
   sandbox: "read-only" | "workspace-write" | "danger-full-access";
   requireSigning: boolean;
+  webhookHeader: string;
+  webhookAuthMode: "hmac" | "header";
 }
 
 function emptyDraft(nodeId: string): Draft {
@@ -416,6 +404,8 @@ function emptyDraft(nodeId: string): Draft {
     approvalMode: "autonomous",
     sandbox: "workspace-write",
     requireSigning: true,
+    webhookHeader: "x-bivy-signature-256",
+    webhookAuthMode: "hmac",
   };
 }
 
@@ -672,7 +662,7 @@ export function AutomationsView({
       await refresh();
 
       if (needsGithub) {
-        openSetup(template.trigger === "github_ci" ? "github" : "work-queue");
+        openSetup("github");
         setNotice({
           tone: "info",
           title: `${template.title} saved as a draft`,
@@ -790,6 +780,8 @@ export function AutomationsView({
       hasTrigger: true,
       trigger: item.trigger === "webhook" ? "webhook" : "schedule",
       requireSigning: item.trigger === "webhook" ? item.requireSigning !== false : base.requireSigning,
+      webhookHeader: item.webhookHeader || base.webhookHeader,
+      webhookAuthMode: item.webhookAuthMode || base.webhookAuthMode,
       nodeId,
       repo: item.repo || "",
       runtimeId: item.runtimeId || "",
@@ -872,7 +864,7 @@ export function AutomationsView({
       await refresh();
       setNotice({
         tone: "warn",
-        title: "New signing secret — copy it now",
+        title: "New webhook secret — copy it now",
         body: "It is only shown once. The previous secret stops working immediately.",
       });
     } catch (e) { setError(String((e as Error).message || e)); }
@@ -1052,7 +1044,7 @@ export function AutomationsView({
             without making three setup cards the first thing on every visit. */}
         <AutomationSourcesPanel
           sources={[
-            { name: "GitHub", status: ghStatus, onClick: () => openSetup(ghStatus.tone === "on" ? "github" : "work-queue") },
+            { name: "GitHub", status: ghStatus, onClick: () => openSetup("github") },
             { name: "Linear", status: linStatus, onClick: () => openSetup("linear") },
             { name: "Slack", status: slackStatus, onClick: () => openSetup("slack") },
           ]}
@@ -1142,7 +1134,7 @@ export function AutomationsView({
                           <div className="reveal-row">
                             <code className="reveal-value">{rotated.secret}</code>
                             <button type="button" className="btn sm" onClick={(event) => { event.stopPropagation(); void copyText(rotated.secret); }}>Copy secret</button>
-                            <span className="settings-hint">New signing secret — shown once.</span>
+                            <span className="settings-hint">New webhook secret — shown once.</span>
                           </div>
                         )}
                       </div>
@@ -1310,6 +1302,7 @@ export function AutomationsView({
             }
           }}
           onSelectSource={(source, current) => { void continueWithSource(source, current).catch((e) => setError(String(e))); }}
+          onOpenSourceSetup={openSetup}
         />
       )}
 
@@ -1331,9 +1324,7 @@ export function AutomationsView({
             setNotice({ tone: "ok", title: "Automation updated" });
           }}
           onConnect={() => {
-            const focus: SourceSetupFocus = sourceEdit.trigger === "linear" ? "linear" : "work-queue";
-            setSourceEdit(null);
-            openSetup(focus);
+            openSetup(sourceEdit.trigger === "linear" ? "linear" : "github");
           }}
         />
       )}
@@ -1410,20 +1401,14 @@ function SourceAutomationEditor({
   const [model, setModel] = useState(item.model || "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  // Account-wide GitHub setting (same control as Settings → GitHub App).
-  const initialTriggerAccess =
-    sources.github?.apps?.find((a) => a.triggerAccess)?.triggerAccess
-    ?? sources.github?.triggerAccess
-    ?? "everyone";
-  const [triggerAccess, setTriggerAccess] = useState<"everyone" | "contributor" | "collaborator">(initialTriggerAccess);
-  const [triggerAccessDirty, setTriggerAccessDirty] = useState(false);
   const preflight = useAutomationPreflight(item.id || undefined);
 
   const needsConnect =
     (trigger === "github" || trigger === "github_ci") && githubSourceStatus(sources.github).tone === "off"
     || trigger === "linear" && linearSourceStatus(sources.linear).tone === "off";
   const isGithub = trigger === "github" || trigger === "github_ci";
-  const mention = sources.github?.apps?.find((a) => a.mention)?.mention || "bivy";
+  const mentions = githubMentionHandles(sources.github, appId);
+  const mentionText = mentions.length ? mentions.map((handle) => `@${handle}`).join(" or ") : "Connect an app to see its @mention handle";
   const anyEvent = events.issuesLabeled || events.issueMention || events.prLabeled || events.prMention || events.workflowFailed;
 
   const parseList = (raw: string): string[] | undefined => {
@@ -1489,9 +1474,6 @@ function SourceAutomationEditor({
           trigger,
           enabled: patch.enabled ?? true,
         });
-      }
-      if (isGithub && triggerAccessDirty) {
-        await controller.setGithubAppTriggerAccess(triggerAccess);
       }
       await onSaved();
     } catch (e) {
@@ -1594,11 +1576,11 @@ function SourceAutomationEditor({
               </p>
               <label className="autom-check-row">
                 <input type="checkbox" checked={events.issuesLabeled} onChange={() => toggleEvent("issuesLabeled")} />
-                <span>Issue labeled <span className="settings-hint">(uses label filter below)</span></span>
+                <span>Issue labeled <code>{labelsText.trim() || "bivy"}</code></span>
               </label>
               <label className="autom-check-row">
                 <input type="checkbox" checked={events.issueMention} onChange={() => toggleEvent("issueMention")} />
-                <span>@mention on issue or PR conversation <code>@{mention}</code></span>
+                <span>Issue or PR conversation containing <code>{mentionText}</code></span>
               </label>
               <label className="autom-check-row">
                 <input type="checkbox" checked={events.prLabeled} onChange={() => toggleEvent("prLabeled")} />
@@ -1606,7 +1588,7 @@ function SourceAutomationEditor({
               </label>
               <label className="autom-check-row">
                 <input type="checkbox" checked={events.prMention} onChange={() => toggleEvent("prMention")} />
-                <span>@mention on a PR review comment</span>
+                <span>PR review comment containing <code>{mentionText}</code></span>
               </label>
               <label className="autom-check-row">
                 <input type="checkbox" checked={events.workflowFailed} onChange={() => toggleEvent("workflowFailed")} />
@@ -1678,40 +1660,8 @@ function SourceAutomationEditor({
             </div>
           )}
 
-          <div className="settings-field">
-            <label className="field-label" htmlFor="src-repos">Repository allowlist (optional)</label>
-            <input
-              id="src-repos"
-              className="picker-search"
-              value={reposText}
-              onChange={(e) => setReposText(e.target.value)}
-              placeholder="owner/repo, owner/other"
-            />
-            <p className="settings-hint">Empty = all installed repos. Use owner/name slugs.</p>
-          </div>
-
-          {isGithub && !needsConnect && (
-            <div className="settings-field">
-              <label className="field-label" htmlFor="src-trigger-access">Who can trigger runs</label>
-              <select
-                id="src-trigger-access"
-                className="picker-search"
-                value={triggerAccess}
-                onChange={(e) => {
-                  setTriggerAccess(e.target.value as "everyone" | "contributor" | "collaborator");
-                  setTriggerAccessDirty(true);
-                }}
-              >
-                <option value="everyone">Everyone — any GitHub user (default)</option>
-                <option value="contributor">Contributors — prior merged contribution, or higher</option>
-                <option value="collaborator">Collaborators only — push access</option>
-              </select>
-              <p className="settings-hint">
-                On a public repo, anyone can open an issue or comment. Restrict who can start a run via{" "}
-                <code>@{mention}</code> or a label. Account-wide — applies to every GitHub App.
-              </p>
-            </div>
-          )}
+          {isGithub && sources.github?.connected && <GithubTriggerAccess info={sources.github} />}
+          <RepositoryEventFilter value={reposText} onChange={setReposText} github={isGithub} />
 
           {(trigger === "linear" || trigger === "github_ci") && (
             <div className="settings-field">
@@ -1817,6 +1767,7 @@ function AutomationEditor({
   onCancel,
   onSaved,
   onSelectSource,
+  onOpenSourceSetup,
 }: {
   state: AppState;
   sources: SourcesSnapshot;
@@ -1832,8 +1783,14 @@ function AutomationEditor({
   onCancel: () => void;
   onSaved: (result?: SaveResult) => void;
   onSelectSource: (source: "github" | "linear", current: Draft) => void;
+  onOpenSourceSetup: (focus: SourceSetupFocus) => void;
 }) {
   const [d, setD] = useState<Draft>(initial);
+  // Write-only: never include this value in persisted/encrypted instruction drafts.
+  const [customWebhookSecret, setCustomWebhookSecret] = useState("");
+  const mentions = githubMentionHandles(sources.github, d.appId);
+  const mentionText = mentions.length ? mentions.map((handle) => `@${handle}`).join(" or ") : "@mention (connect an app to see its handle)";
+  const labelText = d.labels.split(",").map((label) => label.trim()).filter(Boolean).join(", ") || "bivy";
   const [pickerOpen, setPickerOpen] = useState(false);
   const [nlError, setNlError] = useState("");
   const [error, setError] = useState("");
@@ -1928,6 +1885,7 @@ function AutomationEditor({
   if (d.hasTrigger && !scheduleOk) missing.push("a valid schedule");
   if (d.hasTrigger && !repoOk) missing.push("a repository");
   if (d.hasTrigger && d.trigger === "github" && !Object.values(d.githubEvents).some(Boolean)) missing.push("a GitHub event");
+  if (d.hasTrigger && d.trigger === "github" && githubSourceStatus(sources.github).tone !== "on") missing.push("a connected GitHub App");
   if (!d.instructions.trim()) missing.push("instructions");
   if (!d.nodeId) missing.push("a machine");
   else if (!controller.local.keys()[d.nodeId]) missing.push("a paired machine (encryption key missing)");
@@ -2001,7 +1959,13 @@ function AutomationEditor({
         allowDangerous,
         enabled: existing?.enabled ?? true,
         trigger: d.trigger,
-        ...(d.trigger === "webhook" ? { requireSigning: d.requireSigning } : {}),
+        ...(d.trigger === "webhook" ? {
+          requireSigning: d.requireSigning,
+          ...(d.requireSigning ? {
+            webhookHeader: d.webhookHeader,
+            webhookAuthMode: d.webhookAuthMode,
+          } : {}),
+        } : {}),
         repo: repo || (d.id ? "" : undefined),
         ...(d.trigger === "github" || d.trigger === "linear" ? {
           labels,
@@ -2033,8 +1997,12 @@ function AutomationEditor({
         return;
       }
 
+      // Only the authenticated save request receives the write-only secret,
+      // never simulation/preflight payloads.
+      const secretInput = d.trigger === "webhook" && d.requireSigning && customWebhookSecret
+        ? { webhookSecret: customWebhookSecret } : {};
       if (d.id) {
-        const result = await updateAutomation(controller.local, d.id, input);
+        const result = await updateAutomation(controller.local, d.id, { ...input, ...secretInput });
         // Turning signing on for a previously unsigned webhook mints a secret
         // that is disclosed only in this response — show it like a create.
         if (d.trigger === "webhook" && result.webhookSecret) {
@@ -2043,7 +2011,7 @@ function AutomationEditor({
           onSaved({ kind: "updated", name: d.name.trim(), id: d.id });
         }
       } else {
-        const result = await createAutomation(controller.local, input);
+        const result = await createAutomation(controller.local, { ...input, ...secretInput });
         if (d.trigger === "webhook" && result.webhookSecret) {
           setCreated({ url: result.webhookUrl ?? "", secret: result.webhookSecret, name: d.name.trim() });
         } else if (d.trigger === "webhook") {
@@ -2109,7 +2077,7 @@ function AutomationEditor({
           <>
             <div className="wizard-body">
               <div className="banner inline" data-tone="ok" role="status">
-                <strong>{created.updated ? `“${created.name}” now requires signing.` : `“${created.name}” is live.`}</strong> Send signed events to this URL. Copy the signing secret now — it isn&apos;t shown again.
+                <strong>{created.updated ? `“${created.name}” authentication updated.` : `“${created.name}” is live.`}</strong> Send authenticated events to this URL. Copy the webhook secret now — it isn&apos;t shown again.
               </div>
               <div className="settings-field">
                 <label className="field-label">Webhook URL</label>
@@ -2119,14 +2087,14 @@ function AutomationEditor({
                 </div>
               </div>
               <div className="settings-field">
-                <label className="field-label">Signing secret</label>
+                <label className="field-label">{d.webhookAuthMode === "header" ? "Header value" : "Signing secret"}</label>
                 <div className="reveal-row">
                   <code className="reveal-value">{created.secret}</code>
                   <button type="button" className="btn sm" onClick={() => void navigator.clipboard?.writeText(created.secret)}>Copy</button>
                 </div>
               </div>
               <p className="settings-hint">
-                Sign each request with <code>X-Bivy-Signature-256: sha256=HMAC-SHA256(body)</code> and a unique <code>X-Bivy-Idempotency-Key</code>.
+                {d.webhookAuthMode === "header" ? <>Send <code>{d.webhookHeader}</code> with the exact header value above.</> : <>Sign the raw request body with this secret and send <code>{d.webhookHeader}: sha256=HMAC-SHA256(body)</code>.</>} Use a unique <code>X-Bivy-Idempotency-Key</code> per event.
               </p>
             </div>
             <div className="wizard-actions">
@@ -2281,31 +2249,40 @@ function AutomationEditor({
                     )}
                     <label className="settings-toggle-row webhook-signing-toggle">
                       <span className="settings-toggle-text">
-                        <strong className="settings-toggle-title">Require signing headers</strong>
+                        <strong className="settings-toggle-title">Require webhook authentication</strong>
                         <small className="muted">Recommended for authenticating webhook requests.</small>
                       </span>
                       <input className="sr-only" type="checkbox" checked={d.requireSigning} onChange={(event) => set("requireSigning", event.target.checked)} />
                       <span className={`settings-toggle${d.requireSigning ? " on" : ""}`} aria-hidden="true"><span className="settings-toggle-knob" /></span>
                     </label>
-                    <p className="settings-hint">
-                      {!d.requireSigning
-                        ? "Requests may be sent without a signing secret or Bivy headers."
-                        : existing?.trigger === "webhook" && existing.requireSigning
-                          ? "Requests must carry Bivy signing headers. Use “Rotate secret” in the automation menu to issue a new secret."
-                          : "You'll get the signed URL and a one-time signing secret after you save."}
-                    </p>
+                    {d.requireSigning ? <WebhookAuthFields
+                      mode={d.webhookAuthMode}
+                      header={d.webhookHeader}
+                      secret={customWebhookSecret}
+                      existing={Boolean(existing?.requireSigning)}
+                      onMode={(mode) => set("webhookAuthMode", mode)}
+                      onHeader={(header) => set("webhookHeader", header)}
+                      onSecret={setCustomWebhookSecret}
+                    /> : <p className="settings-hint">Anyone with this URL can start a run without authentication.</p>}
                   </div>
                 )}
                 {d.hasTrigger && (d.trigger === "github" || d.trigger === "linear") && (
                   <div className="autom-trigger-config">
+                    <div className="card wq-status-card" data-tone="muted">
+                      <strong>{d.trigger === "github" ? githubSourceStatus(sources.github).label : linearSourceStatus(sources.linear).label}</strong>
+                      <p className="settings-hint">{d.trigger === "github" ? "Choose the hosted Bivy App for the easiest setup, or connect your own app. Adding a trigger does not connect an app." : "Connect Linear to receive issue events for this automation."}</p>
+                      <button type="button" className="btn" onClick={() => onOpenSourceSetup(d.trigger === "github" ? "github" : "linear")}>
+                        {d.trigger === "github" ? "Set up or manage GitHub Apps" : "Set up or manage Linear"}
+                      </button>
+                    </div>
                     {d.trigger === "github" && (
                       <div className="settings-field">
                         <div className="autom-field-label">When any of these fire</div>
                         {([
-                          ["issuesLabeled", "Issue labeled"],
-                          ["issueMention", "@mention on an issue or PR conversation"],
-                          ["prLabeled", "Pull request labeled"],
-                          ["prMention", "@mention on a PR review comment"],
+                          ["issuesLabeled", `Issue labeled: ${labelText}`],
+                          ["issueMention", `Issue or PR conversation containing ${mentionText}`],
+                          ["prLabeled", `Pull request labeled: ${labelText}`],
+                          ["prMention", `PR review comment containing ${mentionText}`],
                           ["workflowFailed", "Workflow failed"],
                         ] as const).map(([key, label]) => (
                           <label className="autom-check-row" key={key}>
@@ -2337,7 +2314,7 @@ function AutomationEditor({
                       <div className="settings-field">
                         <label className="field-label" htmlFor="autom-source-labels">Labels</label>
                         <input id="autom-source-labels" className="picker-search" value={d.labels} onChange={(e) => set("labels", e.target.value)} placeholder="bivy" />
-                        <p className="settings-hint">Comma-separated labels that may trigger this automation.</p>
+                        <p className="settings-hint">Any one of these comma-separated labels triggers the selected label events. Empty uses <code>bivy</code>. Mention events do not require a label.</p>
                       </div>
                     )}
                     {d.trigger === "github" && d.githubEvents.workflowFailed && (
@@ -2346,11 +2323,8 @@ function AutomationEditor({
                         <input id="autom-source-workflows" className="picker-search" value={d.workflows} onChange={(e) => set("workflows", e.target.value)} placeholder="CI, Build" />
                       </div>
                     )}
-                    <div className="settings-field">
-                      <label className="field-label" htmlFor="autom-source-repos">Repository allowlist (optional)</label>
-                      <input id="autom-source-repos" className="picker-search" value={d.repos} onChange={(e) => set("repos", e.target.value)} placeholder="owner/repo, owner/other" />
-                      <p className="settings-hint">Empty means every repository where the app is installed.</p>
-                    </div>
+                    {d.trigger === "github" && sources.github?.connected && <GithubTriggerAccess info={sources.github} />}
+                    <RepositoryEventFilter value={d.repos} onChange={(value) => set("repos", value)} github={d.trigger === "github"} />
                   </div>
                 )}
 
@@ -2358,7 +2332,7 @@ function AutomationEditor({
                   <div className="autom-trigger-config">
                     <div className="settings-field">
                       <label className="field-label" htmlFor="autom-repo">
-                        {d.trigger === "schedule" ? "Repository" : "Repository (optional default)"}
+                        {d.trigger === "schedule" ? "Repository" : "Working repository (optional fallback)"}
                       </label>
                       {state.catalogs.repos.length > 0 ? (
                         <select
@@ -2389,7 +2363,7 @@ function AutomationEditor({
                       <p className="settings-hint">
                         {d.trigger === "schedule"
                           ? "The machine clones this repo before the session starts."
-                          : "Used when the webhook event does not include a repo."}
+                          : "Where the agent works if the event does not identify a repository. This does not filter which events can start a run."}
                       </p>
                       {!d.repo && d.trigger === "schedule" && (
                         <p className="schedule-hint warn">

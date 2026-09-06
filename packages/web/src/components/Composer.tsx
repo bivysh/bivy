@@ -735,7 +735,7 @@ export function Composer({
             ref={taRef}
             className="composer-input"
             placeholder={disabled ? disabledHint || "Connecting…" : firstIsolatedRun ? "Describe your first task…" : "Message your agent…"}
-            rows={1}
+            rows={2}
             hidden={Boolean(recording)}
             value={text}
             disabled={disabled}

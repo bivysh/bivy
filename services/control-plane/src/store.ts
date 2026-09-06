@@ -752,10 +752,14 @@ export interface AutomationDefinition {
    *  "github_ci" is a legacy alias for a GitHub job gated on workflow_run failures
    *  — new rows should use trigger=github + `on` rules. */
   trigger?: "schedule" | "webhook" | "manual" | "github" | "linear" | "github_ci";
-  /** HMAC signing secret for a webhook-triggered automation. Set/rotated
-   *  server-side, returned to the client only at create/rotate time, and never
-   *  echoed by list/get responses. */
+  /** HMAC key or static header value for a webhook-triggered automation.
+   *  Generated or user-supplied; returned once on create/replacement/rotation,
+   *  never echoed by list/get responses. */
   webhookSecret?: string;
+  /** Authentication header name; legacy rows use x-bivy-signature-256. */
+  webhookHeader?: string;
+  /** Legacy/default: HMAC-SHA256. header compares a static secret value. */
+  webhookAuthMode?: "hmac" | "header";
   /** Explicit save-time acknowledgement of the autonomous + danger-full-access
    *  combo (mirrors config-as-code's safety.allowDangerous). Without this, the
    *  shared preflight checklist's sandbox_policy check blocks create/update —

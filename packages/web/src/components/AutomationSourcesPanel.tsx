@@ -35,7 +35,7 @@ export function AutomationSourcesPanel({ sources }: { sources: SourceOverview[] 
             <button type="button" className="autom-source-row" onClick={source.onClick} key={source.name}>
               <span className="autom-source-row-copy">
                 <strong>{source.name}</strong>
-                <span>{source.status.tone === "on" ? "Connected" : source.status.label}</span>
+                <span>{source.status.label}</span>
               </span>
               <span className="autom-source-row-cta">{cta}</span>
               <ChevronRightIcon size={16} />
