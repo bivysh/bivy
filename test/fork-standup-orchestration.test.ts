@@ -89,6 +89,15 @@ const opts = (over: Partial<StandUpForkOptions> = {}): StandUpForkOptions => ({
   ...over,
 });
 
+test("native and seeded forks are new-session admissions, not free resumes", async () => {
+  for (const plan of [{ kind: "resume", sessionFile: "/fork.json" }, { kind: "seed", prompt: "Continue" }]) {
+    const { calls, standUp } = harness({ materializeFork: async () => plan as any });
+    await standUp.standUpFork(opts());
+    assert.equal(calls.createSession.length, 1);
+    assert.equal(calls.createSession[0].opts.newSession, true);
+  }
+});
+
 test("oversized dirty state blocks before any clone/session work", async () => {
   const { calls, standUp } = harness();
   const outcome = await standUp.standUpFork(opts({

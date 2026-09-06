@@ -10,8 +10,8 @@
 /**
  * Ephemeral machines: bring-your-own-cloud, short-lived runners (Fly.io,
  * Hetzner, AWS EC2). Product access is controlled by provider onboarding and
- * per-account opt-in. This build flag is only an emergency kill switch: set it
- * explicitly to `0` to hide launch surfaces during an incident.
+ * per-account opt-in. Launch builds leave these surfaces hidden. Operators
+ * can explicitly enable them with VITE_EPHEMERAL_MACHINES_ENABLED=1.
  *
  * Gates every user-facing entry point: the NodeSwitcher "Ephemeral machine…"
  * menu item, the onboarding "Quick ephemeral server" CTA, the Settings
@@ -22,7 +22,7 @@
  * control plane (planAutoProvision and the /api/ephemeral/exec relay).
  */
 export const EPHEMERAL_MACHINES_ENABLED =
-  import.meta.env.VITE_EPHEMERAL_MACHINES_ENABLED !== "0";
+  import.meta.env.VITE_EPHEMERAL_MACHINES_ENABLED === "1";
 
 /**
  * DEBUG: keep a boot-failed ephemeral machine alive instead of letting it

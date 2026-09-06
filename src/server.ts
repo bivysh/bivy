@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import fs from "node:fs";
+import { createRemoteSessionAdmission, RemoteSessionAdmissionError } from "./session/remote-session-admission.js";
 import path from "node:path";
 import os from "node:os";
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -991,6 +992,8 @@ function startOAuthLoginSweeper(): void {
 // `makeActive: false` keeps a background (e.g. issue-triggered) session from
 // stealing the user's focused session; `source` tags where it came from.
 type CreateSessionOptions = {
+  /** Materialized forks open a ref but are new sessions, not resumes. */
+  newSession?: boolean;
   worktree?: boolean | { branch?: string; base?: string };
   makeActive?: boolean;
   source?: string;
@@ -3050,17 +3053,6 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
       });
       return;
     }
-    const remoteSessionRequestId = requestId ?? randomUUID();
-    const sessionAdmission = await admitRelaySessionCreate(remoteSessionRequestId);
-    if (!sessionAdmission.allowed) {
-      relay?.sendEvent({
-        type: "session.error",
-        code: sessionAdmission.code || "remote_session_limit",
-        error: sessionAdmission.error,
-        requestId,
-      });
-      return;
-    }
     let record: SessionRecord;
     try {
       // Deduped by requestId so a client's post-reconnect retry adopts the
@@ -3085,7 +3077,7 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
         return rec;
       });
     } catch (error) {
-      relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
+      relay?.sendEvent({ type: "session.error", requestId, code: error instanceof RemoteSessionAdmissionError ? error.code : undefined, error: error instanceof Error ? error.message : String(error) });
       return;
     }
     // Resolve once from the session's actual, now-known launch facts (final
@@ -3120,7 +3112,11 @@ const RELAY_CLIENT_ID = "relay";
 
 async function handleRelayMessage(msg: ClientMessage) {
   try {
-    const dispatched = await clientCommands.dispatch(msg.kind, msg, relayCtx);
+    const requestId = typeof msg.requestId === "string" && msg.requestId.trim() ? msg.requestId : randomUUID();
+    const dispatched = await remoteSessionAdmission.run(
+      JSON.stringify(["relay", identity.nodeId, msg.kind, requestId]),
+      () => clientCommands.dispatch(msg.kind, msg, relayCtx),
+    );
     if (dispatched.handled) return;
     // Fallthrough for kinds not in RELAY_COMMANDS: terminal.* frames go to the
     // PTY manager; anything else is an unknown client message.
@@ -3355,22 +3351,23 @@ async function modelAuthFetch(pathname: string, init: RequestInit = {}) {
   return fetch(`${sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "")}${pathname}`, { ...init, headers });
 }
 
-async function admitRelaySessionCreate(idempotencyKey: string): Promise<{ allowed: true } | { allowed: false; error: string; code?: string }> {
-  // Self-hosted/direct deployments without an account extension stay unrestricted:
-  // the control plane answers allowed when no deployment extension is configured.
+const remoteSessionAdmission = createRemoteSessionAdmission(async (idempotencyKey) => {
+  // Only remote scopes reach this callback. Self-hosted control planes answer
+  // allowed without an extension; losing enrollment mid-launch must fail closed.
   const res = await modelAuthFetch("/node/policy/check", {
     method: "POST",
     body: JSON.stringify({ operation: "session.create", idempotencyKey }),
+    signal: AbortSignal.timeout(10_000),
   });
-  if (!res) return { allowed: true };
+  if (!res) return { allowed: false, code: "extension_unavailable", reason: "Reconnect this machine before starting a new remote session." };
   const decision = await res.json().catch(() => ({})) as { allowed?: boolean; reason?: string; code?: string; error?: string };
-  if (res.ok && decision.allowed !== false) return { allowed: true };
+  if (res.ok && decision.allowed === true) return { allowed: true };
   return {
     allowed: false,
     code: decision.code,
-    error: decision.reason || decision.error || "This account has reached its remote session allowance.",
+    reason: decision.reason || decision.error || "This account has reached its remote session allowance.",
   };
-}
+});
 
 // Debounced model-auth sync trigger. A relay wake (`work.available`) fires this
 // so peers answer a new node's vault-key request promptly (event-driven) instead
@@ -5118,6 +5115,12 @@ function lastUserMessageText(record: SessionRecord): string {
 }
 
 async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidencePatch) => Promise<void>, signal: AbortSignal) {
+  // Stable across delivery/lease retries and node changes. Follow-ups that resume
+  // a session do not consume a slot; any fallback that creates one does.
+  return remoteSessionAdmission.run(JSON.stringify(["automation", item.id]), () => executeWorkItem(item, report, signal));
+}
+
+async function executeWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidencePatch) => Promise<void>, signal: AbortSignal) {
   if (signal.aborted) throw signal.reason ?? new Error("Run cancelled");
   // Scheduled, manual, and webhook-triggered automations carry the operator's
   // instructions as an E2E template (`bivy-room-v1:<node>:<ciphertext>`) only the
@@ -8152,6 +8155,8 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
   if (allowedAgents?.length && !allowedAgents.includes(rt.id)) {
     throw new Error(`Repository policy does not allow agent ${rt.id}`);
   }
+
+  await remoteSessionAdmission.admit({ resume: Boolean(requestedSessionFile) && !opts.newSession, internal: opts.ephemeral });
 
   // Optional git-worktree isolation (fresh sessions only). The agent then runs in
   // the worktree, and the A1 boundary confines writes there.
