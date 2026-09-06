@@ -199,6 +199,35 @@ async function main() {
   expect(listA.some((i: any) => i.repo === "acme/rocket"), "the work item landed in the BOUND account's queue");
   expect(!listB.some((i: any) => i.repo === "acme/rocket"), "no work item leaked into another account's queue");
 
+  // Custom trigger labels must reach automation matching before queue routing.
+  const custom = await json(port, "POST", "/account/automations", {
+    name: "Custom GitHub labels", trigger: "github", enabled: true,
+    templateCiphertext: "bivy-room-v1:node-a:opaque", repos: ["acme/rocket"],
+    labels: ["ready for review"],
+    on: [
+      { event: "issues", actions: ["labeled"], labels: ["ready for review"] },
+      { event: "pull_request", actions: ["labeled"], labels: ["ready for review"] },
+    ],
+  }, tokenA);
+  expect(custom.status === 201, "custom label rules can be saved on an automation trigger");
+  for (const event of ["issues", "pull_request"]) {
+    const labeled = {
+      ...issuePayload, issue: undefined, label: { name: "ready for review" },
+      [event === "issues" ? "issue" : "pull_request"]: { ...issuePayload.issue, number: event === "issues" ? 8 : 9, labels: [{ name: "ready for review" }] },
+    };
+    const fired = await deliver(port, WEBHOOK_SECRET, event, labeled, `custom-${event}`);
+    expect(fired.body.enqueued === true && fired.body.definitionId === custom.body.id, `${event}: a custom label triggers without bivy or a mention`);
+    const unrelated = await deliver(port, WEBHOOK_SECRET, event, { ...labeled, label: { name: "unrelated" } }, `unrelated-${event}`);
+    expect(unrelated.body.enqueued === false, `${event}: adding another label does not re-fire an existing trigger label`);
+    const filtered = await deliver(port, WEBHOOK_SECRET, event, { ...labeled, repository: { full_name: "acme/other" } }, `filtered-${event}`);
+    expect(filtered.body.enqueued === false, `${event}: repository filters still apply to custom labels`);
+  }
+  const customRead = (await json(port, "GET", "/account/automations", undefined, tokenA)).body.find((definition: any) => definition.id === custom.body.id);
+  expect(customRead.on[0].labels[0] === "ready for review", "custom trigger labels survive reopening the automation");
+  await json(port, "PUT", `/account/automations/${custom.body.id}`, { enabled: false }, tokenA);
+  const paused = await deliver(port, WEBHOOK_SECRET, "issues", { ...issuePayload, label: { name: "ready for review" }, issue: { ...issuePayload.issue, labels: [{ name: "ready for review" }] } }, "custom-paused");
+  expect(paused.body.enqueued === false, "pausing the custom-label automation stops intake");
+
   const unbound = await deliver(port, WEBHOOK_SECRET, "issues", { ...issuePayload, installation: { id: 99 } }, "delivery-2");
   expect(unbound.status === 200 && unbound.body.enqueued === false && unbound.body.reason === "unbound_installation", "an unbound installation's event is acked and dropped");
 

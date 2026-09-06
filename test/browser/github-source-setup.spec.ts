@@ -77,13 +77,15 @@ async function openSetup(page: Page, theme: string, focus = "github", apps: Arra
 for (const theme of ["light", "dark"]) {
   test(`hosted GitHub setup is separate, actionable, and explicit (${theme})`, async ({ page }, testInfo) => {
     await openSetup(page, theme);
-    const dialog = page.getByRole("dialog", { name: "GitHub App setup" });
+    const dialog = page.getByRole("dialog", { name: "Manage GitHub Apps" });
     await expect(dialog.getByText("Connected", { exact: true })).toBeVisible();
     await expect(dialog).not.toContainText("Linear");
     await expect(dialog).not.toContainText("Work issues into PRs");
     await expect(dialog).not.toContainText("No GitHub App yet");
     await expect(dialog).toContainText("@bivy-hosted");
-    await expect(dialog).toContainText("Default label trigger: bivy");
+    await expect(dialog).toContainText("Labels are configurable per automation");
+    await expect(dialog.getByLabel("Trigger labels", { exact: true })).toHaveCount(0);
+    await expect(dialog).not.toContainText("Default label trigger");
     const manage = dialog.getByRole("link", { name: "Configure / uninstall · acme" });
     await expect(manage).toHaveAttribute("href", "https://github.com/organizations/acme/settings/installations/42");
     await manage.focus();
@@ -148,18 +150,123 @@ test("GitHub trigger setup offers hosted and custom apps without losing the draf
   await expect(page.getByRole("textbox", { name: "Name", exact: true })).toHaveValue("Keep this draft");
 });
 
+async function openSessionComposer(page: Page, theme: string) {
+  const fixture = `/model-refresh-${theme}`;
+  const html = await server.transformIndexHtml(fixture, `<html data-theme="${theme}"><head><meta name="viewport" content="width=device-width, initial-scale=1" /></head><body><div id="root"></div><script type="module">
+    import React from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { Composer } from '/src/components/Composer.tsx';
+    import { controller } from '/src/store/controller.ts';
+    import '/@fs/${path.resolve("packages/ui/tokens.css")}';
+    import '/src/styles.css';
+    import '/src/ux-cleanup.css';
+    const store = controller.store;
+    window.commands = [];
+    controller.send = (command) => {
+      window.commands.push(command);
+      if (command.kind === 'models.list' && command.sessionId === 'live') {
+        const current = { id: 'gpt-5.4', label: 'GPT-5.4', provider: 'openai-codex' };
+        store.apply({ type: 'models.list', sessionId: 'live', runtimeId: 'pi', current, models: [current] });
+      }
+    };
+    // Deliver through the same reducer → model reconciliation order as the
+    // controller's transport handler, without a real agent/network dependency.
+    window.deliver = (event) => { store.apply(event); controller.maybeRefreshModelsForRuntime(event); };
+    store.apply({ type: 'sessions.list', sessions: [{ sessionId: 'live', runtimeId: 'pi', status: 'live' }] });
+    store.apply({ type: 'runtimes.list', runtimes: [{ id: 'pi', name: 'Pi' }], current: { id: 'pi', name: 'Pi' } });
+    store.beginOpen('live');
+    function App() {
+      const state = React.useSyncExternalStore((listener) => store.subscribe(listener), () => store.getState());
+      return React.createElement(Composer, { state, disabled: false, working: false, onSend: () => {}, onAbort: () => {} });
+    }
+    createRoot(document.getElementById('root')).render(React.createElement(App));
+  </script></body></html>`);
+  await page.route(`${origin}${fixture}`, (route) => route.fulfill({ contentType: "text/html", body: html }));
+  await page.goto(`${origin}${fixture}`);
+}
+
 for (const theme of ["light", "dark"]) {
+  test(`session model resolves without opening the picker (${theme})`, async ({ page }, testInfo) => {
+    await openSessionComposer(page, theme);
+    await expect(page.locator(".model-pill")).toBeVisible();
+    await page.evaluate(() => {
+      const fixture = window as unknown as { deliver: (event: unknown) => void };
+      // A reconnect can list the node's fallback session, not the one on screen.
+      fixture.deliver({ type: "models.list", sessionId: "other", models: [], current: null });
+      fixture.deliver({ type: "session.history", sessionId: "live", runtimeId: "pi", messages: [] });
+    });
+    await expect(page.locator(".model-pill")).toHaveText("GPT-5.4");
+    expect(await page.evaluate(() => (window as unknown as { commands: unknown[] }).commands)).toContainEqual({ kind: "models.list", sessionId: "live" });
+    await page.screenshot({ path: testInfo.outputPath(`session-model-${theme}.png`) });
+    await page.locator(".model-pill").click();
+    await expect(page.getByRole("dialog", { name: "Model", exact: true })).toContainText("GPT-5.4");
+    await expect(page.locator(".model-pill")).toHaveText("GPT-5.4");
+    // Once known, repeated history updates need not re-fetch the model catalog.
+    const count = await page.evaluate(() => (window as unknown as { commands: unknown[] }).commands.length);
+    await page.evaluate(() => (window as unknown as { deliver: (event: unknown) => void }).deliver({ type: "session.history", sessionId: "live", runtimeId: "pi", messages: [] }));
+    expect(await page.evaluate(() => (window as unknown as { commands: unknown[] }).commands.length)).toBe(count);
+  });
+
   test(`automation trigger shows actual selected app handles and labels (${theme})`, async ({ page }, testInfo) => {
     await openEditor(page, theme, "GitHub");
+    await expect(page.locator(".autom-trigger-config").getByText("Hosted + custom apps connected", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Manage GitHub Apps", exact: true })).toBeVisible();
+    await expect(page.getByText("Choose the hosted Bivy App for the easiest setup", { exact: false })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Set up or manage GitHub Apps" })).toHaveCount(0);
     await expect(page.getByRole("checkbox", { name: /conversation containing @bivy-hosted or @acme-bot/ })).toBeVisible();
     await expect(page.getByRole("combobox", { name: "Who can trigger with a GitHub mention?" })).toBeVisible();
     await expect(page.getByLabel("Limit to these repositories (optional)")).toBeVisible();
     await expect(page.getByText("This filters events; it does not grant repository access.", { exact: false })).toBeVisible();
     await page.getByLabel("GitHub App source", { exact: true }).selectOption("456");
     await expect(page.getByRole("checkbox", { name: "Issue or PR conversation containing @acme-bot", exact: true })).toBeVisible();
-    await page.getByLabel("Labels", { exact: true }).fill("fix-it, ship-it");
-    await expect(page.getByRole("checkbox", { name: "Issue labeled: fix-it, ship-it", exact: true })).toBeVisible();
+    const labels = page.getByLabel("Trigger labels", { exact: true });
+    await expect(labels).toHaveValue("bivy");
+    await labels.fill("fix-it, ready for review");
+    await expect(page.getByRole("checkbox", { name: "Issue labeled: fix-it, ready for review", exact: true })).toBeVisible();
+    await labels.fill("");
+    await expect(page.getByRole("checkbox", { name: "Issue labeled: bivy", exact: true })).toBeVisible();
+    await labels.fill("fix-it, ready for review");
     await page.screenshot({ path: testInfo.outputPath(`github-trigger-${theme}.png`) });
+  });
+
+  test(`long automation prompt keeps the cursor in view while typing (${theme})`, async ({ page }, testInfo) => {
+    // A short viewport models the space above a mobile keyboard. Playwright
+    // cannot open a real iOS keyboard, but this reproduces the scroll clamp.
+    await page.setViewportSize({ width: testInfo.project.name === "mobile" ? 390 : 1000, height: 440 });
+    await openEditor(page, theme, "GitHub");
+    const prompt = page.getByRole("textbox", { name: "Instructions", exact: true });
+    await prompt.fill(Array.from({ length: 100 }, (_, i) => `Line ${i}`).join("\n"));
+    const before = await prompt.evaluate((input: HTMLTextAreaElement) => {
+      input.focus({ preventScroll: true });
+      const caret = input.value.indexOf("Line 75") + "Line 75".length;
+      input.setSelectionRange(caret, caret);
+      const scroller = input.closest(".wizard-body")!;
+      const style = getComputedStyle(input);
+      const caretY = input.getBoundingClientRect().top + parseFloat(style.paddingTop) + 75 * parseFloat(style.lineHeight);
+      scroller.scrollTop += caretY - scroller.getBoundingClientRect().top - scroller.clientHeight / 2;
+      return scroller.scrollTop;
+    });
+    await prompt.pressSequentially(" typing", { delay: 50 });
+    await expect(prompt).toBeFocused();
+    const after = await prompt.evaluate((input) => input.closest(".wizard-body")!.scrollTop);
+    expect(Math.abs(after - before)).toBeLessThan(30);
+    await prompt.press("Enter");
+    await prompt.pressSequentially("New line", { delay: 50 });
+    await prompt.press("Backspace");
+    const position = await prompt.evaluate((input: HTMLTextAreaElement) => {
+      const style = getComputedStyle(input);
+      const lines = input.value.slice(0, input.selectionStart).split("\n").length;
+      const caretY = input.getBoundingClientRect().top + parseFloat(style.paddingTop) + lines * parseFloat(style.lineHeight);
+      const scroller = input.closest(".wizard-body")!.getBoundingClientRect();
+      return { caretY, top: scroller.top, bottom: scroller.bottom, height: input.clientHeight, contentHeight: input.scrollHeight };
+    });
+    expect(position.caretY).toBeGreaterThan(position.top);
+    expect(position.caretY).toBeLessThan(position.bottom);
+    expect(position.height).toBeGreaterThanOrEqual(position.contentHeight - 1);
+    await page.screenshot({ path: testInfo.outputPath(`prompt-cursor-${theme}.png`) });
+    // Deleting text must still shrink the editor instead of leaving a huge gap.
+    await prompt.fill("Short prompt");
+    expect(await prompt.evaluate((input) => input.clientHeight)).toBeLessThan(position.height);
   });
 
   test(`webhook editor allows custom header names and values (${theme})`, async ({ page }, testInfo) => {

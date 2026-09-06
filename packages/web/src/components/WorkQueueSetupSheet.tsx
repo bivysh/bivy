@@ -374,6 +374,7 @@ export function WorkQueueSetupSheet({
     }
   }
 
+  const title = focus === "github" && (info?.connected || anyInstalled) ? "Manage GitHub Apps" : titleFor(focus);
   const primaryDoneLabel =
     focus === "slack" && slack?.enabled ? "Done — Slack is live"
       : focus === "linear" && linear?.enabled ? "Done — Linear is live"
@@ -387,12 +388,12 @@ export function WorkQueueSetupSheet({
         className="wizard autom-editor wq-setup"
         role="dialog"
         aria-modal="true"
-        aria-label={titleFor(focus)}
+        aria-label={title}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="wizard-head">
           <div className="wq-head-text">
-            <strong>{titleFor(focus)}</strong>
+            <strong>{title}</strong>
             <span className="wq-head-sub">Automations · Sources</span>
           </div>
           <button type="button" className="btn ghost icon" onClick={closeWithBack} aria-label="Close">✕</button>
@@ -532,7 +533,6 @@ export function WorkQueueSetupSheet({
                           </span>
                         )}
                         <span className="settings-hint"><strong>Mention trigger:</strong> {entry.mention ? <><code>@{entry.mention}</code> followed by your instructions</> : "Handle not available yet — refresh app status."}</span>
-                        <span className="settings-hint"><strong>Default label trigger:</strong> <code>bivy</code> (or the labels configured in your automation)</span>
                         {entry.central ? (
                           <>
                             <span className="settings-hint">

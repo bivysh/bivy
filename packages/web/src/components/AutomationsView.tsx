@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import cronstrue from "cronstrue";
+import { useAutoGrowingTextarea } from "../useAutoGrowingTextarea.js";
 import {
   createAutomation,
   deleteAutomation,
@@ -1615,7 +1616,7 @@ function SourceAutomationEditor({
 
           {isGithub && (events.issuesLabeled || events.prLabeled) && (
             <div className="settings-field">
-              <label className="field-label" htmlFor="src-labels">Labels</label>
+              <label className="field-label" htmlFor="src-labels">Trigger labels</label>
               <input
                 id="src-labels"
                 className="picker-search"
@@ -1624,8 +1625,9 @@ function SourceAutomationEditor({
                 placeholder="e.g. bivy"
               />
               <p className="settings-hint">
-                Comma-separated. The default also matches labels that target a specific machine.
-                @mentions ignore this filter.
+                Choose your own GitHub labels, separated by commas (for example, fix-it, ready for review).
+                Any one starts this automation on the selected label events. Leave blank to use bivy.
+                This setting belongs to this automation, not the GitHub App. Mentions do not require a label.
               </p>
             </div>
           )}
@@ -1824,12 +1826,7 @@ function AutomationEditor({
   useEffect(() => {
     setAllowDangerous(existing?.allowDangerous ?? false);
   }, [initial.id, existing?.allowDangerous]);
-  useEffect(() => {
-    const input = instructionsRef.current;
-    if (!input) return;
-    input.style.height = "auto";
-    input.style.height = `${input.scrollHeight}px`;
-  }, [d.instructions]);
+  useAutoGrowingTextarea(instructionsRef, d.instructions);
 
   useEffect(() => {
     if (!pickerOpen) return;
@@ -2268,13 +2265,18 @@ function AutomationEditor({
                 )}
                 {d.hasTrigger && (d.trigger === "github" || d.trigger === "linear") && (
                   <div className="autom-trigger-config">
-                    <div className="card wq-status-card" data-tone="muted">
+                    {d.trigger === "github" && githubSourceStatus(sources.github).tone === "on" ? (
+                      <div className="reveal-row">
+                        <span className="settings-hint">{githubSourceStatus(sources.github).label}</span>
+                        <button type="button" className="btn sm link" onClick={() => onOpenSourceSetup("github")}>Manage GitHub Apps</button>
+                      </div>
+                    ) : <div className="card wq-status-card" data-tone="muted">
                       <strong>{d.trigger === "github" ? githubSourceStatus(sources.github).label : linearSourceStatus(sources.linear).label}</strong>
                       <p className="settings-hint">{d.trigger === "github" ? "Choose the hosted Bivy App for the easiest setup, or connect your own app. Adding a trigger does not connect an app." : "Connect Linear to receive issue events for this automation."}</p>
                       <button type="button" className="btn" onClick={() => onOpenSourceSetup(d.trigger === "github" ? "github" : "linear")}>
                         {d.trigger === "github" ? "Set up or manage GitHub Apps" : "Set up or manage Linear"}
                       </button>
-                    </div>
+                    </div>}
                     {d.trigger === "github" && (
                       <div className="settings-field">
                         <div className="autom-field-label">When any of these fire</div>
@@ -2312,9 +2314,9 @@ function AutomationEditor({
                     )}
                     {(d.trigger === "linear" || d.githubEvents.issuesLabeled || d.githubEvents.prLabeled) && (
                       <div className="settings-field">
-                        <label className="field-label" htmlFor="autom-source-labels">Labels</label>
+                        <label className="field-label" htmlFor="autom-source-labels">{d.trigger === "github" ? "Trigger labels" : "Labels"}</label>
                         <input id="autom-source-labels" className="picker-search" value={d.labels} onChange={(e) => set("labels", e.target.value)} placeholder="bivy" />
-                        <p className="settings-hint">Any one of these comma-separated labels triggers the selected label events. Empty uses <code>bivy</code>. Mention events do not require a label.</p>
+                        <p className="settings-hint">{d.trigger === "github" ? "Choose your own GitHub labels, separated by commas (for example, fix-it, ready for review). This setting belongs to this automation, not the GitHub App. " : "Enter labels separated by commas. "}Any one triggers the selected label events. Leave blank to use <code>bivy</code>. Mention events do not require a label.</p>
                       </div>
                     )}
                     {d.trigger === "github" && d.githubEvents.workflowFailed && (
