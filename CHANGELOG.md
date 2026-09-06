@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Refreshed the release-tested agent runtimes to the latest upstream releases:
+  Claude Agent SDK 0.3.263, Codex 0.153.4, Pi 0.85.1, and OpenCode 1.18.29.
+  Adapter flags and protocol modes were re-probed against each new CLI and the
+  certification matrix, manifest, and docs regenerated.
+
 ## [0.16.10] - 2026-09-06
 
 ### Changed
