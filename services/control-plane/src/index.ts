@@ -2571,6 +2571,17 @@ app.post("/node/automations/:id/run", requireNode, asyncHandler(async (req, res)
   res.status(201).json(await dispatchAutomationDefinition(definition));
 }));
 
+// Bound credential-bearing automation writes without rate-limiting reads or
+// webhook deliveries. Nodes get independent budgets; account clients use IPs.
+const automationWriteRateLimit = rateLimit({
+  windowMs: 60_000,
+  limit: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => (req as Request & { node?: NodeRecord }).node?.id ?? ipKeyGenerator(clientIp(req)),
+  message: { error: "Too many automation updates. Try again shortly." },
+});
+
 // Node-authenticated reconciliation surface for `.bivy/automations.yaml`.
 // A definition applied from a node is deliberately bound to that node: its
 // instructions are encrypted with that node's room key, so allowing another
@@ -2583,7 +2594,7 @@ app.get("/node/automation-config", requireNode, asyncHandler(async (req, res) =>
   res.json({ automations: definitions.map((d) => publicAutomation(d, req)) });
 }));
 
-app.put("/node/automation-config/:key", requireNode, asyncHandler(async (req, res) => {
+app.put("/node/automation-config/:key", requireNode, automationWriteRateLimit, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const configKey = String(req.params.key ?? "").trim();
   if (!/^[a-z][a-z0-9-]{1,62}$/.test(configKey) || req.body?.configKey !== configKey) {
@@ -2779,7 +2790,7 @@ app.get("/account/automations", asyncHandler(async (req, res) => {
   res.json((await store.listAutomationDefinitions(client.accountId)).map((d) => publicAutomation(d, req)));
 }));
 
-app.post("/account/automations", asyncHandler(async (req, res) => {
+app.post("/account/automations", automationWriteRateLimit, asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
@@ -2896,7 +2907,7 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
   res.status(201).json({ ...publicAutomation(definition, req), ...(webhookSecret ? { webhookSecret } : {}) });
 }));
 
-app.put("/account/automations/:id", asyncHandler(async (req, res) => {
+app.put("/account/automations/:id", automationWriteRateLimit, asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const current = await store.getAutomationDefinition(client.accountId, String(req.params.id));
@@ -3036,7 +3047,7 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
 
 // Rotate a webhook automation's signing secret. The new secret is returned once;
 // the old one stops working immediately.
-app.post("/account/automations/:id/webhook/rotate", asyncHandler(async (req, res) => {
+app.post("/account/automations/:id/webhook/rotate", automationWriteRateLimit, asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const current = await store.getAutomationDefinition(client.accountId, String(req.params.id));
