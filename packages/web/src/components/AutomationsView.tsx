@@ -1340,7 +1340,7 @@ export function AutomationsView({
           }}
           onChanged={() => { void refresh().catch(() => {}); }}
           onOpenFullSettings={() => {
-            // Connections live only in Automations — keep the sheet open.
+            // Keep the automation draft open while managing its source.
           }}
         />
       )}
@@ -1943,7 +1943,7 @@ function AutomationEditor({
         throw new Error("Repository must look like owner/name");
       }
       if (repos.some((value) => !repoPattern.test(value) || value.includes(".."))) {
-        throw new Error("Every repository allowlist entry must look like owner/name");
+        throw new Error("Each repository filter must use owner/name (for example, acme/api)");
       }
       const input = {
         name: d.name.trim(),
