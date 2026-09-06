@@ -10,7 +10,25 @@ In the Bivy app, open **Automations** → **New automation** (or a webhook templ
 2. On **When**, choose **Webhook** (or a schedule — same form, different trigger).
 3. Optionally set a **Repository** (`owner/name`). The node clones it before the session starts. The event may also send `repo`; the definition wins when both are set.
 4. Pick the machine (and optionally agent/model/autonomy), then create.
-5. Copy the webhook URL and signing secret from the reveal panel. The secret is shown only at create/rotate time.
+5. Copy the webhook URL and secret from the reveal panel. New or replaced secrets are shown once, never in list responses.
+
+### Custom authentication
+
+Generated credentials remain the default. Under **Require webhook authentication**,
+choose **HMAC-SHA256 signature** (recommended) or **Static secret header**. You can
+set the **Header name** and optionally supply your own 32–256-character secret.
+Leave the secret blank to generate one on create or keep the current one on edit.
+Saving a replacement invalidates the old value immediately; **Rotate secret**
+generates a new value while preserving the chosen header and method.
+
+- **HMAC:** send `sha256=<hex HMAC-SHA256 of the raw body>` in the configured
+  header. The signing secret itself is **not** the header value.
+- **Static header:** send the exact secret as the configured header's value,
+  e.g. `Authorization: Bearer <your-secret>` if that entire value was saved.
+  Use HTTPS. Unlike HMAC, a static credential does not authenticate the body.
+
+These options apply to webhook-triggered automations, not GitHub/Linear/Slack's
+provider-defined signature headers.
 
 The endpoint is:
 
@@ -34,7 +52,8 @@ The fixed template is prepended to every event. Event payloads cannot select com
 ## Send an event
 
 Every request needs `Content-Type: application/json`. When signing is enabled,
-include `X-Bivy-Signature-256: sha256=<hex HMAC-SHA256 of the exact body>`.
+include `X-Bivy-Signature-256: sha256=<hex HMAC-SHA256 of the exact body>` by
+default, or use the custom header/method configured above.
 Include `X-Bivy-Idempotency-Key: <stable unique event id>` whenever the sender
 supports custom headers; otherwise Bivy accepts the delivery with a generated
 key.

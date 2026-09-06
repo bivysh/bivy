@@ -145,6 +145,19 @@ async function main() {
   const afterB = await json(port, "GET", "/account/github/central-app", undefined, tokenB);
   expect(afterB.body.installations.length === 0, "account B sees no installations (cross-account isolation)");
 
+  const sourceA = await json(port, "GET", "/account/github-app", undefined, tokenA);
+  expect(sourceA.body.connected === true && sourceA.body.apps[0]?.central === true, "hosted installation is a connected automation source before any webhook arrives");
+  expect(sourceA.body.apps[0]?.mention === "bivy-central-test" && sourceA.body.apps[0]?.installed === true, "source exposes the real hosted mention and installation state");
+  expect(sourceA.body.apps[0]?.installations[0]?.installationId === "42", "source includes the installation to configure or uninstall");
+
+  const access = await json(port, "POST", "/account/github-app/trigger-access", { triggerAccess: "collaborator" }, tokenA);
+  expect(access.status === 200 && access.body.triggerAccess === "collaborator", "hosted trigger permissions can be configured before the first webhook");
+  const defaultNode = await json(port, "POST", "/account/github-app/default-node", { node: "" }, tokenA);
+  expect(defaultNode.status === 200, "hosted default machine is configurable before the first webhook");
+  const foreignAccess = await json(port, "POST", "/account/github-app/trigger-access", { triggerAccess: "collaborator" }, tokenB);
+  expect(foreignAccess.status === 404, "an account without an installation cannot create hosted app settings");
+  await json(port, "POST", "/account/github-app/trigger-access", { triggerAccess: "everyone" }, tokenA);
+
   const identityA = await json(port, "GET", "/account/hosted-provisioning", undefined, tokenA);
   expect(identityA.body.githubIdentity === "central-app", "first bind selects the central-app identity for the account");
 

@@ -10,8 +10,8 @@ import { StatusDot } from "./StatusDot.js";
  * node is selected. Presents the two ways to get a Machine online — install on
  * your own computer, or (when enabled) spin up an ephemeral cloud server — plus,
  * when the account already has enrolled nodes, a list of them: picking one opens
- * a new session on that node. A live "waiting to connect" indicator sits at the
- * bottom.
+ * a new session on that node. A live "waiting to connect" indicator sits above
+ * the machine list.
  */
 export function ConnectRunner({
   nodes,
@@ -42,6 +42,16 @@ export function ConnectRunner({
               ? "Use a machine with your real repository, services, and warm caches, or launch an isolated machine. Any hosted credential custody is disclosed before enablement."
               : "Use the machine where your repository, services, and warm caches already live."}
         </p>
+      </div>
+
+      <div className="connect-waiting">
+        <Spinner size="sm" />
+        <span className="connect-waiting-text">
+          {persistentNodes.length > 0 ? "Or wait for another Machine to connect…" : "Waiting for a Machine to connect…"}
+        </span>
+        <button type="button" className="btn sm ghost" onClick={onRefresh}>
+          Refresh now
+        </button>
       </div>
 
       {persistentNodes.length > 0 && (
@@ -96,16 +106,6 @@ export function ConnectRunner({
         )}
       </div>
 
-
-      <div className="connect-waiting">
-        <Spinner size="sm" />
-        <span className="connect-waiting-text">
-          {persistentNodes.length > 0 ? "Or wait for another Machine to connect…" : "Waiting for a Machine to connect…"}
-        </span>
-        <button type="button" className="btn sm ghost" onClick={onRefresh}>
-          Refresh now
-        </button>
-      </div>
     </section>
   );
 }

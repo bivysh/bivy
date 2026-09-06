@@ -27,6 +27,7 @@ class EchoSession implements RuntimeSession {
   readonly id = "echo-1";
   private readonly emitter = new EventEmitter();
   private streaming = false;
+  lateStreamingCleanup = false;
   private messages: RuntimeMessage[] = [];
   private _sessionFile?: string;
   private _name?: string;
@@ -72,10 +73,12 @@ class EchoSession implements RuntimeSession {
     this.messages.push(message);
     // The resume ref materializes only after the first turn (like a real runtime).
     this._sessionFile = `/echo/${this.id}.json`;
-    this.streaming = false;
+    if (!this.lateStreamingCleanup) this.streaming = false;
     this.emit({ type: "message_end", message });
     this.emit({ type: "turn_end" });
     this.emit({ type: "agent_end", code: 0, signal: null });
+    if (this.lateStreamingCleanup) this.emit({ type: "runtime.commands", commands: [] });
+    this.streaming = false;
   }
 
   async abort(): Promise<void> {
@@ -199,6 +202,26 @@ test("a prompt forwards the full event stream with a post-turn snapshot", async 
 
   // The prompt req is acked.
   assert.ok(c.outbound.some((m) => m.t === "res" && m.id === 2 && m.ok));
+});
+
+test("agent_end wins over an SDK that clears streaming only after its listeners return", async () => {
+  const runtime = new EchoRuntime();
+  const service = new AgentService({ runtimeProvider: () => runtime });
+  const c = fakeConn();
+  service.accept(c.conn);
+  c.feed(startFrame());
+  await flush();
+  runtime.last!.lateStreamingCleanup = true;
+  c.feed({ t: "req", id: 2, method: "prompt", args: ["finish", {}] });
+  await flush();
+  const end = c.events().find((frame) => frame.event.type === "agent_end");
+  assert.equal(end?.snapshot?.isStreaming, false, "finished state must reach the daemon before its listeners run");
+  const late = c.events().find((frame) => frame.event.type === "runtime.commands");
+  assert.notEqual(late?.snapshot?.isStreaming, true, "late metadata cannot revive a finished turn");
+  c.feed({ t: "req", id: 3, method: "prompt", args: ["next turn", {}] });
+  await flush();
+  assert.equal(c.events().filter((frame) => frame.event.type === "agent_start").at(-1)?.snapshot?.isStreaming, true, "the next turn must show working again");
+  service.disposeAll();
 });
 
 test("tool interception round-trips to the daemon (reverse RPC)", async () => {

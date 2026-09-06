@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import express, { type Request, type Response, type NextFunction } from "express";
 import { ipKeyGenerator, rateLimit } from "express-rate-limit";
 import webpush from "web-push";
+import { resolveWebhookAuth, verifyWebhookAuth, DEFAULT_WEBHOOK_HEADER, type WebhookAuth } from "./webhook-auth.js";
 import { validateCapabilityTags } from "@bivy/core";
 import { providerCredentialFingerprint, type Account, type NodeRecord, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, type AutomationRun, type InboundHook, type NodeClaim, GITHUB_IDENTITY_MODES, type GithubIdentityMode, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
 import { centralGithubAppConfig, centralInstallUrl, applyCentralInstallationEvent, resolveGithubIdentity } from "./central-github-app.js";
@@ -40,7 +41,6 @@ import {
   parseSlackCommand,
   applyDefaultNode,
   meetsTriggerAccess,
-  verifyAutomationSignature,
   parseAutomationEvent,
   renderEventContext,
   normalizeAutomationRepo,
@@ -2370,16 +2370,31 @@ app.get("/account/hosted-github-repositories/:owner/:repo/branches", requireUser
 // Set (or clear) the account's default node: untagged issues/comments that
 // would otherwise route to the shared `bivy` queue instead route to
 // `bivy/<defaultNode>`. Settings → GitHub App in the web UI.
+// Hosted installations are configurable before the first webhook creates their
+// settings row. Never create that row for an app the account has not installed.
+async function githubAppSettingsHooks(accountId: string, appId: string) {
+  const hooks = await store.listGithubAppHooks(accountId);
+  const central = centralGithubAppConfig();
+  if (central && (!appId || appId === central.appId) && !hooks.some((hook) => hook.appId === central.appId)) {
+    const installations = await syncCentralInstallationsForAccount(accountId);
+    if (installations.length) {
+      const hook = await store.createInboundHook(accountId, "github_app");
+      hooks.push((await store.setInboundHookAppMeta(accountId, hook.id, {
+        appId: central.appId,
+        ...(central.slug ? { mention: central.slug, name: central.slug } : {}),
+      })) ?? hook);
+    }
+  }
+  return appId ? hooks.filter((hook) => hook.appId === appId) : hooks;
+}
+
 app.post("/account/github-app/default-node", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const appId = typeof req.body?.appId === "string" ? req.body.appId.trim() : "";
   // The default node is an account-level preference stored per hook. Without an
   // app id, set it on every app so the account has one answer rather than N.
-  const hooks = appId
-    ? [await store.getGithubAppHook(client.accountId, appId)].filter(Boolean as unknown as (h: unknown) => boolean)
-    : await store.listGithubAppHooks(client.accountId);
-  const targets = hooks as Array<{ id: string }>;
+  const targets = await githubAppSettingsHooks(client.accountId, appId);
   if (!targets.length) return res.status(404).json({ error: "No GitHub App connected" });
   const node = typeof req.body?.node === "string" ? req.body.node.trim() : "";
   let updated: { defaultNode?: string } | undefined;
@@ -2407,10 +2422,7 @@ app.post("/account/github-app/trigger-access", asyncHandler(async (req, res) => 
   }
   const triggerAccess = raw === "contributor" || raw === "collaborator" ? raw : undefined;
   const appId = typeof req.body?.appId === "string" ? req.body.appId.trim() : "";
-  const hooks = appId
-    ? [await store.getGithubAppHook(client.accountId, appId)].filter(Boolean as unknown as (h: unknown) => boolean)
-    : await store.listGithubAppHooks(client.accountId);
-  const targets = hooks as Array<{ id: string }>;
+  const targets = await githubAppSettingsHooks(client.accountId, appId);
   if (!targets.length) return res.status(404).json({ error: "No GitHub App connected" });
   let updated: { triggerAccess?: string } | undefined;
   for (const target of targets) {
@@ -2559,6 +2571,17 @@ app.post("/node/automations/:id/run", requireNode, asyncHandler(async (req, res)
   res.status(201).json(await dispatchAutomationDefinition(definition));
 }));
 
+// Bound credential-bearing automation writes without rate-limiting reads or
+// webhook deliveries. Nodes get independent budgets; account clients use IPs.
+const automationWriteRateLimit = rateLimit({
+  windowMs: 60_000,
+  limit: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => (req as Request & { node?: NodeRecord }).node?.id ?? ipKeyGenerator(clientIp(req)),
+  message: { error: "Too many automation updates. Try again shortly." },
+});
+
 // Node-authenticated reconciliation surface for `.bivy/automations.yaml`.
 // A definition applied from a node is deliberately bound to that node: its
 // instructions are encrypted with that node's room key, so allowing another
@@ -2571,7 +2594,7 @@ app.get("/node/automation-config", requireNode, asyncHandler(async (req, res) =>
   res.json({ automations: definitions.map((d) => publicAutomation(d, req)) });
 }));
 
-app.put("/node/automation-config/:key", requireNode, asyncHandler(async (req, res) => {
+app.put("/node/automation-config/:key", requireNode, automationWriteRateLimit, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const configKey = String(req.params.key ?? "").trim();
   if (!/^[a-z][a-z0-9-]{1,62}$/.test(configKey) || req.body?.configKey !== configKey) {
@@ -2646,14 +2669,16 @@ app.put("/node/automation-config/:key", requireNode, asyncHandler(async (req, re
     enabled: req.body?.enabled !== false,
     trigger, repo, repos: repos?.length ? repos : repo && (trigger === "github" || trigger === "linear") ? [repo] : repos, labels, appId, on, schedule, nextRunAt,
   };
+  let webhookAuth: WebhookAuth = {};
+  try {
+    if (trigger === "webhook") webhookAuth = resolveWebhookAuth({ ...(!current ? { requireSigning: true } : {}), ...req.body }, current);
+  } catch (error) { return res.status(400).json({ error: (error as Error).message }); }
+  const webhookSecret = webhookAuth.webhookSecret;
   if (current) {
-    const updated = await store.updateAutomationDefinition(node.accountId, current.id, common);
-    return res.json(publicAutomation(updated!, req));
+    const updated = await store.updateAutomationDefinition(node.accountId, current.id, { ...common, ...webhookAuth });
+    return res.json({ ...publicAutomation(updated!, req), ...(webhookSecret && webhookSecret !== current.webhookSecret ? { webhookSecret } : {}) });
   }
-  const webhookSecret = trigger === "webhook" && req.body?.requireSigning !== false
-    ? randomBytes(32).toString("base64url")
-    : undefined;
-  const created = await store.createAutomationDefinition(node.accountId, { ...common, webhookSecret });
+  const created = await store.createAutomationDefinition(node.accountId, { ...common, ...webhookAuth });
   return res.status(201).json({ ...publicAutomation(created, req), ...(webhookSecret ? { webhookSecret } : {}) });
 }));
 
@@ -2765,7 +2790,7 @@ app.get("/account/automations", asyncHandler(async (req, res) => {
   res.json((await store.listAutomationDefinitions(client.accountId)).map((d) => publicAutomation(d, req)));
 }));
 
-app.post("/account/automations", asyncHandler(async (req, res) => {
+app.post("/account/automations", automationWriteRateLimit, asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
@@ -2792,9 +2817,11 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
   // Some providers cannot configure a signing secret or custom headers. Keep
   // signing enabled by default, but allow explicitly unsigned webhook
   // endpoints for those providers.
-  const webhookSecret = trigger === "webhook" && req.body?.requireSigning !== false
-    ? randomBytes(32).toString("base64url")
-    : undefined;
+  let webhookAuth: WebhookAuth = {};
+  try {
+    if (trigger === "webhook") webhookAuth = resolveWebhookAuth({ requireSigning: true, ...req.body });
+  } catch (error) { return res.status(400).json({ error: (error as Error).message }); }
+  const webhookSecret = webhookAuth.webhookSecret;
   let repo: string | undefined;
   let labels: string[] | undefined;
   let repos: string[] | undefined;
@@ -2854,7 +2881,7 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
     configOrder: nextConfigOrder,
     enabled,
     trigger,
-    webhookSecret,
+    ...webhookAuth,
     repo,
     labels,
     repos,
@@ -2880,7 +2907,7 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
   res.status(201).json({ ...publicAutomation(definition, req), ...(webhookSecret ? { webhookSecret } : {}) });
 }));
 
-app.put("/account/automations/:id", asyncHandler(async (req, res) => {
+app.put("/account/automations/:id", automationWriteRateLimit, asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const current = await store.getAutomationDefinition(client.accountId, String(req.params.id));
@@ -2976,18 +3003,13 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
   // unsigned deliveries are accepted; `true` on an unsigned endpoint mints a
   // fresh secret, disclosed once in this response exactly like create/rotate.
   // Anything else leaves the current secret untouched.
-  let webhookSecret = current.webhookSecret;
-  let mintedSecret: string | undefined;
-  if (current.trigger === "webhook" && typeof req.body?.requireSigning === "boolean") {
-    if (!req.body.requireSigning) {
-      webhookSecret = undefined;
-    } else if (!current.webhookSecret) {
-      mintedSecret = randomBytes(32).toString("base64url");
-      webhookSecret = mintedSecret;
-    }
-  }
+  let webhookAuth: WebhookAuth = {};
+  try {
+    if (current.trigger === "webhook") webhookAuth = resolveWebhookAuth(req.body ?? {}, current);
+  } catch (error) { return res.status(400).json({ error: (error as Error).message }); }
+  const mintedSecret = webhookAuth.webhookSecret !== current.webhookSecret ? webhookAuth.webhookSecret : undefined;
   const patch = {
-    webhookSecret,
+    ...webhookAuth,
     name: typeof req.body?.name === "string" ? req.body.name.trim() || current.name : current.name,
     templateCiphertext: typeof req.body?.templateCiphertext === "string" ? req.body.templateCiphertext : current.templateCiphertext,
     runtimeId: typeof req.body?.runtimeId === "string" ? req.body.runtimeId.trim() || undefined : current.runtimeId,
@@ -3025,7 +3047,7 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
 
 // Rotate a webhook automation's signing secret. The new secret is returned once;
 // the old one stops working immediately.
-app.post("/account/automations/:id/webhook/rotate", asyncHandler(async (req, res) => {
+app.post("/account/automations/:id/webhook/rotate", automationWriteRateLimit, asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const current = await store.getAutomationDefinition(client.accountId, String(req.params.id));
@@ -3827,7 +3849,7 @@ app.post("/webhooks/automation/run/:definitionId", asyncHandler(async (req, res)
   if (!def || def.trigger !== "webhook") return res.status(404).json({ code: "not_found" });
   if (def.enabled === false) return res.status(410).json({ code: "disabled" });
   const raw: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from("");
-  if (def.webhookSecret && !verifyAutomationSignature(def.webhookSecret, raw, req.headers["x-bivy-signature-256"] as string | undefined)) {
+  if (!verifyWebhookAuth(def, raw, req.headers[def.webhookHeader || DEFAULT_WEBHOOK_HEADER])) {
     return res.status(401).json({ code: "invalid_signature" });
   }
   if (!consumeAutomationRate(`def:${def.id}`, 60)) {

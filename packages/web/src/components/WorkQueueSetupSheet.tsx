@@ -9,6 +9,7 @@ import {
   type AppState,
   type GithubAppEntry,
   type GithubAppInfo,
+  type CentralGithubAppView,
   type LinearHook,
   type SlackHook,
   type HostedProvisioningStatus,
@@ -22,6 +23,8 @@ import {
 } from "@bivy/core";
 import { controller } from "../store/controller.js";
 import { Badge } from "./Badge.js";
+import { githubInstallationSettings } from "./githubSource.js";
+import { GithubTriggerAccess } from "./GithubTriggerAccess.js";
 import { useModalBack, useModalEscape } from "../modalStack.js";
 
 export type SourceSetupFocus = "github" | "linear" | "slack" | "work-queue";
@@ -48,43 +51,44 @@ function titleFor(focus: SourceSetupFocus): string {
   switch (focus) {
     case "linear": return "Connect Linear";
     case "slack": return "Connect Slack";
-    case "github": return "Connect GitHub";
-    default: return "Work issues into PRs";
+    default: return "GitHub App setup";
   }
 }
 
 function leadFor(focus: SourceSetupFocus): string {
   switch (focus) {
     case "linear":
-      return "Label a Linear issue and a machine you own opens the pull request. This is the only place to connect or disconnect Linear.";
+      return "Connect Linear to receive issue events. Your automation chooses which labels start a run and what the agent does.";
     case "slack":
       return "Turn a Slack slash command into an unattended run. Connect, copy the Request URL, or disconnect — all here.";
-    case "github":
-      return "Add, install, reconnect, or disconnect GitHub Apps here. One account can hold several apps (personal + orgs).";
     default:
-      return "Connect the sources that start work on your machines. Lifecycle stays in Automations — not Settings.";
+      return "Manage the hosted Bivy GitHub App and your custom apps. App installation grants repository access; each automation configures which events start a run.";
   }
 }
 
 export function WorkQueueSetupSheet({
   state,
   onClose,
-  focus = "work-queue",
+  focus = "github",
   onChanged,
 }: {
   state: AppState;
   onClose: () => void;
   /** @deprecated Connections no longer bounce to Settings. */
   onOpenFullSettings?: (view?: "github" | "linear" | "slack" | "webhooks") => void;
-  /** Which source to emphasise. work-queue shows GitHub + Linear together. */
+  /** One source per sheet. Legacy work-queue links open GitHub setup. */
   focus?: SourceSetupFocus;
   /** Parent refreshes live source chips after a successful connect. */
   onChanged?: () => void;
 }) {
   const canQuery = !controller.direct;
+  const onChangedRef = useRef(onChanged);
+  onChangedRef.current = onChanged;
   const closeWithBack = useModalBack(onClose);
   useModalEscape(closeWithBack);
   const [info, setInfo] = useState<GithubAppInfo | null>(null);
+  const [central, setCentral] = useState<CentralGithubAppView | null>(null);
+  const [loading, setLoading] = useState(true);
   const [nodes, setNodes] = useState<AccountNode[]>([]);
   const [linear, setLinear] = useState<LinearHook | null>(null);
   const [slack, setSlack] = useState<SlackHook | null>(null);
@@ -109,9 +113,6 @@ export function WorkQueueSetupSheet({
   const [disconnectErr, setDisconnectErr] = useState<string | null>(null);
   const [centralBusy, setCentralBusy] = useState(false);
   const [centralError, setCentralError] = useState<string | null>(null);
-  const [triggerAccess, setTriggerAccess] = useState<"everyone" | "contributor" | "collaborator">("everyone");
-  const [savingAccess, setSavingAccess] = useState(false);
-  const [accessMsg, setAccessMsg] = useState<string | null>(null);
 
   // Linear local form state
   const [linSecret, setLinSecret] = useState("");
@@ -132,23 +133,27 @@ export function WorkQueueSetupSheet({
   const ready = phase === "submitting" && app?.action && app?.manifest;
 
   const showGithub = focus === "github" || focus === "work-queue";
-  const showLinear = focus === "linear" || focus === "work-queue";
+  const showLinear = focus === "linear";
   const showSlack = focus === "slack";
 
   const refresh = useCallback(async () => {
     if (!canQuery) {
       setLoadErr("Source setup needs a hosted account connection.");
+      setLoading(false);
       return;
     }
     setLoadErr("");
+    setLoading(true);
     try {
-      const [gh, nodeList, lin, sl, hostedStatus] = await Promise.all([
+      const [gh, nodeList, lin, sl, hostedStatus, centralStatus] = await Promise.all([
         controller.fetchGithubApp(),
         controller.listNodes(),
         fetchLinearHook(controller.local).catch(() => null),
         fetchSlackHook(controller.local).catch(() => null),
         fetchHostedProvisioning(controller.local).catch(() => null),
+        controller.centralGithubApp().catch(() => null),
       ]);
+      setCentral(centralStatus);
       setInfo(gh);
       setNodes(nodeList);
       setLinear(lin);
@@ -156,29 +161,33 @@ export function WorkQueueSetupSheet({
       setHosted(hostedStatus);
       const stored = gh.apps.find((a) => a.defaultNode)?.defaultNode ?? gh.defaultNode ?? "";
       setDefaultNode(stored || "");
-      const access = gh.apps.find((a) => a.triggerAccess)?.triggerAccess ?? gh.triggerAccess ?? "everyone";
-      setTriggerAccess(access);
       if (lin?.defaultNode) setLinRoute(lin.defaultNode);
       if (sl?.defaultNode) setSlackRoute(sl.defaultNode);
     } catch (e) {
       setLoadErr(String((e as Error).message || e));
+    } finally {
+      setLoading(false);
     }
   }, [canQuery]);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    void refresh();
+    const onFocus = () => { void refresh(); onChangedRef.current?.(); };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [refresh]);
   useEffect(() => {
     if (phase === "done") {
       void refresh();
-      onChanged?.();
+      onChangedRef.current?.();
     }
-  }, [phase, refresh, onChanged]);
+  }, [phase, refresh]);
 
   const apps = info?.apps ?? [];
-  const mention = apps.find((a) => a.mention)?.mention || "bivy";
   const anyInstalled = apps.some((a) => a.installed);
-  const anyServed = apps.some((a) => a.hosted || a.servedBy?.online);
+  const anyServed = apps.some((a) => a.servedBy?.online);
   const hostedReady = Boolean(hosted?.execution.ready);
-  const readyToRun = apps.length > 0 && anyInstalled && (hostedReady || anyServed || apps.some((a) => a.servedBy));
+  const readyToRun = apps.length > 0 && anyInstalled && (hostedReady || anyServed);
 
   async function addCentralInstallation() {
     setCentralBusy(true);
@@ -234,28 +243,6 @@ export function WorkQueueSetupSheet({
       setCeHostedError(String((error as Error)?.message || error));
     } finally {
       setCeHostedBusy(false);
-    }
-  }
-
-  async function saveTriggerAccess(next: "everyone" | "contributor" | "collaborator") {
-    setSavingAccess(true);
-    setAccessMsg(null);
-    const prev = triggerAccess;
-    setTriggerAccess(next);
-    try {
-      const saved = await controller.setGithubAppTriggerAccess(next);
-      setTriggerAccess(saved);
-      setInfo((cur) => (cur
-        ? { ...cur, triggerAccess: saved, apps: cur.apps.map((a) => ({ ...a, triggerAccess: saved })) }
-        : cur));
-      setAccessMsg("Saved");
-      onChanged?.();
-      setTimeout(() => setAccessMsg(null), 1500);
-    } catch (e) {
-      setTriggerAccess(prev);
-      setAccessMsg(String((e as Error).message || e));
-    } finally {
-      setSavingAccess(false);
     }
   }
 
@@ -406,7 +393,7 @@ export function WorkQueueSetupSheet({
         <div className="wizard-head">
           <div className="wq-head-text">
             <strong>{titleFor(focus)}</strong>
-            <span className="wq-head-sub">Stays in Automations · nothing to find in Settings</span>
+            <span className="wq-head-sub">Automations · Sources</span>
           </div>
           <button type="button" className="btn ghost icon" onClick={closeWithBack} aria-label="Close">✕</button>
         </div>
@@ -414,32 +401,39 @@ export function WorkQueueSetupSheet({
         <div className="wizard-body">
           <p className="settings-hint wq-lead">{leadFor(focus)}</p>
 
-          {focus === "work-queue" && (
-            <div className="wq-how">
-              <div className="autom-field-label">How it fires</div>
-              <ol className="wq-how-list">
-                <li>
-                  Add a <code>bivy</code> label (or a Machine-specific Bivy label) on an issue —
-                  or comment <code>@{mention}</code> with what to do.
-                </li>
-                <li>An online machine—or your configured hosted ephemeral runner—claims the item, runs your checks, and opens a PR.</li>
-              </ol>
-            </div>
-          )}
-
-          {loadErr && <p className="settings-error">{loadErr}</p>}
+          {loading && <p className="settings-hint" role="status">Checking source connection…</p>}
+          {loadErr && <div className="banner inline" data-tone="danger" role="alert">
+            {loadErr}
+            <button type="button" className="btn sm" onClick={() => void refresh()}>Retry</button>
+          </div>}
 
           {/* ── GitHub ──────────────────────────────────────────────── */}
-          {showGithub && (
+          {showGithub && info && (
             <div className="autom-field-block">
               <div className="autom-field-label">
                 <span className="wq-section-icon" aria-hidden="true"><GhMark /></span>
-                GitHub
+                GitHub Apps
               </div>
-              {apps.length === 0 ? (
+              <p className="settings-hint">
+                Enable label or mention events in an automation to start runs. Labels are configurable per automation;
+                mention events use the app handles below and do not require a label.
+              </p>
+              {!apps.some((entry) => entry.central) && (
                 <div className="card wq-status-card" data-tone="muted">
+                  <strong>Hosted Bivy GitHub App · Recommended</strong>
+                  <p className="settings-hint">Choose repositories on GitHub and start using Bivy. No app creation or private key is needed.</p>
+                  {!central?.configured && <p className="settings-hint">{central ? "The hosted app is not enabled on this deployment. You can use your own app below." : "Could not check hosted app availability. Refresh status to try again."}</p>}
+                  <button type="button" className="btn primary" disabled={centralBusy || !central?.configured} onClick={() => void addCentralInstallation()}>
+                    {centralBusy ? "Opening GitHub…" : "Install hosted Bivy App"}
+                  </button>
+                  {centralError && <p className="settings-error" role="alert">{centralError}</p>}
+                </div>
+              )}
+              {apps.length === 0 ? (
+                <details className="card wq-status-card" data-tone="muted">
+                  <summary>Use your own GitHub App</summary>
                   <p className="settings-hint">
-                    No GitHub App yet. Create one (private key stays on this machine) or connect an app you already own.
+                    No custom GitHub App connected. Create your own app on a connected machine, or connect an app you already own.
                   </p>
                   <label className="field-label" htmlFor="wq-org">Organization (optional)</label>
                   <input
@@ -520,7 +514,7 @@ export function WorkQueueSetupSheet({
                     </div>
                   )}
                   {phase === "error" && <div className="banner inline" data-tone="danger">{app?.error || "GitHub App setup failed."}</div>}
-                </div>
+                </details>
               ) : (
                 <div className="card wq-status-card" data-tone="muted">
                   {apps.map((entry) => (
@@ -528,16 +522,8 @@ export function WorkQueueSetupSheet({
                       <div className="wq-app-row-main">
                         <div className="wq-app-title-row">
                           <strong>{entry.name || entry.mention || "GitHub App"}</strong>
-                          <Badge tone={entry.installed === false ? "warn" : entry.hosted || entry.servedBy?.online || hostedReady ? "ok" : "warn"}>
-                            {entry.installed === false
-                              ? "Needs install"
-                              : entry.hosted || hostedReady
-                                ? "Isolated profile ready"
-                                : entry.servedBy?.online
-                                ? "Live"
-                                : entry.servedBy
-                                  ? "Machine offline"
-                                  : "Needs machine"}
+                          <Badge tone={entry.installed ? "ok" : "warn"}>
+                            {entry.installed ? "Connected" : entry.installed === false ? "Needs install" : "Installation not verified"}
                           </Badge>
                         </div>
                         {entry.owner && (
@@ -545,14 +531,19 @@ export function WorkQueueSetupSheet({
                             {entry.ownerType === "Organization" ? "org" : "personal"} · {entry.owner}
                           </span>
                         )}
-                        {entry.mention && (
-                          <span className="settings-hint">Trigger with <code>@{entry.mention}</code></span>
-                        )}
+                        <span className="settings-hint"><strong>Mention trigger:</strong> {entry.mention ? <><code>@{entry.mention}</code> followed by your instructions</> : "Handle not available yet — refresh app status."}</span>
+                        <span className="settings-hint"><strong>Default label trigger:</strong> <code>bivy</code> (or the labels configured in your automation)</span>
                         {entry.central ? (
                           <>
                             <span className="settings-hint">
                               Hosted Bivy App · {(entry.installations ?? []).map((installation) => installation.githubAccount).filter(Boolean).join(", ") || "installed"}
                             </span>
+                            {(entry.installations ?? []).map((installation) => (
+                              <a key={installation.installationId} className="btn sm" href={githubInstallationSettings(installation)} target="_blank" rel="noreferrer">
+                                Configure / uninstall · {installation.githubAccount || installation.installationId} ↗
+                              </a>
+                            ))}
+                            <span className="settings-hint">Change repository access or uninstall on GitHub. Uninstalling stops events for that installation.</span>
                             <button type="button" className="btn link" disabled={centralBusy} onClick={() => void addCentralInstallation()}>
                               {centralBusy ? "Opening GitHub…" : "Add another account or organization →"}
                             </button>
@@ -568,8 +559,12 @@ export function WorkQueueSetupSheet({
                             <a href={installHref(entry)} target="_blank" rel="noreferrer">Manage →</a>
                           </span>
                         )}
-                        {entry.hosted || hostedReady ? (
-                          <span className="settings-hint">Served on demand by your isolated machine profile.</span>
+                        {entry.central ? (
+                          <span className="settings-hint">Repository access is connected. Runs separately need an online machine or a ready isolated profile.</span>
+                        ) : hostedReady ? (
+                          <span className="settings-hint">An isolated machine profile is ready to run automations.</span>
+                        ) : entry.hosted ? (
+                          <span className="settings-hint">Hosted custom app connected; configure an isolated machine profile to run automations.</span>
                         ) : entry.servedBy === null ? (
                           <p className="schedule-hint warn">
                             No online machine holds this app&apos;s key — queue items won&apos;t be claimed.{" "}
@@ -620,25 +615,7 @@ export function WorkQueueSetupSheet({
                     </div>
                   </div>
 
-                  <div className="settings-field">
-                    <label className="field-label" htmlFor="wq-trigger-access">Who can trigger runs</label>
-                    <select
-                      id="wq-trigger-access"
-                      className="picker-search"
-                      value={triggerAccess}
-                      disabled={savingAccess}
-                      onChange={(e) => void saveTriggerAccess(e.target.value as "everyone" | "contributor" | "collaborator")}
-                    >
-                      <option value="everyone">Everyone — any GitHub user (default)</option>
-                      <option value="contributor">Contributors — prior merged contribution, or higher</option>
-                      <option value="collaborator">Collaborators only — push access</option>
-                    </select>
-                    <p className="settings-hint">
-                      Account-wide — applies to every app above. Restrict who can start runs via{" "}
-                      <code>@{mention}</code> on public repos.
-                    </p>
-                    {accessMsg && <span className="settings-hint">{accessMsg}</span>}
-                  </div>
+                  <GithubTriggerAccess info={info} onChanged={() => { void refresh(); onChanged?.(); }} />
 
                   {!addAppOpen ? (
                     <button type="button" className="btn sm" onClick={() => { setAddAppOpen(true); setShowExisting(false); setCeApp(null); }}>
@@ -729,8 +706,7 @@ export function WorkQueueSetupSheet({
 
                   {readyToRun && (
                     <div className="banner inline" data-tone="ok" role="status">
-                      <strong>Ready.</strong> Label an issue <code>bivy</code> or comment{" "}
-                      <code>@{mention}</code> with what to do.
+                      <strong>App installed.</strong> Configure and enable an automation to choose its labels, mention events, and instructions.
                     </div>
                   )}
                 </div>
@@ -743,7 +719,7 @@ export function WorkQueueSetupSheet({
             <div className="autom-field-block">
               <div className="autom-field-label">
                 <span className="wq-section-icon" aria-hidden="true"><LinMark /></span>
-                Linear{focus === "work-queue" ? " (optional)" : ""}
+                Linear
               </div>
               <div className="card wq-status-card" data-tone="muted">
                 {linErr && <p className="settings-error">{linErr}</p>}
@@ -951,7 +927,7 @@ export function WorkQueueSetupSheet({
         </div>
 
         <div className="wizard-actions">
-          <span className="settings-hint">Connections are managed only here</span>
+          <button type="button" className="btn ghost" aria-label="Refresh source status" disabled={loading} onClick={() => { void refresh(); onChangedRef.current?.(); }}>Refresh</button>
           <button type="button" className="btn primary" onClick={closeWithBack}>
             {primaryDoneLabel}
           </button>
