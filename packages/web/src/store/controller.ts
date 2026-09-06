@@ -7,6 +7,8 @@
 // shouldn't know about (e.g. flushing a first prompt once a draft session
 // becomes real). Everything the UI renders comes from `store`.
 
+import { AttachmentDiskCache, AttachmentLoader } from "./attachment-loader.js";
+
 import {
   DirectTransport,
   RelayTransport,
@@ -282,7 +284,8 @@ export class AppController {
    *  chips referencing the same blob (and re-renders) share one round-trip. Since
    *  the content is immutable per hash, successful results are cached for the
    *  session; failures are evicted so a later chip can retry. */
-  private attachmentFetches = new Map<string, Promise<{ mimeType: string; data: string } | null>>();
+  private attachmentLoader = new AttachmentLoader();
+  private attachmentDiskCache = new AttachmentDiskCache();
   /** A GitHub App manifest `code` captured from a redirect, sent once connected. */
   private pendingGithubAppCode: { code: string; state: string } | null = null;
   /** The route the app was loaded on (e.g. a `/sessions/:id` deep link), applied
@@ -1282,6 +1285,7 @@ export class AppController {
     } catch {
       /* a broken IDB must not prevent sign-out */
     }
+    await this.attachmentDiskCache.clear();
     this.local.clear();
     this.store.setSignedIn(false);
     // Return to the root shell rather than reloading into a `/sessions/:id` deep
@@ -1348,23 +1352,20 @@ export class AppController {
    * chat to rehydrate a thumbnail whose bytes aren't in the local cache — the
    * re-findable path after a reload or on another device.
    */
-  fetchAttachment(hash: string): Promise<{ mimeType: string; data: string } | null> {
+  fetchAttachment(hash: string, createdAt = 0): Promise<{ mimeType: string; data: string } | null> {
     if (!hash) return Promise.resolve(null);
-    const existing = this.attachmentFetches.get(hash);
-    if (existing) return existing;
-    const p = (async () => {
-      try {
-        const ev = (await this.awaitAck({ kind: "attachment.fetch", hash }, 30000)) as { data?: unknown; mimeType?: unknown };
-        if (ev && typeof ev.data === "string") return { mimeType: String(ev.mimeType || "application/octet-stream"), data: ev.data };
-        this.attachmentFetches.delete(hash);
-        return null;
-      } catch {
-        this.attachmentFetches.delete(hash); // allow a later retry
-        return null;
-      }
-    })();
-    this.attachmentFetches.set(hash, p);
-    return p;
+    const scope = this.sessionCacheKey();
+    return this.attachmentLoader.fetch(JSON.stringify([scope, hash]), createdAt, async () => {
+      const cached = await this.attachmentDiskCache.get(scope, hash);
+      if (cached) return cached;
+      // A queued request must not be sent to a different machine after switching.
+      if (scope !== this.sessionCacheKey()) return null;
+      const ev = (await this.awaitAck({ kind: "attachment.fetch", hash }, 30000)) as { data?: unknown; mimeType?: unknown };
+      if (!ev || typeof ev.data !== "string") return null;
+      const value = { mimeType: String(ev.mimeType || "application/octet-stream"), data: ev.data };
+      this.attachmentDiskCache.put(scope, hash, value);
+      return value;
+    });
   }
 
   /** Resolve/reject an in-flight awaitAck() call from its matching reply. */

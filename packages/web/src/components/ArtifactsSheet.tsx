@@ -53,7 +53,7 @@ function ArtifactThumb({ artifact, onOpen }: { artifact: ArtifactEntry; onOpen: 
     let cancelled = false;
     let objectUrl: string | null = null;
     setState({ status: "loading" });
-    void controller.fetchAttachment(artifact.hash).then((res) => {
+    void controller.fetchAttachment(artifact.hash, artifact.createdAt).then((res) => {
       if (cancelled) return;
       const url = res && base64ToBlobUrl(res.data, res.mimeType || artifact.mimeType);
       if (url) { objectUrl = url; setState({ status: "ready", url }); } else setState({ status: "unavailable" });
@@ -62,7 +62,7 @@ function ArtifactThumb({ artifact, onOpen }: { artifact: ArtifactEntry; onOpen: 
       cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [artifact.hash, artifact.mimeType]);
+  }, [artifact.hash, artifact.mimeType, artifact.createdAt]);
 
   if (state.status === "ready") {
     return (
@@ -85,7 +85,7 @@ function ArtifactRow({ artifact, onJump, onOpenImage }: { artifact: ArtifactEntr
   const download = async () => {
     setDownloading(true);
     setUnavailable(false);
-    const res = await controller.fetchAttachment(artifact.hash);
+    const res = await controller.fetchAttachment(artifact.hash, Number.MAX_SAFE_INTEGER);
     setDownloading(false);
     const url = res && base64ToBlobUrl(res.data, res.mimeType || artifact.mimeType);
     if (!url) { setUnavailable(true); return; }
