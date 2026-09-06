@@ -71,7 +71,7 @@ export type StandUpForkOutcome<R> =
 
 /** Fork stand-up's entire coupling surface to the rest of the daemon. */
 export interface ForkStandUpDeps<R extends ForkStandUpSession> {
-  createSession(cwd: string, sessionFile: string | undefined, opts: { runtimeId: string; source?: string; sandbox?: SandboxTier; makeActive?: boolean }): Promise<R>;
+  createSession(cwd: string, sessionFile: string | undefined, opts: { runtimeId: string; source?: string; sandbox?: SandboxTier; makeActive?: boolean; newSession?: boolean }): Promise<R>;
   broadcast(payload: unknown): void;
   persistSessionMetadata(record: R): void;
   scheduleAdvertise(): void;
@@ -298,8 +298,8 @@ export function createForkStandUp<R extends ForkStandUpSession>(deps: ForkStandU
     const targetModel = opts.model ?? (targetRuntimeId === bundle.record.runtimeId ? bundle.record.modelRef : undefined);
     const plan = await deps.materializeFork({ bundle, targetRuntime, ctx: { workspace, cwd, model: targetModel }, seed: { transcriptUrl: opts.transcriptUrl } });
     const record = plan.kind === "resume"
-      ? await deps.createSession(cwd, plan.sessionFile, { runtimeId: targetRuntimeId, source: bundle.record.source, sandbox: forkSandbox, makeActive: false })
-      : await deps.createSession(cwd, undefined, { runtimeId: targetRuntimeId, source: bundle.record.source, sandbox: forkSandbox, makeActive: false });
+      ? await deps.createSession(cwd, plan.sessionFile, { runtimeId: targetRuntimeId, source: bundle.record.source, sandbox: forkSandbox, makeActive: false, newSession: true })
+      : await deps.createSession(cwd, undefined, { runtimeId: targetRuntimeId, source: bundle.record.source, sandbox: forkSandbox, makeActive: false, newSession: true });
     // Mark the new session as a fork of its source, so the run card can show
     // "Forked from …" and the lineage survives a reload (persisted below).
     record.forkedFrom = bundle.record.sourceSessionId;

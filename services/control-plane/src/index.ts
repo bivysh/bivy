@@ -145,7 +145,7 @@ async function requireDeploymentAdmission(accountId: string, operation: Deployme
 }
 
 async function parkAutomationRunForDeploymentDenial(accountId: string, item: { id: string }, decision: Awaited<ReturnType<typeof deploymentDecision>>) {
-  const reason = decision.reason || "Hosted automation is blocked by this account plan.";
+  const reason = decision.reason || "Automation is blocked by deployment policy.";
   const run = await store.transitionAutomationRun(accountId, item.id, "needs_attention", { failure: reason });
   const now = new Date().toISOString();
   const patched = await store.appendRunEvidence(accountId, item.id, {
@@ -4309,7 +4309,7 @@ app.post("/webhooks/slack/:id", asyncHandler(async (req, res) => {
   res.json({
     response_type: "ephemeral",
     text: admission.blocked
-      ? `Queued for ${destination}, but Bivy Cloud must be upgraded before hosted automations can run.`
+      ? `Queued for ${destination}, but blocked by account policy: ${admission.reason || "Review the run in Bivy."}`
       : `On it — queued for ${destination}.${repo ? " I'll bring back a pull request." : ""}`,
   });
 }));

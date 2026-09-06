@@ -18,6 +18,7 @@
  */
 
 import type { RunDecision, RunPolicy } from "./policy/run-policy.js";
+import { RemoteSessionAdmissionError } from "./session/remote-session-admission.js";
 
 export interface ControlPlaneTaskConfig {
   controlPlaneUrl: string;
@@ -427,6 +428,18 @@ export class ControlPlaneTaskPoller {
         // Abort errors are ordinary throws to the policy layer unless guarded.
         // A cancelled/lost Run has no node-side terminal transition or retry.
         if (run.state !== "active") return;
+        // Deployment admission is not an agent failure. Never reroute/retry it
+        // through a provider policy or mark the work successfully completed.
+        if (error instanceof RemoteSessionAdmissionError) {
+          const now = new Date().toISOString();
+          await report({
+            events: [{ at: now, kind: "policy_denial", summary: error.message, reasonCode: error.code, status: "denied", attempt }],
+            attention: { severity: "warning", reason: error.message, since: now },
+          });
+          if (run.state !== "active") return;
+          await needsAttentionWork(this.cfg, item.id);
+          return;
+        }
         const policy = typeof this.policy === "function" ? this.policy(current) : this.policy;
         const decision: RunDecision = policy?.decide({
           routing: { runtimeId: current.runtimeId, model: current.model },
