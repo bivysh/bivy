@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.10] - 2026-09-06
+
+### Changed
+
+- Attachment loading now prioritizes newer files and explicit downloads, limits
+  concurrent transfers, and reuses cached bytes across views and browser reloads.
+- Remote session admission now consistently accounts for new manual, automated,
+  and forked sessions while avoiding duplicate charges for delivery retries;
+  quota-denied automation is parked instead of retried or rerouted.
+- Ephemeral launch controls are hidden by default, with an explicit build-time
+  opt-in for operators.
+
+### Fixed
+
+- Session and exec APIs now resolve declared agent aliases consistently, and
+  `bivy exec` uses the same governed runtime selection as interactive chat.
+
 ## [0.16.9] - 2026-09-05
 
 ### Added
