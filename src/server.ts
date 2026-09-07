@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import fs from "node:fs";
+import { createNodeUpdateChecker, updateRegistryUrl } from "./node-update.js";
 import { createRemoteSessionAdmission, RemoteSessionAdmissionError } from "./session/remote-session-admission.js";
 import path from "node:path";
 import os from "node:os";
@@ -373,7 +374,8 @@ const queueRunPolicy: RunPolicy = {
 };
 // Bivy is distributed on npm, so "is there a newer version?" is a registry
 // question. Overridable for self-hosted or mirrored registries.
-const updateRegistryUrl = process.env.BIVY_UPDATE_REGISTRY_URL ?? "https://registry.npmjs.org/%40bivy%2Fbivy/latest";
+// Capture the loaded package version before an update can replace files on disk.
+const runningVersion = readRunningVersion();
 fs.mkdirSync(sessionsDir, { recursive: true });
 fs.mkdirSync(credsDir, { recursive: true, mode: 0o700 });
 // One-time migration for installs created before the shared vault was split out
@@ -694,10 +696,11 @@ if (process.env.BIVY_SESSION_MODEL_FALLBACK) {
   console.log(`[policy] in-session model reroute enabled: ${process.env.BIVY_SESSION_MODEL_FALLBACK}`);
 }
 
-let lastUpdateCheckAt = 0;
-// The most recent "this node is behind" finding, so a client that connects after
-// the check already ran still gets the banner (replayed on connect below).
-let pendingBivyUpdate: { current: string; latest: string } | null = null;
+const nodeUpdates = createNodeUpdateChecker({
+  current: currentVersion() ?? "",
+  registryUrl: () => updateRegistryUrl(appDir, process.env.BIVY_UPDATE_REGISTRY_URL),
+  publish: (state) => broadcast(state),
+});
 
 function runtimeSummary(rt: AgentRuntime) {
   return runtimeHost.summary(rt);
@@ -755,29 +758,18 @@ function capabilitiesWithCommands(runtimeId: string, session: RuntimeSession): R
   return base;
 }
 
-type ReleaseInfo = { version?: string };
-
-/** The version of the running package, read once from its own package.json. */
+/** All version surfaces describe this process, not a newer install on disk. */
 function currentVersion(): string | undefined {
+  return runningVersion;
+}
+
+function readRunningVersion(): string | undefined {
   try {
     const pkgPath = path.join(repoRoot, "package.json");
     return (JSON.parse(fs.readFileSync(pkgPath, "utf8")) as { version?: string }).version;
   } catch {
     return undefined;
   }
-}
-
-/** Compare dotted numeric versions. Returns true when `latest` is newer. */
-function isNewerVersion(latest: string, current: string): boolean {
-  const parse = (v: string) => v.split("-")[0].split(".").map((n) => Number.parseInt(n, 10) || 0);
-  const a = parse(latest);
-  const b = parse(current);
-  for (let i = 0; i < Math.max(a.length, b.length); i++) {
-    const x = a[i] ?? 0;
-    const y = b[i] ?? 0;
-    if (x !== y) return x > y;
-  }
-  return false;
 }
 
 function readJsonFile<T>(file: string): T | undefined {
@@ -793,21 +785,7 @@ function readJsonFile<T>(file: string): T | undefined {
 // banner with a one-tap "Update this node" button (see runBivyUpdate). Safe to
 // call from anywhere — never throws, never interrupts a session.
 async function checkBivyUpdate(): Promise<void> {
-  const now = Date.now();
-  if (now - lastUpdateCheckAt < 6 * 60 * 60 * 1000) return;
-  lastUpdateCheckAt = now;
-  const current = currentVersion();
-  if (!current) return;
-  try {
-    const res = await fetch(updateRegistryUrl, { signal: AbortSignal.timeout(5000) });
-    if (!res.ok) return;
-    const latest = ((await res.json()) as ReleaseInfo).version;
-    if (!latest || !isNewerVersion(latest, current)) return;
-    pendingBivyUpdate = { current, latest };
-    broadcast({ type: "node.update", current, latest });
-  } catch {
-    // Best-effort update checks should never interrupt a session.
-  }
+  await nodeUpdates.check();
 }
 
 async function maybeNotifyBivyUpdate() {
@@ -2441,6 +2419,10 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     if (record) replayPendingInteractions(record.id);
   },
   async "sessions.list"() {
+    // Relay clients request the list on every connect/reconnect. Replay even an
+    // empty update state so a banner from the previous daemon is cleared.
+    relay?.sendEvent(nodeUpdates.snapshot());
+    void checkBivyUpdate();
     relay?.sendEvent({ type: "sessions.list", sessions: await sessionListRows() });
   },
   "session.close"(msg) {
@@ -11490,7 +11472,7 @@ wss.on("connection", (socket, req) => {
   // the socket reconnects on the new build). Then (re)run the throttled check so
   // a freshly-opened app surfaces a newly-available update without waiting for a
   // session turn.
-  socket.send(JSON.stringify({ type: "node.update", current: currentVersion() ?? "", latest: pendingBivyUpdate?.latest }));
+  socket.send(JSON.stringify(nodeUpdates.snapshot()));
   void checkBivyUpdate();
   socket.on("message", (raw) => {
     let msg: { kind?: string };
