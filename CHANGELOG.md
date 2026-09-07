@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.12] - 2026-09-07
+
 ### Fixed
 
 - Reject opaque, empty, multiple, and non-HTTP browser origins at the node API
@@ -20,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Production promotion now requires the canonical full CI workflow on the exact
   release commit, in addition to staging publication and environment approval.
 - Clarified that npm-global and checkout updates do not automatically roll back.
+- Expanded the README to explain Bivy's full product workflow.
 
 ## [0.16.11] - 2026-09-07
 
