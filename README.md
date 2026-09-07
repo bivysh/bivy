@@ -4,7 +4,8 @@
 [![license: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-2b6cb0)](LICENSE)
 [![node](https://img.shields.io/badge/node-%E2%89%A520-2b6cb0)](https://nodejs.org)
 
-**Your agents. Your machines. One workflow.**
+**Run coding agents on your machines and use them from anywhere — from a phone,
+browser, terminal, GitHub issue, Slack message, schedule, or webhook.**
 
 Bivy is an open-source workspace for coding-agent work. Turn prompts, GitHub
 issues, CI failures, Slack messages, and schedules into live sessions on your
