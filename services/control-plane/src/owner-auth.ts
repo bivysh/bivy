@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { randomBytes, scrypt, timingSafeEqual } from "node:crypto";
-import { Router } from "express";
+import { Router, type RequestHandler } from "express";
+import { rateLimit } from "express-rate-limit";
 import { hashToken, type AccountAuthRepository, type SelfHostOwnerRepository } from "./store.js";
 
 type OwnerStore = SelfHostOwnerRepository & Pick<AccountAuthRepository, "findOrCreateAccount" | "getAccount" | "rateLimitExceeded">;
@@ -60,8 +61,13 @@ export function createOwnerAuthRouter(options: OwnerAuthOptions): Router {
     const owner = await store.selfHostOwner();
     res.json({ enabled: Boolean(tokenHash || owner), passwordConfigured: Boolean(owner), setupRequired: Boolean(tokenHash && !await store.selfHostSetupTokenUsed(tokenHash)), github: Boolean(options.github), email: Boolean(options.email) });
   });
-  router.use(async (req, res, next) => {
-    if (req.method !== "POST") return next();
+  // Reject local bursts before querying Postgres; the durable limits below
+  // remain authoritative across replicas and process restarts.
+  const burstLimit = rateLimit({
+    windowMs: 60_000, limit: 10, standardHeaders: "draft-8", legacyHeaders: false,
+    message: { error: "Too many sign-in attempts. Wait a minute and try again." },
+  });
+  const guard: RequestHandler = async (req, res, next) => {
     if (!req.is("application/json")) return res.status(415).json({ error: "Send application/json." });
     if (req.get("origin") && req.get("origin") !== publicOrigin) return res.status(403).json({ error: "Cross-origin sign-in is not allowed." });
     if (await store.rateLimitExceeded("owner-auth-ip", req.ip || "unknown", 10, 60_000) ||
@@ -70,8 +76,8 @@ export function createOwnerAuthRouter(options: OwnerAuthOptions): Router {
       return res.status(429).json({ error: "Too many sign-in attempts. Wait a minute and try again." });
     }
     next();
-  });
-  router.post("/setup", async (req, res) => {
+  };
+  router.post("/setup", burstLimit, guard, async (req, res) => {
     const candidate = typeof req.body?.setupToken === "string" ? req.body.setupToken : "";
     if (!tokenHash || candidate.length > 256 || !timingSafeEqual(Buffer.from(hashToken(candidate), "hex"), Buffer.from(tokenHash, "hex"))) {
       return res.status(401).json({ error: "Invalid or already-used setup secret." });
@@ -93,7 +99,7 @@ export function createOwnerAuthRouter(options: OwnerAuthOptions): Router {
       res.json({ token, relayUrl });
     } finally { hashing = false; }
   });
-  router.post("/login", async (req, res) => {
+  router.post("/login", burstLimit, guard, async (req, res) => {
     const owner = await store.selfHostOwner();
     if (!owner || !passwordValid(req.body?.password)) return res.status(401).json({ error: "Invalid owner password." });
     if (hashing) return res.status(429).json({ error: "Sign-in is busy. Try again in a moment." });

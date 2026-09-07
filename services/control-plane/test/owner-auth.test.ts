@@ -92,7 +92,10 @@ try {
 
   // Shared rate limiter survives another router/process being constructed.
   await start();
-  for (let i = 0; i < 11; i++) await post("login", { password: "incorrect password" }, { "x-forwarded-for": "198.51.100.1" });
+  for (let i = 0; i < 11; i++) {
+    const result = await post("login", { password: "incorrect password" }, { "x-forwarded-for": "198.51.100.1" });
+    assert.equal(result.status, i < 10 ? 401 : 429, "local burst limiter bounds attempts before DB work");
+  }
   await start();
   assert.equal((await post("login", { password }, { "x-forwarded-for": "198.51.100.1" })).status, 429);
   console.log("owner auth: setup proof, password hashing, recovery, replay/races, session fencing, deletion and shared throttling passed");
