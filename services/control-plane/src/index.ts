@@ -18,6 +18,7 @@ import { listAppInstallations, listInstallationRepositories, listInstallationBra
 import { correlateHostedSessions } from "./hosted-correlation.js";
 import { countActiveAccountSessions } from "./session-count.js";
 import { createStore } from "./store-factory.js";
+import { createOwnerAuthRouter } from "./owner-auth.js";
 import { AutomationScheduler, nextOccurrence, normalizeSchedule } from "./schedule.js";
 import { parseShardUrls, shardForNode } from "./relay-shards.js";
 import { safeReturnPath } from "./redirect.js";
@@ -83,6 +84,9 @@ function assertProductionConfig() {
   const relaySecret = process.env.RELAY_SECRET;
   if (!relaySecret || relaySecret === "dev-relay-secret") {
     problems.push("RELAY_SECRET must be set to a strong, non-default value (openssl rand -hex 32)");
+  }
+  if (process.env.SELF_HOST_SETUP_TOKEN && process.env.SELF_HOST_SETUP_TOKEN === relaySecret) {
+    problems.push("SELF_HOST_SETUP_TOKEN must be different from RELAY_SECRET (the relay must not hold owner setup credentials)");
   }
   if (process.env.ALLOW_DEV_LOGIN === "1") {
     problems.push("ALLOW_DEV_LOGIN=1 must not be set in production (it enables an unauthenticated sign-in endpoint)");
@@ -766,6 +770,19 @@ function asyncHandler(fn: (req: Request, res: Response, next: NextFunction) => P
 const githubClientId = process.env.GITHUB_OAUTH_CLIENT_ID || process.env.BIVY_GITHUB_OAUTH_CLIENT_ID;
 const githubClientSecret = process.env.GITHUB_OAUTH_CLIENT_SECRET || process.env.BIVY_GITHUB_OAUTH_CLIENT_SECRET;
 const githubConfigured = Boolean(githubClientId && githubClientSecret);
+
+// Portable owner authentication: needs only Postgres and an operator-generated
+// setup secret. No SSH, external identity provider, or platform-specific API.
+app.use("/auth/owner", createOwnerAuthRouter({
+  store,
+  setupToken: process.env.SELF_HOST_SETUP_TOKEN,
+  ownerEmail: process.env.SELF_HOST_OWNER_EMAIL,
+  publicUrl: process.env.PUBLIC_CONTROL_PLANE_URL || `http://localhost:${port}`,
+  relayUrl: relayPublicUrl,
+  github: githubConfigured,
+  requireHttps: process.env.NODE_ENV === "production",
+  email: Boolean(process.env.RESEND_API_KEY && process.env.AUTH_EMAIL_FROM) || process.env.NODE_ENV !== "production",
+}));
 
 // Short-lived CSRF/login state lives in Postgres, not process memory: GitHub may
 // return the callback to any healthy control-plane replica behind the load

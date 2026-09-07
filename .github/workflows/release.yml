@@ -303,6 +303,9 @@ jobs:
               "$source"
           done
 
+      - name: Build the checksummed self-host deployment bundle
+        run: node scripts/build-self-host.mjs self-host-release
+
       # Tag the promoted commit and cut the GitHub release. The tag push uses
       # GITHUB_TOKEN, which by design does not retrigger this workflow (and a tag
       # push would not match `on: push: branches` anyway).
@@ -329,3 +332,7 @@ jobs:
           else
             gh release create "v$VERSION" --title "v$VERSION" --notes-file release-notes.md
           fi
+          # Same-commit recovery may resume after release creation. Bundles carry
+          # the immutable SHA whose public service images were verified above.
+          gh release upload "v$VERSION" self-host-release/bivy-self-host.tar.gz \
+            self-host-release/bivy-self-host.tar.gz.sha256 self-host-release/install.sh --clobber

@@ -1,18 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// The "connect a machine" command the app tells users to paste. On the hosted
-// control plane that is the one-line installer; a self-hosted control plane has
-// no `install.sh` of its own, so the copied command must instead point `bivy
-// setup` at *this* deployment (BIVY_CONTROL_PLANE_URL / BIVY_RELAY_URL are the
-// env vars the setup wizard pre-fills from) — otherwise a self-hoster's node
-// would enroll on app.bivy.sh. When the app is already signed in, include the
+// The "connect a machine" command uses the public node installer for both
+// hosted and self-hosted deployments, including Node.js prerequisite setup.
+// Self-hosted commands pin BIVY_CONTROL_PLANE_URL / BIVY_RELAY_URL on the bash
+// side of the pipe so the node enrolls on THIS deployment, not app.bivy.sh. When the app is already signed in, include the
 // current account session as BIVY_SESSION_TOKEN so `bivy setup` can enroll the
 // new Machine without asking the user to authenticate again. Also expose a plain
 // no-token variant for users who prefer to authenticate on the new Machine.
 // Pure so it's testable without a DOM.
 
-/** The one-line installer, hosted control plane only. */
+/** Public node installer; endpoint overrides also support self-hosted servers. */
 export const HOSTED_INSTALL_CMD = "curl -fsSL https://bivy.sh/install.sh | bash";
 
 /** Whether an origin is the hosted control plane (or one of its environments). */
@@ -50,14 +48,13 @@ export function installCommand(origin: string, relayUrl?: string | null, session
   ];
   const authedEnv = sessionToken ? [`BIVY_SESSION_TOKEN=${shellQuote(sessionToken)}`, ...baseEnv] : baseEnv;
   const hosted = isHostedControlPlane(origin);
-  const buildHosted = (env: string[]) => env.length ? `curl -fsSL https://bivy.sh/install.sh | ${env.join(" ")} bash` : HOSTED_INSTALL_CMD;
-  const buildSelfHosted = (env: string[]) => `npm install -g @bivy/bivy && ${env.join(" ")} bivy setup`;
+  const build = (env: string[]) => env.length ? `curl -fsSL https://bivy.sh/install.sh | ${env.join(" ")} bash` : HOSTED_INSTALL_CMD;
 
   // Put env on the `bash` side of the pipe. `VAR=… curl … | bash` would only
   // scope it to curl, so setup would still prompt for sign-in.
-  const plainCommand = hosted ? HOSTED_INSTALL_CMD : buildSelfHosted(baseEnv);
+  const plainCommand = hosted ? HOSTED_INSTALL_CMD : build(baseEnv);
   return {
-    command: sessionToken ? (hosted ? buildHosted(authedEnv) : buildSelfHosted(authedEnv)) : plainCommand,
+    command: sessionToken ? build(authedEnv) : plainCommand,
     plainCommand,
     hosted,
     authenticated: Boolean(sessionToken),

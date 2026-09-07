@@ -7,6 +7,7 @@ import { encryptSecret, decryptSecret, isSecretEnvelope, type SecretEnvelope } f
 import { PostgresDatabaseContext } from "./postgres-database.js";
 import {
   type Account,
+  type SelfHostOwnerCredential,
   type DeviceLoginStatus,
   type ControlPlaneStore,
   type NodeRecord,
@@ -229,6 +230,19 @@ export class PostgresStore implements ControlPlaneStore {
         token_hash  TEXT PRIMARY KEY,
         email       TEXT NOT NULL,
         expires_at  TIMESTAMPTZ NOT NULL
+      );
+
+      -- No cascading account FK: deleting an owner account must not re-arm
+      -- spent setup credentials. Recovery requires a new deployment token.
+      CREATE TABLE IF NOT EXISTS self_host_owner (
+        id            TEXT PRIMARY KEY CHECK (id = 'owner'),
+        account_id    TEXT NOT NULL,
+        password_hash TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS self_host_setup_tokens (
+        token_hash TEXT PRIMARY KEY,
+        claim_id   TEXT NOT NULL,
+        used_at    TIMESTAMPTZ NOT NULL DEFAULT now()
       );
 
       CREATE TABLE IF NOT EXISTS sessions (
@@ -798,6 +812,64 @@ export class PostgresStore implements ControlPlaneStore {
   }
 
   // --- Accounts & auth --------------------------------------------------
+
+  async selfHostOwner(): Promise<SelfHostOwnerCredential | undefined> {
+    const { rows } = await this.query(`SELECT account_id, password_hash FROM self_host_owner WHERE id = 'owner'`);
+    return rows[0] ? { accountId: rows[0].account_id, passwordHash: rows[0].password_hash } : undefined;
+  }
+
+  async selfHostSetupTokenUsed(tokenHash: string): Promise<boolean> {
+    const { rows } = await this.query(`SELECT token_hash FROM self_host_setup_tokens WHERE token_hash = $1`, [tokenHash]);
+    return rows.length > 0;
+  }
+
+  async configureSelfHostOwner(credential: SelfHostOwnerCredential, setupTokenHash: string): Promise<boolean> {
+    const transaction = await this.database.beginTransaction();
+    try {
+      const claimId = randomUUID();
+      const claimed = await transaction.query(
+        `INSERT INTO self_host_setup_tokens (token_hash, claim_id) VALUES ($1, $2) ON CONFLICT (token_hash) DO NOTHING RETURNING claim_id`,
+        [setupTokenHash, claimId],
+      );
+      // Require our own insert receipt, never a pre-existing claim. The receipt
+      // also makes this explicit in SQL adapters that return the conflicting row.
+      if (claimed.rows[0]?.claim_id !== claimId) { await transaction.rollback(); return false; }
+      await transaction.query(
+        `INSERT INTO self_host_owner (id, account_id, password_hash) VALUES ('owner', $1, $2)
+         ON CONFLICT (id) DO UPDATE SET account_id = EXCLUDED.account_id, password_hash = EXCLUDED.password_hash`,
+        [credential.accountId, credential.passwordHash],
+      );
+      await transaction.query(`DELETE FROM sessions WHERE account_id = $1`, [credential.accountId]);
+      await transaction.commit();
+      return true;
+    } catch (error) {
+      await transaction.rollback();
+      throw error;
+    } finally { transaction.release(); }
+  }
+
+  async createSelfHostOwnerSession(expectedPasswordHash: string): Promise<string | undefined> {
+    const transaction = await this.database.beginTransaction();
+    try {
+      // Same row lock as configureSelfHostOwner: no stale-password session can
+      // slip in after a reset revokes sessions, even across service replicas.
+      const { rows } = await transaction.query(`SELECT account_id, password_hash FROM self_host_owner WHERE id = 'owner' FOR UPDATE`);
+      const owner = rows[0];
+      const account = owner ? await transaction.query(`SELECT id FROM accounts WHERE id = $1`, [owner.account_id]) : undefined;
+      if (!owner || owner.password_hash !== expectedPasswordHash || !account?.rows.length) {
+        await transaction.rollback();
+        return undefined;
+      }
+      const token = `sess_${randomBytes(24).toString("base64url")}`;
+      await transaction.query(`INSERT INTO sessions (token_hash, account_id, expires_at) VALUES ($1, $2, $3)`,
+        [hashToken(token), owner.account_id, new Date(Date.now() + SESSION_TTL_MS)]);
+      await transaction.commit();
+      return token;
+    } catch (error) {
+      await transaction.rollback();
+      throw error;
+    } finally { transaction.release(); }
+  }
 
   async findOrCreateAccount(email: string): Promise<Account> {
     const { rows } = await this.query(

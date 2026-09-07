@@ -1181,6 +1181,22 @@ export interface StoreLifecycle {
 
 }
 
+export interface SelfHostOwnerCredential {
+  accountId: string;
+  passwordHash: string;
+}
+
+/** Optional, deployment-local owner sign-in; no cross-account administrator role. */
+export interface SelfHostOwnerRepository {
+  selfHostOwner(): Promise<SelfHostOwnerCredential | undefined>;
+  selfHostSetupTokenUsed(tokenHash: string): Promise<boolean>;
+  // A setup token can change the password only once. Rotating the deployment
+  // token explicitly permits recovery. Password changes revoke account sessions.
+  configureSelfHostOwner(credential: SelfHostOwnerCredential, setupTokenHash: string): Promise<boolean>;
+  // Fence session creation against a concurrent password reset after verification.
+  createSelfHostOwnerSession(expectedPasswordHash: string): Promise<string | undefined>;
+}
+
 export interface AccountAuthRepository {
   // Accounts & auth
   findOrCreateAccount(email: string): Promise<Account>;
@@ -1649,6 +1665,7 @@ export interface WorkQueueRepository {
 export interface ControlPlaneStore
   extends StoreLifecycle,
     AccountAuthRepository,
+    SelfHostOwnerRepository,
     NodeRepository,
     SessionIndexRepository,
     NotificationRepository,

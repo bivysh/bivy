@@ -3,7 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_DOMAIN="${1:-${CP_DOMAIN:-}}"
-RELAY_DOMAIN="${2:-${RELAY_DOMAIN:-}}"
+RELAY_DOMAIN="${2:-${RELAY_DOMAIN:-${APP_DOMAIN}}}"
+umask 077
 # Managed/hosted Postgres: set DATABASE_URL in the environment to use an external
 # database (DigitalOcean, Render, Neon, Supabase, RDS, ...) instead of the bundled
 # postgres container. When set, the installer skips the local DB password, writes
@@ -17,7 +18,7 @@ BIVY_IMAGE_TAG="${BIVY_IMAGE_TAG:-}"
 
 usage() {
   cat <<'EOF'
-Usage: bash deploy/self-host.sh <app-domain> <relay-domain>
+Usage: bash deploy/self-host.sh <app-domain> [relay-domain]
 
 Example:
   bash deploy/self-host.sh app.example.com relay.example.com
@@ -33,14 +34,14 @@ DATABASE_URL in the environment (keep the sslmode your provider gives you):
 
 Prereqs:
   - Docker + docker compose plugin (v2.24+ if you use a managed DATABASE_URL)
-  - DNS A/AAAA records for both domains pointing at this host
+  - DNS A/AAAA records for the domain(s) pointing at this host
   - ports 80 and 443 open
 
-The script writes deploy/.env if missing and configures the untouched example
-Caddyfile for your domains. Production requires either Resend email or GitHub
-OAuth sign-in; when neither is configured, the script writes setup files and
-stops before Docker. It otherwise starts control-plane + relay + Caddy (plus a
-bundled Postgres unless DATABASE_URL points at a managed database).
+One domain is enough: the relay is served under /relay. An optional second
+argument keeps the separate relay domain layout. New installs enable a local
+owner identity and print a private, single-use login link. GitHub/Resend are
+optional. Existing configuration is preserved. The script waits for container
+and public HTTPS readiness before printing success.
 EOF
 }
 
@@ -50,24 +51,42 @@ if [[ "${APP_DOMAIN}" == "" || "${RELAY_DOMAIN}" == "" || "${APP_DOMAIN}" == "-h
 fi
 
 normalize_domain() {
-  printf '%s' "$1" | perl -pe 's#^https?://##i; s#/.*$##; s#\s+##g#'
+  local domain="${1#https://}"
+  domain="${domain#http://}"
+  printf '%s' "${domain%/}" | tr '[:upper:]' '[:lower:]'
+}
+
+valid_domain() {
+  local domain="$1" label
+  [[ ${#domain} -le 253 && "$domain" =~ ^[a-z0-9.-]+$ && "$domain" == *.* && "$domain" != *..* && "$domain" != *. ]] || return 1
+  local labels
+  IFS='.' read -r -a labels <<< "$domain"
+  for label in "${labels[@]}"; do
+    [[ ${#label} -le 63 && "$label" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || return 1
+  done
 }
 
 APP_DOMAIN="$(normalize_domain "${APP_DOMAIN}")"
 RELAY_DOMAIN="$(normalize_domain "${RELAY_DOMAIN}")"
 
-if [[ "${APP_DOMAIN}" == "" || "${RELAY_DOMAIN}" == "" ]]; then
-  echo "Both domains must be non-empty after normalization." >&2
+if ! valid_domain "$APP_DOMAIN" || ! valid_domain "$RELAY_DOMAIN"; then
+  echo "Use DNS hostnames only (no paths, ports, wildcards, or credentials)." >&2
   exit 1
 fi
+RELAY_PUBLIC_URL="wss://${RELAY_DOMAIN}"
+if [[ "$APP_DOMAIN" == "$RELAY_DOMAIN" ]]; then
+  RELAY_PUBLIC_URL="wss://${APP_DOMAIN}/relay"
+fi
 
-# Allow an operator/secret manager to provide auth on the first run. If these
-# are absent, the generated .env intentionally leaves them blank and the auth
-# gate below explains how to finish configuration before Docker starts.
+# Optional external auth can be provided on the first run. Otherwise the local
+# owner identity below gives the administrator a secure shell-only login path.
 RESEND_API_KEY_INPUT="${RESEND_API_KEY:-}"
 AUTH_EMAIL_FROM_INPUT="${AUTH_EMAIL_FROM:-}"
 GITHUB_OAUTH_CLIENT_ID_INPUT="${GITHUB_OAUTH_CLIENT_ID:-}"
 GITHUB_OAUTH_CLIENT_SECRET_INPUT="${GITHUB_OAUTH_CLIENT_SECRET:-}"
+# A local identity, not a claim that an external email address was verified.
+SELF_HOST_OWNER_EMAIL_INPUT="${SELF_HOST_OWNER_EMAIL-owner@self-host.invalid}"
+SELF_HOST_SETUP_TOKEN_INPUT="${SELF_HOST_SETUP_TOKEN:-}"
 
 rand() {
   if command -v openssl >/dev/null 2>&1; then openssl rand -base64 "$1"
@@ -77,9 +96,17 @@ rand() {
 
 cd "${ROOT}"
 mkdir -p deploy
+source deploy/common.sh
+# Reject a domain change before touching the existing image pin or any config.
+if [[ -f deploy/.env ]] && [[ "$(env_value PUBLIC_CONTROL_PLANE_URL)" != "https://${APP_DOMAIN}" || "$(env_value RELAY_PUBLIC_URL)" != "$RELAY_PUBLIC_URL" ]]; then
+  echo "These domains differ from deploy/.env. Use the existing domains, or explicitly update .env and Caddyfile together." >&2
+  exit 1
+fi
 
 if [[ -z "${BIVY_IMAGE_TAG}" ]]; then
-  if ! BIVY_IMAGE_TAG="$(git rev-parse 'HEAD^{commit}' 2>/dev/null)"; then
+  if [[ -f deploy/RELEASE_IMAGE_TAG ]]; then
+    BIVY_IMAGE_TAG="$(< deploy/RELEASE_IMAGE_TAG)"
+  elif ! BIVY_IMAGE_TAG="$(git rev-parse 'HEAD^{commit}' 2>/dev/null)"; then
     echo "Cannot resolve this checkout's image tag. Set BIVY_IMAGE_TAG to a release version or full Core commit SHA." >&2
     exit 1
   fi
@@ -99,7 +126,7 @@ fi
 # so we still layer the hosted-db overlay (otherwise we'd wrongly start a bundled
 # postgres alongside the managed database).
 if [[ -z "${DATABASE_URL}" && -f deploy/.env ]] && grep -qE '^[[:space:]]*DATABASE_URL=' deploy/.env; then
-  DATABASE_URL="$(grep -E '^[[:space:]]*DATABASE_URL=' deploy/.env | head -n1 | cut -d= -f2-)"
+  DATABASE_URL="$(env_value DATABASE_URL)"
 fi
 
 # Compose files to layer, and a human-readable DB mode for the summary.
@@ -120,7 +147,7 @@ if [[ ! -f deploy/.env ]]; then
 NODE_ENV=production
 BIVY_IMAGE_TAG=${BIVY_IMAGE_TAG}
 PUBLIC_CONTROL_PLANE_URL=https://${APP_DOMAIN}
-RELAY_PUBLIC_URL=wss://${RELAY_DOMAIN}
+RELAY_PUBLIC_URL=${RELAY_PUBLIC_URL}
 DISABLE_DEV_LOGIN=1
 
 RELAY_SECRET=${RELAY_SECRET}
@@ -133,8 +160,7 @@ POSTGRES_DB=bivy_control_plane
 POSTGRES_USER=bivy
 POSTGRES_PASSWORD=unused
 
-# Configure at least one sign-in path (Resend email or GitHub OAuth). Web push
-# remains optional.
+# Optional external sign-in. Push keys are generated on first successful startup.
 RESEND_API_KEY=${RESEND_API_KEY_INPUT}
 AUTH_EMAIL_FROM=${AUTH_EMAIL_FROM_INPUT}
 GITHUB_OAUTH_CLIENT_ID=${GITHUB_OAUTH_CLIENT_ID_INPUT}
@@ -148,12 +174,13 @@ WEB_PUSH_SUBJECT=mailto:admin@${APP_DOMAIN}
 HOSTED_CREDENTIAL_KEY=
 EOF
   else
-    POSTGRES_PASSWORD="$(rand 32)"
+    # URL-safe random password for the derived Postgres connection URI.
+    POSTGRES_PASSWORD="$(rand 32 | tr '+/' '-_' | tr -d '=\n')"
     cat > deploy/.env <<EOF
 NODE_ENV=production
 BIVY_IMAGE_TAG=${BIVY_IMAGE_TAG}
 PUBLIC_CONTROL_PLANE_URL=https://${APP_DOMAIN}
-RELAY_PUBLIC_URL=wss://${RELAY_DOMAIN}
+RELAY_PUBLIC_URL=${RELAY_PUBLIC_URL}
 DISABLE_DEV_LOGIN=1
 
 RELAY_SECRET=${RELAY_SECRET}
@@ -161,8 +188,7 @@ POSTGRES_DB=bivy_control_plane
 POSTGRES_USER=bivy
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 
-# Configure at least one sign-in path (Resend email or GitHub OAuth). Web push
-# remains optional.
+# Optional external sign-in. Push keys are generated on first successful startup.
 RESEND_API_KEY=${RESEND_API_KEY_INPUT}
 AUTH_EMAIL_FROM=${AUTH_EMAIL_FROM_INPUT}
 GITHUB_OAUTH_CLIENT_ID=${GITHUB_OAUTH_CLIENT_ID_INPUT}
@@ -176,7 +202,9 @@ WEB_PUSH_SUBJECT=mailto:admin@${APP_DOMAIN}
 HOSTED_CREDENTIAL_KEY=
 EOF
   fi
-  chmod 600 deploy/.env || true
+  printf '\n# Local owner identity; this is not a verified external email.\nSELF_HOST_OWNER_EMAIL=%s\n' "$SELF_HOST_OWNER_EMAIL_INPUT" >> deploy/.env
+  printf '# Optional browser setup secret (generate with openssl rand -hex 32).\nSELF_HOST_SETUP_TOKEN=%s\n' "$SELF_HOST_SETUP_TOKEN_INPUT" >> deploy/.env
+  chmod 600 deploy/.env
   echo "Wrote deploy/.env"
 else
   echo "Keeping existing deploy/.env"
@@ -213,8 +241,19 @@ relay.example.com {
 EOF
 )"
 if [[ ! -f deploy/Caddyfile || "$(cat deploy/Caddyfile)" == "${CADDY_TEMPLATE}" ]]; then
-  CONFIGURED_CADDY="${CADDY_TEMPLATE//app.example.com/${APP_DOMAIN}}"
-  CONFIGURED_CADDY="${CONFIGURED_CADDY//relay.example.com/${RELAY_DOMAIN}}"
+  if [[ "$APP_DOMAIN" == "$RELAY_DOMAIN" ]]; then
+    CONFIGURED_CADDY="${APP_DOMAIN} {
+  handle_path /relay/* {
+    reverse_proxy relay:4500
+  }
+  handle {
+    reverse_proxy control-plane:4400
+  }
+}"
+  else
+    CONFIGURED_CADDY="${CADDY_TEMPLATE//app.example.com/${APP_DOMAIN}}"
+    CONFIGURED_CADDY="${CONFIGURED_CADDY//relay.example.com/${RELAY_DOMAIN}}"
+  fi
   printf '%s\n' "${CONFIGURED_CADDY}" > deploy/Caddyfile
   echo "Wrote deploy/Caddyfile for ${APP_DOMAIN} + ${RELAY_DOMAIN}"
 else
@@ -225,24 +264,23 @@ fi
 # login. Do not continue into an unusable deployment:
 # require at least one real sign-in path before Docker is touched. Parse
 # individual keys rather than `source`-ing operator-controlled .env content.
-env_value() {
-  local key="$1"
-  local value
-  value="$(grep -E "^[[:space:]]*${key}=" deploy/.env | tail -n1 | cut -d= -f2- | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' || true)"
-  if [[ ${#value} -ge 2 ]]; then
-    if [[ "${value:0:1}" == '"' && "${value: -1}" == '"' ]] \
-      || [[ "${value:0:1}" == "'" && "${value: -1}" == "'" ]]; then
-      value="${value:1:${#value}-2}"
-    fi
-  fi
-  printf '%s' "${value}"
-}
 
 RESEND_CONFIGURED="$(env_value RESEND_API_KEY)"
 AUTH_EMAIL_FROM_CONFIGURED="$(env_value AUTH_EMAIL_FROM)"
 GITHUB_CLIENT_ID_CONFIGURED="$(env_value GITHUB_OAUTH_CLIENT_ID)"
 GITHUB_CLIENT_SECRET_CONFIGURED="$(env_value GITHUB_OAUTH_CLIENT_SECRET)"
-if [[ ( -z "${RESEND_CONFIGURED}" || -z "${AUTH_EMAIL_FROM_CONFIGURED}" ) \
+OWNER_EMAIL_CONFIGURED="$(env_value SELF_HOST_OWNER_EMAIL)"
+OWNER_SETUP_CONFIGURED="$(env_value SELF_HOST_SETUP_TOKEN)"
+if [[ -n "$OWNER_SETUP_CONFIGURED" && ! "$OWNER_SETUP_CONFIGURED" =~ ^[A-Za-z0-9_+/=-]{32,256}$ ]]; then
+  echo "SELF_HOST_SETUP_TOKEN must be a random secret of 32–256 URL/base64-safe characters." >&2
+  exit 1
+fi
+if [[ -n "$OWNER_EMAIL_CONFIGURED" && ! "$OWNER_EMAIL_CONFIGURED" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]]; then
+  echo "Invalid SELF_HOST_OWNER_EMAIL in deploy/.env." >&2
+  exit 1
+fi
+if [[ -z "$OWNER_EMAIL_CONFIGURED" && -z "$OWNER_SETUP_CONFIGURED" \
+  && ( -z "${RESEND_CONFIGURED}" || -z "${AUTH_EMAIL_FROM_CONFIGURED}" ) \
   && ( -z "${GITHUB_CLIENT_ID_CONFIGURED}" || -z "${GITHUB_CLIENT_SECRET_CONFIGURED}" ) ]]; then
   cat >&2 <<EOF
 
@@ -250,6 +288,8 @@ Bivy configuration was written, but the stack was not started because no
 production sign-in method is configured.
 
 Choose one, edit deploy/.env, then run this same command again:
+  - Browser owner setup: set SELF_HOST_SETUP_TOKEN (generate with openssl rand -hex 32).
+  - Private server-shell login: set SELF_HOST_OWNER_EMAIL=owner@self-host.invalid.
   - Email magic links: set RESEND_API_KEY (and a verified AUTH_EMAIL_FROM).
   - GitHub sign-in: set GITHUB_OAUTH_CLIENT_ID and GITHUB_OAUTH_CLIENT_SECRET.
     Setup guide: docs/github-oauth-setup.md
@@ -260,12 +300,16 @@ EOF
   exit 2
 fi
 
-# Test/configuration helper: validate generated files and the auth gate without
-# requiring Docker. Normal deployments never set this.
+# Tests exercise generation without requiring Docker.
 if [[ "${BIVY_SELF_HOST_CONFIG_ONLY:-0}" == "1" ]]; then
   echo "Self-host setup files and auth configuration are valid (Docker not started)."
   exit 0
 fi
+for tool in docker curl; do
+  command -v "$tool" >/dev/null || { echo "Missing $tool. Use deploy/install.sh or install prerequisites first." >&2; exit 1; }
+done
+docker info >/dev/null 2>&1 || { echo "Cannot access Docker. Start Docker and run with Docker administrative access." >&2; exit 1; }
+docker compose version >/dev/null 2>&1 || { echo "Install the Docker Compose v2 plugin." >&2; exit 1; }
 
 # Fail early with a clear hint if the merged compose config is invalid — the most
 # likely cause in managed mode is a Docker Compose older than v2.24 (the
@@ -285,17 +329,40 @@ if ! docker compose "${COMPOSE_ARGS[@]}" --env-file deploy/.env config -q 2>"${C
 fi
 
 docker compose "${COMPOSE_ARGS[@]}" --env-file deploy/.env pull control-plane relay
-docker compose "${COMPOSE_ARGS[@]}" --env-file deploy/.env up -d
+if ! docker compose "${COMPOSE_ARGS[@]}" --env-file deploy/.env up -d --wait --wait-timeout 180; then
+  echo "Services did not become healthy. Run: bash deploy/manage.sh status" >&2
+  exit 1
+fi
+
+# Generate push keys once, on the server, using the dependency already in the
+# image. Never silently regenerate half-configured or existing subscriptions.
+if [[ -z "$(env_value WEB_PUSH_VAPID_PUBLIC_KEY)" && -z "$(env_value WEB_PUSH_VAPID_PRIVATE_KEY)" ]]; then
+  PUSH_KEYS="$(docker compose "${COMPOSE_ARGS[@]}" --env-file deploy/.env exec -T control-plane node --input-type=module -e \
+    'import webpush from "web-push"; const k = webpush.generateVAPIDKeys(); console.log(k.publicKey + ":" + k.privateKey)')"
+  if [[ "$PUSH_KEYS" =~ ^[A-Za-z0-9_-]+:[A-Za-z0-9_-]+$ ]]; then
+    sed -i -e "s/^WEB_PUSH_VAPID_PUBLIC_KEY=.*/WEB_PUSH_VAPID_PUBLIC_KEY=${PUSH_KEYS%%:*}/" \
+      -e "s/^WEB_PUSH_VAPID_PRIVATE_KEY=.*/WEB_PUSH_VAPID_PRIVATE_KEY=${PUSH_KEYS#*:}/" deploy/.env
+    docker compose "${COMPOSE_ARGS[@]}" --env-file deploy/.env up -d --wait --wait-timeout 180 control-plane
+  else
+    echo "Could not generate push keys; inspect the control-plane logs." >&2
+    exit 1
+  fi
+fi
+
+bash deploy/manage.sh check
 
 echo
-echo "Bivy self-host stack started."
+echo "Bivy self-host stack is ready."
 echo "Database:      ${DB_MODE}"
 echo "Control plane: https://${APP_DOMAIN}"
-echo "Relay:         wss://${RELAY_DOMAIN}"
-echo
-echo "Connect a node:"
-if [[ -n "${GITHUB_CLIENT_ID_CONFIGURED}" && -n "${GITHUB_CLIENT_SECRET_CONFIGURED}" ]]; then
-  echo "  bivy relay:setup --control-plane https://${APP_DOMAIN} --relay wss://${RELAY_DOMAIN} --github"
+echo "Relay:         ${RELAY_PUBLIC_URL}"
+if [[ -n "$OWNER_EMAIL_CONFIGURED" ]]; then
+  bash deploy/manage.sh login
+elif [[ -n "$OWNER_SETUP_CONFIGURED" ]]; then
+  echo "Open https://${APP_DOMAIN} and enter your deployment setup secret to choose an owner password."
 else
-  echo "  bivy relay:setup --control-plane https://${APP_DOMAIN} --relay wss://${RELAY_DOMAIN} --email you@example.com"
+  echo "Open https://${APP_DOMAIN} and sign in with your configured provider."
 fi
+echo
+echo "In the web app, choose Connect a Machine and copy its authenticated install command."
+echo "Later: bash deploy/manage.sh login | status | backup | update"
