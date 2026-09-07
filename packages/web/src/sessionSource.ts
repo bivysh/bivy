@@ -20,6 +20,24 @@
 // See src/server.ts (`queue:${item.source}`, `repo:${slug}`, `issue:…`) and
 // packages/core/src/store-normalize.ts for where these are produced/parsed.
 
+import type { GithubQueueItem } from "@bivy/core";
+
+/** Session source tags also describe repository identity, not just provenance.
+ * Keep the creating run's trigger separate so repo/branch/PR metadata survives.
+ * Do not relabel a manually opened session when a scheduled follow-up targets it.
+ * Evidence is newest-first; origin is the earliest creating run, not the latest
+ * run whose status happens to be displayed. Legacy runs omit targetKind. */
+export function indexSessionSources(queue: GithubQueueItem[] | null | undefined): Map<string, SourceInfo> {
+  const origins = new Map<string, GithubQueueItem>();
+  for (const item of queue ?? []) {
+    const sid = item.output?.sessionId;
+    if (!sid || item.targetKind === "existing_session" || item.targetSessionId === sid) continue;
+    const previous = origins.get(sid);
+    if (!previous || item.createdAt < previous.createdAt) origins.set(sid, item);
+  }
+  return new Map([...origins].map(([sid, item]) => [sid, classifySource(item.source)]));
+}
+
 /** Every trigger a run can carry, plus the two non-automation origins (a live
  *  `bivy run` terminal → `cli`, anything else opened by hand → `app`). */
 export type SourceKind =
