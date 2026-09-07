@@ -4504,7 +4504,7 @@ async function runUpdate(args = []) {
     await waitForIdleSessions(config, { skip: skipWait });
     // install.sh reads BIVY_CHANNEL from the env; pass the recorded channel so a
     // packaged re-install stays on it (and re-records it) instead of latest.
-    const code = await run("bash", ["-c", "curl -fsSL https://bivy.sh/install.sh | bash"], {
+    const code = await run("bash", ["-o", "pipefail", "-c", "curl -fsSL https://bivy.sh/install.sh | bash"], {
       cwd: repoRoot,
       env: { ...process.env, BIVY_HOME: repoRoot, BIVY_CHANNEL: channel },
     });
@@ -4520,9 +4520,18 @@ async function runUpdate(args = []) {
   console.log(c.dim("Pulling latest code…"));
   const branch = runQuiet("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: repoRoot }).stdout.trim();
   const pull = await run("git", ["pull", "--ff-only", "origin", branch || "main"], { cwd: repoRoot });
-  if (pull !== 0) console.log(c.yellow("git pull reported an issue; continuing."));
+  if (pull !== 0) {
+    console.log(c.yellow(`git pull failed (exit ${pull}); update stopped without restarting the service.`));
+    process.exitCode = pull;
+    return;
+  }
   const [updateCmd, updateArgs] = installCommandFor(repoRoot);
-  await run(updateCmd, updateArgs, { cwd: repoRoot });
+  const installCode = await run(updateCmd, updateArgs, { cwd: repoRoot });
+  if (installCode !== 0) {
+    console.log(c.yellow(`Dependency installation failed (exit ${installCode}); service not restarted. Resolve the installation error and retry 'bivy update'.`));
+    process.exitCode = installCode;
+    return;
+  }
   await ensureKnownAgents();
   const config = loadConfig();
   await waitForIdleSessions(config, { skip: skipWait });

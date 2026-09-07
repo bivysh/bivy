@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Reject opaque, empty, multiple, and non-HTTP browser origins at the node API
+  and WebSocket origin guard, while preserving native clients without Origin.
+- Stop checkout updates on Git or dependency-installation failure without
+  restarting the service, and propagate packaged-update download failures.
+- Keep public-copy contract tests insensitive to Markdown line wrapping.
+
+### Changed
+
+- Production promotion now requires the canonical full CI workflow on the exact
+  release commit, in addition to staging publication and environment approval.
+- Clarified that npm-global and checkout updates do not automatically roll back.
+
 ## [0.16.11] - 2026-09-07
 
 ### Changed

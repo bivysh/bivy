@@ -23,7 +23,10 @@ const publicDocs = [
   "docs/automation-runs.md",
   "docs/cli-reference.md",
 ];
-const publicCopy = publicDocs.map((path) => readFileSync(path, "utf8")).join("\n");
+// Markdown wrapping and blockquote prefixes do not change rendered prose.
+const publicCopy = publicDocs.map((path) => readFileSync(path, "utf8")
+  .replace(/^\s*>\s?/gm, "")
+  .replace(/\s+/g, " ")).join("\n");
 
 /** These are exact customer-facing fragments, not internal route/type names.
  * Keeping the allowlist narrow lets compatibility identifiers such as `nodeId`
