@@ -7,21 +7,24 @@
 **Run coding agents on your machines and use them from anywhere — from a phone,
 browser, terminal, GitHub issue, Slack message, schedule, or webhook.**
 
-Start Claude Code on your workstation, next to the repo, dev server, and
-database you already use. Walk away. From your phone, you can see what it did,
-answer a question, or approve a migration. CI or a webhook can start the next
-job on the right Machine without waiting for you to return.
+Start Claude Code or Codex in the development environment you already use —
+with your repo, running services, tools, and credentials. Leave your desk,
+open the session on your phone, and answer a question, approve an action, or
+review the diff. GitHub issues, CI, schedules, and webhooks can start work on
+those same machines.
 
 ```bash
 curl -fsSL https://bivy.sh/install.sh | bash  # install + guided setup
 cd your-repo
-bivy run claude                                # start an agent in this repo
-bivy open                                      # open it in a browser or on your phone
+bivy run claude                            # start an agent in this repo
+bivy open                                  # open the web app (requires remote setup)
 ```
 
-Bivy does not replace Claude Code, Codex, or the other agents you use. It keeps
-their Sessions running, routes work to the right Machine, and gives you one place
-to start, join, approve, and review work.
+Bivy does not replace your coding agent or provide model inference. It keeps
+Sessions running, routes work to connected Machines, and gives you one place to
+start, join, approve, and review work. A **Machine** is a Mac, Linux computer,
+or existing server you operate; a **Session** is the agent work running there.
+Your machine must stay awake and online for remote access.
 
 First thing to try: ask the agent to explain the repository, make one small safe
 change, then open the same Session in the web app or on your phone while it runs.
@@ -37,22 +40,19 @@ change, then open the same Session in the web app or on your phone while it runs
 > [runtime support matrix](docs/runtime-support-matrix.md) before relying on a
 > specific feature.
 
-## Why not just a cloud sandbox?
+## Why run on your own machines?
 
-A hosted sandbox clones your repo into a clean environment. Bivy runs in the
-environment you already use: the current working tree, running services, and
-warm caches.
+A fresh cloud sandbox can be useful, but it is not always the environment your
+work needs. Bivy connects to the machines you already operate, so your agent can
+use:
 
-|  | Cloud sandbox | Bivy Machine |
-|---|---|---|
-| Your repository | a cloned copy | the real working tree, uncommitted changes and all |
-| Dev server & database | mocked, or absent | already running, right beside the agent |
-| Private networks & internal APIs | out of reach | reachable |
-| Toolchains, package caches | cold, reinstalled each time | warm, already installed |
-| GPUs / local inference | rented separately | the ones on your box |
-| Where your code sits | someone else's infrastructure | the machine you already trust |
+- Your existing working tree, including uncommitted changes.
+- Running dev servers, databases, installed toolchains, and warm caches.
+- Private networks and internal APIs that machine can reach.
+- Your GPUs and local model servers.
 
-Bivy lets you leave that environment running and reach it from anywhere.
+You bring the environment; Bivy makes the work accessible from anywhere.
+Background Runs can use isolated worktrees without rebuilding the whole machine.
 
 ## What you can do
 
@@ -66,7 +66,7 @@ Start an agent, watch it work, steer it, stop it, or approve a tool call. You ca
 leave your desk and keep the Session open:
 
 ```bash
-bivy run claude              # or codex, pi, gemini, and a dozen more
+bivy run claude              # or codex, pi, opencode
 bivy open                    # continue the same session in the browser or PWA
 bivy resume                  # pick it back up in the terminal
 bivy run claude --no-follow  # start it in the background instead of attaching
@@ -128,9 +128,20 @@ remote access. The browser and phone apps need a control plane: use
 [self-host one](docs/self-host-quickstart.md). You can sign in later with
 `bivy login` (or use `bivy relay:setup` for self-hosted endpoint options).
 
-Self-hosted Bivy Core is open source and has no usage limits. Bivy Cloud offers
-a managed app, relay, and hosted Machines; see
-[bivy.sh#pricing](https://bivy.sh#pricing) for details.
+**What Cloud hosts.** Bivy Cloud runs the web app, control plane, and encrypted
+relay — not your agents or their machines. Connect a computer or server you
+already operate and bring your own agent subscription or model API key.
+
+- **Free Cloud:** every launch feature, including automations, with 10 new remote
+  Sessions per rolling seven days. Manual and automated Sessions share this
+  allowance; resuming existing Sessions and viewing history do not consume it.
+  No credit card required.
+- **Cloud — $15/month:** unlimited remote Sessions, with the same features.
+- **Self-hosted Core:** run the app, control plane, and relay yourself, with no
+  Bivy usage limits.
+
+Agent subscriptions and model-provider charges are separate. See
+[bivy.sh#pricing](https://bivy.sh#pricing) for current hosted pricing.
 
 Prefer to inspect the installer first?
 
@@ -183,14 +194,11 @@ Environment variables passed to the one-line installer change what it does:
 
 | Goal | Variable |
 |---|---|
-| Track the dev channel (new build on every merge to `main`) | `BIVY_CHANNEL=staging` |
 | Pin an exact version | `BIVY_VERSION=0.1.0` |
 | Install the npm package into a user-owned prefix | `BIVY_NPM_PREFIX=~/.local` |
 | Preinstall every known upstream agent | `BIVY_INSTALL_ALL_AGENTS=1` |
 | Install optional Bivy bridges/native terminal dependency up front | `BIVY_INSTALL_OPTIONAL_DEPS=1` |
 | Don't touch `~/.bashrc` / `~/.zshrc`; print the PATH line instead | `BIVY_NO_RC_UPDATE=1` |
-
-For example: `BIVY_CHANNEL=staging curl -fsSL https://bivy.sh/install.sh | bash`.
 
 Working from a checkout of this repository instead:
 
@@ -213,19 +221,17 @@ active turn to finish, updates Bivy, and restarts the background service:
 
 | Install kind | What `bivy update` does |
 |---|---|
-| npm global (`npm i -g`) | `npm install -g @bivy/bivy@<channel>`, then restart the service |
+| npm global (`npm i -g`) | updates the global npm package, then restarts the service |
 | installer / packaged | re-runs `install.sh` (migrating to npm if needed), then restart |
 | git checkout | `git pull --ff-only` + `pnpm install --frozen-lockfile`, then restart |
 | `npx` run | nothing to update — each run already fetches the latest |
 
-Updates follow the release **channel** recorded at install time — `latest`
-(production) by default, or `staging` if you installed with
-`BIVY_CHANNEL=staging`. Switch channels (the choice is remembered for next
-time), or skip the wait for a busy session:
+The standard installer uses stable releases (`latest` on npm). Use
+`bivy update` to keep that installation current.
+
+To skip the wait for a busy session:
 
 ```bash
-bivy update --staging   # move to the dev channel
-bivy update --stable    # move back to production (latest)
 bivy update --force     # don't wait for an in-flight turn to finish
 ```
 
@@ -396,11 +402,16 @@ bivy secrets doctor
 `secret://`, `env://`, and `op://` (1Password) references are resolved only when
 an agent needs them, so the raw values do not appear in config files.
 
-Hosted unattended provisioning is different from normal interactive Sessions.
-If you enable it, Bivy Cloud may hold encrypted cloud, repository, model, or
-key-escrow data that the service can access. See the
-[security model](docs/security-model.md#what-the-control-plane-sees) and
-[key-management guide](docs/key-management.md).
+Optional credential sync uploads encrypted vault data and per-machine wrapped
+keys, not plaintext credentials. See the
+[credential-sync guide](docs/credential-sync.md) for supported credentials and
+recovery limits, and the [key-management guide](docs/key-management.md) for
+storage options.
+
+Interactive session encryption does not cover every integration: Slack commands
+and generic webhook instructions reach the control plane in plaintext. Do not
+put secrets in them. The [security model](docs/security-model.md#what-the-control-plane-sees)
+explains what each path exposes.
 
 ## Automations as code
 
@@ -424,8 +435,8 @@ Label an issue `bivy` (or `bivy/<machine>` to target a Machine), or mention the
 Bivy GitHub App in a comment. Bivy creates a Run on the selected Machine, uses an
 isolated worktree, runs the configured checks, and posts the result.
 
-Core has no usage limits. Hosted pricing is managed in the separate Cloud
-repository.
+On Bivy Cloud, a new automation Session counts toward the same allowance as a
+manually started remote Session. Self-hosted Core has no Bivy usage limits.
 
 A private GitHub App only installs on the account that owns it, so connect one
 app per GitHub account — one for your personal repos, one per organization
@@ -475,9 +486,12 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Self-hosting
 
-Node, relay, and control plane are all in this repository. Point a node at your
-own deployment by passing URLs to `bivy relay:setup` — re-running it switches an
-existing node over to the new endpoints:
+The node, web/PWA client, relay, and control plane are all in this repository.
+Self-hosting means operating the remote-access infrastructure yourself; agents
+still run on computers or servers you have set up and connected.
+
+Point a node at your own deployment by passing URLs to `bivy relay:setup` —
+re-running it switches an existing node over to the new endpoints:
 
 ```bash
 bivy relay:setup \
@@ -524,6 +538,19 @@ Report vulnerabilities through [GitHub private vulnerability reporting](https://
 Please don't open a public issue. See [`SECURITY.md`](SECURITY.md) for scope,
 response times, and safe harbour, and [`docs/security-model.md`](docs/security-model.md)
 for the trust model and known limitations.
+
+## In development
+
+Ephemeral Machines — automatically provisioned, short-lived servers for agent
+work — are in development. The code includes provisioning work for both
+Bivy-hosted and self-hosted/bring-your-own-cloud deployments, but **neither path
+is ready or supported for this launch**. Bivy Cloud does not offer hosted agent
+Machines at launch. Use an existing computer or server you operate instead.
+
+Experimental provisioning has different credential-custody and encryption
+boundaries; see the [provisioning trust model](docs/hosted-provisioning-trust-model.md)
+before evaluating that code. Its presence in the repository is not a readiness
+or availability promise.
 
 ## License
 
