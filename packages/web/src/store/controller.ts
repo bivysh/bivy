@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { requestNodeUpdate } from "./node-update.js";
 // Copyright (c) 2026 Petter André Sjulstad
 // AppController — the single seam between the React view and @bivy/core.
 //
@@ -1312,15 +1313,9 @@ export class AppController {
     this.sessionCoordinator.send(command);
   }
 
-  /** Trigger `bivy update` on the connected node from the version-mismatch
-   *  banner. Optimistically marks the node updating so the button can't be
-   *  double-tapped; on success the node restarts and the socket reconnects on
-   *  the new build (the banner clears itself — see the store's node.update
-   *  handler), and a start failure comes back as node.update.result. */
+  /** The startup acknowledgement is bounded; installation may take longer. */
   updateNode(): void {
-    if (this.store.getState().connection.nodeUpdating) return;
-    this.store.setNodeUpdating(true);
-    this.send({ kind: "node.update" });
+    requestNodeUpdate(this.store, () => this.transport.send({ kind: "node.update" }));
   }
 
   /**
