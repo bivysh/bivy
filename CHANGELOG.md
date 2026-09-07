@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.13] - 2026-09-07
+
+### Added
+
+- Portable self-hosting with browser-based owner setup and sign-in, guided VPS
+  deployment, and release bundles with pinned service images.
+- Self-host deployment management scripts and Compose smoke checks for owner
+  authentication, node enrollment, and relay connectivity.
+
+### Fixed
+
+- Preserve self-hosted owner access behind proxies and during upgrades.
+- Keep node version reporting and release-channel update notices consistent.
+- Resync the installed app badge when the app resumes.
+
 ## [0.16.12] - 2026-09-07
 
 ### Fixed
