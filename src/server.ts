@@ -8560,7 +8560,14 @@ function prefetchModels(runtimeIds: string[]): void {
  * flow (see runIssueTask).
  */
 type SessionHelperOpts = {
+  /** Raw first-message text: signals "set a placeholder now, then auto-name from
+   *  this message on the first turn". The VALUE is intentionally not used as the
+   *  name (it's the whole prompt) — see the placeholder assignment below. */
   title?: string;
+  /** An EXPLICIT, user-chosen session name (e.g. `bivy exec --name`). Unlike
+   *  `title`, this is kept verbatim as the session name, which also suppresses
+   *  the first-turn auto-namer (a non-placeholder name is left untouched). */
+  explicitName?: string;
   runtimeId?: string;
   makeActive?: boolean;
   sandbox?: SandboxTier;
@@ -8592,7 +8599,7 @@ async function createWorkspaceSession(workspace: string, opts: SessionHelperOpts
     return createGitWorkspaceSession(workspace, parsed, opts);
   }
   const record = await createSession(workspace, undefined, { runtimeId: opts.runtimeId, sandbox: opts.sandbox, makeActive: opts.makeActive });
-  if (opts.title) { record.session.setName(`Session ${record.id.slice(0, 8)}`); persistSessionMetadata(record); }
+  applyInitialSessionName(record, opts);
   return record;
 }
 
@@ -8613,8 +8620,20 @@ async function createGitWorkspaceSession(repoDir: string, parsed: ParsedRepo, op
     sandbox: opts.sandbox,
     makeActive: opts.makeActive,
   });
-  if (opts.title) { record.session.setName(`Session ${record.id.slice(0, 8)}`); persistSessionMetadata(record); }
+  applyInitialSessionName(record, opts);
   return record;
+}
+
+/**
+ * Set a freshly created session's name before its first turn. An explicit,
+ * user-chosen name (`opts.explicitName`) is kept verbatim so the first-turn
+ * auto-namer leaves it alone; otherwise a raw first message (`opts.title`) only
+ * pins a placeholder so that auto-namer can refine it from the message.
+ */
+function applyInitialSessionName(record: SessionRecord, opts: SessionHelperOpts): void {
+  const explicit = opts.explicitName?.trim();
+  if (explicit) { record.session.setName(explicit); persistSessionMetadata(record); return; }
+  if (opts.title) { record.session.setName(`Session ${record.id.slice(0, 8)}`); persistSessionMetadata(record); }
 }
 
 /**
@@ -10305,6 +10324,9 @@ app.post("/api/session", async (req, res, next) => {
     // relay `session.new` repo path. Takes precedence over a manual workspace path.
     const repoInput = typeof req.body?.repo === "string" ? req.body.repo.trim() : "";
     const title = typeof req.body?.title === "string" ? req.body.title : undefined;
+    // An explicit, user-chosen session name (e.g. `bivy exec --name`). Kept
+    // verbatim, unlike `title` (a raw first message that only seeds auto-naming).
+    const explicitName = typeof req.body?.name === "string" && req.body.name.trim() ? req.body.name.trim() : undefined;
     const requestId = typeof req.body?.requestId === "string" ? req.body.requestId : undefined;
     // Validate the workspace before entering the dedupe path so a bad path still
     // returns a 400 (rather than being cached as a rejected creation).
@@ -10345,8 +10367,8 @@ app.post("/api/session", async (req, res, next) => {
       // session this request already created rather than spawning a duplicate.
       session = await dedupeSessionNew(requestId, async () => {
         const rec = parsed
-          ? await createRepoSession(parsed, { title, runtimeId: agentFrom(req.body ?? {}), branch: branchFrom(req.body ?? {}) })
-          : await createWorkspaceSession(workspace, { title, runtimeId: agentFrom(req.body ?? {}), branch: branchFrom(req.body ?? {}) });
+          ? await createRepoSession(parsed, { title, explicitName, runtimeId: agentFrom(req.body ?? {}), branch: branchFrom(req.body ?? {}) })
+          : await createWorkspaceSession(workspace, { title, explicitName, runtimeId: agentFrom(req.body ?? {}), branch: branchFrom(req.body ?? {}) });
         // Bind the composer's chosen model to the new session before its first turn.
         await applyRequestedModel(rec, modelFrom(req.body ?? {}));
         return rec;

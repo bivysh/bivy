@@ -5040,7 +5040,7 @@ ${c.bold("bivy")} — Bivy node CLI
   ${c.cyan("bivy send <id>")} "..."  Send a prompt to an existing session and stream the reply
   ${c.cyan("bivy kill <id>")}    Stop a session/terminal (--delete also removes a saved session)
   ${c.cyan("bivy prune")}         Delete old sessions/workspaces/worktrees (--keep N, --older-than 7d, --dry-run)
-  ${c.cyan("bivy exec")} "<prompt>"  One-shot headless session: prints the answer to stdout (pipe-friendly)
+  ${c.cyan("bivy exec")} "<prompt>"  One-shot headless session: prints the answer to stdout (pipe-friendly; --agent/--model/--name/--workspace/--session/--json)
   ${c.cyan("bivy runs start")} "<instructions>"  Queue a one-off unattended Run with checks and a Receipt
   ${c.cyan("bivy automation")}  list | trigger | init | validate | plan | test | apply
   ${c.cyan("bivy config")}      init | validate | show | get | set | explain (typed node config)

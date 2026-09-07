@@ -6,7 +6,7 @@ streaming, native resume, and a model picker populated from the providers you
 have actually signed into.
 
 - **Runtime id:** `opencode` · **Tier:** Supported · **In picker:** Yes
-- **Release-tested against:** OpenCode 1.18.23
+- **Release-tested against:** OpenCode 1.18.29
 
 ## Install
 
@@ -52,7 +52,12 @@ fallback pipe path, `opencode run -s <id> "<prompt>"` does the same job.
 
 ## Session fork
 
-Yes — cross-runtime forks *into* OpenCode are **replayed**, not seeded. Bivy
+Yes. A **same-runtime** OpenCode → OpenCode fork is **full** (byte-exact): Bivy
+clones the source session's `session`/`message`/`part` rows verbatim through
+`exportForFork`/`importForFork`, so the copy keeps every message's full data
+rather than a one-text-part-per-turn summary.
+
+Cross-runtime forks *into* OpenCode are **replayed**, not seeded. Bivy
 writes the fork's portable `{role, text}` transcript as a real session in
 OpenCode's own store (`$XDG_DATA_HOME/opencode/opencode.db` — `session`,
 `message`, and `part` rows mirroring OpenCode's own layout), so `session/load`

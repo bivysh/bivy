@@ -7,7 +7,7 @@ change it proposes gets an in-chat Approve/Deny card, and sessions resume by the
 at the sandbox level is also runnable with `BIVY_RUNTIME=codex`.
 
 - **Runtime id:** `codex-approvals` · **Tier:** Supported · **In picker:** Yes
-- **Release-tested against:** Codex CLI 0.150.0
+- **Release-tested against:** Codex CLI 0.153.4
 
 ## Install
 
@@ -46,6 +46,16 @@ one.
 The plain-exec fallback (`BIVY_RUNTIME=codex`) resumes too, via
 `codex exec --json --sandbox <tier> resume <id>`; override the exact args with
 `BIVY_CODEX_RESUME_TEMPLATE` if a Codex version changes its flags.
+
+## Session fork
+
+Yes. A **same-runtime** Codex → Codex fork is **full** (byte-exact): Bivy copies
+the source thread's rollout verbatim through `exportForFork`/`importForFork`, so
+the fork keeps every `response_item`, not a summary. Cross-runtime forks *into*
+Codex are **replayed** — the portable `{role, text}` transcript is written as a
+real rollout so the thread resumes on the full conversation. Both are
+best-effort: a missing or unknown-schema rollout store degrades the fork to the
+seeded continuation prompt. See the [fork fidelity matrix](../fork-matrix.md).
 
 ## Known gaps
 
