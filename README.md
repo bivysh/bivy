@@ -4,8 +4,8 @@
 [![license: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-2b6cb0)](LICENSE)
 [![node](https://img.shields.io/badge/node-%E2%89%A520-2b6cb0)](https://nodejs.org)
 
-**Run coding agents on your machines. Join the same session from your phone,
-browser, or terminal.**
+**Run coding agents on your machines and use them from anywhere — from a phone,
+browser, terminal, GitHub issue, Slack message, schedule, or webhook.**
 
 Start Claude Code or Codex in the development environment you already use —
 with your repo, running services, tools, and credentials. Leave your desk,
