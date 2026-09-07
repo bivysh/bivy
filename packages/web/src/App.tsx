@@ -54,6 +54,7 @@ const Settings = lazy(() => import("./components/Settings.js").then((m) => ({ de
 const AutomationsView = lazy(() =>
   import("./components/AutomationsView.js").then((m) => ({ default: m.AutomationsView })),
 );
+import { onAppVisible } from "./onAppVisible.js";
 import { useEdgeSwipe } from "./useEdgeSwipe.js";
 import { useModalEscape } from "./modalStack.js";
 import { CloseIcon } from "./components/UiIcons.js";
@@ -148,12 +149,13 @@ export function App() {
   }, [state.connection.signedIn]);
   useEffect(() => {
     if (controller.direct || !state.connection.signedIn) return;
-    refreshGithubQueue();
-    refreshAutomationRuns();
+    const refresh = () => { refreshGithubQueue(); refreshAutomationRuns(); };
+    refresh();
+    const stopObserving = onAppVisible(refresh);
     const id = setInterval(() => {
-      if (document.visibilityState !== "hidden") { refreshGithubQueue(); refreshAutomationRuns(); }
+      if (document.visibilityState !== "hidden") refresh();
     }, 30000);
-    return () => clearInterval(id);
+    return () => { clearInterval(id); stopObserving(); };
   }, [refreshGithubQueue, refreshAutomationRuns, state.connection.signedIn]);
   // sessionId → the run that produced it, joined from the queue's evidence.
   // Feeds the sidebar's exception hints and the run pill's outcome. Declared up
@@ -186,11 +188,19 @@ export function App() {
       setAppBadge?: (contents?: number) => Promise<void>;
       clearAppBadge?: () => Promise<void>;
     };
-    const update = count > 0 ? badge.setAppBadge?.(count) : badge.clearAppBadge?.();
-    void update?.catch(() => {}); // unsupported/blocked badge APIs are non-fatal
+    const syncBadge = () => {
+      const update = count > 0 ? badge.setAppBadge?.(count) : badge.clearAppBadge?.();
+      void update?.catch(() => {}); // unsupported/blocked badge APIs are non-fatal
+    };
+    syncBadge();
+    // An installed PWA can resume without a React count change. Retry even
+    // zero: an OS badge may outlive a suspended/blocked background update.
+    const stopObserving = onAppVisible(syncBadge);
     return () => {
+      stopObserving();
       document.title = "Bivy";
-      void badge.clearAppBadge?.().catch(() => {});
+      // Do not clear here: effect cleanup also runs before a count update,
+      // and that asynchronous clear can race the replacement setAppBadge.
     };
   }, [inboxItems.length]);
   // Signed in on the hosted app but no node yet: poll for a newly-installed
