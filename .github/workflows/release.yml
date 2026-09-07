@@ -11,9 +11,10 @@ name: Release
 #   workflow_dispatch  -> PRODUCTION (deliberate). Promotes the current
 #                         package.json version to the `latest` dist-tag, gated by
 #                         the `release` environment approval. Promotion reuses
-#                         the merge's required CI and requires its staging publish
+#                         the canonical CI workflow and requires its staging publish
 #                         to have succeeded, then tags the commit and creates the
-#                         GitHub release. This is the one-click "Promote" button.
+#                         GitHub release. Full CI also gates the exact promoted
+#                         commit, including recovery refs.
 #
 # Both jobs authenticate to npm with the job's GitHub Actions OIDC identity
 # (`id-token: write`) against the ONE trusted publisher configured for
@@ -101,8 +102,21 @@ jobs:
         run: pnpm run publish:npm -- --tag staging
 
   # --------------------------------------------------------------- PRODUCTION --
+  # A staging publish proves packaging, not correctness. Reuse the canonical CI
+  # workflow on this exact SHA, even when branch protection was bypassed or the
+  # dispatch uses a recovery tag. Do not duplicate a subset of its checks here.
+  production-ci:
+    if: github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+      pull-requests: read
+    with:
+      force_all: true
+
   production:
     if: github.event_name == 'workflow_dispatch'
+    needs: production-ci
     name: Promote to npm `latest` + tag + GitHub release
     runs-on: ubuntu-latest
     # Approval gate: a dispatch alone cannot publish to production.
@@ -113,10 +127,9 @@ jobs:
       packages: write # add stable tags to the already-built Core service images
       id-token: write # OIDC: trusted publish + provenance
     steps:
-      # A release PR already passed the required full CI gate. Re-running that
-      # suite here made promotion slow without testing a different commit. The
-      # automatic staging publish is the post-merge canary for the exact main
-      # SHA; wait briefly for it when Promote is clicked immediately after merge.
+      # Full CI passed in production-ci. Also require the automatic staging
+      # publication for the exact main SHA; packaging alone is not a CI receipt.
+      # Wait briefly when Promote is clicked immediately after merge.
       - name: Require a successful staging publish for this commit
         env:
           GH_TOKEN: ${{ github.token }}

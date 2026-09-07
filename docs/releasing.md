@@ -176,10 +176,12 @@ the final `vX.Y.Z` tag, and the GitHub release are idempotent, so this recovery
 cannot mix artifacts from different commits.
 
 The release PR must pass the repository's full required CI before it can merge.
-Promotion does not run that same suite a second time: it verifies that the exact
-`main` commit completed its automatic staging publish, validates the version and
-workspace agreement, and publishes the stable build to `latest` via Trusted
-Publishing (automatic provenance). It then tags the commit `vX.Y.Z` and creates
+Promotion also calls the canonical CI workflow with `force_all: true` for the
+exact release commit (including recovery tags), before the production job can
+publish. A successful staging publish alone is not evidence that tests passed.
+It then verifies that the commit completed its automatic staging publish,
+validates the version and workspace agreement, and publishes the stable build
+to `latest` via Trusted Publishing (automatic provenance). It then tags the commit `vX.Y.Z` and creates
 the GitHub release from the matching CHANGELOG section
 (`scripts/extract-changelog.mjs`). If Promote is clicked while staging is still
 running, it waits for up to ten minutes.

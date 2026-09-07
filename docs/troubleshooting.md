@@ -374,9 +374,15 @@ bivy doctor
   output produced during the restart.
 - `bivy update` waits for active sessions to finish a turn. Use
   `bivy update --force` to skip the wait.
-- The installer stages the new release and restores the previous one if anything
-  fails, so a failed update should leave you running the old version. Check
-  `bivy update:log` for the reason.
+- Updates are not universally transactional. The fallback tarball installer
+  stages dependencies before swapping the application and restores the previous
+  directory if the swap fails; npm-global and Git-checkout updates modify files
+  in place and do not provide automatic rollback. Check `bivy update:log` for
+  the reason before restarting a failed installation.
+- A checkout update stops if `git pull` or dependency installation fails, without
+  restarting the service. Resolve the Git/dependency error and retry
+  `bivy update`; files may already have changed even though the old process is
+  still running.
 - Ownership errors during update: see the next section.
 
 ## Permissions and ownership
