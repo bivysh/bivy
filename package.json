@@ -125,7 +125,7 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "heroicons": "^2.2.0",
     "tsx": "^4.23.13",
-    "typescript": "^7.0.2",
+    "typescript": "^6.0.3",
     "typescript-eslint": "^8.69.0"
   }
 }
