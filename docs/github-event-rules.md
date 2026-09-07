@@ -30,6 +30,34 @@ Any matching rule fires the automation (plus repo allowlist).
 
 ## Labels & @mentions
 
+### Choose your own trigger labels
+
+In **Automations → create/edit an automation → GitHub trigger**, enable
+**Issue labeled** and/or **Pull request labeled**, then edit **Trigger labels**.
+Use your own names, such as `fix-it` or `ready for review`, separated by commas.
+Any one of them can start that automation. `bivy` is the sensible default when
+the field is left blank; it is not a required prefix for custom labels.
+
+Labels belong to each automation's trigger rules, **not** the GitHub App
+connection. Hosted and custom GitHub Apps use the same matching logic.
+The automation's machine selection determines where the run executes; a custom
+trigger label does not become a machine name or queue name.
+
+For a GitHub `labeled` delivery, matching uses the label just applied. Adding an
+unrelated label does not restart work merely because a trigger label was already
+on the issue or PR. Repository/app filters and paused automations still apply.
+
+Example rules for custom labels on both issues and pull requests:
+
+```json
+[
+  { "event": "issues", "actions": ["labeled"], "labels": ["fix-it", "ready for review"] },
+  { "event": "pull_request", "actions": ["labeled"], "labels": ["fix-it", "ready for review"] }
+]
+```
+
+### Mention events
+
 Applied on every surface that has them:
 
 - Issues (labeled / body @mention)

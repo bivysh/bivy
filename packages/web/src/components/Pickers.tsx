@@ -698,7 +698,7 @@ export function ModelPicker({ state, onClose }: { state: AppState; onClose: () =
   }
 
   return (
-    <Sheet title="Model" onClose={onClose} headExtra={<ReasoningPill state={state} />} autoFocusSearch={false} size="large">
+    <Sheet title="Model" ariaLabel="Model" onClose={onClose} headExtra={<ReasoningPill state={state} />} autoFocusSearch={false} size="large">
       <input className="picker-search" placeholder="Search models…" value={q} onChange={(e) => setQ(e.target.value)} />
       <div className="picker-list">
         {connectedModels.length === 0 && otherProviders.length === 0 && <div className="picker-empty">No models available.</div>}

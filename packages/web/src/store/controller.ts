@@ -1877,6 +1877,9 @@ export class AppController {
     const sid = this.store.getState().activeSession.activeSessionId;
     if (sid && !openedAfterNodeSwitch) {
       this.requestHistory(sid);
+      // The model may have changed in another client while we were offline.
+      // Transport startup queries the node default, not necessarily this session.
+      this.listModels();
       this.followupCoordinator.retrySending(sid);
       // Deliver anything the user typed while the node was offline/resuming.
       this.drainPendingResume(sid);
@@ -3212,8 +3215,17 @@ export class AppController {
    * the old runtime (the agent/model mismatch bug); this is the same ordering the
    * legacy client relies on.
    */
-  private maybeRefreshModelsForRuntime(event: { type?: string }): void {
-    if (event.type === "runtime.updated") this.listModels();
+  private maybeRefreshModelsForRuntime(event: { type?: string; sessionId?: string }): void {
+    const state = this.store.getState();
+    // A newly created/resumed session can first become addressable when its
+    // canonical history arrives. Reconnect's unscoped models.list may describe
+    // the node's default session instead and is correctly ignored by the store.
+    // Resolve missing model metadata here, not only when the picker is opened.
+    const needsSessionModel = event.type === "session.history"
+      && Boolean(event.sessionId)
+      && event.sessionId === state.activeSession.activeSessionId
+      && !state.catalogs.currentModel;
+    if (event.type === "runtime.updated" || needsSessionModel) this.listModels();
   }
 
   /**

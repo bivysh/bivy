@@ -11,6 +11,7 @@ import { resolveWebhookAuth, verifyWebhookAuth, DEFAULT_WEBHOOK_HEADER, type Web
 import { validateCapabilityTags } from "@bivy/core";
 import { providerCredentialFingerprint, type Account, type NodeRecord, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, type AutomationRun, type InboundHook, type NodeClaim, GITHUB_IDENTITY_MODES, type GithubIdentityMode, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
 import { centralGithubAppConfig, centralInstallUrl, applyCentralInstallationEvent, resolveGithubIdentity } from "./central-github-app.js";
+import { matchGithubItemTrigger } from "./github-item-trigger.js";
 import { maybeAutoProvision, planAutoProvision, hostedExecutionReadiness, mintHostedInstallationToken, reapSettledHostedMachine, reconcileAllHostedMachines, reconcileAllReadyCapacity, sweepAllOrphanProviderResources, validateHostedProviderToken, markHostedMachineMilestone, EPHEMERAL_MILESTONES, ephemeralMachinesEnabled } from "./ephemeral-provisioner.js";
 import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecret, initializeHostedKeyring } from "./hosted-crypto.js";
 import { listAppInstallations, listInstallationRepositories, listInstallationBranches, getAppInstallation } from "./hosted-github-auth.js";
@@ -28,13 +29,9 @@ import {
   verifyGithubSignature,
   verifyLinearSignature,
   parseLinearIssueEvent,
-  parseGithubIssueEvent,
-  pickIssueRoutingLabel,
   pickRoutingLabel,
   parseGithubCommentEvent,
   pickCommentRoutingLabel,
-  parseGithubPullRequestEvent,
-  pickPullRequestRoutingLabel,
   parseGithubReviewCommentEvent,
   parseInstallationId,
   verifySlackSignature,
@@ -4065,24 +4062,9 @@ async function processGithubEvent(hook: InboundHook, event: string, deliveryId: 
 
   // ── pull_request labeled / body @mention ────────────────────────────────
   if (event === "pull_request") {
-    const pr = parseGithubPullRequestEvent(payload);
-    const rawLabel = pr ? pickPullRequestRoutingLabel(pr, triggerLogin) : undefined;
-    if (!pr || !rawLabel) return res.json({ ok: true, enqueued: false });
-    const isLabelRouted = Boolean(pickRoutingLabel(pr.labels));
-    if (!isLabelRouted && !meetsTriggerAccess(pr.authorAssociation, hook.triggerAccess)) {
-      return res.json({ ok: true, enqueued: false, reason: "access" });
-    }
-    const bodyMention = !isLabelRouted; // routed via @mention in body
-    const matched = matchSourceAutomation(automations, {
-      kind: "github",
-      appId: hook.appId,
-      githubEvent: "pull_request",
-      action: String((payload as any)?.action ?? ""),
-      repo: pr.repo,
-      labels: pr.labels,
-      mention: bodyMention,
-    });
-    if (!matched) return res.json({ ok: true, enqueued: false, reason: "no_automation" });
+    const selection = matchGithubItemTrigger(automations, hook, "pull_request", payload, triggerLogin);
+    if (!selection.matched) return res.json({ ok: true, enqueued: false, reason: selection.reason });
+    const { item: pr, automation: matched, routingLabel: rawLabel } = selection;
     const label = applyDefaultNode(matched.nodeLabel || rawLabel, hook.defaultNode);
     const existingSession = await store.findSessionByIssue(hook.accountId, pr.repo, pr.issueNumber).catch(() => undefined);
     const item = await store.enqueueWorkItem(hook.accountId, {
@@ -4114,24 +4096,9 @@ async function processGithubEvent(hook: InboundHook, event: string, deliveryId: 
 
   // ── issues labeled / body @mention ──────────────────────────────────────
   if (event === "issues") {
-    const issue = parseGithubIssueEvent(payload);
-    const rawLabel = issue ? pickIssueRoutingLabel(issue, triggerLogin) : undefined;
-    if (!issue || !rawLabel) return res.json({ ok: true, enqueued: false });
-    // Label apply already implies triage access; body @mention is gated.
-    const isLabelRouted = Boolean(pickRoutingLabel(issue.labels));
-    if (!isLabelRouted && !meetsTriggerAccess(issue.authorAssociation, hook.triggerAccess)) {
-      return res.json({ ok: true, enqueued: false, reason: "access" });
-    }
-    const matched = matchSourceAutomation(automations, {
-      kind: "github",
-      appId: hook.appId,
-      githubEvent: "issues",
-      action: String((payload as any)?.action ?? ""),
-      repo: issue.repo,
-      labels: issue.labels,
-      mention: !isLabelRouted,
-    });
-    if (!matched) return res.json({ ok: true, enqueued: false, reason: "no_automation" });
+    const selection = matchGithubItemTrigger(automations, hook, "issues", payload, triggerLogin);
+    if (!selection.matched) return res.json({ ok: true, enqueued: false, reason: selection.reason });
+    const { item: issue, automation: matched, routingLabel: rawLabel } = selection;
     const label = applyDefaultNode(matched.nodeLabel || rawLabel, hook.defaultNode);
     const existingIssueSession = await store.findSessionByIssue(hook.accountId, issue.repo, issue.issueNumber).catch(() => undefined);
     const item = await store.enqueueWorkItem(hook.accountId, {
