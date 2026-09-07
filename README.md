@@ -216,7 +216,7 @@ in your browser; adding it to your home screen is optional.
 
 ## Get started
 
-### Install and connect a machine
+### Install
 
 Bivy supports **macOS and Linux with Node.js 20+**. The installer installs the
 `@bivy/bivy` package, runs guided setup, and starts a launchd or systemd service:
@@ -288,7 +288,9 @@ version or full commit SHA.
 [Self-host quickstart →](docs/self-host-quickstart.md) ·
 [Operations reference →](docs/self-host.md)
 
-## Your environment. Clear security boundaries.
+## Architecture
+
+Your environment, with clear security boundaries:
 
 ```text
 Your machine                         Hosted or self-hosted
