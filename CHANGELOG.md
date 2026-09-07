@@ -7,12 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.11] - 2026-09-07
+
 ### Changed
 
 - Refreshed the release-tested agent runtimes to the latest upstream releases:
   Claude Agent SDK 0.3.263, Codex 0.153.4, Pi 0.85.1, and OpenCode 1.18.29.
   Adapter flags and protocol modes were re-probed against each new CLI and the
   certification matrix, manifest, and docs regenerated.
+- Clarified the launch scope around existing machines, Cloud access, and deferred
+  provisioning.
+
+### Fixed
+
+- Improved onboarding, GitHub source setup, webhook authentication, and stale
+  agent status handling.
+- Fixed custom GitHub trigger labels, automation editor scroll jumps, and missing
+  model labels; session badges now show automation trigger provenance.
+- Machine updates no longer stay stuck when an acknowledgement is missing.
 
 ## [0.16.10] - 2026-09-06
 
