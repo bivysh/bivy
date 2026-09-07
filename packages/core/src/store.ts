@@ -1684,7 +1684,8 @@ export class SessionStore {
   }
 
   setCurrentNode(nodeId: string | null): void {
-    this.set({ currentNodeId: nodeId });
+    if (nodeId === this.state.connection.currentNodeId) return;
+    this.set({ currentNodeId: nodeId, nodeUpdate: null, nodeUpdating: false });
   }
 
   /** Clear per-node/session state when switching nodes so transcripts never blend.
