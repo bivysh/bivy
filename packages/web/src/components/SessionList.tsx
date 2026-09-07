@@ -7,7 +7,7 @@ import { controller } from "../store/useStore.js";
 import { attentionRank, statusDotState, statusLabel, type SessionDotState } from "../sessionStatus.js";
 import { SourceMark } from "./SourceMark.js";
 import { Badge } from "./Badge.js";
-import { classifySource, CLI_SOURCE, type SourceKind } from "../sessionSource.js";
+import { classifySource, CLI_SOURCE, type SourceInfo, type SourceKind } from "../sessionSource.js";
 import { rowHint } from "../runEvidence.js";
 import { sessionDateGroup } from "../sessionPresentation.js";
 import { CheckIcon } from "./UiIcons.js";
@@ -139,7 +139,7 @@ function queueSourceMeta(source: string | undefined): string {
 // what's mounted and let the user page through the tail.
 const PAGE = 10;
 
-export function SessionList({ onPick, onPickTerminal, runEvidence, onOpenAutomations, automationsActive }: { onPick: (sessionId: string, path?: string, nodeId?: string) => void; onPickTerminal: (termId: string, nodeId?: string) => void; runEvidence?: Map<string, GithubQueueItem>; onOpenAutomations?: () => void; automationsActive?: boolean }) {
+export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSources, onOpenAutomations, automationsActive }: { onPick: (sessionId: string, path?: string, nodeId?: string) => void; onPickTerminal: (termId: string, nodeId?: string) => void; runEvidence?: Map<string, GithubQueueItem>; sessionSources?: Map<string, SourceInfo>; onOpenAutomations?: () => void; automationsActive?: boolean }) {
   const { sessionIndex: { sessions, runTerminals }, activeSession: { activeSessionId }, connection: { nodes, currentNodeId } } = useAppState();
   const [query, setQuery] = useState("");
   const [repoFilter, setRepoFilter] = useState("");
@@ -424,7 +424,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, onOpenAutomat
             : null;
           const meta = sessionMeta(s, nodeName(s.nodeId));
           const label = statusLabel(s);
-          const src = classifySource(s.source);
+          const src = sessionSources?.get(s.sessionId) ?? classifySource(s.source);
           // A one-word exception hint on failed / waiting-on-you runs, so those
           // rows pop in a long list; null (no extra text) for the calm majority.
           // A run-evidence hint (the specific "what": e.g. an approval prompt or

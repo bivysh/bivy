@@ -22,7 +22,7 @@ import { SessionMenu } from "./components/SessionMenu.js";
 import { TuiLockedView } from "./components/TuiLockedView.js";
 import { GithubPill } from "./components/GithubPill.js";
 import { RunPill } from "./components/RunPill.js";
-import { classifySource, isLiveRunSession, isRunLogSession } from "./sessionSource.js";
+import { classifySource, indexSessionSources, isLiveRunSession, isRunLogSession } from "./sessionSource.js";
 import { runtimeSupportsTerminalTakeover } from "./terminalTakeover.js";
 import { indexRunEvidence, failingCheckNames } from "./runEvidence.js";
 import { SessionChangesSheet, countUniqueEditedFiles } from "./components/SessionChangesSheet.js";
@@ -159,6 +159,7 @@ export function App() {
   // Feeds the sidebar's exception hints and the run pill's outcome. Declared up
   // here (not by activeSession below) so the hook stays above any early return.
   const runEvidence = useMemo(() => indexRunEvidence(githubQueue), [githubQueue]);
+  const sessionSources = useMemo(() => indexSessionSources(githubQueue), [githubQueue]);
   const inboxItems = useMemo(() => buildInboxItems({
     sessions: state.sessionIndex.sessions,
     approvals: state.activeSession.approvals,
@@ -546,7 +547,7 @@ export function App() {
   // Every active session shows the run card (source + live status) in the band
   // above the composer; `null` for a draft (no session yet) falls back to the
   // plain GitHub pill.
-  const activeRunSource = activeSession ? classifySource(activeSession.source) : null;
+  const activeRunSource = activeSession ? sessionSources.get(activeSession.sessionId) ?? classifySource(activeSession.source) : null;
   // A forked session's sheet gets its own "Forked from" row. The parent's name
   // is resolved from the local session list when known; it may live on
   // another node or be gone by now, so this degrades to a bare id.
@@ -623,6 +624,7 @@ export function App() {
         </div>
         <SessionList
           runEvidence={runEvidence}
+          sessionSources={sessionSources}
           automationsActive={Boolean(automationsOpen)}
           onOpenAutomations={() => {
             openAutomations();
