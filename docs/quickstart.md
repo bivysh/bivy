@@ -28,7 +28,7 @@ curl -fsSL https://bivy.sh/install.sh | bash
 ```
 
 This ensures a supported Node.js is present (installing it for you if needed —
-the README's [Install](../README.md#install) section lists exactly when it uses
+the README's [Install](../README.md#install-and-connect-a-machine) section lists exactly when it uses
 `sudo`), runs `npm install -g @bivy/bivy`, then launches the `bivy setup`
 wizard. Node state lives at `~/.bivy`.
 

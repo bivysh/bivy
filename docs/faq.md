@@ -20,7 +20,7 @@ no UI at all — it's a background daemon plus a CLI. When you do want a
 graphical/remote UI, it's the React/Vite **web app**, served by a control
 plane (hosted or self-hosted) and installable as a PWA. See
 [remote-access.md](remote-access.md) and the architecture diagram in the
-[README](../README.md#architecture).
+[README](../README.md#your-environment-clear-security-boundaries).
 
 ## Is there a native mobile app (App Store / Play Store)?
 
@@ -40,7 +40,7 @@ browser or phone UI, because the node hosts none: the hosted one at
 `app.bivy.sh` (GitHub or email sign-in; free tier plus a paid plan — see
 [bivy.sh#pricing](https://bivy.sh#pricing)) or one you
 [self-host](self-host-quickstart.md). Sign in any time with `bivy login`; use `bivy relay:setup` to switch to self-hosted endpoints.
-See the [README](../README.md#install).
+See the [README](../README.md#install-and-connect-a-machine).
 
 ## Can I get support for a self-hosted deployment?
 
