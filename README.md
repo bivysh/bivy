@@ -194,14 +194,11 @@ Environment variables passed to the one-line installer change what it does:
 
 | Goal | Variable |
 |---|---|
-| Track the dev channel (new build on every merge to `main`) | `BIVY_CHANNEL=staging` |
 | Pin an exact version | `BIVY_VERSION=0.1.0` |
 | Install the npm package into a user-owned prefix | `BIVY_NPM_PREFIX=~/.local` |
 | Preinstall every known upstream agent | `BIVY_INSTALL_ALL_AGENTS=1` |
 | Install optional Bivy bridges/native terminal dependency up front | `BIVY_INSTALL_OPTIONAL_DEPS=1` |
 | Don't touch `~/.bashrc` / `~/.zshrc`; print the PATH line instead | `BIVY_NO_RC_UPDATE=1` |
-
-For example: `curl -fsSL https://bivy.sh/install.sh | BIVY_CHANNEL=staging bash`.
 
 Working from a checkout of this repository instead:
 
@@ -224,19 +221,17 @@ active turn to finish, updates Bivy, and restarts the background service:
 
 | Install kind | What `bivy update` does |
 |---|---|
-| npm global (`npm i -g`) | `npm install -g @bivy/bivy@<channel>`, then restart the service |
+| npm global (`npm i -g`) | updates the global npm package, then restarts the service |
 | installer / packaged | re-runs `install.sh` (migrating to npm if needed), then restart |
 | git checkout | `git pull --ff-only` + `pnpm install --frozen-lockfile`, then restart |
 | `npx` run | nothing to update — each run already fetches the latest |
 
-Updates follow the release **channel** recorded at install time — `latest`
-(production) by default, or `staging` if you installed with
-`BIVY_CHANNEL=staging`. Switch channels (the choice is remembered for next
-time), or skip the wait for a busy session:
+The standard installer uses stable releases (`latest` on npm). Use
+`bivy update` to keep that installation current.
+
+To skip the wait for a busy session:
 
 ```bash
-bivy update --staging   # move to the dev channel
-bivy update --stable    # move back to production (latest)
 bivy update --force     # don't wait for an in-flight turn to finish
 ```
 
