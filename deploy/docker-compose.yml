@@ -1,16 +1,10 @@
-# Production-ish deploy for the control plane + relay behind Caddy (auto-TLS).
+# Single-server control plane + relay behind Caddy (auto-TLS).
 #
-# Prereqs on the VPS:
-#   - Docker + compose plugin
-#   - Two DNS A records pointing at the VPS:
-#       app.example.com    -> control plane
-#       relay.example.com -> relay
-#   - Edit deploy/Caddyfile and deploy/.env with your domains/secret.
-#
-# Run:
-#   cd deploy && cp .env.example .env && $EDITOR .env Caddyfile
-#   docker compose pull control-plane relay
-#   docker compose up -d
+# Prereqs: Docker + Compose v2, DNS pointing at this VPS, ports 80/443 open.
+# From the deployment root:
+#   bash deploy/self-host.sh bivy.example.com
+# Or pass app.example.com relay.example.com for separate domains.
+# The helper generates config and secrets, then waits for readiness.
 #
 # BIVY_IMAGE_TAG must be a release version or immutable full commit SHA. The
 # self-host helper resolves and records the checked-out commit automatically.
@@ -23,8 +17,8 @@
 #     --email you@example.com
 #   npm run dev   # node dials the relay; run `bivy link` to pair a phone
 #
-# NODE_ENV defaults to production and unauthenticated development login is
-# disabled. Configure email or GitHub OAuth before starting the stack.
+# NODE_ENV defaults to production and unauthenticated development login stays
+# disabled. New installs use shell-only owner login; email/GitHub are optional.
 
 # Cap container log growth so the json-file driver can't fill the disk.
 x-logging: &default-logging
@@ -52,6 +46,11 @@ services:
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
     restart: unless-stopped
 
   control-plane:
@@ -66,6 +65,9 @@ services:
     environment:
       NODE_ENV: "${NODE_ENV:-production}"
       PORT: "4400"
+      # Only Caddy publishes ports; trust proxies on this private Docker network.
+      # Override with narrower proxy IPs/CIDRs for a customized network layout.
+      TRUST_PROXY: "${TRUST_PROXY-uniquelocal}"
       RELAY_SECRET: "${RELAY_SECRET}"
       RELAY_PUBLIC_URL: "${RELAY_PUBLIC_URL}"
       PUBLIC_CONTROL_PLANE_URL: "${PUBLIC_CONTROL_PLANE_URL}"
@@ -85,6 +87,10 @@ services:
       HOSTED_CREDENTIAL_KEY: "${HOSTED_CREDENTIAL_KEY:-}"
       HOSTED_CREDENTIAL_KEYS: "${HOSTED_CREDENTIAL_KEYS:-}"
       HOSTED_CREDENTIAL_KEY_PRIMARY: "${HOSTED_CREDENTIAL_KEY_PRIMARY:-}"
+      # Used only by the server-shell operator-login command, never an HTTP gate.
+      SELF_HOST_OWNER_EMAIL: "${SELF_HOST_OWNER_EMAIL:-}"
+      # Optional portable browser setup; generate with openssl rand -hex 32.
+      SELF_HOST_SETUP_TOKEN: "${SELF_HOST_SETUP_TOKEN:-}"
       DISABLE_DEV_LOGIN: "${DISABLE_DEV_LOGIN:-1}"
       RESEND_API_KEY: "${RESEND_API_KEY:-}"
       AUTH_EMAIL_FROM: "${AUTH_EMAIL_FROM:-Bivy <login@localhost>}"
@@ -105,7 +111,14 @@ services:
     expose:
       - "4400"
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4400/readyz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      start_period: 30s
+      retries: 20
     restart: unless-stopped
 
   relay:
@@ -141,6 +154,11 @@ services:
         hard: 65536
     expose:
       - "4500"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4500/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
     restart: unless-stopped
 
   caddy:

@@ -19,7 +19,7 @@ that doesn't end when you leave your desk.
 **[Start free on Bivy Cloud](https://app.bivy.sh)** ·
 **[Quickstart](docs/quickstart.md)** ·
 **[Documentation](docs/README.md)** ·
-**[Self-host](docs/self-host-quickstart.md)** ·
+**[Self-host](docs/deploy-images.md)** ·
 **[Website](https://bivy.sh)**
 
 ```bash
@@ -270,6 +270,13 @@ Manual and automated sessions share the Cloud allowance. Resuming existing
 sessions and viewing history do not consume it. Agent subscriptions and model
 provider charges are separate. See [current pricing](https://bivy.sh#pricing).
 
+**Self-host anywhere:** deploy the public control-plane (including the web app)
+and relay images with Postgres and [a small set of environment variables](docs/deploy-images.md).
+Your server or container platform handles HTTPS. Set up owner access in the
+browser—no SSH, external authentication provider, or Bivy Cloud account required.
+For a bare VPS, the [Compose installer](docs/self-host-quickstart.md) automates the
+same stack. These onboarding features require a release containing them.
+
 Start on Cloud and self-host later if you prefer. Deploy the stack, reconnect
 machines with `bivy relay:setup`, and pair devices to your server. This is not a
 one-click migration of your Cloud account; your local repos and agent
@@ -286,7 +293,8 @@ hardening. Public multi-architecture images are available as
 `ghcr.io/bivysh/bivy-control-plane` and `ghcr.io/bivysh/bivy-relay`; pin a release
 version or full commit SHA.
 
-[Self-host quickstart →](docs/self-host-quickstart.md) ·
+[Deploy the images anywhere →](docs/deploy-images.md) ·
+[Optional VPS installer →](docs/self-host-quickstart.md) ·
 [Operations reference →](docs/self-host.md)
 
 ## Architecture

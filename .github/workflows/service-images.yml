@@ -177,6 +177,21 @@ jobs:
             done
           done
 
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.core_sha }}
+
+      - name: Smoke the published self-host stack
+        env:
+          CORE_SHA: ${{ needs.resolve.outputs.core_sha }}
+        run: |
+          # workflow_dispatch can republish a historical ref predating this test.
+          if [ -f scripts/smoke-self-host.sh ]; then
+            bash scripts/smoke-self-host.sh "$CORE_SHA"
+          else
+            echo "Historical ref has no self-host image smoke script."
+          fi
+
       # A commit status is a durable, exact-SHA publication receipt. Unlike an
       # Actions run query it also works when workflow_dispatch checked out an old
       # core_ref while the workflow definition itself came from current main.

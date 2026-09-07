@@ -65,7 +65,7 @@ button:not(:disabled), a.btn { touch-action: manipulation; }
    this is just the fallback everything else gets for free. `:focus-visible`
    (not `:focus`) so mouse/touch taps stay visually quiet. */
 button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible,
-select:focus-visible, [tabindex]:focus-visible {
+select:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -2758,8 +2758,10 @@ select.picker-search { appearance: auto; }
 .setup-or { color: var(--muted); font-size: 13px; margin: 16px 0 8px; }
 .setup-email { display: flex; flex-direction: column; gap: 8px; }
 .setup-email .field { min-width: 0; }
-.setup-email .btn { width: 100%; white-space: nowrap; }
+.setup-email .settings-field { text-align: left; }
+.setup-email .btn { width: 100%; white-space: nowrap; min-height: var(--space-7); }
 .setup-note { margin-top: 10px; word-break: break-word; }
+.setup-note .btn { min-height: var(--space-7); }
 .setup-error { margin: 8px 0 4px; padding: 10px 12px; border: 1px solid var(--danger); border-left-width: 3px; border-radius: var(--radius-md); background: var(--danger-soft, transparent); color: var(--ink); font-size: 13px; line-height: 1.4; text-align: left; }
 /* Setup / connect surfaces prefer a little vertical rhythm on inline banners. */
 .setup-card .banner.inline,

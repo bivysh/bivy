@@ -11,6 +11,19 @@ receives an immutable full-SHA tag. Production promotion aliases those existing
 manifests to `X.Y.Z`, `vX.Y.Z`, and `latest` without rebuilding them. Cloud deployment may
 add deployment-specific metadata around these images, but does not rebuild Core.
 
+Stable releases also publish `bivy-self-host.tar.gz`, its `.sha256` checksum,
+and the standalone `install.sh` release asset (built from **`deploy/install.sh`**,
+not the root node installer). `scripts/build-self-host.mjs` uses an explicit file
+allowlist and embeds the release version and exact image SHA; no `.env`, backups,
+or source checkout is shipped. Older releases do not have these assets.
+
+Before recording `service-images/published`, the image workflow runs
+`scripts/smoke-self-host.sh <SHA>` against the real Compose stack. It verifies
+Caddy configuration, PWA serving, durable operator login, token replay refusal,
+disabled development login, node enrollment, and the relay handshake. It uses
+an isolated project with disposable volumes and no public ports; real DNS/ACME
+and a complete agent session still need a VPS acceptance test.
+
 npm is the node/CLI distribution channel. `install.sh` retains a checksum-verified
 tarball fallback (`TARBALL_URL`/`MANIFEST_URL`/`install_from_tarball`) used only
 during the cutover — when the `bivy` package isn't yet on the registry.

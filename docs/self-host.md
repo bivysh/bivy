@@ -2,7 +2,11 @@
 
 Bivy Core runs the node + CLI locally without any hosted account (drive it from the terminal, or run agents headless). The browser UI (web/PWA) is served by a control plane — not by the node — so to get a browser UI, plus remote access, webhooks, push, and account/node registry, either use Bivy Cloud or self-host the same control-plane + relay stack described here.
 
-**Just want the fastest path to a running stack?** See [self-host-quickstart.md](self-host-quickstart.md). This doc is the deeper operational reference — read it before you rely on a self-hosted deployment for anything that matters.
+**Start with [Deploy Bivy anywhere](deploy-images.md):** two public images,
+Postgres, environment variables, and browser owner setup. No particular deploy
+tool or cloud is required. For a bare VPS, the optional
+[Compose installer](self-host-quickstart.md) automates infrastructure. This document
+is the deeper operational reference; its shell recipes assume the Compose layout.
 
 ## Maturity and support
 
@@ -32,14 +36,16 @@ The two self-host surfaces differ only in how much you have to operate:
 Prereqs:
 
 - Docker + Docker Compose plugin
-- two DNS records pointing at the VPS:
-  - `app.example.com` for the control plane and hosted PWA
-  - `relay.example.com` for the WebSocket relay
+- one DNS record pointing at the VPS (`bivy.example.com`); an optional second
+  record keeps the separate app/relay domain layout
 - ports 80/443 open
 
-Run from the repo root on the server:
+For the standalone release installer (no checkout required), follow the
+[quickstart](self-host-quickstart.md). From a source checkout on the server:
 
 ```bash
+bash deploy/self-host.sh bivy.example.com
+# Or retain separate domains:
 bash deploy/self-host.sh app.example.com relay.example.com
 ```
 
@@ -52,14 +58,24 @@ The script:
 - writes `deploy/.env` if missing;
 - replaces the untouched example Caddyfile with your domains, while preserving
   customized Caddyfiles on later runs;
-- generates strong `RELAY_SECRET` and Postgres password;
-- requires either Resend email or complete GitHub OAuth configuration;
-- starts Postgres, control-plane, relay, and Caddy with auto-TLS.
+- generates strong `RELAY_SECRET`, URL-safe Postgres password, and push keys;
+- defaults new installs to a local owner account (`owner@self-host.invalid`);
+- starts Postgres, control-plane, relay, and Caddy with auto-TLS;
+- waits for container health and public HTTPS checks, then prints a single-use
+  owner sign-in link valid for 15 minutes.
 
-On a first run without auth settings, it writes the setup files and stops before
-Docker. Configure one sign-in path in `deploy/.env`, then run the command again.
-You can instead provide the auth variables through the environment on the first
-invocation. Existing secrets in `deploy/.env` are never overwritten.
+Owner login is issued by `bash deploy/manage.sh login` through Docker/DB
+administrative access. It is not a public bootstrap endpoint, does not verify an
+external email, and does not grant a special cross-account admin role. Existing
+account/session and atomic magic-link consumption are reused. The link and copied
+machine enrollment commands are secrets. Keep shell output private.
+
+GitHub OAuth and Resend are optional. Set `SELF_HOST_OWNER_EMAIL=` explicitly on
+first installation to require external authentication instead. Existing deployments
+retain their old auth configuration; to add shell login deliberately, set
+`SELF_HOST_OWNER_EMAIL` to the intended account's identity and rerun setup.
+Changing that identity selects another account rather than migrating its data.
+Existing secrets and customized proxy configuration are preserved.
 
 ### Image pins and source builds
 
@@ -71,6 +87,8 @@ ghcr.io/bivysh/bivy-control-plane:<version-or-full-commit-sha>
 ghcr.io/bivysh/bivy-relay:<version-or-full-commit-sha>
 ```
 
+Release bundles pin the exact published release SHA in `deploy/RELEASE_IMAGE_TAG`;
+source checkouts default to their HEAD (which must have published images).
 A full SHA is immutable and is the installer's default. Release versions are
 stable aliases of the same manifests. Avoid `latest` for operational deployments.
 To select a release explicitly, run:
@@ -94,7 +112,15 @@ BIVY_IMAGE_TAG=local docker compose \
 
 ### Upgrades
 
-Check out the release or Core commit you intend to run, then rerun the installer.
+For a release-bundle installation, run `bash deploy/manage.sh update`. It creates
+a bundled-DB backup before downloading the stable release; managed-DB operators
+must snapshot their database and back up configuration separately, then set
+`BIVY_MANAGED_BACKUP_CONFIRMED=1`. Select a version with
+`BIVY_SELF_HOST_VERSION=vX.Y.Z`. Configuration and data survive an upgrade, but
+updates are **not transactional database rollbacks**. Restore the matching backup
+and image pin if a schema-changing update needs to be undone.
+
+For a source checkout, check out the release or Core commit you intend to run, then rerun the installer.
 It refreshes `BIVY_IMAGE_TAG`, pulls that immutable image pair, and recreates the
 services while preserving secrets, data volumes, and Caddy customization:
 
@@ -107,7 +133,11 @@ bash deploy/self-host.sh app.example.com relay.example.com
 
 ## Connect a node
 
-On your development machine:
+The easiest path is the web app's **Connect a Machine → Auto sign-in** command.
+It installs prerequisites and enrolls the Machine into the signed-in account,
+including server-shell owner accounts. Treat its account token as a secret.
+
+For an already-installed CLI and an external authentication provider:
 
 ```bash
 # For GitHub OAuth deployments (use --email you@example.com for Resend):
@@ -131,7 +161,20 @@ RELAY_SECRET=...
 POSTGRES_PASSWORD=...
 ```
 
-Configure at least one of the following production sign-in paths:
+New installations default to server-shell owner login:
+
+```env
+SELF_HOST_OWNER_EMAIL=owner@self-host.invalid
+```
+
+For **portable browser owner setup**, set `SELF_HOST_SETUP_TOKEN` to a separate
+random secret (`openssl rand -hex 32`). Open the app, supply it once, and choose a
+password. No external provider or service shell is needed. Passwords are scrypt-
+hashed in Postgres; used setup-token hashes are durable. Remove the setup token
+afterward if desired. Password recovery uses a **new** deployment token and
+revokes prior account sessions; see [the full flow](deploy-images.md#3-set-up-owner-access-in-the-browser).
+
+Alternatively (or additionally), configure these external production sign-in paths:
 
 ```env
 # Magic-link email
@@ -159,8 +202,8 @@ for a backwards-compatible self-host migration, but hosted deployments should
 never set it.
 
 ```env
-# Web push (phone/PWA notifications). Push stays disabled until BOTH VAPID keys
-# are set; generate a pair with `npx web-push generate-vapid-keys`. Push works
+# Web push (phone/PWA notifications). The setup helper generates these once.
+# For manual deployments: `npx web-push generate-vapid-keys`. Push works
 # for every account on a self-hosted stack.
 WEB_PUSH_VAPID_PUBLIC_KEY=...
 WEB_PUSH_VAPID_PRIVATE_KEY=...
@@ -265,6 +308,50 @@ Notes:
 
 > Using a managed/hosted Postgres (above)? Use your provider's snapshots/PITR
 > instead — there is no local `postgres` container for these commands to reach.
+
+### Deployment backup and restore
+
+The simplest bundled-DB backup is `bash deploy/manage.sh backup`. It creates a
+private `backups/bivy-*.tar.gz` containing a consistent Postgres custom-format dump,
+`.env`, `Caddyfile`, and `IMAGE_TAG`. It does not back up agent workspaces or model
+credentials on your Machines; back those up separately. The archive contains
+secrets: copy it to secure off-server storage.
+
+To restore a matching archive, from your deployment directory:
+
+```bash
+umask 077
+mkdir -p restore
+# Use a trusted backup only; its .env contains database and account secrets.
+tar -xzf backups/bivy-TIMESTAMP-ID.tar.gz -C restore
+bash deploy/manage.sh status
+# Stop application writes before restoring the DB.
+docker compose -f deploy/docker-compose.yml --env-file deploy/.env stop control-plane relay
+```
+
+On the same database volume, keep the current database role/password consistent:
+restoring `.env` alone does not change Postgres roles (see password rotation below).
+For a new server, restore `.env` and `Caddyfile` before initializing an empty
+Postgres volume, and install the matching release. Never run `down -v` on the only
+copy of your database.
+
+```bash
+# On the same volume with unchanged DB role/password:
+cp restore/.env deploy/.env
+cp restore/Caddyfile deploy/Caddyfile
+docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --wait postgres
+docker compose -f deploy/docker-compose.yml --env-file deploy/.env exec -T postgres \
+  sh -c 'exec pg_restore --exit-on-error --clean --if-exists --no-owner -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < restore/database.dump
+docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --wait
+bash deploy/manage.sh check
+```
+
+The restored `.env` carries its original image pin. Do not rerun setup (which
+selects the current checkout/bundle pin) until you intend to upgrade. A recovery
+may also require reverting deployment scripts to the matching release. Test the
+whole restore procedure before relying on a backup.
+
+### Manual SQL backup
 
 The stack stores hosted metadata in Postgres. Back it up with:
 

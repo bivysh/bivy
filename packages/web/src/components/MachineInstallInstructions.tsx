@@ -27,9 +27,9 @@ export function MachineInstallInstructions() {
   return (
     <div className="settings-form machine-install-instructions">
       <p className="muted">
-        Run this on any Mac or Linux computer to install Bivy there and connect it as a new Machine on your account.
-        {install.authenticated && " It will use this signed-in account automatically."}
-        {!install.hosted && " Needs Node.js 20 or newer; setup will point the Machine at this control plane."}
+        Run on a Mac or Linux computer to install Bivy and connect a new Machine.
+        {install.authenticated && " Auto sign-in uses your current account."}
+        {!install.hosted && " Both commands connect to your self-hosted server."}
       </p>
       <div className="install-command-list">
         {install.authenticated && (
@@ -52,6 +52,7 @@ export function MachineInstallInstructions() {
         )}
         <div className="install-command-option">
           <div className="install-command-label">Regular sign-in</div>
+          {!install.hosted && <p className="muted">Requires GitHub or email sign-in on your server.{install.authenticated && " For owner access without a provider, use Auto sign-in."}</p>}
           <div className="connect-command">
             <code>{install.plainCommand}</code>
             <button

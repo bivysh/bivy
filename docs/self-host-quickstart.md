@@ -1,127 +1,188 @@
-# Self-host quickstart
+# Optional VPS self-host quickstart
 
-This guide takes a new Linux VPS to a running Bivy control plane, relay, and web
-app — the AGPL control-plane and relay stack from this repo (Bivy Cloud layers
-billing on top of it in a private repository). The installer pulls public,
-multi-platform service images for `linux/amd64` or `linux/arm64`. Self-hosting
-is community-supported (no SLA; best-effort help via GitHub issues — you own
-TLS, backups, upgrades, and hardening) and intended for people comfortable
-operating their own server. If you only want to run agents on your computer, use
-the regular [quickstart](quickstart.md) instead — the CLI needs no server at all.
+**Using a container platform or your own deployment tooling?** Start with
+[Deploy Bivy anywhere](deploy-images.md). It uses the same images and provides
+browser owner setup without SSH. This guide is the optional Compose convenience
+path for a bare VPS.
 
-## Prerequisites
+Run Bivy's web app, control plane, relay, and database on your own Linux server.
+**One domain, one installer, no GitHub OAuth app or email provider required.**
+Your agents still run on Machines you connect afterward.
 
-- A Linux VPS with at least 1 vCPU and 1 GB RAM
-- Two DNS A/AAAA records pointing to it:
-  - `app.example.com` for the web app and control plane
-  - `relay.example.com` for the relay
-- Ports 80 and 443 open
+## Before you start
 
-## 1. Install Docker
+- A Linux VPS: AMD64 or ARM64, **2 GB RAM recommended**, 1 vCPU minimum.
+- One DNS record, such as `bivy.example.com`, pointing at its public IP.
+  Only add an AAAA record if IPv6 actually reaches this server.
+- Inbound TCP ports **80 and 443** open and unused by another web server.
+- SSH access with Docker administrative privileges. The guided Docker install
+  supports Debian/Ubuntu and requires root; other distributions need Docker
+  Engine and the Compose v2 plugin installed first.
 
-The server needs Docker Engine and the Compose plugin. On Ubuntu:
+You still need to provision the server and configure DNS yourself. This is not
+a cloud-provider marketplace deployment button.
 
-```bash
-ssh root@YOUR_SERVER_IP
-apt-get update
-apt-get install -y ca-certificates curl gnupg git
-install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-chmod a+r /etc/apt/keyrings/docker.gpg
-. /etc/os-release
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $VERSION_CODENAME stable" > /etc/apt/sources.list.d/docker.list
-apt-get update
-apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-```
+## 1. Install on the server
 
-## 2. Clone Bivy
+SSH into the VPS, then run:
 
 ```bash
-mkdir -p /opt/bivy && cd /opt/bivy
-git clone https://github.com/bivysh/bivy.git .
+curl -fsSL https://github.com/bivysh/bivy/releases/latest/download/install.sh | bash -s -- bivy.example.com
 ```
 
-## 3. Generate configuration
+The installer offers to install Docker when needed. To explicitly authorize that
+step on a fresh Debian/Ubuntu VPS, run as root with `bash -s -- --install-docker
+bivy.example.com` on the right-hand side of the pipe.
 
-Replace the example domains with your DNS names:
+Prefer to inspect it first?
+
+```bash
+curl -fsSL https://github.com/bivysh/bivy/releases/latest/download/install.sh -o install-bivy.sh
+less install-bivy.sh
+bash install-bivy.sh bivy.example.com
+```
+
+**Release availability:** this path requires a stable release containing the new
+self-host bundle. Older releases do not have these assets; until the first such
+release is published, use the source-checkout path below.
+
+The installer checks prerequisites, downloads a checksummed release bundle,
+pins public service images to that release's exact commit, generates secrets and
+push keys, and starts Postgres, control plane, relay, and Caddy. Caddy handles TLS.
+The relay shares your domain at `wss://bivy.example.com/relay`.
+
+Success is printed only after container health and public HTTPS checks pass.
+No Node.js, repository checkout, or application build is required on the VPS.
+Checksums detect corruption; HTTPS and the GitHub release are the authenticity
+trust boundary.
+
+Files go in `/opt/bivy` when run as root, otherwise `~/bivy-self-host`. Override
+with `BIVY_SELF_HOST_DIR=/your/path` on the **bash side** of the pipe. Select a
+published version with `BIVY_SELF_HOST_VERSION=vX.Y.Z` there too.
+
+## 2. Open your private sign-in link
+
+The installer prints a **single-use link valid for 15 minutes**. Open it in your
+browser to sign into the local `owner@self-host.invalid` account. This is a local
+account identity, not a verified external email address or a platform-wide admin
+role. The link is generated through server-shell access; there is no public
+“claim this server” endpoint and development login remains disabled.
+
+Treat the link as a secret: do not paste it into tickets, logs, or shared chats.
+To sign in again, or recover after an expired link, run on the VPS:
+
+```bash
+cd /opt/bivy # or your installation directory
+bash deploy/manage.sh login
+```
+
+If you want routine sign-in without SSH, configure GitHub OAuth or Resend later
+as described below. Use the same account identity if you intentionally want to
+link that verified email to your owner account; changing the owner identity alone
+selects a different account, it does not migrate Machines or sessions.
+
+## 3. Connect a Machine
+
+In the signed-in web app, choose **Connect a Machine** and copy the **Auto
+sign-in** command. Run it on the Mac or Linux computer where your agents should
+run. It installs Bivy and prerequisites, points it at your server, and uses your
+existing account—no second OAuth/email setup required.
+
+The command includes an account token: only run it on a computer you trust.
+Finish agent authentication in setup, then start your first session in the web
+app. **Regular sign-in** requires a separately configured GitHub/email provider;
+use Auto sign-in for the default server-shell owner account.
+
+## Everyday operations
+
+Run from the installation directory:
+
+```bash
+bash deploy/manage.sh status # container health
+bash deploy/manage.sh logs   # recent logs (review/redact before sharing)
+bash deploy/manage.sh check  # public HTTPS checks
+bash deploy/manage.sh login  # private recovery/sign-in link
+bash deploy/manage.sh backup # bundled DB + secrets + proxy config
+bash deploy/manage.sh update # backs up bundled DB, then installs a stable release
+```
+
+Backups contain secrets. Copy them to secure off-server storage and test restores.
+Updates are not transactional database rollbacks. Managed databases need a
+provider snapshot and a separate secret/config backup before updating; acknowledge
+that with `BIVY_MANAGED_BACKUP_CONFIRMED=1`. See [operations](self-host.md).
+
+## Advanced options
+
+### Use a source checkout
+
+With Docker Engine and Compose already installed:
+
+```bash
+git clone https://github.com/bivysh/bivy.git
+cd bivy
+bash deploy/self-host.sh bivy.example.com
+```
+
+This uses the exact checkout's public images, so wait for its service-image CI
+publication. An unpublished branch commit cannot be pulled. To run modified
+source, use the build overlay in [self-host.md](self-host.md#image-pins-and-source-builds).
+Source checkouts update by checking out a desired release and rerunning setup,
+not by replacing them with a bundle.
+
+### Keep separate app and relay domains
+
+Pass both hostnames to either installer:
 
 ```bash
 bash deploy/self-host.sh app.example.com relay.example.com
 ```
 
-The command pins the public service images to the checkout's immutable full
-commit SHA, creates a private `deploy/.env`, generates relay and database
-secrets, and configures Caddy for automatic TLS. On the first run it stops before
-starting Docker so you can configure sign-in.
+Existing `.env`, custom Caddyfiles, and data volumes are preserved. Changing the
+arguments does not migrate domains: update `.env` and `Caddyfile` together
+explicitly. Existing installations are not automatically given owner login.
 
-## 4. Configure sign-in
+### Managed Postgres
 
-Choose one method in `deploy/.env`:
-
-```env
-# Email magic links
-RESEND_API_KEY=...
-AUTH_EMAIL_FROM=Bivy <login@app.example.com>
-```
-
-Or configure GitHub OAuth:
-
-```env
-GITHUB_OAUTH_CLIENT_ID=...
-GITHUB_OAUTH_CLIENT_SECRET=...
-```
-
-For GitHub, follow [github-oauth-setup.md](github-oauth-setup.md) and use
-`https://app.example.com/auth/github/callback` as the callback URL.
-
-## 5. Start Bivy
-
-Run the deployment command again:
-
-```bash
-bash deploy/self-host.sh app.example.com relay.example.com
-```
-
-This pulls and starts Postgres, the control plane, relay, and Caddy. Open
-`https://app.example.com` in a browser.
-
-To use a managed Postgres database instead of the bundled container, provide its
-connection URL on the first run:
+On the first run, set `DATABASE_URL` on the bash side of the pipe (or when
+invoking `self-host.sh`):
 
 ```bash
 DATABASE_URL='postgres://USER:PASSWORD@HOST:PORT/DBNAME?sslmode=require' \
-  bash deploy/self-host.sh app.example.com relay.example.com
+  bash deploy/self-host.sh bivy.example.com
 ```
 
-## 6. Connect a node
+Compose v2.24+ is required. Subsequent operations remember the managed DB mode.
 
-On the computer where your agents run:
+### Optional browser owner password
 
-```bash
-# GitHub sign-in:
-bivy relay:setup \
-  --control-plane https://app.example.com \
-  --relay wss://relay.example.com \
-  --github
+Set `SELF_HOST_SETUP_TOKEN` to a separate random value (`openssl rand -hex 32`)
+in `deploy/.env` and rerun setup. Open the app's main URL without the shell login
+link to set a password. The token is usable once; the password works afterward
+even if you remove the token. Recovery needs a new token and redeployment.
+See [portable owner access](deploy-images.md#3-set-up-owner-access-in-the-browser).
 
-# For email sign-in, replace --github with --email you@example.com.
-bivy start
+### Optional external sign-in
+
+Configure either pair in `deploy/.env` and rerun setup:
+
+```env
+# GitHub OAuth — docs/github-oauth-setup.md
+GITHUB_OAUTH_CLIENT_ID=...
+GITHUB_OAUTH_CLIENT_SECRET=...
+
+# Or Resend with a verified sender
+RESEND_API_KEY=...
+AUTH_EMAIL_FROM=Bivy <login@example.com>
 ```
 
-Run `bivy link` to pair a phone or `bivy open` to open the web app.
+To use a real, verified email for the owner from the outset, pass
+`SELF_HOST_OWNER_EMAIL=you@example.com` on the first invocation. Only a server
+administrator can issue its shell sign-in link. Set `SELF_HOST_OWNER_EMAIL=`
+explicitly on the first invocation if you want external-provider-only login;
+at least one complete provider configuration is then required.
 
-## Upgrade
+Offline credential storage remains explicit opt-in; follow
+[self-host.md](self-host.md#offline-automations-encrypted-credential-storage).
 
-Check out the desired release (or pull the latest commit you intentionally want
-to run), then rerun the installer. It updates the immutable image pin and pulls
-the matching images without replacing your secrets or customized Caddyfile:
-
-```bash
-cd /opt/bivy
-git fetch --tags
-git checkout vX.Y.Z
-bash deploy/self-host.sh app.example.com relay.example.com
-```
-
-For backups, upgrades, secret rotation, and the security model, read
-[self-host.md](self-host.md).
+Self-hosting is community-supported beta infrastructure. You own server security,
+backup storage, upgrades, monitoring, and recovery—not just initial installation.
