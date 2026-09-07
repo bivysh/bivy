@@ -496,6 +496,7 @@ unauthenticated dev login enabled.
 | --- | --- | --- | --- |
 | `PORT` | integer | `4400` | |
 | `PUBLIC_CONTROL_PLANE_URL` | URL | derived from `x-forwarded-proto` / `x-forwarded-host` / `Host` | Canonical external base URL, used for OAuth redirect URIs and magic-link URLs. **Set this** — the header-derived fallback trusts unvalidated proxy headers |
+| `TRUST_PROXY` | comma-separated IPs/CIDRs or Express named subnets | unset (trust no proxies); Compose: `uniquelocal` | Trusted ingress addresses for forwarded client IPs and owner-auth rate limits. Configure your actual proxies; never use Internet-wide ranges. Booleans and hop counts are not accepted. See [deployment routing](deploy-images.md#2-configure-the-environment) |
 | `RELAY_PUBLIC_URL` | `ws(s)://` URL | `ws://localhost:4500` | Public relay URL handed to nodes and clients in relay tickets |
 | `RELAY_SHARD_URLS` | comma-separated URLs | falls back to `RELAY_PUBLIC_URL`, then `ws://localhost:4500` | Node→shard mapping is by hash of the node id |
 | `DATABASE_POOL_MAX` | integer ≥ 1 | `10` | |

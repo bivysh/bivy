@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { Router, type RequestHandler } from "express";
-import { rateLimit } from "express-rate-limit";
+import { ipKeyGenerator, rateLimit } from "express-rate-limit";
 import { hashToken, type AccountAuthRepository, type SelfHostOwnerRepository } from "./store.js";
 
 type OwnerStore = SelfHostOwnerRepository & Pick<AccountAuthRepository, "findOrCreateAccount" | "getAccount" | "rateLimitExceeded">;
@@ -70,7 +70,7 @@ export function createOwnerAuthRouter(options: OwnerAuthOptions): Router {
   const guard: RequestHandler = async (req, res, next) => {
     if (!req.is("application/json")) return res.status(415).json({ error: "Send application/json." });
     if (req.get("origin") && req.get("origin") !== publicOrigin) return res.status(403).json({ error: "Cross-origin sign-in is not allowed." });
-    if (await store.rateLimitExceeded("owner-auth-ip", req.ip || "unknown", 10, 60_000) ||
+    if (await store.rateLimitExceeded("owner-auth-ip", ipKeyGenerator(req.ip || "unknown"), 10, 60_000) ||
         await store.rateLimitExceeded("owner-auth-global", "owner", 30, 60_000) || hashing) {
       res.setHeader("Retry-After", "60");
       return res.status(429).json({ error: "Too many sign-in attempts. Wait a minute and try again." });

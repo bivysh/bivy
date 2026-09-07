@@ -24,6 +24,7 @@ printf 'docker %s\\n' "$*" >> "$MARKER"
 if [[ "$*" == *' up '* && "\${FAIL_HEALTH:-0}" == 1 ]]; then exit 1; fi
 if [[ "$*" == *generateVAPIDKeys* ]]; then echo 'public-key:private-key'; fi
 if [[ "$*" == *operator-login-cli.ts* ]]; then echo 'private login link'; fi
+if [[ "$*" == *'/auth/owner/status'* ]]; then exit "\${OWNER_PASSWORD_STATUS:-2}"; fi
 if [[ "$*" == *pg_dump* ]]; then echo 'database fixture'; fi
 `, { mode: 0o755 });
   fs.writeFileSync(path.join(bin, "curl"), `#!/usr/bin/env bash
@@ -89,6 +90,37 @@ try {
   success(browserResult);
   assert.match(browserResult.stdout, /enter your deployment setup secret/);
   assert.doesNotMatch(browserOwner.calls(), /operator-login-cli/);
+  // Browser-only deployments keep working after removing their consumed setup
+  // token. Check durable state on a cold start, including managed Postgres.
+  for (const databaseUrl of ["", "postgres://user:pass@db.example/bivy?sslmode=require"]) {
+    const passwordOwner = fixture({ SELF_HOST_OWNER_EMAIL: "", SELF_HOST_SETUP_TOKEN: "a".repeat(64), DATABASE_URL: databaseUrl });
+    success(passwordOwner.setup());
+    const configPath = path.join(passwordOwner.deploy, ".env");
+    fs.writeFileSync(configPath, passwordOwner.config().replace(/^SELF_HOST_SETUP_TOKEN=.*$/m, "SELF_HOST_SETUP_TOKEN="));
+    fs.writeFileSync(passwordOwner.marker, "");
+    const resumed = passwordOwner.setup(undefined, { SELF_HOST_SETUP_TOKEN: "", OWNER_PASSWORD_STATUS: "0" });
+    success(resumed);
+    assert.match(resumed.stdout, /Verified existing owner password/);
+    assert.match(resumed.stdout, /sign in with your owner password/);
+    const calls = passwordOwner.calls();
+    const privateStart = calls.indexOf("up -d --wait --wait-timeout 180 control-plane\n");
+    const check = calls.indexOf("/auth/owner/status");
+    const publicStart = calls.indexOf("up -d --wait --wait-timeout 180\n");
+    assert.ok(privateStart >= 0 && check > privateStart && publicStart > check, "verify the ready control plane before starting the whole stack");
+    assert.doesNotMatch(calls, /operator-login-cli/);
+    assert.match(passwordOwner.config(), /^SELF_HOST_SETUP_TOKEN=$/m, "do not re-arm setup to permit an upgrade");
+    if (databaseUrl) assert.match(calls, /-f deploy\/docker-compose.hosted-db.yml/);
+
+    for (const status of ["1", "2"]) {
+      fs.writeFileSync(passwordOwner.marker, "");
+      assert.equal(passwordOwner.setup(undefined, { SELF_HOST_SETUP_TOKEN: "", OWNER_PASSWORD_STATUS: status }).status, 2);
+      assert.match(passwordOwner.calls(), /\/auth\/owner\/status/);
+      assert.doesNotMatch(passwordOwner.calls(), /up -d --wait --wait-timeout 180\n|operator-login-cli/, "absent passwords and failed checks must not start the public stack");
+    }
+    fs.writeFileSync(passwordOwner.marker, "");
+    assert.equal(passwordOwner.setup(undefined, { SELF_HOST_SETUP_TOKEN: "", BIVY_SELF_HOST_CONFIG_ONLY: "1" }).status, 2);
+    assert.equal(passwordOwner.calls(), "", "config-only cannot verify a persisted password");
+  }
   const weakOwner = fixture({ SELF_HOST_OWNER_EMAIL: "", SELF_HOST_SETUP_TOKEN: "short" });
   assert.equal(weakOwner.setup().status, 1);
 
@@ -99,6 +131,8 @@ try {
   assert.equal(missing.calls(), "");
   fs.appendFileSync(path.join(missing.deploy, ".env"), "\nRESEND_API_KEY=\"\"\nGITHUB_OAUTH_CLIENT_ID=only-id\nGITHUB_OAUTH_CLIENT_SECRET=''\n");
   assert.equal(missing.setup().status, 2);
+  assert.match(missing.calls(), /\/auth\/owner\/status/, "an existing deployment without env auth must check for a persisted password");
+  fs.writeFileSync(missing.marker, "");
   fs.appendFileSync(path.join(missing.deploy, ".env"), "\nSELF_HOST_OWNER_EMAIL=owner@self-host.invalid\n");
   success(missing.setup(undefined, { BIVY_SELF_HOST_CONFIG_ONLY: "1" }));
   assert.equal(missing.calls(), "");

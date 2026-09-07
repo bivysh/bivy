@@ -97,6 +97,8 @@ rand() {
 cd "${ROOT}"
 mkdir -p deploy
 source deploy/common.sh
+EXISTING_CONFIG=0
+if [[ -f deploy/.env ]]; then EXISTING_CONFIG=1; fi
 # Reject a domain change before touching the existing image pin or any config.
 if [[ -f deploy/.env ]] && [[ "$(env_value PUBLIC_CONTROL_PLANE_URL)" != "https://${APP_DOMAIN}" || "$(env_value RELAY_PUBLIC_URL)" != "$RELAY_PUBLIC_URL" ]]; then
   echo "These domains differ from deploy/.env. Use the existing domains, or explicitly update .env and Caddyfile together." >&2
@@ -261,9 +263,10 @@ else
 fi
 
 # A production control plane deliberately disables the unauthenticated dev
-# login. Do not continue into an unusable deployment:
-# require at least one real sign-in path before Docker is touched. Parse
-# individual keys rather than `source`-ing operator-controlled .env content.
+# login. Fresh installs need an explicit sign-in path. Existing installs may
+# instead have a password in Postgres after removing the setup token: verify
+# that through the private control plane before bringing up the public proxy.
+# Parse individual keys rather than sourcing operator-controlled .env content.
 
 RESEND_CONFIGURED="$(env_value RESEND_API_KEY)"
 AUTH_EMAIL_FROM_CONFIGURED="$(env_value AUTH_EMAIL_FROM)"
@@ -279,13 +282,11 @@ if [[ -n "$OWNER_EMAIL_CONFIGURED" && ! "$OWNER_EMAIL_CONFIGURED" =~ ^[^[:space:
   echo "Invalid SELF_HOST_OWNER_EMAIL in deploy/.env." >&2
   exit 1
 fi
-if [[ -z "$OWNER_EMAIL_CONFIGURED" && -z "$OWNER_SETUP_CONFIGURED" \
-  && ( -z "${RESEND_CONFIGURED}" || -z "${AUTH_EMAIL_FROM_CONFIGURED}" ) \
-  && ( -z "${GITHUB_CLIENT_ID_CONFIGURED}" || -z "${GITHUB_CLIENT_SECRET_CONFIGURED}" ) ]]; then
+no_auth_configured() {
   cat >&2 <<EOF
 
-Bivy configuration was written, but the stack was not started because no
-production sign-in method is configured.
+Bivy configuration was written, but setup cannot finish because no
+production sign-in method could be confirmed.
 
 Choose one, edit deploy/.env, then run this same command again:
   - Browser owner setup: set SELF_HOST_SETUP_TOKEN (generate with openssl rand -hex 32).
@@ -294,14 +295,26 @@ Choose one, edit deploy/.env, then run this same command again:
   - GitHub sign-in: set GITHUB_OAUTH_CLIENT_ID and GITHUB_OAUTH_CLIENT_SECRET.
     Setup guide: docs/github-oauth-setup.md
 
-The unauthenticated dev login stays disabled. Refusing to start here prevents a
+The unauthenticated dev login stays disabled. Refusing to finish setup prevents a
 deployment that nobody can sign into.
 EOF
   exit 2
+}
+CHECK_OWNER_PASSWORD=0
+if [[ -z "$OWNER_EMAIL_CONFIGURED" && -z "$OWNER_SETUP_CONFIGURED" \
+  && ( -z "${RESEND_CONFIGURED}" || -z "${AUTH_EMAIL_FROM_CONFIGURED}" ) \
+  && ( -z "${GITHUB_CLIENT_ID_CONFIGURED}" || -z "${GITHUB_CLIENT_SECRET_CONFIGURED}" ) ]]; then
+  if [[ "$EXISTING_CONFIG" == 0 ]]; then no_auth_configured; fi
+  CHECK_OWNER_PASSWORD=1
 fi
 
-# Tests exercise generation without requiring Docker.
+# Tests exercise generation without requiring Docker. Do not claim to have
+# verified a database-backed password when Docker is deliberately skipped.
 if [[ "${BIVY_SELF_HOST_CONFIG_ONLY:-0}" == "1" ]]; then
+  if [[ "$CHECK_OWNER_PASSWORD" == 1 ]]; then
+    echo "Stored owner access needs a database check. Rerun without BIVY_SELF_HOST_CONFIG_ONLY." >&2
+    exit 2
+  fi
   echo "Self-host setup files and auth configuration are valid (Docker not started)."
   exit 0
 fi
@@ -329,6 +342,20 @@ if ! docker compose "${COMPOSE_ARGS[@]}" --env-file deploy/.env config -q 2>"${C
 fi
 
 docker compose "${COMPOSE_ARGS[@]}" --env-file deploy/.env pull control-plane relay
+if [[ "$CHECK_OWNER_PASSWORD" == 1 ]]; then
+  # This also starts the bundled DB dependency on a cold host; managed mode
+  # uses the same readiness gate. No login/session is minted by the check.
+  if ! docker compose "${COMPOSE_ARGS[@]}" --env-file deploy/.env up -d --wait --wait-timeout 180 control-plane; then
+    echo "Cannot verify stored owner access: control plane is not healthy. Run: bash deploy/manage.sh logs" >&2
+    exit 1
+  fi
+  if ! docker compose "${COMPOSE_ARGS[@]}" --env-file deploy/.env exec -T control-plane node -e \
+    'fetch("http://127.0.0.1:4400/auth/owner/status", {signal: AbortSignal.timeout(10000)}).then(async r => { if (!r.ok) throw new Error("Owner status unavailable"); const status = await r.json(); process.exit(status.passwordConfigured === true ? 0 : 2); }).catch(() => process.exit(1))'; then
+    echo "Could not confirm a stored owner password. Check control-plane logs or configure a sign-in method." >&2
+    no_auth_configured
+  fi
+  echo "Verified existing owner password sign-in."
+fi
 if ! docker compose "${COMPOSE_ARGS[@]}" --env-file deploy/.env up -d --wait --wait-timeout 180; then
   echo "Services did not become healthy. Run: bash deploy/manage.sh status" >&2
   exit 1
@@ -360,6 +387,8 @@ if [[ -n "$OWNER_EMAIL_CONFIGURED" ]]; then
   bash deploy/manage.sh login
 elif [[ -n "$OWNER_SETUP_CONFIGURED" ]]; then
   echo "Open https://${APP_DOMAIN} and enter your deployment setup secret to choose an owner password."
+elif [[ "$CHECK_OWNER_PASSWORD" == 1 ]]; then
+  echo "Open https://${APP_DOMAIN} and sign in with your owner password."
 else
   echo "Open https://${APP_DOMAIN} and sign in with your configured provider."
 fi

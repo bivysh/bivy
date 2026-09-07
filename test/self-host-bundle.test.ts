@@ -26,7 +26,8 @@ try {
   const mocks = {
     docker: `printf '%s\\n' "$*" >> "$CALLS"
 if [[ "$*" == *generateVAPIDKeys* ]]; then echo 'pub:priv'; fi
-if [[ "$*" == *operator-login-cli.ts* ]]; then echo 'single-use login'; fi`,
+if [[ "$*" == *operator-login-cli.ts* ]]; then echo 'single-use login'; fi
+if [[ "$*" == *'/auth/owner/status'* ]]; then exit "\${OWNER_PASSWORD_STATUS:-2}"; fi`,
     getent: "echo '203.0.113.1 STREAM app.test.example'",
     ss: "exit 0",
     curl: `url=""; dest=""
@@ -77,7 +78,24 @@ fi`,
   assert.notEqual(corrupt.status, 0);
   assert.match(corrupt.stderr, /checksum mismatch/);
   assert.equal(fs.readFileSync(path.join(target, "deploy/.env"), "utf8"), config);
-  console.log("self-host bundle: allowlist/checksum, stable resolution, SHA pin, bootstrap, preservation and download failures passed");
+  // Exercise manage.sh update, not just the installer: an existing browser
+  // password is sufficient after the operator removes all bootstrap env auth.
+  fs.writeFileSync(`${archive}.sha256`, `${checksum}  bivy-self-host.tar.gz\n`);
+  const passwordConfig = config.replace(/^SELF_HOST_OWNER_EMAIL=.*$/m, "SELF_HOST_OWNER_EMAIL=");
+  fs.writeFileSync(path.join(target, "deploy/.env"), passwordConfig);
+  fs.writeFileSync(calls, "");
+  const updated = spawnSync("bash", [path.join(target, "deploy/manage.sh"), "update"], {
+    encoding: "utf8", env: { ...env, SELF_HOST_OWNER_EMAIL: "", OWNER_PASSWORD_STATUS: "0" },
+  });
+  assert.equal(updated.status, 0, `${updated.stdout}\n${updated.stderr}`);
+  assert.match(updated.stdout, /Backup:/);
+  assert.match(updated.stdout, /Verified existing owner password/);
+  assert.match(updated.stdout, /stack is ready/);
+  assert.match(fs.readFileSync(calls, "utf8"), /\/auth\/owner\/status/);
+  assert.doesNotMatch(fs.readFileSync(calls, "utf8"), /operator-login-cli/);
+  assert.equal(fs.readFileSync(path.join(target, "deploy/.env"), "utf8"), passwordConfig);
+  assert.equal(fs.readFileSync(caddy, "utf8"), custom);
+  console.log("self-host bundle: allowlist/checksum, stable resolution, SHA pin, bootstrap, preservation, password-only update and download failures passed");
 } finally {
   fs.rmSync(temp, { recursive: true, force: true });
 }

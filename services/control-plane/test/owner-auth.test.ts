@@ -6,6 +6,7 @@ import type { Server } from "node:http";
 import { createPgMemStore } from "../src/pg-mem-store.js";
 import { createOwnerAuthRouter, hashOwnerPassword, verifyOwnerPassword } from "../src/owner-auth.js";
 import { hashToken } from "../src/store.js";
+import { configureProxyTrust } from "../src/proxy-trust.js";
 
 const store = createPgMemStore();
 await store.init();
@@ -17,7 +18,7 @@ let ip = 1;
 async function start(setupToken?: string) {
   if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));
   const app = express();
-  app.set("trust proxy", 1);
+  configureProxyTrust(app, "loopback");
   app.use(express.json());
   app.use("/auth/owner", createOwnerAuthRouter({ store, setupToken, publicUrl: "https://app.example.com", relayUrl: "wss://relay.example.com", github: false, email: false }));
   server = app.listen(0, "127.0.0.1");

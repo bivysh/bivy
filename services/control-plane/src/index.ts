@@ -19,6 +19,7 @@ import { correlateHostedSessions } from "./hosted-correlation.js";
 import { countActiveAccountSessions } from "./session-count.js";
 import { createStore } from "./store-factory.js";
 import { createOwnerAuthRouter } from "./owner-auth.js";
+import { configureProxyTrust } from "./proxy-trust.js";
 import { AutomationScheduler, nextOccurrence, normalizeSchedule } from "./schedule.js";
 import { parseShardUrls, shardForNode } from "./relay-shards.js";
 import { safeReturnPath } from "./redirect.js";
@@ -331,6 +332,7 @@ function parseSimulationEventBody(value: unknown): EvaluationEvent {
 }
 
 const app = express();
+configureProxyTrust(app, process.env.TRUST_PROXY);
 
 // Operational counters for the relay ticket mint path. These are intentionally
 // coarse (no tokens, no payloads) and exist to distinguish app/store failures

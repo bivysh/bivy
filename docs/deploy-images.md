@@ -69,6 +69,7 @@ frontend variables. Generic copyable files are available:
 | `DATABASE_URL` | Your Postgres connection URL, including the provider's TLS settings |
 | `RELAY_SECRET` | First random secret, shared with the relay |
 | `PUBLIC_CONTROL_PLANE_URL` | Public HTTPS origin of the control-plane/web service |
+| `TRUST_PROXY` | Comma-separated ingress proxy IPs/CIDRs; empty trusts no forwarded client IPs |
 | `RELAY_PUBLIC_URL` | Public relay URL using `wss://` |
 | `DISABLE_DEV_LOGIN` | `1` (never enable development login for deployment) |
 | `SELF_HOST_SETUP_TOKEN` | Second random secret, authorizing browser owner setup |
@@ -88,6 +89,15 @@ in the relay's `CONTROL_PLANE_URL` or the database connection. Public control-pl
 URLs should be origins, not subpaths. Preserve `/relay` in `RELAY_PUBLIC_URL` if your
 reverse proxy uses path routing. Never expose Postgres publicly just for Bivy.
 
+Set `TRUST_PROXY` to the addresses/subnets of your ingress proxies so owner sign-in
+limits use each client's IP, not one shared proxy IP. The ingress must append or
+replace `X-Forwarded-For` with the actual client address. Trust only proxies you
+control; do not use Internet-wide ranges, booleans, or hop counts. Express's named
+subnets (`loopback`, `linklocal`, `uniquelocal`) are also accepted. The optional
+Compose stack defaults to `uniquelocal` because only Caddy publishes ports on its
+private Docker network; narrow this if you customize the network. Bare images
+trust no proxies by default, so direct clients cannot spoof forwarded addresses.
+
 ## 3. Set up owner access in the browser
 
 Open the web service's public HTTPS URL. The sign-in screen detects available
@@ -105,7 +115,11 @@ not make a spent token usable again. Password sign-in uses ordinary, revocable
 account sessions and is rate-limited; it works directly in installed PWAs too.
 
 After setup, remove `SELF_HOST_SETUP_TOKEN` from your runtime environment and
-redeploy if desired. Ordinary password sign-in continues without it. An unused
+redeploy if desired. Ordinary password sign-in continues without it. The Compose
+installer also supports password-only reruns/upgrades: when no sign-in method is
+in the environment, it starts the private control plane (and bundled DB if used)
+and verifies the stored password configuration before starting the public proxy.
+This check requires Docker and cannot run in config-only mode. An unused
 setup secret has no automatic expiry; remove it if you abandon setup. Never share
 it in a URL, screenshot, source file, or support ticket.
 

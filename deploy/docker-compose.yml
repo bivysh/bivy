@@ -65,6 +65,9 @@ services:
     environment:
       NODE_ENV: "${NODE_ENV:-production}"
       PORT: "4400"
+      # Only Caddy publishes ports; trust proxies on this private Docker network.
+      # Override with narrower proxy IPs/CIDRs for a customized network layout.
+      TRUST_PROXY: "${TRUST_PROXY-uniquelocal}"
       RELAY_SECRET: "${RELAY_SECRET}"
       RELAY_PUBLIC_URL: "${RELAY_PUBLIC_URL}"
       PUBLIC_CONTROL_PLANE_URL: "${PUBLIC_CONTROL_PLANE_URL}"
