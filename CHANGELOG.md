@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.15] - 2026-09-08
+
+### Fixed
+
+- Respect gitignore rules when snapshotting fork workspaces.
+- Load session title decryption keys without requiring each machine to be selected.
+
 ## [0.16.14] - 2026-09-08
 
 ### Added
