@@ -9,6 +9,7 @@ import { requestNodeUpdate } from "./node-update.js";
 // becomes real). Everything the UI renders comes from `store`.
 
 import { AttachmentDiskCache, AttachmentLoader } from "./attachment-loader.js";
+import { SessionTitleKeys } from "./session-title-keys.js";
 
 import {
   DirectTransport,
@@ -1260,6 +1261,7 @@ export class AppController {
   /** Sign out: revoke the session server-side (and free this device's slot),
    *  then clear local state and return to the sign-in screen. */
   async signOut(): Promise<void> {
+    this.sessionTitleKeys?.close();
     try {
       this.transport.close();
     } catch {
@@ -1530,10 +1532,22 @@ export class AppController {
     }
   }
 
+  private sessionTitleKeys?: SessionTitleKeys;
+
   private async refreshAccountSessions(): Promise<void> {
     if (this.direct || !this.signedIn) return;
     try {
       const rows = await fetchAccountSessions(this.local);
+      this.sessionTitleKeys ??= new SessionTitleKeys(
+        this.local,
+        (store, ready) => new RelayTransport({
+          store,
+          pairingOnly: true,
+          handlers: { onStatus: (status) => { if (status === "online") ready(); }, onEvent: () => {} },
+        }),
+        () => { void this.refreshAccountSessions(); },
+      );
+      this.sessionTitleKeys.ensure(rows.filter((row) => row.titleEnc).map((row) => row.nodeId));
       const existing = this.store.getState().sessionIndex.sessions;
       const sessions = await Promise.all(rows.map(async (s) => {
         const sessionId = String(s.sessionId || s.id || "");
