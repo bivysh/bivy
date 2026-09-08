@@ -584,7 +584,13 @@ function acpToolUpdate(msg: Record<string, unknown>): {
 }
 
 // Event `type` values that mean "the turn is finished" across the various CLIs.
-const STREAM_TERMINALS = new Set(["result", "done", "complete", "completed", "turn.completed", "session.done", "session_end", "session/ended", "message_stop", "response.completed", "final"]);
+const STREAM_TERMINALS = new Set(["result", "done", "complete", "completed", "turn.completed", "session.done", "session_end", "session/ended", "message_stop", "response.completed", "final", "end"]);
+
+// Event `type` values whose chunk (in a `data` field) is assistant answer prose
+// vs. reasoning/thinking. Used by the generic streaming parser to support CLIs
+// (e.g. Grok) that key the content off `type` with the text under `data`.
+const STREAM_TEXT_TYPES = new Set(["text", "assistant", "answer", "agent_message", "assistant_message", "output_text", "response_text"]);
+const STREAM_REASONING_TYPES = new Set(["thought", "thinking", "reasoning"]);
 
 /**
  * A TOLERANT line-delimited JSON parser for CLIs whose `--stream-json` /
@@ -621,7 +627,8 @@ export function genericStreamJsonParser(): CliParser {
       // (a suffix match, no per-agent branch) so the message is surfaced as a
       // real turn error instead of leaking into the transcript as assistant
       // prose via the broad `message` text fallback in textFromStreamEvent.
-      const isErrorFrame = /(^|[._:/])error$/.test(type.toLowerCase());
+      const lowerType = type.toLowerCase();
+      const isErrorFrame = /(^|[._:/])error$/.test(lowerType);
       const tool = acpToolUpdate(msg);
       if (tool?.kind === "call") acc.addToolUse(tool.id, tool.name ?? "tool", tool.input, events);
       else if (tool?.kind === "result") acc.addToolResult(tool.id, tool.name ?? "tool", tool.output, events, tool.error);
@@ -632,7 +639,20 @@ export function genericStreamJsonParser(): CliParser {
         const m = msg.message ?? (msg.error as unknown) ?? msg.detail ?? msg.reason;
         if (typeof m === "string" && m.trim()) events.push({ type: "session.error", error: m.trim() });
       }
-      const text = isErrorFrame ? "" : textFromStreamEvent(msg);
+      // Reasoning/thinking stream carried as a typed chunk keyed by `type` with
+      // the content in a `data` field (Grok's streaming-json: {type:"thought",
+      // data}). Surface it as the same display-only thinking sidecar every agent
+      // uses, never as answer prose — a generic shape, not a per-agent branch.
+      if (!isErrorFrame && STREAM_REASONING_TYPES.has(lowerType) && typeof msg.data === "string") {
+        acc.appendReasoning(msg.data, events);
+        return events;
+      }
+      // Assistant answer text. Most CLIs expose it via one of the fields
+      // textFromStreamEvent covers; some (Grok) put it in `data` keyed by an
+      // assistant-text `type`. Fall back to `data` only for those types so an
+      // unrelated control frame's `data` never leaks into the transcript.
+      let text = isErrorFrame ? "" : textFromStreamEvent(msg);
+      if (!text && !isErrorFrame && typeof msg.data === "string" && STREAM_TEXT_TYPES.has(lowerType)) text = msg.data;
       if (text && !STREAM_TERMINALS.has(type)) {
         acc.appendText(text, events);
         sawText = true;

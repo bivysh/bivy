@@ -40,8 +40,8 @@ when a Grok session ends.
 ## Models
 
 Wired via `-m <id>`. The curated default matches the official Grok CLI's
-current catalog (`grok-4.5`). Override with `BIVY_GROK_MODELS` (JSON array of
-`{id,name?,provider?}`) if your install exposes more.
+current catalog (`grok-4.6`, per `grok models`). Override with `BIVY_GROK_MODELS`
+(JSON array of `{id,name?,provider?}`) if your install exposes more.
 
 ## Resume
 
