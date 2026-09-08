@@ -134,7 +134,7 @@ try {
   // The layouts are independent, so exercise both concurrently rather than
   // putting two registry installs in CI's critical path one after the other.
   const installs = await Promise.allSettled([
-    runAsync("npm", ["install", "--global", tarball, "--prefix", globalPrefix, "--no-audit", "--no-fund", "--prefer-offline"]),
+    runAsync("npm", ["install", "--global", tarball, "--prefix", globalPrefix, "--omit=optional", "--no-audit", "--no-fund", "--prefer-offline"]),
     runAsync("npm", ["install", tarball, "--no-fund", "--prefer-offline"], { cwd: consumer }),
   ]);
   const failedInstall = installs.find((result) => result.status === "rejected");
@@ -143,8 +143,9 @@ try {
   const globalBivy = path.join(globalPrefix, "bin", "bivy");
   const globalVersion = run(globalBivy, ["--version"], { capture: true }).trim();
   if (globalVersion !== staged.version) throw new Error(`global CLI version ${globalVersion} != package ${staged.version}`);
-  const globalPiManifest = path.join(globalPrefix, "lib", "node_modules", "@bivy", "bivy", "node_modules", "@earendil-works", "pi-coding-agent", "package.json");
-  if (!fs.existsSync(globalPiManifest)) throw new Error("global install did not resolve Pi as an ordinary dependency");
+  // Match install.sh's default omission of optional agents. Terminal support
+  // must still be present and actually work, not just pass require.resolve().
+  run(process.execPath, [path.join(root, "scripts/smoke-pty.mjs"), path.join(globalPrefix, "lib", "node_modules", "@bivy", "bivy")]);
 
   const bivy = path.join(consumer, "node_modules", ".bin", "bivy");
   const version = run(bivy, ["--version"], { cwd: consumer, capture: true }).trim();

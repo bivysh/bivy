@@ -63,6 +63,7 @@ jobs:
             root:
               - *common
               - 'package.json'
+              - 'install.sh'
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
               - 'tsconfig.json'
@@ -270,6 +271,12 @@ jobs:
           name: release-package
           path: release-artifact
       - run: node scripts/smoke-release.mjs --artifact release-artifact/bivy-npm.tgz
+      - name: Fresh curl installer (no preinstalled Node or build tools)
+        if: runner.os == 'Linux'
+        run: |
+          docker run --rm --init -e BIVY_INSTALL_SMOKE=1 \
+            -v "$PWD:/candidate:ro" ubuntu:24.04 \
+            bash /candidate/scripts/smoke-installer.sh /candidate/release-artifact/bivy-npm.tgz
 
   # The PWA is a principal product client. Playwright parallelizes its test files
   # and desktop/mobile projects within this runner.

@@ -586,12 +586,12 @@ async function ensureDeps() {
   }
   if (process.platform === "linux" && (!commandExists("make") || !commandExists("g++") || !commandExists("python3"))) {
     console.error(c.yellow("Build tools are missing. On Ubuntu/Debian run: sudo apt-get update && sudo apt-get install -y build-essential python3"));
-    console.error(c.dim("Continuing; Bivy can run without them, but interactive terminal support may be unavailable if node-pty cannot use a prebuilt binary."));
+    console.error(c.dim("The node-pty terminal dependency needs these tools if no prebuilt binary matches this machine."));
   }
   console.log(c.dim(`Installing dependencies (${cmd} ${args.join(" ")})…`));
   const code = await run(cmd, args, { cwd: repoRoot });
   if (code !== 0 || !fs.existsSync(dependencyMarker)) {
-    console.error(c.red(`${cmd} install failed. Install Node.js 20+ and, if native optional dependencies failed, build tools (make/g++/python3), then try again.`));
+    console.error(c.red(`${cmd} install failed. Install Node.js 20+ and, if native dependencies failed, build tools (make/g++/python3), then try again.`));
     return false;
   }
   return true;
@@ -4218,7 +4218,7 @@ async function cmdDoctor(args = []) {
   console.log(`  ${mark(hasSupportedNode())} Node ${process.version}${hasSupportedNode() ? "" : c.dim("  (needs >= 20.0.0)")}`);
   const ptyInstalled = nodePackageInstalled("node-pty");
   const ptyUsable = ptyInstalled && nodePackageLoadable("node-pty");
-  console.log(`  ${mark(ptyUsable, true)} terminal PTY ${ptyUsable ? c.green("available") : ptyInstalled ? c.yellow("installed but not loadable — reinstall after installing build tools") : c.dim("optional dependency missing — interactive terminals unavailable; chat/exec still work")}`);
+  console.log(`  ${mark(ptyUsable, true)} terminal PTY ${ptyUsable ? c.green("available") : ptyInstalled ? c.yellow("installed but not loadable — reinstall after installing build tools") : c.yellow("dependency missing — reinstall Bivy; interactive terminals unavailable")}`);
   const claudeBridge = nodePackageInstalled("@anthropic-ai/claude-agent-sdk");
   console.log(`  ${mark(claudeBridge, true)} Claude bridge ${claudeBridge ? c.green("installed") : c.dim("optional — installed on first Claude setup/use")}`);
   const piBridge = nodePackageInstalled("@earendil-works/pi-coding-agent");

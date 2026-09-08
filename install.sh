@@ -35,6 +35,11 @@
 #
 set -euo pipefail
 
+# Parse the whole installer before running anything. With curl | bash, a child
+# that reads stdin (apt/debconf, npm lifecycle scripts, etc.) must never consume
+# the shell source and turn a partial install into a silent exit 0.
+main() {
+
 # BIVY_VERSION pins an exact version; BIVY_CHANNEL selects a dist-tag
 # (latest | staging). BIVY_VERSION wins if both are set.
 PKG_VERSION="${BIVY_VERSION:-${BIVY_CHANNEL:-latest}}"
@@ -65,6 +70,12 @@ run_sudo() {
 
 # ---------------------------------------------------------------- prerequisites
 
+run_apt() {
+  # Set this after sudo (which normally strips environment overrides), and never
+  # let debconf/maintainer scripts read the curl stream. sudo can still use /dev/tty.
+  run_sudo env DEBIAN_FRONTEND=noninteractive apt-get "$@" </dev/null
+}
+
 install_ubuntu_prereqs() {
   command -v apt-get >/dev/null 2>&1 || return 0
   if command -v curl >/dev/null 2>&1 && command -v make >/dev/null 2>&1 \
@@ -72,17 +83,24 @@ install_ubuntu_prereqs() {
     return 0
   fi
   info "Installing build prerequisites"
-  run_sudo apt-get update
-  run_sudo apt-get install -y curl ca-certificates build-essential python3
+  run_apt update || return 1
+  run_apt install -y curl ca-certificates build-essential python3
 }
 
 install_ubuntu_node22() {
   command -v apt-get >/dev/null 2>&1 || return 1
+  local setup_script
   info "Installing Node.js 22"
-  run_sudo apt-get update
-  run_sudo apt-get install -y curl ca-certificates
-  curl -fsSL https://deb.nodesource.com/setup_22.x | run_sudo bash -
-  run_sudo apt-get install -y nodejs
+  run_apt update || return 1
+  run_apt install -y curl ca-certificates || return 1
+  setup_script="$(mktemp)" || return 1
+  if ! curl -fsSL https://deb.nodesource.com/setup_22.x -o "$setup_script" \
+     || ! run_sudo env DEBIAN_FRONTEND=noninteractive bash "$setup_script" </dev/null; then
+    rm -f "$setup_script"
+    return 1
+  fi
+  rm -f "$setup_script"
+  run_apt install -y nodejs
 }
 
 # Provider-agnostic fallback: install the official Node.js 22 binary straight
@@ -140,9 +158,7 @@ node_is_supported() {
   [ "$(node -p 'const [M]=process.versions.node.split(".").map(Number); +(M>=20)' 2>/dev/null)" = "1" ]
 }
 
-# Keep the common path fast: build tools are needed only when optional native
-# dependencies (notably node-pty) cannot use a prebuilt binary, so do not run an
-# unconditional apt-get update here.
+# Existing supported Node installations skip acquisition entirely.
 command -v curl >/dev/null 2>&1 || die "curl is required. Install it and re-run."
 
 if ! node_is_supported; then
@@ -164,7 +180,7 @@ command -v npm >/dev/null 2>&1 || die "npm is required (it ships with Node.js)."
 info "Node $(node -v) and npm $(npm -v) ready"
 
 if command -v apt-get >/dev/null 2>&1 && { ! command -v make >/dev/null 2>&1 || ! command -v g++ >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; }; then
-  warn "Build tools are missing. Interactive terminal support may be unavailable if node-pty cannot use a prebuilt binary. Install them with: sudo apt-get update && sudo apt-get install -y build-essential python3"
+  install_ubuntu_prereqs || warn "Could not install build tools. If the terminal dependency cannot use a prebuilt binary, install them and re-run: sudo apt-get update && sudo apt-get install -y build-essential python3"
 fi
 
 # macOS: node-pty may need to compile, which requires the Xcode Command Line
@@ -597,8 +613,8 @@ if [ -f "$STATE_DIR/cli.json" ]; then
   fi
 else
   info "Launching setup…"
-  if [ -r /dev/tty ] && "$BIVY_BIN" setup </dev/tty; then
-    :
+  if ( : </dev/tty ) 2>/dev/null; then
+    "$BIVY_BIN" setup </dev/tty || die "Setup did not complete. Re-run: bivy setup"
   else
     warn "No interactive terminal detected. Finish setup by running:"
     echo "  bivy setup"
@@ -609,3 +625,6 @@ AGENT_CMD="$(first_agent_command)"
 echo ""
 info "First thing to try: cd your-repo && bivy run $AGENT_CMD   (then: bivy open)"
 info "Installer finished in $(elapsed)"
+}
+
+main "$@"

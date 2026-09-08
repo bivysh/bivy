@@ -228,7 +228,7 @@ curl -fsSL https://bivy.sh/install.sh | bash
 
 Setup helps you choose an agent and configure remote access. Existing agents
 keep their command, login, and configuration. The installer may use `sudo` to
-install Node.js if needed, but never for `npm install`. To inspect it first,
+install missing Node.js or Debian/Ubuntu build tools, but never for `npm install`. To inspect it first,
 download it with `curl -fsSL https://bivy.sh/install.sh -o install.sh`.
 
 Already have Node.js and want to avoid sudo?

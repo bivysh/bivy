@@ -53,6 +53,11 @@ chmod +x "$WORK/stub/npm"
 # nodesource) — slow, network-bound, and it has hung CI when a mirror stalled.
 # Migration handling is what's under test here, not Node acquisition.
 ln -s "$(command -v node)" "$WORK/stub/node"
+# These tests must never provision host build tools or stop a host Bivy service.
+for cmd in make g++ python3 bivy; do
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$WORK/stub/$cmd"
+  chmod +x "$WORK/stub/$cmd"
+done
 
 run_installer() {
   # HOME is redirected so the installer's ~/.local symlink handling is contained.
