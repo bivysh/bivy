@@ -36,7 +36,7 @@
   },
   "scripts": {
     "prepare": "node scripts/disable-git-hooks.mjs",
-    "postinstall": "node bin/patch-pi-dependencies.mjs",
+    "postinstall": "node bin/repair-pty-permissions.mjs && node bin/patch-pi-dependencies.mjs",
     "prepublishOnly": "node -e \"console.error('\\nRefusing to publish from the repo root — this would ship the whole monorepo (src/, services/, tests, and any local .env).\\nUse: pnpm run publish:npm  (scripts/build-release.mjs publishes a curated staging dir). See docs/releasing.md.\\n'); process.exit(1)\"",
     "setup": "node bin/bivy.mjs setup",
     "bivy": "node bin/bivy.mjs",
