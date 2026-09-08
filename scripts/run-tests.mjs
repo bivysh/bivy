@@ -85,7 +85,7 @@ const tsSuites = readdirSync(testDir)
 // what flaked `installer-path.sh` when first parallelized). They stay a SERIAL
 // tail, run one at a time after the parallel pool drains, just as they were the
 // tail of the old `&&` chain. They're cheap; the ~141s all lived in .test.ts.
-const shSuites = ["installer-migration.sh", "installer-path.sh"].map((f) => ({
+const shSuites = ["installer-bootstrap.sh", "installer-migration.sh", "installer-path.sh"].map((f) => ({
   name: f,
   cmd: "bash",
   args: [path.join(testDir, f)],

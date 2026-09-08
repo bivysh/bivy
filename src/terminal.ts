@@ -14,7 +14,7 @@ let ptyModule: NodePty | null | undefined;
 function loadPty(): NodePty {
   if (ptyModule) return ptyModule;
   if (ptyModule === null) {
-    throw new Error("PTY support is unavailable because the optional node-pty dependency is not installed. Reinstall Bivy after installing build tools, or use governed chat/exec sessions instead of interactive terminals.");
+    throw new Error("PTY support is unavailable because the node-pty dependency is not installed. Reinstall Bivy after installing build tools, or use governed chat/exec sessions instead of interactive terminals.");
   }
   try {
     ptyModule = createRequire(import.meta.url)("node-pty") as NodePty;
@@ -22,7 +22,7 @@ function loadPty(): NodePty {
   } catch (error) {
     ptyModule = null;
     const detail = error instanceof Error && error.message ? ` (${error.message.split("\n")[0]})` : "";
-    throw new Error(`PTY support is unavailable because the optional node-pty dependency could not be loaded${detail}. Reinstall Bivy after installing build tools, or use governed chat/exec sessions instead of interactive terminals.`);
+    throw new Error(`PTY support is unavailable because the node-pty dependency could not be loaded${detail}. Reinstall Bivy after installing build tools, or use governed chat/exec sessions instead of interactive terminals.`);
   }
 }
 
