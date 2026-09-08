@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.14] - 2026-09-08
+
+### Added
+
+- `bivy exec` now supports explicit workspace, session name, and model flags.
+
+### Fixed
+
+- Fresh curl installations no longer report success without installing Bivy when
+  prerequisite prompts consume the installer input; setup failures are propagated.
+- Require native terminal support and provision missing Debian/Ubuntu build tools,
+  rather than silently installing without a working `bivy run` terminal.
+- Repair macOS terminal spawn-helper permissions during installation.
+- Report failed headless agent turns instead of returning an empty successful reply,
+  and preserve explicitly supplied session names.
+- Correct the fork-fidelity matrix and documentation for full same-runtime Codex
+  and OpenCode forks.
+
 ## [0.16.13] - 2026-09-07
 
 ### Added
