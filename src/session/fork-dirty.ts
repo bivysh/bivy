@@ -94,16 +94,43 @@ export interface WorkspaceSnapshot {
   oversized?: boolean;
 }
 
-/** Capture a non-git workspace for a fork. Symlinks are recorded, never followed,
- * and .git is excluded as it is a repository boundary rather than workspace data. */
+/** Git's file list preserves tracked files even when ignored, and applies nested
+ * ignore rules, negations, and local/global excludes to untracked files. Include
+ * ancestors so the walker can prune ignored directories before reading them.
+ * Plain directories retain full-snapshot behavior; other git failures abort. */
+function snapshotGitPaths(root: string): Set<string> | undefined {
+  const result = spawnSync("git", ["-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "."], {
+    encoding: "utf8", timeout: 10_000, maxBuffer: 64 * 1024 * 1024,
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    if (/not a git repository|outside a git work tree/i.test(result.stderr)) return undefined;
+    throw new Error(`Could not inspect the session workspace for snapshot files: ${result.stderr.trim() || result.signal || result.status}`);
+  }
+  const paths = new Set<string>();
+  for (const file of result.stdout.split("\0").filter(Boolean)) {
+    let rel = path.normalize(file);
+    while (rel !== ".") {
+      paths.add(rel);
+      rel = path.dirname(rel);
+    }
+  }
+  return paths;
+}
+
+/** Capture a workspace for a fork. Git checkouts include tracked and non-ignored
+ * untracked files only. Symlinks are recorded, never followed, and root .git and
+ * .bivy metadata are excluded. */
 export function captureWorkspaceSnapshot(root: string, opts: { maxBytes?: number } = {}): WorkspaceSnapshot {
   const maxBytes = workspaceMaxBytes(opts.maxBytes);
   const entries: WorkspaceSnapshotEntry[] = [];
+  const gitPaths = snapshotGitPaths(root);
   let byteLength = 0;
   const walk = (dir: string, prefix: string) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       if (!prefix && (entry.name === ".git" || entry.name === ".bivy")) continue;
       const rel = prefix ? path.join(prefix, entry.name) : entry.name;
+      if (gitPaths && !gitPaths.has(rel)) continue;
       const abs = path.join(dir, entry.name);
       const stat = fs.lstatSync(abs);
       if (stat.isDirectory()) { walk(abs, rel); continue; }
