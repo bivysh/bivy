@@ -194,7 +194,7 @@ test("follow-up coordinator owns queue timing and delivery", () => {
 test("AppController keeps public compatibility while workflow decisions live outside it", async () => {
   const source = await readFile(new URL("../packages/web/src/store/controller.ts", import.meta.url), "utf8");
   assert.match(source, /switchNode\(nodeId: string\): void \{\s*this\.nodeCoordinator\.switchNode\(nodeId\);/);
-  assert.match(source, /return this\.sessionCoordinator\.fork\(sourceSessionId, opts\)/);
+  assert.match(source, /await this\.sessionCoordinator\.fork\(sourceSessionId, opts\)/);
   assert.match(source, /return this\.credentialsModelsCoordinator\.testCredential\(provider, label\)/);
   assert.match(source, /this\.sessionCoordinator\.sendPrompt\(text, attachments\)/);
   assert.match(source, /this\.sessionCoordinator\.deleteSession\(sessionId, path\)/);

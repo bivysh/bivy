@@ -759,6 +759,7 @@ export interface SettingsState {
 }
 
 export interface PresentationState {
+  forkProgress: { status: "working" | "error"; message: string } | null;
   oauth: OauthState | null;
   needsModelAuth: { nodeId: string; provider: string; reason?: string } | null;
   githubApp: GithubAppState | null;
@@ -790,7 +791,7 @@ const SESSION_INDEX_FIELDS = ["sessions", "runTerminals", "tuiSessions", "paused
 const ACTIVE_SESSION_FIELDS = ["activeSessionId", "activeRuntimeId", "activeTitle", "github", "transcript", "working", "workingLabel", "opening", "approvals", "questions", "turnAttentions", "usage", "changes", "changesHistory", "checkpoints"] as const;
 const CATALOG_FIELDS = ["models", "modelsRuntimeId", "currentModelId", "currentModel", "thinking", "runtimes", "currentAgentName", "selectedAgentId", "installingRuntimeId", "repos", "reposAuthed", "reposError", "reposLoading", "reposReason", "githubConnect", "branches", "branchesRepo", "branchesDefault", "branchesError", "branchesLoading", "providers", "activationReadiness"] as const;
 const SETTINGS_FIELDS = ["nodeSettings", "providerAuth", "credentialRecords", "credentialPresets", "localModels", "localModelPresets", "rulesets", "sttConfig", "nodeStats", "capabilities"] as const;
-const PRESENTATION_FIELDS = ["oauth", "needsModelAuth", "githubApp", "prResult", "prRefreshAllResult", "error", "notice"] as const;
+const PRESENTATION_FIELDS = ["forkProgress", "oauth", "needsModelAuth", "githubApp", "prResult", "prRefreshAllResult", "error", "notice"] as const;
 
 function pickPatch<T extends object>(current: T, patch: AppStatePatch, fields: readonly (keyof T)[]): T {
   const entries: Array<[keyof T, unknown]> = [];
@@ -872,7 +873,7 @@ export function initialState(): AppState {
     },
     presentation: {
       oauth: null, needsModelAuth: null, githubApp: null, prResult: null,
-      prRefreshAllResult: null, error: null, notice: null,
+      prRefreshAllResult: null, error: null, notice: null, forkProgress: null,
     },
     draft: { ...EMPTY_SESSION_DRAFT },
   };
@@ -1737,6 +1738,10 @@ export class SessionStore {
       // answers `node.settings.get` to overwrite it.
       nodeSettings: null,
     });
+  }
+
+  setForkProgress(progress: PresentationState["forkProgress"]): void {
+    this.set({ forkProgress: progress });
   }
 
   setError(message: string): void {

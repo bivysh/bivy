@@ -12,6 +12,7 @@ export interface SessionForkOptions {
 }
 
 export interface SessionOrchestrationDependencies {
+  reportForkProgress?(message: string): void;
   send(command: Command): void;
   sendRequest(command: Command): void;
   createRequestId(): string;
@@ -252,6 +253,7 @@ export class SessionOrchestrator {
     const crossAgent = Boolean(targetAgentId && (!sourceAgentId || targetAgentId !== sourceAgentId));
 
     if (!crossNode && !crossAgent) {
+      this.deps.reportForkProgress?.("Copying the conversation and working files…");
       const done = await this.request(
         { kind: "session.fork.local", sessionId: sourceSessionId, ...(opts.model ? { model: opts.model } : {}) },
         FORK_IMPORT_TIMEOUT_MS,
@@ -259,11 +261,13 @@ export class SessionOrchestrator {
       const sessionId = String((done as { sessionId?: unknown }).sessionId || "");
       if (!sessionId) throw new Error("Local fork returned no session id");
       const result = this.forkResult(done, "full");
+      this.deps.reportForkProgress?.("Loading the forked session…");
       this.deps.openSession(sessionId, undefined, done);
       if (opts.retireSource) this.deps.send({ kind: "session.delete", sessionId: sourceSessionId });
       return { sessionId, ...result };
     }
 
+    this.deps.reportForkProgress?.("Preparing the conversation and working files…");
     const exported = await this.request({
       kind: "session.fork.export",
       sessionId: sourceSessionId,
@@ -281,6 +285,7 @@ export class SessionOrchestrator {
     let done: ServerEvent;
     try {
       if (crossNode) {
+        this.deps.reportForkProgress?.("Connecting to the destination machine…");
         this.deps.switchNode(destNodeId!);
         // switchNode intentionally clears the source session, which also
         // unmounts ForkSheet. Without app-level feedback a slow or failed import
@@ -288,6 +293,7 @@ export class SessionOrchestrator {
         this.deps.reportCrossNodeFork?.("working", "Creating the fork on the destination machine…");
         await this.deps.waitForOnline();
       }
+      this.deps.reportForkProgress?.("Creating the session in the destination agent…");
       done = await this.request({
         kind: "session.fork.import",
         bundle,
@@ -320,6 +326,7 @@ export class SessionOrchestrator {
     // `session.fork.done` is also a complete history snapshot. Open from that
     // exact reply so the URL, transcript, and active agent switch atomically to
     // the fork instead of waiting for sessions.list/history to catch up.
+    this.deps.reportForkProgress?.("Loading the forked session…");
     this.deps.openSession(sessionId, undefined, done);
     const seedPrompt = (done as { seedPrompt?: unknown }).seedPrompt;
     if (typeof seedPrompt === "string" && seedPrompt.trim()) {
@@ -329,6 +336,7 @@ export class SessionOrchestrator {
     }
 
     if (opts.retireSource) {
+      this.deps.reportForkProgress?.("Retiring the original session…");
       // Retire the MOVE's source with the confirmation-gated, idempotent command
       // (1A) — it carries the destination id so the source node refuses to retire
       // unless the move actually produced `sessionId`, and is safe to re-send.
@@ -343,15 +351,14 @@ export class SessionOrchestrator {
           retireError = error;
         } finally {
           this.deps.switchNode(destNodeId!);
-          await this.deps.waitForOnline().catch(() => {});
+          await this.deps.waitForOnline();
+          this.deps.reportForkProgress?.("Loading the forked session…");
           this.deps.openSession(sessionId, undefined, done);
         }
         if (retireError) {
-          this.deps.reportCrossNodeFork?.(
-            "error",
-            `Fork created, but the original session could not be retired: ${retireError instanceof Error ? retireError.message : String(retireError)}`,
-          );
-          throw retireError;
+          const error = new Error(`Fork created, but the original session could not be retired: ${retireError instanceof Error ? retireError.message : String(retireError)}`);
+          this.deps.reportCrossNodeFork?.("error", error.message);
+          throw error;
         }
       } else {
         this.deps.send(retire);

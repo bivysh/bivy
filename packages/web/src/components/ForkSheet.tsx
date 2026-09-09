@@ -57,22 +57,20 @@ export function ForkSheet({ sessionId, onClose }: { sessionId: string; onClose: 
     // it. Consume that entry before navigating to the fork; navigating first
     // leaves the modal sentinel behind the new URL, and Sheet cleanup then
     // history.back()s the PWA straight into the source session again.
-    dismiss(() => {
-      void controller.forkSession(sessionId, {
-        destNodeId: crossNode ? destNodeId : undefined,
-        // Pass the selected target explicitly. The controller compares it with
-        // the source session's runtime; treating this as only an "agent change"
-        // made the target ambiguous and allowed forks to fall back to the source.
-        agentId: agentId ?? undefined,
-        sourceAgentId: sourceAgentId ?? undefined,
-        model: agentUnchanged && model ? { provider: String(model.provider), id: String(model.id) } : undefined,
-        retireSource: willRetire,
-      }).then((result) => {
-        const warning = result.missing.map((item) => item.detail || item.label).find(Boolean);
-        if (warning) controller.store.setNotice(`Fork created. ${warning}`);
-      }).catch((err) => {
-        controller.store.setError(err instanceof Error ? err.message : String(err));
-      });
+    void controller.forkSession(sessionId, {
+      destNodeId: crossNode ? destNodeId : undefined,
+      // Pass the selected target explicitly. The controller compares it with
+      // the source session's runtime; treating this as only an "agent change"
+      // made the target ambiguous and allowed forks to fall back to the source.
+      agentId: agentId ?? undefined,
+      sourceAgentId: sourceAgentId ?? undefined,
+      model: agentUnchanged && model ? { provider: String(model.provider), id: String(model.id) } : undefined,
+      retireSource: willRetire,
+    }, () => new Promise<void>((resolve) => dismiss(resolve))).then((result) => {
+      const warning = result.missing.map((item) => item.detail || item.label).find(Boolean);
+      if (warning) controller.store.setNotice(`Fork created. ${warning}`);
+    }).catch((err) => {
+      controller.store.setError(err instanceof Error ? err.message : String(err));
     });
   }
 
