@@ -543,10 +543,13 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     // TUI uses the same store via `grok --resume <id>`. Model ids match
     // `grok models` for the official CLI (override with BIVY_GROK_MODELS).
     args: ["-p"],
-    // The current CLI's streaming-json mode is ACP's standard NDJSON envelope.
-    // The shared tolerant parser unwraps session/update notifications, including
-    // tool calls/results and sub-agent activity, so Grok gets faithful transcripts
-    // without a Grok-specific adapter. Keep the plain args as the explicit
+    // The current CLI's `--output-format streaming-json` emits newline-delimited
+    // JSON keyed off `type`: {type:"text",data} for the answer, {type:"thought",
+    // data} for reasoning, {type:"end"} to close the turn (plus tool frames). The
+    // shared tolerant generic-stream-json parser understands this shape (and the
+    // ACP session/update envelope other CLIs use), so Grok gets faithful
+    // transcripts — answer prose, a thinking sidecar, and tool cards — without a
+    // Grok-specific adapter. Keep the plain args as the explicit
     // BIVY_AGENT_STRUCTURED=0 fallback.
     jsonArgs: ["--output-format", "streaming-json", "-p"],
     parserId: "generic-stream-json",
@@ -557,12 +560,12 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     model: {
       flag: "-m",
       models: [
-        // Official Grok CLI (1.x) currently advertises grok-4.5 as the default
-        // subscription model. Older curated ids (grok-4-latest, grok-code-fast-1,
-        // …) return "unknown model id" against current CLIs — keep the list
+        // Official Grok CLI (1.x) advertises grok-4.6 as the default subscription
+        // model (verified against `grok models`); the older grok-4.5 / grok-4-latest
+        // / grok-code-fast-1 ids now return "unknown model id". Keep the list
         // honest; operators can override with BIVY_GROK_MODELS if their install
         // exposes more.
-        { id: "grok-4.5", name: "Grok 4.5", provider: "xai" },
+        { id: "grok-4.6", name: "Grok 4.6", provider: "xai" },
       ],
     },
     promptMode: "argv",

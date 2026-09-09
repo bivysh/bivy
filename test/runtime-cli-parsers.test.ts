@@ -289,6 +289,31 @@ async function main() {
     assert.equal(p.messages().length, 0);
   });
 
+  await check("genericStreamJson: Grok's {type,data} shape — answer text, reasoning sidecar, and `end` terminal", () => {
+    // Grok CLI 1.x `--output-format streaming-json` does NOT emit ACP envelopes:
+    // it keys content off `type` with the chunk under `data` ({type:'text'} for
+    // the answer, {type:'thought'} for reasoning) and ends the turn with
+    // {type:'end'}. The generic parser must surface the answer as prose, the
+    // thoughts as a display-only thinking block (never answer text), and treat
+    // `end` as terminal.
+    const p = genericStreamJsonParser();
+    const events = feed(p, [
+      JSON.stringify({ type: "available_commands", tools: ["read_file"], commands: ["compact"] }),
+      JSON.stringify({ type: "thought", data: "Let me " }),
+      JSON.stringify({ type: "thought", data: "add them." }),
+      JSON.stringify({ type: "text", data: "4" }),
+      JSON.stringify({ type: "usage", usage: { input_tokens: 5, output_tokens: 1 } }),
+      JSON.stringify({ type: "end", stopReason: "end_turn" }),
+    ]);
+    const answer = events.filter((e) => e.type === "message_update" && typeof (e as any).message.content === "string").at(-1) as any;
+    assert.equal(answer.message.content, "4", "answer text is extracted from the `data` field");
+    const thinking = events.filter((e) => e.type === "message_update" && Array.isArray((e as any).message.content)).at(-1) as any;
+    assert.equal(thinking.message.content[0].thinking, "Let me add them.", "thoughts stream into the thinking sidecar");
+    assert.equal(types(events).filter((t) => t === "agent_end").length, 1, "`end` terminates the turn");
+    // The persisted transcript holds the answer, not the chain-of-thought.
+    assert.equal(p.messages().filter((m) => m.role === "assistant").map((m) => m.content).join(""), "4");
+  });
+
   await check("genericJson: extracts the reply from a final JSON object + usage", () => {
     const p = genericJsonParser();
     const events = feed(p, [JSON.stringify({ response: "the answer", usage: { total_tokens: 9 } })]);
