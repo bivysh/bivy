@@ -157,10 +157,11 @@ export function loadCodexTranscriptFile(file: string): RuntimeMessage[] {
  * locates. Message turns carry a Responses-API `message` item (`input_text` for
  * the user, `output_text` for the assistant), which reads back through `textOf`.
  *
- * IMPORTANT — best-effort, and NOT verified against a live Codex resume here (see
- * this module's header): Codex's rollout schema is version-variable, so whether a
- * *synthesised* rollout is fully honored by `thread/resume` depends on the
- * installed Codex. The fork engine calls this only as its "replayed" tier and
+ * Verified against Codex 0.151.0 by inspecting the resumed turn's model request.
+ * Response items must be enclosed in task_started/task_complete events: without
+ * that envelope resume succeeds but silently omits the history from model input.
+ * Codex's rollout schema is version-variable. The fork engine calls this only
+ * as its "replayed" tier and
  * falls back to a seeded continuation prompt if it throws; a node can force that
  * fallback outright with `BIVY_CODEX_NO_FORK_REPLAY=1` when its Codex build
  * doesn't accept synthesised rollouts.
@@ -182,6 +183,7 @@ export function writeCodexRollout(
   fs.mkdirSync(dir, { recursive: true });
   const stamp = iso.replace(/[:.]/g, "-").replace(/Z$/, "");
   const file = path.join(dir, `rollout-${stamp}-${id}.jsonl`);
+  const turnId = randomUUID();
   const records: unknown[] = [
     // Codex's SessionMeta parser requires `originator`. Without it the first
     // record is discarded as malformed; `thread/resume` then reaches the first
@@ -193,6 +195,9 @@ export function writeCodexRollout(
       timestamp: iso,
       payload: { session_id: id, id, timestamp: iso, cwd, originator: "bivy", cli_version: "bivy-fork" },
     },
+    // Import the portable conversation as one completed historical task. Codex
+    // reconstructs model context from task boundaries, not bare response items.
+    { type: "event_msg", timestamp: iso, payload: { type: "task_started", turn_id: turnId } },
     ...history.map((message) => ({
       type: "response_item",
       timestamp: iso,
@@ -202,6 +207,7 @@ export function writeCodexRollout(
         content: [{ type: message.role === "user" ? "input_text" : "output_text", text: message.text }],
       },
     })),
+    { type: "event_msg", timestamp: iso, payload: { type: "task_complete", turn_id: turnId } },
   ];
   fs.writeFileSync(file, records.map((r) => JSON.stringify(r)).join("\n") + "\n");
   return { sessionFile: id, id };
