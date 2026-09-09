@@ -64,8 +64,18 @@ for (const theme of ["light", "dark"]) {
       await expect(page.locator(".activity-row")).toBeVisible();
       if (dismissal === "backdrop") await page.screenshot({ path: testInfo.outputPath(`activity-${theme}.png`) });
       if (dismissal === "nested") {
-        await page.evaluate(() => (window as unknown as { showNested(): void }).showNested());
+        const historyLength = await page.evaluate(() => {
+          // Open through a real user gesture: Chromium may skip history entries
+          // created without activation when exercising browser Back on mobile.
+          const button = document.createElement("button");
+          button.textContent = "Open nested sheet";
+          button.onclick = () => (window as unknown as { showNested(): void }).showNested();
+          document.querySelector(".sheet-content")!.append(button);
+          return history.length;
+        });
+        await page.getByRole("button", { name: "Open nested sheet" }).click();
         await expect(page.getByRole("dialog")).toHaveCount(2);
+        await expect.poll(() => page.evaluate(() => history.length)).toBe(historyLength + 1);
         await page.goBack();
         await expect(page.getByRole("dialog")).toHaveCount(1);
         await expect(page.locator(".activity-row")).toBeVisible();
