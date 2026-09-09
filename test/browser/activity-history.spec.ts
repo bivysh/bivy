@@ -101,4 +101,3 @@ for (const theme of ["light", "dark"]) {
     });
   }
 }
-
