@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.16] - 2026-09-09
+
+### Fixed
+
+- Preserve conversation history in Codex model context when forking from another agent.
+- Repair silent, empty Grok turns with corrected authentication, model selection,
+  and streaming transcript handling.
+- Align the app icon badge with sessions needing attention.
+
 ## [0.16.15] - 2026-09-08
 
 ### Fixed
