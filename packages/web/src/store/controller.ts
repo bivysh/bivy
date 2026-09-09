@@ -348,6 +348,7 @@ export class AppController {
       listProviders: () => this.listProviders(),
     });
     this.sessionCoordinator = new SessionOrchestrator({
+      reportForkProgress: (message) => this.store.setForkProgress({ status: "working", message }),
       send: (command) => { void this.transport.send(command); },
       sendRequest: (command) => { void this.transport.send(command); },
       createRequestId: requestId,
@@ -358,7 +359,7 @@ export class AppController {
       switchNode: (nodeId) => this.switchNode(nodeId),
       waitForOnline: (timeoutMs) => this.waitForOnline(timeoutMs),
       openSession: (sessionId, path, snapshot) => {
-        this.openSession(sessionId, path);
+        this.openSession(sessionId, path, { navigate: !snapshot });
         if (snapshot) {
           // A fork completion is built from the same canonical payload as
           // session.history. The coordinator consumes correlated replies before
@@ -373,7 +374,7 @@ export class AppController {
       refreshAccountSessions: () => { void this.refreshAccountSessions(); },
       reportCrossNodeFork: (status, message) => {
         if (status === "error") this.store.setError(message);
-        else this.store.setNotice(message);
+        else if (status === "success") this.store.setNotice(message);
       },
     }, {
       navigateNew: () => navigate({ kind: "new" }),
@@ -1467,11 +1468,17 @@ export class AppController {
     return this.sessionCoordinator.promote(sessionId, standbyNodeId);
   }
 
+  private forkInFlight = false;
+
   /** Fork/copy/move orchestration is owned by SessionOrchestrator. */
-  forkSession(
+  async forkSession(
     sourceSessionId: string,
     opts: { destNodeId?: string; agentId?: string; sourceAgentId?: string; model?: { provider: string; id: string }; retireSource?: boolean } = {},
+    beforeStart?: () => Promise<void>,
   ): Promise<{ sessionId: string; fidelity: string; missing: Array<{ label?: string; detail?: string }> }> {
+    if (this.forkInFlight) throw new Error("A session fork is already in progress");
+    this.forkInFlight = true;
+    this.store.setForkProgress({ status: "working", message: "Preparing to fork the session…" });
     // Capture the source description before a cross-node fork swaps the session
     // index to the destination machine. It is used for the confirmation toast
     // after the new conversation has landed.
@@ -1486,7 +1493,11 @@ export class AppController {
     const sourceName = source?.name || `session ${sourceSessionId.slice(0, 8)}`;
     const sourceAgent = runtimeLabel(sourceAgentId, source?.agentName);
     const targetAgent = runtimeLabel(targetAgentId, targetAgentId === sourceAgentId ? source?.agentName : undefined);
-    return this.sessionCoordinator.fork(sourceSessionId, opts).then((result) => {
+    try {
+      // Keep app-level progress visible while the launching sheet consumes its
+      // history sentinel. Never navigate with that sentinel still on the stack.
+      await beforeStart?.();
+      const result = await this.sessionCoordinator.fork(sourceSessionId, opts);
       // SessionOrchestrator has already opened the completed fork from its
       // canonical snapshot. Usually only the URL needs confirming here. A
       // cross-node handoff can still reset the active projection after that
@@ -1494,12 +1505,36 @@ export class AppController {
       // keeps the canonical snapshot on the normal path while guaranteeing the
       // success notice is never shown over the source session.
       if (this.store.getState().activeSession.activeSessionId !== result.sessionId) {
-        this.openSession(result.sessionId);
-      } else {
-        navigate({ kind: "session", id: result.sessionId });
+        this.openSession(result.sessionId, undefined, { navigate: false });
       }
+      await this.waitForForkReady(result.sessionId);
+      navigate({ kind: "session", id: result.sessionId });
       this.store.setNotice(`This session was forked from “${sourceName}” with ${sourceAgent} to ${targetAgent}.`);
+      this.store.setForkProgress(null);
       return result;
+    } catch (error) {
+      this.store.setForkProgress({ status: "error", message: error instanceof Error ? error.message : String(error) });
+      throw error;
+    } finally {
+      this.forkInFlight = false;
+    }
+  }
+
+  private waitForForkReady(sessionId: string): Promise<void> {
+    const ready = () => {
+      const active = this.store.getState().activeSession;
+      return active.activeSessionId === sessionId && !active.opening;
+    };
+    if (ready()) return Promise.resolve();
+    this.store.setForkProgress({ status: "working", message: "Loading the forked session…" });
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        unsubscribe();
+        reject(new Error("The fork was created, but its conversation could not be loaded. Reopen it from the session list."));
+      }, 30_000);
+      const unsubscribe = this.store.subscribe(() => {
+        if (ready()) { clearTimeout(timer); unsubscribe(); resolve(); }
+      });
     });
   }
 
@@ -2431,7 +2466,7 @@ export class AppController {
   }
 
   /** Pick a runtime/agent. Draft → select + remember; installable → install. */
-  chooseAgent(rt: RuntimeInfo): void {
+  chooseAgent(rt: RuntimeInfo, beforeFork?: () => Promise<void>): void {
     const status = String((rt as any).status || "available");
     const available = status === "available";
     if (!available && (rt as any).install) {
@@ -2458,7 +2493,7 @@ export class AppController {
         agentId: rt.id,
         sourceAgentId,
         retireSource: false,
-      }).catch((error) => this.store.setError(error instanceof Error ? error.message : String(error)));
+      }, beforeFork).catch((error) => this.store.setError(error instanceof Error ? error.message : String(error)));
       return;
     }
     if (activeSessionId) {

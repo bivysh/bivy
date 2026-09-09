@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep fork progress visible from the session menu and agent picker until the new
+  conversation is loaded, including cross-machine moves, and show failures in place.
+
 ## [0.16.16] - 2026-09-09
 
 ### Fixed

@@ -5,7 +5,7 @@ import type { AppState, ModelInfo, RuntimeInfo, SessionContract } from "@bivy/co
 import { resolveSessionContract } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { ConfirmDialog } from "./AppDialog.js";
-import { Sheet, PickerItem } from "./Sheet.js";
+import { Sheet, PickerItem, type DismissSheet } from "./Sheet.js";
 import { useModalEscape } from "../modalStack.js";
 import { ProviderConnectForm } from "./ProviderConnect.js";
 import { runtimeEnforcesProtection, SANDBOX_TIERS } from "./sandboxTiers.js";
@@ -487,14 +487,17 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
 
   const confirmingRuntime = confirmingId ? state.catalogs.runtimes.find((runtime) => runtime.id === confirmingId) : undefined;
 
-  const chooseRuntime = (runtime: RuntimeInfo) => {
+  const chooseRuntime = (runtime: RuntimeInfo, dismiss: DismissSheet) => {
     const contract = !cloningActiveSession ? previewContractForRuntime(runtime) : undefined;
     if (contract?.requiresAcknowledgement) controller.acknowledgeSessionAgentReducedProtections(true);
-    controller.chooseAgent(runtime);
-    onClose();
+    if (cloningActiveSession) {
+      controller.chooseAgent(runtime, () => new Promise<void>((resolve) => dismiss(resolve)));
+    } else {
+      dismiss(() => controller.chooseAgent(runtime));
+    }
   };
 
-  const renderRuntime = (a: RuntimeInfo) => {
+  const renderRuntime = (a: RuntimeInfo, dismiss: DismissSheet) => {
     const status = String((a as any).status || "available");
     const available = status === "available";
     const installable = !available && Boolean((a as any).install);
@@ -540,7 +543,7 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
             setConfirmingId(a.id);
             return;
           }
-          chooseRuntime(a);
+          chooseRuntime(a, dismiss);
         }}
       />
     );
@@ -548,6 +551,7 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
 
   return (
     <Sheet title={cloningActiveSession ? "Hand off to agent" : "Agent"} onClose={onClose} autoFocusSearch={false} size="large">
+      {(dismiss) => <>
       {cloningActiveSession && (
         <div className="picker-empty">
           Choosing an agent forks this session with its transcript and working files, then opens the fork in that agent.
@@ -557,13 +561,13 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
       <div className="picker-list" ref={listRef}>
         {runtimes.length === 0 && <div className="picker-empty">No agents available.</div>}
         {recommended.length > 0 && <div className="picker-section-label">Recommended</div>}
-        {recommended.map(renderRuntime)}
+        {recommended.map((runtime) => renderRuntime(runtime, dismiss))}
         {more.length > 0 && (
           <button type="button" className="picker-section-toggle" onClick={() => setMoreOpen((open) => !open)} aria-expanded={moreOpen || Boolean(q.trim())}>
             More agents <span aria-hidden>{moreOpen || q.trim() ? "▾" : "▸"}</span>
           </button>
         )}
-        {(moreOpen || Boolean(q.trim())) && more.map(renderRuntime)}
+        {(moreOpen || Boolean(q.trim())) && more.map((runtime) => renderRuntime(runtime, dismiss))}
       </div>
       {confirmingRuntime && (
         <ConfirmDialog
@@ -571,9 +575,10 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
           message="Bivy couldn't check which sign-in this agent will use or guarantee its protection level."
           confirmLabel={`Use ${agentLabel(confirmingRuntime)}`}
           onCancel={() => setConfirmingId(null)}
-          onConfirm={() => chooseRuntime(confirmingRuntime)}
+          onConfirm={() => chooseRuntime(confirmingRuntime, dismiss)}
         />
       )}
+      </>}
     </Sheet>
   );
 }

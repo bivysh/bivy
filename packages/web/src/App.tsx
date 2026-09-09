@@ -26,6 +26,7 @@ import { classifySource, indexSessionSources, isLiveRunSession, isRunLogSession 
 import { runtimeSupportsTerminalTakeover } from "./terminalTakeover.js";
 import { indexRunEvidence, failingCheckNames } from "./runEvidence.js";
 import { SessionChangesSheet, countUniqueEditedFiles } from "./components/SessionChangesSheet.js";
+import { ForkProgressDialog } from "./components/ForkProgressDialog.js";
 import { ArtifactsSheet } from "./components/ArtifactsSheet.js";
 import { ErrorToast } from "./components/ErrorToast.js";
 import { NoticeToast } from "./components/NoticeToast.js";
@@ -1082,6 +1083,7 @@ export function App() {
         </Suspense>
       )}
       {ephemeralOpen && cloudMachinesEnabled && <EphemeralSheet onClose={() => setEphemeralOpen(false)} firstRun={needsNode} />}
+      {state.presentation.forkProgress && <ForkProgressDialog progress={state.presentation.forkProgress} onClose={() => controller.store.setForkProgress(null)} />}
       {state.presentation.needsModelAuth && <FirstRunModelAuthSheet state={state} />}
       {terminalNodePicker && (
         <NodePicker

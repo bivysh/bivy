@@ -2343,6 +2343,8 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .app-dialog-body { position: relative; width: min(420px, 100%); border: 1px solid var(--line-strong); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-xl); padding: 18px; display: flex; flex-direction: column; gap: 12px; }
 .app-dialog-body h3 { margin: 0; font-size: 17px; }
 .app-dialog-body p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.45; }
+.fork-progress-dialog { color: var(--ink); margin: auto; max-width: calc(100% - var(--space-8)); }
+.fork-progress-dialog::backdrop { background: var(--overlay); }
 .app-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .stat { border: 1px solid var(--line); border-radius: var(--radius-md); padding: 10px 12px; background: var(--surface-2); }
