@@ -7,10 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.17] - 2026-09-09
+
 ### Fixed
 
 - Keep fork progress visible from the session menu and agent picker until the new
   conversation is loaded, including cross-machine moves, and show failures in place.
+- Keep activity dismissal and agent-selection confirmation in the current app
+  session instead of navigating to another session or back to GitHub.
+- Hide unattended credential controls when ephemeral machines are disabled.
+- Install Python-based agents in isolated environments with uv and a compatible
+  Python version, avoiding conflicts with system-managed Python installations.
 
 ## [0.16.16] - 2026-09-09
 
