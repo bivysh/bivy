@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { buildInboxItems, deriveActivation, cancelAutomationRun, deriveArtifacts, fetchAutomationRun, recordProductMetric, retryAutomationRun, type AccountAutomationRun, type GithubQueueItem } from "@bivy/core";
+import { deriveActivation, cancelAutomationRun, deriveArtifacts, fetchAutomationRun, recordProductMetric, retryAutomationRun, type GithubQueueItem } from "@bivy/core";
 import { useAppState } from "./store/useStore.js";
 import { SessionList } from "./components/SessionList.js";
 import { ChatView } from "./components/ChatView.js";
@@ -59,7 +59,7 @@ import { useEdgeSwipe } from "./useEdgeSwipe.js";
 import { useModalEscape } from "./modalStack.js";
 import { CloseIcon } from "./components/UiIcons.js";
 import { controller } from "./store/useStore.js";
-import { runStatusLabel, statusClass, statusDotState, statusLabel } from "./sessionStatus.js";
+import { attentionRank, runStatusLabel, statusClass, statusDotState, statusLabel } from "./sessionStatus.js";
 
 const DRAWER_FOCUSABLE = 'a[href],button:not(:disabled),textarea:not(:disabled),input:not(:disabled),select:not(:disabled),[tabindex]:not([tabindex="-1"])';
 
@@ -126,10 +126,6 @@ export function App() {
   // the moment it opens — see #388. Hosted-only: the queue is account-level
   // control-plane state, unavailable in direct mode.
   const [githubQueue, setGithubQueue] = useState<GithubQueueItem[] | null>(null);
-  // Automation runs feed the Inbox's authoritative automation items (runs that
-  // need attention or failed). Same account-level, hosted-only, polled-at-shell
-  // shape as the GitHub queue above.
-  const [automationRuns, setAutomationRuns] = useState<AccountAutomationRun[] | null>(null);
   // Ids of attention items the user has already looked at (opened the mobile
   // session drawer since they arrived). Drives the red dot on the ☰ burger:
   // it lights only for attention that appeared while the list was out of view.
@@ -140,49 +136,41 @@ export function App() {
     if (controller.direct || !state.connection.signedIn) return;
     controller.fetchGithubQueue().then(setGithubQueue).catch(() => {});
   }, [state.connection.signedIn]);
-  const refreshAutomationRuns = useCallback(() => {
-    if (controller.direct || !state.connection.signedIn) return;
-    // The shell only needs lifecycle/linkage fields for Inbox badges. Evidence,
-    // checks, and event timelines are fetched by the Run/Automations views when
-    // opened instead of transferring them every 30 seconds.
-    controller.fetchAutomationRuns(50, { summary: true }).then(setAutomationRuns).catch(() => {});
-  }, [state.connection.signedIn]);
   useEffect(() => {
     if (controller.direct || !state.connection.signedIn) return;
-    const refresh = () => { refreshGithubQueue(); refreshAutomationRuns(); };
+    const refresh = refreshGithubQueue;
     refresh();
     const stopObserving = onAppVisible(refresh);
     const id = setInterval(() => {
       if (document.visibilityState !== "hidden") refresh();
     }, 30000);
     return () => { clearInterval(id); stopObserving(); };
-  }, [refreshGithubQueue, refreshAutomationRuns, state.connection.signedIn]);
+  }, [refreshGithubQueue, state.connection.signedIn]);
   // sessionId → the run that produced it, joined from the queue's evidence.
   // Feeds the sidebar's exception hints and the run pill's outcome. Declared up
   // here (not by activeSession below) so the hook stays above any early return.
   const runEvidence = useMemo(() => indexRunEvidence(githubQueue), [githubQueue]);
   const sessionSources = useMemo(() => indexSessionSources(githubQueue), [githubQueue]);
-  const inboxItems = useMemo(() => buildInboxItems({
-    sessions: state.sessionIndex.sessions,
-    approvals: state.activeSession.approvals,
-    questions: state.activeSession.questions,
-    nodes: state.connection.nodes,
-    queue: githubQueue ?? [],
-    runs: automationRuns ?? [],
-  }), [state.sessionIndex.sessions, state.activeSession.approvals, state.activeSession.questions, state.connection.nodes, githubQueue, automationRuns]);
+  // The session list replaced the Inbox. Count its Needs attention rows, not
+  // legacy adverts, provider expiry, or historical automation/queue failures
+  // that have no corresponding attention row in the app. Count each session
+  // once, across all machines (independent of drawer search/filter state).
+  const attentionSessions = useMemo(() => state.sessionIndex.sessions.filter(
+    (session) => attentionRank(session) > 0,
+  ), [state.sessionIndex.sessions]);
   // Something needs the user that they haven't seen yet → the ☰ burger wears a
   // red dot. Opening the session drawer (openDrawer) marks the current set seen.
-  const attnUnseen = inboxItems.some((it) => !seenAttn.has(it.id));
+  const attnUnseen = attentionSessions.some((session) => !seenAttn.has(session.sessionId));
   const openDrawer = useCallback(() => {
     setDrawerOpen(true);
-    setSeenAttn(new Set(inboxItems.map((it) => it.id)));
-  }, [inboxItems]);
+    setSeenAttn(new Set(attentionSessions.map((session) => session.sessionId)));
+  }, [attentionSessions]);
   const closeDrawer = useCallback(() => setDrawerOpen(false), []);
   // Attention must remain visible when Bivy is a background tab or installed
-  // PWA. The Inbox is authoritative; mirror only its content-free count into
-  // browser chrome and the OS app badge.
+  // PWA. Mirror the session list's content-free attention count into browser
+  // chrome and the OS app badge, including zero to remove old Inbox badges.
   useEffect(() => {
-    const count = inboxItems.length;
+    const count = attentionSessions.length;
     document.title = count > 0 ? `(${count}) Bivy` : "Bivy";
     const badge = navigator as Navigator & {
       setAppBadge?: (contents?: number) => Promise<void>;
@@ -202,7 +190,7 @@ export function App() {
       // Do not clear here: effect cleanup also runs before a count update,
       // and that asynchronous clear can race the replacement setAppBadge.
     };
-  }, [inboxItems.length]);
+  }, [attentionSessions.length]);
   // Signed in on the hosted app but no node yet: poll for a newly-installed
   // machine so the empty state advances to the live app the moment the node
   // dials in — the user shouldn't have to hit "Refresh nodes" after running the
@@ -1031,8 +1019,8 @@ export function App() {
         <RunDetails
           runId={runRoute.runId}
           load={(id) => fetchAutomationRun(controller.local, id)}
-          onCancel={async (id) => { await cancelAutomationRun(controller.local, id); refreshAutomationRuns(); refreshGithubQueue(); }}
-          onRetry={async (id) => { await retryAutomationRun(controller.local, id); refreshAutomationRuns(); refreshGithubQueue(); }}
+          onCancel={async (id) => { await cancelAutomationRun(controller.local, id); refreshGithubQueue(); }}
+          onRetry={async (id) => { await retryAutomationRun(controller.local, id); refreshGithubQueue(); }}
           onReauthenticate={async (provider, machineId, reason) => {
             const targetNode = machineId || state.connection.currentNodeId;
             if (!targetNode) throw new Error("The Machine for this Run is not available.");

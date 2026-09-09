@@ -86,7 +86,8 @@ test("every Run surface links to the exact Run route, preserving the Run id", as
   expect(app).toContain("openRun(runId)");
   expect(app).toContain("load={(id) => fetchAutomationRun(controller.local, id)}");
   expect(app).toContain("retryAutomationRun(controller.local, id)");
-  expect(app).toContain("refreshAutomationRuns(); refreshGithubQueue();");
+  expect(app).toContain("await retryAutomationRun(controller.local, id); refreshGithubQueue();");
+  expect(app).toContain("await cancelAutomationRun(controller.local, id); refreshGithubQueue();");
 });
 
 test("Retry Run is a durable action and never an optimistic status change", async () => {
