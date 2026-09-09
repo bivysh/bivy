@@ -17,9 +17,50 @@ interface Layer {
 }
 
 const stack: Layer[] = [];
-// Back, like Escape, belongs only to the topmost modal. Each listener sees
-// the same popstate; without this guard closing nested setup discards its editor.
-const historyLayers: object[] = [];
+interface HistoryLayer {
+  onBack: Handler;
+  closing: boolean;
+  disposed: boolean;
+}
+
+const historyLayers: HistoryLayer[] = [];
+const waitingHistoryLayers: HistoryLayer[] = [];
+let traversing: HistoryLayer | undefined;
+let historyInstalled = false;
+
+// A Back traversal is asynchronous. Keep ownership of its sentinel until
+// popstate arrives, even if React unmounts the overlay in the meantime. Otherwise
+// confirming a nested dialog queues Back once from the button and again from
+// each unmount, potentially navigating past the app and back to GitHub OAuth.
+function drainModalHistory(): void {
+  if (traversing) return;
+  const top = historyLayers.at(-1);
+  if (top?.closing) {
+    traversing = top;
+    history.back();
+    return;
+  }
+  for (const layer of waitingHistoryLayers.splice(0)) {
+    if (layer.disposed) continue;
+    history.pushState({ __bivyModal: true }, "", location.href);
+    historyLayers.push(layer);
+  }
+  if (historyLayers.at(-1)?.closing) drainModalHistory();
+}
+
+function installModalHistory(): void {
+  if (historyInstalled) return;
+  historyInstalled = true;
+  window.addEventListener("popstate", () => {
+    const layer = historyLayers.pop();
+    traversing = undefined;
+    if (!layer) return;
+    if (!layer.disposed) layer.onBack();
+    // Let React finish unmounting related overlays before consuming their
+    // entries. A programmatic pop must never dismiss an unrelated lower layer.
+    queueMicrotask(drainModalHistory);
+  });
+}
 let installed = false;
 
 function install(): void {
@@ -78,18 +119,14 @@ export function useModalEscape(onEscape: () => void, active = true): void {
 export function useModalBack(onBack: () => void): () => void {
   const callback = useRef(onBack);
   callback.current = onBack;
-  const active = useRef(false);
+  const layerRef = useRef<HistoryLayer | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    installModalHistory();
     let cancelled = false;
-    const layer = {};
-    const onPopState = () => {
-      if (!active.current || historyLayers.at(-1) !== layer) return;
-      active.current = false;
-      callback.current();
-    };
-    window.addEventListener("popstate", onPopState);
+    const layer: HistoryLayer = { onBack: () => callback.current(), closing: false, disposed: false };
+    layerRef.current = layer;
 
     // React StrictMode immediately cleans up and re-runs effects in development.
     // Deferring the sentinel means that simulated first run is cancelled before
@@ -97,31 +134,25 @@ export function useModalBack(onBack: () => void): () => void {
     // pops the second run's sentinel and closes the newly opened sheet.
     queueMicrotask(() => {
       if (cancelled) return;
-      history.pushState({ __bivyModal: true }, "", location.href);
-      historyLayers.push(layer);
-      active.current = true;
+      waitingHistoryLayers.push(layer);
+      drainModalHistory();
     });
 
     return () => {
       cancelled = true;
-      window.removeEventListener("popstate", onPopState);
-      const index = historyLayers.indexOf(layer);
-      if (index >= 0) historyLayers.splice(index, 1);
-      // If the overlay was removed by some other route/state change, remove
-      // its sentinel entry so the next Back gesture does not land on a stale
-      // copy of the current page.
-      if (active.current) {
-        active.current = false;
-        history.back();
-      }
+      layer.disposed = true;
+      layer.closing = true;
+      layerRef.current = null;
+      drainModalHistory();
     };
   }, []);
 
   return () => {
-    if (!active.current) return;
-    // Traverse to the entry before the modal sentinel first. The popstate
-    // handler then closes the route at that entry, replacing the original
-    // overlay URL instead of leaving it behind in the history stack.
-    history.back();
+    const layer = layerRef.current;
+    if (!layer || layer.closing) return;
+    // Close at the destination entry, preserving route-based overlays' replace
+    // semantics, but reserve this traversal so cleanup cannot request it twice.
+    layer.closing = true;
+    drainModalHistory();
   };
 }
