@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { AppState, CredentialRecordSummary, EphemeralModelKeyInfo, LocalModelEndpointResult } from "@bivy/core";
 import { BIVY_PROVIDER_CATALOG, mergeCredentialItems, migrateBrowserModelKeys, migrateNodeCredentialSummaries } from "@bivy/core";
 import { controller } from "../store/useStore.js";
+import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import { OauthStep } from "./ProviderConnect.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { Badge } from "./Badge.js";
@@ -381,7 +382,7 @@ export function CredentialVault({ state, initialProvider = null }: { state: AppS
         <span className="muted">Used by default</span><strong>{isDefault ? "Yes" : "No"}</strong>
         <span className="muted">Used by projects</span><strong>{assignedProjects.length ? assignedProjects.join(", ") : "None explicitly — projects use the default"}</strong>
         {assignmentProject && <><span className="muted">Selected project</span><strong>{usedByProject ? "Uses this credential" : projectLabel ? `Uses ${projectLabel}` : "Uses provider default"}</strong></>}
-        {selected.record && <><span className="muted">Unattended runs</span><strong>{selected.record.unattended ? "Allowed — encrypted cloud copy enabled" : "Not allowed"}</strong></>}
+        {EPHEMERAL_MACHINES_ENABLED && selected.record && <><span className="muted">Unattended runs</span><strong>{selected.record.unattended ? "Allowed — encrypted cloud copy enabled" : "Not allowed"}</strong></>}
         {selected.record?.origin === "agent-native" && <><span className="muted">Added by</span><strong>Agent sign-in</strong></>}
         {selected.record?.ref && <><span className="muted">Reference</span><code>{selected.record.ref}</code></>}
       </div>
@@ -390,9 +391,9 @@ export function CredentialVault({ state, initialProvider = null }: { state: AppS
         {count > 1 && !isDefault && <button className="btn" disabled={busy} onClick={() => void assign("default", selected.provider, selected.label, "Now used by default.")}>Use by default</button>}
         {count > 1 && projectPreset && !usedByProject && <button className="btn" disabled={busy} onClick={() => void assign(projectPreset, selected.provider, selected.label, `Assigned to ${projectId}.`)}>Use for {projectId}</button>}
         {projectPreset && usedByProject && <button className="btn" disabled={busy} onClick={() => void assign(projectPreset, selected.provider, "", `${projectId} now uses the provider default.`)}>Clear project assignment</button>}
-        {selected.record.sync === "account" && selected.record.kind !== "reference" && <button className="btn" disabled={busy} onClick={async () => { setBusy(true); setError(null); try { await controller.setCredentialUnattended(selected.provider, selected.label, !selected.record!.unattended); setMessage(selected.record!.unattended ? "Unattended access revoked and its encrypted cloud copy removed." : "Unattended access enabled with a separate encrypted cloud copy."); refresh(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); } }}>{selected.record.unattended ? "Disable unattended runs" : "Allow unattended runs"}</button>}
+        {EPHEMERAL_MACHINES_ENABLED && selected.record.sync === "account" && selected.record.kind !== "reference" && <button className="btn" disabled={busy} onClick={async () => { setBusy(true); setError(null); try { await controller.setCredentialUnattended(selected.provider, selected.label, !selected.record!.unattended); setMessage(selected.record!.unattended ? "Unattended access revoked and its encrypted cloud copy removed." : "Unattended access enabled with a separate encrypted cloud copy."); refresh(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); } }}>{selected.record.unattended ? "Disable unattended runs" : "Allow unattended runs"}</button>}
       </div>}
-      {selected.record?.sync === "account" && selected.record.kind !== "reference" && <p className="muted vault-custody-note">To run while all your devices are offline, Bivy stores a separate encrypted copy of this credential in its control plane. This is opt-in, used only for unattended runs, and removed when you disable access.</p>}
+      {EPHEMERAL_MACHINES_ENABLED && selected.record?.sync === "account" && selected.record.kind !== "reference" && <p className="muted vault-custody-note">To run while all your devices are offline, Bivy stores a separate encrypted copy of this credential in its control plane. This is opt-in, used only for unattended runs, and removed when you disable access.</p>}
       {count > 1 && <div>
         <label className="field-label" htmlFor="credential-project">Assign for project or repository</label>
         <input id="credential-project" className="picker-search" list="credential-project-options" placeholder="owner/repository or project ID" value={assignmentProject} onChange={(e) => setAssignmentProject(e.target.value)} />
