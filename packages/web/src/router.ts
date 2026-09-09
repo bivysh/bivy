@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-// Lightweight, dependency-free client routing for the session shell.
+// Lightweight client routing for the session shell.
 //
 // Real routes:
 //   /sessions/new         — a fresh draft (nothing created on the node yet)
@@ -19,6 +19,8 @@
 // this module without disturbing which session is open underneath.
 
 import { parseRunRoute, runRoutePath } from "@bivy/core";
+// Modal Back must be consumed before route subscribers handle popstate.
+import "./modalHistory.js";
 
 /** Settings' navigable top-level sections — the mobile drill-in list / desktop
  *  nav. Kept here (rather than in Settings.tsx) so the router can validate a
