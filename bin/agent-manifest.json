@@ -45,7 +45,8 @@
       ],
       "install": {
         "kind": "pip",
-        "pkg": "aider-chat"
+        "pkg": "aider-chat",
+        "python": "3.12"
       }
     },
     {

@@ -56,7 +56,7 @@ export type AgentProfileId =
  */
 export type AgentInstallDescriptor =
   | { kind: "npm"; pkg: string }
-  | { kind: "pip"; pkg: string }
+  | { kind: "pip"; pkg: string; python?: string }
   | { kind: "curl"; display: string; shell: string };
 
 export type AgentProfile = {
@@ -276,7 +276,8 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     // generic id-based primitive, and unsafe to bolt on generically (a second,
     // unrelated session opened in the same workspace would inherit that file's
     // history). See docs/agents-not-fully-supported.md.
-    install: { kind: "pip", pkg: "aider-chat" },
+    // Isolate dependencies from the host Python (which may be too new).
+    install: { kind: "pip", pkg: "aider-chat", python: "3.12" },
   },
   hermes: {
     displayName: "Hermes",
