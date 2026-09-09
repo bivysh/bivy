@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef } from "react";
-import { pushModalHistory } from "./modalHistory.js";
+import { pushModalHistory, type ModalHistoryHandle } from "./modalHistory.js";
 
 // A LIFO stack of open modal layers (sheets, dialogs, popovers) so a single
 // global Escape handler only ever fires the *topmost* one. Before this, several
@@ -76,54 +76,17 @@ export function useModalEscape(onEscape: () => void, active = true): void {
 export function useModalBack(onBack: () => void): () => void {
   const callback = useRef(onBack);
   callback.current = onBack;
-  const active = useRef(false);
-  const closing = useRef(false);
+  const historyHandle = useRef<ModalHistoryHandle | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    let cancelled = false;
-    let removeHistoryLayer = () => {};
-    function onPopState(event: PopStateEvent) {
-      if (!active.current) return;
-      // Popping a modal sentinel is not session navigation. Claim it before
-      // route listeners can reset the transcript and unmount this hook; that
-      // cleanup would otherwise queue a second Back into the previous session.
-      event.stopImmediatePropagation();
-      active.current = false;
-      callback.current();
-    }
-
-    // React StrictMode immediately cleans up and re-runs effects in development.
-    // Deferring the sentinel means that simulated first run is cancelled before
-    // it mutates history; otherwise its cleanup queues a Back navigation that
-    // pops the second run's sentinel and closes the newly opened sheet.
-    queueMicrotask(() => {
-      if (cancelled) return;
-      history.pushState({ __bivyModal: true }, "", location.href);
-      removeHistoryLayer = pushModalHistory(onPopState);
-      active.current = true;
-      closing.current = false;
-    });
-
+    const handle = pushModalHistory(() => callback.current());
+    historyHandle.current = handle;
     return () => {
-      cancelled = true;
-      removeHistoryLayer();
-      // If the overlay was removed by some other route/state change, remove
-      // its sentinel entry so the next Back gesture does not land on a stale
-      // copy of the current page.
-      if (active.current) {
-        active.current = false;
-        history.back();
-      }
+      handle.dispose();
+      historyHandle.current = null;
     };
   }, []);
 
-  return () => {
-    if (!active.current || closing.current) return;
-    closing.current = true;
-    // Traverse to the entry before the modal sentinel first. The popstate
-    // handler then closes the route at that entry, replacing the original
-    // overlay URL instead of leaving it behind in the history stack.
-    history.back();
-  };
+  return () => historyHandle.current?.close();
 }

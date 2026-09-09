@@ -1,116 +1,154 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { expect, test } from "@playwright/test";
-import { readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
+import { expect, test, type Page } from "@playwright/test";
+import path from "node:path";
+import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, type ViteDevServer } from "../../packages/web/node_modules/vite/dist/node/index.js";
+
+type FixtureWindow = Window & { pops: string[]; removeOverlays(): void; replaceAfterConfirm?: boolean };
 
 let server: ViteDevServer;
 let origin: string;
+let cacheDir: string;
 
 test.beforeAll(async () => {
-  server = await createServer({
-    root: fileURLToPath(new URL("../../packages/web", import.meta.url)),
-    logLevel: "silent",
-    server: { host: "127.0.0.1", port: 0 },
-  });
+  const root = path.resolve("packages/web");
+  cacheDir = await mkdtemp(path.join(root, "node_modules/.vite-modal-history-"));
+  server = await createServer({ root, cacheDir, logLevel: "silent", server: { host: "127.0.0.1", port: 0 } });
   await server.listen();
   const address = server.httpServer!.address();
-  if (!address || typeof address === "string") throw new Error("Missing Vite address");
+  if (!address || typeof address === "string") throw new Error("No test port");
   origin = `http://127.0.0.1:${address.port}`;
 });
+test.afterAll(async () => {
+  await server?.close();
+  if (cacheDir) await rm(cacheDir, { recursive: true, force: true });
+});
 
-test.afterAll(async () => { await server?.close(); });
-
-for (const theme of ["light", "dark"]) {
-  for (const dismissal of ["backdrop", "close", "escape", "browser back", "rapid close", "nested"]) {
-    test(`${theme}: activity ${dismissal} stays in the current session`, async ({ page }, testInfo) => {
-      const html = await server.transformIndexHtml('/modal-test', `<!doctype html><html data-theme="${theme}"><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="root"></div>
-          <script type="module">
-            import { createElement as h, StrictMode } from 'react';
-            import { createRoot } from 'react-dom/client';
-            import { flushSync } from 'react-dom';
-            import '/src/router.ts';
-            import '/@fs/${fileURLToPath(new URL('../../packages/ui/tokens.css', import.meta.url))}';
-            import '/src/styles.css';
-            const root = createRoot(document.getElementById('root'));
-            history.replaceState(null, '', '/sessions/previous');
-            history.pushState(null, '', '/sessions/current');
-            window.routeEvents = 0;
-            window.showNested = () => {
-              const host = document.body.appendChild(document.createElement('div'));
-              const nested = createRoot(host);
-              nested.render(h(Sheet, { title: 'Nested sheet', onClose: () => { nested.unmount(); host.remove(); } }, 'Nested content'));
-            };
-            // Routing is registered before modal effects. Reopening the session
-            // resets its transcript and can synchronously unmount the activity.
-            window.addEventListener('popstate', () => {
-              window.routeEvents++;
-              flushSync(() => root.render(h('p', null, location.pathname)));
-            });
-            const { ToolGroup } = await import('/src/components/ToolGroup.tsx');
-            const { Sheet } = await import('/src/components/Sheet.tsx');
-            root.render(h(StrictMode, null, h(ToolGroup, { tools: [
-              { callId: 'read-1', name: 'read', input: { path: 'README.md' }, status: 'done', result: 'File contents' }
-            ] })));
-          </script></body></html>`);
-      await page.route(`${origin}/modal-test`, (route) => route.fulfill({ contentType: 'text/html', body: html }));
-      await page.goto(`${origin}/modal-test`);
-      const opener = page.getByRole("button", { name: /Open work details/ });
-      await opener.click();
-      await expect(page.getByRole("dialog")).toBeVisible();
-      await page.locator(".activity-row").click();
-      await expect(page.locator(".activity-detail")).toBeVisible();
-      await page.getByRole("button", { name: "Back", exact: true }).click();
-      await expect(page.locator(".activity-row")).toBeVisible();
-      if (dismissal === "backdrop") await page.screenshot({ path: testInfo.outputPath(`activity-${theme}.png`) });
-      if (dismissal === "nested") {
-        const historyLength = await page.evaluate(() => {
-          // Open through a real user gesture: Chromium may skip history entries
-          // created without activation when exercising browser Back on mobile.
-          const button = document.createElement("button");
-          button.textContent = "Open nested sheet";
-          button.onclick = () => (window as unknown as { showNested(): void }).showNested();
-          document.querySelector(".sheet-content")!.append(button);
-          return history.length;
-        });
-        await page.getByRole("button", { name: "Open nested sheet" }).click();
-        await expect(page.getByRole("dialog")).toHaveCount(2);
-        await expect.poll(() => page.evaluate(() => history.length)).toBe(historyLength + 1);
-        await page.goBack();
-        await expect(page.getByRole("dialog")).toHaveCount(1);
-        await expect(page.locator(".activity-row")).toBeVisible();
-        expect(await page.evaluate(() => (window as unknown as { routeEvents: number }).routeEvents)).toBe(0);
-        await page.keyboard.press("Escape");
-      } else if (dismissal === "rapid close") {
-        await page.getByRole("button", { name: "Close", exact: true }).evaluate((button: HTMLButtonElement) => {
-          button.click();
-          button.click();
-          button.click();
-        });
-      } else if (dismissal === "backdrop") await page.locator(".sheet-backdrop").click({ position: { x: 5, y: 5 } });
-      else if (dismissal === "close") await page.getByRole("button", { name: "Close", exact: true }).click();
-      else if (dismissal === "escape") await page.keyboard.press("Escape");
-      else await page.goBack();
-      await expect(page.getByRole("dialog")).toHaveCount(0);
-      await expect(page).toHaveURL(`${origin}/sessions/current`);
-      expect(await page.evaluate(() => (window as unknown as { routeEvents: number }).routeEvents)).toBe(0);
-      await expect(opener).toBeFocused();
-      // Once the overlay is gone, ordinary Back still navigates sessions.
-      await page.goBack();
-      await expect(page).toHaveURL(`${origin}/sessions/previous`);
-      await expect(page.getByText('/sessions/previous', { exact: true })).toBeVisible();
-    });
-  }
+async function openFixture(page: Page, theme = "light") {
+  // Observe raw traversals before the modal coordinator consumes them. Route
+  // listeners installed by the app must not receive these sentinel pops.
+  await page.addInitScript(() => {
+    window.addEventListener("popstate", () => (window as FixtureWindow).pops?.push(location.pathname));
+  });
+  const html = await server.transformIndexHtml("/modal-history-test", `<html data-theme="${theme}"><head><meta name="viewport" content="width=device-width, initial-scale=1" /></head><body><div id="root"></div><script type="module">
+    import React, { StrictMode, useState } from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { ConfirmDialog } from '/src/components/AppDialog.tsx';
+    import { Sheet } from '/src/components/Sheet.tsx';
+    import '/@fs/${path.resolve("packages/ui/tokens.css")}';
+    import '/src/styles.css';
+    // Reproduce signing in before opening the picker. An extra Back lands on
+    // this OAuth entry; no live account or GitHub authorization is needed.
+    history.replaceState({}, '', '/auth/github/start');
+    history.pushState({}, '', '/sessions/new');
+    window.pops = [];
+    function App() {
+      const [open, setOpen] = useState(false);
+      const [confirming, setConfirming] = useState(false);
+      const [selected, setSelected] = useState('Pi');
+      const [replacement, setReplacement] = useState(false);
+      window.removeOverlays = () => { setConfirming(false); setOpen(false); };
+      return React.createElement(React.Fragment, null,
+        React.createElement('p', { role: 'status' }, 'Selected: ' + selected),
+        React.createElement('button', { onClick: () => setOpen(true) }, 'Choose agent'),
+        replacement && React.createElement(Sheet, { title: 'Model', ariaLabel: 'Model', onClose: () => setReplacement(false) }, 'Choose a model'),
+        open && React.createElement(Sheet, { title: 'Agent', ariaLabel: 'Agent', onClose: () => setOpen(false) },
+          React.createElement('button', { className: 'btn', onClick: () => setConfirming(true) }, 'Claude Code'),
+          confirming && React.createElement(ConfirmDialog, {
+            title: 'Check how Claude Code runs', message: 'Confirm this agent choice.', confirmLabel: 'Use Claude Code',
+            onCancel: () => setConfirming(false),
+            // Same lifecycle as AgentPicker: request the dialog's Back, then
+            // synchronously unmount both the picker and its confirmation.
+            onConfirm: () => { setSelected('Claude Code'); setConfirming(false); setOpen(false); setReplacement(Boolean(window.replaceAfterConfirm)); },
+          }),
+        ),
+      );
+    }
+    createRoot(document.getElementById('root')).render(React.createElement(StrictMode, null, React.createElement(App)));
+  </script></body></html>`);
+  await page.route(`${origin}/modal-history-test`, (route) => route.fulfill({ contentType: "text/html", body: html }));
+  await page.goto(`${origin}/modal-history-test`);
+  await page.getByRole("button", { name: "Choose agent" }).click();
+  await expect(page.getByRole("dialog", { name: "Agent", exact: true })).toBeVisible();
+  // StrictMode must leave exactly one sentinel, without a spurious Back.
+  await expect.poll(() => page.evaluate(() => history.length)).toBe(4);
+  await expect.poll(() => page.evaluate(() => (window as FixtureWindow).pops.length)).toBe(0);
 }
 
-const SOURCE = new URL("../../packages/web/src/modalStack.ts", import.meta.url);
+async function openConfirmation(page: Page) {
+  await page.getByRole("button", { name: "Claude Code", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Check how Claude Code runs" })).toBeVisible();
+}
 
-test("modal history sentinel survives the StrictMode effect cycle", async () => {
-  const source = await readFile(SOURCE, "utf8");
+async function expectStillInApp(page: Page, pops: number) {
+  await expect.poll(() => page.evaluate(() => (window as FixtureWindow).pops.length)).toBe(pops);
+  // Allow any accidentally queued extra traversal to arrive as well.
+  await page.waitForTimeout(300);
+  expect(await page.evaluate(() => (window as FixtureWindow).pops)).toEqual(Array(pops).fill("/sessions/new"));
+  await expect(page).toHaveURL(`${origin}/sessions/new`);
+}
 
-  // The sentinel must not be pushed synchronously: StrictMode would clean up
-  // that first effect run and queue a Back navigation before mounting it again.
-  expect(source).toContain("queueMicrotask(() => {");
-  expect(source).toContain("if (cancelled) return;");
-  expect(source).toMatch(/cancelled = true;[\s\S]*history\.back\(\);/);
+for (const theme of ["light", "dark"]) {
+  test(`confirming an agent consumes each nested sentinel only once (${theme})`, async ({ page }, testInfo) => {
+    await openFixture(page, theme);
+    await openConfirmation(page);
+    await expect(page.getByRole("button", { name: "Cancel", exact: true })).toBeFocused();
+    await page.screenshot({ path: testInfo.outputPath(`agent-confirm-${theme}.png`) });
+    await page.getByRole("button", { name: "Use Claude Code", exact: true }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.getByRole("status")).toHaveText("Selected: Claude Code");
+    await expectStillInApp(page, 2);
+    // There must be no stale overlay entries left over either.
+    await page.evaluate(() => history.back());
+    await expect(page).toHaveURL(`${origin}/auth/github/start`);
+  });
+}
+
+for (const dismiss of ["back", "escape", "cancel"]) {
+  test(`${dismiss} dismisses only the topmost overlay`, async ({ page }) => {
+    await openFixture(page);
+    await openConfirmation(page);
+    if (dismiss === "back") await page.evaluate(() => history.back());
+    else if (dismiss === "escape") await page.keyboard.press("Escape");
+    else await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "Check how Claude Code runs" })).toHaveCount(0);
+    await expect(page.getByRole("dialog", { name: "Agent", exact: true })).toBeVisible();
+    await expectStillInApp(page, 1);
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expectStillInApp(page, 2);
+  });
+}
+
+test("unmounting nested overlays drains their sentinels without navigating away", async ({ page }) => {
+  await openFixture(page);
+  await openConfirmation(page);
+  await page.evaluate(() => (window as FixtureWindow).removeOverlays());
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expectStillInApp(page, 2);
+});
+
+test("repeated close requests before popstate do not queue extra Back traversals", async ({ page }) => {
+  await openFixture(page);
+  await openConfirmation(page);
+  await page.getByRole("button", { name: "Cancel", exact: true }).evaluate((button: HTMLButtonElement) => {
+    button.click();
+    button.click();
+  });
+  await expect(page.getByRole("dialog", { name: "Agent", exact: true })).toBeVisible();
+  await expectStillInApp(page, 1);
+});
+
+test("a replacement overlay waits for old sentinels to drain", async ({ page }) => {
+  await openFixture(page);
+  await openConfirmation(page);
+  await page.evaluate(() => { (window as FixtureWindow).replaceAfterConfirm = true; });
+  await page.getByRole("button", { name: "Use Claude Code", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Model", exact: true })).toBeVisible();
+  await expectStillInApp(page, 2);
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expectStillInApp(page, 3);
+  await page.evaluate(() => history.back());
+  await expect(page).toHaveURL(`${origin}/auth/github/start`);
 });

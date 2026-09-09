@@ -668,12 +668,9 @@ async function ensureNpmCommand(command, packageName, label) {
 
 async function ensurePythonCommand(command, packageName, label) {
   if (commandExists(command)) return true;
-  if (!commandExists("python3")) {
-    console.log(c.yellow(`Skipping ${label}: python3 is not available.`));
-    return false;
-  }
-  console.log(c.dim(`Installing ${label} (${packageName})…`));
-  const code = await run("python3", ["-m", "pip", "install", "--user", packageName]);
+  const install = loadAgentManifest().find((agent) => agent.command === command)?.install;
+  console.log(c.dim(`Installing ${label} (${packageName}) in an isolated Python environment…`));
+  const code = await run(process.execPath, [path.join(__dirname, "install-python-agent.mjs"), packageName, install?.python ?? "", userLocalPrefix]);
   return code === 0 && commandExists(command);
 }
 

@@ -296,12 +296,10 @@ function installSpecForCliAgent(spec: AgentProfile, prefix: string): { command: 
     };
   }
   if (install.kind === "pip") {
-    // Some node images ship a python3 without pip; bootstrap it via ensurepip
-    // (best-effort) before installing, but show users the plain pip line.
     return {
-      command: "sh",
-      args: ["-c", `python3 -m ensurepip --user >/dev/null 2>&1 || true; python3 -m pip install --user ${install.pkg}`],
-      display: `python3 -m pip install --user ${install.pkg}`,
+      command: process.execPath,
+      args: [path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "bin", "install-python-agent.mjs"), install.pkg, install.python ?? "", prefix],
+      display: `uv tool install${install.python ? ` --python ${install.python}` : ""} ${install.pkg}`,
     };
   }
   // curl / script: `{bin}` → the node's <prefix>/bin so binaries land on PATH.
