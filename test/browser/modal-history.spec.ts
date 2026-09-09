@@ -25,6 +25,11 @@ test.afterAll(async () => {
 });
 
 async function openFixture(page: Page, theme = "light") {
+  // Observe raw traversals before the modal coordinator consumes them. Route
+  // listeners installed by the app must not receive these sentinel pops.
+  await page.addInitScript(() => {
+    window.addEventListener("popstate", () => (window as FixtureWindow).pops?.push(location.pathname));
+  });
   const html = await server.transformIndexHtml("/modal-history-test", `<html data-theme="${theme}"><head><meta name="viewport" content="width=device-width, initial-scale=1" /></head><body><div id="root"></div><script type="module">
     import React, { StrictMode, useState } from 'react';
     import { createRoot } from 'react-dom/client';
@@ -37,7 +42,6 @@ async function openFixture(page: Page, theme = "light") {
     history.replaceState({}, '', '/auth/github/start');
     history.pushState({}, '', '/sessions/new');
     window.pops = [];
-    window.addEventListener('popstate', () => window.pops.push(location.pathname));
     function App() {
       const [open, setOpen] = useState(false);
       const [confirming, setConfirming] = useState(false);

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef } from "react";
+import { pushModalHistory, type ModalHistoryHandle } from "./modalHistory.js";
 
 // A LIFO stack of open modal layers (sheets, dialogs, popovers) so a single
 // global Escape handler only ever fires the *topmost* one. Before this, several
@@ -17,50 +18,6 @@ interface Layer {
 }
 
 const stack: Layer[] = [];
-interface HistoryLayer {
-  onBack: Handler;
-  closing: boolean;
-  disposed: boolean;
-}
-
-const historyLayers: HistoryLayer[] = [];
-const waitingHistoryLayers: HistoryLayer[] = [];
-let traversing: HistoryLayer | undefined;
-let historyInstalled = false;
-
-// A Back traversal is asynchronous. Keep ownership of its sentinel until
-// popstate arrives, even if React unmounts the overlay in the meantime. Otherwise
-// confirming a nested dialog queues Back once from the button and again from
-// each unmount, potentially navigating past the app and back to GitHub OAuth.
-function drainModalHistory(): void {
-  if (traversing) return;
-  const top = historyLayers.at(-1);
-  if (top?.closing) {
-    traversing = top;
-    history.back();
-    return;
-  }
-  for (const layer of waitingHistoryLayers.splice(0)) {
-    if (layer.disposed) continue;
-    history.pushState({ __bivyModal: true }, "", location.href);
-    historyLayers.push(layer);
-  }
-  if (historyLayers.at(-1)?.closing) drainModalHistory();
-}
-
-function installModalHistory(): void {
-  if (historyInstalled) return;
-  historyInstalled = true;
-  window.addEventListener("popstate", () => {
-    const layer = historyLayers.pop();
-    traversing = undefined;
-    if (!layer) return;
-    if (!layer.disposed) layer.onBack();
-    // Let React finish unmounting related overlays before consuming their
-    // entries. A programmatic pop must never dismiss an unrelated lower layer.
-    queueMicrotask(drainModalHistory);
-  });
-}
 let installed = false;
 
 function install(): void {
@@ -119,40 +76,17 @@ export function useModalEscape(onEscape: () => void, active = true): void {
 export function useModalBack(onBack: () => void): () => void {
   const callback = useRef(onBack);
   callback.current = onBack;
-  const layerRef = useRef<HistoryLayer | null>(null);
+  const historyHandle = useRef<ModalHistoryHandle | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    installModalHistory();
-    let cancelled = false;
-    const layer: HistoryLayer = { onBack: () => callback.current(), closing: false, disposed: false };
-    layerRef.current = layer;
-
-    // React StrictMode immediately cleans up and re-runs effects in development.
-    // Deferring the sentinel means that simulated first run is cancelled before
-    // it mutates history; otherwise its cleanup queues a Back navigation that
-    // pops the second run's sentinel and closes the newly opened sheet.
-    queueMicrotask(() => {
-      if (cancelled) return;
-      waitingHistoryLayers.push(layer);
-      drainModalHistory();
-    });
-
+    const handle = pushModalHistory(() => callback.current());
+    historyHandle.current = handle;
     return () => {
-      cancelled = true;
-      layer.disposed = true;
-      layer.closing = true;
-      layerRef.current = null;
-      drainModalHistory();
+      handle.dispose();
+      historyHandle.current = null;
     };
   }, []);
 
-  return () => {
-    const layer = layerRef.current;
-    if (!layer || layer.closing) return;
-    // Close at the destination entry, preserving route-based overlays' replace
-    // semantics, but reserve this traversal so cleanup cannot request it twice.
-    layer.closing = true;
-    drainModalHistory();
-  };
+  return () => historyHandle.current?.close();
 }
