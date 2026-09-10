@@ -170,6 +170,7 @@ try {
   assert.equal(duplicate.body.id,first.body.id);
   assert.notEqual(next.body.id,first.body.id);
   assert.equal((await request(port,'POST',dispatchPath,token,{sourceKey:{bad:true}})).status,400);
+  assert.equal((await request(port,'PUT',`/account/automations/${definition.body.id}`,token,{maxAttempts:0})).status,400,'invalid attempt limits cannot silently widen the budget');
   console.log("✓ authenticated cancel/retry, generation fencing, attempt reservation, idempotent dispatch/result delivery and metrics");
 } finally {
   await stopTestServices(proc ? [proc] : []);

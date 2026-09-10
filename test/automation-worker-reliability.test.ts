@@ -37,7 +37,10 @@ try {
   outbox.put({id:'finished-before-restart',action:'complete',claimToken:'old-process'});
   const calls:string[]=[];
   globalThis.fetch = async url => {calls.push(String(url));return response({items:[]});};
-  await access(new ControlPlaneTaskPoller(cfg,async()=>{throw Error('must not run');},undefined,{resultDirectory:directory})).tick();
+  const restarted = new ControlPlaneTaskPoller(cfg,async()=>{throw Error('must not run');},undefined,{resultDirectory:directory});
+  assert.equal(restarted.inFlightCount(),1,'pending outcome prevents ephemeral teardown');
+  await access(restarted).tick();
+  assert.equal(restarted.inFlightCount(),0);
   assert.match(calls[0],/finished-before-restart\/complete$/);
   assert.deepEqual(new WorkResultOutbox(directory,`${cfg.controlPlaneUrl}:${cfg.enrollmentToken}`).list(),[]);
 

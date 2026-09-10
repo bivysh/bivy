@@ -3189,14 +3189,15 @@ export class PostgresStore implements ControlPlaneStore {
     id: string,
     input: { label: string; runtimeId?: string; model?: string; ephemeral?: boolean },
   ): Promise<WorkItem | undefined> {
-    const current = await this.getAutomationRun(accountId, id);
+    return this.withLockedWork(accountId, id, async (row, query) => {
+    const current = mapAutomationRun(row);
     const at = new Date().toISOString();
     const routeEvents: RunEvidenceEvent[] = current ? [
       ...(current.events ?? []),
       ...(input.ephemeral ? [{ at, kind: "provisioning" as const, summary: "Provisioning an isolated Machine for this Run.", ref: normalizeWorkLabel(input.label), milestoneId: `${id}:provisioning:${current.attempt}` }] : []),
       { at, kind: "routed" as const, summary: "Run routing was updated by an operator.", ref: normalizeWorkLabel(input.label), attempt: current.attempt, milestoneId: `${id}:routed:${current.attempt}:${normalizeWorkLabel(input.label)}` },
     ].slice(-100) : [];
-    const { rows } = await this.query(
+    const { rows } = await query(
       `UPDATE work_items
        SET label = $3, runtime_id = $4, model = $5, default_routed = false, ephemeral = $6, events = $7::jsonb
        WHERE id = $2 AND account_id = $1 AND status = 'pending'
@@ -3204,6 +3205,7 @@ export class PostgresStore implements ControlPlaneStore {
       [accountId, id, normalizeWorkLabel(input.label), input.runtimeId?.trim() || null, input.model?.trim() || null, Boolean(input.ephemeral), JSON.stringify(routeEvents)],
     );
     return rows[0] ? mapWorkItem(rows[0]) : undefined;
+    });
   }
 
   async listPendingWorkItems(accountId: string, labels: string[]): Promise<WorkItem[]> {

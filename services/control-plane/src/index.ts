@@ -2601,6 +2601,14 @@ function nodePublicAutomation(definition: AutomationDefinition, req: Request) {
   return safe;
 }
 
+function automationAttemptLimit(value: unknown, fallback?: number): number | undefined {
+  if (value === undefined) return fallback;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 10) {
+    throw Object.assign(new Error('maxAttempts must be an integer from 1 to 10'), { status: 400 });
+  }
+  return value;
+}
+
 function dispatchKey(req: Request): string | undefined {
   const key = req.body?.sourceKey;
   if (key === undefined) return undefined;
@@ -2951,7 +2959,7 @@ app.post("/account/automations", automationWriteRateLimit, asyncHandler(async (r
     approvalMode: ["never", "risky", "always", "autonomous"].includes(req.body?.approvalMode) ? req.body.approvalMode : undefined,
     sandbox: ["read-only", "workspace-write", "danger-full-access"].includes(req.body?.sandbox) ? req.body.sandbox : undefined,
     allowDangerous: req.body?.allowDangerous === true,
-    maxAttempts: Number.isInteger(req.body?.maxAttempts) && req.body.maxAttempts >= 1 && req.body.maxAttempts <= 10 ? req.body.maxAttempts : undefined,
+    maxAttempts: automationAttemptLimit(req.body?.maxAttempts),
     configOrder: nextConfigOrder,
     enabled,
     trigger,
@@ -3092,7 +3100,7 @@ app.put("/account/automations/:id", automationWriteRateLimit, asyncHandler(async
     approvalMode: ["never", "risky", "always", "autonomous"].includes(req.body?.approvalMode) ? req.body.approvalMode : current.approvalMode,
     sandbox: ["read-only", "workspace-write", "danger-full-access"].includes(req.body?.sandbox) ? req.body.sandbox : current.sandbox,
     allowDangerous: typeof req.body?.allowDangerous === "boolean" ? req.body.allowDangerous : current.allowDangerous,
-    maxAttempts: Number.isInteger(req.body?.maxAttempts) && req.body.maxAttempts >= 1 && req.body.maxAttempts <= 10 ? req.body.maxAttempts : current.maxAttempts,
+    maxAttempts: automationAttemptLimit(req.body?.maxAttempts, current.maxAttempts),
     configOrder: req.body?.configOrder !== undefined ? requestedConfigOrder : current.configOrder,
     enabled,
     schedule,

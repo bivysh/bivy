@@ -306,10 +306,10 @@ export class ControlPlaneTaskPoller {
     void this.tick();
   }
 
-  /** Number of queue items currently running on this node. Lets an ephemeral
-   *  machine's self-teardown avoid exiting while it's mid-work. */
+  /** Include undelivered results so an ephemeral machine cannot tear down its
+   * only durable outbox while completion reconciliation is still pending. */
   inFlightCount(): number {
-    return this.inFlight.size;
+    return new Set([...this.inFlight.keys(), ...this.outbox.list().map(result => result.id)]).size;
   }
 
   /**
