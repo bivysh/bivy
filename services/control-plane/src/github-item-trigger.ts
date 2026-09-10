@@ -27,7 +27,9 @@ export function matchGithubItemTrigger(
   // label must not re-fire an automation just because its label was already there.
   const labels = action === "labeled" && typeof delivery.label?.name === "string"
     ? [delivery.label.name] : item.labels;
-  const mentionRoute = pickIssueRoutingLabel({ ...item, labels: [] }, triggerLogin);
+  // A label delivery does not introduce a new body mention. Reusing the
+  // existing body here makes unrelated/status label additions re-trigger work.
+  const mentionRoute = action === "labeled" ? undefined : pickIssueRoutingLabel({ ...item, labels: [] }, triggerLogin);
   const mentionAllowed = meetsTriggerAccess(item.authorAssociation, hook.triggerAccess);
   const automation = matchSourceAutomation(definitions, {
     kind: "github", appId: hook.appId, githubEvent: event, action,
