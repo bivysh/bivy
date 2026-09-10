@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures.js";
 import { createRequire } from "node:module";
 import path from "node:path";
 
@@ -16,6 +16,13 @@ test.afterAll(async () => { await server?.close(); });
 
 test.beforeEach(async ({ page }) => {
   await page.routeWebSocket(/.*/, () => {});
+  // Bootstrap runs before we replace the transport below. This fixture supplies
+  // controller state itself; explicitly model the absent daemon during startup.
+  for (const endpoint of ["auth/bootstrap", "sessions", "auth/credentials/account-export", "models", "runtimes", "stt/config"]) {
+    await page.route(new RegExp(`/api/${endpoint}(?:\\?|$)`), route => route.fulfill({
+      status: 503, json: { error: "Daemon intentionally offline in fork UI fixture" },
+    }));
+  }
   await page.goto(url);
   await page.evaluate(async () => {
     // Exercise the real app/controller; hold protocol replies to inspect every

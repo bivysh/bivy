@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { expect, test, type Locator, type Page, type TestInfo } from "@playwright/test";
+import { expect, test, type Locator, type Page, type TestInfo } from "./fixtures.js";
 import { readFile } from "node:fs/promises";
 
 const ROOT = new URL("../../", import.meta.url);

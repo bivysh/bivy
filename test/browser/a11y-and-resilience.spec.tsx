@@ -3,7 +3,7 @@
 // update, and reconnect coverage. Follows the suite convention: assert the real
 // source wiring, and exercise a faithful minimal replica with page.setContent so
 // a test can run without booting the whole React app + a live node.
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures.js";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 

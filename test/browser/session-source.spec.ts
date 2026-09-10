@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures.js";
 import path from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, type ViteDevServer } from "../../packages/web/node_modules/vite/dist/node/index.js";
