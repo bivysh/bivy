@@ -28,7 +28,10 @@ test("the automation editor runs the shared evaluator before every save, not jus
   expect(view).toContain("const evaluation = await preflight.run(input, undefined, { resetAck: false });");
   expect(view).toContain("if (evaluation.gate.blocked) {");
   expect(view).toContain("if (evaluation.gate.requiresAck && !preflight.ack) {");
-  expect(view).toContain('const evaluation = await preflight.run({ ...patch, trigger, templateCiphertext: item.templateCiphertext }, undefined, { resetAck: false });');
+  // The patch now includes the re-encrypted account selections, so evaluate
+  // exactly what will be saved rather than overwriting it with stale ciphertext.
+  expect(view).toContain("templateCiphertext: await accountCiphertext(),");
+  expect(view).toContain('const evaluation = await preflight.run({ ...patch, trigger }, undefined, { resetAck: false });');
 });
 
 test("Test event / Check readiness renders match trail, overlaps, and the preflight checklist", async () => {
