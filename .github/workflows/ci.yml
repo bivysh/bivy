@@ -170,7 +170,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run test:core
-        if: matrix.shard == '1/2'
+        if: matrix.shard == '2/2'
       # Each machine gets a stable shard; within it, run independent suites
       # across the runner's CPUs while serializing suites with a shared port.
       - run: pnpm run test:unit
@@ -272,13 +272,24 @@ jobs:
         with:
           name: release-package
           path: release-artifact
-      - run: node scripts/smoke-release.mjs --artifact release-artifact/bivy-npm.tgz
-      - name: Fresh curl installer (no preinstalled Node or build tools)
-        if: runner.os == 'Linux'
+      - name: Release consumer and fresh installer
+        # Independent consumers of the same immutable tarball. Wait for both,
+        # even if one fails; neither check may be hidden by the other result.
+        shell: bash
         run: |
-          docker run --rm --init -e BIVY_INSTALL_SMOKE=1 \
-            -v "$PWD:/candidate:ro" ubuntu:24.04 \
-            bash /candidate/scripts/smoke-installer.sh /candidate/release-artifact/bivy-npm.tgz
+          node scripts/smoke-release.mjs --artifact release-artifact/bivy-npm.tgz &
+          consumer=$!
+          installer=
+          if [ "$RUNNER_OS" = Linux ]; then
+            docker run --rm --init -e BIVY_INSTALL_SMOKE=1 \
+              -v "$PWD:/candidate:ro" ubuntu:24.04 \
+              bash /candidate/scripts/smoke-installer.sh /candidate/release-artifact/bivy-npm.tgz &
+            installer=$!
+          fi
+          status=0
+          wait "$consumer" || status=1
+          if [ -n "$installer" ]; then wait "$installer" || status=1; fi
+          exit "$status"
 
   # Keep real desktop/mobile coverage; distribute files across independent
   # runners. Source-only contracts run once in their own Playwright project.
@@ -304,8 +315,16 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: chromium-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
-      # System libraries are not part of the browser cache.
-      - run: pnpm exec playwright install --with-deps chromium
+      # Only the headless shell is used. Hosted Ubuntu usually already has its
+      # shared libraries; probe a real launch before paying for apt-get update.
+      # A fresh runner missing dependencies still installs them and retries.
+      - name: Prepare Chromium
+        run: |
+          pnpm exec playwright install --only-shell chromium
+          if ! node scripts/check-browser-launch.mjs; then
+            pnpm exec playwright install-deps chromium
+            node scripts/check-browser-launch.mjs
+          fi
       - run: pnpm run test:browser --project=desktop --project=mobile --shard=${{ matrix.shard }}/4 --reporter=line,json
         env:
           PLAYWRIGHT_JSON_OUTPUT_NAME: test-results/timings.json
