@@ -15,6 +15,10 @@ export type DeploymentOperation =
   | "ephemeral.provision"
   | "session.create";
 
+export interface DeploymentPolicyContext {
+  source?: string;
+}
+
 export interface DeploymentDecision {
   allowed: boolean;
   code?: string;
@@ -42,9 +46,9 @@ export class DeploymentExtension {
 
   get configured(): boolean { return Boolean(this.url); }
 
-  async authorize(accountId: string, operation: DeploymentOperation, idempotencyKey?: string): Promise<DeploymentDecision> {
+  async authorize(accountId: string, operation: DeploymentOperation, idempotencyKey?: string, context: DeploymentPolicyContext = {}): Promise<DeploymentDecision> {
     if (!this.url) return { allowed: true };
-    const response = await this.request("/v1/policy/check", { subject: { accountId }, operation, idempotencyKey });
+    const response = await this.request("/v1/policy/check", { subject: { accountId }, operation, idempotencyKey, context });
     const decision = response as Partial<DeploymentDecision>;
     if (typeof decision.allowed !== "boolean") throw new Error("Deployment extension returned an invalid policy decision");
     return decision as DeploymentDecision;
