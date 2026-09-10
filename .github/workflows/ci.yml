@@ -315,16 +315,9 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: chromium-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
-      # Only the headless shell is used. Hosted Ubuntu usually already has its
-      # shared libraries; probe a real launch before paying for apt-get update.
-      # A fresh runner missing dependencies still installs them and retries.
-      - name: Prepare Chromium
-        run: |
-          pnpm exec playwright install --only-shell chromium
-          if ! node scripts/check-browser-launch.mjs; then
-            pnpm exec playwright install-deps chromium
-            node scripts/check-browser-launch.mjs
-          fi
+      # Install fonts as well as shared libraries: a successful browser launch
+      # alone does not guarantee the screenshot environment matches baselines.
+      - run: pnpm exec playwright install --with-deps --only-shell chromium
       - run: pnpm run test:browser --project=desktop --project=mobile --shard=${{ matrix.shard }}/4 --reporter=line,json
         env:
           PLAYWRIGHT_JSON_OUTPUT_NAME: test-results/timings.json
