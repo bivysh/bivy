@@ -51,6 +51,7 @@ import {
 } from "./automationTemplates.js";
 import { WorkQueueSetupSheet, type SourceSetupFocus } from "./WorkQueueSetupSheet.js";
 import { githubSourceStatus, githubMentionHandles } from "./githubSource.js";
+import { buildGithubOn, togglesFromAutomation, type GithubEventToggles } from "./githubAutomationEvents.js";
 import { WebhookAuthFields } from "./WebhookAuthFields.js";
 import { GithubTriggerAccess } from "./GithubTriggerAccess.js";
 import { RepositoryEventFilter } from "./RepositoryEventFilter.js";
@@ -195,54 +196,6 @@ function summarizeGithubEvents(item: AccountAutomation): string {
   if (on.some((r) => r.event === "pull_request_review_comment")) bits.push("review @mention");
   if (on.some((r) => r.event === "workflow_run")) bits.push("failed CI");
   return bits.length ? bits.join(" · ") : "custom events";
-}
-
-type GithubEventToggles = {
-  issuesLabeled: boolean;
-  issueMention: boolean;
-  prLabeled: boolean;
-  prMention: boolean;
-  workflowFailed: boolean;
-};
-
-function togglesFromAutomation(item: AccountAutomation): GithubEventToggles {
-  if (item.trigger === "github_ci") {
-    return { issuesLabeled: false, issueMention: false, prLabeled: false, prMention: false, workflowFailed: true };
-  }
-  const on = item.on;
-  if (!on?.length) {
-    // Legacy github default.
-    return { issuesLabeled: true, issueMention: true, prLabeled: false, prMention: false, workflowFailed: false };
-  }
-  return {
-    issuesLabeled: on.some((r) => r.event === "issues"),
-    issueMention: on.some((r) => r.event === "issue_comment" && r.mention),
-    prLabeled: on.some((r) => r.event === "pull_request"),
-    prMention: on.some((r) => r.event === "pull_request_review_comment" && r.mention),
-    workflowFailed: on.some((r) => r.event === "workflow_run"),
-  };
-}
-
-function buildGithubOn(
-  toggles: GithubEventToggles,
-  labelList: string[] | undefined,
-  workflowList: string[] | undefined,
-): NonNullable<AccountAutomation["on"]> {
-  const labels = labelList?.length ? labelList : ["bivy"];
-  const on: NonNullable<AccountAutomation["on"]> = [];
-  if (toggles.issuesLabeled) on.push({ event: "issues", labels });
-  if (toggles.issueMention) on.push({ event: "issue_comment", mention: true });
-  if (toggles.prLabeled) on.push({ event: "pull_request", labels });
-  if (toggles.prMention) on.push({ event: "pull_request_review_comment", mention: true });
-  if (toggles.workflowFailed) {
-    on.push({
-      event: "workflow_run",
-      actions: ["completed"],
-      conclusions: ["failure", "timed_out", "startup_failure"],
-      workflows: workflowList?.length ? workflowList : undefined,
-    });
-  }
-  return on;
 }
 
 /**

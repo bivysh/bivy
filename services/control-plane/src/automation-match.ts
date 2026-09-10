@@ -107,6 +107,8 @@ export const SOURCE_AUTOMATION_SEEDS: Record<
     labels: ["bivy"],
     on: [
       { event: "issues", labels: ["bivy"] },
+      { event: "issues", mention: true },
+      { event: "pull_request", mention: true },
       { event: "issue_comment", mention: true },
       { event: "pull_request", labels: ["bivy"] },
       { event: "pull_request_review_comment", mention: true },
