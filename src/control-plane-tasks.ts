@@ -140,10 +140,11 @@ export function resolveControlPlaneTaskConfig(
   };
 }
 
-async function cp(cfg: ControlPlaneTaskConfig, method: string, path: string, claimToken?: string, body?: unknown): Promise<Response> {
+async function cp(cfg: ControlPlaneTaskConfig, method: string, path: string, claimToken?: string, body?: unknown, signal?: AbortSignal): Promise<Response> {
+  const timeout = AbortSignal.timeout(10_000);
   return fetch(`${cfg.controlPlaneUrl}${path}`, {
     method,
-    signal: AbortSignal.timeout(10_000),
+    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
     headers: { authorization: `Bearer ${cfg.enrollmentToken}`, 'content-type': 'application/json', ...(claimToken ? { 'x-bivy-work-claim': claimToken } : {}) },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
@@ -455,6 +456,35 @@ export class ControlPlaneTaskPoller {
     } while (run.state === 'active');
   }
 
+  /** Redeliver the same reservation after uncertain acknowledgement, without
+   * consuming another attempt or allowing agent work beyond our lease. */
+  private async reserveAttempt(id: string, attempt: number, run: InFlightRun): Promise<number | undefined> {
+    while (run.state === 'active') {
+      let rejected = false;
+      try {
+        const response = await cp(this.cfg, 'POST', `/node/work/${encodeURIComponent(id)}/attempt`, run.claimToken, { attempt }, run.controller.signal);
+        if (response.ok) {
+          const data = await response.json() as { item?: WorkItem };
+          if (data.item?.attempt !== attempt + 1) throw new Error('Invalid attempt reservation acknowledgement');
+          return run.state === 'active' ? data.item.attempt : undefined;
+        }
+        rejected = response.status !== 408 && response.status !== 429 && response.status < 500;
+      } catch (error) {
+        if (run.state !== 'active') return undefined;
+        console.warn(`[control-plane-tasks] work ${id} attempt reservation failed:`, error instanceof Error ? error.message : error);
+      }
+      if (rejected) {
+        // A conflict may mean either exhausted budget or lost ownership.
+        // Confirm ownership before parking; cancelled/stale workers just stop.
+        await this.checkLease(id, run);
+        if (run.state === 'active') await this.finishWork(id, 'needs-attention', run);
+        return undefined;
+      }
+      if (run.state === 'active') await this.sleep(1000);
+    }
+    return undefined;
+  }
+
   private checkLease(id: string, run: InFlightRun): Promise<void> {
     if (run.state !== "active") return Promise.resolve();
     if (run.leaseCheck) return run.leaseCheck;
@@ -546,10 +576,9 @@ export class ControlPlaneTaskPoller {
 
         if (decision.action === "retry" || decision.action === "reroute") {
           if (run.claimToken) {
-            const response = await cp(this.cfg, 'POST', `/node/work/${encodeURIComponent(item.id)}/attempt`, run.claimToken, { attempt });
-            if (!response.ok) { await this.finishWork(item.id, 'needs-attention', run); return; }
-            const data = await response.json() as { item: WorkItem };
-            attempt = data.item.attempt!;
+            const reserved = await this.reserveAttempt(item.id, attempt, run);
+            if (reserved === undefined) return;
+            attempt = reserved;
           } else { attempt += 1; } // legacy control plane
           const kind = decision.action === "retry" ? "retry" : "fallback";
           console.warn(`[control-plane-tasks] item ${item.id} ${kind} (${decision.condition}): ${decision.summary}`);

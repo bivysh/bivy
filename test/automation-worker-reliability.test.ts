@@ -76,5 +76,88 @@ try {
   assert.equal(reservations,1);
   assert.equal(agentCalls,2,'durable attempt 2 leaves only one retry in budget 3');
   assert.equal(parked,true);
-  console.log('✓ authoritative claim, durable result delivery/restart, lease deadline, server-reserved retry budget');
+  // A lost reservation response must be redelivered with the SAME expected
+  // attempt, even if the server already committed the increment.
+  for (const failure of ['503', '429', '408', 'network', 'lost-response', 'invalid-json']) {
+    const expectedAttempts: number[] = [];
+    const executedAttempts: number[] = [];
+    let durableAttempt = 1;
+    let terminals = 0;
+    globalThis.fetch = async (url, init) => {
+      const endpoint = String(url);
+      if (endpoint.endsWith('/claim')) return response({ item: { ...claim, attempt: 1, leaseExpiresAt: new Date(Date.now() + 10000).toISOString() } });
+      if (endpoint.endsWith('/attempt')) {
+        const expected = JSON.parse(String(init?.body)).attempt;
+        expectedAttempts.push(expected);
+        if (expectedAttempts.length === 1) {
+          if (failure === 'network') throw new TypeError('fetch failed');
+          if (failure === 'lost-response' || failure === 'invalid-json') {
+            durableAttempt = expected + 1;
+            if (failure === 'lost-response') throw new TypeError('response lost after commit');
+            return new Response('truncated json');
+          }
+          return response({}, Number(failure));
+        }
+        if (durableAttempt === expected) durableAttempt++;
+        return response({ item: { ...claim, attempt: durableAttempt } });
+      }
+      if (/\/(complete|fail|needs-attention)$/.test(endpoint)) {
+        assert.ok(endpoint.endsWith('/complete'), failure);
+        terminals++;
+      }
+      return response({});
+    };
+    await access(new ControlPlaneTaskPoller(cfg, async received => {
+      executedAttempts.push(received.attempt!);
+      if (executedAttempts.length === 1) throw Error('retryable agent failure');
+    }, undefined, { sleep: async () => {}, policy: { decide: () => ({ action: 'retry', delayMs: 0, condition: 'transport_error', summary: 'Retry' }) } })).runOne(item);
+    assert.deepEqual(expectedAttempts, [1, 1], failure);
+    assert.deepEqual(executedAttempts, [1, 2], failure);
+    assert.equal(durableAttempt, 2, failure);
+    assert.equal(terminals, 1, failure);
+  }
+
+  // Permanent rejection must not be retried; ownership loss must not park.
+  for (const owned of [true, false]) {
+    let requests = 0;
+    let agentCalls = 0;
+    let parked = false;
+    globalThis.fetch = async url => {
+      const endpoint = String(url);
+      if (endpoint.endsWith('/claim')) return response({ item: { ...claim, attempt: 1, leaseExpiresAt: new Date(Date.now() + 10000).toISOString() } });
+      if (endpoint.endsWith('/attempt')) { requests++; return response({}, 409); }
+      if (endpoint.endsWith('/heartbeat')) return response({ leaseExpiresAt: new Date(Date.now() + 10000).toISOString() }, owned ? 200 : 409);
+      if (/\/(complete|fail|needs-attention)$/.test(endpoint)) { assert.ok(owned); parked = endpoint.endsWith('/needs-attention'); }
+      return response({});
+    };
+    await access(new ControlPlaneTaskPoller(cfg, async () => { agentCalls++; throw Error('retry'); }, undefined, {
+      policy: { decide: () => ({ action: 'retry', delayMs: 0, condition: 'transport_error', summary: 'Retry' }) },
+    })).runOne(item);
+    assert.equal(requests, 1);
+    assert.equal(agentCalls, 1);
+    assert.equal(parked, owned);
+  }
+
+  // Repeated transient failures cannot keep reservations/agent work alive
+  // beyond the last confirmed lease, including an in-progress HTTP request.
+  let reservationAborted = false;
+  let deadlineAgentCalls = 0;
+  globalThis.fetch = async (url, init) => {
+    const endpoint = String(url);
+    if (endpoint.endsWith('/claim')) return response({ item: { ...claim, attempt: 1, leaseExpiresAt: new Date(Date.now() + 100).toISOString() } });
+    if (endpoint.endsWith('/attempt')) return new Promise<Response>((_resolve, reject) => {
+      const timer = setTimeout(() => reject(Error('request was not aborted')), 1000);
+      init!.signal!.addEventListener('abort', () => {
+        clearTimeout(timer); reservationAborted = true; reject(init!.signal!.reason);
+      }, { once: true });
+    });
+    if (/\/(complete|fail|needs-attention)$/.test(endpoint)) throw Error('must not deliver a terminal result after lease loss');
+    return response({});
+  };
+  await access(new ControlPlaneTaskPoller(cfg, async () => { deadlineAgentCalls++; throw Error('retry'); }, undefined, {
+    policy: { decide: () => ({ action: 'retry', delayMs: 0, condition: 'transport_error', summary: 'Retry' }) },
+  })).runOne(item);
+  assert.equal(reservationAborted, true);
+  assert.equal(deadlineAgentCalls, 1);
+  console.log('✓ authoritative claim, durable results, lease deadline, retry reservation redelivery and rejection');
 } finally {globalThis.fetch=original;rmSync(directory,{recursive:true,force:true});}

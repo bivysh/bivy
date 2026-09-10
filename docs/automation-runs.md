@@ -81,7 +81,9 @@ review`, …) from evidence; the durable terminal state underneath it never flip
 **Attempts.** `attempt` starts at 1. The first claim of a `pending` run keeps
 that attempt. A **reclaim** of an expired lease increments it. Current workers
 also reserve policy retries/fallbacks with the control plane before invoking the
-agent again; request redelivery does not reserve another attempt. The configured
+agent again; request redelivery does not reserve another attempt. Transient
+reservation failures retry the same expected attempt while the lease remains
+confirmed, including when a reservation committed but its response was lost. The configured
 `maxAttempts` ceiling applies across operator retries, policy retries, restarts,
 and reclaims (default ceiling 10 when unset). Exhausted reclaims park for review.
 Every attempt belongs to the **same customer-visible run** — a retry is not a
@@ -132,8 +134,10 @@ not duplicate what a reader sees on GitHub:
   issue branch already produced a merged PR is skipped rather than re-run.
 
 Slack/schedule/generic-webhook repo runs use a deterministic `bivy/run-…` output
-branch derived from the durable Run ID. Recovery adopts the existing local or
-remote branch rather than creating a new randomly named output branch. Arbitrary
+branch derived from the durable Run ID. Recovery reuses an existing local
+worktree in place (including uncommitted files and the index), or starts from
+the existing local/remote branch tip when a checkout must be created. Conflicting
+checkout paths fail safely rather than deleting their contents. Arbitrary
 agent-controlled external effects are still **at least once**, not transactional:
 fencing and stable branches cannot guarantee exactly-once comments, API calls,
 or spending during process failure or a network partition.
