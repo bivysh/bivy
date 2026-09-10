@@ -6,6 +6,9 @@ const BADGE_ENABLED_KEY = "bivy.appIconBadge.enabled";
 const PREFS_SNAPSHOT_KEY = "bivy.notificationPreferences.snapshot";
 const CHANGE_EVENT = "bivy-notification-settings-change";
 
+let cachedPreferencesRaw: string | null | undefined;
+let cachedPreferences: NotificationPreferences | null = null;
+
 function emitChange() {
   window.dispatchEvent(new Event(CHANGE_EVENT));
 }
@@ -33,12 +36,18 @@ export function subscribeNotificationSettings(listener: () => void): () => void 
 
 export function getNotificationPreferencesSnapshot(): NotificationPreferences | null {
   const raw = localStorage.getItem(PREFS_SNAPSHOT_KEY);
-  if (!raw) return null;
-  try {
-    return normalizeNotificationPreferences(JSON.parse(raw));
-  } catch {
-    return null;
+  if (raw === cachedPreferencesRaw) return cachedPreferences;
+  cachedPreferencesRaw = raw;
+  if (!raw) {
+    cachedPreferences = null;
+    return cachedPreferences;
   }
+  try {
+    cachedPreferences = normalizeNotificationPreferences(JSON.parse(raw));
+  } catch {
+    cachedPreferences = null;
+  }
+  return cachedPreferences;
 }
 
 export function setNotificationPreferencesSnapshot(preferences: NotificationPreferences) {
