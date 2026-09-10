@@ -344,7 +344,9 @@ export function parseInstallationId(payload: unknown): string | undefined {
  * a user's credentials. Match the durable marker written by commentIssueOnce,
  * not the author or visible prose (which can contain continuation @mentions). */
 function isBivyGeneratedComment(body: string): boolean {
-  return /<!--\s*bivy:comment:[\s\S]*?-->/.test(body);
+  const marker = "<!-- bivy:comment:";
+  const start = body.indexOf(marker);
+  return start !== -1 && body.indexOf("-->", start + marker.length) !== -1;
 }
 
 /** Extract GitHub `@mention` logins from free text (comment/issue body). */
