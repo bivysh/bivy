@@ -5281,6 +5281,9 @@ async function executeWorkItem(item: ControlPlaneWorkItem, report: (patch: Evide
   const sandbox = safety.sandbox;
   const sessionOpts = {
     makeActive: false,
+    // The same durable Run adopts its branch after a retry/reclaim instead of
+    // producing a second randomly named branch/PR on a fresh process.
+    workBranch: `bivy/run-${createHash('sha256').update(item.id).digest('hex').slice(0, 24)}`,
     title: item.title,
     credentialLabels,
     runtimeId: item.runtimeId,
@@ -5388,6 +5391,7 @@ function startControlPlaneTasksIfConfigured() {
   // limit, park quota/auth/context); user-authored rulesets can add fallback
   // chains. Queue runs are unattended, so they act automatically within bounds.
   controlPlanePoller = new ControlPlaneTaskPoller(cfg, runWorkItem, nodeGithubMaxConcurrent, {
+    resultDirectory: path.join(appDir, 'work-results'),
     policy: (item) => {
       // Repository policy is version-controlled with the code and wins over the
       // node-global UI ruleset for this run. The shared clone exists by the time
@@ -8597,6 +8601,8 @@ type SessionHelperOpts = {
   /** A specific remote branch (the composer's branch pill) to base the new
    *  worktree on, instead of the repo's default branch. */
   branch?: string;
+  /** Stable output branch for callers with a durable work identity. */
+  workBranch?: string;
 };
 
 async function createRepoSession(parsed: ParsedRepo, opts: SessionHelperOpts = {}): Promise<SessionRecord> {
@@ -8635,7 +8641,7 @@ async function createGitWorkspaceSession(repoDir: string, parsed: ParsedRepo, op
   // Start from an opaque, git-safe unique branch. The first user message then
   // triggers sessionNamer.maybeNameSession(), which renames both the session and local branch
   // before the first publish/PR attempt.
-  const branch = `bivy/session-${randomBytes(6).toString("hex")}`;
+  const branch = opts.workBranch ?? `bivy/session-${randomBytes(6).toString("hex")}`;
   const record = await createSession(repoDir, undefined, {
     worktree: { branch, base },
     source: `repo:${parsed.slug}`,

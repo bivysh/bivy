@@ -5,7 +5,7 @@ import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
 import { useModalBack, useModalEscape } from "../modalStack.js";
 
-const FOCUSABLE = 'a[href],button:not(:disabled),textarea:not(:disabled),input:not(:disabled),select:not(:disabled),[tabindex]:not([tabindex="-1"])';
+import { useModalFocus } from "../useModalFocus.js";
 
 export function ConfirmDialog({
   title,
@@ -31,29 +31,7 @@ export function ConfirmDialog({
   // Enter/Space can't fire an irreversible action.
   const cancelRef = useRef<HTMLButtonElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const opener = document.activeElement as HTMLElement | null;
-    cancelRef.current?.focus();
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Tab") return;
-      const items = bodyRef.current ? Array.from(bodyRef.current.querySelectorAll<HTMLElement>(FOCUSABLE)) : [];
-      if (items.length === 0) return;
-      const first = items[0]!;
-      const last = items[items.length - 1]!;
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      opener?.focus?.();
-    };
-  }, []);
+  useModalFocus(bodyRef, cancelRef);
   // Unique id per instance — a hardcoded id collides if two dialogs ever mount.
   const titleId = useId();
   // Dialogs can be opened from the transformed mobile sidebar. Portal them so
@@ -90,30 +68,8 @@ export function RenameDialog({
   const bodyRef = useRef<HTMLFormElement>(null);
   const closeWithBack = useModalBack(onCancel);
   useModalEscape(closeWithBack);
-  useEffect(() => {
-    const opener = document.activeElement as HTMLElement | null;
-    inputRef.current?.focus();
-    inputRef.current?.select();
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Tab") return;
-      const items = bodyRef.current ? Array.from(bodyRef.current.querySelectorAll<HTMLElement>(FOCUSABLE)) : [];
-      if (items.length === 0) return;
-      const first = items[0]!;
-      const last = items[items.length - 1]!;
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      opener?.focus?.();
-    };
-  }, []);
+  useModalFocus(bodyRef, inputRef);
+  useEffect(() => { inputRef.current?.select(); }, []);
   const titleId = useId();
   const submit = (e: FormEvent) => {
     e.preventDefault();

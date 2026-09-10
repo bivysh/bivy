@@ -22,10 +22,10 @@ async function freePort(): Promise<number> {
   });
 }
 
-async function request(port: number, method: string, pathname: string, token?: string, body?: unknown) {
+async function request(port: number, method: string, pathname: string, token?: string, body?: unknown, claimToken?: string) {
   const response = await fetch(`http://localhost:${port}${pathname}`, {
     method,
-    headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+    headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}), ...(claimToken ? { 'x-bivy-work-claim': claimToken } : {}) },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   return { status: response.status, body: await response.json().catch(() => ({})) as any };
@@ -140,7 +140,38 @@ try {
 
   const metrics = await (await fetch(`http://localhost:${port}/metrics`)).text();
   assert.match(metrics, /bivy_run_lifecycle_results_total\{outcome="cancelled"\} 1(?:\n|$)/, "only the durable cancellation transition is counted");
-  console.log("✓ authenticated Run cancel/retry APIs, owner wake, fencing, conflicts, and metric");
+  const modern = await request(port, 'POST', '/account/automation-runs', token, {title:'Fenced delivery',maxAttempts:2});
+  const claimToken = 'new-worker-generation';
+  const work = `/node/work/${modern.body.id}`;
+  const claimed = await request(port,'POST',`${work}/claim`,nodeToken,undefined,claimToken);
+  assert.equal(claimed.body.item.claimToken,claimToken);
+  for (const action of ['running','heartbeat','evidence','complete','fail','needs-attention']) {
+    assert.equal((await request(port,'POST',`${work}/${action}`,nodeToken,{},'old-worker-generation')).status,409);
+    assert.equal((await request(port,'POST',`${work}/${action}`,nodeToken,{})).status,409,'legacy requests cannot mutate a fenced claim');
+  }
+  assert.equal((await request(port,'POST',`${work}/running`,nodeToken,undefined,claimToken)).status,200);
+  const reservation = await request(port,'POST',`${work}/attempt`,nodeToken,{attempt:1},claimToken);
+  assert.equal(reservation.body.item.attempt,2);
+  assert.equal((await request(port,'POST',`${work}/attempt`,nodeToken,{attempt:1},claimToken)).body.item.attempt,2);
+  assert.equal((await request(port,'POST',`${work}/attempt`,nodeToken,{attempt:2},claimToken)).status,409);
+  assert.equal((await request(port,'POST',`${work}/complete`,nodeToken,undefined,claimToken)).status,200);
+  const beforeAck = await (await fetch(`http://localhost:${port}/metrics`)).text();
+  assert.equal((await request(port,'POST',`${work}/complete`,nodeToken,undefined,claimToken)).status,200,'lost completion response can be retried');
+  const afterAck = await (await fetch(`http://localhost:${port}/metrics`)).text();
+  assert.equal(afterAck.match(/bivy_run_lifecycle_results_total\{outcome="succeeded"\} \d+/)?.[0],beforeAck.match(/bivy_run_lifecycle_results_total\{outcome="succeeded"\} \d+/)?.[0]);
+
+  const definition = await request(port,'POST','/account/automations',token,{name:'Manual dispatch',trigger:'manual',templateCiphertext:'bivy-room-v1:cancel-node:opaque',nodeLabel:'bivy/cancel-runner'});
+  assert.equal(definition.status,201,JSON.stringify(definition.body));
+  const dispatchPath = `/account/automations/${definition.body.id}/run`;
+  const first = await request(port,'POST',dispatchPath,token,{sourceKey:'click-1'});
+  const duplicate = await request(port,'POST',dispatchPath,token,{sourceKey:'click-1'});
+  const next = await request(port,'POST',dispatchPath,token,{sourceKey:'click-2'});
+  assert.equal(first.status,201);
+  assert.equal(duplicate.body.id,first.body.id);
+  assert.notEqual(next.body.id,first.body.id);
+  assert.equal((await request(port,'POST',dispatchPath,token,{sourceKey:{bad:true}})).status,400);
+  assert.equal((await request(port,'PUT',`/account/automations/${definition.body.id}`,token,{maxAttempts:0})).status,400,'invalid attempt limits cannot silently widen the budget');
+  console.log("✓ authenticated cancel/retry, generation fencing, attempt reservation, idempotent dispatch/result delivery and metrics");
 } finally {
   await stopTestServices(proc ? [proc] : []);
   if (relay) await new Promise<void>((resolve) => relay!.close(() => resolve()));

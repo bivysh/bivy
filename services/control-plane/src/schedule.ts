@@ -32,6 +32,7 @@ export function normalizeSchedule(value: unknown): ScheduleSpec {
   if (input.kind === "cron") {
     if (typeof input.expression !== "string") throw new Error("A cron expression is required.");
     const expression = input.expression.trim();
+    if (expression.split(/\s+/).length !== 5) throw new Error("Invalid cron expression. Use a standard five-field cron expression (minute precision).");
     const timezone = validateTimezone(typeof input.timezone === "string" ? input.timezone : "");
     try {
       CronExpressionParser.parse(expression, { tz: timezone });
@@ -71,11 +72,16 @@ export async function processDueSchedules(
   let enqueued = 0;
   for (const definition of due) {
     if (!definition.enabled || !definition.nextRunAt || !definition.schedule) continue;
-    const next = definition.schedule.kind === "cron" ? nextOccurrence(definition.schedule, now) : undefined;
-    const run = await store.enqueueScheduledOccurrence(definition.accountId, definition.id, definition.nextRunAt, next);
-    if (run) {
-      enqueued += 1;
-      onEnqueued?.(definition.accountId, run);
+    try {
+      const next = definition.schedule.kind === "cron" ? nextOccurrence(definition.schedule, now) : undefined;
+      const run = await store.enqueueScheduledOccurrence(definition.accountId, definition.id, definition.nextRunAt, next);
+      if (run) {
+        enqueued += 1;
+        onEnqueued?.(definition.accountId, run);
+      }
+    } catch (error) {
+      // One poisoned definition must not prevent other accounts from running.
+      console.error("automation schedule failed", definition.id, error);
     }
   }
   return enqueued;
@@ -92,13 +98,16 @@ export class AutomationScheduler {
   ) {}
 
   start(): void {
-    void this.tick();
-    this.timer = setInterval(() => void this.tick(), this.intervalMs);
+    if (this.timer) return;
+    const tick = () => void this.tick().catch((error) => console.error("automation scheduler tick failed", error));
+    tick();
+    this.timer = setInterval(tick, this.intervalMs);
     this.timer.unref?.();
   }
 
   stop(): void {
     if (this.timer) clearInterval(this.timer);
+    this.timer = undefined;
   }
 
   async tick(now = new Date()): Promise<number> {

@@ -709,6 +709,7 @@ export class PostgresStore implements ControlPlaneStore {
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS approval_mode TEXT;
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS sandbox TEXT;
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS max_attempts INTEGER;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS claim_token TEXT;
       -- Untrusted webhook-payload context for a webhook-triggered automation run,
       -- appended to the E2E-decrypted operator template on the node as data.
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS event_context TEXT;
@@ -3006,13 +3007,13 @@ export class PostgresStore implements ControlPlaneStore {
       const policyDenied = events.some((event: RunEvidenceEvent) => event.kind === "policy_denial");
       const hasArtifact = Boolean(output.branch || output.commit || output.prUrl || output.checkpoint || output.artifactUrl);
       const ambiguousSuccess = current.status === "succeeded" && !failedCheck && !explicitNoChanges && !hasArtifact;
-      const eligible = current.status === "failed" || failedCheck || ambiguousSuccess || (current.status === "needs_attention" && policyDenied);
+      const eligible = current.status === "failed" || (current.status === "succeeded" && (failedCheck || ambiguousSuccess)) || (current.status === "needs_attention" && policyDenied);
       if (!eligible) {
         await client.commit();
         return { run: mapAutomationRun(current), transitioned: false, reason: "not_retryable" };
       }
       const attempt = Math.max(1, Number(current.attempt ?? 1));
-      const maxAttempts = Number(current.max_attempts);
+      const maxAttempts = Number(current.max_attempts ?? 10);
       if (Number.isFinite(maxAttempts) && maxAttempts > 0 && attempt >= maxAttempts) {
         await client.commit();
         return { run: mapAutomationRun(current), transitioned: false, reason: "attempt_limit" };
@@ -3047,13 +3048,36 @@ export class PostgresStore implements ControlPlaneStore {
     }
   }
 
-  async transitionAutomationRun(accountId: string, id: string, status: AutomationRunStatus, output?: AutomationRun["output"], expectedNodeId?: string): Promise<AutomationRun | undefined> {
+  private async withLockedWork<T>(accountId: string, id: string, update: (row: pg.QueryResultRow, query: pg.PoolClient["query"]) => Promise<T | undefined>): Promise<T | undefined> {
+    const client = await this.database.beginTransaction();
+    try {
+      const selected = await client.query("SELECT * FROM work_items WHERE account_id=$1 AND id=$2 FOR UPDATE", [accountId, id]);
+      const result = selected.rows[0] ? await update(selected.rows[0], client.query) : undefined;
+      await client.commit();
+      return result;
+    } catch (error) {
+      await client.rollback().catch(() => {});
+      throw error;
+    } finally { client.release(); }
+  }
+
+  async ownsWorkClaim(accountId: string, nodeId: string, id: string, token: string): Promise<boolean> {
+    const { rows } = await this.query("SELECT id FROM work_items WHERE account_id=$1 AND id=$2 AND claimed_by_node_id=$3 AND COALESCE(claim_token, '')=$4", [accountId, id, nodeId, token]);
+    return rows.length > 0;
+  }
+
+  async transitionAutomationRun(accountId: string, id: string, status: AutomationRunStatus, output?: AutomationRun["output"], expectedNodeId?: string, claimToken?: string): Promise<AutomationRun | undefined> {
+    return this.withLockedWork(accountId, id, async (current, query) => {
+    if (expectedNodeId && (current.claimed_by_node_id !== expectedNodeId || (claimToken !== undefined && (current.claim_token ?? '') !== claimToken))) return undefined;
+    // A persisted result may arrive after expiry, but only from the unchanged
+    // claim generation. It must never resurrect execution or renew the lease.
+    if (claimToken && ['running', 'waiting'].includes(status) && current.lease_expires_at && new Date(current.lease_expires_at).getTime() <= Date.now()) return undefined;
     const from: Record<AutomationRunStatus, AutomationRunStatus[]> = {
       pending: [],
       claimed: [],
       running: ["claimed", "waiting"],
       waiting: ["claimed", "running"],
-      needs_attention: ["pending", "running", "waiting"],
+      needs_attention: ["pending", "claimed", "running", "waiting"],
       succeeded: ["running", "needs_attention"],
       // Allow failure straight from "claimed": a node can throw before the
       // best-effort /running transition lands, and the run must still terminate
@@ -3075,17 +3099,9 @@ export class PostgresStore implements ControlPlaneStore {
       cancelled: { kind: "terminal", summary: "Run reached the cancelled terminal outcome." },
     };
     const event = eventForStatus[status];
-    // No jsonb `||` concatenation here (deliberately): pg-mem — the in-memory
-    // Postgres the whole test suite runs against — mis-evaluates the jsonb
-    // concatenation operator inside an UPDATE SET (confirmed against real
-    // Postgres semantics; see pg-mem issue tracker). A plain read-then-write
-    // is a two-query round trip instead of one atomic statement, but this event
-    // append is a best-effort timeline entry, not the transition's atomicity
-    // guard (the conditional `status = ANY(from[status])` above already is).
-    // $8 node guard: when set, the Run must still be claimed by that node, so a
-    // Machine that lost its lease to a reclaim (claimed_by_node_id now points at
-    // the new owner) no-ops here instead of overwriting the fresh attempt.
-    const { rows } = await this.query(
+    // Lifecycle and timeline commit together under the same row lock as cancel,
+    // retry, claim, and evidence. No concurrent writer can lose a milestone.
+    const { rows } = await query(
       `UPDATE work_items SET status = $3,
        started_at = CASE WHEN $3 = 'running' THEN COALESCE(started_at, now()) ELSE started_at END,
        completed_at = CASE WHEN $4 THEN COALESCE(completed_at, now()) ELSE completed_at END,
@@ -3105,27 +3121,20 @@ export class PostgresStore implements ControlPlaneStore {
     const events = [...(rows[0].events ?? []), ...delivery, { at, ...event, attempt: Number(rows[0].attempt ?? 1), milestoneId: `${id}:${status}:${Number(rows[0].attempt ?? 1)}` }]
       .filter((candidate, index, all) => !candidate.milestoneId || all.findIndex((other) => other.milestoneId === candidate.milestoneId) === index)
       .slice(-100);
-    const { rows: withEvent } = await this.query(
+    const { rows: withEvent } = await query(
       `UPDATE work_items SET events = $3::jsonb WHERE account_id = $1 AND id = $2 RETURNING *`,
       [accountId, id, JSON.stringify(events)],
     );
     return mapAutomationRun(withEvent[0] ?? rows[0]);
+    });
   }
 
-  /** Issue #153 — record a sanitized, node-reported evidence patch against a
-   *  run it claimed. `checks`/`events` are appended to existing history;
-   *  `routingReason`/`output` fields are merged, last-write-wins per field.
-   *  Read-then-write (not an atomic jsonb `||` UPDATE) — see the comment in
-   *  transitionAutomationRun for why; a lost update here just drops one
-   *  low-frequency evidence report, never the run's actual status. */
-  async appendRunEvidence(accountId: string, id: string, patch: RunEvidencePatch, expectedNodeId?: string): Promise<AutomationRun | undefined> {
-    const { rows } = await this.query(
-      `SELECT * FROM work_items WHERE account_id = $1 AND id = $2
-       AND ($3::text IS NULL OR (claimed_by_node_id = $3 AND status IN ('claimed', 'running', 'waiting', 'needs_attention')))`,
-      [accountId, id, expectedNodeId ?? null],
-    );
-    if (!rows[0]) return undefined;
-    const current = rows[0];
+  /** Append bounded evidence under the lifecycle row lock. */
+  async appendRunEvidence(accountId: string, id: string, patch: RunEvidencePatch, expectedNodeId?: string, claimToken?: string): Promise<AutomationRun | undefined> {
+    return this.withLockedWork(accountId, id, async (current, query) => {
+    if (expectedNodeId && (current.claimed_by_node_id !== expectedNodeId || !['claimed', 'running', 'waiting', 'needs_attention'].includes(current.status))) return undefined;
+    if (claimToken !== undefined && (current.claim_token ?? '') !== claimToken) return undefined;
+    if (claimToken && current.lease_expires_at && new Date(current.lease_expires_at).getTime() <= Date.now()) return undefined;
     const routingReason = patch.routingReason ?? current.routing_reason ?? undefined;
     const output = patch.output ? { ...(current.output ?? {}), ...patch.output } : (current.output ?? {});
     const checks = patch.checks ? [...(current.checks ?? []), ...patch.checks].slice(-50) : (current.checks ?? []);
@@ -3152,7 +3161,7 @@ export class PostgresStore implements ControlPlaneStore {
     const dedupedEvents = [...events, ...derivedEvents]
       .filter((candidate, index, all) => !candidate.milestoneId || all.findIndex((other) => other.milestoneId === candidate.milestoneId) === index)
       .slice(-100);
-    const { rows: updated } = await this.query(
+    const { rows: updated } = await query(
       `UPDATE work_items SET routing_reason = $3, output = $4::jsonb, checks = $5::jsonb, events = $6::jsonb, receipt_evidence = $7::jsonb,
        run_usage = $8::jsonb, notification_delivery = $9::jsonb, run_references = $10::jsonb, attention = $11::jsonb
        WHERE account_id = $1 AND id = $2
@@ -3161,6 +3170,7 @@ export class PostgresStore implements ControlPlaneStore {
       [accountId, id, routingReason ?? null, JSON.stringify(output), JSON.stringify(checks), JSON.stringify(dedupedEvents), JSON.stringify(receiptEvidence), JSON.stringify(usage), JSON.stringify(notification), JSON.stringify(references), JSON.stringify(attention), expectedNodeId ?? null],
     );
     return updated[0] ? mapAutomationRun(updated[0]) : undefined;
+    });
   }
 
   async rerouteDefaultRoutedPending(accountId: string, label: string): Promise<WorkItem[]> {
@@ -3179,14 +3189,15 @@ export class PostgresStore implements ControlPlaneStore {
     id: string,
     input: { label: string; runtimeId?: string; model?: string; ephemeral?: boolean },
   ): Promise<WorkItem | undefined> {
-    const current = await this.getAutomationRun(accountId, id);
+    return this.withLockedWork(accountId, id, async (row, query) => {
+    const current = mapAutomationRun(row);
     const at = new Date().toISOString();
     const routeEvents: RunEvidenceEvent[] = current ? [
       ...(current.events ?? []),
       ...(input.ephemeral ? [{ at, kind: "provisioning" as const, summary: "Provisioning an isolated Machine for this Run.", ref: normalizeWorkLabel(input.label), milestoneId: `${id}:provisioning:${current.attempt}` }] : []),
       { at, kind: "routed" as const, summary: "Run routing was updated by an operator.", ref: normalizeWorkLabel(input.label), attempt: current.attempt, milestoneId: `${id}:routed:${current.attempt}:${normalizeWorkLabel(input.label)}` },
     ].slice(-100) : [];
-    const { rows } = await this.query(
+    const { rows } = await query(
       `UPDATE work_items
        SET label = $3, runtime_id = $4, model = $5, default_routed = false, ephemeral = $6, events = $7::jsonb
        WHERE id = $2 AND account_id = $1 AND status = 'pending'
@@ -3194,6 +3205,7 @@ export class PostgresStore implements ControlPlaneStore {
       [accountId, id, normalizeWorkLabel(input.label), input.runtimeId?.trim() || null, input.model?.trim() || null, Boolean(input.ephemeral), JSON.stringify(routeEvents)],
     );
     return rows[0] ? mapWorkItem(rows[0]) : undefined;
+    });
   }
 
   async listPendingWorkItems(accountId: string, labels: string[]): Promise<WorkItem[]> {
@@ -3216,43 +3228,48 @@ export class PostgresStore implements ControlPlaneStore {
     return rows.map(mapWorkItem);
   }
 
-  async claimWorkItem(accountId: string, nodeId: string, id: string): Promise<WorkItem | undefined> {
-    // Conditional UPDATE makes both first claim and stale-lease reclaim atomic.
-    // A crashed node cannot strand work forever; a live node renews below.
-    const { rows } = await this.query(
-      `UPDATE work_items
-       SET status = 'claimed', claimed_by_node_id = $3, claimed_at = now(),
-           lease_expires_at = $4,
-           attempt = CASE WHEN status = 'pending' THEN COALESCE(attempt, 1) ELSE COALESCE(attempt, 1) + 1 END
-       WHERE id = $2 AND account_id = $1
-         AND (status = 'pending' OR (status IN ('claimed', 'running') AND lease_expires_at < now()))
-       RETURNING *`,
-      [accountId, id, nodeId, workLeaseExpiry()],
-    );
-    if (!rows[0]) return undefined;
-    // Best-effort timeline entry (issue #153) — read-then-write, same rationale
-    // as transitionAutomationRun; the claim's atomicity is already guaranteed
-    // above and does not depend on this second query.
-    const claimedEvent: RunEvidenceEvent = {
-      at: new Date().toISOString(), kind: "claimed", summary: "Run claimed by an eligible Machine.", ref: nodeId,
-      attempt: Number(rows[0].attempt ?? 1), milestoneId: `${id}:claimed:${Number(rows[0].attempt ?? 1)}`,
-    };
-    const events = [...(rows[0].events ?? []), claimedEvent].slice(-100);
-    const { rows: withEvent } = await this.query(
-      `UPDATE work_items SET events = $3::jsonb WHERE account_id = $1 AND id = $2 RETURNING *`,
-      [accountId, id, JSON.stringify(events)],
-    );
-    return withResumeTarget(mapWorkItem(withEvent[0] ?? rows[0]));
+  async claimWorkItem(accountId: string, nodeId: string, id: string, claimToken?: string): Promise<WorkItem | undefined> {
+    return this.withLockedWork(accountId, id, async (current, query) => {
+      const expired = ['claimed', 'running'].includes(current.status) && current.lease_expires_at && new Date(current.lease_expires_at).getTime() < Date.now();
+      if (current.status !== 'pending' && !expired) return undefined;
+      const attempt = Number(current.attempt ?? 1) + (expired ? 1 : 0);
+      if (attempt > Number(current.max_attempts ?? 10)) {
+        const at = new Date().toISOString();
+        const events = [...(current.events ?? []), { at, kind: 'needs_attention', summary: 'Attempt limit reached; run parked for review.', attempt: Number(current.attempt ?? 1) }].slice(-100);
+        await query("UPDATE work_items SET status='needs_attention', lease_expires_at=NULL, events=$3::jsonb WHERE account_id=$1 AND id=$2", [accountId, id, JSON.stringify(events)]);
+        return undefined;
+      }
+      const event: RunEvidenceEvent = { at: new Date().toISOString(), kind: 'claimed', summary: 'Run claimed by an eligible Machine.', ref: nodeId, attempt, milestoneId: `${id}:claimed:${attempt}` };
+      const { rows } = await query(
+        `UPDATE work_items SET status='claimed', claimed_by_node_id=$3, claimed_at=now(), lease_expires_at=$4,
+         attempt=$5, claim_token=$6, events=$7::jsonb
+         WHERE account_id=$1 AND id=$2 AND (status='pending' OR (status IN ('claimed','running') AND lease_expires_at < now())) RETURNING *`,
+        [accountId, id, nodeId, workLeaseExpiry(), attempt, claimToken ?? null, JSON.stringify([...(current.events ?? []), event].slice(-100))],
+      );
+      return rows[0] ? { ...withResumeTarget(mapWorkItem(rows[0])), claimToken: rows[0].claim_token ?? undefined } : undefined;
+    });
   }
 
-  async renewWorkItemLease(accountId: string, nodeId: string, id: string): Promise<WorkItem | undefined> {
+  /** Reserve policy retries durably before invoking the agent again. Repeating
+   * expectedAttempt after a lost response returns the same reservation. */
+  async advanceWorkItemAttempt(accountId: string, nodeId: string, id: string, claimToken: string, expectedAttempt: number): Promise<WorkItem | undefined> {
+    return this.withLockedWork(accountId, id, async (current, query) => {
+      if (current.claimed_by_node_id !== nodeId || current.claim_token !== claimToken || !['claimed','running'].includes(current.status)
+        || !current.lease_expires_at || new Date(current.lease_expires_at).getTime() <= Date.now()) return undefined;
+      if (Number(current.attempt) === expectedAttempt + 1) return mapWorkItem(current);
+      if (Number(current.attempt) !== expectedAttempt || expectedAttempt >= Number(current.max_attempts ?? 10)) return undefined;
+      const { rows } = await query("UPDATE work_items SET attempt=$3, checks='[]'::jsonb WHERE account_id=$1 AND id=$2 RETURNING *", [accountId, id, expectedAttempt + 1]);
+      return mapWorkItem(rows[0]);
+    });
+  }
+
+  async renewWorkItemLease(accountId: string, nodeId: string, id: string, claimToken?: string): Promise<WorkItem | undefined> {
     const { rows } = await this.query(
-      `UPDATE work_items
-       SET lease_expires_at = $4
-       WHERE account_id = $1 AND id = $2 AND claimed_by_node_id = $3
-         AND status IN ('claimed', 'running')
-       RETURNING *`,
-      [accountId, id, nodeId, workLeaseExpiry()],
+      `UPDATE work_items SET lease_expires_at=$4
+       WHERE account_id=$1 AND id=$2 AND claimed_by_node_id=$3 AND status IN ('claimed','running')
+         AND ($5::text IS NULL OR COALESCE(claim_token, '')=$5)
+         AND ($5::text IS NULL OR $5='' OR lease_expires_at > now()) RETURNING *`,
+      [accountId, id, nodeId, workLeaseExpiry(), claimToken ?? null],
     );
     return rows[0] ? mapWorkItem(rows[0]) : undefined;
   }
@@ -3274,15 +3291,15 @@ export class PostgresStore implements ControlPlaneStore {
     return total;
   }
 
-  async completeWorkItem(accountId: string, id: string, expectedNodeId?: string): Promise<AutomationRun | undefined> {
+  async completeWorkItem(accountId: string, id: string, expectedNodeId?: string, claimToken?: string): Promise<AutomationRun | undefined> {
     // Older nodes only know claim → complete. Adapt that boundary onto the
     // canonical lifecycle without preserving a second legacy transition path.
     // The node guard flows into both hops so a reclaimed-away Machine cannot
     // complete the new attempt (returns undefined, and the caller reports a
     // conflict rather than a spurious success).
     const current = await this.getAutomationRun(accountId, id);
-    if (current?.status === "claimed") await this.transitionAutomationRun(accountId, id, "running", undefined, expectedNodeId);
-    return (await this.transitionAutomationRun(accountId, id, "succeeded", undefined, expectedNodeId)) ?? undefined;
+    if (current?.status === "claimed") await this.transitionAutomationRun(accountId, id, "running", undefined, expectedNodeId, claimToken);
+    return (await this.transitionAutomationRun(accountId, id, "succeeded", undefined, expectedNodeId, claimToken)) ?? undefined;
   }
 
   async deleteWorkItem(accountId: string, id: string): Promise<boolean> {

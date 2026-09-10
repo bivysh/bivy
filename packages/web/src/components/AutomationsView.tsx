@@ -77,6 +77,7 @@ import { AutomationPreflightPanel, useAutomationPreflight } from "./AutomationPr
 import { IconBolt, IconClock, IconPr, IconWebhook } from "./AutomationIcons.js";
 import { AddNodeSheet } from "./AddNodeSheet.js";
 import { useModalBack, useModalEscape } from "../modalStack.js";
+import { useModalFocus } from "../useModalFocus.js";
 
 import { decodeAutomationTemplate, encodeAutomationTemplate } from "@bivy/core";
 import { AutomationAccounts } from "./AutomationAccounts.js";
@@ -678,8 +679,8 @@ export function AutomationsView({
     setDraft(emptyDraft(defaultNodeId));
   }
 
-  async function continueWithSource(source: "github" | "linear", current: Draft, opts?: { keepExistingName?: boolean }) {
-    const existing = items.find((item) => item.trigger === source);
+  async function continueWithSource(source: "github" | "linear", current: Draft, opts?: { keepExistingName?: boolean; definition?: AccountAutomation }) {
+    const existing = opts?.definition ?? items.find((item) => item.trigger === source);
     if (!existing) {
       setDraft({ ...current, hasTrigger: true, trigger: source });
       return;
@@ -689,7 +690,8 @@ export function AutomationsView({
     const parts = existing.templateCiphertext?.split(":");
     if (parts?.[0] === TEMPLATE_PREFIX && parts[1] && parts.slice(2).length) {
       const roomKey = controller.local.keys()[parts[1]];
-      if (roomKey) instructions = await open(await importRoomKey(unb64url(roomKey)), parts.slice(2).join(":"));
+      if (!roomKey) throw new Error("Instructions are locked on this device. Connect to the assigned Machine before editing this automation.");
+      instructions = await open(await importRoomKey(unb64url(roomKey)), parts.slice(2).join(":"));
     }
     const template = decodeAutomationTemplate(instructions);
     const base = emptyDraft(parts?.[1] || defaultNodeId);
@@ -717,7 +719,9 @@ export function AutomationsView({
   async function edit(item: AccountAutomation) {
     setError("");
     if (item.trigger === "github" || item.trigger === "linear") {
-      await continueWithSource(item.trigger, emptyDraft(defaultNodeId), { keepExistingName: true });
+      try {
+        await continueWithSource(item.trigger, emptyDraft(defaultNodeId), { keepExistingName: true, definition: item });
+      } catch (error) { setError(String((error as Error).message || error)); }
       return;
     }
     if (item.trigger === "github_ci") {
@@ -799,21 +803,31 @@ export function AutomationsView({
     } catch (e) { setError(String((e as Error).message || e)); }
   }
 
+  const dispatches = useRef(new Map<string, { key: string; pending: boolean }>());
+  const [dispatchingId, setDispatchingId] = useState<string | null>(null);
   async function runNow(item: AccountAutomation) {
+    const dispatch = dispatches.current.get(item.id) ?? { key: crypto.randomUUID(), pending: false };
+    if (dispatch.pending) return;
+    dispatch.pending = true;
+    dispatches.current.set(item.id, dispatch);
+    setDispatchingId(item.id);
+    setError("");
     try {
-      const run = await runAutomationNow(controller.local, item.id);
+      const run = await runAutomationNow(controller.local, item.id, fetch, dispatch.key);
+      dispatches.current.delete(item.id);
       controller.recordProductMilestone("run_accepted");
-      await refresh();
+      await refresh().catch(() => setError("Run accepted, but activity could not refresh. Reopen Automations to check its status."));
       const sessionId = run.output?.sessionId;
       setNotice({
         tone: "ok",
-        title: `Started “${item.name}”`,
+        title: `${sessionId ? "Started" : "Queued"} “${item.name}”`,
         body: sessionId ? "A session is running on the assigned machine." : "Queued — it will appear in Recent activity shortly.",
         action: sessionId
           ? { label: "Open session", onClick: () => { onOpenSession(sessionId); onClose(); } }
           : undefined,
       });
     } catch (e) { setError(String((e as Error).message || e)); }
+    finally { dispatch.pending = false; setDispatchingId(null); }
   }
 
   async function cancelConfirmedRun() {
@@ -1248,6 +1262,7 @@ export function AutomationsView({
           initial={draft}
           existing={draft.id ? items.find((item) => item.id === draft.id) : undefined}
           onRunNow={runNow}
+          runBusy={Boolean(dispatchingId)}
           onToggle={toggle}
           onDelete={async (item) => { if (await remove(item)) setDraft(null); }}
           onHistory={(id) => { setDraft(null); setHistoryAutomationId(id); }}
@@ -1289,7 +1304,8 @@ export function AutomationsView({
           state={state}
           sources={sources}
           onClose={() => setSourceEdit(null)}
-          onRunNow={(item) => runNow(item)}
+          onRunNow={runNow}
+          runBusy={Boolean(dispatchingId)}
           onToggle={(item) => toggle(item)}
           onDelete={async (item) => { if (await remove(item)) setSourceEdit(null); }}
           onHistory={(id) => { setSourceEdit(null); setHistoryAutomationId(id); }}
@@ -1338,6 +1354,7 @@ function SourceAutomationEditor({
   sources,
   onClose,
   onRunNow,
+  runBusy,
   onToggle,
   onDelete,
   onHistory,
@@ -1350,6 +1367,7 @@ function SourceAutomationEditor({
   state: AppState;
   sources: SourcesSnapshot;
   onClose: () => void;
+  runBusy?: boolean;
   onRunNow?: (item: AccountAutomation) => void | Promise<void>;
   onToggle?: (item: AccountAutomation) => void | Promise<void>;
   onDelete?: (item: AccountAutomation) => void | Promise<void>;
@@ -1515,6 +1533,9 @@ function SourceAutomationEditor({
     await preflight.run(draft, event, { resetAck: true }).catch(() => {});
   }
 
+  const sourceEditorRef = useRef<HTMLDivElement>(null);
+  useModalFocus(sourceEditorRef);
+  useModalEscape(onClose);
   const action = item.id ? "Edit" : "Create";
   const title =
     trigger === "github_ci" ? `${action} GitHub automation (CI)`
@@ -1527,7 +1548,7 @@ function SourceAutomationEditor({
 
   return (
     <div className="wizard-scrim" onClick={onClose}>
-      <div className="wizard autom-editor" role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()}>
+      <div ref={sourceEditorRef} className="wizard autom-editor" role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()}>
         <div className="wizard-head">
           <strong>{title}</strong>
           <button type="button" className="btn ghost icon" onClick={onClose} aria-label="Cancel">✕</button>
@@ -1535,7 +1556,7 @@ function SourceAutomationEditor({
         <details className="autom-editor-actions">
           <summary className="btn sm" aria-label="Automation actions">Actions</summary>
           <div className="menu row-menu-pop" role="menu">
-            {onRunNow && <button type="button" className="menu-item" role="menuitem" onClick={() => void onRunNow(item)}>Run now</button>}
+            {onRunNow && <button type="button" className="menu-item" role="menuitem" disabled={runBusy} onClick={() => void onRunNow(item)}>{runBusy ? "Queueing…" : "Run now"}</button>}
             {onToggle && <button type="button" className="menu-item" role="menuitem" onClick={() => void onToggle(item)}>{enabled ? "Pause" : "Resume"}</button>}
             {onHistory && <button type="button" className="menu-item automation-history-btn" role="menuitem" onClick={() => onHistory(item.id)}>History</button>}
             {onSourceSetup && <button type="button" className="menu-item" role="menuitem" onClick={() => onSourceSetup(item)}>Source setup</button>}
@@ -1766,6 +1787,7 @@ function AutomationEditor({
   initial,
   existing,
   onRunNow,
+  runBusy,
   onToggle,
   onDelete,
   onHistory,
@@ -1781,6 +1803,7 @@ function AutomationEditor({
   sources: SourcesSnapshot;
   initial: Draft;
   existing?: AccountAutomation;
+  runBusy?: boolean;
   onRunNow?: (item: AccountAutomation) => void | Promise<void>;
   onToggle?: (item: AccountAutomation) => void | Promise<void>;
   onDelete?: (item: AccountAutomation) => void | Promise<void>;
@@ -1811,11 +1834,7 @@ function AutomationEditor({
   const instructionsRef = useRef<HTMLTextAreaElement>(null);
   const closeWithBack = useModalBack(onCancel);
   useModalEscape(closeWithBack);
-  useEffect(() => {
-    const opener = document.activeElement as HTMLElement | null;
-    editorRef.current?.querySelector<HTMLElement>("input, textarea, select, button")?.focus();
-    return () => opener?.focus?.();
-  }, []);
+  useModalFocus(editorRef);
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setD((prev) => ({ ...prev, [k]: v }));
   const preflight = useAutomationPreflight(d.id || undefined);
 
@@ -2061,7 +2080,7 @@ function AutomationEditor({
           <details className="autom-editor-actions">
             <summary className="btn sm" aria-label="Automation actions">Actions</summary>
             <div className="menu row-menu-pop" role="menu">
-              {onRunNow && <button type="button" className="menu-item" role="menuitem" onClick={() => void onRunNow(existing)}>{existing.trigger === "webhook" ? "Test run" : "Run now"}</button>}
+              {onRunNow && <button type="button" className="menu-item" role="menuitem" disabled={runBusy} onClick={() => void onRunNow(existing)}>{runBusy ? "Queueing…" : existing.trigger === "webhook" ? "Test run" : "Run now"}</button>}
               {onToggle && <button type="button" className="menu-item" role="menuitem" onClick={() => void onToggle(existing)}>{existing.enabled ? "Pause" : "Resume"}</button>}
               {onHistory && <button type="button" className="menu-item automation-history-btn" role="menuitem" onClick={() => onHistory(existing.id)}>History</button>}
               {existing.webhookUrl && <button type="button" className="menu-item" role="menuitem" onClick={() => { void copyText(existing.webhookUrl!); }}>Copy URL</button>}
@@ -2122,7 +2141,6 @@ function AutomationEditor({
                   onChange={(e) => set("name", e.target.value)}
                   placeholder="My automation"
                   aria-label="Name"
-                  autoFocus
                 />
               </div>
 
@@ -2471,12 +2489,13 @@ function AutomationEditor({
                   </div>
                   <div className="settings-field">
                     <label className="field-label" htmlFor="autom-approvals">Approvals</label>
-                    <select id="autom-approvals" className="picker-search" value={d.approvalMode} onChange={(e) => set("approvalMode", e.target.value as Draft["approvalMode"])}>
-                      <option value="autonomous">Autonomous (default; pauses only for high-risk actions)</option>
+                    <select id="autom-approvals" aria-describedby="autom-approval-help" className="picker-search" value={d.approvalMode} onChange={(e) => set("approvalMode", e.target.value as Draft["approvalMode"])}>
+                      <option value="autonomous">Autonomous (default)</option>
                       <option value="risky">Ask before risky actions</option>
                       <option value="always">Ask before every action</option>
                       <option value="never">Never ask</option>
                     </select>
+                    <p id="autom-approval-help" className="settings-hint">{d.approvalMode === "autonomous" ? "Runs unattended; pauses for high-risk actions." : d.approvalMode === "never" ? "Runs without asking for approval. Review the sandbox before enabling." : "Runs pause when approval is required. Keep a device available to respond."}</p>
                   </div>
                   <div className="settings-field">
                     <label className="field-label" htmlFor="autom-sandbox">Sandbox</label>

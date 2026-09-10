@@ -48,14 +48,54 @@ async function main() {
     const readopt = await createWorktree({ repoDir: dir, id: "issue-42", branch: "bivy/issue-42" });
     assert.equal(readopt.branch, "bivy/issue-42");
     assert.ok(fs.existsSync(path.join(readopt.path, "README.md")), "re-adopted worktree has repo contents");
+    // A retry must preserve all classes of local work, including the index.
+    fs.writeFileSync(path.join(readopt.path, "README.md"), "staged output\n");
+    await exec("git", ["-C", readopt.path, "add", "README.md"]);
+    fs.writeFileSync(path.join(readopt.path, "README.md"), "unstaged output\n");
+    fs.writeFileSync(path.join(readopt.path, "untracked.txt"), "keep me\n");
+    fs.writeFileSync(path.join(readopt.path, ".gitignore"), "ignored.txt\n");
+    fs.writeFileSync(path.join(readopt.path, "ignored.txt"), "keep me too\n");
+    const recovered = await createWorktree({ repoDir: dir, id: "issue-42", branch: readopt.branch });
+    assert.equal(recovered.path, readopt.path);
+    assert.equal(fs.readFileSync(path.join(recovered.path, "README.md"), "utf8"), "unstaged output\n");
+    assert.equal((await exec("git", ["-C", recovered.path, "show", ":README.md"])).stdout, "staged output\n");
+    assert.equal(fs.readFileSync(path.join(recovered.path, "untracked.txt"), "utf8"), "keep me\n");
+    assert.equal(fs.readFileSync(path.join(recovered.path, "ignored.txt"), "utf8"), "keep me too\n");
+    await assert.rejects(createWorktree({ repoDir: dir, id: "issue-42", branch: "bivy/wrong" }), /not on expected branch/);
+    assert.equal(fs.readFileSync(path.join(recovered.path, "README.md"), "utf8"), "unstaged output\n");
+
+    // Publish prior output, then recover on a fresh clone with no local branch.
+    await exec("git", ["-C", recovered.path, "commit", "-qm", "prior output"]);
+    const prior = (await exec("git", ["-C", recovered.path, "rev-parse", "HEAD"])).stdout;
+    // A manually reaped checkout leaves stale Git metadata, but its committed
+    // branch still needs to be recoverable without force-removing live data.
+    fs.rmSync(recovered.path, { recursive: true, force: true });
+    const reaped = await createWorktree({ repoDir: dir, id: "issue-42", branch: readopt.branch });
+    assert.equal((await exec("git", ["-C", reaped.path, "rev-parse", "HEAD"])).stdout, prior);
     await removeWorktree(readopt.repoRoot, readopt.path);
+    const remote = path.join(dir, ".bivy", "remote.git");
+    const fresh = path.join(dir, ".bivy", "fresh");
+    await exec("git", ["clone", "--bare", dir, remote]);
+    await exec("git", ["clone", remote, fresh]);
+    await assert.rejects(exec("git", ["-C", fresh, "show-ref", "--verify", `refs/heads/${readopt.branch}`]));
+    const remoteRecovered = await createWorktree({ repoDir: fresh, id: "issue-42", branch: readopt.branch });
+    assert.equal((await exec("git", ["-C", remoteRecovered.path, "rev-parse", "HEAD"])).stdout, prior);
+    assert.equal(fs.readFileSync(path.join(remoteRecovered.path, "README.md"), "utf8"), "staged output\n");
+    await removeWorktree(remoteRecovered.repoRoot, remoteRecovered.path);
+
+    // An unregistered directory collision must fail without deleting files.
+    const collision = path.join(dir, ".bivy", "worktrees", "collision");
+    fs.mkdirSync(collision);
+    fs.writeFileSync(path.join(collision, "keep.txt"), "unrelated data");
+    await assert.rejects(createWorktree({ repoDir: dir, id: "collision", branch: readopt.branch }));
+    assert.equal(fs.readFileSync(path.join(collision, "keep.txt"), "utf8"), "unrelated data");
 
     const fallback = await createWorktree({ repoDir: dir, id: "issue-99", branch: "bivy/issue-99", base: "bivy/does-not-exist" });
     assert.equal(fallback.branch, "bivy/issue-99");
     assert.ok(fs.existsSync(path.join(fallback.path, "README.md")), "invalid-base fallback has repo contents");
     await removeWorktree(fallback.repoRoot, fallback.path);
 
-    console.log("worktree: ok (slug, create, list, exclude, remove, re-adopt, invalid-base fallback)");
+    console.log("worktree: ok (create, local/remote recovery, dirty work preservation, collision safety, invalid-base fallback)");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

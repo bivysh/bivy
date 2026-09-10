@@ -1226,8 +1226,8 @@ export async function deleteAutomation(store: LocalStore, id: string, fetchImpl:
   if (!res.ok) throw new Error(`delete automation failed: ${res.status}`);
 }
 
-export function runAutomationNow(store: LocalStore, id: string, fetchImpl: typeof fetch = fetch): Promise<AccountAutomationRun> {
-  return automationRequest(store, `/account/automations/${encodeURIComponent(id)}/run`, { method: "POST" }, fetchImpl);
+export function runAutomationNow(store: LocalStore, id: string, fetchImpl: typeof fetch = fetch, sourceKey: string = crypto.randomUUID()): Promise<AccountAutomationRun> {
+  return automationRequest(store, `/account/automations/${encodeURIComponent(id)}/run`, { method: "POST", body: JSON.stringify({ sourceKey }) }, fetchImpl);
 }
 
 /** Queue one governed, unattended Run without creating an Automation definition.
