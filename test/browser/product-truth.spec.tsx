@@ -109,8 +109,8 @@ test("provider key save awaits an authoritative acknowledgement", async () => {
 
 test("global attention count reaches title and installed app badge", async () => {
   const source = await readFile(new URL("../../packages/web/src/App.tsx", import.meta.url), "utf8");
-  expect(source).toContain('document.title = count > 0 ? `(${count}) Bivy` : "Bivy"');
-  expect(source).toContain("setAppBadge?.(count)");
+  expect(source).toContain('document.title = titleCount > 0 ? `(${titleCount}) Bivy` : "Bivy"');
+  expect(source).toContain("setAppBadge?.(badgeCount)");
   expect(source).toContain("clearAppBadge?.()");
 });
 
