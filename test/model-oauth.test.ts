@@ -102,14 +102,24 @@ await check("Anthropic auth-code login persists a labeled OAuth account", async 
   assert.equal(await createCredentialVault(dir).read("anthropic"), undefined, "a named OAuth account does not overwrite the default");
 });
 
-await check("OpenAI Codex login extracts the account id from the JWT access token", async () => {
+await check("OpenAI Codex device-code login extracts the account id from the JWT access token", async () => {
   const dir = tmpDir();
+  let sawDeviceCode = false;
   stubFetch((call) => {
+    if (call.url === "https://auth.openai.com/api/accounts/deviceauth/usercode") {
+      assert.equal(call.body, JSON.stringify({ client_id: "app_EMoamEEZ73f0CkXaXp7hrann" }));
+      return { json: { device_auth_id: "dev", user_code: "OPENAI-CODE", interval: 0 } };
+    }
+    if (call.url === "https://auth.openai.com/api/accounts/deviceauth/token") {
+      return { json: { authorization_code: "auth-code", code_verifier: "verifier" } };
+    }
     assert.equal(call.url, "https://auth.openai.com/oauth/token");
     assert.ok(call.body.includes("grant_type=authorization_code"), "form-encoded body");
+    assert.ok(call.body.includes("redirect_uri=https%3A%2F%2Fauth.openai.com%2Fdeviceauth%2Fcallback"), "uses OpenAI device callback redirect");
     return { json: { access_token: fakeJwt("acct-42"), refresh_token: "rt", expires_in: 3600 } };
   });
-  await loginModelOAuth(dir, "openai-codex", pasteInteraction("https://localhost:1455/auth/callback?code=c&state=s"));
+  await loginModelOAuth(dir, "openai-codex", { notify: (e) => { if (e.type === "device_code") sawDeviceCode = true; }, prompt: async () => "" });
+  assert.ok(sawDeviceCode, "surfaced the device code to the user");
   const cred = await createCredentialVault(dir).read("openai-codex");
   assert.equal((cred as { accountId?: string }).accountId, "acct-42");
 });

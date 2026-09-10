@@ -7,12 +7,12 @@
 // not guesses. Owning these lets Bivy run the OAuth login + token refresh itself,
 // so no credential operation depends on Pi.
 //
-// Covered (fully Bivy-owned): Anthropic (Claude Pro/Max), OpenAI Codex (ChatGPT),
-// xAI (Grok). GitHub Copilot (two-stage token + dynamic base URL entangled with
+// Covered (fully Bivy-owned): Anthropic (Claude Pro/Max), OpenAI Codex (ChatGPT;
+// device-code), xAI (Grok). GitHub Copilot (two-stage token + dynamic base URL entangled with
 // Pi's request layer) and Radius (self-describing gateway) are intentionally not
 // reimplemented here.
 
-export type ModelOAuthFlow = "auth_code" | "device_code";
+export type ModelOAuthFlow = "auth_code" | "device_code" | "openai_codex_device_code";
 export type TokenEncoding = "json" | "form";
 
 export interface ModelOAuthProvider {
@@ -30,8 +30,12 @@ export interface ModelOAuthProvider {
   /** Local callback listener (auth_code flow). `redirectHost` is what goes into
    *  the redirect_uri sent to the provider (may differ from the bind host). */
   callback?: { port: number; path: string; redirectHost: string };
+  /** Hosted/non-loopback redirect URI for auth-code flows that display a paste-back code. */
+  redirectUri?: string;
   /** Device-authorization endpoint (device_code flow). */
   deviceAuthUrl?: string;
+  /** Provider-specific device-token polling endpoint, when it differs from tokenUrl. */
+  deviceTokenUrl?: string;
   /** Extra params appended to the authorize URL. */
   authorizeParams?: Record<string, string>;
   /** `state` sent to authorize equals the PKCE verifier (Anthropic). */
@@ -54,12 +58,16 @@ export const MODEL_OAUTH_PROVIDERS: Record<string, ModelOAuthProvider> = {
     id: "anthropic",
     displayName: "Anthropic (Claude Pro/Max)",
     clientId: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
-    scopes: "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload",
+    // Claude Code's `setup-token` flow avoids localhost entirely: Anthropic hosts
+    // the callback page and shows a code the user can paste back into Bivy. The
+    // resulting long-lived token is inference-only, which is exactly what agent
+    // model requests need and works well from a remote PWA/headless node.
+    scopes: "user:inference",
     flow: "auth_code",
     tokenEncoding: "json",
-    authorizeUrl: "https://claude.ai/oauth/authorize",
+    authorizeUrl: "https://claude.com/cai/oauth/authorize",
     tokenUrl: "https://platform.claude.com/v1/oauth/token",
-    callback: { port: 53692, path: "/callback", redirectHost: "localhost" },
+    redirectUri: "https://platform.claude.com/oauth/code/callback",
     authorizeParams: { code: "true" },
     stateIsVerifier: true,
     refreshSkewMs: 5 * 60 * 1000,
@@ -70,11 +78,13 @@ export const MODEL_OAUTH_PROVIDERS: Record<string, ModelOAuthProvider> = {
     displayName: "OpenAI (ChatGPT Plus/Pro)",
     clientId: "app_EMoamEEZ73f0CkXaXp7hrann",
     scopes: "openid profile email offline_access",
-    flow: "auth_code",
+    flow: "openai_codex_device_code",
     tokenEncoding: "form",
     authorizeUrl: "https://auth.openai.com/oauth/authorize",
     tokenUrl: "https://auth.openai.com/oauth/token",
     callback: { port: 1455, path: "/auth/callback", redirectHost: "localhost" },
+    deviceAuthUrl: "https://auth.openai.com/api/accounts/deviceauth/usercode",
+    deviceTokenUrl: "https://auth.openai.com/api/accounts/deviceauth/token",
     authorizeParams: {
       id_token_add_organizations: "true",
       codex_cli_simplified_flow: "true",
