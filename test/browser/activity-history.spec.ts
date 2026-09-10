@@ -21,6 +21,39 @@ test.beforeAll(async () => {
 test.afterAll(async () => { await server?.close(); });
 
 for (const theme of ["light", "dark"]) {
+  test(`${theme}: failed commands do not require attention`, async ({ page }, testInfo) => {
+    const html = await server.transformIndexHtml('/activity-test', `<!doctype html><html data-theme="${theme}"><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="root"></div>
+      <script type="module">
+        import { createElement as h } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import '/@fs/${fileURLToPath(new URL('../../packages/ui/tokens.css', import.meta.url))}';
+        import '/src/styles.css';
+        import { ToolGroup } from '/src/components/ToolGroup.tsx';
+        const failed = { callId: 'failed', name: 'bash', input: { command: 'false' }, status: 'done', detail: { kind: 'shell', command: 'false', result: { exitCode: 1 } } };
+        const running = { callId: 'running', name: 'bash', input: { command: 'pnpm test' }, status: 'running' };
+        const done = { callId: 'done', name: 'read', input: { path: 'README.md' }, status: 'done' };
+        createRoot(document.getElementById('root')).render(h('main', { className: 'chat-messages' },
+          ...[[failed], [failed, running], [done], [running]].map((tools, key) => h(ToolGroup, { key, tools }))));
+      </script></body></html>`);
+    await page.route(`${origin}/activity-test`, (route) => route.fulfill({ contentType: 'text/html', body: html }));
+    await page.goto(`${origin}/activity-test`);
+    await expect(page.locator('.tool-group-label')).toHaveText(['Worked', 'Working', 'Worked', 'Working']);
+    await expect(page.getByText('Needs attention')).toHaveCount(0);
+    const failed = page.getByRole('button', { name: /^Worked:.*1 failed.*Open work details$/ });
+    await expect(failed).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Working:.*1 failed.*Open work details$/ })).toBeVisible();
+    await page.keyboard.press('Tab');
+    await expect(failed).toBeFocused();
+    await page.screenshot({ path: testInfo.outputPath(`activity-outcomes-${theme}.png`) });
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('dialog')).toBeVisible();
+    await expect(page.locator('.activity-row')).toContainText('Failed');
+    await page.locator('.activity-row').click();
+    await expect(page.locator('.activity-detail')).toContainText('Failed · exit 1');
+    await page.keyboard.press('Escape');
+    await expect(failed).toBeFocused();
+  });
+
   for (const dismissal of ["backdrop", "close", "escape", "browser back", "rapid close", "nested"]) {
     test(`${theme}: activity ${dismissal} stays in the current session`, async ({ page }, testInfo) => {
       const html = await server.transformIndexHtml('/modal-test', `<!doctype html><html data-theme="${theme}"><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="root"></div>
