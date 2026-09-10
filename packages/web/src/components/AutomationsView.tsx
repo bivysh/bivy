@@ -441,11 +441,25 @@ const AUTOMATIONS_TABS: Array<{ label: string; section: AutomationsSection | nul
   { label: "Rulesets", section: "rulesets" },
 ];
 
-function automationCloudGate(me: AccountMe | null): { actions: NonNullable<NonNullable<AccountMe["extension"]>["actions"]> } | null {
+function automationCloudGate(me: AccountMe | null): { title: string; message: string; actions: NonNullable<NonNullable<AccountMe["extension"]>["actions"]> } | null {
   const extension = me?.extension;
   const automationFact = extension?.facts?.find((fact) => fact.id === "automations");
-  if (!extension || !automationFact || !/cloud required/i.test(automationFact.value)) return null;
-  return { actions: extension.actions ?? [] };
+  if (!extension || !automationFact) return null;
+  if (/cloud required/i.test(automationFact.value)) {
+    return {
+      title: "Hosted automations require Cloud",
+      message: "GitHub, schedules, and other hosted triggers can be configured, but incoming events are shown as blocked until this account is upgraded. Self-hosted control planes are not limited by Bivy Cloud billing.",
+      actions: extension.actions ?? [],
+    };
+  }
+  if (/\b0 left\b/i.test(automationFact.value)) {
+    return {
+      title: "Automation run limit reached",
+      message: `This account has used ${automationFact.value}. Upgrade or wait for the usage window to roll before new cloud automations can start.`,
+      actions: extension.actions ?? [],
+    };
+  }
+  return null;
 }
 
 export function AutomationsView({
@@ -982,8 +996,8 @@ export function AutomationsView({
         {cloudAutomationGate && (
           <div className="banner" data-tone="warn" role="status">
             <div className="banner-text">
-              <strong>Hosted automations require Cloud</strong>
-              <span>GitHub, schedules, and other hosted triggers can be configured, but incoming events are shown as blocked until this account is upgraded. Self-hosted control planes are not limited by Bivy Cloud billing.</span>
+              <strong>{cloudAutomationGate.title}</strong>
+              <span>{cloudAutomationGate.message}</span>
             </div>
             {cloudAutomationGate.actions.length > 0 && (
               <div className="banner-actions">

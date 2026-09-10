@@ -14,7 +14,7 @@ import { centralGithubAppConfig, centralInstallUrl, applyCentralInstallationEven
 import { matchGithubItemTrigger } from "./github-item-trigger.js";
 import { maybeAutoProvision, planAutoProvision, hostedExecutionReadiness, mintHostedInstallationToken, reapSettledHostedMachine, reconcileAllHostedMachines, reconcileAllReadyCapacity, sweepAllOrphanProviderResources, validateHostedProviderToken, markHostedMachineMilestone, EPHEMERAL_MILESTONES, ephemeralMachinesEnabled } from "./ephemeral-provisioner.js";
 import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecret, initializeHostedKeyring } from "./hosted-crypto.js";
-import { listAppInstallations, listInstallationRepositories, listInstallationBranches, getAppInstallation } from "./hosted-github-auth.js";
+import { listAppInstallations, listInstallationRepositories, listInstallationBranches, getAppInstallation, mintInstallationToken } from "./hosted-github-auth.js";
 import { correlateHostedSessions } from "./hosted-correlation.js";
 import { countActiveAccountSessions } from "./session-count.js";
 import { createStore } from "./store-factory.js";
@@ -163,11 +163,61 @@ async function parkAutomationRunForDeploymentDenial(accountId: string, item: { i
   });
   const current = patched ?? run;
   if (current) {
+    void notifyAutomationBlocked(accountId, current, reason);
+    void commentGitHubAutomationBlocked(current, reason).catch((error) => console.warn("[github] quota/policy comment failed", error));
     void notifyRelaysRunUpdated(accountId, {
       id: current.id, events: current.events, completedAt: current.completedAt,
       startedAt: current.startedAt, claimedAt: current.claimedAt, createdAt: current.createdAt,
     });
   }
+}
+
+async function notifyAutomationBlocked(accountId: string, run: AutomationRun, reason: string): Promise<void> {
+  const result = await sendPushToAccount(accountId, {
+    title: "Automation run blocked",
+    body: reason,
+    kind: "automation_blocked",
+    runId: run.id,
+    url: `/runs/${encodeURIComponent(run.id)}`,
+  });
+  if (result.sent > 0) {
+    await store.appendRunEvidence(accountId, run.id, {
+      notification: { status: "delivered", channel: "push", updatedAt: new Date().toISOString() },
+    }).catch(() => undefined);
+  }
+}
+
+async function commentGitHubAutomationBlocked(run: AutomationRun, reason: string): Promise<void> {
+  if (!run.source.startsWith("github:")) return;
+  const repo = run.sourceRef?.repo;
+  const issueNumber = run.sourceRef?.issueNumber;
+  if (!repo || !issueNumber) return;
+  const [owner, name] = repo.split("/");
+  if (!owner || !name) return;
+  const central = centralGithubAppConfig();
+  if (!central) return;
+  const installs = await store.listCentralGithubInstallations(run.accountId);
+  const install = installs.find((item) => item.githubAccount?.toLowerCase() === owner.toLowerCase()) ?? (installs.length === 1 ? installs[0] : undefined);
+  if (!install) return;
+  let minted;
+  try {
+    minted = await mintInstallationToken({ appId: central.appId, installationId: install.installationId, privateKeyPem: central.privateKeyPem }, fetch, undefined, { repositories: [name] });
+  } catch {
+    minted = await mintInstallationToken({ appId: central.appId, installationId: install.installationId, privateKeyPem: central.privateKeyPem });
+  }
+  const marker = `<!-- bivy:automation-blocked:${run.id} -->`;
+  const headers = { accept: "application/vnd.github+json", authorization: `Bearer ${minted.token}`, "x-github-api-version": "2022-11-28" };
+  const existing = await fetch(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/issues/${issueNumber}/comments?per_page=100`, { headers }).catch(() => undefined);
+  if (existing?.ok) {
+    const comments = await existing.json().catch(() => []) as Array<{ body?: string }>;
+    if (comments.some((comment) => comment.body?.includes(marker))) return;
+  }
+  const body = `🤖 Bivy queued this automation run, but it is blocked by account policy or usage limits.\n\n${reason}\n\nOpen Bivy to upgrade or retry the run after adjusting the account.\n\n${marker}`;
+  await fetch(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/issues/${issueNumber}/comments`, {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify({ body }),
+  });
 }
 
 async function notifyWorkAvailableOrParkForPlan(accountId: string, item: { id: string; label: string; source?: string }): Promise<{ blocked: boolean; reason?: string }> {
@@ -3278,8 +3328,8 @@ app.post("/account/automation-runs/:id/retry", asyncHandler(async (req, res) => 
       : "This Run is not retryable in its current state.";
     return res.status(409).json({ error: message, reason: result.reason, run: result.run });
   }
-  void notifyRelaysWorkAvailable(client.accountId, { id: result.run.id, label: result.run.routing.nodeLabel });
-  res.json({ ok: true, run: result.run });
+  const admission = await notifyWorkAvailableOrParkForPlan(client.accountId, { id: result.run.id, label: result.run.routing.nodeLabel, source: result.run.source });
+  res.json(admission.blocked ? { ok: true, blocked: true, reason: admission.reason, run: result.run } : { ok: true, run: result.run });
 }));
 
 app.post("/account/automation-runs", asyncHandler(async (req, res) => {

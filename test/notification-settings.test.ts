@@ -23,6 +23,7 @@ setNotificationPreferencesSnapshot({
   session_done: true,
   session_error: true,
   terminal_bell: true,
+  automation_blocked: true,
 });
 assert.equal(listeners.length, 1);
 const first = getNotificationPreferencesSnapshot();

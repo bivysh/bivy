@@ -3003,9 +3003,10 @@ export class PostgresStore implements ControlPlaneStore {
       const events = Array.isArray(current.events) ? current.events : [];
       const failedCheck = checks.some((check: RunCheck) => check.status === "failed");
       const explicitNoChanges = events.some((event: RunEvidenceEvent) => /no (file )?changes/i.test(event.summary));
+      const policyDenied = events.some((event: RunEvidenceEvent) => event.kind === "policy_denial");
       const hasArtifact = Boolean(output.branch || output.commit || output.prUrl || output.checkpoint || output.artifactUrl);
       const ambiguousSuccess = current.status === "succeeded" && !failedCheck && !explicitNoChanges && !hasArtifact;
-      const eligible = current.status === "failed" || failedCheck || ambiguousSuccess;
+      const eligible = current.status === "failed" || failedCheck || ambiguousSuccess || (current.status === "needs_attention" && policyDenied);
       if (!eligible) {
         await client.commit();
         return { run: mapAutomationRun(current), transitioned: false, reason: "not_retryable" };
