@@ -153,7 +153,7 @@ test("GitHub trigger setup offers hosted and custom apps without losing the draf
 // Component fixtures below inject model/runtime events directly into the store.
 // Picker mount still asks the controller for these lists; no daemon is running.
 test.beforeEach(async ({ page }) => {
-  for (const endpoint of ["runtimes", "models"]) {
+  for (const endpoint of ["runtimes", "models", "auth/providers", "auth/credentials", "auth/credential-assignments"]) {
     await page.route(new RegExp(`/api/${endpoint}(?:\\?|$)`), route => route.fulfill({
       status: 503, json: { error: "Lists supplied by the component fixture" },
     }));
