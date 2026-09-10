@@ -15,7 +15,8 @@ test("configured policy forwards opaque operations and fails closed", async () =
     requests.push({ url: String(url), init });
     return new Response(JSON.stringify({ allowed: false, code: "quota_exhausted", actions: [{ id: "checkout-cloud", label: "Buy Cloud", kind: "primary" }] }), { status: 429, headers: { "content-type": "application/json" } });
   });
-  assert.deepEqual(await extension.authorize("a", "automation.run", "r1"), { allowed: false, code: "quota_exhausted", actions: [{ id: "checkout-cloud", label: "Buy Cloud", kind: "primary" }] });
+  assert.deepEqual(await extension.authorize("a", "automation.run", "r1", { source: "github:issue" }), { allowed: false, code: "quota_exhausted", actions: [{ id: "checkout-cloud", label: "Buy Cloud", kind: "primary" }] });
+  assert.equal(JSON.parse(String(requests[0]?.init?.body)).context.source, "github:issue");
   assert.equal(requests[0]?.url, "https://policy.example/v1/policy/check");
   assert.equal(requests[0]?.init?.headers && (requests[0].init.headers as Record<string, string>).authorization, "Bearer secret");
 });

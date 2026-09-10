@@ -26,7 +26,7 @@ import { safeReturnPath } from "./redirect.js";
 import { register, httpMetricsMiddleware, bindRelayTicketMetrics, startUsageCollector, recordFunnelEvent, recordDurableRunLifecycleResult, recordRunFailureStage, classifyRunFailureStage, recordProductEvent, PRODUCT_EVENT_VALUES, PRODUCT_CLIENT_VALUES, type ProductEvent, type ProductClient } from "./metrics.js";
 import { initSentry } from "./instrument.js";
 import { sanitizeEvidencePatch } from "./run-evidence.js";
-import { DeploymentExtension, type DeploymentOperation } from "./deployment-extension.js";
+import { DeploymentExtension, type DeploymentOperation, type DeploymentPolicyContext } from "./deployment-extension.js";
 import {
   verifyGithubSignature,
   verifyLinearSignature,
@@ -131,8 +131,8 @@ process.on("unhandledRejection", (reason) => {
 const store = await createStore();
 const deploymentExtension = new DeploymentExtension();
 
-async function deploymentDecision(accountId: string, operation: DeploymentOperation, idempotencyKey?: string) {
-  const decision = await deploymentExtension.authorize(accountId, operation, idempotencyKey);
+async function deploymentDecision(accountId: string, operation: DeploymentOperation, idempotencyKey?: string, context: DeploymentPolicyContext = {}) {
+  const decision = await deploymentExtension.authorize(accountId, operation, idempotencyKey, context);
   return decision;
 }
 
@@ -170,8 +170,8 @@ async function parkAutomationRunForDeploymentDenial(accountId: string, item: { i
   }
 }
 
-async function notifyWorkAvailableOrParkForPlan(accountId: string, item: { id: string; label: string }): Promise<{ blocked: boolean; reason?: string }> {
-  const decision = await deploymentDecision(accountId, "automation.run", item.id);
+async function notifyWorkAvailableOrParkForPlan(accountId: string, item: { id: string; label: string; source?: string }): Promise<{ blocked: boolean; reason?: string }> {
+  const decision = await deploymentDecision(accountId, "automation.run", item.id, { source: item.source });
   if (decision.allowed) {
     void notifyRelaysWorkAvailable(accountId, item);
     return { blocked: false };
@@ -198,7 +198,7 @@ try {
 const automationScheduler = new AutomationScheduler(
   store,
   Math.max(1_000, Number(process.env.AUTOMATION_SCHEDULER_INTERVAL_MS) || 15_000),
-  (accountId, run) => void notifyWorkAvailableOrParkForPlan(accountId, { id: run.id, label: run.routing.nodeLabel }).catch((error) => console.error("automation schedule admission failed", error)),
+  (accountId, run) => void notifyWorkAvailableOrParkForPlan(accountId, { id: run.id, label: run.routing.nodeLabel, source: run.source }).catch((error) => console.error("automation schedule admission failed", error)),
 );
 automationScheduler.start();
 
@@ -3916,7 +3916,7 @@ app.post("/webhooks/automation/run/:definitionId", asyncHandler(async (req, res)
   if (!result.created) {
     return res.status(200).json({ code: "duplicate", id: result.run.id });
   }
-  const admission = await notifyWorkAvailableOrParkForPlan(def.accountId, { id: result.run.id, label: result.run.routing.nodeLabel });
+  const admission = await notifyWorkAvailableOrParkForPlan(def.accountId, { id: result.run.id, label: result.run.routing.nodeLabel, source: result.run.source });
   res.status(202).json(admission.blocked
     ? { code: "blocked", id: result.run.id, label: result.run.routing.nodeLabel, reason: admission.reason }
     : { code: "accepted", id: result.run.id, label: result.run.routing.nodeLabel });
@@ -4340,7 +4340,7 @@ app.post("/node/work/:id/claim", requireNode, asyncHandler(async (req, res) => {
   const id = String(req.params.id);
   const pending = await store.getAutomationRun(node.accountId, id);
   if (!pending || ["succeeded", "failed", "cancelled", "needs_attention"].includes(pending.status)) return res.status(409).json({ error: "Already claimed or unknown" });
-  const admission = await deploymentDecision(node.accountId, "automation.run", id);
+  const admission = await deploymentDecision(node.accountId, "automation.run", id, { source: pending.source });
   if (!admission.allowed) {
     await parkAutomationRunForDeploymentDenial(node.accountId, { id }, admission);
     return res.status(409).json({ error: admission.reason || "Automation run is blocked by account policy", code: admission.code || "policy_denial" });
