@@ -883,6 +883,8 @@ export interface AutomationRun {
   completedAt?: string;
 }
 export interface WorkItem {
+  /** Returned only by claim; never included in account/run history. */
+  claimToken?: string;
   id: string;
   accountId: string;
   label: string; // routing label; a node only pulls items whose label it serves
@@ -1600,7 +1602,7 @@ export interface AutomationRepository {
    *  so a Machine that lost its lease to a reclaim cannot complete or fail the
    *  new attempt in the read-then-write window. Returns undefined when the
    *  transition was not applied (wrong source state or ownership lost). */
-  transitionAutomationRun(accountId: string, id: string, status: AutomationRunStatus, output?: AutomationRun["output"], expectedNodeId?: string): Promise<AutomationRun | undefined>;
+  transitionAutomationRun(accountId: string, id: string, status: AutomationRunStatus, output?: AutomationRun["output"], expectedNodeId?: string, claimToken?: string): Promise<AutomationRun | undefined>;
   /** Account-scoped, transactional cancellation. Already-cancelled runs are
    *  returned idempotently; callers inspect previousStatus for terminal conflicts. */
   cancelAutomationRun(accountId: string, id: string): Promise<CancelAutomationRunResult | undefined>;
@@ -1613,7 +1615,7 @@ export interface AutomationRepository {
   // declared-check results, and new timeline events. `checks`/`events` in the
   // patch are appended to the run's existing history (bounded), never replacing
   // it. Returns undefined for an unknown run.
-  appendRunEvidence(accountId: string, id: string, patch: RunEvidencePatch, expectedNodeId?: string): Promise<AutomationRun | undefined>;
+  appendRunEvidence(accountId: string, id: string, patch: RunEvidencePatch, expectedNodeId?: string, claimToken?: string): Promise<AutomationRun | undefined>;
 }
 
 export interface WorkQueueRepository {
@@ -1623,9 +1625,11 @@ export interface WorkQueueRepository {
   listPendingWorkItems(accountId: string, labels: string[]): Promise<WorkItem[]>;
   // Recent work items for the account (any status) — powers the incoming-queue UI.
   listWorkItems(accountId: string, limit?: number): Promise<WorkItem[]>;
-  claimWorkItem(accountId: string, nodeId: string, id: string): Promise<WorkItem | undefined>;
+  claimWorkItem(accountId: string, nodeId: string, id: string, claimToken?: string): Promise<WorkItem | undefined>;
+  ownsWorkClaim(accountId: string, nodeId: string, id: string, token: string): Promise<boolean>;
+  advanceWorkItemAttempt(accountId: string, nodeId: string, id: string, claimToken: string, expectedAttempt: number): Promise<WorkItem | undefined>;
   /** Extend a claimed/running item's lease only when this node still owns it. */
-  renewWorkItemLease(accountId: string, nodeId: string, id: string): Promise<WorkItem | undefined>;
+  renewWorkItemLease(accountId: string, nodeId: string, id: string, claimToken?: string): Promise<WorkItem | undefined>;
   // Delete expired rows from every short-lived, single-use auth artifact table
   // (login_tokens, sessions, link_grants, relay_tickets, device_logins,
   // oauth_states, and expired auth_rate_limits). Each of
@@ -1635,7 +1639,7 @@ export interface WorkQueueRepository {
   // an interval by the control plane. Returns
   // how many rows were removed in total.
   pruneExpiredAuthTokens(nowIso: string): Promise<number>;
-  completeWorkItem(accountId: string, id: string, expectedNodeId?: string): Promise<AutomationRun | undefined>;
+  completeWorkItem(accountId: string, id: string, expectedNodeId?: string, claimToken?: string): Promise<AutomationRun | undefined>;
   // Re-route every *pending* item that landed on the shared/default queue
   // (defaultRouted === true) to `label` — used when the account's default node
   // changes so already-queued work follows the new default. Returns the updated items.

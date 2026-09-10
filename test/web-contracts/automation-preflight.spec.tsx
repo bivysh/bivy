@@ -102,7 +102,7 @@ test("account automation creation rejects unsupported trigger values instead of 
 test("choosing a GitHub trigger does not auto-title a scratch automation", async () => {
   const view = await read("../../packages/web/src/components/AutomationsView.tsx");
   expect(view).toContain('name: current.name.trim() ? current.name : opts?.keepExistingName ? existing.name : ""');
-  expect(view).toContain('{ keepExistingName: true }');
+  expect(view).toContain('{ keepExistingName: true, definition: item }');
 });
 
 test("source automation priority is visible and reorderable because first match wins", async () => {

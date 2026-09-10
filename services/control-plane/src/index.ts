@@ -2601,10 +2601,18 @@ function nodePublicAutomation(definition: AutomationDefinition, req: Request) {
   return safe;
 }
 
-async function dispatchAutomationDefinition(definition: AutomationDefinition) {
+function dispatchKey(req: Request): string | undefined {
+  const key = req.body?.sourceKey;
+  if (key === undefined) return undefined;
+  if (typeof key !== 'string' || !/^[a-zA-Z0-9:_-]{1,128}$/.test(key)) throw Object.assign(new Error('Invalid sourceKey'), { status: 400 });
+  return key;
+}
+
+async function dispatchAutomationDefinition(definition: AutomationDefinition, sourceKey?: string) {
   const run = await store.enqueueAutomationRun(definition.accountId, {
     source: "manual",
     triggerKind: "manual",
+    dedupeKey: sourceKey ? `manual:${definition.id}:${sourceKey}` : undefined,
     title: definition.name,
     body: definition.templateCiphertext,
     definitionId: definition.id,
@@ -2634,7 +2642,7 @@ app.post("/node/automations/:id/run", requireNode, asyncHandler(async (req, res)
   const node = (req as Request & { node: NodeRecord }).node;
   const definition = await store.getAutomationDefinition(node.accountId, String(req.params.id));
   if (!definition) return res.status(404).json({ error: "Automation not found" });
-  res.status(201).json(await dispatchAutomationDefinition(definition));
+  res.status(201).json(await dispatchAutomationDefinition(definition, dispatchKey(req)));
 }));
 
 // Bound credential-bearing automation writes without rate-limiting reads or
@@ -3240,7 +3248,7 @@ app.post("/account/automations/:id/run", asyncHandler(async (req, res) => {
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const definition = await store.getAutomationDefinition(client.accountId, String(req.params.id));
   if (!definition) return res.status(404).json({ error: "Automation not found" });
-  res.status(201).json(await dispatchAutomationDefinition(definition));
+  res.status(201).json(await dispatchAutomationDefinition(definition, dispatchKey(req)));
 }));
 
 app.get("/account/automation-runs", asyncHandler(async (req, res) => {
@@ -4384,6 +4392,15 @@ app.get("/node/work", requireNode, asyncHandler(async (req, res) => {
   res.json({ items });
 }));
 
+const workClaimToken = (req: Request): string => req.get('x-bivy-work-claim') || '';
+const requireWorkClaim = asyncHandler(async (req, res, next) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  if (!await store.ownsWorkClaim(node.accountId, node.id, String(req.params.id), workClaimToken(req))) {
+    return res.status(409).json({ error: 'Run claim is no longer owned by this worker' });
+  }
+  next();
+});
+
 // Claim one item (atomic; only one node wins). Returns the item or 409 if taken.
 app.post("/node/work/:id/claim", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
@@ -4395,7 +4412,9 @@ app.post("/node/work/:id/claim", requireNode, asyncHandler(async (req, res) => {
     await parkAutomationRunForDeploymentDenial(node.accountId, { id }, admission);
     return res.status(409).json({ error: admission.reason || "Automation run is blocked by account policy", code: admission.code || "policy_denial" });
   }
-  const item = await store.claimWorkItem(node.accountId, node.id, id);
+  const token = workClaimToken(req);
+  if (token && !/^[a-zA-Z0-9-]{16,128}$/.test(token)) return res.status(400).json({ error: 'Invalid claim token' });
+  const item = await store.claimWorkItem(node.accountId, node.id, id, token || undefined);
   if (!item) return res.status(409).json({ error: "Already claimed or unknown" });
   void notifyRelaysRunUpdated(node.accountId, {
     id: item.id, events: item.events, completedAt: item.completedAt,
@@ -4406,10 +4425,19 @@ app.post("/node/work/:id/claim", requireNode, asyncHandler(async (req, res) => {
 
 // Renew finite ownership while a live node is working. If the node/process dies,
 // heartbeats stop and list/claim may atomically reclaim the item after expiry.
-app.post("/node/work/:id/heartbeat", requireNode, asyncHandler(async (req, res) => {
+app.post("/node/work/:id/attempt", requireNode, requireWorkClaim, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const expected = req.body?.attempt;
+  if (!Number.isInteger(expected) || expected < 1 || !workClaimToken(req)) return res.status(400).json({ error: 'A fenced claim and expected attempt are required' });
+  const item = await store.advanceWorkItemAttempt(node.accountId, node.id, String(req.params.id), workClaimToken(req), expected);
+  if (!item) return res.status(409).json({ error: 'Attempt limit reached or claim expired' });
+  res.json({ ok: true, item });
+}));
+
+app.post("/node/work/:id/heartbeat", requireNode, requireWorkClaim, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const id = String(req.params.id);
-  const item = await store.renewWorkItemLease(node.accountId, node.id, id);
+  const item = await store.renewWorkItemLease(node.accountId, node.id, id, workClaimToken(req));
   if (!item) {
     // Cancellation retains claimedByNodeId only as an ownership tombstone, so
     // the active worker gets an actionable stop reason without exposing another
@@ -4423,14 +4451,15 @@ app.post("/node/work/:id/heartbeat", requireNode, asyncHandler(async (req, res) 
   res.json({ ok: true, leaseExpiresAt: item.leaseExpiresAt });
 }));
 
-app.post("/node/work/:id/complete", requireNode, asyncHandler(async (req, res) => {
+app.post("/node/work/:id/complete", requireNode, requireWorkClaim, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const id = String(req.params.id);
   const current = await store.getAutomationRun(node.accountId, id);
   if (!current || current.claimedByNodeId !== node.id) {
     return res.status(409).json({ error: "Run is not owned by this node" });
   }
-  const run = await store.completeWorkItem(node.accountId, id, node.id);
+  if (workClaimToken(req) && current.status === 'succeeded') return res.json({ ok: true, run: current });
+  const run = await store.completeWorkItem(node.accountId, id, node.id, workClaimToken(req));
   // A no-op means the Run already reached a terminal outcome (e.g. cancelled) or
   // was reclaimed out from under this node in the read-then-write window. Report
   // the conflict instead of a false success, and never emit a lifecycle metric
@@ -4444,27 +4473,28 @@ app.post("/node/work/:id/complete", requireNode, asyncHandler(async (req, res) =
   res.json({ ok: true, run });
 }));
 
-app.post("/node/work/:id/running", requireNode, asyncHandler(async (req, res) => {
+app.post("/node/work/:id/running", requireNode, requireWorkClaim, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const id = String(req.params.id);
   const current = await store.getAutomationRun(node.accountId, id);
   if (!current || current.claimedByNodeId !== node.id || current.status !== "claimed") {
     return res.status(409).json({ error: "Run is not claimed by this node" });
   }
-  const run = await store.transitionAutomationRun(node.accountId, id, "running", undefined, node.id);
+  const run = await store.transitionAutomationRun(node.accountId, id, "running", undefined, node.id, workClaimToken(req));
   if (!run) return res.status(409).json({ error: "Run is no longer claimed by this node" });
   void notifyRelaysRunUpdated(node.accountId, run);
   res.json({ ok: true, run });
 }));
 
-app.post("/node/work/:id/fail", requireNode, asyncHandler(async (req, res) => {
+app.post("/node/work/:id/fail", requireNode, requireWorkClaim, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const id = String(req.params.id);
   const current = await store.getAutomationRun(node.accountId, id);
   if (!current || current.claimedByNodeId !== node.id) {
     return res.status(409).json({ error: "Run is not owned by this node" });
   }
-  const run = await store.transitionAutomationRun(node.accountId, id, "failed", undefined, node.id);
+  if (workClaimToken(req) && current.status === 'failed') return res.json({ ok: true, run: current });
+  const run = await store.transitionAutomationRun(node.accountId, id, "failed", undefined, node.id, workClaimToken(req));
   // No-op → already terminal or reclaimed away. A terminal outcome is immutable,
   // so report the conflict rather than counting a second lifecycle result.
   if (!run) return res.status(409).json({ error: "Run already reached a terminal outcome or was reclaimed" });
@@ -4479,14 +4509,15 @@ app.post("/node/work/:id/fail", requireNode, asyncHandler(async (req, res) => {
 // surfaced rather than silently failed. Transitions running/claimed →
 // needs_attention (which auto-stamps a `needs_attention` timeline event). The
 // node should first POST the reason as a bounded evidence event.
-app.post("/node/work/:id/needs-attention", requireNode, asyncHandler(async (req, res) => {
+app.post("/node/work/:id/needs-attention", requireNode, requireWorkClaim, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const id = String(req.params.id);
   const current = await store.getAutomationRun(node.accountId, id);
   if (!current || current.claimedByNodeId !== node.id) {
     return res.status(409).json({ error: "Run is not owned by this node" });
   }
-  const run = await store.transitionAutomationRun(node.accountId, id, "needs_attention", undefined, node.id);
+  if (workClaimToken(req) && current.status === 'needs_attention') return res.json({ ok: true, run: current });
+  const run = await store.transitionAutomationRun(node.accountId, id, "needs_attention", undefined, node.id, workClaimToken(req));
   // No-op → already terminal (a finished Run stays finished) or reclaimed away.
   if (!run) return res.status(409).json({ error: "Run already reached a terminal outcome or was reclaimed" });
   recordDurableRunLifecycleResult(run, "needs_attention");
@@ -4503,7 +4534,7 @@ app.post("/node/work/:id/needs-attention", requireNode, asyncHandler(async (req,
 // payload and storage — it allowlists every field and rejects anything that
 // looks like a prompt, transcript, diff, file content, secret, token, or raw
 // command/tool output outright (400, not a silent drop).
-app.post("/node/work/:id/evidence", requireNode, asyncHandler(async (req, res) => {
+app.post("/node/work/:id/evidence", requireNode, requireWorkClaim, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const id = String(req.params.id);
   const current = await store.getAutomationRun(node.accountId, id);
@@ -4516,7 +4547,7 @@ app.post("/node/work/:id/evidence", requireNode, asyncHandler(async (req, res) =
   } catch (error) {
     return res.status(400).json({ error: (error as Error).message });
   }
-  const run = await store.appendRunEvidence(node.accountId, id, patch, node.id);
+  const run = await store.appendRunEvidence(node.accountId, id, patch, node.id, workClaimToken(req));
   if (!run) return res.status(409).json({ error: "Run ownership changed before evidence was persisted" });
   void notifyRelaysRunUpdated(node.accountId, run);
   res.json({ ok: true, run });

@@ -69,25 +69,36 @@ session. Existing automations with no pins keep their previous behavior.
 
 ## Outcome finality, retry, and reclaim
 
-Every accepted run reaches **exactly one** durable terminal outcome —
-`succeeded`, `failed`, or `cancelled` — and that outcome is **immutable**. The
-lifecycle state machine only allows a terminal state to be entered from a
-non-terminal one, so no later or losing Machine can rewrite a finished run. The
+Each attempt has a durable terminal outcome — `succeeded`, `failed`, or
+`cancelled` — which stale worker reports cannot rewrite. An explicit operator
+retry may reopen an eligible failed/ambiguous run as a **new attempt**, retaining
+its earlier timeline. Cancelled and actively executing runs are never retryable,
+including when their evidence contains failed checks. The lifecycle state machine
+only accepts worker terminal transitions from non-terminal states. The
 client derives the finer customer outcome (`PR open`, `Checks failed`, `Needs
 review`, …) from evidence; the durable terminal state underneath it never flips.
 
 **Attempts.** `attempt` starts at 1. The first claim of a `pending` run keeps
-attempt 1. A **reclaim** of an expired lease increments it. Every attempt belongs
-to the **same customer-visible run** — a retry is not a second run.
+that attempt. A **reclaim** of an expired lease increments it. Current workers
+also reserve policy retries/fallbacks with the control plane before invoking the
+agent again; request redelivery does not reserve another attempt. The configured
+`maxAttempts` ceiling applies across operator retries, policy retries, restarts,
+and reclaims (default ceiling 10 when unset). Exhausted reclaims park for review.
+Every attempt belongs to the **same customer-visible run** — a retry is not a
+second run.
 
 **Leases and reclaim.** The winning Machine renews a finite lease (default two
 minutes, `BIVY_WORK_LEASE_MS`) roughly every 30 seconds. If it stops renewing
 (crash, network loss, teardown), the run becomes reclaimable once the lease
 expires and another eligible node claims it as the next attempt. The Machine that
-lost the lease is **fenced**: because ownership is checked on every node call and
-terminal transitions are additionally scoped to the current claimant, a stale
-Machine's heartbeat, `running`, `complete`, `fail`, `needs-attention`, and
-evidence writes are all rejected (`409`) once it is no longer the claimant. It
+lost the lease is **fenced**: current workers send a unique `x-bivy-work-claim`
+generation on claim and every subsequent mutation. Replacing a process on the
+same enrolled Machine also replaces that generation, so an old process cannot
+renew or finish the new process's claim. A stale Machine's heartbeat, `running`,
+`complete`, `fail`, `needs-attention`, and evidence writes are rejected (`409`)
+once its generation is no longer current. Workers bound their HTTP requests and
+abort execution before the last confirmed lease expires if renewal fails; a
+network error does not authorize indefinite execution. It
 therefore cannot complete, fail, or otherwise overwrite the new attempt.
 
 **Cancellation precedence.** Cancellation is itself a terminal outcome that
@@ -97,9 +108,12 @@ transition anything, it records **no** lifecycle-result metric. Only real,
 persisted transitions are counted, so a blocked completion cannot inflate the
 `succeeded` outcome counter.
 
-**Idempotent intake.** Duplicate trigger delivery (a redelivered webhook, a
-repeated manual dispatch) collapses to a single run via the per-account
-source/dedupe key: re-enqueuing the same key returns the existing run rather than
+**Idempotent intake.** Duplicate trigger delivery (a redelivered webhook, or a
+manual dispatch repeated with the same `sourceKey`) collapses to a single run via
+the per-account source/dedupe key. The app disables Run now while dispatching and
+reuses its action key after an uncertain failure; a subsequent intentional run
+gets a new key. Definition dispatch accepts a bounded `sourceKey` on both account
+and node APIs: re-enqueuing the same key returns the existing run rather than
 creating a second one. Hosted allowance usage is likewise recorded once per run
 key, so reconnects and reclaims never inflate the run count.
 
@@ -117,9 +131,27 @@ not duplicate what a reader sees on GitHub:
 - **Pull requests** are opened by the agent, then adopted by branch; a run whose
   issue branch already produced a merged PR is skipped rather than re-run.
 
-Known limitation: Slack/schedule/generic-webhook repo runs still use a random
-branch name per run, so their branch/PR effects are not yet idempotent across a
-reclaim on a fresh process. That path is tracked separately.
+Slack/schedule/generic-webhook repo runs use a deterministic `bivy/run-…` output
+branch derived from the durable Run ID. Recovery adopts the existing local or
+remote branch rather than creating a new randomly named output branch. Arbitrary
+agent-controlled external effects are still **at least once**, not transactional:
+fencing and stable branches cannot guarantee exactly-once comments, API calls,
+or spending during process failure or a network partition.
+
+**Durable result delivery.** Current daemons persist a metadata-only terminal
+intent under `work-results/` in their data directory before posting the result.
+Transient delivery failures retry the acknowledgement, not the agent, while the
+lease remains confirmed. On restart, reconciliation runs before queue intake.
+The server acknowledges repeated delivery from the same claim without appending
+another outcome or incrementing lifecycle metrics. An unchanged expired claim
+may still deliver its saved result, but it cannot renew or resume execution;
+once another generation owns the run, the old result is fenced out.
+
+**Rollout compatibility.** Deploy the control plane first, then update runners.
+Legacy workers remain supported on unfenced claims, but do not gain generation
+fencing, server-reserved policy retries, deadline aborts, or durable outcome
+reconciliation. Upgrade all unattended runners before relying on those guarantees.
+Existing pre-upgrade random output branches are not renamed automatically.
 
 **Metrics.** Outcomes are counted with fixed, low-cardinality labels only:
 `bivy_run_lifecycle_results_total{outcome}` (succeeded / failed / needs_attention

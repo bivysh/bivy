@@ -17,6 +17,8 @@
  * here; the actual run is injected so the daemon keeps the agent wiring.
  */
 
+import { randomUUID } from "node:crypto";
+import { WorkResultOutbox, type WorkResult } from "./work-result-outbox.js";
 import type { RunDecision, RunPolicy } from "./policy/run-policy.js";
 import { RemoteSessionAdmissionError } from "./session/remote-session-admission.js";
 
@@ -32,6 +34,7 @@ export interface ControlPlaneTaskConfig {
 }
 
 export interface WorkItem {
+  claimToken?: string;
   id: string;
   label: string;
   source: string; // "github:issue" | "github:comment" | "linear:issue" | "slack"
@@ -137,11 +140,22 @@ export function resolveControlPlaneTaskConfig(
   };
 }
 
-async function cp(cfg: ControlPlaneTaskConfig, method: string, path: string): Promise<Response> {
+async function cp(cfg: ControlPlaneTaskConfig, method: string, path: string, claimToken?: string, body?: unknown): Promise<Response> {
   return fetch(`${cfg.controlPlaneUrl}${path}`, {
     method,
-    headers: { authorization: `Bearer ${cfg.enrollmentToken}` },
+    signal: AbortSignal.timeout(10_000),
+    headers: { authorization: `Bearer ${cfg.enrollmentToken}`, 'content-type': 'application/json', ...(claimToken ? { 'x-bivy-work-claim': claimToken } : {}) },
+    body: body === undefined ? undefined : JSON.stringify(body),
   });
+}
+
+async function sendWorkResult(cfg: ControlPlaneTaskConfig, result: WorkResult): Promise<'acknowledged' | 'lost' | 'retry'> {
+  try {
+    const res = await cp(cfg, 'POST', `/node/work/${encodeURIComponent(result.id)}/${result.action}`, result.claimToken);
+    if (res.ok) return 'acknowledged';
+    if (res.status === 409 || res.status === 404) return 'lost';
+  } catch { /* Outbox retains the intent; retry delivery without agent work. */ }
+  return 'retry';
 }
 
 async function transitionWork(cfg: ControlPlaneTaskConfig, id: string, action: string): Promise<void> {
@@ -166,10 +180,12 @@ export async function fetchPendingWork(cfg: ControlPlaneTaskConfig): Promise<Wor
   return Array.isArray(data.items) ? data.items : [];
 }
 
-/** Atomically claim an item. Returns true only if THIS node won the claim. */
-export async function claimWork(cfg: ControlPlaneTaskConfig, id: string): Promise<boolean> {
-  const res = await cp(cfg, "POST", `/node/work/${encodeURIComponent(id)}/claim`);
-  return res.ok;
+/** Consume the authoritative claim snapshot, not the earlier queue listing. */
+export async function claimWork(cfg: ControlPlaneTaskConfig, id: string): Promise<WorkItem | undefined> {
+  const res = await cp(cfg, "POST", `/node/work/${encodeURIComponent(id)}/claim`, randomUUID());
+  if (!res.ok) return undefined;
+  const data = await res.json() as { item?: WorkItem };
+  return data.item ?? { id } as WorkItem; // compatibility with older control planes
 }
 
 export type WorkLeaseRenewal = "renewed" | "cancelled" | "lost";
@@ -202,11 +218,12 @@ export async function needsAttentionWork(cfg: ControlPlaneTaskConfig, id: string
  *  Best-effort: a dropped report loses one evidence update, never the run
  *  itself. It is not throwing, but the failure is logged (A4) so a persistently
  *  failing evidence channel is visible in diagnostics instead of silent. */
-export async function reportEvidence(cfg: ControlPlaneTaskConfig, id: string, patch: EvidencePatch): Promise<void> {
+export async function reportEvidence(cfg: ControlPlaneTaskConfig, id: string, patch: EvidencePatch, claimToken?: string): Promise<void> {
   try {
     const res = await fetch(`${cfg.controlPlaneUrl}/node/work/${encodeURIComponent(id)}/evidence`, {
       method: "POST",
-      headers: { authorization: `Bearer ${cfg.enrollmentToken}`, "content-type": "application/json" },
+      headers: { authorization: `Bearer ${cfg.enrollmentToken}`, "content-type": "application/json", ...(claimToken ? { 'x-bivy-work-claim': claimToken } : {}) },
+      signal: AbortSignal.timeout(10_000),
       body: JSON.stringify(patch),
     });
     if (!res.ok) {
@@ -220,6 +237,8 @@ export async function reportEvidence(cfg: ControlPlaneTaskConfig, id: string, pa
 /** Optional policy hooks — when omitted the poller keeps its historical behavior
  *  (any thrown error fails the run immediately). */
 export interface ControlPlaneTaskPollerOptions {
+  /** Daemon-owned metadata directory for crash-safe outcome delivery. */
+  resultDirectory?: string;
   /** Decides retry/reroute/park/give_up when an attempt throws. A resolver
    *  allows repository-owned policy to be selected per work item. */
   policy?: RunPolicy | ((item: WorkItem) => RunPolicy | undefined);
@@ -237,6 +256,8 @@ interface InFlightRun {
   state: RunState;
   heartbeat?: NodeJS.Timeout;
   leaseCheck?: Promise<void>;
+  claimToken?: string;
+  deadline?: NodeJS.Timeout;
 }
 
 export class ControlPlaneTaskPoller {
@@ -247,6 +268,8 @@ export class ControlPlaneTaskPoller {
   private readonly policy?: RunPolicy | ((item: WorkItem) => RunPolicy | undefined);
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly leaseHeartbeatMs: number;
+  private readonly outbox: WorkResultOutbox;
+  private flushingResults?: Promise<void>;
 
   constructor(
     private readonly cfg: ControlPlaneTaskConfig,
@@ -259,9 +282,11 @@ export class ControlPlaneTaskPoller {
     this.policy = options.policy;
     this.sleep = options.sleep ?? defaultSleep;
     this.leaseHeartbeatMs = options.leaseHeartbeatMs ?? 30_000;
+    this.outbox = new WorkResultOutbox(options.resultDirectory, `${cfg.controlPlaneUrl}:${cfg.enrollmentToken}`);
   }
 
   start(): void {
+    if (this.timer) return;
     void this.tick();
     this.timer = setInterval(() => void this.tick(), this.cfg.pollMs);
     this.timer.unref?.();
@@ -306,9 +331,11 @@ export class ControlPlaneTaskPoller {
 
   stop(): void {
     if (this.timer) clearInterval(this.timer);
+    this.timer = undefined;
   }
 
   private async tick(): Promise<void> {
+    await this.flushResults();
     let items: WorkItem[];
     try {
       items = await fetchPendingWork(this.cfg);
@@ -318,7 +345,7 @@ export class ControlPlaneTaskPoller {
     const max = this.maxConcurrent?.() ?? 0;
     const running: Promise<void>[] = [];
     for (const item of items) {
-      if (this.inFlight.has(item.id)) continue;
+      if (this.inFlight.has(item.id) || this.outbox.has(item.id)) continue;
       // Hard block: never contend for an item requiring a capability this
       // node hasn't declared. It stays pending for a node that has it (or
       // parks account-wide if the control plane found none at enqueue time).
@@ -357,11 +384,16 @@ export class ControlPlaneTaskPoller {
       // Claim first so only one node runs it; skip if another node won (no
       // claim → not ours → don't run or complete it). A heartbeat keeps the
       // finite lease alive; process death stops it and makes the item reclaimable.
-      if (!(await claimWork(this.cfg, item.id)) || run.state !== "active") return;
+      const claimed = await claimWork(this.cfg, item.id);
+      if (!claimed || run.state !== 'active') return;
+      item = { ...item, ...claimed };
+      run.claimToken = claimed.claimToken;
+      this.setLeaseDeadline(run, claimed.leaseExpiresAt);
       run.heartbeat = setInterval(() => void this.checkLease(item.id, run), this.leaseHeartbeatMs);
       run.heartbeat.unref?.();
-      const report = (patch: EvidencePatch) => reportEvidence(this.cfg, item.id, patch);
-      await transitionWork(this.cfg, item.id, "running");
+      const report = (patch: EvidencePatch) => reportEvidence(this.cfg, item.id, patch, run.claimToken);
+      const started = await cp(this.cfg, 'POST', `/node/work/${encodeURIComponent(item.id)}/running`, run.claimToken);
+      if (!started.ok) return; // Never execute after a rejected lifecycle transition.
       if (run.state !== "active") return;
       console.log(`[control-plane-tasks] running ${item.source} item ${item.id}: ${item.title}`);
       // routingReason is a coarse baseline — a manual "Run…" override picked
@@ -371,11 +403,56 @@ export class ControlPlaneTaskPoller {
       await report({ routingReason: item.runtimeId || item.model ? "manual override" : "queue label" });
       if (run.state !== "active") return;
       await this.runWithPolicy(item, report, run);
+    } catch (error) {
+      console.warn(`[control-plane-tasks] work ${item.id} orchestration failed:`, error);
     } finally {
       if (run.heartbeat) clearInterval(run.heartbeat);
+      if (run.deadline) clearTimeout(run.deadline);
       // A stale completion must not remove a newer reservation for the same id.
       if (this.inFlight.get(item.id) === run) this.inFlight.delete(item.id);
     }
+  }
+
+  private setLeaseDeadline(run: InFlightRun, expiry?: string): void {
+    if (!expiry && !run.claimToken) return; // legacy servers do not advertise a lease
+    const remaining = expiry ? Date.parse(expiry) - Date.now() : 0;
+    if (run.deadline) clearTimeout(run.deadline);
+    const lose = () => {
+      if (run.state !== 'active') return;
+      run.state = 'lost';
+      run.controller.abort(new Error('Run lease expired without confirmed renewal'));
+      if (run.heartbeat) clearInterval(run.heartbeat);
+    };
+    if (!Number.isFinite(remaining) || remaining <= 0) { lose(); return; }
+    run.deadline = setTimeout(lose, Math.max(1, remaining - Math.min(1000, remaining / 10)));
+    run.deadline.unref?.();
+  }
+
+  private flushResults(): Promise<void> {
+    if (this.flushingResults) return this.flushingResults;
+    this.flushingResults = (async () => {
+      for (const result of this.outbox.list()) {
+        // Active workers own their delivery/heartbeat loop.
+        if (this.inFlight.has(result.id)) continue;
+        const status = await sendWorkResult(this.cfg, result);
+        if (status !== 'retry') this.outbox.remove(result.id);
+      }
+    })().catch(error => console.warn('[control-plane-tasks] outcome reconciliation failed:', error))
+      .finally(() => { this.flushingResults = undefined; });
+    return this.flushingResults;
+  }
+
+  private async finishWork(id: string, action: WorkResult['action'], run: InFlightRun): Promise<void> {
+    const result = { id, action, claimToken: run.claimToken };
+    this.outbox.put(result);
+    // Keep ownership while retrying delivery, but never beyond its confirmed
+    // deadline. After a restart the outbox is reconciled before queue intake.
+    do {
+      const status = await sendWorkResult(this.cfg, result);
+      if (status !== 'retry') { this.outbox.remove(id); return; }
+      if (!run.claimToken) return; // legacy server: retain for the recovery poll
+      await this.sleep(1000);
+    } while (run.state === 'active');
   }
 
   private checkLease(id: string, run: InFlightRun): Promise<void> {
@@ -383,8 +460,12 @@ export class ControlPlaneTaskPoller {
     if (run.leaseCheck) return run.leaseCheck;
     run.leaseCheck = (async () => {
       try {
-        const renewal = await renewWorkLease(this.cfg, id);
-        if (renewal === "renewed" || this.inFlight.get(id) !== run || run.state !== "active") return;
+        const response = await cp(this.cfg, 'POST', `/node/work/${encodeURIComponent(id)}/heartbeat`, run.claimToken);
+        const data = await response.json() as { leaseExpiresAt?: string; reason?: string };
+        if (this.inFlight.get(id) !== run || run.state !== 'active') return;
+        if (response.ok) { this.setLeaseDeadline(run, data.leaseExpiresAt); return; }
+        if (response.status !== 409 && response.status !== 404) return;
+        const renewal = data.reason === 'cancelled' ? 'cancelled' : 'lost';
         run.state = renewal;
         if (run.heartbeat) {
           clearInterval(run.heartbeat);
@@ -392,8 +473,7 @@ export class ControlPlaneTaskPoller {
         }
         run.controller.abort(new Error(renewal === "cancelled" ? "Run cancelled" : "Run lease lost"));
       } catch (error) {
-        // A transient network error does not prove ownership was lost. Keep the
-        // Run alive and let the next heartbeat retry.
+        // Transient failures may retry only until the last confirmed deadline.
         console.warn(`[control-plane-tasks] work ${id} heartbeat failed:`, error instanceof Error ? error.message : error);
       } finally {
         run.leaseCheck = undefined;
@@ -413,7 +493,7 @@ export class ControlPlaneTaskPoller {
    */
   private async runWithPolicy(item: WorkItem, report: (patch: EvidencePatch) => Promise<void>, run: InFlightRun): Promise<void> {
     let current = item;
-    let attempt = 1;
+    let attempt = Math.max(1, item.attempt ?? 1);
     let rerouteCount = 0;
     for (;;) {
       if (run.state !== "active") return;
@@ -422,11 +502,15 @@ export class ControlPlaneTaskPoller {
         // TypeScript/JavaScript; cancellation-aware runners can use the third.
         await this.runItem({ ...current, attempt }, report, run.controller.signal);
         if (run.state !== "active") return;
-        await completeWork(this.cfg, item.id);
+        await this.finishWork(item.id, 'complete', run);
         return;
       } catch (error) {
         // Abort errors are ordinary throws to the policy layer unless guarded.
         // A cancelled/lost Run has no node-side terminal transition or retry.
+        if (this.outbox.has(item.id)) {
+          console.error(`[control-plane-tasks] work ${item.id} result delivery/persistence failed; agent will not be retried:`, error);
+          return;
+        }
         if (run.state !== "active") return;
         // Deployment admission is not an agent failure. Never reroute/retry it
         // through a provider policy or mark the work successfully completed.
@@ -437,7 +521,7 @@ export class ControlPlaneTaskPoller {
             attention: { severity: "warning", reason: error.message, since: now },
           });
           if (run.state !== "active") return;
-          await needsAttentionWork(this.cfg, item.id);
+          await this.finishWork(item.id, 'needs-attention', run);
           return;
         }
         const policy = typeof this.policy === "function" ? this.policy(current) : this.policy;
@@ -456,12 +540,17 @@ export class ControlPlaneTaskPoller {
           console.warn(`[control-plane-tasks] item ${item.id} needs attention: ${summary}`);
           await report({ events: [{ at: new Date().toISOString(), kind: "needs_attention", summary, attempt }] });
           if (run.state !== "active") return;
-          await needsAttentionWork(this.cfg, item.id);
+          await this.finishWork(item.id, 'needs-attention', run);
           return;
         }
 
         if (decision.action === "retry" || decision.action === "reroute") {
-          attempt += 1;
+          if (run.claimToken) {
+            const response = await cp(this.cfg, 'POST', `/node/work/${encodeURIComponent(item.id)}/attempt`, run.claimToken, { attempt });
+            if (!response.ok) { await this.finishWork(item.id, 'needs-attention', run); return; }
+            const data = await response.json() as { item: WorkItem };
+            attempt = data.item.attempt!;
+          } else { attempt += 1; } // legacy control plane
           const kind = decision.action === "retry" ? "retry" : "fallback";
           console.warn(`[control-plane-tasks] item ${item.id} ${kind} (${decision.condition}): ${decision.summary}`);
           await report({
@@ -499,13 +588,13 @@ export class ControlPlaneTaskPoller {
           console.warn(`[control-plane-tasks] item ${item.id} needs attention (${decision.condition}): ${decision.summary}`);
           await report({ events: [{ at: new Date().toISOString(), kind: "needs_attention", summary: decision.summary }] });
           if (run.state !== "active") return;
-          await needsAttentionWork(this.cfg, item.id);
+          await this.finishWork(item.id, 'needs-attention', run);
           return;
         }
 
         console.warn(`[control-plane-tasks] item ${item.id} failed:`, error);
         if (run.state !== "active") return;
-        await failWork(this.cfg, item.id);
+        await this.finishWork(item.id, 'fail', run);
         return;
       }
     }
