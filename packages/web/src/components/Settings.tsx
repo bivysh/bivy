@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { SANDBOX_TIERS } from "./sandboxTiers.js";
 import type { AccountMe, AppState, EphemeralNodeConfig, LocalModelEndpointResult, LocalModelPreset, LocalModelProvider, PairedDevice, NodeSettings, NotificationPreferences, EphemeralMachine, ProviderKeyInfo, ProviderSize, HostedAuditEvent, HostedMachineSummary, HostedProvisioningStatus } from "@bivy/core";
@@ -18,6 +18,7 @@ import type { SettingsView } from "../router.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import { setCloudMachinesEnabled, useCloudMachinesEnabled } from "../cloudMachines.js";
 import { requestSignIn } from "../signInRequest.js";
+import { getAppIconBadgeEnabled, setAppIconBadgeEnabled, setNotificationPreferencesSnapshot, subscribeNotificationSettings } from "../notificationSettings.js";
 import { ChevronRightIcon, CloseIcon } from "./UiIcons.js";
 import { CredentialVault } from "./CredentialVault.js";
 
@@ -461,11 +462,15 @@ function NotificationsPanel() {
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const appIconBadgeEnabled = useSyncExternalStore(subscribeNotificationSettings, getAppIconBadgeEnabled);
 
   const reloadStatus = () => controller.pushStatus().then(setStatus).catch(() => {});
   useEffect(() => {
     reloadStatus();
-    controller.getNotificationPreferences().then(setPrefs).catch(() => {});
+    controller.getNotificationPreferences().then((next) => {
+      setPrefs(next);
+      setNotificationPreferencesSnapshot(next);
+    }).catch(() => {});
   }, []);
 
   // The enable/disable result (or a save error) used to sit there forever —
@@ -497,7 +502,10 @@ function NotificationsPanel() {
     if (!prefs) return;
     const next = { ...prefs, [id]: value };
     setPrefs(next); // optimistic
-    controller.setNotificationPreferences({ [id]: value }).then(setPrefs).catch((e) => {
+    controller.setNotificationPreferences({ [id]: value }).then((saved) => {
+      setPrefs(saved);
+      setNotificationPreferencesSnapshot(saved);
+    }).catch((e) => {
       setPrefs(prefs); // revert
       setErr(String((e as Error).message || e));
     });
@@ -519,6 +527,13 @@ function NotificationsPanel() {
           <p className="muted">{on ? "This device receives Bivy push notifications." : "Turn on to get notified about your sessions on this device."}</p>
         </div>
         <Toggle checked={on} disabled={busy} onChange={setMaster} label="Enable push notifications" />
+      </div>
+      <div className="settings-toggle-row">
+        <div className="settings-toggle-text">
+          <span className="settings-toggle-title">App icon badge</span>
+          <p className="muted">Show the number of sessions that need attention on this device's home screen icon.</p>
+        </div>
+        <Toggle checked={appIconBadgeEnabled} onChange={setAppIconBadgeEnabled} label="Show app icon badge" />
       </div>
       {status?.permission === "denied" && (
         <div className="banner inline" data-tone="warn">Notifications are blocked in your browser settings — allow them there to enable push.</div>

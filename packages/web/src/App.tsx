@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { deriveActivation, cancelAutomationRun, deriveArtifacts, fetchAutomationRun, recordProductMetric, retryAutomationRun, type GithubQueueItem } from "@bivy/core";
+import { deriveActivation, cancelAutomationRun, deriveArtifacts, fetchAutomationRun, recordProductMetric, retryAutomationRun, type GithubQueueItem, type NotificationPreferences } from "@bivy/core";
 import { useAppState } from "./store/useStore.js";
 import { SessionList } from "./components/SessionList.js";
 import { ChatView } from "./components/ChatView.js";
@@ -60,12 +60,23 @@ import { useEdgeSwipe } from "./useEdgeSwipe.js";
 import { useModalEscape } from "./modalStack.js";
 import { CloseIcon } from "./components/UiIcons.js";
 import { controller } from "./store/useStore.js";
-import { attentionRank, runStatusLabel, statusClass, statusDotState, statusLabel } from "./sessionStatus.js";
+import { attentionRank, isUnseen, runStatusLabel, statusClass, statusDotState, statusLabel, type SessionStatusInput } from "./sessionStatus.js";
+import { getAppIconBadgeEnabled, getNotificationPreferencesSnapshot, setNotificationPreferencesSnapshot, subscribeNotificationSettings } from "./notificationSettings.js";
 
 const DRAWER_FOCUSABLE = 'a[href],button:not(:disabled),textarea:not(:disabled),input:not(:disabled),select:not(:disabled),[tabindex]:not([tabindex="-1"])';
 
+function notificationAllowsAttentionBadge(session: SessionStatusInput, prefs: NotificationPreferences | null): boolean {
+  if (!prefs) return true;
+  if (session.needsAction || session.status === "needs_action") return prefs.question_asked || prefs.approval_requested;
+  if (session.status === "failed") return prefs.session_error;
+  if (isUnseen(session)) return prefs.session_done;
+  return false;
+}
+
 export function App() {
   const state = useAppState();
+  const appIconBadgeEnabled = useSyncExternalStore(subscribeNotificationSettings, getAppIconBadgeEnabled);
+  const notificationPreferences = useSyncExternalStore(subscribeNotificationSettings, getNotificationPreferencesSnapshot);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const drawerRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLElement>(null);
@@ -147,6 +158,10 @@ export function App() {
     }, 30000);
     return () => { clearInterval(id); stopObserving(); };
   }, [refreshGithubQueue, state.connection.signedIn]);
+  useEffect(() => {
+    if (controller.direct || !state.connection.signedIn) return;
+    controller.getNotificationPreferences().then(setNotificationPreferencesSnapshot).catch(() => {});
+  }, [state.connection.signedIn]);
   // sessionId → the run that produced it, joined from the queue's evidence.
   // Feeds the sidebar's exception hints and the run pill's outcome. Declared up
   // here (not by activeSession below) so the hook stays above any early return.
@@ -159,6 +174,10 @@ export function App() {
   const attentionSessions = useMemo(() => state.sessionIndex.sessions.filter(
     (session) => attentionRank(session) > 0,
   ), [state.sessionIndex.sessions]);
+  const appIconBadgeCount = useMemo(() => {
+    if (!appIconBadgeEnabled) return 0;
+    return attentionSessions.filter((session) => notificationAllowsAttentionBadge(session, notificationPreferences)).length;
+  }, [appIconBadgeEnabled, attentionSessions, notificationPreferences]);
   // Something needs the user that they haven't seen yet → the ☰ burger wears a
   // red dot. Opening the session drawer (openDrawer) marks the current set seen.
   const attnUnseen = attentionSessions.some((session) => !seenAttn.has(session.sessionId));
@@ -169,16 +188,18 @@ export function App() {
   const closeDrawer = useCallback(() => setDrawerOpen(false), []);
   // Attention must remain visible when Bivy is a background tab or installed
   // PWA. Mirror the session list's content-free attention count into browser
-  // chrome and the OS app badge, including zero to remove old Inbox badges.
+  // chrome, while the OS app badge follows the user's notification/badge choices
+  // (including zero to remove old Inbox badges).
   useEffect(() => {
-    const count = attentionSessions.length;
-    document.title = count > 0 ? `(${count}) Bivy` : "Bivy";
+    const titleCount = attentionSessions.length;
+    const badgeCount = appIconBadgeCount;
+    document.title = titleCount > 0 ? `(${titleCount}) Bivy` : "Bivy";
     const badge = navigator as Navigator & {
       setAppBadge?: (contents?: number) => Promise<void>;
       clearAppBadge?: () => Promise<void>;
     };
     const syncBadge = () => {
-      const update = count > 0 ? badge.setAppBadge?.(count) : badge.clearAppBadge?.();
+      const update = badgeCount > 0 ? badge.setAppBadge?.(badgeCount) : badge.clearAppBadge?.();
       void update?.catch(() => {}); // unsupported/blocked badge APIs are non-fatal
     };
     syncBadge();
@@ -191,7 +212,7 @@ export function App() {
       // Do not clear here: effect cleanup also runs before a count update,
       // and that asynchronous clear can race the replacement setAppBadge.
     };
-  }, [attentionSessions.length]);
+  }, [appIconBadgeCount, attentionSessions.length]);
   // Signed in on the hosted app but no node yet: poll for a newly-installed
   // machine so the empty state advances to the live app the moment the node
   // dials in — the user shouldn't have to hit "Refresh nodes" after running the
