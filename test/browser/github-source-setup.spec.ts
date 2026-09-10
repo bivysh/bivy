@@ -150,6 +150,16 @@ test("GitHub trigger setup offers hosted and custom apps without losing the draf
   await expect(page.getByRole("textbox", { name: "Name", exact: true })).toHaveValue("Keep this draft");
 });
 
+// Component fixtures below inject model/runtime events directly into the store.
+// Picker mount still asks the controller for these lists; no daemon is running.
+test.beforeEach(async ({ page }) => {
+  for (const endpoint of ["runtimes", "models"]) {
+    await page.route(new RegExp(`/api/${endpoint}(?:\\?|$)`), route => route.fulfill({
+      status: 503, json: { error: "Lists supplied by the component fixture" },
+    }));
+  }
+});
+
 async function openSessionComposer(page: Page, theme: string) {
   const fixture = `/model-refresh-${theme}`;
   const html = await server.transformIndexHtml(fixture, `<html data-theme="${theme}"><head><meta name="viewport" content="width=device-width, initial-scale=1" /></head><body><div id="root"></div><script type="module">
