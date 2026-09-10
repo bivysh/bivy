@@ -305,13 +305,42 @@ export function claudeStreamJsonParser(): CliParser {
  * codex-cli 0.142): a thread with turns, each turn a stream of typed items.
  *   {"type":"thread.started","thread_id":…}
  *   {"type":"turn.started"} / {"type":"turn.completed"} / {"type":"turn.failed","error":{message}}
+ *   {"type":"item.started","item":{…}}   ← a shell/patch/MCP call begins (live card)
  *   {"type":"item.completed","item":{"id":…,"type":"agent_message"|"reasoning"|
- *        "command_execution"|"mcp_tool_call"|"file_change"|"error", …}}
+ *        "command_execution"|"mcp_tool_call"|"file_change"|"error", "status":…, …}}
  *   {"type":"error","message":…}   ← transient reconnect noise (non-fatal)
+ * A `file_change`/`command_execution` item carries a terminal `status`
+ * (`completed`|`failed`); a `failed` one is surfaced as an errored tool result
+ * rather than a silent success (mirrors the governed app-server shim).
  */
 export function codexJsonParser(): CliParser {
   const acc = new TurnAccumulator({ provider: "codex", protocol: "structured-pipe" });
   let sessionRef: string | undefined;
+  // Tool ids already surfaced as a running card, so `item.started` (live) and the
+  // later `item.completed` (terminal) render one card per call, not two.
+  const startedTools = new Set<string>();
+  const ensureToolUse = (id: string, name: string, input: unknown, events: RuntimeEvent[]) => {
+    if (id && startedTools.has(id)) return;
+    if (id) startedTools.add(id);
+    acc.addToolUse(id, name, input, events);
+  };
+  // A tool item begins. Codex emits `item.started` for shell/patch/MCP calls
+  // before the matching `item.completed`, so surfacing it shows a long-running
+  // command or patch as a live "running" card instead of nothing until it ends.
+  const handleStarted = (item: Record<string, unknown>, events: RuntimeEvent[]) => {
+    const id = String(item.id ?? "");
+    switch (String(item.type ?? "")) {
+      case "command_execution":
+        ensureToolUse(id, "shell", { command: item.command ?? "" }, events);
+        break;
+      case "file_change":
+        ensureToolUse(id, "apply_patch", { changes: item.changes ?? item }, events);
+        break;
+      case "mcp_tool_call":
+        ensureToolUse(id, String(item.tool ?? item.server ?? "mcp"), item.arguments ?? item.input, events);
+        break;
+    }
+  };
   const handleItem = (item: Record<string, unknown>, events: RuntimeEvent[]) => {
     const id = String(item.id ?? "");
     switch (String(item.type ?? "")) {
@@ -319,18 +348,27 @@ export function codexJsonParser(): CliParser {
         acc.appendText(String(item.text ?? ""), events);
         break;
       case "command_execution":
-        acc.addToolUse(id, "shell", { command: item.command ?? "" }, events);
-        if (item.aggregated_output != null || item.exit_code != null) {
-          acc.addToolResult(id, "shell", { content: item.aggregated_output ?? "", exitCode: item.exit_code }, events, Number(item.exit_code) !== 0);
+        ensureToolUse(id, "shell", { command: item.command ?? "" }, events);
+        if (item.aggregated_output != null || item.exit_code != null || item.status != null) {
+          acc.addToolResult(id, "shell", { content: item.aggregated_output ?? "", exitCode: item.exit_code }, events, Number(item.exit_code) !== 0 || item.status === "failed");
         }
         break;
       case "mcp_tool_call":
-        acc.addToolUse(id, String(item.tool ?? item.server ?? "mcp"), item.arguments ?? item.input, events);
-        if (item.result != null) acc.addToolResult(id, String(item.tool ?? "mcp"), item.result, events);
+        ensureToolUse(id, String(item.tool ?? item.server ?? "mcp"), item.arguments ?? item.input, events);
+        if (item.result != null || item.error != null || item.status != null) {
+          acc.addToolResult(id, String(item.tool ?? "mcp"), item.result ?? item.error ?? item.status, events, item.error != null || item.status === "failed");
+        }
         break;
-      case "file_change":
-        acc.addToolUse(id, "apply_patch", { changes: item.changes ?? item }, events);
+      case "file_change": {
+        ensureToolUse(id, "apply_patch", { changes: item.changes ?? item }, events);
+        // `file_change` is terminal in `exec --json` (no separate result event),
+        // so close the card with a result reflecting its status. Without this a
+        // completed patch hangs as "running" and — worse — a FAILED patch renders
+        // as a successful edit. Mirrors the app-server shim's handling.
+        const status = String(item.status ?? "completed");
+        acc.addToolResult(id, "apply_patch", status, events, status === "failed");
         break;
+      }
       case "reasoning": {
         // Codex reasoning items carry either `text` or a `summary` (string or an
         // array of {text}) — surface whichever is present as a thinking stream.
@@ -367,6 +405,9 @@ export function codexJsonParser(): CliParser {
           break;
         case "turn.started":
           events.push({ type: "turn_start" });
+          break;
+        case "item.started":
+          if (msg.item && typeof msg.item === "object") handleStarted(msg.item as Record<string, unknown>, events);
           break;
         case "item.completed":
           if (msg.item && typeof msg.item === "object") handleItem(msg.item as Record<string, unknown>, events);

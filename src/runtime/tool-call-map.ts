@@ -129,12 +129,18 @@ export function mapToolCall(toolName: string, input: unknown, context: ToolCallM
 
   if (inToolSet(EDIT, toolName, key)) {
     let path = str(o, ...PATH_KEYS);
-    // Codex `apply_patch`/`file_change` carries a `changes` map keyed by path.
+    // Codex `apply_patch`/`file_change` carries a `changes` collection. The
+    // app-server keys it by path (a map); `codex exec --json` sends an array of
+    // `{path, kind}` entries. Derive the first touched path from either shape so
+    // the patch renders as an edit card instead of an opaque blob.
     if (!path) {
       const changes = o.changes;
-      if (changes && typeof changes === "object" && !Array.isArray(changes)) {
-        const first = Object.keys(changes as Record<string, unknown>)[0];
-        if (first) path = first;
+      if (Array.isArray(changes)) {
+        const first = changes.find((c): c is Record<string, unknown> => !!c && typeof c === "object" && !Array.isArray(c));
+        if (first) path = str(first, ...PATH_KEYS);
+      } else if (changes && typeof changes === "object") {
+        const firstKey = Object.keys(changes as Record<string, unknown>)[0];
+        if (firstKey) path = firstKey;
       }
     }
     if (!path) return undefined;
