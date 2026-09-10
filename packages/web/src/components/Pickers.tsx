@@ -8,6 +8,9 @@ import { ConfirmDialog } from "./AppDialog.js";
 import { Sheet, PickerItem, type DismissSheet } from "./Sheet.js";
 import { useModalEscape } from "../modalStack.js";
 import { ProviderConnectForm } from "./ProviderConnect.js";
+import { ModelAccounts } from "./ModelAccounts.js";
+import { modelAccountChoice, modelAccountProject } from "../modelAccounts.js";
+import { ChevronRightIcon } from "./UiIcons.js";
 import { runtimeEnforcesProtection, SANDBOX_TIERS } from "./sandboxTiers.js";
 import { writeClipboard } from "../clipboard.js";
 import { agentPickerLabel, filterAndSortAgentRuntimes, isTopAgent } from "../agentPickerCatalog.js";
@@ -630,13 +633,19 @@ function ReasoningPill({ state }: { state: AppState }) {
   );
 }
 
-function modelMeta(m: ModelInfo): string {
+function modelMeta(m: ModelInfo, account?: string): string {
   const ctx = (m as any).contextWindow;
-  return [(m as any).provider, ctx ? `${Math.round(ctx / 1000)}k ctx` : null].filter(Boolean).join(" · ");
+  return [(m as any).provider, account, ctx ? `${Math.round(ctx / 1000)}k ctx` : null].filter(Boolean).join(" · ");
 }
 
 export function ModelPicker({ state, onClose }: { state: AppState; onClose: () => void }) {
   const [q, setQ] = useState("");
+  const [accountModel, setAccountModel] = useState<ModelInfo | null>(null);
+  const accountOpener = useRef<HTMLButtonElement>(null);
+  const lastAccountKey = useRef<string | null>(null);
+  useEffect(() => {
+    if (!accountModel) accountOpener.current?.focus();
+  }, [accountModel]);
   // Id of the unconnected provider the user tapped "Connect" on, if any —
   // swaps the list view for an inline add-credentials form (#390) instead of
   // sending the user to Settings. Just the id (not a name snapshot) so the
@@ -645,7 +654,9 @@ export function ModelPicker({ state, onClose }: { state: AppState; onClose: () =
   useEffect(() => {
     controller.listModels();
     controller.listProviders();
-  }, []);
+    controller.listCredentialRecords();
+    controller.getCredentialPresets();
+  }, [state.connection.currentNodeId]);
 
   // The connect form has no direct ack of its own; once the node's next
   // providers.list reports this provider configured, its models already moved
@@ -685,6 +696,10 @@ export function ModelPicker({ state, onClose }: { state: AppState; onClose: () =
   const isCurrent = (m: ModelInfo) =>
     state.catalogs.currentModel != null && m.id === state.catalogs.currentModel.id && (m as any).provider === (state.catalogs.currentModel as any).provider;
 
+  if (accountModel) {
+    return <ModelAccounts state={state} model={accountModel} onClose={() => setAccountModel(null)} />;
+  }
+
   if (connecting) {
     return (
       <Sheet
@@ -707,18 +722,29 @@ export function ModelPicker({ state, onClose }: { state: AppState; onClose: () =
       <input className="picker-search" placeholder="Search models…" value={q} onChange={(e) => setQ(e.target.value)} />
       <div className="picker-list">
         {connectedModels.length === 0 && otherProviders.length === 0 && <div className="picker-empty">No models available.</div>}
-        {connectedModels.map((m) => (
-          <PickerItem
+        {connectedModels.map((m) => {
+          const provider = String(m.provider || "");
+          const accounts = state.settings.credentialRecords.filter((r) => r.provider === provider);
+          const choice = modelAccountChoice(provider, accounts, state.settings.credentialPresets, modelAccountProject(state));
+          const account = accounts.length ? choice.label || (state.settings.credentialPresets ? "Choose account" : "Loading account…") : undefined;
+          return <PickerItem
             key={`${(m as any).provider || ""}:${m.id}`}
             active={isCurrent(m)}
             title={m.label || m.id}
-            meta={modelMeta(m)}
+            meta={modelMeta(m, account)}
+            right={accounts.length > 1 ? (
+              <button type="button" className="btn ghost icon" aria-label={`Change account for ${m.label || m.id}`}
+                ref={lastAccountKey.current === `${provider}:${m.id}` ? accountOpener : undefined}
+                onClick={() => { lastAccountKey.current = `${provider}:${m.id}`; setAccountModel(m); }}>
+                <ChevronRightIcon />
+              </button>
+            ) : undefined}
             onClick={() => {
               controller.chooseModel(m);
               onClose();
             }}
-          />
-        ))}
+          />;
+        })}
         {otherProviders.length > 0 && (
           <>
             <div className="picker-section-label">Other models</div>
