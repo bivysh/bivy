@@ -77,6 +77,9 @@ import { IconBolt, IconClock, IconPr, IconWebhook } from "./AutomationIcons.js";
 import { AddNodeSheet } from "./AddNodeSheet.js";
 import { useModalBack, useModalEscape } from "../modalStack.js";
 
+import { decodeAutomationTemplate, encodeAutomationTemplate } from "@bivy/core";
+import { AutomationAccounts } from "./AutomationAccounts.js";
+
 const TEMPLATE_PREFIX = "bivy-room-v1";
 
 // Trigger picker options shown under "+ Add Trigger". Schedule/webhook map onto
@@ -356,6 +359,7 @@ interface Draft {
   id: string | null;
   name: string;
   instructions: string;
+  credentialLabels: Record<string, string>;
   /** False until the user picks a trigger (or a template supplies one). */
   hasTrigger: boolean;
   trigger: "schedule" | "webhook" | "github" | "linear";
@@ -386,6 +390,7 @@ function emptyDraft(nodeId: string): Draft {
     id: null,
     name: "",
     instructions: "",
+    credentialLabels: {},
     hasTrigger: false,
     trigger: "schedule",
     kind: "cron",
@@ -733,12 +738,14 @@ export function AutomationsView({
       const roomKey = controller.local.keys()[parts[1]];
       if (roomKey) instructions = await open(await importRoomKey(unb64url(roomKey)), parts.slice(2).join(":"));
     }
+    const template = decodeAutomationTemplate(instructions);
     const base = emptyDraft(parts?.[1] || defaultNodeId);
     setDraft({
       ...base,
       id: existing.id,
       name: current.name.trim() ? current.name : opts?.keepExistingName ? existing.name : "",
-      instructions: current.instructions.trim() ? current.instructions : instructions,
+      instructions: current.instructions.trim() ? current.instructions : template.instructions,
+      credentialLabels: template.credentialLabels,
       hasTrigger: true,
       trigger: source,
       repo: existing.repo || "",
@@ -785,13 +792,15 @@ export function AutomationsView({
       }
       instructions = await open(await importRoomKey(unb64url(roomKey)), parts.slice(2).join(":"));
     }
+    const template = decodeAutomationTemplate(instructions);
     const nodeId = parts?.[1] || defaultNodeId;
     const base = emptyDraft(nodeId);
     setDraft({
       ...base,
       id: item.id,
       name: item.name,
-      instructions,
+      instructions: template.instructions,
+      credentialLabels: template.credentialLabels,
       hasTrigger: true,
       trigger: item.trigger === "webhook" ? "webhook" : "schedule",
       requireSigning: item.trigger === "webhook" ? item.requireSigning !== false : base.requireSigning,
@@ -1127,11 +1136,11 @@ export function AutomationsView({
                       key={item.id}
                       role="button"
                       tabIndex={0}
-                      onClick={() => void edit(item)}
+                      onClick={() => void edit(item).catch((e) => setError(String(e)))}
                       onKeyDown={(event) => {
                         if (event.key === "Enter" || event.key === " ") {
                           event.preventDefault();
-                          void edit(item);
+                          void edit(item).catch((e) => setError(String(e)));
                         }
                       }}
                       aria-label={`Edit ${item.name}`}
@@ -1414,6 +1423,22 @@ function SourceAutomationEditor({
   const [nodeSuffix, setNodeSuffix] = useState(nodeLabelSuffix(item.nodeLabel));
   const [runtimeId, setRuntimeId] = useState(item.runtimeId || "");
   const [model, setModel] = useState(item.model || "");
+  const [accountTemplate, setAccountTemplate] = useState<ReturnType<typeof decodeAutomationTemplate> | null>();
+  const [accountsChanged, setAccountsChanged] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      if (!item.templateCiphertext) return decodeAutomationTemplate(defaultSourceInstructions());
+      const [prefix, nodeId, ...payload] = item.templateCiphertext.split(":");
+      const key = nodeId ? controller.local.keys()[nodeId] : undefined;
+      if (prefix !== TEMPLATE_PREFIX || !key) return null;
+      return decodeAutomationTemplate(await open(await importRoomKey(unb64url(key)), payload.join(":")));
+    };
+    void load().then((template) => { if (!cancelled) setAccountTemplate(template); }).catch((e) => {
+      if (!cancelled) { setAccountTemplate(null); setError(String(e)); }
+    });
+    return () => { cancelled = true; };
+  }, [item.templateCiphertext]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const preflight = useAutomationPreflight(item.id || undefined);
@@ -1430,6 +1455,15 @@ function SourceAutomationEditor({
     const parts = raw.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
     return parts.length ? parts : undefined;
   };
+
+  async function accountCiphertext() {
+    if (!accountsChanged || !accountTemplate) return item.templateCiphertext;
+    const node = state.connection.nodes.find((n) => n.name === nodeSuffix.trim());
+    const nodeId = node?.id;
+    const key = nodeId ? controller.local.keys()[nodeId] : undefined;
+    if (!nodeId || !key) throw new Error("Choose a paired machine before saving account selections.");
+    return `${TEMPLATE_PREFIX}:${nodeId}:${await seal(await importRoomKey(unb64url(key)), encodeAutomationTemplate(accountTemplate.instructions, accountTemplate.credentialLabels))}`;
+  }
 
   async function save() {
     setBusy(true);
@@ -1459,6 +1493,7 @@ function SourceAutomationEditor({
         nodeLabel: nodeSuffix.trim() ? `bivy/${nodeSuffix.trim()}` : "",
         runtimeId: runtimeId.trim() || "",
         model: model.trim() || "",
+        templateCiphertext: await accountCiphertext(),
       };
       if (isGithub) {
         // Persist structured event rules. Legacy github_ci keeps its trigger kind
@@ -1472,7 +1507,7 @@ function SourceAutomationEditor({
       // Shared preflight gate before ever calling create/update (see
       // docs/automation-evaluator.md). resetAck: false so a box already
       // ticked on a prior Save click still counts on this one.
-      const evaluation = await preflight.run({ ...patch, trigger, templateCiphertext: item.templateCiphertext }, undefined, { resetAck: false });
+      const evaluation = await preflight.run({ ...patch, trigger }, undefined, { resetAck: false });
       if (evaluation.gate.blocked) {
         throw new Error(`Can't save yet — ${evaluation.gate.blockingChecks.map((c) => c.label).join(", ")}. See the checklist below.`);
       }
@@ -1714,6 +1749,10 @@ function SourceAutomationEditor({
 
           <details className="autom-cron-details">
             <summary>Agent &amp; model defaults</summary>
+            {accountTemplate ? <AutomationAccounts state={state} value={accountTemplate.credentialLabels} onChange={(credentialLabels) => {
+              setAccountTemplate({ ...accountTemplate, credentialLabels });
+              setAccountsChanged(true);
+            }} /> : <p className="settings-hint" role="status">{accountTemplate === undefined ? "Loading account selections…" : "Account selections are locked. Pair with the assigned machine to edit them."}</p>}
             <div className="settings-field">
               <label className="field-label" htmlFor="src-agent">Agent</label>
               <select id="src-agent" className="picker-search" value={runtimeId} onChange={(e) => setRuntimeId(e.target.value)}>
@@ -1913,7 +1952,7 @@ function AutomationEditor({
     const roomKey = d.nodeId ? controller.local.keys()[d.nodeId] : undefined;
     let templateCiphertext: string | undefined;
     if (d.nodeId && roomKey && d.instructions.trim()) {
-      templateCiphertext = `${TEMPLATE_PREFIX}:${d.nodeId}:${await seal(await importRoomKey(unb64url(roomKey)), d.instructions.trim())}`;
+      templateCiphertext = `${TEMPLATE_PREFIX}:${d.nodeId}:${await seal(await importRoomKey(unb64url(roomKey)), encodeAutomationTemplate(d.instructions.trim(), d.credentialLabels))}`;
     }
     const labels = d.labels.split(/[,\n]/).map((v) => v.trim()).filter(Boolean);
     const repos = d.repos.split(/[,\n]/).map((v) => v.trim()).filter(Boolean);
@@ -1946,7 +1985,7 @@ function AutomationEditor({
     try {
       const roomKey = d.nodeId ? controller.local.keys()[d.nodeId] : undefined;
       if (!d.nodeId || !roomKey) throw new Error("Connect to the assigned machine before saving encrypted instructions.");
-      const encrypted = await seal(await importRoomKey(unb64url(roomKey)), d.instructions.trim());
+      const encrypted = await seal(await importRoomKey(unb64url(roomKey)), encodeAutomationTemplate(d.instructions.trim(), d.credentialLabels));
       const nodeName = selectedNode?.name;
       const repo = d.repo.trim();
       const labels = d.labels.split(/[,\n]/).map((value) => value.trim()).filter(Boolean);
@@ -2502,6 +2541,8 @@ function AutomationEditor({
                   </label>
                 )}
               </section>
+
+              <AutomationAccounts state={state} value={d.credentialLabels} onChange={(value) => set("credentialLabels", value)} />
 
               {d.hasTrigger && (
                 <div className="settings-field">

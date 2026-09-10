@@ -42,6 +42,31 @@ to references such as session, branch, pull request, artifact, or a failure
 summary. Account APIs expose definitions, trigger history, and run history
 separately; the older work-item API reads from the same run records.
 
+## Provider accounts and keys
+
+In the automation editor, **Provider accounts & keys** lets you pin a labeled
+account for each provider. **Machine/project default** keeps the normal selection
+rules; **Default account** explicitly pins the account labeled `default`.
+Assignments affect only that automation's sessions, not shared vault presets.
+
+The picker lists accounts on the connected machine. A selected account must also
+exist on the assigned runner; unavailable selections remain visible when editing.
+Account labels travel inside the encrypted instruction template, never as keys or
+OAuth tokens. Update the runner before using account overrides: older daemons only
+understand plaintext instruction templates inside the encrypted envelope.
+
+Availability is checked when the runner opens the session. Missing accounts fail
+rather than falling back to another account. Pi supports labeled API keys and
+subscriptions; credential-aware CLI/protocol agents support API keys and Anthropic
+subscriptions. Agents that own their native login, and unsupported subscription
+injection, reject overrides. Pi's shared-auth native terminal handoff is disabled
+for pinned sessions. Continue those sessions in chat instead.
+
+Selections are persisted with local session metadata and forwarded to remote
+agent services on create/resume. An automation cannot silently change the accounts
+of an existing correlated session: a conflicting pin fails and requires a new
+session. Existing automations with no pins keep their previous behavior.
+
 ## Outcome finality, retry, and reclaim
 
 Every accepted run reaches **exactly one** durable terminal outcome —

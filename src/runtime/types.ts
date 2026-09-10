@@ -434,6 +434,8 @@ export interface UsageSnapshot {
 
 export interface OpenSessionOptions {
   workspace: string;
+  /** Run-local provider account labels. Never credential material. */
+  credentialLabels?: Record<string, string>;
   /** Existing session file to resume; omit to create a fresh session. */
   sessionFile?: string;
   /**

@@ -17,6 +17,7 @@ import { selectCredential } from "./selection.js";
 export { projectIdsFromWorkspace } from "./selection.js";
 import { loadPresets, defaultPresetsPath } from "./presets.js";
 import type { AgentCredentialStore, CredentialContext, ProviderCredential } from "./types.js";
+import { credentialEnvFallback } from "./session.js";
 import type { SecretResolver, OAuthRefresher } from "./ports.js";
 
 /** Refresh an OAuth token this many ms before it expires (clock-skew guard). */
@@ -186,10 +187,18 @@ export async function buildAgentCredentialEnv(
     let cred: ProviderCredential | undefined;
     try {
       cred = await store.getCredential(id, workspace ? { workspace } : undefined);
-    } catch {
+    } catch (error) {
+      credentialEnvFallback(error);
       continue;
     }
     if (!cred) continue;
+    // Session-pinned Anthropic auth clears the competing ambient login even
+    // when the agent has not advertised its active model provider yet.
+    if (cred.provider === "anthropic" && cred.env) {
+      for (const key of ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]) {
+        if (cred.env[key] === "") env[key] = "";
+      }
+    }
     const isActive = !!active && cred.provider === active;
     if (cred.kind === "oauth") {
       // OAuth *subscription* tokens are provider-specific and are not accepted

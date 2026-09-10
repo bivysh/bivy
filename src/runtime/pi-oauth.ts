@@ -41,12 +41,14 @@ export function piCredentialStore(store: Pick<BivyCredentialStore, "read" | "lis
  * (pi.ts) allows network so dynamic model lists load.
  */
 export async function createPiModelRuntime(
-  opts: { credsDir: string; piDir: string; allowModelNetwork?: boolean; store?: BivyCredentialStore; workspace?: string },
+  opts: { credsDir: string; piDir: string; allowModelNetwork?: boolean; store?: BivyCredentialStore; workspace?: string; credentialLabels?: Record<string, string> },
 ): Promise<ModelRuntime> {
   const store = opts.store ?? createCredentialVault(opts.credsDir);
   const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
+  const selected = selectedCredentialStore(store, opts.credsDir, { workspace: opts.workspace, credentialLabels: opts.credentialLabels });
+  for (const provider of Object.keys(opts.credentialLabels ?? {})) await selected.read(provider);
   return ModelRuntime.create({
-    credentials: piCredentialStore(selectedCredentialStore(store, opts.credsDir, { workspace: opts.workspace })),
+    credentials: piCredentialStore(selected),
     modelsPath: path.join(opts.piDir, "models.json"),
     allowModelNetwork: opts.allowModelNetwork ?? false,
   });

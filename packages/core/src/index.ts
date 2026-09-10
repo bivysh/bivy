@@ -4,6 +4,7 @@
 // later, the Expo app. No DOM, no framework: just protocol, transport, crypto,
 // and the reactive session store.
 
+export * from "./automation-template.js";
 export * from "./base64.js";
 export * from "./crypto.js";
 export * from "./relay-frame.js";

@@ -70,6 +70,7 @@ export interface CredentialContext {
   project?: string;
   workspace?: string;
   preferLabel?: string;
+  credentialLabels?: Record<string, string>;
   /** A bearer rejected by the provider. OAuth resolvers refresh it immediately,
    * even when its stored expiry is still in the future; if another caller has
    * already rotated it, the newer token is returned without a second refresh. */
