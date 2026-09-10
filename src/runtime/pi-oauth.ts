@@ -14,6 +14,7 @@ import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { CredentialStore } from "@earendil-works/pi-ai";
 import { BivyCredentialStore, createCredentialVault } from "./credential-store.js";
 import { isNativeOAuthProvider } from "./oauth/model-oauth-providers.js";
+import { selectedCredentialStore } from "../credentials/selected-store.js";
 
 /** Provider catalog entry: model metadata Pi owns, joined with Bivy auth state. */
 export interface PiProviderInfo {
@@ -28,7 +29,7 @@ export interface PiProviderInfo {
 }
 
 /** Adapt Bivy's store to pi-ai's structurally-identical CredentialStore for injection. */
-export function piCredentialStore(store: BivyCredentialStore): CredentialStore {
+export function piCredentialStore(store: Pick<BivyCredentialStore, "read" | "list" | "modify">): CredentialStore {
   return store as unknown as CredentialStore;
 }
 
@@ -40,12 +41,12 @@ export function piCredentialStore(store: BivyCredentialStore): CredentialStore {
  * (pi.ts) allows network so dynamic model lists load.
  */
 export async function createPiModelRuntime(
-  opts: { credsDir: string; piDir: string; allowModelNetwork?: boolean; store?: BivyCredentialStore },
+  opts: { credsDir: string; piDir: string; allowModelNetwork?: boolean; store?: BivyCredentialStore; workspace?: string },
 ): Promise<ModelRuntime> {
   const store = opts.store ?? createCredentialVault(opts.credsDir);
   const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
   return ModelRuntime.create({
-    credentials: piCredentialStore(store),
+    credentials: piCredentialStore(selectedCredentialStore(store, opts.credsDir, { workspace: opts.workspace })),
     modelsPath: path.join(opts.piDir, "models.json"),
     allowModelNetwork: opts.allowModelNetwork ?? false,
   });

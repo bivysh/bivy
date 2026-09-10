@@ -495,7 +495,7 @@ export class PiRuntime implements AgentRuntime {
           modelsPath: path.join(piDir, "models.json"),
           allowModelNetwork,
         })
-      : await createPiModelRuntime({ credsDir, piDir, allowModelNetwork });
+      : await createPiModelRuntime({ credsDir, piDir, allowModelNetwork, workspace: sessionManager.getCwd() || options.workspace });
     const backgroundShells = new BackgroundShellTracker();
     const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, agentDir, sessionManager, sessionStartEvent }) => {
       const sessionId = sessionManager.getSessionId();
