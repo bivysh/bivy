@@ -340,6 +340,15 @@ export function parseInstallationId(payload: unknown): string | undefined {
   return id === undefined || id === null ? undefined : String(id);
 }
 
+/** Output from any Bivy node is not a new request, even when posted through
+ * a user's credentials. Match the durable marker written by commentIssueOnce,
+ * not the author or visible prose (which can contain continuation @mentions). */
+function isBivyGeneratedComment(body: string): boolean {
+  const marker = "<!-- bivy:comment:";
+  const start = body.indexOf(marker);
+  return start !== -1 && body.indexOf("-->", start + marker.length) !== -1;
+}
+
 /** Extract GitHub `@mention` logins from free text (comment/issue body). */
 export function extractMentions(text: string): string[] {
   const out: string[] = [];
@@ -379,6 +388,7 @@ export function parseGithubCommentEvent(payload: unknown, triggerLogin: string):
   if (!issue || typeof issue !== "object") return undefined;
   if (!comment || typeof comment !== "object") return undefined;
   const instruction = String(comment.body ?? "");
+  if (isBivyGeneratedComment(instruction)) return undefined;
   const mentions = extractMentions(instruction);
   const trigger = triggerLogin.trim().replace(/^@/, "").toLowerCase();
   if (!trigger || !mentions.some((m) => m.toLowerCase() === trigger)) return undefined;
@@ -626,6 +636,7 @@ export function parseGithubReviewCommentEvent(payload: unknown, triggerLogin: st
   const comment = o.comment;
   if (!pr || typeof pr !== "object" || !comment || typeof comment !== "object") return undefined;
   const instruction = String(comment.body ?? "");
+  if (isBivyGeneratedComment(instruction)) return undefined;
   const mentions = extractMentions(instruction);
   const trigger = triggerLogin.trim().replace(/^@/, "").toLowerCase();
   if (!trigger || !mentions.some((m) => m.toLowerCase() === trigger)) return undefined;
