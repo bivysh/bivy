@@ -539,10 +539,10 @@ function groupEntries(entries: TranscriptEntry[]): RenderItem[] {
   return items;
 }
 
-// Cap the number of live DOM nodes. A session can have thousands of messages;
-// mounting (and markdown-rendering) them all is what makes a big session janky
-// and slow to open. Open on just the most recent INITIAL_WINDOW entries, then
-// reveal older history a page at a time on tap ("show earlier" below).
+// Limit the initial mount, not the live transcript. Sliding this window on
+// every append removes the passage being read and remounts tool groups (closing
+// their inspectors). Keep its start fixed until the reader loads more history
+// or switches sessions/views.
 const INITIAL_WINDOW = 20;
 const WINDOW_STEP = 40;
 
@@ -585,9 +585,22 @@ export function ChatView({
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const [pinned, setPinned] = useState(true);
-  const [limit, setLimit] = useState(INITIAL_WINDOW);
+  const source = useMemo(() => focusView ? focusEntries(entries, working) : entries, [entries, focusView, working]);
+  const total = source.length;
   const scrollMemory = useRef(new Map<string, ChatScrollMemory>());
-  const limitRef = useRef(limit);
+  const [historyWindow, setHistoryWindow] = useState(() => ({
+    sessionKey, focusView, initialized: total > 0, start: Math.max(0, total - INITIAL_WINDOW),
+  }));
+  let start = Math.min(historyWindow.start, total);
+  // Reset before committing a different session/view, or its first snapshot.
+  // Ordinary appends must not move the start or change mounted group identities.
+  if (historyWindow.sessionKey !== sessionKey || historyWindow.focusView !== focusView || (!historyWindow.initialized && total > 0)) {
+    const remembered = scrollMemory.current.get(sessionKey ?? "new");
+    start = Math.max(0, total - (remembered?.limit ?? INITIAL_WINDOW));
+    setHistoryWindow({ sessionKey, focusView, initialized: total > 0, start });
+  }
+  const limitRef = useRef(total - start);
+  useLayoutEffect(() => { limitRef.current = total - start; }, [total, start]);
   // Mirror `pinned` into a ref so the layout-effect and ResizeObserver below —
   // which run outside React's render cycle — can read the current value without
   // being re-subscribed on every scroll tick.
@@ -622,17 +635,11 @@ export function ChatView({
     setPinnedState(true);
   }, [setPinnedState]);
 
-  const source = useMemo(() => focusView ? focusEntries(entries, working) : entries, [entries, focusView, working]);
-
   // Remember a session's distance from the bottom rather than its absolute
   // scrollTop. If content grows while it is in the background, returning still
   // lands on the same passage. A first visit starts at the latest message.
-  const total = source.length;
   useLayoutEffect(() => {
     const remembered = scrollMemory.current.get(sessionKey ?? "new");
-    const nextLimit = remembered?.limit ?? INITIAL_WINDOW;
-    limitRef.current = nextLimit;
-    setLimit(nextLimit);
     setPinnedState(remembered?.pinned ?? true);
     const frame = requestAnimationFrame(() => {
       const el = scrollRef.current;
@@ -653,11 +660,7 @@ export function ChatView({
   }, [atBottom, sessionKey, setPinnedState]);
 
   const showEarlier = useCallback(() => {
-    setLimit((current) => {
-      const next = current + WINDOW_STEP;
-      limitRef.current = next;
-      return next;
-    });
+    setHistoryWindow((current) => ({ ...current, start: Math.max(0, current.start - WINDOW_STEP) }));
   }, []);
 
   // Keep the view pinned to the newest line as content grows — streamed tool
@@ -685,7 +688,6 @@ export function ChatView({
     return () => ro.disconnect();
   }, [pinToBottom]);
 
-  const start = Math.max(0, total - limit);
   const visible = start > 0 ? source.slice(start) : source;
   const items = groupEntries(visible);
   const blocks = groupTurns(items);
