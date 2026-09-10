@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.19] - 2026-09-10
+
+### Fixed
+
+- Enable automation mentions in issue and pull request bodies, and prevent GitHub
+  pickup labels from retriggering automations.
+- Harden automation execution ownership, bounded retries, and lease recovery;
+  persist pending results so acknowledgement retries do not rerun the agent.
+- Use stable output branches across recovery and serialize lifecycle updates.
+- Edit the selected automation definition safely, preserve locked instructions,
+  and prevent duplicate Run now dispatches with clearer queued-state feedback.
+- Improve automation dialog focus handling and approval safety explanations.
+
+### Upgrade notes
+
+- Deploy the control plane before upgrading runners. Upgrade all unattended
+  runners to enable generation fencing, durable retry reservations, lease-deadline
+  aborts, and pending-result recovery. External agent side effects remain at least
+  once; existing random output branches are not renamed.
+
 ## [0.16.18] - 2026-09-10
 
 ### Added
