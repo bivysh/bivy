@@ -773,6 +773,11 @@ export class PostgresStore implements ControlPlaneStore {
       -- status='pending' frees the key once the item is claimed/done, so a later
       -- re-label starts a fresh run rather than colliding forever.
       CREATE UNIQUE INDEX IF NOT EXISTS idx_work_items_collapse ON work_items(account_id, collapse_key) WHERE collapse_key IS NOT NULL AND status = 'pending';
+      -- Policy-blocked work has not executed: keep its intake slot until retry
+      -- or cancellation, even though the UI status is needs_attention.
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS policy_blocked BOOLEAN NOT NULL DEFAULT false;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_work_items_admission_collapse ON work_items(account_id, collapse_key)
+        WHERE collapse_key IS NOT NULL AND (status = 'pending' OR (status = 'needs_attention' AND policy_blocked = true));
     `);
   }
 
@@ -2911,7 +2916,7 @@ export class PostgresStore implements ControlPlaneStore {
     );
     if (rows[0]) return { run: mapAutomationRun(rows[0]), created: true };
     // Conflict: a redelivery (dedupe key) or another delivery for an issue that
-    // already has a pending item (collapse key). Return the existing one so the
+    // already has a pending or policy-blocked item (collapse key). Return the existing one so the
     // caller stays idempotent and no duplicate lands in the queue.
     if (dedupeKey) {
       const existing = await this.query(
@@ -2921,7 +2926,7 @@ export class PostgresStore implements ControlPlaneStore {
       if (existing.rows[0]) return { run: mapAutomationRun(existing.rows[0]), created: false };
     }
     const existingPending = await this.query(
-      `SELECT * FROM work_items WHERE account_id = $1 AND collapse_key = $2 AND status = 'pending' LIMIT 1`,
+      `SELECT * FROM work_items WHERE account_id = $1 AND collapse_key = $2 AND (status = 'pending' OR (status = 'needs_attention' AND policy_blocked = true)) LIMIT 1`,
       [accountId, collapseKey],
     );
     return { run: mapAutomationRun(existingPending.rows[0]), created: false };
@@ -3020,7 +3025,7 @@ export class PostgresStore implements ControlPlaneStore {
       }
       if (current.collapse_key) {
         const pending = await client.query(
-          `SELECT id FROM work_items WHERE account_id = $1 AND collapse_key = $2 AND status = 'pending' AND id <> $3 LIMIT 1`,
+          `SELECT id FROM work_items WHERE account_id = $1 AND collapse_key = $2 AND (status = 'pending' OR (status = 'needs_attention' AND policy_blocked = true)) AND id <> $3 LIMIT 1`,
           [accountId, current.collapse_key, id],
         );
         if (pending.rows[0]) {
@@ -3034,7 +3039,7 @@ export class PostgresStore implements ControlPlaneStore {
       const updated = await client.query(
         `UPDATE work_items SET status = 'pending', attempt = $3, claimed_by_node_id = NULL,
          claimed_at = NULL, started_at = NULL, completed_at = NULL, lease_expires_at = NULL,
-         output = NULL, checks = '[]'::jsonb, receipt_evidence = NULL, events = $4::jsonb
+         policy_blocked = false, output = NULL, checks = '[]'::jsonb, receipt_evidence = NULL, events = $4::jsonb
          WHERE account_id = $1 AND id = $2 RETURNING *`,
         [accountId, id, attempt + 1, JSON.stringify([...events, retryEvent].slice(-100))],
       );
@@ -3064,6 +3069,27 @@ export class PostgresStore implements ControlPlaneStore {
   async ownsWorkClaim(accountId: string, nodeId: string, id: string, token: string): Promise<boolean> {
     const { rows } = await this.query("SELECT id FROM work_items WHERE account_id=$1 AND id=$2 AND claimed_by_node_id=$3 AND COALESCE(claim_token, '')=$4", [accountId, id, nodeId, token]);
     return rows.length > 0;
+  }
+
+  async parkAutomationRunForPolicy(accountId: string, id: string, reason: string, code: string): Promise<AutomationRun | undefined> {
+    return this.withLockedWork(accountId, id, async (current, query) => {
+      // Admission runs before claiming. Redeliveries and concurrent admission
+      // checks must not notify again or resurrect cancelled/completed work.
+      if (current.status !== "pending") return undefined;
+      const now = new Date().toISOString();
+      const events = [...(current.events ?? []), {
+        at: now, kind: "policy_denial", summary: reason, status: "denied",
+        reasonCode: code, milestoneId: `${id}:deployment-policy-denial:${Number(current.attempt ?? 1)}`,
+      }].slice(-100);
+      const { rows } = await query(
+        `UPDATE work_items SET status = 'needs_attention', policy_blocked = true,
+         lease_expires_at = NULL, output = $3::jsonb, events = $4::jsonb, attention = $5::jsonb
+         WHERE account_id = $1 AND id = $2 AND status = 'pending' RETURNING *`,
+        [accountId, id, JSON.stringify({ failure: reason }), JSON.stringify(events),
+          JSON.stringify({ severity: "warning", reason, since: now })],
+      );
+      return rows[0] ? mapAutomationRun(rows[0]) : undefined;
+    });
   }
 
   async transitionAutomationRun(accountId: string, id: string, status: AutomationRunStatus, output?: AutomationRun["output"], expectedNodeId?: string, claimToken?: string): Promise<AutomationRun | undefined> {

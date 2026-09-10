@@ -148,20 +148,10 @@ async function requireDeploymentAdmission(accountId: string, operation: Deployme
 
 async function parkAutomationRunForDeploymentDenial(accountId: string, item: { id: string }, decision: Awaited<ReturnType<typeof deploymentDecision>>) {
   const reason = decision.reason || "Automation is blocked by deployment policy.";
-  const run = await store.transitionAutomationRun(accountId, item.id, "needs_attention", { failure: reason });
-  const now = new Date().toISOString();
-  const patched = await store.appendRunEvidence(accountId, item.id, {
-    events: [{
-      at: now,
-      kind: "policy_denial",
-      summary: reason,
-      status: "denied",
-      reasonCode: decision.code || "deployment_policy",
-      milestoneId: `${item.id}:deployment-policy-denial`,
-    }],
-    attention: { severity: "warning", reason, since: now },
-  });
-  const current = patched ?? run;
+  // The durable transition elects one notifier across webhook redeliveries,
+  // node admission checks, and control-plane replicas. A GitHub GET then POST
+  // alone cannot prevent concurrent duplicate comments.
+  const current = await store.parkAutomationRunForPolicy(accountId, item.id, reason, decision.code || "deployment_policy");
   if (current) {
     void notifyAutomationBlocked(accountId, current, reason);
     void commentGitHubAutomationBlocked(current, reason).catch((error) => console.warn("[github] quota/policy comment failed", error));

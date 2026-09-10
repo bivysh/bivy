@@ -248,6 +248,33 @@ await test("enqueueWorkItem collapses an issue's many deliveries into one pendin
   assert.notEqual(rerun.id, opened.id, "a re-label after completion starts a fresh run");
 });
 
+await test("policy denial keeps one issue admission and elects one notifier across concurrent deliveries", async () => {
+  const store = await makeStore();
+  const acct = await store.findOrCreateAccount("blocked-collapse@example.com");
+  const input = { source: "github:issue", title: "Test", repo: "o/r", issueNumber: 186, collapseKey: "gh-issue:o/r#186" };
+  const opened = await store.enqueueWorkItem(acct.id, { ...input, dedupeKey: "gh:opened" });
+  const notices = await Promise.all(Array.from({ length: 4 }, () =>
+    store.parkAutomationRunForPolicy(acct.id, opened.id, "Usage limit reached", "quota")));
+  assert.equal(notices.filter(Boolean).length, 1, "only the atomic transition winner may post a comment/push");
+  const blocked = await store.getAutomationRun(acct.id, opened.id);
+  assert.equal(blocked?.status, "needs_attention");
+  assert.equal(blocked?.events?.filter((event) => event.kind === "policy_denial").length, 1);
+  assert.equal(blocked?.attention?.reason, "Usage limit reached");
+
+  const labeled = await store.enqueueWorkItem(acct.id, { ...input, dedupeKey: "gh:labeled" });
+  assert.equal(labeled.id, opened.id, "label delivery after denial must not create another run");
+  assert.equal(await store.parkAutomationRunForPolicy(acct.id, labeled.id, "Usage limit reached", "quota"), undefined);
+  assert.equal((await store.listWorkItems(acct.id)).length, 1);
+
+  // Explicit retry is a new admission attempt, not a webhook redelivery.
+  await store.retryAutomationRun(acct.id, opened.id);
+  assert.ok(await store.parkAutomationRunForPolicy(acct.id, opened.id, "Still blocked", "quota"));
+  await store.cancelAutomationRun(acct.id, opened.id);
+  assert.equal(await store.parkAutomationRunForPolicy(acct.id, opened.id, "Blocked", "quota"), undefined);
+  const next = await store.enqueueWorkItem(acct.id, { ...input, dedupeKey: "gh:relabel" });
+  assert.notEqual(next.id, opened.id, "cancellation releases the issue intake slot");
+});
+
 await test("rerouteDefaultRoutedPending moves only pending default-routed items", async () => {
   const store = await makeStore();
   const acct = await store.findOrCreateAccount("reroute@example.com");

@@ -904,12 +904,12 @@ export interface WorkItem {
   leaseExpiresAt?: string;
   completedAt?: string;
   dedupeKey?: string; // idempotency key (e.g. "gh:<delivery-id>"); unique per account
-  // Collapse key: while an item is still pending, a second enqueue with the same
+  // Collapse key: while an item is pending or parked by admission policy, a second enqueue with the same
   // collapse key (same account) returns it instead of adding a duplicate. Unlike
   // `dedupeKey` (per-delivery), this is per *issue* (e.g. "gh-issue:owner/repo#7"),
   // so the many webhook deliveries a single issue emits (opened, labeled, edited)
-  // collapse into one queue entry. It frees once the item leaves `pending`, so a
-  // later re-label after a run finished can still start a fresh run.
+  // collapse into one queue entry. Policy denial retains the slot because no
+  // work ran; execution or cancellation releases it so later requests can run.
   collapseKey?: string;
   // True when the item landed on the shared `bivy` queue with no explicit
   // `bivy/<node>` label or `on <node>` directive — i.e. it is re-routable when the
@@ -1602,6 +1602,8 @@ export interface AutomationRepository {
    *  so a Machine that lost its lease to a reclaim cannot complete or fail the
    *  new attempt in the read-then-write window. Returns undefined when the
    *  transition was not applied (wrong source state or ownership lost). */
+  /** Atomically park admission-denied work. Only the winning caller receives a run and may notify. */
+  parkAutomationRunForPolicy(accountId: string, id: string, reason: string, code: string): Promise<AutomationRun | undefined>;
   transitionAutomationRun(accountId: string, id: string, status: AutomationRunStatus, output?: AutomationRun["output"], expectedNodeId?: string, claimToken?: string): Promise<AutomationRun | undefined>;
   /** Account-scoped, transactional cancellation. Already-cancelled runs are
    *  returned idempotently; callers inspect previousStatus for terminal conflicts. */
