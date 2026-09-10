@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.18] - 2026-09-10
+
+### Added
+
+- Select provider accounts and API keys for automations, with encrypted account
+  labels and per-session credential routing. Update runners before configuring
+  account overrides; older daemons do not support structured automation templates.
+- Choose provider accounts directly in the model picker.
+
+### Fixed
+
+- Surface automation quota blocks and forward automation sources to deployment policy.
+- Preserve transcript position and tool inspection during updates, and keep failed
+  tool summaries labeled consistently.
+- Reload the app after activating a PWA update, stabilize notification preferences,
+  and respect notification settings for the app icon badge.
+- Simplify provider OAuth sign-in and honor selected credential accounts.
+- Stabilize terminal cleanup.
+
 ## [0.16.17] - 2026-09-09
 
 ### Fixed
