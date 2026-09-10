@@ -13,6 +13,7 @@
 //   * The SDK is loaded with a dynamic import so it stays an *optional*
 //     dependency: a Bivy install only needs it when this runtime is selected.
 
+import { withSessionCredentials, credentialEnvFallback } from "../../credentials/session.js";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
@@ -847,7 +848,7 @@ class ClaudeSession implements RuntimeSession {
    */
   async interactiveTuiCommand(): Promise<TuiLaunchSpec | null> {
     if (!claudeCliAvailable()) return null;
-    const env = await this.resolveCredentialEnv().catch(() => ({}));
+    const env = await this.resolveCredentialEnv().catch(credentialEnvFallback);
     return { command: "claude", args: ["--resume", this.sessionFile], env };
   }
 
@@ -1028,7 +1029,7 @@ class ClaudeSession implements RuntimeSession {
   async warmModels(): Promise<void> {
     if (this.query) return this.refreshSupportedModels();
     try {
-      const env = { ...process.env, ...depCacheEnv(this.cwd), ...this.runtimeOptions.env, ...(await this.resolveCredentialEnv().catch(() => ({}))) } as Record<string, string>;
+      const env = { ...process.env, ...depCacheEnv(this.cwd), ...this.runtimeOptions.env, ...(await this.resolveCredentialEnv().catch(credentialEnvFallback)) } as Record<string, string>;
       if (anthropicCredentialPreflight(env)) return; // no credential — keep FALLBACK_MODELS
       await this.ensureStarted();
       await this.refreshSupportedModels();
@@ -1059,7 +1060,7 @@ class ClaudeSession implements RuntimeSession {
       // refresh it immediately even if its expiry claims it is still valid.
       // The resolver compares this under the vault lock, making concurrent
       // failures converge on one rotation.
-      const credEnv = await this.resolveCredentialEnv(rejectedToken).catch(() => ({} as Record<string, string>));
+      const credEnv = await this.resolveCredentialEnv(rejectedToken).catch(credentialEnvFallback);
       const nextToken = authTokenFromEnv(credEnv);
       if (!nextToken || nextToken === this.spawnedToken) return false;
       this.emit({ type: "session.notice", level: "info", message: "Refreshing credentials…" });
@@ -1106,8 +1107,8 @@ class ClaudeSession implements RuntimeSession {
     let cred;
     try {
       cred = await store.getCredential(provider, { workspace: this.cwd, ...(rejectedToken ? { rejectedToken } : {}) });
-    } catch {
-      return {};
+    } catch (error) {
+      return credentialEnvFallback(error);
     }
     if (!cred) return {};
     const out: Record<string, string> = { ...(cred.env ?? {}) };
@@ -1378,7 +1379,7 @@ class ClaudeSession implements RuntimeSession {
     // reach the SDK, surface an actionable message instead of letting it spawn
     // and fail its first request with an opaque `401 Unauthorized`.
     if (!this.query) {
-      const env = { ...process.env, ...depCacheEnv(this.cwd), ...this.runtimeOptions.env, ...(await this.resolveCredentialEnv().catch(() => ({}))) } as Record<string, string>;
+      const env = { ...process.env, ...depCacheEnv(this.cwd), ...this.runtimeOptions.env, ...(await this.resolveCredentialEnv().catch(credentialEnvFallback)) } as Record<string, string>;
       const preflightError = anthropicCredentialPreflight(env);
       if (preflightError) {
         this.messages.push({ role: "user", content: hasImages ? content : prompt, timestamp: Date.now() });
@@ -1573,13 +1574,13 @@ export class ClaudeCodeRuntime implements AgentRuntime {
   }
 
   async createSession(options: OpenSessionOptions): Promise<OpenSessionResult> {
-    const session = new ClaudeSession(this.options, options.workspace, options.toolInterceptor, options.toolProvider);
+    const session = new ClaudeSession(await withSessionCredentials(this.options, options.credentialLabels), options.workspace, options.toolInterceptor, options.toolProvider);
     this.sessions.push(session);
     return { session };
   }
 
   async openSession(options: OpenSessionOptions & { sessionFile: string }): Promise<OpenSessionResult> {
-    const session = new ClaudeSession(this.options, options.workspace, options.toolInterceptor, options.toolProvider, options.sessionFile);
+    const session = new ClaudeSession(await withSessionCredentials(this.options, options.credentialLabels), options.workspace, options.toolInterceptor, options.toolProvider, options.sessionFile);
     this.sessions.push(session);
     return {
       session,

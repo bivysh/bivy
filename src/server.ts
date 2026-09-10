@@ -37,6 +37,7 @@ import { InMemoryLocationRegistry } from "./runtime/location-registry.js";
 import { ControlPlaneSessionLocationRegistry, LayeredSessionLocationRegistry, type NodeSessionRow } from "./runtime/control-plane-location.js";
 import { attachAdoptedSessions, classifyAttachFailure } from "./runtime/adoption.js";
 import { createCredentialStore, testProviderCredential } from "./runtime/credentials.js";
+import { decodeAutomationTemplate } from "./automation-template.js";
 import { isModelAuthError, authProviderForSession, classifyModelAuthError } from "./runtime/auth-errors.js";
 import { createCredentialVault, migrateVaultDir } from "./runtime/credential-store.js";
 import { probeAnthropicAccess } from "./runtime/anthropic-preflight.js";
@@ -970,6 +971,7 @@ function startOAuthLoginSweeper(): void {
 // `makeActive: false` keeps a background (e.g. issue-triggered) session from
 // stealing the user's focused session; `source` tags where it came from.
 type CreateSessionOptions = {
+  credentialLabels?: Record<string, string>;
   /** Materialized forks open a ref but are new sessions, not resumes. */
   newSession?: boolean;
   worktree?: boolean | { branch?: string; base?: string };
@@ -4209,6 +4211,7 @@ function withIssueLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
 /** Optional agent/model overrides for a queued run (from the manual "Run…" action).
  *  Take precedence over any `bivy-agent:`/`bivy-model:` directives in the issue body. */
 interface RunIssueOverrides {
+  credentialLabels?: Record<string, string>;
   runtimeId?: string;
   model?: string;
   sandbox?: SandboxTier;
@@ -4309,6 +4312,7 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
   // which now adopts the existing remote branch rather than colliding.
   const existing = findIssueSession(source);
   if (existing?.worktree && fs.existsSync(existing.worktree.path)) {
+    assertSessionAccounts(existing, overrides.credentialLabels);
     const currentSandbox = existing.sandbox ?? sandboxTier();
     const safety = projectSafety(existing.worktree.path, overrides.sandbox ?? currentSandbox, overrides.approvalMode);
     if (safety.sandbox !== currentSandbox) {
@@ -4384,6 +4388,7 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
     runtimeId: directives.runtimeId,
     sandbox: safety.sandbox,
     approvalMode: safety.approval,
+    credentialLabels: overrides.credentialLabels,
   });
   record.githubIssueUrl = `https://github.com/${cfg.owner}/${cfg.repo}/issues/${issue.number}`;
   // Title the session from the issue up front so it never shows as "Untitled
@@ -4997,11 +5002,17 @@ function linearSessionSource(externalId: string): string {
  * starting, and return false so the caller falls through. Returns true only when
  * it fully handled the item.
  */
+function assertSessionAccounts(record: SessionRecord, labels?: Record<string, string>): void {
+  if (Object.entries(labels ?? {}).some(([provider, label]) => record.credentialLabels?.[provider] !== label)) {
+    throw new Error("This session uses different provider accounts; start a new session to use the automation's selections");
+  }
+}
+
 async function continueCorrelatedSession(
   item: ControlPlaneWorkItem,
   prompt: string,
   report: (patch: EvidencePatch) => Promise<void>,
-  opts?: { resumeOnMissing?: boolean; isMessage?: boolean; signal?: AbortSignal },
+  opts?: { resumeOnMissing?: boolean; isMessage?: boolean; signal?: AbortSignal; credentialLabels?: Record<string, string> },
 ): Promise<boolean> {
   if (item.targetKind !== "existing_session" || !item.targetSessionId) return false;
   let record = openSessions.get(item.targetSessionId);
@@ -5026,6 +5037,7 @@ async function continueCorrelatedSession(
     }
     return false;
   }
+  assertSessionAccounts(record, opts?.credentialLabels);
   const branch = record.worktree?.branch;
   if (opts?.resumeOnMissing) {
     // Durable work targeting an existing Session waits for its current turn to
@@ -5109,13 +5121,16 @@ async function executeWorkItem(item: ControlPlaneWorkItem, report: (patch: Evide
   // assigned node can read. The envelope prefix is Bivy's own and never appears
   // on issue/Slack/Linear bodies, so decrypt whenever it's present regardless of
   // source.
+  let credentialLabels: Record<string, string> | undefined;
   if (item.body?.startsWith("bivy-room-v1:")) {
     const [, nodeId, ...payload] = item.body.split(":");
     if (nodeId !== identity.nodeId || payload.length === 0) {
       throw new Error("automation instructions were encrypted for a different node");
     }
     try {
-      item = { ...item, body: open(pairingStore.roomKey(), payload.join(":")) };
+      const template = decodeAutomationTemplate(open(pairingStore.roomKey(), payload.join(":")));
+      credentialLabels = template.credentialLabels;
+      item = { ...item, body: template.instructions };
     } catch {
       throw new Error("could not decrypt automation instructions on this node");
     }
@@ -5178,6 +5193,7 @@ async function executeWorkItem(item: ControlPlaneWorkItem, report: (patch: Evide
     await runIssueTask(cfg, issue, {
       runtimeId: item.runtimeId,
       model: item.model,
+      credentialLabels,
       sandbox: normalizeSandboxTier(item.sandbox),
       approvalMode: approvalModeFrom(item.approvalMode),
       onEvidence: report,
@@ -5198,7 +5214,7 @@ async function executeWorkItem(item: ControlPlaneWorkItem, report: (patch: Evide
     if (!parsed) throw new Error(`Linear work item has an invalid repo "${repoSlug}"`);
     // Case B: a re-dispatch the control plane correlated to an existing session
     // continues it as a normal chat instead of starting cold (mirrors GitHub).
-    if (await continueCorrelatedSession(item, buildLinearTaskPrompt(issue, item.body), report, { resumeOnMissing: item.targetKind === "existing_session", signal })) return;
+    if (await continueCorrelatedSession(item, buildLinearTaskPrompt(issue, item.body), report, { resumeOnMissing: item.targetKind === "existing_session", signal, credentialLabels })) return;
     const githubToken = await resolveGitHubToken();
     if (!githubToken) throw new Error("no GitHub token available to clone the Linear issue repository");
     const repoDir = await cloneOrUpdateRepo({ owner: parsed.owner, repo: parsed.repo, token: githubToken, root: reposRoot });
@@ -5212,6 +5228,7 @@ async function executeWorkItem(item: ControlPlaneWorkItem, report: (patch: Evide
       makeActive: false,
       source: linearSessionSource(item.externalId),
       runtimeId: item.runtimeId || nodeConfiguredDefaultAgent(),
+      credentialLabels,
       sandbox: safety.sandbox,
       approvalMode: safety.approval,
     });
@@ -5250,7 +5267,7 @@ async function executeWorkItem(item: ControlPlaneWorkItem, report: (patch: Evide
   // Scheduled runs targeting an existing session are STRICT: the message must
   // land in that session (resumed from disk if needed), never silently in a new
   // one — so a session that can't be resumed fails the run instead.
-  if (await continueCorrelatedSession(item, request, report, { resumeOnMissing: item.source === "schedule" || item.targetKind === "existing_session", isMessage, signal })) return;
+  if (await continueCorrelatedSession(item, request, report, { resumeOnMissing: item.source === "schedule" || item.targetKind === "existing_session", isMessage, signal, credentialLabels })) return;
   const requestedSandbox = normalizeSandboxTier(item.sandbox);
   // Prepare an explicit repository before resolving its policy. Otherwise a
   // first-ever run would inspect a not-yet-cloned path and miss the policy on
@@ -5265,6 +5282,7 @@ async function executeWorkItem(item: ControlPlaneWorkItem, report: (patch: Evide
   const sessionOpts = {
     makeActive: false,
     title: item.title,
+    credentialLabels,
     runtimeId: item.runtimeId,
     sandbox,
   };
@@ -6543,6 +6561,7 @@ function persistSessionMetadata(record: SessionRecord, status = sessionStatus(re
     delegationDepth: record.delegationDepth,
     runtimeId: record.runtimeId,
     sandbox: record.sandbox,
+    credentialLabels: record.credentialLabels,
     agentName: getRuntime(record.runtimeId).displayName,
     contract: record.contract,
     status,
@@ -7769,7 +7788,7 @@ async function refreshRecordAfterTui(record: SessionRecord) {
     const workspace = record.worktree?.path || oldSession.cwd || record.workspace;
     // Refreshing an EXISTING record: its id is already known, so attach_to_chat
     // (see toolProvider's SessionIdRef doc) can be wired live, not deferred.
-    const runtimeSessionOptions = { workspace, toolProvider: integrations.toolProvider({ current: record.id }), ...(rt.capabilities.toolInterception ? { toolInterceptor: guardianInterceptor } : {}) };
+    const runtimeSessionOptions = { credentialLabels: record.credentialLabels, workspace, toolProvider: integrations.toolProvider({ current: record.id }), ...(rt.capabilities.toolInterception ? { toolInterceptor: guardianInterceptor } : {}) };
     const { session, warning } = await runtimeHost.openSession(rt, { ...runtimeSessionOptions, sessionFile: record.sessionFile });
     record.session = session;
     record.sessionFile = session.sessionFile ?? record.sessionFile;
@@ -8010,6 +8029,7 @@ async function recoverRecordAfterAbort(record: SessionRecord): Promise<void> {
     const workspace = record.worktree?.path || oldSession.cwd || record.workspace;
     const runtimeSessionOptions = {
       workspace,
+      credentialLabels: record.credentialLabels,
       toolProvider: integrations.toolProvider({ current: record.id }),
       ...(rt.capabilities.toolInterception ? { toolInterceptor: guardianInterceptor } : {}),
     };
@@ -8109,6 +8129,7 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
 
   const existing = requestedSessionFile ? (openSessions.get(requestedSessionFile) ?? (storedMeta?.id ? openSessions.get(storedMeta.id) : undefined)) : undefined;
   if (existing) {
+    assertSessionAccounts(existing, opts.credentialLabels);
     // Reopening an already-open session must NOT bump its last-active time —
     // that only tracks real user/agent activity, not focus. (Was touchSession.)
     if (makeActive) active = existing;
@@ -8207,7 +8228,8 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
   // built now, up front — so hand it this box instead of a session id and fill
   // `.current` in the moment `sessionId` is (see toolProvider's SessionIdRef doc).
   const attachSessionIdRef: SessionIdRef = {};
-  const runtimeSessionOptions = { workspace: runtimeWorkspace, toolProvider: integrations.toolProvider(attachSessionIdRef), ...(rt.capabilities.toolInterception ? { toolInterceptor: guardianInterceptor } : {}) };
+  const credentialLabels = opts.credentialLabels ?? storedMeta?.credentialLabels;
+  const runtimeSessionOptions = { credentialLabels, workspace: runtimeWorkspace, toolProvider: integrations.toolProvider(attachSessionIdRef), ...(rt.capabilities.toolInterception ? { toolInterceptor: guardianInterceptor } : {}) };
   // Stage 2/3: prefer re-attaching to a still-live remote session — routed to its
   // OWN agent service — over re-opening a fresh copy from disk. Falls back to
   // open/create when nothing live is there.
@@ -8268,7 +8290,7 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
   // Rehydrating (rather than leaving this undefined for a resumed session)
   // also avoids a persistSessionMetadata call later silently clobbering the
   // stored contract with undefined via its `{...prev, ...input}` merge.
-  const record: SessionRecord = { id: sessionId, session, runtimeId: rt.id, sandbox: sessionSandbox, approvalMode: sessionSafety.approval, automationRunId: storedMeta?.automationRunId, delegationDepth: storedMeta?.delegationDepth, workspace: sessionWorkspace, sessionFile: session.sessionFile, agentServiceAddress: attachedAddress ?? (rt as { agentServiceAddress?: string }).agentServiceAddress, worktree, source, prUrl: storedMeta?.prUrl, prs: storedMeta?.prs, contract: storedMeta?.contract, lastTouchedAt: resumedLastActive ?? Date.now(), warning: modelFallbackMessage, ephemeral: opts.ephemeral, workspaceState: runGit(["status", "--porcelain", "--untracked-files=normal"], sessionWorkspace) ? "dirty" : "clean" };
+  const record: SessionRecord = { id: sessionId, session, runtimeId: rt.id, credentialLabels, sandbox: sessionSandbox, approvalMode: sessionSafety.approval, automationRunId: storedMeta?.automationRunId, delegationDepth: storedMeta?.delegationDepth, workspace: sessionWorkspace, sessionFile: session.sessionFile, agentServiceAddress: attachedAddress ?? (rt as { agentServiceAddress?: string }).agentServiceAddress, worktree, source, prUrl: storedMeta?.prUrl, prs: storedMeta?.prs, contract: storedMeta?.contract, lastTouchedAt: resumedLastActive ?? Date.now(), warning: modelFallbackMessage, ephemeral: opts.ephemeral, workspaceState: runGit(["status", "--porcelain", "--untracked-files=normal"], sessionWorkspace) ? "dirty" : "clean" };
   // Migration: a session resumed/reopened from before this feature (or from a
   // node that predates it) has no stored contract. Stamp an honest one now
   // from currently-observed facts rather than leaving it blank forever or
@@ -8560,6 +8582,7 @@ function prefetchModels(runtimeIds: string[]): void {
  * flow (see runIssueTask).
  */
 type SessionHelperOpts = {
+  credentialLabels?: Record<string, string>;
   /** Raw first-message text: signals "set a placeholder now, then auto-name from
    *  this message on the first turn". The VALUE is intentionally not used as the
    *  name (it's the whole prompt) — see the placeholder assignment below. */
@@ -8598,7 +8621,7 @@ async function createWorkspaceSession(workspace: string, opts: SessionHelperOpts
     await fetchOrigin(workspace);
     return createGitWorkspaceSession(workspace, parsed, opts);
   }
-  const record = await createSession(workspace, undefined, { runtimeId: opts.runtimeId, sandbox: opts.sandbox, makeActive: opts.makeActive });
+  const record = await createSession(workspace, undefined, { runtimeId: opts.runtimeId, credentialLabels: opts.credentialLabels, sandbox: opts.sandbox, makeActive: opts.makeActive });
   applyInitialSessionName(record, opts);
   return record;
 }
@@ -8617,6 +8640,7 @@ async function createGitWorkspaceSession(repoDir: string, parsed: ParsedRepo, op
     worktree: { branch, base },
     source: `repo:${parsed.slug}`,
     runtimeId: opts.runtimeId,
+    credentialLabels: opts.credentialLabels,
     sandbox: opts.sandbox,
     makeActive: opts.makeActive,
   });

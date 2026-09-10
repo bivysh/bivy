@@ -97,6 +97,7 @@ function resolvePiCommand(): string {
 
 /** What PiSession.interactiveTuiCommand needs to relaunch this session's TUI. */
 interface PiTuiLaunch {
+  credentialLabels?: Record<string, string>;
   credsDir: string;
   piDir: string;
   sessionsDir: string;
@@ -247,7 +248,8 @@ class PiSession implements RuntimeSession {
    */
   async interactiveTuiCommand(): Promise<TuiLaunchSpec | null> {
     const file = this.sessionFile;
-    if (!file) return null;
+    // The shared native auth.json cannot represent a session-local assignment.
+    if (!file || Object.keys(this.tui.credentialLabels ?? {}).length) return null;
     // Pi's own TUI reads its plaintext auth.json store, so project the vault to
     // disk (refreshed) for the hand-off. Best-effort: an empty auth.json just
     // means the TUI prompts for login (which we ingest back on the next sync).
@@ -495,7 +497,7 @@ export class PiRuntime implements AgentRuntime {
           modelsPath: path.join(piDir, "models.json"),
           allowModelNetwork,
         })
-      : await createPiModelRuntime({ credsDir, piDir, allowModelNetwork, workspace: sessionManager.getCwd() || options.workspace });
+      : await createPiModelRuntime({ credsDir, piDir, allowModelNetwork, workspace: sessionManager.getCwd() || options.workspace, credentialLabels: options.credentialLabels });
     const backgroundShells = new BackgroundShellTracker();
     const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, agentDir, sessionManager, sessionStartEvent }) => {
       const sessionId = sessionManager.getSessionId();
@@ -525,6 +527,7 @@ export class PiRuntime implements AgentRuntime {
     });
 
     const tui: PiTuiLaunch = {
+      credentialLabels: options.credentialLabels,
       credsDir,
       piDir,
       sessionsDir: this.options.sessionsDir,

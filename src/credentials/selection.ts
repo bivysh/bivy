@@ -19,8 +19,9 @@ export function selectCredential(provider: string, records: readonly CredentialR
   const workspace = context?.workspace?.trim();
   const projects = [context?.project?.trim(), ...(workspace ? projectIdsFromWorkspace(workspace) : [])].filter(Boolean);
   const projectPreset = projects.map((value) => `project:${value}`).find((name) => presets.presets?.[name]?.[id]);
+  const preferLabel = context?.credentialLabels?.[id] ?? context?.preferLabel;
   return resolveCredential(id, records, presets, {
     ...(projectPreset ? { preset: projectPreset } : {}),
-    ...(context?.preferLabel ? { preferLabel: context.preferLabel } : {}),
+    ...(preferLabel ? { preferLabel } : {}),
   });
 }
