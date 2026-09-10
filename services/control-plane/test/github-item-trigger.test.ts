@@ -36,6 +36,21 @@ for (const event of ["issues", "pull_request"] as const) {
     assert.equal(matchGithubItemTrigger([automation()], {}, event, payload("bivy"), "bivy-sh").matched, false);
   });
 
+  test(`${event}: pickup labels do not re-enqueue the issue body as a follow-up`, () => {
+    for (const on of [undefined, [{ event, labels: ["bivy"] }], [{ event, mention: true }]]) {
+      const definition = automation({ on });
+      // Legacy definitions only enable issues, not PRs.
+      if (!on && event === "pull_request") continue;
+      for (const label of ["bivy:in-progress", "bivy/bivy-agent:in-progress", "bivy/bivy-agent-staging:in-progress", "unrelated"]) {
+        const value = payload(label, ["bivy"]);
+        const item = value[event === "issues" ? "issue" : "pull_request"]!;
+        item.body = "@bivy-sh let me know if you receive this";
+        item.author_association = "OWNER";
+        assert.equal(matchGithubItemTrigger([definition], {}, event, value, "bivy-sh").matched, false, label);
+      }
+    }
+  });
+
   test(`${event}: pause, repository, app, and event filters remain authoritative`, () => {
     for (const definition of [
       automation({ enabled: false }), automation({ repos: ["acme/other"] }), automation({ appId: "other-app" }),
@@ -59,7 +74,7 @@ for (const event of ["issues", "pull_request"] as const) {
     assert.equal(matchGithubItemTrigger([definition], {}, event, value, "bivy-sh").matched, false);
     const item = value[event === "issues" ? "issue" : "pull_request"]!;
     item.body = "@bivy-sh on laptop fix it";
-    const denied = matchGithubItemTrigger([definition], { triggerAccess: "collaborator" }, event, value, "bivy-sh");
+    const denied = matchGithubItemTrigger([definition], { triggerAccess: "collaborator" }, event, { ...value, action: "edited" }, "bivy-sh");
     assert.deepEqual(denied, { matched: false, reason: "access" });
     item.author_association = "COLLABORATOR";
     item.labels = [];
