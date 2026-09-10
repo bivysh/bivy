@@ -369,7 +369,8 @@ async function loginOpenAICodexDeviceCode(provider: ModelOAuthProvider, interact
   if (!started.ok) throw new Error(`OpenAI Codex device authorization failed (${started.status}): ${started.text.slice(0, 200)}`);
   const deviceAuthId = typeof started.payload.device_auth_id === "string" ? started.payload.device_auth_id : "";
   const userCode = typeof started.payload.user_code === "string" ? started.payload.user_code : "";
-  const interval = Number(started.payload.interval) || 5;
+  const rawInterval = Number(started.payload.interval);
+  const interval = Number.isFinite(rawInterval) && rawInterval >= 0 ? rawInterval : 5;
   if (!deviceAuthId || !userCode) throw new Error(`Invalid OpenAI Codex device authorization response: ${JSON.stringify(started.payload)}`);
 
   const expiresInSeconds = 15 * 60;

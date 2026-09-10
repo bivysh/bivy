@@ -8,7 +8,7 @@ const opener = (url: string) => { opened = url; return true; };
 
 assert.deepEqual(openOAuthLoginOnNode(undefined, opener), { opened: false, error: "Login is no longer waiting for authorization." });
 assert.deepEqual(
-  openOAuthLoginOnNode({ provider: "anthropic", status: "done", authUrl: "https://claude.ai/oauth/authorize" }, opener),
+  openOAuthLoginOnNode({ provider: "anthropic", status: "done", authUrl: "https://claude.com/cai/oauth/authorize" }, opener),
   { opened: false, error: "Login is no longer waiting for authorization." },
 );
 assert.equal(
@@ -20,10 +20,10 @@ assert.equal(opened, "");
 const result = openOAuthLoginOnNode({
   provider: "anthropic",
   status: "waiting",
-  authUrl: "https://claude.ai/oauth/authorize?client_id=test&state=opaque",
+  authUrl: "https://claude.com/cai/oauth/authorize?client_id=test&state=opaque",
 }, opener);
 assert.deepEqual(result, { opened: true });
-assert.match(opened, /^https:\/\/claude\.ai\/oauth\/authorize\?/);
+assert.match(opened, /^https:\/\/claude\.com\/cai\/oauth\/authorize\?/);
 
 assert.deepEqual(
   openOAuthLoginOnNode({ provider: "openai-codex", status: "waiting", authUrl: "https://auth.openai.com/oauth/authorize?state=x" }, () => false),
