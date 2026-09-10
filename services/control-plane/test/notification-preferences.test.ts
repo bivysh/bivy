@@ -10,7 +10,7 @@ import net from "node:net";
  * Account-scoped notification preferences API (`/api/push/preferences`).
  * Exercises the real HTTP routes in src/index.ts:
  *  - unauthenticated reads are refused,
- *  - a fresh account defaults to all six kinds enabled,
+ *  - a fresh account defaults to every notification kind enabled,
  *  - PUT merges a partial patch and ignores unknown keys,
  *  - the merge persists across requests.
  */
@@ -18,7 +18,7 @@ import net from "node:net";
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const cpDir = path.resolve(testDir, "..");
 
-const KINDS = ["question_asked", "approval_requested", "agent_waiting", "session_done", "session_error", "terminal_bell"];
+const KINDS = ["question_asked", "approval_requested", "agent_waiting", "session_done", "session_error", "terminal_bell", "automation_blocked"];
 
 async function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -85,12 +85,12 @@ async function main() {
   const login = await req(port, "POST", "/auth/dev-login", { email: "prefs@example.com" });
   const token = login.json.token;
 
-  // Fresh account: all six kinds default enabled.
+  // Fresh account: every known kind defaults enabled.
   const defaults = await req(port, "GET", "/api/push/preferences", undefined, token);
   const dp = defaults.json?.preferences ?? {};
   expect(defaults.status === 200, `GET returns 200 (got ${defaults.status})`);
-  expect(KINDS.every((k) => dp[k] === true), "defaults: all six kinds enabled");
-  expect(Object.keys(dp).length === 6, `defaults: exactly six kinds (got ${Object.keys(dp).length})`);
+  expect(KINDS.every((k) => dp[k] === true), "defaults: all notification kinds enabled");
+  expect(Object.keys(dp).length === KINDS.length, `defaults: exactly ${KINDS.length} kinds (got ${Object.keys(dp).length})`);
 
   // Partial patch merges; unknown keys ignored.
   const put = await req(port, "PUT", "/api/push/preferences", { session_done: false, bogus: true }, token);
