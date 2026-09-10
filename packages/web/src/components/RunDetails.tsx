@@ -134,6 +134,7 @@ export function RunDetails({
   const [actionError, setActionError] = useState("");
   const [confirmCancel, setConfirmCancel] = useState(false);
   const reviewedReceipt = useRef(false);
+  const refreshVersion = useRef({ value: 0 });
 
   // App passes `load`/`resolveMachineName` as fresh closures every render; keep
   // them in refs so the fetch is keyed only on runId and never storms the
@@ -144,8 +145,10 @@ export function RunDetails({
 
   const refresh = useCallback(
     async (opts: { keepPrevious?: boolean } = {}) => {
+      const version = ++refreshVersion.current.value;
       try {
         const next = await loadRef.current(runId);
+        if (version !== refreshVersion.current.value) return;
         if (next === null) {
           if (opts.keepPrevious) { setStale(true); return; }
           setRecord(null);
@@ -156,6 +159,7 @@ export function RunDetails({
         setStatus("ready");
         setStale(false);
       } catch (err) {
+        if (version !== refreshVersion.current.value) return;
         const reason = err instanceof RunFetchError ? err.reason : "error";
         if (reason === "unauthorized") { setStatus("unauthorized"); return; }
         // Offline / transient: keep any record we already showed, but mark it
@@ -170,14 +174,34 @@ export function RunDetails({
   useEffect(() => {
     reviewedReceipt.current = false;
     setStatus("loading");
+    setRecord(null);
     setStale(false);
     void refresh();
+    // Ignore responses from a previous route or an unmounted screen.
+    const version = refreshVersion.current;
+    return () => { version.value++; };
   }, [runId, refresh]);
 
   const run = useMemo(
     () => (record ? runFromAutomationRun(record, { resolveMachineName }) : null),
     [record, resolveMachineName],
   );
+
+  const lifecycle = run?.lifecycle;
+
+  // This overlay loads independently of the queue/session stores. Keep active
+  // runs fresh even when another run frees capacity or the agent finishes.
+  useEffect(() => {
+    if (status !== "ready" || !lifecycle || lifecycle === "finished" || busyAction) return;
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      await refresh({ keepPrevious: true });
+      if (!disposed) timer = setTimeout(poll, 5_000);
+    };
+    timer = setTimeout(poll, 5_000);
+    return () => { disposed = true; clearTimeout(timer); };
+  }, [status, lifecycle, busyAction, refresh]);
 
   useEffect(() => {
     if (status !== "ready" || !run || reviewedReceipt.current) return;
@@ -358,11 +382,13 @@ function RunBody({
 
       <div className="run-details-title">{run.title}</div>
 
-      <div className="run-sheet-status">
+      <div className="run-sheet-status" role="status">
         <StatusDot status={LIFECYCLE_STATUS[run.lifecycle]} />
         {LIFECYCLE_LABEL[run.lifecycle]}
-        {" · "}
-        <Badge tone={run.outcome.tone === "success" ? "ok" : run.outcome.tone === "warning" ? "warn" : run.outcome.tone === "danger" ? "danger" : undefined}>{run.outcome.label}</Badge>
+        {run.outcome.terminal && <>
+          {" · "}
+          <Badge tone={run.outcome.tone === "success" ? "ok" : run.outcome.tone === "warning" ? "warn" : run.outcome.tone === "danger" ? "danger" : undefined}>{run.outcome.label}</Badge>
+        </>}
         {run.attempt > 1 && <span className="run-details-attempt"> · attempt {run.attempt}</span>}
       </div>
 
