@@ -19,8 +19,10 @@ if [ "${BIVY_INSTALL_SMOKE_CACHE:-}" = 1 ]; then
 fi
 # Only bootstrap the prerequisites for curl itself. In particular, no Node,
 # timezone, or native build packages are preinstalled by the test harness.
-DEBIAN_FRONTEND=noninteractive apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl ca-certificates
+if ! command -v curl >/dev/null || [ ! -f /etc/ssl/certs/ca-certificates.crt ]; then
+  DEBIAN_FRONTEND=noninteractive apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl ca-certificates
+fi
 export BIVY_VERSION="file:$ARTIFACT" SHELL=/bin/bash
 # Use curl's file transport for the candidate installer, preserving the public
 # command's pipe semantics without deploying unreviewed code to bivy.sh.

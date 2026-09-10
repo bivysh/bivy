@@ -253,7 +253,12 @@ jobs:
   # supported desktop OS families. This catches release-only dependency/audit,
   # native-module, README metadata, and built-in Pi discovery regressions.
   release-consumer:
-    needs: [changes, root-release]
+    # Prepare the consumer/guest while root-release builds. The bounded artifact
+    # wait below replaces the whole-job dependency; ci-ok still gates both jobs.
+    needs: changes
+    permissions:
+      contents: read
+      actions: read
     if: inputs.force_all || needs.changes.outputs.root == 'true'
     name: Release consumer (${{ matrix.os }})
     strategy:
@@ -277,6 +282,13 @@ jobs:
             ~/.cache/bivy-installer-npm
             ~/.cache/bivy-installer-apt
           key: release-downloads-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml', 'install.sh', 'scripts/smoke-installer.sh') }}
+      - name: Prepare clean guest concurrently with packaging
+        if: runner.os == 'Linux'
+        run: bash scripts/installer-smoke-guest.sh start
+      - name: Wait for this run's release package
+        run: bash scripts/wait-release-artifact.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
       - name: Download release package
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -291,23 +303,18 @@ jobs:
           consumer=$!
           installer=
           if [ "$RUNNER_OS" = Linux ]; then
-            mkdir -p "$HOME/.cache/bivy-installer-npm" "$HOME/.cache/bivy-installer-apt"
-            docker run --rm --init -e BIVY_INSTALL_SMOKE=1 \
-              -e BIVY_INSTALL_SMOKE_CACHE=1 \
-              -v "$HOME/.cache/bivy-installer-npm:/root/.npm" \
-              -v "$HOME/.cache/bivy-installer-apt:/var/cache/apt/archives" \
-              -v "$PWD:/candidate:ro" ubuntu:24.04 \
-              bash /candidate/scripts/smoke-installer.sh /candidate/release-artifact/bivy-npm.tgz &
+            bash scripts/installer-smoke-guest.sh test &
             installer=$!
           fi
           status=0
           wait "$consumer" || status=1
           if [ -n "$installer" ]; then
             wait "$installer" || status=1
-            # Docker writes as root; let the runner save its download caches.
-            sudo chown -R "$(id -u):$(id -g)" "$HOME/.cache/bivy-installer-npm" "$HOME/.cache/bivy-installer-apt"
           fi
           exit "$status"
+      - name: Dispose installer guest
+        if: always() && runner.os == 'Linux'
+        run: bash scripts/installer-smoke-guest.sh cleanup
 
   # Keep real desktop/mobile coverage; distribute files across independent
   # runners. Source-only contracts run once in their own Playwright project.
