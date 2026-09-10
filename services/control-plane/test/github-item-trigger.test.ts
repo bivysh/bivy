@@ -3,6 +3,8 @@ import { strict as assert } from "node:assert";
 import test from "node:test";
 import { matchGithubItemTrigger } from "../src/github-item-trigger.js";
 import type { AutomationDefinition } from "../src/store.js";
+import { SOURCE_AUTOMATION_SEEDS } from "../src/automation-match.js";
+import { buildGithubOn } from "../../../packages/web/src/components/githubAutomationEvents.js";
 
 for (const event of ["issues", "pull_request"] as const) {
   const automation = (patch: Partial<AutomationDefinition> = {}): AutomationDefinition => ({
@@ -16,6 +18,26 @@ for (const event of ["issues", "pull_request"] as const) {
     [event === "issues" ? "issue" : "pull_request"]: {
       number: 7, title: "Fix it", body: "", labels: [...existing, label].map((name) => ({ name })), author_association: "NONE",
     },
+  });
+
+  test(`${event}: seeded and editor-generated rules accept unlabelled body mentions`, () => {
+    for (const on of [SOURCE_AUTOMATION_SEEDS.github.on, buildGithubOn({
+      issuesLabeled: true, issueMention: true, prLabeled: true, prMention: true, workflowFailed: false,
+    }, undefined, undefined)]) {
+      const value = payload("unused");
+      const item = value[event === "issues" ? "issue" : "pull_request"]!;
+      item.labels = [];
+      item.body = "Please comment on this thread @bivy-sh-staging";
+      item.author_association = "OWNER";
+      for (const action of ["opened", "edited", "reopened"]) {
+        const selected = matchGithubItemTrigger([automation({ on })], { triggerAccess: "collaborator" }, event, { ...value, action }, "bivy-sh-staging");
+        assert.equal(selected.matched, true);
+        if (selected.matched) assert.equal(selected.routingLabel, "bivy");
+      }
+      assert.equal(matchGithubItemTrigger([automation({ on })], {}, event, { ...value, action: "opened" }, "other-app").matched, false);
+      item.author_association = "NONE";
+      assert.deepEqual(matchGithubItemTrigger([automation({ on })], { triggerAccess: "collaborator" }, event, { ...value, action: "opened" }, "bivy-sh-staging"), { matched: false, reason: "access" });
+    }
   });
 
   test(`${event}: arbitrary configured labels trigger without a bivy label or mention`, () => {
