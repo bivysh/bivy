@@ -62,6 +62,7 @@ function harness(over: any = {}) {
     credsDir: "/creds",
     piDir: "/pi",
     maxRunTerminals: 50,
+    takeoverDiscoveryDelayMs: 0,
   };
   const emit = (e: any) => emitted.push(e);
   return { deps, terminals, emitted, created, broadcasts, metadata, runLogs, listChanged: () => listChanged, emit, rt: createRunTerminals(deps) };

@@ -94,6 +94,63 @@ const shSuites = ["installer-bootstrap.sh", "installer-migration.sh", "installer
 
 const allSuites = [...tsSuites, ...shSuites];
 
+// Approximate wall-clock costs from recent CI/local runs. They are not a
+// correctness input; they only keep shards balanced and start expensive suites
+// first so a long test does not become the final straggler. Unknown suites get a
+// small default weight and still run normally.
+const SUITE_DURATION_HINTS = new Map(Object.entries({
+  "opencode-sessions.test.ts": 54,
+  "plugin-cli.test.ts": 32,
+  "model-oauth.test.ts": 27,
+  "pi-models-auth-refresh.test.ts": 25,
+  "fork-transport.test.ts": 25,
+  "pi-session-discovery.test.ts": 23,
+  "config-cli.test.ts": 22,
+  "pi-integration-credentials.test.ts": 20,
+  "acp-adapter.test.ts": 29,
+  "agent-cli.test.ts": 18,
+  "cli-capability-probe.test.ts": 17,
+  "cli-version.test.ts": 15,
+  "setup-isolated-smoke.test.ts": 5,
+  "pi-models-all.test.ts": 15,
+  "self-host-bundle.test.ts": 14,
+  "self-host-setup.test.ts": 14,
+  "pi-commands.test.ts": 13,
+  "golden-workflow-agents.test.ts": 13,
+  "background-shell.test.ts": 13,
+  "agent-registry.test.ts": 12,
+  "runtime-streaming-behaviors.test.ts": 11,
+  "runtime-delete-session.test.ts": 10,
+  "remote-session-fault-matrix.test.ts": 10,
+  "exec-exit-code.test.ts": 10,
+  "plugin-runtime.test.ts": 9,
+  "python-agent-install.test.ts": 8,
+  "codex-shim-tool-items.test.ts": 8,
+  "cli-resume-templates.test.ts": 8,
+  "remote-runtime-integration.test.ts": 7,
+  "github-tasks-integration.test.ts": 7,
+  "policy-run-policy.test.ts": 6,
+  "protocol-runtime.test.ts": 6,
+  "opencode-fork-transport.test.ts": 6,
+  "local-model-discovery.test.ts": 6,
+  "command-registry.test.ts": 4,
+  "node-config.test.ts": 4,
+  "process-group-kill.test.ts": 4,
+  "remote-runtime-session.test.ts": 4,
+  "rpc-protocol.test.ts": 4,
+  "installer-path.sh": 12,
+  "installer-bootstrap.sh": 3,
+  "installer-migration.sh": 2,
+}));
+
+function durationHint(suite) {
+  return SUITE_DURATION_HINTS.get(suite.name) ?? (suite.name.endsWith(".sh") ? 5 : 1);
+}
+
+function compareByDurationDesc(a, b) {
+  return durationHint(b) - durationHint(a) || a.name.localeCompare(b.name);
+}
+
 const cliArgs = process.argv.slice(2);
 const listOnly = cliArgs.includes("--list");
 const selectors = cliArgs.filter((arg) => !arg.startsWith("--"));
@@ -110,22 +167,25 @@ if (shardSpec) {
   shardCount = Number(match[2]);
 }
 
-// FNV-1a gives every shard the same stable assignment without a coordination
-// file. Unlike contiguous chunks, it also spreads alphabetically clustered CLI
-// and integration suites, which tend to be the expensive ones.
-function shardFor(name) {
-  let hash = 0x811c9dc5;
-  for (const char of name) {
-    hash ^= char.charCodeAt(0);
-    hash = Math.imul(hash, 0x01000193);
+function assignShards(suites, count) {
+  const loads = Array.from({ length: count }, () => 0);
+  const assignments = new Map();
+  for (const suite of [...suites].sort(compareByDurationDesc)) {
+    let best = 0;
+    for (let i = 1; i < loads.length; i++) {
+      if (loads[i] < loads[best]) best = i;
+    }
+    assignments.set(suite.name, best);
+    loads[best] += durationHint(suite);
   }
-  return (hash >>> 0) % shardCount;
+  return assignments;
 }
 
-const selectedSuites = allSuites.filter((suite) =>
-  (selectors.length === 0 || selectors.some((selector) => suite.name.includes(selector)))
-  && shardFor(suite.name) === shardIndex,
+const selectorMatchedSuites = allSuites.filter((suite) =>
+  selectors.length === 0 || selectors.some((selector) => suite.name.includes(selector)),
 );
+const shardAssignments = assignShards(selectorMatchedSuites, shardCount);
+const selectedSuites = selectorMatchedSuites.filter((suite) => shardAssignments.get(suite.name) === shardIndex);
 if (selectedSuites.length === 0) {
   process.stderr.write(`No test suites matched${selectors.length ? `: ${selectors.join(", ")}` : ""}.\n`);
   process.exit(2);
@@ -137,8 +197,8 @@ if (listOnly) {
 }
 
 const suites = selectedSuites;
-const parallelSuites = suites.filter((suite) => suite.name.endsWith(".test.ts"));
-const serialSuites = suites.filter((suite) => !suite.name.endsWith(".test.ts"));
+const parallelSuites = suites.filter((suite) => suite.name.endsWith(".test.ts")).sort(compareByDurationDesc);
+const serialSuites = suites.filter((suite) => !suite.name.endsWith(".test.ts")).sort(compareByDurationDesc);
 
 const parallelism = availableParallelism?.() ?? cpus().length ?? 1;
 const concurrency = Math.max(1, Number(process.env.TEST_CONCURRENCY) || parallelism);

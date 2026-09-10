@@ -172,6 +172,9 @@ interface TerminalEntry {
   closed: boolean;
   /** Deliver a coalesced batch of output to the client. */
   onData: (data: string) => void;
+  /** Settles when node-pty reports the child has exited. Used by tests and shutdown paths that need to prove no PTY handle is left live. */
+  exitPromise: Promise<void>;
+  resolveExit: () => void;
 }
 
 /**
@@ -354,6 +357,8 @@ export class TerminalManager {
     });
 
     const now = Date.now();
+    let resolveExit!: () => void;
+    const exitPromise = new Promise<void>((resolve) => { resolveExit = resolve; });
     const entry: TerminalEntry = {
       proc,
       workspace: options.workspace,
@@ -367,6 +372,8 @@ export class TerminalManager {
       flushTimer: null,
       closed: false,
       onData: options.onData,
+      exitPromise,
+      resolveExit,
     };
     // Register the opener as a sized client so a later, smaller client shrinks
     // the PTY to the min of the two rather than clobbering the opener's size.
@@ -425,7 +432,11 @@ export class TerminalManager {
       flush();
       entry.closed = true;
       this.terminals.delete(id);
-      options.onExit(exitCode, signal, entry.buffer);
+      try {
+        options.onExit(exitCode, signal, entry.buffer);
+      } finally {
+        entry.resolveExit();
+      }
     });
 
     return id;
@@ -500,6 +511,20 @@ export class TerminalManager {
   close(id: string): boolean {
     const entry = this.terminals.get(id);
     if (!entry) return false;
+    this.closeEntry(id, entry);
+    return true;
+  }
+
+  /** Close a terminal and wait for the underlying PTY process to report exit. */
+  async closeAndWait(id: string, timeoutMs = 2000): Promise<boolean> {
+    const entry = this.terminals.get(id);
+    if (!entry) return false;
+    this.closeEntry(id, entry);
+    await waitForExit(entry.exitPromise, timeoutMs);
+    return true;
+  }
+
+  private closeEntry(id: string, entry: TerminalEntry): void {
     this.terminals.delete(id);
     // Drop any queued output — the client asked to close, so don't emit a
     // trailing batch (which would fire onData for a terminal it has torn down).
@@ -515,7 +540,6 @@ export class TerminalManager {
     } catch {
       // already gone
     }
-    return true;
   }
 
   has(id: string): boolean {
@@ -578,6 +602,28 @@ export class TerminalManager {
   /** Kill every terminal (process shutdown). */
   disposeAll(): void {
     for (const id of [...this.terminals.keys()]) this.close(id);
+  }
+
+  /** Kill every terminal and wait for node-pty to release its child handles. */
+  async disposeAllAndWait(timeoutMs = 2000): Promise<void> {
+    const exits: Promise<void>[] = [];
+    for (const [id, entry] of [...this.terminals]) {
+      this.closeEntry(id, entry);
+      exits.push(waitForExit(entry.exitPromise, timeoutMs));
+    }
+    await Promise.all(exits);
+  }
+}
+
+async function waitForExit(exitPromise: Promise<void>, timeoutMs: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      exitPromise,
+      new Promise<void>((resolve) => { timer = setTimeout(resolve, timeoutMs); }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 

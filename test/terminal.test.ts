@@ -25,9 +25,10 @@ async function main() {
           clearTimeout(timeout);
           assert.equal(mgr.size, 1, "one terminal should be live");
           assert.equal(mgr.setClientSize(id, "client-a", 100, 40), true, "resize should succeed");
-          mgr.close(id);
-          assert.equal(mgr.has(id), false, "terminal should be gone after close");
-          resolve();
+          void mgr.closeAndWait(id).then(() => {
+            assert.equal(mgr.has(id), false, "terminal should be gone after close");
+            resolve();
+          }, reject);
         }
       },
       onExit: () => {
@@ -50,7 +51,7 @@ async function main() {
     await bellAndInputCheck();
     missingCommandCheck();
   } catch (error) {
-    mgr.disposeAll();
+    await mgr.disposeAllAndWait();
     // A sandbox without PTY support shouldn't fail the suite hard.
     if (/posix_openpt|posix_spawnp|openpty|ENXIO|ENOENT/.test(String(error))) {
       console.warn(`terminal: skipped (no PTY in this environment): ${error}`);
@@ -81,7 +82,7 @@ async function scrollbackReplayCheck() {
   const snap = mgr.snapshot(id);
   assert.ok(snap != null && snap.includes(marker), "snapshot replays buffered output");
 
-  mgr.close(id);
+  await mgr.closeAndWait(id);
   assert.equal(mgr.snapshot(id), null, "snapshot is null after the terminal closes");
   assert.equal(mgr.snapshot("term-does-not-exist"), null, "snapshot is null for an unknown id");
   console.log("terminal: ok (scrollback snapshot + reattach)");
@@ -114,7 +115,7 @@ async function bellAndInputCheck() {
   });
   await done;
   assert.ok(bells >= 1, "onBell fires when the PTY emits a BEL");
-  mgr.disposeAll();
+  await mgr.disposeAllAndWait();
 
   const mgr2 = new TerminalManager();
   const id = mgr2.open({ workspace: os.tmpdir(), onData: () => {}, onExit: () => {} });
@@ -125,7 +126,7 @@ async function bellAndInputCheck() {
   const after = mgr2.lastInput(id);
   assert.ok(after != null && before != null && after > before, "write bumps lastInput");
   assert.equal(mgr2.lastInput("term-does-not-exist"), null, "lastInput is null for an unknown id");
-  mgr2.disposeAll();
+  await mgr2.disposeAllAndWait();
   console.log("terminal: ok (bell hook + input tracking)");
 }
 
@@ -160,7 +161,7 @@ async function coalescedBurstCheck() {
     void id;
   });
   await done;
-  mgr.disposeAll();
+  await mgr.disposeAllAndWait();
   // Every line arrived, in order. (A PTY rewrites \n as \r\n, so match the
   // token followed by a carriage return / newline rather than a bare \n.)
   for (let i = 0; i < count; i++) {
@@ -200,7 +201,7 @@ async function customCommandCheck() {
     assert.ok(id.startsWith("term-"), "custom-command open returns a term id");
   });
   await done;
-  mgr.disposeAll();
+  await mgr.disposeAllAndWait();
   console.log("terminal: ok (custom command / TUI launch path)");
 }
 
@@ -237,7 +238,7 @@ async function runTerminalMetaCheck() {
   assert.equal(mgr.lastActivity("term-nope"), null, "lastActivity() is null for an unknown id");
   assert.equal(mgr.list().length, 2, "unfiltered list includes the plain shell too");
 
-  mgr.disposeAll();
+  await mgr.disposeAllAndWait();
   assert.equal(mgr.list().length, 0, "disposeAll clears the registry");
   void shellId;
   console.log("terminal: ok (run-terminal metadata + listing)");

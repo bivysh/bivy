@@ -102,6 +102,10 @@ export interface RunTerminalDeps {
   credsDir: string;
   piDir: string;
   maxRunTerminals: number;
+  /** Test/diagnostic override for lazy native-session discovery retries during terminal takeover. */
+  takeoverDiscoveryAttempts?: number;
+  /** Test/diagnostic override for the delay between lazy native-session discovery attempts. */
+  takeoverDiscoveryDelayMs?: number;
 }
 
 export interface RunTerminals {
@@ -416,11 +420,13 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
   async function discoverForTakeover(agent: string, workspace: string, createdAt: number): Promise<string | undefined> {
     const discover = SESSION_DISCOVERY_BY_AGENT[agent];
     if (!discover) return undefined;
-    for (let attempt = 0; attempt < TAKEOVER_DISCOVERY_ATTEMPTS; attempt++) {
+    const attempts = Math.max(1, Math.floor(deps.takeoverDiscoveryAttempts ?? TAKEOVER_DISCOVERY_ATTEMPTS));
+    const delayMs = Math.max(0, Math.floor(deps.takeoverDiscoveryDelayMs ?? TAKEOVER_DISCOVERY_DELAY_MS));
+    for (let attempt = 0; attempt < attempts; attempt++) {
       const ref = await discover(workspace, createdAt);
       if (ref) return ref;
-      if (attempt + 1 < TAKEOVER_DISCOVERY_ATTEMPTS) {
-        await new Promise((resolve) => setTimeout(resolve, TAKEOVER_DISCOVERY_DELAY_MS));
+      if (delayMs > 0 && attempt + 1 < attempts) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
       }
     }
     return undefined;
