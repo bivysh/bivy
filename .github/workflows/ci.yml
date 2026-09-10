@@ -146,6 +146,8 @@ jobs:
       - run: pnpm run check:design
       - run: pnpm run typecheck
       - run: pnpm run typecheck:web
+      - name: Web source contracts (no browser)
+        run: pnpm exec playwright test --project=contracts
 
   root-tests:
     needs: changes
@@ -168,7 +170,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run test:core
-        if: matrix.shard == '1/2'
+        if: matrix.shard == '2/2'
       # Each machine gets a stable shard; within it, run independent suites
       # across the runner's CPUs while serializing suites with a shared port.
       - run: pnpm run test:unit
@@ -251,7 +253,12 @@ jobs:
   # supported desktop OS families. This catches release-only dependency/audit,
   # native-module, README metadata, and built-in Pi discovery regressions.
   release-consumer:
-    needs: [changes, root-release]
+    # Prepare the consumer/guest while root-release builds. The bounded artifact
+    # wait below replaces the whole-job dependency; ci-ok still gates both jobs.
+    needs: changes
+    permissions:
+      contents: read
+      actions: read
     if: inputs.force_all || needs.changes.outputs.root == 'true'
     name: Release consumer (${{ matrix.os }})
     strategy:
@@ -265,22 +272,57 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22.19.0'
+      # Cache registry downloads, never node_modules or an installed Bivy. Both
+      # consumer projects remain fresh and execute all package lifecycle hooks.
+      - name: Cache consumer downloads
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.npm
+            ~/.cache/bivy-installer-npm
+            ~/.cache/bivy-installer-apt
+          key: release-downloads-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml', 'install.sh', 'scripts/smoke-installer.sh') }}
+      - name: Prepare clean guest concurrently with packaging
+        if: runner.os == 'Linux'
+        run: bash scripts/installer-smoke-guest.sh start
+      - name: Wait for this run's release package
+        run: bash scripts/wait-release-artifact.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
       - name: Download release package
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-package
           path: release-artifact
-      - run: node scripts/smoke-release.mjs --artifact release-artifact/bivy-npm.tgz
-      - name: Fresh curl installer (no preinstalled Node or build tools)
-        if: runner.os == 'Linux'
+      - name: Release consumer and fresh installer
+        # Independent consumers of the same immutable tarball. Wait for both,
+        # even if one fails; neither check may be hidden by the other result.
+        shell: bash
         run: |
-          docker run --rm --init -e BIVY_INSTALL_SMOKE=1 \
-            -v "$PWD:/candidate:ro" ubuntu:24.04 \
-            bash /candidate/scripts/smoke-installer.sh /candidate/release-artifact/bivy-npm.tgz
+          node scripts/smoke-release.mjs --artifact release-artifact/bivy-npm.tgz &
+          consumer=$!
+          installer=
+          if [ "$RUNNER_OS" = Linux ]; then
+            bash scripts/installer-smoke-guest.sh test &
+            installer=$!
+          fi
+          status=0
+          wait "$consumer" || status=1
+          if [ -n "$installer" ]; then
+            wait "$installer" || status=1
+          fi
+          exit "$status"
+      - name: Dispose installer guest
+        if: always() && runner.os == 'Linux'
+        run: bash scripts/installer-smoke-guest.sh cleanup
 
-  # The PWA is a principal product client. Playwright parallelizes its test files
-  # and desktop/mobile projects within this runner.
+  # Keep real desktop/mobile coverage; distribute files across independent
+  # runners. Source-only contracts run once in their own Playwright project.
   browser:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     needs: changes
     if: inputs.force_all || needs.changes.outputs.root == 'true'
     runs-on: ubuntu-latest
@@ -293,13 +335,22 @@ jobs:
           node-version: '22.19.0'
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec playwright install --with-deps chromium
-      - run: pnpm run test:browser
+      - name: Cache Chromium
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: chromium-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
+      # Install fonts as well as shared libraries: a successful browser launch
+      # alone does not guarantee the screenshot environment matches baselines.
+      - run: pnpm exec playwright install --with-deps --only-shell chromium
+      - run: pnpm run test:browser --project=desktop --project=mobile --shard=${{ matrix.shard }}/4 --reporter=line,json
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_NAME: test-results/timings.json
       - name: Upload PWA screenshot review artifacts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: pwa-screenshots
+          name: pwa-screenshots-${{ matrix.shard }}
           path: |
             test/browser/screenshots.spec.ts-snapshots/*.png
             test-results/**

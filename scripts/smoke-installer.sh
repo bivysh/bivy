@@ -9,10 +9,20 @@ ARTIFACT="${1:?Usage: smoke-installer.sh /absolute/path/to/bivy-npm.tgz}"
 for cmd in node npm bivy; do
   if command -v "$cmd"; then echo "Guest is not fresh: $cmd already exists" >&2; exit 1; fi
 done
+# Optional CI download cache: retain .deb archives, but never an installed
+# package database. Node/build tools must still be absent and installed by the
+# candidate installer. Ubuntu's Docker cleanup hook otherwise deletes archives.
+if [ "${BIVY_INSTALL_SMOKE_CACHE:-}" = 1 ]; then
+  rm -f /etc/apt/apt.conf.d/docker-clean
+  printf 'Binary::apt::APT::Keep-Downloaded-Packages "true";\n' > /etc/apt/apt.conf.d/keep-downloads
+  export npm_config_prefer_offline=true
+fi
 # Only bootstrap the prerequisites for curl itself. In particular, no Node,
 # timezone, or native build packages are preinstalled by the test harness.
-DEBIAN_FRONTEND=noninteractive apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl ca-certificates
+if ! command -v curl >/dev/null || [ ! -f /etc/ssl/certs/ca-certificates.crt ]; then
+  DEBIAN_FRONTEND=noninteractive apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl ca-certificates
+fi
 export BIVY_VERSION="file:$ARTIFACT" SHELL=/bin/bash
 # Use curl's file transport for the candidate installer, preserving the public
 # command's pipe semantics without deploying unreviewed code to bivy.sh.

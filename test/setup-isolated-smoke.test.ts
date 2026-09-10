@@ -14,9 +14,12 @@ const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-setup-isolated-"));
 const dataDir = path.join(scratch, "data");
 const home = path.join(scratch, "home");
 const workspace = path.join(scratch, "workspace");
+const piAgentDir = path.join(scratch, "pi-agent");
 fs.mkdirSync(dataDir, { recursive: true });
 fs.mkdirSync(home, { recursive: true });
 fs.mkdirSync(workspace, { recursive: true });
+fs.mkdirSync(piAgentDir, { recursive: true });
+fs.writeFileSync(path.join(piAgentDir, "auth.json"), "{}\n");
 
 async function freePort(): Promise<number> {
   const server = net.createServer();
@@ -68,6 +71,7 @@ const interruptedEnv = {
   BIVY_HOST: "127.0.0.1",
   BIVY_SETUP_SKIP_SERVICE: "1",
   BIVY_SKIP_AGENT_PREINSTALL: "1",
+  PI_CODING_AGENT_DIR: piAgentDir,
   NO_COLOR: "1",
   PORT: String(nodePort),
 };
@@ -101,6 +105,7 @@ const env = {
   BIVY_OPEN_BOOTSTRAP: "1",
   BIVY_SETUP_SKIP_SERVICE: "1",
   BIVY_SKIP_AGENT_PREINSTALL: "1",
+  PI_CODING_AGENT_DIR: piAgentDir,
   NO_COLOR: "1",
   PORT: String(nodePort),
 };

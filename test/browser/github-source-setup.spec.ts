@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./fixtures.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -148,6 +148,16 @@ test("GitHub trigger setup offers hosted and custom apps without losing the draf
   await page.goBack();
   await expect(setup).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: "Name", exact: true })).toHaveValue("Keep this draft");
+});
+
+// Component fixtures below inject model/runtime events directly into the store.
+// Picker mount still asks the controller for these lists; no daemon is running.
+test.beforeEach(async ({ page }) => {
+  for (const endpoint of ["runtimes", "models", "auth/providers", "auth/credentials", "auth/credential-assignments"]) {
+    await page.route(new RegExp(`/api/${endpoint}(?:\\?|$)`), route => route.fulfill({
+      status: 503, json: { error: "Lists supplied by the component fixture" },
+    }));
+  }
 });
 
 async function openSessionComposer(page: Page, theme: string) {
