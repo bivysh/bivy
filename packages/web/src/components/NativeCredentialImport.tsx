@@ -23,7 +23,7 @@ export function NativeCredentialImport({ state, onBack }: { state: AppState; onB
   const [error, setError] = useState<string | null>(null);
   const generation = useRef(0);
   const reset = () => { generation.current++; setPreview(null); setSelected([]); setResult(null); setError(null); setBusy(null); };
-  useEffect(() => { reset(); return () => { generation.current++; }; }, [currentNodeId, status]);
+  useEffect(() => { reset(); return () => { generation.current += 1; }; }, [currentNodeId, status]);
   const machineName = nodes.find((node) => node.id === currentNodeId)?.name || currentNodeId || "Connected machine";
   const scan = async () => {
     const attempt = ++generation.current;

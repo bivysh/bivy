@@ -1,10 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { createHash, randomUUID } from "node:crypto";
-import type { NativeCredentialPreview, NativeCredentialImportResult } from "../../packages/core/src/protocol.js";
 import { createCredentialVault } from "./credential-store.js";
 import { discoverNativeAuth, nativeAuthSources, type NativeAuthAgent } from "./native-auth-import.js";
 import { normalizeLabel } from "../credentials/records.js";
+
+// Node-side wire shapes; mirrored by the client protocol. Keep the release
+// build independent of client sources (its rootDir is src/).
+interface NativeCredentialPreview {
+  previewId: string;
+  label: string;
+  items: Array<{ agent: NativeAuthAgent; status: "ready" | "conflict" | "missing" | "unreadable" | "unsupported"; provider?: string; kind?: "oauth" | "api_key" }>;
+}
+interface NativeCredentialImportResult {
+  items: Array<{ agent: NativeAuthAgent; status: "imported" | "conflict" | "changed" }>;
+  warning?: string;
+}
 
 const fingerprint = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
