@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.20] - 2026-09-11
+
+### Fixed
+
+- Prevent Bivy outcome comments from triggering GitHub follow-up runs.
+- Deduplicate policy-blocked issue runs and their notifications.
+- Keep automation run details status consistent and refreshed.
+- Surface failed Codex patches and live tool cards in exec JSON output.
+
 ## [0.16.19] - 2026-09-10
 
 ### Fixed
