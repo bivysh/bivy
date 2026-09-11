@@ -36,6 +36,7 @@ for (const theme of ["light", "dark"]) {
           entries[20] = { id: 'tool-entry', role: 'tool', text: '', tool: { callId: 'read-1', name: 'read', input: {path: 'README.md'}, status: 'done', result: 'File contents\\n'.repeat(200) } };
           render();
         };
+        window.replace = (count) => { entries = Array.from({length: count}, (_, i) => message(i)); render(); };
         window.append = () => { entries.push(message(entries.length)); render(); };
         window.updateTool = () => { entries[20] = { ...entries[20], tool: { ...entries[20].tool, result: entries[20].tool.result + 'Updated output' } }; render(); };
         window.stream = () => { entries[entries.length - 1] = { ...entries.at(-1), text: entries.at(-1).text + ' More streamed text.'.repeat(50), streaming: true }; render(); };
@@ -85,5 +86,37 @@ for (const theme of ["light", "dark"]) {
     await expect.poll(bottomGap).toBeLessThan(2);
     await page.evaluate(() => (window as unknown as { stream(): void }).stream());
     await expect.poll(bottomGap).toBeLessThan(2);
+
+    // A long cached/live transcript can be replaced by a shorter canonical
+    // snapshot. The old cutoff must never hide the entire refreshed history.
+    const replace = (count: number) => page.evaluate(count =>
+      (window as unknown as { replace(count: number): void }).replace(count), count);
+    await replace(20);
+    await expect(page.locator('.msg')).toHaveCount(20);
+    await expect(page.locator('.msg').last()).toContainText('Message 19');
+    await expect(page.getByRole('button', { name: /Show earlier messages/ })).toHaveCount(0);
+    await expect.poll(bottomGap).toBeLessThan(2);
+    await page.evaluate(() => (window as unknown as { append(): void }).append());
+    await expect(page.locator('.msg')).toHaveCount(21);
+    await expect(page.locator('.msg').first()).toContainText('Message 0');
+    await replace(0);
+    await expect(page.getByText('No messages yet')).toBeVisible();
+    // Persist the empty viewport before reloading. Native scroll delivery can
+    // lag behind React's commit, leaving the previous 21-message window saved.
+    await chat.evaluate(el => el.dispatchEvent(new Event('scroll', { bubbles: true })));
+    await replace(184);
+    await expect(page.locator('.msg')).toHaveCount(20);
+    await expect(page.getByRole('button', { name: /Show earlier messages \(164 more\)/ })).toBeAttached();
+    await replace(164);
+    await expect(page.locator('.msg')).toHaveCount(20);
+    await expect(page.locator('.msg').last()).toContainText('Message 163');
+    await expect.poll(bottomGap).toBeLessThan(2);
+    await page.screenshot({ path: testInfo.outputPath(`chat-refreshed-${theme}.png`) });
+    await chat.evaluate(el => { el.scrollTop = 0; });
+    await page.getByRole('button', { name: /Show earlier messages/ }).click();
+    await expect(page.locator('.msg')).toHaveCount(60);
+    await replace(5);
+    await expect(page.locator('.msg')).toHaveCount(5);
+    await expect(page.locator('.msg').last()).toContainText('Message 4');
   });
 }
