@@ -591,13 +591,19 @@ export function ChatView({
   const [historyWindow, setHistoryWindow] = useState(() => ({
     sessionKey, focusView, initialized: total > 0, start: Math.max(0, total - INITIAL_WINDOW),
   }));
-  let start = Math.min(historyWindow.start, total);
+  // A refreshed/filtered transcript can shrink beneath the fixed cutoff. Keep
+  // a tail of messages mounted, and persist the corrected cutoff so subsequent
+  // appends cannot hide them again. Ordinary appends leave the window fixed.
+  const latestStart = Math.max(0, total - INITIAL_WINDOW);
+  let start = Math.min(historyWindow.start, latestStart);
   // Reset before committing a different session/view, or its first snapshot.
   // Ordinary appends must not move the start or change mounted group identities.
   if (historyWindow.sessionKey !== sessionKey || historyWindow.focusView !== focusView || (!historyWindow.initialized && total > 0)) {
     const remembered = scrollMemory.current.get(sessionKey ?? "new");
-    start = Math.max(0, total - (remembered?.limit ?? INITIAL_WINDOW));
+    start = Math.max(0, total - Math.max(INITIAL_WINDOW, remembered?.limit ?? INITIAL_WINDOW));
     setHistoryWindow({ sessionKey, focusView, initialized: total > 0, start });
+  } else if (start !== historyWindow.start || (historyWindow.initialized && total === 0)) {
+    setHistoryWindow({ ...historyWindow, initialized: total > 0, start });
   }
   const limitRef = useRef(total - start);
   useLayoutEffect(() => { limitRef.current = total - start; }, [total, start]);
