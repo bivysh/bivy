@@ -144,6 +144,30 @@ describe("DirectTransport", () => {
     ]));
   });
 
+  it("routes native credential previews and imports with correlated success and error replies", async () => {
+    const events: ServerEvent[] = [];
+    const calls: Array<{ url: string; body: unknown }> = [];
+    let invalid = false;
+    const transport = new DirectTransport({
+      origin: "http://node.local", tokenStore: mem({ bivy_local_token: "token" }),
+      fetchImpl: (async (url: string, init?: RequestInit) => {
+        calls.push({ url: String(url), body: JSON.parse(String(init?.body || "{}")) });
+        return { ok: true, json: async () => invalid ? { error: "Invalid import request" } : { previewId: "preview-1", items: [] } } as Response;
+      }) as typeof fetch,
+      webSocketImpl: FakeWS as unknown as typeof WebSocket,
+      handlers: { onEvent: (event) => events.push(event), onStatus: () => {} },
+    });
+    await transport.send({ kind: "credentials.native.preview", requestId: "scan", label: "work" });
+    await transport.send({ kind: "credentials.native.import", requestId: "save", previewId: "preview-1", agents: ["codex"], sync: "node" });
+    expect(calls[0].url).toBe("http://node.local/api/auth/credentials/native-preview");
+    expect(calls[1]).toMatchObject({ url: "http://node.local/api/auth/credentials/native-import", body: { previewId: "preview-1", agents: ["codex"], sync: "node" } });
+    expect(events[0]).toMatchObject({ type: "credentials.native.preview.ok", requestId: "scan", previewId: "preview-1" });
+    expect(events[1]).toMatchObject({ type: "credentials.native.import.ok", requestId: "save" });
+    invalid = true;
+    await transport.send({ kind: "credentials.native.import", requestId: "bad" });
+    expect(events.at(-1)).toMatchObject({ type: "credentials.native.import.error", requestId: "bad", error: "Invalid import request" });
+  });
+
   it("routes models.prefetch to the prefetch endpoint (no session/runtime query)", async () => {
     FakeWS.instances.length = 0;
     const fetchCalls: string[] = [];

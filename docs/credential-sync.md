@@ -99,6 +99,54 @@ These are **not automatically synced across all nodes** unless Bivy explicitly i
 
 In short: Bivy syncs Bivy-managed provider credentials end-to-end for supported runtimes, including revocation. Agent-native CLI logins may need to be performed once per node.
 
+### Import existing local logins
+
+In the PWA, open **Settings → Providers & credentials → Import from machine**.
+Choose an online source machine, scan for logins, select the ones to import, and
+choose **Only the source machine** or **All my machines** before confirming.
+Selecting a machine also switches Settings's active connection; direct-mode users
+can import only from their connected server. Scanning reads files as the daemon's
+OS user, which must be the user who signed into the native CLI.
+
+Previews contain no tokens, expire after five minutes, and are bound to the source
+machine. Confirmation refuses logins that changed since scanning. Use **Keep a
+second login** to choose another name when an existing vault slot conflicts.
+
+Or run this on the machine where you already signed into the native CLI:
+
+```sh
+bivy auth import --dry-run
+bivy auth import                       # preview, choose node/account scope, confirm
+bivy auth import claude codex grok --sync account --yes
+# Equivalent entry point: bivy credentials import
+```
+
+Supported sources are Claude's credential JSON files, Codex's `auth.json`
+(including `CODEX_HOME`), and the official Grok CLI's `auth.json`. OS-keychain-only
+logins are not supported by this command. Missing, unreadable, or unrecognized
+files are reported without printing their contents. Import is not an online
+verification that the login still works.
+
+Imports use the provider's `default` slot and **never replace an existing slot**,
+including its sync policy. Use `--label work` to keep a second credential, then
+select it with `bivy credentials preset set <preset> <provider> work` and
+`bivy credentials preset use <preset>`. This explicit command does not change or
+use the automatic `credentials ingest` merge/separate policy.
+
+Interactive imports default to node-only storage. Non-interactive imports require
+both `--yes` and `--sync node|account`; `--dry-run` does not import anything.
+Account scope makes the encrypted credential eligible for the existing E2E sync
+when the enrolled daemon runs; it does not confirm delivery to other nodes or
+grant hosted unattended custody. Node-only imports can later be promoted with
+`bivy credentials sync <provider> <label> account`.
+
+Source logins are left untouched. Subscription OAuth credentials are not universal
+API keys: only compatible provider endpoints and Bivy-managed runtimes can use
+them, subject to provider policies. Agent-managed runtimes are not automatically
+switched to Bivy auth. Copying a rotating refresh token does not coordinate refresh
+with the original CLI or all other machines; concurrent refresh can invalidate a
+login and require signing in again. This command does not eliminate that limitation.
+
 ## Runtime mapping
 
 | Runtime | Credential owner | Sync expectation |

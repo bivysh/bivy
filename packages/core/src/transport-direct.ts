@@ -487,6 +487,19 @@ export class DirectTransport implements Transport {
         case "credentials.list":
           this.emitMerged("credentials.records", await this.directApi("/api/auth/credentials"));
           break;
+        case "credentials.native.preview":
+        case "credentials.native.import": {
+          const requestId = String(obj.requestId ?? "");
+          const endpoint = obj.kind === "credentials.native.preview" ? "native-preview" : "native-import";
+          try {
+            const result = await this.directApi(`/api/auth/credentials/${endpoint}`, { method: "POST", body: JSON.stringify(obj) });
+            if (typeof result.error === "string") throw new Error(result.error);
+            this.emit({ ...result, type: `${obj.kind}.ok`, requestId });
+          } catch (error) {
+            this.emit({ type: `${obj.kind}.error`, requestId, error: error instanceof Error ? error.message : String(error) });
+          }
+          break;
+        }
         case "credentials.account.export": {
           const requestId = String(obj.requestId ?? "");
           try {

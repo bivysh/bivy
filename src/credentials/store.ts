@@ -408,17 +408,28 @@ export class BivyCredentialStore {
    * `importRecords()` (merge) for ingest/sync, where a fresher local login must win.
    */
   async putRecord(record: CredentialRecord): Promise<void> {
+    await this.writeRecord(record, false);
+  }
+
+  /** Import only into an empty slot; the existence check shares the vault lock. */
+  async putRecordIfAbsent(record: CredentialRecord): Promise<boolean> {
+    return this.writeRecord(record, true);
+  }
+
+  private async writeRecord(record: CredentialRecord, ifAbsent: boolean): Promise<boolean> {
     const id = providerId(record.provider);
     if (!id) throw new Error("Provider is required");
     const label = normalizeLabel(record.label);
     const key = credKey(id, label);
-    await this.enqueue(id, async () => {
+    return this.enqueue(id, async () => {
       await this.acquireLock();
       try {
         const document = this.readDocument();
+        if (ifAbsent && document.credentials[key]) return false;
         document.credentials[key] = { ...record, provider: id, label, updatedAt: Date.now() };
         delete document.deletedAt[key];
         this.writeDocument(document);
+        return true;
       } finally {
         await this.releaseLock();
       }

@@ -8,6 +8,7 @@ import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import { OauthStep } from "./ProviderConnect.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { Badge } from "./Badge.js";
+import { NativeCredentialImport } from "./NativeCredentialImport.js";
 
 type CatalogProvider = { id: string; name: string; oauth?: boolean; apiKey?: boolean; reference?: boolean; help?: string };
 type Availability = "account" | "node" | "device";
@@ -47,7 +48,7 @@ export function CredentialVault({ state, initialProvider = null }: { state: AppS
   const localModels = state.settings.localModels;
   const oauth = state.presentation.oauth;
   const [deviceKeys, setDeviceKeys] = useState<EphemeralModelKeyInfo[]>([]);
-  const [view, setView] = useState<"list" | "add" | "detail">(() => initialProvider ? "add" : "list");
+  const [view, setView] = useState<"list" | "add" | "detail" | "import">(() => initialProvider ? "add" : "list");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [provider, setProvider] = useState(() => initialProvider ?? "");
@@ -67,6 +68,12 @@ export function CredentialVault({ state, initialProvider = null }: { state: AppS
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<VaultItem | null>(null);
   const [oauthRecovery, setOauthRecovery] = useState(() => controller.getOAuthBrowserRecovery());
+  const importButton = useRef<HTMLButtonElement>(null);
+  const previousView = useRef(view);
+  useEffect(() => {
+    if (previousView.current === "import" && view === "list") importButton.current?.focus();
+    previousView.current = view;
+  }, [view]);
 
   const refreshDevice = () => controller.listEphemeralModelKeys().then(setDeviceKeys).catch(() => setDeviceKeys([]));
   const refresh = () => {
@@ -256,6 +263,8 @@ export function CredentialVault({ state, initialProvider = null }: { state: AppS
     finally { setBusy(false); }
   };
 
+  if (view === "import") return <NativeCredentialImport state={state} onBack={() => { setView("list"); refresh(); }} />;
+
   if (view === "add") {
     const chosen = catalog.find((p) => p.id === provider) ?? (provider ? { id: provider, name: provider } : undefined);
     if (!chosen) {
@@ -418,6 +427,7 @@ export function CredentialVault({ state, initialProvider = null }: { state: AppS
   const filtered = items.filter((item) => `${item.providerName} ${item.provider} ${item.label}`.toLowerCase().includes(query.toLowerCase()));
   return <div className="settings-form credential-vault">
     <div className="vault-title-row"><div><h3>Your model access</h3><p className="muted settings-intro">Hosted providers, subscription sign-ins, API keys, and your own model endpoints.</p></div><button className="btn primary" onClick={() => { setSelectedKey(null); resetAdd(); setQuery(""); setView("add"); }}>+ Add</button></div>
+    <button ref={importButton} className="btn" onClick={() => setView("import")}>Import from machine</button>
     <div className="settings-toggle-row">
       <div className="settings-toggle-text"><div className="settings-toggle-title">OAuth browser recovery</div><p className="muted small">Keep account OAuth refresh tokens end-to-end encrypted on your signed-in devices so a new machine can recover without another machine online.</p></div>
       <button type="button" role="switch" aria-checked={oauthRecovery} aria-label="Allow OAuth browser recovery" className={`settings-toggle${oauthRecovery ? " on" : ""}`} onClick={() => { const enabled = !oauthRecovery; setOauthRecovery(enabled); void controller.setOAuthBrowserRecovery(enabled).catch(() => setOauthRecovery(!enabled)); }}><span className="settings-toggle-knob" aria-hidden /></button>
