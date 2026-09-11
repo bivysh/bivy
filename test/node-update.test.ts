@@ -25,14 +25,20 @@ test("a missing update acknowledgement times out and permits retry without hidin
   assert.match(store.getState().presentation.error!, /may still be updating/);
 });
 
-test("startup reply cancels the timeout but keeps the version banner", (t) => {
+test("startup reply cancels the timeout and keeps updates disabled until completion", (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const store = setup();
   requestNodeUpdate(store, () => store.apply({ type: "node.update.result", ok: true }));
-  t.mock.timers.tick(15_000);
-  assert.equal(store.getState().connection.nodeUpdating, false);
+  t.mock.timers.tick(60_000);
+  assert.equal(store.getState().connection.nodeUpdating, true);
   assert.ok(store.getState().connection.nodeUpdate);
   assert.ok(!store.getState().presentation.error);
+  store.apply({ type: "node.update", current: "1.0.0", latest: "2.0.0" });
+  requestNodeUpdate(store, () => assert.fail("must not send a duplicate update"));
+  store.apply({ type: "node.update", current: "2.0.0" });
+  assert.equal(store.getState().connection.nodeUpdating, false);
+  assert.equal(store.getState().connection.nodeUpdate, null);
+  assert.equal(store.getState().connection.nodeUpdateAcknowledged, false);
 });
 
 test("switching machines clears update state and cancels the old timeout", (t) => {
@@ -64,6 +70,20 @@ test("a rejected startup reply retains its error instead of timing out", (t) => 
   t.mock.timers.tick(15_000);
   assert.equal(store.getState().connection.nodeUpdating, false);
   assert.equal(store.getState().presentation.error, "CLI missing");
+});
+
+test("an error after acknowledgement releases the button and allows a fresh request", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const store = setup();
+  requestNodeUpdate(store, () => store.apply({ type: "node.update.result", ok: true }));
+  store.apply({ type: "node.update.result", ok: false, error: "Update failed" });
+  assert.equal(store.getState().connection.nodeUpdating, false);
+  assert.equal(store.getState().presentation.error, "Update failed");
+  requestNodeUpdate(store, () => {});
+  assert.equal(store.getState().connection.nodeUpdateAcknowledged, false);
+  t.mock.timers.tick(15_000);
+  assert.equal(store.getState().connection.nodeUpdating, false);
+  assert.match(store.getState().presentation.error!, /didn't confirm/);
 });
 
 test("send failures release the button immediately", async () => {

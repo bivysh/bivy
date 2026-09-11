@@ -16,17 +16,18 @@ describe("pure app event folds", () => {
   });
 
   it("folds connection updates without mutating the input", () => {
-    const value = { nodes: [{ id: "n1", name: "Before" }], currentNodeId: "n1", nodeUpdate: null, nodeUpdating: false };
+    const value = { nodes: [{ id: "n1", name: "Before" }], currentNodeId: "n1", nodeUpdate: null, nodeUpdating: false, nodeUpdateAcknowledged: false };
     const result = foldConnectionEvent(value, { type: "node.updated", name: "After" });
     expect(result.handled).toBe(true);
     expect(result.value.nodes[0]?.name).toBe("After");
     expect(value.nodes[0]?.name).toBe("Before");
   });
 
-  it("re-enables the update action after the updater acknowledges startup", () => {
-    const value = { nodes: [], currentNodeId: null, nodeUpdate: { current: "0.1.0", latest: "0.2.0" }, nodeUpdating: true };
+  it("keeps the update action busy after the updater acknowledges startup", () => {
+    const value = { nodes: [], currentNodeId: null, nodeUpdate: { current: "0.1.0", latest: "0.2.0" }, nodeUpdating: true, nodeUpdateAcknowledged: false };
     const result = foldConnectionEvent(value, { type: "node.update.result", ok: true });
-    expect(result.value.nodeUpdating).toBe(false);
+    expect(result.value.nodeUpdating).toBe(true);
+    expect(result.value.nodeUpdateAcknowledged).toBe(true);
     expect(result.value.nodeUpdate).toEqual(value.nodeUpdate);
   });
 

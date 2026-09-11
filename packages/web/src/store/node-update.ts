@@ -24,7 +24,9 @@ export function requestNodeUpdate(store: SessionStore, send: () => void | Promis
   const timer = setTimeout(() => fail(
     "The machine didn't confirm the update request. It may still be updating or waiting for active turns. Check `bivy update:log` on the machine before trying again.",
   ), timeoutMs);
-  const unsubscribe = store.subscribe(() => { if (!isPending()) cleanup(); });
+  const unsubscribe = store.subscribe(() => {
+    if (!isPending() || store.getState().connection.nodeUpdateAcknowledged) cleanup();
+  });
   try {
     void Promise.resolve(send()).catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)));
   } catch (error) {

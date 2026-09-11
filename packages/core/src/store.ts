@@ -688,6 +688,7 @@ export interface ConnectionAccountState {
   currentNodeId: string | null;
   nodeUpdate: { current: string; latest: string } | null;
   nodeUpdating: boolean;
+  nodeUpdateAcknowledged: boolean;
 }
 
 export interface SessionIndexState {
@@ -786,7 +787,7 @@ type AppStatePatch = Partial<
   SettingsState & PresentationState & { draft: SessionDraft }
 >;
 
-const CONNECTION_FIELDS = ["status", "signedIn", "nodes", "currentNodeId", "nodeUpdate", "nodeUpdating"] as const;
+const CONNECTION_FIELDS = ["status", "signedIn", "nodes", "currentNodeId", "nodeUpdate", "nodeUpdating", "nodeUpdateAcknowledged"] as const;
 const SESSION_INDEX_FIELDS = ["sessions", "runTerminals", "tuiSessions", "pausedSessionIds", "commandsBySession", "followupsBySession"] as const;
 const ACTIVE_SESSION_FIELDS = ["activeSessionId", "activeRuntimeId", "activeTitle", "github", "transcript", "working", "workingLabel", "opening", "approvals", "questions", "turnAttentions", "usage", "changes", "changesHistory", "checkpoints"] as const;
 const CATALOG_FIELDS = ["models", "modelsRuntimeId", "currentModelId", "currentModel", "thinking", "runtimes", "currentAgentName", "selectedAgentId", "installingRuntimeId", "repos", "reposAuthed", "reposError", "reposLoading", "reposReason", "githubConnect", "branches", "branchesRepo", "branchesDefault", "branchesError", "branchesLoading", "providers", "activationReadiness"] as const;
@@ -844,7 +845,7 @@ export function initialState(): AppState {
   return {
     connection: {
       status: "offline", signedIn: false, nodes: [], currentNodeId: null,
-      nodeUpdate: null, nodeUpdating: false,
+      nodeUpdate: null, nodeUpdating: false, nodeUpdateAcknowledged: false,
     },
     sessionIndex: {
       sessions: [], runTerminals: [], tuiSessions: [], pausedSessionIds: [],
@@ -1686,7 +1687,7 @@ export class SessionStore {
 
   setCurrentNode(nodeId: string | null): void {
     if (nodeId === this.state.connection.currentNodeId) return;
-    this.set({ currentNodeId: nodeId, nodeUpdate: null, nodeUpdating: false });
+    this.set({ currentNodeId: nodeId, nodeUpdate: null, nodeUpdating: false, nodeUpdateAcknowledged: false });
   }
 
   /** Clear per-node/session state when switching nodes so transcripts never blend.
@@ -1756,7 +1757,7 @@ export class SessionStore {
   /** Optimistically mark the node as updating the moment the user taps the
    *  banner button, so it can't be tapped twice while the request is in flight. */
   setNodeUpdating(value: boolean): void {
-    this.set({ nodeUpdating: value });
+    this.set({ nodeUpdating: value, nodeUpdateAcknowledged: false });
   }
 
   /** Set (or clear, with null) the first-run "sign in to your model" prompt for a
