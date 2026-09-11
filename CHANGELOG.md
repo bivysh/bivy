@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Keep machine update actions busy after startup acknowledgement until the update completes.
+- Keep the latest messages visible instead of hiding them behind earlier-message pagination.
 
 ## [0.16.20] - 2026-09-11
 
