@@ -314,6 +314,34 @@ async function main() {
     assert.equal(p.messages().filter((m) => m.role === "assistant").map((m) => m.content).join(""), "4");
   });
 
+  await check("genericStreamJson: Grok's TOP-LEVEL tool frames render a shell card with clean output + exit code", () => {
+    // Grok CLI 1.x emits tool activity as top-level frames (NOT wrapped in a
+    // JSON-RPC session/update): {type:'tool_call', toolCallId, toolName,
+    // rawInput} then streaming {type:'tool_call_update', …, status} frames. The
+    // terminal (status:'completed') frame carries the display output in an ACP
+    // `content` block; rawOutput.output is a byte array we must NOT surface.
+    const p = genericStreamJsonParser();
+    const events = feed(p, [
+      JSON.stringify({ type: "tool_call", toolCallId: "c1", title: "run_terminal_command", toolName: "run_terminal_command", status: "pending", rawInput: { command: "ls", description: "List files" } }),
+      // Echo/progress frames must NOT close the card or duplicate it.
+      JSON.stringify({ type: "tool_call_update", toolCallId: "c1", status: null, content: [{ type: "content", content: { type: "text", text: "List files" } }], rawOutput: null }),
+      JSON.stringify({ type: "tool_call_update", toolCallId: "c1", status: "in_progress", content: [{ type: "content", content: { type: "text", text: "partial" } }], rawOutput: { type: "Bash", output: [50, 53], exit_code: 0 } }),
+      JSON.stringify({ type: "tool_call_update", toolCallId: "c1", status: "completed", content: [{ type: "content", content: { type: "text", text: "a.txt\nb.txt" } }], rawOutput: { type: "Bash", output: [1, 2, 3], exit_code: 0, command: "ls" } }),
+      JSON.stringify({ type: "text", data: "Two files." }),
+      JSON.stringify({ type: "end" }),
+    ]);
+    const calls = events.filter((e) => e.type === "tool_call");
+    assert.equal(calls.length, 1, "exactly one tool_call surfaced");
+    assert.equal((calls[0] as any).toolName, "run_terminal_command");
+    assert.equal((calls[0] as any).detail?.kind, "shell", "run_terminal_command maps to a shell card");
+    assert.equal((calls[0] as any).detail?.command, "ls");
+    const results = events.filter((e) => e.type === "tool_result");
+    assert.equal(results.length, 1, "exactly one tool_result surfaced (no duplicate, no premature close)");
+    assert.equal((results[0] as any).detail?.result?.text, "a.txt\nb.txt", "clean ACP content text, not the byte-array rawOutput");
+    assert.equal((results[0] as any).detail?.result?.exitCode, 0, "exit code preserved from rawOutput");
+    assert.equal(p.messages().filter((m) => m.role === "assistant").map((m) => JSON.stringify(m.content)).join("").includes("Two files."), true);
+  });
+
   await check("genericJson: extracts the reply from a final JSON object + usage", () => {
     const p = genericJsonParser();
     const events = feed(p, [JSON.stringify({ response: "the answer", usage: { total_tokens: 9 } })]);
