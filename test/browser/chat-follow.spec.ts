@@ -101,6 +101,9 @@ for (const theme of ["light", "dark"]) {
     await expect(page.locator('.msg').first()).toContainText('Message 0');
     await replace(0);
     await expect(page.getByText('No messages yet')).toBeVisible();
+    // Persist the empty viewport before reloading. Native scroll delivery can
+    // lag behind React's commit, leaving the previous 21-message window saved.
+    await chat.evaluate(el => el.dispatchEvent(new Event('scroll', { bubbles: true })));
     await replace(184);
     await expect(page.locator('.msg')).toHaveCount(20);
     await expect(page.getByRole('button', { name: /Show earlier messages \(164 more\)/ })).toBeAttached();
