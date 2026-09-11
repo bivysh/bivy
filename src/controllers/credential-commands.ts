@@ -11,6 +11,7 @@
 
 import type { CommandEntries } from "../protocol/command-registry.js";
 import { testProviderCredential } from "../runtime/credentials.js";
+import { NativeAuthPreviewService } from "../runtime/native-auth-preview.js";
 import {
   exportAccountApiKeys,
   exportAccountOAuthCredentials,
@@ -50,7 +51,34 @@ export interface CredentialCommandDeps {
 
 export function createCredentialCommands(deps: CredentialCommandDeps): CommandEntries<CredentialCommandMessage> {
   const { credsDir } = deps;
+  const nativeAuth = new NativeAuthPreviewService(credsDir);
   return {
+    async "credentials.native.preview"(msg, ctx) {
+      try {
+        ctx.reply({ type: "credentials.native.preview.ok", requestId: msg.requestId, ...await nativeAuth.preview(msg.label) });
+      } catch {
+        ctx.reply({ type: "credentials.native.preview.error", requestId: msg.requestId, httpStatus: 400, error: "Could not scan native logins. Check the label and machine permissions, then retry." });
+      }
+    },
+    async "credentials.native.import"(msg, ctx) {
+      try {
+        const result = await nativeAuth.import(msg.previewId, msg.agents, msg.sync);
+        if (result.items.some((item) => item.status === "imported")) {
+          try {
+            await deps.pushModelAuthToControlPlane();
+            await deps.refreshSessionAfterAuth();
+            deps.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
+            deps.broadcast({ type: "providers.list", providers: await deps.listProvidersUnified() });
+          } catch {
+            result.warning = "Saved on this machine, but sync or runtime refresh could not be confirmed. Check machine connectivity.";
+          }
+        }
+        ctx.reply({ type: "credentials.native.import.ok", requestId: msg.requestId, ...result });
+      } catch {
+        // Filesystem/parse errors may include secrets; never return raw errors.
+        ctx.reply({ type: "credentials.native.import.error", requestId: msg.requestId, httpStatus: 400, error: "Import could not complete. Scan again and check the results before retrying; existing credentials will not be replaced." });
+      }
+    },
     async "credentials.list"() {
       deps.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
     },

@@ -27,6 +27,7 @@ import {
   type CredentialRecordSummary,
 } from "./credentials/api.js";
 import { defaultPresetsPath, inferReferenceBackend } from "./credentials/index.js";
+import { importNativeAuthCommand } from "./credential-import-command.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
@@ -51,6 +52,9 @@ Presets (which labeled key a project uses):
   bivy credentials preset clear <name> <provider>    Remove a provider's mapping from a preset
 
 Agent-native logins:
+  bivy auth import [claude codex grok] [--sync node|account] [--label name] [--yes] [--dry-run]
+                                                     Import local credential files (alias: credentials import).
+                                                     Preview first; existing slots are never replaced.
   bivy credentials ingest [merge|separate]           Show or set the ingest policy
 
 Config file (${path.relative(process.cwd(), configPath) || configPath}):
@@ -174,6 +178,7 @@ async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
   if (!command || command === "help" || command === "--help" || command === "-h") { usage(); return; }
   switch (command) {
+    case "import": return importNativeAuthCommand(credsDir, args);
     case "list": return cmdList();
     case "add": return cmdAdd(args[0], args[1], args[2]);
     case "remove": case "rm":

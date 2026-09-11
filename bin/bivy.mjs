@@ -5054,6 +5054,7 @@ ${c.bold("bivy")} — Bivy node CLI
   ${c.cyan("bivy login")}      Sign this machine into a Bivy account (GitHub or email)
   ${c.cyan("bivy logout")}     Sign this machine out (alias: signout)
   ${c.cyan("bivy provider login")}  Sign into a model provider (alias: model login)
+  ${c.cyan("bivy auth import")}     Import local Claude, Codex, or Grok logins into the vault
   ${c.cyan("bivy update")}     Update Bivy + install deps + restart service (waits for active sessions to finish a turn; --force to skip)
   ${c.cyan("bivy update:log")} Show output of the last (or in-progress) update
   ${c.cyan("bivy agent add")}        Connect an existing user-owned agent
@@ -5200,6 +5201,7 @@ Unlike 'bivy run', these commands operate on governed background Runs with check
       process.exit(await run(nodeBin, [...nodeScriptArgs(configEntry), ...args], { cwd: process.cwd(), env: process.env }));
       break;
     }
+    case "auth":
     case "credentials":
     case "creds": {
       if (!(await ensureDeps())) process.exit(1);

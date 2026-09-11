@@ -140,7 +140,7 @@ const SEARCH_TERMS: Record<View, string> = {
   appearance: "theme system light dark",
   notifications: "push alerts attention approval permission idle completed",
   import: "session transcript file upload migrate",
-  providers: "model provider api key oauth openai anthropic google login credentials custom endpoint local ollama",
+  providers: "model provider api key oauth openai anthropic google login credentials custom endpoint local ollama import claude codex grok machine",
   models: "model provider api key oauth ollama local custom endpoint",
   voice: "microphone speech transcription read aloud reader text to speech voice tone speed",
   github: "github app repository installation issue pull request",

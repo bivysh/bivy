@@ -34,6 +34,9 @@ import {
   cancelAutomationRun as apiCancelAutomationRun,
   recordProductMetric,
   activationFromState,
+  type NativeCredentialPreview,
+  type NativeCredentialImportResult,
+  type NativeCredentialAgent,
   type ProductMetricEvent,
   type ActivationCheckId,
   assignWorkItem,
@@ -2533,6 +2536,19 @@ export class AppController {
   openOauthOnNode(id: string): Promise<{ opened: boolean; error?: string }> { return this.credentialsModelsCoordinator.openOauthOnNode(id); }
   submitOauthCode(id: string, code: string): void { this.credentialsModelsCoordinator.submitOauthCode(id, code); }
   listCredentialRecords(): void { this.credentialsModelsCoordinator.listCredentials(); }
+  async previewNativeCredentials(nodeId: string | null, label: string): Promise<NativeCredentialPreview> {
+    return await this.nativeCredentialCommand(nodeId, { kind: "credentials.native.preview", label }) as unknown as NativeCredentialPreview;
+  }
+  async importNativeCredentials(nodeId: string | null, previewId: string, agents: NativeCredentialAgent[], sync: "node" | "account"): Promise<NativeCredentialImportResult> {
+    return await this.nativeCredentialCommand(nodeId, { kind: "credentials.native.import", previewId, agents, sync }) as unknown as NativeCredentialImportResult;
+  }
+  private async nativeCredentialCommand(nodeId: string | null, command: Command): Promise<ServerEvent> {
+    const connection = this.store.getState().connection;
+    if (connection.status !== "online" || connection.currentNodeId !== nodeId) throw new Error("Connect to the selected machine before scanning or importing.");
+    const result = await this.awaitAck(command, 20_000);
+    if (this.store.getState().connection.currentNodeId !== nodeId) throw new Error("Machine changed. Scan again on the selected machine.");
+    return result;
+  }
 
   /** Bidirectional API-key convergence between the PWA account vault and node. */
   private syncAccountCredentialsWithNode(): Promise<void> {
