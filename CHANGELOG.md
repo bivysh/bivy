@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.23] - 2026-09-12
+
+### Fixed
+- Preserve image-only messages in cross-agent forks with a placeholder pointing to the full transcript.
+- Remove the redundant mobile Automations sidebar background.
+- Add a dedicated hosted GitHub App management link for repository access, with guidance for organization installations. Existing installations remain manageable even when a deployment cannot offer new installations.
+
 ## [0.16.22] - 2026-09-12
 
 ### Fixed
