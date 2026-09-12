@@ -593,9 +593,42 @@ function textFromStreamEvent(msg: Record<string, unknown>): string {
   return "";
 }
 
-/** Extract an ACP tool update from a JSON-RPC session/update notification.
- * ACP deliberately calls these updates rather than tool calls; mapping the
- * common fields here lets any ACP-speaking CLI show the same tool cards. */
+/** Flatten an ACP `ContentBlock[]` (or a single block/string) to plain text.
+ * ACP tool updates carry their human-readable output as content blocks —
+ * `[{type:"content", content:{type:"text", text}}]` or `[{type:"text", text}]` —
+ * which is the display-normalized form to prefer over a raw byte dump. Returns
+ * undefined when there is no usable text (so callers fall back to rawOutput). */
+function flattenAcpContent(value: unknown): string | undefined {
+  const walk = (v: unknown): string => {
+    if (typeof v === "string") return v;
+    if (Array.isArray(v)) return v.map(walk).join("");
+    if (v && typeof v === "object") {
+      const o = v as Record<string, unknown>;
+      if (typeof o.text === "string") return o.text;
+      if (o.content !== undefined) return walk(o.content);
+    }
+    return "";
+  };
+  const text = walk(value);
+  return text.trim() ? text : undefined;
+}
+
+/** Extract a numeric exit code from a raw tool-output object, if present. */
+function rawExitCode(raw: unknown): number | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const o = raw as Record<string, unknown>;
+  const exit = o.exit_code ?? o.exitCode ?? o.code;
+  return typeof exit === "number" ? exit : undefined;
+}
+
+/** Extract an ACP-style tool update. Two transports converge here:
+ *   1. A JSON-RPC `session/update` notification (`params.update`), the true ACP
+ *      wire form used by Gemini/Qwen/Copilot etc.
+ *   2. A TOP-LEVEL tool frame (`{type:"tool_call", toolCallId, toolName,
+ *      rawInput}` / `{type:"tool_call_update", …, rawOutput}`) — the shape the
+ *      Grok CLI's `--output-format streaming-json` emits without the JSON-RPC
+ *      envelope. Both name the same fields, so one mapper renders both as the
+ *      same tool cards (no per-agent branch). */
 function acpToolUpdate(msg: Record<string, unknown>): {
   kind: "call" | "result";
   id: string;
@@ -605,20 +638,35 @@ function acpToolUpdate(msg: Record<string, unknown>): {
   error?: boolean;
 } | undefined {
   const params = msg.params as Record<string, unknown> | undefined;
-  const update = (params?.update ?? msg.update) as Record<string, unknown> | undefined;
+  // Fall back to the message itself so a top-level tool frame (Grok) is read the
+  // same way as a nested `session/update` (canonical ACP). A non-tool top-level
+  // frame has no toolCallId and is rejected by the `id` guard below.
+  const update = (params?.update ?? msg.update ?? msg) as Record<string, unknown> | undefined;
   if (!update || typeof update !== "object") return undefined;
   const type = String(update.sessionUpdate ?? update.type ?? "").toLowerCase();
   const id = String(update.toolCallId ?? update.tool_call_id ?? update.id ?? "");
   if (!id) return undefined;
   if (type === "tool_call" || type === "tool_call_started" || type === "tool_call_start") {
-    return { kind: "call", id, name: String(update.title ?? update.name ?? "tool"), input: update.rawInput ?? update.input ?? update.arguments };
+    return { kind: "call", id, name: String(update.title ?? update.toolName ?? update.name ?? "tool"), input: update.rawInput ?? update.input ?? update.arguments };
   }
   if (type === "tool_call_update" || type === "tool_result" || type === "tool_call_completed") {
     const status = String(update.status ?? "").toLowerCase();
-    // ACP sends progress updates through the same envelope. Only close the
-    // card once it has a terminal status or an actual result payload.
-    const output = update.rawOutput ?? update.output ?? update.content ?? update.result;
-    if (type === "tool_call_update" && (status === "in_progress" || status === "pending" || (output === undefined && !["completed", "failed", "error"].includes(status)))) return undefined;
+    const terminal = status === "completed" || status === "complete" || status === "success" || status === "done" || status === "failed" || status === "error";
+    const hasStatus = update.status !== undefined && update.status !== null && String(update.status).trim() !== "";
+    const raw = update.rawOutput ?? update.output ?? update.result;
+    // A CLI that streams progress (Grok) tags every frame with a non-terminal
+    // status and a partial payload — only a terminal status closes the card. A
+    // CLI that sends a single result frame with no status closes as soon as a
+    // payload lands. This prevents both a premature close and a duplicate card.
+    if (type === "tool_call_update" && (hasStatus ? !terminal : raw === undefined)) return undefined;
+    // Prefer the display-normalized ACP content text over a raw payload (Grok's
+    // rawOutput.output is a byte array that would render as garbage). Preserve
+    // the exit code from the raw payload when we take the content text instead.
+    const contentText = flattenAcpContent(update.content);
+    const exit = rawExitCode(raw);
+    const output = contentText !== undefined
+      ? (exit !== undefined ? { content: contentText, exit_code: exit } : contentText)
+      : (raw ?? update.content);
     return { kind: "result", id, output, error: status === "failed" || status === "error" };
   }
   return undefined;

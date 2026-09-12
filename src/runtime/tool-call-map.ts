@@ -87,13 +87,14 @@ function str(o: Record<string, unknown>, ...keys: string[]): string | undefined 
 
 const SHELL = new Set([
   "bash", "sh", "shell", "run", "runcommand", "command", "commandexecution",
-  "exec", "execute", "executecommand", "terminal", "runterminalcmd", "localshell",
+  "exec", "execute", "executecommand", "terminal", "runterminalcmd",
+  "runterminalcommand", "localshell",
 ]);
 const READ = new Set(["read", "readfile", "view", "viewfile", "cat", "openfile", "fileread"]);
 const WRITE = new Set(["write", "writefile", "create", "createfile", "newfile", "filewrite", "savefile"]);
 const EDIT = new Set([
   "edit", "editfile", "multiedit", "strreplace", "strreplaceeditor", "replace",
-  "applypatch", "patch", "filechange", "filechanges", "update", "modify",
+  "searchreplace", "applypatch", "patch", "filechange", "filechanges", "update", "modify",
 ]);
 const SEARCH = new Set(["search", "grep", "glob", "ripgrep", "rg", "find", "findfiles", "codebasesearch", "filesearch"]);
 const FETCH = new Set(["fetch", "webfetch", "httpfetch", "geturl", "browse", "curl", "openurl"]);
@@ -105,7 +106,8 @@ const PLAN = new Set(["plan", "updateplan", "setplan", "todo", "todowrite", "exi
 // still falls through to the opaque default, never a false "Delegated".
 const DELEGATE = new Set([
   "task", "agent", "subagent", "runagent", "runsubagent", "spawnagent",
-  "dispatchagent", "delegate", "delegatetask", "agenttask", "startagent", "startrun",
+  "spawnsubagent", "dispatchagent", "delegate", "delegatetask", "agenttask",
+  "startagent", "startrun",
   // Codex app-server 0.147+ first-class child lifecycle item.
   "subagentactivity",
 ]);
