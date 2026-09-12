@@ -70,6 +70,27 @@ test("a user message that is purely tool_result becomes a 'tool' turn", () => {
   assert.ok(t.turns[0].toolSummary?.includes("file contents here"));
 });
 
+test("image blocks are preserved as a placeholder so the turn is never silently dropped", () => {
+  // Two runtime image shapes: Claude ({source:{…}}) and the protocol runtime
+  // ({data, mimeType}). Both tag the block type "image" and carry no portable
+  // text, so before this they were dropped — an image-only turn vanished whole.
+  const msgs = [
+    // image-only user turn (Claude shape)
+    { role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: "AAAA" } }] },
+    // text + image user turn (protocol shape)
+    { role: "user", content: [{ type: "text", text: "what is this?" }, { type: "image", data: "BBBB", mimeType: "image/jpeg" }] },
+  ];
+  const t = normalizeMessages(msgs as never, header);
+  assert.equal(t.turns.length, 2, "the image-only turn survives instead of being dropped");
+  assert.equal(t.turns[0].role, "user");
+  assert.ok(/1 image attachment omitted/.test(t.turns[0].text), "the image-only turn discloses the attachment");
+  assert.ok(t.turns[1].text.includes("what is this?"), "the accompanying text is kept");
+  assert.ok(/1 image attachment omitted/.test(t.turns[1].text), "the image is disclosed alongside the text");
+  // And it carries through a replayed (true) fork rather than being lost there too.
+  const history = buildForkHistory(t);
+  assert.ok(history.some((m) => /image attachment/.test(m.text)), "the image note replays into the forked history");
+});
+
 test("empty / unknown-shape turns are dropped, never thrown on", () => {
   const msgs = [
     { role: "assistant", content: [{ type: "thinking", thinking: "only reasoning" }] }, // -> nothing usable
