@@ -39,7 +39,7 @@ test("connection status does not conflate hosted installation with executor read
   expect(githubInstallationSettings({ ...installation, githubAccountType: "User" })).toBe("https://github.com/settings/installations/42");
 });
 
-async function openSetup(page: Page, theme: string, focus = "github", apps: Array<typeof hosted | typeof custom> = [hosted], fail = false) {
+async function openSetup(page: Page, theme: string, focus = "github", apps: Array<typeof hosted | typeof custom> = [hosted], fail = false, centralConfigured = true) {
   await page.route("**/account/**", (route) => {
     const pathname = new URL(route.request().url()).pathname;
     const json = pathname === "/account/github-app" ? { connected: apps.length > 0, apps }
@@ -48,7 +48,7 @@ async function openSetup(page: Page, theme: string, focus = "github", apps: Arra
     return route.fulfill({ json });
   });
   await page.route("**/nodes", (route) => route.fulfill({ json: [] }));
-  const fixturePath = `/source-test-${theme}-${focus}-${apps.length}-${fail}`;
+  const fixturePath = `/source-test-${theme}-${focus}-${apps.map((entry) => entry.appId).join("-")}-${fail}-${centralConfigured}`;
   const html = await server.transformIndexHtml(fixturePath, `<html data-theme="${theme}"><head><meta name="viewport" content="width=device-width, initial-scale=1" /></head><body><div id="root"></div><script type="module">
     import React from 'react';
     import { createRoot } from 'react-dom/client';
@@ -64,7 +64,7 @@ async function openSetup(page: Page, theme: string, focus = "github", apps: Arra
     controller.fetchMe = async () => null;
     controller.fetchGithubApp = async () => { ${fail ? 'throw new Error("Connection failed");' : `return ${JSON.stringify({ connected: apps.length > 0, apps })};`} };
     controller.listNodes = async () => [];
-    controller.centralGithubApp = async () => ({ configured: true, installations: [] });
+    controller.centralGithubApp = async () => ({ configured: ${centralConfigured}, installations: [] });
     const state = controller.store.getState();
     createRoot(document.getElementById('root')).render(${focus === "automations"
       ? `React.createElement(AutomationsView, { state, section: null, onSectionChange: () => {}, onOpenSession: () => {}, onClose: () => {} })`
@@ -95,6 +95,24 @@ for (const theme of ["light", "dark"]) {
     await page.keyboard.press("Escape");
     await expect(page.getByText("Closed", { exact: true })).toBeVisible();
   });
+}
+
+for (const theme of ["light", "dark"]) {
+  for (const configured of [true, false]) {
+    test(`hosted management stays available with configured=${configured} (${theme})`, async ({ page }, testInfo) => {
+      await openSetup(page, theme, "github", [custom], false, configured);
+      const install = page.getByRole("button", { name: "Install hosted Bivy App" });
+      if (configured) await expect(install).toBeEnabled();
+      else await expect(install).toBeDisabled();
+      const manage = page.getByRole("link", { name: "Manage hosted app access on GitHub" });
+      await expect(manage).toHaveAttribute("href", "https://github.com/settings/installations");
+      await expect(manage).toHaveAttribute("target", "_blank");
+      await manage.focus();
+      await expect(manage).toBeFocused();
+      await expect(page.getByText("For organization installations", { exact: false })).toBeVisible();
+      await page.screenshot({ path: testInfo.outputPath(`hosted-management-${theme}-${configured}.png`), fullPage: true });
+    });
+  }
 }
 
 test("unconnected GitHub offers hosted installation, not just custom app creation", async ({ page }) => {

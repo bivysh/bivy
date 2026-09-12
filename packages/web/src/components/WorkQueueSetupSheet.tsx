@@ -427,6 +427,10 @@ export function WorkQueueSetupSheet({
                   <button type="button" className="btn primary" disabled={centralBusy || !central?.configured} onClick={() => void addCentralInstallation()}>
                     {centralBusy ? "Opening GitHub…" : "Install hosted Bivy App"}
                   </button>
+                  <a className="btn sm" href="https://github.com/settings/installations" target="_blank" rel="noreferrer">
+                    Manage hosted app access on GitHub ↗
+                  </a>
+                  <p className="settings-hint">Change repository access or uninstall the Bivy App on GitHub. For organization installations, use the organization’s Settings → GitHub Apps.</p>
                   {centralError && <p className="settings-error" role="alert">{centralError}</p>}
                 </div>
               )}
