@@ -15,7 +15,6 @@
   .sidebar-head-actions .btn { min-height: 40px; }
   .sidebar-nav {
     padding: var(--space-2) var(--space-3);
-    background: var(--surface-2);
   }
   .sidebar-nav-item { min-height: 44px; }
   .sidebar-foot { padding: var(--space-3); background: var(--surface-2); }
