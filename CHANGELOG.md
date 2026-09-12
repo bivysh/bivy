@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.22] - 2026-09-12
+
+### Fixed
+
+- Render Grok tool calls in transcripts with clean output and without duplicate cards.
+
 ## [0.16.21] - 2026-09-11
 
 ### Added
