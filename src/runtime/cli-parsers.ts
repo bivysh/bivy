@@ -98,6 +98,16 @@ class TurnAccumulator {
   // already sealed into `content` as its own block.
   private readonly content: Array<Record<string, unknown>> = [];
   private textFlushed = "";
+  // A tool call interrupts the assistant's prose/reasoning: the text that
+  // resumes after it is a NEW message segment, not a continuation of the last
+  // token. Without a separator the two run together ("…what it does.The next…",
+  // "…shell commandI have…") — exactly the seam the governed ProtocolRuntime
+  // guards with its `assistantItemBoundary` \n\n insertion. Mirror that here so
+  // every CliParser agent (Grok, Goose, Gemini, the generic streams) gets the
+  // same clean paragraph break instead of a concatenated blob. Tracked per
+  // stream because text and reasoning accumulate into separate buffers.
+  private pendingTextBoundary = false;
+  private pendingReasoningBoundary = false;
   private readonly out: RuntimeMessage[] = [];
   private readonly details = new Map<string, ReturnType<typeof mapToolCall>>();
   // Not every CLI includes a stable id on both halves of a tool exchange.
@@ -113,7 +123,15 @@ class TurnAccumulator {
     if (pending) this.content.push({ type: "text", text: pending });
   }
 
-  constructor(private readonly toolContext: ToolCallMapContext) {}
+  constructor(
+    private readonly toolContext: ToolCallMapContext,
+    // Native CLI streams (Grok, Goose, Claude/Codex JSON, …) start a fresh
+    // prose/reasoning segment after each tool call without re-emitting a
+    // separator, so we infer the paragraph break. The bivy-agent-protocol path
+    // instead carries continuation faithfully (a shim can emit an explicit
+    // boundary when it wants one), so it opts out.
+    private readonly inferSegmentBoundaries = true,
+  ) {}
 
   ensureStart(events: RuntimeEvent[]) {
     if (!this.started) {
@@ -131,6 +149,8 @@ class TurnAccumulator {
    */
   appendReasoning(text: string, events: RuntimeEvent[]) {
     if (!text) return;
+    if (this.pendingReasoningBoundary && this.reasoning) this.reasoning += "\n\n";
+    this.pendingReasoningBoundary = false;
     this.reasoning += text;
     events.push({ type: "message_update", message: { role: "assistant", content: [{ type: "thinking", thinking: this.reasoning }] } });
   }
@@ -143,6 +163,17 @@ class TurnAccumulator {
   appendText(text: string, events: RuntimeEvent[]) {
     if (!text) return;
     this.ensureStart(events);
+    if (this.pendingTextBoundary && this.text) {
+      // Advance the sealed prefix over the display-only separator when the prior
+      // segment was already flushed to a content block, so the next persisted
+      // block holds `Second message`, not `\n\nSecond message` (matching
+      // ProtocolRuntime). The cumulative `text` still carries the break for the
+      // live stream and the final answer.
+      const wasFullyFlushed = this.textFlushed === this.text;
+      this.text += "\n\n";
+      if (wasFullyFlushed) this.textFlushed = this.text;
+    }
+    this.pendingTextBoundary = false;
     this.text += text;
     events.push({ type: "message_update", message: { role: "assistant", content: this.text } });
   }
@@ -157,6 +188,12 @@ class TurnAccumulator {
     const detail = mapToolCall(name, input, this.toolContext);
     if (detail) this.details.set(callId, detail);
     this.flushPendingText();
+    // Prose/reasoning that resumes after this call is a fresh segment — arm the
+    // boundary so the next appendText/appendReasoning inserts a separator.
+    if (this.inferSegmentBoundaries) {
+      this.pendingTextBoundary = true;
+      this.pendingReasoningBoundary = true;
+    }
     this.content.push({ type: "tool_use", id: callId, name, input: input ?? {}, ...(detail ? { detail } : {}) });
     events.push({ type: "tool_call", toolName: name, input, toolCallId: callId, ...(detail ? { detail } : {}) });
   }
@@ -206,7 +243,10 @@ class TurnAccumulator {
 
 /** Parser for the bivy-agent-protocol JSONL event vocabulary (the universal path). */
 export function bivyProtocolParser(): CliParser {
-  const acc = new TurnAccumulator({ provider: "bivy-protocol", protocol: "protocol" });
+  // The universal protocol carries continuation faithfully: text after a tool is
+  // appended verbatim (a shim emits an explicit break when it wants one), so it
+  // opts out of inferred segment boundaries.
+  const acc = new TurnAccumulator({ provider: "bivy-protocol", protocol: "protocol" }, false);
   return {
     onLine(line) {
       const events: RuntimeEvent[] = [];
