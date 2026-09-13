@@ -4,7 +4,7 @@
 
 import type { PromptAttachment, ServerEvent } from "./protocol.js";
 import { toHtml } from "./markdown.js";
-import { eventKind, toolCallId, toolDetail, toolInput, toolName } from "./tool-activity.js";
+import { eventKind, toolCallId, toolDetail, toolInput, toolName, toolParentId } from "./tool-activity.js";
 import { contentThinking, contentToText, toolEntriesFromContent } from "./store-render.js";
 import { humanizeError, looksLikeAgentError } from "./store-errors.js";
 
@@ -12,6 +12,8 @@ import { humanizeError, looksLikeAgentError } from "./store-errors.js";
 
 export interface TranscriptFoldTool {
   callId: string; name: string; input: unknown; status: "running" | "done"; result?: string; detail?: unknown;
+  /** callId of the delegation that spawned this call (see ToolActivity). */
+  parentToolUseId?: string;
 }
 export interface TranscriptFoldEntry {
   id: string; role: "user" | "assistant" | "system" | "thinking" | "error"; text: string;
@@ -134,7 +136,8 @@ function applyTool(value: TranscriptFoldValue, tool: TranscriptFoldTool): void {
   if (index < 0) { append(value, { role: "assistant", text: "", tool }); return; }
   const entry = value.transcript[index]!; const previous = entry.tool!;
   value.transcript[index] = { ...entry, tool: { ...previous, status: tool.status, result: tool.result ?? previous.result,
-    detail: tool.detail ?? previous.detail, input: tool.status === "running" ? mergeInput(previous.input, tool.input) : previous.input } };
+    detail: tool.detail ?? previous.detail, parentToolUseId: tool.parentToolUseId ?? previous.parentToolUseId,
+    input: tool.status === "running" ? mergeInput(previous.input, tool.input) : previous.input } };
 }
 function closeTools(value: TranscriptFoldValue): void {
   value.transcript = value.transcript.map((entry) => entry.tool?.status === "running"
@@ -217,8 +220,8 @@ export function foldTranscriptEvent(input: TranscriptFoldValue, event: ServerEve
       else { const label = text ? "Drafting response…" : "Thinking…"; if (!value.working || value.workingLabel !== label) setWorking(value, label); previewProse(value); }
       for (const tool of toolEntriesFromContent(msg.content)) applyTool(value, tool as TranscriptFoldTool); break;
     }
-    case "start": commitThinking(value); commitProse(value); finishDrafts(value); applyTool(value, { callId: toolId(event, value.transcript), name: toolName(event as any), input: toolInput(event as any), status: "running", detail: toolDetail(event as any) }); setWorking(value, toolLabel(event, value.transcript)); break;
-    case "update": applyTool(value, { callId: toolId(event, value.transcript), name: toolName(event as any), input: toolInput(event as any), status: "running", detail: toolDetail(event as any) }); setWorking(value, toolLabel(event, value.transcript)); break;
+    case "start": commitThinking(value); commitProse(value); finishDrafts(value); applyTool(value, { callId: toolId(event, value.transcript), name: toolName(event as any), input: toolInput(event as any), status: "running", detail: toolDetail(event as any), ...(toolParentId(event as any) ? { parentToolUseId: toolParentId(event as any) } : {}) }); setWorking(value, toolLabel(event, value.transcript)); break;
+    case "update": applyTool(value, { callId: toolId(event, value.transcript), name: toolName(event as any), input: toolInput(event as any), status: "running", detail: toolDetail(event as any), ...(toolParentId(event as any) ? { parentToolUseId: toolParentId(event as any) } : {}) }); setWorking(value, toolLabel(event, value.transcript)); break;
     case "result": applyTool(value, { callId: toolId(event, value.transcript), name: toolName(event as any), input: {}, status: "done", result: typeof (event as any).result === "string" ? (event as any).result : contentToText((event as any).result), detail: toolDetail(event as any) }); break;
     case "turn_end": if (flushAttachments(value)) commands.push({ kind: "remember-agent-attachments" }); setWorking(value, "Planning next step…"); break;
     case "agent_end": finishDrafts(value); if (flushAttachments(value)) commands.push({ kind: "remember-agent-attachments" }); closeTools(value); Object.assign(value.draft, { pendingText: "", committedText: "", committedThinking: "" }); value.working = false; value.workingLabel = ""; commands.push({ kind: "turn-settled" }); break;

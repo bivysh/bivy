@@ -5,7 +5,7 @@
 // `content`/`messages` into the TranscriptEntry[] the view renders; they hold no
 // state beyond the shared `nextId` sequence.
 
-import { isToolResultBlock, isToolUseBlock, toolCallId, toolDetail, toolInput, toolName } from "./tool-activity.js";
+import { isToolResultBlock, isToolUseBlock, toolCallId, toolDetail, toolInput, toolName, toolParentId } from "./tool-activity.js";
 import { humanizeError, looksLikeAgentError } from "./store-errors.js";
 import type { AttachmentRef, PromptAttachment } from "./protocol.js";
 import type { ToolActivity, TranscriptEntry } from "./store.js";
@@ -144,17 +144,21 @@ function toolResultText(content: any): string {
   return contentToText(content);
 }
 
-export function toolEntriesFromContent(content: any): ToolActivity[] {
+export function toolEntriesFromContent(content: any, parentToolUseId?: string): ToolActivity[] {
   if (!Array.isArray(content)) return [];
   const out: ToolActivity[] = [];
   for (const block of content) {
     if (isToolUseBlock(block)) {
+      // A per-block parent wins over the message-level one; both are just a
+      // display grouping hint, so a missing id simply leaves the call top-level.
+      const parent = toolParentId(block) || parentToolUseId || "";
       out.push({
         callId: toolCallId(block) || nextId(),
         name: toolName(block),
         input: toolInput(block),
         status: "running",
         detail: toolDetail(block),
+        ...(parent ? { parentToolUseId: parent } : {}),
       });
     } else if (isToolResultBlock(block)) {
       const id = toolCallId(block);
@@ -224,6 +228,11 @@ export function renderHistory(messages: any[]): TranscriptEntry[] {
       const tool = toolEntryFromToolResultMessage(msg);
       if (tool) mergeToolInto(entries, tool);
     } else {
+      // Claude's Agent SDK stamps every persisted message it generated inside a
+      // `Task` sub-agent with a message-level parent_tool_use_id; carry it onto
+      // this turn's tool cards so a reloaded transcript nests them under the
+      // delegation exactly like the live stream does.
+      const msgParent = toolParentId(msg);
       // Walk the content blocks in order so text runs and tool cards interleave
       // exactly as the model produced them. One assistant message is frequently
       // text → tool_use → text (e.g. Codex: "I'll do X." → runs commands →
@@ -254,7 +263,7 @@ export function renderHistory(messages: any[]): TranscriptEntry[] {
         for (const block of content) {
           if (isToolUseBlock(block) || isToolResultBlock(block)) {
             flushRuns();
-            for (const tool of toolEntriesFromContent([block])) mergeToolInto(entries, tool);
+            for (const tool of toolEntriesFromContent([block], msgParent)) mergeToolInto(entries, tool);
           } else if (isAgentAttachmentBlock(block)) {
             // Seal any prose/reasoning before the attachment so its source order
             // is retained and the chip lands as its own entry.
@@ -386,6 +395,8 @@ export function mergeToolInto(entries: TranscriptEntry[], tool: ToolActivity): v
       status: tool.status,
       result: tool.result ?? existing.tool.result,
       detail: tool.detail ?? existing.tool.detail,
+      // A result-only echo has no parent hint; keep the one the call landed with.
+      parentToolUseId: tool.parentToolUseId ?? existing.tool.parentToolUseId,
       // Merge, don't replace, while a call streams. A progress-only ping (e.g.
       // Claude's `tool_execution_update` carrying just `{ elapsedSeconds }`)
       // would otherwise clobber the original call's `command`/`path`, blanking

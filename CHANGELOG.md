@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Nest a sub-agent's own tool calls under the delegation card that spawned them in session transcripts, instead of rendering them flat and unlabelled. Works live and on reload; general to any agent that surfaces a parent tool-call id (Claude's `parent_tool_use_id` today).
+
 ### Fixed
 
 - Separate assistant prose and reasoning that resume after a tool call with a paragraph break in transcripts for pipe/stream agents (Grok, Goose, Gemini, and the generic streams), so segments no longer run together (e.g. "…what it does.The workspace…"). Matches the governed protocol path.
