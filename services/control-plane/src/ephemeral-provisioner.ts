@@ -56,6 +56,7 @@ import {
 import type { SecretEnvelope } from "./hosted-crypto.js";
 import { mintInstallationToken } from "./hosted-github-auth.js";
 import { encryptSecret, decryptSecret } from "./hosted-crypto.js";
+import { hostedEnrollment } from "./hosted-enrollment.js";
 import { centralGithubAppConfig, resolveGithubIdentity, type ResolvedGithubIdentity } from "./central-github-app.js";
 import type { CentralGithubInstallation } from "./store.js";
 import { usageFromManagedMachine } from "./compute-metering.js";
@@ -636,7 +637,7 @@ export async function provisionEphemeralForAccount(
       ownershipTag,
       // computeSource rides in `desired` so teardown/reconcile can pick the
       // right credential lane even after the config itself is deleted.
-      desired: { ...attempt?.desired, region: config.region, size: config.size, image: config.image, ttlMinutes: config.ttlMinutes, teardownOnAgentFinish: config.teardownOnAgentFinish, purpose, setupId: config.id, computeSource },
+      desired: { ...attempt?.desired, bootstrapIdentityVersion: 1, region: config.region, size: config.size, image: config.image, ttlMinutes: config.ttlMinutes, teardownOnAgentFinish: config.teardownOnAgentFinish, purpose, setupId: config.id, computeSource },
       machine: event.machine as unknown as Record<string, unknown> | undefined,
       lastError: event.error, retryCount: retry?.retryCount ?? 0,
       createdAt: attempt?.createdAt ?? createdAt, updatedAt: new Date().toISOString(),
@@ -670,6 +671,7 @@ export async function provisionEphemeralForAccount(
       {
         store: localStore, exec: directExec(), keys: serverKeyStore(providerToken), machines: serverMachineStore(store, accountId, nowMs, computeSource),
         persistRoomKey: async (nodeId, key) => { await store.setNodeRoomKeyEnc(accountId, nodeId, encryptSecret(accountId, key)); },
+        enrollment: hostedEnrollment(accountId, () => attempt, async (next) => { attempt = await store.putHostedMachineAttempt(next); }, (retry?.retryCount ?? 0) > 0),
       },
     );
     // Custom/injected launchers may not emit callbacks. Production launchers do;
@@ -814,7 +816,7 @@ export async function provisionEphemeralRestore(
       observedState: attempt?.observedState,
       deadlineAt: computeAttemptDeadline(phase, eventCreatedAt ?? attempt?.machine?.createdAt as string | undefined, config.ttlMinutes, Date.now()),
       ownershipTag,
-      desired: { ...attempt?.desired, region: config.region, size: config.size, image: config.image, ttlMinutes: config.ttlMinutes, teardownOnAgentFinish: config.teardownOnAgentFinish, purpose: opts.purpose ?? "queue-default", setupId: config.id, restoreSessionId: opts.restoreSessionId, computeSource },
+      desired: { ...attempt?.desired, bootstrapIdentityVersion: 1, region: config.region, size: config.size, image: config.image, ttlMinutes: config.ttlMinutes, teardownOnAgentFinish: config.teardownOnAgentFinish, purpose: opts.purpose ?? "queue-default", setupId: config.id, restoreSessionId: opts.restoreSessionId, computeSource },
       machine: event.machine as unknown as Record<string, unknown> | undefined,
       lastError: event.error, retryCount: opts.retryCount ?? 0,
       createdAt: attempt?.createdAt ?? createdAt, updatedAt: new Date().toISOString(),
@@ -844,7 +846,9 @@ export async function provisionEphemeralRestore(
         reuseRoomKeyB64,
         restoreSessionId: opts.restoreSessionId,
       },
-      { store: localStore, exec: directExec(), keys: serverKeyStore(providerToken), machines: serverMachineStore(store, accountId, nowMs, computeSource) },
+      { store: localStore, exec: directExec(), keys: serverKeyStore(providerToken), machines: serverMachineStore(store, accountId, nowMs, computeSource),
+        enrollment: hostedEnrollment(accountId, () => attempt, async (next) => { attempt = await store.putHostedMachineAttempt(next); }, (opts.retryCount ?? 0) > 0),
+      },
     );
     if (attempt) await store.putHostedMachineAttempt({ ...attempt, state: "tracked", machine: machine as unknown as Record<string, unknown>, updatedAt: new Date().toISOString() });
     await audit(store, accountId, { action: "room_key_reused", provider: config.provider, configId: config.id, nodeId: machine.nodeId });

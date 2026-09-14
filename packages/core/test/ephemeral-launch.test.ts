@@ -60,6 +60,52 @@ describe("launchEphemeralMachine — durable lifecycle", () => {
     expect(order).toEqual(["requested", "enrolled", "provider-accepted", "tracked"]);
   });
 
+  it("adopts a lost provider response without rotating the enrolled guest's bearer", async () => {
+    const keys = createEphemeralKeyStore(memoryBackend());
+    await keys.setToken("fly", "fly-tok");
+    const store = fakeStore();
+    const machines = createMachineStore(memoryBackend());
+    let token = "", enrolled = 0, created = 0;
+    let accepted: Record<string, unknown> | undefined;
+    const exec: ExecFn = async (req) => {
+      if (req.method === "GET" && req.url.endsWith("/machines")) return { status: 200, body: accepted ? [accepted] : [] };
+      if (req.method === "POST" && req.url.endsWith("/machines")) {
+        expect(token).toBe("original-enrollment");
+        const body = req.body as { config: unknown };
+        expect(JSON.stringify(body)).toContain(token);
+        accepted = { id: "accepted-machine", state: "started", created_at: "2026-01-01T00:00:00Z", config: body.config };
+        created++;
+        throw new Error("provider response lost");
+      }
+      return flyExec(req);
+    };
+    const fetchImpl = (async () => { enrolled++; return { ok: true, json: async () => ({ enrollmentToken: "original-enrollment" }) }; }) as unknown as typeof fetch;
+    const opts = { provider: "fly", attemptId: "stable-attempt", reuseNodeId: "eph-stable" };
+    await expect(launchEphemeralMachine(opts, { store, exec, keys, machines, fetchImpl,
+      enrollment: { persist: async (_nodeId, value) => { token = value; } },
+    })).rejects.toThrow(/response lost/);
+    const machine = await launchEphemeralMachine({ ...opts, reuseRoomKeyB64: store.keys()[opts.reuseNodeId] }, {
+      store, exec, keys, machines, fetchImpl,
+      enrollment: { token, persist: async (_nodeId, value) => { expect(value).toBe(token); } },
+    });
+    expect(machine.id).toBe("accepted-machine");
+    expect(enrolled).toBe(1);
+    expect(created).toBe(1);
+  });
+
+  it("fails before provider effects when enrollment persistence fails", async () => {
+    const keys = createEphemeralKeyStore(memoryBackend());
+    await keys.setToken("fly", "fly-tok");
+    let providerCalls = 0;
+    await expect(launchEphemeralMachine({ provider: "fly" }, {
+      store: fakeStore(), keys, machines: createMachineStore(memoryBackend()),
+      exec: async (req) => { providerCalls++; return flyExec(req); },
+      fetchImpl: (async () => ({ ok: true, json: async () => ({ enrollmentToken: "secret" }) })) as unknown as typeof fetch,
+      enrollment: { persist: async () => { throw new Error("storage unavailable"); } },
+    })).rejects.toThrow(/storage unavailable/);
+    expect(providerCalls).toBe(0);
+  });
+
   it("refuses device-only providers whose guest shutdown cannot stop billing", async () => {
     const keys = createEphemeralKeyStore(memoryBackend());
     await keys.setToken("hetzner", "hz-token");

@@ -252,9 +252,10 @@ export async function listEphemeralSizes(
  */
 export async function launchEphemeralMachine(
   opts: LaunchOpts,
-  deps: { store: LocalStore; exec: ExecFn; keys: EphemeralKeyStore; machines: MachineStore; fetchImpl?: typeof fetch; persistRoomKey?: (nodeId: string, roomKeyB64: string) => Promise<void> },
+  deps: { store: LocalStore; exec: ExecFn; keys: EphemeralKeyStore; machines: MachineStore; fetchImpl?: typeof fetch; persistRoomKey?: (nodeId: string, roomKeyB64: string) => Promise<void>; enrollment?: { token?: string; persist: (nodeId: string, token: string) => Promise<void> } },
 ): Promise<EphemeralMachine> {
   if (opts.computeSource === "managed" && !opts.externalTeardownGuaranteed) throw new Error("Bivy hosted machines must be launched by the control plane, not with a device-held cloud token.");
+  if (deps.enrollment?.token && !opts.reuseNodeId) throw new Error("Saved enrollment requires the original node identity");
   const requestedAt = nowIso();
   const fetchImpl = deps.fetchImpl ?? fetch;
   const adapter = ephemeralAdapter(opts.provider);
@@ -290,12 +291,19 @@ export async function launchEphemeralMachine(
     });
     return { res, data: (await res.json().catch(() => ({}))) as any };
   };
-  const { res: enrollRes, data: enroll } = await enrollOnce();
-  if (!enrollRes.ok || !enroll?.enrollmentToken) {
-    const error = enroll?.error || "Could not enroll the machine";
-    await opts.onLifecycle?.({ attemptId, nodeId, phase: "failed", error });
-    throw new Error(error);
+  let enrollmentToken = deps.enrollment?.token;
+  if (!enrollmentToken) {
+    const { res: enrollRes, data: enroll } = await enrollOnce();
+    if (!enrollRes.ok || typeof enroll?.enrollmentToken !== "string" || !enroll.enrollmentToken) {
+      const error = enroll?.error || "Could not enroll the machine";
+      await opts.onLifecycle?.({ attemptId, nodeId, phase: "failed", error });
+      throw new Error(error);
+    }
+    enrollmentToken = enroll.enrollmentToken as string;
   }
+  // Re-enrollment rotates the bearer. A retry that adopts an already-created
+  // guest must keep its original enrollment identity as well as its room key.
+  await deps.enrollment?.persist(nodeId, enrollmentToken);
   await opts.onLifecycle?.({ attemptId, nodeId, phase: "enrolled" });
   progress("Node enrolled. Building its secure bootstrap…");
 
@@ -323,7 +331,7 @@ export async function launchEphemeralMachine(
     ...opts,
     provider: plan.provider,
     nodeId: plan.nodeId,
-    enrollmentToken: enroll.enrollmentToken,
+    enrollmentToken,
     roomKeyB64: b64(roomBytes),
     relayUrl: deps.store.relay,
     controlPlaneUrl: cpBase(deps.store),
