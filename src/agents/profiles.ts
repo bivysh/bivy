@@ -543,19 +543,28 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     // UUID (sessions live under ~/.grok/sessions/<cwd>/<id>/). The interactive
     // TUI uses the same store via `grok --resume <id>`. Model ids match
     // `grok models` for the official CLI (override with BIVY_GROK_MODELS).
-    args: ["-p"],
-    // The current CLI's `--output-format streaming-json` emits newline-delimited
-    // JSON keyed off `type`: {type:"text",data} for the answer, {type:"thought",
-    // data} for reasoning, {type:"end"} to close the turn (plus tool frames). The
-    // shared tolerant generic-stream-json parser understands this shape (and the
-    // ACP session/update envelope other CLIs use), so Grok gets faithful
-    // transcripts — answer prose, a thinking sidecar, and tool cards — without a
-    // Grok-specific adapter. Keep the plain args as the explicit
-    // BIVY_AGENT_STRUCTURED=0 fallback.
-    jsonArgs: ["--output-format", "streaming-json", "-p"],
+    // `--always-approve` auto-approves every tool execution. Without it, Grok's
+    // headless `-p` turn emits a tool_call and then waits for the client to
+    // approve it over the streaming-json (ACP) channel; Bivy governs effects at
+    // the sandbox tier and closes stdin, so the pending call races to a "User
+    // cancelled the execution" — i.e. Grok could never actually run a tool under
+    // Bivy. The flag is the Grok analogue of Cursor's `--force`, Copilot's
+    // `--allow-all-tools`, Droid's `--auto`, etc.
+    args: ["--always-approve", "-p"],
+    // The current CLI's `--output-format streaming-json` emits NDJSON of the
+    // agent-native ACP session updates: assistant text, a {type:"thought"}
+    // reasoning sidecar, and tool_call/tool_call_update frames. The shared
+    // tolerant generic-stream-json parser understands this shape (and the ACP
+    // session/update envelope other CLIs use), so Grok gets faithful transcripts
+    // — answer prose, a thinking sidecar, and tool cards — without a Grok-specific
+    // adapter. Keep the plain args as the explicit BIVY_AGENT_STRUCTURED=0
+    // fallback.
+    jsonArgs: ["--output-format", "streaming-json", "--always-approve", "-p"],
     parserId: "generic-stream-json",
+    // Resume mirrors the fresh-launch recipe (structured output + auto-approve)
+    // so a continued turn streams and runs tools exactly like the first one.
     resume: {
-      template: ["--resume", "{id}", "-p"],
+      template: ["--output-format", "streaming-json", "--resume", "{id}", "--always-approve", "-p"],
       historyLoader: "grok",
     },
     model: {

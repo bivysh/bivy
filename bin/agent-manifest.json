@@ -193,7 +193,10 @@
       "certification": "release-tested",
       "testedVersion": "1.0.0",
       "headlessFlags": [
+        "--always-approve",
         "-p",
+        "--output-format",
+        "streaming-json",
         "--resume"
       ],
       "install": {

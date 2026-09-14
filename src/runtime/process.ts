@@ -549,7 +549,14 @@ class ProcessSession implements RuntimeSession {
         this.nativeSessionRef = learnedRef;
         this.upstreamSessionStarted = true;
       }
-      for (const event of events) this.emit(event);
+      // Sync the parser's final transcript into this.messages BEFORE emitting the
+      // terminal events (message_end/turn_end/agent_end). The daemon persists a
+      // base-transcript snapshot synchronously on message_end/turn_end by reading
+      // getMessages() — so if the push happened after the emit loop (as it once
+      // did), that snapshot saw an empty turn and the agent's answer + paired
+      // tool blocks were never persisted, vanishing on reload for every
+      // structured-pipe CLI (Grok, Goose, Gemini, …). Populating first makes
+      // getMessages() authoritative the instant message_end fires.
       if (!messagesPushed && events.some((e) => e.type === "agent_end")) {
         messagesPushed = true;
         for (const message of activeParser.messages()) this.messages.push(message);
@@ -558,6 +565,7 @@ class ProcessSession implements RuntimeSession {
         const usage = activeParser.usage?.();
         if (usage) this.lastUsage = usage;
       }
+      for (const event of events) this.emit(event);
     };
     const feedParser = (activeParser: CliParser, text: string) => {
       lineBuf += text;

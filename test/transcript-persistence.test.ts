@@ -61,6 +61,18 @@ test("tool_call maps to a tool_use entry; tool_result to a tool_result entry; ot
   assert.equal(eventLog.appended[1].entry.content[0].type, "tool_result");
 });
 
+test("a structured-pipe tool_result (id nested under result.toolCallId) pairs with its call", () => {
+  const { tp, eventLog } = harness();
+  // The shared TurnAccumulator (Grok/Goose/Gemini/…) emits a tool_result whose
+  // only id is `result.toolCallId`, with a generic `toolName` and no input. A
+  // prior version keyed this `"tool:"` — orphaning the output from its call.
+  tp.persistToolActivityFromEvent(sess(), { type: "tool_call", toolName: "run_terminal_command", input: { command: "ls" }, toolCallId: "call-abc-0" } as any);
+  tp.persistToolActivityFromEvent(sess(), { type: "tool_result", toolName: "tool", result: { toolCallId: "call-abc-0", content: "a\nb\n" } } as any);
+  assert.equal(eventLog.appended[0].entry.id, "bivy-tool-call-call-abc-0");
+  assert.equal(eventLog.appended[1].entry.id, "bivy-tool-result-call-abc-0", "result overlay pairs with the call id, not 'tool:'");
+  assert.equal(eventLog.appended[1].entry.content[0].toolUseId, "call-abc-0");
+});
+
 test("a progress-only tool_execution_update (elapsedSeconds, no detail) does not overwrite the tool-call overlay", () => {
   const { tp, eventLog } = harness();
   // The initiating call records the real input + classification.
