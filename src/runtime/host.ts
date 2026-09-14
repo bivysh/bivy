@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { listRuntimes, makeRuntime, type AgentRuntime, type RuntimeFactoryOptions, type RuntimeInfo } from "./index.js";
 import { RemoteRuntime, connectSocketTransport } from "./remote.js";
+import { canonicalSession } from "./canonical-session.js";
 import type { SandboxTier } from "../harness/sandbox.js";
 import { withExactCapabilitySurface, type DiscoveredNativeSession, type OpenSessionOptions, type OpenSessionResult, type RuntimeCapabilities, type RuntimeMessage, type SessionSummary } from "./types.js";
 
@@ -150,7 +151,8 @@ export class RuntimeHost {
   }
 
   async openSession(runtime: AgentRuntime, options: OpenSessionOptions & { sessionFile: string }): Promise<OpenSessionResult> {
-    return runtime.openSession(options);
+    const result = await runtime.openSession(options);
+    return { ...result, session: canonicalSession(result.session, options.canonicalId) };
   }
 
   async listSessions(runtime: AgentRuntime): Promise<SessionSummary[]> {

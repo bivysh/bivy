@@ -38,6 +38,8 @@ export type MetadataSession = {
   /** Per-session sandbox tier override ("read-only" | "workspace-write" |
    *  "danger-full-access"), so resume rebuilds the runtime at the same tier. */
   sandbox?: string;
+  /** Preserve the session's approval policy when reopening or rebuilding. */
+  approvalMode?: string;
   agentName?: string;
   status?: string;
   branch?: string;

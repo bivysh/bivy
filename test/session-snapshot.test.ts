@@ -72,4 +72,17 @@ const roomKey = randomBytes(32);
   await assert.rejects(() => applySessionSnapshot(sealed!, randomBytes(32), standbyCapture().deps));
 }
 
+// Execution facts travel inside the seal; a mismatched session cannot write
+// transcript/checkpoint state before identity validation.
+{
+  const sessionInfo = { runtimeId: "generic-agent", model: { provider: "provider", id: "model" }, name: "private title", sandbox: "read-only", approvalMode: "manual" };
+  const sealed = await buildSessionSnapshot("original", roomKey, { ...ownerDeps([base(1)], undefined), sessionInfo: () => sessionInfo });
+  assert.ok(sealed && !sealed.includes("private title"));
+  const cap = standbyCapture();
+  await assert.rejects(() => applySessionSnapshot(sealed!, roomKey, { ...cap.deps, expectedSessionId: "different" }), /identity mismatch/);
+  assert.equal(cap.persisted.length, 0);
+  const applied = await applySessionSnapshot(sealed!, roomKey, { ...cap.deps, expectedSessionId: "original" });
+  assert.deepEqual(applied.sessionInfo, sessionInfo);
+}
+
 console.log("session-snapshot: all tests passed");

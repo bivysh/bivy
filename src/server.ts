@@ -74,6 +74,7 @@ import { RelayConnector, loadRelayConfig, soloCredentials, type ClientMessage } 
 import { readEphemeralTeardownConfig, shouldSelfTeardown, snapshotsDurableForTeardown, performSelfTeardown, type SnapshotFlushResult } from "./ephemeral-teardown.js";
 import { buildSessionSnapshot, applySessionSnapshot } from "./session/snapshot.js";
 import { clearTurnActivity } from "./session/turn-activity.js";
+import { rebuildSnapshotRuntime } from "./session/snapshot-runtime.js";
 import { createCheckpointBundle, applyCheckpointBundle, materializeCheckpoint } from "./session/checkpoint-pack.js";
 import { configuredTurnTimeoutMs, configuredTurnStallMs, configuredTurnActivityStallMs } from "./session/turn-watchdog.js";
 import { createTurnWatchdog, probeTurnPidAlive } from "./session/turn-watchdog-runtime.js";
@@ -6486,6 +6487,7 @@ function persistSessionMetadata(record: SessionRecord, status = sessionStatus(re
     delegationDepth: record.delegationDepth,
     runtimeId: record.runtimeId,
     sandbox: record.sandbox,
+    approvalMode: record.approvalMode,
     agentName: getRuntime(record.runtimeId).displayName,
     contract: record.contract,
     status,
@@ -6989,17 +6991,21 @@ async function restoreSessionFromSnapshot(sessionId: string): Promise<boolean> {
     const data = (await res.json()) as { ciphertext?: string };
     if (!data.ciphertext) return false;
     const applied = await applySessionSnapshot(data.ciphertext, pairingStore.roomKey(), {
+      expectedSessionId: sessionId,
       persistRecords: (id, records) => eventLog.rewrite(id, records),
       applyBundle: async (id, buf) => applyCheckpointBundle(await ensureReplicaRepo(id), id, buf),
       materialize: async (id) => materializeCheckpoint(await ensureReplicaRepo(id), id),
     });
-    // Register the rebuilt session so it lists and opens (mirrors the standby's
-    // upsertReplicaMeta); the transcript replays from the restored EventLog.
-    try {
-      metadata.upsertSession({ id: sessionId, source: "restored", status: "saved" });
-    } catch {
-      /* best-effort listing */
-    }
+    const info = applied.sessionInfo;
+    if (!info?.runtimeId) throw new Error("Snapshot lacks runtime information; transcript retained but not resumable");
+    const workspace = applied.checkpointCommit ? await ensureReplicaRepo(sessionId) : defaultWorkspace;
+    const rt = await ensureRuntimeAvailable(info.runtimeId, sandboxTier(info.sandbox));
+    const sessionFile = await rebuildSnapshotRuntime(info, rt, eventLog.readBase(sessionId), workspace);
+    // The imported native id may differ; RuntimeHost keeps this durable Bivy id
+    // while letting native methods use their own new resume token.
+    metadata.upsertSession({ id: sessionId, path: sessionFile, runtimeId: info.runtimeId,
+      workspace, name: info.name, sandbox: sandboxTier(info.sandbox), approvalMode: approvalModeFrom(info.approvalMode),
+      source: "restored", status: "saved" });
     console.log(`[restore] session ${sessionId}: ${applied.recordCount} records, checkpoint ${applied.checkpointCommit ?? "none"}`);
     void reportEphemeralMilestone("snapshotReadyAt");
     return true;
@@ -7029,6 +7035,12 @@ async function flushSessionSnapshots(): Promise<SnapshotFlushResult> {
     result.required++;
     try {
       const sealed = await buildSessionSnapshot(record.id, roomKey, {
+        sessionInfo: () => {
+          const model = record.session.getCurrentModel();
+          return { runtimeId: record.runtimeId, name: record.session.getName(),
+            model: model ? { provider: model.provider, id: model.id } : undefined,
+            sandbox: record.sandbox, approvalMode: record.approvalMode };
+        },
         readRecords: (id) => eventLog.entries(id),
         epochOf: () => 0,
         checkpointHead: async (id) => {
@@ -8069,7 +8081,7 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
   const sessionSafety = projectSafety(
     policyWorkspace,
     sandboxTier(opts.sandbox ?? storedMeta?.sandbox),
-    opts.approvalMode ?? approvalMode,
+    opts.approvalMode ?? approvalModeFrom(storedMeta?.approvalMode) ?? approvalMode,
   );
   const sessionSandbox = sessionSafety.sandbox;
   const rt = await ensureRuntimeAvailable(opts.runtimeId ?? storedMeta?.runtimeId, sessionSandbox);
