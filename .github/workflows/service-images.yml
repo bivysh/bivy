@@ -50,7 +50,7 @@ env:
 jobs:
   validate:
     if: github.event_name == 'pull_request'
-    name: Build ${{ matrix.service }} image (${{ matrix.arch }})
+    name: Build ${{ matrix.service }} image (${{ matrix.arch }})${{ matrix.tag_suffix }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:
@@ -61,6 +61,16 @@ jobs:
             arch: amd64
             runner: ubuntu-latest
           - service: control-plane
+            arch: arm64
+            runner: ubuntu-24.04-arm
+          - service: control-plane
+            tag_suffix: -ephemerals
+            ephemerals: "1"
+            arch: amd64
+            runner: ubuntu-latest
+          - service: control-plane
+            tag_suffix: -ephemerals
+            ephemerals: "1"
             arch: arm64
             runner: ubuntu-24.04-arm
           - service: relay
@@ -78,6 +88,7 @@ jobs:
           docker buildx build \
             --file "deploy/Dockerfile.${{ matrix.service }}" \
             --platform "linux/${{ matrix.arch }}" \
+            --build-arg "VITE_EPHEMERAL_MACHINES_ENABLED=${{ matrix.ephemerals || '0' }}" \
             --output type=cacheonly \
             .
 
@@ -97,7 +108,7 @@ jobs:
   publish:
     if: github.event_name != 'pull_request'
     needs: resolve
-    name: Publish ${{ matrix.service }} image
+    name: Publish ${{ matrix.service }} image${{ matrix.tag_suffix }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
@@ -106,6 +117,12 @@ jobs:
         include:
           - service: control-plane
             image: bivy-control-plane
+          # An opt-in UI variant, in the same public package. Default images
+          # keep launch UI disabled; runtime admission gates still apply to both.
+          - service: control-plane
+            image: bivy-control-plane
+            tag_suffix: -ephemerals
+            ephemerals: "1"
           - service: relay
             image: bivy-relay
     permissions:
@@ -126,29 +143,31 @@ jobs:
         run: docker buildx create --name bivy-services --driver docker-container --use
 
       # A full-SHA tag is write-once. A rerun can repair a partially completed
-      # pair, but never silently replace an artifact for an existing commit after
+      # image set, but never silently replace an artifact for an existing commit after
       # a mutable base image has advanced.
       - name: Build and publish
         env:
           CORE_SHA: ${{ needs.resolve.outputs.core_sha }}
+          IMAGE_TAG: ${{ needs.resolve.outputs.core_sha }}${{ matrix.tag_suffix }}
           IMAGE: ghcr.io/bivysh/${{ matrix.image }}
         run: |
           set -euo pipefail
-          if docker buildx imagetools inspect "$IMAGE:$CORE_SHA" >/dev/null 2>&1; then
-            echo "$IMAGE:$CORE_SHA already exists; preserving it."
+          if docker buildx imagetools inspect "$IMAGE:$IMAGE_TAG" >/dev/null 2>&1; then
+            echo "$IMAGE:$IMAGE_TAG already exists; preserving it."
           else
             docker buildx build \
               --file "deploy/Dockerfile.${{ matrix.service }}" \
               --platform linux/amd64,linux/arm64 \
               --push \
-              --tag "$IMAGE:$CORE_SHA" \
+              --tag "$IMAGE:$IMAGE_TAG" \
+              --build-arg "VITE_EPHEMERAL_MACHINES_ENABLED=${{ matrix.ephemerals || '0' }}" \
               --label "org.opencontainers.image.source=https://github.com/bivysh/bivy" \
               --label "org.opencontainers.image.revision=$CORE_SHA" \
               --label "org.opencontainers.image.licenses=AGPL-3.0-only" \
               --provenance=true \
               --sbom=true \
-              --cache-from "type=registry,ref=$IMAGE:buildcache" \
-              --cache-to "type=registry,ref=$IMAGE:buildcache,mode=max" \
+              --cache-from "type=registry,ref=$IMAGE:buildcache${{ matrix.tag_suffix }}" \
+              --cache-to "type=registry,ref=$IMAGE:buildcache${{ matrix.tag_suffix }},mode=max" \
               .
           fi
 
@@ -167,13 +186,13 @@ jobs:
           CORE_SHA: ${{ needs.resolve.outputs.core_sha }}
         run: |
           set -euo pipefail
-          for image in bivy-control-plane bivy-relay; do
-            manifest="$(docker buildx imagetools inspect --raw "ghcr.io/bivysh/$image:$CORE_SHA")"
+          for image in "bivy-control-plane:$CORE_SHA" "bivy-control-plane:$CORE_SHA-ephemerals" "bivy-relay:$CORE_SHA"; do
+            manifest="$(docker buildx imagetools inspect --raw "ghcr.io/bivysh/$image")"
             for arch in amd64 arm64; do
               jq -e --arg arch "$arch" \
                 '.manifests | any(.platform.os == "linux" and .platform.architecture == $arch)' \
                 <<<"$manifest" >/dev/null \
-                || { echo "::error::ghcr.io/bivysh/$image:$CORE_SHA has no linux/$arch manifest"; exit 1; }
+                || { echo "::error::ghcr.io/bivysh/$image has no linux/$arch manifest"; exit 1; }
             done
           done
 
