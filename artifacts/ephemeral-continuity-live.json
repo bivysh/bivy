@@ -1,0 +1,39 @@
+{
+  "scope": "Isolated local authenticated control plane; real Fly, OAuth model, E2E relay, snapshot and rebuild. Not staging/production certification.",
+  "imageCommit": "d949f1bd4a24eb05c674d726e6f77e315f69c1ff",
+  "controlPlaneCommit": "9ad4a1d583d9324cb085b75397d040d620b7bfbb",
+  "runtimeId": "pi",
+  "providerId": "openai-codex",
+  "modelId": "gpt-5.5",
+  "apps": [
+    "bivy-1070c762869287796d08334d32838c44"
+  ],
+  "machines": [
+    "287d907bd6d3e8",
+    "d895130a0e3428"
+  ],
+  "passed": true,
+  "continuityFidelity": "portable conversation replay, not byte-identical native runtime state",
+  "credentialConstraints": "Access-only filtered grant; no refresh token copied or refreshed; no billing-account changes",
+  "accountId": "acct_dc11a247-e84b-49bb-b0ed-7d569d379e30",
+  "filteredGrantPublished": true,
+  "providerAcceptedMs": 2988,
+  "nodeId": "eph-1070c762869287796d08334d32838c44",
+  "providerInitiallyObserved": true,
+  "httpReplayConfirmed": true,
+  "relayErrors": 10,
+  "lastRelayError": "Node offline",
+  "credentialDeliveryPhases": [
+    "attach",
+    "restore"
+  ],
+  "encryptedAttachMs": 36381,
+  "sessionId": "01a0a0f6-1a44-70fc-9e05-0c0a4060e2c2",
+  "firstModelReply": true,
+  "snapshotConfirmed": true,
+  "firstTeardownConfirmed": true,
+  "transcriptRestored": true,
+  "secondModelReply": true,
+  "inventoryCleared": true,
+  "providerAppAbsenceConfirmed": true
+}

@@ -4904,7 +4904,7 @@ app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
   res.status(status).json({ error: message, ...(code ? { code } : {}) });
 });
 
-const server = app.listen(port, () => {
+const server = app.listen({ port, host: process.env.BIND_HOST || undefined }, () => {
   const storeName = process.env.DATABASE_URL ? "Postgres" : "in-memory";
   console.log(`Control plane (${storeName}) listening on http://localhost:${port}`);
 });

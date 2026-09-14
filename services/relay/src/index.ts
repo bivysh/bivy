@@ -599,6 +599,6 @@ function attachClient(ws: WebSocket, nodeId: string, accountId: string) {
   });
 }
 
-httpServer.listen(port, () => {
+httpServer.listen({ port, host: process.env.BIND_HOST || undefined }, () => {
   console.log(`Relay listening on http://localhost:${port}  (control plane: ${controlPlaneUrl}, max frame: ${maxFrameBytes} bytes, max buffered: ${maxBufferedBytes} bytes, rate: client ${maxClientMessagesPerMinute}/min, node ${maxNodeMessagesPerMinute}/min)`);
 });

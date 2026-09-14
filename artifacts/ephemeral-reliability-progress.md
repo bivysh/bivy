@@ -8,6 +8,11 @@ A merge with the original main-based worktree exposed substantial conflicts. Thi
 
 ## Implemented
 
+- Stable interactive request IDs, durable replay receipts, account leases, pending-capacity reservations, and restored-node exclusivity across interactive/auth/queue paths.
+- Encrypted enrollment-bearer escrow before provider effects; retries do not invalidate an already-created guest's authentication.
+- Settle remote turns and observe real relay viewers before snapshot/teardown; retain fast-turn activity between timer samples.
+- Preserve managed credential custody and queue/publisher privileges on rebuild.
+- Reconstruct the agent's native history store from encrypted runtime/model/safety facts; preserve Bivy identity independently of native imported IDs.
 - Room-key escrow before provider creation; reload the original key on hosted retry.
 - Recover retries from durable launch intent, including billing source and finish policy, rather than an edited profile.
 - Provider-only deletion; retain tracking and node authority until authoritative absence, including legacy records.
@@ -32,10 +37,17 @@ Earlier probe attempts exposed harness mistakes (Fly's exec request uses a strin
 
 This used an intentionally unregistered bootstrap and an already-published image. It does **not** certify account enrollment, credential handoff, model execution, the PR's newly built/runtime-specific images, or snapshot/restore. The timing is a single polled sample, not a cold-start percentile or sub-10-second guarantee.
 
+## Authenticated live continuity
+
+**Passed twice** with a real Fly runner and Pi / OpenAI Codex / GPT-5.5. The latest run accepted provisioning in **2.988 seconds** and attached over the encrypted relay in **36.381 seconds**. A real first reply was snapshotted, the original machine was deleted, and a different machine reopened the same Bivy session and produced a new reply recalling the marker. The follow-up prompt did not include the marker; a cached reply cannot satisfy the final assertion.
+
+Both credential-delivery phases, encrypted snapshot, original-machine deletion, restored runtime readiness, final inventory cleanup, and provider app absence passed. See `ephemeral-continuity-live.json` and [the scope, reproduction instructions, and limitations](../docs/ephemeral-continuity-verification.md). This is portable conversation replay on an isolated local authenticated control plane, not staging/production or byte-identical native-state certification. No refresh token was copied or rotated and no billing setting was changed. Temporary services/tunnel were stopped after the probe.
+
 ## Local verification
 
-- Ephemeral core plus account API: **166 tests passed, 20 files** after the idempotency increment.
-- Control plane: **41 suite scripts passed**, including admission, room-key escrow, and 13 managed interactive orchestration tests.
+- Core: **689 tests passed, 59 files** after enrollment-identity hardening.
+- Root: **282 suites passed**, including executable safety guards for the durable live harness.
+- Control plane: **42 suite scripts passed**, including admission, room-key/enrollment escrow, and 13 managed interactive orchestration tests.
 - Coordinator tests: **12 passed**, including stable restore request identity.
 - Root, web, and control-plane typechecks passed.
 - Lint passed with zero errors (existing warnings remain).
@@ -44,9 +56,8 @@ This used an intentionally unregistered bootstrap and an already-published image
 
 ## Still open
 
-- Completed in the next increment: stable interactive request IDs, durable replay receipts, per-account lease serialization, pending-capacity reservations, and restored-node exclusivity. Auth runners and queue recovery share the same lease. Thirteen dedicated orchestration tests cover replay/conflict, capacity, failure, lease loss, lifecycle persistence, and concurrent restore/reconciliation.
 - The remaining milestone-reporting and image-workflow improvements from the preserved work, reconciled with #678's runtime-specific images.
-- Full authenticated message → snapshot → teardown → rebuild → message certification. Dedicated staging dev-login returned HTTP 404; no authenticated test account was created.
+- Dedicated staging/production certification; other providers/runtimes; real repository/checkpoint continuity and refresh-token rotation. Staging dev-login returned HTTP 404; the completed certification used disposable accounts on an isolated local control plane.
 - Integration with newer main and final integrated regression coverage.
 
 ## Repeat the limited provider probe
