@@ -19,6 +19,21 @@
 import { OwnerReplicator, StandbyApplier, type OwnerReplicatorDeps, type StandbyApplierDeps, type ReplWireFrame } from "./replicator.js";
 import { seal, open } from "../e2e.js";
 
+/** Portable execution facts. Never reuse paths from the destroyed machine. */
+export interface SnapshotSessionInfo {
+  runtimeId: string;
+  model?: { provider: string; id: string };
+  name?: string;
+  sandbox?: string;
+  approvalMode?: string;
+  /** Preserve the selected account per provider; rebuild must not select default billing. */
+  credentialLabels?: Record<string, string>;
+}
+
+export interface SnapshotBuildDeps extends OwnerReplicatorDeps {
+  sessionInfo?: (sessionId: string) => SnapshotSessionInfo;
+}
+
 /**
  * Build a full, sealed snapshot of a session: a complete replication frame (ALL
  * transcript records + a full git checkpoint bundle + the runtime resume token),
@@ -29,16 +44,17 @@ import { seal, open } from "../e2e.js";
  * frame + full bundle — exactly what a from-scratch rebuild on a new machine
  * needs (it holds no base to delta against).
  */
-export async function buildSessionSnapshot(sessionId: string, roomKey: Buffer, deps: OwnerReplicatorDeps): Promise<string | null> {
+export async function buildSessionSnapshot(sessionId: string, roomKey: Buffer, deps: SnapshotBuildDeps): Promise<string | null> {
   const owner = new OwnerReplicator({ ...deps, worktreeSync: () => true });
   const frame = await owner.buildTurnFrame(sessionId);
   // Nothing worth persisting yet: no transcript and no checkpoint (a fresh owner
   // has no cursor, so buildReplFrame emits a zero-record frame rather than null).
   if (!frame || (frame.records.length === 0 && !frame.checkpointCommit)) return null;
-  return seal(roomKey, JSON.stringify(frame));
+  return seal(roomKey, JSON.stringify({ ...frame, sessionInfo: deps.sessionInfo?.(sessionId) }));
 }
 
 export interface AppliedSnapshot {
+  sessionInfo?: SnapshotSessionInfo;
   /** The runtime's opaque resume token from the source machine. Not sufficient
    *  alone on a fresh box (it names an on-disk store that won't exist) — the
    *  caller reconstructs a resumable runtime from the restored transcript. */
@@ -54,8 +70,9 @@ export interface AppliedSnapshot {
  * can re-derive a resumable runtime session (writeHistory / seeded fallback).
  * Throws on a bad key / corrupt blob, or if the frame can't apply cleanly.
  */
-export async function applySessionSnapshot(sealed: string, roomKey: Buffer, deps: StandbyApplierDeps): Promise<AppliedSnapshot> {
-  const frame = JSON.parse(open(roomKey, sealed)) as ReplWireFrame;
+export async function applySessionSnapshot(sealed: string, roomKey: Buffer, deps: StandbyApplierDeps & { expectedSessionId?: string }): Promise<AppliedSnapshot> {
+  const frame = JSON.parse(open(roomKey, sealed)) as ReplWireFrame & { sessionInfo?: SnapshotSessionInfo };
+  if (deps.expectedSessionId && frame.sessionId !== deps.expectedSessionId) throw new Error("Snapshot session identity mismatch");
   const applier = new StandbyApplier(deps);
   const ack = await applier.receive(frame);
   // We always ship a FULL frame + full bundle, so a fresh applier applies it
@@ -65,6 +82,7 @@ export async function applySessionSnapshot(sealed: string, roomKey: Buffer, deps
     throw new Error(`snapshot apply failed: ${ack.status}`);
   }
   return {
+    sessionInfo: frame.sessionInfo,
     runtimeSessionRef: frame.runtimeSessionRef,
     recordCount: frame.records.length,
     checkpointCommit: frame.checkpointCommit,

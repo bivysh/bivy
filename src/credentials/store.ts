@@ -24,6 +24,7 @@ import { seal, open } from "../e2e.js";
 import {
   migrateToV3,
   mergeDocuments,
+  preferIncomingOAuthCredential,
   recordFromStored,
   emptyDocument,
   type CredentialVaultDocumentV3,
@@ -110,25 +111,14 @@ function defaultKey(provider: string): string {
  *  - No local entry → take the incoming one.
  *  - Only OAuth-vs-OAuth needs freshness arbitration (an api-key set/replace, or a
  *    type switch, keeps the existing "incoming wins on a real content change").
- *  - A snapshot that omits the refresh token must never clobber a usable one —
- *    rotated refresh tokens are single-use, so an incoming with a blank refresh is
- *    strictly worse than a local one that still has it.
- *  - Prefer the token minted LATER by `refreshedAt` (monotonic mint order) when
- *    both carry it; otherwise fall back to the access-token `expires`. In both
- *    cases a tie KEEPS the local credential (strictly-greater wins), so an equal
- *    stamp can't needlessly churn/rotate the vault, and clock skew can't let an
- *    equal-`expires` stale token win.
+ *  - A snapshot that omits the refresh token must never clobber a usable one.
+ *  - OAuth ordering is delegated to document.ts so record-shaped and legacy
+ *    wire merges use the same deterministic refreshedAt/expires/content order.
  */
 export function preferIncomingCredential(local: StoredCredential | undefined, incoming: StoredCredential): boolean {
   if (!local) return true;
   if (local.type !== "oauth" || incoming.type !== "oauth") return true;
-  const localRefresh = String(local.refresh ?? "").trim();
-  const incomingRefresh = String(incoming.refresh ?? "").trim();
-  if (!incomingRefresh && localRefresh) return false;
-  const lt = Number(local.refreshedAt);
-  const it = Number(incoming.refreshedAt);
-  if (Number.isFinite(lt) && Number.isFinite(it)) return it > lt;
-  return (Number(incoming.expires) || 0) > (Number(local.expires) || 0);
+  return preferIncomingOAuthCredential(local, incoming);
 }
 
 /** A tombstone wins only when it is newer than the credential it would remove. */

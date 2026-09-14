@@ -251,6 +251,69 @@ The feature also needs ephemeral machines enabled, which is the default:
 `EPHEMERAL_MACHINES_ENABLED` and the build-time `VITE_EPHEMERAL_MACHINES_ENABLED`
 are on unless set to exactly `0`.
 
+## Operator-owned managed compute
+
+A self-hoster can expose the same managed-compute lane used by Bivy Cloud while
+keeping the provider account under their own control. It is the normal hosted
+ephemeral provisioner with an operator credential instead of each user's cloud
+token; model and repository credentials still belong to each user.
+
+For Fly, create a dedicated organization and a narrowly scoped token that can
+create, inspect, and destroy Machines, then configure the control plane:
+
+```env
+# New managed launches are disabled unless this is exactly 1.
+MANAGED_COMPUTE_ENABLED=1
+MANAGED_PROVIDER_TOKEN_FLY=<operator Fly token>
+
+# Required when NODE_ENV=production. The deployment extension owns spend,
+# provider-budget, upgrade, and suspension policy; Core enforces this additional
+# per-account ceiling even when that service admits a launch.
+MANAGED_COMPUTE_MAX_ACTIVE_PER_ACCOUNT=3
+DEPLOYMENT_EXTENSION_URL=https://policy.example.internal
+DEPLOYMENT_EXTENSION_TOKEN=<service token>
+
+# Set only after the exact production guest image has passed egress and
+# process/mining-abuse validation. Production refuses managed launches otherwise.
+MANAGED_GUEST_HARDENING_ATTESTED=1
+
+# Interactive managed-session defaults. Production requires an immutable,
+# prebuilt baseline image: managed compute never silently installs onto a generic
+# provider image during boot. Users never receive the provider token.
+MANAGED_SESSION_PROVIDER=fly
+MANAGED_SESSION_TTL_MINUTES=60
+MANAGED_SESSION_IMAGE=ghcr.io/your-org/bivy-ephemeral-runner:sha-<commit>
+# MANAGED_SESSION_REGION=<adapter default>
+# MANAGED_SESSION_SIZE=<adapter default>
+
+# Optional smaller runtime-specific images. The managed launch endpoint chooses
+# one from the requested agent and falls back to MANAGED_SESSION_IMAGE for a
+# custom runtime. Bivy's official GHCR baseline automatically derives these
+# `sha-<commit>-<runtime>` tags; custom registries can set them explicitly.
+# MANAGED_SESSION_IMAGE_CLAUDE=ghcr.io/your-org/bivy-ephemeral-runner:sha-<commit>-claude
+# MANAGED_SESSION_IMAGE_CODEX=ghcr.io/your-org/bivy-ephemeral-runner:sha-<commit>-codex
+# MANAGED_SESSION_IMAGE_PI=ghcr.io/your-org/bivy-ephemeral-runner:sha-<commit>-pi
+
+# Optional first-run authentication Machine overrides. It falls back to the
+# baseline MANAGED_SESSION_IMAGE because provider selection happens after boot.
+MANAGED_AUTH_RUNNER_PROVIDER=fly
+MANAGED_AUTH_RUNNER_TTL_MINUTES=15
+# MANAGED_AUTH_RUNNER_REGION=<adapter default>
+# MANAGED_AUTH_RUNNER_SIZE=<adapter default>
+# MANAGED_AUTH_RUNNER_IMAGE=<defaults to MANAGED_SESSION_IMAGE>
+```
+
+Restart the control plane after changing these values. The token is read only by
+the control plane, used transiently for provider API calls, and is never returned
+by an account API, persisted in Postgres, logged, or included in machine
+user-data. Keep it in your deployment secret manager or `deploy/.env` with mode
+`600`, and rotate it like any other infrastructure credential.
+
+Setting `MANAGED_COMPUTE_ENABLED=0` (or removing it) blocks new managed launches.
+It does **not** disable teardown, reconciliation, creation-attempt cleanup, or
+orphan sweeps; leave `MANAGED_PROVIDER_TOKEN_FLY` available until every managed
+machine has been destroyed. User-token/BYO configurations are unaffected.
+
 ## Using a managed/hosted Postgres
 
 By default the stack runs its own `postgres` container. If you'd rather use a

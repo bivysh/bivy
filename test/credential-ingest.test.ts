@@ -29,7 +29,9 @@ function jwtWithExp(expSeconds: number): string {
 
 await check("maps a Codex ChatGPT auth.json to an oauth credential with JWT expiry + account id", async () => {
   const expSeconds = Math.floor(Date.now() / 1000) + 3600;
+  const refreshedAt = "2026-01-02T03:04:05.000Z";
   const mapped = codexAuthToCredential({
+    last_refresh: refreshedAt,
     tokens: { access_token: jwtWithExp(expSeconds), refresh_token: "rt", account_id: "acct-9" },
   });
   assert.equal(mapped?.providerId, "openai-codex");
@@ -37,6 +39,7 @@ await check("maps a Codex ChatGPT auth.json to an oauth credential with JWT expi
   assert.equal((mapped?.credential as { refresh?: string }).refresh, "rt");
   assert.equal((mapped?.credential as { accountId?: string }).accountId, "acct-9");
   assert.equal((mapped?.credential as { expires?: number }).expires, expSeconds * 1000, "expiry taken from the JWT exp claim");
+  assert.equal((mapped?.credential as { refreshedAt?: number }).refreshedAt, Date.parse(refreshedAt), "Codex mint time survives ingest");
 });
 
 await check("maps a Codex api-key auth.json to an api_key credential for openai", async () => {

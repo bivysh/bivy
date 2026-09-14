@@ -51,7 +51,19 @@ describe("buildBootstrapUserData — hosted queue opt-in", () => {
     expect(userData).toContain("export BIVY_GITHUB_TOKEN='ghp_abc123'");
     // Still runs the installer with BIVY_DATA_DIR set, same as before.
     expect(userData).toContain("export BIVY_DATA_DIR=/etc/bivy");
-    expect(userData).toContain("curl -fsSL");
+    expect(userData).toContain("curl --connect-timeout 10 --max-time 120 -fsSL");
+  });
+
+  it("enables hosted credential custody without enabling unattended queue polling", () => {
+    const userData = buildBootstrapUserData({ ...base, hostedCredentialCustody: true });
+    expect(userData).toContain("export BIVY_HOSTED_CREDENTIAL_CUSTODY=1");
+    expect(userData).not.toContain("BIVY_GITHUB_HOSTED_TASKS");
+  });
+
+  it("allows an interactive setup guest to publish only its initial hosted credential snapshot", () => {
+    const userData = buildBootstrapUserData({ ...base, hostedCredentialCustody: true, hostedCredentialPublisher: true });
+    expect(userData).toContain("export BIVY_HOSTED_CREDENTIAL_CUSTODY=1");
+    expect(userData).toContain("export BIVY_HOSTED_CREDENTIAL_PUBLISH=1");
   });
 
   it("single-quotes a token so shell metacharacters can't break out of the export", () => {
@@ -78,12 +90,17 @@ describe("buildBootstrapUserData — hosted queue opt-in", () => {
     // start.sh runs the daemon in the foreground so the process supervisor keeps
     // it alive; `bivy setup` is never involved.
     expect(userData).toContain("exec bivy start");
+    // Login shells used by providers may discard the image's ENV PATH. Resolve
+    // Bivy's package-local executable directory again in start.sh so bundled
+    // agents such as Pi remain discoverable without a separate installation.
+    expect(userData).toContain('BIVY_CLI="$(readlink -f "$(command -v bivy)")"');
+    expect(userData).toContain('export PATH="$BIVY_PACKAGE_DIR/node_modules/.bin:$PATH"');
     // A transient systemd unit survives cloud-init's own unit exiting; the
     // setsid fallback covers an image without systemd-run.
     expect(userData).toContain("systemd-run --unit=bivy");
     expect(userData).toContain("setsid bash /etc/bivy/start.sh");
     // The install step still runs, and the TTL self-shutdown backstop remains.
-    expect(userData).toContain("curl -fsSL");
+    expect(userData).toContain("curl --connect-timeout 10 --max-time 120 -fsSL");
     expect(userData).toContain("shutdown -h now");
   });
 });

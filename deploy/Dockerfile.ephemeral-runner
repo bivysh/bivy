@@ -11,6 +11,14 @@ WORKDIR /repo
 # own package-lock.json — which is what `npm install -g` consumes below.
 RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY packages/automation-core/package.json ./packages/automation-core/package.json
+COPY packages/core/package.json ./packages/core/package.json
+COPY packages/plugin-sdk/package.json ./packages/plugin-sdk/package.json
+COPY packages/ui/package.json ./packages/ui/package.json
+COPY packages/web/package.json ./packages/web/package.json
+# Dependency resolution changes only with manifests/lockfiles. Keep source out of
+# this layer so normal Core changes reuse the expensive full-workspace install.
+RUN pnpm install --frozen-lockfile --ignore-scripts
 COPY tsconfig.json ./
 COPY packages/ ./packages/
 COPY src/ ./src/
@@ -18,10 +26,9 @@ COPY bin/ ./bin/
 COPY public/qr.js ./public/qr.js
 COPY scripts/ ./scripts/
 COPY README.md LICENSE ./
-# This stage only type-checks and packs; it never runs the node, so skip
-# install scripts (notably node-pty's node-gyp build, which needs a toolchain
-# the slim image lacks). The runtime stage below compiles node-pty for real.
-RUN pnpm install --frozen-lockfile --ignore-scripts
+# This stage only type-checks and packs; install scripts were skipped above
+# (notably node-pty's node-gyp build, which needs a toolchain the slim image
+# lacks). The runtime stage below compiles node-pty for real.
 # The context has no .git, so the packed manifest's `commit` comes from this
 # build-arg (the workflow passes the pushed SHA); it is empty for local builds.
 ARG GITHUB_SHA=
@@ -34,9 +41,14 @@ RUN apt-get update -qq \
   && apt-get install -y -qq --no-install-recommends ca-certificates curl git openssh-client tini \
   && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/bivy-latest.tar.gz /tmp/bivy.tar.gz
-# node-pty compiles from source (same toolchain install.sh requires on
-# Debian/Ubuntu). Install it, build, and purge it in one layer so the runtime
-# image ships no compiler.
+# Maintained agents bundled as Bivy dependencies expose their CLIs here. npm
+# does not promote transitive bins into /usr/local/bin when installing Bivy
+# globally, so include the package-local bin directory for every such agent
+# rather than adding one bespoke symlink per integration.
+ENV PATH="/usr/local/lib/node_modules/@bivy/bivy/node_modules/.bin:${PATH}"
+# Install the common Bivy layer once for every runtime-specific image. node-pty
+# compiles from source (same toolchain install.sh requires on Debian/Ubuntu), so
+# install and purge the compiler in one layer rather than shipping it.
 RUN apt-get update -qq \
   && apt-get install -y -qq --no-install-recommends python3 make g++ \
   && npm install -g /tmp/bivy.tar.gz \
@@ -44,7 +56,23 @@ RUN apt-get update -qq \
   && apt-get purge -y -qq --auto-remove python3 make g++ \
   && rm -rf /var/lib/apt/lists/* /root/.npm \
   && command -v bivy \
+  && command -v pi \
   && node -e "require('/usr/local/lib/node_modules/@bivy/bivy/node_modules/node-pty')"
+# `all` is the compatibility/auth image. Interactive sessions can use the much
+# smaller `claude`, `codex`, or `pi` variants selected by the requested runtime,
+# avoiding a cold pull of unrelated agent binaries.
+ARG BIVY_RUNNER_AGENT=all
+RUN case "$BIVY_RUNNER_AGENT" in \
+      all) npm install -g @openai/codex@0.147.0 @anthropic-ai/claude-code@2.1.246 ;; \
+      codex) npm install -g @openai/codex@0.147.0 ;; \
+      claude) npm install -g @anthropic-ai/claude-code@2.1.246 ;; \
+      pi) : ;; \
+      *) echo "unsupported BIVY_RUNNER_AGENT=$BIVY_RUNNER_AGENT" >&2; exit 1 ;; \
+    esac \
+  && rm -rf /root/.npm \
+  && { [ "$BIVY_RUNNER_AGENT" != all ] && [ "$BIVY_RUNNER_AGENT" != codex ] || command -v codex; } \
+  && { [ "$BIVY_RUNNER_AGENT" != all ] && [ "$BIVY_RUNNER_AGENT" != claude ] || command -v claude; } \
+  && command -v pi
 RUN mkdir -p /etc/bivy /workspace \
   && chmod 700 /etc/bivy
 ENV BIVY_DATA_DIR=/etc/bivy

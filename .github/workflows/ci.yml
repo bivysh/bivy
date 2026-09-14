@@ -1,8 +1,8 @@
 name: CI
 
 on:
+  # Stacked follow-ups need the same checks before their parent merges.
   pull_request:
-    branches: [main]
   # Merge queue validates the exact result of applying queued PRs to the latest
   # main. Without this event, the required ci-ok check never reports for the
   # temporary merge group and queued PRs eventually time out.

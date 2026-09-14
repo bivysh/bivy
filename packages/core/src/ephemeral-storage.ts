@@ -522,7 +522,7 @@ export interface PendingEphemeralLaunch {
   };
   followups: Array<{ text: string; clientMessageId: string; attachments?: PromptAttachment[] }>;
   logs: string[];
-  phase: "provisioning" | "booting" | "failed";
+  phase: "provisioning" | "booting" | "credential-setup" | "failed";
   machine?: EphemeralMachine;
   createdAt: string;
   updatedAt: string;

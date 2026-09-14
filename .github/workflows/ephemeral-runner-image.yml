@@ -2,7 +2,9 @@ name: Ephemeral runner image
 
 on:
   push:
-    branches: [main]
+    # Prebuild on review branches too. Staging deploys can then retag/use the
+    # exact Core SHA immediately instead of spending several minutes compiling
+    # node-pty and exporting the runner image on the deployment critical path.
     paths:
       - deploy/Dockerfile.ephemeral-runner
       - src/**
@@ -33,7 +35,12 @@ env:
 
 jobs:
   publish:
+    name: publish (${{ matrix.variant }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [all, claude, codex, pi]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -45,22 +52,37 @@ jobs:
       - name: Create buildx builder
         run: docker buildx create --name bivy --driver docker-container --use
 
-      # `:main` moves only for builds of main; a workflow_dispatch from another
-      # branch publishes just its `sha-` tag.
+      # The `all` compatibility image keeps the historical unsuffixed tags.
+      # Runtime variants omit unrelated agent binaries and are selected by the
+      # managed launch endpoint from its requested runtime id.
       - name: Build and push image
+        env:
+          VARIANT: ${{ matrix.variant }}
         run: |
           set -euo pipefail
-          tags=(--tag "$IMAGE:sha-${GITHUB_SHA::7}")
+          suffix="-$VARIANT"
+          cache_suffix="-$VARIANT"
+          if [ "$VARIANT" = all ]; then
+            suffix=""
+            cache_suffix=""
+          fi
+          tags=(
+            --tag "$IMAGE:sha-${GITHUB_SHA::7}${suffix}"
+            --tag "$IMAGE:prebuild-${GITHUB_SHA}${suffix}"
+          )
           if [ "$GITHUB_REF" = "refs/heads/main" ]; then
-            tags+=(--tag "$IMAGE:main")
+            tags+=(--tag "$IMAGE:main${suffix}")
           fi
           docker buildx build \
             --file deploy/Dockerfile.ephemeral-runner \
             --build-arg "GITHUB_SHA=$GITHUB_SHA" \
+            --build-arg "BIVY_RUNNER_AGENT=$VARIANT" \
             --push \
             "${tags[@]}" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
             --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --cache-from "type=registry,ref=$IMAGE:buildcache" \
-            --cache-to "type=registry,ref=$IMAGE:buildcache,mode=max" \
+            --label "service=bivy-staging-managed-runner" \
+            --label "bivy.runner.agent=$VARIANT" \
+            --cache-from "type=registry,ref=$IMAGE:buildcache${cache_suffix}" \
+            --cache-to "type=registry,ref=$IMAGE:buildcache${cache_suffix},mode=max" \
             .

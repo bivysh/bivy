@@ -51,6 +51,7 @@ export function claudeCodeIntegration(origin: AgentIntegrationOrigin) {
         testedVersion: CLAUDE_TESTED_VERSION,
         source: origin,
         authOwner: "agent",
+        credentialRequirements: { owner: "agent", strategy: "agent-login", providers: ["anthropic"] },
         notes: installed
           ? "Uses the Claude Code executable already on this node, including its native auth, configuration, and sessions. Set BIVY_CLAUDE_MODEL to pick a default model."
           : agentInstalled

@@ -76,10 +76,13 @@ function oauthRecord(provider: string, label: string, access: string, expires: n
     const store = createCredentialVault(credsDir);
     await store.setApiKey("anthropic", "personal-key");
     await store.putRecord({ provider: "anthropic", label: "work", origin: "bivy", sync: "account", source: { kind: "stored", cred: { type: "api_key", key: "work-key" } } });
+    await store.putRecord({ provider: "openai", label: "team", origin: "bivy", sync: "account", source: { kind: "stored", cred: { type: "api_key", key: "team-key" } } });
     await setCredentialUnattended(credsDir, "anthropic", "work", true);
+    await setCredentialUnattended(credsDir, "openai", "team", true);
     const hosted = await exportUnattendedRecords(credsDir);
-    assert.deepEqual(Object.keys(hosted), ["anthropic:work"]);
+    assert.deepEqual(Object.keys(hosted).sort(), ["anthropic:work", "openai:team"]);
     assert.equal(hosted["anthropic:work"]?.unattended, true);
+    assert.equal(hosted["openai:team"]?.unattended, true);
     assert.equal((await store.readRecord("anthropic", "default"))?.unattended, undefined, "account sync never implies hosted custody");
     await setProviderApiKeyLabeled(credsDir, "anthropic", "work", "rotated-work-key");
     assert.equal((await store.readRecord("anthropic", "work"))?.unattended, true, "rotating a key preserves its custody grant");

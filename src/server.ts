@@ -77,6 +77,8 @@ import { authMiddleware, resolveAuth, isAuthorized, requestOriginAllowed } from 
 import { RelayConnector, loadRelayConfig, soloCredentials, type ClientMessage } from "./remote/index.js";
 import { readEphemeralTeardownConfig, shouldSelfTeardown, snapshotsDurableForTeardown, performSelfTeardown, type SnapshotFlushResult } from "./ephemeral-teardown.js";
 import { buildSessionSnapshot, applySessionSnapshot } from "./session/snapshot.js";
+import { clearTurnActivity } from "./session/turn-activity.js";
+import { rebuildSnapshotRuntime } from "./session/snapshot-runtime.js";
 import { createCheckpointBundle, applyCheckpointBundle, materializeCheckpoint } from "./session/checkpoint-pack.js";
 import { configuredTurnTimeoutMs, configuredTurnStallMs, configuredTurnActivityStallMs } from "./session/turn-watchdog.js";
 import { createTurnWatchdog, probeTurnPidAlive } from "./session/turn-watchdog-runtime.js";
@@ -3022,19 +3024,27 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     // resolves to afterward.
     const acknowledgeReducedProtections = msg.acknowledgeReducedProtections === true;
     const gateNow = new Date().toISOString();
-    const rt = getRuntime(agentFrom(msg) ?? defaultRuntimeId);
-    const gateContract = computeSessionContract(
-      { runtime: rt as SessionContractRuntimeFacts, preview: false, sandbox: sandboxFrom(msg), acknowledgedAt: acknowledgeReducedProtections ? gateNow : undefined },
-      gateNow,
-    );
-    if (gateContract.requiresAcknowledgement) {
-      relay?.sendEvent({
-        type: "session.error",
-        code: "reduced_protections_ack_required",
-        error: `${rt.displayName || rt.id} would run this session with reduced protections for a certified profile. Confirm to continue.`,
-        contract: gateContract,
-        requestId,
-      });
+    try {
+      const rt = getRuntime(agentFrom(msg) ?? defaultRuntimeId);
+      const gateContract = computeSessionContract(
+        { runtime: rt as SessionContractRuntimeFacts, preview: false, sandbox: sandboxFrom(msg), acknowledgedAt: acknowledgeReducedProtections ? gateNow : undefined },
+        gateNow,
+      );
+      if (gateContract.requiresAcknowledgement) {
+        relay?.sendEvent({
+          type: "session.error",
+          code: "reduced_protections_ack_required",
+          error: `${rt.displayName || rt.id} would run this session with reduced protections for a certified profile. Confirm to continue.`,
+          contract: gateContract,
+          requestId,
+        });
+        return;
+      }
+    } catch (error) {
+      // Agent availability is checked before workspace creation. Return a real
+      // terminal response to the requesting client instead of letting the relay's
+      // outer console-only catch strand an invisible pending session forever.
+      relay?.sendEvent({ type: "session.error", requestId, error: error instanceof Error ? error.message : String(error) });
       return;
     }
     let record: SessionRecord;
@@ -3072,6 +3082,10 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
       gateNow,
     );
     persistSessionMetadata(record);
+    // Session creation returns only after the selected repository/workspace and
+    // runtime are usable. On ephemeral nodes this records a content-free latency
+    // milestone; ordinary personal nodes have no hosted Machine and ignore it.
+    void reportEphemeralMilestone("repositoryReadyAt");
     relay?.sendEvent({
       ...transcripts.buildHistoryEvent({
         sessionId: record.id,
@@ -3207,7 +3221,7 @@ const hostedImportedRecordsPath = path.join(appDir, "model-auth-hosted-records.j
 let lastPushedModelAuthCiphertext = "";
 let lastPushedHostedModelAuthCiphertext = "";
 let lastPushedHostedModelAuthRevision = -1;
-const isHostedCustodyNode = () => Boolean(process.env.BIVY_GITHUB_HOSTED_TASKS);
+const isHostedCustodyNode = () => Boolean(process.env.BIVY_HOSTED_CREDENTIAL_CUSTODY || process.env.BIVY_GITHUB_HOSTED_TASKS);
 
 function readLocalModelAuthVaultKey(): string | undefined {
   try {
@@ -3500,9 +3514,13 @@ async function syncModelAuthFromControlPlane() {
     }
 
     await processModelAuthKeyRequests(data.requests ?? []);
-    // Ready means there is no encrypted vault to hydrate, or this node has the
-    // key needed to consume it. Ciphertext with no key remains not-ready.
-    if (!targetVault?.ciphertext || (hostedCustody ? readHostedModelAuthVaultKey() : readLocalModelAuthVaultKey())) void reportEphemeralMilestone("credentialsReadyAt");
+    // A personal node with no vault has nothing to hydrate and is ready. A
+    // hosted-custody guest is different: an absent filtered snapshot means it
+    // has no model credential at all, not that hydration succeeded.
+    const credentialsReady = hostedCustody
+      ? Boolean(targetVault?.ciphertext && readHostedModelAuthVaultKey())
+      : Boolean(!targetVault?.ciphertext || readLocalModelAuthVaultKey());
+    if (credentialsReady) void reportEphemeralMilestone("credentialsReadyAt");
   } catch (error) {
     console.warn("[auth-sync] model auth sync failed:", (error as Error).message);
   }
@@ -3523,6 +3541,10 @@ async function processModelAuthKeyRequests(requests: Array<{ nodeId: string; pub
 
 async function pushHostedModelAuthToControlPlane() {
   const [records, revision] = await Promise.all([exportUnattendedRecords(credsDir), unattendedCredentialRevision(credsDir)]);
+  // A setup guest must not establish an empty snapshot when the credential is
+  // first saved (before the explicit grant command follows). Otherwise its
+  // one allowed initial write would be consumed by an unusable vault.
+  if (isHostedCustodyNode() && Object.keys(records).length === 0) return;
   if (revision === lastPushedHostedModelAuthRevision) return;
   const key = ensureHostedModelAuthVaultKey();
   const ciphertext = encryptModelAuthProviders({}, {}, {}, key, records, {});
@@ -3531,7 +3553,7 @@ async function pushHostedModelAuthToControlPlane() {
     body: JSON.stringify({ ciphertext, vaultKeyB64: key, expectedGeneration, revision }),
   });
   const currentResponse = await modelAuthFetch("/node/model-auth-hosted-vault");
-  if (currentResponse?.status === 403) return; // hosted provisioning is disabled
+  if (currentResponse?.status === 403) throw new Error("hosted credential custody is not enabled for this account");
   const current = currentResponse?.ok
     ? (await currentResponse.json().catch(() => ({}))) as HostedModelAuthVaultResponse
     : {};
@@ -3545,12 +3567,12 @@ async function pushHostedModelAuthToControlPlane() {
   if (response?.ok) {
     lastPushedHostedModelAuthCiphertext = ciphertext;
     lastPushedHostedModelAuthRevision = revision;
-  } else if (response?.status !== 403 && response?.status !== 409) {
+  } else {
     throw new Error(`hosted model-auth push failed (${response?.status ?? "offline"})`);
   }
 }
 
-async function pushModelAuthToControlPlane(rotateKey = false) {
+async function pushModelAuthToControlPlane(rotateKey = false, throwOnFailure = false) {
   if (!sessionAdvertiseTarget) return;
   // Piggyback the (plaintext, non-secret) provider status summary on every
   // trigger that already pushes the encrypted model-auth vault — one "creds
@@ -3562,8 +3584,10 @@ async function pushModelAuthToControlPlane(rotateKey = false) {
     // A hosted runner holds only the explicitly granted snapshot and must never
     // overwrite the peer-to-peer account vault with that filtered subset.
     if (isHostedCustodyNode()) {
-      // Hosted runners are recipients, never authorities for the custody set.
-      // Letting one republish its stale filtered copy could undo a revocation.
+      // A credential-setup guest may establish the initial filtered snapshot.
+      // The control plane refuses managed-guest replacement after that first
+      // write, so normal hosted runners remain recipients rather than authorities.
+      if (process.env.BIVY_HOSTED_CREDENTIAL_PUBLISH === "1" && !lastPushedHostedModelAuthCiphertext) await pushHostedModelAuthToControlPlane();
       return;
     }
     // Only push credentials on the account-sync tier; a `sync: "node"` credential
@@ -3602,6 +3626,7 @@ async function pushModelAuthToControlPlane(rotateKey = false) {
     await pushHostedModelAuthToControlPlane();
   } catch (error) {
     console.warn("[auth-sync] could not push model auth:", (error as Error).message);
+    if (throwOnFailure) throw error;
   }
 }
 
@@ -3891,7 +3916,7 @@ const NODE_HEARTBEAT_MS = 30_000;
 let nodeHeartbeatTimer: ReturnType<typeof setInterval> | undefined;
 const reportedEphemeralMilestones = new Set<string>();
 
-async function reportEphemeralMilestone(milestone: "credentialsReadyAt" | "snapshotReadyAt" | "firstAgentEventAt"): Promise<void> {
+async function reportEphemeralMilestone(milestone: "credentialsReadyAt" | "repositoryReadyAt" | "snapshotReadyAt" | "firstAgentEventAt" | "firstTokenAt"): Promise<void> {
   if (!sessionAdvertiseTarget || reportedEphemeralMilestones.has(milestone)) return;
   try {
     const res = await fetch(`${sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "")}/node/ephemeral-milestone`, {
@@ -6565,6 +6590,7 @@ function persistSessionMetadata(record: SessionRecord, status = sessionStatus(re
     delegationDepth: record.delegationDepth,
     runtimeId: record.runtimeId,
     sandbox: record.sandbox,
+    approvalMode: record.approvalMode,
     credentialLabels: record.credentialLabels,
     agentName: getRuntime(record.runtimeId).displayName,
     contract: record.contract,
@@ -7069,17 +7095,22 @@ async function restoreSessionFromSnapshot(sessionId: string): Promise<boolean> {
     const data = (await res.json()) as { ciphertext?: string };
     if (!data.ciphertext) return false;
     const applied = await applySessionSnapshot(data.ciphertext, pairingStore.roomKey(), {
+      expectedSessionId: sessionId,
       persistRecords: (id, records) => eventLog.rewrite(id, records),
       applyBundle: async (id, buf) => applyCheckpointBundle(await ensureReplicaRepo(id), id, buf),
       materialize: async (id) => materializeCheckpoint(await ensureReplicaRepo(id), id),
     });
-    // Register the rebuilt session so it lists and opens (mirrors the standby's
-    // upsertReplicaMeta); the transcript replays from the restored EventLog.
-    try {
-      metadata.upsertSession({ id: sessionId, source: "restored", status: "saved" });
-    } catch {
-      /* best-effort listing */
-    }
+    const info = applied.sessionInfo;
+    if (!info?.runtimeId) throw new Error("Snapshot lacks runtime information; transcript retained but not resumable");
+    const workspace = applied.checkpointCommit ? await ensureReplicaRepo(sessionId) : defaultWorkspace;
+    const rt = await ensureRuntimeAvailable(info.runtimeId, sandboxTier(info.sandbox));
+    const sessionFile = await rebuildSnapshotRuntime(info, rt, eventLog.readBase(sessionId), workspace);
+    // The imported native id may differ; RuntimeHost keeps this durable Bivy id
+    // while letting native methods use their own new resume token.
+    metadata.upsertSession({ id: sessionId, path: sessionFile, runtimeId: info.runtimeId,
+      workspace, name: info.name, sandbox: sandboxTier(info.sandbox), approvalMode: approvalModeFrom(info.approvalMode),
+      credentialLabels: info.credentialLabels,
+      source: "restored", status: "saved" });
     console.log(`[restore] session ${sessionId}: ${applied.recordCount} records, checkpoint ${applied.checkpointCommit ?? "none"}`);
     void reportEphemeralMilestone("snapshotReadyAt");
     return true;
@@ -7109,6 +7140,12 @@ async function flushSessionSnapshots(): Promise<SnapshotFlushResult> {
     result.required++;
     try {
       const sealed = await buildSessionSnapshot(record.id, roomKey, {
+        sessionInfo: () => {
+          const model = record.session.getCurrentModel();
+          return { runtimeId: record.runtimeId, name: record.session.getName(),
+            model: model ? { provider: model.provider, id: model.id } : undefined,
+            sandbox: record.sandbox, approvalMode: record.approvalMode, credentialLabels: record.credentialLabels };
+        },
         readRecords: (id) => eventLog.entries(id),
         epochOf: () => 0,
         checkpointHead: async (id) => {
@@ -7148,7 +7185,8 @@ function evaluateEphemeralTeardown(): void {
   if (!ephemeralTeardownCfg.enabled || ephemeralTearingDown) return;
   const records = new Set(openSessions.values());
   const anyWorking = [...records].some((r) => r.isWorking);
-  const anyRemoteActive = [...records].some((r) => r.remoteActive);
+  const anyRemoteActive = clients.size > 0 || (relay?.clientCount ?? 0) > 0
+    || [...records].some((r) => r.remoteActive);
   const inFlightWork = controlPlanePoller?.inFlightCount() ?? 0;
   if (anyWorking || anyRemoteActive || inFlightWork > 0) {
     ephemeralEverBusy = true;
@@ -7269,6 +7307,8 @@ function markSessionWorking(record: SessionRecord, activity: unknown, opts?: { s
   record.lastFailureAt = undefined;
   metadata.touchSession(record.id, "working");
   if (!wasWorking) {
+    // Do not miss a fast turn that begins and ends between teardown samples.
+    evaluateEphemeralTeardown();
     scheduleAdvertise(); // idle → working transition
     broadcastSessionState(record);
   }
@@ -7278,9 +7318,7 @@ function clearSessionWorking(record: SessionRecord, forcedStatus?: BivySessionSt
   turnWatchdog.clearTurnAttentionOnProgress(record, true);
   turnWatchdog.clearTurnWatchdog(record);
   touchSession(record);
-  record.isWorking = false;
-  record.lastActivity = undefined;
-  record.workingStartedAt = undefined;
+  clearTurnActivity(record);
   // A completed turn clears any pending manual-resume offer: the session has now
   // moved on (whether it was the resume itself or an unrelated new message).
   metadata.setResumePending(record.id, false);
@@ -7473,7 +7511,9 @@ function actionableAgentError(runtimeId: string, error: unknown): string {
   if (isModelAuthError(raw) || /reading ['"]provider['"]|no api key found/i.test(raw)) {
     if (id.includes("claude")) return "Claude Code is not signed in. Run `claude` once, complete sign-in, then retry; the same login works from Bivy and the PWA.";
     if (id.startsWith("codex")) return "Codex is not signed in. Run `codex login`, then retry; the same login works from Bivy and the PWA.";
-    if (id === "pi" || id === "aider") return "No model credential is configured. Run `bivy provider login`, then retry. This is only required once and compatible credentials sync E2E-encrypted to your other Bivy nodes.";
+    if (id === "pi" || id === "aider") return isHostedCustodyNode()
+      ? "No model credential is available to this Bivy Cloud Machine. Connect a provider and enable it for Bivy Cloud, then retry."
+      : "No model credential is configured. Run `bivy provider login`, then retry. This is only required once and compatible credentials sync E2E-encrypted to your other Bivy nodes.";
     return "The selected agent needs model authentication. Sign in through its native CLI, then retry.";
   }
   return raw;
@@ -7610,6 +7650,7 @@ function attachSessionListeners(record: SessionRecord) {
     // that was fixed (or newly broke) is re-evaluated on the next prompt.
     if (event.type === "turn_start") record.authRequiredSignaled = false;
     if (event.type === "message_update" && (event as Record<string, unknown>).message && ((event as Record<string, { role?: unknown }>).message?.role === "assistant")) {
+      void reportEphemeralMilestone("firstTokenAt");
       transcripts.persistIntermediateFromEvent(record, event as Record<string, unknown>, false);
     }
     if (event.type === "message_end" && (event as Record<string, unknown>).message && ((event as Record<string, { role?: unknown }>).message?.role === "assistant")) {
@@ -7746,7 +7787,7 @@ function attachSessionListeners(record: SessionRecord) {
           title: "Session hit an error",
           body: `${sessionNotifyLabel(record)} failed its last turn — tap to see what went wrong.`,
         });
-      } else if (!record.isWorking && !record.remoteActive && (record.backgroundTaskCount ?? 0) === 0) {
+      } else if (!record.isWorking && !record.remoteActive && clients.size === 0 && (relay?.clientCount ?? 0) === 0 && (record.backgroundTaskCount ?? 0) === 0) {
         void sendNotificationHint({
           kind: "session_done",
           sessionId: record.id,
@@ -8154,7 +8195,7 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
   const sessionSafety = projectSafety(
     policyWorkspace,
     sandboxTier(opts.sandbox ?? storedMeta?.sandbox),
-    opts.approvalMode ?? approvalMode,
+    opts.approvalMode ?? approvalModeFrom(storedMeta?.approvalMode) ?? approvalMode,
   );
   const sessionSandbox = sessionSafety.sandbox;
   const rt = await ensureRuntimeAvailable(opts.runtimeId ?? storedMeta?.runtimeId, sessionSandbox);
@@ -8747,7 +8788,7 @@ const runTerms = createRunTerminals({
   loadRunLog: (termId) => runLogs.load(termId),
   listAllSessions,
   listProvidersUnified,
-  pushModelAuthToControlPlane: () => pushModelAuthToControlPlane(),
+  pushModelAuthToControlPlane: () => pushModelAuthToControlPlane(false, true),
   listPiSessions: async () => {
     // `bivy run pi` is an agent-owned native TUI and writes to Pi's own store;
     // governed Pi chats write to Bivy's isolated store. Search both so a native

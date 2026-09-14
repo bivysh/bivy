@@ -63,6 +63,13 @@ export interface AgentInfo {
   source?: AgentIntegrationOrigin;
   testedVersion?: string;
   authOwner?: "bivy" | "agent" | "mixed";
+  /** Declarative first-run auth contract. Empty providers means discover them
+   * from the runtime's live provider catalog. */
+  credentialRequirements?: {
+    owner: "bivy" | "agent" | "mixed";
+    strategy: "one-of" | "all" | "agent-login";
+    providers: string[];
+  };
   notes?: string;
   install?: AgentInstallInfo;
 }

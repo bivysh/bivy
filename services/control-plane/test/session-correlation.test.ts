@@ -25,13 +25,13 @@ await test("set/get round-trips all launch params", async () => {
   const acct = await store.findOrCreateAccount("a@example.com");
   const rec = await store.setSessionCorrelation(acct.id, {
     sessionId: "s1", nodeId: "eph-abc", provider: "fly",
-    region: "iad", ttlMinutes: 60, repo: "o/r", setupId: "setup1", machineId: "m1", app: "app1",
+    region: "iad", ttlMinutes: 60, repo: "o/r", setupId: "setup1", machineId: "m1", app: "app1", computeSource: "managed",
   });
   assert.equal(rec.sessionId, "s1");
   const got = await store.getSessionCorrelation(acct.id, "s1");
   assert.deepEqual(
     { ...got, updatedAt: undefined },
-    { sessionId: "s1", nodeId: "eph-abc", provider: "fly", region: "iad", ttlMinutes: 60, repo: "o/r", setupId: "setup1", machineId: "m1", app: "app1", updatedAt: undefined },
+    { sessionId: "s1", nodeId: "eph-abc", provider: "fly", region: "iad", ttlMinutes: 60, repo: "o/r", setupId: "setup1", machineId: "m1", app: "app1", computeSource: "managed", updatedAt: undefined },
   );
 });
 

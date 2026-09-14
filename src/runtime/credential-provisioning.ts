@@ -73,7 +73,11 @@ export async function provisionAgentRun(credsDir: string, piDir: string, agentId
     });
   } else if (agentId === "codex") {
     // Codex reads OPENAI_API_KEY (already in env) or its own auth.json; mint the
-    // latter from a connected ChatGPT subscription when present.
+    // latter from a connected ChatGPT subscription when present. Codex may rotate
+    // that file while running; server.ts calls ingestAgentCredentials("codex") on
+    // terminal exit, and ensureCodexAuth also reconciles it on the next launch, so
+    // refreshed tokens flow back to the vault. This is persistence, not a global
+    // lease: never run two machines concurrently from copies of one Codex login.
     const home = await ensureCodexAuth(credsDir).catch(() => undefined);
     if (home) env.CODEX_HOME = home;
     // Pre-trust the run workspace so Codex doesn't stall on its first-run trust

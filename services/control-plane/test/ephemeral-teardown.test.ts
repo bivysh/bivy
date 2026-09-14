@@ -29,11 +29,27 @@ const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
   );
   const seen: Array<{ id: unknown; token: string | null }> = [];
   const fakeDestroy: DestroyFn = async (machine, deps) => { seen.push({ id: machine.id, token: await deps.keys.getToken("hetzner") }); };
-  const found = await reapSettledHostedMachine(store, "acct", "eph-1", env, Date.now(), fakeDestroy);
+  const found = await reapSettledHostedMachine(store, "acct", "eph-1", env, Date.now(), fakeDestroy, async () => "gone");
   assert.equal(found, true);
   assert.equal(seen.length, 1);
   assert.equal(seen[0].id, "srv1");
   assert.equal(seen[0].token, "hz-token");
+}
+
+// Even legacy machines remain tracked until provider-confirmed absence.
+{
+  const machine = { id: "legacy", provider: "fly", nodeId: "eph-legacy", createdAt: iso(0) };
+  const { store } = fakeStore([machine], { fly: "token" });
+  const destroy: DestroyFn = async (_machine, deps) => {
+    assert.equal(deps.providerOnly, true);
+    await deps.machines.remove("legacy"); // a legacy injected destroy must not drop tracking
+  };
+  await reapSettledHostedMachine(store, "acct", "eph-legacy", env, Date.now(), destroy, async () => "running");
+  assert.deepEqual(await store.getHostedMachines("acct"), [machine]);
+  await reapSettledHostedMachine(store, "acct", "eph-legacy", env, Date.now(), destroy, async () => { throw new Error("inventory unavailable"); });
+  assert.deepEqual(await store.getHostedMachines("acct"), [machine]);
+  await reapSettledHostedMachine(store, "acct", "eph-legacy", env, Date.now(), destroy, async () => "gone");
+  assert.deepEqual(await store.getHostedMachines("acct"), []);
 }
 
 // An untracked node (device-launched machine) → no-op, false, no destroy.
@@ -63,7 +79,7 @@ const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
     { hetzner: "hz-token" },
   );
   let destroyed = 0;
-  const n = await reconcileHostedMachines(store, "acct", Date.now(), env, async () => { destroyed++; });
+  const n = await reconcileHostedMachines(store, "acct", Date.now(), env, async () => { destroyed++; }, async () => "gone");
   assert.equal(n, 1);
   assert.equal(destroyed, 1);
 }
@@ -168,8 +184,19 @@ const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
   const { store, audits } = fakeStore([{ id: "srv8", provider: "fly", nodeId: "eph-8", createdAt: iso(0), milestones: { requestedAt: "2026-08-12T00:00:00.000Z" } }], {});
   assert.equal(await markHostedMachineMilestone(store, "acct", "eph-8", "nodeReadyAt", "2026-08-12T00:00:02.000Z"), true);
   assert.equal(await markHostedMachineMilestone(store, "acct", "eph-8", "nodeReadyAt", "2026-08-12T00:00:09.000Z"), true);
+  assert.equal(await markHostedMachineMilestone(store, "acct", "eph-8", "credentialsReadyAt", "2026-08-12T00:00:03.000Z"), true);
+  assert.equal(await markHostedMachineMilestone(store, "acct", "eph-8", "repositoryReadyAt", "2026-08-12T00:00:04.000Z"), true);
+  assert.equal(await markHostedMachineMilestone(store, "acct", "eph-8", "firstAgentEventAt", "2026-08-12T00:00:05.000Z"), true);
+  assert.equal(await markHostedMachineMilestone(store, "acct", "eph-8", "firstTokenAt", "2026-08-12T00:00:06.000Z"), true);
   const machine = (await store.getHostedMachines("acct"))[0];
-  assert.deepEqual(machine.milestones, { requestedAt: "2026-08-12T00:00:00.000Z", nodeReadyAt: "2026-08-12T00:00:02.000Z" });
+  assert.deepEqual(machine.milestones, {
+    requestedAt: "2026-08-12T00:00:00.000Z",
+    nodeReadyAt: "2026-08-12T00:00:02.000Z",
+    credentialsReadyAt: "2026-08-12T00:00:03.000Z",
+    repositoryReadyAt: "2026-08-12T00:00:04.000Z",
+    firstAgentEventAt: "2026-08-12T00:00:05.000Z",
+    firstTokenAt: "2026-08-12T00:00:06.000Z",
+  });
   assert.ok(audits.some((event) => event.action === "machine_milestone" && event.detail === "nodeReadyAt elapsedMs=2000"));
   assert.equal(await markHostedMachineMilestone(store, "acct", "eph-missing", "nodeReadyAt"), false);
 }

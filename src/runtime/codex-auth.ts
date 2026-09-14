@@ -18,11 +18,11 @@
 // `id_token` — the same call Codex itself makes to refresh.
 //
 // Rotation note: OpenAI rotates the refresh token on every grant, so we persist
-// the rotated token back to the vault. We mint only when no auth.json exists yet
-// (Codex then owns and self-refreshes it), which keeps churn to a single grant.
-// The residual edge case — Codex self-refreshing later invalidates the vault's
-// copy for *other* `openai-codex` consumers — is documented; for the common case
-// (the subscription was connected for Codex) there are no other consumers.
+// the rotated token back to the vault. Codex then owns and self-refreshes its
+// auth.json; terminal-exit ingest and the next launch fold its `last_refresh`
+// token set back into the vault. This repairs persistence but does NOT serialize
+// two machines using copies of one login: operators must still run only one
+// machine (or one serialized job stream) per OpenAI refresh-token lineage.
 
 import fs from "node:fs";
 import os from "node:os";
@@ -137,7 +137,9 @@ export async function ensureCodexAuth(credsDir: string): Promise<string | undefi
       const nativeAccess = String(projected.tokens?.access_token ?? "");
       if (nativeRefresh && Number.isFinite(nativeStamp)) {
         await store.modify("openai-codex", async (current) => {
-          if (!current || current.type !== "oauth" || nativeStamp <= Number(current.updatedAt ?? 0)) return current;
+          if (!current || current.type !== "oauth") return current;
+          const currentFreshness = Number(current.refreshedAt ?? current.updatedAt ?? 0);
+          if (nativeStamp <= currentFreshness) return current;
           return { ...current, access: nativeAccess || current.access, refresh: nativeRefresh, refreshedAt: nativeStamp };
         });
       }
@@ -153,15 +155,17 @@ export async function ensureCodexAuth(credsDir: string): Promise<string | undefi
 
   // Persist the rotated refresh token back to the vault FIRST — OpenAI rotates it
   // on every grant, so the previous one is now dead. If we can't persist it, bail
-  // rather than strand the vault on a token we've just invalidated.
+  // rather than strand the vault on a token we've just invalidated. Use the same
+  // stamp in auth.json so later ingestion recognizes this exact token generation.
+  const refreshedAt = Date.now();
   try {
     await store.modify("openai-codex", async (current) => ({
       ...(current ?? cred),
       type: "oauth",
       access: refreshed.accessToken,
       refresh: refreshed.refreshToken,
-      expires: Date.now() + refreshed.expiresIn * 1000,
-      refreshedAt: Date.now(),
+      expires: refreshedAt + refreshed.expiresIn * 1000,
+      refreshedAt,
     }));
   } catch {
     return undefined;
@@ -177,7 +181,7 @@ export async function ensureCodexAuth(credsDir: string): Promise<string | undefi
       refresh_token: refreshed.refreshToken,
       account_id: accountId,
     },
-    last_refresh: new Date().toISOString(),
+    last_refresh: new Date(refreshedAt).toISOString(),
   };
 
   try {

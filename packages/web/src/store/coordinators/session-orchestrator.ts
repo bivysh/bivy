@@ -5,6 +5,8 @@ const FORK_IMPORT_TIMEOUT_MS = 11 * 60 * 1000;
 
 export interface SessionForkOptions {
   destNodeId?: string;
+  /** Provision this managed profile as the destination after source export. */
+  managedConfigId?: string;
   agentId?: string;
   sourceAgentId?: string;
   model?: { provider: string; id: string };
@@ -30,6 +32,7 @@ export interface SessionOrchestrationDependencies {
   addUserMessage(text: string, clientMessageId: string): void;
   transcriptUrl(sessionId: string): string;
   refreshAccountSessions(): void;
+  launchManagedDestination(configId: string, runtimeId?: string): Promise<string>;
   /** Cross-node forks outlive the sheet that launched them because switching
    *  machines clears the active session (and unmounts that sheet). Surface their
    *  progress and outcome through app-level presentation instead. */
@@ -246,8 +249,9 @@ export class SessionOrchestrator {
     missing: Array<{ label?: string; detail?: string }>;
   }> {
     const sourceNodeId = this.deps.currentNodeId();
-    const destNodeId = opts.destNodeId ?? sourceNodeId;
-    const crossNode = !this.deps.isDirect() && Boolean(destNodeId) && destNodeId !== sourceNodeId;
+    let destNodeId = opts.destNodeId ?? sourceNodeId;
+    const managedDestination = Boolean(opts.managedConfigId);
+    const crossNode = managedDestination || (!this.deps.isDirect() && Boolean(destNodeId) && destNodeId !== sourceNodeId);
     const sourceAgentId = opts.sourceAgentId ?? this.deps.sessionRuntime(sourceSessionId);
     const targetAgentId = opts.agentId ?? sourceAgentId;
     const crossAgent = Boolean(targetAgentId && (!sourceAgentId || targetAgentId !== sourceAgentId));
@@ -284,6 +288,11 @@ export class SessionOrchestrator {
     const sourceTranscriptUrl = this.deps.transcriptUrl(sourceSessionId);
     let done: ServerEvent;
     try {
+      if (opts.managedConfigId) {
+        // Keep export authoritative before provisioning and retain main's
+        // source recovery if destination launch or import fails.
+        destNodeId = await this.deps.launchManagedDestination(opts.managedConfigId, opts.agentId);
+      }
       if (crossNode) {
         this.deps.reportForkProgress?.("Connecting to the destination machine…");
         this.deps.switchNode(destNodeId!);
@@ -291,7 +300,7 @@ export class SessionOrchestrator {
         // unmounts ForkSheet. Without app-level feedback a slow or failed import
         // looks exactly like the button did nothing.
         this.deps.reportCrossNodeFork?.("working", "Creating the fork on the destination machine…");
-        await this.deps.waitForOnline();
+        await this.deps.waitForOnline(managedDestination ? 120_000 : undefined);
       }
       this.deps.reportForkProgress?.("Creating the session in the destination agent…");
       done = await this.request({

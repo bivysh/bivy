@@ -136,6 +136,7 @@ export function piIntegration(origin: AgentIntegrationOrigin) {
         testedVersion: PI_TESTED_VERSION,
         source: origin,
         authOwner: "agent",
+        credentialRequirements: { owner: "agent", strategy: "one-of", providers: [] },
         notes: !nodeSupportsPi()
           ? unsupportedNodeMessage()
           : installed

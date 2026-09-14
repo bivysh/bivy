@@ -15,8 +15,11 @@ export type DeploymentOperation =
   | "ephemeral.provision"
   | "session.create";
 
-export interface DeploymentPolicyContext {
-  source?: string;
+export interface DeploymentDecisionAction {
+  /** Opaque deployment-owned action handled by /account/extension/actions/:id. */
+  id: string;
+  label: string;
+  kind?: "primary" | "secondary";
 }
 
 export interface DeploymentDecision {
@@ -24,8 +27,28 @@ export interface DeploymentDecision {
   code?: string;
   reason?: string;
   usage?: { used: number; limit?: number };
-  actions?: Array<{ id: string; label: string; kind?: "primary" | "secondary" }>;
+  /** Optional remediation such as upgrade, add payment, or switch to BYO. */
+  actions?: DeploymentDecisionAction[];
 }
+
+/** Opaque technical facts an operator may use for admission. Core never puts
+ * product tiers, prices, or commercial cap names in this contract. */
+export interface DeploymentPolicyContext {
+  source?: string;
+  computeSource?: "user" | "managed";
+  provider?: string;
+  sizeId?: string;
+  vcpus?: number;
+  memoryMiB?: number;
+  ttlMinutes?: number;
+  configId?: string;
+  purpose?: string;
+}
+
+export type DeploymentLifecycleEvent =
+  | { type: "ephemeral.first-agent-event"; attemptId: string; at: string }
+  | { type: "ephemeral.launch-failed"; attemptId: string; at: string }
+  | { type: "ephemeral.settled"; attemptId: string; at: string; machineSeconds?: number; activeAgentSeconds?: number };
 
 export interface AccountExtensionView {
   title?: string;
@@ -52,6 +75,11 @@ export class DeploymentExtension {
     const decision = response as Partial<DeploymentDecision>;
     if (typeof decision.allowed !== "boolean") throw new Error("Deployment extension returned an invalid policy decision");
     return decision as DeploymentDecision;
+  }
+
+  async record(accountId: string, event: DeploymentLifecycleEvent): Promise<void> {
+    if (!this.url) return;
+    await this.request("/v1/events", { subject: { accountId }, event });
   }
 
   async publishSessions(accountId: string, sessionIds: string[]): Promise<void> {

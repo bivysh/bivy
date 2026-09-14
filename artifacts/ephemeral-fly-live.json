@@ -1,0 +1,16 @@
+{
+  "app": "bivy-cert-b71ab64d-8f63-4e7c-9d42-6fe1cffc0c04",
+  "attemptId": "b71ab64d-8f63-4e7c-9d42-6fe1cffc0c04",
+  "image": "ghcr.io/bivysh/bivy-ephemeral-runner@sha256:30705bdda88425646b0c5dc19fc0e95cc4a026ca9c09a4f904c15b3a21e246ac",
+  "scope": "provider boot, native PTY, retry adoption, deletion; no account enrollment or model execution",
+  "machineId": "8654d9df9e7608",
+  "providerAcceptedMs": 2642,
+  "lastExecStatus": 200,
+  "lastExecExit": 1,
+  "lastExecStderr": "",
+  "lastExecError": "",
+  "healthAndNativePtyMs": 31105,
+  "retryAdoptedSameMachine": true,
+  "bootPassed": true,
+  "cleanupConfirmed": true
+}

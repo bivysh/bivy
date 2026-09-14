@@ -28,6 +28,7 @@ type FlyMachineBody = {
     image?: string;
     auto_destroy: boolean;
     restart: { policy: string };
+    guest?: { cpu_kind: string; cpus: number; memory_mb: number };
     init: { exec?: string[]; user_data?: string };
     files?: FlyFile[];
   };
@@ -110,29 +111,46 @@ describe("fly adapter — provision", () => {
     // hands the foreground to start.sh under a TTL timeout (90 min → 5400s), the
     // backstop that replaces the VM shutdown. `pipefail` makes a failed install
     // abort loudly instead of limping on to a doomed `bivy start`.
-    const script = cfg.init.exec![2];
-    expect(cfg.init.exec[0]).toBe("/bin/bash");
-    expect(cfg.init.exec[1]).toBe("-lc");
+    const script = cfg.init.exec![5];
+    expect(cfg.init.exec!.slice(0, 5)).toEqual(["/usr/bin/timeout", "--kill-after=10s", "5400", "/bin/bash", "-c"]);
     expect(script).toContain("set -euo pipefail");
     expect(script).toContain("command -v bivy");
     expect(script).toContain("apt-get install -y -qq curl ca-certificates");
-    expect(script).toContain("curl -fsSL");
-    expect(script).toContain("exec timeout 5400 bash /etc/bivy/start.sh");
+    expect(script).toContain("--max-time 120 -fsSL");
+    expect(script).toContain("exec bash /etc/bivy/start.sh");
+    expect(script).toContain("/node/bootstrap-status");
+    expect(script).toContain("chmod 600 /etc/bivy/relay.json /etc/bivy/start.sh");
   });
 
-  it("falls back to cloud-init user_data when no structured bootstrap is given", async () => {
+  it("derives guest cpu_kind/cpus/memory from the size row, so a new lane is a data row", async () => {
     const { exec, calls } = fakeFlyExec();
     const adapter = ephemeralAdapter("fly")!;
     await adapter.provision({
       exec,
       token: "fly-token",
-      userData: "#cloud-config\nruncmd: []\n",
-      config: { slug: "abc123", region: "fra", size: "shared-1x-2gb", ttlMinutes: 60 },
+      userData: "",
+      bootstrap: BOOTSTRAP,
+      config: { slug: "abc123", region: "iad", size: "shared-8x-16gb", ttlMinutes: 60 },
     });
     const create = calls.find((c) => /\/machines$/.test(c.url))!;
-    const cfg = machineConfig(create);
-    expect(cfg.init).toEqual({ user_data: "#cloud-config\nruncmd: []\n" });
-    expect(cfg.files).toBeUndefined();
+    expect(machineConfig(create).guest).toEqual({ cpu_kind: "shared", cpus: 8, memory_mb: 16384 });
+  });
+
+  it("catalogs the 8 vCPU / 16 GB size with an indicative price", () => {
+    const size = ephemeralAdapter("fly")!.sizes.find((s) => s.id === "shared-8x-16gb")!;
+    expect(size).toMatchObject({ vcpus: 8, memoryMiB: 16384, architecture: "x86_64", pricePerHour: 0.1234, priceSource: "indicative" });
+  });
+
+  it("rejects unsupported cloud-init before creating any billable resource", async () => {
+    const { exec, calls } = fakeFlyExec();
+    const adapter = ephemeralAdapter("fly")!;
+    await expect(adapter.provision({
+      exec,
+      token: "fly-token",
+      userData: "#cloud-config\nruncmd: []\n",
+      config: { slug: "abc123", region: "fra", size: "shared-1x-2gb", ttlMinutes: 60, attemptId: "test" },
+    })).rejects.toThrow("structured Bivy bootstrap");
+    expect(calls).toEqual([]);
   });
 });
 

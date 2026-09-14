@@ -8,15 +8,19 @@ import express, { type Request, type Response, type NextFunction } from "express
 import { ipKeyGenerator, rateLimit } from "express-rate-limit";
 import webpush from "web-push";
 import { resolveWebhookAuth, verifyWebhookAuth, DEFAULT_WEBHOOK_HEADER, type WebhookAuth } from "./webhook-auth.js";
-import { validateCapabilityTags } from "@bivy/core";
+import { matchGithubItemTrigger } from "./github-item-trigger.js";
+import { ephemeralAdapter, validateCapabilityTags } from "@bivy/core";
 import { providerCredentialFingerprint, type Account, type NodeRecord, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, type AutomationRun, type InboundHook, type NodeClaim, GITHUB_IDENTITY_MODES, type GithubIdentityMode, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
 import { centralGithubAppConfig, centralInstallUrl, applyCentralInstallationEvent, resolveGithubIdentity } from "./central-github-app.js";
-import { matchGithubItemTrigger } from "./github-item-trigger.js";
-import { maybeAutoProvision, planAutoProvision, hostedExecutionReadiness, mintHostedInstallationToken, reapSettledHostedMachine, reconcileAllHostedMachines, reconcileAllReadyCapacity, sweepAllOrphanProviderResources, validateHostedProviderToken, markHostedMachineMilestone, EPHEMERAL_MILESTONES, ephemeralMachinesEnabled } from "./ephemeral-provisioner.js";
+import { maybeAutoProvision, planAutoProvision, hostedExecutionReadiness, mintHostedInstallationToken, provisionEphemeralForAccount, provisionEphemeralRestore, reapSettledHostedMachine, reconcileAllHostedMachines, reconcileAllReadyCapacity, sweepAllOrphanProviderResources, validateHostedProviderToken, markHostedMachineMilestone, EPHEMERAL_MILESTONES, ephemeralMachinesEnabled, type ManagedProvisionRequest } from "./ephemeral-provisioner.js";
 import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecret, initializeHostedKeyring } from "./hosted-crypto.js";
 import { listAppInstallations, listInstallationRepositories, listInstallationBranches, getAppInstallation, mintInstallationToken } from "./hosted-github-auth.js";
 import { correlateHostedSessions } from "./hosted-correlation.js";
 import { countActiveAccountSessions } from "./session-count.js";
+import { usageFromManagedMachine } from "./compute-metering.js";
+import { managedCapacityCount, managedConcurrencyLimit } from "./managed-admission.js";
+import { managedInteractiveLaunch, ManagedLaunchConflict, type ManagedInteractiveRequest } from "./managed-interactive-launch.js";
+import { managedAuthRunnerImage, managedSessionImage } from "./managed-compute.js";
 import { createStore } from "./store-factory.js";
 import { createOwnerAuthRouter } from "./owner-auth.js";
 import { configureProxyTrust } from "./proxy-trust.js";
@@ -108,6 +112,20 @@ function assertProductionConfig() {
     // believes it is on — refuse to boot instead.
     problems.push("BIVY_CENTRAL_GITHUB_APP_ID and BIVY_CENTRAL_GITHUB_APP_PRIVATE_KEY must be configured together");
   }
+  if (process.env.MANAGED_COMPUTE_ENABLED === "1") {
+    if (!process.env.DEPLOYMENT_EXTENSION_URL || !process.env.DEPLOYMENT_EXTENSION_TOKEN) {
+      problems.push("production managed compute requires a deployment extension for spend, provider-budget, and account-suspension policy");
+    }
+    if (!managedConcurrencyLimit()) {
+      problems.push("MANAGED_COMPUTE_MAX_ACTIVE_PER_ACCOUNT must be a positive integer");
+    }
+    if (process.env.MANAGED_GUEST_HARDENING_ATTESTED !== "1") {
+      problems.push("MANAGED_GUEST_HARDENING_ATTESTED=1 is required after validating egress and process/mining controls in the production guest image");
+    }
+    if (!managedSessionImage()) {
+      problems.push("MANAGED_SESSION_IMAGE is required for production managed compute (generic provider images install at boot and cannot meet the startup SLO)");
+    }
+  }
   if (problems.length > 0) {
     console.error("Refusing to start: insecure production configuration:\n  - " + problems.join("\n  - "));
     process.exit(1);
@@ -131,13 +149,39 @@ process.on("unhandledRejection", (reason) => {
 const store = await createStore();
 const deploymentExtension = new DeploymentExtension();
 
-async function deploymentDecision(accountId: string, operation: DeploymentOperation, idempotencyKey?: string, context: DeploymentPolicyContext = {}) {
-  const decision = await deploymentExtension.authorize(accountId, operation, idempotencyKey, context);
-  return decision;
+async function deploymentDecision(
+  accountId: string,
+  operation: DeploymentOperation,
+  idempotencyKey?: string,
+  context: DeploymentPolicyContext = {},
+) {
+  if (operation !== "ephemeral.provision" || context?.computeSource !== "managed") return deploymentExtension.authorize(accountId, operation, idempotencyKey, context);
+  const limit = managedConcurrencyLimit();
+  if (limit !== undefined) {
+    const active = managedCapacityCount(await store.getHostedMachines(accountId), await store.listHostedMachineAttempts(accountId, true));
+    if (active >= limit) {
+      const presentation = await deploymentExtension.account(accountId).catch(() => undefined);
+      return {
+        allowed: false,
+        code: "managed_concurrency_limit",
+        reason: `This account already has ${active} active managed Machine${active === 1 ? "" : "s"}.`,
+        usage: { used: active, limit },
+        actions: presentation?.actions,
+      };
+    }
+  }
+  // Do not reserve deployment-owned budget for a request already refused by
+  // the local capacity ceiling. Launch callers hold the provision lease.
+  return deploymentExtension.authorize(accountId, operation, idempotencyKey, context);
 }
 
-async function requireDeploymentAdmission(accountId: string, operation: DeploymentOperation, idempotencyKey?: string) {
-  const decision = await deploymentDecision(accountId, operation, idempotencyKey);
+async function requireDeploymentAdmission(
+  accountId: string,
+  operation: DeploymentOperation,
+  idempotencyKey?: string,
+  context?: DeploymentPolicyContext,
+) {
+  const decision = await deploymentDecision(accountId, operation, idempotencyKey, context);
   if (!decision.allowed) {
     const error = new Error(decision.reason || "Operation is not available") as Error & { status?: number; code?: string };
     error.status = 429;
@@ -220,6 +264,16 @@ async function notifyWorkAvailableOrParkForPlan(accountId: string, item: { id: s
   return { blocked: true, reason: decision.reason };
 }
 
+function managedProvisionAdmission(accountId: string) {
+  return ({ attemptId, ...context }: ManagedProvisionRequest) =>
+    deploymentDecision(accountId, "ephemeral.provision", attemptId, context);
+}
+
+function managedLaunchFailureRecorder(accountId: string) {
+  return (attemptId: string) => deploymentExtension.record(accountId, {
+    type: "ephemeral.launch-failed", attemptId, at: new Date().toISOString(),
+  });
+}
 try {
   await store.init();
 } catch (error) {
@@ -299,8 +353,7 @@ async function notifyRelaysWorkAvailable(
   // Cancelling must never start a machine. Normal enqueue notifications retain
   // the unattended-provisioning check.
   if (options.autoProvision !== false) {
-    void deploymentDecision(accountId, "ephemeral.provision")
-      .then((decision) => decision.allowed ? maybeAutoProvision(store, accountId, provisionEnv()) : undefined)
+    void maybeAutoProvision(store, accountId, provisionEnv(), undefined, managedProvisionAdmission(accountId), managedLaunchFailureRecorder(accountId))
       .catch((error) => console.error("[deployment-extension] provisioning admission failed", error));
   }
 }
@@ -1262,6 +1315,228 @@ function presentNodeClaim(claim: NodeClaim) {
   return { ...claim, status };
 }
 
+function managedAutomationNodeId(accountId: string): string {
+  return `eph-managed-auto-${createHash("sha256").update(accountId).digest("hex").slice(0, 16)}`;
+}
+
+function managedSessionConfig(now = new Date().toISOString()): EphemeralNodeConfig | null {
+  const provider = String(process.env.MANAGED_SESSION_PROVIDER || process.env.MANAGED_AUTH_RUNNER_PROVIDER || "fly").trim();
+  const adapter = ephemeralAdapter(provider);
+  if (!adapter) return null;
+  return {
+    id: "managed-default",
+    name: "Bivy Cloud",
+    provider,
+    region: String(process.env.MANAGED_SESSION_REGION || adapter.defaultRegion),
+    size: String(process.env.MANAGED_SESSION_SIZE || adapter.defaultSize),
+    image: managedSessionImage(),
+    ttlMinutes: Math.max(5, Math.min(24 * 60, Number(process.env.MANAGED_SESSION_TTL_MINUTES) || 60)),
+    teardownOnAgentFinish: true,
+    computeSource: "managed",
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+async function ensureManagedDefaultForAccount(accountId: string): Promise<EphemeralNodeConfig> {
+  const desired = managedSessionConfig();
+  if (!desired) throw Object.assign(new Error("Managed session provider is not configured."), { status: 503 });
+  const configs = await store.getEphemeralConfigs(accountId);
+  const existing = configs.find((config) => config.computeSource === "managed");
+  let config = desired;
+  if (!existing) {
+    await store.setEphemeralConfigs(accountId, [...configs, config]);
+  } else {
+    // This profile is deployment-owned. Reconcile image/size/TTL on every read
+    // so existing accounts follow the exact control-plane SHA instead of
+    // retaining whichever managed image was current when they first onboarded.
+    const candidate: EphemeralNodeConfig = {
+      ...desired,
+      id: existing.id,
+      createdAt: existing.createdAt,
+      updatedAt: existing.updatedAt,
+    };
+    const fields: Array<keyof EphemeralNodeConfig> = [
+      "name", "provider", "region", "size", "image", "ttlMinutes",
+      "teardownOnAgentFinish", "computeSource",
+    ];
+    const changed = fields.some((field) => candidate[field] !== existing[field]);
+    config = changed ? { ...candidate, updatedAt: new Date().toISOString() } : existing;
+    if (changed) {
+      await store.setEphemeralConfigs(accountId, configs.map((item) => item.id === existing.id ? config : item));
+    }
+  }
+  await store.setHostedProvisioning(accountId, { enabled: true });
+  return config;
+}
+
+const managedOnboardingRateLimit = rateLimit({
+  windowMs: 60_000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => ipKeyGenerator(clientIp(req)),
+  message: { error: "Too many onboarding requests" },
+});
+
+app.post("/account/onboarding/auth-runner", managedOnboardingRateLimit, requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  res.setHeader("cache-control", "no-store");
+  if (!ephemeralMachinesEnabled() || process.env.MANAGED_COMPUTE_ENABLED !== "1") {
+    return res.status(503).json({ error: "Managed setup Machines are not available." });
+  }
+  // Choosing a managed setup Machine is the durable account-level choice too:
+  // establish the later interactive profile before redirects/reloads can lose
+  // browser-only onboarding state.
+  await ensureManagedDefaultForAccount(account.id);
+  const provider = String(process.env.MANAGED_AUTH_RUNNER_PROVIDER || process.env.MANAGED_SESSION_PROVIDER || "fly").trim();
+  const adapter = ephemeralAdapter(provider);
+  if (!adapter) return res.status(503).json({ error: "Managed setup provider is not configured." });
+  const ttlMinutes = Math.max(5, Math.min(15, Number(process.env.MANAGED_AUTH_RUNNER_TTL_MINUTES) || 15));
+  const size = String(process.env.MANAGED_AUTH_RUNNER_SIZE || adapter.defaultSize).trim();
+  const config: EphemeralNodeConfig = {
+    id: "managed-auth-runner", name: "Authentication Machine", provider,
+    region: String(process.env.MANAGED_AUTH_RUNNER_REGION || adapter.defaultRegion), size,
+    image: managedAuthRunnerImage(),
+    ttlMinutes, computeSource: "managed", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  };
+  await respondManagedLaunch(res, account.id, { config, purpose: "auth-runner", requestId: req.body?.requestId ?? randomUUID() });
+}));
+
+// Establish the durable, non-secret profile used by the repo-first composer.
+// Idempotent across redirects/devices; it never persists or returns the operator
+// provider token. Queue routing remains independent because interactive prompts
+// launch directly and Free hosted automations are separately policy-gated.
+app.post("/account/onboarding/managed-defaults", managedOnboardingRateLimit, requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  if (!ephemeralMachinesEnabled() || process.env.MANAGED_COMPUTE_ENABLED !== "1") {
+    return res.status(503).json({ error: "Managed session Machines are not available." });
+  }
+  res.json({ ok: true, config: await ensureManagedDefaultForAccount(account.id) });
+}));
+
+// Stable E2E identity for unattended managed automations. The browser encrypts
+// instructions to this room key; a future Bivy Cloud queue Machine adopts the
+// same node id + key at launch. This is account-authenticated, no-store, and
+// separate from interactive session keys.
+app.post("/account/managed-automation-target", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  res.setHeader("cache-control", "no-store");
+  if (!ephemeralMachinesEnabled() || process.env.MANAGED_COMPUTE_ENABLED !== "1") {
+    return res.status(503).json({ error: "Bivy Cloud automations are not available." });
+  }
+  const config = await ensureManagedDefaultForAccount(account.id);
+  const nodeId = managedAutomationNodeId(account.id);
+  let encrypted = await store.getNodeRoomKeyEnc(account.id, nodeId);
+  if (!encrypted) {
+    encrypted = await store.setNodeRoomKeyEncIfAbsent(
+      account.id,
+      nodeId,
+      encryptSecret(account.id, randomBytes(32).toString("base64url")),
+    );
+  }
+  res.json({ ok: true, nodeId, roomKey: decryptSecret(account.id, encrypted), config });
+}));
+
+// Browser-visible readiness contains no credential material: it only confirms
+// whether the separately encrypted Cloud snapshot has been published. Onboarding
+// waits for this authoritative edge instead of trusting a node-local toggle.
+app.get("/account/managed-credential-status", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const vault = await store.getHostedModelAuthVault(account.id);
+  res.json({ ready: Boolean(vault?.ciphertext), generation: vault?.generation ?? 0 });
+}));
+
+async function respondManagedLaunch(res: Response, accountId: string, request: ManagedInteractiveRequest): Promise<void> {
+  const config = request.config;
+  const adapter = ephemeralAdapter(config.provider);
+  if (!adapter) { res.status(503).json({ error: "Managed provider is not configured." }); return; }
+  const sizeId = config.size || adapter.defaultSize;
+  const size = adapter.sizes.find((entry) => entry.id === sizeId);
+  try {
+    const result = await managedInteractiveLaunch(store, accountId, request, {
+      admit: async (attemptId) => {
+        const decision = await deploymentDecision(accountId, "ephemeral.provision", attemptId, {
+          computeSource: "managed", provider: config.provider, sizeId, vcpus: size?.vcpus,
+          memoryMiB: size?.memoryMiB, ttlMinutes: config.ttlMinutes ?? 60, configId: config.id,
+          purpose: request.restore ? "interactive-restore" : request.purpose,
+        });
+        if (!decision.allowed) throw Object.assign(new ManagedLaunchConflict(403, decision.code || "managed_launch_denied", decision.reason || "Managed launch denied"), { decision });
+      },
+      launch: (attemptId, nodeId) => request.restore
+        ? provisionEphemeralRestore(store, accountId, config, provisionEnv(), {
+            reuseNodeId: nodeId, restoreSessionId: request.restore.sessionId, attemptId, retryCount: 0, purpose: "interactive",
+          })
+        : provisionEphemeralForAccount(store, accountId, config, provisionEnv(), undefined, Date.now(), request.purpose, { attemptId, nodeId, retryCount: 0 }),
+      launchFailed: managedLaunchFailureRecorder(accountId),
+    });
+    const encryptedKey = result.machine.nodeId ? await store.getNodeRoomKeyEnc(accountId, result.machine.nodeId) : undefined;
+    if (!encryptedKey) throw new ManagedLaunchConflict(409, "managed_launch_pending", "Machine key recovery is pending. Retry this same request.");
+    res.status(result.duplicate ? 200 : 201).json({ ok: true, ...result, roomKey: decryptSecret(accountId, encryptedKey) });
+  } catch (error) {
+    if (error instanceof ManagedLaunchConflict) {
+      res.status(error.status).json({ error: error.message, code: error.code, ...(error as ManagedLaunchConflict & { decision?: object }).decision });
+    } else {
+      // Never return provider bodies or credential-bearing bootstrap failures.
+      res.status(502).json({ error: "Managed launch failed. Retry the same request to recover it.", code: "managed_launch_failed" });
+    }
+  }
+}
+
+// Interactive managed launch. The account chooses only a server-authored managed
+// profile; provider credentials remain operator-only. The room key is returned
+// once over the authenticated no-store response so this browser can establish
+// the same E2E channel as a device-launched Machine.
+app.post("/account/managed-machines", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  res.setHeader("cache-control", "no-store");
+  if (!ephemeralMachinesEnabled() || process.env.MANAGED_COMPUTE_ENABLED !== "1") {
+    return res.status(503).json({ error: "Managed session Machines are not available." });
+  }
+  const configId = String(req.body?.configId ?? "").trim();
+  const runtimeId = String(req.body?.runtimeId ?? "").trim().slice(0, 120);
+  // Missing hosted credentials no longer reject the session before allocation.
+  // The intended interactive Machine starts in credential-setup mode; agent
+  // execution remains paused until its initial filtered snapshot is confirmed.
+  const storedConfig = (await store.getEphemeralConfigs(account.id)).find((candidate) => candidate.id === configId);
+  if (!storedConfig || storedConfig.computeSource !== "managed") return res.status(404).json({ error: "Managed session profile not found." });
+  // Select the smallest prebuilt image that contains the requested runtime. The
+  // deployment-owned baseline remains the fallback for custom/unknown agents.
+  const config = { ...storedConfig, image: managedSessionImage(process.env, runtimeId) ?? storedConfig.image };
+  const adapter = ephemeralAdapter(config.provider);
+  if (!adapter) return res.status(503).json({ error: "Managed session provider is not configured." });
+  await respondManagedLaunch(res, account.id, { config, purpose: "interactive", runtimeId, requestId: req.body?.requestId ?? randomUUID() });
+}));
+
+// Rebuild a managed session onto fresh operator-owned compute. Account-scoped
+// correlation + escrowed key checks prevent choosing another session/node.
+app.post("/account/managed-machines/restore", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  res.setHeader("cache-control", "no-store");
+  if (!ephemeralMachinesEnabled() || process.env.MANAGED_COMPUTE_ENABLED !== "1") {
+    return res.status(503).json({ error: "Managed session Machines are not available." });
+  }
+  const sessionId = String(req.body?.sessionId ?? "").trim();
+  const nodeId = String(req.body?.nodeId ?? "").trim();
+  const configId = String(req.body?.configId ?? "").trim();
+  if (!sessionId || !nodeId || !configId) return res.status(400).json({ error: "sessionId, nodeId and configId are required." });
+  const [config, correlation, encryptedKey] = await Promise.all([
+    store.getEphemeralConfigs(account.id).then((configs) => configs.find((candidate) => candidate.id === configId)),
+    store.getSessionCorrelation(account.id, sessionId),
+    store.getNodeRoomKeyEnc(account.id, nodeId),
+  ]);
+  if (!config || config.computeSource !== "managed") return res.status(404).json({ error: "Managed session profile not found." });
+  if (!correlation || correlation.nodeId !== nodeId || correlation.setupId !== configId || correlation.computeSource !== "managed") {
+    return res.status(404).json({ error: "Managed session restore record not found." });
+  }
+  if (!encryptedKey) return res.status(409).json({ error: "Managed session key is no longer available." });
+  const adapter = ephemeralAdapter(config.provider);
+  if (!adapter) return res.status(503).json({ error: "Managed session provider is not configured." });
+  // Older clients get a stable identity for this source-machine generation.
+  const requestId = req.body?.requestId ?? createHash("sha256").update(JSON.stringify(["restore", nodeId, sessionId, correlation.machineId || "legacy"])).digest("hex");
+  await respondManagedLaunch(res, account.id, { config, purpose: "interactive", requestId, restore: { nodeId, sessionId } });
+}));
+
 // Mint the one-line personal-machine command. The raw code is returned exactly
 // once and only its SHA-256 hash is persisted. It authorizes enrollment only —
 // never an account session, GitHub token, billing action, or existing-node read.
@@ -1421,7 +1696,18 @@ app.post("/node/ephemeral-milestone", requireNode, asyncHandler(async (req, res)
   const node = (req as Request & { node: NodeRecord }).node;
   const milestone = String(req.body?.milestone ?? "");
   if (!(EPHEMERAL_MILESTONES as readonly string[]).includes(milestone)) return res.status(400).json({ error: "unknown milestone" });
-  const tracked = await markHostedMachineMilestone(store, node.accountId, node.id, milestone as (typeof EPHEMERAL_MILESTONES)[number]);
+  const at = new Date().toISOString();
+  const tracked = await markHostedMachineMilestone(store, node.accountId, node.id, milestone as (typeof EPHEMERAL_MILESTONES)[number], at);
+  if (tracked && milestone === "firstAgentEventAt") {
+    const machine = (await store.getHostedMachines(node.accountId)).find((candidate) => candidate.nodeId === node.id);
+    if (machine?.computeSource === "managed" && typeof machine.attemptId === "string") {
+      // Await activation so a failed Cloud policy write is retried by the
+      // milestone caller; the store update above is first-write-wins and safe.
+      await deploymentExtension.record(node.accountId, {
+        type: "ephemeral.first-agent-event", attemptId: machine.attemptId, at,
+      });
+    }
+  }
   res.json({ ok: true, tracked });
 }));
 
@@ -1485,6 +1771,7 @@ app.put("/session-correlation/:sessionId", requireUser, asyncHandler(async (req,
     setupId: str(req.body?.setupId),
     machineId: str(req.body?.machineId),
     app: str(req.body?.app),
+    computeSource: req.body?.computeSource === "managed" ? "managed" : undefined,
   });
   res.json({ ok: true, correlation: rec });
 }));
@@ -1497,7 +1784,18 @@ app.put("/session-correlation/:sessionId", requireUser, asyncHandler(async (req,
 // server-side → reaped:false. See src/ephemeral-teardown.ts.
 app.post("/node/settled", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
+  const settledAt = new Date().toISOString();
+  const machine = (await store.getHostedMachines(node.accountId)).find((candidate) => candidate.nodeId === node.id);
+  const usage = machine?.computeSource === "managed" ? usageFromManagedMachine(node.accountId, machine, settledAt) : undefined;
   const reaped = await reapSettledHostedMachine(store, node.accountId, node.id, provisionEnv()).catch(() => false);
+  // Billing/usage outages must never prevent provider teardown. The extension
+  // event is idempotent and can be recovered from the durable Core settlement.
+  if (usage && typeof machine?.attemptId === "string") {
+    await deploymentExtension.record(node.accountId, {
+      type: "ephemeral.settled", attemptId: machine.attemptId, at: settledAt,
+      machineSeconds: usage.machineSeconds, activeAgentSeconds: usage.activeAgentSeconds,
+    }).catch((error) => console.error("[deployment-extension] settlement event failed", error));
+  }
   res.json({ ok: true, reaped });
 }));
 
@@ -1845,6 +2143,14 @@ app.put("/node/model-auth-hosted-vault", requireNode, asyncHandler(async (req, r
   }
   if (!(await store.getHostedProvisioning(node.accountId)).enabled) {
     return res.status(403).json({ error: "hosted provisioning not enabled for this account" });
+  }
+  const currentVault = await store.getHostedModelAuthVault(node.accountId);
+  const managedGuest = (await store.listHostedMachineAttempts(node.accountId, false)).some((attempt) => attempt.nodeId === node.id);
+  // A managed setup guest can create the first filtered snapshot, but must
+  // never replace/revoke custody after an agent could have run on it. Personal
+  // Machines remain the authorities for all subsequent changes.
+  if (managedGuest && currentVault) {
+    return res.status(403).json({ error: "managed guests cannot replace hosted credentials" });
   }
   const generation = await store.setHostedModelAuthVault(node.accountId, ciphertext, encryptSecret(node.accountId, vaultKeyB64), expectedGeneration, revision);
   if (generation === undefined) {
@@ -2359,6 +2665,10 @@ app.post("/account/hosted-github-app/connect", requireUser, asyncHandler(async (
     await store.setInboundHookInstallStatus(account.id, hook.id, repositories.length);
     await store.setHostedProvisioning(account.id, {
       githubApp,
+      // Supplying this key is an explicit choice to use the account's own App
+      // for hosted discovery and managed Machines, even if a central App was
+      // selected previously.
+      githubIdentity: "own-app",
     });
     await store.appendHostedAudit(account.id, {
       at: new Date().toISOString(),
@@ -2377,8 +2687,10 @@ app.post("/account/hosted-github-app/connect", requireUser, asyncHandler(async (
   }
 }));
 
-// Repo discovery for the browser when no persistent node exists. Installation
-// tokens are minted just in time and never returned to the client.
+// Repo discovery for the browser when no persistent node exists. Resolve the
+// same account identity used by JIT git-token minting, then aggregate every
+// central-App installation so a user with personal + organization installs sees
+// one ordinary repo picker. Installation tokens stay server-side and ephemeral.
 app.get("/account/hosted-github-repositories", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   const hosted = await store.getHostedProvisioning(account.id);
@@ -3454,6 +3766,13 @@ app.put("/account/ephemeral-default", asyncHandler(async (req, res) => {
 app.get("/account/ephemeral-configs", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
+  // Existing users may have completed onboarding before managed Cloud existed.
+  // Listing the picker is the universal idempotent adoption seam: self-hosted
+  // and disabled deployments stay untouched, while every eligible account sees
+  // the deployment-owned Bivy Cloud destination alongside personal Machines.
+  if (ephemeralMachinesEnabled() && process.env.MANAGED_COMPUTE_ENABLED === "1") {
+    await ensureManagedDefaultForAccount(client.accountId);
+  }
   res.json(await store.getEphemeralConfigs(client.accountId));
 }));
 
@@ -3476,6 +3795,7 @@ app.post("/account/ephemeral-configs", asyncHandler(async (req, res) => {
   if (typeof body.readyCapacity === "number") config.readyCapacity = body.readyCapacity;
   if (typeof body.ttlMinutes === "number") config.ttlMinutes = body.ttlMinutes;
   if (body.teardownOnAgentFinish === true) config.teardownOnAgentFinish = true;
+  if (body.computeSource === "managed") config.computeSource = "managed";
   const current = await store.getEphemeralConfigs(client.accountId);
   const saved = await store.setEphemeralConfigs(client.accountId, [...current, config]);
   res.json(saved.find((c) => c.id === config.id) ?? config);
@@ -3498,6 +3818,7 @@ app.put("/account/ephemeral-configs/:id", asyncHandler(async (req, res) => {
   if (typeof body.readyCapacity === "number") next.readyCapacity = body.readyCapacity;
   if (typeof body.ttlMinutes === "number") next.ttlMinutes = body.ttlMinutes;
   if (typeof body.teardownOnAgentFinish === "boolean") next.teardownOnAgentFinish = body.teardownOnAgentFinish || undefined;
+  if (typeof body.computeSource === "string") next.computeSource = body.computeSource === "managed" ? "managed" : undefined;
   const saved = await store.setEphemeralConfigs(client.accountId, current.map((c) => (c.id === id ? next : c)));
   res.json(saved.find((c) => c.id === id) ?? next);
 }));
@@ -3655,6 +3976,7 @@ app.get("/account/github/central-app", asyncHandler(async (req, res) => {
     configured: Boolean(central),
     appId: central?.appId,
     slug: central?.slug,
+    managedComputeAvailable: ephemeralMachinesEnabled() && process.env.MANAGED_COMPUTE_ENABLED === "1" && Boolean(managedSessionConfig()),
     installations: installations.map(({ installationId, githubAccount, githubAccountType, repositorySelection, createdAt }) => ({
       installationId, githubAccount, githubAccountType, repositorySelection, createdAt,
     })),
@@ -3732,10 +4054,11 @@ app.get("/github/central-app/setup", asyncHandler(async (req, res) => {
     action: "central_install_bound",
     detail: `installation ${installationId}${detail.account ? ` on ${detail.account}` : ""}`,
   });
-  // First bind selects the central identity, unless the account already chose.
+  // Completing this explicit install/configure flow selects the central identity
+  // even for established accounts that previously used their own App or token.
+  // Their old credential remains intact and usable by personal Machines.
   try {
-    const hosted = await store.getHostedProvisioning(bound.accountId);
-    if (!hosted.githubIdentity) await store.setHostedProvisioning(bound.accountId, { githubIdentity: "central-app" });
+    await store.setHostedProvisioning(bound.accountId, { githubIdentity: "central-app" });
   } catch {
     // best-effort: sealed BYO credentials without a configured key still bind
   }
@@ -3807,7 +4130,7 @@ app.get("/account/hosted-machines", asyncHandler(async (req, res) => {
     createdAt: typeof m.createdAt === "string" ? m.createdAt : "",
     ttlMinutes: typeof m.ttlMinutes === "number" ? m.ttlMinutes : undefined,
     setupId: typeof m.setupId === "string" ? m.setupId : undefined,
-    purpose: m.purpose === "queue-item" || m.purpose === "queue-default" || m.purpose === "ready-capacity" ? m.purpose : undefined,
+    purpose: m.purpose === "queue-item" || m.purpose === "queue-default" || m.purpose === "ready-capacity" || m.purpose === "auth-runner" || m.purpose === "interactive" ? m.purpose : undefined,
     claimedAt: typeof m.claimedAt === "string" ? m.claimedAt : undefined,
     milestones: m.milestones && typeof m.milestones === "object" ? m.milestones : undefined,
     lifecycleState: attempt?.state,
@@ -3850,10 +4173,12 @@ app.post("/account/hosted-provisioning/rotate", asyncHandler(async (req, res) =>
 app.post("/account/hosted-provision-now", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
-  const plan = await planAutoProvision(store, client.accountId);
+  const admission = managedProvisionAdmission(client.accountId);
+  const plan = await planAutoProvision(store, client.accountId, Date.now(), admission);
   if (req.body?.execute === true && plan.willProvision) {
-    await requireDeploymentAdmission(client.accountId, "ephemeral.provision");
-    const machine = await maybeAutoProvision(store, client.accountId, provisionEnv());
+    const machine = await maybeAutoProvision(
+      store, client.accountId, provisionEnv(), undefined, admission, managedLaunchFailureRecorder(client.accountId),
+    );
     return res.json({ plan, provisioned: machine ? { id: machine.id, nodeId: machine.nodeId } : null });
   }
   res.json({ plan });
@@ -4787,7 +5112,7 @@ app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
   res.status(status).json({ error: message, ...(code ? { code } : {}) });
 });
 
-const server = app.listen(port, () => {
+const server = app.listen({ port, host: process.env.BIND_HOST || undefined }, () => {
   const storeName = process.env.DATABASE_URL ? "Postgres" : "in-memory";
   console.log(`Control plane (${storeName}) listening on http://localhost:${port}`);
 });

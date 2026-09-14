@@ -196,7 +196,11 @@ export function Composer({
   const currentCaps = currentRuntime?.capabilities as
     | { modelSelection?: boolean; commands?: SlashCommand[] }
     | undefined;
-  const modelSelectable = currentCaps?.modelSelection !== false;
+  // A Cloud draft has no destination catalog until its Machine starts. Never
+  // present the connected personal Machine's model list as if it belonged to
+  // that future runner; it may contain models or credentials Cloud cannot use.
+  const destinationCatalogPending = !state.activeSession.activeSessionId && Boolean(state.draft.ephemeralConfig);
+  const modelSelectable = !destinationCatalogPending && currentCaps?.modelSelection !== false;
   // The active agent's own slash commands (e.g. Claude Code's `/compact`). These
   // are advertised PER SESSION (session.created / session.capabilities → the
   // store's commandsBySession), so we read the *active session's* set — never a
@@ -540,8 +544,14 @@ export function Composer({
     requestAnimationFrame(autosize);
   }
 
-  const modelLabel = state.catalogs.currentModel?.label || state.catalogs.currentModel?.id || "Choose a model";
+  const modelLabel = destinationCatalogPending
+    ? "Default"
+    : state.catalogs.currentModel?.label || state.catalogs.currentModel?.id || "Choose a model";
   const agentLabel = String(currentRuntime?.displayName || currentRuntime?.name || currentRuntime?.id || state.catalogs.currentAgentName || "Choose an agent");
+  // The repo pill also carries the chosen remote branch (#466) — picked from
+  // the arrow on a repo row in the repo picker, not a separate pill. A blank
+  // branch means "the repo's default branch", so we only append "@ <branch>"
+  // when a specific one was chosen.
   const repoLabel = state.draft.repo
     ? state.draft.branch
       ? `${state.draft.repo} @ ${state.draft.branch}`
@@ -824,7 +834,7 @@ export function Composer({
                 className="btn sm ghost model-pill"
                 onClick={() => { if (modelSelectable) setPicker("model"); }}
                 disabled={!modelSelectable}
-                title={modelSelectable ? "Model" : "This agent uses its own default model"}
+                title={modelSelectable ? "Model" : destinationCatalogPending ? "Model options load when Bivy Cloud starts" : "This agent uses its own default model"}
               >
                 <span className="pill-glyph"><ModelGlyph /></span>
                 <span className="pill-label">{modelLabel}</span>

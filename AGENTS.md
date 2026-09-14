@@ -76,5 +76,5 @@ not.
 
 
 ## PRs
-When you open a PR make sure the title and description gives a good overview of what these changes do. 
+When you open a PR make sure the title and description gives a good overview of what these changes do.
 Follow CI and fix any errors that come up until CI is green.

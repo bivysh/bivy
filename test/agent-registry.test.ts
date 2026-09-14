@@ -46,6 +46,10 @@ test("catalog profiles expose package provenance, aliases, and install metadata"
   assert.ok(registered.length >= 25);
   assert.ok(registered.every((agent) => agent.source?.kind === "package"));
   assert.ok(registered.every((agent) => agent.source?.kind !== "package" || agent.source.packageId === "bivy-agent-integrations"));
+  assert.ok(registered.every((agent) => agent.credentialRequirements));
+  assert.deepEqual(registered.find((agent) => agent.id === "claude-code-sdk")?.credentialRequirements, {
+    owner: "agent", strategy: "agent-login", providers: ["anthropic"],
+  });
   assert.equal(canonicalAgentId("open-code"), "opencode");
   assert.equal(canonicalAgentId("claude"), "claude-code-sdk");
   assert.match(agentInstallSpec("open-code", "/tmp/bivy-prefix")?.display ?? "", /opencode-ai/);

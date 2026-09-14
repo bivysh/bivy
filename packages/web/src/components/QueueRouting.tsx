@@ -150,8 +150,10 @@ export function QueueRoutingSection({
   const selectedConfig = selectedConfigId ? configs.find((c) => c.id === selectedConfigId) : undefined;
   const fallbackConfig = fallbackConfigId ? configs.find((c) => c.id === fallbackConfigId) : undefined;
   const hostedCanRun = (config?: EphemeralNodeConfig) => Boolean(
-    config && hosted?.enabled && hosted.validatedProviders.includes(config.provider)
-    && hosted.credential !== "none" && hosted.encryptionReady,
+    config && (config.computeSource === "managed"
+      ? hosted?.execution.ready && (!hosted.execution.configId || hosted.execution.configId === config.id)
+      : hosted?.enabled && hosted.validatedProviders.includes(config.provider)
+        && hosted.credential !== "none" && hosted.encryptionReady),
   );
   const primaryNodeName = routing?.primary.kind === "node" ? routing.primary.node : "";
   const routeReady = routing?.primary.kind === "config"
