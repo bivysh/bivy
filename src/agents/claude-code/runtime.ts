@@ -1216,12 +1216,17 @@ class ClaudeSession implements RuntimeSession {
         if (assistantText && await this.recoverFromAuthError(assistantText)) break;
         const model = message.message?.model;
         if (model) this.currentModel = toModelInfo({ id: model });
+        // The SDK stamps every message it generates inside a `Task` sub-agent
+        // with the spawning Task's tool_use id. Carry it onto this turn's tool
+        // calls so the UI nests the sub-agent's work under its delegation card
+        // instead of rendering it flat alongside the parent's own tools.
+        const parentToolUseId = typeof message.parent_tool_use_id === "string" && message.parent_tool_use_id ? message.parent_tool_use_id : undefined;
         const content = Array.isArray(message.message?.content) ? message.message.content : [];
         for (const block of content) {
           if (block?.type === "tool_use") {
             const detail = mapToolCall(String(block.name ?? "tool"), block.input, { provider: "claude", protocol: "sdk" });
             if (detail && typeof block.id === "string") this.toolDetailsByUseId.set(block.id, detail);
-            this.emit({ type: "tool_call", toolName: block.name, input: block.input, toolUseId: block.id, ...(detail ? { detail } : {}) });
+            this.emit({ type: "tool_call", toolName: block.name, input: block.input, toolUseId: block.id, ...(detail ? { detail } : {}), ...(parentToolUseId ? { parentToolUseId } : {}) });
             if (typeof block.id === "string" && typeof block.name === "string") this.toolNamesByUseId.set(block.id, block.name);
           }
         }
@@ -1232,7 +1237,7 @@ class ClaudeSession implements RuntimeSession {
         // tool_use blocks with the tool_result messages below; otherwise the plain
         // text is enough. The live stream still surfaces text via message_end.
         if (content.length || text) {
-          this.messages.push({ role: "assistant", content: content.length ? content : text, timestamp: Date.now() });
+          this.messages.push({ role: "assistant", content: content.length ? content : text, timestamp: Date.now(), ...(parentToolUseId ? { parentToolUseId } : {}) });
         }
         if (text) {
           this.beginMessage();

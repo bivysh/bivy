@@ -221,6 +221,12 @@ export interface ToolActivity {
   /** Node-computed normalized classification (see ToolCallDetail); when present,
    *  formatTool renders from it instead of re-deriving from `input`. */
   detail?: ToolCallDetail;
+  /** The `callId` of the delegation/sub-agent call that spawned this tool, when
+   *  the agent surfaced a parent relationship (Claude's `parent_tool_use_id`,
+   *  Codex's child-thread items, …). Purely a display grouping hint: the UI
+   *  nests these under their parent delegation card. Absent for ordinary
+   *  top-level calls. Never a claim of ownership over the child agent. */
+  parentToolUseId?: string;
 }
 
 export type TranscriptRole = "user" | "assistant" | "system" | "thinking" | "error";

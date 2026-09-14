@@ -114,3 +114,20 @@ export function toolCallId(ev: AnyEvent): string {
     ""
   );
 }
+
+/**
+ * The id of the delegation/sub-agent call that produced this tool event, if the
+ * agent surfaced one. Claude's Agent SDK stamps every message generated inside a
+ * `Task` sub-agent with `parent_tool_use_id`; other agents converge on the same
+ * idea under a handful of spellings. Empty string when the call is top-level.
+ * Purely a UI grouping hint (see ToolActivity.parentToolUseId).
+ */
+export function toolParentId(ev: AnyEvent): string {
+  return String(
+    ev?.parentToolUseId ||
+      ev?.parent_tool_use_id ||
+      ev?.parentToolCallId ||
+      ev?.parentCallId ||
+      "",
+  );
+}
