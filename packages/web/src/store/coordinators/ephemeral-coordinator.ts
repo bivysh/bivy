@@ -25,7 +25,7 @@ export interface EphemeralDependencies {
   nodes(): AccountNode[];
   correlations(): SessionCorrelation[];
   launchMachine(opts: LaunchOpts): Promise<EphemeralMachine>;
-  restoreManagedMachine(input: { configId: string; nodeId: string; sessionId: string }): Promise<EphemeralMachine>;
+  restoreManagedMachine(input: { configId: string; nodeId: string; sessionId: string; requestId?: string }): Promise<EphemeralMachine>;
   destroyMachine(machine: EphemeralMachine): Promise<void>;
   machineFromNode(node: AccountNode): EphemeralMachine | null;
   machineFromCorrelation(correlation: SessionCorrelation): EphemeralMachine;
@@ -181,7 +181,12 @@ export class EphemeralCoordinator {
       const correlation = this.deps.correlations().find((item) => item.nodeId === nodeId || item.sessionId === sessionId);
       if (correlation?.computeSource === "managed") {
         if (!correlation.setupId) throw new Error("This managed session no longer has a Machine profile to rebuild from.");
-        await this.deps.restoreManagedMachine({ configId: correlation.setupId, nodeId: correlation.nodeId, sessionId });
+        await this.deps.restoreManagedMachine({
+          configId: correlation.setupId, nodeId: correlation.nodeId, sessionId,
+          // A new source-machine generation permits a new restore; retries and
+          // fresh devices looking at the same correlation reuse one purchase.
+          requestId: `restore:${sessionId}:${correlation.nodeId}:${correlation.machineId || "legacy"}`,
+        });
         await this.deps.connectToNode(correlation.nodeId, 120_000);
         return;
       }

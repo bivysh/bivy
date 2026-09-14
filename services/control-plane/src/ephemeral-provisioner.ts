@@ -264,7 +264,7 @@ function startLeaseHeartbeat(store: EphemeralProvisioningPort, accountId: string
         lost = true;
         console.error(`[hosted-provision] lost lease account=${accountId} holder=${holder}`);
       }
-    }).catch((error) => console.error(`[hosted-provision] lease renewal failed account=${accountId}:`, error));
+    }).catch((error) => { lost = true; console.error(`[hosted-provision] lease renewal failed account=${accountId}:`, error); });
   }, 60_000);
   timer.unref?.();
   return { stop: () => clearInterval(timer), isLost: () => lost };
@@ -480,6 +480,16 @@ function serverKeyStore(providerToken: string): EphemeralKeyStore {
 // Machine records persisted to the account's hosted_machines JSONB. On add we
 // prune to a recent window so the list can't grow unbounded (TTL destroys the
 // real VMs; this is only bookkeeping for dedupe/teardown).
+async function assertExclusiveNodeLaunch(store: EphemeralProvisioningPort, accountId: string, nodeId: string, attemptId: string): Promise<void> {
+  // Interactive, queue and reconciliation callers share the provision lease.
+  // A capacity allowance never authorizes two machines with one node identity.
+  const [machines, attempts] = await Promise.all([store.getHostedMachines(accountId), store.listHostedMachineAttempts(accountId, true)]);
+  if (machines.some((m) => m.nodeId === nodeId && m.attemptId !== attemptId)
+    || attempts.some((a) => a.nodeId === nodeId && a.attemptId !== attemptId && a.state !== "deleted")) {
+    throw new Error("This node has another active or unresolved launch; finish cleanup before rebuilding.");
+  }
+}
+
 function serverMachineStore(
   store: EphemeralProvisioningPort,
   accountId: string,
@@ -598,6 +608,7 @@ export async function provisionEphemeralForAccount(
   let roomKeyB64 = "";
   const localStore = serverLocalStore({ sessionToken, env, onAddKey: (_id, key) => { roomKeyB64 = key; } });
   const attemptId = retry?.attemptId ?? randomUUID();
+  if (retry?.nodeId) await assertExclusiveNodeLaunch(store, accountId, retry.nodeId, attemptId);
   const persistedKey = retry?.nodeId ? await store.getNodeRoomKeyEnc(accountId, retry.nodeId) : undefined;
   const reuseRoomKeyB64 = persistedKey ? decryptSecret(accountId, persistedKey) : retry?.roomKeyB64;
   const createdAt = new Date(nowMs).toISOString();
@@ -615,7 +626,7 @@ export async function provisionEphemeralForAccount(
       ownershipTag,
       // computeSource rides in `desired` so teardown/reconcile can pick the
       // right credential lane even after the config itself is deleted.
-      desired: { region: config.region, size: config.size, image: config.image, ttlMinutes: config.ttlMinutes, teardownOnAgentFinish: config.teardownOnAgentFinish, purpose, setupId: config.id, computeSource },
+      desired: { ...attempt?.desired, region: config.region, size: config.size, image: config.image, ttlMinutes: config.ttlMinutes, teardownOnAgentFinish: config.teardownOnAgentFinish, purpose, setupId: config.id, computeSource },
       machine: event.machine as unknown as Record<string, unknown> | undefined,
       lastError: event.error, retryCount: retry?.retryCount ?? 0,
       createdAt: attempt?.createdAt ?? createdAt, updatedAt: new Date().toISOString(),
@@ -786,6 +797,7 @@ export async function provisionEphemeralRestore(
   const sessionToken = await store.createSession(accountId);
   const localStore = serverLocalStore({ sessionToken, env, onAddKey: () => {} });
   const attemptId = opts.attemptId ?? randomUUID();
+  await assertExclusiveNodeLaunch(store, accountId, opts.reuseNodeId, attemptId);
   const createdAt = new Date(nowMs).toISOString();
   const ownershipTag = ownershipTagFor(accountId);
   let attempt: HostedMachineAttempt | undefined = opts.attemptId ? await store.getHostedMachineAttempt(accountId, attemptId) : undefined;
@@ -799,7 +811,7 @@ export async function provisionEphemeralRestore(
       observedState: attempt?.observedState,
       deadlineAt: computeAttemptDeadline(phase, eventCreatedAt ?? attempt?.machine?.createdAt as string | undefined, config.ttlMinutes, Date.now()),
       ownershipTag,
-      desired: { region: config.region, size: config.size, image: config.image, ttlMinutes: config.ttlMinutes, purpose: opts.purpose ?? "queue-default", setupId: config.id, restoreSessionId: opts.restoreSessionId, computeSource },
+      desired: { ...attempt?.desired, region: config.region, size: config.size, image: config.image, ttlMinutes: config.ttlMinutes, teardownOnAgentFinish: config.teardownOnAgentFinish, purpose: opts.purpose ?? "queue-default", setupId: config.id, restoreSessionId: opts.restoreSessionId, computeSource },
       machine: event.machine as unknown as Record<string, unknown> | undefined,
       lastError: event.error, retryCount: opts.retryCount ?? 0,
       createdAt: attempt?.createdAt ?? createdAt, updatedAt: new Date().toISOString(),
@@ -1081,9 +1093,16 @@ export async function reconcileHostedMachines(
   // Retry pre-acceptance attempts with the SAME attempt/node identity. Provider
   // adapters first discover by the attempt tag (and EC2 uses ClientToken), so an
   // accepted create whose response was lost is adopted, never duplicated.
-  if (env && attempts.length) {
-    for (const attempt of attempts) {
-      if (attempt.machine || attempt.desiredState === "deleted" || !["requested", "enrolled", "failed"].includes(attempt.state)) continue;
+  const retryHolder = randomUUID();
+  const retryable = attempts.some((a) => !a.machine && a.desiredState !== "deleted" && ["requested", "enrolled", "failed"].includes(a.state));
+  if (env && retryable && await store.acquireHostedProvisionLease(accountId, retryHolder, PROVISION_LEASE_SECONDS)) {
+    const heartbeat = startLeaseHeartbeat(store, accountId, retryHolder);
+    try {
+    for (const listed of attempts) {
+      if (heartbeat.isLost()) break;
+      // The launch that held the lease may have completed after our first read.
+      const attempt = await store.getHostedMachineAttempt(accountId, listed.attemptId);
+      if (!attempt || attempt.machine || attempt.desiredState === "deleted" || !["requested", "enrolled", "failed"].includes(attempt.state)) continue;
       // Enrollment rollback: a node enrolled by `requested`/`enrolled` but
       // never reaching the provider is a real, if rare, orphan risk (a plan's
       // node-limit is finite). Past a retry ceiling, stop retrying creation —
@@ -1140,6 +1159,10 @@ export async function reconcileHostedMachines(
       }
     }
     machines = await store.getHostedMachines(accountId);
+    } finally {
+      heartbeat.stop();
+      await store.releaseHostedProvisionLease(accountId, retryHolder).catch(() => {});
+    }
   }
 
   if (!machines.length && !attempts.length) return 0;

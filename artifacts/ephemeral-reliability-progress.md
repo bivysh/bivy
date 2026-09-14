@@ -34,8 +34,9 @@ This used an intentionally unregistered bootstrap and an already-published image
 
 ## Local verification
 
-- Ephemeral core: **121 tests passed, 19 files**.
-- Control plane: **40 suite scripts passed**, including newly wired admission and room-key escrow suites.
+- Ephemeral core plus account API: **166 tests passed, 20 files** after the idempotency increment.
+- Control plane: **41 suite scripts passed**, including admission, room-key escrow, and 13 managed interactive orchestration tests.
+- Coordinator tests: **12 passed**, including stable restore request identity.
 - Root, web, and control-plane typechecks passed.
 - Lint passed with zero errors (existing warnings remain).
 - Module-boundary and route-uniqueness checks passed.
@@ -43,7 +44,7 @@ This used an intentionally unregistered bootstrap and an already-published image
 
 ## Still open
 
-- Stable interactive HTTP request identity, launch/restore serialization, and atomic reservation of pending managed capacity.
+- Completed in the next increment: stable interactive request IDs, durable replay receipts, per-account lease serialization, pending-capacity reservations, and restored-node exclusivity. Auth runners and queue recovery share the same lease. Thirteen dedicated orchestration tests cover replay/conflict, capacity, failure, lease loss, lifecycle persistence, and concurrent restore/reconciliation.
 - The remaining milestone-reporting and image-workflow improvements from the preserved work, reconciled with #678's runtime-specific images.
 - Full authenticated message → snapshot → teardown → rebuild → message certification. Dedicated staging dev-login returned HTTP 404; no authenticated test account was created.
 - Integration with newer main and final integrated regression coverage.

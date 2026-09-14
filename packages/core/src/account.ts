@@ -419,12 +419,13 @@ export async function ensureManagedSessionDefaults(store: LocalStore, fetchImpl:
 export async function launchManagedSessionMachine(
   store: LocalStore,
   configId: string,
-  fetchOrOptions: typeof fetch | { runtimeId?: string; fetchImpl?: typeof fetch } = fetch,
+  fetchOrOptions: typeof fetch | { runtimeId?: string; requestId?: string; fetchImpl?: typeof fetch } = fetch,
 ): Promise<EphemeralMachine> {
   const fetchImpl = typeof fetchOrOptions === "function" ? fetchOrOptions : fetchOrOptions.fetchImpl ?? fetch;
   const runtimeId = typeof fetchOrOptions === "function" ? undefined : fetchOrOptions.runtimeId;
+  const requestId = typeof fetchOrOptions === "function" ? undefined : fetchOrOptions.requestId;
   const res = await fetchImpl(`${cpBase(store)}/account/managed-machines`, {
-    method: "POST", headers: authHeaders(store), body: JSON.stringify({ configId, ...(runtimeId ? { runtimeId } : {}) }),
+    method: "POST", headers: authHeaders(store), body: JSON.stringify({ configId, ...(runtimeId ? { runtimeId } : {}), ...(requestId ? { requestId } : {}) }),
   });
   const value = await res.json().catch(() => ({})) as { machine?: EphemeralMachine; roomKey?: string; error?: string; reason?: string; code?: string; actions?: unknown };
   if (!res.ok || !value.machine) throw managedLaunchError(value, res.status, `managed Machine launch failed: ${res.status}`);
@@ -435,7 +436,7 @@ export async function launchManagedSessionMachine(
 /** Rebuild a torn-down managed session and adopt its escrowed room key. */
 export async function restoreManagedSessionMachine(
   store: LocalStore,
-  input: { configId: string; nodeId: string; sessionId: string },
+  input: { configId: string; nodeId: string; sessionId: string; requestId?: string },
   fetchImpl: typeof fetch = fetch,
 ): Promise<EphemeralMachine> {
   const res = await fetchImpl(`${cpBase(store)}/account/managed-machines/restore`, {

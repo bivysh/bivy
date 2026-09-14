@@ -166,7 +166,7 @@ test("ephemeral coordinator restores managed sessions without a device cloud tok
   assert.equal(coordinator.isCurrentNodeResumable(), true, "hosted escrow makes a managed correlation rebuildable on a fresh device");
   await coordinator.reprovision("eph-managed", "s1");
   assert.deepEqual(events, [
-    'restore:{"configId":"managed-default","nodeId":"eph-managed","sessionId":"s1"}',
+    'restore:{"configId":"managed-default","nodeId":"eph-managed","sessionId":"s1","requestId":"restore:s1:eph-managed:legacy"}',
     "connect:eph-managed",
   ]);
 });

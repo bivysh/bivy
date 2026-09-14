@@ -480,8 +480,8 @@ describe("managed account Machines", () => {
       body = String(init?.body || "");
       return new Response(JSON.stringify({ machine: { id: "m-1", provider: "fly", name: "Cloud", region: "iad", status: "running", ip: null, createdAt: "", nodeId: "eph-1" }, roomKey: "room-1" }), { status: 201 });
     }) as typeof fetch;
-    const machine = await launchManagedSessionMachine(store, "managed-default", { runtimeId: "codex", fetchImpl: fakeFetch });
-    expect(JSON.parse(body)).toEqual({ configId: "managed-default", runtimeId: "codex" });
+    const machine = await launchManagedSessionMachine(store, "managed-default", { runtimeId: "codex", requestId: "starting-persisted", fetchImpl: fakeFetch });
+    expect(JSON.parse(body)).toEqual({ configId: "managed-default", runtimeId: "codex", requestId: "starting-persisted" });
     expect(machine.nodeId).toBe("eph-1");
     expect(store.keys()["eph-1"]).toBe("room-1");
   });
@@ -520,8 +520,8 @@ describe("managed account Machines", () => {
       body = String(init?.body || "");
       return new Response(JSON.stringify({ machine: { id: "m-restored", provider: "fly", name: "Cloud", region: "iad", status: "running", ip: null, createdAt: "", nodeId: "eph-old", computeSource: "managed" }, roomKey: "room-restored" }), { status: 201 });
     }) as typeof fetch;
-    await restoreManagedSessionMachine(store, { configId: "managed-default", nodeId: "eph-old", sessionId: "s1" }, fakeFetch);
-    expect(JSON.parse(body)).toEqual({ configId: "managed-default", nodeId: "eph-old", sessionId: "s1" });
+    await restoreManagedSessionMachine(store, { configId: "managed-default", nodeId: "eph-old", sessionId: "s1", requestId: "restore:s1:eph-old:m1" }, fakeFetch);
+    expect(JSON.parse(body)).toEqual({ configId: "managed-default", nodeId: "eph-old", sessionId: "s1", requestId: "restore:s1:eph-old:m1" });
     expect(store.keys()["eph-old"]).toBe("room-restored");
   });
 });

@@ -5,6 +5,8 @@
  * managed concurrency ceiling. Deployment policy still owns plans and spend. */
 export interface ManagedAdmissionMachine {
   computeSource?: "user" | "managed";
+  id?: unknown;
+  attemptId?: unknown;
   status?: string;
   createdAt?: string;
   ttlMinutes?: number;
@@ -17,6 +19,16 @@ export function activeManagedMachineCount(machines: readonly ManagedAdmissionMac
   // still incur charges and consume capacity until deletion is confirmed.
   return machines.filter((machine) => machine.computeSource === "managed"
     && !TERMINAL.has(String(machine.status || "").toLowerCase())).length;
+}
+
+/** Count durable reservations as well as inventory, without counting the same
+ * provider resource twice during the handoff from attempt to tracked machine. */
+export function managedCapacityCount(machines: readonly ManagedAdmissionMachine[], attempts: readonly {
+  attemptId: string; state: string; desired: Record<string, unknown>; machine?: Record<string, unknown>;
+}[]): number {
+  const active = machines.filter((m) => activeManagedMachineCount([m]) > 0);
+  return active.length + attempts.filter((a) => a.state !== "deleted" && a.desired.computeSource === "managed"
+    && !active.some((m) => m.attemptId === a.attemptId || (m.id && m.id === a.machine?.id))).length;
 }
 
 export function managedConcurrencyLimit(raw = process.env.MANAGED_COMPUTE_MAX_ACTIVE_PER_ACCOUNT): number | undefined {

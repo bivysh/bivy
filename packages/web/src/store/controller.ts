@@ -2013,7 +2013,7 @@ export class AppController {
       }
       if (config.computeSource === "managed") logSetup("Reserving secure managed compute…");
       const machineLaunch = config.computeSource === "managed"
-        ? launchManagedSessionMachine(this.local, config.id, { runtimeId: requestedAgent })
+        ? launchManagedSessionMachine(this.local, config.id, { runtimeId: requestedAgent, requestId: provisionalId })
         : this.launchEphemeral({
             provider: config.provider,
             region: config.region ?? undefined,

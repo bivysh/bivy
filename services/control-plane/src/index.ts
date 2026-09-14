@@ -16,7 +16,8 @@ import { listAppInstallations, listInstallationRepositories, listInstallationBra
 import { correlateHostedSessions } from "./hosted-correlation.js";
 import { countActiveAccountSessions } from "./session-count.js";
 import { usageFromManagedMachine } from "./compute-metering.js";
-import { activeManagedMachineCount, managedConcurrencyLimit } from "./managed-admission.js";
+import { managedCapacityCount, managedConcurrencyLimit } from "./managed-admission.js";
+import { managedInteractiveLaunch, ManagedLaunchConflict, type ManagedInteractiveRequest } from "./managed-interactive-launch.js";
 import { managedAuthRunnerImage, managedSessionImage } from "./managed-compute.js";
 import { createStore } from "./store-factory.js";
 import { AutomationScheduler, nextOccurrence, normalizeSchedule } from "./schedule.js";
@@ -152,11 +153,10 @@ async function deploymentDecision(
   idempotencyKey?: string,
   context?: DeploymentPolicyContext,
 ) {
-  const decision = await deploymentExtension.authorize(accountId, operation, idempotencyKey, context);
-  if (!decision.allowed || operation !== "ephemeral.provision" || context?.computeSource !== "managed") return decision;
+  if (operation !== "ephemeral.provision" || context?.computeSource !== "managed") return deploymentExtension.authorize(accountId, operation, idempotencyKey, context);
   const limit = managedConcurrencyLimit();
   if (limit !== undefined) {
-    const active = activeManagedMachineCount(await store.getHostedMachines(accountId));
+    const active = managedCapacityCount(await store.getHostedMachines(accountId), await store.listHostedMachineAttempts(accountId, true));
     if (active >= limit) {
       const presentation = await deploymentExtension.account(accountId).catch(() => undefined);
       return {
@@ -168,7 +168,9 @@ async function deploymentDecision(
       };
     }
   }
-  return decision;
+  // Do not reserve deployment-owned budget for a request already refused by
+  // the local capacity ceiling. Launch callers hold the provision lease.
+  return deploymentExtension.authorize(accountId, operation, idempotencyKey, context);
 }
 
 async function requireDeploymentAdmission(
@@ -1312,43 +1314,18 @@ app.post("/account/onboarding/auth-runner", managedOnboardingRateLimit, requireU
   // establish the later interactive profile before redirects/reloads can lose
   // browser-only onboarding state.
   await ensureManagedDefaultForAccount(account.id);
-  const existing = (await store.getHostedMachines(account.id)).find(
-    (machine) => machine.computeSource === "managed" && machine.purpose === "auth-runner",
-  );
-  if (existing) {
-    const encryptedKey = typeof existing.nodeId === "string" ? await store.getNodeRoomKeyEnc(account.id, existing.nodeId) : undefined;
-    return res.json({ ok: true, machine: existing, duplicate: true, ...(encryptedKey ? { roomKey: decryptSecret(account.id, encryptedKey) } : {}) });
-  }
-
   const provider = String(process.env.MANAGED_AUTH_RUNNER_PROVIDER || process.env.MANAGED_SESSION_PROVIDER || "fly").trim();
   const adapter = ephemeralAdapter(provider);
   if (!adapter) return res.status(503).json({ error: "Managed setup provider is not configured." });
   const ttlMinutes = Math.max(5, Math.min(15, Number(process.env.MANAGED_AUTH_RUNNER_TTL_MINUTES) || 15));
   const size = String(process.env.MANAGED_AUTH_RUNNER_SIZE || adapter.defaultSize).trim();
-  const selectedSize = adapter.sizes.find((entry) => entry.id === size);
   const config: EphemeralNodeConfig = {
     id: "managed-auth-runner", name: "Authentication Machine", provider,
     region: String(process.env.MANAGED_AUTH_RUNNER_REGION || adapter.defaultRegion), size,
     image: managedAuthRunnerImage(),
     ttlMinutes, computeSource: "managed", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   };
-  const attemptId = randomUUID();
-  const decision = await deploymentDecision(account.id, "ephemeral.provision", attemptId, {
-    computeSource: "managed", provider, sizeId: size, vcpus: selectedSize?.vcpus,
-    memoryMiB: selectedSize?.memoryMiB, ttlMinutes, configId: config.id, purpose: "auth-runner",
-  });
-  if (!decision.allowed) return res.status(403).json({ error: decision.reason || "Managed setup Machine denied", ...decision });
-  try {
-    let roomKey = "";
-    const machine = await provisionEphemeralForAccount(
-      store, account.id, config, provisionEnv(), undefined, Date.now(), "auth-runner",
-      { attemptId, retryCount: 0 }, (_nodeId, key) => { roomKey = key; },
-    );
-    res.status(201).json({ ok: true, machine, ...(roomKey ? { roomKey } : {}) });
-  } catch (error) {
-    await managedLaunchFailureRecorder(account.id)(attemptId).catch(() => {});
-    throw error;
-  }
+  await respondManagedLaunch(res, account.id, { config, purpose: "auth-runner", requestId: req.body?.requestId ?? randomUUID() });
 }));
 
 // Establish the durable, non-secret profile used by the repo-first composer.
@@ -1386,17 +1363,6 @@ app.post("/account/managed-automation-target", requireUser, asyncHandler(async (
   res.json({ ok: true, nodeId, roomKey: decryptSecret(account.id, encrypted), config });
 }));
 
-function managedLaunchPublicMessage(error: unknown, attemptId: string): string {
-  const message = String((error as Error)?.message || error);
-  const stage = /create machine/i.test(message) ? "creating the Machine"
-    : /create app/i.test(message) ? "creating its isolated Fly App"
-      : /organization|list organizations/i.test(message) ? "selecting the managed Fly organization"
-        : /enroll/i.test(message) ? "enrolling its secure Bivy node"
-          : /image|manifest/i.test(message) ? "loading the managed runner image"
-            : "starting managed compute";
-  return `Bivy Cloud failed while ${stage}. Reference ${attemptId.slice(0, 8)}. Please retry; no Machine was left assigned to this session.`;
-}
-
 // Browser-visible readiness contains no credential material: it only confirms
 // whether the separately encrypted Cloud snapshot has been published. Onboarding
 // waits for this authoritative edge instead of trusting a node-local toggle.
@@ -1405,6 +1371,42 @@ app.get("/account/managed-credential-status", requireUser, asyncHandler(async (r
   const vault = await store.getHostedModelAuthVault(account.id);
   res.json({ ready: Boolean(vault?.ciphertext), generation: vault?.generation ?? 0 });
 }));
+
+async function respondManagedLaunch(res: Response, accountId: string, request: ManagedInteractiveRequest): Promise<void> {
+  const config = request.config;
+  const adapter = ephemeralAdapter(config.provider);
+  if (!adapter) { res.status(503).json({ error: "Managed provider is not configured." }); return; }
+  const sizeId = config.size || adapter.defaultSize;
+  const size = adapter.sizes.find((entry) => entry.id === sizeId);
+  try {
+    const result = await managedInteractiveLaunch(store, accountId, request, {
+      admit: async (attemptId) => {
+        const decision = await deploymentDecision(accountId, "ephemeral.provision", attemptId, {
+          computeSource: "managed", provider: config.provider, sizeId, vcpus: size?.vcpus,
+          memoryMiB: size?.memoryMiB, ttlMinutes: config.ttlMinutes ?? 60, configId: config.id,
+          purpose: request.restore ? "interactive-restore" : request.purpose,
+        });
+        if (!decision.allowed) throw Object.assign(new ManagedLaunchConflict(403, decision.code || "managed_launch_denied", decision.reason || "Managed launch denied"), { decision });
+      },
+      launch: (attemptId, nodeId) => request.restore
+        ? provisionEphemeralRestore(store, accountId, config, provisionEnv(), {
+            reuseNodeId: nodeId, restoreSessionId: request.restore.sessionId, attemptId, retryCount: 0, purpose: "interactive",
+          })
+        : provisionEphemeralForAccount(store, accountId, config, provisionEnv(), undefined, Date.now(), request.purpose, { attemptId, nodeId, retryCount: 0 }),
+      launchFailed: managedLaunchFailureRecorder(accountId),
+    });
+    const encryptedKey = result.machine.nodeId ? await store.getNodeRoomKeyEnc(accountId, result.machine.nodeId) : undefined;
+    if (!encryptedKey) throw new ManagedLaunchConflict(409, "managed_launch_pending", "Machine key recovery is pending. Retry this same request.");
+    res.status(result.duplicate ? 200 : 201).json({ ok: true, ...result, roomKey: decryptSecret(accountId, encryptedKey) });
+  } catch (error) {
+    if (error instanceof ManagedLaunchConflict) {
+      res.status(error.status).json({ error: error.message, code: error.code, ...(error as ManagedLaunchConflict & { decision?: object }).decision });
+    } else {
+      // Never return provider bodies or credential-bearing bootstrap failures.
+      res.status(502).json({ error: "Managed launch failed. Retry the same request to recover it.", code: "managed_launch_failed" });
+    }
+  }
+}
 
 // Interactive managed launch. The account chooses only a server-authored managed
 // profile; provider credentials remain operator-only. The room key is returned
@@ -1428,30 +1430,7 @@ app.post("/account/managed-machines", requireUser, asyncHandler(async (req, res)
   const config = { ...storedConfig, image: managedSessionImage(process.env, runtimeId) ?? storedConfig.image };
   const adapter = ephemeralAdapter(config.provider);
   if (!adapter) return res.status(503).json({ error: "Managed session provider is not configured." });
-  const sizeId = config.size || adapter.defaultSize;
-  const selectedSize = adapter.sizes.find((entry) => entry.id === sizeId);
-  const attemptId = randomUUID();
-  const decision = await deploymentDecision(account.id, "ephemeral.provision", attemptId, {
-    computeSource: "managed", provider: config.provider, sizeId,
-    vcpus: selectedSize?.vcpus, memoryMiB: selectedSize?.memoryMiB,
-    ttlMinutes: config.ttlMinutes ?? 60, configId: config.id, purpose: "interactive",
-  });
-  if (!decision.allowed) return res.status(403).json({ error: decision.reason || "Managed session denied", ...decision });
-  try {
-    let roomKey = "";
-    const machine = await provisionEphemeralForAccount(
-      store, account.id, config, provisionEnv(), undefined, Date.now(), "interactive",
-      { attemptId, retryCount: 0 }, (_nodeId, key) => { roomKey = key; },
-    );
-    res.status(201).json({ ok: true, machine, ...(roomKey ? { roomKey } : {}) });
-  } catch (error) {
-    await managedLaunchFailureRecorder(account.id)(attemptId).catch(() => {});
-    console.error(`[managed-launch] account=${account.id} attempt=${attemptId}`, (error as Error)?.message || error);
-    return res.status(502).json({
-      error: managedLaunchPublicMessage(error, attemptId),
-      code: "managed_launch_failed",
-    });
-  }
+  await respondManagedLaunch(res, account.id, { config, purpose: "interactive", runtimeId, requestId: req.body?.requestId ?? randomUUID() });
 }));
 
 // Rebuild a managed session onto fresh operator-owned compute. Account-scoped
@@ -1478,24 +1457,9 @@ app.post("/account/managed-machines/restore", requireUser, asyncHandler(async (r
   if (!encryptedKey) return res.status(409).json({ error: "Managed session key is no longer available." });
   const adapter = ephemeralAdapter(config.provider);
   if (!adapter) return res.status(503).json({ error: "Managed session provider is not configured." });
-  const sizeId = config.size || adapter.defaultSize;
-  const selectedSize = adapter.sizes.find((entry) => entry.id === sizeId);
-  const attemptId = randomUUID();
-  const decision = await deploymentDecision(account.id, "ephemeral.provision", attemptId, {
-    computeSource: "managed", provider: config.provider, sizeId,
-    vcpus: selectedSize?.vcpus, memoryMiB: selectedSize?.memoryMiB,
-    ttlMinutes: config.ttlMinutes ?? 60, configId: config.id, purpose: "interactive-restore",
-  });
-  if (!decision.allowed) return res.status(403).json({ error: decision.reason || "Managed session restore denied", ...decision });
-  try {
-    const machine = await provisionEphemeralRestore(store, account.id, config, provisionEnv(), {
-      reuseNodeId: nodeId, restoreSessionId: sessionId, attemptId, retryCount: 0, purpose: "interactive",
-    });
-    res.status(201).json({ ok: true, machine: { ...machine, computeSource: "managed" }, roomKey: decryptSecret(account.id, encryptedKey) });
-  } catch (error) {
-    await managedLaunchFailureRecorder(account.id)(attemptId).catch(() => {});
-    throw error;
-  }
+  // Older clients get a stable identity for this source-machine generation.
+  const requestId = req.body?.requestId ?? createHash("sha256").update(JSON.stringify(["restore", nodeId, sessionId, correlation.machineId || "legacy"])).digest("hex");
+  await respondManagedLaunch(res, account.id, { config, purpose: "interactive", requestId, restore: { nodeId, sessionId } });
 }));
 
 // Mint the one-line personal-machine command. The raw code is returned exactly
