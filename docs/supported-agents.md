@@ -6,9 +6,9 @@
 
 | Agent | Runtime id | Validated range | Platforms | Required mode | Release-tested capabilities |
 | --- | --- | --- | --- | --- | --- |
-| Claude Code | `claude-code-sdk` | `>=0.3.263 <=0.3.263` (pin `0.3.263`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
-| Codex (governed) | `codex-approvals` | `>=0.153.4 <=0.153.4` (pin `0.153.4`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
+| Claude Code | `claude-code-sdk` | `>=0.3.270 <=0.3.270` (pin `0.3.270`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
+| Codex (governed) | `codex-approvals` | `>=0.154.0 <=0.154.0` (pin `0.154.0`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
 | Pi | `pi` | `>=0.85.1 <=0.85.1` (pin `0.85.1`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
-| OpenCode ACP | `opencode` | `>=1.18.29 <=1.18.29` (pin `1.18.29`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
+| OpenCode ACP | `opencode` | `>=1.18.30 <=1.18.30` (pin `1.18.30`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
 
 Deterministic normal-CI fixtures exercise: probe-install, auth-handoff, first-turn, structured-streaming, approval, denial, cancellation, resume, attachments, token-refresh, malformed-output, version-drift. Live credentials are tested only by explicit workflow dispatch. Nightly latest-upstream checks report drift for review and never update this file or the production pins.
