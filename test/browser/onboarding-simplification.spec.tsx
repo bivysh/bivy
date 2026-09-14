@@ -37,7 +37,9 @@ test("Bivy Cloud is a first-class unattended automation target", async () => {
   const provisioner = await read("../../services/control-plane/src/ephemeral-provisioner.ts");
   expect(editor).toContain("Bivy Cloud · managed");
   expect(editor).toContain("managedAutomationTarget");
-  expect(provisioner).toContain("reuseRoomKeyB64: retry?.roomKeyB64");
+  // The persisted key takes precedence after a lost provider response. The
+  // executable control-plane escrow tests verify identity across retries.
+  expect(provisioner).toContain("const reuseRoomKeyB64 = persistedKey ? decryptSecret(accountId, persistedKey) : retry?.roomKeyB64");
   expect(provisioner).toContain("hasManagedAutomation");
 });
 
