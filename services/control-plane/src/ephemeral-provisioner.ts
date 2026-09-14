@@ -572,6 +572,16 @@ async function planRestoreProvision(
   return null;
 }
 
+// Fresh launches and rebuilds need identical custody and queue privileges.
+// Interactive/auth guests may establish an initial grant, never replace one.
+function credentialBootstrap(computeSource: "user" | "managed", purpose: EphemeralMachine["purpose"]) {
+  return {
+    hostedTasks: purpose !== "auth-runner" && purpose !== "interactive",
+    hostedCredentialCustody: computeSource === "managed",
+    hostedCredentialPublisher: computeSource === "managed" && (purpose === "interactive" || purpose === "auth-runner"),
+  };
+}
+
 /** Launch an ephemeral machine for `config` on behalf of the account. */
 export async function provisionEphemeralForAccount(
   store: EphemeralProvisioningPort,
@@ -650,14 +660,7 @@ export async function provisionEphemeralForAccount(
         // Authentication runners exist only to establish encrypted provider
         // credentials. They must never poll or claim queued work, so no agent
         // event can accidentally consume a managed trial.
-        hostedTasks: purpose !== "auth-runner" && purpose !== "interactive",
-        // Interactive managed sessions must receive the explicit hosted-custody
-        // snapshot without becoming unattended queue pollers.
-        hostedCredentialCustody: computeSource === "managed",
-        // Interactive/auth setup guests may establish the initial filtered
-        // snapshot. Server + control plane both refuse guest replacement once
-        // one exists, preserving the recipient-only rule after setup.
-        hostedCredentialPublisher: computeSource === "managed" && (purpose === "interactive" || purpose === "auth-runner"),
+        ...credentialBootstrap(computeSource, purpose),
         githubToken,
         hostedMint: useHostedMint,
         setupId: config.id,
@@ -829,7 +832,7 @@ export async function provisionEphemeralRestore(
         image: config.image,
         ttlMinutes: config.ttlMinutes,
         teardownOnAgentFinish: config.teardownOnAgentFinish,
-        hostedTasks: opts.purpose !== "interactive",
+        ...credentialBootstrap(computeSource, opts.purpose ?? "queue-default"),
         externalTeardownGuaranteed: true,
         githubToken,
         hostedMint: useHostedMint,

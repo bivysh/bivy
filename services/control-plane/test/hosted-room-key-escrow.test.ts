@@ -82,6 +82,38 @@ await test("provisionEphemeralRestore hands the escrowed key back to the rebuilt
   assert.equal(captured?.hostedTasks, false, "interactive restore must not poll unattended queues");
 });
 
+for (const computeSource of ["user", "managed"] as const) {
+  for (const purpose of ["interactive", "auth-runner", "queue-default"] as const) {
+    await test(`${computeSource} ${purpose} rebuild preserves fresh-launch credential privileges`, async () => {
+      const previous = process.env.MANAGED_PROVIDER_TOKEN_FLY;
+      process.env.MANAGED_PROVIDER_TOKEN_FLY = "managed-test-token";
+      try {
+        const store = await makeStore();
+        const acct = await store.findOrCreateAccount(`${computeSource}-${purpose}@example.com`);
+        await store.setHostedProvisioning(acct.id, { enabled: true, providerTokens: { fly: "user-test-token" } });
+        const calls: Array<Parameters<typeof launchEphemeralMachine>[0]> = [];
+        const launch: typeof launchEphemeralMachine = async (opts, deps) => {
+          calls.push(opts);
+          deps.store.addKey("eph-grant", ROOM_KEY);
+          return { id: "machine", provider: "fly", name: "test", region: "iad", status: "running", ip: null, createdAt: "", nodeId: "eph-grant" };
+        };
+        const config = { ...CONFIG, computeSource };
+        await provisionEphemeralForAccount(store, acct.id, config, ENV, launch, Date.now(), purpose);
+        await provisionEphemeralRestore(store, acct.id, config, ENV, { reuseNodeId: "eph-grant", restoreSessionId: "session", purpose }, launch);
+        assert.equal(calls.length, 2);
+        for (const opts of calls) {
+          assert.equal(opts.hostedCredentialCustody, computeSource === "managed");
+          assert.equal(opts.hostedCredentialPublisher, computeSource === "managed" && purpose !== "queue-default");
+          assert.equal(opts.hostedTasks, purpose === "queue-default");
+        }
+      } finally {
+        if (previous === undefined) delete process.env.MANAGED_PROVIDER_TOKEN_FLY;
+        else process.env.MANAGED_PROVIDER_TOKEN_FLY = previous;
+      }
+    });
+  }
+}
+
 await test("restore fails cleanly when no room key was escrowed", async () => {
   const store = await makeStore();
   const acct = await store.findOrCreateAccount("d@example.com");
