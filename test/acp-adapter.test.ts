@@ -109,6 +109,32 @@ await check("acp: observed tool activity never opens a misleading approval", asy
   }
 });
 
+await check("acp: a tool's output that streamed before the closing frame survives in the result", async () => {
+  // Regression: opencode's execute tool streams stdout in an in_progress
+  // tool_call_update and closes with an empty `completed` frame. The shim must
+  // surface the accumulated output, not collapse the result to the bare status.
+  process.env.BIVY_ACP_COMMAND = process.execPath;
+  process.env.BIVY_ACP_ARGS = JSON.stringify([acpAgent]);
+  process.env.ACP_SPLIT_TOOL_OUTPUT = "1";
+  try {
+    const runtime = makeRuntime({ runtime: "acp", credsDir: __dirname, piDir: __dirname, sessionsDir: __dirname });
+    const { session } = await runtime.createSession({ workspace: __dirname, toolInterceptor: async () => undefined });
+    const events: RuntimeEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    await session.prompt("run a command whose output streams early");
+    await waitFor(events, (event) => event.type === "agent_end");
+    const result = events.find((e) => e.type === "tool_result" && (e as any).toolCallId === "split1") as any;
+    assert.ok(result, "the split-output tool produced a result");
+    assert.equal(result.result, "file-a.txt\nfile-b.txt", "the streamed stdout survives, not the bare 'completed' status");
+    assert.equal(result.detail?.result?.text, "file-a.txt\nfile-b.txt", "normalized detail carries the real output");
+    session.dispose();
+  } finally {
+    delete process.env.BIVY_ACP_COMMAND;
+    delete process.env.BIVY_ACP_ARGS;
+    delete process.env.ACP_SPLIT_TOOL_OUTPUT;
+  }
+});
+
 // 3A: Bivy's configured MCP servers must reach the ACP agent on session/new
 // (they were hardcoded to [] in the shim, cutting ACP agents off from MCP).
 await check("acp: forwards BIVY_ACP_MCP_SERVERS to the agent on session/new", async () => {

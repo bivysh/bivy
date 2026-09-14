@@ -342,6 +342,32 @@ async function main() {
     assert.equal(p.messages().filter((m) => m.role === "assistant").map((m) => JSON.stringify(m.content)).join("").includes("Two files."), true);
   });
 
+  await check("genericStreamJson: text and reasoning that resume after a tool get a paragraph break (no run-on)", () => {
+    // The seam that produced Grok's \"…what it does.The workspace…\" and
+    // \"…shell commandI have…\" run-ons: a fresh prose/reasoning segment streamed
+    // after a tool call must be separated from the segment before it, not glued
+    // to the last token. Mirrors ProtocolRuntime's assistantItemBoundary break.
+    const p = genericStreamJsonParser();
+    const events = feed(p, [
+      JSON.stringify({ type: "thought", data: "Let me list the files." }),
+      JSON.stringify({ type: "text", data: "I'll inspect the workspace." }),
+      JSON.stringify({ type: "tool_call", toolCallId: "c1", toolName: "run_terminal_command", rawInput: { command: "ls" } }),
+      JSON.stringify({ type: "tool_call_update", toolCallId: "c1", status: "completed", content: [{ type: "content", content: { type: "text", text: "a.txt" } }] }),
+      JSON.stringify({ type: "thought", data: "I have the listing." }),
+      JSON.stringify({ type: "text", data: "The workspace has one file." }),
+      JSON.stringify({ type: "end" }),
+    ]);
+    const answer = events.filter((e) => e.type === "message_update" && typeof (e as any).message.content === "string").at(-1) as any;
+    assert.equal(answer.message.content, "I'll inspect the workspace.\n\nThe workspace has one file.", "prose segments are separated, not run together");
+    const thinking = events.filter((e) => e.type === "message_update" && Array.isArray((e as any).message.content)).at(-1) as any;
+    assert.equal(thinking.message.content[0].thinking, "Let me list the files.\n\nI have the listing.", "reasoning segments are separated, not run together");
+    // Persisted history seals each prose segment as its own block (no leading
+    // separator baked into the second block).
+    const assistant = p.messages().find((m) => m.role === "assistant" && Array.isArray(m.content)) as any;
+    const texts = assistant.content.filter((b: any) => b.type === "text").map((b: any) => b.text);
+    assert.deepEqual(texts, ["I'll inspect the workspace.", "The workspace has one file."], "each segment is its own clean content block");
+  });
+
   await check("genericJson: extracts the reply from a final JSON object + usage", () => {
     const p = genericJsonParser();
     const events = feed(p, [JSON.stringify({ response: "the answer", usage: { total_tokens: 9 } })]);

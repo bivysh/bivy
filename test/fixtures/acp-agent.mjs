@@ -73,6 +73,14 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         notify("session/update", { sessionId, update: { sessionUpdate: "tool_call", toolCallId: "auto1", title: "automatic read", kind: "read", rawInput: { path: "README.md" } } });
         notify("session/update", { sessionId, update: { sessionUpdate: "tool_call_update", toolCallId: "auto1", status: "completed", content: { type: "text", text: "done" } } });
       }
+      // Simulate opencode's execute tool: the command's stdout streams in an
+      // in_progress update, and the closing (completed) update carries NO
+      // content — the shim must still surface the streamed output, not "completed".
+      if (process.env.ACP_SPLIT_TOOL_OUTPUT === "1") {
+        notify("session/update", { sessionId, update: { sessionUpdate: "tool_call", toolCallId: "split1", title: "run ls", kind: "execute", rawInput: { command: "ls" } } });
+        notify("session/update", { sessionId, update: { sessionUpdate: "tool_call_update", toolCallId: "split1", status: "in_progress", content: { type: "text", text: "file-a.txt\nfile-b.txt" } } });
+        notify("session/update", { sessionId, update: { sessionUpdate: "tool_call_update", toolCallId: "split1", status: "completed" } });
+      }
       // Request permission to run a tool, then finish once granted.
       const permId = 9001;
       const done = new Promise((res) => { permResolve = res; });
