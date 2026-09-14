@@ -7,9 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.24] - 2026-09-14
+
 ### Added
 
 - Nest a sub-agent's own tool calls under the delegation card that spawned them in session transcripts, instead of rendering them flat and unlabelled. Works live and on reload; general to any agent that surfaces a parent tool-call id (Claude's `parent_tool_use_id` today).
+
+- Improve browser-first machine enrollment and first-task onboarding.
 
 ### Changed
 
@@ -17,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Keep updates from installing agents the user has not selected.
+- Keep tool-result images out of portable transcript summaries when forking sessions.
 - Separate assistant prose and reasoning that resume after a tool call with a paragraph break in transcripts for pipe/stream agents (Grok, Goose, Gemini, and the generic streams), so segments no longer run together (e.g. "…what it does.The workspace…"). Matches the governed protocol path.
 - Preserve a tool's output in ACP transcripts (OpenCode and other ACP agents) when the command's stdout streams before the closing frame, instead of collapsing the result to a bare "completed" status.
 
