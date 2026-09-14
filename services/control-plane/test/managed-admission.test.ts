@@ -5,14 +5,17 @@ import { activeManagedMachineCount, managedConcurrencyLimit } from "../src/manag
 
 const now = Date.parse("2026-08-25T12:00:00.000Z");
 
-test("managed concurrency counts only live, unexpired operator-owned Machines", () => {
+test("managed concurrency retains overdue and failed resources until deletion is confirmed", () => {
   assert.equal(activeManagedMachineCount([
     { computeSource: "managed", status: "running", createdAt: "2026-08-25T11:30:00.000Z", ttlMinutes: 60 },
     { computeSource: "managed", status: "destroyed", createdAt: "2026-08-25T11:30:00.000Z", ttlMinutes: 60 },
     { computeSource: "managed", status: "running", createdAt: "2026-08-25T09:00:00.000Z", ttlMinutes: 60 },
     { computeSource: "user", status: "running", createdAt: "2026-08-25T11:30:00.000Z", ttlMinutes: 60 },
     { computeSource: "managed", status: "provisioning" },
-  ], now), 2);
+    { computeSource: "managed", status: "failed" },
+    { computeSource: "managed", status: "stopped" },
+    { computeSource: "managed", status: "gone" },
+  ], now), 5);
 });
 
 test("managed concurrency limit accepts only positive integers", () => {

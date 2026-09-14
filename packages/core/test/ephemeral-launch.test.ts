@@ -32,6 +32,7 @@ function fakeStore(): LocalStore {
 const flyExec: ExecFn = async (req) => {
   if (req.url === "https://api.fly.io/graphql") return { status: 200, body: { data: { organizations: { nodes: [{ slug: "personal", type: "PERSONAL" }] } } } };
   if (req.url.endsWith("/v1/apps")) return { status: 201, body: {} };
+  if (req.method === "GET" && req.url.endsWith("/machines")) return { status: 200, body: [] };
   return { status: 200, body: { id: "flymachine123", state: "created" } };
 };
 
@@ -141,7 +142,7 @@ describe("launchEphemeralMachine — machine record naming", () => {
       "Enrolling a secure Bivy node…",
       "Node enrolled. Building its secure bootstrap…",
       "Creating the machine in lhr (shared-1x-2gb)…",
-      "Machine created. Boot setup is installing and starting Bivy…",
+      "Machine created. Starting Bivy and connecting securely…",
     ]);
 
     const stored = await machines.list();

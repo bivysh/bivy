@@ -29,11 +29,27 @@ const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
   );
   const seen: Array<{ id: unknown; token: string | null }> = [];
   const fakeDestroy: DestroyFn = async (machine, deps) => { seen.push({ id: machine.id, token: await deps.keys.getToken("hetzner") }); };
-  const found = await reapSettledHostedMachine(store, "acct", "eph-1", env, Date.now(), fakeDestroy);
+  const found = await reapSettledHostedMachine(store, "acct", "eph-1", env, Date.now(), fakeDestroy, async () => "gone");
   assert.equal(found, true);
   assert.equal(seen.length, 1);
   assert.equal(seen[0].id, "srv1");
   assert.equal(seen[0].token, "hz-token");
+}
+
+// Even legacy machines remain tracked until provider-confirmed absence.
+{
+  const machine = { id: "legacy", provider: "fly", nodeId: "eph-legacy", createdAt: iso(0) };
+  const { store } = fakeStore([machine], { fly: "token" });
+  const destroy: DestroyFn = async (_machine, deps) => {
+    assert.equal(deps.providerOnly, true);
+    await deps.machines.remove("legacy"); // a legacy injected destroy must not drop tracking
+  };
+  await reapSettledHostedMachine(store, "acct", "eph-legacy", env, Date.now(), destroy, async () => "running");
+  assert.deepEqual(await store.getHostedMachines("acct"), [machine]);
+  await reapSettledHostedMachine(store, "acct", "eph-legacy", env, Date.now(), destroy, async () => { throw new Error("inventory unavailable"); });
+  assert.deepEqual(await store.getHostedMachines("acct"), [machine]);
+  await reapSettledHostedMachine(store, "acct", "eph-legacy", env, Date.now(), destroy, async () => "gone");
+  assert.deepEqual(await store.getHostedMachines("acct"), []);
 }
 
 // An untracked node (device-launched machine) → no-op, false, no destroy.
@@ -63,7 +79,7 @@ const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
     { hetzner: "hz-token" },
   );
   let destroyed = 0;
-  const n = await reconcileHostedMachines(store, "acct", Date.now(), env, async () => { destroyed++; });
+  const n = await reconcileHostedMachines(store, "acct", Date.now(), env, async () => { destroyed++; }, async () => "gone");
   assert.equal(n, 1);
   assert.equal(destroyed, 1);
 }

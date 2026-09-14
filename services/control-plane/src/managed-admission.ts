@@ -10,15 +10,13 @@ export interface ManagedAdmissionMachine {
   ttlMinutes?: number;
 }
 
-const TERMINAL = new Set(["destroyed", "deleted", "failed", "stopped"]);
+const TERMINAL = new Set(["destroyed", "deleted", "gone"]);
 
-export function activeManagedMachineCount(machines: readonly ManagedAdmissionMachine[], nowMs = Date.now()): number {
-  return machines.filter((machine) => {
-    if (machine.computeSource !== "managed" || TERMINAL.has(String(machine.status || "").toLowerCase())) return false;
-    const created = Date.parse(String(machine.createdAt || ""));
-    const ttlMs = Math.max(5, Number(machine.ttlMinutes) || 60) * 60_000;
-    return !Number.isFinite(created) || created + ttlMs > nowMs;
-  }).length;
+export function activeManagedMachineCount(machines: readonly ManagedAdmissionMachine[], _nowMs = Date.now()): number {
+  // A TTL is desired policy, not an observation. Failed/stopped resources may
+  // still incur charges and consume capacity until deletion is confirmed.
+  return machines.filter((machine) => machine.computeSource === "managed"
+    && !TERMINAL.has(String(machine.status || "").toLowerCase())).length;
 }
 
 export function managedConcurrencyLimit(raw = process.env.MANAGED_COMPUTE_MAX_ACTIVE_PER_ACCOUNT): number | undefined {

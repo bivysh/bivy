@@ -11,7 +11,7 @@ process.env.HOSTED_CREDENTIAL_KEY = Buffer.alloc(32, 7).toString("base64");
 import { createPgMemStore } from "../src/pg-mem-store.js";
 import { provisionEphemeralForAccount, provisionEphemeralRestore, type ProvisionEnv } from "../src/ephemeral-provisioner.js";
 import { decryptSecret } from "../src/hosted-crypto.js";
-import type { EphemeralMachine } from "@bivy/core";
+import type { EphemeralMachine, launchEphemeralMachine } from "@bivy/core";
 
 async function makeStore() {
   const store = createPgMemStore();
@@ -90,6 +90,28 @@ await test("restore fails cleanly when no room key was escrowed", async () => {
     () => provisionEphemeralRestore(store, acct.id, CONFIG, ENV, { reuseNodeId: "eph-unknown", restoreSessionId: "s1" }, (async () => ({}) as EphemeralMachine) as never),
     /No escrowed room key/,
   );
+});
+
+await test("lost provider response preserves escrow and retries with the original room key", async () => {
+  const store = await makeStore();
+  const acct = await store.findOrCreateAccount("lost-response@example.com");
+  await store.setHostedProvisioning(acct.id, { enabled: true, providerTokens: { fly: "fly-token" } });
+  const launcher: typeof launchEphemeralMachine = async (opts, deps) => {
+    await opts.onLifecycle?.({ attemptId: opts.attemptId!, nodeId: "eph-retry", phase: "requested" });
+    deps.store.addKey("eph-retry", ROOM_KEY);
+    assert.ok(deps.persistRoomKey, "durable escrow must be supplied to the launcher");
+    await deps.persistRoomKey("eph-retry", ROOM_KEY);
+    const saved = await store.getNodeRoomKeyEnc(acct.id, "eph-retry");
+    assert.equal(decryptSecret(acct.id, saved!), ROOM_KEY, "key must already be durable before the provider call");
+    throw new Error("provider response lost");
+  };
+  await assert.rejects(provisionEphemeralForAccount(store, acct.id, CONFIG, ENV, launcher, Date.now(), "interactive", { attemptId: "retry-key", retryCount: 0 }), /provider response lost/);
+  const retry: typeof launchEphemeralMachine = async (opts) => {
+    assert.equal(opts.reuseNodeId, "eph-retry");
+    assert.equal(opts.reuseRoomKeyB64, ROOM_KEY, "retry must not mint a replacement key");
+    return { id: "m-retry", provider: "fly", nodeId: "eph-retry", name: "retry", region: "iad", status: "running", ip: null, createdAt: new Date().toISOString() };
+  };
+  await provisionEphemeralForAccount(store, acct.id, CONFIG, ENV, retry, Date.now(), "interactive", { attemptId: "retry-key", nodeId: "eph-retry", retryCount: 1 });
 });
 
 console.log(`hosted-room-key-escrow: ${passed} test(s) passed`);

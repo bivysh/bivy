@@ -40,6 +40,6 @@ describe("bootstrap ephemeral self-teardown env", () => {
 
   it("skips network installation when a runner image already has bivy", () => {
     const userData = buildBootstrapUserData({ ...base, provider: "hetzner" });
-    expect(userData).toContain("command -v bivy >/dev/null 2>&1 || curl -fsSL");
+    expect(userData).toContain("command -v bivy >/dev/null 2>&1 || curl --connect-timeout 10 --max-time 120 -fsSL");
   });
 });

@@ -78,13 +78,20 @@ export function bivyStartScript(opts: BootstrapOpts): string {
   );
 }
 
+/** Best-effort telemetry must never block boot or expose bootstrap material in
+ * logs. This is shared by container and cloud-init startup. */
+export function bivyBootstrapStatusCommand(opts: BootstrapOpts, phase: "booting" | "installing" | "starting" | "failed"): string {
+  return `curl --connect-timeout 2 --max-time 3 -fsS -X POST -H 'content-type: application/json' -H ${shq(`authorization: Bearer ${opts.enrollmentToken}`)} --data ${shq(JSON.stringify({ phase }))} ${shq(`${opts.controlPlaneUrl.replace(/\/$/, "")}/node/bootstrap-status`)} >/dev/null 2>&1 || true`;
+}
+
 export function buildBootstrapUserData(opts: BootstrapOpts): string {
   const relay = bivyRelayJson(opts);
   const ttl = clampTtlMinutes(opts.ttlMinutes);
   const installUrl = opts.installUrl || "https://bivy.sh/install.sh";
   const startScript = bivyStartScript(opts);
-  const status = (phase: string) =>
-    `curl -fsS -X POST -H 'content-type: application/json' -H ${shq(`authorization: Bearer ${opts.enrollmentToken}`)} --data ${shq(JSON.stringify({ phase }))} ${shq(`${opts.controlPlaneUrl.replace(/\/$/, "")}/node/bootstrap-status`)} >/dev/null 2>&1 || true`;
+  const status = (phase: Parameters<typeof bivyBootstrapStatusCommand>[1]) => bivyBootstrapStatusCommand(opts, phase);
+  // Arm cost protection BEFORE any network/install operation can hang.
+  const ttlCommand = `systemd-run --on-active=${ttl}m --timer-property=AccuracySec=1s --unit=bivy-ttl shutdown -h now || (echo 'shutdown -h now' | at now + ${ttl} minutes) || setsid bash -c 'sleep ${ttl * 60}; shutdown -h now' </dev/null >/var/log/bivy-ttl.log 2>&1 &`;
   return (
     [
       "#cloud-config",
@@ -98,22 +105,17 @@ export function buildBootstrapUserData(opts: BootstrapOpts): string {
       "    content: |",
       indentJson(startScript, "      "),
       "runcmd:",
+      `  - [ bash, -lc, ${JSON.stringify(ttlCommand)} ]`,
       `  - [ bash, -lc, ${JSON.stringify(status("booting"))} ]`,
       // 1. Install Bivy (state lands in /etc/bivy via BIVY_DATA_DIR).
-      `  - [ bash, -lc, ${JSON.stringify(`${status("installing")}; mkdir -p /etc/bivy && export BIVY_DATA_DIR=/etc/bivy && (command -v bivy >/dev/null 2>&1 || curl -fsSL ${shq(installUrl)} | bash) || { ${status("failed")}; exit 1; }`)} ]`,
+      `  - [ bash, -lc, ${JSON.stringify(`set -euo pipefail; ${status("installing")}; mkdir -p /etc/bivy && export BIVY_DATA_DIR=/etc/bivy && (command -v bivy >/dev/null 2>&1 || curl --connect-timeout 10 --max-time 120 -fsSL ${shq(installUrl)} | bash) || { ${status("failed")}; exit 1; }`)} ]`,
       // 2. Start the daemon. On a systemd VM a transient system unit keeps it
       `  - [ bash, -lc, ${JSON.stringify(status("starting"))} ]`,
       //    running after cloud-init's own unit exits (a bare backgrounded process
       //    would be cleaned up with cloud-final's cgroup); the setsid fallback
       //    covers a rare image without systemd-run.
       `  - [ bash, -lc, "systemd-run --unit=bivy --collect --property=Restart=on-failure /etc/bivy/start.sh || setsid bash /etc/bivy/start.sh </dev/null >/var/log/bivy.log 2>&1 &" ]`,
-      // 3. TTL backstop: halt the VM so a forgotten machine can't bill forever.
-      //    Prefer a systemd-run transient timer — it's owned by systemd, so it
-      //    survives cloud-init exiting (unlike a bare backgrounded `sleep`, which
-      //    cloud-final's cgroup reaps — the same reason step 2 uses systemd-run).
-      //    Fall back to `at`, then to a detached setsid `sleep` for the rare image
-      //    with neither, so the machine self-halts however minimal the base image.
-      `  - [ bash, -lc, "systemd-run --on-active=${ttl}m --timer-property=AccuracySec=1s --unit=bivy-ttl shutdown -h now || (echo 'shutdown -h now' | at now + ${ttl} minutes) || setsid bash -c 'sleep ${ttl * 60}; shutdown -h now' </dev/null >/var/log/bivy-ttl.log 2>&1 &" ]`,
+
     ].join("\n") + "\n"
   );
 }

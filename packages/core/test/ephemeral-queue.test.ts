@@ -51,7 +51,7 @@ describe("buildBootstrapUserData — hosted queue opt-in", () => {
     expect(userData).toContain("export BIVY_GITHUB_TOKEN='ghp_abc123'");
     // Still runs the installer with BIVY_DATA_DIR set, same as before.
     expect(userData).toContain("export BIVY_DATA_DIR=/etc/bivy");
-    expect(userData).toContain("curl -fsSL");
+    expect(userData).toContain("curl --connect-timeout 10 --max-time 120 -fsSL");
   });
 
   it("enables hosted credential custody without enabling unattended queue polling", () => {
@@ -100,7 +100,7 @@ describe("buildBootstrapUserData — hosted queue opt-in", () => {
     expect(userData).toContain("systemd-run --unit=bivy");
     expect(userData).toContain("setsid bash /etc/bivy/start.sh");
     // The install step still runs, and the TTL self-shutdown backstop remains.
-    expect(userData).toContain("curl -fsSL");
+    expect(userData).toContain("curl --connect-timeout 10 --max-time 120 -fsSL");
     expect(userData).toContain("shutdown -h now");
   });
 });

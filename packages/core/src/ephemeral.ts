@@ -156,6 +156,7 @@ export interface EphemeralLaunchEvent {
 }
 
 export interface LaunchOpts {
+  computeSource?: "user" | "managed";
   provider: string;
   /** Stable operation identity. Hosted controllers persist this before any
    * side effect; device launches generate one locally. */
@@ -251,8 +252,9 @@ export async function listEphemeralSizes(
  */
 export async function launchEphemeralMachine(
   opts: LaunchOpts,
-  deps: { store: LocalStore; exec: ExecFn; keys: EphemeralKeyStore; machines: MachineStore; fetchImpl?: typeof fetch },
+  deps: { store: LocalStore; exec: ExecFn; keys: EphemeralKeyStore; machines: MachineStore; fetchImpl?: typeof fetch; persistRoomKey?: (nodeId: string, roomKeyB64: string) => Promise<void> },
 ): Promise<EphemeralMachine> {
+  if (opts.computeSource === "managed" && !opts.externalTeardownGuaranteed) throw new Error("Bivy hosted machines must be launched by the control plane, not with a device-held cloud token.");
   const requestedAt = nowIso();
   const fetchImpl = deps.fetchImpl ?? fetch;
   const adapter = ephemeralAdapter(opts.provider);
@@ -302,6 +304,10 @@ export async function launchEphemeralMachine(
   // that was sealed under it; otherwise mint a fresh 32-byte key.
   const roomBytes = opts.reuseRoomKeyB64 ? unb64url(opts.reuseRoomKeyB64) : crypto.getRandomValues(new Uint8Array(32));
   deps.store.addKey(nodeId, b64url(roomBytes));
+  // Hosted retries may adopt a machine whose create response was lost. Persist
+  // its key BEFORE creating it, otherwise a retry could escrow a different key
+  // and make both E2E attach and snapshot restore permanently impossible.
+  await deps.persistRoomKey?.(nodeId, b64url(roomBytes));
 
   const plan = planEphemeralLaunch({
     ...opts,
@@ -342,9 +348,9 @@ export async function launchEphemeralMachine(
     });
     throw error;
   }
-  const accepted = { ...machine, attemptId };
+  const accepted = { ...machine, ...plan.machineFacts, attemptId };
   await opts.onLifecycle?.({ attemptId, nodeId, phase: "provider-accepted", machine: accepted });
-  progress("Machine created. Boot setup is installing and starting Bivy…");
+  progress("Machine created. Starting Bivy and connecting securely…");
   machine = trackProvisionedMachine(accepted, plan, nowIso());
   await deps.machines.add(machine);
   await opts.onLifecycle?.({ attemptId, nodeId, phase: "tracked", machine });
@@ -354,7 +360,7 @@ export async function launchEphemeralMachine(
 /** Destroy a machine at the provider, forget its record, and unenroll the node. */
 export async function destroyEphemeralMachine(
   machine: EphemeralMachine,
-  deps: { store: LocalStore; exec: ExecFn; keys: EphemeralKeyStore; machines: MachineStore; fetchImpl?: typeof fetch },
+  deps: { store: LocalStore; exec: ExecFn; keys: EphemeralKeyStore; machines: MachineStore; fetchImpl?: typeof fetch; providerOnly?: boolean },
 ): Promise<void> {
   const fetchImpl = deps.fetchImpl ?? fetch;
   const adapter = ephemeralAdapter(machine.provider);
@@ -377,6 +383,9 @@ export async function destroyEphemeralMachine(
       throw new Error(`Couldn't destroy this machine at ${adapter.name}: ${detail}. It's still listed — try again in a moment.`);
     }
   }
+  // A durable controller finalizes tracking only after a fresh status read
+  // confirms deletion, not merely when the provider accepts DELETE.
+  if (deps.providerOnly) return;
   await deps.machines.remove(machine.id);
   if (machine.nodeId) {
     await fetchImpl(`${cpBase(deps.store)}/nodes/${encodeURIComponent(machine.nodeId)}`, {

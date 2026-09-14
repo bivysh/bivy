@@ -483,16 +483,16 @@ function serverKeyStore(providerToken: string): EphemeralKeyStore {
 function serverMachineStore(
   store: EphemeralProvisioningPort,
   accountId: string,
-  nowMs: number,
+  _nowMs: number,
   computeSource?: ComputeSource,
 ): MachineStore {
   return {
     list: async () => (await store.getHostedMachines(accountId)) as unknown as EphemeralMachine[],
     add: async (m) => {
       const cur = await store.getHostedMachines(accountId);
-      const recent = cur.filter((x) => withinMs(x.createdAt, 6 * 60 * 60 * 1000, nowMs));
       const record = computeSource ? { ...m, computeSource } : m;
-      await store.setHostedMachines(accountId, [...recent, record as unknown as Record<string, unknown>]);
+      // Age is not proof of deletion; retain unresolved billable resources.
+      await store.setHostedMachines(accountId, [...cur.filter((x) => x.id !== m.id), record as unknown as Record<string, unknown>]);
       return m;
     },
     update: async (id, patch) => {
@@ -598,6 +598,8 @@ export async function provisionEphemeralForAccount(
   let roomKeyB64 = "";
   const localStore = serverLocalStore({ sessionToken, env, onAddKey: (_id, key) => { roomKeyB64 = key; } });
   const attemptId = retry?.attemptId ?? randomUUID();
+  const persistedKey = retry?.nodeId ? await store.getNodeRoomKeyEnc(accountId, retry.nodeId) : undefined;
+  const reuseRoomKeyB64 = persistedKey ? decryptSecret(accountId, persistedKey) : retry?.roomKeyB64;
   const createdAt = new Date(nowMs).toISOString();
   const ownershipTag = ownershipTagFor(accountId);
   let attempt: HostedMachineAttempt | undefined = retry ? await store.getHostedMachineAttempt(accountId, attemptId) : undefined;
@@ -613,7 +615,7 @@ export async function provisionEphemeralForAccount(
       ownershipTag,
       // computeSource rides in `desired` so teardown/reconcile can pick the
       // right credential lane even after the config itself is deleted.
-      desired: { region: config.region, size: config.size, image: config.image, ttlMinutes: config.ttlMinutes, purpose, setupId: config.id, computeSource },
+      desired: { region: config.region, size: config.size, image: config.image, ttlMinutes: config.ttlMinutes, teardownOnAgentFinish: config.teardownOnAgentFinish, purpose, setupId: config.id, computeSource },
       machine: event.machine as unknown as Record<string, unknown> | undefined,
       lastError: event.error, retryCount: retry?.retryCount ?? 0,
       createdAt: attempt?.createdAt ?? createdAt, updatedAt: new Date().toISOString(),
@@ -626,7 +628,7 @@ export async function provisionEphemeralForAccount(
         attemptId,
         onLifecycle,
         reuseNodeId: retry?.nodeId,
-        reuseRoomKeyB64: retry?.roomKeyB64,
+        reuseRoomKeyB64,
         externalTeardownGuaranteed: true,
         ownershipTag,
         region: config.region,
@@ -651,7 +653,10 @@ export async function provisionEphemeralForAccount(
         purpose,
         name: `Hosted ${config.name}`,
       },
-      { store: localStore, exec: directExec(), keys: serverKeyStore(providerToken), machines: serverMachineStore(store, accountId, nowMs, computeSource) },
+      {
+        store: localStore, exec: directExec(), keys: serverKeyStore(providerToken), machines: serverMachineStore(store, accountId, nowMs, computeSource),
+        persistRoomKey: async (nodeId, key) => { await store.setNodeRoomKeyEnc(accountId, nodeId, encryptSecret(accountId, key)); },
+      },
     );
     // Custom/injected launchers may not emit callbacks. Production launchers do;
     // once accepted, preserve the provider identity before any later bookkeeping.
@@ -659,12 +664,10 @@ export async function provisionEphemeralForAccount(
       attempt = await store.putHostedMachineAttempt({ ...attempt, state: "tracked", machine: machine as unknown as Record<string, unknown>, updatedAt: new Date().toISOString() });
     }
     await audit(store, accountId, { action: "provision_launched", provider: config.provider, configId: config.id, nodeId: machine.nodeId });
-    // Gap 3: escrow the room key the control plane just generated, sealed at rest
-    // with this account's hosted-provisioning key, keyed by the (reusable) node id.
-    // This is what lets a later HOSTED, device-offline rebuild decrypt the session
-    // snapshot — see provisionEphemeralRestore. Hosted-only by construction (this
-    // function requires a hosted provider token); the CP never sees the plaintext
-    // key on the wire and never exposes it to any client.
+    // Production already escrowed this key before provider creation. Keep this
+    // compatibility path for injected launchers, and deliver the same key to the
+    // authenticated interactive caller for E2E attachment. The encrypted record
+    // survives teardown so a later rebuild can decrypt the session snapshot.
     if (roomKeyB64 && machine.nodeId) {
       await store.setNodeRoomKeyEnc(accountId, machine.nodeId, encryptSecret(accountId, roomKeyB64));
       await audit(store, accountId, { action: "room_key_escrowed", provider: config.provider, configId: config.id, nodeId: machine.nodeId });
@@ -915,7 +918,8 @@ async function destroyOneHostedMachine(
     store: localStore,
     exec: directExec(),
     keys: serverKeyStore(providerToken),
-    machines: serverMachineStore(store, accountId, nowMs),
+    providerOnly: true,
+    machines: { ...serverMachineStore(store, accountId, nowMs), remove: async () => {} },
   });
 }
 
@@ -988,8 +992,8 @@ export async function reapSettledHostedMachine(
       // attempt terminal; if the provider still sees it, leave state
       // "deleting" so the next reconcile tick (which also observes) re-checks
       // rather than trusting the delete call on its own.
-      if (machine.attemptId) {
-        const attempt = await store.getHostedMachineAttempt(accountId, machine.attemptId).catch(() => undefined);
+      {
+        const attempt = machine.attemptId ? await store.getHostedMachineAttempt(accountId, machine.attemptId).catch(() => undefined) : undefined;
         let confirmed: boolean;
         try {
           confirmed = providerToken ? (await observe(machine, providerToken)) === "gone" : false;
@@ -1010,6 +1014,8 @@ export async function reapSettledHostedMachine(
           return true;
         }
       }
+      await store.setHostedMachines(accountId, (await store.getHostedMachines(accountId)).filter((m) => m.id !== machine.id));
+      await store.removeNode(accountId, nodeId);
       await audit(store, accountId, { action: "machine_reaped", provider: machine.provider, nodeId, detail: "settled — destroyed" });
     } else {
       // Missing credentials are not proof that the provider resource is gone.
@@ -1076,7 +1082,6 @@ export async function reconcileHostedMachines(
   // adapters first discover by the attempt tag (and EC2 uses ClientToken), so an
   // accepted create whose response was lost is adopted, never duplicated.
   if (env && attempts.length) {
-    const configs = await store.getEphemeralConfigs(accountId);
     for (const attempt of attempts) {
       if (attempt.machine || attempt.desiredState === "deleted" || !["requested", "enrolled", "failed"].includes(attempt.state)) continue;
       // Enrollment rollback: a node enrolled by `requested`/`enrolled` but
@@ -1107,7 +1112,9 @@ export async function reconcileHostedMachines(
       // above so hopeless attempts are still cleaned up, and everything
       // deletion-side below is untouched — cleanup never turns off.
       if (normalizeComputeSource(attempt.desired?.computeSource) === "managed" && !managedComputeEnabled()) continue;
-      const config = configs.find((c) => c.id === attempt.configId) ?? {
+      // A saved profile can be edited while a create response is in flight.
+      // Recover the original purchase, never reinterpret its credential lane.
+      const config: EphemeralNodeConfig = {
         id: attempt.configId || `recovered-${attempt.attemptId}`,
         name: "Recovered ephemeral runner",
         provider: attempt.provider,
@@ -1115,6 +1122,7 @@ export async function reconcileHostedMachines(
         size: typeof attempt.desired.size === "string" ? attempt.desired.size : undefined,
         image: typeof attempt.desired.image === "string" ? attempt.desired.image : undefined,
         ttlMinutes: typeof attempt.desired.ttlMinutes === "number" ? attempt.desired.ttlMinutes : 60,
+        teardownOnAgentFinish: attempt.desired.teardownOnAgentFinish === true,
         ...(normalizeComputeSource(attempt.desired.computeSource) === "managed" ? { computeSource: "managed" as const } : {}),
         createdAt: attempt.createdAt,
         updatedAt: attempt.updatedAt,
@@ -1242,14 +1250,10 @@ export async function reconcileHostedMachines(
         });
         continue;
       }
-      // Confirmed-deletion finalizer, gated the same way the pre-destroy
-      // observe above is: only attempt-tracked rows opt into the extra
-      // provider call, so an upgrade doesn't suddenly fan out requests for
-      // untouched legacy inventory. `destroy()` not throwing only means the
-      // provider ACCEPTED the delete (EC2 termination is asynchronous); don't
-      // drop the resource from inventory or finalize the attempt until a
-      // fresh observe agrees it's actually gone.
-      if (deletingAttemptId) {
+      // Every deletion, including legacy inventory, needs confirmation.
+      // `destroy()` returning means acceptance, not absence (EC2 termination
+      // is asynchronous). Retain bookkeeping until a fresh observation says gone.
+      {
         let confirmed: boolean;
         try {
           confirmed = (await observe(m as unknown as EphemeralMachine, providerToken)) === "gone";
