@@ -4360,7 +4360,7 @@ function spawnDetachedUpdateProcess(args, logFd) {
       "--wait",
       "--collect",
       `--unit=${unit}`,
-      `--working-directory=${repoRoot}`,
+      `--working-directory=${os.homedir()}`,
       `--property=StandardOutput=${logProp}`,
       `--property=StandardError=${logProp}`,
       "--setenv=BIVY_UPDATE_DETACHED=1",
@@ -4378,7 +4378,7 @@ function spawnDetachedUpdateProcess(args, logFd) {
   }
 
   const child = spawn(nodeBin, updateArgs, {
-    cwd: repoRoot,
+    cwd: os.homedir(),
     detached: true,
     stdio: ["ignore", logFd, logFd],
     env,
@@ -4463,6 +4463,11 @@ async function runUpdate(args = []) {
     return;
   }
 
+  // npm and the packaged installer replace the installation directory. Leave
+  // it before updating, including for inline invocations started inside it,
+  // so subsequent subprocesses never inherit a deleted cwd (uv_cwd).
+  process.chdir(os.homedir());
+
   // Update along the recorded channel (default `latest`), not a hardcoded tag,
   // so a staging box stays on staging instead of silently jumping to production.
   const channel = resolveUpdateChannel(args);
@@ -4480,7 +4485,6 @@ async function runUpdate(args = []) {
       console.log(c.yellow(`npm reported an issue (exit ${code}). Try: sudo npm i -g @bivy/bivy@${channel}`));
       process.exit(code);
     }
-    await ensureKnownAgents();
     const config = loadConfig();
     await waitForIdleSessions(config, { skip: skipWait });
     if (hasConfiguredService(config) && (await restartServiceReconciled(config))) {
@@ -4510,7 +4514,7 @@ async function runUpdate(args = []) {
     // install.sh reads BIVY_CHANNEL from the env; pass the recorded channel so a
     // packaged re-install stays on it (and re-records it) instead of latest.
     const code = await run("bash", ["-o", "pipefail", "-c", "curl -fsSL https://bivy.sh/install.sh | bash"], {
-      cwd: repoRoot,
+      cwd: os.homedir(),
       env: { ...process.env, BIVY_HOME: repoRoot, BIVY_CHANNEL: channel },
     });
     // install.sh restarts the service itself; verify the node actually came up
@@ -4537,7 +4541,6 @@ async function runUpdate(args = []) {
     process.exitCode = installCode;
     return;
   }
-  await ensureKnownAgents();
   const config = loadConfig();
   await waitForIdleSessions(config, { skip: skipWait });
   if (hasConfiguredService(config) && (await restartServiceReconciled(config))) {
