@@ -247,9 +247,17 @@ the endpoints fail closed rather than storing anything.
 cannot be decrypted; the account has to re-enter them. Treat it like
 `RELAY_SECRET` — it lives in `deploy/.env` (mode `600`) and nowhere else.
 
-The feature also needs ephemeral machines enabled, which is the default:
-`EPHEMERAL_MACHINES_ENABLED` and the build-time `VITE_EPHEMERAL_MACHINES_ENABLED`
-are on unless set to exactly `0`.
+The feature also needs ephemeral machines enabled. The server gate
+`EPHEMERAL_MACHINES_ENABLED` is on unless set to exactly `0`, but the web build
+requires an explicit `VITE_EPHEMERAL_MACHINES_ENABLED=1`.
+
+Published `ghcr.io/bivysh/bivy-control-plane:<full-core-sha>` images keep that UI
+gate off. To opt in, use the separate `<full-core-sha>-ephemerals` image variant,
+which Core builds with the web flag set to `1`. Both variants have the same
+backend source and enforce the same runtime launch, policy, and hardening gates.
+Setting a `VITE_` variable on an already-built container does not change its
+compiled web assets. Default image tags are not overwritten when publishing the
+opt-in variant.
 
 ## Operator-owned managed compute
 
