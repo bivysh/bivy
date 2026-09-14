@@ -73,6 +73,7 @@ import { authMiddleware, resolveAuth, isAuthorized, requestOriginAllowed } from 
 import { RelayConnector, loadRelayConfig, soloCredentials, type ClientMessage } from "./remote/index.js";
 import { readEphemeralTeardownConfig, shouldSelfTeardown, snapshotsDurableForTeardown, performSelfTeardown, type SnapshotFlushResult } from "./ephemeral-teardown.js";
 import { buildSessionSnapshot, applySessionSnapshot } from "./session/snapshot.js";
+import { clearTurnActivity } from "./session/turn-activity.js";
 import { createCheckpointBundle, applyCheckpointBundle, materializeCheckpoint } from "./session/checkpoint-pack.js";
 import { configuredTurnTimeoutMs, configuredTurnStallMs, configuredTurnActivityStallMs } from "./session/turn-watchdog.js";
 import { createTurnWatchdog, probeTurnPidAlive } from "./session/turn-watchdog-runtime.js";
@@ -7067,7 +7068,8 @@ function evaluateEphemeralTeardown(): void {
   if (!ephemeralTeardownCfg.enabled || ephemeralTearingDown) return;
   const records = new Set(openSessions.values());
   const anyWorking = [...records].some((r) => r.isWorking);
-  const anyRemoteActive = [...records].some((r) => r.remoteActive);
+  const anyRemoteActive = clients.size > 0 || (relay?.clientCount ?? 0) > 0
+    || [...records].some((r) => r.remoteActive);
   const inFlightWork = controlPlanePoller?.inFlightCount() ?? 0;
   if (anyWorking || anyRemoteActive || inFlightWork > 0) {
     ephemeralEverBusy = true;
@@ -7188,6 +7190,8 @@ function markSessionWorking(record: SessionRecord, activity: unknown, opts?: { s
   record.lastFailureAt = undefined;
   metadata.touchSession(record.id, "working");
   if (!wasWorking) {
+    // Do not miss a fast turn that begins and ends between teardown samples.
+    evaluateEphemeralTeardown();
     scheduleAdvertise(); // idle → working transition
     broadcastSessionState(record);
   }
@@ -7197,9 +7201,7 @@ function clearSessionWorking(record: SessionRecord, forcedStatus?: BivySessionSt
   turnWatchdog.clearTurnAttentionOnProgress(record, true);
   turnWatchdog.clearTurnWatchdog(record);
   touchSession(record);
-  record.isWorking = false;
-  record.lastActivity = undefined;
-  record.workingStartedAt = undefined;
+  clearTurnActivity(record);
   // A completed turn clears any pending manual-resume offer: the session has now
   // moved on (whether it was the resume itself or an unrelated new message).
   metadata.setResumePending(record.id, false);
@@ -7661,7 +7663,7 @@ function attachSessionListeners(record: SessionRecord) {
           title: "Session hit an error",
           body: `${sessionNotifyLabel(record)} failed its last turn — tap to see what went wrong.`,
         });
-      } else if (!record.isWorking && !record.remoteActive && (record.backgroundTaskCount ?? 0) === 0) {
+      } else if (!record.isWorking && !record.remoteActive && clients.size === 0 && (relay?.clientCount ?? 0) === 0 && (record.backgroundTaskCount ?? 0) === 0) {
         void sendNotificationHint({
           kind: "session_done",
           sessionId: record.id,

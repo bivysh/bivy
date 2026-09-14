@@ -149,6 +149,7 @@ export class RelayConnector {
   // and the socket closing. This — not "a connector object exists" — is what
   // "connected" means to the control plane, so it's what `bivy status` reports.
   private ready = false;
+  private remoteClients = 0;
   // Most recent relay-side failure (ticket mint, socket error, or an `error`
   // frame), surfaced by `bivy status`/`doctor` so a node that never connects
   // explains why instead of silently showing "configured".
@@ -188,6 +189,9 @@ export class RelayConnector {
     return this.ready && this.ws?.readyState === WebSocket.OPEN;
   }
 
+  /** Actual viewers on this relay connection, not a sticky prompt flag. */
+  get clientCount(): number { return this.connected ? this.remoteClients : 0; }
+
   /** Most recent relay-side failure, if any — for status/diagnostics. */
   get lastError(): string | undefined {
     return this.lastErrorMessage;
@@ -202,6 +206,7 @@ export class RelayConnector {
   stop() {
     this.closed = true;
     this.ready = false;
+    this.remoteClients = 0;
     this.stopHeartbeat();
     this.clearBackoffReset();
     this.ws?.close();
@@ -403,7 +408,8 @@ export class RelayConnector {
     });
 
     ws.on("message", (data) => {
-      let env: { t?: string; p?: string };
+      if (this.ws !== ws) return;
+      let env: { t?: string; p?: string; clients?: unknown };
       try {
         env = JSON.parse(data.toString());
       } catch {
@@ -418,6 +424,11 @@ export class RelayConnector {
         this.startHeartbeat(ws);
         this.scheduleBackoffReset(ws);
         console.log("[relay] connected");
+        return;
+      }
+      if (env.t === "peer.online" || env.t === "peer.offline") {
+        if (typeof env.clients === "number" && Number.isSafeInteger(env.clients) && env.clients >= 0) this.remoteClients = env.clients;
+        else if (env.t === "peer.online") this.remoteClients = Math.max(1, this.remoteClients);
         return;
       }
       if (env.t === "pair" && typeof env.p === "string") {
@@ -468,7 +479,9 @@ export class RelayConnector {
     });
 
     ws.on("close", () => {
+      if (this.ws !== ws) return;
       this.ready = false;
+      this.remoteClients = 0;
       this.stopHeartbeat();
       this.clearBackoffReset();
       this.scheduleReconnect();
