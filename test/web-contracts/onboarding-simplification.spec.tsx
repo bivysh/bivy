@@ -11,9 +11,10 @@ test("isolated first use recommends one cloud and hides the rest behind progress
   expect(view).toContain("<Badge>Available</Badge>");
 });
 
-test("the first isolated Run offers a safe task and names the billable launch action", async () => {
+test("the first task offers a no-edit prompt and names the billable isolated launch action", async () => {
   const composer = await read("../../packages/web/src/components/Composer.tsx");
-  expect(composer).toContain("Start with a safe read-only task");
+  expect(composer).toContain("Start with a small task");
+  expect(composer).toContain("(firstIsolatedRun || firstTask)");
   expect(composer).toContain("Inspect this repository and explain how to run its tests. Do not change files.");
   expect(composer).toContain("Launch Machine and send task");
 });

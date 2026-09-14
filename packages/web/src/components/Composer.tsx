@@ -570,17 +570,35 @@ export function Composer({
     : `${state.catalogs.currentAgentName || "This agent"} can't ask for approval — treated as full access`;
   const canSend = !disabled && (Boolean(text.trim()) || attachments.length > 0);
   const firstIsolatedRun = isDraft && Boolean(state.draft.ephemeralConfig);
+  const firstTask = isDraft && state.sessionIndex.sessions.length === 0
+    && state.activeSession.transcript.length === 0 && state.connection.status === "online";
   const starterTask = "Inspect this repository and explain how to run its tests. Do not change files.";
 
   return (
     <>
-      {firstIsolatedRun && !text.trim() && attachments.length === 0 && (
+      {(firstIsolatedRun || firstTask) && !text.trim() && attachments.length === 0 && (
         <div className="composer-starter" role="note">
           <div>
-            <strong>Start with a safe read-only task</strong>
-            <span>Verify the Machine, repository, agent, and model before asking it to edit code.</span>
+            <strong>Start with a small task</strong>
+            <span>Ask your agent to explain the repository and how to run its tests, without editing files. Review its answer here, or write your own task below.</span>
+            {firstTask && !state.draft.repo && (
+              <>
+                <span>Choose a repository to confirm where the task will run, or use this machine’s default workspace.</span>
+                {state.catalogs.reposLoading && <span role="status">Finding available repositories…</span>}
+                {state.catalogs.reposError && <span role="alert">Could not load repositories. Open Choose repository to retry or connect GitHub.</span>}
+                <div className="connect-option-links" aria-label="Suggested repositories">
+                  {state.catalogs.repos.slice(0, 3).map((repo) => (
+                    <button key={repo.slug} type="button" className="btn sm ghost" title={repo.description || repo.slug} onClick={() => controller.chooseRepo(repo.slug)}>{repo.slug}</button>
+                  ))}
+                  <button type="button" className="btn sm ghost" onClick={() => setPicker("repo")}>{state.catalogs.repos.length ? "Browse repositories" : "Choose repository"}</button>
+                </div>
+              </>
+            )}
           </div>
-          <button type="button" className="btn sm" onClick={() => setText(starterTask)}>
+          <button type="button" className="btn sm" onClick={() => {
+            setText(starterTask);
+            requestAnimationFrame(() => { autosize(); taRef.current?.focus(); });
+          }}>
             Use starter task
           </button>
         </div>

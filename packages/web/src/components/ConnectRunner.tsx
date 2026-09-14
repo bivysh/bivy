@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
+import { useEffect, useRef, useState } from "react";
 import type { AccountNode } from "@bivy/core";
 import { MachineInstallInstructions } from "./MachineInstallInstructions.js";
 import { Spinner } from "./Spinner.js";
@@ -30,6 +31,18 @@ export function ConnectRunner({
   // persistent node list — mirror the node switcher so a booted ephemeral runner
   // isn't offered here as if it were a regular enrolled node.
   const persistentNodes = nodes.filter((n) => !n.id.startsWith("eph-"));
+  const [enrolledNodeId, setEnrolledNodeId] = useState<string | null>(null);
+  const startedEmpty = useRef(persistentNodes.length === 0);
+  const picked = useRef(false);
+  useEffect(() => {
+    // Prefer the exact machine enrolled by this page. For a fresh account (or
+    // a reload after installing), a sole online machine is unambiguous too.
+    const preferredId = enrolledNodeId ?? (startedEmpty.current && nodes.length === 1 ? nodes[0]?.id : undefined);
+    const node = nodes.find((item) => item.id === preferredId && item.online && !item.id.startsWith("eph-"));
+    if (!node || picked.current) return;
+    picked.current = true;
+    onPickNode(node.id);
+  }, [nodes, enrolledNodeId, onPickNode]);
 
   return (
     <section className="connect-runner" aria-labelledby="connect-runner-title">
@@ -40,17 +53,17 @@ export function ConnectRunner({
             ? "Pick an online machine to start, or add another machine."
             : ephemeralEnabled
               ? "Use a machine with your real repository, services, and warm caches, or launch an isolated machine. Any hosted credential custody is disclosed before enablement."
-              : "Use the machine where your repository, services, and warm caches already live."}
+              : "Your agents run here, using your existing environment. Keep your repositories, tools, and agent logins."}
         </p>
       </div>
 
-      <div className="connect-waiting">
+      <div className="connect-waiting" role="status">
         <Spinner size="sm" />
         <span className="connect-waiting-text">
-          {persistentNodes.length > 0 ? "Or wait for another Machine to connect…" : "Waiting for a Machine to connect…"}
+          {persistentNodes.length > 0 ? "Checking for connected machines automatically…" : "Waiting for your machine. This page updates automatically."}
         </span>
         <button type="button" className="btn sm ghost" onClick={onRefresh}>
-          Refresh now
+          Check now
         </button>
       </div>
 
@@ -82,7 +95,7 @@ export function ConnectRunner({
 
       <div className="connect-options">
         <div className="connect-option machine-install-card">
-          <MachineInstallInstructions />
+          <MachineInstallInstructions onEnrolled={setEnrolledNodeId} />
         </div>
 
         {ephemeralEnabled && (
@@ -105,7 +118,7 @@ export function ConnectRunner({
           </div>
         )}
       </div>
-
+      <p className="connect-sub">Next: choose a repository, send your first task, and review the result right here.</p>
     </section>
   );
 }

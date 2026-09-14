@@ -3585,8 +3585,15 @@ async function cmdTokenSetup() {
   }
   const explicitPort = Number(process.env.PORT);
   config.port = explicitPort || await findAvailablePort(Number(config.port) || 4317, nodeBindHost());
-  config.env = { ...config.env, BIVY_RUNTIME: config.env?.BIVY_RUNTIME || "pi" };
+  // Reuse an existing agent and its native login, rather than silently choosing
+  // Pi and asking an already-authenticated Claude/Codex user for another login.
+  // Keep explicit choices (including custom runtimes) unchanged.
+  const installedAgents = SETUP_AGENT_CHOICES.filter((choice) => choice.command && commandExists(choice.command));
+  const detectedAgent = config.env?.BIVY_RUNTIME ? undefined
+    : installedAgents.find((choice) => nativeAgentAuthDetected(choice)) || installedAgents[0];
+  config.env = { ...config.env, BIVY_RUNTIME: config.env?.BIVY_RUNTIME || detectedAgent?.runtimeId || "pi" };
   saveConfig(config);
+  console.log(c.dim(`Agent: ${config.env.BIVY_RUNTIME} — existing logins stay on this machine. Change the agent in the app any time.`));
 
   const code = await run(nodeBin, [...nodeScriptArgs(relaySetupEntry)], {
     cwd: repoRoot,
@@ -3605,6 +3612,7 @@ async function cmdTokenSetup() {
     return;
   }
   console.log(c.bold(c.green("\n✓ Machine added and running. No interactive setup was needed.")));
+  console.log("Return to the Bivy page where you copied the command. It will connect automatically; choose a repository and send your first task there.");
 }
 
 async function cmdSetup(args = []) {

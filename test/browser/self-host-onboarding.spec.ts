@@ -106,26 +106,29 @@ for (const theme of ["light", "dark"] as const) {
     for (const route of ["**/nodes", "**/account/**", "**/sessions", "**/devices"]) {
       await page.route(route, (request) => request.fulfill({ json: [] }));
     }
+    const claim = { id: "claim-1", status: "pending", createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 600_000).toISOString(), command: `curl -fsSL https://bivy.sh/install.sh | BIVY_NODE_CLAIM_CODE=one-time-code BIVY_CONTROL_PLANE_URL=${origin} bash` };
+    await page.route("**/account/node-claims", route => route.fulfill({ json: route.request().method() === "POST" ? claim : [claim] }));
     await page.goto(origin);
     await expect(page.getByRole("heading", { name: "Connect a Machine", exact: true }).last()).toBeVisible();
-    await expect(page.getByText("Both commands connect to your self-hosted server.", { exact: false })).toBeVisible();
-    const auto = page.getByRole("button", { name: "Copy auto sign-in command", exact: true });
+    const auto = page.getByRole("button", { name: "Copy install command", exact: true });
     await auto.focus();
     await expect(auto).toBeFocused();
     expect(await auto.evaluate((element) => getComputedStyle(element).outlineStyle)).not.toBe("none");
     await page.keyboard.press("Enter");
-    await expect(page.getByRole("button", { name: "Auto sign-in command copied", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Install command copied", exact: true })).toBeVisible();
     const copied = await page.evaluate(() => (window as unknown as { copied: string }).copied);
-    expect(copied).toContain("https://bivy.sh/install.sh | BIVY_SESSION_TOKEN=sess_fixture_");
+    expect(copied).toContain("https://bivy.sh/install.sh | BIVY_NODE_CLAIM_CODE=one-time-code");
+    expect(copied).not.toContain("sess_fixture_");
     expect(copied).toContain(`BIVY_CONTROL_PLANE_URL=${origin}`);
-    expect(copied).toContain("BIVY_RELAY_URL=wss://very-long-self-hosted-domain.example/relay bash");
+    await page.getByText("Other ways to install", { exact: true }).click();
+    await expect(page.getByText("It connects to your self-hosted server.", { exact: false })).toBeVisible();
     await page.getByRole("button", { name: "Copy regular sign-in command", exact: true }).click();
     const plain = await page.evaluate(() => (window as unknown as { copied: string }).copied);
     expect(plain).not.toContain("BIVY_SESSION_TOKEN");
     expect(plain).toContain(`BIVY_CONTROL_PLANE_URL=${origin}`);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     if (testInfo.project.name === "mobile") {
-      const box = await auto.boundingBox();
+      const box = await page.getByRole("button", { name: /^(Copy install command|Install command copied)$/ }).boundingBox();
       expect(box!.width).toBeGreaterThanOrEqual(44);
       expect(box!.height).toBeGreaterThanOrEqual(44);
     }

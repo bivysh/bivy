@@ -22,6 +22,14 @@ that doesn't end when you leave your desk.
 **[Self-host](docs/deploy-images.md)** ·
 **[Website](https://bivy.sh)**
 
+**Recommended:** sign in at [app.bivy.sh](https://app.bivy.sh), then copy your
+personalized **Connect a Machine** command into a terminal on your Mac or Linux
+computer. It installs and enrolls the machine without another Bivy login. The
+browser connects automatically; choose a repository and send your first task
+right there.
+
+Prefer starting from the terminal?
+
 ```bash
 curl -fsSL https://bivy.sh/install.sh | bash  # install + guided setup
 cd your-repo

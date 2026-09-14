@@ -220,10 +220,13 @@ export function App() {
   const awaitingNode = !controller.direct && state.connection.signedIn && !state.connection.currentNodeId;
   useEffect(() => {
     if (!awaitingNode) return;
-    const id = setInterval(() => {
+    const refresh = () => {
       if (document.visibilityState !== "hidden") void controller.refreshNodes();
-    }, 4000);
-    return () => clearInterval(id);
+    };
+    refresh();
+    const id = setInterval(refresh, 4000);
+    const stopObserving = onAppVisible(refresh);
+    return () => { clearInterval(id); stopObserving(); };
   }, [awaitingNode]);
   const [focusView, setFocusView] = useState(() => localStorage.getItem("bivy.focusView") === "1");
   const toggleFocusView = useCallback(() => {
