@@ -1,11 +1,44 @@
 # Quickstart
 
-Zero to your first agent reply. Roughly five minutes.
+Zero to your first agent reply. Start in your browser or phone.
 
-Bivy runs a **node** on your own machine. The node is a data plane: it serves an
-HTTP API and a WebSocket at `http://localhost:4317` and hosts no web UI. You
-drive it from the terminal with the `bivy` CLI. A browser or phone UI is served
-by a control plane — see [remote-access.md](remote-access.md).
+## Recommended: start in the web app
+
+1. Open **[app.bivy.sh](https://app.bivy.sh)** and sign in (or open your
+   self-hosted Bivy app).
+2. **Connect a Machine** shows a personalized install command. On your Mac or
+   Linux computer, open a terminal inside the repository you want to work on
+   and paste it. The single-use command expires after 10 minutes and authorizes
+   machine enrollment only—not access to your account. Keep it private.
+3. Installation enrolls the machine, chooses an installed agent where available,
+   and starts the background service without a second Bivy login. Existing
+   agent authentication stays in place; an agent without credentials still
+   needs its own login or a supported provider connection.
+4. Keep the web app open. It checks for your machine automatically and opens
+   the newly enrolled machine when it comes online. If several machines are
+   already connected, you can choose one explicitly.
+5. Confirm a suggested repository, browse your available GitHub repositories,
+   or use the machine's default workspace. **Use starter task** fills in a
+   request to explain the repository and its tests without changing files.
+   Review or edit the prompt, then send it. A prompt isn't a sandbox guarantee;
+   check the session's protection setting before running work.
+6. Read the answer, steer the session, and review any changes or artifacts in
+   the same interface.
+
+Your agents run on your machine, using your existing environment. **Keep it
+awake and online** while work runs. Starting on a phone still requires access
+to a computer terminal for the installation step.
+
+If the command expires, choose **Create new install command**. If installation
+fails, follow the terminal's recovery instructions; **Other ways to install**
+also offers the ordinary installer with sign-in on the machine.
+
+## Alternative: start from the terminal
+
+Bivy runs a **node** on your own machine. The node serves an HTTP API and a
+WebSocket at `http://localhost:4317` and hosts no web UI. A browser or phone UI
+is served by the hosted or self-hosted app—see [remote-access.md](remote-access.md).
+The CLI-only path below does not require an account.
 
 ## Prerequisites
 
