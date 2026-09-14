@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Nest a sub-agent's own tool calls under the delegation card that spawned them in session transcripts, instead of rendering them flat and unlabelled. Works live and on reload; general to any agent that surfaces a parent tool-call id (Claude's `parent_tool_use_id` today).
 
+### Changed
+
+- Refresh release-tested agent pins to the current upstream builds: Claude Agent SDK 0.3.270, Codex 0.154.0, and OpenCode 1.18.30 (Pi stays at 0.85.1). Each was validated with a real turn through Bivy's own runtime against live credentials before the pin moved.
+
 ### Fixed
 
 - Separate assistant prose and reasoning that resume after a tool call with a paragraph break in transcripts for pipe/stream agents (Grok, Goose, Gemini, and the generic streams), so segments no longer run together (e.g. "…what it does.The workspace…"). Matches the governed protocol path.
