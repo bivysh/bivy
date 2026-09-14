@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { spawnTestService, stopTestServices } from "../../test-service-process.js";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import net from "node:net";
@@ -38,18 +39,9 @@ const GATED_OFF_PORT = await freePort();
 
 const procs: ChildProcess[] = [];
 function spawnRelay(env: Record<string, string>) {
-  const child = spawn("npx", ["tsx", "src/index.ts"], { cwd: relayDir, env: { ...process.env, ...env }, stdio: "inherit" });
-  child.once("error", (error) => {
-    console.error("Failed to start relay:", error);
-    cleanup(1);
-  });
+  const child = spawnTestService(relayDir, env);
   procs.push(child);
   return child;
-}
-
-function cleanup(code: number) {
-  for (const p of procs) p.kill("SIGTERM");
-  process.exit(code);
 }
 
 // Spawn a relay expected to REFUSE to start (non-zero exit). Resolves true if it
@@ -57,20 +49,19 @@ function cleanup(code: number) {
 // misconfig guard must reject the given env, not run.
 function expectRefusesToStart(env: Record<string, string>, timeoutMs = 8000): Promise<boolean> {
   return new Promise((resolve) => {
-    const child = spawn("npx", ["tsx", "src/index.ts"], { cwd: relayDir, env: { ...process.env, ...env }, stdio: "inherit" });
+    const child = spawnTestService(relayDir, env);
     let settled = false;
-    const done = (v: boolean) => {
-      if (!settled) {
-        settled = true;
-        resolve(v);
-      }
+    const timer = setTimeout(() => {
+      void stopTestServices([child]).then(() => done(false));
+    }, timeoutMs);
+    const done = (value: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
     };
     child.once("exit", (code) => done(code !== 0));
     child.once("error", () => done(false));
-    setTimeout(() => {
-      if (!settled) child.kill("SIGTERM");
-      done(false);
-    }, timeoutMs);
   });
 }
 
@@ -155,10 +146,7 @@ function connect(url: string, timeoutMs = 3000): Conn {
 }
 
 function expect(cond: boolean, msg: string) {
-  if (!cond) {
-    console.error(`✗ FAIL: ${msg}`);
-    cleanup(1);
-  }
+  if (!cond) throw new Error(`✗ FAIL: ${msg}`);
   console.log(`✓ ${msg}`);
 }
 
@@ -226,10 +214,13 @@ async function main() {
   expect(refused, "refuses to start when room tokens are combined with a non-local control plane");
 
   console.log("\nAll solo relay admission checks passed.");
-  cleanup(0);
 }
 
-main().catch((error) => {
+try {
+  await main();
+} catch (error) {
   console.error(error);
-  cleanup(1);
-});
+  process.exitCode = 1;
+} finally {
+  await stopTestServices(procs);
+}

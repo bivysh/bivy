@@ -254,6 +254,10 @@ section > .lede { color: var(--muted); font-size: var(--text-sm); margin: 0 0 va
 .banner[data-tone="warn"]   { background: var(--warn-soft); color: var(--warn); }
 .banner[data-tone="info"]   { background: var(--surface-2); color: var(--muted); }
 .banner[data-tone="accent"] { background: var(--accent-soft); color: var(--ink); }
+.banner.with-steps { align-items: flex-start; }
+.banner-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.banner-text span { color: var(--ink); opacity: 0.85; }
+.banner-steps { margin: var(--space-1) 0; padding-left: var(--space-5); display: grid; gap: var(--space-1); color: var(--ink); opacity: 0.85; }
 
 /* --- Field (text input) + composer --- */
 .field { width: 100%; padding: 9px 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm);
@@ -561,6 +565,7 @@ section > .lede { color: var(--muted); font-size: var(--text-sm); margin: 0 0 va
     <div class="spec"><div class="spec-h"><b>Inline banners</b> <code>.banner[data-tone]</code></div>
       <div class="demo col">
         <div class="banner" data-tone="danger">Something went wrong while syncing.</div>
+        <div class="banner with-steps" data-tone="danger"><div class="banner-text"><strong>Action required</strong><span>This device is missing a key.</span><ol class="banner-steps"><li>Bring the Machine online.</li><li>Connect to it from this device.</li><li>Try again.</li></ol></div></div>
         <div class="banner" data-tone="warn">This session is read-only.</div>
         <div class="banner" data-tone="info">Connected to 2 nodes.</div>
         <div class="banner" data-tone="accent">A new version is ready.</div>

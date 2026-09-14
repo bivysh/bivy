@@ -11,19 +11,20 @@ const CTX: Ctx = { reply: () => {} };
 function harness(over: Partial<ForkCommandDeps> = {}) {
   const events: any[] = [];
   const broadcasts: any[] = [];
-  const rec: any = { id: "s1", runtimeId: "codex", workspace: "/w", sessionFile: "ref", worktree: undefined, session: { getMessages: () => [], cwd: "/w" } };
+  const rec: any = { id: "s1", runtimeId: "codex", workspace: "/tmp", sessionFile: "ref", worktree: undefined, session: { getMessages: () => [], cwd: "/tmp" } };
   const deps: ForkCommandDeps = {
     sendEvent: (e) => events.push(e),
     broadcast: (e) => broadcasts.push(e),
     resolveSession: () => rec,
     getRuntime: () => ({ id: "codex", capabilities: {} }) as any,
-    forkRecordFor: () => ({ sourceSessionId: "s1", runtimeId: "codex", workspace: "/w", cwd: "/w" }) as any,
+    forkRecordFor: () => ({ sourceSessionId: "s1", runtimeId: "codex", workspace: "/tmp", cwd: "/tmp", repoSlug: "octo/repo" }) as any,
     forkInFlightState: () => undefined,
     forkDoneEvent: (requestId, record) => ({ type: "session.fork.done", requestId, sessionId: (record as any).id }),
     agentFrom: () => undefined,
     modelFrom: () => undefined,
     pushModelAuthToControlPlane: async () => {},
     pushForkSourceBranch: async () => {},
+    forkWorkspaceMaxBytes: () => 50 * 1024 * 1024,
     standUpFork: async () => ({ ok: true, record: rec, plan: { kind: "seed", fidelity: "seeded", seedPrompt: "hi" }, missing: [] }) as any,
     retireSource: async () => ({ ok: true, retired: true, alreadyGone: false }),
     ...over,

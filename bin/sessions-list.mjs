@@ -25,3 +25,14 @@ export function resolveSessionsLimit(rawArg) {
 export function truncateSavedSessions(sessions, limit) {
   return sessions.slice(0, limit);
 }
+
+/**
+ * Pick the provider-native token for a terminal resume. `id` is Bivy's
+ * canonical conversation id; `ref` is the runtime's durable resume ref exposed
+ * as `SessionSummary.path` (a Codex rollout id, a Claude session id, etc.).
+ * They are often equal, but forks/imports deliberately give a conversation a
+ * new Bivy id while retaining a different provider ref.
+ */
+export function nativeResumeRef(item) {
+  return item?.ref || item?.id;
+}

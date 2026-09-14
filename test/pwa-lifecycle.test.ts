@@ -93,6 +93,7 @@ const lifecycle: PwaLifecycleState = {
   readingAttachments: true,
   turnActive: true,
   locallyQueuedPrompts: 2,
+  queuedFollowups: 1,
 };
 assert.deepEqual(updateBlockers(lifecycle), [
   "the active turn finishes",
@@ -100,9 +101,10 @@ assert.deepEqual(updateBlockers(lifecycle), [
   "the unsent draft is sent or cleared",
   "pending attachments are sent or cleared",
   "locally queued prompts reach the Machine",
+  "queued follow-ups are delivered",
 ]);
 assert.equal(canActivateUpdate(lifecycle), false);
-const idle = { ...lifecycle, hasDraft: false, pendingAttachments: 0, readingAttachments: false, turnActive: false, locallyQueuedPrompts: 0 };
+const idle = { ...lifecycle, hasDraft: false, pendingAttachments: 0, readingAttachments: false, turnActive: false, locallyQueuedPrompts: 0, queuedFollowups: 0 };
 assert.deepEqual(updateBlockers(idle), []);
 assert.equal(canActivateUpdate(idle), true);
 assert.equal(canActivateUpdate({ ...idle, updateAvailable: false }), false);
@@ -113,6 +115,9 @@ assert.equal(describeAvailability("offline", true, idle).kind, "cached-transcrip
 assert.equal(describeAvailability("offline", false, idle).kind, "cached-shell");
 assert.equal(describeAvailability("offline", false, { ...idle, shellCached: false }).kind, "offline-page");
 assert.equal(describeAvailability("online", true, { ...idle, locallyQueuedPrompts: 1 }).kind, "local-queue");
+// A visible follow-up queue has its own per-session UI — it must not raise the
+// global "queued on this device" banner (which would show on every session).
+assert.equal(describeAvailability("online", true, { ...idle, queuedFollowups: 3 }).kind, "live-control");
 // An unreachable Machine is named and comes with the one actionable hint, so a
 // phone user knows which machine to check and what to run there.
 assert.match(describeAvailability("offline", true, idle, "macbook").detail, /Machine macbook is offline/);
@@ -122,14 +127,17 @@ assert.equal(describeAvailability("reconnecting", true, idle, "macbook").label, 
 assert.equal(describeAvailability("reconnecting", true, idle).label, "Reconnecting Machine");
 
 // Reconnect buffering and visible follow-up queues are independent concurrent
-// sources: reconnect recovery must not accidentally clear a queued follow-up.
+// sources: reconnect recovery must not touch follow-ups, and follow-ups never
+// inflate the undelivered-prompt count behind the availability banner.
 setFollowupQueuedPrompts(2);
 markPromptQueued();
-assert.equal(getPwaLifecycleState().locallyQueuedPrompts, 3);
+assert.equal(getPwaLifecycleState().locallyQueuedPrompts, 1);
+assert.equal(getPwaLifecycleState().queuedFollowups, 2);
 clearQueuedPrompts();
-assert.equal(getPwaLifecycleState().locallyQueuedPrompts, 2);
-setFollowupQueuedPrompts(0);
 assert.equal(getPwaLifecycleState().locallyQueuedPrompts, 0);
+assert.equal(getPwaLifecycleState().queuedFollowups, 2);
+setFollowupQueuedPrompts(0);
+assert.equal(getPwaLifecycleState().queuedFollowups, 0);
 
 assert.equal(fallbackInstallChoice("Mozilla/5.0 (iPhone) AppleWebKit Safari", "iPhone", 5), "ios");
 assert.equal(fallbackInstallChoice("Mozilla/5.0 AppleWebKit Version/17.4 Safari/605.1.15", "MacIntel", 0), "safari");

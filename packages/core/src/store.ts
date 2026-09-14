@@ -159,6 +159,9 @@ export interface SessionSummary {
   worktree?: string;
   name: string;
   source?: string;
+  /** True for sessions created through Bivy, false for agent-native sessions
+   * discovered from existing history. */
+  bivyCreated?: boolean;
   /** Parent session's id, when this session was materialized from a fork
    *  bundle (see src/session/fork.ts on the node). Undefined for an ordinary
    *  session. The parent may live on a different node, so this is only ever
@@ -248,6 +251,12 @@ export interface ToolActivity {
   /** Node-computed normalized classification (see ToolCallDetail); when present,
    *  formatTool renders from it instead of re-deriving from `input`. */
   detail?: ToolCallDetail;
+  /** The `callId` of the delegation/sub-agent call that spawned this tool, when
+   *  the agent surfaced a parent relationship (Claude's `parent_tool_use_id`,
+   *  Codex's child-thread items, …). Purely a display grouping hint: the UI
+   *  nests these under their parent delegation card. Absent for ordinary
+   *  top-level calls. Never a claim of ownership over the child agent. */
+  parentToolUseId?: string;
 }
 
 export type TranscriptRole = "user" | "assistant" | "system" | "thinking" | "error";
@@ -721,6 +730,7 @@ export interface ConnectionAccountState {
   currentNodeId: string | null;
   nodeUpdate: { current: string; latest: string } | null;
   nodeUpdating: boolean;
+  nodeUpdateAcknowledged: boolean;
 }
 
 export interface SessionIndexState {
@@ -792,6 +802,7 @@ export interface SettingsState {
 }
 
 export interface PresentationState {
+  forkProgress: { status: "working" | "error"; message: string } | null;
   oauth: OauthState | null;
   needsModelAuth: { nodeId: string; provider: string; reason?: string } | null;
   githubApp: GithubAppState | null;
@@ -819,12 +830,12 @@ type AppStatePatch = Partial<
   SettingsState & PresentationState & { draft: SessionDraft }
 >;
 
-const CONNECTION_FIELDS = ["status", "signedIn", "nodes", "currentNodeId", "nodeUpdate", "nodeUpdating"] as const;
+const CONNECTION_FIELDS = ["status", "signedIn", "nodes", "currentNodeId", "nodeUpdate", "nodeUpdating", "nodeUpdateAcknowledged"] as const;
 const SESSION_INDEX_FIELDS = ["sessions", "runTerminals", "tuiSessions", "pausedSessionIds", "commandsBySession", "followupsBySession"] as const;
 const ACTIVE_SESSION_FIELDS = ["activeSessionId", "activeRuntimeId", "activeTitle", "github", "transcript", "working", "workingLabel", "opening", "approvals", "questions", "turnAttentions", "usage", "changes", "changesHistory", "checkpoints"] as const;
 const CATALOG_FIELDS = ["models", "modelsRuntimeId", "currentModelId", "currentModel", "thinking", "runtimes", "currentAgentName", "selectedAgentId", "installingRuntimeId", "repos", "reposAuthed", "reposError", "reposLoading", "reposReason", "githubConnect", "branches", "branchesRepo", "branchesDefault", "branchesError", "branchesLoading", "providers", "activationReadiness"] as const;
 const SETTINGS_FIELDS = ["nodeSettings", "providerAuth", "credentialRecords", "credentialPresets", "localModels", "localModelPresets", "rulesets", "sttConfig", "nodeStats", "capabilities"] as const;
-const PRESENTATION_FIELDS = ["oauth", "needsModelAuth", "githubApp", "prResult", "prRefreshAllResult", "error", "notice"] as const;
+const PRESENTATION_FIELDS = ["forkProgress", "oauth", "needsModelAuth", "githubApp", "prResult", "prRefreshAllResult", "error", "notice"] as const;
 
 function pickPatch<T extends object>(current: T, patch: AppStatePatch, fields: readonly (keyof T)[]): T {
   const entries: Array<[keyof T, unknown]> = [];
@@ -877,7 +888,7 @@ export function initialState(): AppState {
   return {
     connection: {
       status: "offline", signedIn: false, nodes: [], currentNodeId: null,
-      nodeUpdate: null, nodeUpdating: false,
+      nodeUpdate: null, nodeUpdating: false, nodeUpdateAcknowledged: false,
     },
     sessionIndex: {
       sessions: [], runTerminals: [], tuiSessions: [], pausedSessionIds: [],
@@ -906,7 +917,7 @@ export function initialState(): AppState {
     },
     presentation: {
       oauth: null, needsModelAuth: null, githubApp: null, prResult: null,
-      prRefreshAllResult: null, error: null, errorActions: [], notice: null,
+      prRefreshAllResult: null, error: null, errorActions: [], notice: null, forkProgress: null,
     },
     draft: { ...EMPTY_SESSION_DRAFT },
   };
@@ -1702,10 +1713,13 @@ export class SessionStore {
       ));
     const merged = [...launching, ...sessions];
     const activeId = this.state.activeSession.activeSessionId;
+    const activeRow = activeId ? merged.find((session) => session.sessionId === activeId) : undefined;
+    const sessionStopped = Boolean(activeRow && activeRow.status !== "working" && activeRow.sessionState?.agent !== "working");
     this.set({
       sessions: activeId
         ? merged.map((s) => (s.sessionId === activeId ? { ...s, lastSeenAt: Date.now() } : s))
         : merged,
+      ...(sessionStopped ? { working: false, workingLabel: "" } : {}),
     });
   }
 
@@ -1724,7 +1738,8 @@ export class SessionStore {
   }
 
   setCurrentNode(nodeId: string | null): void {
-    this.set({ currentNodeId: nodeId });
+    if (nodeId === this.state.connection.currentNodeId) return;
+    this.set({ currentNodeId: nodeId, nodeUpdate: null, nodeUpdating: false, nodeUpdateAcknowledged: false });
   }
 
   /** Clear per-node/session state when switching nodes so transcripts never blend.
@@ -1778,6 +1793,10 @@ export class SessionStore {
     });
   }
 
+  setForkProgress(progress: PresentationState["forkProgress"]): void {
+    this.set({ forkProgress: progress });
+  }
+
   setError(message: string, actions: Array<{ id: string; label: string; kind?: "primary" | "secondary" }> = []): void {
     this.set({ error: message, errorActions: message ? actions : [] });
   }
@@ -1790,7 +1809,7 @@ export class SessionStore {
   /** Optimistically mark the node as updating the moment the user taps the
    *  banner button, so it can't be tapped twice while the request is in flight. */
   setNodeUpdating(value: boolean): void {
-    this.set({ nodeUpdating: value });
+    this.set({ nodeUpdating: value, nodeUpdateAcknowledged: false });
   }
 
   /** Set (or clear, with null) the first-run "sign in to your model" prompt for a
@@ -2365,6 +2384,7 @@ export class SessionStore {
             // undefined values, so an existing row keeps what it already had.
             name: e.name || (known ? undefined : "Untitled session"),
             source: e.source,
+            bivyCreated: e.bivyCreated === true,
             nodeId: e.nodeId,
             runtimeId: e.runtimeId,
             agentName: e.agentName,
@@ -2583,7 +2603,15 @@ export class SessionStore {
         // (which must runtime.select it so the node previews that agent's models),
         // not here — see AppController.maybeRestoreDraftAgent.
         const cur = e.current || runtimes.find((a) => a.id === (this.state.catalogs.selectedAgentId || e.activeAgent));
-        const selectedAgentId = cur?.id || e.activeAgent || this.state.catalogs.selectedAgentId;
+        // Opening the picker requests runtimes.list. That response can race a
+        // click made while the sheet is open and still describe the old node
+        // default. Keep an optimistic draft choice until runtime.updated
+        // confirms runtime.select; otherwise the stale list makes the selected
+        // agent (and its composer pill) immediately snap back.
+        const localDraftSelection = !this.state.activeSession.activeSessionId && e.type === "runtimes.list"
+          ? runtimes.find((a) => a.id === this.state.catalogs.selectedAgentId)
+          : undefined;
+        const selectedAgentId = localDraftSelection?.id || cur?.id || e.activeAgent || this.state.catalogs.selectedAgentId;
         // runtimes.list is also requested whenever the agent sheet opens. Its
         // `current` runtime is the default for the *next* session, not the owner
         // of the session on screen. Keep the pill tied to activeRuntimeId just

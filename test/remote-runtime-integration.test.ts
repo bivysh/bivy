@@ -104,6 +104,10 @@ test("remote runtime streams a turn identically to the in-process runtime", asyn
     capabilities: { toolInterception: false, modelSelection: false, packages: false, resume: false, fork: false },
     connect: () => connectSocketTransport(addr),
   });
+  // Explicit account selections survive both RPC operations. This native-only
+  // echo agent must reject them, never silently ignore them on the service.
+  await assert.rejects(remote.createSession({ workspace: repoRoot, credentialLabels: { anthropic: "work" } }), /manages its own login/);
+  await assert.rejects(remote.openSession({ workspace: repoRoot, sessionFile: "saved", credentialLabels: { anthropic: "work" } }), /manages its own login/);
   const remoteOpen = await remote.createSession({ workspace: repoRoot });
   const remoteTurn = drainTurn(remoteOpen.session);
   await remoteOpen.session.prompt("hello from bivy");

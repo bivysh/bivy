@@ -19,11 +19,16 @@ import { type AgentForkCaps, renderForkMatrixMarkdown } from "../src/session/for
 
 const FORK_CAPS: AgentForkCaps[] = [
   // Native same-runtime transport + portable-history import (full where same id).
+  // Pi/Claude expose exportForFork+importForFork on their bespoke runtimes;
+  // Codex/OpenCode expose the same pair on ProtocolRuntime (which flips
+  // capabilities.forkTransport on when both hooks are present — see
+  // src/agents/codex/integration.ts and src/runtime/index.ts), so a same-runtime
+  // self-fork is byte-exact "full", not a replay. All four also carry
+  // writeHistory → forkHistoryImport for cross-runtime replays.
   { id: "pi", displayName: "Pi", forkTransport: true, forkHistoryImport: true },
   { id: "claude", displayName: "Claude Code", forkTransport: true, forkHistoryImport: true },
-  // Portable-history import only (replayed as a destination; no byte-exact self-fork).
-  { id: "codex", displayName: "Codex", forkHistoryImport: true },
-  { id: "opencode", displayName: "OpenCode", forkHistoryImport: true },
+  { id: "codex", displayName: "Codex", forkTransport: true, forkHistoryImport: true },
+  { id: "opencode", displayName: "OpenCode", forkTransport: true, forkHistoryImport: true },
   // No fork import — always a seeded continuation as a destination.
   { id: "gemini", displayName: "Gemini" },
   { id: "aider", displayName: "Aider" },

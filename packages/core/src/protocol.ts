@@ -65,6 +65,8 @@ export interface Command extends CommandBase {
     | "credentials.list"
     | "credentials.account.export"
     | "credentials.account.import"
+    | "credentials.native.preview"
+    | "credentials.native.import"
     | "credential.set"
     | "credential.remove"
     | "credential.sync.set"
@@ -117,6 +119,23 @@ export interface Command extends CommandBase {
     // Reply: `attachment.data` (base64) or `attachment.error`.
     | "attachment.fetch"
     | (string & {});
+}
+
+export type NativeCredentialAgent = "claude" | "codex" | "grok";
+export interface NativeCredentialPreviewItem {
+  agent: NativeCredentialAgent;
+  status: "ready" | "conflict" | "missing" | "unreadable" | "unsupported";
+  provider?: string;
+  kind?: "oauth" | "api_key";
+}
+export interface NativeCredentialPreview {
+  previewId: string;
+  label: string;
+  items: NativeCredentialPreviewItem[];
+}
+export interface NativeCredentialImportResult {
+  items: Array<{ agent: NativeCredentialAgent; status: "imported" | "conflict" | "changed" }>;
+  warning?: string;
 }
 
 export interface ServerEvent {

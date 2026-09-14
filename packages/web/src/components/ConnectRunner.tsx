@@ -2,19 +2,17 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, useState } from "react";
 import type { AccountNode } from "@bivy/core";
-import { writeClipboard } from "../clipboard.js";
+import { MachineInstallInstructions } from "./MachineInstallInstructions.js";
 import { Spinner } from "./Spinner.js";
 import { StatusDot } from "./StatusDot.js";
-import { installCommand } from "../installCommand.js";
-import { controller } from "../store/useStore.js";
 
 /**
  * The "no Machine connected" onboarding screen shown on a fresh session before a
  * node is selected. Presents the two ways to get a Machine online — install on
  * your own computer, or (when enabled) spin up an ephemeral cloud server — plus,
  * when the account already has enrolled nodes, a list of them: picking one opens
- * a new session on that node. A live "waiting to connect" indicator sits at the
- * bottom.
+ * a new session on that node. A live "waiting to connect" indicator sits above
+ * the machine list.
  */
 export function ConnectRunner({
   nodes,
@@ -29,28 +27,22 @@ export function ConnectRunner({
   onEphemeral: () => void;
   onRefresh: () => void;
 }) {
-  const [copied, setCopied] = useState<"auto" | "plain" | null>(null);
-  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Hosted: the one-line installer. Self-hosted: point `bivy setup` at this
-  // deployment, since only bivy.sh serves install.sh (see installCommand.ts).
-  const install = installCommand(location.origin, controller.local.relay, controller.local.s);
-
-  useEffect(() => () => {
-    if (copyTimer.current) clearTimeout(copyTimer.current);
-  }, []);
-
   // Ephemeral machines (id `eph-…`) live in their own launcher, not the
   // persistent node list — mirror the node switcher so a booted ephemeral runner
   // isn't offered here as if it were a regular enrolled node.
   const persistentNodes = nodes.filter((n) => !n.id.startsWith("eph-"));
-
-  const copyCommand = async (command: string, kind: "auto" | "plain") => {
-    const ok = await writeClipboard(command);
-    if (!ok) return;
-    setCopied(kind);
-    if (copyTimer.current) clearTimeout(copyTimer.current);
-    copyTimer.current = setTimeout(() => setCopied(null), 1800);
-  };
+  const [enrolledNodeId, setEnrolledNodeId] = useState<string | null>(null);
+  const startedEmpty = useRef(persistentNodes.length === 0);
+  const picked = useRef(false);
+  useEffect(() => {
+    // Prefer the exact machine enrolled by this page. For a fresh account (or
+    // a reload after installing), a sole online machine is unambiguous too.
+    const preferredId = enrolledNodeId ?? (startedEmpty.current && nodes.length === 1 ? nodes[0]?.id : undefined);
+    const node = nodes.find((item) => item.id === preferredId && item.online && !item.id.startsWith("eph-"));
+    if (!node || picked.current) return;
+    picked.current = true;
+    onPickNode(node.id);
+  }, [nodes, enrolledNodeId, onPickNode]);
 
   return (
     <section className="connect-runner" aria-labelledby="connect-runner-title">
@@ -58,11 +50,21 @@ export function ConnectRunner({
         <h2 className="connect-title" id="connect-runner-title">{persistentNodes.length > 0 ? "Choose a Machine" : "Connect a Machine"}</h2>
         <p className="connect-sub">
           {persistentNodes.length > 0
-            ? "Pick an online Machine to start, or add another workstation."
+            ? "Pick an online machine to start, or add another machine."
             : ephemeralEnabled
-              ? "Use a workstation with your real repo, services, and warm caches, or launch an isolated Machine. Any hosted credential custody is disclosed before enablement."
-              : "Use the workstation where your repo, services, and warm caches already live."}
+              ? "Use a machine with your real repository, services, and warm caches, or launch an isolated machine. Any hosted credential custody is disclosed before enablement."
+              : "Your agents run here, using your existing environment. Keep your repositories, tools, and agent logins."}
         </p>
+      </div>
+
+      <div className="connect-waiting" role="status">
+        <Spinner size="sm" />
+        <span className="connect-waiting-text">
+          {persistentNodes.length > 0 ? "Checking for connected machines automatically…" : "Waiting for your machine. This page updates automatically."}
+        </span>
+        <button type="button" className="btn sm ghost" onClick={onRefresh}>
+          Check now
+        </button>
       </div>
 
       {persistentNodes.length > 0 && (
@@ -92,55 +94,8 @@ export function ConnectRunner({
       )}
 
       <div className="connect-options">
-        <div className="connect-option">
-          <div className="connect-option-head">
-            <span className="connect-option-badge" aria-hidden>
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-                <path d="m4 17 6-6-6-6" />
-                <path d="M12 19h8" />
-              </svg>
-            </span>
-            <div className="connect-option-copy">
-              <h3>{persistentNodes.length > 0 ? "Add another workstation" : "Connect your workstation"}</h3>
-              <p>
-                Paste this on the Mac or Linux computer where your repo lives.
-                {install.authenticated && " It can use this account automatically."}
-                {!install.hosted && " Needs Node.js 22.19 or newer."}
-              </p>
-            </div>
-          </div>
-          <div className="connect-command">
-            <code>{install.command}</code>
-            <button
-              type="button"
-              className={`connect-copy icon-only${copied === "auto" ? " is-copied" : ""}`}
-              onClick={() => copyCommand(install.command, "auto")}
-              aria-label={copied === "auto" ? "Command copied" : install.authenticated ? "Copy auto sign-in install command" : "Copy install command"}
-              title={copied === "auto" ? "Copied" : install.authenticated ? "Copy auto sign-in" : "Copy"}
-            >
-              {copied === "auto" ? (
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                  <path d="m20 6-11 11-5-5" />
-                </svg>
-              ) : (
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                  <rect x="9" y="9" width="11" height="11" rx="2" />
-                  <path d="M5 15V5a2 2 0 0 1 2-2h10" />
-                </svg>
-              )}
-            </button>
-          </div>
-          <div className="connect-option-links">
-            {install.authenticated && (
-              <button type="button" className="btn link" onClick={() => copyCommand(install.plainCommand, "plain")}>
-                {copied === "plain" ? "Plain command copied" : "Use plain install"}
-              </button>
-            )}
-            {install.hosted && <a className="connect-option-link" href="/install.sh">Download script</a>}
-          </div>
-          {install.authenticated && (
-            <p className="connect-token-note">Auto sign-in includes an account token. Use only on a Machine you trust.</p>
-          )}
+        <div className="connect-option machine-install-card">
+          <MachineInstallInstructions onEnrolled={setEnrolledNodeId} />
         </div>
 
         {ephemeralEnabled && (
@@ -163,17 +118,7 @@ export function ConnectRunner({
           </div>
         )}
       </div>
-
-
-      <div className="connect-waiting">
-        <Spinner size="sm" />
-        <span className="connect-waiting-text">
-          {persistentNodes.length > 0 ? "Or wait for another Machine to connect…" : "Waiting for a Machine to connect…"}
-        </span>
-        <button type="button" className="connect-refresh" onClick={onRefresh}>
-          Refresh now
-        </button>
-      </div>
+      <p className="connect-sub">Next: choose a repository, send your first task, and review the result right here.</p>
     </section>
   );
 }

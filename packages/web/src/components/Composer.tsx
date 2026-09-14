@@ -6,9 +6,8 @@ import type { AppState, PromptAttachment, SlashCommand } from "@bivy/core";
 import { isSlashInput, parseSlash, matchSlashCommands, resolveSlash } from "@bivy/core";
 import { useModalEscape } from "../modalStack.js";
 import { RepoPicker, AgentPicker, ModelPicker, SandboxPicker } from "./Pickers.js";
-import { firstSessionSummary } from "../firstSession.js";
 import { FollowupQueue } from "./FollowupQueue.js";
-import { SANDBOX_TIERS } from "./sandboxTiers.js";
+import { runtimeEnforcesProtection, SANDBOX_TIERS } from "./sandboxTiers.js";
 import { VoiceRecorder } from "./VoiceRecorder.js";
 import { Spinner } from "./Spinner.js";
 import { WebSpeechRecorder, webSpeechSupported } from "./WebSpeechRecorder.js";
@@ -157,6 +156,8 @@ export function Composer({
   const [menuDismissed, setMenuDismissed] = useState(false);
   const [recording, setRecording] = useState<null | "server" | "webspeech">(null);
   const [dragging, setDragging] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const [stopTimedOut, setStopTimedOut] = useState(false);
   // Reading a large/multiple file(s) (base64-encoding images, slurping text)
   // can take a visible moment with zero prior feedback — the paperclip button
   // just sat there looking unresponsive. Tracks a plain count so multiple
@@ -165,6 +166,24 @@ export function Composer({
   const [readingCount, setReadingCount] = useState(0);
   const [viewing, setViewing] = useState<string | null>(null);
   const dragDepth = useRef(0);
+
+  useEffect(() => {
+    if (!working) {
+      setStopping(false);
+      setStopTimedOut(false);
+      return;
+    }
+    if (!stopping) return;
+    const timer = window.setTimeout(() => setStopTimedOut(true), 10_000);
+    return () => window.clearTimeout(timer);
+  }, [stopping, working]);
+
+  const requestStop = () => {
+    if (stopping) return;
+    setStopping(true);
+    setStopTimedOut(false);
+    onAbort();
+  };
 
   // Some runtimes (e.g. Codex / Codex approvals) own model selection themselves
   // and expose no in-app model list — advertised via
@@ -498,6 +517,11 @@ export function Composer({
   function submit() {
     const value = text.trim();
     if ((!value && !attachments.length) || disabled) return;
+    const modelId = state.catalogs.currentModel?.id || state.catalogs.currentModelId;
+    if (isDraft && modelSelectable && (!modelId || modelId === "unknown")) {
+      setPicker("model");
+      return;
+    }
     // Dispatch a slash line (see resolveSlash): an advertised agent command is
     // invoked. An unknown slash is rejected with feedback WHEN the active session
     // advertised a command catalog — otherwise we stay permissive and forward the
@@ -522,7 +546,8 @@ export function Composer({
 
   const modelLabel = destinationCatalogPending
     ? "Default"
-    : state.catalogs.currentModel?.label || state.catalogs.currentModel?.id || "Default";
+    : state.catalogs.currentModel?.label || state.catalogs.currentModel?.id || "Choose a model";
+  const agentLabel = String(currentRuntime?.displayName || currentRuntime?.name || currentRuntime?.id || state.catalogs.currentAgentName || "Choose an agent");
   // The repo pill also carries the chosen remote branch (#466) — picked from
   // the arrow on a repo row in the repo picker, not a separate pill. A blank
   // branch means "the repo's default branch", so we only append "@ <branch>"
@@ -531,63 +556,76 @@ export function Composer({
     ? state.draft.branch
       ? `${state.draft.repo} @ ${state.draft.branch}`
       : state.draft.repo
-    : "No repo";
+    : "Choose repository";
   const repoTitle = state.draft.repo
     ? state.draft.branch
       ? `Repository ${state.draft.repo} (branch ${state.draft.branch})`
       : `Repository ${state.draft.repo} (default branch)`
-    : "Repository";
+    : "Choose repository";
   // The next session's sandbox tier: an explicit draft choice, else the node
   // default (shown by name when known). Chosen up front on the draft; a running
   // session shows it read-only in Session settings.
   const draftTier = SANDBOX_TIERS.find((t) => t.id === state.draft.sandbox);
   const nodeDefaultTier = SANDBOX_TIERS.find((t) => t.id === state.settings.nodeSettings?.defaultSandbox);
-  // The ◈ glyph already reads as "sandbox", so we drop the redundant "Sandbox"
-  // word: show the chosen tier, else the node default's name, else glyph only.
+  // Keep this decision labelled on mobile: the glyph alone does not explain
+  // that the control chooses the session's protection level.
   const sandboxLabel = draftTier
     ? draftTier.label
     : nodeDefaultTier
       ? nodeDefaultTier.label
-      : state.settings.nodeSettings?.defaultSandbox ?? "";
-  const sandboxTitle = draftTier ? draftTier.hint : "Sandbox mode for this session (machine default)";
+      : state.settings.nodeSettings?.defaultSandbox ?? "Default";
+  const selectedRuntime = state.catalogs.runtimes.find((runtime) => runtime.id === state.catalogs.selectedAgentId);
+  const sandboxTitle = runtimeEnforcesProtection(selectedRuntime)
+    ? (draftTier ? draftTier.hint : "Protection for this session (machine default)")
+    : `${state.catalogs.currentAgentName || "This agent"} can't ask for approval — treated as full access`;
   const canSend = !disabled && (Boolean(text.trim()) || attachments.length > 0);
-  // A draft renders a compact summary of its session choices; the actual
-  // controls remain in their stable positions around the composer.
-  const machineLabel = state.draft.ephemeralConfig?.name
-    || state.connection.nodes.find((n) => n.id === state.connection.currentNodeId)?.name
-    || (controller.direct ? "This machine" : "Default machine");
-  const firstSessionLine = firstSessionSummary({
-    machine: machineLabel,
-    repo: state.draft.repo || "No repo",
-    agent: state.catalogs.currentAgentName || "Agent",
-    model: modelLabel,
-    modelManagedByAgent: !modelSelectable,
-    protection: sandboxLabel || state.draft.sandbox || undefined,
-  });
   const firstIsolatedRun = isDraft && Boolean(state.draft.ephemeralConfig);
+  const firstTask = isDraft && state.sessionIndex.sessions.length === 0
+    && state.activeSession.transcript.length === 0 && state.connection.status === "online";
+  const starterTask = "Inspect this repository and explain how to run its tests. Do not change files.";
 
   return (
     <>
-      {isDraft && (
-        <div
-          className="composer-first-session"
-          title="Machine, repository, agent, model, and protection for this session"
-        >
-          Starting on <span className="fs-decisions">{firstSessionLine}</span>
+      {(firstIsolatedRun || firstTask) && !text.trim() && attachments.length === 0 && (
+        <div className="composer-starter" role="note">
+          <div>
+            <strong>Start with a small task</strong>
+            <span>Ask your agent to explain the repository and how to run its tests, without editing files. Review its answer here, or write your own task below.</span>
+            {firstTask && !state.draft.repo && (
+              <>
+                <span>Choose a repository to confirm where the task will run, or use this machine’s default workspace.</span>
+                {state.catalogs.reposLoading && <span role="status">Finding available repositories…</span>}
+                {state.catalogs.reposError && <span role="alert">Could not load repositories. Open Choose repository to retry or connect GitHub.</span>}
+                <div className="connect-option-links" aria-label="Suggested repositories">
+                  {state.catalogs.repos.slice(0, 3).map((repo) => (
+                    <button key={repo.slug} type="button" className="btn sm ghost" title={repo.description || repo.slug} onClick={() => controller.chooseRepo(repo.slug)}>{repo.slug}</button>
+                  ))}
+                  <button type="button" className="btn sm ghost" onClick={() => setPicker("repo")}>{state.catalogs.repos.length ? "Browse repositories" : "Choose repository"}</button>
+                </div>
+              </>
+            )}
+          </div>
+          <button type="button" className="btn sm" onClick={() => {
+            setText(starterTask);
+            requestAnimationFrame(() => { autosize(); taRef.current?.focus(); });
+          }}>
+            Use starter task
+          </button>
         </div>
       )}
       {isDraft && (
-        <div className="composer-lead">
-          <button type="button" className="pill repo-pill" onClick={() => setPicker("repo")} title={repoTitle}>
+        <div className="composer-lead" aria-label="Session setup">
+          <button type="button" className="btn sm ghost repo-pill" onClick={() => setPicker("repo")} title={repoTitle}>
             <GhGlyph />
             <span className="pill-label">{repoLabel}</span>
           </button>
-          <button type="button" className="pill sandbox-pill" onClick={() => setPicker("sandbox")} title={sandboxTitle} aria-label="Sandbox mode">
+          <button type="button" className="btn sm ghost sandbox-pill" onClick={() => setPicker("sandbox")} title={sandboxTitle} aria-label={`Protection: ${sandboxLabel}`}>
             <span className="pill-glyph">◈</span>
-            {sandboxLabel && <span className="pill-label">{sandboxLabel}</span>}
+            <span className="pill-label">{sandboxLabel}</span>
           </button>
         </div>
       )}
+
       {state.activeSession.activeSessionId && (
         <FollowupQueue
           sessionId={state.activeSession.activeSessionId}
@@ -596,6 +634,14 @@ export function Composer({
           busy={working}
           onError={onError}
         />
+      )}
+      {stopTimedOut && (
+        <div className="banner" data-tone="warn" role="alert">
+          <span className="banner-text">The agent didn&apos;t confirm it stopped.</span>
+          <button type="button" className="btn sm banner-action" onClick={() => location.reload()}>
+            Reload
+          </button>
+        </div>
       )}
       <form
         ref={formRef}
@@ -717,7 +763,7 @@ export function Composer({
             ref={taRef}
             className="composer-input"
             placeholder={disabled ? disabledHint || "Connecting…" : firstIsolatedRun ? "Describe your first task…" : "Message your agent…"}
-            rows={1}
+            rows={2}
             hidden={Boolean(recording)}
             value={text}
             disabled={disabled}
@@ -771,7 +817,7 @@ export function Composer({
             <div className="composer-meta">
               <button
                 type="button"
-                className="pill attach-pill"
+                className="btn sm ghost attach-pill"
                 onClick={() => fileRef.current?.click()}
                 disabled={disabled}
                 title="Attach files"
@@ -779,13 +825,13 @@ export function Composer({
               >
                 <span className="pill-glyph"><AttachGlyph /></span>
               </button>
-              <button type="button" className="pill agent-pill" onClick={() => setPicker("agent")} title="Agent">
+              <button type="button" className="btn sm ghost agent-pill" onClick={() => setPicker("agent")} title={`Agent: ${agentLabel}`}>
                 <span className="pill-glyph"><AgentGlyph /></span>
-                <span className="pill-label">{state.catalogs.currentAgentName || "Agent"}</span>
+                <span className="pill-label">{agentLabel}</span>
               </button>
               <button
                 type="button"
-                className="pill model-pill"
+                className="btn sm ghost model-pill"
                 onClick={() => { if (modelSelectable) setPicker("model"); }}
                 disabled={!modelSelectable}
                 title={modelSelectable ? "Model" : destinationCatalogPending ? "Model options load when Bivy Cloud starts" : "This agent uses its own default model"}
@@ -830,18 +876,18 @@ export function Composer({
                 ⚡
               </button>
             )}
-            {/* Stop (a hard kill of the current turn) is always reachable
-                while the agent is working — typing a follow-up must not take
-                away the ability to interrupt. With an empty composer it's the
-                only button; the moment you type something, Send appears next
-                to it — a follow-up message is a normal thing to want. It's
-                held in the visible queue (see FollowupQueue above) until the
-                current turn settles, rather than sent straight through. When
-                not working, it's just Send (disabled until there's something
-                to send). */}
-            {working && (
-              <button type="button" className="composer-btn stop" onClick={onAbort} title="Stop" aria-label="Stop current turn">
-                ■
+            {/* Keep Stop available for an empty composer; once the user has
+                entered a follow-up, the Send button takes its place. */}
+            {working && !text.trim() && (
+              <button
+                type="button"
+                className={`composer-btn stop${stopping ? " is-stopping" : ""}`}
+                onClick={requestStop}
+                title={stopping ? "Stopping" : "Stop"}
+                aria-label={stopping ? "Stopping current turn" : "Stop current turn"}
+                disabled={stopping}
+              >
+                {stopping ? <><span className="working-dots" aria-hidden><i /><i /><i /></span><span>Stopping…</span></> : "■"}
               </button>
             )}
             {(!working || canSend) && (

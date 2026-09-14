@@ -104,7 +104,7 @@ async function loginApiKey(provider: AuthProvider) {
   if (provider.id === "anthropic") {
     const probe = await probeAnthropicAccess(apiKey);
     if (probe.probed && !probe.ok) {
-      console.log(`⚠ ${probe.reason || "The key was saved but Anthropic rejected it."} Double-check the key; re-run 'bivy login' to replace it.`);
+      console.log(`⚠ ${probe.reason || "The key was saved but Anthropic rejected it."} Double-check the key; re-run 'bivy provider login' to replace it.`);
     } else if (probe.probed) {
       console.log("✓ Verified: the key can reach the Anthropic API.");
     }

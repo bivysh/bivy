@@ -112,6 +112,48 @@ test("session coordinator provisions a managed fork only after export and before
   assert.ok(events.includes("open:forked"));
 });
 
+test("cross-node fork resolves source metadata before switching and restores source on import failure", async () => {
+  let current = "source-node";
+  let request = 0;
+  let command: any;
+  const switches: string[] = [];
+  const opened: string[] = [];
+  const transcriptNodes: string[] = [];
+  const reports: Array<{ status: string; message: string }> = [];
+  const coordinator = new SessionOrchestrator({
+    send: () => {},
+    sendRequest: (value) => { command = value; },
+    createRequestId: () => `request-${++request}`,
+    createClientMessageId: () => "message-1",
+    currentNodeId: () => current,
+    isDirect: () => false,
+    sessionRuntime: () => "pi",
+    switchNode: (id) => { current = id; switches.push(id); },
+    waitForOnline: async () => {},
+    openSession: (id) => { opened.push(id); },
+    addUserMessage: () => {},
+    transcriptUrl: (id) => { transcriptNodes.push(current); return `https://app/${current}/${id}`; },
+    refreshAccountSessions: () => {},
+    reportCrossNodeFork: (status, message) => { reports.push({ status, message }); },
+  });
+
+  const result = coordinator.fork("source-session", { destNodeId: "dest-node", agentId: "claude", sourceAgentId: "pi" });
+  assert.equal(command.kind, "session.fork.export");
+  coordinator.handleEvent({ type: "session.fork.bundle", requestId: "request-1", bundle: { record: {}, normalized: { turns: [] } } } as any);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(command.kind, "session.fork.import");
+  assert.equal(command.transcriptUrl, "https://app/source-node/source-session");
+  coordinator.handleEvent({ type: "session.fork.error", requestId: "request-2", error: "destination failed" } as any);
+  await assert.rejects(result, /destination failed/);
+  assert.deepEqual(transcriptNodes, ["source-node"]);
+  assert.deepEqual(switches, ["dest-node", "source-node"]);
+  assert.deepEqual(opened, ["source-session"]);
+  assert.deepEqual(reports, [
+    { status: "working", message: "Creating the fork on the destination machine…" },
+    { status: "error", message: "destination failed" },
+  ]);
+});
+
 test("session coordinator owns draft creation ordering and first prompt framing", () => {
   const events: string[] = [];
   let pending: any;
@@ -231,7 +273,7 @@ test("steering follows the active conversation rather than the next draft agent"
 test("AppController keeps public compatibility while workflow decisions live outside it", async () => {
   const source = await readFile(new URL("../packages/web/src/store/controller.ts", import.meta.url), "utf8");
   assert.match(source, /switchNode\(nodeId: string\): void \{\s*this\.store\.setDraftEphemeralConfig\(null\);\s*this\.nodeCoordinator\.switchNode\(nodeId\);/);
-  assert.match(source, /return this\.sessionCoordinator\.fork\(sourceSessionId, opts\)/);
+  assert.match(source, /await this\.sessionCoordinator\.fork\(sourceSessionId, opts\)/);
   assert.match(source, /return this\.credentialsModelsCoordinator\.testCredential\(provider, label\)/);
   assert.match(source, /this\.sessionCoordinator\.sendPrompt\(text, attachments\)/);
   assert.match(source, /this\.sessionCoordinator\.deleteSession\(sessionId, path\)/);

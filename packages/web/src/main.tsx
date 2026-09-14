@@ -12,6 +12,7 @@ import { initializeInstallLifecycle } from "./pwaLifecycle.js";
 import { controller } from "./store/useStore.js";
 import "@bivy/ui/tokens.css";
 import "./styles.css";
+import "./ux-cleanup.css";
 import "./pwa-lifecycle.css";
 
 // Apply the saved theme before first paint to avoid a flash.

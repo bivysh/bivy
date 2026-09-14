@@ -60,7 +60,7 @@ process, so the daemon, agents and helper scripts all agree.
 | `config.yaml` | **Canonical user-authored node configuration**: workspace/port, defaults, concurrency, session behavior, checks, and advanced environment references. Mode `0600` | `bivy setup`, `bivy config`, and the web Settings screen |
 | `cli.json` | Generated compatibility projection: workspace, port, service state, and persisted environment. Do not hand-edit once `config.yaml` exists | Bivy CLI/config projection and integration connect flows |
 | `settings.json` | Generated compatibility projection of node defaults for older binaries. Do not hand-edit once `config.yaml` exists | Node/config projection |
-| `relay.json` | Relay URL, control-plane URL, client base URL, node enrollment token. Mode `0600` | `bivy relay:setup` |
+| `relay.json` | Relay URL, control-plane URL, client base URL, node enrollment token. Mode `0600` | `bivy login`, `bivy relay:setup` |
 | `nodes.json` | Direct-node registry (`name` → `{url, token}`) for `bivy run --node` | `bivy nodes add/remove` |
 | `shims.json` | Installed agent shims | `bivy shim install/uninstall` |
 | `plugins/<id>/manifest.json` | Canonical declarative plugin manifests; no executable code or secrets | `bivy plugin install/remove` |
@@ -70,7 +70,7 @@ process, so the daemon, agents and helper scripts all agree.
 | `pairing.json` | Paired remote devices | The node |
 | `metadata.json` | Cross-agent session index | The node |
 | `integrations.json` | Connected third-party integrations | The node |
-| `credentials/` | Shared, agent-neutral model credential vault (`auth.enc`, `auth.key`) | `bivy login`, the web app |
+| `credentials/` | Shared, agent-neutral model credential vault (`auth.enc`, `auth.key`) | `bivy provider login`, the web app |
 | `pi/` | Pi's own config, `models.json` projection, and sessions | Pi |
 | `event-log/`, `transcripts/`, `intermediate-messages/`, `tool-activities/` | Session history | The node |
 | `repos/` | Checkouts for repo-backed sessions | The node |
@@ -290,7 +290,7 @@ A stdio/JSONL protocol runtime.
 
 ## Model credentials
 
-Prefer `bivy login` (which stores credentials encrypted in
+Prefer `bivy provider login` (which stores credentials encrypted in
 `<data-dir>/credentials`) or the agent's own CLI login. These environment
 variables are a fallback.
 
@@ -496,6 +496,7 @@ unauthenticated dev login enabled.
 | --- | --- | --- | --- |
 | `PORT` | integer | `4400` | |
 | `PUBLIC_CONTROL_PLANE_URL` | URL | derived from `x-forwarded-proto` / `x-forwarded-host` / `Host` | Canonical external base URL, used for OAuth redirect URIs and magic-link URLs. **Set this** — the header-derived fallback trusts unvalidated proxy headers |
+| `TRUST_PROXY` | comma-separated IPs/CIDRs or Express named subnets | unset (trust no proxies); Compose: `uniquelocal` | Trusted ingress addresses for forwarded client IPs and owner-auth rate limits. Configure your actual proxies; never use Internet-wide ranges. Booleans and hop counts are not accepted. See [deployment routing](deploy-images.md#2-configure-the-environment) |
 | `RELAY_PUBLIC_URL` | `ws(s)://` URL | `ws://localhost:4500` | Public relay URL handed to nodes and clients in relay tickets |
 | `RELAY_SHARD_URLS` | comma-separated URLs | falls back to `RELAY_PUBLIC_URL`, then `ws://localhost:4500` | Node→shard mapping is by hash of the node id |
 | `DATABASE_POOL_MAX` | integer ≥ 1 | `10` | |
@@ -621,4 +622,17 @@ variables.
 | Variable | Type | Default |
 | --- | --- | --- |
 | `DATABASE_URL` | postgres URL | unset = bundled Postgres container |
-| `CP_DOMAIN`, `RELAY_DOMAIN` | hostname | positional args (`<app-domain> <relay-domain>`) |
+| `CP_DOMAIN`, `RELAY_DOMAIN` | hostname | positional args (`<app-domain> [relay-domain]`); relay defaults to the app domain under `/relay` |
+| `SELF_HOST_OWNER_EMAIL` | account identity | `owner@self-host.invalid` for new owner setup. Existing owner password recovery preserves its account; this is not a verified external email |
+| `SELF_HOST_SETUP_TOKEN` | random secret | unset; optional browser owner setup/recovery. Generate 32 random bytes (`openssl rand -hex 32`). Each token works once; password sign-in persists without this variable afterward |
+| `BIVY_IMAGE_TAG` | container tag | release bundle's exact SHA, otherwise checkout HEAD |
+| `BIVY_SELF_HOST_VERSION` | `vX.Y.Z` | standalone installer resolves latest stable GitHub release |
+| `BIVY_SELF_HOST_DIR` | directory | `/opt/bivy` as root, otherwise `~/bivy-self-host` (standalone installer only) |
+| `BIVY_MANAGED_BACKUP_CONFIRMED` | `1` | unset; managed-DB update requires confirmation after a provider snapshot and config backup |
+
+`SELF_HOST_SETUP_TOKEN` and `SELF_HOST_OWNER_EMAIL` are also control-plane runtime
+variables, independent of deployment tooling. See [deploy-images.md](deploy-images.md)
+for the portable environment contract, browser sign-in, and recovery.
+
+The standalone entry point is `deploy/install.sh`; operational commands are in
+`deploy/manage.sh`. See [self-host-quickstart.md](self-host-quickstart.md).

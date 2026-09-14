@@ -7,6 +7,7 @@ import { encryptSecret, decryptSecret, isSecretEnvelope, type SecretEnvelope } f
 import { PostgresDatabaseContext } from "./postgres-database.js";
 import {
   type Account,
+  type SelfHostOwnerCredential,
   type DeviceLoginStatus,
   type ControlPlaneStore,
   type NodeRecord,
@@ -246,6 +247,19 @@ export class PostgresStore implements ControlPlaneStore {
         token_hash  TEXT PRIMARY KEY,
         email       TEXT NOT NULL,
         expires_at  TIMESTAMPTZ NOT NULL
+      );
+
+      -- No cascading account FK: deleting an owner account must not re-arm
+      -- spent setup credentials. Recovery requires a new deployment token.
+      CREATE TABLE IF NOT EXISTS self_host_owner (
+        id            TEXT PRIMARY KEY CHECK (id = 'owner'),
+        account_id    TEXT NOT NULL,
+        password_hash TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS self_host_setup_tokens (
+        token_hash TEXT PRIMARY KEY,
+        claim_id   TEXT NOT NULL,
+        used_at    TIMESTAMPTZ NOT NULL DEFAULT now()
       );
 
       CREATE TABLE IF NOT EXISTS sessions (
@@ -660,11 +674,14 @@ export class PostgresStore implements ControlPlaneStore {
       -- webhook_secret is the HMAC key for the /webhooks/automation/run path.
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS trigger TEXT;
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS webhook_secret TEXT;
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS webhook_header TEXT;
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS webhook_auth_mode TEXT;
       -- Workspace target for triggers that do not carry a repo (schedule, etc.).
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS repo TEXT;
       -- Source-trigger filters (github/linear) + built-in template id.
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS labels JSONB;
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS repos JSONB;
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS app_id TEXT;
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS template_id TEXT;
       -- GitHub event rules ("when"). JSON array of { event, actions?, labels?, mention?, … }.
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS on_events JSONB;
@@ -711,6 +728,7 @@ export class PostgresStore implements ControlPlaneStore {
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS approval_mode TEXT;
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS sandbox TEXT;
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS max_attempts INTEGER;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS claim_token TEXT;
       -- Untrusted webhook-payload context for a webhook-triggered automation run,
       -- appended to the E2E-decrypted operator template on the node as data.
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS event_context TEXT;
@@ -736,6 +754,7 @@ export class PostgresStore implements ControlPlaneStore {
       INSERT INTO trigger_events (id, account_id, kind, created_at)
         SELECT 'legacy:' || id, account_id,
           CASE WHEN source LIKE 'github:%' THEN 'github'
+               WHEN source LIKE 'linear:%' THEN 'linear'
                WHEN source = 'slack' THEN 'slack'
                WHEN source = 'manual' THEN 'manual'
                ELSE 'webhook' END,
@@ -749,6 +768,7 @@ export class PostgresStore implements ControlPlaneStore {
         trigger_id = COALESCE(trigger_id, 'legacy:' || id),
         trigger_kind = COALESCE(trigger_kind,
           CASE WHEN source LIKE 'github:%' THEN 'github'
+               WHEN source LIKE 'linear:%' THEN 'linear'
                WHEN source = 'slack' THEN 'slack'
                WHEN source = 'manual' THEN 'manual'
                ELSE 'webhook' END),
@@ -772,6 +792,11 @@ export class PostgresStore implements ControlPlaneStore {
       -- status='pending' frees the key once the item is claimed/done, so a later
       -- re-label starts a fresh run rather than colliding forever.
       CREATE UNIQUE INDEX IF NOT EXISTS idx_work_items_collapse ON work_items(account_id, collapse_key) WHERE collapse_key IS NOT NULL AND status = 'pending';
+      -- Policy-blocked work has not executed: keep its intake slot until retry
+      -- or cancellation, even though the UI status is needs_attention.
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS policy_blocked BOOLEAN NOT NULL DEFAULT false;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_work_items_admission_collapse ON work_items(account_id, collapse_key)
+        WHERE collapse_key IS NOT NULL AND (status = 'pending' OR (status = 'needs_attention' AND policy_blocked = true));
     `);
   }
 
@@ -813,6 +838,64 @@ export class PostgresStore implements ControlPlaneStore {
 
   // --- Accounts & auth --------------------------------------------------
 
+  async selfHostOwner(): Promise<SelfHostOwnerCredential | undefined> {
+    const { rows } = await this.query(`SELECT account_id, password_hash FROM self_host_owner WHERE id = 'owner'`);
+    return rows[0] ? { accountId: rows[0].account_id, passwordHash: rows[0].password_hash } : undefined;
+  }
+
+  async selfHostSetupTokenUsed(tokenHash: string): Promise<boolean> {
+    const { rows } = await this.query(`SELECT token_hash FROM self_host_setup_tokens WHERE token_hash = $1`, [tokenHash]);
+    return rows.length > 0;
+  }
+
+  async configureSelfHostOwner(credential: SelfHostOwnerCredential, setupTokenHash: string): Promise<boolean> {
+    const transaction = await this.database.beginTransaction();
+    try {
+      const claimId = randomUUID();
+      const claimed = await transaction.query(
+        `INSERT INTO self_host_setup_tokens (token_hash, claim_id) VALUES ($1, $2) ON CONFLICT (token_hash) DO NOTHING RETURNING claim_id`,
+        [setupTokenHash, claimId],
+      );
+      // Require our own insert receipt, never a pre-existing claim. The receipt
+      // also makes this explicit in SQL adapters that return the conflicting row.
+      if (claimed.rows[0]?.claim_id !== claimId) { await transaction.rollback(); return false; }
+      await transaction.query(
+        `INSERT INTO self_host_owner (id, account_id, password_hash) VALUES ('owner', $1, $2)
+         ON CONFLICT (id) DO UPDATE SET account_id = EXCLUDED.account_id, password_hash = EXCLUDED.password_hash`,
+        [credential.accountId, credential.passwordHash],
+      );
+      await transaction.query(`DELETE FROM sessions WHERE account_id = $1`, [credential.accountId]);
+      await transaction.commit();
+      return true;
+    } catch (error) {
+      await transaction.rollback();
+      throw error;
+    } finally { transaction.release(); }
+  }
+
+  async createSelfHostOwnerSession(expectedPasswordHash: string): Promise<string | undefined> {
+    const transaction = await this.database.beginTransaction();
+    try {
+      // Same row lock as configureSelfHostOwner: no stale-password session can
+      // slip in after a reset revokes sessions, even across service replicas.
+      const { rows } = await transaction.query(`SELECT account_id, password_hash FROM self_host_owner WHERE id = 'owner' FOR UPDATE`);
+      const owner = rows[0];
+      const account = owner ? await transaction.query(`SELECT id FROM accounts WHERE id = $1`, [owner.account_id]) : undefined;
+      if (!owner || owner.password_hash !== expectedPasswordHash || !account?.rows.length) {
+        await transaction.rollback();
+        return undefined;
+      }
+      const token = `sess_${randomBytes(24).toString("base64url")}`;
+      await transaction.query(`INSERT INTO sessions (token_hash, account_id, expires_at) VALUES ($1, $2, $3)`,
+        [hashToken(token), owner.account_id, new Date(Date.now() + SESSION_TTL_MS)]);
+      await transaction.commit();
+      return token;
+    } catch (error) {
+      await transaction.rollback();
+      throw error;
+    } finally { transaction.release(); }
+  }
+
   async findOrCreateAccount(email: string): Promise<Account> {
     const { rows } = await this.query(
       `INSERT INTO accounts (id, email)
@@ -827,6 +910,11 @@ export class PostgresStore implements ControlPlaneStore {
   async getAccount(accountId: string): Promise<Account | undefined> {
     const { rows } = await this.query(`SELECT * FROM accounts WHERE id = $1`, [accountId]);
     return rows[0] ? mapAccount(rows[0]) : undefined;
+  }
+
+  async deleteAccount(accountId: string): Promise<boolean> {
+    const result = await this.query(`DELETE FROM accounts WHERE id = $1`, [accountId]);
+    return (result.rowCount ?? 0) > 0;
   }
 
   async setGithubIdentity(accountId: string, githubUserId: string, targetIds: string[]): Promise<void> {
@@ -2077,7 +2165,8 @@ export class PostgresStore implements ControlPlaneStore {
     await this.query(
       `INSERT INTO model_auth_node_keys (account_id, node_id, public_key, updated_at)
        VALUES ($1, $2, $3, now())
-       ON CONFLICT (account_id, node_id) DO UPDATE SET public_key = EXCLUDED.public_key, updated_at = now()`,
+       ON CONFLICT (account_id, node_id) DO UPDATE SET public_key = EXCLUDED.public_key, updated_at = now()
+       WHERE model_auth_node_keys.public_key <> EXCLUDED.public_key`,
       [accountId, nodeId, publicKey],
     );
   }
@@ -2088,16 +2177,31 @@ export class PostgresStore implements ControlPlaneStore {
     return row ? { nodeId: row.node_id, wrappedKey: row.wrapped_key, wrappedByNodeId: row.wrapped_by_node_id, wrappedByPublicKey: row.wrapped_by_public_key, updatedAt: new Date(row.updated_at).toISOString() } : undefined;
   }
 
-  async requestModelAuthWrappedKey(accountId: string, nodeId: string, publicKey: string): Promise<void> {
+  async requestModelAuthWrappedKey(accountId: string, nodeId: string, publicKey: string): Promise<boolean> {
     await this.setModelAuthNodePublicKey(accountId, nodeId, publicKey);
     const existing = await this.getModelAuthWrappedKey(accountId, nodeId);
-    if (existing) return;
-    await this.query(
+    if (existing) return false;
+    const pending = await this.query(
+      `SELECT public_key FROM model_auth_key_requests WHERE account_id=$1 AND node_id=$2`,
+      [accountId, nodeId],
+    );
+    if (pending.rows[0]?.public_key === publicKey) return false;
+    if (pending.rows[0]) {
+      await this.query(
+        `UPDATE model_auth_key_requests SET public_key=$3, created_at=now()
+         WHERE account_id=$1 AND node_id=$2`,
+        [accountId, nodeId, publicKey],
+      );
+      return true;
+    }
+    const inserted = await this.query(
       `INSERT INTO model_auth_key_requests (account_id, node_id, public_key, created_at)
        VALUES ($1, $2, $3, now())
-       ON CONFLICT (account_id, node_id) DO UPDATE SET public_key = EXCLUDED.public_key, created_at = now()`,
+       ON CONFLICT (account_id, node_id) DO NOTHING
+       RETURNING node_id`,
       [accountId, nodeId, publicKey],
     );
+    return inserted.rows.length > 0;
   }
 
   async listModelAuthKeyRequests(accountId: string, exceptNodeId: string): Promise<ModelAuthKeyRequest[]> {
@@ -2597,8 +2701,8 @@ export class PostgresStore implements ControlPlaneStore {
       `INSERT INTO automation_definitions
       (id, account_id, name, template_ciphertext, runtime_id, model, node_label, ephemeral,
        approval_mode, sandbox, enabled, schedule, next_run_at, trigger, webhook_secret, repo,
-       labels, repos, template_id, on_events, target_kind, target_session_id, message, config_key, config_order, max_attempts, allow_dangerous, required_capabilities, preferred_capabilities)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29) RETURNING *`,
+       labels, repos, app_id, template_id, on_events, target_kind, target_session_id, message, config_key, config_order, max_attempts, allow_dangerous, required_capabilities, preferred_capabilities, webhook_header, webhook_auth_mode)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32) RETURNING *`,
       [`automation_${randomUUID()}`, accountId, input.name, input.templateCiphertext ?? null,
         input.runtimeId ?? null, input.model ?? null, input.nodeLabel ?? null, input.ephemeral ?? null,
         input.approvalMode ?? null, input.sandbox ?? null, input.enabled ?? false,
@@ -2606,6 +2710,7 @@ export class PostgresStore implements ControlPlaneStore {
         input.trigger ?? null, input.webhookSecret ?? null, input.repo ?? null,
         input.labels ? JSON.stringify(input.labels) : null,
         input.repos ? JSON.stringify(input.repos) : null,
+        input.appId ?? null,
         input.templateId ?? null,
         input.on ? JSON.stringify(input.on) : null,
         input.target?.kind === "existing_session" ? input.target.kind : null,
@@ -2616,7 +2721,8 @@ export class PostgresStore implements ControlPlaneStore {
         input.maxAttempts ?? null,
         input.allowDangerous ?? null,
         input.requiredCapabilities ? JSON.stringify(input.requiredCapabilities) : null,
-        input.preferredCapabilities ? JSON.stringify(input.preferredCapabilities) : null],
+        input.preferredCapabilities ? JSON.stringify(input.preferredCapabilities) : null,
+        input.webhookHeader ?? null, input.webhookAuthMode ?? null],
     );
     return mapAutomationDefinition(rows[0]);
   }
@@ -2649,9 +2755,9 @@ export class PostgresStore implements ControlPlaneStore {
       `UPDATE automation_definitions SET name=$3, template_ciphertext=$4, runtime_id=$5,
        model=$6, node_label=$7, ephemeral=$8, approval_mode=$9, sandbox=$10,
        enabled=$11, schedule=$12, next_run_at=$13, trigger=$14, webhook_secret=$15,
-       repo=$16, labels=$17, repos=$18, template_id=$19, on_events=$20,
-       target_kind=$21, target_session_id=$22, message=$23, config_key=$24,
-       config_order=$25, max_attempts=$26, allow_dangerous=$27, required_capabilities=$28, preferred_capabilities=$29, updated_at=now()
+       repo=$16, labels=$17, repos=$18, app_id=$19, template_id=$20, on_events=$21,
+       target_kind=$22, target_session_id=$23, message=$24, config_key=$25,
+       config_order=$26, max_attempts=$27, allow_dangerous=$28, required_capabilities=$29, preferred_capabilities=$30, webhook_header=$31, webhook_auth_mode=$32, updated_at=now()
        WHERE account_id=$1 AND id=$2 RETURNING *`,
       [accountId, id, next.name, next.templateCiphertext ?? null, next.runtimeId ?? null,
         next.model ?? null, next.nodeLabel ?? null, next.ephemeral ?? null,
@@ -2660,6 +2766,7 @@ export class PostgresStore implements ControlPlaneStore {
         next.trigger ?? null, next.webhookSecret ?? null, next.repo ?? null,
         next.labels ? JSON.stringify(next.labels) : null,
         next.repos ? JSON.stringify(next.repos) : null,
+        next.appId ?? null,
         next.templateId ?? null,
         next.on ? JSON.stringify(next.on) : null,
         next.target?.kind === "existing_session" ? next.target.kind : null,
@@ -2670,7 +2777,8 @@ export class PostgresStore implements ControlPlaneStore {
         next.maxAttempts ?? null,
         next.allowDangerous ?? null,
         next.requiredCapabilities ? JSON.stringify(next.requiredCapabilities) : null,
-        next.preferredCapabilities ? JSON.stringify(next.preferredCapabilities) : null],
+        next.preferredCapabilities ? JSON.stringify(next.preferredCapabilities) : null,
+        next.webhookHeader ?? null, next.webhookAuthMode ?? null],
     );
     return rows[0] ? mapAutomationDefinition(rows[0]) : undefined;
   }
@@ -2735,9 +2843,9 @@ export class PostgresStore implements ControlPlaneStore {
     // move this exact occurrence. The unique dedupe key separately guarantees
     // that a crash after INSERT but before UPDATE cannot duplicate the run.
     const { rowCount } = await this.query(
-      `UPDATE automation_definitions SET last_scheduled_at=$4, next_run_at=$5,
+      `UPDATE automation_definitions SET last_scheduled_at=$4::timestamptz, next_run_at=$5::timestamptz,
        enabled=CASE WHEN $5::timestamptz IS NULL THEN false ELSE enabled END, updated_at=now()
-       WHERE account_id=$1 AND id=$2 AND enabled=true AND next_run_at=$3`,
+       WHERE account_id=$1 AND id=$2 AND enabled=true AND next_run_at=$3::timestamptz`,
       [accountId, definitionId, new Date(occurrenceIso), new Date(occurrenceIso), nextRunAt ? new Date(nextRunAt) : null],
     );
     return (rowCount ?? 0) > 0 ? run : undefined;
@@ -2880,7 +2988,7 @@ export class PostgresStore implements ControlPlaneStore {
     );
     if (rows[0]) return { run: mapAutomationRun(rows[0]), created: true };
     // Conflict: a redelivery (dedupe key) or another delivery for an issue that
-    // already has a pending item (collapse key). Return the existing one so the
+    // already has a pending or policy-blocked item (collapse key). Return the existing one so the
     // caller stays idempotent and no duplicate lands in the queue.
     if (dedupeKey) {
       const existing = await this.query(
@@ -2890,7 +2998,7 @@ export class PostgresStore implements ControlPlaneStore {
       if (existing.rows[0]) return { run: mapAutomationRun(existing.rows[0]), created: false };
     }
     const existingPending = await this.query(
-      `SELECT * FROM work_items WHERE account_id = $1 AND collapse_key = $2 AND status = 'pending' LIMIT 1`,
+      `SELECT * FROM work_items WHERE account_id = $1 AND collapse_key = $2 AND (status = 'pending' OR (status = 'needs_attention' AND policy_blocked = true)) LIMIT 1`,
       [accountId, collapseKey],
     );
     return { run: mapAutomationRun(existingPending.rows[0]), created: false };
@@ -2973,22 +3081,23 @@ export class PostgresStore implements ControlPlaneStore {
       const events = Array.isArray(current.events) ? current.events : [];
       const failedCheck = checks.some((check: RunCheck) => check.status === "failed");
       const explicitNoChanges = events.some((event: RunEvidenceEvent) => /no (file )?changes/i.test(event.summary));
+      const policyDenied = events.some((event: RunEvidenceEvent) => event.kind === "policy_denial");
       const hasArtifact = Boolean(output.branch || output.commit || output.prUrl || output.checkpoint || output.artifactUrl);
       const ambiguousSuccess = current.status === "succeeded" && !failedCheck && !explicitNoChanges && !hasArtifact;
-      const eligible = current.status === "failed" || failedCheck || ambiguousSuccess;
+      const eligible = current.status === "failed" || (current.status === "succeeded" && (failedCheck || ambiguousSuccess)) || (current.status === "needs_attention" && policyDenied);
       if (!eligible) {
         await client.commit();
         return { run: mapAutomationRun(current), transitioned: false, reason: "not_retryable" };
       }
       const attempt = Math.max(1, Number(current.attempt ?? 1));
-      const maxAttempts = Number(current.max_attempts);
+      const maxAttempts = Number(current.max_attempts ?? 10);
       if (Number.isFinite(maxAttempts) && maxAttempts > 0 && attempt >= maxAttempts) {
         await client.commit();
         return { run: mapAutomationRun(current), transitioned: false, reason: "attempt_limit" };
       }
       if (current.collapse_key) {
         const pending = await client.query(
-          `SELECT id FROM work_items WHERE account_id = $1 AND collapse_key = $2 AND status = 'pending' AND id <> $3 LIMIT 1`,
+          `SELECT id FROM work_items WHERE account_id = $1 AND collapse_key = $2 AND (status = 'pending' OR (status = 'needs_attention' AND policy_blocked = true)) AND id <> $3 LIMIT 1`,
           [accountId, current.collapse_key, id],
         );
         if (pending.rows[0]) {
@@ -3002,7 +3111,7 @@ export class PostgresStore implements ControlPlaneStore {
       const updated = await client.query(
         `UPDATE work_items SET status = 'pending', attempt = $3, claimed_by_node_id = NULL,
          claimed_at = NULL, started_at = NULL, completed_at = NULL, lease_expires_at = NULL,
-         output = NULL, checks = '[]'::jsonb, receipt_evidence = NULL, events = $4::jsonb
+         policy_blocked = false, output = NULL, checks = '[]'::jsonb, receipt_evidence = NULL, events = $4::jsonb
          WHERE account_id = $1 AND id = $2 RETURNING *`,
         [accountId, id, attempt + 1, JSON.stringify([...events, retryEvent].slice(-100))],
       );
@@ -3016,13 +3125,57 @@ export class PostgresStore implements ControlPlaneStore {
     }
   }
 
-  async transitionAutomationRun(accountId: string, id: string, status: AutomationRunStatus, output?: AutomationRun["output"], expectedNodeId?: string): Promise<AutomationRun | undefined> {
+  private async withLockedWork<T>(accountId: string, id: string, update: (row: pg.QueryResultRow, query: pg.PoolClient["query"]) => Promise<T | undefined>): Promise<T | undefined> {
+    const client = await this.database.beginTransaction();
+    try {
+      const selected = await client.query("SELECT * FROM work_items WHERE account_id=$1 AND id=$2 FOR UPDATE", [accountId, id]);
+      const result = selected.rows[0] ? await update(selected.rows[0], client.query) : undefined;
+      await client.commit();
+      return result;
+    } catch (error) {
+      await client.rollback().catch(() => {});
+      throw error;
+    } finally { client.release(); }
+  }
+
+  async ownsWorkClaim(accountId: string, nodeId: string, id: string, token: string): Promise<boolean> {
+    const { rows } = await this.query("SELECT id FROM work_items WHERE account_id=$1 AND id=$2 AND claimed_by_node_id=$3 AND COALESCE(claim_token, '')=$4", [accountId, id, nodeId, token]);
+    return rows.length > 0;
+  }
+
+  async parkAutomationRunForPolicy(accountId: string, id: string, reason: string, code: string): Promise<AutomationRun | undefined> {
+    return this.withLockedWork(accountId, id, async (current, query) => {
+      // Admission runs before claiming. Redeliveries and concurrent admission
+      // checks must not notify again or resurrect cancelled/completed work.
+      if (current.status !== "pending") return undefined;
+      const now = new Date().toISOString();
+      const events = [...(current.events ?? []), {
+        at: now, kind: "policy_denial", summary: reason, status: "denied",
+        reasonCode: code, milestoneId: `${id}:deployment-policy-denial:${Number(current.attempt ?? 1)}`,
+      }].slice(-100);
+      const { rows } = await query(
+        `UPDATE work_items SET status = 'needs_attention', policy_blocked = true,
+         lease_expires_at = NULL, output = $3::jsonb, events = $4::jsonb, attention = $5::jsonb
+         WHERE account_id = $1 AND id = $2 AND status = 'pending' RETURNING *`,
+        [accountId, id, JSON.stringify({ failure: reason }), JSON.stringify(events),
+          JSON.stringify({ severity: "warning", reason, since: now })],
+      );
+      return rows[0] ? mapAutomationRun(rows[0]) : undefined;
+    });
+  }
+
+  async transitionAutomationRun(accountId: string, id: string, status: AutomationRunStatus, output?: AutomationRun["output"], expectedNodeId?: string, claimToken?: string): Promise<AutomationRun | undefined> {
+    return this.withLockedWork(accountId, id, async (current, query) => {
+    if (expectedNodeId && (current.claimed_by_node_id !== expectedNodeId || (claimToken !== undefined && (current.claim_token ?? '') !== claimToken))) return undefined;
+    // A persisted result may arrive after expiry, but only from the unchanged
+    // claim generation. It must never resurrect execution or renew the lease.
+    if (claimToken && ['running', 'waiting'].includes(status) && current.lease_expires_at && new Date(current.lease_expires_at).getTime() <= Date.now()) return undefined;
     const from: Record<AutomationRunStatus, AutomationRunStatus[]> = {
       pending: [],
       claimed: [],
       running: ["claimed", "waiting"],
       waiting: ["claimed", "running"],
-      needs_attention: ["pending", "running", "waiting"],
+      needs_attention: ["pending", "claimed", "running", "waiting"],
       succeeded: ["running", "needs_attention"],
       // Allow failure straight from "claimed": a node can throw before the
       // best-effort /running transition lands, and the run must still terminate
@@ -3044,17 +3197,9 @@ export class PostgresStore implements ControlPlaneStore {
       cancelled: { kind: "terminal", summary: "Run reached the cancelled terminal outcome." },
     };
     const event = eventForStatus[status];
-    // No jsonb `||` concatenation here (deliberately): pg-mem — the in-memory
-    // Postgres the whole test suite runs against — mis-evaluates the jsonb
-    // concatenation operator inside an UPDATE SET (confirmed against real
-    // Postgres semantics; see pg-mem issue tracker). A plain read-then-write
-    // is a two-query round trip instead of one atomic statement, but this event
-    // append is a best-effort timeline entry, not the transition's atomicity
-    // guard (the conditional `status = ANY(from[status])` above already is).
-    // $8 node guard: when set, the Run must still be claimed by that node, so a
-    // Machine that lost its lease to a reclaim (claimed_by_node_id now points at
-    // the new owner) no-ops here instead of overwriting the fresh attempt.
-    const { rows } = await this.query(
+    // Lifecycle and timeline commit together under the same row lock as cancel,
+    // retry, claim, and evidence. No concurrent writer can lose a milestone.
+    const { rows } = await query(
       `UPDATE work_items SET status = $3,
        started_at = CASE WHEN $3 = 'running' THEN COALESCE(started_at, now()) ELSE started_at END,
        completed_at = CASE WHEN $4 THEN COALESCE(completed_at, now()) ELSE completed_at END,
@@ -3074,27 +3219,20 @@ export class PostgresStore implements ControlPlaneStore {
     const events = [...(rows[0].events ?? []), ...delivery, { at, ...event, attempt: Number(rows[0].attempt ?? 1), milestoneId: `${id}:${status}:${Number(rows[0].attempt ?? 1)}` }]
       .filter((candidate, index, all) => !candidate.milestoneId || all.findIndex((other) => other.milestoneId === candidate.milestoneId) === index)
       .slice(-100);
-    const { rows: withEvent } = await this.query(
+    const { rows: withEvent } = await query(
       `UPDATE work_items SET events = $3::jsonb WHERE account_id = $1 AND id = $2 RETURNING *`,
       [accountId, id, JSON.stringify(events)],
     );
     return mapAutomationRun(withEvent[0] ?? rows[0]);
+    });
   }
 
-  /** Issue #153 — record a sanitized, node-reported evidence patch against a
-   *  run it claimed. `checks`/`events` are appended to existing history;
-   *  `routingReason`/`output` fields are merged, last-write-wins per field.
-   *  Read-then-write (not an atomic jsonb `||` UPDATE) — see the comment in
-   *  transitionAutomationRun for why; a lost update here just drops one
-   *  low-frequency evidence report, never the run's actual status. */
-  async appendRunEvidence(accountId: string, id: string, patch: RunEvidencePatch, expectedNodeId?: string): Promise<AutomationRun | undefined> {
-    const { rows } = await this.query(
-      `SELECT * FROM work_items WHERE account_id = $1 AND id = $2
-       AND ($3::text IS NULL OR (claimed_by_node_id = $3 AND status IN ('claimed', 'running', 'waiting', 'needs_attention')))`,
-      [accountId, id, expectedNodeId ?? null],
-    );
-    if (!rows[0]) return undefined;
-    const current = rows[0];
+  /** Append bounded evidence under the lifecycle row lock. */
+  async appendRunEvidence(accountId: string, id: string, patch: RunEvidencePatch, expectedNodeId?: string, claimToken?: string): Promise<AutomationRun | undefined> {
+    return this.withLockedWork(accountId, id, async (current, query) => {
+    if (expectedNodeId && (current.claimed_by_node_id !== expectedNodeId || !['claimed', 'running', 'waiting', 'needs_attention'].includes(current.status))) return undefined;
+    if (claimToken !== undefined && (current.claim_token ?? '') !== claimToken) return undefined;
+    if (claimToken && current.lease_expires_at && new Date(current.lease_expires_at).getTime() <= Date.now()) return undefined;
     const routingReason = patch.routingReason ?? current.routing_reason ?? undefined;
     const output = patch.output ? { ...(current.output ?? {}), ...patch.output } : (current.output ?? {});
     const checks = patch.checks ? [...(current.checks ?? []), ...patch.checks].slice(-50) : (current.checks ?? []);
@@ -3121,7 +3259,7 @@ export class PostgresStore implements ControlPlaneStore {
     const dedupedEvents = [...events, ...derivedEvents]
       .filter((candidate, index, all) => !candidate.milestoneId || all.findIndex((other) => other.milestoneId === candidate.milestoneId) === index)
       .slice(-100);
-    const { rows: updated } = await this.query(
+    const { rows: updated } = await query(
       `UPDATE work_items SET routing_reason = $3, output = $4::jsonb, checks = $5::jsonb, events = $6::jsonb, receipt_evidence = $7::jsonb,
        run_usage = $8::jsonb, notification_delivery = $9::jsonb, run_references = $10::jsonb, attention = $11::jsonb
        WHERE account_id = $1 AND id = $2
@@ -3130,6 +3268,7 @@ export class PostgresStore implements ControlPlaneStore {
       [accountId, id, routingReason ?? null, JSON.stringify(output), JSON.stringify(checks), JSON.stringify(dedupedEvents), JSON.stringify(receiptEvidence), JSON.stringify(usage), JSON.stringify(notification), JSON.stringify(references), JSON.stringify(attention), expectedNodeId ?? null],
     );
     return updated[0] ? mapAutomationRun(updated[0]) : undefined;
+    });
   }
 
   async rerouteDefaultRoutedPending(accountId: string, label: string): Promise<WorkItem[]> {
@@ -3148,14 +3287,15 @@ export class PostgresStore implements ControlPlaneStore {
     id: string,
     input: { label: string; runtimeId?: string; model?: string; ephemeral?: boolean },
   ): Promise<WorkItem | undefined> {
-    const current = await this.getAutomationRun(accountId, id);
+    return this.withLockedWork(accountId, id, async (row, query) => {
+    const current = mapAutomationRun(row);
     const at = new Date().toISOString();
     const routeEvents: RunEvidenceEvent[] = current ? [
       ...(current.events ?? []),
       ...(input.ephemeral ? [{ at, kind: "provisioning" as const, summary: "Provisioning an isolated Machine for this Run.", ref: normalizeWorkLabel(input.label), milestoneId: `${id}:provisioning:${current.attempt}` }] : []),
       { at, kind: "routed" as const, summary: "Run routing was updated by an operator.", ref: normalizeWorkLabel(input.label), attempt: current.attempt, milestoneId: `${id}:routed:${current.attempt}:${normalizeWorkLabel(input.label)}` },
     ].slice(-100) : [];
-    const { rows } = await this.query(
+    const { rows } = await query(
       `UPDATE work_items
        SET label = $3, runtime_id = $4, model = $5, default_routed = false, ephemeral = $6, events = $7::jsonb
        WHERE id = $2 AND account_id = $1 AND status = 'pending'
@@ -3163,6 +3303,7 @@ export class PostgresStore implements ControlPlaneStore {
       [accountId, id, normalizeWorkLabel(input.label), input.runtimeId?.trim() || null, input.model?.trim() || null, Boolean(input.ephemeral), JSON.stringify(routeEvents)],
     );
     return rows[0] ? mapWorkItem(rows[0]) : undefined;
+    });
   }
 
   async listPendingWorkItems(accountId: string, labels: string[]): Promise<WorkItem[]> {
@@ -3185,43 +3326,48 @@ export class PostgresStore implements ControlPlaneStore {
     return rows.map(mapWorkItem);
   }
 
-  async claimWorkItem(accountId: string, nodeId: string, id: string): Promise<WorkItem | undefined> {
-    // Conditional UPDATE makes both first claim and stale-lease reclaim atomic.
-    // A crashed node cannot strand work forever; a live node renews below.
-    const { rows } = await this.query(
-      `UPDATE work_items
-       SET status = 'claimed', claimed_by_node_id = $3, claimed_at = now(),
-           lease_expires_at = $4,
-           attempt = CASE WHEN status = 'pending' THEN COALESCE(attempt, 1) ELSE COALESCE(attempt, 1) + 1 END
-       WHERE id = $2 AND account_id = $1
-         AND (status = 'pending' OR (status IN ('claimed', 'running') AND lease_expires_at < now()))
-       RETURNING *`,
-      [accountId, id, nodeId, workLeaseExpiry()],
-    );
-    if (!rows[0]) return undefined;
-    // Best-effort timeline entry (issue #153) — read-then-write, same rationale
-    // as transitionAutomationRun; the claim's atomicity is already guaranteed
-    // above and does not depend on this second query.
-    const claimedEvent: RunEvidenceEvent = {
-      at: new Date().toISOString(), kind: "claimed", summary: "Run claimed by an eligible Machine.", ref: nodeId,
-      attempt: Number(rows[0].attempt ?? 1), milestoneId: `${id}:claimed:${Number(rows[0].attempt ?? 1)}`,
-    };
-    const events = [...(rows[0].events ?? []), claimedEvent].slice(-100);
-    const { rows: withEvent } = await this.query(
-      `UPDATE work_items SET events = $3::jsonb WHERE account_id = $1 AND id = $2 RETURNING *`,
-      [accountId, id, JSON.stringify(events)],
-    );
-    return withResumeTarget(mapWorkItem(withEvent[0] ?? rows[0]));
+  async claimWorkItem(accountId: string, nodeId: string, id: string, claimToken?: string): Promise<WorkItem | undefined> {
+    return this.withLockedWork(accountId, id, async (current, query) => {
+      const expired = ['claimed', 'running'].includes(current.status) && current.lease_expires_at && new Date(current.lease_expires_at).getTime() < Date.now();
+      if (current.status !== 'pending' && !expired) return undefined;
+      const attempt = Number(current.attempt ?? 1) + (expired ? 1 : 0);
+      if (attempt > Number(current.max_attempts ?? 10)) {
+        const at = new Date().toISOString();
+        const events = [...(current.events ?? []), { at, kind: 'needs_attention', summary: 'Attempt limit reached; run parked for review.', attempt: Number(current.attempt ?? 1) }].slice(-100);
+        await query("UPDATE work_items SET status='needs_attention', lease_expires_at=NULL, events=$3::jsonb WHERE account_id=$1 AND id=$2", [accountId, id, JSON.stringify(events)]);
+        return undefined;
+      }
+      const event: RunEvidenceEvent = { at: new Date().toISOString(), kind: 'claimed', summary: 'Run claimed by an eligible Machine.', ref: nodeId, attempt, milestoneId: `${id}:claimed:${attempt}` };
+      const { rows } = await query(
+        `UPDATE work_items SET status='claimed', claimed_by_node_id=$3, claimed_at=now(), lease_expires_at=$4,
+         attempt=$5, claim_token=$6, events=$7::jsonb
+         WHERE account_id=$1 AND id=$2 AND (status='pending' OR (status IN ('claimed','running') AND lease_expires_at < now())) RETURNING *`,
+        [accountId, id, nodeId, workLeaseExpiry(), attempt, claimToken ?? null, JSON.stringify([...(current.events ?? []), event].slice(-100))],
+      );
+      return rows[0] ? { ...withResumeTarget(mapWorkItem(rows[0])), claimToken: rows[0].claim_token ?? undefined } : undefined;
+    });
   }
 
-  async renewWorkItemLease(accountId: string, nodeId: string, id: string): Promise<WorkItem | undefined> {
+  /** Reserve policy retries durably before invoking the agent again. Repeating
+   * expectedAttempt after a lost response returns the same reservation. */
+  async advanceWorkItemAttempt(accountId: string, nodeId: string, id: string, claimToken: string, expectedAttempt: number): Promise<WorkItem | undefined> {
+    return this.withLockedWork(accountId, id, async (current, query) => {
+      if (current.claimed_by_node_id !== nodeId || current.claim_token !== claimToken || !['claimed','running'].includes(current.status)
+        || !current.lease_expires_at || new Date(current.lease_expires_at).getTime() <= Date.now()) return undefined;
+      if (Number(current.attempt) === expectedAttempt + 1) return mapWorkItem(current);
+      if (Number(current.attempt) !== expectedAttempt || expectedAttempt >= Number(current.max_attempts ?? 10)) return undefined;
+      const { rows } = await query("UPDATE work_items SET attempt=$3, checks='[]'::jsonb WHERE account_id=$1 AND id=$2 RETURNING *", [accountId, id, expectedAttempt + 1]);
+      return mapWorkItem(rows[0]);
+    });
+  }
+
+  async renewWorkItemLease(accountId: string, nodeId: string, id: string, claimToken?: string): Promise<WorkItem | undefined> {
     const { rows } = await this.query(
-      `UPDATE work_items
-       SET lease_expires_at = $4
-       WHERE account_id = $1 AND id = $2 AND claimed_by_node_id = $3
-         AND status IN ('claimed', 'running')
-       RETURNING *`,
-      [accountId, id, nodeId, workLeaseExpiry()],
+      `UPDATE work_items SET lease_expires_at=$4
+       WHERE account_id=$1 AND id=$2 AND claimed_by_node_id=$3 AND status IN ('claimed','running')
+         AND ($5::text IS NULL OR COALESCE(claim_token, '')=$5)
+         AND ($5::text IS NULL OR $5='' OR lease_expires_at > now()) RETURNING *`,
+      [accountId, id, nodeId, workLeaseExpiry(), claimToken ?? null],
     );
     return rows[0] ? mapWorkItem(rows[0]) : undefined;
   }
@@ -3243,15 +3389,15 @@ export class PostgresStore implements ControlPlaneStore {
     return total;
   }
 
-  async completeWorkItem(accountId: string, id: string, expectedNodeId?: string): Promise<AutomationRun | undefined> {
+  async completeWorkItem(accountId: string, id: string, expectedNodeId?: string, claimToken?: string): Promise<AutomationRun | undefined> {
     // Older nodes only know claim → complete. Adapt that boundary onto the
     // canonical lifecycle without preserving a second legacy transition path.
     // The node guard flows into both hops so a reclaimed-away Machine cannot
     // complete the new attempt (returns undefined, and the caller reports a
     // conflict rather than a spurious success).
     const current = await this.getAutomationRun(accountId, id);
-    if (current?.status === "claimed") await this.transitionAutomationRun(accountId, id, "running", undefined, expectedNodeId);
-    return (await this.transitionAutomationRun(accountId, id, "succeeded", undefined, expectedNodeId)) ?? undefined;
+    if (current?.status === "claimed") await this.transitionAutomationRun(accountId, id, "running", undefined, expectedNodeId, claimToken);
+    return (await this.transitionAutomationRun(accountId, id, "succeeded", undefined, expectedNodeId, claimToken)) ?? undefined;
   }
 
   async deleteWorkItem(accountId: string, id: string): Promise<boolean> {
@@ -3383,7 +3529,7 @@ function withResumeTarget(item: WorkItem): WorkItem {
 function triggerKindForSource(explicit: AutomationTriggerKind | undefined, source: string): AutomationTriggerKind {
   if (explicit) return explicit;
   if (source.startsWith("github:")) return "github";
-  if (source.startsWith("linear:")) return "webhook";
+  if (source.startsWith("linear:")) return "linear";
   if (source === "slack") return "slack";
   if (source === "manual") return "manual";
   return "webhook";
@@ -3423,10 +3569,13 @@ function mapAutomationDefinition(row: any): AutomationDefinition {
     enabled: Boolean(row.enabled),
     trigger: row.trigger ?? undefined,
     webhookSecret: row.webhook_secret ?? undefined,
+    webhookHeader: row.webhook_header ?? undefined,
+    webhookAuthMode: row.webhook_auth_mode ?? undefined,
     allowDangerous: row.allow_dangerous ?? undefined,
     repo: row.repo ?? undefined,
     labels: mapStringList(row.labels),
     repos: mapStringList(row.repos),
+    appId: row.app_id ?? undefined,
     on: mapEventRules(row.on_events),
     templateId: row.template_id ?? undefined,
     target: row.target_kind === "existing_session" && row.target_session_id

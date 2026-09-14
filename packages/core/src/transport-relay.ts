@@ -22,6 +22,8 @@ export interface RelayTransportOptions {
   webSocketImpl?: typeof WebSocket;
   /** First reconnect delay in ms (doubles up to MAX_BACKOFF). Test seam. */
   initialBackoffMs?: number;
+  /** Pair for metadata decryption only; do not request session/catalog data. */
+  pairingOnly?: boolean;
 }
 
 const MAX_BACKOFF = 15000;
@@ -69,6 +71,7 @@ export class RelayTransport implements Transport {
   private readonly handlers: TransportHandlers;
   private readonly fetchImpl: typeof fetch;
   private readonly WS: typeof WebSocket;
+  private readonly pairingOnly: boolean;
 
   private ws: WebSocket | null = null;
   private connected = false;
@@ -90,6 +93,7 @@ export class RelayTransport implements Transport {
 
   constructor(opts: RelayTransportOptions) {
     this.store = opts.store;
+    this.pairingOnly = opts.pairingOnly ?? false;
     this.handlers = opts.handlers;
     this.fetchImpl = opts.fetchImpl ?? (globalThis.fetch?.bind(globalThis) as typeof fetch);
     this.WS = opts.webSocketImpl ?? ((globalThis as unknown as { WebSocket: typeof WebSocket }).WebSocket);
@@ -175,6 +179,7 @@ export class RelayTransport implements Transport {
     this.closedByUs = false;
     this.setStatus("connecting");
     this.curKey = await this.keyFor(this.store.cur);
+    if (this.closedByUs) return;
     // Account-free ("solo") admission has no control plane to mint a ticket
     // against: authorize onto the relay with the room id + bearer token from the
     // pairing QR. The pairing handshake (pair.hello over the relay) is unchanged.
@@ -196,6 +201,7 @@ export class RelayTransport implements Transport {
         return;
       }
     }
+    if (this.closedByUs) return;
     this.pairSent = false;
     const targetNodeId = this.store.cur;
     const relayBase = (relayUrl || this.store.relay).replace(/\/$/, "");
@@ -294,6 +300,7 @@ export class RelayTransport implements Transport {
   /** Once the relay reports the node reachable: resume if paired, else pair. */
   private async onLinkReady(): Promise<void> {
     if (this.curKey) {
+      if (this.pairingOnly) return;
       this.flush();
       if (!this.shouldResync()) return; // node flap re-fired peer.online; don't re-burst
       const active = this.store.sessions(); // touch to keep parity with legacy loadSessionIndex timing
@@ -376,6 +383,7 @@ export class RelayTransport implements Transport {
         this.curKey = await this.keyFor(cur);
         this.pairAttempts = 0;
         this.setStatus("online");
+        if (this.pairingOnly) return;
         this.flush();
         await this.send({ kind: "sessions.list" });
         await this.send({ kind: "history" });

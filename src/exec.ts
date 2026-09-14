@@ -7,8 +7,13 @@
 //
 //   bivy exec "summarize README.md"
 //   bivy exec --agent claude "what does src/server.ts do?"
+//   bivy exec --workspace /path/to/repo --name "nightly audit" "…"
 //   bivy exec --session <ref> "and now add a test"      # continue a session
 //   echo "explain this" | bivy exec -                    # prompt from stdin
+//
+// A turn that ends without any assistant text because the agent FAILED (e.g. an
+// unauthenticated CLI) exits non-zero with the error on stderr, rather than
+// reporting a silent empty success.
 
 import { WebSocket } from "ws";
 
@@ -16,7 +21,10 @@ type Args = {
   url: string;
   token?: string;
   agent?: string;
+  model?: string;
   session?: string;
+  name?: string;
+  workspace?: string;
   prompt: string;
   json: boolean;
   timeoutMs: number;
@@ -28,7 +36,10 @@ function parseArgs(argv: string[]): Args {
   let url = process.env.BIVY_URL || `http://localhost:${process.env.PORT || "4317"}`;
   let token = process.env.BIVY_DEVICE_TOKEN || undefined;
   let agent: string | undefined;
+  let model: string | undefined;
   let session: string | undefined;
+  let name: string | undefined;
+  let workspace: string | undefined;
   let json = false;
   let timeoutMs = Number(process.env.BIVY_EXEC_TIMEOUT_MS) || 10 * 60 * 1000;
   const prompt: string[] = [];
@@ -40,13 +51,19 @@ function parseArgs(argv: string[]): Args {
     else if (arg.startsWith("--token=")) token = arg.slice("--token=".length);
     else if ((arg === "-a" || arg === "--agent") && argv[i + 1]) agent = argv[++i];
     else if (arg.startsWith("--agent=")) agent = arg.slice("--agent=".length);
+    else if ((arg === "-m" || arg === "--model") && argv[i + 1]) model = argv[++i];
+    else if (arg.startsWith("--model=")) model = arg.slice("--model=".length);
     else if (arg === "--session" && argv[i + 1]) session = argv[++i];
     else if (arg.startsWith("--session=")) session = arg.slice("--session=".length);
+    else if ((arg === "-n" || arg === "--name") && argv[i + 1]) name = argv[++i];
+    else if (arg.startsWith("--name=")) name = arg.slice("--name=".length);
+    else if ((arg === "-w" || arg === "--workspace") && argv[i + 1]) workspace = argv[++i];
+    else if (arg.startsWith("--workspace=")) workspace = arg.slice("--workspace=".length);
     else if (arg === "--json") json = true;
     else if (arg === "--timeout" && argv[i + 1]) timeoutMs = Number(argv[++i]) * 1000;
     else prompt.push(arg);
   }
-  return { url: url.replace(/\/+$/, ""), token, agent, session, prompt: prompt.join(" "), json, timeoutMs };
+  return { url: url.replace(/\/+$/, ""), token, agent, model, session, name, workspace, prompt: prompt.join(" "), json, timeoutMs };
 }
 
 function authHeaders(token?: string): Record<string, string> {
@@ -115,7 +132,17 @@ async function main() {
     } else {
       const created = await api<{ id: string }>(args.url, args.token, "/api/session", {
         method: "POST",
-        body: JSON.stringify(args.agent ? { agent: args.agent } : {}),
+        body: JSON.stringify({
+          ...(args.agent ? { agent: args.agent } : {}),
+          // Mirror the `bivy-model:` directive path: an empty provider lets the
+          // server resolve the id against the session's catalog (the same
+          // setModel("", id) form). Passing the id verbatim keeps ids that embed
+          // a provider slash (e.g. `opencode/gpt-5.6-sol`) intact.
+          ...(args.model ? { model: { provider: "", id: args.model } } : {}),
+          // Explicit, user-chosen name (kept verbatim; suppresses auto-naming).
+          ...(args.name ? { name: args.name } : {}),
+          ...(args.workspace ? { workspace: args.workspace } : {}),
+        }),
       });
       sessionId = created.id;
     }
@@ -130,6 +157,9 @@ async function main() {
   const socket = new WebSocket(wsUrl(args.url, args.token));
   let answer = "";
   let settled = false;
+  // Last stderr the agent surfaced (auth failures, crashes). Carried so a turn
+  // that ends with no assistant text can explain WHY instead of printing empty.
+  let lastStderr = "";
 
   const finish = (code: number, errorText?: string) => {
     if (settled) return;
@@ -177,9 +207,26 @@ async function main() {
       if (ev.type === "message_start" || ev.type === "message_update" || ev.type === "message_end") {
         const text = assistantText(ev);
         if (text) answer = text; // events carry the full message text so far
+      } else if (ev.type === "tool_execution_update" && ev.toolName === "agent_output") {
+        const input = (ev.input || {}) as Record<string, unknown>;
+        if (input.stream === "stderr" && typeof input.output === "string" && input.output.trim()) {
+          lastStderr = input.output.trim();
+        }
       } else if (ev.type === "agent_end") {
         clearTimeout(timer);
-        finish(0);
+        // A turn can end without any assistant text because the agent FAILED
+        // (e.g. an unauthenticated CLI that printed to stderr and exited
+        // non-zero). Printing an empty answer with exit 0 would report a silent
+        // false success to a script. Surface the failure instead: prefer an
+        // explicit error string, then the last stderr line, then the exit code.
+        const errText = typeof ev.error === "string" && ev.error.trim() ? ev.error.trim() : undefined;
+        const code = typeof ev.code === "number" ? ev.code : undefined;
+        const failed = !!errText || (code !== undefined && code !== 0);
+        if (!answer.trim() && failed) {
+          finish(1, errText || lastStderr || `The agent produced no output (exit code ${code ?? "unknown"}).`);
+        } else {
+          finish(0);
+        }
       }
     } else if (type === "session.error") {
       clearTimeout(timer);

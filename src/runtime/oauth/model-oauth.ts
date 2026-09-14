@@ -239,7 +239,7 @@ function startCallbackServer(host: string, port: number, pathName: string, expec
 async function loginAuthCode(provider: ModelOAuthProvider, interaction: AuthInteraction): Promise<OAuthTokens> {
   const { verifier, challenge } = createPkce();
   const state = provider.stateIsVerifier ? verifier : randomBytes(16).toString("hex");
-  const redirectUri = `http://${provider.callback!.redirectHost}:${provider.callback!.port}${provider.callback!.path}`;
+  const redirectUri = provider.redirectUri ?? `http://${provider.callback!.redirectHost}:${provider.callback!.port}${provider.callback!.path}`;
   const authorizeUrl = buildAuthorizeUrl(provider, { challenge, state, redirectUri });
 
   interaction.notify({
@@ -341,6 +341,85 @@ async function loginDeviceCode(provider: ModelOAuthProvider, interaction: AuthIn
   }
 }
 
+async function postJsonObject(url: string, body: Record<string, string>, signal?: AbortSignal): Promise<{ status: number; ok: boolean; payload: Record<string, unknown>; text: string }> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(body),
+    signal,
+  });
+  const text = await res.text();
+  let payload: Record<string, unknown> = {};
+  try { payload = JSON.parse(text) as Record<string, unknown>; } catch { /* non-JSON error body */ }
+  return { status: res.status, ok: res.ok, payload, text };
+}
+
+function nestedOAuthErrorCode(payload: Record<string, unknown>): string {
+  const error = payload.error;
+  if (typeof error === "string") return error;
+  if (error && typeof error === "object") {
+    const code = (error as Record<string, unknown>).code;
+    return typeof code === "string" ? code : "";
+  }
+  return "";
+}
+
+async function loginOpenAICodexDeviceCode(provider: ModelOAuthProvider, interaction: AuthInteraction): Promise<OAuthTokens> {
+  const started = await postJsonObject(provider.deviceAuthUrl!, { client_id: provider.clientId }, interaction.signal);
+  if (!started.ok) throw new Error(`OpenAI Codex device authorization failed (${started.status}): ${started.text.slice(0, 200)}`);
+  const deviceAuthId = typeof started.payload.device_auth_id === "string" ? started.payload.device_auth_id : "";
+  const userCode = typeof started.payload.user_code === "string" ? started.payload.user_code : "";
+  const rawInterval = Number(started.payload.interval);
+  const interval = Number.isFinite(rawInterval) && rawInterval >= 0 ? rawInterval : 5;
+  if (!deviceAuthId || !userCode) throw new Error(`Invalid OpenAI Codex device authorization response: ${JSON.stringify(started.payload)}`);
+
+  const expiresInSeconds = 15 * 60;
+  interaction.notify({
+    type: "device_code",
+    userCode,
+    verificationUri: "https://auth.openai.com/codex/device",
+    intervalSeconds: interval,
+    expiresInSeconds,
+  });
+
+  const deadline = Date.now() + expiresInSeconds * 1000;
+  let authorizationCode = "";
+  let codeVerifier = "";
+  let waitMs = interval * 1000;
+  await sleep(waitMs);
+  while (Date.now() <= deadline) {
+    if (interaction.signal?.aborted) throw new Error("Login aborted");
+    const polled = await postJsonObject(provider.deviceTokenUrl!, { device_auth_id: deviceAuthId, user_code: userCode }, interaction.signal);
+    if (polled.ok) {
+      authorizationCode = typeof polled.payload.authorization_code === "string" ? polled.payload.authorization_code : "";
+      codeVerifier = typeof polled.payload.code_verifier === "string" ? polled.payload.code_verifier : "";
+      if (!authorizationCode || !codeVerifier) throw new Error(`Invalid OpenAI Codex device token response: ${JSON.stringify(polled.payload)}`);
+      break;
+    }
+    const errorCode = nestedOAuthErrorCode(polled.payload);
+    if (polled.status === 403 || polled.status === 404 || errorCode === "deviceauth_authorization_pending") {
+      await sleep(waitMs);
+      continue;
+    }
+    if (errorCode === "slow_down") {
+      waitMs += 5000;
+      await sleep(waitMs);
+      continue;
+    }
+    throw new Error(`OpenAI Codex device authorization failed (${polled.status}): ${polled.text.slice(0, 200)}`);
+  }
+  if (!authorizationCode || !codeVerifier) throw new Error("OpenAI Codex device login timed out. Please try again.");
+
+  const payload = await postToken(provider.tokenUrl, provider.tokenEncoding, {
+    grant_type: "authorization_code",
+    client_id: provider.clientId,
+    code: authorizationCode,
+    code_verifier: codeVerifier,
+    redirect_uri: "https://auth.openai.com/deviceauth/callback",
+  });
+  return tokensFrom(provider, payload);
+}
+
 // --- Public API --------------------------------------------------------------
 
 /** Provider ids Bivy can natively drive a subscription login for. */
@@ -354,7 +433,10 @@ export { isNativeOAuthProvider, nativeOAuthProviderIds } from "./model-oauth-pro
 export async function loginModelOAuth(credsDir: string, providerId: string, interaction: AuthInteraction, label: string = DEFAULT_LABEL): Promise<void> {
   const provider = getModelOAuthProvider(providerId);
   if (!provider) throw new Error(`Provider "${providerId}" does not support subscription login`);
-  const tokens = provider.flow === "device_code" ? await loginDeviceCode(provider, interaction) : await loginAuthCode(provider, interaction);
+  const tokens =
+    provider.flow === "device_code" ? await loginDeviceCode(provider, interaction)
+    : provider.flow === "openai_codex_device_code" ? await loginOpenAICodexDeviceCode(provider, interaction)
+    : await loginAuthCode(provider, interaction);
   const credential: OAuthCredential = { type: "oauth", access: tokens.access, refresh: tokens.refresh, expires: tokens.expires, refreshedAt: tokens.refreshedAt, ...(tokens.accountId ? { accountId: tokens.accountId } : {}) };
   await createCredentialVault(credsDir).modifyRecord(providerId, label, async () => credential);
 }

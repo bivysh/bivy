@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { buildInboxItems, deriveActivation, cancelAutomationRun, deriveArtifacts, fetchAutomationRun, recordProductMetric, retryAutomationRun, type AccountAutomationRun, type GithubQueueItem } from "@bivy/core";
+import { deriveActivation, cancelAutomationRun, deriveArtifacts, fetchAutomationRun, recordProductMetric, retryAutomationRun, type GithubQueueItem, type NotificationPreferences } from "@bivy/core";
 import { useAppState } from "./store/useStore.js";
 import { SessionList } from "./components/SessionList.js";
 import { ChatView } from "./components/ChatView.js";
@@ -23,9 +23,11 @@ import { SessionMenu } from "./components/SessionMenu.js";
 import { TuiLockedView } from "./components/TuiLockedView.js";
 import { GithubPill } from "./components/GithubPill.js";
 import { RunPill } from "./components/RunPill.js";
-import { classifySource, isLiveRunSession, isRunLogSession } from "./sessionSource.js";
+import { classifySource, indexSessionSources, isLiveRunSession, isRunLogSession } from "./sessionSource.js";
+import { runtimeSupportsTerminalTakeover } from "./terminalTakeover.js";
 import { indexRunEvidence, failingCheckNames } from "./runEvidence.js";
 import { SessionChangesSheet, countUniqueEditedFiles } from "./components/SessionChangesSheet.js";
+import { ForkProgressDialog } from "./components/ForkProgressDialog.js";
 import { ArtifactsSheet } from "./components/ArtifactsSheet.js";
 import { ErrorToast } from "./components/ErrorToast.js";
 import { NoticeToast } from "./components/NoticeToast.js";
@@ -33,7 +35,6 @@ import { Spinner } from "./components/Spinner.js";
 import { StatusDot } from "./components/StatusDot.js";
 import { EphemeralSheet } from "./components/Ephemeral.js";
 import { FirstRunModelAuthSheet } from "./components/FirstRunModelAuth.js";
-import { FirstRunOnboarding } from "./components/FirstRunOnboarding.js";
 import { NodePicker } from "./components/Pickers.js";
 import { ConnectRunner } from "./components/ConnectRunner.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "./flags.js";
@@ -55,14 +56,38 @@ const Settings = lazy(() => import("./components/Settings.js").then((m) => ({ de
 const AutomationsView = lazy(() =>
   import("./components/AutomationsView.js").then((m) => ({ default: m.AutomationsView })),
 );
+import { onAppVisible } from "./onAppVisible.js";
 import { useEdgeSwipe } from "./useEdgeSwipe.js";
+import { useModalEscape } from "./modalStack.js";
+import { CloseIcon } from "./components/UiIcons.js";
 import { controller } from "./store/useStore.js";
-import { statusClass, statusDotState, statusLabel } from "./sessionStatus.js";
+import { attentionRank, isUnseen, runStatusLabel, statusClass, statusDotState, statusLabel, type SessionStatusInput } from "./sessionStatus.js";
+import { getAppIconBadgeEnabled, getNotificationPreferencesSnapshot, setNotificationPreferencesSnapshot, subscribeNotificationSettings } from "./notificationSettings.js";
+
+const DRAWER_FOCUSABLE = 'a[href],button:not(:disabled),textarea:not(:disabled),input:not(:disabled),select:not(:disabled),[tabindex]:not([tabindex="-1"])';
+
+function notificationAllowsAttentionBadge(session: SessionStatusInput, prefs: NotificationPreferences | null): boolean {
+  if (!prefs) return true;
+  if (session.needsAction || session.status === "needs_action") return prefs.question_asked || prefs.approval_requested;
+  if (session.status === "failed") return prefs.session_error;
+  if (isUnseen(session)) return prefs.session_done;
+  return false;
+}
 
 export function App() {
   const state = useAppState();
+  const appIconBadgeEnabled = useSyncExternalStore(subscribeNotificationSettings, getAppIconBadgeEnabled);
+  const notificationPreferences = useSyncExternalStore(subscribeNotificationSettings, getNotificationPreferencesSnapshot);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [onboardingDismissed, setOnboardingDismissed] = useState(() => localStorage.getItem("bivy:first-run-onboarding") === "done");
+  const drawerRef = useRef<HTMLDivElement>(null);
+  const mainRef = useRef<HTMLElement>(null);
+  const burgerRef = useRef<HTMLButtonElement>(null);
+  // The automation suggestion is a first-mile nudge, not a permanent session
+  // control. Once the user has reached activation (the first real assistant
+  // answer), consume it immediately so it cannot follow them into later turns
+  // or sessions. Keep the old key for backwards compatibility with users who
+  // already dismissed it.
+  const [automationNextStepDismissed, setAutomationNextStepDismissed] = useState(() => localStorage.getItem("bivy:automation-next-step") === "done");
   // Settings is URL-backed (#78) — `settingsRoute` mirrors the `/settings` /
   // `/settings/:view` route the same way useAppState mirrors the session
   // store, and is null whenever the URL is on anything else (Settings closed).
@@ -114,10 +139,6 @@ export function App() {
   // the moment it opens — see #388. Hosted-only: the queue is account-level
   // control-plane state, unavailable in direct mode.
   const [githubQueue, setGithubQueue] = useState<GithubQueueItem[] | null>(null);
-  // Automation runs feed the Inbox's authoritative automation items (runs that
-  // need attention or failed). Same account-level, hosted-only, polled-at-shell
-  // shape as the GitHub queue above.
-  const [automationRuns, setAutomationRuns] = useState<AccountAutomationRun[] | null>(null);
   // Ids of attention items the user has already looked at (opened the mobile
   // session drawer since they arrived). Drives the red dot on the ☰ burger:
   // it lights only for attention that appeared while the list was out of view.
@@ -128,55 +149,71 @@ export function App() {
     if (controller.direct || !state.connection.signedIn) return;
     controller.fetchGithubQueue().then(setGithubQueue).catch(() => {});
   }, [state.connection.signedIn]);
-  const refreshAutomationRuns = useCallback(() => {
-    if (controller.direct || !state.connection.signedIn) return;
-    controller.fetchAutomationRuns().then(setAutomationRuns).catch(() => {});
-  }, [state.connection.signedIn]);
   useEffect(() => {
     if (controller.direct || !state.connection.signedIn) return;
-    refreshGithubQueue();
-    refreshAutomationRuns();
+    const refresh = refreshGithubQueue;
+    refresh();
+    const stopObserving = onAppVisible(refresh);
     const id = setInterval(() => {
-      if (document.visibilityState !== "hidden") { refreshGithubQueue(); refreshAutomationRuns(); }
+      if (document.visibilityState !== "hidden") refresh();
     }, 30000);
-    return () => clearInterval(id);
-  }, [refreshGithubQueue, refreshAutomationRuns, state.connection.signedIn]);
+    return () => { clearInterval(id); stopObserving(); };
+  }, [refreshGithubQueue, state.connection.signedIn]);
+  useEffect(() => {
+    if (controller.direct || !state.connection.signedIn) return;
+    controller.getNotificationPreferences().then(setNotificationPreferencesSnapshot).catch(() => {});
+  }, [state.connection.signedIn]);
   // sessionId → the run that produced it, joined from the queue's evidence.
   // Feeds the sidebar's exception hints and the run pill's outcome. Declared up
   // here (not by activeSession below) so the hook stays above any early return.
   const runEvidence = useMemo(() => indexRunEvidence(githubQueue), [githubQueue]);
-  const inboxItems = useMemo(() => buildInboxItems({
-    sessions: state.sessionIndex.sessions,
-    approvals: state.activeSession.approvals,
-    questions: state.activeSession.questions,
-    nodes: state.connection.nodes,
-    queue: githubQueue ?? [],
-    runs: automationRuns ?? [],
-  }), [state.sessionIndex.sessions, state.activeSession.approvals, state.activeSession.questions, state.connection.nodes, githubQueue, automationRuns]);
+  const sessionSources = useMemo(() => indexSessionSources(githubQueue), [githubQueue]);
+  // The session list replaced the Inbox. Count its Needs attention rows, not
+  // legacy adverts, provider expiry, or historical automation/queue failures
+  // that have no corresponding attention row in the app. Count each session
+  // once, across all machines (independent of drawer search/filter state).
+  const attentionSessions = useMemo(() => state.sessionIndex.sessions.filter(
+    (session) => attentionRank(session) > 0,
+  ), [state.sessionIndex.sessions]);
+  const appIconBadgeCount = useMemo(() => {
+    if (!appIconBadgeEnabled) return 0;
+    return attentionSessions.filter((session) => notificationAllowsAttentionBadge(session, notificationPreferences)).length;
+  }, [appIconBadgeEnabled, attentionSessions, notificationPreferences]);
   // Something needs the user that they haven't seen yet → the ☰ burger wears a
   // red dot. Opening the session drawer (openDrawer) marks the current set seen.
-  const attnUnseen = inboxItems.some((it) => !seenAttn.has(it.id));
+  const attnUnseen = attentionSessions.some((session) => !seenAttn.has(session.sessionId));
   const openDrawer = useCallback(() => {
     setDrawerOpen(true);
-    setSeenAttn(new Set(inboxItems.map((it) => it.id)));
-  }, [inboxItems]);
+    setSeenAttn(new Set(attentionSessions.map((session) => session.sessionId)));
+  }, [attentionSessions]);
+  const closeDrawer = useCallback(() => setDrawerOpen(false), []);
   // Attention must remain visible when Bivy is a background tab or installed
-  // PWA. The Inbox is authoritative; mirror only its content-free count into
-  // browser chrome and the OS app badge.
+  // PWA. Mirror the session list's content-free attention count into browser
+  // chrome, while the OS app badge follows the user's notification/badge choices
+  // (including zero to remove old Inbox badges).
   useEffect(() => {
-    const count = inboxItems.length;
-    document.title = count > 0 ? `(${count}) Bivy` : "Bivy";
+    const titleCount = attentionSessions.length;
+    const badgeCount = appIconBadgeCount;
+    document.title = titleCount > 0 ? `(${titleCount}) Bivy` : "Bivy";
     const badge = navigator as Navigator & {
       setAppBadge?: (contents?: number) => Promise<void>;
       clearAppBadge?: () => Promise<void>;
     };
-    const update = count > 0 ? badge.setAppBadge?.(count) : badge.clearAppBadge?.();
-    void update?.catch(() => {}); // unsupported/blocked badge APIs are non-fatal
-    return () => {
-      document.title = "Bivy";
-      void badge.clearAppBadge?.().catch(() => {});
+    const syncBadge = () => {
+      const update = badgeCount > 0 ? badge.setAppBadge?.(badgeCount) : badge.clearAppBadge?.();
+      void update?.catch(() => {}); // unsupported/blocked badge APIs are non-fatal
     };
-  }, [inboxItems.length]);
+    syncBadge();
+    // An installed PWA can resume without a React count change. Retry even
+    // zero: an OS badge may outlive a suspended/blocked background update.
+    const stopObserving = onAppVisible(syncBadge);
+    return () => {
+      stopObserving();
+      document.title = "Bivy";
+      // Do not clear here: effect cleanup also runs before a count update,
+      // and that asynchronous clear can race the replacement setAppBadge.
+    };
+  }, [appIconBadgeCount, attentionSessions.length]);
   // Signed in on the hosted app but no node yet: poll for a newly-installed
   // machine so the empty state advances to the live app the moment the node
   // dials in — the user shouldn't have to hit "Refresh nodes" after running the
@@ -184,18 +221,18 @@ export function App() {
   const awaitingNode = !controller.direct && state.connection.signedIn && !state.connection.currentNodeId;
   useEffect(() => {
     if (!awaitingNode) return;
-    const id = setInterval(() => {
+    const refresh = () => {
       if (document.visibilityState !== "hidden") void controller.refreshNodes();
-    }, 4000);
-    return () => clearInterval(id);
+    };
+    refresh();
+    const id = setInterval(refresh, 4000);
+    const stopObserving = onAppVisible(refresh);
+    return () => { clearInterval(id); stopObserving(); };
   }, [awaitingNode]);
-  // Focus view: collapse interim messages (thinking, tool cards, intermediate
-  // assistant prose) down to just the conversation. Persisted so the choice
-  // sticks across reloads and session switches.
-  const [collapsed, setCollapsed] = useState(() => localStorage.getItem("bivy.focusView") === "1");
-  const toggleCollapsed = useCallback(() => {
-    setCollapsed((v) => {
-      const next = !v;
+  const [focusView, setFocusView] = useState(() => localStorage.getItem("bivy.focusView") === "1");
+  const toggleFocusView = useCallback(() => {
+    setFocusView((current) => {
+      const next = !current;
       localStorage.setItem("bivy.focusView", next ? "1" : "0");
       return next;
     });
@@ -215,6 +252,11 @@ export function App() {
     repositoryReady: state.catalogs.activationReadiness ? state.catalogs.activationReadiness.repository.ok : undefined,
     agentAnswered: state.activeSession.transcript.some((entry) => entry.role === "assistant" && Boolean(entry.text) && !entry.tool) ? true : undefined,
   }), [state.catalogs.activationReadiness, state.catalogs.runtimes, state.connection.signedIn, state.connection.status, state.activeSession.transcript]);
+  useEffect(() => {
+    if (!activation.activated || !state.activeSession.activeSessionId || automationNextStepDismissed) return;
+    localStorage.setItem("bivy:automation-next-step", "done");
+    setAutomationNextStepDismissed(true);
+  }, [activation.activated, state.activeSession.activeSessionId, automationNextStepDismissed]);
   // Latch: has this client ever had a live connection this run? Once true, we
   // treat the WHOLE transient reconnect window as still-composable — not just the
   // brief "reconnecting" beat, but the redial's "connecting" and any re-pair
@@ -260,13 +302,58 @@ export function App() {
   const canCompose = (online || transientReconnect || controller.isCurrentNodeResumable() || Boolean(state.draft.ephemeralConfig)) && !activeTuiLocked;
 
   // Left-edge swipe opens the sidebar drawer; swipe-left closes it (mobile).
-  useEdgeSwipe({ isOpen: drawerOpen, onOpen: openDrawer, onClose: () => setDrawerOpen(false) });
+  useEdgeSwipe({ isOpen: drawerOpen, onOpen: openDrawer, onClose: closeDrawer, maxWidth: 900 });
+  useModalEscape(closeDrawer, drawerOpen);
+
+  // The mobile sidebar obscures the main pane, so it behaves as a modal
+  // navigation drawer: focus enters it, cannot tab into the covered composer,
+  // and returns to the burger after dismissal. `inert` also removes the main
+  // pane from the accessibility tree while the drawer is open.
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const drawer = drawerRef.current;
+    const main = mainRef.current;
+    const burger = burgerRef.current;
+    main?.setAttribute("inert", "");
+    const focusables = () => drawer ? Array.from(drawer.querySelectorAll<HTMLElement>(DRAWER_FOCUSABLE)) : [];
+    const frame = requestAnimationFrame(() => {
+      (drawer?.querySelector<HTMLElement>(".sidebar-close") ?? drawer)?.focus();
+    });
+    const containFocus = (event: KeyboardEvent) => {
+      if (event.key !== "Tab") return;
+      const items = focusables();
+      if (!items.length) return;
+      const first = items[0]!;
+      const last = items[items.length - 1]!;
+      const active = document.activeElement;
+      if (event.shiftKey && (active === first || !drawer?.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (active === last || !drawer?.contains(active))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", containFocus);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("keydown", containFocus);
+      main?.removeAttribute("inert");
+      burger?.focus();
+    };
+  }, [drawerOpen]);
 
   // Run an inline notice action button (e.g. a node-emitted "/new"). Declared
   // before any early return so hook order stays stable across renders (stable
   // identity too — controller is a singleton — so ChatView's memoized entries
   // aren't forced to re-render on every update).
   const runCommand = useCallback((name: string, _args?: string) => {
+    if (name.startsWith("connect-provider:")) {
+      const provider = name.slice("connect-provider:".length);
+      const nodeId = state.connection.currentNodeId;
+      if (provider && nodeId) controller.store.setNeedsModelAuth({ nodeId, provider });
+      return;
+    }
     switch (name) {
       case "/new": controller.newSession(); break;
       case "/resume":
@@ -277,7 +364,7 @@ export function App() {
         );
         break;
     }
-  }, []);
+  }, [state.connection.currentNodeId]);
 
   // Standalone (session-less) terminal: opened from the sidebar button, always
   // scoped to a node's default workspace rather than any chat session. Skips
@@ -329,8 +416,9 @@ export function App() {
   // supported). Auto-opening the PTY was the regression that skipped that
   // handoff and hid "Continue in chat".
   const pickTerminal = useCallback(
-    (termId: string, nodeId?: string) => {
+    (termId: string, nodeId?: string, targetSessionId?: string, targetEpoch?: number) => {
       const select = () => {
+        if (targetSessionId && !controller.isCurrentSessionTarget(targetSessionId, targetEpoch)) return;
         setPendingRunTerm({ termId, nodeId });
         setTerminalOpen(false);
         setTerminalTarget(null);
@@ -340,7 +428,9 @@ export function App() {
       setDrawerOpen(false);
       if (!controller.direct && nodeId && nodeId !== state.connection.currentNodeId) {
         void controller.connectToNode(nodeId).then(select).catch((err) => {
-          controller.store.setError(err instanceof Error ? err.message : String(err));
+          if (!targetSessionId || controller.isCurrentSessionTarget(targetSessionId, targetEpoch)) {
+            controller.store.setError(err instanceof Error ? err.message : String(err));
+          }
         });
         return;
       }
@@ -355,8 +445,9 @@ export function App() {
   // shell is opened and nothing can be typed into it. Cross-node rows switch
   // first, like pickTerminal.
   const openRunLog = useCallback(
-    (sessionId: string, nodeId?: string) => {
+    (sessionId: string, nodeId?: string, targetEpoch?: number) => {
       const show = () => {
+        if (!controller.isCurrentSessionTarget(sessionId, targetEpoch)) return;
         setPendingRunTerm(null);
         setTerminalTarget(sessionId);
         setTerminalStandalone(true);
@@ -433,6 +524,19 @@ export function App() {
     target.focus({ preventScroll: true });
   }, [state.activeSession.activeSessionId, state.activeSession.approvals, state.activeSession.questions, state.activeSession.turnAttentions]);
 
+  // Approval/question cards render inline in the active session's chat scroll.
+  // Keep these hooks before the auth gate so every render calls hooks in the
+  // same order, including the sign-in → app-shell transition.
+  const activeApprovals = state.activeSession.approvals.filter((a) => !a.sessionId || a.sessionId === state.activeSession.activeSessionId);
+  const activeQuestions = state.activeSession.questions.filter((q) => !q.sessionId || q.sessionId === state.activeSession.activeSessionId);
+  const activeTurnAttention = state.activeSession.turnAttentions.find((a) => a.sessionId === state.activeSession.activeSessionId);
+  const attentionFooterRef = useRef<HTMLDivElement>(null);
+  const attentionKey = [activeApprovals[0]?.id, activeQuestions[0]?.id, activeTurnAttention?.sessionId].filter(Boolean).join(":");
+  useEffect(() => {
+    if (!attentionKey) return;
+    requestAnimationFrame(() => attentionFooterRef.current?.querySelector<HTMLElement>("[data-attention-card]")?.focus());
+  }, [attentionKey]);
+
   // Auth/setup gates, derived from reactive store fields (not read live off
   // localStorage) so signing in swaps the sign-in screen for the app shell the
   // instant the token lands — no page reload needed. `direct` (local/loopback
@@ -442,11 +546,10 @@ export function App() {
   // (Automations, cloud machine profiles) can summon the sign-in screen on
   // demand — see signInRequest.ts. Dismissable, unlike the boot-time gate.
   const signInRequested = useSyncExternalStore(subscribeSignInRequest, getSignInRequest);
-  // Picking an ephemeral runner counts as having chosen where to run, even
-  // before its machine exists — show the composer, not the onboarding screen.
-  const needsNode = !controller.direct && state.connection.signedIn && !state.connection.currentNodeId && !state.draft.ephemeralConfig;
-  const showFirstRunOnboarding = !controller.direct && state.connection.signedIn && !onboardingDismissed
-    && state.sessionIndex.sessions.length === 0 && state.activeSession.transcript.length === 0;
+  // A first session starts by connecting a real machine. Workspace choice comes
+  // afterward: the default/local workspace needs no GitHub authorization, while
+  // the repo picker can authorize GitHub only when the user requests it.
+  const needsNode = !controller.direct && state.connection.signedIn && !state.connection.currentNodeId;
 
   // Hosted control plane, not signed in yet: show the sign-in screen instead of a
   // dead shell. Once signed in we always render the normal app — a node is picked
@@ -464,12 +567,11 @@ export function App() {
     );
   }
 
-  const closeDrawer = () => setDrawerOpen(false);
   const activeSession = state.sessionIndex.sessions.find((s) => s.sessionId === state.activeSession.activeSessionId);
   // Every active session shows the run card (source + live status) in the band
   // above the composer; `null` for a draft (no session yet) falls back to the
   // plain GitHub pill.
-  const activeRunSource = activeSession ? classifySource(activeSession.source) : null;
+  const activeRunSource = activeSession ? sessionSources.get(activeSession.sessionId) ?? classifySource(activeSession.source) : null;
   // A forked session's sheet gets its own "Forked from" row. The parent's name
   // is resolved from the local session list when known; it may live on
   // another node or be gone by now, so this degrades to a bare id.
@@ -495,17 +597,16 @@ export function App() {
     | undefined;
   const canContinueInTerminal = online && Boolean(activeRuntimeCaps?.interactiveTui);
 
-  // Approval/question cards render inline in the active session's chat scroll, so
-  // only show the ones that belong to that session. Items are still kept globally
-  // in the store (for the sidebar "needs response" indicator); we just don't render
-  // another session's cards into whichever chat happens to be on screen. Items with
-  // no sessionId are treated as global and shown everywhere.
-  const activeApprovals = state.activeSession.approvals.filter((a) => !a.sessionId || a.sessionId === state.activeSession.activeSessionId);
-  const activeQuestions = state.activeSession.questions.filter((q) => !q.sessionId || q.sessionId === state.activeSession.activeSessionId);
-  const activeTurnAttention = state.activeSession.turnAttentions.find((a) => a.sessionId === state.activeSession.activeSessionId);
   return (
     <div className="app">
-      <aside className={`sidebar${drawerOpen ? " open" : ""}`}>
+      <div
+        ref={drawerRef}
+        className={`sidebar${drawerOpen ? " open" : ""}`}
+        role={drawerOpen ? "dialog" : "complementary"}
+        aria-modal={drawerOpen ? "true" : undefined}
+        aria-label="Sessions and workspace"
+        tabIndex={drawerOpen ? -1 : undefined}
+      >
         <div className="sidebar-head">
           <span className="brand">Bivy</span>
           <div className="sidebar-head-actions">
@@ -540,11 +641,25 @@ export function App() {
             >
               + New
             </button>
+            <button className="btn ghost icon only-mobile sidebar-close" onClick={closeDrawer} aria-label="Close sessions">
+              <CloseIcon />
+            </button>
           </div>
         </div>
         <SessionList
           runEvidence={runEvidence}
+          sessionSources={sessionSources}
+          automationsActive={Boolean(automationsOpen)}
+          onOpenAutomations={() => {
+            openAutomations();
+            closeDrawer();
+          }}
           onPick={(id, path, nodeId) => {
+            // Set the prompt destination synchronously. Live-run detection below
+            // is asynchronous (and may switch machines), so waiting to call
+            // openSessionOnNode would leave the composer targeting the old/top
+            // session if the user sends during that handoff.
+            const targetEpoch = controller.selectSessionTarget(id);
             setPendingRunTerm(null);
             closeDrawer();
             // A `bivy run` session whose PTY is still alive (advertised by its
@@ -558,39 +673,27 @@ export function App() {
             // log read-only in the terminal overlay (the node replays it on
             // attach), on the node that owns it.
             if (row && isRunLogSession(row)) {
-              openRunLog(id, nodeId);
+              openRunLog(id, nodeId, targetEpoch);
               return;
             }
             if (row && isLiveRunSession(row)) {
               void controller.findLiveRunTerminal(id, nodeId)
                 .then((term) => {
-                  if (term) pickTerminal(term.termId, term.nodeId ?? nodeId);
+                  if (!controller.isCurrentSessionTarget(id, targetEpoch)) return;
+                  if (term) pickTerminal(term.termId, term.nodeId ?? nodeId, id, targetEpoch);
                   else controller.openSessionOnNode(id, path, nodeId);
                 })
-                .catch((err) => controller.store.setError(err instanceof Error ? err.message : String(err)));
+                .catch((err) => {
+                  if (controller.isCurrentSessionTarget(id, targetEpoch)) controller.store.setError(err instanceof Error ? err.message : String(err));
+                });
               return;
             }
             controller.openSessionOnNode(id, path, nodeId);
           }}
           onPickTerminal={pickTerminal}
         />
-        {/* One entry point now — a ChatGPT-style gear. Theme, GitHub Queue, and
-            everything else moved inside the Settings modal. */}
+        {/* Settings is the low-attention utility below the scrollable sidebar content. */}
         <div className="sidebar-foot">
-          <button
-            className="settings-gear automations-launch"
-            onClick={() => {
-              openAutomations();
-              closeDrawer();
-            }}
-            title="Automations"
-            aria-label="Automations"
-          >
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M13 2 3 14h9l-1 8 10-12h-9z" />
-            </svg>
-            <span>Automations</span>
-          </button>
           <button
             className="settings-gear"
             onClick={() => {
@@ -607,13 +710,14 @@ export function App() {
             <span>Settings</span>
           </button>
         </div>
-      </aside>
+      </div>
 
       {drawerOpen && <div className="scrim" onClick={closeDrawer} />}
 
-      <main className={`main${showFirstRunOnboarding ? " onboarding" : needsNode ? " needs-node" : ""}`}>
+      <main ref={mainRef} className={`main${needsNode ? " needs-node" : ""}`}>
         <header className="topbar">
           <button
+            ref={burgerRef}
             className="btn ghost icon only-mobile burger-btn"
             onClick={openDrawer}
             aria-label={attnUnseen ? "Open sessions — something needs your attention" : "Open sessions"}
@@ -644,25 +748,20 @@ export function App() {
           <div className="topbar-actions">
             {state.activeSession.activeSessionId && (
               <button
-                className="btn ghost icon eye-btn"
-                onClick={toggleCollapsed}
-                title={collapsed ? "Focus view on — show all messages" : "Focus view — hide tool use"}
-                aria-label="Toggle focus view"
-                aria-pressed={collapsed}
+                className="btn ghost focus-view-btn"
+                onClick={toggleFocusView}
+                title={focusView ? "Focus view on — show full transcript" : "Focus view — show only prompts and final answers"}
+                aria-label={focusView ? "Show full transcript" : "Show only prompts and final answers"}
+                aria-pressed={focusView}
               >
-                {collapsed ? (
+                {focusView ? (
                   <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" />
-                    <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
-                    <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" />
-                    <line x1="2" x2="22" y1="2" y2="22" />
+                    <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" /><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" /><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" /><line x1="2" x2="22" y1="2" y2="22" />
                   </svg>
                 ) : (
-                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z" />
-                    <circle cx="12" cy="12" r="3" />
-                  </svg>
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" /></svg>
                 )}
+                <span className="focus-view-label">{focusView ? "Focused" : "Focus"}</span>
               </button>
             )}
             {state.activeSession.activeSessionId && (
@@ -715,14 +814,14 @@ export function App() {
           </div>
         )}
 
-        {!showFirstRunOnboarding && !state.activeSession.activeSessionId && state.activeSession.transcript.length === 0 && state.sessionIndex.sessions.length === 0 && (
+        {!needsNode && !state.activeSession.activeSessionId && state.activeSession.transcript.length === 0 && state.sessionIndex.sessions.length === 0 && (
           <Suspense fallback={null}>
             <ReadinessChecklist
               activation={activation}
               onRemediate={{
-                connect_machine: () => openSettings("nodes"),
+                connect_machine: () => (document.querySelector(".node-switcher-btn") as HTMLButtonElement | null)?.click(),
                 install_agent: () => (document.querySelector(".agent-pill") as HTMLButtonElement | null)?.click(),
-                authenticate_credential: () => openSettings("providers"),
+                authenticate_credential: () => (document.querySelector(".model-pill") as HTMLButtonElement | null)?.click(),
                 grant_repository: () => (document.querySelector(".repo-pill") as HTMLButtonElement | null)?.click(),
                 run_starter_task: () => (document.querySelector(".composer-input") as HTMLTextAreaElement | null)?.focus(),
               }}
@@ -730,20 +829,11 @@ export function App() {
           </Suspense>
         )}
 
-        {showFirstRunOnboarding && (
-          <div className="connect-runner-scroll">
-            <FirstRunOnboarding state={state} onDone={() => {
-              localStorage.setItem("bivy:first-run-onboarding", "done");
-              setOnboardingDismissed(true);
-            }} />
-          </div>
-        )}
-
-        {!showFirstRunOnboarding && needsNode && (
+        {needsNode && (
           <div className="connect-runner-scroll">
             <ConnectRunner
               nodes={state.connection.nodes}
-              ephemeralEnabled={cloudMachinesEnabled}
+              ephemeralEnabled={false}
               onPickNode={(nodeId) => controller.switchNode(nodeId)}
               onEphemeral={() => setEphemeralOpen(true)}
               onRefresh={() => controller.refreshNodes()}
@@ -757,9 +847,7 @@ export function App() {
             const runName = run?.name || run?.label || run?.agent || "Terminal session";
             const runNode = state.connection.nodes.find((n) => n.id === (run?.nodeId || pendingRunTerm.nodeId));
             // Same capability gate the Terminal overlay uses for "Continue in chat".
-            const runtime = state.catalogs.runtimes.find((r) => r.id === String(run?.agent || ""));
-            const caps = runtime?.capabilities as { sessionDiscovery?: boolean } | undefined;
-            const canTakeover = Boolean(run?.sessionId) || Boolean(caps?.sessionDiscovery);
+            const canTakeover = Boolean(run?.sessionId) || runtimeSupportsTerminalTakeover(run?.agent, state.catalogs.runtimes);
             return (
               <TuiLockedView
                 sessionName={runName}
@@ -791,7 +879,7 @@ export function App() {
               draftRoute={!state.activeSession.activeSessionId}
               opening={state.activeSession.opening}
               sessionKey={state.activeSession.activeSessionId}
-              collapsed={collapsed}
+              focusView={focusView}
               onAction={runCommand}
               header={activeSession?.launchProgress ? <SessionLaunchProgressView
                 progress={activeSession.launchProgress}
@@ -811,7 +899,7 @@ export function App() {
                 }}
               /> : undefined}
               footer={
-                <>
+                <div className="attention-footer" ref={attentionFooterRef} role="region" aria-live="polite" aria-label="Agent needs your response">
                   <ApprovalStack approvals={activeApprovals} onResolve={(id, ok, remember) => controller.resolveApproval(id, ok, remember)} />
                   <QuestionStack
                     questions={activeQuestions}
@@ -824,9 +912,29 @@ export function App() {
                       onResolve={(sessionId, action) => controller.resolveTurnAttention(sessionId, action)}
                     />
                   )}
-                </>
+                </div>
               }
             />
+
+            {activation.activated && activeSession && !automationNextStepDismissed && (
+              <section className="card automation-next-step" aria-label="Next step">
+                <div>
+                  <strong>Make this repeatable</strong>
+                  <p>Create an automation to run work without you.</p>
+                </div>
+                <div className="automation-next-step-actions">
+                  <button type="button" className="btn sm primary" onClick={() => {
+                    localStorage.setItem("bivy:automation-next-step", "done");
+                    setAutomationNextStepDismissed(true);
+                    openAutomations();
+                  }}>Open Automations</button>
+                  <button type="button" className="btn sm ghost" aria-label="Dismiss" onClick={() => {
+                    localStorage.setItem("bivy:automation-next-step", "done");
+                    setAutomationNextStepDismissed(true);
+                  }}>Dismiss</button>
+                </div>
+              </section>
+            )}
 
             {changesSheetOpen && (
               <SessionChangesSheet
@@ -851,7 +959,7 @@ export function App() {
                   anchorId={`attention-${activeSession.sessionId}`}
                   source={activeRunSource}
                   statusClass={statusClass(activeSession)}
-                  statusLabel={statusLabel(activeSession)}
+                  statusLabel={runStatusLabel(activeSession)}
                   gh={state.activeSession.github}
                   evidence={runEvidence.get(activeSession.sessionId)}
                   finishedAt={activeSession.finishedAt}
@@ -954,8 +1062,8 @@ export function App() {
         <RunDetails
           runId={runRoute.runId}
           load={(id) => fetchAutomationRun(controller.local, id)}
-          onCancel={async (id) => { await cancelAutomationRun(controller.local, id); refreshAutomationRuns(); refreshGithubQueue(); }}
-          onRetry={async (id) => { await retryAutomationRun(controller.local, id); refreshAutomationRuns(); refreshGithubQueue(); }}
+          onCancel={async (id) => { await cancelAutomationRun(controller.local, id); refreshGithubQueue(); }}
+          onRetry={async (id) => { await retryAutomationRun(controller.local, id); refreshGithubQueue(); }}
           onReauthenticate={async (provider, machineId, reason) => {
             const targetNode = machineId || state.connection.currentNodeId;
             if (!targetNode) throw new Error("The Machine for this Run is not available.");
@@ -1001,7 +1109,7 @@ export function App() {
             if (view === "github" || view === "linear" || view === "slack") {
               openAutomations({ setup: view });
             } else if (view === "queue" || view === "rulesets") {
-              openAutomations({ section: view });
+              openAutomations({ section: view === "queue" ? "runs" : view });
             } else {
               // Other stale sections (e.g. the removed Webhooks tab) land on Overview.
               openAutomations();
@@ -1017,6 +1125,7 @@ export function App() {
         </Suspense>
       )}
       {ephemeralOpen && cloudMachinesEnabled && <EphemeralSheet onClose={() => setEphemeralOpen(false)} firstRun={needsNode} />}
+      {state.presentation.forkProgress && <ForkProgressDialog progress={state.presentation.forkProgress} onClose={() => controller.store.setForkProgress(null)} />}
       {state.presentation.needsModelAuth && <FirstRunModelAuthSheet state={state} />}
       {terminalNodePicker && (
         <NodePicker

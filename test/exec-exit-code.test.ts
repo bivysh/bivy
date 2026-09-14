@@ -33,12 +33,24 @@ async function check(name: string, fn: () => Promise<void>) {
   }
 }
 
-type Behavior = "disconnect-after-partial" | "disconnect-no-text" | "complete-normally";
+type Behavior =
+  | "disconnect-after-partial"
+  | "disconnect-no-text"
+  | "complete-normally"
+  // Turn ends with NO assistant text but a failing agent_end (non-zero code)
+  // plus an agent_output stderr line — e.g. an unauthenticated CLI. exec must
+  // surface the stderr and exit non-zero, not report a silent empty success.
+  | "fail-no-text-with-code";
+
+/** Records the parsed body of the last POST /api/session, so tests can assert
+ *  which fields (name/model/workspace) exec sends to the daemon. */
+type CreateProbe = { body?: Record<string, unknown> };
 
 /** Spin up a fake daemon: /api/session + /api/session/prompt over HTTP, turn events over a /ws socket. */
-async function withFakeDaemon(behavior: Behavior, fn: (url: string) => Promise<void>) {
+async function withFakeDaemon(behavior: Behavior, fn: (url: string, probe: CreateProbe) => Promise<void>) {
   const sessionId = "sess-fake-1";
   let wsSocket: import("ws").WebSocket | undefined;
+  const probe: CreateProbe = {};
 
   const server = http.createServer((req, res) => {
     let body = "";
@@ -46,6 +58,7 @@ async function withFakeDaemon(behavior: Behavior, fn: (url: string) => Promise<v
     req.on("end", () => {
       res.writeHead(200, { "content-type": "application/json" });
       if (req.method === "POST" && req.url === "/api/session") {
+        try { probe.body = body ? JSON.parse(body) : {}; } catch { probe.body = {}; }
         res.end(JSON.stringify({ id: sessionId }));
         return;
       }
@@ -62,6 +75,9 @@ async function withFakeDaemon(behavior: Behavior, fn: (url: string) => Promise<v
             setTimeout(() => wsSocket!.close(), 20); // drop before agent_end
           } else if (behavior === "disconnect-no-text") {
             setTimeout(() => wsSocket!.close(), 20); // drop with no text at all
+          } else if (behavior === "fail-no-text-with-code") {
+            send({ type: "tool_execution_update", toolName: "agent_output", toolCallId: "agent-output", input: { stream: "stderr", output: "Error: Not signed in. Run: grok login" } });
+            send({ type: "agent_end", code: 1 });
           } else {
             send({ type: "message_start", message: { role: "assistant", content: "" } });
             send({ type: "message_update", message: { role: "assistant", content: "the full answer" } });
@@ -85,16 +101,16 @@ async function withFakeDaemon(behavior: Behavior, fn: (url: string) => Promise<v
   const url = `http://127.0.0.1:${(address as { port: number }).port}`;
 
   try {
-    await fn(url);
+    await fn(url, probe);
   } finally {
     wss.close();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 }
 
-function runExec(url: string, timeoutMs = 8000): Promise<{ code: number | null; stdout: string; stderr: string }> {
+function runExec(url: string, extraArgs: string[] = [], timeoutMs = 8000): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [...execArgs, "--url", url, "hello"], {
+    const child = spawn(process.execPath, [...execArgs, "--url", url, ...extraArgs, "hello"], {
       cwd: repoRoot,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -138,6 +154,27 @@ await check("exits zero only once agent_end is actually observed", async () => {
     const { code, stdout } = await runExec(url);
     assert.equal(code, 0, `expected exit 0 on a real completion, got ${code}`);
     assert.ok(stdout.includes("the full answer"), `stdout should carry the final answer, got ${JSON.stringify(stdout)}`);
+  });
+});
+
+await check("exits non-zero and surfaces stderr when a turn ends with no text but a failing agent_end", async () => {
+  await withFakeDaemon("fail-no-text-with-code", async (url) => {
+    const { code, stdout, stderr } = await runExec(url);
+    assert.notEqual(code, 0, `a failed turn with no output must exit non-zero, got ${code}`);
+    assert.equal(stdout.trim(), "", `stdout should stay empty on failure, got ${JSON.stringify(stdout)}`);
+    assert.ok(stderr.includes("Not signed in"), `stderr should carry the agent's error, got ${JSON.stringify(stderr)}`);
+  });
+});
+
+await check("sends --name/--model/--workspace to the daemon instead of leaking them into the prompt", async () => {
+  await withFakeDaemon("complete-normally", async (url, probe) => {
+    const { code } = await runExec(url, ["--agent", "codex", "--name", "nightly audit", "--model", "gpt-5.6-sol", "--workspace", "/tmp/ws"]);
+    assert.equal(code, 0);
+    assert.ok(probe.body, "the create request body should have been recorded");
+    assert.equal(probe.body!.agent, "codex");
+    assert.equal(probe.body!.name, "nightly audit", "explicit --name must be sent as the `name` field");
+    assert.equal(probe.body!.workspace, "/tmp/ws");
+    assert.deepEqual(probe.body!.model, { provider: "", id: "gpt-5.6-sol" }, "--model must be sent as a model ref, verbatim id");
   });
 });
 

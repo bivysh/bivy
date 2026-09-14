@@ -4,7 +4,7 @@
 
 Work is on `bivy/ephemeral-reliability-on-678`, based on PR #678 head `b4544731d6d054b287f686d70e93b3f7e4bddece`. The earlier implementation is preserved in stash `5cf64a6f971f88978d091193799f6bcfca658b42`. It has not been discarded or reapplied wholesale.
 
-A merge with the original main-based worktree exposed substantial conflicts. This follow-up deliberately preserves #678's contracts rather than silently choosing either side of those conflicts. Integration with newer main remains necessary before merging.
+The follow-up initially stayed stacked to avoid overwriting either implementation. At the user's request, #940 now consolidates #678 and targets main; main at `6d81877b` was merged while preserving both histories and resolving the overlapping behavior. See [main integration evidence](ephemeral-main-integration.md).
 
 ## Implemented
 
@@ -58,7 +58,7 @@ Both credential-delivery phases, encrypted snapshot, original-machine deletion, 
 
 - The remaining milestone-reporting and image-workflow improvements from the preserved work, reconciled with #678's runtime-specific images.
 - Dedicated staging/production certification; other providers/runtimes; real repository/checkpoint continuity and refresh-token rotation. Staging dev-login returned HTTP 404; the completed certification used disposable accounts on an isolated local control plane.
-- Integration with newer main and final integrated regression coverage.
+- Final production/staging rollout review. Main integration and integrated regression coverage are documented in `ephemeral-main-integration.md`.
 
 ## Repeat the limited provider probe
 

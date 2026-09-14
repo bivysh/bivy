@@ -14,6 +14,14 @@ The recommended path is:
 curl -fsSL https://bivy.sh/install.sh | bash
 ```
 
+Prefer to inspect the installer first?
+
+```bash
+curl -fsSL https://bivy.sh/install.sh -o install.sh
+less install.sh
+bash install.sh
+```
+
 If you are already signed in at `app.bivy.sh`, **Connect a machine** creates a
 short-lived, single-use command instead:
 
@@ -29,13 +37,17 @@ identity.
 
 The installer:
 
-1. checks for Node.js 22.19+ and installs it if missing — on Debian/Ubuntu via
-   `sudo apt-get` (build tools) and NodeSource's setup script; on other
-   Linux/macOS by downloading the official Node 22 tarball from nodejs.org and
-   installing it under `/usr/local` with `sudo`. On macOS it warns if Xcode
-   Command Line Tools are missing, which the native `node-pty` module needs to
-   build. Bring your own Node.js 22.19+ and none of this runs,
-2. runs `npm install -g @bivy/bivy` (never under `sudo` — see below),
+1. checks for Node.js 20+ and installs it if missing — on Debian/Ubuntu via
+   NodeSource's setup script; on other Linux/macOS by downloading the official
+   Node 22 tarball from nodejs.org and installing it under `/usr/local` with
+   `sudo`. On Debian/Ubuntu it also installs missing build tools for terminal
+   support (`build-essential` and `python3`). Existing Node and build tools
+   skip these steps. Package setup is noninteractive so prompts cannot consume
+   the piped installer,
+2. runs `npm install -g @bivy/bivy --omit=optional` (never under `sudo` — see
+   below), then installs only the agent bridge/CLI you choose in setup. If that
+   agent is already on `PATH`, setup prints the path and uses the existing CLI,
+   login, and configuration rather than replacing it,
 3. migrates state from a previous tarball install, if it finds one (see below),
 4. launches the interactive `bivy setup` wizard, or restarts the background
    service on an existing install.
@@ -44,7 +56,7 @@ Bivy is distributed on npm. npm verifies each package's integrity hash on
 install, and releases published from CI carry a provenance attestation you can
 check with `npm audit signatures`. See [releasing.md](releasing.md).
 
-If you already have Node.js 22.19+, the installer is optional:
+If you already have Node.js 20+, the installer is optional:
 
 ```bash
 npm install -g @bivy/bivy
@@ -63,6 +75,9 @@ BIVY_NPM_PREFIX=~/.local bash install.sh
 # Preinstall every known upstream agent rather than just your default.
 BIVY_INSTALL_ALL_AGENTS=1 bash install.sh
 
+# Install Bivy's optional agent bridges up front (terminal support is required).
+BIVY_INSTALL_OPTIONAL_DEPS=1 bash install.sh
+
 # Don't touch ~/.bashrc or ~/.zshrc; just print the PATH line to add yourself.
 BIVY_NO_RC_UPDATE=1 bash install.sh
 ```
@@ -78,6 +93,17 @@ the block. A script can't change the PATH of the shell that invoked it, so
 open a new terminal (or `source` the rc file) afterwards to pick it up. Set
 `BIVY_NO_RC_UPDATE=1` to skip this and just get the `export PATH=...` line
 printed for you to run manually.
+
+Interactive terminals use the required `node-pty` dependency. If no prebuilt
+binary matches your machine, it must compile locally; a failed build now fails
+the install rather than silently leaving `bivy run` broken. On macOS, install
+the Xcode Command Line Tools (`xcode-select --install`); on Debian/Ubuntu, the
+installer installs missing build tools using sudo when needed. For other Linux
+distributions, provide `make`, a C++ compiler, and Python 3, then re-run.
+
+A headless install prints `bivy setup` as the next step. With an interactive
+terminal, a failed setup returns a nonzero installer exit code instead of being
+reported as a missing terminal.
 
 ## Where your data lives
 
@@ -107,7 +133,7 @@ picks sensible defaults for everything and asks a few questions:
   `app.bivy.sh`, free tier plus a paid plan — see
   [bivy.sh#pricing](https://bivy.sh#pricing)), `self-hosted` (points this node
   at your own control plane + relay), or `local only for now` (skip enrollment;
-  the CLI works locally and `bivy open` tells you to run `bivy relay:setup`
+  the CLI works locally and `bivy open` tells you to run `bivy login`
   when you want a browser or phone). Execution and session history stay on
   your machine in every case.
 - **Remote login** (hosted / self-hosted only) — GitHub sign-in (default) or an
@@ -118,7 +144,7 @@ picks sensible defaults for everything and asks a few questions:
 A browser or phone UI needs a control plane, because the node hosts none — so
 without enrollment Bivy is a local CLI: durable Sessions, resume, Runs, and
 automations from the terminal, but no `bivy open`. If enrollment fails, setup
-offers to retry; run `bivy relay:setup` later to finish.
+offers to retry; run `bivy login` later to finish.
 
 Everything else is automatic and changeable later in Settings: a dedicated
 `~/bivy-workspace` folder and local port, and a background service
@@ -149,7 +175,7 @@ internet), and session traffic is **end-to-end encrypted** — the relay only
 routes opaque frames. You can enable this later on an already-set-up node with:
 
 ```bash
-bivy relay:setup            # one-click sign-in, then enroll this node
+bivy login                  # GitHub or email sign-in, then enroll this node
 ```
 
 The hosted endpoints are baked in. To point at your own deployment, set
@@ -302,7 +328,7 @@ sudo journalctl -u bivy -f
 
 ## Remote PWA
 
-1. Enable hosted relay access with `bivy relay:setup`.
+1. Enable hosted relay access with `bivy login`.
 2. Open the app (served by the control plane, not the node) with `bivy open`.
 3. Choose **Link remote device** and scan/open the hosted sign-in link.
 4. On iOS Safari, tap Share → Add to Home Screen.

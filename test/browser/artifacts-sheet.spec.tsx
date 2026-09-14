@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures.js";
 import { readFile } from "node:fs/promises";
 
 const TOKENS = new URL("../../packages/ui/tokens.css", import.meta.url);
@@ -18,6 +18,9 @@ test("Artifacts sheet groups images/files, badges named artifacts, and shows an 
   expect(source).toContain('className="artifacts-group"');
   expect(source).toContain('<Badge tone="accent" variant="solid" upper>Artifact</Badge>');
   expect(source).toContain('className="artifact-unavailable"');
+  expect(source).toContain("artifact.caption.split(/\\r?\\n/, 1)[0]");
+  expect(source).toContain("<ImageGallery images={imageAttachments} index={galleryIndex}");
+  expect(source).toContain('aria-label={`View ${artifact.name}`}');
 
   await page.setContent(`<!doctype html>
     <html><head><style>${tokens}</style><style>${css}</style></head><body>
@@ -88,6 +91,11 @@ test("Artifacts sheet groups images/files, badges named artifacts, and shows an 
     rows.nth(0).locator(".artifact-meta").evaluate((el) => getComputedStyle(el).color),
   ]);
   expect(unavailableColor).not.toBe(metaColor);
+
+  // Captions remain one concise line even when the source message is long.
+  const caption = rows.nth(0).locator(".artifact-caption");
+  await expect(caption).toHaveCSS("white-space", "nowrap");
+  await expect(caption).toHaveCSS("text-overflow", "ellipsis");
 
   // Both actions stay reachable per row, keyboard included.
   await expect(rows.nth(0).getByRole("button", { name: "Download" })).toBeVisible();

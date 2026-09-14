@@ -3,7 +3,7 @@
 Google's terminal coding agent (`@google/gemini-cli`), run headlessly under
 Bivy with structured JSON output.
 
-- **Runtime id:** `gemini` · **Tier:** Beta · **In picker:** Yes
+- **Runtime id:** `gemini` · **Tier:** Supported · **In picker:** Yes
 
 ## Install
 
@@ -25,7 +25,7 @@ through Bivy's own vault, that credential is forwarded to the `gemini` process
 every turn as `GEMINI_API_KEY`:
 
 ```bash
-bivy login   # pick the Google/Gemini entry from the menu
+bivy provider login   # pick the Google/Gemini entry from the menu
 ```
 
 ## Models

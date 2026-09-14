@@ -42,6 +42,17 @@ check("validation rejects an unknown condition in a rule", () => {
   assert.equal(v.ok, false);
 });
 
+check("validation rejects an empty reroute candidate", () => {
+  const v = validateRuleset({
+    version: 1,
+    name: "x",
+    appliesTo: ["queue"],
+    rules: [{ when: ["rate_limited"], action: "reroute", maxAttempts: 2, chain: [{}] }],
+  });
+  assert.equal(v.ok, false);
+  assert.match(v.errors[0] ?? "", /fallback candidate/);
+});
+
 // ── Pure matcher ────────────────────────────────────────────────────────────
 
 check("findRule matches by condition and context", () => {

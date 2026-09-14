@@ -7,16 +7,19 @@
 
 import { registerSW } from "virtual:pwa-register";
 import { canActivateUpdate, setUpdateAvailable } from "./pwaLifecycle.js";
+import { activateWaitingWorker } from "./pwaUpdate.js";
 
 type UpdateListener = (needRefresh: boolean) => void;
 
-let applyUpdate: (reload?: boolean) => Promise<void> = async () => {};
 const listeners = new Set<UpdateListener>();
 let needRefresh = false;
 
 export function initPwa(): void {
-  applyUpdate = registerSW({
+  registerSW({
     immediate: true,
+    // Reload is owned by the explicit click below. A different tab activating
+    // the worker must not reload this tab and discard its unsent work.
+    onNeedReload() {},
     onNeedRefresh() {
       needRefresh = true;
       setUpdateAvailable(true);
@@ -32,8 +35,14 @@ export function onUpdateAvailable(fn: UpdateListener): () => void {
 }
 
 /** Activate the waiting worker only after every user-work blocker clears. */
-export function reloadForUpdate(): boolean {
+export async function reloadForUpdate(): Promise<boolean> {
   if (!canActivateUpdate()) return false;
-  void applyUpdate(true);
+  const registration = await navigator.serviceWorker?.getRegistration();
+  if (!canActivateUpdate()) return false;
+  await activateWaitingWorker(registration);
+  // Work may have started while activation was in flight. Keep the prompt so
+  // the user can reload later, even though no waiting worker remains.
+  if (!canActivateUpdate()) return false;
+  window.location.reload();
   return true;
 }

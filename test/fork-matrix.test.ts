@@ -10,15 +10,18 @@ import type { AgentRuntime } from "../src/runtime/types.js";
 test("tier logic matches the documented cases", () => {
   const pi: AgentForkCaps = { id: "pi", forkTransport: true, forkHistoryImport: true };
   const claude: AgentForkCaps = { id: "claude", forkTransport: true, forkHistoryImport: true };
-  const codex: AgentForkCaps = { id: "codex", forkHistoryImport: true }; // no forkTransport
+  // History-import only (no native transport) — a synthetic capability combo, not
+  // a specific agent. Real Codex/OpenCode DO expose forkTransport, so this uses a
+  // neutral id to avoid asserting a false fact about any shipping runtime.
+  const importerOnly: AgentForkCaps = { id: "importer-only", forkHistoryImport: true };
   const gemini: AgentForkCaps = { id: "gemini" }; // neither
 
   assert.equal(forkTier(pi, pi), "full", "same runtime with native transport");
   assert.equal(forkTier(claude, claude), "full");
-  assert.equal(forkTier(codex, codex), "replayed", "same runtime but NO native transport → replayed, not full");
+  assert.equal(forkTier(importerOnly, importerOnly), "replayed", "same runtime but NO native transport → replayed, not full");
   assert.equal(forkTier(pi, claude), "replayed", "cross-runtime into a history importer");
   assert.equal(forkTier(pi, gemini), "seeded", "destination can't import history");
-  assert.equal(forkTier(codex, gemini), "seeded");
+  assert.equal(forkTier(importerOnly, gemini), "seeded");
 });
 
 // Build a fake runtime + bundle exactly as resolveForkFidelity inspects them, so
@@ -70,12 +73,13 @@ test("matrix agrees with the real resolveForkFidelity for every capability combo
 test("matrix + markdown render", () => {
   const agents: AgentForkCaps[] = [
     { id: "pi", displayName: "Pi", forkTransport: true, forkHistoryImport: true },
-    { id: "codex", displayName: "Codex", forkHistoryImport: true },
+    { id: "codex", displayName: "Codex", forkTransport: true, forkHistoryImport: true },
     { id: "gemini", displayName: "Gemini" },
   ];
   const cells = forkMatrix(agents);
   assert.equal(cells.length, 9);
   assert.equal(cells.find((c) => c.source === "pi" && c.dest === "pi")?.tier, "full");
+  assert.equal(cells.find((c) => c.source === "codex" && c.dest === "codex")?.tier, "full", "Codex exposes native forkTransport → self-fork is byte-exact");
   assert.equal(cells.find((c) => c.source === "codex" && c.dest === "gemini")?.tier, "seeded");
 
   const md = renderForkMatrixMarkdown(agents);

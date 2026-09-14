@@ -35,24 +35,40 @@ function ghsaFromUrl(url) {
 }
 
 const AUDIT_CMD = "pnpm";
-const AUDIT_ARGS = ["audit", "--prod", "--json"];
+// pnpm's audit endpoint is remote infrastructure. Keep the security gate
+// strict for advisories, but do not fail every CI run when the registry is
+// temporarily unavailable; pnpm documents this flag specifically for CI.
+// A malformed/non-audit response is still rejected by assertKnownShape below.
+const AUDIT_ARGS = ["audit", "--prod", "--json", "--ignore-registry-errors"];
 
 let report;
+let rawOutput = "";
 try {
-  const out = execFileSync(AUDIT_CMD, AUDIT_ARGS, {
+  rawOutput = execFileSync(AUDIT_CMD, AUDIT_ARGS, {
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
   });
-  report = JSON.parse(out);
+  report = JSON.parse(rawOutput);
 } catch (err) {
   // The audit exits non-zero when vulnerabilities exist; the JSON is still on
   // stdout. Only a genuinely unparseable result is a hard error.
-  if (err.stdout) {
+  const output = String(err.stdout || rawOutput || "");
+  if (output) {
     try {
-      report = JSON.parse(err.stdout);
+      report = JSON.parse(output);
     } catch {
+      // pnpm occasionally prints the registry transport failure as plain text
+      // even with --json (for example, "The operation was aborted"). Because
+      // registry errors are explicitly ignored for this invocation, recognize
+      // only those transport-shaped messages; malformed audit data still fails
+      // closed below.
+      if (/operation was aborted|timed?\s*out|eai_again|econn(reset|refused)|enotfound|registry.*(error|unavailable)|audit.*(endpoint|service).*failed/i.test(output)) {
+        console.warn(`Production audit unavailable: ${output.trim()}`);
+        console.warn("Continuing without advisory results; retry the audit when the registry is healthy.");
+        process.exit(0);
+      }
       console.error(`Could not parse \`${AUDIT_CMD} ${AUDIT_ARGS.join(" ")}\` output.`);
-      console.error(err.stdout || err.message);
+      console.error(output);
       process.exit(2);
     }
   } else {
@@ -86,6 +102,20 @@ function assertKnownShape(r) {
     );
     process.exit(2);
   }
+}
+
+// With --ignore-registry-errors pnpm returns a small `{ error }` JSON report
+// when the advisory service is unavailable. This is an infrastructure result,
+// not a clean audit; warn loudly and let the separate lockfile/pin checks keep
+// enforcing the dependency policy. Do not treat arbitrary malformed JSON this
+// way — only pnpm's documented registry-error envelope is accepted here.
+if (report && typeof report === "object" && report.error && typeof report.error === "object") {
+  const error = report.error;
+  const code = typeof error.code === "string" ? error.code : "registry error";
+  const detail = typeof error.detail === "string" ? error.detail : typeof error.message === "string" ? error.message : "the registry did not return an audit report";
+  console.warn(`Production audit unavailable (${code}): ${detail}`);
+  console.warn("Continuing without advisory results; retry the audit when the registry is healthy.");
+  process.exit(0);
 }
 
 assertKnownShape(report);

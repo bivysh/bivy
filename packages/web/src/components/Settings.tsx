@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { SANDBOX_TIERS } from "./sandboxTiers.js";
 import type { AccountMe, AppState, EphemeralNodeConfig, LocalModelEndpointResult, LocalModelPreset, LocalModelProvider, PairedDevice, NodeSettings, NotificationPreferences, EphemeralMachine, ProviderKeyInfo, ProviderSize, HostedAuditEvent, HostedMachineSummary, HostedProvisioningStatus } from "@bivy/core";
@@ -13,11 +13,12 @@ import { MachineCapabilitiesSection } from "./MachineCapabilities.js";
 import { Segmented } from "./Segmented.js";
 import { Badge } from "./Badge.js";
 import { currentThemeSetting, setTheme, type ThemeSetting } from "../theme.js";
-import { useModalEscape } from "../modalStack.js";
+import { useModalBack, useModalEscape } from "../modalStack.js";
 import type { SettingsView } from "../router.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import { setCloudMachinesEnabled, useCloudMachinesEnabled } from "../cloudMachines.js";
 import { requestSignIn } from "../signInRequest.js";
+import { getAppIconBadgeEnabled, setAppIconBadgeEnabled, setNotificationPreferencesSnapshot, subscribeNotificationSettings } from "../notificationSettings.js";
 import { ChevronRightIcon, CloseIcon } from "./UiIcons.js";
 import { CredentialVault } from "./CredentialVault.js";
 
@@ -139,7 +140,7 @@ const SEARCH_TERMS: Record<View, string> = {
   appearance: "theme system light dark",
   notifications: "push alerts attention approval permission idle completed",
   import: "session transcript file upload migrate",
-  providers: "model provider api key oauth openai anthropic google login credentials custom endpoint local ollama",
+  providers: "model provider api key oauth openai anthropic google login credentials custom endpoint local ollama import claude codex grok machine",
   models: "model provider api key oauth ollama local custom endpoint",
   voice: "microphone speech transcription read aloud reader text to speech voice tone speed",
   github: "github app repository installation issue pull request",
@@ -182,6 +183,7 @@ export function Settings({
   const isDesktop = useMediaQuery("(min-width: 721px)");
   const DEFAULT: View = "appearance";
   const [query, setQuery] = useState("");
+  const [credentialProvider, setCredentialProvider] = useState<string | null>(null);
 
   // null === the mobile root menu. On desktop we always resolve to a panel —
   // reflect that resolution back into the URL so `/settings` never lingers
@@ -200,9 +202,11 @@ export function Settings({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view]);
 
-  // Escape closes; focus starts inside the panel and restores to the opener on
-  // close (parity with the Sheet primitive this replaced).
-  const onCloseRef = useRef(onClose);
+  // Escape and browser Back close Settings before navigating the underlying app.
+  const closeWithBack = useModalBack(onClose);
+  // Focus starts inside the panel and restores to the opener on close (parity
+  // with the Sheet primitive this replaced).
+  const onCloseRef = useRef(closeWithBack);
   onCloseRef.current = onClose;
   // Escape closes the modal — but only when Settings is the topmost layer.
   // A confirm dialog or sheet opened from within a panel registers above this,
@@ -267,12 +271,12 @@ export function Settings({
 
   return createPortal(
     <div className="settings-modal" role="dialog" aria-modal="true" aria-label="Settings">
-      <div className="settings-scrim" onClick={onClose} />
+      <div className="settings-scrim" onClick={closeWithBack} />
       <div className="settings-panel" data-mode={activeView ? "panel" : "menu"}>
         <aside className="settings-nav">
           <div className="settings-nav-top">
             <span className="settings-nav-heading">Settings</span>
-            <button className="settings-x" onClick={onClose} aria-label="Close settings"><CloseIcon /></button>
+            <button className="settings-x" onClick={closeWithBack} aria-label="Close settings"><CloseIcon /></button>
           </div>
           <div className="settings-search-wrap">
             <svg className="settings-search-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
@@ -298,7 +302,10 @@ export function Settings({
                     <button
                       key={it.id}
                       className={`settings-nav-item${activeView === it.id || (it.id === "providers" && activeView === "models") ? " active" : ""}`}
-                      onClick={() => onViewChange(it.id)}
+                      onClick={() => {
+                        if (it.id === "providers") setCredentialProvider(null);
+                        onViewChange(it.id);
+                      }}
                     >
                       <span className="settings-nav-icon">{it.icon}</span>
                       <span className="settings-nav-label">{it.label}</span>
@@ -325,20 +332,26 @@ export function Settings({
               </button>
             )}
             <h2 className="settings-head-title">{title}</h2>
-            <button className="settings-x settings-x-content" onClick={onClose} aria-label="Close settings"><CloseIcon /></button>
+            <button className="settings-x settings-x-content" onClick={closeWithBack} aria-label="Close settings"><CloseIcon /></button>
           </header>
-          <div className="settings-body">
+          <div className="settings-body" key={activeView ?? "menu"}>
             {activeView === "appearance" && <AppearancePanel />}
             {activeView === "notifications" && <NotificationsPanel />}
             {activeView === "import" && <ImportPanel onImported={(id) => onImported?.(id)} />}
-            {activeView === "providers" && <CredentialVault state={state} />}
+            {activeView === "providers" && <CredentialVault state={state} initialProvider={credentialProvider} />}
             {/* Compatibility for old /settings/models links. New endpoints are
                 added from Models & keys; this keeps the full legacy endpoint
                 editor reachable without splitting the primary navigation. */}
             {activeView === "models" && <LocalModelsPanel state={state} onStartWork={onClose} />}
             {activeView === "voice" && (
               <Suspense fallback={<div className="muted">Loading voice settings…</div>}>
-                <VoiceSettings state={state} />
+                <VoiceSettings
+                  state={state}
+                  onManageKey={(providerId) => {
+                    setCredentialProvider(providerId);
+                    onViewChange("providers");
+                  }}
+                />
               </Suspense>
             )}
             {/* github / linear / slack / queue / webhooks / rulesets moved to the
@@ -449,11 +462,15 @@ function NotificationsPanel() {
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const appIconBadgeEnabled = useSyncExternalStore(subscribeNotificationSettings, getAppIconBadgeEnabled);
 
   const reloadStatus = () => controller.pushStatus().then(setStatus).catch(() => {});
   useEffect(() => {
     reloadStatus();
-    controller.getNotificationPreferences().then(setPrefs).catch(() => {});
+    controller.getNotificationPreferences().then((next) => {
+      setPrefs(next);
+      setNotificationPreferencesSnapshot(next);
+    }).catch(() => {});
   }, []);
 
   // The enable/disable result (or a save error) used to sit there forever —
@@ -485,7 +502,10 @@ function NotificationsPanel() {
     if (!prefs) return;
     const next = { ...prefs, [id]: value };
     setPrefs(next); // optimistic
-    controller.setNotificationPreferences({ [id]: value }).then(setPrefs).catch((e) => {
+    controller.setNotificationPreferences({ [id]: value }).then((saved) => {
+      setPrefs(saved);
+      setNotificationPreferencesSnapshot(saved);
+    }).catch((e) => {
       setPrefs(prefs); // revert
       setErr(String((e as Error).message || e));
     });
@@ -507,6 +527,13 @@ function NotificationsPanel() {
           <p className="muted">{on ? "This device receives Bivy push notifications." : "Turn on to get notified about your sessions on this device."}</p>
         </div>
         <Toggle checked={on} disabled={busy} onChange={setMaster} label="Enable push notifications" />
+      </div>
+      <div className="settings-toggle-row">
+        <div className="settings-toggle-text">
+          <span className="settings-toggle-title">App icon badge</span>
+          <p className="muted">Show the number of sessions that need attention on this device's home screen icon.</p>
+        </div>
+        <Toggle checked={appIconBadgeEnabled} onChange={setAppIconBadgeEnabled} label="Show app icon badge" />
       </div>
       {status?.permission === "denied" && (
         <div className="banner inline" data-tone="warn">Notifications are blocked in your browser settings — allow them there to enable push.</div>
@@ -1058,7 +1085,7 @@ function NodesPanel({ state, cloudMachinesEnabled }: { state: AppState; cloudMac
                 <code>{nodeClaim.command}</code>
                 <button
                   type="button"
-                  className={`repo-connect-copy${claimCopied ? " is-copied" : ""}`}
+                  className={`btn sm ghost${claimCopied ? " is-copied" : ""}`}
                   onClick={() => {
                     void navigator.clipboard.writeText(nodeClaim.command || "").then(() => {
                       setClaimCopied(true);
@@ -1096,7 +1123,7 @@ function NodesPanel({ state, cloudMachinesEnabled }: { state: AppState; cloudMac
                   right={claim.status === "pending" ? (
                     <button
                       type="button"
-                      className="picker-action danger"
+                      className="btn sm danger-ghost"
                       onClick={(event) => {
                         event.stopPropagation();
                         controller.revokeNodeClaim(claim.id)
@@ -1682,7 +1709,7 @@ function HostedRunnerActivity() {
               key={`${m.provider}:${m.id}`}
               title={<>{m.name || m.nodeId || m.id} <Badge tone={failure ? "danger" : phase === "ready" ? "ok" : undefined}>{phase.replaceAll("-", " ")}</Badge></>}
               meta={[m.provider, m.region, m.size, cost, m.ttlMinutes ? `TTL ${m.ttlMinutes}m` : null].filter(Boolean).join(" · ")}
-              right={<button type="button" className="picker-action danger" disabled={!m.nodeId || busy} onClick={(e) => { e.stopPropagation(); setConfirmDestroy(m); }}>Destroy</button>}
+              right={<button type="button" className="btn sm danger-ghost" disabled={!m.nodeId || busy} onClick={(e) => { e.stopPropagation(); setConfirmDestroy(m); }}>Destroy</button>}
             />;
           })}
         </div>}
@@ -2002,7 +2029,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
                 right={
                   <button
                     type="button"
-                    className="picker-action danger"
+                    className="btn sm danger-ghost"
                     onClick={(e) => {
                       e.stopPropagation();
                       setConfirm({
@@ -2139,7 +2166,7 @@ function AccountPanel() {
               right={
                 <button
                   type="button"
-                  className="picker-action danger"
+                  className="btn sm danger-ghost"
                   onClick={(e) => {
                     e.stopPropagation();
                     setConfirm({
@@ -2172,7 +2199,7 @@ function AccountPanel() {
                 right={
                   <button
                     type="button"
-                    className="picker-action danger"
+                    className="btn sm danger-ghost"
                     onClick={(e) => {
                       e.stopPropagation();
                       setConfirm({
@@ -2213,6 +2240,24 @@ function AccountPanel() {
           })}
         >
           Sign out
+        </button>
+        <button
+          className="btn danger-ghost block"
+          disabled={accountAction !== null}
+          onClick={() => setConfirm({
+            title: "Delete account?",
+            message: "This permanently deletes your Bivy account, billing subscription, and its data. This cannot be undone.",
+            label: "Delete account",
+            action: () => {
+              setAccountAction("delete-account");
+              controller.deleteAccount()
+                .then(() => controller.signOut())
+                .catch((e) => setErr(String(e?.message || e)))
+                .finally(() => setAccountAction(null));
+            },
+          })}
+        >
+          {accountAction === "delete-account" ? "Deleting…" : "Delete account"}
         </button>
       </div>
     </div>

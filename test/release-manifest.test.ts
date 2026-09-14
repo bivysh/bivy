@@ -82,6 +82,12 @@ check("runtime dependencies are retained", () => {
   assert.ok(staged.dependencies?.express, "express (a runtime dep) must be retained");
 });
 
+check("terminal support cannot be omitted or silently discarded on a failed native build", () => {
+  assert.equal(staged.dependencies?.["node-pty"], rootPkg.dependencies["node-pty"]);
+  assert.ok(staged.dependencies?.["node-pty"], "node-pty must be a required runtime dependency");
+  assert.ok(!staged.optionalDependencies?.["node-pty"], "--omit=optional must retain terminal support");
+});
+
 check("workspaces field is dropped", () => {
   assert.ok(!("workspaces" in staged), "staged manifest must not carry the monorepo workspaces field");
 });

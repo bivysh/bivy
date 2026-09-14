@@ -17,11 +17,14 @@
 // returns is the caller's own record type, not a narrowed copy.
 
 import { randomBytes } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { normalizeSandboxTier, type SandboxTier } from "../harness/sandbox.js";
 import { parseRepo } from "../repo-workspace.js";
 import { evaluateForkPrereqs, blockingForkPrereqs, missingForkPrereqs, type ForkPrereq, type ForkPrereqInput } from "../session/fork-prereqs.js";
 import type { ForkBundle, ForkPlan, MaterializeForkOptions } from "../session/fork.js";
 import type { Worktree } from "../worktree.js";
+import { applyWorkspaceSnapshot } from "./fork-dirty.js";
 import type { AgentRuntime } from "../runtime/index.js";
 
 type ModelRef = { provider: string; id: string };
@@ -68,7 +71,7 @@ export type StandUpForkOutcome<R> =
 
 /** Fork stand-up's entire coupling surface to the rest of the daemon. */
 export interface ForkStandUpDeps<R extends ForkStandUpSession> {
-  createSession(cwd: string, sessionFile: string | undefined, opts: { runtimeId: string; source?: string; sandbox?: SandboxTier; makeActive?: boolean }): Promise<R>;
+  createSession(cwd: string, sessionFile: string | undefined, opts: { runtimeId: string; source?: string; sandbox?: SandboxTier; makeActive?: boolean; newSession?: boolean }): Promise<R>;
   broadcast(payload: unknown): void;
   persistSessionMetadata(record: R): void;
   scheduleAdvertise(): void;
@@ -88,7 +91,7 @@ export interface ForkStandUpDeps<R extends ForkStandUpSession> {
   /** Whether the source branch is on the remote — gates the adopt path so a
    *  never-pushed branch can't silently base off the destination default. */
   originBranchPresent(repoDir: string, branch: string): Promise<boolean>;
-  applyDirtyPatch(cwd: string, patch: ForkBundle["dirtyPatch"]): { warning?: string };
+  applyDirtyPatch(cwd: string, patch: ForkBundle["dirtyPatch"]): { applied?: boolean; warning?: string };
   gitRepoRoot(cwd: string): Promise<string | undefined>;
   materializeFork(args: MaterializeForkOptions): Promise<ForkPlan>;
   getRuntime(id: string, sandbox?: SandboxTier): AgentRuntime;
@@ -123,6 +126,27 @@ export function createForkStandUp<R extends ForkStandUpSession>(deps: ForkStandU
   async function standUpFork(opts: StandUpForkOptions): Promise<StandUpForkOutcome<R>> {
     const { bundle, targetRuntimeId } = opts;
     const fallback = opts.fallback ?? { workspace: deps.defaultWorkspace, cwd: deps.defaultWorkspace };
+    // An oversized dirty marker means no WIP bytes are present in the bundle.
+    // Never continue and pretend the pushed branch preserved them: git push only
+    // transports commits. The source remains untouched, so the user can commit,
+    // reduce the change set, or raise the configured transfer limit and retry.
+    if (bundle.dirtyPatch?.pushedInstead) {
+      const size = bundle.dirtyPatch.byteLength;
+      const limit = bundle.dirtyPatch.maxBytes;
+      const detail = size && limit ? ` (${Math.ceil(size / 1024)} KiB; limit ${Math.ceil(limit / 1024)} KiB)` : "";
+      return {
+        ok: false,
+        error: `The source has too many uncommitted changes to transfer safely${detail}. Commit them or reduce the working-tree changes, then retry; the source was not modified.`,
+        missing: [],
+      };
+    }
+    if (bundle.workspaceSnapshot?.oversized) {
+      return {
+        ok: false,
+        error: `The source workspace is too large to transfer safely (${bundle.workspaceSnapshot.byteLength} bytes; limit ${bundle.workspaceSnapshot.maxBytes}). Reduce it and retry.`,
+        missing: [],
+      };
+    }
     // Carry the source's sandbox tier so a sandboxed session forks into a
     // sandboxed one, rather than defaulting to this node's tier (fork.ts).
     const forkSandbox = normalizeSandboxTier(bundle.record.sandbox);
@@ -216,21 +240,49 @@ export function createForkStandUp<R extends ForkStandUpSession>(deps: ForkStandU
         return deps.createWorktree({ repoDir, id: dirId, branch: srcBranch, base });
       });
       const applied = deps.applyDirtyPatch(wt.path, bundle.dirtyPatch);
+      if (bundle.dirtyPatch?.patch.trim() && applied.applied !== true) {
+        return {
+          ok: false,
+          error: applied.warning ?? "The source's uncommitted changes could not be applied safely. The source was not modified; retry after committing or reducing the changes.",
+          missing: [],
+        };
+      }
       if (applied.warning) dirtyWarning = applied.warning;
       workspace = repoDir;
       cwd = wt.path;
       worktree = wt;
     } else {
+      // Non-repo-backed source. Materialise the complete workspace into an
+      // isolated directory on the destination; this also prevents same-node
+      // plain-directory forks from running two agents in one cwd.
+      if (bundle.workspaceSnapshot) {
+        const root = path.resolve(deps.defaultWorkspace);
+        fs.mkdirSync(root, { recursive: true });
+        const isolated = fs.mkdtempSync(path.join(root, ".bivy-fork-"));
+        applyWorkspaceSnapshot(isolated, bundle.workspaceSnapshot);
+        workspace = isolated;
+        cwd = isolated;
+      }
       // Non-repo-backed source. The fork would otherwise reuse the PARENT's cwd,
       // putting two sessions in one working tree — so when that cwd is itself a git
       // checkout (a local repo without a GitHub origin), cut the fork its own
       // worktree on a fresh branch. Best-effort: a non-git workspace has no tree to
       // isolate, so the fork keeps the fallback cwd (no git collisions possible).
-      const forkRepoRoot = await deps.gitRepoRoot(cwd);
+      // A snapshot is authoritative for a machine-local source. Do not inspect
+      // the destination fallback cwd and accidentally turn it into a worktree
+      // fork of an unrelated repository.
+      const forkRepoRoot = bundle.workspaceSnapshot ? undefined : await deps.gitRepoRoot(cwd);
       if (forkRepoRoot) {
         const forkBranch = `bivy/fork-${randomBytes(6).toString("hex")}`;
         const wt = await deps.withRepoLock(forkRepoRoot, () => deps.createWorktree({ repoDir: forkRepoRoot, id: forkBranch, branch: forkBranch }));
         const applied = deps.applyDirtyPatch(wt.path, bundle.dirtyPatch);
+        if (bundle.dirtyPatch?.patch.trim() && applied.applied !== true) {
+          return {
+            ok: false,
+            error: applied.warning ?? "The source's uncommitted changes could not be applied safely. The source was not modified; retry after committing or reducing the changes.",
+            missing: [],
+          };
+        }
         if (applied.warning) dirtyWarning = applied.warning;
         workspace = forkRepoRoot;
         cwd = wt.path;
@@ -246,8 +298,8 @@ export function createForkStandUp<R extends ForkStandUpSession>(deps: ForkStandU
     const targetModel = opts.model ?? (targetRuntimeId === bundle.record.runtimeId ? bundle.record.modelRef : undefined);
     const plan = await deps.materializeFork({ bundle, targetRuntime, ctx: { workspace, cwd, model: targetModel }, seed: { transcriptUrl: opts.transcriptUrl } });
     const record = plan.kind === "resume"
-      ? await deps.createSession(cwd, plan.sessionFile, { runtimeId: targetRuntimeId, source: bundle.record.source, sandbox: forkSandbox, makeActive: false })
-      : await deps.createSession(cwd, undefined, { runtimeId: targetRuntimeId, source: bundle.record.source, sandbox: forkSandbox, makeActive: false });
+      ? await deps.createSession(cwd, plan.sessionFile, { runtimeId: targetRuntimeId, source: bundle.record.source, sandbox: forkSandbox, makeActive: false, newSession: true })
+      : await deps.createSession(cwd, undefined, { runtimeId: targetRuntimeId, source: bundle.record.source, sandbox: forkSandbox, makeActive: false, newSession: true });
     // Mark the new session as a fork of its source, so the run card can show
     // "Forked from …" and the lineage survives a reload (persisted below).
     record.forkedFrom = bundle.record.sourceSessionId;

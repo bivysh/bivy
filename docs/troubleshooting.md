@@ -228,8 +228,8 @@ First, work out who owns auth for your agent — `bivy doctor` prints it:
 
 - **Bivy-owned or mixed** (for example Aider): credentials can live in Bivy's vault.
   ```bash
-  bivy login              # subscription (OAuth) or API key, then pick a provider
-  bivy login <provider>   # skip the menu
+  bivy provider login              # subscription (OAuth) or API key, then pick a provider
+  bivy provider login <provider>   # skip the menu
   ```
 - **Agent-owned** (Pi, Claude Code, Codex, Gemini CLI, Qwen Code): run the agent's
   own CLI once and complete its login.
@@ -259,7 +259,7 @@ bivy logs -f    # look for lines tagged [relay]
 **Fixes.**
 
 - Never set up (you chose *local only* in `bivy setup`, or skipped it): run
-  `bivy relay:setup` and sign in.
+  `bivy login` and sign in.
 - Configured but the running node has not picked it up: `bivy restart`.
 - The node dials the relay outbound over WSS. If a corporate proxy or firewall
   blocks outbound WebSocket connections, the node will retry with exponential
@@ -288,7 +288,7 @@ bivy link     # mint a fresh pairing QR
 - Pairing secrets in a link are single-use. If you scanned an old QR, run
   `bivy link` again for a fresh one.
 - Make sure you are signed into the same account on the phone that you used
-  during `bivy relay:setup`.
+  during `bivy login`.
 - See [remote-access.md](remote-access.md) for the full flow.
 
 ## "This Bivy server has no encryption key for stored credentials"
@@ -374,9 +374,15 @@ bivy doctor
   output produced during the restart.
 - `bivy update` waits for active sessions to finish a turn. Use
   `bivy update --force` to skip the wait.
-- The installer stages the new release and restores the previous one if anything
-  fails, so a failed update should leave you running the old version. Check
-  `bivy update:log` for the reason.
+- Updates are not universally transactional. The fallback tarball installer
+  stages dependencies before swapping the application and restores the previous
+  directory if the swap fails; npm-global and Git-checkout updates modify files
+  in place and do not provide automatic rollback. Check `bivy update:log` for
+  the reason before restarting a failed installation.
+- A checkout update stops if `git pull` or dependency installation fails, without
+  restarting the service. Resolve the Git/dependency error and retry
+  `bivy update`; files may already have changed even though the old process is
+  still running.
 - Ownership errors during update: see the next section.
 
 ## Permissions and ownership

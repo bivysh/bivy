@@ -9,12 +9,24 @@
 // delegates here rather than re-implementing the contract.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { evaluateAutomation, findOverlaps, gateFromChecks, matchFirst, runPreflightChecks } from "../src/automation/index.js";
+import { evaluateAutomation, findOverlaps, gateFromChecks, labelsMatch, matchFirst, runPreflightChecks } from "../src/automation/index.js";
 import type { EvaluableAutomation } from "../src/automation/types.js";
 
 function automation(partial: Partial<EvaluableAutomation> & Pick<EvaluableAutomation, "id" | "trigger">): EvaluableAutomation {
   return { enabled: true, ...partial };
 }
+
+test("labelsMatch: routing prefixes exclude status labels without breaking explicit custom labels", () => {
+  for (const filter of [undefined, ["bivy"]]) {
+    assert.equal(labelsMatch(filter, ["bivy"]), true);
+    assert.equal(labelsMatch(filter, ["bivy/laptop"]), true);
+    for (const label of ["bivy:in-progress", "bivy/laptop:in-progress", " BIVY/STAGING:IN-PROGRESS "]) {
+      assert.equal(labelsMatch(filter, [label]), false);
+    }
+  }
+  assert.equal(labelsMatch(["agent"], ["agent/linux"]), true);
+  assert.equal(labelsMatch(["status:ready"], ["status:ready"]), true);
+});
 
 test("matchFirst: first enabled candidate in caller order wins", () => {
   const candidates = [

@@ -4,9 +4,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { AppState, CredentialRecordSummary, EphemeralModelKeyInfo, LocalModelEndpointResult } from "@bivy/core";
 import { BIVY_PROVIDER_CATALOG, mergeCredentialItems, migrateBrowserModelKeys, migrateNodeCredentialSummaries } from "@bivy/core";
 import { controller } from "../store/useStore.js";
+import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import { OauthStep } from "./ProviderConnect.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { Badge } from "./Badge.js";
+import { NativeCredentialImport } from "./NativeCredentialImport.js";
 
 type CatalogProvider = { id: string; name: string; oauth?: boolean; apiKey?: boolean; reference?: boolean; help?: string };
 type Availability = "account" | "node" | "device";
@@ -35,7 +37,7 @@ const titleFor = (item: VaultItem) => item.label === "default" ? item.providerNa
 const methodLabel = (kind: VaultItem["kind"]) => kind === "oauth" ? "Subscription sign-in" : kind === "reference" ? "Password-manager reference" : kind === "environment" ? "Environment" : "API key";
 const availabilityLabel = (value: Availability) => value === "account" ? "All my machines" : value === "node" ? "Only this machine" : "Only this device";
 
-export function CredentialVault({ state }: { state: AppState }) {
+export function CredentialVault({ state, initialProvider = null }: { state: AppState; initialProvider?: string | null }) {
   const status = state.connection.status;
   const currentNodeId = state.connection.currentNodeId;
   const nodes = state.connection.nodes;
@@ -46,10 +48,10 @@ export function CredentialVault({ state }: { state: AppState }) {
   const localModels = state.settings.localModels;
   const oauth = state.presentation.oauth;
   const [deviceKeys, setDeviceKeys] = useState<EphemeralModelKeyInfo[]>([]);
-  const [view, setView] = useState<"list" | "add" | "detail">("list");
+  const [view, setView] = useState<"list" | "add" | "detail" | "import">(() => initialProvider ? "add" : "list");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [provider, setProvider] = useState("");
+  const [provider, setProvider] = useState(() => initialProvider ?? "");
   const [method, setMethod] = useState<"api_key" | "oauth" | "reference">("api_key");
   const [label, setLabel] = useState("");
   const [secret, setSecret] = useState("");
@@ -66,6 +68,12 @@ export function CredentialVault({ state }: { state: AppState }) {
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<VaultItem | null>(null);
   const [oauthRecovery, setOauthRecovery] = useState(() => controller.getOAuthBrowserRecovery());
+  const importButton = useRef<HTMLButtonElement>(null);
+  const previousView = useRef(view);
+  useEffect(() => {
+    if (previousView.current === "import" && view === "list") importButton.current?.focus();
+    previousView.current = view;
+  }, [view]);
 
   const refreshDevice = () => controller.listEphemeralModelKeys().then(setDeviceKeys).catch(() => setDeviceKeys([]));
   const refresh = () => {
@@ -255,6 +263,8 @@ export function CredentialVault({ state }: { state: AppState }) {
     finally { setBusy(false); }
   };
 
+  if (view === "import") return <NativeCredentialImport state={state} onBack={() => { setView("list"); refresh(); }} />;
+
   if (view === "add") {
     const chosen = catalog.find((p) => p.id === provider) ?? (provider ? { id: provider, name: provider } : undefined);
     if (!chosen) {
@@ -381,7 +391,7 @@ export function CredentialVault({ state }: { state: AppState }) {
         <span className="muted">Used by default</span><strong>{isDefault ? "Yes" : "No"}</strong>
         <span className="muted">Used by projects</span><strong>{assignedProjects.length ? assignedProjects.join(", ") : "None explicitly — projects use the default"}</strong>
         {assignmentProject && <><span className="muted">Selected project</span><strong>{usedByProject ? "Uses this credential" : projectLabel ? `Uses ${projectLabel}` : "Uses provider default"}</strong></>}
-        {selected.record && <><span className="muted">Unattended runs</span><strong>{selected.record.unattended ? "Allowed — encrypted cloud copy enabled" : "Not allowed"}</strong></>}
+        {EPHEMERAL_MACHINES_ENABLED && selected.record && <><span className="muted">Unattended runs</span><strong>{selected.record.unattended ? "Allowed — encrypted cloud copy enabled" : "Not allowed"}</strong></>}
         {selected.record?.origin === "agent-native" && <><span className="muted">Added by</span><strong>Agent sign-in</strong></>}
         {selected.record?.ref && <><span className="muted">Reference</span><code>{selected.record.ref}</code></>}
       </div>
@@ -390,9 +400,9 @@ export function CredentialVault({ state }: { state: AppState }) {
         {count > 1 && !isDefault && <button className="btn" disabled={busy} onClick={() => void assign("default", selected.provider, selected.label, "Now used by default.")}>Use by default</button>}
         {count > 1 && projectPreset && !usedByProject && <button className="btn" disabled={busy} onClick={() => void assign(projectPreset, selected.provider, selected.label, `Assigned to ${projectId}.`)}>Use for {projectId}</button>}
         {projectPreset && usedByProject && <button className="btn" disabled={busy} onClick={() => void assign(projectPreset, selected.provider, "", `${projectId} now uses the provider default.`)}>Clear project assignment</button>}
-        {selected.record.sync === "account" && selected.record.kind !== "reference" && <button className="btn" disabled={busy} onClick={async () => { setBusy(true); setError(null); try { await controller.setCredentialUnattended(selected.provider, selected.label, !selected.record!.unattended); setMessage(selected.record!.unattended ? "Unattended access revoked and its encrypted cloud copy removed." : "Unattended access enabled with a separate encrypted cloud copy."); refresh(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); } }}>{selected.record.unattended ? "Disable unattended runs" : "Allow unattended runs"}</button>}
+        {EPHEMERAL_MACHINES_ENABLED && selected.record.sync === "account" && selected.record.kind !== "reference" && <button className="btn" disabled={busy} onClick={async () => { setBusy(true); setError(null); try { await controller.setCredentialUnattended(selected.provider, selected.label, !selected.record!.unattended); setMessage(selected.record!.unattended ? "Unattended access revoked and its encrypted cloud copy removed." : "Unattended access enabled with a separate encrypted cloud copy."); refresh(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); } }}>{selected.record.unattended ? "Disable unattended runs" : "Allow unattended runs"}</button>}
       </div>}
-      {selected.record?.sync === "account" && selected.record.kind !== "reference" && <p className="muted vault-custody-note">To run while all your devices are offline, Bivy stores a separate encrypted copy of this credential in its control plane. This is opt-in, used only for unattended runs, and removed when you disable access.</p>}
+      {EPHEMERAL_MACHINES_ENABLED && selected.record?.sync === "account" && selected.record.kind !== "reference" && <p className="muted vault-custody-note">To run while all your devices are offline, Bivy stores a separate encrypted copy of this credential in its control plane. This is opt-in, used only for unattended runs, and removed when you disable access.</p>}
       {count > 1 && <div>
         <label className="field-label" htmlFor="credential-project">Assign for project or repository</label>
         <input id="credential-project" className="picker-search" list="credential-project-options" placeholder="owner/repository or project ID" value={assignmentProject} onChange={(e) => setAssignmentProject(e.target.value)} />
@@ -417,6 +427,7 @@ export function CredentialVault({ state }: { state: AppState }) {
   const filtered = items.filter((item) => `${item.providerName} ${item.provider} ${item.label}`.toLowerCase().includes(query.toLowerCase()));
   return <div className="settings-form credential-vault">
     <div className="vault-title-row"><div><h3>Your model access</h3><p className="muted settings-intro">Hosted providers, subscription sign-ins, API keys, and your own model endpoints.</p></div><button className="btn primary" onClick={() => { setSelectedKey(null); resetAdd(); setQuery(""); setView("add"); }}>+ Add</button></div>
+    <button ref={importButton} className="btn" onClick={() => setView("import")}>Import from machine</button>
     <div className="settings-toggle-row">
       <div className="settings-toggle-text"><div className="settings-toggle-title">OAuth browser recovery</div><p className="muted small">Keep account OAuth refresh tokens end-to-end encrypted on your signed-in devices so a new machine can recover without another machine online.</p></div>
       <button type="button" role="switch" aria-checked={oauthRecovery} aria-label="Allow OAuth browser recovery" className={`settings-toggle${oauthRecovery ? " on" : ""}`} onClick={() => { const enabled = !oauthRecovery; setOauthRecovery(enabled); void controller.setOAuthBrowserRecovery(enabled).catch(() => setOauthRecovery(!enabled)); }}><span className="settings-toggle-knob" aria-hidden /></button>

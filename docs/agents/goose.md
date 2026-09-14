@@ -3,7 +3,7 @@
 Block's open-source agent (`block/goose`), run under Bivy with its
 `stream-json` output format for structured streaming.
 
-- **Runtime id:** `goose` · **Tier:** Beta · **In picker:** Yes
+- **Runtime id:** `goose` · **Tier:** Supported · **In picker:** Yes
 
 ## Install
 
@@ -23,7 +23,7 @@ Goose's own configuration is set to read that provider from the environment —
 Bivy doesn't select a model or provider for Goose itself:
 
 ```bash
-bivy login   # sign in to whichever provider Goose is configured to use
+bivy provider login   # sign in to whichever provider Goose is configured to use
 ```
 
 ## Models

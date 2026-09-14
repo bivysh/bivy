@@ -15,6 +15,7 @@ export interface ConnectionFoldValue {
   readonly currentNodeId: string | null;
   readonly nodeUpdate: { current: string; latest: string } | null;
   readonly nodeUpdating: boolean;
+  readonly nodeUpdateAcknowledged: boolean;
 }
 
 export interface ConnectionFoldResult<T> {
@@ -45,14 +46,19 @@ export function foldConnectionEvent<T extends ConnectionFoldValue>(
       handled: true,
       value: current && latest
         ? { ...value, nodeUpdate: { current, latest } }
-        : { ...value, nodeUpdate: null, nodeUpdating: false },
+        : { ...value, nodeUpdate: null, nodeUpdating: false, nodeUpdateAcknowledged: false },
     };
   }
   if (event.type === "node.update.result") {
-    if (event.ok !== false) return { handled: true, value };
+    if (event.ok !== false) {
+      // The reply only confirms that the updater was started. The node.update
+      // event sent by the replacement process clears the busy state once the
+      // new version is actually running. Acceptance is not completion.
+      return { handled: true, value: { ...value, nodeUpdateAcknowledged: true } };
+    }
     return {
       handled: true,
-      value: { ...value, nodeUpdating: false },
+      value: { ...value, nodeUpdating: false, nodeUpdateAcknowledged: false },
       error: typeof event.error === "string" ? event.error : "Couldn't start the update on this node.",
     };
   }

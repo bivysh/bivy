@@ -98,8 +98,24 @@ class TurnAccumulator {
   // already sealed into `content` as its own block.
   private readonly content: Array<Record<string, unknown>> = [];
   private textFlushed = "";
+  // A tool call interrupts the assistant's prose/reasoning: the text that
+  // resumes after it is a NEW message segment, not a continuation of the last
+  // token. Without a separator the two run together ("…what it does.The next…",
+  // "…shell commandI have…") — exactly the seam the governed ProtocolRuntime
+  // guards with its `assistantItemBoundary` \n\n insertion. Mirror that here so
+  // every CliParser agent (Grok, Goose, Gemini, the generic streams) gets the
+  // same clean paragraph break instead of a concatenated blob. Tracked per
+  // stream because text and reasoning accumulate into separate buffers.
+  private pendingTextBoundary = false;
+  private pendingReasoningBoundary = false;
   private readonly out: RuntimeMessage[] = [];
   private readonly details = new Map<string, ReturnType<typeof mapToolCall>>();
+  // Not every CLI includes a stable id on both halves of a tool exchange.
+  // Keep a small FIFO of open calls so the universal parser can still pair an
+  // anonymous result with its call instead of creating a second, forever-running
+  // card in the transcript.
+  private readonly openToolIds: string[] = [];
+  private anonymousToolId = 0;
 
   private flushPendingText() {
     const pending = this.text.slice(this.textFlushed.length);
@@ -107,7 +123,15 @@ class TurnAccumulator {
     if (pending) this.content.push({ type: "text", text: pending });
   }
 
-  constructor(private readonly toolContext: ToolCallMapContext) {}
+  constructor(
+    private readonly toolContext: ToolCallMapContext,
+    // Native CLI streams (Grok, Goose, Claude/Codex JSON, …) start a fresh
+    // prose/reasoning segment after each tool call without re-emitting a
+    // separator, so we infer the paragraph break. The bivy-agent-protocol path
+    // instead carries continuation faithfully (a shim can emit an explicit
+    // boundary when it wants one), so it opts out.
+    private readonly inferSegmentBoundaries = true,
+  ) {}
 
   ensureStart(events: RuntimeEvent[]) {
     if (!this.started) {
@@ -125,6 +149,8 @@ class TurnAccumulator {
    */
   appendReasoning(text: string, events: RuntimeEvent[]) {
     if (!text) return;
+    if (this.pendingReasoningBoundary && this.reasoning) this.reasoning += "\n\n";
+    this.pendingReasoningBoundary = false;
     this.reasoning += text;
     events.push({ type: "message_update", message: { role: "assistant", content: [{ type: "thinking", thinking: this.reasoning }] } });
   }
@@ -137,29 +163,55 @@ class TurnAccumulator {
   appendText(text: string, events: RuntimeEvent[]) {
     if (!text) return;
     this.ensureStart(events);
+    if (this.pendingTextBoundary && this.text) {
+      // Advance the sealed prefix over the display-only separator when the prior
+      // segment was already flushed to a content block, so the next persisted
+      // block holds `Second message`, not `\n\nSecond message` (matching
+      // ProtocolRuntime). The cumulative `text` still carries the break for the
+      // live stream and the final answer.
+      const wasFullyFlushed = this.textFlushed === this.text;
+      this.text += "\n\n";
+      if (wasFullyFlushed) this.textFlushed = this.text;
+    }
+    this.pendingTextBoundary = false;
     this.text += text;
     events.push({ type: "message_update", message: { role: "assistant", content: this.text } });
   }
 
   addToolUse(id: string, name: string, input: unknown, events: RuntimeEvent[]) {
-    traceToolPayload({ phase: "call", context: this.toolContext, name, callId: id, payload: input });
+    const callId = id || `cli-tool-${++this.anonymousToolId}`;
+    this.openToolIds.push(callId);
+    traceToolPayload({ phase: "call", context: this.toolContext, name, callId, payload: input });
     // Attach a normalized ToolCallDetail (display-only) so the PWA renders this
     // call the same way it renders every other agent's equivalent call. Absent
     // when unrecognized — the block stays opaque and renders as before.
     const detail = mapToolCall(name, input, this.toolContext);
-    if (detail && id) this.details.set(id, detail);
+    if (detail) this.details.set(callId, detail);
     this.flushPendingText();
-    this.content.push({ type: "tool_use", id, name, input: input ?? {}, ...(detail ? { detail } : {}) });
-    events.push({ type: "tool_call", toolName: name, input, toolCallId: id, ...(detail ? { detail } : {}) });
+    // Prose/reasoning that resumes after this call is a fresh segment — arm the
+    // boundary so the next appendText/appendReasoning inserts a separator.
+    if (this.inferSegmentBoundaries) {
+      this.pendingTextBoundary = true;
+      this.pendingReasoningBoundary = true;
+    }
+    this.content.push({ type: "tool_use", id: callId, name, input: input ?? {}, ...(detail ? { detail } : {}) });
+    events.push({ type: "tool_call", toolName: name, input, toolCallId: callId, ...(detail ? { detail } : {}) });
   }
 
   addToolResult(toolUseId: string, name: string, content: unknown, events: RuntimeEvent[], isError = false) {
-    traceToolPayload({ phase: "result", context: this.toolContext, name, callId: toolUseId, payload: content });
-    const prior = this.details.get(toolUseId);
+    // Prefer the explicit id. Otherwise close the oldest open call, which is
+    // the only generally safe correlation available from an id-less stream.
+    const callId = toolUseId || this.openToolIds.shift() || `cli-tool-result-${++this.anonymousToolId}`;
+    if (toolUseId) {
+      const index = this.openToolIds.indexOf(toolUseId);
+      if (index >= 0) this.openToolIds.splice(index, 1);
+    }
+    traceToolPayload({ phase: "result", context: this.toolContext, name, callId, payload: content });
+    const prior = this.details.get(callId);
     const detail = prior ? { ...prior, result: mapToolResult(content, isError) } : undefined;
-    if (detail) this.details.set(toolUseId, detail);
-    this.toolResults.push({ type: "tool_result", tool_use_id: toolUseId, content: content ?? "", ...(detail ? { detail } : {}) });
-    events.push({ type: "tool_result", toolName: name, result: { toolCallId: toolUseId, content }, ...(detail ? { detail } : {}) });
+    if (detail) this.details.set(callId, detail);
+    this.toolResults.push({ type: "tool_result", tool_use_id: callId, content: content ?? "", ...(detail ? { detail } : {}) });
+    events.push({ type: "tool_result", toolName: name, result: { toolCallId: callId, content }, ...(detail ? { detail } : {}) });
   }
 
   /** Finalize the turn: emit message_end/turn_end/agent_end and record history. */
@@ -191,7 +243,10 @@ class TurnAccumulator {
 
 /** Parser for the bivy-agent-protocol JSONL event vocabulary (the universal path). */
 export function bivyProtocolParser(): CliParser {
-  const acc = new TurnAccumulator({ provider: "bivy-protocol", protocol: "protocol" });
+  // The universal protocol carries continuation faithfully: text after a tool is
+  // appended verbatim (a shim emits an explicit break when it wants one), so it
+  // opts out of inferred segment boundaries.
+  const acc = new TurnAccumulator({ provider: "bivy-protocol", protocol: "protocol" }, false);
   return {
     onLine(line) {
       const events: RuntimeEvent[] = [];
@@ -290,13 +345,42 @@ export function claudeStreamJsonParser(): CliParser {
  * codex-cli 0.142): a thread with turns, each turn a stream of typed items.
  *   {"type":"thread.started","thread_id":…}
  *   {"type":"turn.started"} / {"type":"turn.completed"} / {"type":"turn.failed","error":{message}}
+ *   {"type":"item.started","item":{…}}   ← a shell/patch/MCP call begins (live card)
  *   {"type":"item.completed","item":{"id":…,"type":"agent_message"|"reasoning"|
- *        "command_execution"|"mcp_tool_call"|"file_change"|"error", …}}
+ *        "command_execution"|"mcp_tool_call"|"file_change"|"error", "status":…, …}}
  *   {"type":"error","message":…}   ← transient reconnect noise (non-fatal)
+ * A `file_change`/`command_execution` item carries a terminal `status`
+ * (`completed`|`failed`); a `failed` one is surfaced as an errored tool result
+ * rather than a silent success (mirrors the governed app-server shim).
  */
 export function codexJsonParser(): CliParser {
   const acc = new TurnAccumulator({ provider: "codex", protocol: "structured-pipe" });
   let sessionRef: string | undefined;
+  // Tool ids already surfaced as a running card, so `item.started` (live) and the
+  // later `item.completed` (terminal) render one card per call, not two.
+  const startedTools = new Set<string>();
+  const ensureToolUse = (id: string, name: string, input: unknown, events: RuntimeEvent[]) => {
+    if (id && startedTools.has(id)) return;
+    if (id) startedTools.add(id);
+    acc.addToolUse(id, name, input, events);
+  };
+  // A tool item begins. Codex emits `item.started` for shell/patch/MCP calls
+  // before the matching `item.completed`, so surfacing it shows a long-running
+  // command or patch as a live "running" card instead of nothing until it ends.
+  const handleStarted = (item: Record<string, unknown>, events: RuntimeEvent[]) => {
+    const id = String(item.id ?? "");
+    switch (String(item.type ?? "")) {
+      case "command_execution":
+        ensureToolUse(id, "shell", { command: item.command ?? "" }, events);
+        break;
+      case "file_change":
+        ensureToolUse(id, "apply_patch", { changes: item.changes ?? item }, events);
+        break;
+      case "mcp_tool_call":
+        ensureToolUse(id, String(item.tool ?? item.server ?? "mcp"), item.arguments ?? item.input, events);
+        break;
+    }
+  };
   const handleItem = (item: Record<string, unknown>, events: RuntimeEvent[]) => {
     const id = String(item.id ?? "");
     switch (String(item.type ?? "")) {
@@ -304,18 +388,27 @@ export function codexJsonParser(): CliParser {
         acc.appendText(String(item.text ?? ""), events);
         break;
       case "command_execution":
-        acc.addToolUse(id, "shell", { command: item.command ?? "" }, events);
-        if (item.aggregated_output != null || item.exit_code != null) {
-          acc.addToolResult(id, "shell", { content: item.aggregated_output ?? "", exitCode: item.exit_code }, events, Number(item.exit_code) !== 0);
+        ensureToolUse(id, "shell", { command: item.command ?? "" }, events);
+        if (item.aggregated_output != null || item.exit_code != null || item.status != null) {
+          acc.addToolResult(id, "shell", { content: item.aggregated_output ?? "", exitCode: item.exit_code }, events, Number(item.exit_code) !== 0 || item.status === "failed");
         }
         break;
       case "mcp_tool_call":
-        acc.addToolUse(id, String(item.tool ?? item.server ?? "mcp"), item.arguments ?? item.input, events);
-        if (item.result != null) acc.addToolResult(id, String(item.tool ?? "mcp"), item.result, events);
+        ensureToolUse(id, String(item.tool ?? item.server ?? "mcp"), item.arguments ?? item.input, events);
+        if (item.result != null || item.error != null || item.status != null) {
+          acc.addToolResult(id, String(item.tool ?? "mcp"), item.result ?? item.error ?? item.status, events, item.error != null || item.status === "failed");
+        }
         break;
-      case "file_change":
-        acc.addToolUse(id, "apply_patch", { changes: item.changes ?? item }, events);
+      case "file_change": {
+        ensureToolUse(id, "apply_patch", { changes: item.changes ?? item }, events);
+        // `file_change` is terminal in `exec --json` (no separate result event),
+        // so close the card with a result reflecting its status. Without this a
+        // completed patch hangs as "running" and — worse — a FAILED patch renders
+        // as a successful edit. Mirrors the app-server shim's handling.
+        const status = String(item.status ?? "completed");
+        acc.addToolResult(id, "apply_patch", status, events, status === "failed");
         break;
+      }
       case "reasoning": {
         // Codex reasoning items carry either `text` or a `summary` (string or an
         // array of {text}) — surface whichever is present as a thinking stream.
@@ -352,6 +445,9 @@ export function codexJsonParser(): CliParser {
           break;
         case "turn.started":
           events.push({ type: "turn_start" });
+          break;
+        case "item.started":
+          if (msg.item && typeof msg.item === "object") handleStarted(msg.item as Record<string, unknown>, events);
           break;
         case "item.completed":
           if (msg.item && typeof msg.item === "object") handleItem(msg.item as Record<string, unknown>, events);
@@ -502,8 +598,19 @@ export function geminiJsonParser(): CliParser {
  * event carries no assistant text (a control frame), so the caller can ignore it.
  */
 function textFromStreamEvent(msg: Record<string, unknown>): string {
+  // ACP session/update notifications nest the update below JSON-RPC params.
+  // Grok's streaming-json mode uses this standard shape, while other CLIs put
+  // the same content directly on the event. Unwrap it before applying the
+  // broad fallbacks below so ACP remains a generic capability, not an agent
+  // specific parser.
+  const nested = (msg.params as Record<string, unknown> | undefined)?.update
+    ?? (msg.update as Record<string, unknown> | undefined);
+  const source: Record<string, unknown> = nested && typeof nested === "object" ? nested as Record<string, unknown> : msg;
+  const nestedContent = (source.content as { text?: unknown } | undefined);
+  if (nestedContent && typeof nestedContent.text === "string") return nestedContent.text;
+
   // Claude / ACP assistant shape: { message: { content: [{type:"text",text}] } }.
-  const mc = (msg.message as { content?: unknown } | undefined)?.content;
+  const mc = (source.message as { content?: unknown } | undefined)?.content;
   if (Array.isArray(mc)) {
     return mc.map((b) => (b && typeof b === "object" && typeof (b as { text?: unknown }).text === "string" ? (b as { text: string }).text : "")).join("");
   }
@@ -526,8 +633,93 @@ function textFromStreamEvent(msg: Record<string, unknown>): string {
   return "";
 }
 
+/** Flatten an ACP `ContentBlock[]` (or a single block/string) to plain text.
+ * ACP tool updates carry their human-readable output as content blocks —
+ * `[{type:"content", content:{type:"text", text}}]` or `[{type:"text", text}]` —
+ * which is the display-normalized form to prefer over a raw byte dump. Returns
+ * undefined when there is no usable text (so callers fall back to rawOutput). */
+function flattenAcpContent(value: unknown): string | undefined {
+  const walk = (v: unknown): string => {
+    if (typeof v === "string") return v;
+    if (Array.isArray(v)) return v.map(walk).join("");
+    if (v && typeof v === "object") {
+      const o = v as Record<string, unknown>;
+      if (typeof o.text === "string") return o.text;
+      if (o.content !== undefined) return walk(o.content);
+    }
+    return "";
+  };
+  const text = walk(value);
+  return text.trim() ? text : undefined;
+}
+
+/** Extract a numeric exit code from a raw tool-output object, if present. */
+function rawExitCode(raw: unknown): number | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const o = raw as Record<string, unknown>;
+  const exit = o.exit_code ?? o.exitCode ?? o.code;
+  return typeof exit === "number" ? exit : undefined;
+}
+
+/** Extract an ACP-style tool update. Two transports converge here:
+ *   1. A JSON-RPC `session/update` notification (`params.update`), the true ACP
+ *      wire form used by Gemini/Qwen/Copilot etc.
+ *   2. A TOP-LEVEL tool frame (`{type:"tool_call", toolCallId, toolName,
+ *      rawInput}` / `{type:"tool_call_update", …, rawOutput}`) — the shape the
+ *      Grok CLI's `--output-format streaming-json` emits without the JSON-RPC
+ *      envelope. Both name the same fields, so one mapper renders both as the
+ *      same tool cards (no per-agent branch). */
+function acpToolUpdate(msg: Record<string, unknown>): {
+  kind: "call" | "result";
+  id: string;
+  name?: string;
+  input?: unknown;
+  output?: unknown;
+  error?: boolean;
+} | undefined {
+  const params = msg.params as Record<string, unknown> | undefined;
+  // Fall back to the message itself so a top-level tool frame (Grok) is read the
+  // same way as a nested `session/update` (canonical ACP). A non-tool top-level
+  // frame has no toolCallId and is rejected by the `id` guard below.
+  const update = (params?.update ?? msg.update ?? msg) as Record<string, unknown> | undefined;
+  if (!update || typeof update !== "object") return undefined;
+  const type = String(update.sessionUpdate ?? update.type ?? "").toLowerCase();
+  const id = String(update.toolCallId ?? update.tool_call_id ?? update.id ?? "");
+  if (!id) return undefined;
+  if (type === "tool_call" || type === "tool_call_started" || type === "tool_call_start") {
+    return { kind: "call", id, name: String(update.title ?? update.toolName ?? update.name ?? "tool"), input: update.rawInput ?? update.input ?? update.arguments };
+  }
+  if (type === "tool_call_update" || type === "tool_result" || type === "tool_call_completed") {
+    const status = String(update.status ?? "").toLowerCase();
+    const terminal = status === "completed" || status === "complete" || status === "success" || status === "done" || status === "failed" || status === "error";
+    const hasStatus = update.status !== undefined && update.status !== null && String(update.status).trim() !== "";
+    const raw = update.rawOutput ?? update.output ?? update.result;
+    // A CLI that streams progress (Grok) tags every frame with a non-terminal
+    // status and a partial payload — only a terminal status closes the card. A
+    // CLI that sends a single result frame with no status closes as soon as a
+    // payload lands. This prevents both a premature close and a duplicate card.
+    if (type === "tool_call_update" && (hasStatus ? !terminal : raw === undefined)) return undefined;
+    // Prefer the display-normalized ACP content text over a raw payload (Grok's
+    // rawOutput.output is a byte array that would render as garbage). Preserve
+    // the exit code from the raw payload when we take the content text instead.
+    const contentText = flattenAcpContent(update.content);
+    const exit = rawExitCode(raw);
+    const output = contentText !== undefined
+      ? (exit !== undefined ? { content: contentText, exit_code: exit } : contentText)
+      : (raw ?? update.content);
+    return { kind: "result", id, output, error: status === "failed" || status === "error" };
+  }
+  return undefined;
+}
+
 // Event `type` values that mean "the turn is finished" across the various CLIs.
-const STREAM_TERMINALS = new Set(["result", "done", "complete", "completed", "turn.completed", "session.done", "message_stop", "response.completed", "final"]);
+const STREAM_TERMINALS = new Set(["result", "done", "complete", "completed", "turn.completed", "session.done", "session_end", "session/ended", "message_stop", "response.completed", "final", "end"]);
+
+// Event `type` values whose chunk (in a `data` field) is assistant answer prose
+// vs. reasoning/thinking. Used by the generic streaming parser to support CLIs
+// (e.g. Grok) that key the content off `type` with the text under `data`.
+const STREAM_TEXT_TYPES = new Set(["text", "assistant", "answer", "agent_message", "assistant_message", "output_text", "response_text"]);
+const STREAM_REASONING_TYPES = new Set(["thought", "thinking", "reasoning"]);
 
 /**
  * A TOLERANT line-delimited JSON parser for CLIs whose `--stream-json` /
@@ -555,12 +747,41 @@ export function genericStreamJsonParser(): CliParser {
         return events;
       }
       acc.addUsage(extractTokenUsage(msg.usage ?? msg.stats ?? msg));
-      const type = String(msg.type ?? "");
+      const nestedUpdate = ((msg.params as Record<string, unknown> | undefined)?.update
+        ?? (msg.update as Record<string, unknown> | undefined)) as Record<string, unknown> | undefined;
+      const type = String(msg.type ?? msg.method ?? nestedUpdate?.sessionUpdate ?? nestedUpdate?.type ?? "");
+      // Typed error frame — `{type:"error", message}` (Grok's streaming-json and
+      // other ACP-style CLIs), `session/error`, `turn.error`, … — as opposed to
+      // the `{error:{message}}` envelope handled below. Recognize it as data
+      // (a suffix match, no per-agent branch) so the message is surfaced as a
+      // real turn error instead of leaking into the transcript as assistant
+      // prose via the broad `message` text fallback in textFromStreamEvent.
+      const lowerType = type.toLowerCase();
+      const isErrorFrame = /(^|[._:/])error$/.test(lowerType);
+      const tool = acpToolUpdate(msg);
+      if (tool?.kind === "call") acc.addToolUse(tool.id, tool.name ?? "tool", tool.input, events);
+      else if (tool?.kind === "result") acc.addToolResult(tool.id, tool.name ?? "tool", tool.output, events, tool.error);
       if (msg.error && !type.includes("delta")) {
         const m = (msg.error as { message?: unknown }).message ?? msg.error;
         events.push({ type: "session.error", error: String(m) });
+      } else if (isErrorFrame) {
+        const m = msg.message ?? (msg.error as unknown) ?? msg.detail ?? msg.reason;
+        if (typeof m === "string" && m.trim()) events.push({ type: "session.error", error: m.trim() });
       }
-      const text = textFromStreamEvent(msg);
+      // Reasoning/thinking stream carried as a typed chunk keyed by `type` with
+      // the content in a `data` field (Grok's streaming-json: {type:"thought",
+      // data}). Surface it as the same display-only thinking sidecar every agent
+      // uses, never as answer prose — a generic shape, not a per-agent branch.
+      if (!isErrorFrame && STREAM_REASONING_TYPES.has(lowerType) && typeof msg.data === "string") {
+        acc.appendReasoning(msg.data, events);
+        return events;
+      }
+      // Assistant answer text. Most CLIs expose it via one of the fields
+      // textFromStreamEvent covers; some (Grok) put it in `data` keyed by an
+      // assistant-text `type`. Fall back to `data` only for those types so an
+      // unrelated control frame's `data` never leaks into the transcript.
+      let text = isErrorFrame ? "" : textFromStreamEvent(msg);
+      if (!text && !isErrorFrame && typeof msg.data === "string" && STREAM_TEXT_TYPES.has(lowerType)) text = msg.data;
       if (text && !STREAM_TERMINALS.has(type)) {
         acc.appendText(text, events);
         sawText = true;

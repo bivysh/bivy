@@ -14,10 +14,11 @@ import {
   codexIntegration,
   invalidateCodexCommandProbe,
 } from "../agents/codex/integration.js";
-import { invalidatePiCommandProbe, piAgentDir, piCommandAvailable, piIntegration } from "../agents/pi/integration.js";
+import { invalidatePiCommandProbe, piAgentDir, piCommandAvailable, piIntegration, LazyPiRuntime } from "../agents/pi/integration.js";
 import { deleteCodexSession, loadCodexTranscript } from "./codex-sessions.js";
 import { deleteOpenCodeSession, exportOpenCodeSession, importOpenCodeSession, loadOpenCodeTranscript, writeOpenCodeHistory } from "./opencode-sessions.js";
 import { discoverNativeGrokSessions, listGrokSessions, loadGrokTranscript } from "./grok-sessions.js";
+import { discoverNativeGeminiFamilySessions, listGeminiFamilySessions, loadGeminiFamilyTranscript, type GeminiFamilyAgent } from "./gemini-sessions.js";
 import { createCredentialStore } from "./credentials.js";
 import { AgentRegistry } from "../agents/registry.js";
 import { applyCertification } from "../certification/index.js";
@@ -57,7 +58,6 @@ function codexResumeArgs(sessionId: string, tier: string): string[] {
   return ["exec", "--json", "--sandbox", tier, "resume", sessionId];
 }
 import type { ModelInfo, ForkHistoryMessage, ForkImportContext, ForkNativePayload } from "./types.js";
-import { PiRuntime } from "../agents/pi/runtime.js";
 import { ProcessRuntime, processRuntimeFromEnv, type ProcessModelConfig, type ProcessPromptMode, type ProcessThinkingConfig } from "./process.js";
 import { codexCredentialPreflight } from "./codex-preflight.js";
 import { opencodeCredentialPreflight } from "./opencode-preflight.js";
@@ -297,12 +297,10 @@ function installSpecForCliAgent(spec: AgentProfile, prefix: string): { command: 
     };
   }
   if (install.kind === "pip") {
-    // Some node images ship a python3 without pip; bootstrap it via ensurepip
-    // (best-effort) before installing, but show users the plain pip line.
     return {
-      command: "sh",
-      args: ["-c", `python3 -m ensurepip --user >/dev/null 2>&1 || true; python3 -m pip install --user ${install.pkg}`],
-      display: `python3 -m pip install --user ${install.pkg}`,
+      command: process.execPath,
+      args: [path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "bin", "install-python-agent.mjs"), install.pkg, install.python ?? "", prefix],
+      display: `uv tool install${install.python ? ` --python ${install.python}` : ""} ${install.pkg}`,
     };
   }
   // curl / script: `{bin}` → the node's <prefix>/bin so binaries land on PATH.
@@ -346,8 +344,8 @@ export function cliAgentManifest(): Array<{
       label: spec.displayName,
       command: spec.command,
       hidden: Boolean(spec.hidden),
-      supportTier: spec.supportTier ?? "beta",
-      certification: spec.testedVersion ? "release-tested" : (spec.supportTier ?? "beta") === "beta" ? "adapter-tested" : "unverified",
+      supportTier: spec.supportTier ?? "supported",
+      certification: spec.testedVersion ? "release-tested" : (spec.supportTier ?? "supported") === "supported" || (spec.supportTier ?? "supported") === "beta" ? "adapter-tested" : "unverified",
       ...(spec.testedVersion ? { testedVersion: spec.testedVersion } : {}),
       headlessFlags: [...headless].filter((a) => !a.includes("{")),
       install: spec.install ?? null,
@@ -704,7 +702,7 @@ export function catalogRuntimes(credsDir: string, piDir: string, sessionsDir: st
   // (piAgentDir) still supplies the operator's models cache / config / packages.
   // credentialOwner "agent" here would make Pi read piAgentDir/auth.json — a file
   // the vault never populates — so the picker shows every provider "Not connected".
-  if (piCommandAvailable()) runtimes.unshift(new PiRuntime({ credsDir, piDir: piAgentDir(), sessionsDir, credentialOwner: "bivy" }));
+  if (piCommandAvailable()) runtimes.unshift(new LazyPiRuntime({ credsDir, piDir: piAgentDir(), sessionsDir, credentialOwner: "bivy" }));
   const claudeOptions = claudeRuntimeFromEnv();
   if (claudeSdkInstalled() && claudeOptions.executablePath) runtimes.push(new ClaudeCodeRuntime(claudeOptions));
   return runtimes;
@@ -1129,7 +1127,7 @@ function runtimeCertification(runtime: RuntimeInfo): Pick<RuntimeInfo, "certific
     ...(runtime.testedVersion ? { testedVersion: runtime.testedVersion } : {}),
   };
   if (runtime.testedVersion) return { certification: "release-tested", testedVersion: runtime.testedVersion };
-  return { certification: runtime.supportTier === "beta" ? "adapter-tested" : "unverified" };
+  return { certification: runtime.supportTier === "supported" || runtime.supportTier === "beta" ? "adapter-tested" : "unverified" };
 }
 
 function runtimeProtection(runtime: RuntimeInfo): Pick<RuntimeInfo, "protectionLevel" | "protectionLabel" | "protectionDetail"> {
@@ -1305,7 +1303,11 @@ function makeCliRuntime(id: string, options: RuntimeFactoryOptions, spec: AgentP
         : resumeTemplate
           ? {
               resumable: true,
-              loadHistory: spec.resume?.historyLoader === "grok" ? loadGrokTranscript : undefined,
+              loadHistory: spec.resume?.historyLoader === "grok"
+                ? loadGrokTranscript
+                : spec.resume?.historyLoader === "gemini" || spec.resume?.historyLoader === "qwen"
+                  ? (sessionId: string) => loadGeminiFamilyTranscript(spec.resume!.historyLoader as GeminiFamilyAgent, sessionId)
+                  : undefined,
               // `{sandbox}` expands to that agent's native containment flags for
               // the tier (e.g. Gemini/Qwen's `--approval-mode <mode>`) — a whole
               // token, not a string substitution, since it can be multiple argv
@@ -1328,15 +1330,16 @@ function makeCliRuntime(id: string, options: RuntimeFactoryOptions, spec: AgentP
                 ),
             }
           : {};
-      // Grok-specific: on-disk session enumeration + interactive TUI hand-off so
-      // `bivy run grok` sessions persist after the PTY exits and can be taken
-      // over as chat or reopened in the native TUI.
-      const nativeSessionOpts =
-        behaviors?.nativeSessions === "grok"
-          ? {
-              sessionDiscovery: true,
-              listDiskSessions: () =>
-                listGrokSessions().map((s) => ({
+      // Profile-selected native session enumeration + interactive TUI hand-off.
+      // Store readers keep terminal-originated sessions resumable and let the
+      // generic ProcessRuntime preload their transcript during chat takeover.
+      const nativeSessionBehavior = behaviors?.nativeSessions;
+      const nativeSessionOpts = nativeSessionBehavior
+        ? {
+            sessionDiscovery: true,
+            listDiskSessions: () => {
+              if (nativeSessionBehavior === "grok") {
+                return listGrokSessions().map((s) => ({
                   id: s.id,
                   path: s.dir,
                   cwd: s.cwd,
@@ -1344,13 +1347,22 @@ function makeCliRuntime(id: string, options: RuntimeFactoryOptions, spec: AgentP
                   created: s.createdAt ? new Date(s.createdAt).toISOString() : undefined,
                   modified: s.updatedAt ? new Date(s.updatedAt).toISOString() : undefined,
                   firstMessage: s.firstMessage,
-                })),
-              interactiveTui: ({ sessionRef, env }: { sessionRef?: string; cwd: string; env: Record<string, string> }) =>
-                sessionRef ? { command: "grok", args: ["--resume", sessionRef], env } : null,
-              // discoverNativeSessions is on AgentRuntime; ProcessRuntime doesn't
-              // expose it as an option — wire via a thin subclass below when needed.
-            }
-          : {};
+                }));
+              }
+              return listGeminiFamilySessions(nativeSessionBehavior).map((s) => ({
+                id: s.id,
+                path: s.id,
+                cwd: s.cwd,
+                name: s.firstMessage,
+                created: s.createdAt ? new Date(s.createdAt).toISOString() : undefined,
+                modified: s.updatedAt ? new Date(s.updatedAt).toISOString() : undefined,
+                firstMessage: s.firstMessage,
+              }));
+            },
+            interactiveTui: ({ sessionRef, env }: { sessionRef?: string; cwd: string; env: Record<string, string> }) =>
+              sessionRef ? { command: spec.command, args: ["--resume", sessionRef], env } : null,
+          }
+        : {};
       const runtime = new ProcessRuntime({
         id,
         displayName: spec.displayName,
@@ -1368,10 +1380,12 @@ function makeCliRuntime(id: string, options: RuntimeFactoryOptions, spec: AgentP
         ...resumeOpts,
         ...nativeSessionOpts,
       });
-      if (behaviors?.nativeSessions === "grok") {
+      if (nativeSessionBehavior) {
         // Issue #156 discovery surface — ProcessRuntime has no options hook for
-        // this; attach it so collectDiscoveredSessions picks Grok sessions up.
-        (runtime as AgentRuntime).discoverNativeSessions = () => discoverNativeGrokSessions();
+        // this; attach the profile's native store reader to the generic runtime.
+        (runtime as AgentRuntime).discoverNativeSessions = () => nativeSessionBehavior === "grok"
+          ? discoverNativeGrokSessions()
+          : discoverNativeGeminiFamilySessions(nativeSessionBehavior);
       }
       return runtime;
 }

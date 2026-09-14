@@ -40,7 +40,7 @@ function harness(over: any = {}) {
     broadcast: (p) => { broadcasts.push(p); },
     sendRelayEvent: () => {},
     sendNotificationHint: () => {},
-    createSession: async (_ws, sf) => { created.push(sf ?? "<fresh>"); return { id: "new-session" }; },
+    createSession: over.createSession ?? (async (_ws, sf) => { created.push(sf ?? "<fresh>"); return { id: "new-session" }; }),
     resolveSession: over.resolveSession ?? (() => undefined),
     sessionBusy: () => false,
     sessionTerminalsRecord: async () => {},
@@ -49,10 +49,10 @@ function harness(over: any = {}) {
     sessionListChanged: () => { listChanged += 1; },
     saveRunLog: (termId, log) => { runLogs.set(termId, log); return `/logs/${termId}.json`; },
     loadRunLog: (termId) => runLogs.get(termId),
-    listAllSessions: async () => [],
+    listAllSessions: over.listAllSessions ?? (async () => []),
     listProvidersUnified: async () => [],
     pushModelAuthToControlPlane: async () => {},
-    listPiSessions: async () => [],
+    listPiSessions: over.listPiSessions ?? (async () => []),
     resolveAuthOwner: over.resolveAuthOwner ?? (() => "agent"),
     broadcastTuiState: () => {},
     refreshRecordAfterTui: () => {},
@@ -62,6 +62,7 @@ function harness(over: any = {}) {
     credsDir: "/creds",
     piDir: "/pi",
     maxRunTerminals: 50,
+    takeoverDiscoveryDelayMs: 0,
   };
   const emit = (e: any) => emitted.push(e);
   return { deps, terminals, emitted, created, broadcasts, metadata, runLogs, listChanged: () => listChanged, emit, rt: createRunTerminals(deps) };
@@ -124,7 +125,53 @@ test("takeover of a supported pinned agent reopens it as a governed chat", async
     assert.equal(r.runtimeId, "claude-code-sdk");
     assert.equal(r.resumeCommand, "claude --resume sess-abc");
     assert.deepEqual(created, ["sess-abc"], "createSession resumes the pinned session file");
+    assert.deepEqual(terminals.calls.close, ["t1"], "the PTY closes only after governed resume succeeds");
   }
+});
+
+test("a failed governed resume leaves the native terminal running", async () => {
+  const terminals = fakeTerminals({
+    list: () => [{ id: "t1", meta: { kind: "run", agent: "claude", sessionId: "sess-abc" }, workspace: "/w", createdAt: 0 }],
+  });
+  const { rt, emit } = harness({ terminals, createSession: async () => { throw new Error("resume failed"); } });
+  await rt.openRunTerminal({ command: "claude", args: [], agent: "claude", sessionId: "sess-abc" }, emit);
+  await assert.rejects(() => rt.takeoverRunTerminal({ termId: "t1" }), /resume failed/);
+  assert.deepEqual(terminals.calls.close, [], "a failed preparation must not kill the user's working TUI");
+  assert.equal(rt.hasRunTerminal("t1"), true);
+});
+
+test("an in-flight terminal list cannot resurrect a run closed by takeover", async () => {
+  const terminals = fakeTerminals({
+    list: () => [{ id: "t1", meta: { kind: "run", agent: "opencode", sessionId: "ses-1", autoName: true }, workspace: "/w", createdAt: 0 }],
+  });
+  let releaseList!: () => void;
+  const listing = new Promise<void>((resolve) => { releaseList = resolve; });
+  const { rt, emit } = harness({ terminals, listAllSessions: async () => { await listing; return []; } });
+  // Force runTerminalList to await its native-name lookup, reproducing the race
+  // where takeover closes the PTY while an older terminal.list is in flight.
+  await rt.openRunTerminal({ command: "opencode", args: [], agent: "opencode", sessionId: "ses-1" }, emit);
+  const pending = rt.runTerminalList();
+  const result = await rt.takeoverRunTerminal({ termId: "t1" });
+  assert.equal(result.ok, true);
+  releaseList();
+  assert.deepEqual(await pending, [], "the stale list drops the terminal removed during takeover");
+});
+
+test("takeover retries a lazily persisted Pi session", async () => {
+  const createdAt = Date.now();
+  const terminals = fakeTerminals({
+    list: () => [{ id: "t1", meta: { kind: "run", agent: "pi" }, workspace: "/w", createdAt }],
+  });
+  let lists = 0;
+  const { rt, emit, created } = harness({
+    terminals,
+    listPiSessions: async () => ++lists < 3 ? [] : [{ id: "pi-id", path: "/sessions/pi.jsonl", cwd: "/w", created: new Date(createdAt) }],
+  });
+  await rt.openRunTerminal({ command: "pi", args: [], agent: "pi", workspace: "/w" }, emit);
+  const result = await rt.takeoverRunTerminal({ termId: "t1" });
+  assert.equal(result.ok, true);
+  assert.equal(lists, 3);
+  assert.deepEqual(created, ["/sessions/pi.jsonl"]);
 });
 
 // --- `bivy run` sessions in the sidebar ---------------------------------------

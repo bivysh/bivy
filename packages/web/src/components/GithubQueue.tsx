@@ -399,9 +399,9 @@ export function GithubQueuePanel({
       <div className="settings-form">
         {canQuery && appInfo && apps.length === 0 && (
           <div className="banner inline" data-tone="neutral">
-            No GitHub App connected yet.{" "}
+            Install the hosted Bivy GitHub App, or connect your own app.{" "}
             <button className="btn link" onClick={onOpenGithubSettings}>
-              Connect one in Settings →
+              Set up GitHub Apps →
             </button>
           </div>
         )}

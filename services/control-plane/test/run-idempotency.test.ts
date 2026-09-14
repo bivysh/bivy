@@ -7,7 +7,8 @@
 // real control plane with a deliberately short work lease so reclaim is
 // deterministic rather than clock-dependent.
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { spawnTestService, stopTestServices } from "../../test-service-process.js";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -52,17 +53,12 @@ const LEASE_MS = 700;
 let proc: ChildProcess | undefined;
 try {
   const port = await freePort();
-  proc = spawn("npx", ["tsx", "src/index.ts"], {
-    cwd: cpDir,
-    env: {
-      ...process.env,
-      PORT: String(port),
-      RELAY_PUBLIC_URL: "ws://localhost:1",
-      RELAY_SECRET: "idem-test",
-      AUTOMATION_SCHEDULER_INTERVAL_MS: "60000",
-      BIVY_WORK_LEASE_MS: String(LEASE_MS),
-    },
-    stdio: "inherit",
+  proc = spawnTestService(cpDir, {
+    PORT: String(port),
+    RELAY_PUBLIC_URL: "ws://localhost:1",
+    RELAY_SECRET: "idem-test",
+    AUTOMATION_SCHEDULER_INTERVAL_MS: "60000",
+    BIVY_WORK_LEASE_MS: String(LEASE_MS),
   });
   for (let i = 0; i < 100; i++) {
     try { if ((await fetch(`http://localhost:${port}/healthz`)).ok) break; } catch {}
@@ -146,5 +142,5 @@ try {
 
   console.log("✓ duplicate-delivery dedupe, reclaim attempt numbering, stale-Machine blocking, cancel/complete race integrity, and failure-stage metric");
 } finally {
-  proc?.kill("SIGTERM");
+  await stopTestServices(proc ? [proc] : []);
 }

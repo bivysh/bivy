@@ -10,7 +10,25 @@ In the Bivy app, open **Automations** → **New automation** (or a webhook templ
 2. On **When**, choose **Webhook** (or a schedule — same form, different trigger).
 3. Optionally set a **Repository** (`owner/name`). The node clones it before the session starts. The event may also send `repo`; the definition wins when both are set.
 4. Pick the machine (and optionally agent/model/autonomy), then create.
-5. Copy the webhook URL and signing secret from the reveal panel. The secret is shown only at create/rotate time.
+5. Copy the webhook URL and secret from the reveal panel. New or replaced secrets are shown once, never in list responses.
+
+### Custom authentication
+
+Generated credentials remain the default. Under **Require webhook authentication**,
+choose **HMAC-SHA256 signature** (recommended) or **Static secret header**. You can
+set the **Header name** and optionally supply your own 32–256-character secret.
+Leave the secret blank to generate one on create or keep the current one on edit.
+Saving a replacement invalidates the old value immediately; **Rotate secret**
+generates a new value while preserving the chosen header and method.
+
+- **HMAC:** send `sha256=<hex HMAC-SHA256 of the raw body>` in the configured
+  header. The signing secret itself is **not** the header value.
+- **Static header:** send the exact secret as the configured header's value,
+  e.g. `Authorization: Bearer <your-secret>` if that entire value was saved.
+  Use HTTPS. Unlike HMAC, a static credential does not authenticate the body.
+
+These options apply to webhook-triggered automations, not GitHub/Linear/Slack's
+provider-defined signature headers.
 
 The endpoint is:
 
@@ -33,11 +51,12 @@ The fixed template is prepended to every event. Event payloads cannot select com
 
 ## Send an event
 
-Every request needs:
-
-- `Content-Type: application/json`
-- `X-Bivy-Signature-256: sha256=<hex HMAC-SHA256 of the exact body>`
-- `X-Bivy-Idempotency-Key: <stable unique event id>`
+Every request needs `Content-Type: application/json`. When signing is enabled,
+include `X-Bivy-Signature-256: sha256=<hex HMAC-SHA256 of the exact body>` by
+default, or use the custom header/method configured above.
+Include `X-Bivy-Idempotency-Key: <stable unique event id>` whenever the sender
+supports custom headers; otherwise Bivy accepts the delivery with a generated
+key.
 
 ```bash
 # Definition-bound (from Automations → webhook trigger):
@@ -60,12 +79,21 @@ curl -X POST "$endpoint" \
 
 Sign the exact bytes sent with `--data-binary`. Reusing an idempotency key returns the existing run instead of creating a duplicate. For a definition-bound webhook, `instruction` is untrusted event context appended after the operator template — not a way to override the automation's configured job.
 
-## Event schema
+## Event payload
+
+Webhook-triggered automations accept provider-native JSON objects and arrays, so
+services such as Basecamp can post their standard webhook body without a
+translation proxy. The complete payload is appended to the configured automation
+instructions as clearly marked, untrusted context. Provider fields never select
+the machine, repository, runtime, model, sandbox, or executable instructions.
+
+Send Bivy's versioned envelope when you control the sender and want the optional
+routing and display fields:
 
 ```json
 {
   "version": "1",
-  "instruction": "Required instruction for this event",
+  "instruction": "Required context for this event",
   "title": "Optional queue title",
   "sourceUrl": "https://example.com/events/123",
   "externalId": "optional-source-id",
@@ -79,10 +107,11 @@ Sign the exact bytes sent with `--data-binary`. Reusing an idempotency key retur
 }
 ```
 
-Only these fields are accepted. `repo` is an optional GitHub slug used when the
-automation definition did not set a workspace. `metadata` values must be strings,
-finite numbers, or booleans. Treat metadata as untrusted context; never put
-credentials or secrets in the payload.
+When `version` or `instruction` is present, the payload is treated as a Bivy
+envelope and only these fields are accepted. `repo` is an optional GitHub slug
+used when the automation definition did not set a workspace. `metadata` values
+must be strings, finite numbers, or booleans. Treat every payload as untrusted
+context; never put credentials or secrets in it.
 
 ## Recipe: failed CI build
 
@@ -135,7 +164,7 @@ Map the external task id to both `externalId` and the idempotency key. Use `rout
 
 - `202 accepted` — a new run was queued.
 - `200 duplicate` — that source/idempotency key was already accepted.
-- `400 invalid_request` — malformed body, unsupported schema, or missing/invalid idempotency key.
+- `400 invalid_request` — malformed body, invalid Bivy envelope, or invalid idempotency key.
 - `401 invalid_signature` — signature did not match the exact body.
 - `410 disabled` — the hook has been disabled.
 - `429 quota_exhausted` — rate limit, plan gate, or rolling run allowance prevented admission.

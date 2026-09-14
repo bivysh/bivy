@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef } from "react";
+import { pushModalHistory, type ModalHistoryHandle } from "./modalHistory.js";
 
 // A LIFO stack of open modal layers (sheets, dialogs, popovers) so a single
 // global Escape handler only ever fires the *topmost* one. Before this, several
@@ -64,4 +65,28 @@ export function useModalEscape(onEscape: () => void, active = true): void {
     if (!active) return;
     return pushModal(() => ref.current());
   }, [active]);
+}
+
+/**
+ * Give an overlay its own history entry so the browser Back gesture behaves
+ * like a native mobile back button: it closes the topmost overlay first and
+ * only then navigates the underlying app. Programmatic closes consume the
+ * entry too, keeping Back from reopening the overlay later.
+ */
+export function useModalBack(onBack: () => void): () => void {
+  const callback = useRef(onBack);
+  callback.current = onBack;
+  const historyHandle = useRef<ModalHistoryHandle | null>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handle = pushModalHistory(() => callback.current());
+    historyHandle.current = handle;
+    return () => {
+      handle.dispose();
+      historyHandle.current = null;
+    };
+  }, []);
+
+  return () => historyHandle.current?.close();
 }

@@ -213,6 +213,15 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.deepEqual(requests.map((request) => request.nodeId), [a.id], "only another currently-enrolled survivor is queued for the new key");
   });
 
+  await test("model auth key requests: repeated requests are idempotent", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-model-auth-request@example.com");
+    const { node } = await store.enrollNode(acct.id, "node-mar-request", "Requester");
+
+    assert.equal(await store.requestModelAuthWrappedKey(acct.id, node.id, "pub-v1"), true);
+    assert.equal(await store.requestModelAuthWrappedKey(acct.id, node.id, "pub-v1"), false, "an unchanged pending request does not wake peers again");
+    assert.equal(await store.requestModelAuthWrappedKey(acct.id, node.id, "pub-v2"), true, "a changed node key requires a fresh peer wake");
+  });
+
   // --- GitHub App private-key vault (issue #88) -------------------------------
   await test("github app vault: push, request, and wrap round-trip per app", async (store) => {
     const acct = await store.findOrCreateAccount("contract-ghvault@example.com");
@@ -563,6 +572,16 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
 
   await test("automation definitions: webhook trigger fields and event context round-trip", async (store) => {
     const acct = await store.findOrCreateAccount("contract-webhook-def@example.com");
+    const appScoped = await store.createAutomationDefinition(acct.id, {
+      name: "App-scoped GitHub",
+      trigger: "github",
+      appId: "12345",
+      templateCiphertext: "bivy-room-v1:node-x:opaque",
+      enabled: true,
+      schedule: { kind: "once", at: "9999-12-31T00:00:00.000Z" },
+    });
+    assert.equal(appScoped.appId, "12345");
+    assert.equal((await store.getAutomationDefinition(acct.id, appScoped.id))?.appId, "12345");
     const def = await store.createAutomationDefinition(acct.id, {
       name: "Fix CI",
       trigger: "webhook",
@@ -606,7 +625,9 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     const again = await store.enqueueWorkItem(acct.id, { source: "github:issue", title: "Fix (redeliver)", dedupeKey: "gh:1" });
     assert.equal(again.id, first.id);
     assert.equal(again.title, "Fix");
-    assert.equal((await store.listWorkItems(acct.id)).length, 1);
+    const linear = await store.enqueueWorkItem(acct.id, { source: "linear:issue", title: "Linear" });
+    assert.equal(linear.triggerKind, "linear");
+    assert.equal((await store.listWorkItems(acct.id)).length, 2);
   });
 
   await test("automation hooks configure safely and report replay deduplication", async (store) => {

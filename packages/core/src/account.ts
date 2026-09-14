@@ -38,6 +38,7 @@ export const NOTIFICATION_KINDS = [
   "session_done",
   "session_error",
   "terminal_bell",
+  "automation_blocked",
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 export type NotificationPreferences = Record<NotificationKind, boolean>;
@@ -49,6 +50,7 @@ export const NOTIFICATION_KIND_META: Array<{ id: NotificationKind; label: string
   { id: "session_done", label: "Session finished", description: "A session completed its turn — ready to review." },
   { id: "session_error", label: "Session error", description: "The last turn failed and needs attention." },
   { id: "terminal_bell", label: "Terminal bell", description: "A terminal rang the bell while you were away." },
+  { id: "automation_blocked", label: "Automation blocked", description: "An automation run could not start because of plan limits or policy." },
 ];
 
 /** Fill in any missing kinds as enabled so the UI always has a full map. */
@@ -517,6 +519,13 @@ export async function fetchMe(store: LocalStore, fetchImpl: typeof fetch = fetch
   const res = await fetchImpl(`${cpBase(store)}/me`, { headers: authHeaders(store) });
   if (!res.ok) throw new Error(`account request failed: ${res.status}`);
   return (await res.json()) as AccountMe;
+}
+
+/** Permanently delete the signed-in account and its deployment billing record. */
+export async function deleteAccount(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<void> {
+  const res = await fetchImpl(`${cpBase(store)}/account`, { method: "DELETE", headers: authHeaders(store) });
+  const data = await res.json().catch(() => ({})) as { error?: string };
+  if (!res.ok) throw new Error(data.error || `account deletion failed: ${res.status}`);
 }
 
 /** Invoke an opaque action contributed by the deployment's account extension. */
@@ -1061,7 +1070,7 @@ export interface GithubQueueItem {
   leaseExpiresAt?: string;
   completedAt?: string;
   triggerId?: string;
-  triggerKind?: "github" | "slack" | "manual" | "webhook" | "schedule";
+  triggerKind?: "github" | "linear" | "slack" | "manual" | "webhook" | "schedule";
   definitionId?: string;
   attempt?: number;
   targetKind?: "new_session" | "existing_session";
@@ -1163,6 +1172,8 @@ export interface AccountAutomation {
   labels?: string[];
   /** Repo allowlist for github/linear. */
   repos?: string[];
+  /** Optional GitHub App id filter for github source automations. Empty/undefined → every connected app. */
+  appId?: string;
   /**
    * GitHub event rules ("when any of these fire"). Outcomes are whatever the
    * instructions say — not a special-cased PR path.
@@ -1190,6 +1201,15 @@ export interface AccountAutomation {
   /** Present for a webhook-triggered automation: the signed endpoint to POST
    *  events to. The signing secret is returned only once (create/rotate). */
   webhookUrl?: string;
+  /** Webhook trigger only. Whether authentication is required (a secret exists).
+   *  The legacy name also covers static header authentication. Set `false` for
+   *  unauthenticated delivery; `true` on an unsigned endpoint generates a secret
+   *  unless webhookSecret is supplied, returned once in the save response. */
+  requireSigning?: boolean;
+  /** Default: x-bivy-signature-256. */
+  webhookHeader?: string;
+  /** Default: HMAC-SHA256; header uses a static shared secret instead. */
+  webhookAuthMode?: "hmac" | "header";
   createdAt: string;
   updatedAt: string;
 }
@@ -1197,7 +1217,7 @@ export interface AccountAutomation {
 export type CreateAutomationInput = Omit<
   AccountAutomation,
   "id" | "createdAt" | "updatedAt" | "lastScheduledAt" | "schedule" | "webhookUrl"
-> & { schedule?: AutomationSchedule };
+> & { schedule?: AutomationSchedule; webhookSecret?: string };
 
 export interface AccountAutomationRun {
   id: string;
@@ -1269,9 +1289,9 @@ export function rotateAutomationWebhook(
 export function updateAutomation(
   store: LocalStore,
   id: string,
-  patch: Partial<AccountAutomation>,
+  patch: Partial<AccountAutomation> & { webhookSecret?: string },
   fetchImpl: typeof fetch = fetch,
-): Promise<AccountAutomation> {
+): Promise<AccountAutomation & { webhookSecret?: string }> {
   return automationRequest(store, `/account/automations/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(patch) }, fetchImpl);
 }
 
@@ -1281,6 +1301,7 @@ export function updateAutomation(
 export interface AutomationSimulationEvent {
   kind: "github" | "linear" | "schedule" | "webhook" | "manual";
   repo?: string;
+  appId?: string;
   labels?: string[];
   mention?: boolean;
   event?: "issues" | "issue_comment" | "pull_request" | "pull_request_review_comment" | "workflow_run";
@@ -1358,8 +1379,8 @@ export async function deleteAutomation(store: LocalStore, id: string, fetchImpl:
   if (!res.ok) throw new Error(`delete automation failed: ${res.status}`);
 }
 
-export function runAutomationNow(store: LocalStore, id: string, fetchImpl: typeof fetch = fetch): Promise<AccountAutomationRun> {
-  return automationRequest(store, `/account/automations/${encodeURIComponent(id)}/run`, { method: "POST" }, fetchImpl);
+export function runAutomationNow(store: LocalStore, id: string, fetchImpl: typeof fetch = fetch, sourceKey: string = crypto.randomUUID()): Promise<AccountAutomationRun> {
+  return automationRequest(store, `/account/automations/${encodeURIComponent(id)}/run`, { method: "POST", body: JSON.stringify({ sourceKey }) }, fetchImpl);
 }
 
 /** Queue one governed, unattended Run without creating an Automation definition.
@@ -1389,9 +1410,12 @@ export function createOneOffRun(
 export function fetchAutomationRuns(
   store: LocalStore,
   limit = 50,
+  options: { summary?: boolean } = {},
   fetchImpl: typeof fetch = fetch,
 ): Promise<AccountAutomationRun[]> {
-  return automationRequest(store, `/account/automation-runs?limit=${encodeURIComponent(String(limit))}`, {}, fetchImpl);
+  const query = new URLSearchParams({ limit: String(limit) });
+  if (options.summary) query.set("summary", "1");
+  return automationRequest(store, `/account/automation-runs?${query}`, {}, fetchImpl);
 }
 
 /** A failed Run fetch that still tells the caller which explicit state to show:

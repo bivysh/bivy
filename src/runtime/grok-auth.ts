@@ -45,6 +45,58 @@ export function grokAuthEntryKey(clientId?: string): string {
   return `${GROK_OIDC_ISSUER}::${id}`;
 }
 
+/** Decode a JWT payload without verifying its signature (best-effort). */
+function decodeJwtClaims(token: string): Record<string, unknown> | undefined {
+  const parts = token.split(".");
+  if (parts.length < 2 || !parts[1]) return undefined;
+  try {
+    const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
+    return JSON.parse(Buffer.from(padded, "base64").toString("utf8")) as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The xAI user id the Grok CLI records as `user_id` in each auth.json entry —
+ * the OIDC subject (`sub`) of the access token (falling back to `principal_id`).
+ * The current Grok CLI (1.x) rejects an auth.json entry that is *missing* this
+ * field (serde: "missing field `user_id`"), so a minted file without it cannot
+ * be parsed — Grok then can't authenticate or self-refresh and silently
+ * produces empty turns. Bivy's `xai` vault record only stores {access, refresh,
+ * expires}, so we recover the id from the access token's own claims.
+ */
+export function grokUserIdFromAccessToken(access: string): string | undefined {
+  const claims = decodeJwtClaims(access);
+  if (!claims) return undefined;
+  const sub = typeof claims.sub === "string" ? claims.sub.trim() : "";
+  if (sub) return sub;
+  const principal = typeof claims.principal_id === "string" ? claims.principal_id.trim() : "";
+  return principal || undefined;
+}
+
+/**
+ * Whether an existing auth.json entry for our scope is parseable by the current
+ * Grok CLI. An entry written by an older Bivy (or hand-rolled) that lacks a
+ * non-empty `user_id` cannot be loaded — leaving it in place guarantees a
+ * broken, unauthenticated session, so those are re-minted rather than kept.
+ */
+function grokEntryIsHealthy(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object") return false;
+  const userId = (entry as Record<string, unknown>).user_id;
+  return typeof userId === "string" && userId.trim().length > 0;
+}
+
+function readGrokAuthJson(authFile: string): Record<string, unknown> | undefined {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(authFile, "utf8")) as unknown;
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Ensure the Grok CLI has a usable credential file, minting one from Bivy's
  * vault when needed. Returns the resolved `GROK_HOME` (so the caller can pin it
@@ -52,23 +104,33 @@ export function grokAuthEntryKey(clientId?: string): string {
  * credential — in which case the caller's preflight surfaces the actionable
  * "no credential" error unchanged.
  *
- * Idempotent and low-churn: if an `auth.json` already exists (a native
- * `grok login` or a prior materialization) it is left untouched — Grok owns and
- * self-refreshes it — so we mint at most once. We write to the *default* Grok
- * home (never a throwaway dir) so sessions stay where the CLI already looks.
+ * Idempotent and low-churn: a *parseable* existing entry for our scope (a native
+ * `grok login` or a prior materialization) is left untouched — Grok owns and
+ * self-refreshes it. The one exception is a legacy entry that the current Grok
+ * CLI can no longer parse (missing `user_id`): leaving that in place guarantees
+ * a silently-unauthenticated session, so it is re-minted from the vault (other
+ * scopes in the file are preserved). We write to the *default* Grok home (never
+ * a throwaway dir) so sessions stay where the CLI already looks.
  */
 export async function ensureGrokAuth(credsDir: string): Promise<string | undefined> {
   const grokHome = resolveGrokHome();
   const authFile = path.join(grokHome, "auth.json");
 
-  // Never clobber an existing login (native or previously materialized); Grok
-  // owns and refreshes it. An API key, if present, is handled by preflight /
-  // env projection — no auth.json needed.
-  if (fs.existsSync(authFile)) return grokHome;
-  if (process.env.XAI_API_KEY?.trim() || process.env.GROK_API_KEY?.trim()) return undefined;
-
   const provider = getModelOAuthProvider("xai");
-  if (!provider) return undefined;
+  if (!provider) return fs.existsSync(authFile) ? grokHome : undefined;
+  const entryKey = grokAuthEntryKey(provider.clientId);
+
+  // A parseable entry for our scope is Grok's to own and refresh — never clobber
+  // it. Only an absent file or a legacy entry the current CLI can't load (no
+  // `user_id`) falls through to (re)minting below.
+  const existingJson = fs.existsSync(authFile) ? readGrokAuthJson(authFile) : undefined;
+  if (existingJson && grokEntryIsHealthy(existingJson[entryKey])) return grokHome;
+
+  // An API key authenticates Grok directly (preflight / env projection) — no
+  // auth.json needed. Only skip minting when we have no OAuth entry to heal.
+  if (process.env.XAI_API_KEY?.trim() || process.env.GROK_API_KEY?.trim()) {
+    return fs.existsSync(authFile) ? grokHome : undefined;
+  }
 
   // Ensure the vault access token is still live before we project it. No-op when
   // fresh; refreshes under the store lock when expired. Failure leaves the vault
@@ -83,10 +145,17 @@ export async function ensureGrokAuth(credsDir: string): Promise<string | undefin
   const refresh = typeof cred.refresh === "string" ? cred.refresh : "";
   if (!access || !refresh) return undefined;
 
+  // The current Grok CLI requires `user_id` on every entry; recover it from the
+  // access token's OIDC claims. Without it the file is unparseable and useless,
+  // so surface the honest "no credential" state (undefined) rather than writing
+  // a file Grok will silently reject.
+  const userId = grokUserIdFromAccessToken(access);
+  if (!userId) return fs.existsSync(authFile) ? grokHome : undefined;
+
   const expiresMs = Number(cred.expires) || 0;
-  const entryKey = grokAuthEntryKey(provider.clientId);
   const entry: Record<string, unknown> = {
     key: access,
+    user_id: userId,
     auth_mode: "oidc",
     create_time: new Date().toISOString(),
     refresh_token: refresh,
@@ -95,7 +164,9 @@ export async function ensureGrokAuth(credsDir: string): Promise<string | undefin
   };
   if (expiresMs > 0) entry.expires_at = new Date(expiresMs).toISOString();
 
-  const authJson = { [entryKey]: entry };
+  // Preserve any other scopes already present (e.g. a native login for a
+  // different client id) — replace only our own entry.
+  const authJson = { ...(existingJson ?? {}), [entryKey]: entry };
 
   try {
     fs.mkdirSync(grokHome, { recursive: true, mode: 0o700 });

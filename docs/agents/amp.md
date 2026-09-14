@@ -5,7 +5,7 @@ thread turn per prompt (`amp -x`, which executes and streams to stdout). Amp
 doesn't gate tools per-run — it's governed by its own allowlist config plus Bivy's
 sandbox tier.
 
-- **Runtime id:** `amp` · **Tier:** Beta · **In picker:** Yes
+- **Runtime id:** `amp` · **Tier:** Supported · **In picker:** Yes
 
 ## Install
 

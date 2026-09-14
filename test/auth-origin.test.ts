@@ -2,7 +2,7 @@ import assert from "node:assert";
 import type { IncomingMessage } from "node:http";
 import { requestOriginAllowed } from "../src/auth.js";
 
-function req(headers: Record<string, string | undefined>): IncomingMessage {
+function req(headers: Record<string, string | string[] | undefined>): IncomingMessage {
   return { headers } as unknown as IncomingMessage;
 }
 
@@ -32,6 +32,12 @@ function run() {
   // — rejected on the Host.
   assert.equal(requestOriginAllowed(req({ host: "evil.example.com", origin: "https://evil.example.com" })), false, "rebinding public host");
   assert.equal(requestOriginAllowed(req({ host: "evil.example.com:4317" })), false, "rebinding public host, no origin");
+
+  // Opaque origins (sandboxed iframes / file URLs) are untrusted, not native
+  // clients. Only an absent header may take the no-Origin path.
+  for (const origin of ["null", "", ["http://localhost:4317", "https://evil.example.com"], "file://localhost", "ftp://localhost"]) {
+    assert.equal(requestOriginAllowed(req({ host: "localhost:4317", origin })), false, `untrusted origin: ${JSON.stringify(origin)}`);
+  }
 
   // A malformed Origin is rejected.
   assert.equal(requestOriginAllowed(req({ host: "localhost:4317", origin: "not-a-url" })), false, "malformed origin");

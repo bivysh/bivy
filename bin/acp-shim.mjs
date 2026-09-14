@@ -346,7 +346,14 @@ function onSessionUpdate(params) {
           type: "tool.result",
           toolCallId,
           name: toolCallName(state),
-          result: textOf(u.content) || status,
+          // Use the ACCUMULATED content (mergeToolCallState keeps the fullest
+          // seen across the call's lifecycle), not just this terminal frame's.
+          // Agents like opencode stream a command's stdout in an earlier
+          // (in_progress) tool_call_update and leave `content` empty on the
+          // closing frame — reading only `u.content` there collapsed the result
+          // to the bare status ("completed"), dropping the real output. Prefer
+          // the terminal frame's content when it has some, else the accumulated.
+          result: textOf(u.content) || textOf(state.content) || status,
           isError: status === "failed",
         });
       } else {

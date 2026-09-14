@@ -19,7 +19,10 @@ get shell completion.
 | Continue an existing session non-interactively | `bivy send <id> "…"` |
 | Send a file/image from the agent into the chat | `bivy attach <file>` |
 | Stop a session | `bivy kill <id>` |
-| Use the web/PWA app | `bivy relay:setup` then `bivy open` |
+| Sign this machine into my Bivy account | `bivy login` |
+| Sign this machine out | `bivy logout` |
+| Sign into a model provider | `bivy provider login` |
+| Use the web/PWA app | `bivy login` then `bivy open` |
 | Pair my phone | `bivy link` |
 | Run an agent on another machine | `bivy nodes add …` then `bivy run <agent> --node <name>` |
 | Make typing `claude` remote-visible | `bivy shim install claude` |
@@ -65,7 +68,7 @@ Steps, in order:
 4. If `<data-dir>/relay.json` does not exist yet, asks for remote access —
    `hosted`, `self-hosted`, or `local only for now` — and, for the first two,
    a sign-in method (GitHub or email link), then runs `relay:setup`. Local
-   only skips enrollment; run `bivy relay:setup` later for a browser or phone.
+   only skips enrollment; run `bivy login` later for a browser or phone.
 5. Offers the agent's model login if it is not signed in yet.
 6. Installs the background service (launchd on macOS, systemd `--user` on
    Linux) and starts it.
@@ -369,8 +372,8 @@ and approval bounds, deterministic checks, and retry/fallback rules. See
 CLI parity with the web **Keys & OAuth** screen: manage multiple labeled
 credentials per provider, per-credential sync, selection presets, and the
 agent-native ingest policy. Operates directly on the node's vault +
-`credentials.config.json` (no running daemon required). `bivy login` still adds a
-provider's default OAuth/API-key login. See
+`credentials.config.json` (no running daemon required). `bivy provider login`
+still adds a provider's default OAuth/API-key login. See
 [key-management.md](key-management.md).
 
 ```bash
@@ -494,9 +497,35 @@ bivy promote 3f1c9a02-6b41-4a0f-9c2e-5d7f1b0a8e33
 
 ## Machines and remote access
 
+### `bivy login [flags]`
+
+Signs this machine into a Bivy account with GitHub or an emailed magic link,
+enrolls the node, and enables remote web/PWA access. With no flags, it asks
+which sign-in method to use.
+
+```bash
+bivy login
+bivy login --github
+bivy login --email you@example.com
+```
+
+### `bivy logout`
+
+Alias: `bivy signout`.
+
+Signs this machine out of its Bivy account. It removes the machine registration
+from the control plane when reachable, clears the local relay enrollment, and
+disconnects the running node. Local sessions and model-provider credentials are
+kept, so the machine can subsequently sign into another account.
+
+```bash
+bivy logout
+```
+
 ### `bivy relay:setup [flags]`
 
-Enables remote web/PWA access. Signs into a control plane, enrolls this node,
+Advanced alias for account sign-in with self-hosted endpoint and session-token
+options. Enables remote web/PWA access, signs into a control plane, enrolls this node,
 and writes `<data-dir>/relay.json` with the relay URL, control-plane URL, client
 base URL and an enrollment token.
 
@@ -531,7 +560,7 @@ Opens the remote web/PWA app in a local browser. Prefers, in order: an account
 sign-in URL (only right after `bivy setup`), a freshly minted node-scoped paired
 link, then the plain remote base URL. Prints the URL when there is no browser.
 
-Requires the relay/control plane — run `bivy relay:setup` first. The node itself
+Requires the relay/control plane — run `bivy login` first. The node itself
 does not serve a UI.
 
 ### `bivy link`
@@ -637,19 +666,22 @@ bivy shim uninstall claude
 
 ## Secrets and credentials
 
-### `bivy login [args…]`
+### `bivy provider login [provider]`
+
+Alias: `bivy model login [provider]`.
 
 Signs into a model provider and stores the credential in the node's shared,
-agent-neutral credential vault (`<data-dir>/credentials`). Interactive: it lists
-providers and runs either an OAuth flow or an API-key prompt. Arguments are
-passed through to the login helper.
+agent-neutral credential vault (`<data-dir>/credentials`). With no provider it
+lists providers and runs either an OAuth flow or an API-key prompt.
 
 This is for agents whose model auth Bivy owns (Pi, Aider). Agents with their own
 native auth (Claude Code, Codex, Gemini CLI, Qwen) should be signed in with
 their own CLI.
 
 ```bash
-bivy login
+bivy provider login
+bivy provider login anthropic
+bivy model login openai
 ```
 
 ### `bivy secrets <subcommand>`

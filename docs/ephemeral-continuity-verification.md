@@ -1,6 +1,9 @@
 # Authenticated ephemeral continuity verification
 
-Draft PR [#940](https://github.com/bivysh/bivy/pull/940) is stacked on #678.
+Draft PR [#940](https://github.com/bivysh/bivy/pull/940) consolidates #678 and its
+reliability follow-up, and now targets main. The live evidence below remains
+pinned to the recorded pre-integration versions; see
+`artifacts/ephemeral-main-integration.md` for integrated regression coverage.
 The opt-in probe is `scripts/smoke-ephemeral-continuity.mts`; the redacted live
 result is `artifacts/ephemeral-continuity-live.json`.
 

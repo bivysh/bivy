@@ -3,7 +3,7 @@
 The popular git-native pair-programming CLI (`aider-chat`), run under Bivy as
 one non-interactive turn per prompt (`aider --yes-always --message "<prompt>"`).
 
-- **Runtime id:** `aider` · **Tier:** Beta · **In picker:** Yes
+- **Runtime id:** `aider` · **Tier:** Supported · **In picker:** Yes
 
 ## Install
 
@@ -19,10 +19,10 @@ so the exact login depends on the model:
 
 | Model alias | Provider | Sign in with |
 | --- | --- | --- |
-| `sonnet`, `opus` | Anthropic | `bivy login anthropic` |
-| `gpt-5`, `o3` | OpenAI | `bivy login openai` |
-| `gemini` | Google | `bivy login google` |
-| `deepseek` | DeepSeek | `bivy login deepseek` |
+| `sonnet`, `opus` | Anthropic | `bivy provider login anthropic` |
+| `gpt-5`, `o3` | OpenAI | `bivy provider login openai` |
+| `gemini` | Google | `bivy provider login google` |
+| `deepseek` | DeepSeek | `bivy provider login deepseek` |
 
 Bivy forwards the stored credential as that provider's standard key variable
 (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `DEEPSEEK_API_KEY`).

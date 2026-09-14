@@ -4,7 +4,7 @@ Atlassian's Rovo Dev terminal coding agent, delivered as a subcommand of the
 Atlassian CLI (`acli`) and run under Bivy as one instruction per prompt
 (`acli rovodev run --yolo`, where `--yolo` skips tool-approval prompts).
 
-- **Runtime id:** `rovodev` · **Tier:** Beta · **In picker:** Yes
+- **Runtime id:** `rovodev` · **Tier:** Supported · **In picker:** Yes
 
 ## Install
 

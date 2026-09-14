@@ -137,6 +137,7 @@ export type RuntimeRpcMethod = "listSessions" | "deleteSession";
 export type StartOp = "create" | "open" | "attach";
 
 export interface StartOptions {
+  credentialLabels?: Record<string, string>;
   /** Workspace/cwd for create|open. */
   workspace?: string;
   /** Resume ref for `open` (a path for pi, a session id for Claude Code). */

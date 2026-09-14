@@ -46,22 +46,23 @@ const cancelledRun = new CertificationHarness(fixtures[0]).run("first-turn", con
 controller.abort(new Error("cancelled by test"));
 await assert.rejects(() => cancelledRun, /cancelled by test/);
 
-// Static profile data alone cannot assert Supported. Every certified path must
-// match active matrix data; OpenCode's non-ACP fallback is deliberately Beta.
+// Supported means Bivy maintains the wrapper. Certification is narrower: the
+// release-tested signal is attached only when the configured path matches the
+// active matrix data; a different path remains Supported but adapter-tested.
 process.env.BIVY_OPENCODE_ACP = "1";
-const supported = listRegisteredAgents().filter((agent) => agent.supportTier === "supported");
-assert.deepEqual(supported.map((agent) => agent.id).sort(), matrix.agents.map((agent: { id: string }) => agent.id).sort());
-for (const runtime of supported) {
-  const entry = certificationEntry(runtime.id);
-  assert.ok(entry && entry.status === "active");
+const listed = listRegisteredAgents();
+for (const entry of matrix.agents) {
+  const runtime = listed.find((agent) => agent.id === entry.id)!;
+  assert.equal(runtime.supportTier, "supported");
   assert.equal(runtime.executionMode, entry.executionMode);
-  assert.equal(runtime.testedVersion, entry.pinnedVersion);
+  assert.equal(runtime.testedVersion, entry.upstream.pinnedVersion);
   assert.equal(runtime.certification, "release-tested");
+  assert.equal(certificationEntry(runtime.id)?.status, "active");
 }
 process.env.BIVY_OPENCODE_ACP = "0";
 const fallback = listRegisteredAgents().find((agent) => agent.id === "opencode")!;
 assert.equal(fallback.executionMode, "pipe");
-assert.equal(fallback.supportTier, "beta");
+assert.equal(fallback.supportTier, "supported");
 assert.equal(fallback.certification, "adapter-tested");
 delete process.env.BIVY_OPENCODE_ACP;
 

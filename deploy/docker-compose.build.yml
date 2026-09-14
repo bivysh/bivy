@@ -1,0 +1,27 @@
+# Optional overlay for operators developing or modifying the AGPL services.
+# The default stack pulls public, multi-platform images pinned by BIVY_IMAGE_TAG.
+# This overlay restores local source builds instead:
+#
+#   docker compose \
+#     -f deploy/docker-compose.yml \
+#     -f deploy/docker-compose.build.yml \
+#     --env-file deploy/.env up -d --build
+#
+# Compose still assigns the local result the configured image/tag, but does not
+# push it. Use a distinctive BIVY_IMAGE_TAG (for example `local`) to avoid
+# confusing a modified local image with a published immutable artifact.
+
+services:
+  control-plane:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.control-plane
+      args:
+        # Optional ephemeral-machine UI, paired with the runtime flag in the
+        # base Compose file.
+        VITE_EPHEMERAL_MACHINES_ENABLED: "${VITE_EPHEMERAL_MACHINES_ENABLED:-}"
+
+  relay:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.relay

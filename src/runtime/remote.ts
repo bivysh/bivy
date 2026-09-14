@@ -665,7 +665,7 @@ export class RemoteRuntime implements AgentRuntime {
     const toolSpecs = options.toolProvider?.list();
     return startRemoteSession(
       transport,
-      { runtime: this.id, sandbox: this.config.sandbox, op: "create", options: { workspace: options.workspace, hasToolInterceptor: Boolean(options.toolInterceptor), ...(toolSpecs?.length ? { toolSpecs } : {}) } },
+      { runtime: this.id, sandbox: this.config.sandbox, op: "create", options: { credentialLabels: options.credentialLabels, workspace: options.workspace, hasToolInterceptor: Boolean(options.toolInterceptor), ...(toolSpecs?.length ? { toolSpecs } : {}) } },
       { toolInterceptor: options.toolInterceptor, toolProvider: options.toolProvider },
     );
   }
@@ -675,7 +675,7 @@ export class RemoteRuntime implements AgentRuntime {
     const toolSpecs = options.toolProvider?.list();
     return startRemoteSession(
       transport,
-      { runtime: this.id, sandbox: this.config.sandbox, op: "open", options: { workspace: options.workspace, sessionFile: options.sessionFile, hasToolInterceptor: Boolean(options.toolInterceptor), ...(toolSpecs?.length ? { toolSpecs } : {}) } },
+      { runtime: this.id, sandbox: this.config.sandbox, op: "open", options: { credentialLabels: options.credentialLabels, workspace: options.workspace, sessionFile: options.sessionFile, hasToolInterceptor: Boolean(options.toolInterceptor), ...(toolSpecs?.length ? { toolSpecs } : {}) } },
       { toolInterceptor: options.toolInterceptor, toolProvider: options.toolProvider },
     );
   }

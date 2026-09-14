@@ -7,6 +7,434 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.24] - 2026-09-14
+
+### Added
+
+- Nest a sub-agent's own tool calls under the delegation card that spawned them in session transcripts, instead of rendering them flat and unlabelled. Works live and on reload; general to any agent that surfaces a parent tool-call id (Claude's `parent_tool_use_id` today).
+
+- Improve browser-first machine enrollment and first-task onboarding.
+
+### Changed
+
+- Refresh release-tested agent pins to the current upstream builds: Claude Agent SDK 0.3.270, Codex 0.154.0, and OpenCode 1.18.30 (Pi stays at 0.85.1). Each was validated with a real turn through Bivy's own runtime against live credentials before the pin moved.
+
+### Fixed
+
+- Keep updates from installing agents the user has not selected.
+- Keep tool-result images out of portable transcript summaries when forking sessions.
+- Separate assistant prose and reasoning that resume after a tool call with a paragraph break in transcripts for pipe/stream agents (Grok, Goose, Gemini, and the generic streams), so segments no longer run together (e.g. "…what it does.The workspace…"). Matches the governed protocol path.
+- Preserve a tool's output in ACP transcripts (OpenCode and other ACP agents) when the command's stdout streams before the closing frame, instead of collapsing the result to a bare "completed" status.
+
+## [0.16.23] - 2026-09-12
+
+### Fixed
+- Preserve image-only messages in cross-agent forks with a placeholder pointing to the full transcript.
+- Remove the redundant mobile Automations sidebar background.
+- Add a dedicated hosted GitHub App management link for repository access, with guidance for organization installations. Existing installations remain manageable even when a deployment cannot offer new installations.
+
+## [0.16.22] - 2026-09-12
+
+### Fixed
+
+- Render Grok tool calls in transcripts with clean output and without duplicate cards.
+
+## [0.16.21] - 2026-09-11
+
+### Added
+
+- Import existing Claude, Codex, and Grok logins through the CLI and Settings.
+
+### Fixed
+
+- Keep machine update actions busy after startup acknowledgement until the update completes.
+- Keep the latest messages visible instead of hiding them behind earlier-message pagination.
+
+## [0.16.20] - 2026-09-11
+
+### Fixed
+
+- Prevent Bivy outcome comments from triggering GitHub follow-up runs.
+- Deduplicate policy-blocked issue runs and their notifications.
+- Keep automation run details status consistent and refreshed.
+- Surface failed Codex patches and live tool cards in exec JSON output.
+
+## [0.16.19] - 2026-09-10
+
+### Fixed
+
+- Enable automation mentions in issue and pull request bodies, and prevent GitHub
+  pickup labels from retriggering automations.
+- Harden automation execution ownership, bounded retries, and lease recovery;
+  persist pending results so acknowledgement retries do not rerun the agent.
+- Use stable output branches across recovery and serialize lifecycle updates.
+- Edit the selected automation definition safely, preserve locked instructions,
+  and prevent duplicate Run now dispatches with clearer queued-state feedback.
+- Improve automation dialog focus handling and approval safety explanations.
+
+### Upgrade notes
+
+- Deploy the control plane before upgrading runners. Upgrade all unattended
+  runners to enable generation fencing, durable retry reservations, lease-deadline
+  aborts, and pending-result recovery. External agent side effects remain at least
+  once; existing random output branches are not renamed.
+
+## [0.16.18] - 2026-09-10
+
+### Added
+
+- Select provider accounts and API keys for automations, with encrypted account
+  labels and per-session credential routing. Update runners before configuring
+  account overrides; older daemons do not support structured automation templates.
+- Choose provider accounts directly in the model picker.
+
+### Fixed
+
+- Surface automation quota blocks and forward automation sources to deployment policy.
+- Preserve transcript position and tool inspection during updates, and keep failed
+  tool summaries labeled consistently.
+- Reload the app after activating a PWA update, stabilize notification preferences,
+  and respect notification settings for the app icon badge.
+- Simplify provider OAuth sign-in and honor selected credential accounts.
+- Stabilize terminal cleanup.
+
+## [0.16.17] - 2026-09-09
+
+### Fixed
+
+- Keep fork progress visible from the session menu and agent picker until the new
+  conversation is loaded, including cross-machine moves, and show failures in place.
+- Keep activity dismissal and agent-selection confirmation in the current app
+  session instead of navigating to another session or back to GitHub.
+- Hide unattended credential controls when ephemeral machines are disabled.
+- Install Python-based agents in isolated environments with uv and a compatible
+  Python version, avoiding conflicts with system-managed Python installations.
+
+## [0.16.16] - 2026-09-09
+
+### Fixed
+
+- Preserve conversation history in Codex model context when forking from another agent.
+- Repair silent, empty Grok turns with corrected authentication, model selection,
+  and streaming transcript handling.
+- Align the app icon badge with sessions needing attention.
+
+## [0.16.15] - 2026-09-08
+
+### Fixed
+
+- Respect gitignore rules when snapshotting fork workspaces.
+- Load session title decryption keys without requiring each machine to be selected.
+
+## [0.16.14] - 2026-09-08
+
+### Added
+
+- `bivy exec` now supports explicit workspace, session name, and model flags.
+
+### Fixed
+
+- Fresh curl installations no longer report success without installing Bivy when
+  prerequisite prompts consume the installer input; setup failures are propagated.
+- Require native terminal support and provision missing Debian/Ubuntu build tools,
+  rather than silently installing without a working `bivy run` terminal.
+- Repair macOS terminal spawn-helper permissions during installation.
+- Report failed headless agent turns instead of returning an empty successful reply,
+  and preserve explicitly supplied session names.
+- Correct the fork-fidelity matrix and documentation for full same-runtime Codex
+  and OpenCode forks.
+
+## [0.16.13] - 2026-09-07
+
+### Added
+
+- Portable self-hosting with browser-based owner setup and sign-in, guided VPS
+  deployment, and release bundles with pinned service images.
+- Self-host deployment management scripts and Compose smoke checks for owner
+  authentication, node enrollment, and relay connectivity.
+
+### Fixed
+
+- Preserve self-hosted owner access behind proxies and during upgrades.
+- Keep node version reporting and release-channel update notices consistent.
+- Resync the installed app badge when the app resumes.
+
+## [0.16.12] - 2026-09-07
+
+### Fixed
+
+- Reject opaque, empty, multiple, and non-HTTP browser origins at the node API
+  and WebSocket origin guard, while preserving native clients without Origin.
+- Stop checkout updates on Git or dependency-installation failure without
+  restarting the service, and propagate packaged-update download failures.
+- Keep public-copy contract tests insensitive to Markdown line wrapping.
+
+### Changed
+
+- Production promotion now requires the canonical full CI workflow on the exact
+  release commit, in addition to staging publication and environment approval.
+- Clarified that npm-global and checkout updates do not automatically roll back.
+- Expanded the README to explain Bivy's full product workflow.
+
+## [0.16.11] - 2026-09-07
+
+### Changed
+
+- Refreshed the release-tested agent runtimes to the latest upstream releases:
+  Claude Agent SDK 0.3.263, Codex 0.153.4, Pi 0.85.1, and OpenCode 1.18.29.
+  Adapter flags and protocol modes were re-probed against each new CLI and the
+  certification matrix, manifest, and docs regenerated.
+- Clarified the launch scope around existing machines, Cloud access, and deferred
+  provisioning.
+
+### Fixed
+
+- Improved onboarding, GitHub source setup, webhook authentication, and stale
+  agent status handling.
+- Fixed custom GitHub trigger labels, automation editor scroll jumps, and missing
+  model labels; session badges now show automation trigger provenance.
+- Machine updates no longer stay stuck when an acknowledgement is missing.
+
+## [0.16.10] - 2026-09-06
+
+### Changed
+
+- Attachment loading now prioritizes newer files and explicit downloads, limits
+  concurrent transfers, and reuses cached bytes across views and browser reloads.
+- Remote session admission now consistently accounts for new manual, automated,
+  and forked sessions while avoiding duplicate charges for delivery retries;
+  quota-denied automation is parked instead of retried or rerouted.
+- Ephemeral launch controls are hidden by default, with an explicit build-time
+  opt-in for operators.
+
+### Fixed
+
+- Session and exec APIs now resolve declared agent aliases consistently, and
+  `bivy exec` uses the same governed runtime selection as interactive chat.
+
+## [0.16.9] - 2026-09-05
+
+### Added
+
+- Public, multi-platform control plane and relay images are now published from
+  Core for reproducible self-hosted deployments.
+
+### Changed
+
+- The session experience now groups agent work into chronological turns, keeps
+  the active session rail compact, and improves mobile composer, picker, queue,
+  artifact, and transcript layouts.
+- Cross-machine forks now navigate reliably to the destination session and keep
+  browser history aligned throughout the handoff.
+- Agent compatibility now covers current releases and preserves namespaced tool
+  transcripts.
+- npm-global updates now replace the installed package in place.
+
+### Fixed
+
+- Streaming JSON errors now surface as turn errors instead of leaving work in an
+  ambiguous state.
+- Machine updates, queued follow-ups, attachment visibility, artifact navigation,
+  and missing automation-key recovery now behave consistently.
+- Sidebar navigation and session controls now have improved keyboard and screen
+  reader behavior.
+
+## [0.16.8] - 2026-09-02
+
+### Changed
+
+- Cross-machine forks now transfer plain and unmanaged workspaces into isolated
+  destinations, preserve files, symlinks, and modes, and support a configurable
+  workspace size limit.
+
+### Fixed
+
+- Workspace forks now fail safely on inspection errors and avoid stale native
+  transcripts while a transfer is in progress.
+
+## [0.16.7] - 2026-09-02
+
+### Added
+
+- Bivy account login and logout are now available from the CLI, including
+  interactive GitHub and email sign-in.
+
+### Changed
+
+- Model-provider authentication is now available through `bivy provider login`
+  (also aliased as `bivy model login`), leaving `bivy login` for account access.
+
+## [0.16.6] - 2026-09-02
+
+### Changed
+
+- Grok CLI sessions now preserve structured tool calls and results in live and
+  persisted transcripts.
+
+### Fixed
+
+- Cross-machine session forks now keep progress, success, setup warnings, and
+  failures visible while switching between source and destination machines.
+
+## [0.16.5] - 2026-09-01
+
+### Fixed
+
+- Forked session handoffs now restore the source session when destination import
+  fails, retain live transcript and unmanaged-workspace changes, and reject
+  moves that would lose context.
+
+## [0.16.4] - 2026-09-01
+
+### Fixed
+
+- Chat sessions can now start when a runtime defers model selection until the
+  first query, including `bivy run claude --chat`.
+
+## [0.16.3] - 2026-09-01
+
+### Changed
+
+- The automation editor now uses a wider two-column layout for execution
+  settings, grows the instructions field with its content, surfaces agent,
+  model & safety settings as a first-class section, and keeps save errors
+  visible above the editor actions.
+
+### Fixed
+
+- Forking or moving a session across agents and machines now fails safe
+  against context loss: the live transcript is preferred over stale snapshots,
+  uncommitted changes are captured from unmanaged Git workspaces too, lossy
+  moves are rejected, and the source session is restored when a destination
+  import fails.
+- Native terminal-to-chat handoffs now discover Pi sessions in Pi's
+  per-workspace session layout, consistently offer Codex terminal takeover,
+  and no longer let stale terminal lists resurrect an OpenCode terminal after
+  takeover.
+
+## [0.16.2] - 2026-09-01
+
+### Changed
+
+- Machine connection instructions now use one consistent card across onboarding
+  and Add a Machine, show both sign-in options, and keep the dialog centered.
+- The installer now streams npm progress and lifecycle output while retaining it
+  for fallback diagnostics; verbosity can be adjusted with `BIVY_NPM_LOGLEVEL`.
+
+## [0.16.1] - 2026-09-01
+
+### Changed
+
+- Documentation now distinguishes Bivy's local agent runtime, remote browser
+  access, and optional hosted control plane more clearly.
+
+### Fixed
+
+- Native terminal handoffs now discover and resume agent sessions reliably,
+  including Claude Code, Pi, Gemini CLI, and Qwen Code sessions.
+- `bivy update` now recognizes scoped global npm installs and restarts an
+  existing service even when its stored configuration hint is stale.
+- Tool calls and results from agents that omit correlation IDs now remain paired
+  in live and persisted transcripts instead of appearing as duplicate or
+  indefinitely running tool cards.
+
+## [0.16.0] - 2026-08-31
+
+### Changed
+
+- Control-plane and relay containers now run as an unprivileged user, drop Linux
+  capabilities, prevent privilege escalation, and serve a host-scoped HSTS policy.
+- Production dependencies were refreshed, including TypeBox, Highlight.js,
+  Mermaid, PostgreSQL, Sentry, and cron-parser.
+
+### Fixed
+
+- Model-auth key requests no longer create a relay feedback loop, repeatedly
+  write unchanged requests, or inadvertently trigger hosted machine provisioning.
+- Scheduled automations now update PostgreSQL timestamp fields without parameter
+  type-inference errors that caused due runs to retry indefinitely.
+
+## [0.15.0] - 2026-08-31
+
+### Added
+
+- Self-hosted control planes can use AWS KMS as the hosted keyring source for
+  encrypted machine enrollment credentials.
+- Automation setup now includes source readiness checks, clearer trigger
+  templates, scoped run history, and a dedicated Runs destination.
+- Accounts can be permanently deleted from Accounts & Billing settings, including
+  deployment-owned billing data, after any hosted machines are removed.
+
+### Changed
+
+- Installation now supports Node.js 20+, skips optional agent bridges and native
+  terminal dependencies on the fast path, and installs only the selected agent
+  integration when needed while preserving existing agent installs and logins.
+- The PWA has a more focused mobile and desktop shell, simpler new-session and
+  automation flows, improved workspace navigation, and more consistent sheets,
+  menus, touch targets, and attention states.
+- First-session onboarding now starts by connecting a machine, offers its default
+  workspace without requiring GitHub, and limits the post-activation automation
+  suggestion to a one-time next step.
+- Add Machine now presents clearly labeled auto sign-in and regular sign-in
+  commands with separate copy actions and explicit token-safety guidance.
+- Maintained agent support is now reported separately from release-tested
+  capability certification, so support status does not disappear when an
+  upstream version moves beyond the latest certified range. Release-tested pins
+  were refreshed for Claude Agent SDK 0.3.251, Codex 0.151.0, Pi 0.84.4, and
+  OpenCode 1.18.25.
+- The agent picker prioritizes Claude Code, Codex, Grok, OpenCode, and Pi while
+  keeping the full catalog searchable, and uses an explicit confirmation when
+  switching to an agent whose sign-in or protection level cannot be verified.
+- Session and automation polling payloads are smaller to reduce routine control
+  plane traffic.
+- Direct GitHub queue runs now honor project and node rulesets for retries and
+  fallback routing, matching hosted queue behavior.
+
+### Fixed
+
+- Session switching, closed-session resume, and async handoffs now keep prompts
+  and follow-ups attached to the intended session and preserve native resume
+  references; changing agents in a blank session remains a draft instead of
+  creating an empty fork.
+- Reasoning, structured tool calls, tool results, failures, and workspace changes
+  are preserved consistently in stored and resumed transcripts.
+- Webhook automations preserve signing settings, accept provider-native JSON
+  payloads, and generate idempotency keys when providers cannot send custom
+  headers.
+- Signing out clears the account-bound browser device key and remote pairing, so
+  the same browser can sign in and pair successfully with a different account.
+- Concurrent automation and vault operations now share one device identity and
+  tolerate stale recipients, avoiding save races and spurious sync failures.
+- Token and claim-based machine installs now use the standard installer and a
+  non-interactive enrollment path that works correctly on headless machines.
+- Automations sidebar navigation and voice-provider key actions now open their
+  intended destinations directly.
+- Mobile overlays, modal history, Settings navigation, automation editor state,
+  agent picker selection, actionable authentication errors, and terminal-launched
+  updates no longer get stuck or lose user state; automation text fields also no
+  longer trigger browser zoom on focus.
+
+## [0.13.0] - 2026-08-27
+
+### Added
+
+- Hosted GitHub App support was extracted into the Cloud integration path.
+- Personal machine claims and first-run onboarding now give new installs a
+  clearer account-linked setup path.
+
+### Changed
+
+- Machine onboarding is more app-first, first-run launch messaging is sharper,
+  Cloud machines are gated behind an explicit settings opt-in, and Free Cloud
+  remote sessions now respect plan limits.
+
+### Fixed
+
+- Existing installs re-enroll with an account token so they stay connected after
+  the account-linked onboarding changes.
+- Blocked hosted automations now surface clearly instead of failing silently.
+
 ## [0.12.0] - 2026-08-27
 
 ### Changed

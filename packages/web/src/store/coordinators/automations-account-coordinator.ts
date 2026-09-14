@@ -13,7 +13,7 @@ export interface AutomationsAccountDependencies {
     fetchMe(local: LocalStore): Promise<AccountMe>;
     fetchGithubApp(local: LocalStore): Promise<unknown>;
     fetchGithubQueue(local: LocalStore, limit: number): Promise<any>;
-    fetchAutomationRuns(local: LocalStore, limit: number): Promise<any>;
+    fetchAutomationRuns(local: LocalStore, limit: number, options?: { summary?: boolean }): Promise<any>;
     cancelAutomationRun(local: LocalStore, id: string): Promise<unknown>;
     disconnectGithubApp(local: LocalStore, input: { appId?: string; hookId?: string }): Promise<void>;
     removeNode(local: LocalStore, nodeId: string): Promise<void>;
@@ -51,7 +51,9 @@ export class AutomationsAccountCoordinator {
   fetchMe(): Promise<AccountMe> { return this.deps.api.fetchMe(this.deps.local); }
   fetchGithubApp(): Promise<unknown> { return this.deps.api.fetchGithubApp(this.deps.local); }
   fetchGithubQueue(limit = 30): Promise<any> { return this.deps.api.fetchGithubQueue(this.deps.local, limit); }
-  fetchAutomationRuns(limit = 50): Promise<any> { return this.deps.api.fetchAutomationRuns(this.deps.local, limit); }
+  fetchAutomationRuns(limit = 50, options: { summary?: boolean } = {}): Promise<any> {
+    return this.deps.api.fetchAutomationRuns(this.deps.local, limit, options);
+  }
 
   setGithubAppDefaultNode(node: string, appId?: string): Promise<string | undefined> {
     return this.deps.api.setGithubAppDefaultNode(this.deps.local, node, appId);

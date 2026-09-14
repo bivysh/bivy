@@ -75,7 +75,7 @@ const roomKey = randomBytes(32);
 // Execution facts travel inside the seal; a mismatched session cannot write
 // transcript/checkpoint state before identity validation.
 {
-  const sessionInfo = { runtimeId: "generic-agent", model: { provider: "provider", id: "model" }, name: "private title", sandbox: "read-only", approvalMode: "manual" };
+  const sessionInfo = { runtimeId: "generic-agent", model: { provider: "provider", id: "model" }, name: "private title", sandbox: "read-only", approvalMode: "manual", credentialLabels: { provider: "work-account" } };
   const sealed = await buildSessionSnapshot("original", roomKey, { ...ownerDeps([base(1)], undefined), sessionInfo: () => sessionInfo });
   assert.ok(sealed && !sealed.includes("private title"));
   const cap = standbyCapture();

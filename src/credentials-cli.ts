@@ -27,6 +27,7 @@ import {
   type CredentialRecordSummary,
 } from "./credentials/api.js";
 import { defaultPresetsPath, inferReferenceBackend } from "./credentials/index.js";
+import { importNativeAuthCommand } from "./credential-import-command.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
@@ -51,12 +52,15 @@ Presets (which labeled key a project uses):
   bivy credentials preset clear <name> <provider>    Remove a provider's mapping from a preset
 
 Agent-native logins:
+  bivy auth import [claude codex grok] [--sync node|account] [--label name] [--yes] [--dry-run]
+                                                     Import local credential files (alias: credentials import).
+                                                     Preview first; existing slots are never replaced.
   bivy credentials ingest [merge|separate]           Show or set the ingest policy
 
 Config file (${path.relative(process.cwd(), configPath) || configPath}):
   bivy credentials config path|show|edit             Print path, show, or open in $EDITOR
 
-Note: run 'bivy login' to add a provider's default OAuth/API-key login.`);
+Note: run 'bivy provider login' to add a provider's default OAuth/API-key login.`);
 }
 
 async function askHidden(question: string): Promise<string> {
@@ -90,7 +94,7 @@ function kindLabel(r: CredentialRecordSummary): string {
 async function cmdList(): Promise<void> {
   const records = [...(await listCredentialRecords(credsDir))].sort((a, b) =>
     `${a.provider}:${a.label}`.localeCompare(`${b.provider}:${b.label}`));
-  if (records.length === 0) { console.log("No credentials. Add one with 'bivy credentials add', or 'bivy login'."); return; }
+  if (records.length === 0) { console.log("No credentials. Add one with 'bivy credentials add', or 'bivy provider login'."); return; }
   const presets = getCredentialPresets(credsDir);
   for (const r of records) {
     const badges = [kindLabel(r), r.sync === "account" ? "sync" : "node-only", r.origin === "agent-native" ? "from agent" : null]
@@ -174,6 +178,7 @@ async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
   if (!command || command === "help" || command === "--help" || command === "-h") { usage(); return; }
   switch (command) {
+    case "import": return importNativeAuthCommand(credsDir, args);
     case "list": return cmdList();
     case "add": return cmdAdd(args[0], args[1], args[2]);
     case "remove": case "rm":

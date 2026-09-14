@@ -3,6 +3,15 @@
 import { useEffect, useRef, useState } from "react";
 import { isStandaloneDisplay, startGithubDeviceLogin, startEmailDeviceLogin, pollDeviceLogin, type EmailDeviceLogin } from "@bivy/core";
 import { controller } from "../store/useStore.js";
+import { OwnerSignIn } from "./OwnerSignIn.js";
+
+interface SignInMethods {
+  enabled: boolean;
+  passwordConfigured: boolean;
+  setupRequired: boolean;
+  github: boolean;
+  email: boolean;
+}
 
 /**
  * Shown on the hosted control plane (app.bivy.sh) before the client is signed
@@ -21,6 +30,30 @@ import { controller } from "../store/useStore.js";
  */
 export function SetupNotice({ onDismiss }: { onDismiss?: () => void } = {}) {
   const origin = location.origin;
+  const [methods, setMethods] = useState<SignInMethods | null>(null);
+  const [methodsError, setMethodsError] = useState("");
+  const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    const abort = new AbortController();
+    const timeout = setTimeout(() => abort.abort(), 10_000);
+    let active = true;
+    setMethodsError("");
+    fetch(`${origin}/auth/owner/status`, { signal: abort.signal })
+      .then(async (response) => {
+        // Older control planes may serve the SPA fallback for an unknown route.
+        if (response.status === 404 || (response.ok && !response.headers.get("content-type")?.includes("application/json"))) {
+          return { enabled: false, passwordConfigured: false, setupRequired: false, github: true, email: true };
+        }
+        if (!response.ok) throw new Error("Could not load sign-in options.");
+        const data = await response.json();
+        if (typeof data.enabled !== "boolean" || typeof data.github !== "boolean" || typeof data.email !== "boolean") throw new Error("Invalid sign-in configuration from server.");
+        return data as SignInMethods;
+      })
+      .then((value) => { if (active) setMethods(value); })
+      .catch(() => { if (active) setMethodsError("Could not reach your server. Check the connection and try again."); })
+      .finally(() => clearTimeout(timeout));
+    return () => { active = false; abort.abort(); clearTimeout(timeout); };
+  }, [origin, retry]);
   // An installed/home-screen PWA runs in a scoped window; an emailed magic link
   // opens in the system browser, not this window, so the redirect-based sign-in
   // would finish in that browser tab and never return here. Detect standalone so
@@ -255,12 +288,21 @@ export function SetupNotice({ onDismiss }: { onDismiss?: () => void } = {}) {
         )}
         <div className="setup-glyph">⛺</div>
         <h1>Bivy</h1>
-        <p>Run Claude Code, Codex, or another coding agent on a Machine you control — then continue it from your browser or phone.</p>
+        <p>{methods?.enabled ? "Your self-hosted Bivy workspace." : "Run Claude Code, Codex, or another coding agent on a Machine you control — then continue it from your browser or phone."}</p>
+        {!methods && !methodsError && <p className="muted" role="status">Loading sign-in options…</p>}
+        {methodsError && <div className="setup-error" role="alert">
+          <p>{methodsError}</p>
+          <button type="button" className="btn" onClick={() => setRetry((value) => value + 1)}>Retry</button>
+        </div>}
+        {methods?.enabled && <OwnerSignIn setupRequired={methods.setupRequired} passwordConfigured={methods.passwordConfigured} />}
+        {methods && !methods.enabled && !methods.github && !methods.email && <p className="muted">No browser sign-in method is configured. Use your private server-shell sign-in link, or configure SELF_HOST_SETUP_TOKEN in your deployment settings.</p>}
         {signInError && (
           <div className="setup-error" role="alert">
             {signInError}
           </div>
         )}
+        {methods?.github && <>
+        {methods.enabled && <div className="setup-or">or</div>}
         {standalone ? (
           <button
             type="button"
@@ -298,7 +340,9 @@ export function SetupNotice({ onDismiss }: { onDismiss?: () => void } = {}) {
           </div>
         )}
         {githubError && <p className="setup-note muted">{githubError}</p>}
-        <div className="setup-or">or with email</div>
+        </>}
+        {methods?.email && <>
+        <div className="setup-or">{methods.enabled || methods.github ? "or with email" : "Sign in with email"}</div>
         <form className="setup-email" onSubmit={sendMagicLink}>
           <input
             className="field"
@@ -339,10 +383,11 @@ export function SetupNotice({ onDismiss }: { onDismiss?: () => void } = {}) {
             . You can also edit the address above and send again.
           </p>
         )}
-        <p className="setup-foot muted">
+        </>}
+        {methods && !methods.enabled && (methods.github || methods.email) && <p className="setup-foot muted">
           By continuing, you agree to the <a href="https://bivy.sh/terms.html">Terms</a> and acknowledge the{" "}
           <a href="https://bivy.sh/privacy.html">Privacy Policy</a>.
-        </p>
+        </p>}
       </div>
     </div>
   );

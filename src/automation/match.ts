@@ -40,7 +40,10 @@ export function labelsMatch(filter: string[] | undefined, eventLabels: string[] 
   const normalized = (eventLabels ?? []).map((l) => l.trim().toLowerCase()).filter(Boolean);
   const filters = (filter && filter.length > 0 ? filter : DEFAULT_LABEL_FILTER).map((l) => l.trim().toLowerCase()).filter(Boolean);
   if (filters.length === 0) return true;
-  return normalized.some((label) => filters.some((f) => label === f || label.startsWith(`${f}/`)));
+  // Prefix matching is for routing labels, not status labels such as
+  // bivy/<node>:in-progress. Otherwise claiming work triggers another run.
+  // Explicit custom labels (including ones containing ':') still match exactly.
+  return normalized.some((label) => filters.some((f) => label === f || (label.startsWith(`${f}/`) && !label.includes(":"))));
 }
 
 function actionAllowed(rule: EvaluableEventRule, action: string | undefined): boolean {

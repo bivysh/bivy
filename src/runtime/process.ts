@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { stripAnsi } from "./ansi.js";
 import { buildAgentCredentialEnv } from "./credentials.js";
+import { withSessionCredentials, credentialEnvFallback } from "../credentials/session.js";
 import { egressEnv, sessionEgressEnv } from "../harness/egress.js";
 import { depCacheEnv } from "../harness/dep-cache.js";
 import { bivySessionEnv } from "./session-env.js";
@@ -479,7 +480,7 @@ class ProcessSession implements RuntimeSession {
     // added after this session started) reach the agent. The vault wins over any
     // ambient key so Bivy's shared sign-in is authoritative.
     const credentialEnv = this.runtimeOptions.credentials
-      ? await buildAgentCredentialEnv(this.runtimeOptions.credentials, undefined, this.currentModelProvider, this.cwd).catch(() => ({}))
+      ? await buildAgentCredentialEnv(this.runtimeOptions.credentials, undefined, this.currentModelProvider, this.cwd).catch(credentialEnvFallback)
       : {};
     // Optional prepare step (e.g. Codex materializes its auth.json from the vault
     // and pins CODEX_HOME). Runs after credentials, before preflight/spawn; its
@@ -704,7 +705,7 @@ export class ProcessRuntime implements AgentRuntime {
   }
 
   async createSession(options: OpenSessionOptions): Promise<OpenSessionResult> {
-    const session = new ProcessSession(this.options, options.workspace);
+    const session = new ProcessSession(await withSessionCredentials(this.options, options.credentialLabels), options.workspace);
     this.sessions.push(session);
     return { session, warning: "Generic CLI runtime streams stdout/stderr only; approvals, model picker, and resume depend on the underlying agent protocol." };
   }
@@ -713,7 +714,7 @@ export class ProcessRuntime implements AgentRuntime {
     // Resumable runtimes bind the agent's session id so each prompt continues it
     // (see resumeArgs); non-resumable ones ignore the ref and start fresh.
     if (this.options.resumable) {
-      const session = new ProcessSession(this.options, options.workspace, options.sessionFile);
+      const session = new ProcessSession(await withSessionCredentials(this.options, options.credentialLabels), options.workspace, options.sessionFile);
       this.sessions.push(session);
       return { session };
     }

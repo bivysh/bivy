@@ -4,7 +4,7 @@ Alibaba's Qwen Code CLI (`@qwen-code/qwen-code`) — a Gemini-CLI fork tuned for
 Qwen-Coder models. Bivy reuses Gemini's JSON parser, approval-mode
 containment, and resume form, since Qwen Code shares that CLI shape.
 
-- **Runtime id:** `qwen` · **Tier:** Beta · **In picker:** Yes
+- **Runtime id:** `qwen` · **Tier:** Supported · **In picker:** Yes
 
 ## Install
 
@@ -28,7 +28,7 @@ path; this hand-off only helps if your Qwen Code version reads `QWEN_API_KEY`
 from the environment:
 
 ```bash
-bivy login   # pick the Qwen entry from the menu, if present
+bivy provider login   # pick the Qwen entry from the menu, if present
 ```
 
 ## Models

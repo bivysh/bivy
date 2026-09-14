@@ -10,6 +10,13 @@ const optionalSession = { sessionId: Type.Optional(Type.String()) };
  * this table remains migration-compatible; adding validation is one data row. */
 export const CLIENT_COMMAND_SCHEMAS: Readonly<Record<string, TSchema>> = {
   ping: Type.Object(request),
+  "credentials.native.preview": Type.Object({ ...request, label: Type.Optional(Type.String({ maxLength: 100 })) }),
+  "credentials.native.import": Type.Object({
+    ...request,
+    previewId: Type.String({ minLength: 1, maxLength: 100 }),
+    agents: Type.Array(Type.Union([Type.Literal("claude"), Type.Literal("codex"), Type.Literal("grok")]), { minItems: 1, maxItems: 3, uniqueItems: true }),
+    sync: Type.Union([Type.Literal("node"), Type.Literal("account")]),
+  }),
   "attachment.fetch": Type.Object({ ...request, hash: Type.String() }),
   "session.pause": Type.Object(session),
   "session.resume": Type.Object(session),

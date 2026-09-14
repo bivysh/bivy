@@ -255,9 +255,11 @@ function actionsFor(record: RunRecord, outcome: RunOutcome, sessionId: string | 
   if (provider) actions.push({ kind: "reauthenticate", label: "Re-authenticate", provider });
   if (outcome.kind === "needs_review" && sessionId) actions.push({ kind: "review_session", label: "Review Session" });
   if (CANCELLABLE.has(record.status)) actions.push({ kind: "cancel", label: "Cancel Run" });
-  // Retry is another attempt of a Run that has ENDED in a failure the customer
-  // can act on. A still-parked needs_attention Run is cancellable, not retryable.
-  if (FINISHED.has(record.status) && RETRYABLE_OUTCOMES.has(outcome.kind) && (!record.maxAttempts || attempt < record.maxAttempts)) actions.push({ kind: "retry", label: "Retry Run" });
+  const policyDenied = record.events?.some((event) => event.kind === "policy_denial");
+  // Retry is another attempt of a Run that ended in an actionable failure. A
+  // policy-denied Run is parked until the user upgrades/adjusts policy, then the
+  // same Retry affordance should re-check admission and enqueue it.
+  if (((FINISHED.has(record.status) && RETRYABLE_OUTCOMES.has(outcome.kind)) || (record.status === "needs_attention" && policyDenied)) && (!record.maxAttempts || attempt < record.maxAttempts)) actions.push({ kind: "retry", label: "Retry Run" });
   return actions;
 }
 

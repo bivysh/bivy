@@ -226,6 +226,7 @@ export function RunPill({
           onClose={() => setOpen(false)}
           autoFocusSearch={false}
         >
+          {(dismiss) => <>
             <div className="run-sheet-status">
               <StatusDot status={statusClass} />
               {sheetStatus}
@@ -297,7 +298,7 @@ export function RunPill({
               <button
                 type="button"
                 className="sheet-action run-sheet-changes"
-                onClick={() => { setOpen(false); onOpenChanges(); }}
+                onClick={() => dismiss(onOpenChanges)}
               >
                 <span className="run-sheet-changes-icon" aria-hidden>◈</span>
                 <span>{filesLabel}</span>
@@ -309,7 +310,7 @@ export function RunPill({
               <button
                 type="button"
                 className="sheet-action run-sheet-changes"
-                onClick={() => { setOpen(false); onOpenArtifacts(); }}
+                onClick={() => dismiss(onOpenArtifacts)}
               >
                 <span className="run-sheet-changes-icon" aria-hidden>📎</span>
                 <span>{artifactsLabel}</span>
@@ -339,7 +340,7 @@ export function RunPill({
               <button
                 type="button"
                 className="sheet-action run-sheet-open-run"
-                onClick={() => { setOpen(false); onOpenRun(evidence.id); }}
+                onClick={() => dismiss(() => onOpenRun(evidence.id))}
               >
                 <span aria-hidden>▸</span>
                 <span>Run details</span>
@@ -362,6 +363,7 @@ export function RunPill({
             {actions.length === 0 && !evidence && !hasUsage && !forkedFrom && !filesLabel && (
               <div className="sheet-action-empty">This session has nothing to report yet.</div>
             )}
+          </>}
         </Sheet>
       )}
     </>

@@ -10,13 +10,36 @@ import type { ForkDirtyPatch } from "./fork.js";
  * checks it out); this carries the in-flight
  * edits on top so a fork never silently drops work-in-progress.
  *
- * The patch is size-capped. When the working tree is larger
- * than the cap (big or binary churn), we DON'T inline it — `capture` returns
- * `pushedInstead: true` and the caller commits & pushes the branch so the
- * destination reproduces from the pushed commit instead.
+ * The patch is size-capped. When the working tree is larger than the cap, the
+ * capture carries an explicit oversized marker. Fork stand-up rejects that
+ * bundle: pushing a branch cannot carry uncommitted files, and silently treating
+ * the marker as success would lose work-in-progress.
  */
 
 const DEFAULT_MAX_BYTES = 5 * 1024 * 1024; // 5 MiB of patch text
+const DEFAULT_WORKSPACE_MAX_BYTES = 50 * 1024 * 1024; // 50 MiB of files
+
+function workspaceMaxBytes(configured?: number): number {
+  return configured !== undefined ? configured : DEFAULT_WORKSPACE_MAX_BYTES;
+}
+
+/** Find the containing git checkout without throwing for ordinary non-git
+ * workspaces. A discovered checkout is captured fail-closed by the caller. */
+export function captureWorkspaceDirtyPatch(cwd: string, opts: { maxBytes?: number } = {}): ForkDirtyPatch | undefined {
+  const probe = spawnSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], { encoding: "utf8", timeout: 10_000 });
+  if (probe.error) throw probe.error;
+  if (probe.signal === "SIGTERM") throw new Error("Timed out while inspecting the session workspace for uncommitted changes.");
+  if (probe.status !== 0) {
+    // A plain directory is a supported workspace. Do not, however, turn a
+    // broken/permission-denied git invocation into an apparent clean tree: for
+    // a MOVE that could discard the only copy of the user's edits.
+    const detail = String(probe.stderr || "").toLowerCase();
+    if (/not a git repository|outside a git work tree/.test(detail)) return undefined;
+    throw new Error(`Could not inspect the session workspace with git${probe.stderr ? `: ${String(probe.stderr).trim()}` : ""}`);
+  }
+  const root = String(probe.stdout || "").trim();
+  return root ? captureDirtyPatch(root, opts) : undefined;
+}
 
 function git(repoDir: string, args: string[]): string {
   try {
@@ -48,13 +71,101 @@ export function captureDirtyPatch(repoDir: string, opts: { maxBytes?: number } =
     git(repoDir, ["diff", "--no-index", "--binary", "--", "/dev/null", rel]),
   );
   const patch = [tracked, ...untrackedPatches].filter(Boolean).join("");
-  if (Buffer.byteLength(patch, "utf8") > maxBytes) {
-    return { patch: "", untracked: [], pushedInstead: true };
+  const byteLength = Buffer.byteLength(patch, "utf8");
+  if (byteLength > maxBytes) {
+    return { patch: "", untracked, pushedInstead: true, byteLength, maxBytes };
   }
   return { patch, untracked };
 }
 
 /** Outcome of re-applying a fork's captured working-tree changes. */
+export interface WorkspaceSnapshotEntry {
+  path: string;
+  kind: "file" | "symlink";
+  data?: string;
+  target?: string;
+  mode?: number;
+}
+
+export interface WorkspaceSnapshot {
+  entries: WorkspaceSnapshotEntry[];
+  byteLength: number;
+  maxBytes: number;
+  oversized?: boolean;
+}
+
+/** Git's file list preserves tracked files even when ignored, and applies nested
+ * ignore rules, negations, and local/global excludes to untracked files. Include
+ * ancestors so the walker can prune ignored directories before reading them.
+ * Plain directories retain full-snapshot behavior; other git failures abort. */
+function snapshotGitPaths(root: string): Set<string> | undefined {
+  const result = spawnSync("git", ["-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "."], {
+    encoding: "utf8", timeout: 10_000, maxBuffer: 64 * 1024 * 1024,
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    if (/not a git repository|outside a git work tree/i.test(result.stderr)) return undefined;
+    throw new Error(`Could not inspect the session workspace for snapshot files: ${result.stderr.trim() || result.signal || result.status}`);
+  }
+  const paths = new Set<string>();
+  for (const file of result.stdout.split("\0").filter(Boolean)) {
+    let rel = path.normalize(file);
+    while (rel !== ".") {
+      paths.add(rel);
+      rel = path.dirname(rel);
+    }
+  }
+  return paths;
+}
+
+/** Capture a workspace for a fork. Git checkouts include tracked and non-ignored
+ * untracked files only. Symlinks are recorded, never followed, and root .git and
+ * .bivy metadata are excluded. */
+export function captureWorkspaceSnapshot(root: string, opts: { maxBytes?: number } = {}): WorkspaceSnapshot {
+  const maxBytes = workspaceMaxBytes(opts.maxBytes);
+  const entries: WorkspaceSnapshotEntry[] = [];
+  const gitPaths = snapshotGitPaths(root);
+  let byteLength = 0;
+  const walk = (dir: string, prefix: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (!prefix && (entry.name === ".git" || entry.name === ".bivy")) continue;
+      const rel = prefix ? path.join(prefix, entry.name) : entry.name;
+      if (gitPaths && !gitPaths.has(rel)) continue;
+      const abs = path.join(dir, entry.name);
+      const stat = fs.lstatSync(abs);
+      if (stat.isDirectory()) { walk(abs, rel); continue; }
+      if (stat.isSymbolicLink()) {
+        const target = fs.readlinkSync(abs);
+        byteLength += Buffer.byteLength(target);
+        entries.push({ path: rel, kind: "symlink", target });
+      } else if (stat.isFile()) {
+        byteLength += stat.size;
+        entries.push({ path: rel, kind: "file", data: fs.readFileSync(abs).toString("base64"), mode: stat.mode & 0o777 });
+      }
+    }
+  };
+  walk(path.resolve(root), "");
+  if (byteLength > maxBytes) return { entries: [], byteLength, maxBytes, oversized: true };
+  return { entries, byteLength, maxBytes };
+}
+
+/** Materialise a captured workspace into a fresh destination directory. */
+export function applyWorkspaceSnapshot(root: string, snapshot: WorkspaceSnapshot | undefined): void {
+  if (!snapshot) return;
+  if (snapshot.oversized) throw new Error(`The workspace snapshot is ${snapshot.byteLength} bytes, above the ${snapshot.maxBytes}-byte transfer limit.`);
+  const destination = path.resolve(root);
+  for (const entry of snapshot.entries) {
+    const target = path.resolve(destination, entry.path);
+    if (target !== destination && !target.startsWith(`${destination}${path.sep}`)) throw new Error("Workspace snapshot contains an invalid path.");
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    if (entry.kind === "symlink") fs.symlinkSync(entry.target ?? "", target);
+    else {
+      fs.writeFileSync(target, Buffer.from(entry.data ?? "", "base64"));
+      if (entry.mode !== undefined) fs.chmodSync(target, entry.mode);
+    }
+  }
+}
+
 export interface ApplyDirtyResult {
   /** True when at least part of the patch landed on the destination tree. */
   applied: boolean;
@@ -65,9 +176,10 @@ export interface ApplyDirtyResult {
 }
 
 /**
- * Re-apply a captured patch onto a fresh checkout at `repoDir`. A no-op when the
- * source pushed the branch instead (`pushedInstead`) or the working tree was
- * clean (empty patch). Uses `git apply` so both tracked hunks and untracked
+ * Re-apply a captured patch onto a fresh checkout at `repoDir`. An oversized
+ * marker produces a warning as a final defence; normal fork stand-up rejects it
+ * before reaching this function. A clean patch is a no-op. Uses `git apply` so
+ * both tracked hunks and untracked
  * new-file hunks (produced via `--no-index`) land correctly.
  *
  * NEVER throws: a fork's uncommitted changes are best-effort, and the source's
@@ -80,7 +192,13 @@ export interface ApplyDirtyResult {
  * succeeds, minus the un-appliable working-tree edits.
  */
 export function applyDirtyPatch(repoDir: string, dirty: ForkDirtyPatch | undefined): ApplyDirtyResult {
-  if (!dirty || dirty.pushedInstead || !dirty.patch.trim()) return { applied: false };
+  if (dirty?.pushedInstead) {
+    return {
+      applied: false,
+      warning: "The source working tree exceeded the fork transfer limit, so its uncommitted changes were not applied. The fork was stopped to prevent data loss.",
+    };
+  }
+  if (!dirty || !dirty.patch.trim()) return { applied: false };
   const tmp = path.join(os.tmpdir(), `bivy-fork-${Date.now()}-${Math.random().toString(36).slice(2)}.patch`);
   fs.writeFileSync(tmp, dirty.patch);
   try {

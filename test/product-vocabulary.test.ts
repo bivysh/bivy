@@ -23,7 +23,10 @@ const publicDocs = [
   "docs/automation-runs.md",
   "docs/cli-reference.md",
 ];
-const publicCopy = publicDocs.map((path) => readFileSync(path, "utf8")).join("\n");
+// Markdown wrapping and blockquote prefixes do not change rendered prose.
+const publicCopy = publicDocs.map((path) => readFileSync(path, "utf8")
+  .replace(/^\s*>\s?/gm, "")
+  .replace(/\s+/g, " ")).join("\n");
 
 /** These are exact customer-facing fragments, not internal route/type names.
  * Keeping the allowlist narrow lets compatibility identifiers such as `nodeId`
@@ -79,7 +82,7 @@ test("primary public copy follows the product and trust contracts", () => {
 
   for (const required of [
     "Run agents where your environment lives",
-    "Claude Code and Codex are the recommended",
+    "are the release-tested paths",
     "credential custodian",
     "not a signed attestation",
   ]) {

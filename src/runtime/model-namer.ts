@@ -13,8 +13,7 @@
 // inference SDK, kept under src/runtime/ so the core daemon (src/server.ts) stays
 // free of any @earendil-works import.
 
-import { completeSimple, type Api, type Model } from "@earendil-works/pi-ai/compat";
-import { ModelRegistry } from "@earendil-works/pi-coding-agent";
+import type { Api, Model } from "@earendil-works/pi-ai/compat";
 import { createPiModelRuntime } from "./pi-oauth.js";
 
 function cleanSessionName(value: string): string {
@@ -65,6 +64,10 @@ export async function suggestNameFromSelectedModel(opts: {
   if (!prompt) return undefined;
 
   try {
+    const [{ completeSimple }, { ModelRegistry }] = await Promise.all([
+      import("@earendil-works/pi-ai/compat"),
+      import("@earendil-works/pi-coding-agent"),
+    ]);
     const registry = new ModelRegistry(await createPiModelRuntime({ credsDir: opts.credsDir, piDir: opts.piDir }));
     let model: Model<Api> | undefined;
     for (const candidate of selectedModelCandidates(opts.provider, opts.id)) {

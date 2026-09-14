@@ -27,8 +27,32 @@ export interface DeviceKeypair {
  *
  * `keyStore` is injectable for testing; defaults to the IndexedDB store.
  */
-export async function deviceKeypair(store: LocalStore, keyStore?: DeviceKeyStore): Promise<DeviceKeypair> {
-  const secureStore = keyStore ?? indexedDbDeviceKeyStore();
+const deviceKeypairInFlight = new WeakMap<LocalStore, Promise<DeviceKeypair>>();
+
+/**
+ * Resolve the device identity once at a time. Several startup paths (the relay,
+ * account vault, and sign-out) can ask for it concurrently. Without this
+ * single-flight guard they can all observe an empty store, generate different
+ * identities, and race their writes. That leaves the control plane with a
+ * device public key that does not match the key used by the vault request.
+ */
+export function deviceKeypair(store: LocalStore, keyStore?: DeviceKeyStore): Promise<DeviceKeypair> {
+  // Injected stores are used by tests and callers that explicitly control
+  // persistence; keep their call semantics unchanged.
+  if (keyStore) return loadDeviceKeypair(store, keyStore);
+  const pending = deviceKeypairInFlight.get(store);
+  if (pending) return pending;
+  const current = loadDeviceKeypair(store, indexedDbDeviceKeyStore() ?? undefined);
+  deviceKeypairInFlight.set(store, current);
+  void current.catch(() => {
+    // A failed resolution must not poison future reconnect attempts.
+    if (deviceKeypairInFlight.get(store) === current) deviceKeypairInFlight.delete(store);
+  });
+  return current;
+}
+
+async function loadDeviceKeypair(store: LocalStore, secureStoreOverride?: DeviceKeyStore): Promise<DeviceKeypair> {
+  const secureStore = secureStoreOverride ?? indexedDbDeviceKeyStore();
 
   if (secureStore) {
     try {

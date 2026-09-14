@@ -55,6 +55,43 @@ check("codex: turn.failed surfaces an error and closes once", () => {
   assert.equal(events.filter((e) => e.type === "session.error").length, 1);
 });
 
+check("codex: a failed file_change is an errored patch, not a silent success", () => {
+  const p = codexJsonParser();
+  const events = run(p, [
+    `{"type":"turn.started"}`,
+    `{"type":"item.started","item":{"id":"f1","type":"file_change","changes":[{"path":"/x/hello.py","kind":"add"}],"status":"in_progress"}}`,
+    `{"type":"item.completed","item":{"id":"f1","type":"file_change","changes":[{"path":"/x/hello.py","kind":"add"}],"status":"failed"}}`,
+    `{"type":"turn.completed"}`,
+  ]);
+  // Exactly one running card for the patch (item.started + item.completed must
+  // not create two), and it closes with an ERROR result.
+  assert.equal(events.filter((e) => e.type === "tool_call" && (e as any).toolName === "apply_patch").length, 1);
+  const result = events.find((e) => e.type === "tool_result" && (e as any).toolName === "apply_patch") as any;
+  assert.ok(result, "a failed file_change must emit a tool_result");
+  assert.equal(result.detail?.result?.isError, true);
+});
+
+check("codex: a completed file_change closes its card without erroring", () => {
+  const p = codexJsonParser();
+  const events = run(p, [
+    `{"type":"item.completed","item":{"id":"f2","type":"file_change","changes":[{"path":"/x/a.ts","kind":"update"}],"status":"completed"}}`,
+    `{"type":"turn.completed"}`,
+  ]);
+  const result = events.find((e) => e.type === "tool_result" && (e as any).toolName === "apply_patch") as any;
+  assert.ok(result, "a completed file_change must still emit a tool_result so the card is not left running");
+  assert.notEqual(result.detail?.result?.isError, true);
+});
+
+check("codex: item.started surfaces a live shell card before completion", () => {
+  const p = codexJsonParser();
+  const startedThenRunning = p.onLine(`{"type":"item.started","item":{"id":"c1","type":"command_execution","command":"sleep 5"}}`);
+  assert.ok(startedThenRunning.some((e) => e.type === "tool_call" && (e as any).toolName === "shell"), "item.started should surface a running shell card");
+  const completed = p.onLine(`{"type":"item.completed","item":{"id":"c1","type":"command_execution","command":"sleep 5","aggregated_output":"","exit_code":0}}`);
+  // The completed item must NOT create a second card for the same id.
+  assert.equal(completed.filter((e) => e.type === "tool_call").length, 0);
+  assert.ok(completed.some((e) => e.type === "tool_result"));
+});
+
 check("codex: mcp_tool_call becomes a tool card", () => {
   const p = codexJsonParser();
   const events = run(p, [

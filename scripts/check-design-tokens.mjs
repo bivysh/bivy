@@ -11,8 +11,9 @@
 //   node scripts/check-design-tokens.mjs   # exit 1 if a palette token is
 //                                           # redeclared outside tokens.css
 //
-// It also REPORTS (without failing) raw hex/rgb color literals in app CSS, as a
-// drift signal — app CSS should reference var(--…), not hardcode color. Flip
+// It also rejects raw numeric z-index values and component classes retired in
+// favor of canonical design-system primitives. Raw hex/rgb color literals are
+// reported as a drift signal — app CSS should reference var(--…), not hardcode color. Flip
 // HEX_IS_ERROR to true once the app stylesheets are fully tokenized to promote
 // that from a warning to a hard failure (same pattern as check-module-boundaries).
 
@@ -42,6 +43,14 @@ const PALETTE_TOKENS = [
 const declRe = new RegExp(`--(${PALETTE_TOKENS.join("|")})\\s*:`, "g");
 // Hex or rgb/rgba/hsl literals used as a value (rough — good enough as a signal).
 const hexRe = /#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(/g;
+const rawZIndexRe = /z-index\s*:\s*-?\d/;
+const RETIRED_CLASSES = [
+  "autom-new-btn", "autom-save-btn", "autom-empty-new-btn", "pill",
+  "picker-action", "repo-connect-copy", "connect-copy", "connect-refresh",
+  "autom-notice", "autom-banner", "autom-success", "routing-readiness",
+  "autom-trigger-menu", "autom-trigger-option", "template-card-badge",
+];
+const retiredClassRe = new RegExp(`(?:\\.|className[^\\n]*[\\"'\\x60 {])(${RETIRED_CLASSES.join("|")})(?=[\\s.\\"'\\x60}:])`, "g");
 
 function walk(dir) {
   const abs = path.join(repoRoot, dir);
@@ -50,7 +59,7 @@ function walk(dir) {
   for (const entry of fs.readdirSync(abs, { withFileTypes: true })) {
     const rel = path.join(dir, entry.name);
     if (entry.isDirectory()) out.push(...walk(rel));
-    else if (entry.name.endsWith(".css")) out.push(rel);
+    else if (/\.(?:css|ts|tsx)$/.test(entry.name)) out.push(rel);
   }
   return out;
 }
@@ -61,13 +70,17 @@ const files = [...SCAN_DIRS.flatMap(walk), ...SCAN_FILES].filter(
 
 const redeclarations = [];
 const hexHits = [];
+const rawZIndexHits = [];
+const retiredClassHits = [];
 for (const file of files) {
   const lines = fs.readFileSync(path.join(repoRoot, file), "utf8").split("\n");
   lines.forEach((line, i) => {
     if (line.trimStart().startsWith("/*") || line.trimStart().startsWith("*")) return;
     for (const m of line.matchAll(declRe)) redeclarations.push({ file, line: i + 1, token: m[1] });
-    if (hexRe.test(line)) hexHits.push({ file, line: i + 1, text: line.trim().slice(0, 80) });
+    if (file.endsWith(".css") && hexRe.test(line)) hexHits.push({ file, line: i + 1, text: line.trim().slice(0, 80) });
     hexRe.lastIndex = 0;
+    if (rawZIndexRe.test(line)) rawZIndexHits.push({ file, line: i + 1, text: line.trim() });
+    for (const m of line.matchAll(retiredClassRe)) retiredClassHits.push({ file, line: i + 1, className: m[1] });
   });
 }
 
@@ -81,6 +94,18 @@ if (redeclarations.length) {
   console.error(`  change the value there so every surface moves together.\n`);
 } else {
   console.log(`✓ Single source of truth: no palette token is redeclared outside ${TOKENS_FILE}.`);
+}
+
+if (rawZIndexHits.length) {
+  failed = true;
+  console.error(`\n✖ ${rawZIndexHits.length} raw z-index value(s); use a --z-* token:`);
+  for (const h of rawZIndexHits) console.error(`  ${h.file}:${h.line}  ${h.text}`);
+}
+
+if (retiredClassHits.length) {
+  failed = true;
+  console.error(`\n✖ ${retiredClassHits.length} retired design-system class use(s):`);
+  for (const h of retiredClassHits) console.error(`  ${h.file}:${h.line}  .${h.className}`);
 }
 
 if (hexHits.length) {

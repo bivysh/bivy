@@ -61,7 +61,7 @@ function ApprovalCard({
   const badgeText = f.severity === "critical" ? "Permanent" : f.severity === "high" ? "High risk" : f.severity === "medium" ? "Medium risk" : "Low risk";
   const badgeTone: BadgeTone = f.severity === "critical" || f.severity === "high" ? "danger" : f.severity === "medium" ? "warn" : "accent";
   return (
-    <div id={`attention-${encodeURIComponent(approval.id)}`} className={`card approval-card sev-${f.severity}${pending ? " pending" : ""}`} data-tone={f.severity === "critical" ? "danger" : "accent"}>
+    <div id={`attention-${encodeURIComponent(approval.id)}`} className={`card approval-card sev-${f.severity}${pending ? " pending" : ""}`} data-tone={f.severity === "critical" ? "danger" : "accent"} data-attention-card tabIndex={-1}>
       <div className="approval-head">
         <span className="approval-title">{f.title}</span>
         <Badge tone={badgeTone} variant="soft" upper>{badgeText}</Badge>

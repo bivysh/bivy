@@ -91,9 +91,13 @@ await check("provisionAgentRun('grok') mints ~/.grok/auth.json from an xai OAuth
   delete process.env.XAI_API_KEY;
   delete process.env.GROK_API_KEY;
   const store = createCredentialVault(credsDir);
+  // The real xAI access token is a JWT whose `sub` claim is the user id the Grok
+  // CLI records as `user_id` (required by the current CLI). Use a matching fake.
+  const seg = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  const xaiAccess = `${seg({ alg: "none" })}.${seg({ sub: "xai-user-1" })}.sig`;
   await store.modify("xai", async () => ({
     type: "oauth",
-    access: "xai-access",
+    access: xaiAccess,
     refresh: "xai-refresh",
     expires: Date.now() + 3_600_000,
   }));
@@ -102,8 +106,9 @@ await check("provisionAgentRun('grok') mints ~/.grok/auth.json from an xai OAuth
   const authPath = path.join(grokHome, "auth.json");
   assert.ok(fs.existsSync(authPath), "Grok auth.json materialized");
   const onDisk = JSON.parse(fs.readFileSync(authPath, "utf8"));
-  const entry = Object.values(onDisk)[0] as { key?: string; refresh_token?: string; auth_mode?: string };
-  assert.equal(entry.key, "xai-access");
+  const entry = Object.values(onDisk)[0] as { key?: string; refresh_token?: string; auth_mode?: string; user_id?: string };
+  assert.equal(entry.key, xaiAccess);
+  assert.equal(entry.user_id, "xai-user-1", "records user_id from the access token's sub claim");
   assert.equal(entry.refresh_token, "xai-refresh");
   assert.equal(entry.auth_mode, "oidc");
   delete process.env.GROK_HOME;

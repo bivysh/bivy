@@ -42,7 +42,7 @@ export function linearBranchName(identifier: string): string {
   return `bivy/linear-${slug || "issue"}`;
 }
 
-export function buildLinearTaskPrompt(issue: LinearIssue): string {
+export function buildLinearTaskPrompt(issue: LinearIssue, instructions?: string): string {
   return [
     `You are working on Linear issue ${issue.identifier}: ${issue.title}`,
     "",
@@ -50,8 +50,8 @@ export function buildLinearTaskPrompt(issue: LinearIssue): string {
     "",
     issue.url ? `Issue: ${issue.url}` : "",
     "",
-    "Understand the issue and surrounding codebase, implement it completely, and run the project's tests, linter, and type-checker.",
+    instructions?.trim() || "Understand the issue and surrounding codebase, implement it completely, and run the project's tests, linter, and type-checker.",
     "",
-    `When finished, commit and push your changes and open a pull request yourself. Include a link to ${issue.identifier} in the pull request description.`,
+    instructions?.trim() ? "" : `When finished, commit and push your changes and open a pull request yourself. Include a link to ${issue.identifier} in the pull request description.`,
   ].filter((part, index, all) => part !== "" || all[index - 1] !== "").join("\n");
 }

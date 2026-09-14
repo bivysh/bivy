@@ -254,16 +254,19 @@ export function requestOriginAllowed(req: IncomingMessage): boolean {
     if (host && !ok(host)) return false;
   }
 
-  const originHeader = req.headers["origin"];
-  const origin = Array.isArray(originHeader) ? originHeader[0] : originHeader;
-  if (origin && origin !== "null") {
-    let originHost: string | null = null;
+  const origin = req.headers["origin"];
+  if (origin !== undefined) {
+    // A literal "null" is an opaque browser origin (e.g. a sandboxed iframe),
+    // not the absence of Origin from a native client. Fail closed on empty or
+    // multiple origins too; trusting the first would discard conflicting input.
+    if (typeof origin !== "string" || !origin || origin === "null") return false;
     try {
-      originHost = new URL(origin).hostname;
+      const parsed = new URL(origin);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+      if (!ok(parsed.hostname)) return false;
     } catch {
       return false;
     }
-    if (!ok(originHost)) return false;
   }
   return true;
 }

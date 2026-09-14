@@ -32,7 +32,9 @@ type ToolCallKindDetail =
   | { kind: "search"; query: string; path?: string }
   | { kind: "fetch"; url: string }
   | { kind: "plan"; text?: string }
-  | { kind: "delegation"; label?: string; description?: string };
+  | { kind: "delegation"; label?: string; description?: string }
+  /** Outcome-only metadata from a result whose matching call was not retained. */
+  | { kind: "unknown" };
 
 export type ToolCallDetail = ToolCallKindDetail & {
   meta?: {
@@ -54,6 +56,7 @@ const DETAIL_VERB: Record<ToolCallDetail["kind"], string> = {
   fetch: "Fetched",
   plan: "Planned",
   delegation: "Delegated",
+  unknown: "Tool",
 };
 
 export interface DiffHunk {
@@ -102,6 +105,10 @@ function str(v: unknown): string {
 function clip(v: unknown, max = 120): string {
   const s = str(v);
   return s.length > max ? s.slice(0, max - 1) + "…" : s;
+}
+
+function oneLine(v: unknown, max = 120): string {
+  return clip(str(v).replace(/\s+/g, " ").trim(), max);
 }
 
 function basename(path: string): string {
@@ -355,7 +362,7 @@ export function formatTool(name: string, input: unknown, detail?: ToolCallDetail
 
 /** One-line label for a tool row: command, else path/target, else query. */
 export function toolRowLabel(f: ToolFormat): string {
-  return f.command || f.path || f.target || f.query || clip(f.output, 120) || "";
+  return oneLine(f.command || f.path || f.target || f.query || f.output, 120);
 }
 
 /** Plain-language summary of a batch of tools, e.g. "Read 2 files, ran a command". */

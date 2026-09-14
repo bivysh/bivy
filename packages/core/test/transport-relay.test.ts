@@ -80,7 +80,7 @@ async function settle(): Promise<void> {
 }
 
 describe("RelayTransport pairing rejection recovery", () => {
-  function makeTransport() {
+  function makeTransport(pairingOnly = false) {
     FakeWS.instances.length = 0;
     const store = createLocalStore(mem(), mem());
     store.cp = "https://cp.example";
@@ -90,6 +90,7 @@ describe("RelayTransport pairing rejection recovery", () => {
     const errors: string[] = [];
     const transport = new RelayTransport({
       store,
+      pairingOnly,
       handlers: {
         onEvent: () => {},
         onStatus: (s) => statuses.push(s),
@@ -144,8 +145,8 @@ describe("RelayTransport pairing rejection recovery", () => {
     expect(errors.some((e) => /couldn't link this device/i.test(e))).toBe(true);
   });
 
-  it("completes the account-pair handshake and goes online (device key stays consistent)", async () => {
-    const { transport, statuses } = makeTransport();
+  it.each([false, true])("completes the account-pair handshake (pairingOnly=%s)", async (pairingOnly) => {
+    const { transport, statuses } = makeTransport(pairingOnly);
     const store = (transport as unknown as { store: ReturnType<typeof createLocalStore> }).store;
     await transport.connect();
     const ws = FakeWS.instances[0];
@@ -167,6 +168,12 @@ describe("RelayTransport pairing rejection recovery", () => {
 
     expect(statuses).toContain("online");
     expect(store.keys()["node-1"]).toBe(b64url(roomKey)); // room key unwrapped + persisted
+    if (pairingOnly) {
+      expect(ws.sent.map((s) => JSON.parse(s)).filter((e) => e.t === "frame")).toHaveLength(0);
+      const title = await seal(await importRoomKey(roomKey), "A session on another machine");
+      expect(await open(await importRoomKey(unb64url(store.keys()["node-1"])), title)).toBe("A session on another machine");
+    }
+    transport.close();
   });
 
   it("requests live bivy-run terminals on first pairing, not just on reconnect (issue #476)", async () => {

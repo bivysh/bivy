@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { describe, it, expect } from "vitest";
-import { diffOps, compactDiffOps, editHunks, formatTool, toolGroupSummary } from "../src/tool-format.js";
+import { diffOps, compactDiffOps, editHunks, formatTool, toolGroupSummary, toolRowLabel } from "../src/tool-format.js";
 
 describe("diffOps", () => {
   it("marks added, removed, and context lines", () => {
@@ -80,6 +80,13 @@ describe("formatTool", () => {
     expect(f.verb).toBe("Agent output");
     expect(f.title).toBe("Agent output");
     expect(f.output).toBe("working on it");
+  });
+
+  it("preserves output lines while flattening only the row summary", () => {
+    const output = "first line\nsecond line\nthird line";
+    const f = formatTool("agent_output", { stream: "stdout", output });
+    expect(f.output).toBe(output);
+    expect(toolRowLabel(f)).toBe("first line second line third line");
   });
 
   it("prefers node-computed detail over the input heuristic (Codex apply_patch → edit)", () => {

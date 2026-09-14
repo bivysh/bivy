@@ -4,7 +4,7 @@ Factory AI's autonomous terminal coding agent (`droid`), run under Bivy as one
 headless task per prompt (`droid exec --auto high`, which runs at high autonomy —
 auto-approving — and streams to stdout).
 
-- **Runtime id:** `droid` · **Tier:** Beta · **In picker:** Yes
+- **Runtime id:** `droid` · **Tier:** Supported · **In picker:** Yes
 
 ## Install
 

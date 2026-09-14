@@ -13,6 +13,7 @@
 //   * The SDK is loaded with a dynamic import so it stays an *optional*
 //     dependency: a Bivy install only needs it when this runtime is selected.
 
+import { withSessionCredentials, credentialEnvFallback } from "../../credentials/session.js";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
@@ -577,11 +578,18 @@ function findClaudeTranscript(sessionId: string): string | undefined {
       const projectsRoot = fs.realpathSync(path.resolve(projects));
       for (const project of fs.readdirSync(projectsRoot, { withFileTypes: true })) {
         if (!project.isDirectory()) continue;
-        const projectRoot = fs.realpathSync(path.resolve(projectsRoot, project.name));
-        if (!projectRoot.startsWith(`${projectsRoot}${path.sep}`)) continue;
-        const candidate = fs.realpathSync(path.resolve(projectRoot, fileName));
-        if (!candidate.startsWith(`${projectRoot}${path.sep}`)) continue;
-        if (path.basename(candidate) === fileName) return candidate;
+        try {
+          const projectRoot = fs.realpathSync(path.resolve(projectsRoot, project.name));
+          if (!projectRoot.startsWith(`${projectsRoot}${path.sep}`)) continue;
+          // Most project directories do not contain this session. Resolve each
+          // candidate independently: a missing file in the first project must
+          // not abort the whole store scan and hide a transcript in a later one.
+          const candidate = fs.realpathSync(path.resolve(projectRoot, fileName));
+          if (!candidate.startsWith(`${projectRoot}${path.sep}`)) continue;
+          if (path.basename(candidate) === fileName) return candidate;
+        } catch {
+          continue;
+        }
       }
     } catch {
       // ignore missing/unreadable Claude stores
@@ -840,7 +848,7 @@ class ClaudeSession implements RuntimeSession {
    */
   async interactiveTuiCommand(): Promise<TuiLaunchSpec | null> {
     if (!claudeCliAvailable()) return null;
-    const env = await this.resolveCredentialEnv().catch(() => ({}));
+    const env = await this.resolveCredentialEnv().catch(credentialEnvFallback);
     return { command: "claude", args: ["--resume", this.sessionFile], env };
   }
 
@@ -1021,7 +1029,7 @@ class ClaudeSession implements RuntimeSession {
   async warmModels(): Promise<void> {
     if (this.query) return this.refreshSupportedModels();
     try {
-      const env = { ...process.env, ...depCacheEnv(this.cwd), ...this.runtimeOptions.env, ...(await this.resolveCredentialEnv().catch(() => ({}))) } as Record<string, string>;
+      const env = { ...process.env, ...depCacheEnv(this.cwd), ...this.runtimeOptions.env, ...(await this.resolveCredentialEnv().catch(credentialEnvFallback)) } as Record<string, string>;
       if (anthropicCredentialPreflight(env)) return; // no credential — keep FALLBACK_MODELS
       await this.ensureStarted();
       await this.refreshSupportedModels();
@@ -1052,7 +1060,7 @@ class ClaudeSession implements RuntimeSession {
       // refresh it immediately even if its expiry claims it is still valid.
       // The resolver compares this under the vault lock, making concurrent
       // failures converge on one rotation.
-      const credEnv = await this.resolveCredentialEnv(rejectedToken).catch(() => ({} as Record<string, string>));
+      const credEnv = await this.resolveCredentialEnv(rejectedToken).catch(credentialEnvFallback);
       const nextToken = authTokenFromEnv(credEnv);
       if (!nextToken || nextToken === this.spawnedToken) return false;
       this.emit({ type: "session.notice", level: "info", message: "Refreshing credentials…" });
@@ -1099,8 +1107,8 @@ class ClaudeSession implements RuntimeSession {
     let cred;
     try {
       cred = await store.getCredential(provider, { workspace: this.cwd, ...(rejectedToken ? { rejectedToken } : {}) });
-    } catch {
-      return {};
+    } catch (error) {
+      return credentialEnvFallback(error);
     }
     if (!cred) return {};
     const out: Record<string, string> = { ...(cred.env ?? {}) };
@@ -1208,12 +1216,17 @@ class ClaudeSession implements RuntimeSession {
         if (assistantText && await this.recoverFromAuthError(assistantText)) break;
         const model = message.message?.model;
         if (model) this.currentModel = toModelInfo({ id: model });
+        // The SDK stamps every message it generates inside a `Task` sub-agent
+        // with the spawning Task's tool_use id. Carry it onto this turn's tool
+        // calls so the UI nests the sub-agent's work under its delegation card
+        // instead of rendering it flat alongside the parent's own tools.
+        const parentToolUseId = typeof message.parent_tool_use_id === "string" && message.parent_tool_use_id ? message.parent_tool_use_id : undefined;
         const content = Array.isArray(message.message?.content) ? message.message.content : [];
         for (const block of content) {
           if (block?.type === "tool_use") {
             const detail = mapToolCall(String(block.name ?? "tool"), block.input, { provider: "claude", protocol: "sdk" });
             if (detail && typeof block.id === "string") this.toolDetailsByUseId.set(block.id, detail);
-            this.emit({ type: "tool_call", toolName: block.name, input: block.input, toolUseId: block.id, ...(detail ? { detail } : {}) });
+            this.emit({ type: "tool_call", toolName: block.name, input: block.input, toolUseId: block.id, ...(detail ? { detail } : {}), ...(parentToolUseId ? { parentToolUseId } : {}) });
             if (typeof block.id === "string" && typeof block.name === "string") this.toolNamesByUseId.set(block.id, block.name);
           }
         }
@@ -1224,7 +1237,7 @@ class ClaudeSession implements RuntimeSession {
         // tool_use blocks with the tool_result messages below; otherwise the plain
         // text is enough. The live stream still surfaces text via message_end.
         if (content.length || text) {
-          this.messages.push({ role: "assistant", content: content.length ? content : text, timestamp: Date.now() });
+          this.messages.push({ role: "assistant", content: content.length ? content : text, timestamp: Date.now(), ...(parentToolUseId ? { parentToolUseId } : {}) });
         }
         if (text) {
           this.beginMessage();
@@ -1371,7 +1384,7 @@ class ClaudeSession implements RuntimeSession {
     // reach the SDK, surface an actionable message instead of letting it spawn
     // and fail its first request with an opaque `401 Unauthorized`.
     if (!this.query) {
-      const env = { ...process.env, ...depCacheEnv(this.cwd), ...this.runtimeOptions.env, ...(await this.resolveCredentialEnv().catch(() => ({}))) } as Record<string, string>;
+      const env = { ...process.env, ...depCacheEnv(this.cwd), ...this.runtimeOptions.env, ...(await this.resolveCredentialEnv().catch(credentialEnvFallback)) } as Record<string, string>;
       const preflightError = anthropicCredentialPreflight(env);
       if (preflightError) {
         this.messages.push({ role: "user", content: hasImages ? content : prompt, timestamp: Date.now() });
@@ -1566,13 +1579,13 @@ export class ClaudeCodeRuntime implements AgentRuntime {
   }
 
   async createSession(options: OpenSessionOptions): Promise<OpenSessionResult> {
-    const session = new ClaudeSession(this.options, options.workspace, options.toolInterceptor, options.toolProvider);
+    const session = new ClaudeSession(await withSessionCredentials(this.options, options.credentialLabels), options.workspace, options.toolInterceptor, options.toolProvider);
     this.sessions.push(session);
     return { session };
   }
 
   async openSession(options: OpenSessionOptions & { sessionFile: string }): Promise<OpenSessionResult> {
-    const session = new ClaudeSession(this.options, options.workspace, options.toolInterceptor, options.toolProvider, options.sessionFile);
+    const session = new ClaudeSession(await withSessionCredentials(this.options, options.credentialLabels), options.workspace, options.toolInterceptor, options.toolProvider, options.sessionFile);
     this.sessions.push(session);
     return {
       session,

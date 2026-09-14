@@ -385,6 +385,22 @@ async function run() {
     assert.equal(withLive.native, undefined, "a live-only agent needs no resume ref to fork out");
   });
 
+  await test("live transcript wins over a stale persisted reader during an open-session fork", () => {
+    const stale = fakeRuntime("pi", false);
+    stale.readMessages = () => [{ role: "user", content: "old persisted turn" }];
+    const bundle = buildForkBundle({
+      runtime: stale,
+      sessionFile: "x",
+      record: record(),
+      liveMessages: [
+        { role: "user", content: "old persisted turn" },
+        { role: "assistant", content: "completed after the last flush" },
+      ],
+    });
+    assert.equal(bundle.normalized.turns.length, 2);
+    assert.equal(bundle.normalized.turns[1]?.text, "completed after the last flush");
+  });
+
   await test("portable source metadata carries sandbox and typed model identity", async () => {
     const src = fakeRuntime("pi", true);
     const bundle = buildForkBundle({

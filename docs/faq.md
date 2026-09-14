@@ -39,7 +39,7 @@ automations from the terminal all work with no account and no server; pick
 browser or phone UI, because the node hosts none: the hosted one at
 `app.bivy.sh` (GitHub or email sign-in; free tier plus a paid plan — see
 [bivy.sh#pricing](https://bivy.sh#pricing)) or one you
-[self-host](self-host-quickstart.md). Switch any time with `bivy relay:setup`.
+[self-host](self-host-quickstart.md). Sign in any time with `bivy login`; use `bivy relay:setup` to switch to self-hosted endpoints.
 See the [README](../README.md#install).
 
 ## Can I get support for a self-hosted deployment?

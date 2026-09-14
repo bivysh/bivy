@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { stripAttachmentPlaceholders, toHtml, type PromptAttachment, type ToolActivity, type TranscriptEntry } from "@bivy/core";
-import { ToolGroup } from "./ToolGroup.js";
+import { stripAttachmentPlaceholders, toHtml, type PromptAttachment, type TranscriptEntry } from "@bivy/core";
 import { Spinner } from "./Spinner.js";
+import { ToolGroup } from "./ToolGroup.js";
 import { ImageGallery } from "./ImageGallery.js";
+import { focusEntries } from "../focusTranscript.js";
 import { decorateCodeBlocks, highlightCode } from "../highlight.js";
 import { renderMermaidDiagrams } from "../mermaid.js";
 import { writeClipboard } from "../clipboard.js";
@@ -69,7 +70,7 @@ export function useAttachmentUrl(attachment: PromptAttachment | null | undefined
     const mimeType = attachment.mimeType;
     let cancelled = false;
     let objectUrl: string | null = null;
-    void controller.fetchAttachment(attachment.hash).then((res) => {
+    void controller.fetchAttachment(attachment.hash, attachment.createdAt).then((res) => {
       if (cancelled || !res) return;
       objectUrl = base64ToBlobUrl(res.data, res.mimeType || mimeType);
       if (objectUrl) setFetchedUrl(objectUrl);
@@ -168,6 +169,7 @@ function MessageAttachments({ attachments }: { attachments: PromptAttachment[] }
 function actionLabel(action: string): string {
   if (action === "/new") return "New session";
   if (action === "/resume") return "Resume";
+  if (action.startsWith("connect-provider:")) return "Connect a provider";
   return `Run ${action}`;
 }
 
@@ -406,15 +408,26 @@ const EntryView = memo(function EntryView({
     );
   if (entry.role === "thinking")
     return <div className={`msg thinking${entry.streaming ? " streaming" : ""}`}>{entry.text}</div>;
-  if (entry.role === "error")
+  if (entry.role === "error") {
+    const [summary = "The agent hit an error", ...detailLines] = entry.text.split("\n");
+    const details = detailLines.join("\n").trim();
     return (
-      <div className="msg error" role="alert">
-        <span className="msg-error-icon" aria-hidden>
-          !
-        </span>
-        <span className="msg-error-text">{entry.text}</span>
+      <div className="card" data-tone="danger" role="alert">
+        <strong>{summary}</strong>
+        {entry.action && onAction && (
+          <button type="button" className="btn primary" onClick={() => onAction(entry.action!)}>
+            {actionLabel(entry.action)}
+          </button>
+        )}
+        {details && (
+          <details className="settings-disclosure">
+            <summary className="settings-disclosure-summary">Details</summary>
+            <pre className="settings-disclosure-body">{details}</pre>
+          </details>
+        )}
       </div>
     );
+  }
   if (entry.role === "user") {
     const hasAttachments = !!entry.attachments && entry.attachments.length > 0;
     // With the attachments shown as thumbnails/chips, the node's appended
@@ -463,78 +476,73 @@ const EntryView = memo(function EntryView({
 
 type RenderItem =
   | { kind: "entry"; key: string; entry: TranscriptEntry }
-  | { kind: "tools"; key: string; tools: ToolActivity[] };
+  | { kind: "tools"; key: string; tools: NonNullable<TranscriptEntry["tool"]>[] };
+
+type RenderTurn = { kind: "turn"; key: string; user?: RenderItem; response: RenderItem[] };
+type RenderBlock = RenderTurn | { kind: "standalone"; key: string; item: RenderItem };
 
 /**
- * Focus view: drop the interim chatter so the transcript reads as just the
- * conversation — user prompts, the agent's final answer for each turn, and any
- * system notice (errors, the inline "Create PR" action). "Interim" is the
- * agent's working-out: thinking blocks, tool-call cards, and the intermediate
- * assistant messages it emits between tool calls. Within each user-bounded
- * turn only the last assistant prose entry survives (the turn's conclusion); a
- * still-streaming reply is naturally that last entry, so it stays visible and
- * keeps updating. Pure filter over the array — the surviving entries keep their
- * object identity, so EntryView's memoization still skips unchanged rows.
+ * The wire transcript is entry-oriented, but people read it in turns. Group a
+ * user prompt with everything that follows until the next prompt so thinking,
+ * activity, the answer, and its actions share one visual rhythm. A window can
+ * begin mid-turn, hence the response-only first group.
  */
-function collapseInterim(entries: TranscriptEntry[]): TranscriptEntry[] {
-  const keep: TranscriptEntry[] = [];
-  let lastAssistant: TranscriptEntry | null = null;
-  const flush = () => {
-    if (lastAssistant) keep.push(lastAssistant);
-    lastAssistant = null;
-  };
-  for (const e of entries) {
-    if (e.tool || e.role === "thinking") continue; // interim working-out
-    if (e.role === "assistant") {
-      lastAssistant = e; // hold; only the turn's last assistant prose is kept
+function groupTurns(items: RenderItem[]): RenderBlock[] {
+  const blocks: RenderBlock[] = [];
+  let current: RenderTurn | null = null;
+  for (const item of items) {
+    const isUser = item.kind === "entry" && item.entry.role === "user";
+    if (isUser) {
+      current = { kind: "turn", key: `turn-${item.key}`, user: item, response: [] };
+      blocks.push(current);
       continue;
     }
-    // user / system entry ends the current assistant run — emit the held final
-    // assistant prose before it so ordering is preserved.
-    flush();
-    keep.push(e);
+    // System notices and errors are session-level events, not agent prose. Keep
+    // them in source order and outside the preceding conversation group.
+    const standalone = item.kind === "entry" && (item.entry.role === "system" || item.entry.role === "error");
+    if (standalone) {
+      blocks.push({ kind: "standalone", key: `standalone-${item.key}`, item });
+      current = null;
+      continue;
+    }
+    if (!current) {
+      current = { kind: "turn", key: `turn-${item.key}`, response: [] };
+      blocks.push(current);
+    }
+    current.response.push(item);
   }
-  flush();
-  return keep;
+  return blocks;
 }
 
-/** Stable React key for a tool-run group. Keyed on the first tool's runtime
- *  `callId` — NOT the transcript entry `id` — because reconciling a live turn
- *  with canonical history (store.applyHistory → renderHistory) rebuilds the
- *  whole transcript with freshly-generated entry ids. Keying on those made an
- *  open ToolGroup remount on every such reconcile, resetting its local `open`
- *  state and slamming the activity sheet shut mid-run. `callId` comes from the
- *  runtime and is preserved across re-renders, so the group — and any sheet the
- *  user opened on it — stays put until they close it themselves. Falls back to
- *  the entry id for the rare tool with no callId. */
-function toolRunKey(first: TranscriptEntry): string {
-  return `g:${first.tool?.callId || first.id}`;
-}
-
-/** Collapse runs of consecutive tool entries into a single grouped item. */
+/** Keep consecutive tool calls together while preserving their chronological
+ * place among interim messages. This lets a live turn reveal meaningful work
+ * as it happens instead of moving it above newer prose or hiding it until the
+ * final answer arrives. */
 function groupEntries(entries: TranscriptEntry[]): RenderItem[] {
-  const out: RenderItem[] = [];
-  let run: TranscriptEntry[] | null = null;
-  for (const e of entries) {
-    if (e.tool) {
-      if (!run) run = [];
-      run.push(e);
+  const items: RenderItem[] = [];
+  let tools: NonNullable<TranscriptEntry["tool"]>[] = [];
+  let key = "";
+  const flush = () => {
+    if (tools.length) items.push({ kind: "tools", key, tools });
+    tools = [];
+  };
+  for (const entry of entries) {
+    if (entry.tool) {
+      if (!tools.length) key = `tools-${entry.tool.callId || entry.id}`;
+      tools.push(entry.tool);
     } else {
-      if (run) {
-        out.push({ kind: "tools", key: toolRunKey(run[0]!), tools: run.map((r) => r.tool!) });
-        run = null;
-      }
-      out.push({ kind: "entry", key: e.id, entry: e });
+      flush();
+      items.push({ kind: "entry", key: entry.id, entry });
     }
   }
-  if (run) out.push({ kind: "tools", key: toolRunKey(run[0]!), tools: run.map((r) => r.tool!) });
-  return out;
+  flush();
+  return items;
 }
 
-// Cap the number of live DOM nodes. A session can have thousands of messages;
-// mounting (and markdown-rendering) them all is what makes a big session janky
-// and slow to open. Open on just the most recent INITIAL_WINDOW entries, then
-// reveal older history a page at a time on tap ("show earlier" below).
+// Limit the initial mount, not the live transcript. Sliding this window on
+// every append removes the passage being read and remounts tool groups (closing
+// their inspectors). Keep its start fixed until the reader loads more history
+// or switches sessions/views.
 const INITIAL_WINDOW = 20;
 const WINDOW_STEP = 40;
 
@@ -545,7 +553,7 @@ export function ChatView({
   draftRoute,
   opening,
   sessionKey,
-  collapsed,
+  focusView,
   onAction,
   header,
   footer,
@@ -564,9 +572,8 @@ export function ChatView({
   opening?: boolean;
   /** Identity of the open session; used to preserve its window and reading position. */
   sessionKey: string | null;
-  /** Focus view: hide thinking, tool cards, and interim assistant messages —
-   *  leaving user prompts, each turn's final answer, and system notices. */
-  collapsed?: boolean;
+  /** Show only user prompts, final assistant answers, and essential notices. */
+  focusView?: boolean;
   /** Run a slash command from an inline notice action button (e.g. "/new"). */
   onAction?: (action: string) => void;
   /** Structured session startup state rendered before transcript entries. */
@@ -581,9 +588,28 @@ export function ChatView({
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const [pinned, setPinned] = useState(true);
-  const [limit, setLimit] = useState(INITIAL_WINDOW);
+  const source = useMemo(() => focusView ? focusEntries(entries, working) : entries, [entries, focusView, working]);
+  const total = source.length;
   const scrollMemory = useRef(new Map<string, ChatScrollMemory>());
-  const limitRef = useRef(limit);
+  const [historyWindow, setHistoryWindow] = useState(() => ({
+    sessionKey, focusView, initialized: total > 0, start: Math.max(0, total - INITIAL_WINDOW),
+  }));
+  // A refreshed/filtered transcript can shrink beneath the fixed cutoff. Keep
+  // a tail of messages mounted, and persist the corrected cutoff so subsequent
+  // appends cannot hide them again. Ordinary appends leave the window fixed.
+  const latestStart = Math.max(0, total - INITIAL_WINDOW);
+  let start = Math.min(historyWindow.start, latestStart);
+  // Reset before committing a different session/view, or its first snapshot.
+  // Ordinary appends must not move the start or change mounted group identities.
+  if (historyWindow.sessionKey !== sessionKey || historyWindow.focusView !== focusView || (!historyWindow.initialized && total > 0)) {
+    const remembered = scrollMemory.current.get(sessionKey ?? "new");
+    start = Math.max(0, total - Math.max(INITIAL_WINDOW, remembered?.limit ?? INITIAL_WINDOW));
+    setHistoryWindow({ sessionKey, focusView, initialized: total > 0, start });
+  } else if (start !== historyWindow.start || (historyWindow.initialized && total === 0)) {
+    setHistoryWindow({ ...historyWindow, initialized: total > 0, start });
+  }
+  const limitRef = useRef(total - start);
+  useLayoutEffect(() => { limitRef.current = total - start; }, [total, start]);
   // Mirror `pinned` into a ref so the layout-effect and ResizeObserver below —
   // which run outside React's render cycle — can read the current value without
   // being re-subscribed on every scroll tick.
@@ -618,20 +644,11 @@ export function ChatView({
     setPinnedState(true);
   }, [setPinnedState]);
 
-  // In focus view the transcript is the interim-free projection; everything
-  // downstream (windowing, auto-scroll, "show earlier" counts) operates on that
-  // filtered list so the counts and the visible rows stay in agreement.
-  const source = useMemo(() => (collapsed ? collapseInterim(entries) : entries), [collapsed, entries]);
-
   // Remember a session's distance from the bottom rather than its absolute
   // scrollTop. If content grows while it is in the background, returning still
   // lands on the same passage. A first visit starts at the latest message.
-  const total = source.length;
   useLayoutEffect(() => {
     const remembered = scrollMemory.current.get(sessionKey ?? "new");
-    const nextLimit = remembered?.limit ?? INITIAL_WINDOW;
-    limitRef.current = nextLimit;
-    setLimit(nextLimit);
     setPinnedState(remembered?.pinned ?? true);
     const frame = requestAnimationFrame(() => {
       const el = scrollRef.current;
@@ -652,11 +669,7 @@ export function ChatView({
   }, [atBottom, sessionKey, setPinnedState]);
 
   const showEarlier = useCallback(() => {
-    setLimit((current) => {
-      const next = current + WINDOW_STEP;
-      limitRef.current = next;
-      return next;
-    });
+    setHistoryWindow((current) => ({ ...current, start: Math.max(0, current.start - WINDOW_STEP) }));
   }, []);
 
   // Keep the view pinned to the newest line as content grows — streamed tool
@@ -684,9 +697,17 @@ export function ChatView({
     return () => ro.disconnect();
   }, [pinToBottom]);
 
-  const start = Math.max(0, total - limit);
   const visible = start > 0 ? source.slice(start) : source;
   const items = groupEntries(visible);
+  const blocks = groupTurns(items);
+  const tail = visible.at(-1);
+  // Prose, streaming output, or a tool cluster already communicates progress;
+  // reserve the generic dots for the gap before the agent emits anything.
+  const tailShowsProgress = Boolean(tail?.role === "assistant" || tail?.tool);
+
+  const renderItem = (it: RenderItem) => it.kind === "tools"
+    ? <ToolGroup key={it.key} tools={it.tools} />
+    : <EntryView key={it.key} entry={it.entry} onAction={onAction} />;
 
   return (
     <div className="chat-wrap">
@@ -708,20 +729,6 @@ export function ChatView({
               </p>
             </div>
           )}
-          {total === 0 && !header && draftRoute && (
-            <div className="chat-empty">
-              <p className="chat-empty-title">Start a new session</p>
-              <p className="chat-empty-sub">
-                Choose the <b>machine</b> to run on in the header, then the{" "}
-                <b>agent</b> and <b>model</b> below. Describe your task to
-                begin.
-              </p>
-              <p className="chat-empty-sub chat-empty-note">
-                You can switch the model at any time, or hand off to a new
-                agent to continue in a fresh session.
-              </p>
-            </div>
-          )}
           {start > 0 && (
             <button
               className="load-earlier"
@@ -730,14 +737,15 @@ export function ChatView({
               ↑ Show earlier messages ({start} more)
             </button>
           )}
-          {items.map((it) =>
-            it.kind === "tools" ? (
-              <ToolGroup key={it.key} tools={it.tools} />
-            ) : (
-              <EntryView key={it.key} entry={it.entry} onAction={onAction} />
-            ),
-          )}
-          {working && (
+          {blocks.map((block) => block.kind === "standalone" ? (
+            <div className="transcript-standalone" key={block.key}>{renderItem(block.item)}</div>
+          ) : (
+            <div className="transcript-turn" key={block.key}>
+              {block.user?.kind === "entry" && <EntryView entry={block.user.entry} onAction={onAction} />}
+              {block.response.length > 0 && <div className="turn-response-body">{block.response.map(renderItem)}</div>}
+            </div>
+          ))}
+          {working && !tailShowsProgress && (
             <div className="working-row">
               <span className="working-dots" aria-hidden>
                 <i />

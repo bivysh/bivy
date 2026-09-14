@@ -150,6 +150,7 @@ export const NOTIFICATION_KINDS = [
   "session_done",
   "session_error",
   "terminal_bell",
+  "automation_blocked",
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
@@ -625,7 +626,7 @@ export interface RetryAutomationRunResult {
   transitioned: boolean;
   reason?: "not_retryable" | "attempt_limit";
 }
-export type AutomationTriggerKind = "github" | "slack" | "manual" | "webhook" | "schedule";
+export type AutomationTriggerKind = "github" | "linear" | "slack" | "manual" | "webhook" | "schedule";
 
 // --- Privacy-safe run evidence (issue #153) -----------------------------------
 // A run's routing/status/output above already carry most of an outcome report.
@@ -762,10 +763,14 @@ export interface AutomationDefinition {
    *  "github_ci" is a legacy alias for a GitHub job gated on workflow_run failures
    *  — new rows should use trigger=github + `on` rules. */
   trigger?: "schedule" | "webhook" | "manual" | "github" | "linear" | "github_ci";
-  /** HMAC signing secret for a webhook-triggered automation. Set/rotated
-   *  server-side, returned to the client only at create/rotate time, and never
-   *  echoed by list/get responses. */
+  /** HMAC key or static header value for a webhook-triggered automation.
+   *  Generated or user-supplied; returned once on create/replacement/rotation,
+   *  never echoed by list/get responses. */
   webhookSecret?: string;
+  /** Authentication header name; legacy rows use x-bivy-signature-256. */
+  webhookHeader?: string;
+  /** Legacy/default: HMAC-SHA256. header compares a static secret value. */
+  webhookAuthMode?: "hmac" | "header";
   /** Explicit save-time acknowledgement of the autonomous + danger-full-access
    *  combo (mirrors config-as-code's safety.allowDangerous). Without this, the
    *  shared preflight checklist's sandbox_policy check blocks create/update —
@@ -781,6 +786,8 @@ export interface AutomationDefinition {
   labels?: string[];
   /** Repo allowlist for github/linear (`owner/name`). Empty/undefined → all. */
   repos?: string[];
+  /** Optional GitHub App id filter for github source automations. Empty/undefined → every connected app. */
+  appId?: string;
   /**
    * GitHub event rules ("when"). Any matching rule fires the job. Outcomes are
    * whatever the instructions say — not a special PR path. Legacy rows without
@@ -886,6 +893,8 @@ export interface AutomationRun {
   completedAt?: string;
 }
 export interface WorkItem {
+  /** Returned only by claim; never included in account/run history. */
+  claimToken?: string;
   id: string;
   accountId: string;
   label: string; // routing label; a node only pulls items whose label it serves
@@ -905,12 +914,12 @@ export interface WorkItem {
   leaseExpiresAt?: string;
   completedAt?: string;
   dedupeKey?: string; // idempotency key (e.g. "gh:<delivery-id>"); unique per account
-  // Collapse key: while an item is still pending, a second enqueue with the same
+  // Collapse key: while an item is pending or parked by admission policy, a second enqueue with the same
   // collapse key (same account) returns it instead of adding a duplicate. Unlike
   // `dedupeKey` (per-delivery), this is per *issue* (e.g. "gh-issue:owner/repo#7"),
   // so the many webhook deliveries a single issue emits (opened, labeled, edited)
-  // collapse into one queue entry. It frees once the item leaves `pending`, so a
-  // later re-label after a run finished can still start a fresh run.
+  // collapse into one queue entry. Policy denial retains the slot because no
+  // work ran; execution or cancellation releases it so later requests can run.
   collapseKey?: string;
   // True when the item landed on the shared `bivy` queue with no explicit
   // `bivy/<node>` label or `on <node>` directive — i.e. it is re-routable when the
@@ -1199,10 +1208,27 @@ export interface StoreLifecycle {
 
 }
 
+export interface SelfHostOwnerCredential {
+  accountId: string;
+  passwordHash: string;
+}
+
+/** Optional, deployment-local owner sign-in; no cross-account administrator role. */
+export interface SelfHostOwnerRepository {
+  selfHostOwner(): Promise<SelfHostOwnerCredential | undefined>;
+  selfHostSetupTokenUsed(tokenHash: string): Promise<boolean>;
+  // A setup token can change the password only once. Rotating the deployment
+  // token explicitly permits recovery. Password changes revoke account sessions.
+  configureSelfHostOwner(credential: SelfHostOwnerCredential, setupTokenHash: string): Promise<boolean>;
+  // Fence session creation against a concurrent password reset after verification.
+  createSelfHostOwnerSession(expectedPasswordHash: string): Promise<string | undefined>;
+}
+
 export interface AccountAuthRepository {
   // Accounts & auth
   findOrCreateAccount(email: string): Promise<Account>;
   getAccount(accountId: string): Promise<Account | undefined>;
+  deleteAccount(accountId: string): Promise<boolean>;
   setGithubIdentity(accountId: string, githubUserId: string, targetIds: string[]): Promise<void>;
   createLoginToken(email: string): Promise<string>; // magic-link, returns raw token
   consumeLoginToken(token: string): Promise<Account | undefined>;
@@ -1401,7 +1427,8 @@ export interface VaultRepository {
   setModelAuthVault(accountId: string, nodeId: string, ciphertext: string, rotated?: boolean): Promise<ModelAuthVault>;
   setModelAuthNodePublicKey(accountId: string, nodeId: string, publicKey: string): Promise<void>;
   getModelAuthWrappedKey(accountId: string, nodeId: string): Promise<ModelAuthWrappedKey | undefined>;
-  requestModelAuthWrappedKey(accountId: string, nodeId: string, publicKey: string): Promise<void>;
+  /** Queue a key request. Returns true only when peers need a new wake-up. */
+  requestModelAuthWrappedKey(accountId: string, nodeId: string, publicKey: string): Promise<boolean>;
   listModelAuthKeyRequests(accountId: string, exceptNodeId: string): Promise<ModelAuthKeyRequest[]>;
   setModelAuthWrappedKey(accountId: string, targetNodeId: string, wrappedByNodeId: string, wrappedByPublicKey: string, wrappedKey: string): Promise<ModelAuthWrappedKey>;
 
@@ -1609,7 +1636,9 @@ export interface AutomationRepository {
    *  so a Machine that lost its lease to a reclaim cannot complete or fail the
    *  new attempt in the read-then-write window. Returns undefined when the
    *  transition was not applied (wrong source state or ownership lost). */
-  transitionAutomationRun(accountId: string, id: string, status: AutomationRunStatus, output?: AutomationRun["output"], expectedNodeId?: string): Promise<AutomationRun | undefined>;
+  /** Atomically park admission-denied work. Only the winning caller receives a run and may notify. */
+  parkAutomationRunForPolicy(accountId: string, id: string, reason: string, code: string): Promise<AutomationRun | undefined>;
+  transitionAutomationRun(accountId: string, id: string, status: AutomationRunStatus, output?: AutomationRun["output"], expectedNodeId?: string, claimToken?: string): Promise<AutomationRun | undefined>;
   /** Account-scoped, transactional cancellation. Already-cancelled runs are
    *  returned idempotently; callers inspect previousStatus for terminal conflicts. */
   cancelAutomationRun(accountId: string, id: string): Promise<CancelAutomationRunResult | undefined>;
@@ -1622,7 +1651,7 @@ export interface AutomationRepository {
   // declared-check results, and new timeline events. `checks`/`events` in the
   // patch are appended to the run's existing history (bounded), never replacing
   // it. Returns undefined for an unknown run.
-  appendRunEvidence(accountId: string, id: string, patch: RunEvidencePatch, expectedNodeId?: string): Promise<AutomationRun | undefined>;
+  appendRunEvidence(accountId: string, id: string, patch: RunEvidencePatch, expectedNodeId?: string, claimToken?: string): Promise<AutomationRun | undefined>;
 }
 
 export interface WorkQueueRepository {
@@ -1632,9 +1661,11 @@ export interface WorkQueueRepository {
   listPendingWorkItems(accountId: string, labels: string[]): Promise<WorkItem[]>;
   // Recent work items for the account (any status) — powers the incoming-queue UI.
   listWorkItems(accountId: string, limit?: number): Promise<WorkItem[]>;
-  claimWorkItem(accountId: string, nodeId: string, id: string): Promise<WorkItem | undefined>;
+  claimWorkItem(accountId: string, nodeId: string, id: string, claimToken?: string): Promise<WorkItem | undefined>;
+  ownsWorkClaim(accountId: string, nodeId: string, id: string, token: string): Promise<boolean>;
+  advanceWorkItemAttempt(accountId: string, nodeId: string, id: string, claimToken: string, expectedAttempt: number): Promise<WorkItem | undefined>;
   /** Extend a claimed/running item's lease only when this node still owns it. */
-  renewWorkItemLease(accountId: string, nodeId: string, id: string): Promise<WorkItem | undefined>;
+  renewWorkItemLease(accountId: string, nodeId: string, id: string, claimToken?: string): Promise<WorkItem | undefined>;
   // Delete expired rows from every short-lived, single-use auth artifact table
   // (login_tokens, sessions, link_grants, relay_tickets, device_logins,
   // oauth_states, and expired auth_rate_limits). Each of
@@ -1644,7 +1675,7 @@ export interface WorkQueueRepository {
   // an interval by the control plane. Returns
   // how many rows were removed in total.
   pruneExpiredAuthTokens(nowIso: string): Promise<number>;
-  completeWorkItem(accountId: string, id: string, expectedNodeId?: string): Promise<AutomationRun | undefined>;
+  completeWorkItem(accountId: string, id: string, expectedNodeId?: string, claimToken?: string): Promise<AutomationRun | undefined>;
   // Re-route every *pending* item that landed on the shared/default queue
   // (defaultRouted === true) to `label` — used when the account's default node
   // changes so already-queued work follows the new default. Returns the updated items.
@@ -1675,6 +1706,7 @@ export interface WorkQueueRepository {
 export interface ControlPlaneStore
   extends StoreLifecycle,
     AccountAuthRepository,
+    SelfHostOwnerRepository,
     NodeRepository,
     SessionIndexRepository,
     NotificationRepository,

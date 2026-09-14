@@ -7,8 +7,8 @@ Legend: ● full (byte-exact, same runtime) · ◑ replayed (portable history) �
 | --- | :-: | :-: | :-: | :-: | :-: | :-: | :-: |
 | Pi | ● | ◑ | ◑ | ◑ | ○ | ○ | ○ |
 | Claude Code | ◑ | ● | ◑ | ◑ | ○ | ○ | ○ |
-| Codex | ◑ | ◑ | ◑ | ◑ | ○ | ○ | ○ |
-| OpenCode | ◑ | ◑ | ◑ | ◑ | ○ | ○ | ○ |
+| Codex | ◑ | ◑ | ● | ◑ | ○ | ○ | ○ |
+| OpenCode | ◑ | ◑ | ◑ | ● | ○ | ○ | ○ |
 | Gemini | ◑ | ◑ | ◑ | ◑ | ○ | ○ | ○ |
 | Aider | ◑ | ◑ | ◑ | ◑ | ○ | ○ | ○ |
 | Goose | ◑ | ◑ | ◑ | ◑ | ○ | ○ | ○ |

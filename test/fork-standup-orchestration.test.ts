@@ -89,6 +89,38 @@ const opts = (over: Partial<StandUpForkOptions> = {}): StandUpForkOptions => ({
   ...over,
 });
 
+test("native and seeded forks are new-session admissions, not free resumes", async () => {
+  for (const plan of [{ kind: "resume", sessionFile: "/fork.json" }, { kind: "seed", prompt: "Continue" }]) {
+    const { calls, standUp } = harness({ materializeFork: async () => plan as any });
+    await standUp.standUpFork(opts());
+    assert.equal(calls.createSession.length, 1);
+    assert.equal(calls.createSession[0].opts.newSession, true);
+  }
+});
+
+test("oversized dirty state blocks before any clone/session work", async () => {
+  const { calls, standUp } = harness();
+  const outcome = await standUp.standUpFork(opts({
+    bundle: { ...bundle(), dirtyPatch: { patch: "", untracked: ["large.bin"], pushedInstead: true, byteLength: 8192, maxBytes: 1024 } },
+  }));
+  assert.equal(outcome.ok, false);
+  assert.match(outcome.ok ? "" : outcome.error, /uncommitted changes/i);
+  assert.equal(calls.createWorktree.length, 0);
+  assert.equal(calls.createSession.length, 0);
+});
+
+test("an uncommitted patch that cannot apply never creates a lossy destination", async () => {
+  const { calls, standUp } = harness({
+    applyDirtyPatch: () => ({ applied: false, warning: "patch base is unavailable" }),
+  });
+  const outcome = await standUp.standUpFork(opts({
+    bundle: { ...bundle(), dirtyPatch: { patch: "diff --git a/file b/file", untracked: [] } },
+  }));
+  assert.equal(outcome.ok, false);
+  assert.match(outcome.ok ? "" : outcome.error, /patch base is unavailable/);
+  assert.equal(calls.createSession.length, 0);
+});
+
 test("a blocking prereq (agent unavailable) stops before any clone/session work", async () => {
   const { standUp, calls } = harness({ listRuntimes: () => [{ id: "claude-code-sdk", status: "not_installed", displayName: "Claude Code" }] });
   const outcome = await standUp.standUpFork(opts({ detectPrereqs: true }));

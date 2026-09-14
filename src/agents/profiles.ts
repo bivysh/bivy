@@ -18,7 +18,7 @@ export type AgentProfileBehaviors = {
   prepare?: "grok-auth";
   slashCommands?: "codex" | "opencode";
   sessionStore?: "codex" | "opencode";
-  nativeSessions?: "grok";
+  nativeSessions?: "grok" | "gemini" | "qwen";
 };
 
 export type AgentProfileId =
@@ -56,7 +56,7 @@ export type AgentProfileId =
  */
 export type AgentInstallDescriptor =
   | { kind: "npm"; pkg: string }
-  | { kind: "pip"; pkg: string }
+  | { kind: "pip"; pkg: string; python?: string }
   | { kind: "curl"; display: string; shell: string };
 
 export type AgentProfile = {
@@ -103,7 +103,7 @@ export type AgentProfile = {
     /** Optional fresh-launch recipe containing `{id}` for agents that accept a
      * caller-assigned conversation id. Subsequent turns use `template`. */
     newTemplate?: string[];
-    historyLoader?: "grok";
+    historyLoader?: "grok" | "gemini" | "qwen";
   };
   /**
    * Model selection, the data-driven way. `flag` is the CLI's model option (its
@@ -215,7 +215,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     // Approve/Deny + session/load resume + a real model picker), the same bar Pi,
     // Claude Code, and Codex clear. See `acp` below for the version fallback.
     supportTier: "supported",
-    testedVersion: "1.18.23",
+    testedVersion: "1.18.30",
     blurb: "The most widely used open-source coding harness (OpenCode CLI).",
     // `opencode run -s <id> "<prompt>"` continues a prior session by its own id
     // (`-s, --session  session id to continue`, per `opencode run --help`).
@@ -254,7 +254,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     // git-aware turn and exits instead of dropping into the REPL.
     args: ["--yes-always", "--message"],
     promptMode: "argv",
-    supportTier: "beta",
+    supportTier: "supported",
     authOwner: "mixed",
     blurb: "Popular git-native pair-programming agent (Aider).",
     // `aider --model <id> …` — a leading option (insertAt: 0). Aider resolves its
@@ -276,7 +276,8 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     // generic id-based primitive, and unsafe to bolt on generically (a second,
     // unrelated session opened in the same workspace would inherit that file's
     // history). See docs/agents-not-fully-supported.md.
-    install: { kind: "pip", pkg: "aider-chat" },
+    // Isolate dependencies from the host Python (which may be too new).
+    install: { kind: "pip", pkg: "aider-chat", python: "3.12" },
   },
   hermes: {
     displayName: "Hermes",
@@ -288,6 +289,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     // Hidden from the picker: dumb-pipe adapter with no validated JSON parser or
     // documented session/resume flag (still runnable via BIVY_RUNTIME=hermes).
     hidden: true,
+    supportTier: "experimental",
     // No `resume`: no documented session/resume flag.
     install: { kind: "npm", pkg: "hermes-agent" },
   },
@@ -309,7 +311,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     // BIVY_GOOSE_ACP=1 (or global BIVY_PREFER_ACP=1); off by default until validated.
     acp: { args: ["acp"] },
     promptMode: "argv",
-    supportTier: "beta",
+    supportTier: "supported",
     blurb: "Block's open-source agent with a structured stream-json protocol (Goose).",
     // Homebrew isn't present on stock Linux nodes (brew → ENOENT); the official
     // download script installs the goose binary on both Linux and macOS.
@@ -324,9 +326,10 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
   },
   gemini: {
     displayName: "Gemini CLI",
+    behaviors: { nativeSessions: "gemini" },
     command: "gemini",
     packageName: "@google/gemini-cli",
-    supportTier: "beta",
+    supportTier: "supported",
     blurb: "Google's terminal coding agent (Gemini CLI).",
     // `gemini -m <id> … -p "<prompt>"` — a leading option before the trailing `-p`
     // (insertAt: 0). The prompt flag stays last, so prepending is safe.
@@ -356,7 +359,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     // most recent or index number (e.g. --resume 5)`, per `gemini --help`; a
     // session UUID also works). `{sandbox}` re-derives --approval-mode from the
     // tier so a resumed turn stays as contained as a fresh one.
-    resume: { template: ["-o", "json", "{sandbox}", "-r", "{id}", "-p"] },
+    resume: { template: ["-o", "json", "{sandbox}", "-r", "{id}", "-p"], historyLoader: "gemini" },
     // Gemini CLI speaks ACP (`--experimental-acp`), so it can be driven through the
     // governed ProtocolRuntime instead of the one-shot pipe — per-tool approvals +
     // streaming + resume. Opt in with BIVY_GEMINI_ACP=1 (or global BIVY_PREFER_ACP=1);
@@ -367,9 +370,10 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
   },
   qwen: {
     displayName: "Qwen Code",
+    behaviors: { nativeSessions: "qwen" },
     command: "qwen",
     packageName: "@qwen-code/qwen-code",
-    supportTier: "beta",
+    supportTier: "supported",
     blurb: "Alibaba's Qwen Code CLI (a Gemini-CLI fork tuned for Qwen-Coder models).",
     // Gemini-CLI fork: same `-m <id> … -p` model flag (insertAt: 0).
     model: {
@@ -396,7 +400,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     },
     // Gemini-CLI fork: same `--resume <id>` headless resume form (Qwen Code docs,
     // "Headless Mode"). `{sandbox}` re-derives --approval-mode from the tier.
-    resume: { template: ["--output-format", "json", "{sandbox}", "--resume", "{id}", "-p"] },
+    resume: { template: ["--output-format", "json", "{sandbox}", "--resume", "{id}", "-p"], historyLoader: "qwen" },
     // Qwen Code inherits Gemini CLI's ACP server (packages/cli/src/acp-integration),
     // so it can be driven through the governed ProtocolRuntime instead of the pipe —
     // per-tool approvals + streaming + resume. Newer builds graduated the flag to
@@ -413,7 +417,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     displayName: "Cline",
     command: "cline",
     packageName: "cline",
-    supportTier: "beta",
+    supportTier: "supported",
     blurb: "Cline's standalone terminal agent (the CLI sibling of the Cline IDE extension).",
     // `cline -y "<prompt>"` runs one autonomous, non-interactive task (‑y/‑‑yolo
     // skips per-tool prompts so a piped run doesn't wedge on approval). Bivy's
@@ -436,7 +440,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     displayName: "Crush",
     command: "crush",
     packageName: "@charmland/crush",
-    supportTier: "beta",
+    supportTier: "supported",
     blurb: "Charm's glamourous open-source coding agent (Crush).",
     // `crush run "<prompt>"` runs a single non-interactive prompt and exits;
     // `-q/--quiet` suppresses the spinner UI so stdout is just the reply.
@@ -458,7 +462,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     displayName: "Cursor",
     command: "cursor-agent",
     packageName: "cursor (curl https://cursor.com/install)",
-    supportTier: "beta",
+    supportTier: "supported",
     blurb: "Cursor's standalone terminal coding agent (cursor-agent) — the editor's engine on the CLI.",
     // `cursor-agent --force -p "<prompt>"` runs one non-interactive print turn and
     // exits (`-p/--print`); `--force` auto-approves tool/command execution so a
@@ -493,7 +497,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     displayName: "GitHub Copilot",
     command: "copilot",
     packageName: "@github/copilot",
-    supportTier: "beta",
+    supportTier: "supported",
     blurb: "GitHub's official terminal coding agent (Copilot CLI).",
     // `copilot --allow-all-tools -p "<prompt>"` runs one programmatic turn and
     // exits; --allow-all-tools skips per-tool approval so a piped run doesn't
@@ -525,7 +529,8 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     behaviors: { preflight: "grok", prepare: "grok-auth", nativeSessions: "grok" },
     command: "grok",
     packageName: "grok (curl -fsSL https://x.ai/cli/install.sh | bash)",
-    supportTier: "beta",
+    supportTier: "supported",
+    testedVersion: "1.0.0",
     authOwner: "mixed",
     blurb: "xAI's official Grok coding agent (Grok CLI) — SuperGrok/X subscription or API key.",
     // Official CLI: `grok -p "<prompt>"` (alias `--single`) runs one headless
@@ -539,6 +544,16 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     // TUI uses the same store via `grok --resume <id>`. Model ids match
     // `grok models` for the official CLI (override with BIVY_GROK_MODELS).
     args: ["-p"],
+    // The current CLI's `--output-format streaming-json` emits newline-delimited
+    // JSON keyed off `type`: {type:"text",data} for the answer, {type:"thought",
+    // data} for reasoning, {type:"end"} to close the turn (plus tool frames). The
+    // shared tolerant generic-stream-json parser understands this shape (and the
+    // ACP session/update envelope other CLIs use), so Grok gets faithful
+    // transcripts — answer prose, a thinking sidecar, and tool cards — without a
+    // Grok-specific adapter. Keep the plain args as the explicit
+    // BIVY_AGENT_STRUCTURED=0 fallback.
+    jsonArgs: ["--output-format", "streaming-json", "-p"],
+    parserId: "generic-stream-json",
     resume: {
       template: ["--resume", "{id}", "-p"],
       historyLoader: "grok",
@@ -546,12 +561,12 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     model: {
       flag: "-m",
       models: [
-        // Official Grok CLI (1.x) currently advertises grok-4.5 as the default
-        // subscription model. Older curated ids (grok-4-latest, grok-code-fast-1,
-        // …) return "unknown model id" against current CLIs — keep the list
+        // Official Grok CLI (1.x) advertises grok-4.6 as the default subscription
+        // model (verified against `grok models`); the older grok-4.5 / grok-4-latest
+        // / grok-code-fast-1 ids now return "unknown model id". Keep the list
         // honest; operators can override with BIVY_GROK_MODELS if their install
         // exposes more.
-        { id: "grok-4.5", name: "Grok 4.5", provider: "xai" },
+        { id: "grok-4.6", name: "Grok 4.6", provider: "xai" },
       ],
     },
     promptMode: "argv",
@@ -565,7 +580,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     displayName: "Amp",
     command: "amp",
     packageName: "@sourcegraph/amp",
-    supportTier: "beta",
+    supportTier: "supported",
     blurb: "Sourcegraph's autonomous coding agent with persistent threads (Amp).",
     // `amp -x "<prompt>"` (`--execute`) runs one thread turn and streams to stdout;
     // Amp doesn't gate tools per-run (governed by its own allowlist config), so no
@@ -587,7 +602,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     displayName: "Auggie",
     command: "auggie",
     packageName: "@augmentcode/auggie",
-    supportTier: "beta",
+    supportTier: "supported",
     blurb: "Augment Code's terminal agent backed by its codebase context engine (Auggie).",
     // `auggie --quiet --print "<prompt>"` runs one non-interactive turn and prints
     // the final reply (`--print`); `--quiet` drops the UI chatter. Prompt trails.
@@ -601,7 +616,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     displayName: "Droid",
     command: "droid",
     packageName: "droid (curl https://app.factory.ai/cli)",
-    supportTier: "beta",
+    supportTier: "supported",
     blurb: "Factory AI's autonomous terminal coding agent (Droid).",
     // `droid exec --auto high "<prompt>"` runs one headless task at high autonomy
     // (auto-approves) and streams to stdout. Prompt trails the `exec` subcommand.
@@ -629,7 +644,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     displayName: "Continue",
     command: "cn",
     packageName: "@continuedev/cli",
-    supportTier: "beta",
+    supportTier: "supported",
     blurb: "Continue's headless terminal agent (cn) driving configurable assistants.",
     // `cn --auto -p "<prompt>"` runs one headless turn (`-p` = no TUI) and prints
     // the final response; `--auto` allows all tools without prompting. Prompt
@@ -657,7 +672,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     displayName: "Kilo Code",
     command: "kilo",
     packageName: "@kilocode/cli",
-    supportTier: "beta",
+    supportTier: "supported",
     blurb: "Kilo Code's terminal CLI (an OpenCode fork) for pipeline-friendly agentic coding.",
     // `kilo run --auto "<prompt>"` runs one non-interactive turn (`run`) with
     // auto-approved permissions (`--auto`) and streams to stdout. Prompt trails.
@@ -691,7 +706,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     displayName: "Rovo Dev",
     command: "acli",
     packageName: "atlassian acli (rovodev)",
-    supportTier: "beta",
+    supportTier: "supported",
     blurb: "Atlassian's Rovo Dev terminal coding agent, run through the acli CLI.",
     // `acli rovodev run --yolo "<prompt>"` runs one instruction headlessly; --yolo
     // skips tool-approval prompts. Prompt trails the `rovodev run` subcommand.

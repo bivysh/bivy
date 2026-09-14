@@ -4,16 +4,18 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { AppState, ModelInfo, RuntimeInfo, SessionContract } from "@bivy/core";
 import { resolveSessionContract } from "@bivy/core";
 import { controller } from "../store/useStore.js";
-import { Sheet, PickerItem } from "./Sheet.js";
+import { ConfirmDialog } from "./AppDialog.js";
+import { Sheet, PickerItem, type DismissSheet } from "./Sheet.js";
 import { useModalEscape } from "../modalStack.js";
 import { ProviderConnectForm } from "./ProviderConnect.js";
-import { SANDBOX_TIERS } from "./sandboxTiers.js";
+import { ModelAccounts } from "./ModelAccounts.js";
+import { modelAccountChoice, modelAccountProject } from "../modelAccounts.js";
+import { ChevronRightIcon } from "./UiIcons.js";
+import { runtimeEnforcesProtection, SANDBOX_TIERS } from "./sandboxTiers.js";
 import { writeClipboard } from "../clipboard.js";
-import { Badge, type BadgeTone } from "./Badge.js";
+import { agentPickerLabel, filterAndSortAgentRuntimes, isTopAgent } from "../agentPickerCatalog.js";
 
-function agentLabel(a: RuntimeInfo): string {
-  return String(a.displayName || a.name || a.id || "Agent");
-}
+const agentLabel = agentPickerLabel;
 
 const THINKING_LABELS: Record<string, string> = {
   off: "Fastest",
@@ -22,28 +24,6 @@ const THINKING_LABELS: Record<string, string> = {
   medium: "Default",
   high: "Deep",
 };
-
-function runtimeCapabilityChips(a: RuntimeInfo): Array<{ label: string; ok: boolean }> {
-  const caps = (a.capabilities || {}) as Record<string, unknown>;
-  const mode = String((a as { executionMode?: unknown }).executionMode || "");
-  const modeLabel = mode === "protocol" ? "Protocol" : mode === "structured-pipe" ? "Structured" : mode === "pipe" ? "Chat pipe" : mode === "pty" ? "Terminal" : "";
-  // "Approvals" is on for native per-tool interception OR the MCP-proxy gate
-  // (which governs the agent's MCP tool calls through the same Approve/Deny flow).
-  return [
-    ...(modeLabel ? [{ label: modeLabel, ok: true }] : []),
-    { label: "Approvals", ok: Boolean(caps.toolInterception) || Boolean(caps.mcpToolApprovals) },
-    { label: "Resume", ok: Boolean(caps.resume) },
-    { label: "Models", ok: Boolean(caps.modelSelection) },
-    // Forking is a Bivy session-layer feature. Every agent can at least receive
-    // the portable seeded continuation; native capabilities only improve its
-    // fidelity and must not make the picker claim other agents cannot fork.
-    { label: "Fork", ok: true },
-  ];
-}
-
-function runtimeTier(runtime: RuntimeInfo): string {
-  return String((runtime as { supportTier?: unknown }).supportTier || "experimental");
-}
 
 /**
  * Preview an Effective Session Contract for a runtime BEFORE a session
@@ -76,58 +56,6 @@ function previewContractForRuntime(a: RuntimeInfo): SessionContract {
   });
 }
 
-function tierLabel(tier: string): string {
-  if (tier === "supported") return "Supported";
-  if (tier === "beta") return "Beta";
-  if (tier === "planned") return "Planned";
-  return "Experimental";
-}
-
-function RuntimeMeta({ runtime, text }: { runtime: RuntimeInfo; text?: string }) {
-  const tier = runtimeTier(runtime);
-  const protectionLevel = runtime.protectionLevel || "user-permissions";
-  const protectionLabel = runtime.protectionLabel || "Protection unknown";
-  const tierTone: BadgeTone | undefined = tier === "supported" ? "ok" : tier === "beta" || tier === "experimental" ? "warn" : undefined;
-  const protectionTone: BadgeTone = protectionLevel === "native-sandbox" || protectionLevel === "tool-controls" ? "ok" : protectionLevel === "mcp-controls" ? "warn" : "danger";
-  return (
-    <span className="runtime-meta">
-      {text && <span className="runtime-meta-text">{text}</span>}
-      <span className="runtime-capabilities" aria-label="Agent support tier, protection, and capabilities">
-        <Badge
-          tone={tierTone}
-          title={runtime.certification === "release-tested"
-            ? `Release-tested${runtime.testedVersion ? ` with version ${runtime.testedVersion}` : ""}`
-            : runtime.certification === "adapter-tested" ? "Adapter tests pass; live CLI compatibility is not release-certified" : "Not release-certified"}
-        >
-          {tierLabel(tier)}{runtime.testedVersion ? ` · ${runtime.testedVersion}` : ""}
-        </Badge>
-        {runtime.source?.kind === "package" && (
-          <Badge
-            tone={runtime.source.verified ? "ok" : "warn"}
-            title={`${runtime.source.publisher ? `${runtime.source.publisher} · ` : ""}${runtime.source.packageId}@${runtime.source.packageVersion}`}
-          >
-            {runtime.source.verified ? "Verified" : "Package"} · {runtime.source.packageId}
-          </Badge>
-        )}
-        {runtime.source?.kind === "config" && (
-          <Badge tone="warn" title="Configured explicitly on this node">Local integration</Badge>
-        )}
-        <Badge
-          tone={protectionTone}
-          title={runtime.protectionDetail || "This machine did not report a protection description."}
-        >
-          {protectionLabel}
-        </Badge>
-        {runtimeCapabilityChips(runtime).map((chip) => (
-          <Badge key={chip.label} tone={chip.ok ? "ok" : undefined} title={chip.ok ? `${chip.label} supported` : `${chip.label} not supported by this runtime`}>
-            {chip.ok ? "✓" : "–"} {chip.label}
-          </Badge>
-        ))}
-      </span>
-    </span>
-  );
-}
-
 // A small copy-command row (mirrors ConnectRunner's install-command block) for
 // the connect prompt below.
 function ConnectCommand({ cmd, label }: { cmd: string; label: string }) {
@@ -145,7 +73,7 @@ function ConnectCommand({ cmd, label }: { cmd: string; label: string }) {
       <code>{cmd}</code>
       <button
         type="button"
-        className={`repo-connect-copy${copied ? " is-copied" : ""}`}
+        className={`btn sm ghost${copied ? " is-copied" : ""}`}
         onClick={copy}
         aria-label={copied ? "Command copied" : label}
       >
@@ -419,9 +347,10 @@ export function RepoPicker({ state, onClose }: { state: AppState; onClose: () =>
     <Sheet title="Repository" onClose={onClose}>
       <input className="picker-search" placeholder="Search repos…" value={q} onChange={(e) => setQ(e.target.value)} />
       <div className="picker-list">
+        <div className="picker-section-label">This Machine</div>
         <PickerItem
           active={!state.draft.repo}
-          title="No repo"
+          title="Default workspace"
           meta="Work in the machine's default workspace"
           onClick={() => {
             controller.chooseRepo(null);
@@ -436,6 +365,7 @@ export function RepoPicker({ state, onClose }: { state: AppState; onClose: () =>
           <RepoConnectPrompt state={state} />
         )}
         {!state.catalogs.reposLoading && state.catalogs.reposError && !managedDraft && <div className="picker-empty">{state.catalogs.reposError}</div>}
+        {repos.length > 0 && <div className="picker-section-label">GitHub repositories</div>}
         {repos.map((r) => {
           const picked = r.slug === state.draft.repo;
           return (
@@ -456,7 +386,7 @@ export function RepoPicker({ state, onClose }: { state: AppState; onClose: () =>
               right={
                 <button
                   type="button"
-                  className="picker-action repo-branch-arrow"
+                  className="btn ghost icon repo-branch-arrow"
                   title={`Choose a branch of ${r.slug}`}
                   aria-label={`Choose a branch of ${r.slug}`}
                   onClick={(e) => {
@@ -576,13 +506,21 @@ function RepoBranchPicker({
 export function SandboxPicker({ state, onClose }: { state: AppState; onClose: () => void }) {
   const nodeDefault = state.settings.nodeSettings?.defaultSandbox;
   const [confirmFullAccess, setConfirmFullAccess] = useState(false);
+  const selectedRuntime = state.catalogs.runtimes.find((runtime) => runtime.id === state.catalogs.selectedAgentId);
+  const protectionEnforced = runtimeEnforcesProtection(selectedRuntime);
+  const agentName = state.catalogs.currentAgentName || "This agent";
   return (
-    <Sheet title="Sandbox mode" onClose={onClose} autoFocusSearch={false}>
+    <Sheet title="Protection" onClose={onClose} autoFocusSearch={false}>
+      {!protectionEnforced && (
+        <div className="banner" data-tone="warn" role="note">
+          {agentName} can't ask for approval — protection choices are treated as full access.
+        </div>
+      )}
       <div className="picker-list">
         <PickerItem
           active={!state.draft.sandbox}
           title={`Machine default${nodeDefault ? ` (${nodeDefault})` : ""}`}
-          meta="Use this machine's configured sandbox mode"
+          meta="Use this machine's configured protection"
           onClick={() => {
             controller.setSessionSandbox(null);
             onClose();
@@ -650,9 +588,21 @@ export function NodePicker({
 
 // ---- Agent picker ----
 export function AgentPicker({ state, onClose }: { state: AppState; onClose: () => void }) {
+  // An id can exist transiently before the first prompt is persisted. That is
+  // still a draft for picker purposes; changing agents must not present or
+  // trigger the handoff/fork flow until the conversation has started.
+  const cloningActiveSession = Boolean(state.activeSession.activeSessionId)
+    && state.activeSession.transcript.some((entry) => entry.role === "user");
+  // For an active session, "current" means the runtime that owns that session,
+  // never the globally last-used/default runtime for new drafts.
+  const selectedAgentId = cloningActiveSession
+    ? state.activeSession.activeRuntimeId ?? state.sessionIndex.sessions.find((s) => s.sessionId === state.activeSession.activeSessionId)?.runtimeId ?? null
+    : state.catalogs.selectedAgentId ?? (state.catalogs.runtimes.find((r) => (r as any).current)?.id || null);
   const [q, setQ] = useState("");
   const [moreOpen, setMoreOpen] = useState(false);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const scrolledAgentRef = useRef<string | null>(null);
   useEffect(() => {
     controller.listRuntimes();
     // Warm each agent's model list in the background so the first switch lists
@@ -660,121 +610,119 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
     // session, whose agent is fixed).
     controller.prefetchModels();
   }, []);
-  const runtimes = useMemo(() => {
-    const query = q.trim().toLowerCase();
-    const matched = !query
-      ? state.catalogs.runtimes
-      : state.catalogs.runtimes.filter((a) =>
-          `${a.id} ${a.name || ""} ${a.displayName || ""} ${(a as any).description || ""} ${(a as any).language || ""} ${a.protectionLabel || ""}`.toLowerCase().includes(query),
-        );
-    return [...matched].sort((a, b) => agentLabel(a).localeCompare(agentLabel(b), undefined, { sensitivity: "base" }));
-  }, [state.catalogs.runtimes, q]);
-  const recommended = runtimes.filter((runtime) => runtimeTier(runtime) === "supported");
-  const more = runtimes.filter((runtime) => runtimeTier(runtime) !== "supported");
+  const runtimes = useMemo(
+    () => filterAndSortAgentRuntimes(state.catalogs.runtimes, q),
+    [state.catalogs.runtimes, q],
+  );
+  const recommended = runtimes.filter(isTopAgent);
+  const more = runtimes.filter((runtime) => !isTopAgent(runtime));
 
-  const cloningActiveSession = Boolean(state.activeSession.activeSessionId);
-  // For an active session, "current" means the runtime that owns that session,
-  // never the globally last-used/default runtime for new drafts.
-  const selectedAgentId = cloningActiveSession
-    ? state.activeSession.activeRuntimeId ?? state.sessionIndex.sessions.find((s) => s.sessionId === state.activeSession.activeSessionId)?.runtimeId ?? null
-    : state.catalogs.selectedAgentId ?? (state.catalogs.runtimes.find((r) => (r as any).current)?.id || null);
+  const selectedRuntime = state.catalogs.runtimes.find((runtime) => runtime.id === selectedAgentId);
+  useEffect(() => {
+    if (selectedRuntime && !isTopAgent(selectedRuntime)) setMoreOpen(true);
+  }, [selectedRuntime]);
+  useEffect(() => {
+    if (!selectedAgentId || scrolledAgentRef.current === selectedAgentId) return;
+    const selected = listRef.current?.querySelector<HTMLElement>(".picker-item-row.active");
+    if (!selected) return;
+    selected.scrollIntoView({ block: "center" });
+    scrolledAgentRef.current = selectedAgentId;
+  }, [selectedAgentId, runtimes.length, moreOpen]);
 
-  const renderRuntime = (a: RuntimeInfo) => {
+  const confirmingRuntime = confirmingId ? state.catalogs.runtimes.find((runtime) => runtime.id === confirmingId) : undefined;
+
+  const chooseRuntime = (runtime: RuntimeInfo, dismiss: DismissSheet) => {
+    const contract = !cloningActiveSession ? previewContractForRuntime(runtime) : undefined;
+    if (contract?.requiresAcknowledgement) controller.acknowledgeSessionAgentReducedProtections(true);
+    if (cloningActiveSession) {
+      controller.chooseAgent(runtime, () => new Promise<void>((resolve) => dismiss(resolve)));
+    } else {
+      dismiss(() => controller.chooseAgent(runtime));
+    }
+  };
+
+  const renderRuntime = (a: RuntimeInfo, dismiss: DismissSheet) => {
     const status = String((a as any).status || "available");
     const available = status === "available";
     const installable = !available && Boolean((a as any).install);
     const installing = state.catalogs.installingRuntimeId === a.id;
     const active = a.id === selectedAgentId;
-    // The Effective Session Contract preview (see previewContractForRuntime):
-    // requiresAcknowledgement fires ONLY for a "supported" (certified) profile
-    // whose live protection would be degraded — a broken promise, not merely
-    // an unprotected experimental agent. Union it with the existing raw
-    // protection-level check (which already covers any tier's zero-isolation
-    // case) so a certified agent degraded in a DIFFERENT area (auth/resume/
-    // tool interception, not just sandbox) still gets caught.
+    // Only a certified profile whose live contract is unexpectedly degraded
+    // needs a separate acknowledgement. Disclosed runtime limitations remain in
+    // Details and Protection; they must not turn every normal agent choice into
+    // a hidden two-tap interaction.
     const previewContract = !cloningActiveSession ? previewContractForRuntime(a) : undefined;
     const needsProtectionConfirmation = !cloningActiveSession
-      && (a.protectionLevel === "user-permissions" || Boolean(previewContract?.requiresAcknowledgement));
-    const confirming = needsProtectionConfirmation && confirmingId === a.id;
-    const confirmText = previewContract?.degradedReasons.length
-      ? `${previewContract.degradedReasons.map((r) => r.message).join(" ")} Select again to continue.`
-      : "Runs with your OS user permissions and no Bivy-owned isolation. Use a container/VM for unattended or untrusted work. Select again to continue.";
-    const chips = [
-      installing ? "setting up…" : null,
-      !available ? status : null,
-      (a as any).language,
-      (a as { authOwner?: string }).authOwner ? `auth: ${(a as { authOwner?: string }).authOwner}` : null,
-    ].filter(Boolean).join(" · ");
+      && Boolean(previewContract?.requiresAcknowledgement);
+    const description = String((a as { description?: unknown }).description || "");
     return (
       <PickerItem
         key={a.id}
         active={active}
-        title={confirming ? `Confirm ${agentLabel(a)}` : agentLabel(a)}
-        meta={
-          <RuntimeMeta
-            runtime={a}
-            text={confirming
-              ? confirmText
-              : cloningActiveSession
-                ? ["Fork + handoff", chips || (a as any).description].filter(Boolean).join(" · ")
-                : chips || (a as any).description}
-          />
-        }
+        title={agentLabel(a)}
+        meta={[
+          installing ? "Setting up…" : !available ? (installable ? "Install required" : "Needs sign-in") : cloningActiveSession ? "Fork and hand off" : null,
+          description,
+        ].filter(Boolean).join(" · ")}
         disabled={installing || (!available && !installable)}
-        right={
-          installable && !installing ? (
-            <button
-              type="button"
-              className="picker-action"
-              onClick={(e) => {
-                e.stopPropagation();
-                controller.installAgent(a.id);
-              }}
-            >
-              Install
-            </button>
-          ) : undefined
-        }
+        right={installable && !installing ? (
+          <button
+            type="button"
+            className="btn sm ghost"
+            onClick={(e) => {
+              e.stopPropagation();
+              controller.installAgent(a.id);
+            }}
+          >
+            Install
+          </button>
+        ) : undefined}
         onClick={() => {
           if (installable) {
             controller.installAgent(a.id);
             return;
           }
           if (!available) return;
-          if (needsProtectionConfirmation && !confirming) {
+          if (needsProtectionConfirmation) {
             setConfirmingId(a.id);
             return;
           }
-          // Certified-profile downgrades need a durable acknowledgement (the
-          // node re-checks it on session.new); the raw user-permissions warning
-          // above is UX-only and doesn't set it.
-          if (previewContract?.requiresAcknowledgement) controller.acknowledgeSessionAgentReducedProtections(true);
-          controller.chooseAgent(a);
-          onClose();
+          chooseRuntime(a, dismiss);
         }}
       />
     );
   };
 
   return (
-    <Sheet title={cloningActiveSession ? "Hand off to agent" : "Agent"} onClose={onClose} autoFocusSearch={false}>
+    <Sheet title={cloningActiveSession ? "Hand off to agent" : "Agent"} onClose={onClose} autoFocusSearch={false} size="large">
+      {(dismiss) => <>
       {cloningActiveSession && (
         <div className="picker-empty">
           Choosing an agent forks this session with its transcript and working files, then opens the fork in that agent.
         </div>
       )}
       <input className="picker-search" placeholder="Search agents…" value={q} onChange={(e) => { setQ(e.target.value); setConfirmingId(null); }} />
-      <div className="picker-list">
+      <div className="picker-list" ref={listRef}>
         {runtimes.length === 0 && <div className="picker-empty">No agents available.</div>}
         {recommended.length > 0 && <div className="picker-section-label">Recommended</div>}
-        {recommended.map(renderRuntime)}
+        {recommended.map((runtime) => renderRuntime(runtime, dismiss))}
         {more.length > 0 && (
           <button type="button" className="picker-section-toggle" onClick={() => setMoreOpen((open) => !open)} aria-expanded={moreOpen || Boolean(q.trim())}>
             More agents <span aria-hidden>{moreOpen || q.trim() ? "▾" : "▸"}</span>
           </button>
         )}
-        {(moreOpen || Boolean(q.trim())) && more.map(renderRuntime)}
+        {(moreOpen || Boolean(q.trim())) && more.map((runtime) => renderRuntime(runtime, dismiss))}
       </div>
+      {confirmingRuntime && (
+        <ConfirmDialog
+          title={`Check how ${agentLabel(confirmingRuntime)} runs`}
+          message="Bivy couldn't check which sign-in this agent will use or guarantee its protection level."
+          confirmLabel={`Use ${agentLabel(confirmingRuntime)}`}
+          onCancel={() => setConfirmingId(null)}
+          onConfirm={() => chooseRuntime(confirmingRuntime, dismiss)}
+        />
+      )}
+      </>}
     </Sheet>
   );
 }
@@ -826,13 +774,19 @@ function ReasoningPill({ state }: { state: AppState }) {
   );
 }
 
-function modelMeta(m: ModelInfo): string {
+function modelMeta(m: ModelInfo, account?: string): string {
   const ctx = (m as any).contextWindow;
-  return [(m as any).provider, ctx ? `${Math.round(ctx / 1000)}k ctx` : null].filter(Boolean).join(" · ");
+  return [(m as any).provider, account, ctx ? `${Math.round(ctx / 1000)}k ctx` : null].filter(Boolean).join(" · ");
 }
 
 export function ModelPicker({ state, onClose }: { state: AppState; onClose: () => void }) {
   const [q, setQ] = useState("");
+  const [accountModel, setAccountModel] = useState<ModelInfo | null>(null);
+  const accountOpener = useRef<HTMLButtonElement>(null);
+  const lastAccountKey = useRef<string | null>(null);
+  useEffect(() => {
+    if (!accountModel) accountOpener.current?.focus();
+  }, [accountModel]);
   // Id of the unconnected provider the user tapped "Connect" on, if any —
   // swaps the list view for an inline add-credentials form (#390) instead of
   // sending the user to Settings. Just the id (not a name snapshot) so the
@@ -841,7 +795,9 @@ export function ModelPicker({ state, onClose }: { state: AppState; onClose: () =
   useEffect(() => {
     controller.listModels();
     controller.listProviders();
-  }, []);
+    controller.listCredentialRecords();
+    controller.getCredentialPresets();
+  }, [state.connection.currentNodeId]);
 
   // The connect form has no direct ack of its own; once the node's next
   // providers.list reports this provider configured, its models already moved
@@ -881,11 +837,16 @@ export function ModelPicker({ state, onClose }: { state: AppState; onClose: () =
   const isCurrent = (m: ModelInfo) =>
     state.catalogs.currentModel != null && m.id === state.catalogs.currentModel.id && (m as any).provider === (state.catalogs.currentModel as any).provider;
 
+  if (accountModel) {
+    return <ModelAccounts state={state} model={accountModel} onClose={() => setAccountModel(null)} />;
+  }
+
   if (connecting) {
     return (
       <Sheet
         title={providerName(connecting)}
         onClose={onClose}
+        size="large"
         headExtra={
           <button className="sheet-back" onClick={() => setConnecting(null)} aria-label="Back">
             ‹
@@ -898,22 +859,33 @@ export function ModelPicker({ state, onClose }: { state: AppState; onClose: () =
   }
 
   return (
-    <Sheet title="Model" onClose={onClose} headExtra={<ReasoningPill state={state} />} autoFocusSearch={false}>
+    <Sheet title="Model" ariaLabel="Model" onClose={onClose} headExtra={<ReasoningPill state={state} />} autoFocusSearch={false} size="large">
       <input className="picker-search" placeholder="Search models…" value={q} onChange={(e) => setQ(e.target.value)} />
       <div className="picker-list">
         {connectedModels.length === 0 && otherProviders.length === 0 && <div className="picker-empty">No models available.</div>}
-        {connectedModels.map((m) => (
-          <PickerItem
+        {connectedModels.map((m) => {
+          const provider = String(m.provider || "");
+          const accounts = state.settings.credentialRecords.filter((r) => r.provider === provider);
+          const choice = modelAccountChoice(provider, accounts, state.settings.credentialPresets, modelAccountProject(state));
+          const account = accounts.length ? choice.label || (state.settings.credentialPresets ? "Choose account" : "Loading account…") : undefined;
+          return <PickerItem
             key={`${(m as any).provider || ""}:${m.id}`}
             active={isCurrent(m)}
             title={m.label || m.id}
-            meta={modelMeta(m)}
+            meta={modelMeta(m, account)}
+            right={accounts.length > 1 ? (
+              <button type="button" className="btn ghost icon" aria-label={`Change account for ${m.label || m.id}`}
+                ref={lastAccountKey.current === `${provider}:${m.id}` ? accountOpener : undefined}
+                onClick={() => { lastAccountKey.current = `${provider}:${m.id}`; setAccountModel(m); }}>
+                <ChevronRightIcon />
+              </button>
+            ) : undefined}
             onClick={() => {
               controller.chooseModel(m);
               onClose();
             }}
-          />
-        ))}
+          />;
+        })}
         {otherProviders.length > 0 && (
           <>
             <div className="picker-section-label">Other models</div>
@@ -929,7 +901,7 @@ export function ModelPicker({ state, onClose }: { state: AppState; onClose: () =
                   right={
                     <button
                       type="button"
-                      className="picker-action"
+                      className="btn sm ghost"
                       onClick={(e) => {
                         e.stopPropagation();
                         setConnecting(provider);

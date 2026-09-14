@@ -6,6 +6,7 @@ import { DiffView } from "./DiffView.js";
 import { Sheet } from "./Sheet.js";
 import { ChevronRightIcon } from "./UiIcons.js";
 import { Badge } from "./Badge.js";
+import { orderToolsWithDepth } from "./tool-nesting.js";
 
 function GlyphIcon({ glyph }: { glyph: ToolGlyph }) {
   const common = { width: 16, height: 16, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
@@ -69,13 +70,13 @@ function elapsedLabel(tool: ToolActivity): string {
   return `${minutes}m ${Math.floor(seconds % 60)}s`;
 }
 
-function ToolListRow({ tool, f, onSelect }: { tool: ToolActivity; f: ToolFormat; onSelect: (callId: string) => void }) {
+function ToolListRow({ tool, f, depth = 0, onSelect }: { tool: ToolActivity; f: ToolFormat; depth?: number; onSelect: (callId: string) => void }) {
   const elapsed = elapsedLabel(tool);
   const baseLabel = toolRowLabel(f);
   const label = elapsed ? `${baseLabel || "Sub-agent"} · ${elapsed}` : baseLabel;
   const running = tool.status === "running";
   return (
-    <div className={`activity${running ? " is-running" : ""}${f.isError ? " is-error" : ""}`}>
+    <div className={`activity${running ? " is-running" : ""}${f.isError ? " is-error" : ""}${depth > 0 ? " is-subagent-step" : ""}`}>
       <button className="activity-row" onClick={() => onSelect(tool.callId)}>
         <span className="activity-ic">
           <GlyphIcon glyph={f.glyph} />
@@ -95,7 +96,7 @@ function ToolListRow({ tool, f, onSelect }: { tool: ToolActivity; f: ToolFormat;
  *  wrapped in its own toggle button since the sheet's back chevron is what
  *  navigates away from it now. Takes the ToolFormat computed once by the
  *  sheet rather than recomputing it (see ToolListRow's comment). */
-function ToolDetail({ tool, f }: { tool: ToolActivity; f: ToolFormat }) {
+function ToolDetail({ tool, f, subSteps = 0 }: { tool: ToolActivity; f: ToolFormat; subSteps?: number }) {
   const output = tool.result || f.output || "";
   const showOutput = output && (f.diffs.length === 0 || f.command || f.verb === "Agent output");
   const elapsed = elapsedLabel(tool);
@@ -105,6 +106,12 @@ function ToolDetail({ tool, f }: { tool: ToolActivity; f: ToolFormat }) {
         <div className="tool-detail-block">
           <div className="tool-detail-label">Status</div>
           <div className="tool-detail-value">Sub-agent active{elapsed ? ` · ${elapsed} elapsed` : ""}</div>
+        </div>
+      )}
+      {tool.detail?.kind === "delegation" && subSteps > 0 && (
+        <div className="tool-detail-block">
+          <div className="tool-detail-label">Sub-agent work</div>
+          <div className="tool-detail-value">{subSteps} step{subSteps === 1 ? "" : "s"} nested below this delegation</div>
         </div>
       )}
       {(f.isError || f.truncated) && (
@@ -183,7 +190,7 @@ function runningSummary(tool: ToolActivity): string {
  * every time the parent re-renders while a call is still streaming, and a
  * stale object reference would freeze the open card mid-run.
  */
-function ToolActivitySheet({ tools, summary, onClose }: { tools: ToolActivity[]; summary: string; onClose: () => void }) {
+export function ToolActivitySheet({ tools, summary, onClose }: { tools: ToolActivity[]; summary: string; onClose: () => void }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selected = selectedId ? tools.find((t) => t.callId === selectedId) : undefined;
   // One formatTool per tool per render, not per tool per *place it's used* —
@@ -191,6 +198,7 @@ function ToolActivitySheet({ tools, summary, onClose }: { tools: ToolActivity[];
   // separately for the list row, the sheet title, and the detail view would
   // triple that work for no reason.
   const formatted = selected ? formatTool(selected.name, selected.input, selected.detail) : undefined;
+  const subSteps = selected ? tools.filter((t) => t.parentToolUseId === selected.callId && t.callId !== selected.callId).length : 0;
 
   // The sheet's scrollable body is a single persistent DOM node (Sheet.tsx's
   // .sheet-content) that this component swaps between the list and a detail
@@ -216,9 +224,9 @@ function ToolActivitySheet({ tools, summary, onClose }: { tools: ToolActivity[];
     >
       <div ref={anchorRef}>
         {selected && formatted ? (
-          <ToolDetail tool={selected} f={formatted} />
+          <ToolDetail tool={selected} f={formatted} subSteps={subSteps} />
         ) : tools.length ? (
-          tools.map((t) => <ToolListRow key={t.callId} tool={t} f={formatTool(t.name, t.input, t.detail)} onSelect={setSelectedId} />)
+          orderToolsWithDepth(tools).map(({ tool: t, depth }) => <ToolListRow key={t.callId} tool={t} depth={depth} f={formatTool(t.name, t.input, t.detail)} onSelect={setSelectedId} />)
         ) : (
           <div className="tool-detail-value output">No tool activity.</div>
         )}
@@ -251,14 +259,18 @@ export const ToolGroup = memo(function ToolGroup({ tools }: { tools: ToolActivit
       : running && tools.every((t) => t.status === "running") && tools.length === 1
         ? runningSummary(tools[0]!)
         : toolGroupSummary(tools);
+  const stateLabel = running ? "Working" : "Worked";
+  const displaySummary = summary;
+  const sheetSummary = `${running ? "Work in progress" : "Work log"} · ${tools.length} action${tools.length === 1 ? "" : "s"}`;
   return (
     <div className="tool-group">
-      <button className={`tool-group-line${running ? " is-running" : ""}${hasError ? " is-error" : ""}`} onClick={() => setOpen(true)}>
+      <button className={`tool-group-line${running ? " is-running" : ""}${hasError ? " is-error" : ""}`} onClick={() => setOpen(true)} aria-label={`${stateLabel}: ${displaySummary}. Open work details`}>
         <span className="tool-group-state" aria-hidden />
-        <span className="tool-group-summary">{summary}</span>
+        <span className="tool-group-label">{stateLabel}</span>
+        <span className="tool-group-summary">{displaySummary}</span>
         <span className="tool-chevron"><ChevronRightIcon size={14} /></span>
       </button>
-      {open && <ToolActivitySheet tools={tools} summary={summary} onClose={close} />}
+      {open && <ToolActivitySheet tools={tools} summary={sheetSummary} onClose={close} />}
     </div>
   );
 });

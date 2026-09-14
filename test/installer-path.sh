@@ -37,6 +37,7 @@ cat > "$WORK/stub/npm" <<STUB
 set -euo pipefail
 if [ "\${1:-}" = "prefix" ]; then echo "$WORK/npm-prefix"; exit 0; fi
 if [ "\${1:-}" = "install" ]; then
+  echo 'npm info install progress is visible' >&2
   mkdir -p "$WORK/npm-prefix/bin"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$WORK/npm-prefix/bin/bivy"
   chmod +x "$WORK/npm-prefix/bin/bivy"
@@ -52,6 +53,11 @@ chmod +x "$WORK/stub/npm"
 # needs the network, and has hung CI for hours when a mirror stalled. This test
 # is about rc-file handling; Node acquisition is not under test.
 ln -s "$(command -v node)" "$WORK/stub/node"
+# These tests must never provision host build tools or stop a host Bivy service.
+for cmd in make g++ python3 bivy; do
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$WORK/stub/$cmd"
+  chmod +x "$WORK/stub/$cmd"
+done
 
 run_installer() {
   # HOME/SHELL are redirected so the installer's rc-file handling is contained.
@@ -119,6 +125,8 @@ check "unknown shell gets manual instructions, no rc file created" \
   "$([ -e "$HOME5/.bashrc" ] || [ -e "$HOME5/.zshrc" ] && echo present || echo absent)" 'absent'
 check "unknown shell manual export line still printed" \
   "$(grep -c 'export PATH=' "$WORK/out.log" 2>/dev/null || echo 0)" '1'
+check "npm install progress is streamed" \
+  "$(grep -c 'npm info install progress is visible' "$WORK/out.log" 2>/dev/null || echo 0)" '1'
 
 if [ "$FAILED" != "0" ]; then
   echo "installer-path: FAILED"

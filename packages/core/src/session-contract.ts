@@ -104,12 +104,11 @@ export interface SessionContract {
    *  human-readable form. Never invented — absence of a fact yields an
    *  "unavailable" state and a reason here, not a guessed guarantee. */
   degradedReasons: SessionContractDegradedReason[];
-  /** True when this is a "supported" (certified) profile with at least one
-   *  protection-relevant area (auth/resume/toolInterception/sandbox)
-   *  degraded or unavailable, and no acknowledgement has been recorded yet.
-   *  Callers (the launch gate, the picker) must not silently proceed while
-   *  this is true. Beta/experimental/planned profiles never set this — they
-   *  never promised the guarantee being reduced. */
+  /** True when this is a release-tested profile with at least one protection-
+   *  relevant area (auth/resume/toolInterception/sandbox) degraded or unavailable,
+   *  and no acknowledgement has been recorded yet. Callers (the launch gate, the
+   *  picker) must not silently proceed while this is true. Supported wrappers that
+   *  are only adapter-tested keep running with their capability gaps disclosed. */
   requiresAcknowledgement: boolean;
   /** ISO instant the user explicitly acknowledged continuing with the
    *  degraded protections described above, if they have. */
@@ -235,7 +234,7 @@ export function resolveSessionContract(input: SessionContractInput): SessionCont
 
   const supportTier = input.supportTier ?? "experimental";
   const hasProtectionDegradation = degradedReasons.some((r) => PROTECTION_AREAS.has(r.area));
-  const requiresAcknowledgement = supportTier === "supported" && hasProtectionDegradation && !input.acknowledgedAt;
+  const requiresAcknowledgement = input.certification === "release-tested" && hasProtectionDegradation && !input.acknowledgedAt;
 
   return {
     schemaVersion: SESSION_CONTRACT_SCHEMA_VERSION,

@@ -72,6 +72,27 @@ interface Block {
   is_error?: boolean;
 }
 
+/**
+ * Summarise a tool_result's content for the portable transcript. A tool_result
+ * can carry `image` parts (a Playwright/screenshot MCP tool's output); those
+ * bytes don't round-trip across runtimes, and JSON-stringifying them here would
+ * spend the compaction budget on a truncated base64 blob that reads as noise.
+ * Keep the readable text and mark each image as `[image]` so the tool result is
+ * disclosed cleanly instead. A string result is returned as-is (compacted by the
+ * caller); an unknown shape falls back to `compactValue`.
+ */
+function summarizeToolResultContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return compactValue(content);
+  const parts: string[] = [];
+  for (const raw of content as Block[]) {
+    if (raw?.type === "text" && typeof raw.text === "string") parts.push(raw.text);
+    else if (raw?.type === "image") parts.push("[image]");
+    else parts.push(compactValue(raw));
+  }
+  return parts.join(" ").trim();
+}
+
 /** Flatten one runtime message's content into text + tool annotations. */
 function readContent(content: unknown): { text: string; tools: Array<{ name?: string; summary: string }>; toolResultOnly: boolean } {
   if (typeof content === "string") {
@@ -84,6 +105,7 @@ function readContent(content: unknown): { text: string; tools: Array<{ name?: st
   const tools: Array<{ name?: string; summary: string }> = [];
   let sawText = false;
   let sawToolResult = false;
+  let images = 0;
   for (const raw of content as Block[]) {
     const type = raw?.type;
     if (type === "text" && typeof raw.text === "string") {
@@ -93,10 +115,22 @@ function readContent(content: unknown): { text: string; tools: Array<{ name?: st
       tools.push({ name: raw.name, summary: `${raw.name ?? "tool"}(${compactValue(raw.input)})` });
     } else if (type === "tool_result") {
       sawToolResult = true;
-      tools.push({ name: undefined, summary: `→ ${compactValue(raw.content)}` });
+      tools.push({ name: undefined, summary: `→ ${compactValue(summarizeToolResultContent(raw.content))}` });
+    } else if (type === "image") {
+      // Image bytes don't round-trip across runtimes (each has its own store
+      // and content schema), but the turn itself must never silently vanish —
+      // an image-only user turn would otherwise be dropped whole. Record a
+      // textual placeholder so the turn survives the fork and the new agent is
+      // told an image was in the conversation, pointing at the full transcript
+      // for the actual bytes (same treatment as compacted tool payloads).
+      images += 1;
     }
-    // "thinking" and unknown block types are intentionally dropped: internal
-    // reasoning is neither portable across runtimes nor needed for continuity.
+    // "thinking" and other unknown block types are intentionally dropped:
+    // internal reasoning is neither portable across runtimes nor needed for
+    // continuity.
+  }
+  if (images > 0) {
+    texts.push(`[${images} image attachment${images === 1 ? "" : "s"} omitted — see the full transcript]`);
   }
   return { text: texts.join("\n").trim(), tools, toolResultOnly: sawToolResult && !sawText };
 }

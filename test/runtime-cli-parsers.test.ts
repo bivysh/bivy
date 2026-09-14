@@ -59,6 +59,22 @@ async function main() {
     assert.equal((msgs[1] as any).content[0].type, "tool_result");
   });
 
+  await check("bivyProtocol: correlates tool results that omit ids", () => {
+    const p = bivyProtocolParser();
+    feed(p, [
+      JSON.stringify({ type: "tool.call", name: "bash", input: { command: "pwd" } }),
+      JSON.stringify({ type: "tool.result", name: "bash", result: "workspace" }),
+      JSON.stringify({ type: "session.done" }),
+    ]);
+    const messages = p.messages();
+    assert.equal(messages.length, 2);
+    const call = (messages[0] as any).content[0];
+    const result = (messages[1] as any).content[0];
+    assert.equal(call.type, "tool_use");
+    assert.ok(call.id);
+    assert.equal(result.tool_use_id, call.id);
+  });
+
   await check("bivyProtocol: close without session.done still finalizes once", () => {
     const p = bivyProtocolParser();
     const events = feed(p, [JSON.stringify({ type: "message.delta", text: "hi" })]);
@@ -216,6 +232,21 @@ async function main() {
     assert.equal(p.usage?.()?.tokens?.input, 3);
   });
 
+  await check("genericStreamJson: unwraps ACP session updates and preserves tool activity", () => {
+    const p = genericStreamJsonParser();
+    const events = feed(p, [
+      JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Checking " } } } }),
+      JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call", toolCallId: "t1", title: "sub-agent", rawInput: { task: "inspect" } } } }),
+      JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call_update", toolCallId: "t1", status: "in_progress" } } }),
+      JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call_update", toolCallId: "t1", status: "completed", rawOutput: "done" } } }),
+      JSON.stringify({ jsonrpc: "2.0", method: "session_end" }),
+    ]);
+    assert.equal((events.filter((e) => e.type === "message_update").at(-1) as any).message.content, "Checking ");
+    assert.equal(events.filter((e) => e.type === "tool_call").length, 1);
+    assert.equal(events.filter((e) => e.type === "tool_result").length, 1);
+    assert.equal((p.messages()[0]?.content as any[]).some((part) => part.type === "tool_use"), true);
+  });
+
   await check("genericStreamJson: extracts OpenAI-style delta chunks", () => {
     const p = genericStreamJsonParser();
     const events = feed(p, [
@@ -239,6 +270,102 @@ async function main() {
     const p = genericStreamJsonParser();
     const events = feed(p, [JSON.stringify({ error: { message: "boom" } }), JSON.stringify({ type: "done" })]);
     assert.ok(events.some((e) => e.type === "session.error" && (e as any).error === "boom"));
+  });
+
+  await check("genericStreamJson: a typed {type:'error',message} frame is a session.error, not assistant text", () => {
+    // Grok's streaming-json (and other ACP-style CLIs) emit errors as a typed
+    // frame rather than the {error:{message}} envelope. It must not leak into
+    // the transcript as an assistant message via the broad `message` fallback.
+    const p = genericStreamJsonParser();
+    const events = feed(p, [JSON.stringify({ type: "error", message: "Not signed in. Run grok login." })]);
+    assert.ok(events.some((e) => e.type === "session.error" && /Not signed in/.test((e as any).error)), "error frame surfaced as session.error");
+    assert.equal(p.messages().length, 0, "error text must not become an assistant message");
+  });
+
+  await check("genericStreamJson: namespaced error frames (session/error) are recognized", () => {
+    const p = genericStreamJsonParser();
+    const events = feed(p, [JSON.stringify({ type: "session/error", message: "model overloaded" })]);
+    assert.ok(events.some((e) => e.type === "session.error" && /overloaded/.test((e as any).error)));
+    assert.equal(p.messages().length, 0);
+  });
+
+  await check("genericStreamJson: Grok's {type,data} shape — answer text, reasoning sidecar, and `end` terminal", () => {
+    // Grok CLI 1.x `--output-format streaming-json` does NOT emit ACP envelopes:
+    // it keys content off `type` with the chunk under `data` ({type:'text'} for
+    // the answer, {type:'thought'} for reasoning) and ends the turn with
+    // {type:'end'}. The generic parser must surface the answer as prose, the
+    // thoughts as a display-only thinking block (never answer text), and treat
+    // `end` as terminal.
+    const p = genericStreamJsonParser();
+    const events = feed(p, [
+      JSON.stringify({ type: "available_commands", tools: ["read_file"], commands: ["compact"] }),
+      JSON.stringify({ type: "thought", data: "Let me " }),
+      JSON.stringify({ type: "thought", data: "add them." }),
+      JSON.stringify({ type: "text", data: "4" }),
+      JSON.stringify({ type: "usage", usage: { input_tokens: 5, output_tokens: 1 } }),
+      JSON.stringify({ type: "end", stopReason: "end_turn" }),
+    ]);
+    const answer = events.filter((e) => e.type === "message_update" && typeof (e as any).message.content === "string").at(-1) as any;
+    assert.equal(answer.message.content, "4", "answer text is extracted from the `data` field");
+    const thinking = events.filter((e) => e.type === "message_update" && Array.isArray((e as any).message.content)).at(-1) as any;
+    assert.equal(thinking.message.content[0].thinking, "Let me add them.", "thoughts stream into the thinking sidecar");
+    assert.equal(types(events).filter((t) => t === "agent_end").length, 1, "`end` terminates the turn");
+    // The persisted transcript holds the answer, not the chain-of-thought.
+    assert.equal(p.messages().filter((m) => m.role === "assistant").map((m) => m.content).join(""), "4");
+  });
+
+  await check("genericStreamJson: Grok's TOP-LEVEL tool frames render a shell card with clean output + exit code", () => {
+    // Grok CLI 1.x emits tool activity as top-level frames (NOT wrapped in a
+    // JSON-RPC session/update): {type:'tool_call', toolCallId, toolName,
+    // rawInput} then streaming {type:'tool_call_update', …, status} frames. The
+    // terminal (status:'completed') frame carries the display output in an ACP
+    // `content` block; rawOutput.output is a byte array we must NOT surface.
+    const p = genericStreamJsonParser();
+    const events = feed(p, [
+      JSON.stringify({ type: "tool_call", toolCallId: "c1", title: "run_terminal_command", toolName: "run_terminal_command", status: "pending", rawInput: { command: "ls", description: "List files" } }),
+      // Echo/progress frames must NOT close the card or duplicate it.
+      JSON.stringify({ type: "tool_call_update", toolCallId: "c1", status: null, content: [{ type: "content", content: { type: "text", text: "List files" } }], rawOutput: null }),
+      JSON.stringify({ type: "tool_call_update", toolCallId: "c1", status: "in_progress", content: [{ type: "content", content: { type: "text", text: "partial" } }], rawOutput: { type: "Bash", output: [50, 53], exit_code: 0 } }),
+      JSON.stringify({ type: "tool_call_update", toolCallId: "c1", status: "completed", content: [{ type: "content", content: { type: "text", text: "a.txt\nb.txt" } }], rawOutput: { type: "Bash", output: [1, 2, 3], exit_code: 0, command: "ls" } }),
+      JSON.stringify({ type: "text", data: "Two files." }),
+      JSON.stringify({ type: "end" }),
+    ]);
+    const calls = events.filter((e) => e.type === "tool_call");
+    assert.equal(calls.length, 1, "exactly one tool_call surfaced");
+    assert.equal((calls[0] as any).toolName, "run_terminal_command");
+    assert.equal((calls[0] as any).detail?.kind, "shell", "run_terminal_command maps to a shell card");
+    assert.equal((calls[0] as any).detail?.command, "ls");
+    const results = events.filter((e) => e.type === "tool_result");
+    assert.equal(results.length, 1, "exactly one tool_result surfaced (no duplicate, no premature close)");
+    assert.equal((results[0] as any).detail?.result?.text, "a.txt\nb.txt", "clean ACP content text, not the byte-array rawOutput");
+    assert.equal((results[0] as any).detail?.result?.exitCode, 0, "exit code preserved from rawOutput");
+    assert.equal(p.messages().filter((m) => m.role === "assistant").map((m) => JSON.stringify(m.content)).join("").includes("Two files."), true);
+  });
+
+  await check("genericStreamJson: text and reasoning that resume after a tool get a paragraph break (no run-on)", () => {
+    // The seam that produced Grok's \"…what it does.The workspace…\" and
+    // \"…shell commandI have…\" run-ons: a fresh prose/reasoning segment streamed
+    // after a tool call must be separated from the segment before it, not glued
+    // to the last token. Mirrors ProtocolRuntime's assistantItemBoundary break.
+    const p = genericStreamJsonParser();
+    const events = feed(p, [
+      JSON.stringify({ type: "thought", data: "Let me list the files." }),
+      JSON.stringify({ type: "text", data: "I'll inspect the workspace." }),
+      JSON.stringify({ type: "tool_call", toolCallId: "c1", toolName: "run_terminal_command", rawInput: { command: "ls" } }),
+      JSON.stringify({ type: "tool_call_update", toolCallId: "c1", status: "completed", content: [{ type: "content", content: { type: "text", text: "a.txt" } }] }),
+      JSON.stringify({ type: "thought", data: "I have the listing." }),
+      JSON.stringify({ type: "text", data: "The workspace has one file." }),
+      JSON.stringify({ type: "end" }),
+    ]);
+    const answer = events.filter((e) => e.type === "message_update" && typeof (e as any).message.content === "string").at(-1) as any;
+    assert.equal(answer.message.content, "I'll inspect the workspace.\n\nThe workspace has one file.", "prose segments are separated, not run together");
+    const thinking = events.filter((e) => e.type === "message_update" && Array.isArray((e as any).message.content)).at(-1) as any;
+    assert.equal(thinking.message.content[0].thinking, "Let me list the files.\n\nI have the listing.", "reasoning segments are separated, not run together");
+    // Persisted history seals each prose segment as its own block (no leading
+    // separator baked into the second block).
+    const assistant = p.messages().find((m) => m.role === "assistant" && Array.isArray(m.content)) as any;
+    const texts = assistant.content.filter((b: any) => b.type === "text").map((b: any) => b.text);
+    assert.deepEqual(texts, ["I'll inspect the workspace.", "The workspace has one file."], "each segment is its own clean content block");
   });
 
   await check("genericJson: extracts the reply from a final JSON object + usage", () => {

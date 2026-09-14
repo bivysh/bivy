@@ -130,7 +130,7 @@ export function nlToCron(input: string): NlCronResult {
 
   const domField = dom != null ? String(dom) : "*";
   const monthField = months.length ? months.join(",") : "*";
-  const dowField = dows.length ? dows.join(",") : "*";
+  const dowField = dows.join(",") === "1,2,3,4,5" ? "1-5" : dows.length ? dows.join(",") : "*";
 
   if (stepMatch) {
     const n = Number(stepMatch[1]);

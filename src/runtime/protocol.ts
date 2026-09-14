@@ -4,6 +4,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { buildAgentCredentialEnv } from "./credentials.js";
+import { withSessionCredentials, credentialEnvFallback } from "../credentials/session.js";
 import { bivySessionEnv } from "./session-env.js";
 import { mergeAgentCommands, type SlashCommandProvider } from "./slash-commands.js";
 import type {
@@ -329,6 +330,24 @@ class ProtocolSession implements RuntimeSession {
   // toolCallId -> the node's normalized classification, so a later tool.result
   // (or tool.update) can attach/refresh `detail` on the already-pushed block.
   private toolDetailsByCallId = new Map<string, ReturnType<typeof mapToolCall>>();
+  private openToolIds: string[] = [];
+  private anonymousToolId = 0;
+
+  /** Protocol is intentionally agent-neutral: if an upstream omits ids, give
+   * the exchange a local identity so live and persisted views can still pair it. */
+  private resolveToolId(raw: string, result = false): string {
+    if (raw) {
+      if (result) {
+        const index = this.openToolIds.indexOf(raw);
+        if (index >= 0) this.openToolIds.splice(index, 1);
+      }
+      return raw;
+    }
+    if (result) return this.openToolIds.shift() || `protocol-tool-result-${++this.anonymousToolId}`;
+    const id = `protocol-tool-${++this.anonymousToolId}`;
+    this.openToolIds.push(id);
+    return id;
+  }
 
   constructor(
     private readonly runtimeOptions: ProtocolRuntimeOptions,
@@ -431,7 +450,7 @@ class ProtocolSession implements RuntimeSession {
     const hook = this.runtimeOptions.interactiveTui;
     if (!hook) return null;
     const credentialEnv = this.runtimeOptions.credentials
-      ? await buildAgentCredentialEnv(this.runtimeOptions.credentials, undefined, this.currentModelProvider, this.cwd).catch(() => ({}))
+      ? await buildAgentCredentialEnv(this.runtimeOptions.credentials, undefined, this.currentModelProvider, this.cwd).catch(credentialEnvFallback)
       : {};
     let prepareEnv = this.prepareEnv;
     if (this.runtimeOptions.prepare) {
@@ -453,7 +472,7 @@ class ProtocolSession implements RuntimeSession {
   async start(): Promise<void> {
     if (this.child) return;
     const credentialEnv = this.runtimeOptions.credentials
-      ? await buildAgentCredentialEnv(this.runtimeOptions.credentials, undefined, this.currentModelProvider, this.cwd).catch(() => ({}))
+      ? await buildAgentCredentialEnv(this.runtimeOptions.credentials, undefined, this.currentModelProvider, this.cwd).catch(credentialEnvFallback)
       : {};
     // Optional prepare step, run before the child spawns because a shim reads its
     // credential at launch (e.g. Codex mints ~/.codex/auth.json from the vault and
@@ -547,7 +566,7 @@ class ProtocolSession implements RuntimeSession {
   private async preparePreflight(): Promise<string | undefined> {
     if (!this.runtimeOptions.prepare && !this.runtimeOptions.preflight) return undefined;
     const credentialEnv = this.runtimeOptions.credentials
-      ? await buildAgentCredentialEnv(this.runtimeOptions.credentials, undefined, this.currentModelProvider, this.cwd).catch(() => ({}))
+      ? await buildAgentCredentialEnv(this.runtimeOptions.credentials, undefined, this.currentModelProvider, this.cwd).catch(credentialEnvFallback)
       : {};
     if (this.runtimeOptions.prepare) {
       this.prepareEnv =
@@ -788,6 +807,7 @@ class ProtocolSession implements RuntimeSession {
       this.turnTextFlushed = "";
       this.turnToolResults = [];
       this.toolDetailsByCallId.clear();
+      this.openToolIds = [];
       this.emit({ type: "agent_end" });
       return;
     }
@@ -798,12 +818,13 @@ class ProtocolSession implements RuntimeSession {
       this.turnTextFlushed = "";
       this.turnToolResults = [];
       this.toolDetailsByCallId.clear();
+      this.openToolIds = [];
       this.emit({ type: "session.error", error: String(msg.error || "Protocol agent error") });
       this.emit({ type: "agent_end" });
       return;
     }
     if (type === "tool.call" || type === "tool.observe") {
-      const toolCallId = String(msg.toolCallId || msg.id || "");
+      const toolCallId = this.resolveToolId(String(msg.toolCallId || msg.id || ""));
       const toolName = String(msg.name || "tool");
       const detail = mapToolCall(toolName, msg.input, { provider: this.runtimeOptions.id || "acp", protocol: "protocol" });
       if (detail) this.toolDetailsByCallId.set(toolCallId, detail);
@@ -859,7 +880,7 @@ class ProtocolSession implements RuntimeSession {
       return;
     }
     if (type === "tool.result") {
-      const toolCallId = String(msg.toolCallId || msg.tool_use_id || msg.id || "");
+      const toolCallId = this.resolveToolId(String(msg.toolCallId || msg.tool_use_id || msg.id || ""), true);
       const result = msg.result ?? msg.output ?? msg.content ?? msg.text ?? msg.summary ?? "";
       const isError = Boolean(msg.isError || msg.is_error);
       this.turnToolResults.push({
@@ -1060,7 +1081,7 @@ export class ProtocolRuntime implements AgentRuntime {
   }
 
   async createSession(options: OpenSessionOptions): Promise<OpenSessionResult> {
-    const session = new ProtocolSession(this.options, options.workspace, this.capabilities, options.toolInterceptor);
+    const session = new ProtocolSession(await withSessionCredentials(this.options, options.credentialLabels), options.workspace, this.capabilities, options.toolInterceptor);
     try {
       await session.start();
       this.sessions.push(session);
@@ -1077,7 +1098,7 @@ export class ProtocolRuntime implements AgentRuntime {
     // Adopt the caller's canonical id (a reopen of a known session) so the
     // resumed session keeps its original id instead of taking `sessionFile` (the
     // agent's own ref) as its id — see OpenSessionOptions.canonicalId.
-    const session = new ProtocolSession(this.options, options.workspace, this.capabilities, options.toolInterceptor, options.sessionFile, options.canonicalId);
+    const session = new ProtocolSession(await withSessionCredentials(this.options, options.credentialLabels), options.workspace, this.capabilities, options.toolInterceptor, options.sessionFile, options.canonicalId);
     try {
       await session.start();
       if (!this.options.resumable && !this.capabilities.resume) {

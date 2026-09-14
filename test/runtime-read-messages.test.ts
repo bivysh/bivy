@@ -51,6 +51,9 @@ assert.deepEqual(missing, [], "a missing session file reads as an empty transcri
 // CLAUDE_CONFIG_DIR) /projects/<cwd>/<id>.jsonl — the exact read a resumed
 // ClaudeSession does in its constructor (this.messages = loadClaudeTranscript).
 const claudeHome = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-claude-"));
+// A real Claude store contains many workspace directories. Put an unrelated
+// one first so lookup proves a missing candidate does not abort the whole scan.
+fs.mkdirSync(path.join(claudeHome, "projects", "-aaa-unrelated"), { recursive: true });
 const projectDir = path.join(claudeHome, "projects", "-home-user-proj");
 fs.mkdirSync(projectDir, { recursive: true });
 const claudeSessionId = "11111111-2222-3333-4444-555555555555";

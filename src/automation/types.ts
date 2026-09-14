@@ -55,6 +55,8 @@ export interface EvaluableAutomation {
 export interface EvaluationEvent {
   kind: EvaluationTriggerKind;
   repo?: string;
+  /** Optional GitHub App id fixture; control-plane source rules can scope to one app. */
+  appId?: string;
   labels?: string[];
   mention?: boolean;
   event?: GithubEventName;

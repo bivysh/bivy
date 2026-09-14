@@ -1,10 +1,30 @@
 # Releasing and distribution
 
-Bivy is distributed on npm as the [`@bivy/bivy`](https://www.npmjs.com/package/@bivy/bivy)
-package. `install.sh` is a thin bootstrapper: it ensures a supported Node.js is
-present, runs `npm install -g @bivy/bivy`, and then runs `bivy setup`.
+The Bivy node and CLI are distributed on npm as the
+[`@bivy/bivy`](https://www.npmjs.com/package/@bivy/bivy) package. `install.sh`
+is a thin bootstrapper: it ensures a supported Node.js is present, runs
+`npm install -g @bivy/bivy`, and then runs `bivy setup`.
 
-npm is the distribution channel. `install.sh` retains a checksum-verified
+The control plane and relay are distributed as public GHCR images built by
+`service-images.yml` from their source commit. Every Core commit on `main`
+receives an immutable full-SHA tag. Production promotion aliases those existing
+manifests to `X.Y.Z`, `vX.Y.Z`, and `latest` without rebuilding them. Cloud deployment may
+add deployment-specific metadata around these images, but does not rebuild Core.
+
+Stable releases also publish `bivy-self-host.tar.gz`, its `.sha256` checksum,
+and the standalone `install.sh` release asset (built from **`deploy/install.sh`**,
+not the root node installer). `scripts/build-self-host.mjs` uses an explicit file
+allowlist and embeds the release version and exact image SHA; no `.env`, backups,
+or source checkout is shipped. Older releases do not have these assets.
+
+Before recording `service-images/published`, the image workflow runs
+`scripts/smoke-self-host.sh <SHA>` against the real Compose stack. It verifies
+Caddy configuration, PWA serving, durable operator login, token replay refusal,
+disabled development login, node enrollment, and the relay handshake. It uses
+an isolated project with disposable volumes and no public ports; real DNS/ACME
+and a complete agent session still need a VPS acceptance test.
+
+npm is the node/CLI distribution channel. `install.sh` retains a checksum-verified
 tarball fallback (`TARBALL_URL`/`MANIFEST_URL`/`install_from_tarball`) used only
 during the cutover — when the `bivy` package isn't yet on the registry.
 
@@ -16,7 +36,7 @@ both published from CI via the single `release.yml` workflow:
 | Channel | dist-tag | Version shape | When it publishes | Install |
 |---|---|---|---|---|
 | **Production** | `latest` | `X.Y.Z` | on a deliberate "Promote" dispatch | `npm i -g @bivy/bivy` (default) |
-| **Staging** | `staging` | `X.Y.Z-staging.<run#>` | automatically on every merge to `main` | `BIVY_CHANNEL=staging` / `npm i -g @bivy/bivy@staging` |
+| **Staging** | `staging` | `X.Y.Z-staging.N` | automatically on every merge to `main` | `BIVY_CHANNEL=staging` / `npm i -g @bivy/bivy@staging` |
 
 The flow is trunk-based: every change lands on `main` through a PR, and each merge
 immediately publishes a unique, provenance-signed **staging** build that the dev
@@ -119,8 +139,10 @@ npm versions are immutable and a hand publish carries no provenance.
 ## Staging (automatic)
 
 Nothing to do. Every merge to `main` runs the `staging` job in `release.yml`,
-which stamps `X.Y.Z-staging.<run_number>` onto the package, publishes it to the
-`staging` dist-tag with provenance, and moves on. There is no tag, no changelog
+which stamps the next `X.Y.Z-staging.N` for the current clean base version onto
+the package, publishes it to the `staging` dist-tag with provenance, and moves
+on. The staging counter resets for each new base (for example,
+`0.15.0-staging.1`). There is no tag, no changelog
 requirement, and no approval — it is meant to be invisible. Install/verify a
 staging build with:
 
@@ -137,12 +159,11 @@ Production is a deliberate promotion of whatever version `package.json` currentl
 holds on `main`, to the `latest` dist-tag.
 
 1. Open a PR that, on `main`:
-   - sets the release version in the root `package.json` **and every workspace**
-     `package.json` (`packages/*`, `services/*`) so they all agree — there is no
-     sync script — to a clean `X.Y.Z` (no prerelease suffix);
+   - runs `pnpm run release:version -- X.Y.Z` to set the root, package, and
+     service manifests together to a clean release version;
    - moves `CHANGELOG.md`'s `[Unreleased]` into a `## [X.Y.Z]` section.
-   Merge it. (This merge also publishes one more `X.Y.Z-staging.<run#>` build —
-   harmless; it's a release candidate for exactly this version.)
+   Merge it and wait for its required CI and automatic staging publish to pass.
+   (The staging build is a release candidate for exactly this commit.)
 2. Run the **Promote** button: Actions → **Release** → *Run workflow* (from
    `main`), and type the exact `X.Y.Z` into the confirmation field. Or from the
    CLI:
@@ -152,15 +173,35 @@ holds on `main`, to the `latest` dist-tag.
    ```
 3. Approve the run when it pauses on the `release` environment.
 
-The `production` job re-runs the full CI gate (`ci.yml` via `workflow_call`),
-validates that `package.json` is a clean version matching your confirmation and
-that `vX.Y.Z` was not already released, checks all workspaces agree, publishes to
-`latest` via Trusted Publishing (automatic provenance), then tags the commit
-`vX.Y.Z` and creates the GitHub release from the matching `## [X.Y.Z]` CHANGELOG
-section (`scripts/extract-changelog.mjs`).
+Before publishing, promotion creates the durable tag
+`release-intent-vX.Y.Z`, binding that version to the exact commit. The tag is
+kept after a successful release. If a run fails after creating the intent,
+resume from that ref—not from a newer `main`:
 
-After the release, bump `package.json` (all workspaces) to the next development
-version in a follow-up PR so subsequent staging builds carry the new number.
+```bash
+gh workflow run release.yml --ref release-intent-vX.Y.Z \
+  -f confirm_version=X.Y.Z
+```
+
+The workflow accepts an existing npm version only when the intent points to its
+current commit and npm's `latest` tag already names that version. Image aliases,
+the final `vX.Y.Z` tag, and the GitHub release are idempotent, so this recovery
+cannot mix artifacts from different commits.
+
+The release PR must pass the repository's full required CI before it can merge.
+Promotion also calls the canonical CI workflow with `force_all: true` for the
+exact release commit (including recovery tags), before the production job can
+publish. A successful staging publish alone is not evidence that tests passed.
+It then verifies that the commit completed its automatic staging publish,
+validates the version and workspace agreement, and publishes the stable build
+to `latest` via Trusted Publishing (automatic provenance). It then tags the commit `vX.Y.Z` and creates
+the GitHub release from the matching CHANGELOG section
+(`scripts/extract-changelog.mjs`). If Promote is clicked while staging is still
+running, it waits for up to ten minutes.
+
+After the release, use `pnpm run release:version -- X.Y.Z` in the development
+version PR as well; this replaces the previous manual edits across every
+manifest.
 
 ### Publishing by hand (discouraged)
 
@@ -174,6 +215,31 @@ A hand publish produces **no** provenance attestation — npm can only attest to
 builds it can trace to a CI workflow — and needs a token or interactive 2FA that
 the trusted-publishing workflow exists precisely to avoid. The build prints a
 warning when this happens. Prefer the workflow.
+
+## Service container images
+
+```text
+ghcr.io/bivysh/bivy-control-plane:<full-sha|version|latest>
+ghcr.io/bivysh/bivy-relay:<full-sha|version|latest>
+```
+
+The full 40-character commit tag is write-once. Each tag is a multi-platform
+OCI index for `linux/amd64` and `linux/arm64`. Both images carry OCI source,
+revision, and AGPL license labels plus SBOM and provenance attestations.
+`latest` and version tags are created only by the production release job and all
+reference the exact full-SHA manifest built for
+that commit. A manual `service-images.yml` dispatch with `core_ref` can backfill
+an older tag or SHA.
+
+GHCR visibility cannot be changed through the Packages REST API. Before enabling
+the image workflow, use the package settings UI to make both packages **public**
+and grant `bivysh/bivy` Actions **admin** access. The workflow verifies anonymous
+pulls and records an exact-SHA commit status only after that check passes.
+
+The two package names historically originated in the Cloud deployment repository.
+Keep or remove that repository's access independently because it now publishes
+deployment wrappers under separate `bivy-cloud-*` package names. These one-time
+registry ACL and visibility changes cannot be represented in Git.
 
 ## What ships in the package
 

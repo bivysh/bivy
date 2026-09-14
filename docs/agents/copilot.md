@@ -5,7 +5,7 @@ programmatic turn per prompt (`copilot --allow-all-tools -p`, where `-p` runs
 headlessly and `--allow-all-tools` skips per-tool approval so a piped run doesn't
 wedge).
 
-- **Runtime id:** `copilot` · **Tier:** Beta · **In picker:** Yes
+- **Runtime id:** `copilot` · **Tier:** Supported · **In picker:** Yes
 
 ## Install
 

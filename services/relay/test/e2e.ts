@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { spawnTestService, stopTestServices } from "../../test-service-process.js";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { randomBytes, createCipheriv, createDecipheriv } from "node:crypto";
@@ -39,22 +40,9 @@ const SECRET = "test-relay-secret";
 
 const procs: ChildProcess[] = [];
 function spawnService(cwd: string, env: Record<string, string>) {
-  const child = spawn("npx", ["tsx", "src/index.ts"], {
-    cwd,
-    env: { ...process.env, ...env },
-    stdio: "inherit",
-  });
-  child.once("error", (error) => {
-    console.error(`Failed to start service in ${cwd}:`, error);
-    cleanup(1);
-  });
+  const child = spawnTestService(cwd, env);
   procs.push(child);
   return child;
-}
-
-function cleanup(code: number) {
-  for (const p of procs) p.kill("SIGTERM");
-  process.exit(code);
 }
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -117,10 +105,7 @@ function connect(url: string): Promise<WebSocket> {
 }
 
 function expect(cond: boolean, msg: string) {
-  if (!cond) {
-    console.error(`\u2717 FAIL: ${msg}`);
-    cleanup(1);
-  }
+  if (!cond) throw new Error(`\u2717 FAIL: ${msg}`);
   console.log(`\u2713 ${msg}`);
 }
 
@@ -228,10 +213,13 @@ async function main() {
   expect(rejected, "foreign account is refused access to the node");
 
   console.log("\nAll relay e2e checks passed.");
-  cleanup(0);
 }
 
-main().catch((error) => {
+try {
+  await main();
+} catch (error) {
   console.error(error);
-  cleanup(1);
-});
+  process.exitCode = 1;
+} finally {
+  await stopTestServices(procs);
+}

@@ -54,6 +54,19 @@ function canon(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
+/** Match both native names and namespaced MCP/ACP names. Providers commonly
+ * expose a tool as `mcp__server__read_file` or `functions.exec`; the final
+ * component still has the same portable meaning. Keep this exact (rather than
+ * substring) matching so `multitasker` cannot become a delegation by accident. */
+function inToolSet(set: Set<string>, rawName: string, key: string): boolean {
+  if (set.has(key)) return true;
+  const separator = rawName.lastIndexOf("__");
+  const dot = rawName.lastIndexOf(".");
+  const slash = rawName.lastIndexOf("/");
+  const index = Math.max(separator, dot, slash);
+  return index >= 0 && set.has(canon(rawName.slice(index + (separator === index ? 2 : 1))));
+}
+
 function asRecord(input: unknown): Record<string, unknown> {
   return input && typeof input === "object" && !Array.isArray(input)
     ? (input as Record<string, unknown>)
@@ -74,13 +87,14 @@ function str(o: Record<string, unknown>, ...keys: string[]): string | undefined 
 
 const SHELL = new Set([
   "bash", "sh", "shell", "run", "runcommand", "command", "commandexecution",
-  "exec", "execute", "executecommand", "terminal", "runterminalcmd", "localshell",
+  "exec", "execute", "executecommand", "terminal", "runterminalcmd",
+  "runterminalcommand", "localshell",
 ]);
 const READ = new Set(["read", "readfile", "view", "viewfile", "cat", "openfile", "fileread"]);
 const WRITE = new Set(["write", "writefile", "create", "createfile", "newfile", "filewrite", "savefile"]);
 const EDIT = new Set([
   "edit", "editfile", "multiedit", "strreplace", "strreplaceeditor", "replace",
-  "applypatch", "patch", "filechange", "filechanges", "update", "modify",
+  "searchreplace", "applypatch", "patch", "filechange", "filechanges", "update", "modify",
 ]);
 const SEARCH = new Set(["search", "grep", "glob", "ripgrep", "rg", "find", "findfiles", "codebasesearch", "filesearch"]);
 const FETCH = new Set(["fetch", "webfetch", "httpfetch", "geturl", "browse", "curl", "openurl"]);
@@ -92,7 +106,8 @@ const PLAN = new Set(["plan", "updateplan", "setplan", "todo", "todowrite", "exi
 // still falls through to the opaque default, never a false "Delegated".
 const DELEGATE = new Set([
   "task", "agent", "subagent", "runagent", "runsubagent", "spawnagent",
-  "dispatchagent", "delegate", "delegatetask", "agenttask", "startagent", "startrun",
+  "spawnsubagent", "dispatchagent", "delegate", "delegatetask", "agenttask",
+  "startagent", "startrun",
   // Codex app-server 0.147+ first-class child lifecycle item.
   "subagentactivity",
 ]);
@@ -109,19 +124,25 @@ export function mapToolCall(toolName: string, input: unknown, context: ToolCallM
   const key = canon(toolName);
   const o = asRecord(input);
 
-  if (SHELL.has(key)) {
+  if (inToolSet(SHELL, toolName, key)) {
     const command = str(o, "command", "cmd", "script", "input", "args");
     return command ? decorate({ kind: "shell", command, ...(str(o, "cwd", "workdir", "workingDir", "directory") ? { cwd: str(o, "cwd", "workdir", "workingDir", "directory") } : {}) }, toolName, input, context) : undefined;
   }
 
-  if (EDIT.has(key)) {
+  if (inToolSet(EDIT, toolName, key)) {
     let path = str(o, ...PATH_KEYS);
-    // Codex `apply_patch`/`file_change` carries a `changes` map keyed by path.
+    // Codex `apply_patch`/`file_change` carries a `changes` collection. The
+    // app-server keys it by path (a map); `codex exec --json` sends an array of
+    // `{path, kind}` entries. Derive the first touched path from either shape so
+    // the patch renders as an edit card instead of an opaque blob.
     if (!path) {
       const changes = o.changes;
-      if (changes && typeof changes === "object" && !Array.isArray(changes)) {
-        const first = Object.keys(changes as Record<string, unknown>)[0];
-        if (first) path = first;
+      if (Array.isArray(changes)) {
+        const first = changes.find((c): c is Record<string, unknown> => !!c && typeof c === "object" && !Array.isArray(c));
+        if (first) path = str(first, ...PATH_KEYS);
+      } else if (changes && typeof changes === "object") {
+        const firstKey = Object.keys(changes as Record<string, unknown>)[0];
+        if (firstKey) path = firstKey;
       }
     }
     if (!path) return undefined;
@@ -130,31 +151,31 @@ export function mapToolCall(toolName: string, input: unknown, context: ToolCallM
     return decorate({ kind: "edit", path, ...(oldText ? { oldText } : {}), ...(newText ? { newText } : {}) }, toolName, input, context);
   }
 
-  if (WRITE.has(key)) {
+  if (inToolSet(WRITE, toolName, key)) {
     const path = str(o, ...PATH_KEYS);
     return path ? decorate({ kind: "write", path }, toolName, input, context) : undefined;
   }
 
-  if (READ.has(key)) {
+  if (inToolSet(READ, toolName, key)) {
     const path = str(o, ...PATH_KEYS);
     return path ? decorate({ kind: "read", path }, toolName, input, context) : undefined;
   }
 
-  if (SEARCH.has(key)) {
+  if (inToolSet(SEARCH, toolName, key)) {
     const query = str(o, "pattern", "query", "q", "search", "regex", "searchTerm");
     return query ? decorate({ kind: "search", query, ...(str(o, "path", "dir", "directory", "include") ? { path: str(o, "path", "dir", "directory", "include") } : {}) }, toolName, input, context) : undefined;
   }
 
-  if (FETCH.has(key)) {
+  if (inToolSet(FETCH, toolName, key)) {
     const url = str(o, "url", "uri", "href", "link");
     return url ? decorate({ kind: "fetch", url }, toolName, input, context) : undefined;
   }
 
-  if (PLAN.has(key)) {
+  if (inToolSet(PLAN, toolName, key)) {
     return decorate({ kind: "plan", ...(str(o, "plan", "text", "content", "message") ? { text: str(o, "plan", "text", "content", "message") } : {}) }, toolName, input, context);
   }
 
-  if (DELEGATE.has(key)) {
+  if (inToolSet(DELEGATE, toolName, key)) {
     const label = str(o, "subagent_type", "subagentType", "agent", "agentType", "role", "name");
     const description = str(o, "description", "task", "prompt", "instructions", "goal", "message");
     return decorate({ kind: "delegation", ...(label ? { label } : {}), ...(description ? { description } : {}) }, toolName, input, context);

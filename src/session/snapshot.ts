@@ -26,6 +26,8 @@ export interface SnapshotSessionInfo {
   name?: string;
   sandbox?: string;
   approvalMode?: string;
+  /** Preserve the selected account per provider; rebuild must not select default billing. */
+  credentialLabels?: Record<string, string>;
 }
 
 export interface SnapshotBuildDeps extends OwnerReplicatorDeps {

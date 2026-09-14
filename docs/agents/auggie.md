@@ -4,7 +4,7 @@ Augment Code's terminal agent (`@augmentcode/auggie`), backed by its codebase
 context engine, run under Bivy as one non-interactive turn per prompt
 (`auggie --quiet --print`).
 
-- **Runtime id:** `auggie` · **Tier:** Beta · **In picker:** Yes
+- **Runtime id:** `auggie` · **Tier:** Supported · **In picker:** Yes
 
 ## Install
 

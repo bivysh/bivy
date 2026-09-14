@@ -4,7 +4,7 @@ Continue's headless terminal agent (`@continuedev/cli`, the `cn` command), run
 under Bivy as one headless turn per prompt (`cn --auto -p`, where `-p` skips the
 TUI and `--auto` allows all tools without prompting).
 
-- **Runtime id:** `continue` · **Tier:** Beta · **In picker:** Yes
+- **Runtime id:** `continue` · **Tier:** Supported · **In picker:** Yes
 
 ## Install
 

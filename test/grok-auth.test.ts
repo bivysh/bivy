@@ -22,13 +22,23 @@ async function check(name: string, fn: () => Promise<void> | void) {
   }
 }
 
+// The real xAI access token is a JWT whose `sub` claim is the user id the Grok
+// CLI records as `user_id`. Mint a matching fake so the materializer can recover
+// it exactly as it does in production.
+const XAI_SUB = "user-abc-123";
+function fakeJwt(claims: Record<string, unknown>): string {
+  const seg = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  return `${seg({ alg: "none", typ: "JWT" })}.${seg(claims)}.sig`;
+}
+const XAI_ACCESS_TOKEN = fakeJwt({ sub: XAI_SUB, iss: GROK_OIDC_ISSUER });
+
 function freshVault(withXai = true): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "grok-auth-vault-"));
   const vault: Record<string, unknown> = {};
   if (withXai) {
     vault.xai = {
       type: "oauth",
-      access: "xai-access-token",
+      access: XAI_ACCESS_TOKEN,
       refresh: "xai-refresh-token",
       expires: Date.now() + 3_600_000,
     };
@@ -60,7 +70,8 @@ await check("mints auth.json from the vault in Grok's OIDC shape", async () => {
   const entryKey = grokAuthEntryKey();
   assert.ok(auth[entryKey], `auth.json has entry under ${entryKey}`);
   const entry = auth[entryKey];
-  assert.equal(entry.key, "xai-access-token");
+  assert.equal(entry.key, XAI_ACCESS_TOKEN);
+  assert.equal(entry.user_id, XAI_SUB, "records user_id from the access token's sub claim");
   assert.equal(entry.refresh_token, "xai-refresh-token");
   assert.equal(entry.auth_mode, "oidc");
   assert.equal(entry.oidc_issuer, GROK_OIDC_ISSUER);
@@ -69,17 +80,40 @@ await check("mints auth.json from the vault in Grok's OIDC shape", async () => {
   assert.ok(typeof entry.create_time === "string" && entry.create_time.length > 0);
 });
 
-await check("is a no-op (no overwrite) when an auth.json already exists", async () => {
+await check("is a no-op (no overwrite) when a parseable entry for our scope exists", async () => {
   clearApiKeyEnv();
   const vaultDir = freshVault();
   const home = freshGrokHome();
-  const existing = { "https://auth.x.ai::existing": { key: "keep-me", auth_mode: "oidc" } };
+  const entryKey = grokAuthEntryKey();
+  // A healthy entry (has a user_id) is Grok's to own and refresh.
+  const existing = { [entryKey]: { key: "keep-me", user_id: "native-user", auth_mode: "oidc" } };
   fs.writeFileSync(path.join(home, "auth.json"), JSON.stringify(existing));
 
   const result = await ensureGrokAuth(vaultDir);
   assert.equal(result, home, "returns GROK_HOME without minting");
   const auth = JSON.parse(fs.readFileSync(path.join(home, "auth.json"), "utf8"));
-  assert.deepEqual(auth, existing, "existing auth.json is left untouched");
+  assert.deepEqual(auth, existing, "a healthy auth.json is left untouched");
+});
+
+await check("heals a legacy entry that is missing user_id (unparseable by the current CLI)", async () => {
+  clearApiKeyEnv();
+  const vaultDir = freshVault();
+  const home = freshGrokHome();
+  const entryKey = grokAuthEntryKey();
+  // An entry written by an older Bivy: no `user_id`, so the current Grok CLI
+  // rejects it. Also carry an unrelated scope that must be preserved.
+  const legacy = {
+    [entryKey]: { key: "stale-access", auth_mode: "oidc", refresh_token: "stale-rt" },
+    "https://auth.x.ai::other-client": { key: "keep-me", user_id: "other-user", auth_mode: "oidc" },
+  };
+  fs.writeFileSync(path.join(home, "auth.json"), JSON.stringify(legacy));
+
+  const result = await ensureGrokAuth(vaultDir);
+  assert.equal(result, home);
+  const auth = JSON.parse(fs.readFileSync(path.join(home, "auth.json"), "utf8"));
+  assert.equal(auth[entryKey].key, XAI_ACCESS_TOKEN, "our scope is re-minted from the vault");
+  assert.equal(auth[entryKey].user_id, XAI_SUB, "healed entry now carries user_id");
+  assert.deepEqual(auth["https://auth.x.ai::other-client"], legacy["https://auth.x.ai::other-client"], "other scopes are preserved");
 });
 
 await check("returns undefined when the vault has no xai credential", async () => {

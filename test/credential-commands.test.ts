@@ -15,7 +15,11 @@ function harness(over: Partial<CredentialCommandDeps> = {}) {
   const events: any[] = [];
   const broadcasts: any[] = [];
   const calls = { pushed: 0, refreshed: 0 };
-  const credsDir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-creds-"));
+  // credentials.config.json intentionally lives beside the vault directory.
+  // Give each harness an isolated parent too; using a mkdtemp directory as the
+  // vault itself would make every test share /tmp/credentials.config.json.
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-creds-"));
+  const credsDir = path.join(dataDir, "credentials");
   const deps: CredentialCommandDeps = {
     credsDir,
     sendEvent: (e) => events.push(e),
@@ -27,7 +31,7 @@ function harness(over: Partial<CredentialCommandDeps> = {}) {
   };
   const replies: any[] = [];
   const ctx = { reply: (e: unknown) => replies.push(e) } as any;
-  return { events, broadcasts, replies, calls, credsDir, ctx, cmds: createCredentialCommands(deps), cleanup: () => fs.rmSync(credsDir, { recursive: true, force: true }) };
+  return { events, broadcasts, replies, calls, credsDir, ctx, cmds: createCredentialCommands(deps), cleanup: () => fs.rmSync(dataDir, { recursive: true, force: true }) };
 }
 
 test("registers the full credential command cluster", () => {
@@ -35,9 +39,48 @@ test("registers the full credential command cluster", () => {
   try {
     assert.deepEqual(Object.keys(h.cmds).sort(), [
       "credential.remove", "credential.set", "credential.sync.set", "credential.test", "credential.unattended.set",
-      "credentials.account.export", "credentials.account.import", "credentials.list", "credentials.presets.get", "credentials.presets.setActive", "credentials.presets.setMapping",
+      "credentials.account.export", "credentials.account.import", "credentials.list", "credentials.native.import", "credentials.native.preview", "credentials.presets.get", "credentials.presets.setActive", "credentials.presets.setMapping",
     ]);
   } finally { h.cleanup(); }
+});
+
+test("native preview and import stay secret-free, consent-scoped and bound to the source login", async () => {
+  const h = harness();
+  const home = path.join(h.credsDir, "native-codex");
+  const savedEnv = Object.fromEntries(["CODEX_HOME", "HOME", "CLAUDE_CONFIG_DIR", "GROK_HOME"].map((key) => [key, process.env[key]]));
+  for (const key of Object.keys(savedEnv)) process.env[key] = home;
+  fs.mkdirSync(home, { recursive: true });
+  const secret = "native-secret-must-not-leave-node";
+  const file = path.join(home, "auth.json");
+  fs.writeFileSync(file, JSON.stringify({ OPENAI_API_KEY: secret }));
+  const preview = async () => {
+    await (h.cmds["credentials.native.preview"] as any)({ kind: "credentials.native.preview", requestId: "preview", label: "import-test" }, h.ctx);
+    return h.replies.at(-1);
+  };
+  const confirm = async (previewId: string, sync: unknown) => {
+    await (h.cmds["credentials.native.import"] as any)({ kind: "credentials.native.import", requestId: "confirm", previewId, agents: ["codex"], sync }, h.ctx);
+    return h.replies.at(-1);
+  };
+  try {
+    const initial = await preview();
+    assert.equal(initial.items.find((i: any) => i.agent === "codex").status, "ready");
+    assert.equal((await createCredentialVault(h.credsDir).listRecords()).length, 0);
+    assert.equal((await confirm(initial.previewId, undefined)).type, "credentials.native.import.error");
+    fs.writeFileSync(file, JSON.stringify({ OPENAI_API_KEY: "changed" }));
+    assert.equal((await confirm(initial.previewId, "node")).items[0].status, "changed");
+    assert.equal((await confirm(initial.previewId, "node")).type, "credentials.native.import.error", "single use preview");
+    fs.writeFileSync(file, JSON.stringify({ OPENAI_API_KEY: secret }));
+    const next = await preview();
+    assert.equal((await confirm(next.previewId, "node")).items[0].status, "imported");
+    const stored = await createCredentialVault(h.credsDir).readRecord("openai", "import-test");
+    assert.equal(stored?.sync, "node");
+    assert.equal(h.calls.pushed, 1);
+    assert.equal((await preview()).items.find((i: any) => i.agent === "codex").status, "conflict");
+    assert.ok(!JSON.stringify([h.replies, h.events, h.broadcasts]).includes(secret));
+  } finally {
+    for (const [key, value] of Object.entries(savedEnv)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    h.cleanup();
+  }
 });
 
 test("account export includes OAuth material only after explicit recovery opt-in", async () => {

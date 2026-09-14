@@ -77,7 +77,7 @@ export function OauthStep() {
 
       {!deviceCode && (!canOpenOnNode || deviceFallback) && <>
         {!deviceFallback && url && <a className="btn primary block" href={url} target="_blank" rel="noopener">Continue on this device</a>}
-        <p className="muted">After approval, the browser may stop on a localhost page. Copy its full URL, return here, then paste it.</p>
+        <p className="muted">After approval, the provider may show a code or stop on a redirect page. Copy the code or full URL, return here, then paste it.</p>
         {typeof navigator !== "undefined" && navigator.clipboard && <button className="btn" onClick={() => void pasteClipboard()}>Paste redirect from clipboard</button>}
         <label className="field-label" htmlFor="oauth-redirect-code">Redirect URL or authorization code</label>
         <input id="oauth-redirect-code" className="picker-search" value={code} onChange={(e) => setCode(e.target.value)} />

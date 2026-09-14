@@ -5,7 +5,7 @@
 // `content`/`messages` into the TranscriptEntry[] the view renders; they hold no
 // state beyond the shared `nextId` sequence.
 
-import { isToolResultBlock, isToolUseBlock, toolCallId, toolDetail, toolInput, toolName } from "./tool-activity.js";
+import { isToolResultBlock, isToolUseBlock, toolCallId, toolDetail, toolInput, toolName, toolParentId } from "./tool-activity.js";
 import { humanizeError, looksLikeAgentError } from "./store-errors.js";
 import type { AttachmentRef, PromptAttachment } from "./protocol.js";
 import type { ToolActivity, TranscriptEntry } from "./store.js";
@@ -105,37 +105,72 @@ function isMetaText(text: string): boolean {
 
 export function contentToText(content: any): string {
   if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter(isTextBlock)
-    .map((b) => String(b?.text ?? b?.content ?? ""))
-    .join("\n");
+  if (Array.isArray(content)) {
+    return content
+      .filter(isTextBlock)
+      .map((b) => String(b?.text ?? b?.content ?? ""))
+      .join("\n");
+  }
+  // Tool output is not consistently typed across agents: ACP commonly sends a
+  // content block, while some CLIs return `{ output }` or a structured JSON
+  // value. Do not silently turn those successful results into an empty card.
+  if (content && typeof content === "object") {
+    const value = content.text ?? content.content ?? content.output ?? content.result;
+    if (typeof value === "string") return value;
+    if (value !== undefined) return contentToText(value);
+    try { return JSON.stringify(content); } catch { return String(content); }
+  }
+  return content == null ? "" : String(content);
 }
 
 export function contentThinking(content: any): string {
   if (!Array.isArray(content)) return "";
   return content
-    .filter((b) => String(b?.type || b?.kind || "").toLowerCase() === "thinking")
-    .map((b) => String(b?.text ?? b?.thinking ?? ""))
+    .filter(isThinkingBlock)
+    .map((b) => String(b?.text ?? b?.thinking ?? b?.reasoning ?? ""))
     .join("\n");
 }
 
-export function toolEntriesFromContent(content: any): ToolActivity[] {
+/** Tool results can contain structured arrays (for example a list of files or
+ * diagnostics), not just text blocks. Unlike assistant content, a result has no
+ * prose/tool ordering to preserve, so stringify unknown values rather than
+ * silently rendering an empty card. */
+function toolResultText(content: any): string {
+  if (Array.isArray(content)) {
+    const text = content.filter(isTextBlock).map((b) => String(b?.text ?? b?.content ?? "")).join("\n");
+    if (text) return text;
+    try { return JSON.stringify(content); } catch { return String(content); }
+  }
+  return contentToText(content);
+}
+
+export function toolEntriesFromContent(content: any, parentToolUseId?: string): ToolActivity[] {
   if (!Array.isArray(content)) return [];
   const out: ToolActivity[] = [];
   for (const block of content) {
     if (isToolUseBlock(block)) {
+      // A per-block parent wins over the message-level one; both are just a
+      // display grouping hint, so a missing id simply leaves the call top-level.
+      const parent = toolParentId(block) || parentToolUseId || "";
       out.push({
         callId: toolCallId(block) || nextId(),
         name: toolName(block),
         input: toolInput(block),
         status: "running",
         detail: toolDetail(block),
+        ...(parent ? { parentToolUseId: parent } : {}),
       });
     } else if (isToolResultBlock(block)) {
       const id = toolCallId(block);
-      const result = typeof block?.content === "string" ? block.content : contentToText(block?.content);
-      out.push({ callId: id, name: toolName(block), input: {}, status: "done", result, detail: toolDetail(block) });
+      const result = toolResultText(block?.content);
+      const existingDetail = toolDetail(block);
+      // Some runtimes persist the failure only on the tool_result block. Carry
+      // that outcome into the normalized detail so a reloaded card is marked
+      // failed just like its live counterpart (without an agent-specific path).
+      const detail = (block?.isError || block?.is_error) && existingDetail
+        ? { ...existingDetail, result: { ...(existingDetail.result ?? {}), isError: true } }
+        : (block?.isError || block?.is_error ? { kind: "unknown", result: { isError: true } } as ToolActivity["detail"] : existingDetail);
+      out.push({ callId: id, name: toolName(block), input: {}, status: "done", result, ...(detail ? { detail } : {}) });
     }
   }
   return out;
@@ -143,14 +178,17 @@ export function toolEntriesFromContent(content: any): ToolActivity[] {
 
 function toolEntryFromToolResultMessage(msg: any): ToolActivity | null {
   const callId = String(msg?.toolCallId || msg?.toolUseId || msg?.tool_use_id || msg?.id || "");
-  if (!callId) return null;
+  // Some providers omit ids from result envelopes. Keep the anonymous result
+  // so mergeToolInto can correlate it with the newest open call.
   return {
     callId,
     name: String(msg?.toolName || msg?.name || "tool").toLowerCase(),
     input: {},
     status: "done",
-    result: contentToText(msg?.content),
-    detail: toolDetail(msg),
+    result: toolResultText(msg?.content),
+    detail: (msg?.isError || msg?.is_error)
+      ? (toolDetail(msg) ?? ({ kind: "unknown", result: { isError: true } } as ToolActivity["detail"]))
+      : toolDetail(msg),
   };
 }
 
@@ -190,6 +228,11 @@ export function renderHistory(messages: any[]): TranscriptEntry[] {
       const tool = toolEntryFromToolResultMessage(msg);
       if (tool) mergeToolInto(entries, tool);
     } else {
+      // Claude's Agent SDK stamps every persisted message it generated inside a
+      // `Task` sub-agent with a message-level parent_tool_use_id; carry it onto
+      // this turn's tool cards so a reloaded transcript nests them under the
+      // delegation exactly like the live stream does.
+      const msgParent = toolParentId(msg);
       // Walk the content blocks in order so text runs and tool cards interleave
       // exactly as the model produced them. One assistant message is frequently
       // text → tool_use → text (e.g. Codex: "I'll do X." → runs commands →
@@ -220,7 +263,7 @@ export function renderHistory(messages: any[]): TranscriptEntry[] {
         for (const block of content) {
           if (isToolUseBlock(block) || isToolResultBlock(block)) {
             flushRuns();
-            for (const tool of toolEntriesFromContent([block])) mergeToolInto(entries, tool);
+            for (const tool of toolEntriesFromContent([block], msgParent)) mergeToolInto(entries, tool);
           } else if (isAgentAttachmentBlock(block)) {
             // Seal any prose/reasoning before the attachment so its source order
             // is retained and the chip lands as its own entry.
@@ -339,19 +382,30 @@ function mergeToolInput(prev: unknown, next: unknown): unknown {
 }
 
 export function mergeToolInto(entries: TranscriptEntry[], tool: ToolActivity): void {
-  const existing = tool.callId ? entries.find((e) => e.tool && e.tool.callId === tool.callId) : undefined;
+  // A few CLIs omit the call id on result events. Pair an anonymous result with
+  // the newest still-running call of the same tool (or, when the tool name is
+  // the generic fallback, the newest running call). This keeps the universal
+  // transcript useful without teaching the daemon about another agent format.
+  const existing = tool.callId
+    ? entries.find((e) => e.tool && e.tool.callId === tool.callId)
+    : [...entries].reverse().find((e) => e.tool && e.tool.status === "running" && (tool.name === "tool" || e.tool.name === tool.name));
   if (existing && existing.tool) {
     existing.tool = {
       ...existing.tool,
       status: tool.status,
       result: tool.result ?? existing.tool.result,
       detail: tool.detail ?? existing.tool.detail,
+      // A result-only echo has no parent hint; keep the one the call landed with.
+      parentToolUseId: tool.parentToolUseId ?? existing.tool.parentToolUseId,
       // Merge, don't replace, while a call streams. A progress-only ping (e.g.
       // Claude's `tool_execution_update` carrying just `{ elapsedSeconds }`)
       // would otherwise clobber the original call's `command`/`path`, blanking
       // the row label for any tool the node couldn't classify into `detail`.
       // A later enriching update (e.g. opencode's late `rawInput`) still wins
       // per-key. On completion (`done`) the input is frozen as-is.
+      // Results commonly carry the placeholder name "tool" and no input;
+      // preserve the call's identity and display metadata in that case.
+      name: tool.status === "done" && tool.name === "tool" ? existing.tool.name : tool.name,
       input: tool.status === "running" ? mergeToolInput(existing.tool.input, tool.input) : existing.tool.input,
     };
   } else {

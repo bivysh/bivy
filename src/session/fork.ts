@@ -64,8 +64,17 @@ export interface ForkDirtyPatch {
   patch: string;
   /** Relative paths of untracked files included in `patch` via --intent-to-add. */
   untracked: string[];
-  /** True when the working tree was too large to inline; branch was pushed instead. */
+  /**
+   * The snapshot exceeded the transport limit and was NOT captured. Importers
+   * must reject this bundle rather than silently creating a fork without WIP.
+   * `pushedInstead` is retained as the wire-compatible marker used by older
+   * nodes; despite its historical name, uncommitted files cannot be preserved
+   * by pushing the branch alone.
+   */
   pushedInstead?: boolean;
+  /** Actual and configured snapshot sizes, for an actionable error. */
+  byteLength?: number;
+  maxBytes?: number;
 }
 
 /**
@@ -88,6 +97,8 @@ export interface ForkBundle {
   /** Present only when the source runtime supports same-runtime full transport. */
   native?: ForkNativePayload;
   dirtyPatch?: ForkDirtyPatch;
+  /** Complete contents for a non-git workspace, transported over the E2E bundle. */
+  workspaceSnapshot?: import("./fork-dirty.js").WorkspaceSnapshot;
   /** In-flight turn/approval state, carried for disclosure (see the interface). */
   state?: ForkInFlightState;
 }
@@ -98,6 +109,7 @@ export interface BuildForkBundleOptions {
   sessionFile?: string;
   record: ForkRecord;
   dirtyPatch?: ForkDirtyPatch;
+  workspaceSnapshot?: import("./fork-dirty.js").WorkspaceSnapshot;
   /**
    * The runtime the fork is known to target, when the client has already chosen
    * a different agent. A native payload is only ever replayable by the SAME
@@ -132,17 +144,18 @@ export interface BuildForkBundleOptions {
  */
 export function buildForkBundle(opts: BuildForkBundleOptions): ForkBundle {
   const { runtime, sessionFile, record } = opts;
-  // Prefer the build-free readMessages fast path (pi/Claude); fall back to the
-  // live session's transcript for runtimes without one (the generic CLI runtime),
-  // so a fork *from* any agent still carries its real history.
+  // The live session is authoritative: a persisted native reader can lag the
+  // current turn (or return an empty-but-valid snapshot during a flush race).
+  // Prefer liveMessages whenever the caller has them, and use readMessages only
+  // when no live transcript was supplied. This avoids silently truncating a fork
+  // made while the source is open, while still supporting offline/native refs.
   let messages = opts.liveMessages;
-  if (sessionFile && runtime.readMessages) {
+  if (messages === undefined && sessionFile && runtime.readMessages) {
     try {
-      messages = runtime.readMessages(sessionFile) ?? messages;
+      messages = runtime.readMessages(sessionFile);
     } catch {
-      // Runtime-native readers are best-effort. The live transcript is the
-      // universal source fallback and keeps one broken adapter from blocking a
-      // fork out to every other agent.
+      // Runtime-native readers are best-effort. An unavailable reader yields an
+      // empty portable transcript, which still degrades safely to a seed.
     }
   }
   const normalized = normalizeMessages(messages, {
@@ -154,7 +167,14 @@ export function buildForkBundle(opts: BuildForkBundleOptions): ForkBundle {
   // Only worth capturing when the target is the same runtime (or not yet known).
   const nativeCouldReplay = !opts.targetRuntimeId || opts.targetRuntimeId === runtime.id;
   let native: ForkNativePayload | undefined;
-  if (sessionFile && nativeCouldReplay && runtime.capabilities.forkTransport && runtime.exportForFork) {
+  // A native export reads the runtime's persisted store, which may lag the
+  // live session while a turn is streaming. Never prefer that stale snapshot
+  // for an in-flight fork: the normalized live transcript below is the only
+  // representation that includes the current turn. This is especially
+  // important for same-runtime forks, where a successful native import would
+  // otherwise prevent the portable fallback from being used.
+  const nativeSafe = !opts.state?.working;
+  if (sessionFile && nativeSafe && nativeCouldReplay && runtime.capabilities.forkTransport && runtime.exportForFork) {
     try {
       native = runtime.exportForFork(sessionFile);
     } catch {
@@ -162,7 +182,7 @@ export function buildForkBundle(opts: BuildForkBundleOptions): ForkBundle {
       // transcript below still supports replay or a seeded continuation.
     }
   }
-  return { record, normalized, ...(native ? { native } : {}), ...(opts.dirtyPatch ? { dirtyPatch: opts.dirtyPatch } : {}), ...(opts.state ? { state: opts.state } : {}) };
+  return { record, normalized, ...(native ? { native } : {}), ...(opts.dirtyPatch ? { dirtyPatch: opts.dirtyPatch } : {}), ...(opts.workspaceSnapshot ? { workspaceSnapshot: opts.workspaceSnapshot } : {}), ...(opts.state ? { state: opts.state } : {}) };
 }
 
 /**

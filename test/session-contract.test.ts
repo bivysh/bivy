@@ -41,14 +41,14 @@ test("resolveSessionContract: every area guaranteed, no degraded reasons, when f
   assert.equal(contract.requiresAcknowledgement, false);
 });
 
-test("resolveSessionContract: requires acknowledgement for a supported profile whose sandbox is not natively enforced", () => {
+test("resolveSessionContract: requires acknowledgement for a release-tested profile whose sandbox is not natively enforced", () => {
   const contract = resolveSessionContract(fullyGuaranteed({ runtimeEnforcement: "user-permissions" }));
   assert.equal(contract.sandbox.state, "unavailable");
   assert.equal(contract.requiresAcknowledgement, true);
 });
 
-test("resolveSessionContract: a beta profile with the same degradation never requires acknowledgement", () => {
-  const contract = resolveSessionContract(fullyGuaranteed({ supportTier: "beta", runtimeEnforcement: "user-permissions" }));
+test("resolveSessionContract: an adapter-tested supported wrapper with the same degradation never requires acknowledgement", () => {
+  const contract = resolveSessionContract(fullyGuaranteed({ certification: "adapter-tested", runtimeEnforcement: "user-permissions" }));
   assert.equal(contract.requiresAcknowledgement, false);
 });
 
@@ -118,10 +118,11 @@ test("computeSessionContract: mixed authOwner reports auth origin unknown rather
 // The following mirror the session.new / POST /api/session launch gate in
 // src/server.ts exactly: compute a contract with no acknowledgedAt to decide
 // whether to reject, and (only on retry) one with acknowledgedAt set.
-test("launch gate: a supported-but-degraded agent is rejected without acknowledgement, and admitted once acknowledged", () => {
+test("launch gate: a release-tested-but-degraded agent is rejected without acknowledgement, and admitted once acknowledged", () => {
   const runtime: SessionContractRuntimeFacts = {
     id: "codex",
     supportTier: "supported",
+    certification: "release-tested",
     protectionLevel: "user-permissions",
     capabilities: { resume: true, toolInterception: true },
   };
@@ -137,6 +138,7 @@ test("launch gate: two concurrent unacknowledged requests for the same degraded 
   const runtime: SessionContractRuntimeFacts = {
     id: "codex",
     supportTier: "supported",
+    certification: "release-tested",
     protectionLevel: "user-permissions",
   };
   const [a, b] = await Promise.all([
@@ -147,8 +149,8 @@ test("launch gate: two concurrent unacknowledged requests for the same degraded 
   assert.equal(b.requiresAcknowledgement, true);
 });
 
-test("launch gate: an unsupported (beta/experimental) agent is never rejected, even fully unprotected", () => {
-  const runtime: SessionContractRuntimeFacts = { id: "aider", supportTier: "experimental", protectionLevel: "user-permissions" };
+test("launch gate: a supported adapter-tested wrapper is never rejected, even fully unprotected", () => {
+  const runtime: SessionContractRuntimeFacts = { id: "aider", supportTier: "supported", certification: "adapter-tested", protectionLevel: "user-permissions" };
   const contract = computeSessionContract({ runtime, preview: false }, NOW);
   assert.equal(contract.requiresAcknowledgement, false);
 });

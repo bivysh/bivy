@@ -27,12 +27,18 @@
 #   BIVY_CHANNEL=staging          install the latest dev build off the `staging`
 #                                 dist-tag (every merge to main); default `latest`
 #   BIVY_NPM_PREFIX=~/.local      install into a user-owned npm prefix (no sudo)
+#   BIVY_NPM_LOGLEVEL=warn        reduce npm's live install output (default: info)
 #   BIVY_INSTALL_ALL_AGENTS=1     preinstall every bundled agent runtime
 #   BIVY_NO_TARBALL_FALLBACK=1    fail instead of falling back to the tarball
 #   BIVY_NO_RC_UPDATE=1           don't add BIN_DIR to ~/.bashrc or ~/.zshrc;
 #                                 just print the manual `export PATH=...` line
 #
 set -euo pipefail
+
+# Parse the whole installer before running anything. With curl | bash, a child
+# that reads stdin (apt/debconf, npm lifecycle scripts, etc.) must never consume
+# the shell source and turn a partial install into a silent exit 0.
+main() {
 
 # BIVY_VERSION pins an exact version; BIVY_CHANNEL selects a dist-tag
 # (latest | staging). BIVY_VERSION wins if both are set.
@@ -48,9 +54,12 @@ MANIFEST_URL="${BIVY_MANIFEST_URL:-https://bivy.sh/downloads/bivy-latest.json}"
 # because a tarball install keeps a different layout.
 INSTALL_MODE="npm"
 
-info() { printf '\033[36m==>\033[0m %s\n' "$1"; }
-warn() { printf '\033[33m==>\033[0m %s\n' "$1"; }
-die()  { printf '\033[31mError:\033[0m %s\n' "$1" >&2; exit 1; }
+INSTALL_STARTED_SECONDS=$SECONDS
+
+elapsed() { printf '%ss' "$((SECONDS - INSTALL_STARTED_SECONDS))"; }
+info() { printf '\033[36m==>\033[0m [%s] %s\n' "$(elapsed)" "$1"; }
+warn() { printf '\033[33m==>\033[0m [%s] %s\n' "$(elapsed)" "$1"; }
+die()  { printf '\033[31mError:\033[0m [%s] %s\n' "$(elapsed)" "$1" >&2; exit 1; }
 
 run_sudo() {
   if [ "$(id -u)" -eq 0 ]; then "$@";
@@ -61,6 +70,12 @@ run_sudo() {
 
 # ---------------------------------------------------------------- prerequisites
 
+run_apt() {
+  # Set this after sudo (which normally strips environment overrides), and never
+  # let debconf/maintainer scripts read the curl stream. sudo can still use /dev/tty.
+  run_sudo env DEBIAN_FRONTEND=noninteractive apt-get "$@" </dev/null
+}
+
 install_ubuntu_prereqs() {
   command -v apt-get >/dev/null 2>&1 || return 0
   if command -v curl >/dev/null 2>&1 && command -v make >/dev/null 2>&1 \
@@ -68,17 +83,24 @@ install_ubuntu_prereqs() {
     return 0
   fi
   info "Installing build prerequisites"
-  run_sudo apt-get update
-  run_sudo apt-get install -y curl ca-certificates build-essential python3
+  run_apt update || return 1
+  run_apt install -y curl ca-certificates build-essential python3
 }
 
 install_ubuntu_node22() {
   command -v apt-get >/dev/null 2>&1 || return 1
+  local setup_script
   info "Installing Node.js 22"
-  run_sudo apt-get update
-  run_sudo apt-get install -y curl ca-certificates
-  curl -fsSL https://deb.nodesource.com/setup_22.x | run_sudo bash -
-  run_sudo apt-get install -y nodejs
+  run_apt update || return 1
+  run_apt install -y curl ca-certificates || return 1
+  setup_script="$(mktemp)" || return 1
+  if ! curl -fsSL https://deb.nodesource.com/setup_22.x -o "$setup_script" \
+     || ! run_sudo env DEBIAN_FRONTEND=noninteractive bash "$setup_script" </dev/null; then
+    rm -f "$setup_script"
+    return 1
+  fi
+  rm -f "$setup_script"
+  run_apt install -y nodejs
 }
 
 # Provider-agnostic fallback: install the official Node.js 22 binary straight
@@ -133,10 +155,10 @@ install_node22_tarball() {
 
 node_is_supported() {
   command -v node >/dev/null 2>&1 || return 1
-  [ "$(node -p 'const [M,m]=process.versions.node.split(".").map(Number); +(M>22 || (M===22 && m>=19))' 2>/dev/null)" = "1" ]
+  [ "$(node -p 'const [M]=process.versions.node.split(".").map(Number); +(M>=20)' 2>/dev/null)" = "1" ]
 }
 
-install_ubuntu_prereqs || true
+# Existing supported Node installations skip acquisition entirely.
 command -v curl >/dev/null 2>&1 || die "curl is required. Install it and re-run."
 
 if ! node_is_supported; then
@@ -150,14 +172,15 @@ if ! node_is_supported; then
 fi
 if ! node_is_supported; then
   if command -v node >/dev/null 2>&1; then
-    die "Node.js 22.19+ is required (found $(node -v)). Upgrade from https://nodejs.org and re-run."
+    die "Node.js 20+ is required (found $(node -v)). Upgrade from https://nodejs.org and re-run."
   fi
-  die "Node.js 22.19+ is required but was not found. Install it from https://nodejs.org and re-run."
+  die "Node.js 20+ is required but was not found. Install it from https://nodejs.org and re-run."
 fi
 command -v npm >/dev/null 2>&1 || die "npm is required (it ships with Node.js)."
+info "Node $(node -v) and npm $(npm -v) ready"
 
 if command -v apt-get >/dev/null 2>&1 && { ! command -v make >/dev/null 2>&1 || ! command -v g++ >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; }; then
-  die "Build tools are missing. Install them with: sudo apt-get update && sudo apt-get install -y build-essential python3"
+  install_ubuntu_prereqs || warn "Could not install build tools. If the terminal dependency cannot use a prebuilt binary, install them and re-run: sudo apt-get update && sudo apt-get install -y build-essential python3"
 fi
 
 # macOS: node-pty may need to compile, which requires the Xcode Command Line
@@ -240,7 +263,11 @@ install_from_tarball() {
   chmod +x "$staged/bin/bivy.mjs"
 
   info "Installing production dependencies"
-  if ! ( cd "$staged" && if [ -f package-lock.json ]; then npm ci --omit=dev --no-audit --no-fund; else npm install --omit=dev --no-audit --no-fund; fi ); then
+  local omit_flags=(--omit=dev)
+  if [ "${BIVY_INSTALL_OPTIONAL_DEPS:-}" != "1" ]; then
+    omit_flags+=(--omit=optional)
+  fi
+  if ! ( cd "$staged" && if [ -f package-lock.json ]; then npm ci "${omit_flags[@]}" --no-audit --no-fund; else npm install "${omit_flags[@]}" --no-audit --no-fund; fi ); then
     rm -rf "$stage"
     die "Could not install Bivy's dependencies. Your current install was left untouched."
   fi
@@ -304,8 +331,20 @@ clear_stale_npm_temp() {
   { [ -n "${1:-}" ] && [ -d "$scope" ] && find "$scope" -maxdepth 1 -name '.bivy-*' -exec rm -rf {} + 2>/dev/null; } || true
 }
 
+# Keep npm's output visible while also retaining it for the permission/404
+# diagnostics below. Redirecting stderr only to ERR_LOG made a healthy install
+# look frozen for minutes because npm writes all fetch and lifecycle progress
+# there. `tee` gives the user live activity without sacrificing those checks.
+run_npm_install() {
+  npm "$@" 2>&1 | tee "$ERR_LOG"
+  return "${PIPESTATUS[0]}"
+}
+
 install_globally() {
-  local args=(install -g "${NPM_PACKAGE}@${PKG_VERSION}" --no-audit --no-fund)
+  local args=(install -g "${NPM_PACKAGE}@${PKG_VERSION}" --no-audit --no-fund --loglevel="${BIVY_NPM_LOGLEVEL:-info}")
+  if [ "${BIVY_INSTALL_OPTIONAL_DEPS:-}" != "1" ]; then
+    args+=(--omit=optional)
+  fi
   if [ -n "${BIVY_NPM_PREFIX:-}" ]; then
     info "Installing ${NPM_PACKAGE}@${PKG_VERSION} into ${BIVY_NPM_PREFIX}"
     clear_stale_npm_temp "$BIVY_NPM_PREFIX"
@@ -314,7 +353,7 @@ install_globally() {
   fi
   info "Installing ${NPM_PACKAGE}@${PKG_VERSION} from npm"
   clear_stale_npm_temp "$(npm prefix -g 2>/dev/null)"
-  if npm "${args[@]}" 2>"$ERR_LOG"; then
+  if run_npm_install "${args[@]}"; then
     return 0
   fi
   # The classic failure: the global prefix is root-owned. Rather than silently
@@ -353,8 +392,12 @@ trap 'rm -f "$ERR_LOG"; rm -rf "$TMP_DIR"' EXIT
 # install gets corrupted (half-written deps / leftover temp dirs) in the first
 # place. Best-effort and only when a bivy is already on PATH; a fresh install has
 # nothing to stop, and the existing-config branch below restarts it afterward.
-if command -v bivy >/dev/null 2>&1; then bivy stop >/dev/null 2>&1 || true; fi
+if command -v bivy >/dev/null 2>&1; then
+  info "Stopping any existing Bivy node before updating"
+  bivy stop >/dev/null 2>&1 || true
+fi
 install_globally
+info "Bivy package installed"
 
 # A tarball fallback has already set BIN_DIR/BIVY_BIN to the install it made.
 if [ "$INSTALL_MODE" = "npm" ]; then
@@ -531,15 +574,37 @@ if [ "${BIVY_INSTALL_ALL_AGENTS:-}" = "1" ]; then
   "$BIVY_BIN" agents:install || warn "Could not install every bundled agent runtime. Bivy still works; run 'bivy agents:install' later to retry."
 fi
 
+first_agent_command() {
+  node -e '
+    const fs = require("fs");
+    const file = process.argv[1];
+    const map = { "claude-code-sdk": "claude", "codex-approvals": "codex", opencode: "opencode", gemini: "gemini", qwen: "qwen", pi: "pi", aider: "aider", cline: "cline", crush: "crush" };
+    try {
+      const cfg = JSON.parse(fs.readFileSync(file, "utf8"));
+      const id = String(cfg.env?.BIVY_RUNTIME || cfg.defaults?.agent || "claude-code-sdk").toLowerCase();
+      process.stdout.write(map[id] || id || "claude");
+    } catch { process.stdout.write("claude"); }
+  ' "$STATE_DIR/cli.json" 2>/dev/null || printf 'claude'
+}
+
 if [ -f "$STATE_DIR/cli.json" ]; then
-  info "Existing Bivy configuration found; applying the update."
+  if [ -n "${BIVY_SESSION_TOKEN:-}${BIVY_NODE_CLAIM_CODE:-}" ]; then
+    info "Existing Bivy configuration found; enrolling with the provided account token."
+    # The hosted "Connect a Machine" command intentionally includes a fresh
+    # account session/claim. Treat that as an explicit re-pair request even when
+    # this machine already has local Bivy state; otherwise the installer would
+    # only update/restart the old enrollment and the browser would keep waiting.
+    "$BIVY_BIN" relay:setup || warn "Could not enroll with the provided account token. Existing configuration was left in place."
+  else
+    info "Existing Bivy configuration found; applying the update."
+  fi
   # A Bivy node is remote-only — it has to keep running to stay reachable through
-  # the relay — so an update RESTARTS the background service to pick up the new
-  # build and reconnect. It never drops you at a local 'bivy start'. `bivy
-  # restart` exits non-zero when there is no service to restart; in that case
-  # install one so the node keeps running. (Don't gate on cli.json's `service`
-  # flag: a box can have an active service while that flag is unset, which is
-  # exactly how an update used to silently do nothing.)
+  # the relay — so an update/re-enroll RESTARTS the background service to pick up
+  # the new build and reconnect. It never drops you at a local 'bivy start'.
+  # `bivy restart` exits non-zero when there is no service to restart; in that
+  # case install one so the node keeps running. (Don't gate on cli.json's
+  # `service` flag: a box can have an active service while that flag is unset,
+  # which is exactly how an update used to silently do nothing.)
   if "$BIVY_BIN" restart; then
     :
   else
@@ -548,10 +613,18 @@ if [ -f "$STATE_DIR/cli.json" ]; then
   fi
 else
   info "Launching setup…"
-  if [ -r /dev/tty ] && "$BIVY_BIN" setup </dev/tty; then
-    :
+  if ( : </dev/tty ) 2>/dev/null; then
+    "$BIVY_BIN" setup </dev/tty || die "Setup did not complete. Re-run: bivy setup"
   else
     warn "No interactive terminal detected. Finish setup by running:"
     echo "  bivy setup"
   fi
 fi
+
+AGENT_CMD="$(first_agent_command)"
+echo ""
+info "First thing to try: cd your-repo && bivy run $AGENT_CMD   (then: bivy open)"
+info "Installer finished in $(elapsed)"
+}
+
+main "$@"

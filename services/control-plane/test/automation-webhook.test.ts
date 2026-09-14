@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { createHmac } from "node:crypto";
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { spawnTestService, stopTestServices } from "../../test-service-process.js";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import net from "node:net";
@@ -9,15 +10,8 @@ import net from "node:net";
 const cpDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const procs: ChildProcess[] = [];
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-function finish(code: number): never {
-  for (const proc of procs) proc.kill("SIGTERM");
-  process.exit(code);
-}
 function expect(condition: boolean, message: string) {
-  if (!condition) {
-    console.error(`✗ FAIL: ${message}`);
-    finish(1);
-  }
+  if (!condition) throw new Error(`✗ FAIL: ${message}`);
   console.log(`✓ ${message}`);
 }
 async function freePort(): Promise<number> {
@@ -54,11 +48,7 @@ async function trigger(port: number, endpoint: string, secret: string, raw: stri
 
 async function main() {
   const port = await freePort();
-  const proc = spawn("npx", ["tsx", "src/index.ts"], {
-    cwd: cpDir,
-    env: { ...process.env, PORT: String(port), RELAY_SECRET: "automation-test" },
-    stdio: "inherit",
-  });
+  const proc = spawnTestService(cpDir, { PORT: String(port), RELAY_SECRET: "automation-test" });
   procs.push(proc);
   let ready = false;
   for (let i = 0; i < 100; i++) {
@@ -206,6 +196,14 @@ async function main() {
   const dupFired = await trigger(port, auto.body.webhookUrl, auto.body.webhookSecret, evtRaw, "evt-1");
   expect(dupFired.status === 200 && dupFired.body.code === "duplicate", "webhook redelivery to a definition is idempotent");
 
+  const providerRaw = JSON.stringify({
+    id: 17000492462,
+    kind: "todo_created",
+    recording: { id: 10252945882, title: "@bivy - prepare for Show HN" },
+  });
+  const providerFired = await trigger(port, auto.body.webhookUrl, auto.body.webhookSecret, providerRaw, "basecamp-17000492462");
+  expect(providerFired.status === 202 && providerFired.body.code === "accepted", "provider-native JSON fires without a Bivy-specific envelope");
+
   const oversized = await trigger(port, auto.body.webhookUrl, auto.body.webhookSecret, "x".repeat(70_000), "evt-oversized");
   expect(oversized.status === 413 && oversized.body.code === "payload_too_large", "oversized bodies receive a stable rejection");
 
@@ -234,6 +232,14 @@ async function main() {
 
   const badSig = await trigger(port, auto.body.webhookUrl, "nope", evtRaw, "evt-2");
   expect(badSig.status === 401, "a bad signature is rejected on the definition path");
+  let rejectedBadSignatures = 0;
+  for (let i = 0; i < 65; i += 1) {
+    const bad = await trigger(port, auto.body.webhookUrl, "nope", evtRaw, `bad-sig-${i}`);
+    if (bad.status === 401) rejectedBadSignatures += 1;
+  }
+  expect(rejectedBadSignatures === 65, "unsigned webhook attempts are rejected before quota accounting");
+  const afterBadSigs = await trigger(port, auto.body.webhookUrl, auto.body.webhookSecret, evtRaw, "evt-after-bad-sigs");
+  expect(afterBadSigs.status === 202, "valid signed webhook still works after many bad signatures");
 
   const rot = await json(port, "POST", `/account/automations/${auto.body.id}/webhook/rotate`, undefined, token);
   expect(rot.status === 200 && rot.body.webhookSecret && rot.body.webhookSecret !== auto.body.webhookSecret, "rotate returns a fresh secret");
@@ -246,11 +252,68 @@ async function main() {
   const whenDisabled = await trigger(port, auto.body.webhookUrl, rot.body.webhookSecret, evtRaw, "evt-4");
   expect(whenDisabled.status === 410 && whenDisabled.body.code === "disabled", "a disabled webhook automation refuses events");
 
+  // --- Signing toggle round-trips through update and is visible on read ---
+  expect(listedAuto.requireSigning === true, "a signed webhook automation reads back requireSigning=true");
+  const unsigned = await json(port, "PUT", `/account/automations/${auto.body.id}`, { enabled: true, requireSigning: false }, token);
+  expect(unsigned.status === 200 && unsigned.body.requireSigning === false && !unsigned.body.webhookSecret, "turning signing off persists and never echoes a secret");
+  const unsignedRead = (await json(port, "GET", "/account/automations", undefined, token)).body.find((d: any) => d.id === auto.body.id);
+  expect(unsignedRead.requireSigning === false, "the editor sees signing off after reopening");
+  const unsignedFire = await fetch(auto.body.webhookUrl.replace(/^https?:\/\/[^/]+/, `http://localhost:${port}`), {
+    method: "POST", headers: { "content-type": "application/json", "x-bivy-idempotency-key": "evt-unsigned" }, body: evtRaw,
+  });
+  expect(unsignedFire.status === 202, "an unsigned webhook automation accepts deliveries without signing headers");
+  const untouched = await json(port, "PUT", `/account/automations/${auto.body.id}`, { name: "Fix CI renamed" }, token);
+  expect(untouched.status === 200 && untouched.body.requireSigning === false, "an update that omits requireSigning leaves it alone");
+  const resigned = await json(port, "PUT", `/account/automations/${auto.body.id}`, { requireSigning: true }, token);
+  expect(resigned.status === 200 && resigned.body.requireSigning === true && typeof resigned.body.webhookSecret === "string", "turning signing back on mints a secret and discloses it once");
+  const resignedRead = (await json(port, "GET", "/account/automations", undefined, token)).body.find((d: any) => d.id === auto.body.id);
+  expect(resignedRead.requireSigning === true && !resignedRead.webhookSecret, "listing shows signing on without the secret");
+  const keepSecret = await json(port, "PUT", `/account/automations/${auto.body.id}`, { requireSigning: true }, token);
+  expect(keepSecret.status === 200 && !keepSecret.body.webhookSecret, "requireSigning=true on an already-signed endpoint keeps the existing secret");
+  const resignedFire = await trigger(port, auto.body.webhookUrl, resigned.body.webhookSecret, evtRaw, "evt-resigned");
+  expect(resignedFire.status === 202, "the minted secret signs new deliveries");
+  const staleFire = await trigger(port, auto.body.webhookUrl, rot.body.webhookSecret, evtRaw, "evt-stale");
+  expect(staleFire.status === 401, "the pre-toggle secret no longer signs deliveries");
+
+  // Custom names and write-only values work with HMAC or static headers.
+  const ownSecret = "my-provider-secret-with-at-least-32-characters";
+  const own = await json(port, "POST", "/account/automations", {
+    name: "Provider authentication", trigger: "webhook", templateCiphertext: "bivy-room-v1:node-x:opaque",
+    nodeLabel: "bivy/runner", webhookHeader: "X-Provider-Signature", webhookSecret: ownSecret,
+  }, token);
+  expect(own.status === 201 && own.body.webhookSecret === ownSecret && own.body.webhookHeader === "x-provider-signature", "create accepts a user-supplied secret and header name");
+  const ownUrl = own.body.webhookUrl.replace(/^https?:\/\/[^/]+/, `http://localhost:${port}`);
+  const deliver = (header: string, value: string, key: string) => fetch(ownUrl, {
+    method: "POST", headers: { "content-type": "application/json", [header]: value, "x-bivy-idempotency-key": key }, body: evtRaw,
+  });
+  const digest = `sha256=${createHmac("sha256", ownSecret).update(evtRaw).digest("hex")}`;
+  expect((await deliver("X-Provider-Signature", digest, "own-hmac")).status === 202, "custom HMAC header authenticates");
+  expect((await deliver("x-bivy-signature-256", digest, "wrong-header")).status === 401, "the default header cannot bypass the configured header");
+  expect((await deliver("X-Provider-Signature", ownSecret, "not-a-signature")).status === 401, "HMAC mode never accepts the raw secret");
+  const staticValue = "Bearer user-selected-header-value-long-enough";
+  const staticSaved = await json(port, "PUT", `/account/automations/${own.body.id}`, {
+    webhookAuthMode: "header", webhookHeader: "Authorization", webhookSecret: staticValue,
+  }, token);
+  expect(staticSaved.status === 200 && staticSaved.body.webhookSecret === staticValue, "update accepts a custom static header value");
+  expect((await deliver("Authorization", staticValue, "static-value")).status === 202, "the exact custom header value authenticates");
+  expect((await deliver("Authorization", "wrong", "static-wrong")).status === 401, "wrong static header values are rejected");
+  const ownRead = (await json(port, "GET", "/account/automations", undefined, token)).body.find((d: any) => d.id === own.body.id);
+  expect(ownRead.webhookAuthMode === "header" && ownRead.webhookHeader === "authorization" && !ownRead.webhookSecret, "read preserves mode/name without leaking the secret");
+  const ownRotate = await json(port, "POST", `/account/automations/${own.body.id}/webhook/rotate`, undefined, token);
+  expect((await deliver("Authorization", staticValue, "static-old")).status === 401, "rotation invalidates a custom static secret");
+  expect((await deliver("Authorization", ownRotate.body.webhookSecret, "static-new")).status === 202, "rotation preserves the custom header and mode");
+  for (const patch of [{ webhookHeader: "x-bad\r\ninjected" }, { webhookHeader: "Content-Length" }, { webhookSecret: "short" }, { webhookAuthMode: "invalid" }]) {
+    const invalid = await json(port, "PUT", `/account/automations/${own.body.id}`, patch, token);
+    expect(invalid.status === 400, "invalid authentication configuration is rejected");
+  }
   console.log("\nAll automation webhook checks passed.");
-  finish(0);
 }
 
-main().catch((error) => {
+try {
+  await main();
+} catch (error) {
   console.error(error);
-  finish(1);
-});
+  process.exitCode = 1;
+} finally {
+  await stopTestServices(procs);
+}

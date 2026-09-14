@@ -19,7 +19,7 @@ import { ProtocolRuntime } from "../../runtime/protocol.js";
 import { codexSlashCommands } from "../../runtime/slash-commands.js";
 import type { AgentRuntime } from "../../runtime/types.js";
 
-export const CODEX_TESTED_VERSION = "0.150.0";
+export const CODEX_TESTED_VERSION = "0.154.0";
 const CODEX_AVAILABLE_CACHE = new Map<string, boolean>();
 
 function codexCommand(): string {
@@ -114,6 +114,9 @@ export function codexAppServerRuntime(tier?: SandboxTier): AgentRuntime {
       interactiveTui: codexCommandAvailable(),
       nativeSessionDiscovery: true,
       nativeSessionAdoption: true,
+      // `bivy run codex` learns the rollout id from Codex's on-disk store after
+      // launch, so an unpinned native terminal can be taken over as chat.
+      sessionDiscovery: true,
     },
     resumable: true,
     loadHistory: (sessionId) => loadCodexTranscript(sessionId),
@@ -155,6 +158,7 @@ export function codexIntegration(origin: AgentIntegrationOrigin) {
           interactiveTui: installed,
           nativeSessionDiscovery: true,
           nativeSessionAdoption: true,
+          sessionDiscovery: true,
         },
         nativeSandbox: true,
         supportTier: "supported",

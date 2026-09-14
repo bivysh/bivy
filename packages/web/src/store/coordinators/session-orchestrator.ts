@@ -14,6 +14,7 @@ export interface SessionForkOptions {
 }
 
 export interface SessionOrchestrationDependencies {
+  reportForkProgress?(message: string): void;
   send(command: Command): void;
   sendRequest(command: Command): void;
   createRequestId(): string;
@@ -23,11 +24,19 @@ export interface SessionOrchestrationDependencies {
   sessionRuntime(sessionId: string): string | undefined;
   switchNode(nodeId: string): void;
   waitForOnline(timeoutMs?: number): Promise<void>;
-  openSession(sessionId: string, path?: string): void;
+  /** Open a session, optionally hydrating it from the correlated creation reply.
+   *  Fork replies already contain canonical history/runtime metadata; carrying
+   *  that snapshot through avoids briefly repainting the source session while a
+   *  second history request is in flight. */
+  openSession(sessionId: string, path?: string, snapshot?: ServerEvent): void;
   addUserMessage(text: string, clientMessageId: string): void;
   transcriptUrl(sessionId: string): string;
   refreshAccountSessions(): void;
   launchManagedDestination(configId: string, runtimeId?: string): Promise<string>;
+  /** Cross-node forks outlive the sheet that launched them because switching
+   *  machines clears the active session (and unmounts that sheet). Surface their
+   *  progress and outcome through app-level presentation instead. */
+  reportCrossNodeFork?(status: "working" | "success" | "error", message: string): void;
 }
 
 export type SessionOrchestrationResult =
@@ -58,6 +67,8 @@ export interface SessionWorkflowPort {
   listBranches(repo: string): void;
   activeSessionId(): string | null;
   isPendingLaunch(id: string): boolean;
+  sessionIsSaved(sessionId: string): boolean;
+  openSession(sessionId: string, path?: string): void;
   appendPendingLaunchFollowup(id: string, prompt: { text: string; clientMessageId: string; attachments?: PromptAttachment[] }): void;
   addUserMessage(text: string, clientMessageId: string, attachments?: PromptAttachment[]): void;
   mustQueue(sessionId: string): boolean;
@@ -153,6 +164,12 @@ export class SessionOrchestrator {
       return;
     }
     if (active) {
+      // A completed agent turn is no longer kept in memory by the node. Re-open it
+      // before delivering the next prompt instead of treating the composer as a
+      // new-session surface. The prompt remains explicitly session-scoped below;
+      // opening first also gives the node a deterministic resume target when a
+      // close event and a tap happen in the same reconnect window.
+      if (port.sessionIsSaved?.(active)) port.openSession(active);
       if (port.mustQueue(active)) {
         port.enqueueFollowup(active, { id: clientMessageId, text: trimmed, attachments: files });
         port.persistFollowup(active, clientMessageId, trimmed);
@@ -240,6 +257,7 @@ export class SessionOrchestrator {
     const crossAgent = Boolean(targetAgentId && (!sourceAgentId || targetAgentId !== sourceAgentId));
 
     if (!crossNode && !crossAgent) {
+      this.deps.reportForkProgress?.("Copying the conversation and working files…");
       const done = await this.request(
         { kind: "session.fork.local", sessionId: sourceSessionId, ...(opts.model ? { model: opts.model } : {}) },
         FORK_IMPORT_TIMEOUT_MS,
@@ -247,11 +265,13 @@ export class SessionOrchestrator {
       const sessionId = String((done as { sessionId?: unknown }).sessionId || "");
       if (!sessionId) throw new Error("Local fork returned no session id");
       const result = this.forkResult(done, "full");
-      this.deps.openSession(sessionId);
+      this.deps.reportForkProgress?.("Loading the forked session…");
+      this.deps.openSession(sessionId, undefined, done);
       if (opts.retireSource) this.deps.send({ kind: "session.delete", sessionId: sourceSessionId });
       return { sessionId, ...result };
     }
 
+    this.deps.reportForkProgress?.("Preparing the conversation and working files…");
     const exported = await this.request({
       kind: "session.fork.export",
       sessionId: sourceSessionId,
@@ -261,31 +281,62 @@ export class SessionOrchestrator {
     const bundle = (exported as { bundle?: unknown }).bundle;
     if (!bundle) throw new Error("Fork export returned no bundle");
 
-    if (opts.managedConfigId) {
-      // Export first while the source transport is authoritative. Provisioning
-      // happens only after a complete bundle exists, and source retirement stays
-      // confirmation-gated below, so every failure leaves the original intact.
-      destNodeId = await this.deps.launchManagedDestination(opts.managedConfigId, opts.agentId);
+    // Resolve source-addressed metadata before changing node identity. Besides
+    // producing the correct link, this keeps the entire export result independent
+    // of destination state. If destination stand-up fails, restore the source
+    // node/session so the user never gets stranded on an empty machine view.
+    const sourceTranscriptUrl = this.deps.transcriptUrl(sourceSessionId);
+    let done: ServerEvent;
+    try {
+      if (opts.managedConfigId) {
+        // Keep export authoritative before provisioning and retain main's
+        // source recovery if destination launch or import fails.
+        destNodeId = await this.deps.launchManagedDestination(opts.managedConfigId, opts.agentId);
+      }
+      if (crossNode) {
+        this.deps.reportForkProgress?.("Connecting to the destination machine…");
+        this.deps.switchNode(destNodeId!);
+        // switchNode intentionally clears the source session, which also
+        // unmounts ForkSheet. Without app-level feedback a slow or failed import
+        // looks exactly like the button did nothing.
+        this.deps.reportCrossNodeFork?.("working", "Creating the fork on the destination machine…");
+        await this.deps.waitForOnline(managedDestination ? 120_000 : undefined);
+      }
+      this.deps.reportForkProgress?.("Creating the session in the destination agent…");
+      done = await this.request({
+        kind: "session.fork.import",
+        bundle,
+        transcriptUrl: sourceTranscriptUrl,
+        sameNode: !crossNode,
+        ...(targetAgentId ? { agent: targetAgentId } : {}),
+        ...(opts.model ? { model: opts.model } : {}),
+      }, FORK_IMPORT_TIMEOUT_MS);
+    } catch (error) {
+      if (crossNode) {
+        this.deps.switchNode(sourceNodeId);
+        await this.deps.waitForOnline().catch(() => {});
+        this.deps.openSession(sourceSessionId);
+        this.deps.reportCrossNodeFork?.("error", error instanceof Error ? error.message : String(error));
+      }
+      throw error;
     }
-    if (crossNode) {
-      this.deps.switchNode(destNodeId!);
-      await this.deps.waitForOnline(managedDestination ? 120_000 : undefined);
-    }
-    const done = await this.request({
-      kind: "session.fork.import",
-      bundle,
-      transcriptUrl: this.deps.transcriptUrl(sourceSessionId),
-      sameNode: !crossNode,
-      ...(targetAgentId ? { agent: targetAgentId } : {}),
-      ...(opts.model ? { model: opts.model } : {}),
-    }, FORK_IMPORT_TIMEOUT_MS);
     const sessionId = String((done as { sessionId?: unknown }).sessionId || "");
-    if (!sessionId) throw new Error("Fork import returned no session id");
+    if (!sessionId) {
+      const error = new Error("Fork import returned no session id");
+      if (crossNode) this.deps.reportCrossNodeFork?.("error", error.message);
+      throw error;
+    }
     const actualAgentId = String((done as { runtimeId?: unknown }).runtimeId || "");
     if (targetAgentId && actualAgentId && actualAgentId !== targetAgentId) {
-      throw new Error(`Fork requested agent ${targetAgentId}, but the destination used ${actualAgentId}`);
+      const error = new Error(`Fork requested agent ${targetAgentId}, but the destination used ${actualAgentId}`);
+      if (crossNode) this.deps.reportCrossNodeFork?.("error", error.message);
+      throw error;
     }
-    this.deps.openSession(sessionId);
+    // `session.fork.done` is also a complete history snapshot. Open from that
+    // exact reply so the URL, transcript, and active agent switch atomically to
+    // the fork instead of waiting for sessions.list/history to catch up.
+    this.deps.reportForkProgress?.("Loading the forked session…");
+    this.deps.openSession(sessionId, undefined, done);
     const seedPrompt = (done as { seedPrompt?: unknown }).seedPrompt;
     if (typeof seedPrompt === "string" && seedPrompt.trim()) {
       const id = this.deps.createClientMessageId();
@@ -294,25 +345,47 @@ export class SessionOrchestrator {
     }
 
     if (opts.retireSource) {
+      this.deps.reportForkProgress?.("Retiring the original session…");
       // Retire the MOVE's source with the confirmation-gated, idempotent command
       // (1A) — it carries the destination id so the source node refuses to retire
       // unless the move actually produced `sessionId`, and is safe to re-send.
       const retire = { kind: "session.fork.retire-source" as const, sourceSessionId, newSessionId: sessionId };
       if (crossNode) {
+        let retireError: unknown;
         try {
           this.deps.switchNode(sourceNodeId);
           await this.deps.waitForOnline();
           this.deps.send(retire);
+        } catch (error) {
+          retireError = error;
         } finally {
           this.deps.switchNode(destNodeId!);
-          await this.deps.waitForOnline().catch(() => {});
-          this.deps.openSession(sessionId);
+          await this.deps.waitForOnline();
+          this.deps.reportForkProgress?.("Loading the forked session…");
+          this.deps.openSession(sessionId, undefined, done);
+        }
+        if (retireError) {
+          const error = new Error(`Fork created, but the original session could not be retired: ${retireError instanceof Error ? retireError.message : String(retireError)}`);
+          this.deps.reportCrossNodeFork?.("error", error.message);
+          throw error;
         }
       } else {
         this.deps.send(retire);
       }
     }
-    return { sessionId, ...this.forkResult(done, "seeded") };
+    const result = this.forkResult(done, "seeded");
+    if (crossNode) {
+      const warning = result.missing.map((item) => item.detail || item.label).find(Boolean);
+      this.deps.reportCrossNodeFork?.(
+        "success",
+        warning
+          ? `Fork created on the destination machine. ${warning}`
+          : opts.retireSource
+            ? "Session moved to the destination machine."
+            : "Fork created on the destination machine.",
+      );
+    }
+    return { sessionId, ...result };
   }
 
   private workflowPort(): SessionWorkflowPort {

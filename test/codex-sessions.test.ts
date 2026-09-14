@@ -181,6 +181,14 @@ check("writeCodexRollout synthesises a rollout that reads back as the full trans
   assert.equal(firstRecord.payload?.session_id, id);
   assert.equal(firstRecord.payload?.id, id);
   assert.equal(firstRecord.payload?.originator, "bivy");
+  // Bare response_items round-trip through OUR reader but Codex drops them
+  // from model context. Require a completed task enclosing the imported history.
+  const records = fs.readFileSync(written!.file, "utf8").trim().split(/\r?\n/).map((line) => JSON.parse(line));
+  assert.deepEqual(records.map((record) => record.type), ["session_meta", "event_msg", "response_item", "response_item", "event_msg"]);
+  assert.equal(records[1].payload.type, "task_started");
+  assert.equal(records[4].payload.type, "task_complete");
+  assert.ok(records[1].payload.turn_id);
+  assert.equal(records[4].payload.turn_id, records[1].payload.turn_id);
   // Reads back through the ordinary reader as an in-order user/assistant turn pair.
   const msgs = loadCodexTranscript(id) as Array<{ role: string; content: string }>;
   assert.deepEqual(msgs.map((m) => [m.role, m.content]), [["user", "port the parser to rust"], ["assistant", "Starting the port."]]);

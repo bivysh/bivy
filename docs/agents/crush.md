@@ -4,7 +4,7 @@ Charm's open-source coding agent (`@charmland/crush`), run under Bivy as one
 non-interactive prompt per turn (`crush run -q`, which suppresses Crush's
 spinner UI so stdout is just the reply).
 
-- **Runtime id:** `crush` · **Tier:** Beta · **In picker:** Yes
+- **Runtime id:** `crush` · **Tier:** Supported · **In picker:** Yes
 
 ## Install
 
@@ -23,7 +23,7 @@ variable, in case Crush's own configuration reads a provider from the
 environment:
 
 ```bash
-bivy login   # sign in to whichever provider Crush is configured to use
+bivy provider login   # sign in to whichever provider Crush is configured to use
 ```
 
 ## Models

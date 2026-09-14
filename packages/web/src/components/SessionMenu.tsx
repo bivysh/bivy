@@ -50,7 +50,7 @@ function ResumeCommandDialog({
           <code>{`bivy resume ${sessionId}`}</code>
           <button
             type="button"
-            className={`repo-connect-copy${copied ? " is-copied" : ""}`}
+            className={`btn sm ghost${copied ? " is-copied" : ""}`}
             onClick={copy}
             aria-label={copied ? "Command copied" : "Copy resume command"}
           >

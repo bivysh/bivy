@@ -8,7 +8,8 @@
 // (installation id → account → enqueue; unbound installations dropped), and
 // the node mint path (per-account isolation, repo scoping).
 import { createHmac, generateKeyPairSync } from "node:crypto";
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { spawnTestService, stopTestServices } from "../../test-service-process.js";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import net from "node:net";
@@ -18,16 +19,8 @@ const cpDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const procs: ChildProcess[] = [];
 const servers: http.Server[] = [];
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-function finish(code: number): never {
-  for (const proc of procs) proc.kill("SIGTERM");
-  for (const server of servers) server.close();
-  process.exit(code);
-}
 function expect(condition: boolean, message: string) {
-  if (!condition) {
-    console.error(`✗ FAIL: ${message}`);
-    finish(1);
-  }
+  if (!condition) throw new Error(`✗ FAIL: ${message}`);
   console.log(`✓ ${message}`);
 }
 async function freePort(): Promise<number> {
@@ -108,26 +101,18 @@ async function startFakeGithub(): Promise<number> {
 async function main() {
   const githubPort = await startFakeGithub();
   const port = await freePort();
-  // Spawn Node directly rather than through `npx`: killing an npx wrapper can
-  // leave its control-plane grandchild alive and keep the test process' stdio
-  // open after every assertion has passed.
-  const proc = spawn(process.execPath, ["--import", "tsx", "src/index.ts"], {
-    cwd: cpDir,
-    env: {
-      ...process.env,
-      PORT: String(port),
-      RELAY_SECRET: "central-app-test",
-      GITHUB_API_BASE_URL: `http://localhost:${githubPort}`,
-      BIVY_CENTRAL_GITHUB_APP_ID: "555",
-      BIVY_CENTRAL_GITHUB_APP_PRIVATE_KEY: Buffer.from(pem).toString("base64"),
-      BIVY_CENTRAL_GITHUB_APP_WEBHOOK_SECRET: WEBHOOK_SECRET,
-      BIVY_CENTRAL_GITHUB_APP_SLUG: "bivy-central-test",
-      // This legacy-flow fixture signs in through dev-login and therefore has no
-      // GitHub OAuth identity proof. Dedicated store/auth tests cover the
-      // production-default installer target check.
-      BIVY_GITHUB_INSTALLER_IDENTITY_REQUIRED: "0",
-    },
-    stdio: "inherit",
+  const proc = spawnTestService(cpDir, {
+    PORT: String(port),
+    RELAY_SECRET: "central-app-test",
+    GITHUB_API_BASE_URL: `http://localhost:${githubPort}`,
+    BIVY_CENTRAL_GITHUB_APP_ID: "555",
+    BIVY_CENTRAL_GITHUB_APP_PRIVATE_KEY: Buffer.from(pem).toString("base64"),
+    BIVY_CENTRAL_GITHUB_APP_WEBHOOK_SECRET: WEBHOOK_SECRET,
+    BIVY_CENTRAL_GITHUB_APP_SLUG: "bivy-central-test",
+    // This legacy-flow fixture signs in through dev-login and therefore has no
+    // GitHub OAuth identity proof. Dedicated store/auth tests cover the
+    // production-default installer target check.
+    BIVY_GITHUB_INSTALLER_IDENTITY_REQUIRED: "0",
   });
   procs.push(proc);
   let ready = false;
@@ -165,6 +150,19 @@ async function main() {
   expect(afterA.body.installations.length === 1 && afterA.body.installations[0].githubAccount === "acme", "account A sees its bound installation with the GitHub owner recorded");
   const afterB = await json(port, "GET", "/account/github/central-app", undefined, tokenB);
   expect(afterB.body.installations.length === 0, "account B sees no installations (cross-account isolation)");
+
+  const sourceA = await json(port, "GET", "/account/github-app", undefined, tokenA);
+  expect(sourceA.body.connected === true && sourceA.body.apps[0]?.central === true, "hosted installation is a connected automation source before any webhook arrives");
+  expect(sourceA.body.apps[0]?.mention === "bivy-central-test" && sourceA.body.apps[0]?.installed === true, "source exposes the real hosted mention and installation state");
+  expect(sourceA.body.apps[0]?.installations[0]?.installationId === "42", "source includes the installation to configure or uninstall");
+
+  const access = await json(port, "POST", "/account/github-app/trigger-access", { triggerAccess: "collaborator" }, tokenA);
+  expect(access.status === 200 && access.body.triggerAccess === "collaborator", "hosted trigger permissions can be configured before the first webhook");
+  const defaultNode = await json(port, "POST", "/account/github-app/default-node", { node: "" }, tokenA);
+  expect(defaultNode.status === 200, "hosted default machine is configurable before the first webhook");
+  const foreignAccess = await json(port, "POST", "/account/github-app/trigger-access", { triggerAccess: "collaborator" }, tokenB);
+  expect(foreignAccess.status === 404, "an account without an installation cannot create hosted app settings");
+  await json(port, "POST", "/account/github-app/trigger-access", { triggerAccess: "everyone" }, tokenA);
 
   const identityA = await json(port, "GET", "/account/hosted-provisioning", undefined, tokenA);
   expect(identityA.body.githubIdentity === "central-app", "explicit central App setup replaces an established account's hosted identity selection");
@@ -216,6 +214,35 @@ async function main() {
   expect(listA.some((i: any) => i.repo === "acme/rocket"), "the work item landed in the BOUND account's queue");
   expect(!listB.some((i: any) => i.repo === "acme/rocket"), "no work item leaked into another account's queue");
 
+  // Custom trigger labels must reach automation matching before queue routing.
+  const custom = await json(port, "POST", "/account/automations", {
+    name: "Custom GitHub labels", trigger: "github", enabled: true,
+    templateCiphertext: "bivy-room-v1:node-a:opaque", repos: ["acme/rocket"],
+    labels: ["ready for review"],
+    on: [
+      { event: "issues", actions: ["labeled"], labels: ["ready for review"] },
+      { event: "pull_request", actions: ["labeled"], labels: ["ready for review"] },
+    ],
+  }, tokenA);
+  expect(custom.status === 201, "custom label rules can be saved on an automation trigger");
+  for (const event of ["issues", "pull_request"]) {
+    const labeled = {
+      ...issuePayload, issue: undefined, label: { name: "ready for review" },
+      [event === "issues" ? "issue" : "pull_request"]: { ...issuePayload.issue, number: event === "issues" ? 8 : 9, labels: [{ name: "ready for review" }] },
+    };
+    const fired = await deliver(port, WEBHOOK_SECRET, event, labeled, `custom-${event}`);
+    expect(fired.body.enqueued === true && fired.body.definitionId === custom.body.id, `${event}: a custom label triggers without bivy or a mention`);
+    const unrelated = await deliver(port, WEBHOOK_SECRET, event, { ...labeled, label: { name: "unrelated" } }, `unrelated-${event}`);
+    expect(unrelated.body.enqueued === false, `${event}: adding another label does not re-fire an existing trigger label`);
+    const filtered = await deliver(port, WEBHOOK_SECRET, event, { ...labeled, repository: { full_name: "acme/other" } }, `filtered-${event}`);
+    expect(filtered.body.enqueued === false, `${event}: repository filters still apply to custom labels`);
+  }
+  const customRead = (await json(port, "GET", "/account/automations", undefined, tokenA)).body.find((definition: any) => definition.id === custom.body.id);
+  expect(customRead.on[0].labels[0] === "ready for review", "custom trigger labels survive reopening the automation");
+  await json(port, "PUT", `/account/automations/${custom.body.id}`, { enabled: false }, tokenA);
+  const paused = await deliver(port, WEBHOOK_SECRET, "issues", { ...issuePayload, label: { name: "ready for review" }, issue: { ...issuePayload.issue, labels: [{ name: "ready for review" }] } }, "custom-paused");
+  expect(paused.body.enqueued === false, "pausing the custom-label automation stops intake");
+
   const unbound = await deliver(port, WEBHOOK_SECRET, "issues", { ...issuePayload, installation: { id: 99 } }, "delivery-2");
   expect(unbound.status === 200 && unbound.body.enqueued === false && unbound.body.reason === "unbound_installation", "an unbound installation's event is acked and dropped");
 
@@ -239,10 +266,14 @@ async function main() {
   expect(afterUninstall.body.installations.length === 0, "the binding is gone after uninstall");
 
   console.log("central-github-webhook: all tests passed");
-  finish(0);
 }
 
-main().catch((error) => {
+try {
+  await main();
+} catch (error) {
   console.error(error);
-  finish(1);
-});
+  process.exitCode = 1;
+} finally {
+  await stopTestServices(procs);
+  await Promise.all(servers.map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
+}

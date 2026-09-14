@@ -28,7 +28,10 @@ export interface PwaLifecycleState {
   pendingAttachments: number;
   readingAttachments: boolean;
   turnActive: boolean;
+  /** Prompts buffered by a reconnecting transport — undelivered until online. */
   locallyQueuedPrompts: number;
+  /** Follow-ups waiting in the visible queue — intentional, already surfaced by their own UI. */
+  queuedFollowups: number;
 }
 
 type BeforeInstallPromptEvent = Event & {
@@ -44,7 +47,6 @@ let installEvent: BeforeInstallPromptEvent | null = null;
 let installedThisRun = false;
 let installDismissed = false;
 let reconnectQueuedPrompts = 0;
-let followupQueuedPrompts = 0;
 
 function storedFirstSuccess(): boolean {
   try {
@@ -96,6 +98,7 @@ let state: PwaLifecycleState = {
   readingAttachments: false,
   turnActive: false,
   locallyQueuedPrompts: 0,
+  queuedFollowups: 0,
 };
 
 function publish(patch: Partial<PwaLifecycleState>): void {
@@ -166,25 +169,22 @@ export function setComposerLifecycle(activity: Pick<PwaLifecycleState, "hasDraft
 
 export function setTurnActive(turnActive: boolean): void { publish({ turnActive }); }
 
-function publishQueuedPrompts(): void {
-  publish({ locallyQueuedPrompts: reconnectQueuedPrompts + followupQueuedPrompts });
-}
-
 /** Track prompts buffered by a reconnecting transport until it returns online. */
 export function markPromptQueued(): void {
   reconnectQueuedPrompts += 1;
-  publishQueuedPrompts();
+  publish({ locallyQueuedPrompts: reconnectQueuedPrompts });
 }
 
 export function clearQueuedPrompts(): void {
   reconnectQueuedPrompts = 0;
-  publishQueuedPrompts();
+  publish({ locallyQueuedPrompts: 0 });
 }
 
-/** Track the controller's visible in-memory follow-up queues across Sessions. */
+/** Track the controller's visible in-memory follow-up queues across Sessions.
+ *  These block a service-worker update (a reload would drop them) but never the
+ *  availability banner — the queue already has its own per-session UI. */
 export function setFollowupQueuedPrompts(count: number): void {
-  followupQueuedPrompts = Math.max(0, Math.floor(count));
-  publishQueuedPrompts();
+  publish({ queuedFollowups: Math.max(0, Math.floor(count)) });
 }
 
 export function markFirstSuccessfulResponse(): void {
@@ -224,6 +224,7 @@ export function updateBlockers(value = state): string[] {
   if (value.hasDraft) blockers.push("the unsent draft is sent or cleared");
   if (value.pendingAttachments) blockers.push("pending attachments are sent or cleared");
   if (value.locallyQueuedPrompts) blockers.push("locally queued prompts reach the Machine");
+  if (value.queuedFollowups) blockers.push("queued follow-ups are delivered");
   return blockers;
 }
 

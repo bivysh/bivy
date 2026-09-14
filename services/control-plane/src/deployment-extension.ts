@@ -34,6 +34,7 @@ export interface DeploymentDecision {
 /** Opaque technical facts an operator may use for admission. Core never puts
  * product tiers, prices, or commercial cap names in this contract. */
 export interface DeploymentPolicyContext {
+  source?: string;
   computeSource?: "user" | "managed";
   provider?: string;
   sizeId?: string;
@@ -68,12 +69,7 @@ export class DeploymentExtension {
 
   get configured(): boolean { return Boolean(this.url); }
 
-  async authorize(
-    accountId: string,
-    operation: DeploymentOperation,
-    idempotencyKey?: string,
-    context?: DeploymentPolicyContext,
-  ): Promise<DeploymentDecision> {
+  async authorize(accountId: string, operation: DeploymentOperation, idempotencyKey?: string, context: DeploymentPolicyContext = {}): Promise<DeploymentDecision> {
     if (!this.url) return { allowed: true };
     const response = await this.request("/v1/policy/check", { subject: { accountId }, operation, idempotencyKey, context });
     const decision = response as Partial<DeploymentDecision>;
@@ -105,6 +101,11 @@ export class DeploymentExtension {
     const result = await this.request("/v1/account", { subject: { accountId } }) as { presentation?: AccountExtensionView };
     if (!result.presentation || typeof result.presentation !== "object") throw new Error("Deployment extension returned invalid account presentation");
     return result.presentation;
+  }
+
+  async deleteAccount(accountId: string, email: string): Promise<void> {
+    if (!this.url) return;
+    await this.request("/v1/account/delete", { subject: { accountId, email } });
   }
 
   async accountAction(accountId: string, email: string, action: string): Promise<{ url: string }> {

@@ -7,12 +7,14 @@ import { fileURLToPath } from "node:url";
 import express, { type Request, type Response, type NextFunction } from "express";
 import { ipKeyGenerator, rateLimit } from "express-rate-limit";
 import webpush from "web-push";
+import { resolveWebhookAuth, verifyWebhookAuth, DEFAULT_WEBHOOK_HEADER, type WebhookAuth } from "./webhook-auth.js";
+import { matchGithubItemTrigger } from "./github-item-trigger.js";
 import { ephemeralAdapter, validateCapabilityTags } from "@bivy/core";
 import { providerCredentialFingerprint, type Account, type NodeRecord, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, type AutomationRun, type InboundHook, type NodeClaim, GITHUB_IDENTITY_MODES, type GithubIdentityMode, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
 import { centralGithubAppConfig, centralInstallUrl, applyCentralInstallationEvent, resolveGithubIdentity } from "./central-github-app.js";
 import { maybeAutoProvision, planAutoProvision, hostedExecutionReadiness, mintHostedInstallationToken, provisionEphemeralForAccount, provisionEphemeralRestore, reapSettledHostedMachine, reconcileAllHostedMachines, reconcileAllReadyCapacity, sweepAllOrphanProviderResources, validateHostedProviderToken, markHostedMachineMilestone, EPHEMERAL_MILESTONES, ephemeralMachinesEnabled, type ManagedProvisionRequest } from "./ephemeral-provisioner.js";
 import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecret, initializeHostedKeyring } from "./hosted-crypto.js";
-import { listAppInstallations, listInstallationRepositories, listInstallationBranches, getAppInstallation } from "./hosted-github-auth.js";
+import { listAppInstallations, listInstallationRepositories, listInstallationBranches, getAppInstallation, mintInstallationToken } from "./hosted-github-auth.js";
 import { correlateHostedSessions } from "./hosted-correlation.js";
 import { countActiveAccountSessions } from "./session-count.js";
 import { usageFromManagedMachine } from "./compute-metering.js";
@@ -20,6 +22,8 @@ import { managedCapacityCount, managedConcurrencyLimit } from "./managed-admissi
 import { managedInteractiveLaunch, ManagedLaunchConflict, type ManagedInteractiveRequest } from "./managed-interactive-launch.js";
 import { managedAuthRunnerImage, managedSessionImage } from "./managed-compute.js";
 import { createStore } from "./store-factory.js";
+import { createOwnerAuthRouter } from "./owner-auth.js";
+import { configureProxyTrust } from "./proxy-trust.js";
 import { AutomationScheduler, nextOccurrence, normalizeSchedule } from "./schedule.js";
 import { parseShardUrls, shardForNode } from "./relay-shards.js";
 import { safeReturnPath } from "./redirect.js";
@@ -31,20 +35,15 @@ import {
   verifyGithubSignature,
   verifyLinearSignature,
   parseLinearIssueEvent,
-  parseGithubIssueEvent,
-  pickIssueRoutingLabel,
   pickRoutingLabel,
   parseGithubCommentEvent,
   pickCommentRoutingLabel,
-  parseGithubPullRequestEvent,
-  pickPullRequestRoutingLabel,
   parseGithubReviewCommentEvent,
   parseInstallationId,
   verifySlackSignature,
   parseSlackCommand,
   applyDefaultNode,
   meetsTriggerAccess,
-  verifyAutomationSignature,
   parseAutomationEvent,
   renderEventContext,
   normalizeAutomationRepo,
@@ -90,6 +89,9 @@ function assertProductionConfig() {
   const relaySecret = process.env.RELAY_SECRET;
   if (!relaySecret || relaySecret === "dev-relay-secret") {
     problems.push("RELAY_SECRET must be set to a strong, non-default value (openssl rand -hex 32)");
+  }
+  if (process.env.SELF_HOST_SETUP_TOKEN && process.env.SELF_HOST_SETUP_TOKEN === relaySecret) {
+    problems.push("SELF_HOST_SETUP_TOKEN must be different from RELAY_SECRET (the relay must not hold owner setup credentials)");
   }
   if (process.env.ALLOW_DEV_LOGIN === "1") {
     problems.push("ALLOW_DEV_LOGIN=1 must not be set in production (it enables an unauthenticated sign-in endpoint)");
@@ -151,7 +153,7 @@ async function deploymentDecision(
   accountId: string,
   operation: DeploymentOperation,
   idempotencyKey?: string,
-  context?: DeploymentPolicyContext,
+  context: DeploymentPolicyContext = {},
 ) {
   if (operation !== "ephemeral.provision" || context?.computeSource !== "managed") return deploymentExtension.authorize(accountId, operation, idempotencyKey, context);
   const limit = managedConcurrencyLimit();
@@ -189,22 +191,14 @@ async function requireDeploymentAdmission(
 }
 
 async function parkAutomationRunForDeploymentDenial(accountId: string, item: { id: string }, decision: Awaited<ReturnType<typeof deploymentDecision>>) {
-  const reason = decision.reason || "Hosted automation is blocked by this account plan.";
-  const run = await store.transitionAutomationRun(accountId, item.id, "needs_attention", { failure: reason });
-  const now = new Date().toISOString();
-  const patched = await store.appendRunEvidence(accountId, item.id, {
-    events: [{
-      at: now,
-      kind: "policy_denial",
-      summary: reason,
-      status: "denied",
-      reasonCode: decision.code || "deployment_policy",
-      milestoneId: `${item.id}:deployment-policy-denial`,
-    }],
-    attention: { severity: "warning", reason, since: now },
-  });
-  const current = patched ?? run;
+  const reason = decision.reason || "Automation is blocked by deployment policy.";
+  // The durable transition elects one notifier across webhook redeliveries,
+  // node admission checks, and control-plane replicas. A GitHub GET then POST
+  // alone cannot prevent concurrent duplicate comments.
+  const current = await store.parkAutomationRunForPolicy(accountId, item.id, reason, decision.code || "deployment_policy");
   if (current) {
+    void notifyAutomationBlocked(accountId, current, reason);
+    void commentGitHubAutomationBlocked(current, reason).catch((error) => console.warn("[github] quota/policy comment failed", error));
     void notifyRelaysRunUpdated(accountId, {
       id: current.id, events: current.events, completedAt: current.completedAt,
       startedAt: current.startedAt, claimedAt: current.claimedAt, createdAt: current.createdAt,
@@ -212,8 +206,56 @@ async function parkAutomationRunForDeploymentDenial(accountId: string, item: { i
   }
 }
 
-async function notifyWorkAvailableOrParkForPlan(accountId: string, item: { id: string; label: string }): Promise<{ blocked: boolean; reason?: string }> {
-  const decision = await deploymentDecision(accountId, "automation.run", item.id);
+async function notifyAutomationBlocked(accountId: string, run: AutomationRun, reason: string): Promise<void> {
+  const result = await sendPushToAccount(accountId, {
+    title: "Automation run blocked",
+    body: reason,
+    kind: "automation_blocked",
+    runId: run.id,
+    url: `/runs/${encodeURIComponent(run.id)}`,
+  });
+  if (result.sent > 0) {
+    await store.appendRunEvidence(accountId, run.id, {
+      notification: { status: "delivered", channel: "push", updatedAt: new Date().toISOString() },
+    }).catch(() => undefined);
+  }
+}
+
+async function commentGitHubAutomationBlocked(run: AutomationRun, reason: string): Promise<void> {
+  if (!run.source.startsWith("github:")) return;
+  const repo = run.sourceRef?.repo;
+  const issueNumber = run.sourceRef?.issueNumber;
+  if (!repo || !issueNumber) return;
+  const [owner, name] = repo.split("/");
+  if (!owner || !name) return;
+  const central = centralGithubAppConfig();
+  if (!central) return;
+  const installs = await store.listCentralGithubInstallations(run.accountId);
+  const install = installs.find((item) => item.githubAccount?.toLowerCase() === owner.toLowerCase()) ?? (installs.length === 1 ? installs[0] : undefined);
+  if (!install) return;
+  let minted;
+  try {
+    minted = await mintInstallationToken({ appId: central.appId, installationId: install.installationId, privateKeyPem: central.privateKeyPem }, fetch, undefined, { repositories: [name] });
+  } catch {
+    minted = await mintInstallationToken({ appId: central.appId, installationId: install.installationId, privateKeyPem: central.privateKeyPem });
+  }
+  const marker = `<!-- bivy:automation-blocked:${run.id} -->`;
+  const headers = { accept: "application/vnd.github+json", authorization: `Bearer ${minted.token}`, "x-github-api-version": "2022-11-28" };
+  const existing = await fetch(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/issues/${issueNumber}/comments?per_page=100`, { headers }).catch(() => undefined);
+  if (existing?.ok) {
+    const comments = await existing.json().catch(() => []) as Array<{ body?: string }>;
+    if (comments.some((comment) => comment.body?.includes(marker))) return;
+  }
+  const body = `🤖 Bivy queued this automation run, but it is blocked by account policy or usage limits.\n\n${reason}\n\nOpen Bivy to upgrade or retry the run after adjusting the account.\n\n${marker}`;
+  await fetch(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/issues/${issueNumber}/comments`, {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify({ body }),
+  });
+}
+
+async function notifyWorkAvailableOrParkForPlan(accountId: string, item: { id: string; label: string; source?: string }): Promise<{ blocked: boolean; reason?: string }> {
+  const decision = await deploymentDecision(accountId, "automation.run", item.id, { source: item.source });
   if (decision.allowed) {
     void notifyRelaysWorkAvailable(accountId, item);
     return { blocked: false };
@@ -250,7 +292,7 @@ try {
 const automationScheduler = new AutomationScheduler(
   store,
   Math.max(1_000, Number(process.env.AUTOMATION_SCHEDULER_INTERVAL_MS) || 15_000),
-  (accountId, run) => void notifyWorkAvailableOrParkForPlan(accountId, { id: run.id, label: run.routing.nodeLabel }).catch((error) => console.error("automation schedule admission failed", error)),
+  (accountId, run) => void notifyWorkAvailableOrParkForPlan(accountId, { id: run.id, label: run.routing.nodeLabel, source: run.source }).catch((error) => console.error("automation schedule admission failed", error)),
 );
 automationScheduler.start();
 
@@ -290,7 +332,7 @@ async function notifyRelaysRunUpdated(accountId: string, run: Pick<AutomationRun
 async function notifyRelaysWorkAvailable(
   accountId: string,
   item: { id: string; label: string },
-  options: { nodeId?: string; autoProvision?: boolean } = {},
+  options: { nodeId?: string; excludeNodeId?: string; autoProvision?: boolean } = {},
 ) {
   // Best-effort push: relay-connected nodes get an immediate hint and then fetch
   // + atomically claim via /node/work. A cancellation targets only the active
@@ -300,7 +342,7 @@ async function notifyRelaysWorkAvailable(
       await fetch(`${relayHttpUrl(url).replace(/\/$/, "")}/internal/work-available`, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${process.env.RELAY_SECRET ?? "dev-relay-secret"}` },
-        body: JSON.stringify({ accountId, id: item.id, label: item.label, nodeId: options.nodeId }),
+        body: JSON.stringify({ accountId, id: item.id, label: item.label, nodeId: options.nodeId, excludeNodeId: options.excludeNodeId }),
       });
     }),
   );
@@ -372,6 +414,7 @@ function parseSimulationEventBody(value: unknown): EvaluationEvent {
   return {
     kind,
     repo,
+    appId: typeof o.appId === "string" ? o.appId.trim() || undefined : undefined,
     labels,
     mention: o.mention === true,
     event,
@@ -382,6 +425,7 @@ function parseSimulationEventBody(value: unknown): EvaluationEvent {
 }
 
 const app = express();
+configureProxyTrust(app, process.env.TRUST_PROXY);
 
 // Operational counters for the relay ticket mint path. These are intentionally
 // coarse (no tokens, no payloads) and exist to distinguish app/store failures
@@ -468,6 +512,9 @@ function securityHeaders(_req: Request, res: Response, next: NextFunction) {
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Referrer-Policy", "no-referrer");
   res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  // Browsers only honor HSTS over HTTPS. Keep this host-scoped: operators may
+  // serve unrelated or non-HTTPS applications from sibling subdomains.
+  res.setHeader("Strict-Transport-Security", "max-age=31536000");
   res.setHeader("Permissions-Policy", "camera=(self), microphone=(), geolocation=(), payment=(), usb=(), serial=()");
   // The hosted PWA keeps JS/CSS in external static assets so CSP can avoid
   // unsafe-inline while still allowing API, relay, and push-notification flows.
@@ -818,6 +865,19 @@ function asyncHandler(fn: (req: Request, res: Response, next: NextFunction) => P
 const githubClientId = process.env.GITHUB_OAUTH_CLIENT_ID || process.env.BIVY_GITHUB_OAUTH_CLIENT_ID;
 const githubClientSecret = process.env.GITHUB_OAUTH_CLIENT_SECRET || process.env.BIVY_GITHUB_OAUTH_CLIENT_SECRET;
 const githubConfigured = Boolean(githubClientId && githubClientSecret);
+
+// Portable owner authentication: needs only Postgres and an operator-generated
+// setup secret. No SSH, external identity provider, or platform-specific API.
+app.use("/auth/owner", createOwnerAuthRouter({
+  store,
+  setupToken: process.env.SELF_HOST_SETUP_TOKEN,
+  ownerEmail: process.env.SELF_HOST_OWNER_EMAIL,
+  publicUrl: process.env.PUBLIC_CONTROL_PLANE_URL || `http://localhost:${port}`,
+  relayUrl: relayPublicUrl,
+  github: githubConfigured,
+  requireHttps: process.env.NODE_ENV === "production",
+  email: Boolean(process.env.RESEND_API_KEY && process.env.AUTH_EMAIL_FROM) || process.env.NODE_ENV !== "production",
+}));
 
 // Short-lived CSRF/login state lives in Postgres, not process memory: GitHub may
 // return the callback to any healthy control-plane replica behind the load
@@ -1214,6 +1274,21 @@ app.get("/me", requireUser, asyncHandler(async (req, res) => {
 // Generic deployment-owned account actions. Core neither defines nor interprets
 // action ids; a configured extension returns presentation data from /me and
 // handles the selected action out of process.
+app.delete("/account", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  // Never remove the account row while a Bivy-managed machine is active: the
+  // reconciler needs that row to keep retrying provider deletion.
+  const activeMachines = await store.listHostedMachineAttempts(account.id, true);
+  if (activeMachines.length > 0) {
+    return void res.status(409).json({ error: "Delete your hosted machines before deleting your account" });
+  }
+  // Billing cleanup runs first. If it fails, retain the account so the user can
+  // retry without losing access to the deletion flow.
+  await deploymentExtension.deleteAccount(account.id, account.email);
+  const deleted = await store.deleteAccount(account.id);
+  res.json({ ok: deleted });
+}));
+
 app.post("/account/extension/actions/:action", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   res.json(await deploymentExtension.accountAction(account.id, account.email, String(req.params.action)));
@@ -1469,7 +1544,11 @@ app.post("/account/node-claims", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   const { claim, code } = await store.createNodeClaim(account.id);
   const claimUrl = `${baseUrl(req)}/claim/${code}`;
-  res.status(201).json({ ...presentNodeClaim(claim), claimUrl, command: `curl -fsSL ${shellSingleQuote(claimUrl)} | sh` });
+  // Keep machine enrollment on the same installer as every other install. The
+  // claim is passed as an environment variable to install.sh; do not make the
+  // claim URL itself a second installer entry point.
+  const command = `curl -fsSL https://bivy.sh/install.sh | BIVY_NODE_CLAIM_CODE=${shellSingleQuote(code)} BIVY_CONTROL_PLANE_URL=${shellSingleQuote(baseUrl(req))} bash`;
+  res.status(201).json({ ...presentNodeClaim(claim), claimUrl, command });
 }));
 
 app.get("/account/node-claims", requireUser, asyncHandler(async (req, res) => {
@@ -1493,7 +1572,10 @@ app.get("/claim/:code", (req, res) => {
   const controlPlaneUrl = baseUrl(req);
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("Referrer-Policy", "no-referrer");
-  res.type("text/x-shellscript").send(`#!/bin/sh\nset -eu\nexport BIVY_NODE_CLAIM_CODE=${shellSingleQuote(code)}\nexport BIVY_CONTROL_PLANE_URL=${shellSingleQuote(controlPlaneUrl)}\ncurl -fsSL https://bivy.sh/install.sh | sh\n`);
+  // Legacy claim URLs remain usable, but must invoke bash: install.sh uses
+  // bash arrays and cannot be piped into POSIX sh. -L also handles a proxy's
+  // canonical-host redirect before the script reaches the shell.
+  res.type("text/x-shellscript").send(`#!/usr/bin/env bash\nset -eu\nexport BIVY_NODE_CLAIM_CODE=${shellSingleQuote(code)}\nexport BIVY_CONTROL_PLANE_URL=${shellSingleQuote(controlPlaneUrl)}\ncurl -fsSL https://bivy.sh/install.sh | bash\n`);
 });
 
 app.post("/claim/:code/enroll", asyncHandler(async (req, res) => {
@@ -2095,19 +2177,36 @@ app.post("/node/model-auth-key/public", requireNode, asyncHandler(async (req, re
   res.json({ ok: true });
 }));
 
-app.post("/node/model-auth-key/request", requireNode, asyncHandler(async (req, res) => {
+const modelAuthKeyRequestRateLimit = rateLimit({
+  windowMs: 60_000,
+  // Cold-start retries run every 2s for at most a minute. Allow that bounded
+  // recovery cadence while containing buggy or stale clients before they can
+  // recreate a control-plane/relay feedback storm.
+  limit: 40,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => (req as Request & { node?: NodeRecord }).node?.id ?? ipKeyGenerator(clientIp(req)),
+  message: { error: "Too many model-auth key requests" },
+});
+
+app.post("/node/model-auth-key/request", requireNode, modelAuthKeyRequestRateLimit, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const publicKey = String(req.body?.publicKey ?? "").trim();
   if (!publicKey) return res.status(400).json({ error: "Missing publicKey" });
-  await store.requestModelAuthWrappedKey(node.accountId, node.id, publicKey);
+  const queued = await store.requestModelAuthWrappedKey(node.accountId, node.id, publicKey);
   // Event-driven vault-key hand-off: wake the account's other (peer) nodes over
   // the relay so one of them runs a model-auth sync and answers this request now,
-  // instead of on its 30s poll. Critical for short-lived ephemeral runners. Best
-  // effort — the requester's fast-retry + fallback poll still guarantee pickup if
-  // no relay/peer is reachable. Peer-only: the CP only relays a wake signal and
-  // never sees the vault key or any credential.
-  void notifyRelaysWorkAvailable(node.accountId, { id: "model-auth", label: "model-auth" }).catch(() => {});
-  res.json({ ok: true });
+  // instead of on its 30s poll. Notify only for a new/changed request and exclude
+  // the requester: waking it creates a request → wake → request feedback loop.
+  // A credential wake is not a queued Run and must never trigger auto-provisioning.
+  if (queued) {
+    void notifyRelaysWorkAvailable(
+      node.accountId,
+      { id: "model-auth", label: "model-auth" },
+      { excludeNodeId: node.id, autoProvision: false },
+    ).catch(() => {});
+  }
+  res.json({ ok: true, queued });
 }));
 
 app.put("/node/model-auth-key/wrapped", requireNode, asyncHandler(async (req, res) => {
@@ -2639,16 +2738,31 @@ app.get("/account/hosted-github-repositories/:owner/:repo/branches", requireUser
 // Set (or clear) the account's default node: untagged issues/comments that
 // would otherwise route to the shared `bivy` queue instead route to
 // `bivy/<defaultNode>`. Settings → GitHub App in the web UI.
+// Hosted installations are configurable before the first webhook creates their
+// settings row. Never create that row for an app the account has not installed.
+async function githubAppSettingsHooks(accountId: string, appId: string) {
+  const hooks = await store.listGithubAppHooks(accountId);
+  const central = centralGithubAppConfig();
+  if (central && (!appId || appId === central.appId) && !hooks.some((hook) => hook.appId === central.appId)) {
+    const installations = await syncCentralInstallationsForAccount(accountId);
+    if (installations.length) {
+      const hook = await store.createInboundHook(accountId, "github_app");
+      hooks.push((await store.setInboundHookAppMeta(accountId, hook.id, {
+        appId: central.appId,
+        ...(central.slug ? { mention: central.slug, name: central.slug } : {}),
+      })) ?? hook);
+    }
+  }
+  return appId ? hooks.filter((hook) => hook.appId === appId) : hooks;
+}
+
 app.post("/account/github-app/default-node", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const appId = typeof req.body?.appId === "string" ? req.body.appId.trim() : "";
   // The default node is an account-level preference stored per hook. Without an
   // app id, set it on every app so the account has one answer rather than N.
-  const hooks = appId
-    ? [await store.getGithubAppHook(client.accountId, appId)].filter(Boolean as unknown as (h: unknown) => boolean)
-    : await store.listGithubAppHooks(client.accountId);
-  const targets = hooks as Array<{ id: string }>;
+  const targets = await githubAppSettingsHooks(client.accountId, appId);
   if (!targets.length) return res.status(404).json({ error: "No GitHub App connected" });
   const node = typeof req.body?.node === "string" ? req.body.node.trim() : "";
   let updated: { defaultNode?: string } | undefined;
@@ -2676,10 +2790,7 @@ app.post("/account/github-app/trigger-access", asyncHandler(async (req, res) => 
   }
   const triggerAccess = raw === "contributor" || raw === "collaborator" ? raw : undefined;
   const appId = typeof req.body?.appId === "string" ? req.body.appId.trim() : "";
-  const hooks = appId
-    ? [await store.getGithubAppHook(client.accountId, appId)].filter(Boolean as unknown as (h: unknown) => boolean)
-    : await store.listGithubAppHooks(client.accountId);
-  const targets = hooks as Array<{ id: string }>;
+  const targets = await githubAppSettingsHooks(client.accountId, appId);
   if (!targets.length) return res.status(404).json({ error: "No GitHub App connected" });
   let updated: { triggerAccess?: string } | undefined;
   for (const target of targets) {
@@ -2778,10 +2889,12 @@ const SENTINEL_SCHEDULE = { kind: "once" as const, at: "9999-12-31T00:00:00.000Z
 // webhook-triggered automation so the client can display it. The secret is
 // returned to the client exactly once, at create/rotate time.
 function publicAutomation(def: AutomationDefinition, req: Request) {
-  const { webhookSecret: _secret, target, ...rest } = def;
+  const { webhookSecret, target, ...rest } = def;
   const base = { ...rest, targetKind: target?.kind, targetSessionId: target?.sessionId };
+  // `requireSigning` mirrors whether a secret exists so the editor can show
+  // the toggle's real state without ever seeing the secret itself.
   return def.trigger === "webhook"
-    ? { ...base, webhookUrl: `${baseUrl(req)}/webhooks/automation/run/${def.id}` }
+    ? { ...base, webhookUrl: `${baseUrl(req)}/webhooks/automation/run/${def.id}`, requireSigning: Boolean(webhookSecret) }
     : base;
 }
 
@@ -2790,10 +2903,26 @@ function nodePublicAutomation(definition: AutomationDefinition, req: Request) {
   return safe;
 }
 
-async function dispatchAutomationDefinition(definition: AutomationDefinition) {
+function automationAttemptLimit(value: unknown, fallback?: number): number | undefined {
+  if (value === undefined) return fallback;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 10) {
+    throw Object.assign(new Error('maxAttempts must be an integer from 1 to 10'), { status: 400 });
+  }
+  return value;
+}
+
+function dispatchKey(req: Request): string | undefined {
+  const key = req.body?.sourceKey;
+  if (key === undefined) return undefined;
+  if (typeof key !== 'string' || !/^[a-zA-Z0-9:_-]{1,128}$/.test(key)) throw Object.assign(new Error('Invalid sourceKey'), { status: 400 });
+  return key;
+}
+
+async function dispatchAutomationDefinition(definition: AutomationDefinition, sourceKey?: string) {
   const run = await store.enqueueAutomationRun(definition.accountId, {
     source: "manual",
     triggerKind: "manual",
+    dedupeKey: sourceKey ? `manual:${definition.id}:${sourceKey}` : undefined,
     title: definition.name,
     body: definition.templateCiphertext,
     definitionId: definition.id,
@@ -2823,8 +2952,19 @@ app.post("/node/automations/:id/run", requireNode, asyncHandler(async (req, res)
   const node = (req as Request & { node: NodeRecord }).node;
   const definition = await store.getAutomationDefinition(node.accountId, String(req.params.id));
   if (!definition) return res.status(404).json({ error: "Automation not found" });
-  res.status(201).json(await dispatchAutomationDefinition(definition));
+  res.status(201).json(await dispatchAutomationDefinition(definition, dispatchKey(req)));
 }));
+
+// Bound credential-bearing automation writes without rate-limiting reads or
+// webhook deliveries. Nodes get independent budgets; account clients use IPs.
+const automationWriteRateLimit = rateLimit({
+  windowMs: 60_000,
+  limit: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => (req as Request & { node?: NodeRecord }).node?.id ?? ipKeyGenerator(clientIp(req)),
+  message: { error: "Too many automation updates. Try again shortly." },
+});
 
 // Node-authenticated reconciliation surface for `.bivy/automations.yaml`.
 // A definition applied from a node is deliberately bound to that node: its
@@ -2838,7 +2978,7 @@ app.get("/node/automation-config", requireNode, asyncHandler(async (req, res) =>
   res.json({ automations: definitions.map((d) => publicAutomation(d, req)) });
 }));
 
-app.put("/node/automation-config/:key", requireNode, asyncHandler(async (req, res) => {
+app.put("/node/automation-config/:key", requireNode, automationWriteRateLimit, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const configKey = String(req.params.key ?? "").trim();
   if (!/^[a-z][a-z0-9-]{1,62}$/.test(configKey) || req.body?.configKey !== configKey) {
@@ -2871,6 +3011,7 @@ app.put("/node/automation-config/:key", requireNode, asyncHandler(async (req, re
   let repos: string[] | undefined;
   let labels: string[] | undefined;
   let on: AutomationDefinition["on"] | undefined;
+  const appId = typeof req.body?.appId === "string" ? req.body.appId.trim() || undefined : undefined;
   let schedule = SENTINEL_SCHEDULE as AutomationDefinition["schedule"];
   let nextRunAt: string | undefined;
   try {
@@ -2910,14 +3051,18 @@ app.put("/node/automation-config/:key", requireNode, asyncHandler(async (req, re
     ephemeral: req.body?.ephemeral === true || undefined,
     approvalMode, sandbox, maxAttempts,
     enabled: req.body?.enabled !== false,
-    trigger, repo, repos: repos?.length ? repos : repo && (trigger === "github" || trigger === "linear") ? [repo] : repos, labels, on, schedule, nextRunAt,
+    trigger, repo, repos: repos?.length ? repos : repo && (trigger === "github" || trigger === "linear") ? [repo] : repos, labels, appId, on, schedule, nextRunAt,
   };
+  let webhookAuth: WebhookAuth = {};
+  try {
+    if (trigger === "webhook") webhookAuth = resolveWebhookAuth({ ...(!current ? { requireSigning: true } : {}), ...req.body }, current);
+  } catch (error) { return res.status(400).json({ error: (error as Error).message }); }
+  const webhookSecret = webhookAuth.webhookSecret;
   if (current) {
-    const updated = await store.updateAutomationDefinition(node.accountId, current.id, common);
-    return res.json(publicAutomation(updated!, req));
+    const updated = await store.updateAutomationDefinition(node.accountId, current.id, { ...common, ...webhookAuth });
+    return res.json({ ...publicAutomation(updated!, req), ...(webhookSecret && webhookSecret !== current.webhookSecret ? { webhookSecret } : {}) });
   }
-  const webhookSecret = trigger === "webhook" ? randomBytes(32).toString("base64url") : undefined;
-  const created = await store.createAutomationDefinition(node.accountId, { ...common, webhookSecret });
+  const created = await store.createAutomationDefinition(node.accountId, { ...common, ...webhookAuth });
   return res.status(201).json({ ...publicAutomation(created, req), ...(webhookSecret ? { webhookSecret } : {}) });
 }));
 
@@ -3029,17 +3174,16 @@ app.get("/account/automations", asyncHandler(async (req, res) => {
   res.json((await store.listAutomationDefinitions(client.accountId)).map((d) => publicAutomation(d, req)));
 }));
 
-app.post("/account/automations", asyncHandler(async (req, res) => {
+app.post("/account/automations", automationWriteRateLimit, asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
   if (!name) return res.status(400).json({ error: "name is required" });
   const rawTrigger = typeof req.body?.trigger === "string" ? req.body.trigger : "schedule";
-  const trigger: NonNullable<AutomationDefinition["trigger"]> =
-    rawTrigger === "webhook" || rawTrigger === "github" || rawTrigger === "linear"
-      || rawTrigger === "github_ci" || rawTrigger === "manual"
-      ? rawTrigger
-      : "schedule";
+  if (!["schedule", "webhook", "github", "linear", "github_ci", "manual"].includes(rawTrigger)) {
+    return res.status(400).json({ error: "unsupported automation trigger" });
+  }
+  const trigger = rawTrigger as NonNullable<AutomationDefinition["trigger"]>;
   const enabled = req.body?.enabled !== false;
   // Webhook + source triggers have no schedule: park on the sentinel so the
   // scheduler never fires them. Only schedule-triggered rows get nextRunAt.
@@ -3054,11 +3198,19 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
     nextRunAt = enabled ? nextOccurrence(schedule, new Date(Date.now() - 1)) : undefined;
     if (enabled && !nextRunAt) return res.status(400).json({ error: "The one-time timestamp must be in the future." });
   }
-  const webhookSecret = trigger === "webhook" ? randomBytes(32).toString("base64url") : undefined;
+  // Some providers cannot configure a signing secret or custom headers. Keep
+  // signing enabled by default, but allow explicitly unsigned webhook
+  // endpoints for those providers.
+  let webhookAuth: WebhookAuth = {};
+  try {
+    if (trigger === "webhook") webhookAuth = resolveWebhookAuth({ requireSigning: true, ...req.body });
+  } catch (error) { return res.status(400).json({ error: (error as Error).message }); }
+  const webhookSecret = webhookAuth.webhookSecret;
   let repo: string | undefined;
   let labels: string[] | undefined;
   let repos: string[] | undefined;
   let on: AutomationDefinition["on"] | undefined;
+  const appId = typeof req.body?.appId === "string" ? req.body.appId.trim() || undefined : undefined;
   let target: AutomationDefinition["target"];
   let requiredCapabilities: string[] | undefined;
   let preferredCapabilities: string[] | undefined;
@@ -3091,6 +3243,14 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
     return res.status(400).json({ error: (error as Error).message });
   }
   const templateId = typeof req.body?.templateId === "string" ? req.body.templateId.trim() || undefined : undefined;
+  const requestedConfigOrder = Number(req.body?.configOrder);
+  if (req.body?.configOrder !== undefined && (!Number.isInteger(requestedConfigOrder) || requestedConfigOrder < 0 || requestedConfigOrder > 999)) {
+    return res.status(400).json({ error: "configOrder must be an integer from 0 to 999" });
+  }
+  const existingDefinitions = await store.listAutomationDefinitions(client.accountId);
+  const nextConfigOrder = req.body?.configOrder !== undefined
+    ? requestedConfigOrder
+    : Math.max(-1, ...existingDefinitions.map((d) => d.configOrder ?? -1)) + 1;
   const input: Omit<AutomationDefinition, "id" | "accountId" | "createdAt" | "updatedAt"> = {
     name,
     templateCiphertext: typeof req.body?.templateCiphertext === "string" ? req.body.templateCiphertext : undefined,
@@ -3101,13 +3261,15 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
     approvalMode: ["never", "risky", "always", "autonomous"].includes(req.body?.approvalMode) ? req.body.approvalMode : undefined,
     sandbox: ["read-only", "workspace-write", "danger-full-access"].includes(req.body?.sandbox) ? req.body.sandbox : undefined,
     allowDangerous: req.body?.allowDangerous === true,
-    maxAttempts: Number.isInteger(req.body?.maxAttempts) && req.body.maxAttempts >= 1 && req.body.maxAttempts <= 10 ? req.body.maxAttempts : undefined,
+    maxAttempts: automationAttemptLimit(req.body?.maxAttempts),
+    configOrder: nextConfigOrder,
     enabled,
     trigger,
-    webhookSecret,
+    ...webhookAuth,
     repo,
     labels,
     repos,
+    appId,
     on,
     target,
     templateId: templateId || (isSourceTrigger(trigger) ? "issue-to-pr" : undefined),
@@ -3129,7 +3291,7 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
   res.status(201).json({ ...publicAutomation(definition, req), ...(webhookSecret ? { webhookSecret } : {}) });
 }));
 
-app.put("/account/automations/:id", asyncHandler(async (req, res) => {
+app.put("/account/automations/:id", automationWriteRateLimit, asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const current = await store.getAutomationDefinition(client.accountId, String(req.params.id));
@@ -3165,6 +3327,7 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
   let labels = current.labels;
   let repos = current.repos;
   let on = current.on;
+  let appId = current.appId;
   let target = current.target;
   let requiredCapabilities = current.requiredCapabilities;
   let preferredCapabilities = current.preferredCapabilities;
@@ -3184,6 +3347,9 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
     }
     if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "on")) {
       on = req.body.on === null ? undefined : normalizeEventRules(req.body.on);
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "appId")) {
+      appId = typeof req.body.appId === "string" && req.body.appId.trim() ? req.body.appId.trim() : undefined;
     }
     if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "targetKind")) {
       if (req.body.targetKind === "existing_session") {
@@ -3213,7 +3379,21 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
   } catch (error) {
     return res.status(400).json({ error: (error as Error).message });
   }
+  const requestedConfigOrder = Number(req.body?.configOrder);
+  if (req.body?.configOrder !== undefined && (!Number.isInteger(requestedConfigOrder) || requestedConfigOrder < 0 || requestedConfigOrder > 999)) {
+    return res.status(400).json({ error: "configOrder must be an integer from 0 to 999" });
+  }
+  // Signing toggle (webhook trigger only): `false` drops the HMAC secret so
+  // unsigned deliveries are accepted; `true` on an unsigned endpoint mints a
+  // fresh secret, disclosed once in this response exactly like create/rotate.
+  // Anything else leaves the current secret untouched.
+  let webhookAuth: WebhookAuth = {};
+  try {
+    if (current.trigger === "webhook") webhookAuth = resolveWebhookAuth(req.body ?? {}, current);
+  } catch (error) { return res.status(400).json({ error: (error as Error).message }); }
+  const mintedSecret = webhookAuth.webhookSecret !== current.webhookSecret ? webhookAuth.webhookSecret : undefined;
   const patch = {
+    ...webhookAuth,
     name: typeof req.body?.name === "string" ? req.body.name.trim() || current.name : current.name,
     templateCiphertext: typeof req.body?.templateCiphertext === "string" ? req.body.templateCiphertext : current.templateCiphertext,
     runtimeId: typeof req.body?.runtimeId === "string" ? req.body.runtimeId.trim() || undefined : current.runtimeId,
@@ -3222,13 +3402,15 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
     approvalMode: ["never", "risky", "always", "autonomous"].includes(req.body?.approvalMode) ? req.body.approvalMode : current.approvalMode,
     sandbox: ["read-only", "workspace-write", "danger-full-access"].includes(req.body?.sandbox) ? req.body.sandbox : current.sandbox,
     allowDangerous: typeof req.body?.allowDangerous === "boolean" ? req.body.allowDangerous : current.allowDangerous,
-    maxAttempts: Number.isInteger(req.body?.maxAttempts) && req.body.maxAttempts >= 1 && req.body.maxAttempts <= 10 ? req.body.maxAttempts : current.maxAttempts,
+    maxAttempts: automationAttemptLimit(req.body?.maxAttempts, current.maxAttempts),
+    configOrder: req.body?.configOrder !== undefined ? requestedConfigOrder : current.configOrder,
     enabled,
     schedule,
     nextRunAt,
     repo,
     labels,
     repos,
+    appId,
     on,
     target,
     templateId: typeof req.body?.templateId === "string" ? req.body.templateId.trim() || undefined : current.templateId,
@@ -3244,12 +3426,12 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
     return res.status(400).json({ error: gate.blockingChecks.map((c) => `${c.label}: ${c.detail}`).join("; "), preflight: gate.blockingChecks });
   }
   const updated = await store.updateAutomationDefinition(client.accountId, current.id, patch);
-  res.json(updated ? publicAutomation(updated, req) : updated);
+  res.json(updated ? { ...publicAutomation(updated, req), ...(mintedSecret ? { webhookSecret: mintedSecret } : {}) } : updated);
 }));
 
 // Rotate a webhook automation's signing secret. The new secret is returned once;
 // the old one stops working immediately.
-app.post("/account/automations/:id/webhook/rotate", asyncHandler(async (req, res) => {
+app.post("/account/automations/:id/webhook/rotate", automationWriteRateLimit, asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const current = await store.getAutomationDefinition(client.accountId, String(req.params.id));
@@ -3293,6 +3475,7 @@ function draftAutomationPatch(body: Record<string, unknown>): Partial<Automation
     if (patch.repos) for (const r of patch.repos) normalizeAutomationRepo(r);
   }
   if (body.labels !== undefined) patch.labels = body.labels === null ? undefined : normalizeStringList(body.labels);
+  if (body.appId !== undefined) patch.appId = typeof body.appId === "string" && body.appId.trim() ? body.appId.trim() : undefined;
   if (body.on !== undefined) patch.on = body.on === null ? undefined : normalizeEventRules(body.on);
   if (typeof body.templateCiphertext === "string") patch.templateCiphertext = body.templateCiphertext;
   if (typeof body.runtimeId === "string") patch.runtimeId = body.runtimeId.trim() || undefined;
@@ -3375,13 +3558,38 @@ app.post("/account/automations/:id/run", asyncHandler(async (req, res) => {
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const definition = await store.getAutomationDefinition(client.accountId, String(req.params.id));
   if (!definition) return res.status(404).json({ error: "Automation not found" });
-  res.status(201).json(await dispatchAutomationDefinition(definition));
+  res.status(201).json(await dispatchAutomationDefinition(definition, dispatchKey(req)));
 }));
 
 app.get("/account/automation-runs", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
-  res.json(await store.listAutomationRuns(client.accountId, Number(req.query.limit) || 50));
+  const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 50));
+  const runs = await store.listAutomationRuns(client.accountId, limit);
+  if (req.query.summary !== "1") return res.json(runs);
+
+  // The always-mounted PWA shell polls this feed for Inbox attention. It only
+  // needs lifecycle and session linkage; transferring each Run's checks, event
+  // timeline, receipt evidence, references, and routing detail every 30 seconds
+  // made idle mobile clients surprisingly data-hungry. Full list/detail calls
+  // remain unchanged for the Automations and Run views.
+  res.json(runs.map((run) => ({
+    id: run.id,
+    definitionId: run.definitionId,
+    triggerKind: run.triggerKind,
+    status: run.status,
+    title: run.title,
+    message: run.message,
+    targetKind: run.target.kind,
+    targetSessionId: run.target.kind === "existing_session" ? run.target.sessionId : undefined,
+    createdAt: run.createdAt,
+    startedAt: run.startedAt,
+    completedAt: run.completedAt,
+    leaseExpiresAt: run.leaseExpiresAt,
+    attempt: run.attempt,
+    maxAttempts: run.maxAttempts,
+    output: run.output?.sessionId ? { sessionId: run.output.sessionId } : undefined,
+  })));
 }));
 
 // Single Run by id, for the routable /runs/:runId detail screen. Account-scoped:
@@ -3438,8 +3646,8 @@ app.post("/account/automation-runs/:id/retry", asyncHandler(async (req, res) => 
       : "This Run is not retryable in its current state.";
     return res.status(409).json({ error: message, reason: result.reason, run: result.run });
   }
-  void notifyRelaysWorkAvailable(client.accountId, { id: result.run.id, label: result.run.routing.nodeLabel });
-  res.json({ ok: true, run: result.run });
+  const admission = await notifyWorkAvailableOrParkForPlan(client.accountId, { id: result.run.id, label: result.run.routing.nodeLabel, source: result.run.source });
+  res.json(admission.blocked ? { ok: true, blocked: true, reason: admission.reason, run: result.run } : { ok: true, run: result.run });
 }));
 
 app.post("/account/automation-runs", asyncHandler(async (req, res) => {
@@ -4037,20 +4245,23 @@ app.post("/webhooks/automation/run/:definitionId", asyncHandler(async (req, res)
   const def = await store.getAutomationDefinitionById(String(req.params.definitionId));
   if (!def || def.trigger !== "webhook") return res.status(404).json({ code: "not_found" });
   if (def.enabled === false) return res.status(410).json({ code: "disabled" });
+  const raw: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from("");
+  if (!verifyWebhookAuth(def, raw, req.headers[def.webhookHeader || DEFAULT_WEBHOOK_HEADER])) {
+    return res.status(401).json({ code: "invalid_signature" });
+  }
   if (!consumeAutomationRate(`def:${def.id}`, 60)) {
     return res.status(429).json({ code: "quota_exhausted", retryAfterSeconds: 60 });
-  }
-  const raw: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from("");
-  if (!def.webhookSecret || !verifyAutomationSignature(def.webhookSecret, raw, req.headers["x-bivy-signature-256"] as string | undefined)) {
-    return res.status(401).json({ code: "invalid_signature" });
   }
   if (!consumeAutomationRate(`account:${def.accountId}`, 300)) {
     return res.status(429).json({ code: "quota_exhausted", retryAfterSeconds: 60 });
   }
-  const idempotencyKey = String(req.headers["x-bivy-idempotency-key"] ?? "").trim();
-  if (!idempotencyKey || idempotencyKey.length > 200 || /[^\x21-\x7e]/.test(idempotencyKey)) {
-    return res.status(400).json({ code: "invalid_request", error: "A valid X-Bivy-Idempotency-Key header is required." });
+  const suppliedIdempotencyKey = String(req.headers["x-bivy-idempotency-key"] ?? "").trim();
+  if (suppliedIdempotencyKey.length > 200 || /[^\x21-\x7e]/.test(suppliedIdempotencyKey)) {
+    return res.status(400).json({ code: "invalid_request", error: "X-Bivy-Idempotency-Key must be printable ASCII and no longer than 200 characters." });
   }
+  // Idempotency is recommended, but cannot be required from providers that do
+  // not let users add headers. Requests without one are still processed.
+  const idempotencyKey = suppliedIdempotencyKey || randomUUID();
   let payload: unknown;
   try {
     payload = JSON.parse(raw.toString("utf8"));
@@ -4058,7 +4269,7 @@ app.post("/webhooks/automation/run/:definitionId", asyncHandler(async (req, res)
     return res.status(400).json({ code: "invalid_request", error: "Invalid JSON." });
   }
   const event = parseAutomationEvent(payload);
-  if (!event) return res.status(400).json({ code: "invalid_request", error: "Event does not match automation schema version 1." });
+  if (!event) return res.status(400).json({ code: "invalid_request", error: "Webhook body must be a supported Bivy event envelope or a JSON object or array." });
   const dedupeKey = `automation:${def.id}:${idempotencyKey}`;
   const replay = await store.getAutomationRunBySourceKey(def.accountId, dedupeKey);
   if (replay) return res.status(200).json({ code: "duplicate", id: replay.id });
@@ -4086,7 +4297,7 @@ app.post("/webhooks/automation/run/:definitionId", asyncHandler(async (req, res)
   if (!result.created) {
     return res.status(200).json({ code: "duplicate", id: result.run.id });
   }
-  const admission = await notifyWorkAvailableOrParkForPlan(def.accountId, { id: result.run.id, label: result.run.routing.nodeLabel });
+  const admission = await notifyWorkAvailableOrParkForPlan(def.accountId, { id: result.run.id, label: result.run.routing.nodeLabel, source: result.run.source });
   res.status(202).json(admission.blocked
     ? { code: "blocked", id: result.run.id, label: result.run.routing.nodeLabel, reason: admission.reason }
     : { code: "accepted", id: result.run.id, label: result.run.routing.nodeLabel });
@@ -4119,6 +4330,7 @@ async function processGithubEvent(hook: InboundHook, event: string, deliveryId: 
     if (!failure) return res.json({ ok: true, enqueued: false });
     const matched = matchSourceAutomation(automations, {
       kind: "github",
+      appId: hook.appId,
       githubEvent: "workflow_run",
       action: "completed",
       repo: failure.repo,
@@ -4165,6 +4377,7 @@ async function processGithubEvent(hook: InboundHook, event: string, deliveryId: 
     }
     const matched = matchSourceAutomation(automations, {
       kind: "github",
+      appId: hook.appId,
       githubEvent: "issue_comment",
       action: String((payload as any)?.action ?? ""),
       repo: comment.repo,
@@ -4189,6 +4402,7 @@ async function processGithubEvent(hook: InboundHook, event: string, deliveryId: 
       appId: hook.appId,
       definitionId: matched.id,
       triggerKind: "github",
+      body: matched.templateCiphertext,
       runtimeId: matched.runtimeId,
       model: matched.model,
       approvalMode: matched.approvalMode,
@@ -4209,6 +4423,7 @@ async function processGithubEvent(hook: InboundHook, event: string, deliveryId: 
     }
     const matched = matchSourceAutomation(automations, {
       kind: "github",
+      appId: hook.appId,
       githubEvent: "pull_request_review_comment",
       action: String((payload as any)?.action ?? ""),
       repo: review.repo,
@@ -4233,6 +4448,7 @@ async function processGithubEvent(hook: InboundHook, event: string, deliveryId: 
       appId: hook.appId,
       definitionId: matched.id,
       triggerKind: "github",
+      body: matched.templateCiphertext,
       runtimeId: matched.runtimeId,
       model: matched.model,
       approvalMode: matched.approvalMode,
@@ -4246,23 +4462,9 @@ async function processGithubEvent(hook: InboundHook, event: string, deliveryId: 
 
   // ── pull_request labeled / body @mention ────────────────────────────────
   if (event === "pull_request") {
-    const pr = parseGithubPullRequestEvent(payload);
-    const rawLabel = pr ? pickPullRequestRoutingLabel(pr, triggerLogin) : undefined;
-    if (!pr || !rawLabel) return res.json({ ok: true, enqueued: false });
-    const isLabelRouted = Boolean(pickRoutingLabel(pr.labels));
-    if (!isLabelRouted && !meetsTriggerAccess(pr.authorAssociation, hook.triggerAccess)) {
-      return res.json({ ok: true, enqueued: false, reason: "access" });
-    }
-    const bodyMention = !isLabelRouted; // routed via @mention in body
-    const matched = matchSourceAutomation(automations, {
-      kind: "github",
-      githubEvent: "pull_request",
-      action: String((payload as any)?.action ?? ""),
-      repo: pr.repo,
-      labels: pr.labels,
-      mention: bodyMention,
-    });
-    if (!matched) return res.json({ ok: true, enqueued: false, reason: "no_automation" });
+    const selection = matchGithubItemTrigger(automations, hook, "pull_request", payload, triggerLogin);
+    if (!selection.matched) return res.json({ ok: true, enqueued: false, reason: selection.reason });
+    const { item: pr, automation: matched, routingLabel: rawLabel } = selection;
     const label = applyDefaultNode(matched.nodeLabel || rawLabel, hook.defaultNode);
     const existingSession = await store.findSessionByIssue(hook.accountId, pr.repo, pr.issueNumber).catch(() => undefined);
     const item = await store.enqueueWorkItem(hook.accountId, {
@@ -4280,6 +4482,7 @@ async function processGithubEvent(hook: InboundHook, event: string, deliveryId: 
       appId: hook.appId,
       definitionId: matched.id,
       triggerKind: "github",
+      body: matched.templateCiphertext,
       runtimeId: matched.runtimeId,
       model: matched.model,
       approvalMode: matched.approvalMode,
@@ -4293,23 +4496,9 @@ async function processGithubEvent(hook: InboundHook, event: string, deliveryId: 
 
   // ── issues labeled / body @mention ──────────────────────────────────────
   if (event === "issues") {
-    const issue = parseGithubIssueEvent(payload);
-    const rawLabel = issue ? pickIssueRoutingLabel(issue, triggerLogin) : undefined;
-    if (!issue || !rawLabel) return res.json({ ok: true, enqueued: false });
-    // Label apply already implies triage access; body @mention is gated.
-    const isLabelRouted = Boolean(pickRoutingLabel(issue.labels));
-    if (!isLabelRouted && !meetsTriggerAccess(issue.authorAssociation, hook.triggerAccess)) {
-      return res.json({ ok: true, enqueued: false, reason: "access" });
-    }
-    const matched = matchSourceAutomation(automations, {
-      kind: "github",
-      githubEvent: "issues",
-      action: String((payload as any)?.action ?? ""),
-      repo: issue.repo,
-      labels: issue.labels,
-      mention: !isLabelRouted,
-    });
-    if (!matched) return res.json({ ok: true, enqueued: false, reason: "no_automation" });
+    const selection = matchGithubItemTrigger(automations, hook, "issues", payload, triggerLogin);
+    if (!selection.matched) return res.json({ ok: true, enqueued: false, reason: selection.reason });
+    const { item: issue, automation: matched, routingLabel: rawLabel } = selection;
     const label = applyDefaultNode(matched.nodeLabel || rawLabel, hook.defaultNode);
     const existingIssueSession = await store.findSessionByIssue(hook.accountId, issue.repo, issue.issueNumber).catch(() => undefined);
     const item = await store.enqueueWorkItem(hook.accountId, {
@@ -4327,6 +4516,7 @@ async function processGithubEvent(hook: InboundHook, event: string, deliveryId: 
       appId: hook.appId,
       definitionId: matched.id,
       triggerKind: "github",
+      body: matched.templateCiphertext,
       runtimeId: matched.runtimeId,
       model: matched.model,
       approvalMode: matched.approvalMode,
@@ -4462,7 +4652,8 @@ app.post("/webhooks/linear/:id", asyncHandler(async (req, res) => {
     collapseKey: `linear-issue:${issue.id}`,
     defaultRouted: rawLabel === "bivy" && !matched.nodeLabel,
     definitionId: matched.id,
-    triggerKind: "webhook",
+    triggerKind: "linear",
+    body: matched.templateCiphertext,
     runtimeId: matched.runtimeId,
     model: matched.model,
     approvalMode: matched.approvalMode,
@@ -4507,7 +4698,7 @@ app.post("/webhooks/slack/:id", asyncHandler(async (req, res) => {
   res.json({
     response_type: "ephemeral",
     text: admission.blocked
-      ? `Queued for ${destination}, but Bivy Cloud must be upgraded before hosted automations can run.`
+      ? `Queued for ${destination}, but blocked by account policy: ${admission.reason || "Review the run in Bivy."}`
       : `On it — queued for ${destination}.${repo ? " I'll bring back a pull request." : ""}`,
   });
 }));
@@ -4524,24 +4715,29 @@ app.get("/node/work", requireNode, asyncHandler(async (req, res) => {
   res.json({ items });
 }));
 
+const workClaimToken = (req: Request): string => req.get('x-bivy-work-claim') || '';
+const requireWorkClaim = asyncHandler(async (req, res, next) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  if (!await store.ownsWorkClaim(node.accountId, node.id, String(req.params.id), workClaimToken(req))) {
+    return res.status(409).json({ error: 'Run claim is no longer owned by this worker' });
+  }
+  next();
+});
+
 // Claim one item (atomic; only one node wins). Returns the item or 409 if taken.
 app.post("/node/work/:id/claim", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const id = String(req.params.id);
   const pending = await store.getAutomationRun(node.accountId, id);
   if (!pending || ["succeeded", "failed", "cancelled", "needs_attention"].includes(pending.status)) return res.status(409).json({ error: "Already claimed or unknown" });
-  // Manual interactive work remains available on Free/BYO machines. Every
-  // unattended ingress (schedule, GitHub, Slack, generic webhook, including
-  // legacy items without an explicit trigger kind) is a hosted automation and
-  // requires the deployment extension's paid automation entitlement.
-  if (pending.triggerKind !== "manual") {
-    const admission = await deploymentDecision(node.accountId, "automation.run", id);
-    if (!admission.allowed) {
-      await parkAutomationRunForDeploymentDenial(node.accountId, { id }, admission);
-      return res.status(409).json({ error: admission.reason || "Automation run is blocked by account policy", code: admission.code || "policy_denial" });
-    }
+  const admission = await deploymentDecision(node.accountId, "automation.run", id, { source: pending.source });
+  if (!admission.allowed) {
+    await parkAutomationRunForDeploymentDenial(node.accountId, { id }, admission);
+    return res.status(409).json({ error: admission.reason || "Automation run is blocked by account policy", code: admission.code || "policy_denial" });
   }
-  const item = await store.claimWorkItem(node.accountId, node.id, id);
+  const token = workClaimToken(req);
+  if (token && !/^[a-zA-Z0-9-]{16,128}$/.test(token)) return res.status(400).json({ error: 'Invalid claim token' });
+  const item = await store.claimWorkItem(node.accountId, node.id, id, token || undefined);
   if (!item) return res.status(409).json({ error: "Already claimed or unknown" });
   void notifyRelaysRunUpdated(node.accountId, {
     id: item.id, events: item.events, completedAt: item.completedAt,
@@ -4552,10 +4748,19 @@ app.post("/node/work/:id/claim", requireNode, asyncHandler(async (req, res) => {
 
 // Renew finite ownership while a live node is working. If the node/process dies,
 // heartbeats stop and list/claim may atomically reclaim the item after expiry.
-app.post("/node/work/:id/heartbeat", requireNode, asyncHandler(async (req, res) => {
+app.post("/node/work/:id/attempt", requireNode, requireWorkClaim, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const expected = req.body?.attempt;
+  if (!Number.isInteger(expected) || expected < 1 || !workClaimToken(req)) return res.status(400).json({ error: 'A fenced claim and expected attempt are required' });
+  const item = await store.advanceWorkItemAttempt(node.accountId, node.id, String(req.params.id), workClaimToken(req), expected);
+  if (!item) return res.status(409).json({ error: 'Attempt limit reached or claim expired' });
+  res.json({ ok: true, item });
+}));
+
+app.post("/node/work/:id/heartbeat", requireNode, requireWorkClaim, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const id = String(req.params.id);
-  const item = await store.renewWorkItemLease(node.accountId, node.id, id);
+  const item = await store.renewWorkItemLease(node.accountId, node.id, id, workClaimToken(req));
   if (!item) {
     // Cancellation retains claimedByNodeId only as an ownership tombstone, so
     // the active worker gets an actionable stop reason without exposing another
@@ -4569,14 +4774,15 @@ app.post("/node/work/:id/heartbeat", requireNode, asyncHandler(async (req, res) 
   res.json({ ok: true, leaseExpiresAt: item.leaseExpiresAt });
 }));
 
-app.post("/node/work/:id/complete", requireNode, asyncHandler(async (req, res) => {
+app.post("/node/work/:id/complete", requireNode, requireWorkClaim, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const id = String(req.params.id);
   const current = await store.getAutomationRun(node.accountId, id);
   if (!current || current.claimedByNodeId !== node.id) {
     return res.status(409).json({ error: "Run is not owned by this node" });
   }
-  const run = await store.completeWorkItem(node.accountId, id, node.id);
+  if (workClaimToken(req) && current.status === 'succeeded') return res.json({ ok: true, run: current });
+  const run = await store.completeWorkItem(node.accountId, id, node.id, workClaimToken(req));
   // A no-op means the Run already reached a terminal outcome (e.g. cancelled) or
   // was reclaimed out from under this node in the read-then-write window. Report
   // the conflict instead of a false success, and never emit a lifecycle metric
@@ -4590,27 +4796,28 @@ app.post("/node/work/:id/complete", requireNode, asyncHandler(async (req, res) =
   res.json({ ok: true, run });
 }));
 
-app.post("/node/work/:id/running", requireNode, asyncHandler(async (req, res) => {
+app.post("/node/work/:id/running", requireNode, requireWorkClaim, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const id = String(req.params.id);
   const current = await store.getAutomationRun(node.accountId, id);
   if (!current || current.claimedByNodeId !== node.id || current.status !== "claimed") {
     return res.status(409).json({ error: "Run is not claimed by this node" });
   }
-  const run = await store.transitionAutomationRun(node.accountId, id, "running", undefined, node.id);
+  const run = await store.transitionAutomationRun(node.accountId, id, "running", undefined, node.id, workClaimToken(req));
   if (!run) return res.status(409).json({ error: "Run is no longer claimed by this node" });
   void notifyRelaysRunUpdated(node.accountId, run);
   res.json({ ok: true, run });
 }));
 
-app.post("/node/work/:id/fail", requireNode, asyncHandler(async (req, res) => {
+app.post("/node/work/:id/fail", requireNode, requireWorkClaim, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const id = String(req.params.id);
   const current = await store.getAutomationRun(node.accountId, id);
   if (!current || current.claimedByNodeId !== node.id) {
     return res.status(409).json({ error: "Run is not owned by this node" });
   }
-  const run = await store.transitionAutomationRun(node.accountId, id, "failed", undefined, node.id);
+  if (workClaimToken(req) && current.status === 'failed') return res.json({ ok: true, run: current });
+  const run = await store.transitionAutomationRun(node.accountId, id, "failed", undefined, node.id, workClaimToken(req));
   // No-op → already terminal or reclaimed away. A terminal outcome is immutable,
   // so report the conflict rather than counting a second lifecycle result.
   if (!run) return res.status(409).json({ error: "Run already reached a terminal outcome or was reclaimed" });
@@ -4625,14 +4832,15 @@ app.post("/node/work/:id/fail", requireNode, asyncHandler(async (req, res) => {
 // surfaced rather than silently failed. Transitions running/claimed →
 // needs_attention (which auto-stamps a `needs_attention` timeline event). The
 // node should first POST the reason as a bounded evidence event.
-app.post("/node/work/:id/needs-attention", requireNode, asyncHandler(async (req, res) => {
+app.post("/node/work/:id/needs-attention", requireNode, requireWorkClaim, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const id = String(req.params.id);
   const current = await store.getAutomationRun(node.accountId, id);
   if (!current || current.claimedByNodeId !== node.id) {
     return res.status(409).json({ error: "Run is not owned by this node" });
   }
-  const run = await store.transitionAutomationRun(node.accountId, id, "needs_attention", undefined, node.id);
+  if (workClaimToken(req) && current.status === 'needs_attention') return res.json({ ok: true, run: current });
+  const run = await store.transitionAutomationRun(node.accountId, id, "needs_attention", undefined, node.id, workClaimToken(req));
   // No-op → already terminal (a finished Run stays finished) or reclaimed away.
   if (!run) return res.status(409).json({ error: "Run already reached a terminal outcome or was reclaimed" });
   recordDurableRunLifecycleResult(run, "needs_attention");
@@ -4649,7 +4857,7 @@ app.post("/node/work/:id/needs-attention", requireNode, asyncHandler(async (req,
 // payload and storage — it allowlists every field and rejects anything that
 // looks like a prompt, transcript, diff, file content, secret, token, or raw
 // command/tool output outright (400, not a silent drop).
-app.post("/node/work/:id/evidence", requireNode, asyncHandler(async (req, res) => {
+app.post("/node/work/:id/evidence", requireNode, requireWorkClaim, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const id = String(req.params.id);
   const current = await store.getAutomationRun(node.accountId, id);
@@ -4662,7 +4870,7 @@ app.post("/node/work/:id/evidence", requireNode, asyncHandler(async (req, res) =
   } catch (error) {
     return res.status(400).json({ error: (error as Error).message });
   }
-  const run = await store.appendRunEvidence(node.accountId, id, patch, node.id);
+  const run = await store.appendRunEvidence(node.accountId, id, patch, node.id, workClaimToken(req));
   if (!run) return res.status(409).json({ error: "Run ownership changed before evidence was persisted" });
   void notifyRelaysRunUpdated(node.accountId, run);
   res.json({ ok: true, run });

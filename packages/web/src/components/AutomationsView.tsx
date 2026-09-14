@@ -7,9 +7,10 @@
 // Settings and loses the thread. Creating/editing uses one form modal
 // (name → trigger → instructions → machine); templates pre-fill it. Everything
 // still writes the same POST /account/automations definition.
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import cronstrue from "cronstrue";
+import { useAutoGrowingTextarea } from "../useAutoGrowingTextarea.js";
 import {
   createAutomation,
   deleteAutomation,
@@ -22,7 +23,6 @@ import {
   fetchSlackHook,
   runAutomationNow,
   rotateAutomationWebhook,
-  simulateAutomation,
   updateAutomation,
   importRoomKey,
   seal,
@@ -35,10 +35,8 @@ import {
   type AccountAutomation,
   type AccountAutomationRun,
   type AccountNode,
-  type AutomationPreflightSeverity,
   type AutomationSimulationDraft,
   type AutomationSimulationEvent,
-  type AutomationSimulationResult,
   type GithubAppInfo,
   type LinearHook,
   type SlackHook,
@@ -46,13 +44,17 @@ import {
 } from "@bivy/core";
 import { controller } from "../store/controller.js";
 import {
-  AUTOMATION_TEMPLATES,
   type AutomationTemplate,
   type ScheduleTemplate,
   type SourceTemplate,
   type WebhookTemplate,
 } from "./automationTemplates.js";
 import { WorkQueueSetupSheet, type SourceSetupFocus } from "./WorkQueueSetupSheet.js";
+import { githubSourceStatus, githubMentionHandles } from "./githubSource.js";
+import { buildGithubOn, togglesFromAutomation, type GithubEventToggles } from "./githubAutomationEvents.js";
+import { WebhookAuthFields } from "./WebhookAuthFields.js";
+import { GithubTriggerAccess } from "./GithubTriggerAccess.js";
+import { RepositoryEventFilter } from "./RepositoryEventFilter.js";
 import { GithubQueuePanel } from "./GithubQueue.js";
 import { RulesetsPanel } from "./Rulesets.js";
 import { QueueRoutingSection } from "./QueueRouting.js";
@@ -70,6 +72,15 @@ import { RunHistory } from "./RunHistory.js";
 import { compactCronSummary, formatAutomationMoment, formatNextAutomationRun } from "../automationPresentation.js";
 import { isListedAutomation } from "../automationList.js";
 import { Badge } from "./Badge.js";
+import { NewAutomationChooser, NewAutomationPicker } from "./NewAutomationChooser.js";
+import { AutomationPreflightPanel, useAutomationPreflight } from "./AutomationPreflight.js";
+import { IconBolt, IconClock, IconPr, IconWebhook } from "./AutomationIcons.js";
+import { AddNodeSheet } from "./AddNodeSheet.js";
+import { useModalBack, useModalEscape } from "../modalStack.js";
+import { useModalFocus } from "../useModalFocus.js";
+
+import { decodeAutomationTemplate, encodeAutomationTemplate } from "@bivy/core";
+import { AutomationAccounts } from "./AutomationAccounts.js";
 
 const TEMPLATE_PREFIX = "bivy-room-v1";
 
@@ -106,6 +117,20 @@ function describeCron(cron: string): string {
   } catch {
     return "";
   }
+}
+
+function cronChip(cron: string, timezone: string): { label: string; detail: string } {
+  const [minute, hour, dayOfMonth, month, dayOfWeek] = cron.trim().split(/\s+/);
+  const validTime = /^\d+$/.test(minute || "") && /^\d+$/.test(hour || "")
+    && Number(minute) < 60 && Number(hour) < 24;
+  const time = validTime ? `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}` : "";
+  if (validTime && dayOfMonth === "*" && month === "*" && dayOfWeek === "1-5") {
+    return { label: "Weekdays", detail: `Weekdays ${time} ${timezone}` };
+  }
+  if (validTime && dayOfMonth === "*" && month === "*" && dayOfWeek === "*") {
+    return { label: "Daily", detail: `Daily ${time} ${timezone}` };
+  }
+  return { label: "Schedule", detail: [time, timezone].filter(Boolean).join(" ") || timezone };
 }
 
 function timezoneOptions(current: string): string[] {
@@ -151,6 +176,13 @@ function isSourceTrigger(t: AccountAutomation["trigger"]): t is "github" | "line
   return t === "github" || t === "linear" || t === "github_ci";
 }
 
+function automationPrioritySort(a: AccountAutomation, b: AccountAutomation): number {
+  const ao = a.configOrder ?? Number.MAX_SAFE_INTEGER;
+  const bo = b.configOrder ?? Number.MAX_SAFE_INTEGER;
+  if (ao !== bo) return ao - bo;
+  return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+}
+
 /** Human summary of GitHub `on` rules (or legacy defaults). */
 function summarizeGithubEvents(item: AccountAutomation): string {
   const on = item.on;
@@ -167,54 +199,6 @@ function summarizeGithubEvents(item: AccountAutomation): string {
   return bits.length ? bits.join(" · ") : "custom events";
 }
 
-type GithubEventToggles = {
-  issuesLabeled: boolean;
-  issueMention: boolean;
-  prLabeled: boolean;
-  prMention: boolean;
-  workflowFailed: boolean;
-};
-
-function togglesFromAutomation(item: AccountAutomation): GithubEventToggles {
-  if (item.trigger === "github_ci") {
-    return { issuesLabeled: false, issueMention: false, prLabeled: false, prMention: false, workflowFailed: true };
-  }
-  const on = item.on;
-  if (!on?.length) {
-    // Legacy github default.
-    return { issuesLabeled: true, issueMention: true, prLabeled: false, prMention: false, workflowFailed: false };
-  }
-  return {
-    issuesLabeled: on.some((r) => r.event === "issues"),
-    issueMention: on.some((r) => r.event === "issue_comment" && r.mention),
-    prLabeled: on.some((r) => r.event === "pull_request"),
-    prMention: on.some((r) => r.event === "pull_request_review_comment" && r.mention),
-    workflowFailed: on.some((r) => r.event === "workflow_run"),
-  };
-}
-
-function buildGithubOn(
-  toggles: GithubEventToggles,
-  labelList: string[] | undefined,
-  workflowList: string[] | undefined,
-): NonNullable<AccountAutomation["on"]> {
-  const labels = labelList?.length ? labelList : ["bivy"];
-  const on: NonNullable<AccountAutomation["on"]> = [];
-  if (toggles.issuesLabeled) on.push({ event: "issues", labels });
-  if (toggles.issueMention) on.push({ event: "issue_comment", mention: true });
-  if (toggles.prLabeled) on.push({ event: "pull_request", labels });
-  if (toggles.prMention) on.push({ event: "pull_request_review_comment", mention: true });
-  if (toggles.workflowFailed) {
-    on.push({
-      event: "workflow_run",
-      actions: ["completed"],
-      conclusions: ["failure", "timed_out", "startup_failure"],
-      workflows: workflowList?.length ? workflowList : undefined,
-    });
-  }
-  return on;
-}
-
 /**
  * A representative event fixture for the editor's "Test event" workflow —
  * derived from whichever GitHub event toggle (or the Linear label filter) is
@@ -229,28 +213,18 @@ function buildRepresentativeEvent(d: Draft): AutomationSimulationEvent | undefin
   const workflows = d.workflows.split(/[,\n]/).map((v) => v.trim()).filter(Boolean);
   if (d.trigger === "linear") return { kind: "linear", repo, labels: labels.length ? labels : ["bivy"] };
   if (d.trigger !== "github") return undefined;
-  if (d.githubEvents.issuesLabeled) return { kind: "github", repo, event: "issues", action: "labeled", labels: labels.length ? labels : ["bivy"] };
-  if (d.githubEvents.issueMention) return { kind: "github", repo, event: "issue_comment", mention: true };
-  if (d.githubEvents.prLabeled) return { kind: "github", repo, event: "pull_request", action: "labeled", labels: labels.length ? labels : ["bivy"] };
-  if (d.githubEvents.prMention) return { kind: "github", repo, event: "pull_request_review_comment", mention: true };
-  if (d.githubEvents.workflowFailed) return { kind: "github", repo, event: "workflow_run", action: "completed", conclusion: "failure", workflow: workflows[0] };
+  const appId = d.appId.trim() || undefined;
+  if (d.githubEvents.issuesLabeled) return { kind: "github", repo, appId, event: "issues", action: "labeled", labels: labels.length ? labels : ["bivy"] };
+  if (d.githubEvents.issueMention) return { kind: "github", repo, appId, event: "issue_comment", mention: true };
+  if (d.githubEvents.prLabeled) return { kind: "github", repo, appId, event: "pull_request", action: "labeled", labels: labels.length ? labels : ["bivy"] };
+  if (d.githubEvents.prMention) return { kind: "github", repo, appId, event: "pull_request_review_comment", mention: true };
+  if (d.githubEvents.workflowFailed) return { kind: "github", repo, appId, event: "workflow_run", action: "completed", conclusion: "failure", workflow: workflows[0] };
   return undefined;
 }
 
 function nodeLabelSuffix(nodeLabel?: string): string {
   if (!nodeLabel) return "";
   return nodeLabel.startsWith("bivy/") ? nodeLabel.slice("bivy/".length) : nodeLabel;
-}
-
-function triggerBadge(template: AutomationTemplate): { label: string; tone: string } {
-  if (template.kind === "schedule") return { label: "Schedule", tone: "schedule" };
-  if (template.kind === "webhook") return { label: "Webhook", tone: "webhook" };
-  if (template.kind === "source") {
-    if (template.trigger === "linear") return { label: "Linear", tone: "linear" };
-    if (template.trigger === "github_ci") return { label: "CI", tone: "github" };
-    return { label: "GitHub", tone: "github" };
-  }
-  return { label: "Setup", tone: "manual" };
 }
 
 interface SourcesSnapshot {
@@ -263,28 +237,6 @@ interface SourcesSnapshot {
 
 function emptySources(): SourcesSnapshot {
   return { github: null, linear: null, slack: null, nodes: [], hosted: null };
-}
-
-function githubSourceStatus(gh: GithubAppInfo | null, hostedReady = false): { tone: "on" | "off" | "warn"; label: string; detail: string } {
-  if (!gh?.connected || !gh.apps?.length) {
-    return { tone: "off", label: "Not connected", detail: "Connect a GitHub App to run issue and CI automations." };
-  }
-  const installed = gh.apps.some((a) => a.installed || (a.installCount ?? 0) > 0);
-  const served = gh.apps.some((a) => a.servedBy?.online);
-  const count = gh.apps.reduce((n, a) => n + (a.installCount ?? (a.installed ? 1 : 0)), 0);
-  if (!installed) {
-    return { tone: "warn", label: "App created · not installed", detail: "Install the app on at least one repository." };
-  }
-  if (hostedReady) return { tone: "on", label: `Installed${count ? ` · ${count} repo(s)` : ""} · ephemeral ready`, detail: "Hosted ephemeral execution can claim work without a persistent node." };
-  if (!served && !gh.apps.some((a) => a.servedBy)) {
-    return { tone: "warn", label: `Installed${count ? ` · ${count} repo(s)` : ""} · no machine`, detail: "No machine is serving the app key yet." };
-  }
-  const online = served ? "online" : "offline";
-  return {
-    tone: served ? "on" : "warn",
-    label: `${count || gh.apps.length} repo(s) · machine ${online}`,
-    detail: "Issues, @mentions, and (when enabled) Actions failures can start sessions.",
-  };
 }
 
 function linearSourceStatus(lin: LinearHook | null): { tone: "on" | "off" | "warn"; label: string; detail: string } {
@@ -300,17 +252,28 @@ function slackSourceStatus(slack: SlackHook | null): { tone: "on" | "off" | "war
 }
 
 /** Status chip for a source automation given live connect state. */
+function githubAppOptionLabel(app: NonNullable<GithubAppInfo["apps"]>[number]): string {
+  const name = app.name || app.mention || app.owner || app.appId || "GitHub App";
+  const kind = app.central ? "Hosted Bivy App" : app.hosted ? "Hosted custom app" : "Custom/user-installed app";
+  const owner = app.owner ? ` · ${app.owner}${app.ownerType ? ` (${app.ownerType})` : ""}` : "";
+  return `${name} · ${kind}${owner}`;
+}
+
 function sourceAutomationChip(
   item: AccountAutomation,
   sources: SourcesSnapshot,
 ): { tone: "on" | "off" | "warn"; label: string } {
   const executorReady = sources.nodes.some((node) => node.online) || Boolean(sources.hosted?.execution.ready);
   if (item.trigger === "github" || item.trigger === "github_ci") {
-    const gh = githubSourceStatus(sources.github, Boolean(sources.hosted?.execution.ready));
+    const gh = githubSourceStatus(sources.github);
     if (gh.tone === "off") return { tone: "warn", label: item.enabled ? "Needs GitHub" : "Draft · needs GitHub" };
     if (gh.tone === "warn") return { tone: "warn", label: item.enabled ? gh.label : `Draft · ${gh.label}` };
     if (!item.enabled) return { tone: "off", label: "Paused" };
     if (!executorReady) return { tone: "warn", label: "Needs executor" };
+    const apps = sources.github?.apps.filter((app) => !item.appId || app.appId === item.appId) ?? [];
+    if (!apps.some((app) => app.central || (app.hosted && sources.hosted?.execution.ready) || app.servedBy?.online)) {
+      return { tone: "warn", label: "App connected · needs serving machine" };
+    }
     if (item.trigger === "github_ci") return { tone: "on", label: "Active · verify workflow_run" };
     return { tone: "on", label: "Active" };
   }
@@ -350,6 +313,7 @@ interface Draft {
   id: string | null;
   name: string;
   instructions: string;
+  credentialLabels: Record<string, string>;
   /** False until the user picks a trigger (or a template supplies one). */
   hasTrigger: boolean;
   trigger: "schedule" | "webhook" | "github" | "linear";
@@ -362,6 +326,7 @@ interface Draft {
   repo: string;
   labels: string;
   repos: string;
+  appId: string;
   githubEvents: GithubEventToggles;
   workflows: string;
   nodeId: string;
@@ -369,6 +334,9 @@ interface Draft {
   model: string;
   approvalMode: "never" | "risky" | "always" | "autonomous";
   sandbox: "read-only" | "workspace-write" | "danger-full-access";
+  requireSigning: boolean;
+  webhookHeader: string;
+  webhookAuthMode: "hmac" | "header";
 }
 
 function emptyDraft(nodeId: string): Draft {
@@ -376,6 +344,7 @@ function emptyDraft(nodeId: string): Draft {
     id: null,
     name: "",
     instructions: "",
+    credentialLabels: {},
     hasTrigger: false,
     trigger: "schedule",
     kind: "cron",
@@ -386,6 +355,7 @@ function emptyDraft(nodeId: string): Draft {
     repo: "",
     labels: "bivy",
     repos: "",
+    appId: "",
     githubEvents: { issuesLabeled: true, issueMention: true, prLabeled: false, prMention: false, workflowFailed: false },
     workflows: "",
     nodeId,
@@ -393,6 +363,9 @@ function emptyDraft(nodeId: string): Draft {
     model: "",
     approvalMode: "autonomous",
     sandbox: "workspace-write",
+    requireSigning: true,
+    webhookHeader: "x-bivy-signature-256",
+    webhookAuthMode: "hmac",
   };
 }
 
@@ -401,20 +374,8 @@ function rememberedRepo(state: AppState): string {
   return state.draft.repo || "";
 }
 
-// Soft glyph for each suggested template card.
-function templateIcon(key: string): ReactNode {
-  switch (key) {
-    case "upgrade-dependencies": return <IconPackage />;
-    case "dependency-security-audit": return <IconShield />;
-    case "lint-format-autofix": return <IconSpark />;
-    case "flaky-test-triage": return <IconFlask />;
-    case "fix-failed-ci": return <IconCi />;
-    case "fix-error-tracker-issue": return <IconBug />;
-    case "investigate-production-errors": return <IconRadar />;
-    case "work-issues-into-prs":
-    case "work-linear-issues-into-prs": return <IconPr />;
-    default: return <IconBolt />;
-  }
+function defaultSourceInstructions(): string {
+  return "Handle the incoming item using its event context. Investigate the request, make the smallest safe change, run the relevant checks, and report the outcome with links to any pull request or follow-up.";
 }
 
 interface Notice {
@@ -424,19 +385,40 @@ interface Notice {
   action?: { label: string; onClick: () => void };
 }
 
+interface AutomationViewError {
+  title: string;
+  message: string;
+  steps?: string[];
+  help?: string;
+}
+
 /** Top-level destinations: definitions and source setup, the unified Run feed
  *  and routing, then execution policy. The URL owns the selected tab. */
 const AUTOMATIONS_TABS: Array<{ label: string; section: AutomationsSection | null }> = [
   { label: "Automations", section: null },
-  { label: "Runs", section: "queue" },
+  { label: "Runs", section: "runs" },
   { label: "Rulesets", section: "rulesets" },
 ];
 
-function automationCloudGate(me: AccountMe | null): { actions: NonNullable<NonNullable<AccountMe["extension"]>["actions"]> } | null {
+function automationCloudGate(me: AccountMe | null): { title: string; message: string; actions: NonNullable<NonNullable<AccountMe["extension"]>["actions"]> } | null {
   const extension = me?.extension;
   const automationFact = extension?.facts?.find((fact) => fact.id === "automations");
-  if (!extension || !automationFact || !/cloud required/i.test(automationFact.value)) return null;
-  return { actions: extension.actions ?? [] };
+  if (!extension || !automationFact) return null;
+  if (/cloud required/i.test(automationFact.value)) {
+    return {
+      title: "Hosted automations require Cloud",
+      message: "GitHub, schedules, and other hosted triggers can be configured, but incoming events are shown as blocked until this account is upgraded. Self-hosted control planes are not limited by Bivy Cloud billing.",
+      actions: extension.actions ?? [],
+    };
+  }
+  if (/\b0 left\b/i.test(automationFact.value)) {
+    return {
+      title: "Automation run limit reached",
+      message: `This account has used ${automationFact.value}. Upgrade or wait for the usage window to roll before new cloud automations can start.`,
+      actions: extension.actions ?? [],
+    };
+  }
+  return null;
 }
 
 export function AutomationsView({
@@ -467,19 +449,19 @@ export function AutomationsView({
   const [sources, setSources] = useState<SourcesSnapshot>(emptySources);
   const [me, setMe] = useState<AccountMe | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<string | AutomationViewError>("");
   const [notice, setNotice] = useState<Notice | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [sourceEdit, setSourceEdit] = useState<AccountAutomation | null>(null);
   const [rotated, setRotated] = useState<{ id: string; secret: string } | null>(null);
   const [setupFocus, setSetupFocus] = useState<SourceSetupFocus | null>(null);
-  const [menuId, setMenuId] = useState<string | null>(null);
   const [cancelRun, setCancelRun] = useState<AccountAutomationRun | null>(null);
   const [cancelBusyId, setCancelBusyId] = useState<string | null>(null);
   const [cancelError, setCancelError] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<AccountAutomation | null>(null);
   /** Create chooser (scratch + templates). Opens from New automation. */
   const [chooserOpen, setChooserOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
+  const [historyAutomationId, setHistoryAutomationId] = useState<string | null>(null);
 
   // Solo (account-free QR) and direct (loopback) pairings have no account
   // session — every account fetch below would 401. Skip them and render the
@@ -526,7 +508,7 @@ export function AutomationsView({
     });
     // Polling is recovery only: a backgrounded browser or old relay can miss a
     // best-effort hint. Keep the interval deliberately calm.
-    const recovery = section === "queue" ? setInterval(() => void refreshRuns().catch(() => {}), 30_000) : null;
+    const recovery = section === "runs" ? setInterval(() => void refreshRuns().catch(() => {}), 30_000) : null;
     return () => { unsubscribe(); if (debounce) clearTimeout(debounce); if (recovery) clearInterval(recovery); };
   }, [refreshRuns, section]);
   useEffect(() => {
@@ -540,25 +522,9 @@ export function AutomationsView({
     if (focus) setSetupFocus(focus);
   }, []);
 
-  // Close overflow menus on outside click / Escape.
-  useEffect(() => {
-    if (!menuId) return;
-    function onDoc(e: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuId(null);
-    }
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setMenuId(null);
-    }
-    document.addEventListener("mousedown", onDoc);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDoc);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [menuId]);
 
   const defaultNodeId = state.connection.currentNodeId || controller.local.cur || "";
-  const listedItems = useMemo(() => items.filter(isListedAutomation), [items]);
+  const listedItems = useMemo(() => items.filter(isListedAutomation).sort(automationPrioritySort), [items]);
   const isEmpty = !loading && listedItems.length === 0;
 
   function openSetup(focus: SourceSetupFocus) {
@@ -623,6 +589,38 @@ export function AutomationsView({
       const needsLinear = template.trigger === "linear" && linearSourceStatus(linear).tone !== "on";
       const sourceReady = !needsGithub && !needsLinear;
 
+      if (template.trigger !== "github_ci") {
+        const existing = items.find((i) => i.trigger === template.trigger);
+        if (existing) {
+          await continueWithSource(template.trigger, emptyDraft(defaultNodeId));
+        } else {
+          const base = emptyDraft(defaultNodeId);
+          setDraft({
+            ...base,
+            name: template.prefill.name,
+            instructions: defaultSourceInstructions(),
+            hasTrigger: true,
+            trigger: template.trigger,
+            labels: (template.prefill.labels ?? ["bivy"]).join(", "),
+            githubEvents: template.trigger === "github"
+              ? { issuesLabeled: true, issueMention: true, prLabeled: true, prMention: true, workflowFailed: false }
+              : base.githubEvents,
+            approvalMode: "autonomous",
+            sandbox: "workspace-write",
+          });
+        }
+        if (needsGithub) openSetup("work-queue");
+        if (needsLinear) openSetup("linear");
+        setNotice({
+          tone: sourceReady ? "info" : "warn",
+          title: sourceReady ? `${template.title} ready to review` : `${template.title} needs setup`,
+          body: sourceReady
+            ? "Review the encrypted instructions and turn it on when ready."
+            : "Finish connecting the source, then review and turn on the Automation. It cannot receive events yet.",
+        });
+        return;
+      }
+
       const existing = items.find((i) => i.trigger === template.trigger);
       if (existing) {
         if (sourceReady && !existing.enabled) await updateAutomation(controller.local, existing.id, { enabled: true });
@@ -638,7 +636,7 @@ export function AutomationsView({
       await refresh();
 
       if (needsGithub) {
-        openSetup(template.trigger === "github_ci" ? "github" : "work-queue");
+        openSetup("github");
         setNotice({
           tone: "info",
           title: `${template.title} saved as a draft`,
@@ -681,30 +679,34 @@ export function AutomationsView({
     setDraft(emptyDraft(defaultNodeId));
   }
 
-  async function continueWithSource(source: "github" | "linear", current: Draft) {
-    const existing = items.find((item) => item.trigger === source);
+  async function continueWithSource(source: "github" | "linear", current: Draft, opts?: { keepExistingName?: boolean; definition?: AccountAutomation }) {
+    const existing = opts?.definition ?? items.find((item) => item.trigger === source);
     if (!existing) {
       setDraft({ ...current, hasTrigger: true, trigger: source });
       return;
     }
 
-    let instructions = "Handle the incoming item using its event context. Investigate the request, make the smallest safe change, run the relevant checks, and report the outcome with links to any pull request or follow-up.";
+    let instructions = defaultSourceInstructions();
     const parts = existing.templateCiphertext?.split(":");
     if (parts?.[0] === TEMPLATE_PREFIX && parts[1] && parts.slice(2).length) {
       const roomKey = controller.local.keys()[parts[1]];
-      if (roomKey) instructions = await open(await importRoomKey(unb64url(roomKey)), parts.slice(2).join(":"));
+      if (!roomKey) throw new Error("Instructions are locked on this device. Connect to the assigned Machine before editing this automation.");
+      instructions = await open(await importRoomKey(unb64url(roomKey)), parts.slice(2).join(":"));
     }
+    const template = decodeAutomationTemplate(instructions);
     const base = emptyDraft(parts?.[1] || defaultNodeId);
     setDraft({
       ...base,
       id: existing.id,
-      name: current.name.trim() ? current.name : existing.name,
-      instructions: current.instructions.trim() ? current.instructions : instructions,
+      name: current.name.trim() ? current.name : opts?.keepExistingName ? existing.name : "",
+      instructions: current.instructions.trim() ? current.instructions : template.instructions,
+      credentialLabels: template.credentialLabels,
       hasTrigger: true,
       trigger: source,
       repo: existing.repo || "",
       labels: (existing.labels ?? ["bivy"]).join(", "),
       repos: (existing.repos ?? []).join(", "),
+      appId: existing.appId || "",
       githubEvents: togglesFromAutomation(existing),
       workflows: (existing.on?.find((rule) => rule.event === "workflow_run")?.workflows ?? []).join(", "),
       runtimeId: existing.runtimeId || "",
@@ -716,9 +718,10 @@ export function AutomationsView({
 
   async function edit(item: AccountAutomation) {
     setError("");
-    setMenuId(null);
     if (item.trigger === "github" || item.trigger === "linear") {
-      await continueWithSource(item.trigger, emptyDraft(defaultNodeId));
+      try {
+        await continueWithSource(item.trigger, emptyDraft(defaultNodeId), { keepExistingName: true, definition: item });
+      } catch (error) { setError(String((error as Error).message || error)); }
       return;
     }
     if (item.trigger === "github_ci") {
@@ -730,20 +733,36 @@ export function AutomationsView({
     if (parts?.[0] === TEMPLATE_PREFIX && parts[1] && parts.slice(2).length) {
       const roomKey = controller.local.keys()[parts[1]];
       if (!roomKey) {
-        setError("This device does not hold the assigned machine's encryption key, so its instructions can't be shown here.");
+        const assignedNode = state.connection.nodes.find((node) => node.id === parts[1]);
+        const machine = assignedNode?.name ? `“${assignedNode.name}”` : "the assigned Machine";
+        setError({
+          title: "Instructions are locked on this device",
+          message: `This automation is encrypted for ${machine}, but this device does not have its key.`,
+          steps: [
+            `Bring ${machine} online.`,
+            `In Bivy, switch to ${machine} and wait until it shows Connected.`,
+            "Open this automation again.",
+          ],
+          help: "If that Machine no longer exists, use a device that was already paired with it or recreate the automation. The server key used for Cloud credentials cannot unlock end-to-end encrypted instructions.",
+        });
         return;
       }
       instructions = await open(await importRoomKey(unb64url(roomKey)), parts.slice(2).join(":"));
     }
+    const template = decodeAutomationTemplate(instructions);
     const nodeId = parts?.[1] || defaultNodeId;
     const base = emptyDraft(nodeId);
     setDraft({
       ...base,
       id: item.id,
       name: item.name,
-      instructions,
+      instructions: template.instructions,
+      credentialLabels: template.credentialLabels,
       hasTrigger: true,
       trigger: item.trigger === "webhook" ? "webhook" : "schedule",
+      requireSigning: item.trigger === "webhook" ? item.requireSigning !== false : base.requireSigning,
+      webhookHeader: item.webhookHeader || base.webhookHeader,
+      webhookAuthMode: item.webhookAuthMode || base.webhookAuthMode,
       nodeId,
       repo: item.repo || "",
       runtimeId: item.runtimeId || "",
@@ -758,7 +777,6 @@ export function AutomationsView({
   }
 
   async function toggle(item: AccountAutomation) {
-    setMenuId(null);
     try {
       await updateAutomation(controller.local, item.id, { enabled: !item.enabled });
       await refresh();
@@ -769,22 +787,47 @@ export function AutomationsView({
     } catch (e) { setError(String((e as Error).message || e)); }
   }
 
-  async function runNow(item: AccountAutomation) {
-    setMenuId(null);
+  async function moveSourceAutomation(item: AccountAutomation, direction: -1 | 1) {
+    const sourceItems = items.filter((i) => isSourceTrigger(i.trigger) && !i.configKey).sort(automationPrioritySort);
+    const index = sourceItems.findIndex((i) => i.id === item.id);
+    const swap = sourceItems[index + direction];
+    if (!swap) return;
+    const orders = sourceItems.map((i, n) => i.configOrder ?? n);
     try {
-      const run = await runAutomationNow(controller.local, item.id);
-      controller.recordProductMilestone("run_accepted");
+      await Promise.all([
+        updateAutomation(controller.local, item.id, { configOrder: orders[index + direction] }),
+        updateAutomation(controller.local, swap.id, { configOrder: orders[index] }),
+      ]);
       await refresh();
+      setNotice({ tone: "ok", title: `Moved “${item.name}” ${direction < 0 ? "earlier" : "later"}` });
+    } catch (e) { setError(String((e as Error).message || e)); }
+  }
+
+  const dispatches = useRef(new Map<string, { key: string; pending: boolean }>());
+  const [dispatchingId, setDispatchingId] = useState<string | null>(null);
+  async function runNow(item: AccountAutomation) {
+    const dispatch = dispatches.current.get(item.id) ?? { key: crypto.randomUUID(), pending: false };
+    if (dispatch.pending) return;
+    dispatch.pending = true;
+    dispatches.current.set(item.id, dispatch);
+    setDispatchingId(item.id);
+    setError("");
+    try {
+      const run = await runAutomationNow(controller.local, item.id, fetch, dispatch.key);
+      dispatches.current.delete(item.id);
+      controller.recordProductMilestone("run_accepted");
+      await refresh().catch(() => setError("Run accepted, but activity could not refresh. Reopen Automations to check its status."));
       const sessionId = run.output?.sessionId;
       setNotice({
         tone: "ok",
-        title: `Started “${item.name}”`,
+        title: `${sessionId ? "Started" : "Queued"} “${item.name}”`,
         body: sessionId ? "A session is running on the assigned machine." : "Queued — it will appear in Recent activity shortly.",
         action: sessionId
           ? { label: "Open session", onClick: () => { onOpenSession(sessionId); onClose(); } }
           : undefined,
       });
     } catch (e) { setError(String((e as Error).message || e)); }
+    finally { dispatch.pending = false; setDispatchingId(null); }
   }
 
   async function cancelConfirmedRun() {
@@ -805,7 +848,6 @@ export function AutomationsView({
   }
 
   async function rotate(item: AccountAutomation) {
-    setMenuId(null);
     setError("");
     try {
       const result = await rotateAutomationWebhook(controller.local, item.id);
@@ -813,17 +855,25 @@ export function AutomationsView({
       await refresh();
       setNotice({
         tone: "warn",
-        title: "New signing secret — copy it now",
+        title: "New webhook secret — copy it now",
         body: "It is only shown once. The previous secret stops working immediately.",
       });
     } catch (e) { setError(String((e as Error).message || e)); }
   }
 
-  async function remove(item: AccountAutomation) {
-    setMenuId(null);
-    if (!confirm(`Delete “${item.name}”? This cannot be undone.`)) return;
+  async function remove(item: AccountAutomation): Promise<boolean> {
+    setPendingDelete(item);
+    return false;
+  }
+
+  async function deleteConfirmed() {
+    const item = pendingDelete;
+    if (!item) return;
+    setPendingDelete(null);
     try {
       await deleteAutomation(controller.local, item.id);
+      setDraft(null);
+      setSourceEdit(null);
       await refresh();
       setNotice({ tone: "ok", title: `Deleted “${item.name}”` });
     } catch (e) { setError(String((e as Error).message || e)); }
@@ -860,11 +910,10 @@ export function AutomationsView({
         <div className="automations-view-body">
           <section className="autom-hero">
             <div className="autom-hero-copy">
-              <h2 className="autom-hero-title">Automations need an account</h2>
+              <h2 className="autom-hero-title">Schedule work while you&apos;re away</h2>
               <p className="autom-hero-body">
-                Automations run through a control plane, which stores your triggers and queues Runs
-                even while this device and your machine are offline. Right now this device is paired
-                to your machine directly, without an account, so there&apos;s nowhere to keep them.
+                Sign in through Bivy Cloud or a self-hosted control plane to store triggers and Runs
+                while this device and your machine are offline.
               </p>
               <p className="autom-hero-body">
                 {controller.solo
@@ -890,28 +939,28 @@ export function AutomationsView({
   }
 
   return createPortal(
-    <div className="automations-view" role="dialog" aria-modal="true" aria-label="Automations">
+    <div className={`automations-view${historyAutomationId ? " is-history" : ""}`} role="dialog" aria-modal="true" aria-label="Automations">
       <header className="automations-view-head">
         <div className="automations-view-head-text">
           <h1 className="automations-view-heading">Automations</h1>
           <p className="automations-view-sub">Jobs that run on your machines while you&apos;re away.</p>
         </div>
         <div className="automations-view-head-actions">
-          <button type="button" className="btn primary autom-new-btn" onClick={openChooser} aria-label="New automation">
+          <button type="button" className="btn primary" onClick={openChooser} aria-label="New automation">
             <PlusIcon size={18} />
-            <span className="autom-new-btn-label">New automation</span>
+            <span className="action-label">New automation</span>
           </button>
           <button type="button" className="btn ghost icon autom-close-btn" onClick={onClose} title="Close" aria-label="Close automations"><CloseIcon /></button>
         </div>
       </header>
 
-      <nav className="automations-tabs" aria-label="Automations sections">
+      <nav className="automations-tabs segmented" aria-label="Automations sections">
         {AUTOMATIONS_TABS.map((tab) => (
           <button
             key={tab.label}
             type="button"
-            className={`automations-tab${section === tab.section ? " active" : ""}`}
-            aria-current={section === tab.section ? "page" : undefined}
+            className="seg-btn"
+            aria-selected={section === tab.section}
             onClick={() => onSectionChange(tab.section)}
           >
             {tab.label}
@@ -921,13 +970,13 @@ export function AutomationsView({
 
       <div className="automations-view-body">
         {cloudAutomationGate && (
-          <div className="autom-notice warn" role="status">
-            <div className="autom-notice-text">
-              <strong>Hosted automations require Cloud</strong>
-              <span>GitHub, schedules, and other hosted triggers can be configured, but incoming events are shown as blocked until this account is upgraded. Self-hosted control planes are not limited by Bivy Cloud billing.</span>
+          <div className="banner" data-tone="warn" role="status">
+            <div className="banner-text">
+              <strong>{cloudAutomationGate.title}</strong>
+              <span>{cloudAutomationGate.message}</span>
             </div>
             {cloudAutomationGate.actions.length > 0 && (
-              <div className="autom-notice-actions">
+              <div className="banner-actions">
                 {cloudAutomationGate.actions.map((action) => (
                   <button
                     type="button"
@@ -943,18 +992,33 @@ export function AutomationsView({
           </div>
         )}
         {error && (
-          <div className="autom-notice warn" role="alert">
-            <div className="autom-notice-text"><strong>Something went wrong</strong><span>{error}</span></div>
+          <div className={`banner${typeof error === "string" ? "" : " with-steps"}`} data-tone="danger" role="alert">
+            <div className="banner-text">
+              <strong>{typeof error === "string" ? "Something went wrong" : error.title}</strong>
+              {typeof error === "string" ? (
+                <span>{error}</span>
+              ) : (
+                <>
+                  <span>{error.message}</span>
+                  {error.steps && (
+                    <ol className="banner-steps">
+                      {error.steps.map((step) => <li key={step}>{step}</li>)}
+                    </ol>
+                  )}
+                  {error.help && <span>{error.help}</span>}
+                </>
+              )}
+            </div>
             <button type="button" className="btn ghost icon" onClick={() => setError("")} aria-label="Dismiss">✕</button>
           </div>
         )}
         {notice && (
-          <div className={`autom-notice ${notice.tone}`} role="status">
-            <div className="autom-notice-text">
+          <div className="banner" data-tone={notice.tone === "info" ? "accent" : notice.tone} role="status">
+            <div className="banner-text">
               <strong>{notice.title}</strong>
               {notice.body && <span>{notice.body}</span>}
             </div>
-            <div className="autom-notice-actions">
+            <div className="banner-actions">
               {notice.action && (
                 <button type="button" className="btn sm primary" onClick={notice.action.onClick}>
                   {notice.action.label}
@@ -965,24 +1029,24 @@ export function AutomationsView({
           </div>
         )}
 
-        {section === null && (
+        {section === null && !historyAutomationId && (
         <>
         {/* Sources collapse to one overview row. Connection details stay nearby
             without making three setup cards the first thing on every visit. */}
         <AutomationSourcesPanel
           sources={[
-            { name: "GitHub", status: ghStatus, onClick: () => openSetup(ghStatus.tone === "on" ? "github" : "work-queue") },
+            { name: "GitHub", status: ghStatus, onClick: () => openSetup("github") },
             { name: "Linear", status: linStatus, onClick: () => openSetup("linear") },
             { name: "Slack", status: slackStatus, onClick: () => openSetup("slack") },
           ]}
         />
 
         {items.some((i) => i.trigger === "github_ci" && i.enabled) && sources.github?.connected && (
-          <div className="autom-banner" role="status">
+          <div className="banner inline" data-tone="accent" role="status">
             <strong>Fix failed CI is on.</strong>{" "}
             New GitHub Apps created in Bivy receive <code>workflow_run</code> events automatically.
             Existing apps need <code>workflow_run</code> + Actions/Checks read on the app in GitHub.
-            <button type="button" className="btn sm" style={{ marginLeft: 8 }} onClick={() => openSetup("github")}>
+            <button type="button" className="btn sm banner-action" onClick={() => openSetup("github")}>
               Review GitHub setup
             </button>
           </div>
@@ -994,17 +1058,25 @@ export function AutomationsView({
 
         {/* Empty state is the create chooser itself — no buried templates. */}
         {isEmpty && (
-          <section className="autom-hero">
+          <section className="autom-hero autom-empty-state">
+            <div className="autom-empty-icon" aria-hidden="true"><IconClock /></div>
             <div className="autom-hero-copy">
-              <h2 className="autom-hero-title">Put work on autopilot</h2>
+              <h2 className="autom-hero-title">Start by adding an automation</h2>
               <p className="autom-hero-body">
-                Start from a template or build your own. Setup stays here until it&apos;s running.
+                Schedule an automation to run any prompt and get reminded when it completes.
               </p>
             </div>
-            <NewAutomationPicker
-              onScratch={startFromScratch}
-              onTemplate={startFromTemplate}
-            />
+            <div className="autom-empty-action">
+              <button type="button" className="btn primary" onClick={openChooser}>
+                <PlusIcon size={22} /> New automation
+              </button>
+            </div>
+            <div className="autom-empty-picker">
+              <NewAutomationPicker
+                onScratch={startFromScratch}
+                onTemplate={startFromTemplate}
+              />
+            </div>
           </section>
         )}
 
@@ -1024,9 +1096,25 @@ export function AutomationsView({
                   const nextRun = item.enabled && item.nextRunAt && item.schedule?.kind !== "once"
                     ? formatNextAutomationRun(item.nextRunAt)
                     : null;
-                  const meta = [scheduleSummary(item), item.configKey ? "Managed by file" : null, nextRun].filter(Boolean).join(" · ");
+                  const meta = [scheduleSummary(item), item.configKey ? "Managed by file" : null, isSourceTrigger(item.trigger) ? "Priority: first match wins" : null, nextRun].filter(Boolean).join(" · ");
                   return (
-                    <div className={`automation-row${item.enabled ? "" : " is-paused"}`} key={item.id}>
+                    <div
+                      className={`automation-row${item.enabled ? "" : " is-paused"}`}
+                      key={item.id}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => void edit(item).catch((e) => setError(String(e)))}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          void edit(item).catch((e) => setError(String(e)));
+                        }
+                      }}
+                      aria-label={`Edit ${item.name}`}
+                    >
+                      <span className="automation-row-icon" aria-hidden="true">
+                        {item.trigger === "webhook" ? <IconWebhook /> : isSourceTrigger(item.trigger) ? <IconPr /> : <IconClock />}
+                      </span>
                       <div className="automation-row-main">
                         <div className="automation-row-title">
                           <strong>{item.name}</strong>
@@ -1036,68 +1124,33 @@ export function AutomationsView({
                         {item.trigger === "webhook" && rotated?.id === item.id && (
                           <div className="reveal-row">
                             <code className="reveal-value">{rotated.secret}</code>
-                            <button type="button" className="btn sm" onClick={() => copyText(rotated.secret)}>Copy secret</button>
-                            <span className="settings-hint">New signing secret — shown once.</span>
+                            <button type="button" className="btn sm" onClick={(event) => { event.stopPropagation(); void copyText(rotated.secret); }}>Copy secret</button>
+                            <span className="settings-hint">New webhook secret — shown once.</span>
                           </div>
                         )}
                       </div>
                       <div className="automation-row-actions">
+                        {(() => {
+                          const activeRun = runs.find((run) => run.definitionId === item.id && ["pending", "claimed", "running", "waiting", "needs_attention"].includes(run.status));
+                          return activeRun ? (
+                            <button
+                              type="button"
+                              className="btn sm link automation-row-run-status"
+                              onClick={(event) => { event.stopPropagation(); onOpenRun?.(activeRun.id); }}
+                            >
+                              {activeRun.status === "running" ? "Running now" : "Queued"}
+                            </button>
+                          ) : null;
+                        })()}
                         {needsConnect && (
                           <button
                             type="button"
                             className="btn sm primary"
-                            onClick={() => openSetup(item.trigger === "linear" ? "linear" : "work-queue")}
+                            onClick={(event) => { event.stopPropagation(); openSetup(item.trigger === "linear" ? "linear" : "work-queue"); }}
                           >
                             Connect
                           </button>
                         )}
-                        {(!item.configKey || isSourceTrigger(item.trigger)) && <div className="row-menu" ref={menuId === item.id ? menuRef : undefined}>
-                          <button
-                            type="button"
-                            className="row-menu-btn"
-                            aria-label={`More actions for ${item.name}`}
-                            aria-expanded={menuId === item.id}
-                            onClick={() => setMenuId((cur) => (cur === item.id ? null : item.id))}
-                          >
-                            …
-                          </button>
-                          {menuId === item.id && (
-                            <div className="menu row-menu-pop" role="menu">
-                              {!isSourceTrigger(item.trigger) && (
-                                <button type="button" className="menu-item row-menu-item" role="menuitem" onClick={() => { setMenuId(null); void runNow(item); }}>
-                                  {item.trigger === "webhook" ? "Test run" : "Run now"}
-                                </button>
-                              )}
-                              {!item.configKey && <button type="button" className="menu-item row-menu-item" role="menuitem" onClick={() => { setMenuId(null); void edit(item); }}>Edit</button>}
-                              {item.trigger === "webhook" && item.webhookUrl && (
-                                <button type="button" className="menu-item row-menu-item" role="menuitem" onClick={() => {
-                                  setMenuId(null);
-                                  void copyText(item.webhookUrl!);
-                                  setNotice({ tone: "ok", title: "Webhook URL copied" });
-                                }}>Copy webhook URL</button>
-                              )}
-                              {item.trigger === "webhook" && (
-                                <button type="button" className="menu-item row-menu-item" role="menuitem" onClick={() => { setMenuId(null); void rotate(item); }}>Rotate secret</button>
-                              )}
-                              {!item.configKey && <button type="button" className="menu-item row-menu-item" role="menuitem" onClick={() => void toggle(item)}>
-                                {item.enabled ? "Pause" : "Resume"}
-                              </button>}
-                              {isSourceTrigger(item.trigger) && (
-                                <button
-                                  type="button"
-                                  className="menu-item row-menu-item"
-                                  role="menuitem"
-                                  onClick={() => { setMenuId(null); openSetup(item.trigger === "linear" ? "linear" : "github"); }}
-                                >
-                                  Source setup
-                                </button>
-                              )}
-                              {!item.configKey && <button type="button" className="menu-item row-menu-item danger" role="menuitem" onClick={() => void remove(item)}>
-                                Delete
-                              </button>}
-                            </div>
-                          )}
-                        </div>}
                       </div>
                     </div>
                   );
@@ -1110,7 +1163,25 @@ export function AutomationsView({
         </>
         )}
 
-        {section === "queue" && (
+        {section === null && historyAutomationId && (
+          <section className="autom-section automation-history-view">
+            <div className="autom-section-head">
+              <button type="button" className="btn link" onClick={() => setHistoryAutomationId(null)}>‹ Automations</button>
+              <strong>{listedItems.find((item) => item.id === historyAutomationId)?.name || "Automation"} history</strong>
+            </div>
+            <RunHistory
+              runs={runs.filter((run) => run.definitionId === historyAutomationId)}
+              definitions={items}
+              cancelBusyId={cancelBusyId}
+              onRefresh={() => void refresh().catch((e) => setError(String((e as Error).message || e)))}
+              onCancel={(run) => { setCancelError(null); setCancelRun(run); }}
+              onOpenRun={onOpenRun}
+              onOpenSession={(sessionId) => { onOpenSession(sessionId); onClose(); }}
+            />
+          </section>
+        )}
+
+        {section === "runs" && (
           <>
             {cancelError && <div className="banner inline" data-tone="danger">Could not cancel run: {cancelError}</div>}
             {cloudMachinesEnabled && (
@@ -1154,6 +1225,17 @@ export function AutomationsView({
         {section === "rulesets" && <RulesetsPanel state={state} />}
       </div>
 
+      {pendingDelete && (
+        <ConfirmDialog
+          title="Delete automation?"
+          message={`Delete “${pendingDelete.name}”? This can't be undone.`}
+          confirmLabel="Delete"
+          danger
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={() => void deleteConfirmed()}
+        />
+      )}
+
       {cancelRun && (
         <ConfirmDialog
           title="Cancel Run?"
@@ -1176,7 +1258,17 @@ export function AutomationsView({
       {draft && (
         <AutomationEditor
           state={state}
+          sources={sources}
           initial={draft}
+          existing={draft.id ? items.find((item) => item.id === draft.id) : undefined}
+          onRunNow={runNow}
+          runBusy={Boolean(dispatchingId)}
+          onToggle={toggle}
+          onDelete={async (item) => { if (await remove(item)) setDraft(null); }}
+          onHistory={(id) => { setDraft(null); setHistoryAutomationId(id); }}
+          onRotate={rotate}
+          onSourceSetup={(item) => openSetup(item.trigger === "linear" ? "linear" : "github")}
+          onMove={moveSourceAutomation}
           onCancel={() => setDraft(null)}
           onSaved={async (result) => {
             setDraft(null);
@@ -1202,6 +1294,7 @@ export function AutomationsView({
             }
           }}
           onSelectSource={(source, current) => { void continueWithSource(source, current).catch((e) => setError(String(e))); }}
+          onOpenSourceSetup={openSetup}
         />
       )}
 
@@ -1211,15 +1304,20 @@ export function AutomationsView({
           state={state}
           sources={sources}
           onClose={() => setSourceEdit(null)}
+          onRunNow={runNow}
+          runBusy={Boolean(dispatchingId)}
+          onToggle={(item) => toggle(item)}
+          onDelete={async (item) => { if (await remove(item)) setSourceEdit(null); }}
+          onHistory={(id) => { setSourceEdit(null); setHistoryAutomationId(id); }}
+          onSourceSetup={(item) => openSetup(item.trigger === "linear" ? "linear" : "github")}
+          onMove={moveSourceAutomation}
           onSaved={async () => {
             setSourceEdit(null);
             await refresh().catch((e) => setError(String(e)));
             setNotice({ tone: "ok", title: "Automation updated" });
           }}
           onConnect={() => {
-            const focus: SourceSetupFocus = sourceEdit.trigger === "linear" ? "linear" : "work-queue";
-            setSourceEdit(null);
-            openSetup(focus);
+            openSetup(sourceEdit.trigger === "linear" ? "linear" : "github");
           }}
         />
       )}
@@ -1234,7 +1332,7 @@ export function AutomationsView({
           }}
           onChanged={() => { void refresh().catch(() => {}); }}
           onOpenFullSettings={() => {
-            // Connections live only in Automations — keep the sheet open.
+            // Keep the automation draft open while managing its source.
           }}
         />
       )}
@@ -1248,305 +1346,20 @@ function copyText(value: string): void {
   void navigator.clipboard?.writeText(value);
 }
 
-// ── New automation chooser ──────────────────────────────────────────────────
-// Linear / Notion-style: one primary "from scratch" row, then a browsable
-// template gallery. Used both as the empty-state body and as the New sheet.
-
-const TEMPLATE_GROUPS: Array<{ id: string; label: string; match: (t: AutomationTemplate) => boolean }> = [
-  {
-    id: "events",
-    label: "From GitHub & Linear",
-    match: (t) => t.kind === "source",
-  },
-  {
-    id: "schedule",
-    label: "On a schedule",
-    match: (t) => t.kind === "schedule",
-  },
-  {
-    id: "webhook",
-    label: "From a webhook",
-    match: (t) => t.kind === "webhook",
-  },
-];
-
-function NewAutomationChooser({
-  onClose,
-  onScratch,
-  onTemplate,
-}: {
-  onClose: () => void;
-  onScratch: () => void;
-  onTemplate: (t: AutomationTemplate) => void;
-}) {
-  return (
-    <div className="wizard-scrim" onClick={onClose}>
-      <div
-        className="wizard autom-editor autom-chooser"
-        role="dialog"
-        aria-modal="true"
-        aria-label="New automation"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="wizard-head">
-          <div className="wq-head-text">
-            <strong>New automation</strong>
-            <span className="wq-head-sub">Pick a starting point</span>
-          </div>
-          <button type="button" className="btn ghost icon" onClick={onClose} aria-label="Close">✕</button>
-        </div>
-        <div className="wizard-body autom-chooser-body">
-          <NewAutomationPicker onScratch={onScratch} onTemplate={onTemplate} />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function NewAutomationPicker({
-  onScratch,
-  onTemplate,
-}: {
-  onScratch: () => void;
-  onTemplate: (t: AutomationTemplate) => void;
-}) {
-  const [query, setQuery] = useState("");
-  const q = query.trim().toLowerCase();
-
-  const filtered = useMemo(() => {
-    if (!q) return AUTOMATION_TEMPLATES;
-    return AUTOMATION_TEMPLATES.filter((t) => {
-      const hay = `${t.title} ${t.tagline} ${t.key}`.toLowerCase();
-      return hay.includes(q);
-    });
-  }, [q]);
-
-  const groups = useMemo(() => {
-    return TEMPLATE_GROUPS
-      .map((g) => ({ ...g, items: filtered.filter(g.match) }))
-      .filter((g) => g.items.length > 0);
-  }, [filtered]);
-
-  // Anything that didn't land in a group (future kinds) still shows.
-  const ungrouped = useMemo(() => {
-    const claimed = new Set(groups.flatMap((g) => g.items.map((t) => t.key)));
-    return filtered.filter((t) => !claimed.has(t.key));
-  }, [filtered, groups]);
-
-  return (
-    <div className="autom-picker">
-      <button type="button" className="autom-scratch-row" onClick={onScratch}>
-        <span className="autom-scratch-icon" aria-hidden="true"><IconBolt /></span>
-        <span className="autom-scratch-text">
-          <strong>Start from scratch</strong>
-          <span>Blank automation — pick the trigger, write the instructions</span>
-        </span>
-        <span className="autom-scratch-chevron" aria-hidden="true">→</span>
-      </button>
-
-      <div className="autom-picker-templates-head">
-        <h3 className="autom-section-label" style={{ margin: 0 }}>Templates</h3>
-        <input
-          className="autom-picker-search"
-          type="search"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search templates…"
-          aria-label="Search templates"
-          autoComplete="off"
-        />
-      </div>
-
-      {filtered.length === 0 ? (
-        <p className="settings-hint autom-empty-hint">No templates match “{query.trim()}”.</p>
-      ) : (
-        <>
-          {groups.map((g) => (
-            <div className="autom-picker-group" key={g.id}>
-              <h4 className="autom-picker-group-label">{g.label}</h4>
-              <div className="automation-templates">
-                {g.items.map((template) => (
-                  <TemplateCard
-                    key={template.key}
-                    template={template}
-                    onUse={() => onTemplate(template)}
-                  />
-                ))}
-              </div>
-            </div>
-          ))}
-          {ungrouped.length > 0 && (
-            <div className="autom-picker-group">
-              <div className="automation-templates">
-                {ungrouped.map((template) => (
-                  <TemplateCard
-                    key={template.key}
-                    template={template}
-                    onUse={() => onTemplate(template)}
-                  />
-                ))}
-              </div>
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
-// ── Template card ───────────────────────────────────────────────────────────
-
-function TemplateCard({
-  template,
-  onUse,
-  featured = false,
-}: {
-  template: AutomationTemplate;
-  onUse: () => void;
-  featured?: boolean;
-}) {
-  const badge = triggerBadge(template);
-  const cta = template.kind === "source" ? (template.cta || "Set up") : "Use";
-  return (
-    <button
-      type="button"
-      className={`template-card${featured ? " is-featured" : ""}`}
-      onClick={onUse}
-    >
-      <div className="template-card-top">
-        <span className="template-card-icon" aria-hidden="true">{templateIcon(template.key)}</span>
-        <span className={`template-card-badge tone-${badge.tone}`}>{badge.label}</span>
-      </div>
-      <strong className="template-card-title">{template.title}</strong>
-      <p className="template-card-tagline">{template.tagline}</p>
-      <span className="template-card-cta">{cta} →</span>
-    </button>
-  );
-}
-
 // ── Source automation editor (GitHub / Linear / CI) ─────────────────────────
-
-// ── Test event / preflight — shared by both editors ────────────────────────
-// Explains, without creating a run, which automation a representative event
-// would fire (and why the rest didn't), overlap/shadow warnings across the
-// account's rules, and the six-check preflight — the same contract
-// `bivy automation test` and the control-plane's live intake use (see
-// docs/automation-evaluator.md). Every Save also runs this silently (no
-// event) so a hard failure never reaches the API, and a non-blocking warning
-// always requires the explicit acknowledgement checkbox below before Save
-// is enabled — the draft/gate can change between runs, so a fresh result
-// always clears any prior acknowledgement.
-function useAutomationPreflight(automationId: string | undefined) {
-  const [result, setResult] = useState<AutomationSimulationResult | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [ack, setAck] = useState(false);
-
-  const run = useCallback(async (
-    draft: AutomationSimulationDraft,
-    event?: AutomationSimulationEvent,
-    opts?: { resetAck?: boolean },
-  ) => {
-    setBusy(true);
-    setError("");
-    try {
-      const r = await simulateAutomation(controller.local, { automationId, draft, event });
-      setResult(r);
-      // An explicit Test event / Check readiness click always clears a stale
-      // acknowledgement (new warnings deserve a fresh look). Save's own
-      // silent pre-check passes resetAck: false so a user who already ticked
-      // the box doesn't get it cleared out from under them by the very same
-      // click that's supposed to consume it.
-      if (opts?.resetAck !== false) setAck(false);
-      return r;
-    } catch (e) {
-      setResult(null);
-      setError(String((e as Error).message || e));
-      throw e;
-    } finally {
-      setBusy(false);
-    }
-  }, [automationId]);
-
-  return { result, busy, error, ack, setAck, run };
-}
-
-function preflightIcon(severity: AutomationPreflightSeverity): string {
-  if (severity === "ok") return "✓";
-  if (severity === "block") return "✗";
-  if (severity === "warn") return "⚠";
-  if (severity === "skipped") return "·";
-  return "ℹ";
-}
-
-function AutomationPreflightPanel({
-  result,
-  error,
-  ack,
-  onAckChange,
-  showTrail,
-}: {
-  result: AutomationSimulationResult | null;
-  error: string;
-  ack: boolean;
-  onAckChange: (value: boolean) => void;
-  showTrail: boolean;
-}) {
-  if (error) return <p className="settings-error">{error}</p>;
-  if (!result) return null;
-  const ownOverlaps = result.overlaps.filter((o) => o.beforeId === result.subjectId || o.afterId === result.subjectId);
-  const visibleChecks = result.preflight.filter((c) => c.severity !== "skipped");
-  return (
-    <div className="autom-preflight" role="status">
-      {showTrail && result.trail.length > 0 && (
-        <div className="autom-preflight-trail">
-          <div className="autom-field-label">Rule evaluation (first match wins)</div>
-          <ul className="autom-preflight-list">
-            {result.trail.map((t) => (
-              <li key={t.id} className={t.matched ? "ok" : undefined}>
-                <span>{t.matched ? "✓" : "·"}</span>{" "}
-                {t.id === result.subjectId ? <strong>this automation</strong> : t.id}: {t.reason}
-              </li>
-            ))}
-          </ul>
-          {!result.matchedId && <p className="schedule-hint warn">No automation — including this one — would fire for this event.</p>}
-        </div>
-      )}
-      {ownOverlaps.map((o, i) => (
-        <p key={i} className={o.kind === "shadowed" ? "settings-error" : "schedule-hint warn"}>{o.detail}</p>
-      ))}
-      {visibleChecks.length > 0 && (
-        <div className="autom-preflight-checks">
-          <div className="autom-field-label">Preflight</div>
-          <ul className="autom-preflight-list">
-            {visibleChecks.map((c) => (
-              <li key={c.id} className={`preflight-${c.severity}`}>
-                <span>{preflightIcon(c.severity)}</span> <strong>{c.label}</strong>: {c.detail}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-      {result.gate.blocked && (
-        <p className="settings-error">
-          Can&apos;t save yet — {result.gate.blockingChecks.map((c) => c.label).join(", ")}.
-        </p>
-      )}
-      {!result.gate.blocked && result.gate.requiresAck && (
-        <label className="autom-check-row">
-          <input type="checkbox" checked={ack} onChange={(e) => onAckChange(e.target.checked)} />
-          <span>I understand the warnings above and want to save anyway.</span>
-        </label>
-      )}
-    </div>
-  );
-}
 
 function SourceAutomationEditor({
   item,
   state,
   sources,
   onClose,
+  onRunNow,
+  runBusy,
+  onToggle,
+  onDelete,
+  onHistory,
+  onSourceSetup,
+  onMove,
   onSaved,
   onConnect,
 }: {
@@ -1554,6 +1367,13 @@ function SourceAutomationEditor({
   state: AppState;
   sources: SourcesSnapshot;
   onClose: () => void;
+  runBusy?: boolean;
+  onRunNow?: (item: AccountAutomation) => void | Promise<void>;
+  onToggle?: (item: AccountAutomation) => void | Promise<void>;
+  onDelete?: (item: AccountAutomation) => void | Promise<void>;
+  onHistory?: (id: string) => void;
+  onSourceSetup?: (item: AccountAutomation) => void;
+  onMove?: (item: AccountAutomation, direction: -1 | 1) => void | Promise<void>;
   onSaved: () => void | Promise<void>;
   onConnect: () => void;
 }) {
@@ -1569,32 +1389,52 @@ function SourceAutomationEditor({
       : (item.on?.find((r) => r.event === "workflow_run")?.workflows ?? []).join(", "),
   );
   const [reposText, setReposText] = useState((item.repos ?? []).join(", "));
+  const [appId, setAppId] = useState(item.appId || "");
   const [repoDefault, setRepoDefault] = useState(item.repo || "");
   const [nodeSuffix, setNodeSuffix] = useState(nodeLabelSuffix(item.nodeLabel));
   const [runtimeId, setRuntimeId] = useState(item.runtimeId || "");
   const [model, setModel] = useState(item.model || "");
+  const [accountTemplate, setAccountTemplate] = useState<ReturnType<typeof decodeAutomationTemplate> | null>();
+  const [accountsChanged, setAccountsChanged] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      if (!item.templateCiphertext) return decodeAutomationTemplate(defaultSourceInstructions());
+      const [prefix, nodeId, ...payload] = item.templateCiphertext.split(":");
+      const key = nodeId ? controller.local.keys()[nodeId] : undefined;
+      if (prefix !== TEMPLATE_PREFIX || !key) return null;
+      return decodeAutomationTemplate(await open(await importRoomKey(unb64url(key)), payload.join(":")));
+    };
+    void load().then((template) => { if (!cancelled) setAccountTemplate(template); }).catch((e) => {
+      if (!cancelled) { setAccountTemplate(null); setError(String(e)); }
+    });
+    return () => { cancelled = true; };
+  }, [item.templateCiphertext]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  // Account-wide GitHub setting (same control as Settings → GitHub App).
-  const initialTriggerAccess =
-    sources.github?.apps?.find((a) => a.triggerAccess)?.triggerAccess
-    ?? sources.github?.triggerAccess
-    ?? "everyone";
-  const [triggerAccess, setTriggerAccess] = useState<"everyone" | "contributor" | "collaborator">(initialTriggerAccess);
-  const [triggerAccessDirty, setTriggerAccessDirty] = useState(false);
   const preflight = useAutomationPreflight(item.id || undefined);
 
   const needsConnect =
     (trigger === "github" || trigger === "github_ci") && githubSourceStatus(sources.github).tone === "off"
     || trigger === "linear" && linearSourceStatus(sources.linear).tone === "off";
   const isGithub = trigger === "github" || trigger === "github_ci";
-  const mention = sources.github?.apps?.find((a) => a.mention)?.mention || "bivy";
+  const mentions = githubMentionHandles(sources.github, appId);
+  const mentionText = mentions.length ? mentions.map((handle) => `@${handle}`).join(" or ") : "Connect an app to see its @mention handle";
   const anyEvent = events.issuesLabeled || events.issueMention || events.prLabeled || events.prMention || events.workflowFailed;
 
   const parseList = (raw: string): string[] | undefined => {
     const parts = raw.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
     return parts.length ? parts : undefined;
   };
+
+  async function accountCiphertext() {
+    if (!accountsChanged || !accountTemplate) return item.templateCiphertext;
+    const node = state.connection.nodes.find((n) => n.name === nodeSuffix.trim());
+    const nodeId = node?.id;
+    const key = nodeId ? controller.local.keys()[nodeId] : undefined;
+    if (!nodeId || !key) throw new Error("Choose a paired machine before saving account selections.");
+    return `${TEMPLATE_PREFIX}:${nodeId}:${await seal(await importRoomKey(unb64url(key)), encodeAutomationTemplate(accountTemplate.instructions, accountTemplate.credentialLabels))}`;
+  }
 
   async function save() {
     setBusy(true);
@@ -1619,10 +1459,12 @@ function SourceAutomationEditor({
         enabled,
         labels: labels ?? [],
         repos: repos ?? [],
+        appId: isGithub ? appId.trim() || "" : "",
         repo: repoDefault.trim() || "",
         nodeLabel: nodeSuffix.trim() ? `bivy/${nodeSuffix.trim()}` : "",
         runtimeId: runtimeId.trim() || "",
         model: model.trim() || "",
+        templateCiphertext: await accountCiphertext(),
       };
       if (isGithub) {
         // Persist structured event rules. Legacy github_ci keeps its trigger kind
@@ -1636,7 +1478,7 @@ function SourceAutomationEditor({
       // Shared preflight gate before ever calling create/update (see
       // docs/automation-evaluator.md). resetAck: false so a box already
       // ticked on a prior Save click still counts on this one.
-      const evaluation = await preflight.run({ ...patch, trigger, templateCiphertext: item.templateCiphertext }, undefined, { resetAck: false });
+      const evaluation = await preflight.run({ ...patch, trigger }, undefined, { resetAck: false });
       if (evaluation.gate.blocked) {
         throw new Error(`Can't save yet — ${evaluation.gate.blockingChecks.map((c) => c.label).join(", ")}. See the checklist below.`);
       }
@@ -1653,9 +1495,6 @@ function SourceAutomationEditor({
           trigger,
           enabled: patch.enabled ?? true,
         });
-      }
-      if (isGithub && triggerAccessDirty) {
-        await controller.setGithubAppTriggerAccess(triggerAccess);
       }
       await onSaved();
     } catch (e) {
@@ -1679,6 +1518,7 @@ function SourceAutomationEditor({
       templateCiphertext: item.templateCiphertext,
       labels: labels ?? [],
       repos: repos ?? [],
+      appId: isGithub ? appId.trim() || undefined : undefined,
       repo: repoDefault.trim() || undefined,
       nodeLabel: nodeSuffix.trim() ? `bivy/${nodeSuffix.trim()}` : undefined,
       runtimeId: runtimeId.trim() || undefined,
@@ -1693,6 +1533,9 @@ function SourceAutomationEditor({
     await preflight.run(draft, event, { resetAck: true }).catch(() => {});
   }
 
+  const sourceEditorRef = useRef<HTMLDivElement>(null);
+  useModalFocus(sourceEditorRef);
+  useModalEscape(onClose);
   const action = item.id ? "Edit" : "Create";
   const title =
     trigger === "github_ci" ? `${action} GitHub automation (CI)`
@@ -1705,20 +1548,34 @@ function SourceAutomationEditor({
 
   return (
     <div className="wizard-scrim" onClick={onClose}>
-      <div className="wizard autom-editor" role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()}>
+      <div ref={sourceEditorRef} className="wizard autom-editor" role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()}>
         <div className="wizard-head">
           <strong>{title}</strong>
           <button type="button" className="btn ghost icon" onClick={onClose} aria-label="Cancel">✕</button>
         </div>
+        <details className="autom-editor-actions">
+          <summary className="btn sm" aria-label="Automation actions">Actions</summary>
+          <div className="menu row-menu-pop" role="menu">
+            {onRunNow && <button type="button" className="menu-item" role="menuitem" disabled={runBusy} onClick={() => void onRunNow(item)}>{runBusy ? "Queueing…" : "Run now"}</button>}
+            {onToggle && <button type="button" className="menu-item" role="menuitem" onClick={() => void onToggle(item)}>{enabled ? "Pause" : "Resume"}</button>}
+            {onHistory && <button type="button" className="menu-item automation-history-btn" role="menuitem" onClick={() => onHistory(item.id)}>History</button>}
+            {onSourceSetup && <button type="button" className="menu-item" role="menuitem" onClick={() => onSourceSetup(item)}>Source setup</button>}
+            {onMove && (trigger === "github" || trigger === "linear") && <>
+              <button type="button" className="menu-item" role="menuitem" onClick={() => void onMove(item, -1)}>Move earlier</button>
+              <button type="button" className="menu-item" role="menuitem" onClick={() => void onMove(item, 1)}>Move later</button>
+            </>}
+            {onDelete && !item.configKey && <button type="button" className="menu-item danger" role="menuitem" onClick={() => void onDelete(item)}>Delete</button>}
+          </div>
+        </details>
         <div className="wizard-body">
           {needsConnect && (
-            <div className="autom-banner" role="status">
+            <div className="banner inline" data-tone="accent" role="status">
               Connect {trigger === "linear" ? "Linear" : "GitHub"} before this automation can fire.
               <button type="button" className="btn sm primary" style={{ marginLeft: 8 }} onClick={onConnect}>Connect here</button>
             </div>
           )}
           {events.workflowFailed && enabled && !needsConnect && isGithub && (
-            <div className="autom-banner" role="status">
+            <div className="banner inline" data-tone="accent" role="status">
               Failed CI needs <code>workflow_run</code> on the GitHub App (included for apps created in Bivy).
               Existing apps: add the event + Actions/Checks read in GitHub settings.
             </div>
@@ -1743,11 +1600,11 @@ function SourceAutomationEditor({
               </p>
               <label className="autom-check-row">
                 <input type="checkbox" checked={events.issuesLabeled} onChange={() => toggleEvent("issuesLabeled")} />
-                <span>Issue labeled <span className="settings-hint">(uses label filter below)</span></span>
+                <span>Issue labeled <code>{labelsText.trim() || "bivy"}</code></span>
               </label>
               <label className="autom-check-row">
                 <input type="checkbox" checked={events.issueMention} onChange={() => toggleEvent("issueMention")} />
-                <span>@mention on issue or PR conversation <code>@{mention}</code></span>
+                <span>Issue or PR conversation containing <code>{mentionText}</code></span>
               </label>
               <label className="autom-check-row">
                 <input type="checkbox" checked={events.prLabeled} onChange={() => toggleEvent("prLabeled")} />
@@ -1755,7 +1612,7 @@ function SourceAutomationEditor({
               </label>
               <label className="autom-check-row">
                 <input type="checkbox" checked={events.prMention} onChange={() => toggleEvent("prMention")} />
-                <span>@mention on a PR review comment</span>
+                <span>PR review comment containing <code>{mentionText}</code></span>
               </label>
               <label className="autom-check-row">
                 <input type="checkbox" checked={events.workflowFailed} onChange={() => toggleEvent("workflowFailed")} />
@@ -1765,9 +1622,24 @@ function SourceAutomationEditor({
             </div>
           )}
 
+          {isGithub && (sources.github?.apps?.length ?? 0) > 1 && (
+            <div className="settings-field">
+              <label className="field-label" htmlFor="src-app-id">GitHub App source</label>
+              <select id="src-app-id" className="picker-search" value={appId} onChange={(e) => setAppId(e.target.value)}>
+                <option value="">All GitHub Apps</option>
+                {sources.github?.apps.map((app) => (
+                  <option key={app.appId || app.hookId || app.name} value={app.appId || ""} disabled={!app.appId}>
+                    {githubAppOptionLabel(app)}
+                  </option>
+                ))}
+              </select>
+              <p className="settings-hint">Scope this automation to the hosted Bivy App or to a custom/user-installed GitHub App.</p>
+            </div>
+          )}
+
           {isGithub && (events.issuesLabeled || events.prLabeled) && (
             <div className="settings-field">
-              <label className="field-label" htmlFor="src-labels">Labels</label>
+              <label className="field-label" htmlFor="src-labels">Trigger labels</label>
               <input
                 id="src-labels"
                 className="picker-search"
@@ -1776,8 +1648,9 @@ function SourceAutomationEditor({
                 placeholder="e.g. bivy"
               />
               <p className="settings-hint">
-                Comma-separated. The default also matches labels that target a specific machine.
-                @mentions ignore this filter.
+                Choose your own GitHub labels, separated by commas (for example, fix-it, ready for review).
+                Any one starts this automation on the selected label events. Leave blank to use bivy.
+                This setting belongs to this automation, not the GitHub App. Mentions do not require a label.
               </p>
             </div>
           )}
@@ -1812,40 +1685,8 @@ function SourceAutomationEditor({
             </div>
           )}
 
-          <div className="settings-field">
-            <label className="field-label" htmlFor="src-repos">Repository allowlist (optional)</label>
-            <input
-              id="src-repos"
-              className="picker-search"
-              value={reposText}
-              onChange={(e) => setReposText(e.target.value)}
-              placeholder="owner/repo, owner/other"
-            />
-            <p className="settings-hint">Empty = all installed repos. Use owner/name slugs.</p>
-          </div>
-
-          {isGithub && !needsConnect && (
-            <div className="settings-field">
-              <label className="field-label" htmlFor="src-trigger-access">Who can trigger runs</label>
-              <select
-                id="src-trigger-access"
-                className="picker-search"
-                value={triggerAccess}
-                onChange={(e) => {
-                  setTriggerAccess(e.target.value as "everyone" | "contributor" | "collaborator");
-                  setTriggerAccessDirty(true);
-                }}
-              >
-                <option value="everyone">Everyone — any GitHub user (default)</option>
-                <option value="contributor">Contributors — prior merged contribution, or higher</option>
-                <option value="collaborator">Collaborators only — push access</option>
-              </select>
-              <p className="settings-hint">
-                On a public repo, anyone can open an issue or comment. Restrict who can start a run via{" "}
-                <code>@{mention}</code> or a label. Account-wide — applies to every GitHub App.
-              </p>
-            </div>
-          )}
+          {isGithub && sources.github?.connected && <GithubTriggerAccess info={sources.github} />}
+          <RepositoryEventFilter value={reposText} onChange={setReposText} github={isGithub} />
 
           {(trigger === "linear" || trigger === "github_ci") && (
             <div className="settings-field">
@@ -1882,6 +1723,10 @@ function SourceAutomationEditor({
 
           <details className="autom-cron-details">
             <summary>Agent &amp; model defaults</summary>
+            {accountTemplate ? <AutomationAccounts state={state} value={accountTemplate.credentialLabels} onChange={(credentialLabels) => {
+              setAccountTemplate({ ...accountTemplate, credentialLabels });
+              setAccountsChanged(true);
+            }} /> : <p className="settings-hint" role="status">{accountTemplate === undefined ? "Loading account selections…" : "Account selections are locked. Pair with the assigned machine to edit them."}</p>}
             <div className="settings-field">
               <label className="field-label" htmlFor="src-agent">Agent</label>
               <select id="src-agent" className="picker-search" value={runtimeId} onChange={(e) => setRuntimeId(e.target.value)}>
@@ -1918,7 +1763,7 @@ function SourceAutomationEditor({
         </div>
         <div className="wizard-actions">
           <button type="button" className="btn" onClick={onClose}>Cancel</button>
-          <button type="button" className="btn primary autom-save-btn" disabled={busy} onClick={() => void save()}>
+          <button type="button" className="btn primary" disabled={busy} onClick={() => void save()}>
             {busy ? "Saving…" : "Save"}
           </button>
         </div>
@@ -1938,32 +1783,65 @@ interface SaveResult {
 
 function AutomationEditor({
   state,
+  sources,
   initial,
+  existing,
+  onRunNow,
+  runBusy,
+  onToggle,
+  onDelete,
+  onHistory,
+  onRotate,
+  onSourceSetup,
+  onMove,
   onCancel,
   onSaved,
   onSelectSource,
+  onOpenSourceSetup,
 }: {
   state: AppState;
+  sources: SourcesSnapshot;
   initial: Draft;
+  existing?: AccountAutomation;
+  runBusy?: boolean;
+  onRunNow?: (item: AccountAutomation) => void | Promise<void>;
+  onToggle?: (item: AccountAutomation) => void | Promise<void>;
+  onDelete?: (item: AccountAutomation) => void | Promise<void>;
+  onHistory?: (id: string) => void;
+  onRotate?: (item: AccountAutomation) => void | Promise<void>;
+  onSourceSetup?: (item: AccountAutomation) => void;
+  onMove?: (item: AccountAutomation, direction: -1 | 1) => void | Promise<void>;
   onCancel: () => void;
   onSaved: (result?: SaveResult) => void;
   onSelectSource: (source: "github" | "linear", current: Draft) => void;
+  onOpenSourceSetup: (focus: SourceSetupFocus) => void;
 }) {
   const [d, setD] = useState<Draft>(initial);
+  // Write-only: never include this value in persisted/encrypted instruction drafts.
+  const [customWebhookSecret, setCustomWebhookSecret] = useState("");
+  const mentions = githubMentionHandles(sources.github, d.appId);
+  const mentionText = mentions.length ? mentions.map((handle) => `@${handle}`).join(" or ") : "@mention (connect an app to see its handle)";
+  const labelText = d.labels.split(",").map((label) => label.trim()).filter(Boolean).join(", ") || "bivy";
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [showAdvanced, setShowAdvanced] = useState(false);
   const [nlError, setNlError] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [created, setCreated] = useState<{ url: string; secret: string; name: string } | null>(null);
-  const [allowDangerous, setAllowDangerous] = useState(false);
   const [managedTarget, setManagedTarget] = useState<Awaited<ReturnType<typeof controller.managedAutomationTarget>> | null>(null);
+  const [created, setCreated] = useState<{ url: string; secret: string; name: string; updated?: boolean } | null>(null);
+  const [allowDangerous, setAllowDangerous] = useState(existing?.allowDangerous ?? false);
+  const [pairMachineOpen, setPairMachineOpen] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
+  const editorRef = useRef<HTMLDivElement>(null);
+  const instructionsRef = useRef<HTMLTextAreaElement>(null);
+  const closeWithBack = useModalBack(onCancel);
+  useModalEscape(closeWithBack);
+  useModalFocus(editorRef);
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setD((prev) => ({ ...prev, [k]: v }));
   const preflight = useAutomationPreflight(d.id || undefined);
 
   const tzList = useMemo(() => timezoneOptions(d.timezone), [d.timezone]);
   const cronHuman = useMemo(() => describeCron(d.cron), [d.cron]);
+  const cronChipCopy = useMemo(() => cronChip(d.cron, d.timezone), [d.cron, d.timezone]);
   const selectedNode = state.connection.nodes.find((n) => n.id === d.nodeId);
   const selectedManaged = Boolean(managedTarget && d.nodeId === managedTarget.nodeId);
   const selectedNodeHasKey = Boolean(d.nodeId && controller.local.keys()[d.nodeId]);
@@ -1979,6 +1857,10 @@ function AutomationEditor({
       setManagedTarget(target);
     }).catch(() => {});
   }, []);
+  useEffect(() => {
+    setAllowDangerous(existing?.allowDangerous ?? false);
+  }, [initial.id, existing?.allowDangerous]);
+  useAutoGrowingTextarea(instructionsRef, d.instructions);
 
   useEffect(() => {
     if (!pickerOpen) return;
@@ -2044,6 +1926,7 @@ function AutomationEditor({
   if (d.hasTrigger && !scheduleOk) missing.push("a valid schedule");
   if (d.hasTrigger && !repoOk) missing.push("a repository");
   if (d.hasTrigger && d.trigger === "github" && !Object.values(d.githubEvents).some(Boolean)) missing.push("a GitHub event");
+  if (d.hasTrigger && d.trigger === "github" && githubSourceStatus(sources.github).tone !== "on") missing.push("a connected GitHub App");
   if (!d.instructions.trim()) missing.push("instructions");
   if (!d.nodeId) missing.push("a machine");
   else if (!controller.local.keys()[d.nodeId]) missing.push("a paired machine (encryption key missing)");
@@ -2060,7 +1943,7 @@ function AutomationEditor({
     const roomKey = d.nodeId ? controller.local.keys()[d.nodeId] : undefined;
     let templateCiphertext: string | undefined;
     if (d.nodeId && roomKey && d.instructions.trim()) {
-      templateCiphertext = `${TEMPLATE_PREFIX}:${d.nodeId}:${await seal(await importRoomKey(unb64url(roomKey)), d.instructions.trim())}`;
+      templateCiphertext = `${TEMPLATE_PREFIX}:${d.nodeId}:${await seal(await importRoomKey(unb64url(roomKey)), encodeAutomationTemplate(d.instructions.trim(), d.credentialLabels))}`;
     }
     const labels = d.labels.split(/[,\n]/).map((v) => v.trim()).filter(Boolean);
     const repos = d.repos.split(/[,\n]/).map((v) => v.trim()).filter(Boolean);
@@ -2080,7 +1963,7 @@ function AutomationEditor({
       ...(d.trigger === "github" || d.trigger === "linear" ? {
         labels,
         repos,
-        ...(d.trigger === "github" ? { on: buildGithubOn(d.githubEvents, labels, workflows) } : {}),
+        ...(d.trigger === "github" ? { appId: d.appId.trim() || undefined, on: buildGithubOn(d.githubEvents, labels, workflows) } : {}),
       } : {}),
     };
     await preflight.run(draft, buildRepresentativeEvent(d), { resetAck: true }).catch(() => {});
@@ -2093,7 +1976,7 @@ function AutomationEditor({
     try {
       const roomKey = d.nodeId ? controller.local.keys()[d.nodeId] : undefined;
       if (!d.nodeId || !roomKey) throw new Error("Connect to the assigned machine before saving encrypted instructions.");
-      const encrypted = await seal(await importRoomKey(unb64url(roomKey)), d.instructions.trim());
+      const encrypted = await seal(await importRoomKey(unb64url(roomKey)), encodeAutomationTemplate(d.instructions.trim(), d.credentialLabels));
       const nodeName = selectedManaged ? undefined : selectedNode?.name;
       if (selectedManaged && managedTarget) {
         await controller.setQueueRouting({ primary: { kind: "config", configId: managedTarget.config.id } });
@@ -2102,11 +1985,12 @@ function AutomationEditor({
       const labels = d.labels.split(/[,\n]/).map((value) => value.trim()).filter(Boolean);
       const repos = d.repos.split(/[,\n]/).map((value) => value.trim()).filter(Boolean);
       const workflows = d.workflows.split(/[,\n]/).map((value) => value.trim()).filter(Boolean);
-      if (repo && !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) {
+      const repoPattern = /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/;
+      if (repo && (!repoPattern.test(repo) || repo.includes(".."))) {
         throw new Error("Repository must look like owner/name");
       }
-      if (repos.some((value) => !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(value))) {
-        throw new Error("Every repository allowlist entry must look like owner/name");
+      if (repos.some((value) => !repoPattern.test(value) || value.includes(".."))) {
+        throw new Error("Each repository filter must use owner/name (for example, acme/api)");
       }
       const input = {
         name: d.name.trim(),
@@ -2117,13 +2001,20 @@ function AutomationEditor({
         approvalMode: d.approvalMode,
         sandbox: d.sandbox,
         allowDangerous,
-        enabled: true,
+        enabled: existing?.enabled ?? true,
         trigger: d.trigger,
+        ...(d.trigger === "webhook" ? {
+          requireSigning: d.requireSigning,
+          ...(d.requireSigning ? {
+            webhookHeader: d.webhookHeader,
+            webhookAuthMode: d.webhookAuthMode,
+          } : {}),
+        } : {}),
         repo: repo || (d.id ? "" : undefined),
         ...(d.trigger === "github" || d.trigger === "linear" ? {
           labels,
           repos,
-          ...(d.trigger === "github" ? { on: buildGithubOn(d.githubEvents, labels, workflows) } : {}),
+          ...(d.trigger === "github" ? { appId: d.appId.trim() || undefined, on: buildGithubOn(d.githubEvents, labels, workflows) } : {}),
         } : {}),
         ...(d.trigger === "schedule"
           ? {
@@ -2150,18 +2041,30 @@ function AutomationEditor({
         return;
       }
 
+      // Only the authenticated save request receives the write-only secret,
+      // never simulation/preflight payloads.
+      const secretInput = d.trigger === "webhook" && d.requireSigning && customWebhookSecret
+        ? { webhookSecret: customWebhookSecret } : {};
       if (d.id) {
-        await updateAutomation(controller.local, d.id, input);
-        onSaved({ kind: "updated", name: d.name.trim(), id: d.id });
+        const result = await updateAutomation(controller.local, d.id, { ...input, ...secretInput });
+        // Turning signing on for a previously unsigned webhook mints a secret
+        // that is disclosed only in this response — show it like a create.
+        if (d.trigger === "webhook" && result.webhookSecret) {
+          setCreated({ url: result.webhookUrl ?? existing?.webhookUrl ?? "", secret: result.webhookSecret, name: d.name.trim(), updated: true });
+        } else {
+          onSaved({ kind: "updated", name: d.name.trim(), id: d.id });
+        }
       } else {
-        const result = await createAutomation(controller.local, input);
+        const result = await createAutomation(controller.local, { ...input, ...secretInput });
         if (d.trigger === "webhook" && result.webhookSecret) {
           setCreated({ url: result.webhookUrl ?? "", secret: result.webhookSecret, name: d.name.trim() });
+        } else if (d.trigger === "webhook") {
+          onSaved({ kind: "created-webhook", name: d.name.trim(), id: result.id });
         } else {
           const nextHint = d.trigger === "schedule"
-            ? (d.kind === "cron"
-                ? (cronHuman ? `Next: ${cronHuman.charAt(0).toLowerCase() + cronHuman.slice(1)} (${d.timezone}).` : "On the schedule you set.")
-                : `Once at ${new Date(d.onceAt).toLocaleString()}.`)
+            ? (result.nextRunAt
+                ? `${formatNextAutomationRun(result.nextRunAt)}.`
+                : d.kind === "once" ? `Once at ${new Date(d.onceAt).toLocaleString()}.` : "On the schedule you set.")
             : d.trigger === "github" ? "Matching GitHub events will start a run with these instructions."
               : d.trigger === "linear" ? "Matching Linear issues will start a run with these instructions."
                 : undefined;
@@ -2181,8 +2084,9 @@ function AutomationEditor({
   }
 
   return (
-    <div className="wizard-scrim" onClick={onCancel}>
+    <div className="wizard-scrim" onClick={closeWithBack}>
       <div
+        ref={editorRef}
         className="wizard autom-editor"
         role="dialog"
         aria-modal="true"
@@ -2191,14 +2095,33 @@ function AutomationEditor({
       >
         <div className="wizard-head">
           <strong>{created ? "Webhook ready" : d.id ? "Edit automation" : "New automation"}</strong>
-          <button type="button" className="btn ghost icon" onClick={onCancel} aria-label="Cancel">✕</button>
+          <button type="button" className="btn ghost icon" onClick={closeWithBack} aria-label="Cancel">✕</button>
         </div>
+
+        {existing && !created && (
+          <details className="autom-editor-actions">
+            <summary className="btn sm" aria-label="Automation actions">Actions</summary>
+            <div className="menu row-menu-pop" role="menu">
+              {onRunNow && <button type="button" className="menu-item" role="menuitem" disabled={runBusy} onClick={() => void onRunNow(existing)}>{runBusy ? "Queueing…" : existing.trigger === "webhook" ? "Test run" : "Run now"}</button>}
+              {onToggle && <button type="button" className="menu-item" role="menuitem" onClick={() => void onToggle(existing)}>{existing.enabled ? "Pause" : "Resume"}</button>}
+              {onHistory && <button type="button" className="menu-item automation-history-btn" role="menuitem" onClick={() => onHistory(existing.id)}>History</button>}
+              {existing.webhookUrl && <button type="button" className="menu-item" role="menuitem" onClick={() => { void copyText(existing.webhookUrl!); }}>Copy URL</button>}
+              {existing.trigger === "webhook" && onRotate && <button type="button" className="menu-item" role="menuitem" onClick={() => void onRotate(existing)}>Rotate secret</button>}
+              {onSourceSetup && (existing.trigger === "github" || existing.trigger === "linear") && <button type="button" className="menu-item" role="menuitem" onClick={() => onSourceSetup(existing)}>Source setup</button>}
+              {onMove && (existing.trigger === "github" || existing.trigger === "linear") && <>
+                <button type="button" className="menu-item" role="menuitem" onClick={() => void onMove(existing, -1)}>Move earlier</button>
+                <button type="button" className="menu-item" role="menuitem" onClick={() => void onMove(existing, 1)}>Move later</button>
+              </>}
+              {onDelete && !existing.configKey && <button type="button" className="menu-item danger" role="menuitem" onClick={() => void onDelete(existing)}>Delete</button>}
+            </div>
+          </details>
+        )}
 
         {created ? (
           <>
             <div className="wizard-body">
-              <div className="autom-success" role="status">
-                <strong>“{created.name}” is live.</strong> Send signed events to this URL. Copy the signing secret now — it isn&apos;t shown again.
+              <div className="banner inline" data-tone="ok" role="status">
+                <strong>{created.updated ? `“${created.name}” authentication updated.` : `“${created.name}” is live.`}</strong> Send authenticated events to this URL. Copy the webhook secret now — it isn&apos;t shown again.
               </div>
               <div className="settings-field">
                 <label className="field-label">Webhook URL</label>
@@ -2208,22 +2131,22 @@ function AutomationEditor({
                 </div>
               </div>
               <div className="settings-field">
-                <label className="field-label">Signing secret</label>
+                <label className="field-label">{d.webhookAuthMode === "header" ? "Header value" : "Signing secret"}</label>
                 <div className="reveal-row">
                   <code className="reveal-value">{created.secret}</code>
                   <button type="button" className="btn sm" onClick={() => void navigator.clipboard?.writeText(created.secret)}>Copy</button>
                 </div>
               </div>
               <p className="settings-hint">
-                Sign each request with <code>X-Bivy-Signature-256: sha256=HMAC-SHA256(body)</code> and a unique <code>X-Bivy-Idempotency-Key</code>.
+                {d.webhookAuthMode === "header" ? <>Send <code>{d.webhookHeader}</code> with the exact header value above.</> : <>Sign the raw request body with this secret and send <code>{d.webhookHeader}: sha256=HMAC-SHA256(body)</code>.</>} Use a unique <code>X-Bivy-Idempotency-Key</code> per event.
               </p>
             </div>
             <div className="wizard-actions">
               <span />
               <button
                 type="button"
-                className="btn primary autom-save-btn"
-                onClick={() => onSaved({ kind: "created-webhook", name: created.name })}
+                className="btn primary"
+                onClick={() => onSaved(created.updated ? { kind: "updated", name: created.name, id: existing?.id } : { kind: "created-webhook", name: created.name })}
               >
                 Done
               </button>
@@ -2240,7 +2163,6 @@ function AutomationEditor({
                   onChange={(e) => set("name", e.target.value)}
                   placeholder="My automation"
                   aria-label="Name"
-                  autoFocus
                 />
               </div>
 
@@ -2252,7 +2174,7 @@ function AutomationEditor({
                       {pick.id === "webhook" ? <IconWebhook /> : pick.id === "github" || pick.id === "linear" ? <IconPr /> : <IconClock />}
                     </span>
                     <div className="autom-trigger-chip-text">
-                      <strong>{pick.label}</strong>
+                      <strong>{d.trigger === "schedule" && d.kind === "cron" ? cronChipCopy.label : pick.label}</strong>
                       <span>
                         {d.trigger === "webhook"
                           ? pick.hint
@@ -2260,7 +2182,7 @@ function AutomationEditor({
                             ? pick.hint
                           : d.kind === "once"
                             ? (d.onceAt ? new Date(d.onceAt).toLocaleString() : pick.hint)
-                            : (cronHuman || pick.hint)}
+                            : cronChipCopy.detail}
                       </span>
                     </div>
                     {canEditTrigger && (
@@ -2278,12 +2200,12 @@ function AutomationEditor({
                       + Add trigger
                     </button>
                     {pickerOpen && (
-                      <div className="autom-trigger-menu" role="listbox" aria-label="Trigger types">
+                      <div className="menu autom-trigger-picker" role="listbox" aria-label="Trigger types">
                         {TRIGGER_OPTIONS.map((opt) => (
                           <button
                             key={opt.id}
                             type="button"
-                            className="autom-trigger-option"
+                            className="menu-item autom-trigger-pick"
                             role="option"
                             onClick={() => applyTrigger(opt)}
                           >
@@ -2358,22 +2280,57 @@ function AutomationEditor({
                   </div>
                 )}
                 {d.hasTrigger && d.trigger === "webhook" && (
-                  <p className="settings-hint autom-trigger-config">
-                    {d.id
-                      ? "Fires on a signed POST to its webhook URL. Copy the URL from the automation row; rotate the secret there if needed."
-                      : "You'll get the signed URL and a one-time signing secret after you save."}
-                  </p>
+                  <div className="autom-trigger-config">
+                    {existing?.trigger === "webhook" && existing.webhookUrl && (
+                      <div className="settings-field">
+                        <label className="field-label">Webhook URL</label>
+                        <div className="reveal-row">
+                          <code className="reveal-value">{existing.webhookUrl}</code>
+                          <button type="button" className="btn sm" onClick={() => void copyText(existing.webhookUrl!)}>Copy</button>
+                        </div>
+                      </div>
+                    )}
+                    <label className="settings-toggle-row webhook-signing-toggle">
+                      <span className="settings-toggle-text">
+                        <strong className="settings-toggle-title">Require webhook authentication</strong>
+                        <small className="muted">Recommended for authenticating webhook requests.</small>
+                      </span>
+                      <input className="sr-only" type="checkbox" checked={d.requireSigning} onChange={(event) => set("requireSigning", event.target.checked)} />
+                      <span className={`settings-toggle${d.requireSigning ? " on" : ""}`} aria-hidden="true"><span className="settings-toggle-knob" /></span>
+                    </label>
+                    {d.requireSigning ? <WebhookAuthFields
+                      mode={d.webhookAuthMode}
+                      header={d.webhookHeader}
+                      secret={customWebhookSecret}
+                      existing={Boolean(existing?.requireSigning)}
+                      onMode={(mode) => set("webhookAuthMode", mode)}
+                      onHeader={(header) => set("webhookHeader", header)}
+                      onSecret={setCustomWebhookSecret}
+                    /> : <p className="settings-hint">Anyone with this URL can start a run without authentication.</p>}
+                  </div>
                 )}
                 {d.hasTrigger && (d.trigger === "github" || d.trigger === "linear") && (
                   <div className="autom-trigger-config">
+                    {d.trigger === "github" && githubSourceStatus(sources.github).tone === "on" ? (
+                      <div className="reveal-row">
+                        <span className="settings-hint">{githubSourceStatus(sources.github).label}</span>
+                        <button type="button" className="btn sm link" onClick={() => onOpenSourceSetup("github")}>Manage GitHub Apps</button>
+                      </div>
+                    ) : <div className="card wq-status-card" data-tone="muted">
+                      <strong>{d.trigger === "github" ? githubSourceStatus(sources.github).label : linearSourceStatus(sources.linear).label}</strong>
+                      <p className="settings-hint">{d.trigger === "github" ? "Choose the hosted Bivy App for the easiest setup, or connect your own app. Adding a trigger does not connect an app." : "Connect Linear to receive issue events for this automation."}</p>
+                      <button type="button" className="btn" onClick={() => onOpenSourceSetup(d.trigger === "github" ? "github" : "linear")}>
+                        {d.trigger === "github" ? "Set up or manage GitHub Apps" : "Set up or manage Linear"}
+                      </button>
+                    </div>}
                     {d.trigger === "github" && (
                       <div className="settings-field">
                         <div className="autom-field-label">When any of these fire</div>
                         {([
-                          ["issuesLabeled", "Issue labeled"],
-                          ["issueMention", "@mention on an issue or PR conversation"],
-                          ["prLabeled", "Pull request labeled"],
-                          ["prMention", "@mention on a PR review comment"],
+                          ["issuesLabeled", `Issue labeled: ${labelText}`],
+                          ["issueMention", `Issue or PR conversation containing ${mentionText}`],
+                          ["prLabeled", `Pull request labeled: ${labelText}`],
+                          ["prMention", `PR review comment containing ${mentionText}`],
                           ["workflowFailed", "Workflow failed"],
                         ] as const).map(([key, label]) => (
                           <label className="autom-check-row" key={key}>
@@ -2387,11 +2344,25 @@ function AutomationEditor({
                         ))}
                       </div>
                     )}
+                    {d.trigger === "github" && (sources.github?.apps?.length ?? 0) > 1 && (
+                      <div className="settings-field">
+                        <label className="field-label" htmlFor="autom-source-app">GitHub App source</label>
+                        <select id="autom-source-app" className="picker-search" value={d.appId} onChange={(e) => set("appId", e.target.value)}>
+                          <option value="">All GitHub Apps</option>
+                          {sources.github?.apps.map((app) => (
+                            <option key={app.appId || app.hookId || app.name} value={app.appId || ""} disabled={!app.appId}>
+                              {githubAppOptionLabel(app)}
+                            </option>
+                          ))}
+                        </select>
+                        <p className="settings-hint">Choose the hosted Bivy App or one of your custom/user-installed GitHub Apps.</p>
+                      </div>
+                    )}
                     {(d.trigger === "linear" || d.githubEvents.issuesLabeled || d.githubEvents.prLabeled) && (
                       <div className="settings-field">
-                        <label className="field-label" htmlFor="autom-source-labels">Labels</label>
+                        <label className="field-label" htmlFor="autom-source-labels">{d.trigger === "github" ? "Trigger labels" : "Labels"}</label>
                         <input id="autom-source-labels" className="picker-search" value={d.labels} onChange={(e) => set("labels", e.target.value)} placeholder="bivy" />
-                        <p className="settings-hint">Comma-separated labels that may trigger this automation.</p>
+                        <p className="settings-hint">{d.trigger === "github" ? "Choose your own GitHub labels, separated by commas (for example, fix-it, ready for review). This setting belongs to this automation, not the GitHub App. " : "Enter labels separated by commas. "}Any one triggers the selected label events. Leave blank to use <code>bivy</code>. Mention events do not require a label.</p>
                       </div>
                     )}
                     {d.trigger === "github" && d.githubEvents.workflowFailed && (
@@ -2400,11 +2371,8 @@ function AutomationEditor({
                         <input id="autom-source-workflows" className="picker-search" value={d.workflows} onChange={(e) => set("workflows", e.target.value)} placeholder="CI, Build" />
                       </div>
                     )}
-                    <div className="settings-field">
-                      <label className="field-label" htmlFor="autom-source-repos">Repository allowlist (optional)</label>
-                      <input id="autom-source-repos" className="picker-search" value={d.repos} onChange={(e) => set("repos", e.target.value)} placeholder="owner/repo, owner/other" />
-                      <p className="settings-hint">Empty means every repository where the app is installed.</p>
-                    </div>
+                    {d.trigger === "github" && sources.github?.connected && <GithubTriggerAccess info={sources.github} />}
+                    <RepositoryEventFilter value={d.repos} onChange={(value) => set("repos", value)} github={d.trigger === "github"} />
                   </div>
                 )}
 
@@ -2412,31 +2380,43 @@ function AutomationEditor({
                   <div className="autom-trigger-config">
                     <div className="settings-field">
                       <label className="field-label" htmlFor="autom-repo">
-                        {d.trigger === "schedule" ? "Repository" : "Repository (optional default)"}
+                        {d.trigger === "schedule" ? "Repository" : "Working repository (optional fallback)"}
                       </label>
-                      <select
-                        id="autom-repo"
-                        className="picker-search"
-                        value={d.repo}
-                        onChange={(e) => set("repo", e.target.value)}
-                      >
-                        <option value="">{d.trigger === "schedule" ? "Select a GitHub repo…" : "Event may supply the repo"}</option>
-                        {d.repo && !state.catalogs.repos.some((r) => r.slug === d.repo) && (
-                          <option value={d.repo}>{d.repo}</option>
-                        )}
-                        {state.catalogs.repos.map((r) => (
-                          <option key={r.slug} value={r.slug}>{r.slug}</option>
-                        ))}
-                      </select>
+                      {state.catalogs.repos.length > 0 ? (
+                        <select
+                          id="autom-repo"
+                          className="picker-search"
+                          value={d.repo}
+                          onChange={(e) => set("repo", e.target.value)}
+                        >
+                          <option value="">{d.trigger === "schedule" ? "Select a GitHub repo…" : "Event may supply the repo"}</option>
+                          {d.repo && !state.catalogs.repos.some((r) => r.slug === d.repo) && (
+                            <option value={d.repo}>{d.repo}</option>
+                          )}
+                          {state.catalogs.repos.map((r) => (
+                            <option key={r.slug} value={r.slug}>{r.slug}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          id="autom-repo"
+                          className="picker-search"
+                          value={d.repo}
+                          onChange={(e) => set("repo", e.target.value)}
+                          placeholder={d.trigger === "schedule" ? "owner/repo" : "Event may supply the repo"}
+                          autoComplete="off"
+                          spellCheck={false}
+                        />
+                      )}
                       <p className="settings-hint">
                         {d.trigger === "schedule"
                           ? "The machine clones this repo before the session starts."
-                          : "Used when the webhook event does not include a repo."}
+                          : "Where the agent works if the event does not identify a repository. This does not filter which events can start a run."}
                       </p>
                       {!d.repo && d.trigger === "schedule" && (
                         <p className="schedule-hint warn">
                           {state.catalogs.repos.length === 0
-                            ? "No repos listed yet — connect GitHub on the machine, or type nothing and pick after the list loads."
+                            ? "No repos listed yet — enter owner/name, or connect GitHub on the machine to populate this list."
                             : "Pick a repository so scheduled runs land in the right project."}
                         </p>
                       )}
@@ -2470,25 +2450,31 @@ function AutomationEditor({
                       {d.nodeId && !selectedManaged && !state.connection.nodes.some((n) => n.id === d.nodeId) && <option value={d.nodeId}>{d.nodeId} · unavailable</option>}
                     </select>
                   </label>
-                  {!selectedNodeHasKey && (
+                  {!selectedNodeHasKey && pairedNodes.length === 0 && (
                     <div className="autom-runner-help" role="status">
-                      {pairedNodes.length === 0
-                        ? "Pair this phone or browser with a machine first. That pairing key protects the instructions; account sign-in alone cannot decrypt them."
-                        : "Choose a machine marked online or offline (not key unavailable). Offline machines can still own the encrypted job and use an isolated fallback from the Runs tab."}
+                      <button type="button" className="btn primary" onClick={() => setPairMachineOpen(true)}>Pair this machine</button>
                     </div>
                   )}
+                  {!selectedNodeHasKey && pairedNodes.length > 0 && (
+                    <div className="autom-runner-help" role="status">Choose a machine without “key unavailable”. Offline machines can still own the encrypted job.</div>
+                  )}
                 </div>
-                <p className="settings-hint">
-                  {selectedManaged
-                    ? "Bivy Cloud starts on demand for this account's queued work and adopts this automation's E2E encryption identity. Model and GitHub credentials are injected only when the managed runner starts."
-                    : <>Persistent machine: runs there whenever it is online. An isolated fallback can be configured under <strong>Runs → Queue routing</strong>. Cloud and model sign-ins are separate and injected only when that runner starts.</>}
-                </p>
+                <details className="settings-disclosure">
+                  <summary className="settings-disclosure-summary">How pairing protects instructions</summary>
+                  <div className="settings-disclosure-body settings-hint">
+                    {selectedManaged
+                      ? "Bivy Cloud starts on demand for this account's queued work and adopts this automation's E2E encryption identity. Model and GitHub credentials are injected only when the managed runner starts."
+                      : "Instructions are encrypted for the paired machine. Account sign-in alone cannot decrypt them. Configure isolated fallback routing from Runs when needed."}
+                  </div>
+                </details>
               </div>
 
               <div className="autom-field-block">
-                <div className="autom-field-label">Instructions</div>
+                <label className="autom-field-label" htmlFor="autom-instructions">Instructions</label>
                 <div className="autom-instructions">
                   <textarea
+                    ref={instructionsRef}
+                    id="autom-instructions"
                     className="autom-instructions-input"
                     rows={7}
                     value={d.instructions}
@@ -2497,65 +2483,65 @@ function AutomationEditor({
                   />
                   <div className="autom-instructions-bar">
                     <span className="settings-hint">Encrypted end to end</span>
-                    <button
-                      type="button"
-                      className="autom-advanced-link"
-                      onClick={() => setShowAdvanced((v) => !v)}
-                      aria-expanded={showAdvanced}
-                    >
-                      {showAdvanced ? "Hide advanced" : "Agent, model & safety"}
-                    </button>
                   </div>
                 </div>
-                {showAdvanced && (
-                  <div className="wizard-advanced">
-                    <div className="settings-field">
-                      <label className="field-label" htmlFor="autom-runtime">Agent</label>
-                      <select id="autom-runtime" className="picker-search" value={d.runtimeId} onChange={(e) => set("runtimeId", e.target.value)}>
-                        <option value="">Machine default</option>
-                        {state.catalogs.runtimes.map((r) => <option key={r.id} value={r.id}>{String(r.displayName || r.name || r.id)}</option>)}
-                        {d.runtimeId && !state.catalogs.runtimes.some((r) => r.id === d.runtimeId) && (
-                          <option value={d.runtimeId}>{d.runtimeId} (not installed here)</option>
-                        )}
-                      </select>
-                    </div>
-                    <div className="settings-field">
-                      <label className="field-label" htmlFor="autom-model">Model</label>
-                      <select id="autom-model" className="picker-search" value={d.model} onChange={(e) => set("model", e.target.value)}>
-                        <option value="">Agent default</option>
-                        {state.catalogs.models.map((m) => (
-                          <option key={String((m as { provider?: string }).provider || "") + ":" + m.id} value={m.id}>{m.label || m.id}</option>
-                        ))}
-                        {d.model && !state.catalogs.models.some((m) => m.id === d.model) && <option value={d.model}>{d.model}</option>}
-                      </select>
-                    </div>
-                    <div className="settings-field">
-                      <label className="field-label" htmlFor="autom-approvals">Approvals</label>
-                      <select id="autom-approvals" className="picker-search" value={d.approvalMode} onChange={(e) => set("approvalMode", e.target.value as Draft["approvalMode"])}>
-                        <option value="autonomous">Autonomous (default; pauses only for high-risk actions)</option>
-                        <option value="risky">Ask before risky actions</option>
-                        <option value="always">Ask before every action</option>
-                        <option value="never">Never ask</option>
-                      </select>
-                    </div>
-                    <div className="settings-field">
-                      <label className="field-label" htmlFor="autom-sandbox">Sandbox</label>
-                      <select id="autom-sandbox" className="picker-search" value={d.sandbox} onChange={(e) => set("sandbox", e.target.value as Draft["sandbox"])}>
-                        <option value="read-only">Read only</option>
-                        <option value="workspace-write">Workspace write</option>
-                        <option value="danger-full-access">Full access</option>
-                      </select>
-                    </div>
-                    {unsafeCombo && (
-                      <label className="autom-check-row">
-                        <input type="checkbox" checked={allowDangerous} onChange={(e) => setAllowDangerous(e.target.checked)} />
-                        <span>I understand the risk of autonomous approval with full access — allow it anyway.</span>
-                      </label>
-                    )}
-                  </div>
-                )}
-                <p className="settings-hint">Encrypted for the assigned machine before upload. The hosted control plane never sees the prompt, your code, or credentials.</p>
+                <p className="settings-hint">Encrypted for the assigned machine before upload. The control plane never sees the plaintext prompt or code.</p>
               </div>
+
+              <section className="autom-field-block autom-safety-section" aria-labelledby="autom-safety-heading">
+                <div>
+                  <h2 className="autom-section-heading" id="autom-safety-heading">Agent, model &amp; safety</h2>
+                  <p className="settings-hint">Choose how the agent runs and which actions need approval.</p>
+                </div>
+                <div className="wizard-advanced">
+                  <div className="settings-field">
+                    <label className="field-label" htmlFor="autom-runtime">Agent</label>
+                    <select id="autom-runtime" className="picker-search" value={d.runtimeId} onChange={(e) => set("runtimeId", e.target.value)}>
+                      <option value="">Machine default</option>
+                      {state.catalogs.runtimes.map((r) => <option key={r.id} value={r.id}>{String(r.displayName || r.name || r.id)}</option>)}
+                      {d.runtimeId && !state.catalogs.runtimes.some((r) => r.id === d.runtimeId) && (
+                        <option value={d.runtimeId}>{d.runtimeId} (not installed here)</option>
+                      )}
+                    </select>
+                  </div>
+                  <div className="settings-field">
+                    <label className="field-label" htmlFor="autom-model">Model</label>
+                    <select id="autom-model" className="picker-search" value={d.model} onChange={(e) => set("model", e.target.value)}>
+                      <option value="">Agent default</option>
+                      {state.catalogs.models.map((m) => (
+                        <option key={String((m as { provider?: string }).provider || "") + ":" + m.id} value={m.id}>{m.label || m.id}</option>
+                      ))}
+                      {d.model && !state.catalogs.models.some((m) => m.id === d.model) && <option value={d.model}>{d.model}</option>}
+                    </select>
+                  </div>
+                  <div className="settings-field">
+                    <label className="field-label" htmlFor="autom-approvals">Approvals</label>
+                    <select id="autom-approvals" aria-describedby="autom-approval-help" className="picker-search" value={d.approvalMode} onChange={(e) => set("approvalMode", e.target.value as Draft["approvalMode"])}>
+                      <option value="autonomous">Autonomous (default)</option>
+                      <option value="risky">Ask before risky actions</option>
+                      <option value="always">Ask before every action</option>
+                      <option value="never">Never ask</option>
+                    </select>
+                    <p id="autom-approval-help" className="settings-hint">{d.approvalMode === "autonomous" ? "Runs unattended; pauses for high-risk actions." : d.approvalMode === "never" ? "Runs without asking for approval. Review the sandbox before enabling." : "Runs pause when approval is required. Keep a device available to respond."}</p>
+                  </div>
+                  <div className="settings-field">
+                    <label className="field-label" htmlFor="autom-sandbox">Sandbox</label>
+                    <select id="autom-sandbox" className="picker-search" value={d.sandbox} onChange={(e) => set("sandbox", e.target.value as Draft["sandbox"])}>
+                      <option value="read-only">Read only</option>
+                      <option value="workspace-write">Workspace write</option>
+                      <option value="danger-full-access">Full access</option>
+                    </select>
+                  </div>
+                </div>
+                {unsafeCombo && (
+                  <label className="autom-check-row">
+                    <input type="checkbox" checked={allowDangerous} onChange={(e) => setAllowDangerous(e.target.checked)} />
+                    <span>I understand the risk of autonomous approval with full access — allow it anyway.</span>
+                  </label>
+                )}
+              </section>
+
+              <AutomationAccounts state={state} value={d.credentialLabels} onChange={(value) => set("credentialLabels", value)} />
 
               {d.hasTrigger && (
                 <div className="settings-field">
@@ -2582,17 +2568,17 @@ function AutomationEditor({
                 </div>
               )}
 
-              {error && <p className="settings-error">{error}</p>}
-              {!canSave && missing.length > 0 && (
-                <p className="settings-hint autom-save-hint">Needs {missing.join(", ")} to save.</p>
-              )}
             </div>
 
+            {error && <div className="autom-save-error" role="alert">{error}</div>}
             <div className="wizard-actions">
-              <button type="button" className="btn" onClick={onCancel} disabled={busy}>Cancel</button>
+              <button type="button" className="btn" onClick={closeWithBack} disabled={busy}>Cancel</button>
+              {!canSave && missing.length > 0 && (
+                <span className="settings-hint autom-save-hint">Needs {missing.join(", ")} to save.</span>
+              )}
               <button
                 type="button"
-                className="btn primary autom-save-btn"
+                className="btn primary"
                 onClick={() => void save()}
                 disabled={busy || !canSave}
               >
@@ -2602,87 +2588,7 @@ function AutomationEditor({
           </>
         )}
       </div>
+      {pairMachineOpen && <AddNodeSheet onClose={() => setPairMachineOpen(false)} />}
     </div>
-  );
-}
-
-// ── Icons (inline SVG, 18–20px) ─────────────────────────────────────────────
-
-function IconBolt() {
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M13 2 3 14h9l-1 8 10-12h-9z" />
-    </svg>
-  );
-}
-function IconClock() {
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" />
-    </svg>
-  );
-}
-function IconWebhook() {
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M18 16a3 3 0 1 0-2.8-4H9.8A3 3 0 1 0 12 16h6Z" /><path d="M8.5 9.5 12 4l3.5 5.5" />
-    </svg>
-  );
-}
-function IconPackage() {
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M21 8 12 3 3 8l9 5 9-5Z" /><path d="M3 8v8l9 5 9-5V8" /><path d="M12 13v8" />
-    </svg>
-  );
-}
-function IconShield() {
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M12 3 5 6v6c0 5 3.5 8 7 9 3.5-1 7-4 7-9V6l-7-3Z" />
-    </svg>
-  );
-}
-function IconSpark() {
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8" />
-    </svg>
-  );
-}
-function IconFlask() {
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.7 3h10.6a2 2 0 0 0 1.7-3l-5-9V3" />
-    </svg>
-  );
-}
-function IconCi() {
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M4 6h16v12H4z" /><path d="m8 10 2 2-2 2M12 14h4" />
-    </svg>
-  );
-}
-function IconBug() {
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M8 9a4 4 0 0 1 8 0v7a4 4 0 0 1-8 0V9Z" /><path d="M8 12H4M20 12h-4M9 5 7 3M15 5l2-2M9 19l-2 2M15 19l2 2" />
-    </svg>
-  );
-}
-function IconRadar() {
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="12" cy="12" r="9" /><path d="M12 12 17 7" /><circle cx="12" cy="12" r="3" />
-    </svg>
-  );
-}
-function IconPr() {
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="7" cy="6" r="2" /><circle cx="7" cy="18" r="2" /><circle cx="17" cy="18" r="2" />
-      <path d="M7 8v8M17 16V9a2 2 0 0 0-2-2h-3" />
-    </svg>
   );
 }

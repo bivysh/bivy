@@ -1,13 +1,24 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import type { ConnectionStatus } from "@bivy/core";
 import { describeAvailability, dismissInstall, getPwaLifecycleState, requestInstall, subscribePwaLifecycle } from "../pwaLifecycle.js";
 
 export function PwaLifecycleNotice({ status, hasCachedTranscript, machineName }: { status: ConnectionStatus; hasCachedTranscript: boolean; machineName?: string }) {
   const lifecycle = useSyncExternalStore(subscribePwaLifecycle, getPwaLifecycleState);
   const [guidance, setGuidance] = useState(false);
-  const availability = describeAvailability(status, hasCachedTranscript, lifecycle, machineName);
+  const [browserOffline, setBrowserOffline] = useState(() => typeof navigator !== "undefined" && !navigator.onLine);
+  useEffect(() => {
+    const wentOffline = () => setBrowserOffline(true);
+    const cameOnline = () => setBrowserOffline(false);
+    window.addEventListener("offline", wentOffline);
+    window.addEventListener("online", cameOnline);
+    return () => {
+      window.removeEventListener("offline", wentOffline);
+      window.removeEventListener("online", cameOnline);
+    };
+  }, []);
+  const availability = describeAvailability(browserOffline ? "offline" : status, hasCachedTranscript, lifecycle, machineName);
   const showStatus = availability.kind !== "live-control";
   const showInstall = lifecycle.installChoice !== null && !lifecycle.standalone;
   if (!showStatus && !showInstall) return null;

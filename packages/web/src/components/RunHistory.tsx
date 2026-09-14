@@ -43,10 +43,17 @@ export function RunHistory({
     if (filter === "attention") return needsAttention(run);
     return runHistoryCategory(run) === filter;
   }), [filter, runs]);
+  const countFor = (id: RunHistoryFilter): number => {
+    if (id === "all") return runs.length;
+    if (id === "attention") return attentionCount;
+    return runs.filter((run) => runHistoryCategory(run) === id).length;
+  };
   const filters: Array<{ id: RunHistoryFilter; label: string }> = [
-    { id: "all", label: "All" }, { id: "active", label: "Active" },
-    { id: "attention", label: `Attention${attentionCount ? ` (${attentionCount})` : ""}` },
-    { id: "parked", label: "Parked" }, { id: "dead_letter", label: "Dead letter" },
+    { id: "all", label: `All · ${countFor("all")}` },
+    { id: "active", label: `Active · ${countFor("active")}` },
+    { id: "attention", label: `Attention · ${attentionCount}` },
+    { id: "parked", label: `Parked · ${countFor("parked")}` },
+    { id: "dead_letter", label: `Dead letter · ${countFor("dead_letter")}` },
   ];
 
   return (
@@ -60,7 +67,7 @@ export function RunHistory({
           <button type="button" className="btn sm" onClick={onRefresh}>Refresh</button>
         </div>
       </div>
-      {attentionCount > 0 && <div className="autom-notice warn" role="alert"><div className="autom-notice-text"><strong>{attentionCount} Run{attentionCount === 1 ? "" : "s"} need attention</strong><span>Review parked work, failed notification delivery, or terminal failures before retrying.</span></div></div>}
+      {attentionCount > 0 && <div className="banner" data-tone="warn" role="alert"><div className="banner-text"><strong>{attentionCount} Run{attentionCount === 1 ? "" : "s"} need attention</strong><span>Review parked work, failed notification delivery, or terminal failures before retrying.</span></div></div>}
       <div className="run-history-filters" role="group" aria-label="Filter Runs">
         {filters.map((item) => <button type="button" key={item.id} className={`btn sm${filter === item.id ? " primary" : ""}`} aria-pressed={filter === item.id} onClick={() => setFilter(item.id)}>{item.label}</button>)}
       </div>

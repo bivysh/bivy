@@ -3,7 +3,7 @@
 xAI's official Grok coding agent (`grok`), run under Bivy as one headless prompt
 per turn (`grok -p` / `--single`).
 
-- **Runtime id:** `grok` · **Tier:** Beta · **In picker:** Yes
+- **Runtime id:** `grok` · **Tier:** Supported · **In picker:** Yes
 
 ## Install
 
@@ -40,8 +40,8 @@ when a Grok session ends.
 ## Models
 
 Wired via `-m <id>`. The curated default matches the official Grok CLI's
-current catalog (`grok-4.5`). Override with `BIVY_GROK_MODELS` (JSON array of
-`{id,name?,provider?}`) if your install exposes more.
+current catalog (`grok-4.6`, per `grok models`). Override with `BIVY_GROK_MODELS`
+(JSON array of `{id,name?,provider?}`) if your install exposes more.
 
 ## Resume
 

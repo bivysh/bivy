@@ -50,8 +50,13 @@ export function foldActiveSessionEvent(input: ActiveLifecycleInput, event: Serve
     case "session.branch_renamed": return { handled: true, patch: (!sid || sid === input.activeSessionId) && e.branch ? { github: { ...input.github, branch: String(e.branch) } } : undefined, commands: e.branch && sid ? [{ kind: "row", sessionId: sid, patch: { branch: String(e.branch) } }] : [] };
     case "session.error": case "session.errored": {
       if (foreign(input.activeSessionId, e.sessionId)) return { handled: true, commands: [] };
-      const message = humanizeError(String(e.error || e.errorMessage || "error"));
-      return { handled: true, patch: { working: false, opening: false }, commands: e.sessionId ? [{ kind: "entry", role: "error", text: message }] : [{ kind: "global-error", message }] };
+      const structured = e.error && typeof e.error === "object" ? e.error : null;
+      const modelAuth = structured?.kind === "model_auth" && typeof structured.provider === "string";
+      const message = modelAuth
+        ? `No credentials for ${structured.provider}`
+        : humanizeError(String(e.error || e.errorMessage || "error"));
+      const entry = { kind: "entry" as const, role: "error" as const, text: message, ...(modelAuth ? { action: `connect-provider:${structured.provider}` } : {}) };
+      return { handled: true, patch: { working: false, opening: false }, commands: e.sessionId ? [entry] : [{ kind: "global-error", message }] };
     }
     case "session.closed": return { handled: true, patch: sid === input.activeSessionId ? { working: false, workingLabel: "", opening: false } : undefined, commands: sid ? [{ kind: "row", sessionId: sid, patch: { status: "saved", needsAction: false } }] : [] };
     case "session.failed": return { handled: true, commands: sid ? [{ kind: "row", sessionId: sid, patch: { status: "failed", needsAction: false, failedAt: Number(e.failedAt) || now, updatedAt: now } }] : [] };

@@ -76,7 +76,7 @@ function excludeMeshDir(repoRoot: string): void {
 }
 
 /**
- * Create a worktree for `repoDir` on a new branch. The worktree lives under
+ * Create or recover a worktree for `repoDir`, preserving existing work. It lives under
  * `<repoRoot>/.bivy/worktrees/<slug>` by default (excluded from git).
  */
 export async function createWorktree(opts: {
@@ -93,38 +93,35 @@ export async function createWorktree(opts: {
   const branch = opts.branch ?? `bivy/${slug}`;
   const root = opts.root ?? path.join(repoRoot, ".bivy", "worktrees");
   const wtPath = path.join(root, slug);
-  const base = opts.base ?? (await currentRef(repoRoot));
+  let base = opts.base ?? (await currentRef(repoRoot));
 
   excludeMeshDir(repoRoot);
   fs.mkdirSync(root, { recursive: true });
-  try {
+  // Reuse the registered checkout in place. Recovery must not force-remove
+  // staged, unstaged, untracked or ignored work left by the previous attempt.
+  // Use Git's registry rather than merely accepting an existing directory.
+  const { stdout: registered } = await exec("git", ["-C", repoRoot, "worktree", "list", "--porcelain", "-z"]);
+  const existing = registered.split("\0\0").map(entry => entry.split("\0"))
+    .find(fields => fields.includes(`worktree ${wtPath}`));
+  if (existing && fs.existsSync(wtPath)) {
+    if (!existing.includes(`branch refs/heads/${branch}`)) throw new Error(`Worktree ${wtPath} is not on expected branch ${branch}`);
+    return { path: wtPath, branch, repoRoot };
+  }
+  // A manually reaped directory can leave a stale registration. Remove only
+  // that registration, without --force (locked or newly dirty work stays safe).
+  if (existing) await exec("git", ["-C", repoRoot, "worktree", "remove", wtPath]);
+
+  // A remote-only branch does NOT make `worktree add -b` fail. Resolve it
+  // before creation, otherwise a fresh Machine silently starts at default HEAD.
+  const localExists = await refExists(repoRoot, `refs/heads/${branch}`);
+  const remoteExists = !localExists && await refExists(repoRoot, `refs/remotes/origin/${branch}`);
+  if (localExists) {
+    await exec("git", ["-C", repoRoot, "worktree", "add", wtPath, branch]);
+  } else {
+    if (remoteExists) base = `refs/remotes/origin/${branch}`;
+    else if (base !== "HEAD" && !(await refExists(repoRoot, base))) base = "HEAD";
+    // Fail closed on path collisions; never delete an unrelated directory.
     await exec("git", ["-C", repoRoot, "worktree", "add", "-b", branch, wtPath, base]);
-  } catch (error) {
-    // The branch already exists (e.g. a GitHub-issue pickup whose branch was
-    // pushed on an earlier run, now re-triggered after the session closed). Adopt
-    // it instead of hard-failing, which previously bubbled up and silently marked
-    // the work item "done" with nothing happening. Clear any stale worktree dir
-    // first, then check the existing branch out into a fresh worktree.
-    const localExists = await refExists(repoRoot, `refs/heads/${branch}`);
-    const remoteExists = !localExists && (await refExists(repoRoot, `refs/remotes/origin/${branch}`));
-    if (localExists || remoteExists) {
-      await removeWorktree(repoRoot, wtPath);
-      fs.rmSync(wtPath, { recursive: true, force: true });
-      if (localExists) {
-        await exec("git", ["-C", repoRoot, "worktree", "add", wtPath, branch]);
-      } else {
-        // Recreate the local branch from origin, then check it out in the worktree.
-        await exec("git", ["-C", repoRoot, "worktree", "add", "-b", branch, wtPath, `origin/${branch}`]);
-      }
-    } else if (base !== "HEAD" && !(await refExists(repoRoot, base))) {
-      // Defense in depth for stale internal metadata: callers should resolve a
-      // fork base first, but a missing ref must not prevent session stand-up.
-      await removeWorktree(repoRoot, wtPath);
-      fs.rmSync(wtPath, { recursive: true, force: true });
-      await exec("git", ["-C", repoRoot, "worktree", "add", "-b", branch, wtPath, "HEAD"]);
-    } else {
-      throw error;
-    }
   }
 
   // Opportunistically reuse a sibling worktree's installed deps (node_modules,

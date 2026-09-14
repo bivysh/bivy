@@ -5,7 +5,7 @@ non-interactive print turn per prompt (`cursor-agent --force -p`, where `-p`
 prints headlessly and `--force` auto-approves tool/command execution so a piped
 run never blocks).
 
-- **Runtime id:** `cursor` · **Tier:** Beta · **In picker:** Yes
+- **Runtime id:** `cursor` · **Tier:** Supported · **In picker:** Yes
 
 ## Install
 

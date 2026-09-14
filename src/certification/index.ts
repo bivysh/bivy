@@ -9,9 +9,11 @@ export function certificationEntry(id: string): CertificationEntry | undefined {
 }
 
 /**
- * The paid Supported promise is derived from certification, never merely copied
- * from a profile. A suspended/missing entry, wrong adapter mode, stale pin, or
- * missing required runtime capability is downgraded to Beta in the picker.
+ * Supported means Bivy maintains a wrapper for this integration. Certification is
+ * a separate fidelity signal: an active matrix entry verifies the richer release-
+ * tested capability set for a pinned adapter version, while drift or a different
+ * configured path keeps the wrapper Supported but marks the capability surface as
+ * adapter-tested instead of release-tested.
  */
 export function applyCertification(runtime: AgentInfo): AgentInfo {
   if (runtime.supportTier !== "supported") return runtime;
@@ -23,9 +25,8 @@ export function applyCertification(runtime: AgentInfo): AgentInfo {
   if (!eligible) {
     return {
       ...runtime,
-      supportTier: "beta",
-      certification: "adapter-tested",
-      notes: `${runtime.notes ? `${runtime.notes} ` : ""}This configured path is not the release-certified execution mode.`,
+      certification: runtime.certification ?? "adapter-tested",
+      notes: `${runtime.notes ? `${runtime.notes} ` : ""}This wrapper is maintained by Bivy; its current configured path is adapter-tested rather than release-tested.`,
     };
   }
   return { ...runtime, certification: "release-tested", testedVersion: entry.pinnedVersion };

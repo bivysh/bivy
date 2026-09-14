@@ -1,0 +1,18 @@
+.git
+.bivy
+.github
+node_modules
+**/node_modules
+**/dist
+**/.env
+**/.env.*
+!**/.env.example
+*.log
+.DS_Store
+
+# Deployment state and local editor/tooling files are never image inputs.
+deploy/.env
+deploy/Caddyfile
+coverage
+playwright-report
+test-results
