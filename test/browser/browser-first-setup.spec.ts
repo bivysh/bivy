@@ -85,8 +85,9 @@ for (const theme of ["light", "dark"]) {
       await expect(page.getByText("Start with a small task", { exact: true })).toHaveCount(0);
       await expect(page.getByRole("status", { name: "Setup readiness" })).toHaveCount(0);
       await expect(page.locator(".composer-input")).toHaveValue("");
-      await expect(page.locator(".model-pill")).toContainText("Choose during startup");
+      await expect(page.locator(".model-pill")).toContainText("Choose model");
       await page.screenshot({ path: testInfo.outputPath(`cloud-draft-${computeSource}-${theme}.png`), fullPage: true });
+      expect(await page.locator(".model-pill .pill-label").evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
     }
     await page.evaluate(async () => {
       const module = "/src/store/useStore.ts";
