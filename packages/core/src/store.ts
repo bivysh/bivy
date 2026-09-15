@@ -2122,7 +2122,7 @@ export class SessionStore {
 
   setLaunchModelChoice(sessionId: string, modelChoice: SessionLaunchProgress["modelChoice"]): void {
     this.set({ sessions: this.state.sessionIndex.sessions.map(session => session.sessionId === sessionId && session.launchProgress
-      ? { ...session, launchProgress: { ...session.launchProgress, modelChoice } } : session) });
+      ? { ...session, needsAction: Boolean(modelChoice && !modelChoice.loading && !modelChoice.selecting), launchProgress: { ...session.launchProgress, modelChoice } } : session) });
   }
 
   markLaunchFirstResponse(sessionId: string, at = Date.now()): void {
