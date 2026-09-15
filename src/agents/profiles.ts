@@ -571,13 +571,21 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
       flag: "-m",
       models: [
         // Official Grok CLI (1.x) advertises grok-4.6 as the default subscription
-        // model (verified against `grok models`); the older grok-4.5 / grok-4-latest
-        // / grok-code-fast-1 ids now return "unknown model id". Keep the list
-        // honest; operators can override with BIVY_GROK_MODELS if their install
-        // exposes more.
+        // model (verified against the authenticated `~/.grok/models_cache.json`,
+        // origin cli-chat-proxy.grok.com/v1/models); the older grok-4.5 /
+        // grok-4-latest / grok-code-fast-1 ids now return "unknown model id".
+        // Keep the list honest; operators can override with BIVY_GROK_MODELS if
+        // their install exposes more.
         { id: "grok-4.6", name: "Grok 4.6", provider: "xai" },
       ],
     },
+    // Grok's reasoning models expose a `--reasoning-effort <EFFORT>` flag
+    // (verified against `grok --help`, 1.0.0); the authenticated model catalog
+    // lists low/medium/high/xhigh with `high` as the default. `{level}` fills
+    // the value; insertAt: 0 keeps the trailing `-p` prompt flag last so the
+    // prompt still lands as its value. Threads through the resume path too, so a
+    // continued turn keeps the chosen effort. Override with BIVY_GROK_THINKING.
+    thinking: { levels: ["low", "medium", "high", "xhigh"], default: "high", template: ["--reasoning-effort", "{level}"], insertAt: 0 },
     promptMode: "argv",
     install: {
       kind: "curl",
