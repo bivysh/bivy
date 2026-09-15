@@ -1466,6 +1466,8 @@ export interface SessionStateRepository {
   listSessionCorrelations(accountId: string): Promise<SessionCorrelation[]>;
   setSessionCorrelation(accountId: string, input: SessionCorrelationInput): Promise<SessionCorrelation>;
   deleteSessionCorrelation(accountId: string, sessionId: string): Promise<void>;
+  /** Durable account-side deletion for a retired ephemeral session. */
+  deleteRetiredSession(accountId: string, sessionId: string): Promise<void>;
 
   // Case B: find an indexed session for a GitHub issue so an inbound comment/issue
   // CONTINUES it instead of starting a new one. Matches session_index.source

@@ -3391,7 +3391,12 @@ export class AppController {
     };
     try {
       const { base, auth } = this.correlationApi();
-      await fetch(`${base}/session-correlation/${encodeURIComponent(sessionId)}`, { method: "PUT", headers: auth, body: JSON.stringify(body) });
+      const response = await fetch(`${base}/session-correlation/${encodeURIComponent(sessionId)}`, { method: "PUT", headers: auth, body: JSON.stringify(body) });
+      if (response.status === 410) {
+        this.ephemeralCorrelations = this.ephemeralCorrelations.filter((entry) => entry.sessionId !== sessionId);
+        return;
+      }
+      if (!response.ok) throw new Error("Couldn't save session routing metadata.");
       this.ephemeralCorrelations = [body, ...this.ephemeralCorrelations.filter((c) => c.sessionId !== sessionId)];
     } catch {
       this.correlatedSessions.delete(dedupe); // let a later attempt retry
@@ -3863,9 +3868,35 @@ export class AppController {
     this.refreshSessions();
   }
 
-  deleteSession(sessionId: string, path?: string): void {
+  async deleteSession(sessionId: string, path?: string): Promise<void> {
+    const correlation = this.ephemeralCorrelations.find((entry) => entry.sessionId === sessionId);
+    const online = correlation && this.store.getState().connection.nodes.some((node) => node.id === correlation.nodeId && node.online);
+    if (!this.direct && correlation && !online) {
+      await this.deleteRetiredSession(sessionId);
+      return;
+    }
     if (this.promptTargetSessionId === sessionId) this.promptTargetSessionId = null;
     this.sessionCoordinator.deleteSession(sessionId, path);
+  }
+
+  private async deleteRetiredSession(sessionId: string): Promise<void> {
+    try {
+      const { base, auth } = this.correlationApi();
+      const response = await fetch(`${base}/session-correlation/${encodeURIComponent(sessionId)}`, { method: "DELETE", headers: auth, signal: AbortSignal.timeout(15_000) });
+      if (!response.ok) throw new Error("Couldn't delete the retired session. Refresh and try again.");
+      this.ephemeralCorrelations = this.ephemeralCorrelations.filter((entry) => entry.sessionId !== sessionId);
+      if (this.promptTargetSessionId === sessionId) this.promptTargetSessionId = null;
+      if (this.store.getState().activeSession.activeSessionId === sessionId) {
+        this.store.resetActiveSession();
+        navigate({ kind: "new" });
+      }
+      this.store.removeSessionLocal(sessionId);
+      this.persistDeletedSessionTombstones();
+      await this.transcriptCache.delete(sessionId);
+      this.refreshSessions();
+    } catch (error) {
+      this.store.setError(error instanceof Error ? error.message : "Couldn't delete the retired session.");
+    }
   }
 
   pauseSession(sessionId?: string): void {

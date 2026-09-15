@@ -11,6 +11,7 @@ import { classifySource, CLI_SOURCE, type SourceInfo, type SourceKind } from "..
 import { rowHint } from "../runEvidence.js";
 import { sessionDateGroup } from "../sessionPresentation.js";
 import { CheckIcon } from "./UiIcons.js";
+import { ConfirmDialog } from "./AppDialog.js";
 
 /** The leading indicator on a session row: a tinted source tile carrying the
  *  trigger's glyph, with the live status as a small dot badge on its corner.
@@ -142,6 +143,8 @@ const PAGE = 10;
 export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSources, onOpenAutomations, automationsActive }: { onPick: (sessionId: string, path?: string, nodeId?: string) => void; onPickTerminal: (termId: string, nodeId?: string) => void; runEvidence?: Map<string, GithubQueueItem>; sessionSources?: Map<string, SourceInfo>; onOpenAutomations?: () => void; automationsActive?: boolean }) {
   const { sessionIndex: { sessions, runTerminals }, activeSession: { activeSessionId }, connection: { nodes, currentNodeId } } = useAppState();
   const [query, setQuery] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<{ sessionId: string; name: string } | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [repoFilter, setRepoFilter] = useState("");
   const [nodeFilter, setNodeFilter] = useState("");
   const [filterOpen, setFilterOpen] = useState(false);
@@ -270,6 +273,19 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSource
 
   return (
     <div className="session-list">
+      {deleteTarget && <ConfirmDialog
+        title="Delete saved session?"
+        message={`Delete “${deleteTarget.name}” and its saved Cloud history? This can't be undone.`}
+        confirmLabel="Delete"
+        danger
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={() => {
+          const id = deleteTarget.sessionId;
+          setDeleteTarget(null);
+          setDeletingId(id);
+          void controller.deleteSession(id).catch(() => controller.store.setError("Couldn't delete the session.")).finally(() => setDeletingId(null));
+        }}
+      />}
       {onOpenAutomations && (
         <nav className="sidebar-nav" aria-label="Workspace">
           <button className={`sidebar-nav-item${automationsActive ? " active" : ""}`} onClick={onOpenAutomations} title="Automations">
@@ -469,6 +485,13 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSource
                   )}
                 </span>
               </button>
+              {s.rebuildable && !s.pendingLaunch && (
+                <span className="pending-launch-actions">
+                  <button type="button" disabled={deletingId === s.sessionId} aria-label={`Delete ${s.name}`} onClick={() => setDeleteTarget({ sessionId: s.sessionId, name: s.name || "Saved session" })}>
+                    {deletingId === s.sessionId ? "Deleting…" : "Delete"}
+                  </button>
+                </span>
+              )}
               {failedLaunch && (
                 <span className="pending-launch-actions">
                   <button type="button" onClick={() => void controller.retryPendingLaunch(s.sessionId)}>Retry</button>

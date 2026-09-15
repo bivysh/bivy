@@ -332,6 +332,30 @@ try {
     assert.equal(attempt?.retryCount, 1, "retry budget untouched — it resumes when the switch returns");
   });
 
+  await test("canceled attempts without a machine release capacity only after provider confirmation", async () => {
+    process.env.EPHEMERAL_MACHINES_ENABLED = "0";
+    process.env.MANAGED_PROVIDER_TOKEN_FLY = OPERATOR_TOKEN;
+    const { store, acctId } = await managedAccount();
+    await store.putHostedMachineAttempt({ accountId: acctId, attemptId: "empty-app", provider: "fly", nodeId: "eph-empty", state: "failed", desiredState: "deleted", desired: { computeSource: "managed" }, retryCount: 8, createdAt: iso(1000), updatedAt: iso(1000) });
+    const reconcile = (cleanup: () => Promise<boolean>) => reconcileHostedMachines(store, acctId, Date.now(), env, async () => {}, async () => "gone", undefined, cleanup);
+    await reconcile(async () => false);
+    assert.equal((await store.getHostedMachineAttempt(acctId, "empty-app"))?.state, "failed");
+    await reconcile(async () => { throw new Error("provider offline"); });
+    assert.equal((await store.getHostedMachineAttempt(acctId, "empty-app"))?.state, "failed");
+    assert.equal(await store.acquireHostedProvisionLease(acctId, "other-owner", 300), true);
+    assert.equal(await reconcile(async () => { throw new Error("must not call provider while lease is held"); }), 0);
+    await store.releaseHostedProvisionLease(acctId, "other-owner");
+    await reconcile(async () => {
+      const changed = await store.getHostedMachineAttempt(acctId, "empty-app");
+      await store.putHostedMachineAttempt({ ...changed!, lastError: "concurrent update" });
+      return true;
+    });
+    assert.equal((await store.getHostedMachineAttempt(acctId, "empty-app"))?.state, "failed", "stale proof cannot settle a changed receipt");
+    assert.equal(await reconcile(async () => true), 1);
+    assert.equal((await store.getHostedMachineAttempt(acctId, "empty-app"))?.state, "deleted");
+    assert.equal((await store.listHostedMachineAttempts(acctId, true)).length, 0);
+  });
+
   await test("settled-reap of a managed machine resolves the operator token", async () => {
     delete process.env.EPHEMERAL_MACHINES_ENABLED;
     process.env.MANAGED_PROVIDER_TOKEN_FLY = OPERATOR_TOKEN;
