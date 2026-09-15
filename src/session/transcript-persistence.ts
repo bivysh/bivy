@@ -98,7 +98,16 @@ function capThinkingForPersistence(text: string): string {
 function toolEventId(event: Record<string, unknown>): string {
   const toolCall = event.toolCall as Record<string, unknown> | undefined;
   const input = (event.input || event.toolInput || event.args || toolCall?.input || {}) as Record<string, unknown>;
-  const explicit = event.toolUseId || event.tool_use_id || event.toolCallId || event.callId || event.id || toolCall?.id;
+  // Structured-pipe parsers (Grok/Goose/Gemini/… via the shared TurnAccumulator)
+  // emit a `tool_result` whose id lives under `result.toolCallId`, not at the top
+  // level. Without reading it here the result overlay was keyed `"<name>:"` and
+  // never paired with its `tool_call` overlay — orphaning the output in the
+  // transcript. Check the nested result id as a general shape, not a per-agent
+  // branch (protocol agents that already set a top-level id are unaffected).
+  const result = (event.result || event.toolResult) as Record<string, unknown> | undefined;
+  const explicit =
+    event.toolUseId || event.tool_use_id || event.toolCallId || event.callId || event.id || toolCall?.id ||
+    result?.toolCallId || result?.tool_use_id || result?.toolUseId || result?.id;
   if (explicit) return String(explicit);
   return `${String(event.toolName || event.name || toolCall?.name || "tool")}:${String(input.path || input.file || input.filePath || input.command || input.cmd || input.query || "")}`;
 }
