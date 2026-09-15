@@ -40,8 +40,18 @@ when a Grok session ends.
 ## Models
 
 Wired via `-m <id>`. The curated default matches the official Grok CLI's
-current catalog (`grok-4.6`, per `grok models`). Override with `BIVY_GROK_MODELS`
-(JSON array of `{id,name?,provider?}`) if your install exposes more.
+current catalog (`grok-4.6`, per the authenticated model catalog). Override with
+`BIVY_GROK_MODELS` (JSON array of `{id,name?,provider?}`) if your install exposes
+more.
+
+## Reasoning effort
+
+**Yes.** Grok's reasoning models expose `--reasoning-effort <EFFORT>`; Bivy wires
+the reasoning/thinking picker to it with the levels the authenticated catalog
+advertises — `low`, `medium`, `high` (default), and `xhigh`. Leaving it untouched
+runs on the agent's own default; picking a level threads through the resume path
+too, so a continued turn keeps the chosen effort. Override the levels/flag with
+`BIVY_GROK_THINKING` (JSON `{levels,template,insertAt?,default?}`).
 
 ## Resume
 
