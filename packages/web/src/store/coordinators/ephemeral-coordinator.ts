@@ -219,9 +219,11 @@ export class EphemeralCoordinator {
     const nodeId = this.deps.currentNodeId();
     if (!nodeId) return false;
     const correlation = this.deps.correlations().find((item) => item.nodeId === nodeId);
-    if (correlation?.computeSource === "managed") return true;
-    if (!this.deps.roomKey(nodeId)) return false;
     const node = this.deps.nodes().find((candidate) => candidate.id === nodeId);
+    // Managed cleanup unenrolls a retired node. An enrolled node (even during a
+    // transient disconnect) must reconnect, not request a second machine.
+    if (correlation?.computeSource === "managed") return !node;
+    if (!this.deps.roomKey(nodeId)) return false;
     if (node) return !node.online && Boolean(this.deps.machineFromNode(node));
     return Boolean(correlation);
   }

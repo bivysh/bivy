@@ -890,20 +890,20 @@ export function App() {
                     controller.store.setError(error instanceof Error ? error.message : String(error));
                   }
                 }}
-                onRetryLaunch={async () => {
+                onRetryLaunch={activeSession.pendingLaunch ? async () => {
                   try {
                     await controller.retryPendingLaunch(activeSession.sessionId);
                   } catch (error) {
                     controller.store.setError(error instanceof Error ? error.message : String(error));
                   }
-                }}
-                onRetryFreshMachine={async () => {
+                } : undefined}
+                onRetryFreshMachine={activeSession.pendingLaunch ? async () => {
                   try {
                     await controller.retryPendingLaunchOnFreshMachine(activeSession.sessionId);
                   } catch (error) {
                     controller.store.setError(error instanceof Error ? error.message : String(error));
                   }
-                }}
+                } : undefined}
               /> : undefined}
               footer={
                 <div className="attention-footer" ref={attentionFooterRef} role="region" aria-live="polite" aria-label="Agent needs your response">

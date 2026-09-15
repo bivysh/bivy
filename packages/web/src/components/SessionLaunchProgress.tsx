@@ -53,7 +53,9 @@ export function SessionLaunchProgressView({
     ? `Agent responded in ${duration}`
     : progress.failedAt
       ? `Startup failed after ${duration}`
-      : `Starting Bivy Cloud · ${duration} elapsed`;
+      : progress.checkpoints.message?.state === "done"
+        ? `Waiting for agent response · ${duration} elapsed`
+        : `Starting Bivy Cloud · ${duration} elapsed`;
 
   return (
     <section className="session-launch-progress" aria-label="Bivy Cloud startup progress">
