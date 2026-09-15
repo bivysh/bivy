@@ -18,7 +18,7 @@ for (const theme of ["light", "dark"]) {
       await route.fulfill(fail ? { status: 503, json: { error: "test outage" } } : { status: 204 });
     });
     const fixturePath = `/retired-fixture-${theme}`;
-    const html = await server.transformIndexHtml(fixturePath, `<html data-theme="${theme}"><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div class="sidebar open" id="root"></div><script type="module">
+    const html = await server.transformIndexHtml(fixturePath, `<html data-theme="${theme}"><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div class="app"><div class="sidebar open" id="root"></div><main class="main"></main></div><script type="module">
       import React from 'react'; import { createRoot } from 'react-dom/client';
       import { SessionList } from '/src/components/SessionList.tsx';
       import { controller } from '/src/store/useStore.ts';
