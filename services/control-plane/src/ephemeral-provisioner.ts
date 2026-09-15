@@ -146,7 +146,7 @@ export async function hostedExecutionReadiness(store: EphemeralProvisioningPort,
   if (!config) return { ready: false, reason: "automation routing has no ephemeral config" };
   if (!ephemeralAdapter(config.provider)) return { ready: false, reason: `provider ${config.provider} is no longer supported`, configId: config.id };
   if (normalizeComputeSource(config.computeSource) === "managed") {
-    if (!managedComputeEnabled()) return { ready: false, reason: "managed compute is disabled (MANAGED_COMPUTE_ENABLED)", configId: config.id };
+    if (!managedComputeEnabled()) return { ready: false, reason: "managed compute is disabled (EPHEMERAL_MACHINES_ENABLED)", configId: config.id };
     const cred = await resolveProviderCredential(hosted, config.provider, "managed");
     if (!cred.token) return { ready: false, reason: cred.reason, configId: config.id };
     return { ready: true, reason: "hosted ephemeral execution is ready", configId: config.id };
@@ -372,7 +372,7 @@ export async function planAutoProvision(
   // per-account hosted opt-in is authoritative. This is the single choke point
   // for ALL server-initiated auto-launches — both maybeAutoProvision
   // call sites route through here. Mirrors the /api/ephemeral/exec relay guard
-  // (device-initiated launches) and the web VITE_EPHEMERAL_MACHINES_ENABLED flag.
+  // (device-initiated launches) and the web EPHEMERAL_MACHINES_ENABLED flag.
   if (!ephemeralMachinesEnabled()) {
     return { willProvision: false, targetConfigId: null, reason: "ephemeral machines disabled (EPHEMERAL_MACHINES_ENABLED)" };
   }
@@ -392,7 +392,7 @@ export async function planAutoProvision(
   // EPHEMERAL_MACHINES_ENABLED above), so flipping it off never strands a
   // billing machine.
   if (computeSource === "managed" && !managedComputeEnabled()) {
-    return { willProvision: false, targetConfigId: target.id, reason: "managed compute disabled (MANAGED_COMPUTE_ENABLED)" };
+    return { willProvision: false, targetConfigId: target.id, reason: "managed compute disabled (EPHEMERAL_MACHINES_ENABLED)" };
   }
   const cred = await resolveProviderCredential(hosted, target.provider, computeSource, { requireValidated: true });
   if (!cred.token) {
@@ -981,7 +981,7 @@ export async function reapSettledHostedMachine(
   // Teardown resolves its credential by the machine's compute source — the CP
   // holds the operator token, so managed machines get the same full
   // server-side destroy authority as hosted ones. Never gated by the
-  // MANAGED_COMPUTE_ENABLED launch switch.
+  // EPHEMERAL_MACHINES_ENABLED launch switch.
   const sourceAttempt = machine.attemptId ? await store.getHostedMachineAttempt(accountId, machine.attemptId).catch(() => undefined) : undefined;
   const sourceConfigs = typeof store.getEphemeralConfigs === "function"
     ? await store.getEphemeralConfigs(accountId).catch(() => [] as EphemeralNodeConfig[])

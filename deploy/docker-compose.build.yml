@@ -19,7 +19,7 @@ services:
       args:
         # Optional ephemeral-machine UI, paired with the runtime flag in the
         # base Compose file.
-        VITE_EPHEMERAL_MACHINES_ENABLED: "${VITE_EPHEMERAL_MACHINES_ENABLED:-}"
+        EPHEMERAL_MACHINES_ENABLED: "${EPHEMERAL_MACHINES_ENABLED:-}"
 
   relay:
     build:

@@ -22,13 +22,23 @@ export function normalizeComputeSource(value: unknown): ComputeSource {
 
 /**
  * Deployment kill switch for NEW managed launches. Default OFF — an operator
- * opts in with MANAGED_COMPUTE_ENABLED=1. Mirrors EPHEMERAL_MACHINES_ENABLED
- * semantics: it gates launches only, never cleanup — teardown, reconcile, and
+ * opts in with EPHEMERAL_MACHINES_ENABLED=1. The same flag controls the UI
+ * and both credential lanes: it gates launches only, never cleanup — teardown, reconcile, and
  * orphan sweeps for already-created managed machines keep running while it is
  * off (the operator token stays available to them via the token source).
  */
 export function managedComputeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.MANAGED_COMPUTE_ENABLED === "1";
+  return env.EPHEMERAL_MACHINES_ENABLED === "1";
+}
+
+/** Operator credentials configure the managed lane; they are not a second flag.
+ * Independent of launch enablement so cleanup can still use them while off. */
+export function managedProviderConfigured(env: NodeJS.ProcessEnv = process.env, provider?: string): boolean {
+  if (provider !== undefined) {
+    const suffix = provider.trim().toUpperCase().replace(/[^A-Z0-9]/g, "_");
+    return Boolean(suffix && env[`MANAGED_PROVIDER_TOKEN_${suffix}`]?.trim());
+  }
+  return Object.entries(env).some(([key, value]) => /^MANAGED_PROVIDER_TOKEN_[A-Z0-9_]+$/.test(key) && Boolean(value?.trim()));
 }
 
 const MANAGED_RUNTIME_IMAGES = [

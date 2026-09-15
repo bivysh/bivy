@@ -14,13 +14,14 @@ import { providerCredentialFingerprint, type Account, type NodeRecord, type Noti
 import { centralGithubAppConfig, centralInstallUrl, applyCentralInstallationEvent, resolveGithubIdentity } from "./central-github-app.js";
 import { maybeAutoProvision, planAutoProvision, hostedExecutionReadiness, mintHostedInstallationToken, provisionEphemeralForAccount, provisionEphemeralRestore, reapSettledHostedMachine, reconcileAllHostedMachines, reconcileAllReadyCapacity, sweepAllOrphanProviderResources, validateHostedProviderToken, markHostedMachineMilestone, EPHEMERAL_MILESTONES, ephemeralMachinesEnabled, type ManagedProvisionRequest } from "./ephemeral-provisioner.js";
 import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecret, initializeHostedKeyring } from "./hosted-crypto.js";
+import { webRuntimeConfigScript } from "./web-runtime-config.js";
 import { listAppInstallations, listInstallationRepositories, listInstallationBranches, getAppInstallation, mintInstallationToken } from "./hosted-github-auth.js";
 import { correlateHostedSessions } from "./hosted-correlation.js";
 import { countActiveAccountSessions } from "./session-count.js";
 import { usageFromManagedMachine } from "./compute-metering.js";
 import { managedCapacityCount, managedConcurrencyLimit } from "./managed-admission.js";
 import { managedInteractiveLaunch, ManagedLaunchConflict, type ManagedInteractiveRequest } from "./managed-interactive-launch.js";
-import { managedAuthRunnerImage, managedSessionImage } from "./managed-compute.js";
+import { managedAuthRunnerImage, managedSessionImage, managedComputeEnabled, managedProviderConfigured } from "./managed-compute.js";
 import { createStore } from "./store-factory.js";
 import { createOwnerAuthRouter } from "./owner-auth.js";
 import { configureProxyTrust } from "./proxy-trust.js";
@@ -112,7 +113,7 @@ function assertProductionConfig() {
     // believes it is on — refuse to boot instead.
     problems.push("BIVY_CENTRAL_GITHUB_APP_ID and BIVY_CENTRAL_GITHUB_APP_PRIVATE_KEY must be configured together");
   }
-  if (process.env.MANAGED_COMPUTE_ENABLED === "1") {
+  if (managedComputeEnabled() && managedProviderConfigured()) {
     if (!process.env.DEPLOYMENT_EXTENSION_URL || !process.env.DEPLOYMENT_EXTENSION_TOKEN) {
       problems.push("production managed compute requires a deployment extension for spend, provider-budget, and account-suspension policy");
     }
@@ -590,6 +591,13 @@ app.get("/readyz", asyncHandler(async (_req, res) => {
     res.status(503).json({ error: "Service not ready." });
   }
 }));
+// A blocking same-origin script loads before the PWA modules, including when
+// the HTML shell comes from the service worker. It is never precached.
+app.get("/runtime-config.js", (_req, res) => {
+  noStorePwaShell(res);
+  res.type("application/javascript").send(webRuntimeConfigScript());
+});
+
 function noStorePwaShell(res: Response) {
   res.setHeader("Cache-Control", "no-store, max-age=0");
 }
@@ -1322,7 +1330,7 @@ function managedAutomationNodeId(accountId: string): string {
 function managedSessionConfig(now = new Date().toISOString()): EphemeralNodeConfig | null {
   const provider = String(process.env.MANAGED_SESSION_PROVIDER || process.env.MANAGED_AUTH_RUNNER_PROVIDER || "fly").trim();
   const adapter = ephemeralAdapter(provider);
-  if (!adapter) return null;
+  if (!adapter || !managedProviderConfigured(process.env, provider)) return null;
   return {
     id: "managed-default",
     name: "Bivy Cloud",
@@ -1382,7 +1390,7 @@ const managedOnboardingRateLimit = rateLimit({
 app.post("/account/onboarding/auth-runner", managedOnboardingRateLimit, requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   res.setHeader("cache-control", "no-store");
-  if (!ephemeralMachinesEnabled() || process.env.MANAGED_COMPUTE_ENABLED !== "1") {
+  if (!managedComputeEnabled()) {
     return res.status(503).json({ error: "Managed setup Machines are not available." });
   }
   // Choosing a managed setup Machine is the durable account-level choice too:
@@ -1409,7 +1417,7 @@ app.post("/account/onboarding/auth-runner", managedOnboardingRateLimit, requireU
 // launch directly and Free hosted automations are separately policy-gated.
 app.post("/account/onboarding/managed-defaults", managedOnboardingRateLimit, requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
-  if (!ephemeralMachinesEnabled() || process.env.MANAGED_COMPUTE_ENABLED !== "1") {
+  if (!managedComputeEnabled()) {
     return res.status(503).json({ error: "Managed session Machines are not available." });
   }
   res.json({ ok: true, config: await ensureManagedDefaultForAccount(account.id) });
@@ -1422,7 +1430,7 @@ app.post("/account/onboarding/managed-defaults", managedOnboardingRateLimit, req
 app.post("/account/managed-automation-target", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   res.setHeader("cache-control", "no-store");
-  if (!ephemeralMachinesEnabled() || process.env.MANAGED_COMPUTE_ENABLED !== "1") {
+  if (!managedComputeEnabled()) {
     return res.status(503).json({ error: "Bivy Cloud automations are not available." });
   }
   const config = await ensureManagedDefaultForAccount(account.id);
@@ -1490,7 +1498,7 @@ async function respondManagedLaunch(res: Response, accountId: string, request: M
 app.post("/account/managed-machines", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   res.setHeader("cache-control", "no-store");
-  if (!ephemeralMachinesEnabled() || process.env.MANAGED_COMPUTE_ENABLED !== "1") {
+  if (!managedComputeEnabled()) {
     return res.status(503).json({ error: "Managed session Machines are not available." });
   }
   const configId = String(req.body?.configId ?? "").trim();
@@ -1513,7 +1521,7 @@ app.post("/account/managed-machines", requireUser, asyncHandler(async (req, res)
 app.post("/account/managed-machines/restore", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   res.setHeader("cache-control", "no-store");
-  if (!ephemeralMachinesEnabled() || process.env.MANAGED_COMPUTE_ENABLED !== "1") {
+  if (!managedComputeEnabled()) {
     return res.status(503).json({ error: "Managed session Machines are not available." });
   }
   const sessionId = String(req.body?.sessionId ?? "").trim();
@@ -2045,7 +2053,7 @@ app.post("/api/ephemeral/exec", requireUser, asyncHandler(async (req, res) => {
   // EPHEMERAL_MACHINES_ENABLED=0 (ephemeralMachinesEnabled). Device-initiated
   // launches route their provider create/destroy calls through this relay, so
   // refusing here stops them server-side even if a client bypasses the web
-  // VITE_EPHEMERAL_MACHINES_ENABLED flag. Mirrors the planAutoProvision guard.
+  // EPHEMERAL_MACHINES_ENABLED flag. Mirrors the planAutoProvision guard.
   if (!ephemeralMachinesEnabled()) {
     return res.status(403).json({ error: "Ephemeral machines are disabled." });
   }
@@ -3770,7 +3778,7 @@ app.get("/account/ephemeral-configs", asyncHandler(async (req, res) => {
   // Listing the picker is the universal idempotent adoption seam: self-hosted
   // and disabled deployments stay untouched, while every eligible account sees
   // the deployment-owned Bivy Cloud destination alongside personal Machines.
-  if (ephemeralMachinesEnabled() && process.env.MANAGED_COMPUTE_ENABLED === "1") {
+  if (managedComputeEnabled()) {
     await ensureManagedDefaultForAccount(client.accountId);
   }
   res.json(await store.getEphemeralConfigs(client.accountId));
@@ -3976,7 +3984,7 @@ app.get("/account/github/central-app", asyncHandler(async (req, res) => {
     configured: Boolean(central),
     appId: central?.appId,
     slug: central?.slug,
-    managedComputeAvailable: ephemeralMachinesEnabled() && process.env.MANAGED_COMPUTE_ENABLED === "1" && Boolean(managedSessionConfig()),
+    managedComputeAvailable: managedComputeEnabled() && Boolean(managedSessionConfig()),
     installations: installations.map(({ installationId, githubAccount, githubAccountType, repositorySelection, createdAt }) => ({
       installationId, githubAccount, githubAccountType, repositorySelection, createdAt,
     })),

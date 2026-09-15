@@ -232,7 +232,7 @@ async function main() {
   // setup remains idempotent, and later reads reconcile a stale image.
   const port3 = await startControlPlane({
     HOSTED_CREDENTIAL_KEY: Buffer.alloc(32, 9).toString("base64"),
-    MANAGED_COMPUTE_ENABLED: "1",
+    EPHEMERAL_MACHINES_ENABLED: "1",
     MANAGED_PROVIDER_TOKEN_FLY: "operator-token-not-used-by-default-setup",
     MANAGED_SESSION_IMAGE: "ghcr.io/bivysh/bivy-ephemeral-runner:current-staging-sha",
   });
