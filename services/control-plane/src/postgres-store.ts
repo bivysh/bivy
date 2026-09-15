@@ -1903,10 +1903,12 @@ export class PostgresStore implements ControlPlaneStore {
         `UPDATE hosted_machine_attempts SET
            provider=$3, config_id=$4, node_id=$5, state=$6, desired_state=$7, observed_state=$8,
            deadline_at=$9, ownership_tag=$10, desired=$11, machine=$12, last_error=$13, retry_count=$14,
-           version=version + 1, updated_at=$16
-         WHERE account_id=$1 AND attempt_id=$2 AND version=$17
+           version=version + 1, updated_at=$15
+         WHERE account_id=$1 AND attempt_id=$2 AND version=$16
          RETURNING *`,
-        [...params, expectedVersion],
+        // created_at is immutable on updates. Do not leave its unused bind slot:
+        // real PostgreSQL cannot infer the type of an unreferenced parameter.
+        [...params.slice(0, 14), attempt.updatedAt, expectedVersion],
       );
       if (!rows[0]) throw new ConcurrentAttemptUpdateError(attempt.accountId, attempt.attemptId);
       return this.hostedAttemptFromRow(rows[0]);
