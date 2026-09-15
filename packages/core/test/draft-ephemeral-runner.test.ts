@@ -69,6 +69,19 @@ describe("draftEphemeralConfig (pick-a-runner-then-send)", () => {
     });
   });
 
+  it("settles all overlapping startup work on failure and retains a safe failure code", () => {
+    const store = new SessionStore();
+    store.persistPendingSession("starting", "Test", true, "Bivy Cloud");
+    store.updateLaunchCheckpoint("starting", "account", "active");
+    store.updateLaunchCheckpoint("starting", "capacity", "active");
+    store.updateLaunchCheckpoint("starting", "machine", "failed", "Image unavailable", "managed_image_unavailable");
+    const progress = store.getState().sessionIndex.sessions[0]?.launchProgress;
+    expect(progress?.failedAt).toBeDefined();
+    expect(progress?.checkpoints.account?.state).toBe("waiting");
+    expect(progress?.checkpoints.capacity?.state).toBe("waiting");
+    expect(progress?.checkpoints.machine).toMatchObject({ state: "failed", errorCode: "managed_image_unavailable" });
+  });
+
   it("keeps structured startup checkpoints and time-to-first-response across canonical binding", () => {
     const store = new SessionStore();
     store.persistPendingSession("starting-request-1", "Fix the flaky test", true, "Bivy Cloud", 1_000);

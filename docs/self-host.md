@@ -308,9 +308,9 @@ MANAGED_SESSION_IMAGE=ghcr.io/your-org/bivy-ephemeral-runner:sha-<commit>
 # MANAGED_SESSION_SIZE=<adapter default>
 
 # Optional smaller runtime-specific images. The managed launch endpoint chooses
-# one from the requested agent and falls back to MANAGED_SESSION_IMAGE for a
-# custom runtime. Bivy's official GHCR baseline automatically derives these
-# `sha-<commit>-<runtime>` tags; custom registries can set them explicitly.
+# explicitly configured image for the requested agent; otherwise it uses
+# MANAGED_SESSION_IMAGE exactly as configured, for every runtime. No suffix is
+# inferred: deployment aliases do not guarantee runtime-specific tags exist.
 # MANAGED_SESSION_IMAGE_CLAUDE=ghcr.io/your-org/bivy-ephemeral-runner:sha-<commit>-claude
 # MANAGED_SESSION_IMAGE_CODEX=ghcr.io/your-org/bivy-ephemeral-runner:sha-<commit>-codex
 # MANAGED_SESSION_IMAGE_PI=ghcr.io/your-org/bivy-ephemeral-runner:sha-<commit>-pi
