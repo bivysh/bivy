@@ -87,6 +87,8 @@ export default defineConfig({
       filename: "sw.ts",
       injectManifest: {
         globPatterns: ["**/*.{js,css,html,svg,png,woff2}"],
+        // Deployment flags must come from the live host, never the offline shell.
+        globIgnores: ["**/runtime-config.js"],
       },
       manifest: {
         id: "/",

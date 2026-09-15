@@ -23,9 +23,9 @@ RUN pnpm install --filter @bivy/web... --frozen-lockfile --ignore-scripts
 COPY packages/ ./packages/
 # Ephemeral-machines UI flag, baked into the web bundle at build time (Vite reads
 # VITE_*-prefixed env; see packages/web/src/flags.ts). Declare it only after the
-# dependency layer so staging's value and production's default share that cache.
-# Pass 1 to expose the surface (staging does; production omits it). Pairs with
-# the runtime EPHEMERAL_MACHINES_ENABLED server-side enforcement flag.
+# dependency layer so custom builds share that cache. Standard images leave
+# this off; the control plane overrides it via /runtime-config.js at runtime.
+# Pairs with the EPHEMERAL_MACHINES_ENABLED server-side enforcement flag.
 ARG VITE_EPHEMERAL_MACHINES_ENABLED
 ENV VITE_EPHEMERAL_MACHINES_ENABLED=$VITE_EPHEMERAL_MACHINES_ENABLED
 RUN pnpm --filter @bivy/web run build

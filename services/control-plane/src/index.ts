@@ -14,6 +14,7 @@ import { providerCredentialFingerprint, type Account, type NodeRecord, type Noti
 import { centralGithubAppConfig, centralInstallUrl, applyCentralInstallationEvent, resolveGithubIdentity } from "./central-github-app.js";
 import { maybeAutoProvision, planAutoProvision, hostedExecutionReadiness, mintHostedInstallationToken, provisionEphemeralForAccount, provisionEphemeralRestore, reapSettledHostedMachine, reconcileAllHostedMachines, reconcileAllReadyCapacity, sweepAllOrphanProviderResources, validateHostedProviderToken, markHostedMachineMilestone, EPHEMERAL_MILESTONES, ephemeralMachinesEnabled, type ManagedProvisionRequest } from "./ephemeral-provisioner.js";
 import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecret, initializeHostedKeyring } from "./hosted-crypto.js";
+import { webRuntimeConfigScript } from "./web-runtime-config.js";
 import { listAppInstallations, listInstallationRepositories, listInstallationBranches, getAppInstallation, mintInstallationToken } from "./hosted-github-auth.js";
 import { correlateHostedSessions } from "./hosted-correlation.js";
 import { countActiveAccountSessions } from "./session-count.js";
@@ -590,6 +591,13 @@ app.get("/readyz", asyncHandler(async (_req, res) => {
     res.status(503).json({ error: "Service not ready." });
   }
 }));
+// A blocking same-origin script loads before the PWA modules, including when
+// the HTML shell comes from the service worker. It is never precached.
+app.get("/runtime-config.js", (_req, res) => {
+  noStorePwaShell(res);
+  res.type("application/javascript").send(webRuntimeConfigScript());
+});
+
 function noStorePwaShell(res: Response) {
   res.setHeader("Cache-Control", "no-store, max-age=0");
 }

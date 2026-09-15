@@ -530,7 +530,8 @@ commercial configuration belong to the separate Cloud repository.
 
 | Variable | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `EPHEMERAL_MACHINES_ENABLED` | `0` to disable | on | Deployment kill switch for **new** cloud-machine launches (device- and server-initiated). Only the exact value `0` disables; teardown of running machines is unaffected. The web build has a matching `VITE_EPHEMERAL_MACHINES_ENABLED` that hides the UI |
+| `EPHEMERAL_MACHINES_ENABLED` | `0` to disable | on | Deployment kill switch for **new** cloud-machine launches (device- and server-initiated). Only the exact value `0` disables; teardown of running machines is unaffected. The runtime UI flag below controls visibility; `0` here also forces it off |
+| `VITE_EPHEMERAL_MACHINES_ENABLED` | `1` to expose launch UI | off | Runtime control-plane setting served through uncached `/runtime-config.js`; works with the standard image without rebuilding. Standalone/static web hosts can still set it at build time |
 | `HOSTED_CREDENTIAL_KEY` | base64 of 32 random bytes | unset — **feature off, fail-closed** | Master key for encrypted credential storage. Required for **Settings → Cloud machine profiles → a profile → "Run automations while I'm offline"**; while unset the toggle is disabled and the profile says the server has no encryption key for stored credentials. Generate with `openssl rand -base64 32`; back it up with the database. See [`self-host.md`](self-host.md#offline-automations-encrypted-credential-storage) |
 | `HOSTED_CREDENTIAL_KEYS` | `id:<base64>,id:<base64>` | unset | Keyring form, for rotation only. Envelopes record the key id they were sealed with, so old ids keep decrypting while a new primary is introduced |
 | `HOSTED_CREDENTIAL_KEY_PRIMARY` | key id | first configured entry | Which keyring entry new writes are sealed under |

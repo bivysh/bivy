@@ -248,16 +248,22 @@ cannot be decrypted; the account has to re-enter them. Treat it like
 `RELAY_SECRET` — it lives in `deploy/.env` (mode `600`) and nowhere else.
 
 The feature also needs ephemeral machines enabled. The server gate
-`EPHEMERAL_MACHINES_ENABLED` is on unless set to exactly `0`, but the web build
+`EPHEMERAL_MACHINES_ENABLED` is on unless set to exactly `0`, but the UI
 requires an explicit `VITE_EPHEMERAL_MACHINES_ENABLED=1`.
 
-Published `ghcr.io/bivysh/bivy-control-plane:<full-core-sha>` images keep that UI
-gate off. To opt in, use the separate `<full-core-sha>-ephemerals` image variant,
-which Core builds with the web flag set to `1`. Both variants have the same
-backend source and enforce the same runtime launch, policy, and hardening gates.
-Setting a `VITE_` variable on an already-built container does not change its
-compiled web assets. Default image tags are not overwritten when publishing the
-opt-in variant.
+Use the standard `ghcr.io/bivysh/bivy-control-plane:<full-core-sha>` image and
+set `VITE_EPHEMERAL_MACHINES_ENABLED=1` on the **running control-plane container**
+to expose the UI. The control plane serves an uncached `/runtime-config.js`
+before the PWA starts; no rebuild or additional image is needed. This public
+configuration contains only allowlisted boolean flags, never credentials.
+`EPHEMERAL_MACHINES_ENABLED=0` also forces the UI off. Admission, policy and
+managed-guest hardening checks remain enforced server-side.
+
+Standalone/static web hosts without this endpoint retain the build-time
+`VITE_EPHEMERAL_MACHINES_ENABLED` option. The runtime script is excluded from
+service-worker precaching so a cached app shell still reads current deployment
+flags on reload. A missing script uses the build default (off in standard
+images); runtime configuration never grants server-side authority.
 
 ## Operator-owned managed compute
 

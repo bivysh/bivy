@@ -1,17 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// Build-time feature flags for the web client.
-//
-// These gate not-yet-shipped surfaces so their code can stay in the tree,
-// compiled and reviewable, without being reachable by users. Flip a flag to
-// `true` to bring the feature back online — no other wiring needed.
+// Deployment feature flags for the web client.
+import { runtimeBoolean } from "./runtime-config.js";
 
 /**
  * Ephemeral machines: bring-your-own-cloud, short-lived runners (Fly.io,
  * Hetzner, AWS EC2). Product access is controlled by provider onboarding and
- * per-account opt-in. Launch builds leave these surfaces hidden. Operators
- * can explicitly enable them with VITE_EPHEMERAL_MACHINES_ENABLED=1.
+ * per-account opt-in. Operators enable them on the control-plane container
+ * with VITE_EPHEMERAL_MACHINES_ENABLED=1. Its runtime config overrides the
+ * build default; standalone/static hosts retain the build-time option.
  *
  * Gates every user-facing entry point: the NodeSwitcher "Ephemeral machine…"
  * menu item, the onboarding "Quick ephemeral server" CTA, the Settings
@@ -21,8 +19,10 @@
  * Mirrors the server-side `EPHEMERAL_MACHINES_ENABLED=0` emergency gate in the
  * control plane (planAutoProvision and the /api/ephemeral/exec relay).
  */
-export const EPHEMERAL_MACHINES_ENABLED =
-  import.meta.env.VITE_EPHEMERAL_MACHINES_ENABLED === "1";
+export const EPHEMERAL_MACHINES_ENABLED = runtimeBoolean(
+  "ephemeralMachinesEnabled",
+  import.meta.env.VITE_EPHEMERAL_MACHINES_ENABLED === "1",
+);
 
 /**
  * DEBUG: keep a boot-failed ephemeral machine alive instead of letting it
