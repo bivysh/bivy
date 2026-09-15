@@ -814,7 +814,7 @@ export function App() {
           </div>
         )}
 
-        {!needsNode && !state.activeSession.activeSessionId && state.activeSession.transcript.length === 0 && state.sessionIndex.sessions.length === 0 && (
+        {!needsNode && !state.draft.ephemeralConfig && !state.activeSession.activeSessionId && state.activeSession.transcript.length === 0 && state.sessionIndex.sessions.length === 0 && (
           <Suspense fallback={null}>
             <ReadinessChecklist
               activation={activation}

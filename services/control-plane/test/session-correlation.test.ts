@@ -72,4 +72,27 @@ await test("list is account-scoped; delete removes", async () => {
   assert.equal((await store.listSessionCorrelations(b.id)).length, 1);
 });
 
+await test("retired session deletion removes ciphertext and metadata, survives refresh, and fences late uploads", async () => {
+  const store = await makeStore();
+  const a = await store.findOrCreateAccount("retired@example.com");
+  const b = await store.findOrCreateAccount("other@example.com");
+  for (const account of [a, b]) {
+    await store.setSessionCorrelation(account.id, { sessionId: "same-id", nodeId: "eph-retired", provider: "fly" });
+    await store.setSessionSnapshot(account.id, "same-id", "sealed-content");
+  }
+  await store.enrollNode(a.id, "eph-retired", "Tear");
+  await store.replaceNodeSessions(a.id, "eph-retired", [{ sessionId: "same-id", status: "idle" }]);
+  await store.deleteRetiredSession(a.id, "same-id");
+  await store.deleteRetiredSession(a.id, "same-id");
+  assert.equal(await store.getSessionSnapshot(a.id, "same-id"), undefined);
+  assert.equal(await store.getSessionCorrelation(a.id, "same-id"), undefined);
+  assert.deepEqual(await store.listSessionCorrelations(a.id), []);
+  await store.replaceNodeSessions(a.id, "eph-retired", [{ sessionId: "same-id", status: "idle" }]);
+  assert.deepEqual(await store.listAccountSessions(a.id), []);
+  assert.deepEqual(await store.listNodeSessions(a.id, "eph-retired"), []);
+  await assert.rejects(() => store.setSessionSnapshot(a.id, "same-id", "late-ciphertext"), /deleted/);
+  await assert.rejects(() => store.setSessionCorrelation(a.id, { sessionId: "same-id", nodeId: "eph-retired", provider: "fly" }), /deleted/);
+  assert.ok(await store.getSessionSnapshot(b.id, "same-id"), "other account remains untouched");
+});
+
 console.log(`session-correlation: ${passed} test(s) passed`);

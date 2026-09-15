@@ -278,6 +278,28 @@ export const flyProvider: ProviderAdapter = {
   // with this token and checks each one's machines for the ownership tag.
   // Bounded by how many bivy- apps exist for the token (normally very few);
   // one app's list call failing is skipped rather than aborting the scan.
+  async cleanupAttempt({ exec, token, nodeId, attemptId, ownershipTag }) {
+    // The launch plan uses this exact, server-enrolled node identity as its slug.
+    if (!/^eph-(?:[a-f0-9]{16}|[a-f0-9]{32})$/.test(nodeId)) return false;
+    const app = `bivy-${nodeId.replace(/^eph-/, "")}`;
+    const url = `https://api.machines.dev/v1/apps/${encodeURIComponent(app)}`;
+    const inventory = await call(exec, { method: "GET", url: `${url}/machines`, headers: bearer(token) });
+    if (inventory.status !== 404) {
+      if (inventory.status >= 300 || !Array.isArray(inventory.body)) throw new Error("Cannot verify canceled Fly launch inventory");
+      if (inventory.body.some((m: any) => m?.config?.metadata?.["bivy-attempt"] !== attemptId || m?.config?.metadata?.["bivy-account"] !== ownershipTag)) return false;
+      for (const machine of inventory.body) {
+        if (!machine?.id) return false;
+        const deleted = await call(exec, { method: "DELETE", url: `${url}/machines/${encodeURIComponent(machine.id)}?force=true`, headers: bearer(token) });
+        if (deleted.status >= 300 && deleted.status !== 404) return false;
+      }
+      // Empty dedicated apps are resources too; discovery of machines alone
+      // cannot find this common image-pull failure window.
+      const removed = await call(exec, { method: "DELETE", url, headers: bearer(token) });
+      if (removed.status >= 300 && removed.status !== 404) return false;
+    }
+    const confirmed = await call(exec, { method: "GET", url, headers: bearer(token) });
+    return confirmed.status === 404;
+  },
   async discover({ exec, token, ownershipTag }) {
     const org = await resolveFlyOrg(exec, token);
     const appsRes = await call(exec, { method: "GET", url: `https://api.machines.dev/v1/apps?org_slug=${encodeURIComponent(org)}`, headers: bearer(token) });

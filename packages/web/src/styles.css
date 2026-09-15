@@ -337,9 +337,9 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .session-meta { font-size: 12px; line-height: 1.25; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @keyframes dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
 .session-row { position: relative; display: flex; align-items: center; }
-.session-row .session-item { flex: 1; }
+.session-row .session-item { flex: 1; min-width: 0; }
 .pending-launch-actions { display: flex; flex: none; gap: 4px; padding-right: 6px; }
-.pending-launch-actions button { border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--ink); padding: 5px 8px; font-size: 12px; cursor: pointer; }
+.pending-launch-actions button { min-height: var(--space-7); min-width: var(--space-7); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--ink); padding: 5px 8px; font-size: 12px; cursor: pointer; }
 .pending-launch-actions button:last-child { color: var(--muted); background: transparent; }
 .pending-launch-actions button:hover { background: var(--surface-3); }
 .row-menu-pop { position: absolute; right: 0; top: calc(100% + 2px); min-width: 180px; z-index: var(--z-dropdown); }

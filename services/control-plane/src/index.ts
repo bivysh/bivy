@@ -1764,6 +1764,21 @@ app.get("/session-correlation", requireUser, asyncHandler(async (req, res) => {
   res.json({ ok: true, correlations: await store.listSessionCorrelations(account.id) });
 }));
 
+// Retired ephemeral sessions cannot receive a node-side session.delete command.
+// Delete their retained account records instead, with a durable tombstone.
+app.delete("/session-correlation/:sessionId", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const sessionId = String(req.params.sessionId ?? "").trim();
+  const correlation = await store.getSessionCorrelation(account.id, sessionId);
+  if (!correlation) { res.sendStatus(204); return; }
+  const nodes = await store.listNodes(account.id);
+  if (nodes.some((node) => node.id === correlation.nodeId && withEffectiveOnline(node).online)) {
+    res.status(409).json({ error: "This session's machine is online. Delete the live session on that machine." }); return;
+  }
+  await store.deleteRetiredSession(account.id, sessionId);
+  res.sendStatus(204);
+}));
+
 app.put("/session-correlation/:sessionId", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   const sessionId = String(req.params.sessionId ?? "").trim();

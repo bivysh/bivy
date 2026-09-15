@@ -11,10 +11,13 @@ test("isolated first use recommends one cloud and hides the rest behind progress
   expect(view).toContain("<Badge>Available</Badge>");
 });
 
-test("the first task offers a no-edit prompt and names the billable isolated launch action", async () => {
+test("only local first tasks offer a no-edit prompt; cloud launch remains explicitly named", async () => {
   const composer = await read("../../packages/web/src/components/Composer.tsx");
   expect(composer).toContain("Start with a small task");
-  expect(composer).toContain("(firstIsolatedRun || firstTask)");
+  expect(composer).toContain("const firstTask = isDraft && !firstIsolatedRun");
+  expect(composer).toContain("{firstTask && !text.trim()");
+  const app = await read("../../packages/web/src/App.tsx");
+  expect(app).toContain("!needsNode && !state.draft.ephemeralConfig && !state.activeSession.activeSessionId");
   expect(composer).toContain("Inspect this repository and explain how to run its tests. Do not change files.");
   expect(composer).toContain("Launch Machine and send task");
 });

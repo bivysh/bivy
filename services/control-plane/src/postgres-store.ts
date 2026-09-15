@@ -4,7 +4,7 @@ import { randomUUID, randomBytes } from "node:crypto";
 import pg from "pg";
 import { anyNodeEligible } from "@bivy/core";
 import { encryptSecret, decryptSecret, isSecretEnvelope, type SecretEnvelope } from "./hosted-crypto.js";
-import { PostgresDatabaseContext } from "./postgres-database.js";
+import { PostgresDatabaseContext, type PostgresTransactionContext } from "./postgres-database.js";
 import {
   type Account,
   type SelfHostOwnerCredential,
@@ -533,6 +533,7 @@ export class PostgresStore implements ControlPlaneStore {
         PRIMARY KEY (account_id, session_id)
       );
       ALTER TABLE session_correlation ADD COLUMN IF NOT EXISTS compute_source TEXT;
+      ALTER TABLE session_correlation ADD COLUMN IF NOT EXISTS deleted BOOLEAN NOT NULL DEFAULT false;
 
       -- Escrowed session ROOM KEY for HOSTED (device-offline) rebuild (Gap 3).
       -- Sealed at rest with the per-account hosted-provisioning key (hosted-crypto),
@@ -1441,7 +1442,7 @@ export class PostgresStore implements ControlPlaneStore {
 
   async listAccountSessions(accountId: string): Promise<SessionIndexEntry[]> {
     const { rows } = await this.query(
-      `SELECT * FROM session_index WHERE account_id = $1 ORDER BY updated_at DESC`,
+      `SELECT * FROM session_index WHERE account_id = $1 AND session_id NOT IN (SELECT session_id FROM session_correlation WHERE account_id = $1 AND deleted = true) ORDER BY updated_at DESC`,
       [accountId],
     );
     return rows.map((row: any) => ({
@@ -1459,7 +1460,7 @@ export class PostgresStore implements ControlPlaneStore {
 
   async listNodeSessions(accountId: string, nodeId: string): Promise<SessionIndexEntry[]> {
     const { rows } = await this.query(
-      `SELECT * FROM session_index WHERE account_id = $1 AND node_id = $2 ORDER BY updated_at DESC`,
+      `SELECT * FROM session_index WHERE account_id = $1 AND node_id = $2 AND session_id NOT IN (SELECT session_id FROM session_correlation WHERE account_id = $1 AND deleted = true) ORDER BY updated_at DESC`,
       [accountId, nodeId],
     );
     return rows.map((row: any) => ({
@@ -2392,15 +2393,30 @@ export class PostgresStore implements ControlPlaneStore {
     return { sessionId: row.session_id, ciphertext: row.ciphertext, updatedAt: new Date(row.updated_at).toISOString() };
   }
 
+  private async writeSessionRecord<T>(accountId: string, sessionId: string, write: (client: PostgresTransactionContext) => Promise<T>): Promise<T> {
+    const client = await this.database.beginTransaction();
+    try {
+      await client.query(`SELECT id FROM accounts WHERE id = $1 FOR UPDATE`, [accountId]);
+      const deleted = await client.query(`SELECT session_id FROM session_correlation WHERE account_id = $1 AND session_id = $2 AND deleted = true`, [accountId, sessionId]);
+      if (deleted.rows.length) throw Object.assign(new Error("Session has been deleted"), { status: 410 });
+      const result = await write(client);
+      await client.commit();
+      return result;
+    } catch (error) { await client.rollback(); throw error; }
+    finally { client.release(); }
+  }
+
   async setSessionSnapshot(accountId: string, sessionId: string, ciphertext: string): Promise<SessionSnapshotRecord> {
-    const { rows } = await this.query(
-      `INSERT INTO session_snapshots (account_id, session_id, ciphertext, updated_at)
-       VALUES ($1, $2, $3, now())
-       ON CONFLICT (account_id, session_id) DO UPDATE SET ciphertext = EXCLUDED.ciphertext, updated_at = now()
-       RETURNING *`,
-      [accountId, sessionId, ciphertext],
-    );
-    return { sessionId: rows[0].session_id, ciphertext: rows[0].ciphertext, updatedAt: new Date(rows[0].updated_at).toISOString() };
+    return this.writeSessionRecord(accountId, sessionId, async (client) => {
+      const { rows } = await client.query(
+        `INSERT INTO session_snapshots (account_id, session_id, ciphertext, updated_at)
+         VALUES ($1, $2, $3, now())
+         ON CONFLICT (account_id, session_id) DO UPDATE SET ciphertext = EXCLUDED.ciphertext, updated_at = now()
+         RETURNING *`,
+        [accountId, sessionId, ciphertext],
+      );
+      return { sessionId: rows[0].session_id, ciphertext: rows[0].ciphertext, updatedAt: new Date(rows[0].updated_at).toISOString() };
+    });
   }
 
   async deleteSessionSnapshot(accountId: string, sessionId: string): Promise<void> {
@@ -2426,36 +2442,55 @@ export class PostgresStore implements ControlPlaneStore {
   }
 
   async getSessionCorrelation(accountId: string, sessionId: string): Promise<SessionCorrelation | undefined> {
-    const { rows } = await this.query(`SELECT * FROM session_correlation WHERE account_id = $1 AND session_id = $2`, [accountId, sessionId]);
+    const { rows } = await this.query(`SELECT * FROM session_correlation WHERE account_id = $1 AND session_id = $2 AND deleted = false`, [accountId, sessionId]);
     return rows[0] ? this.mapSessionCorrelation(rows[0]) : undefined;
   }
 
   async listSessionCorrelations(accountId: string): Promise<SessionCorrelation[]> {
-    const { rows } = await this.query(`SELECT * FROM session_correlation WHERE account_id = $1 ORDER BY updated_at DESC`, [accountId]);
+    const { rows } = await this.query(`SELECT * FROM session_correlation WHERE account_id = $1 AND deleted = false ORDER BY updated_at DESC`, [accountId]);
     return rows.map((r) => this.mapSessionCorrelation(r));
   }
 
   async setSessionCorrelation(accountId: string, input: SessionCorrelationInput): Promise<SessionCorrelation> {
-    const { rows } = await this.query(
-      `INSERT INTO session_correlation
-         (account_id, session_id, node_id, provider, region, ttl_minutes, repo, setup_id, machine_id, app, compute_source, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
-       ON CONFLICT (account_id, session_id) DO UPDATE SET
-         node_id = EXCLUDED.node_id, provider = EXCLUDED.provider, region = EXCLUDED.region,
-         ttl_minutes = EXCLUDED.ttl_minutes, repo = EXCLUDED.repo, setup_id = EXCLUDED.setup_id,
-         machine_id = EXCLUDED.machine_id, app = EXCLUDED.app, compute_source = EXCLUDED.compute_source, updated_at = now()
-       RETURNING *`,
-      [
-        accountId, input.sessionId, input.nodeId, input.provider,
-        input.region ?? null, input.ttlMinutes ?? null, input.repo ?? null,
-        input.setupId ?? null, input.machineId ?? null, input.app ?? null, input.computeSource === "managed" ? "managed" : null,
-      ],
-    );
-    return this.mapSessionCorrelation(rows[0]);
+    return this.writeSessionRecord(accountId, input.sessionId, async (client) => {
+      const { rows } = await client.query(
+        `INSERT INTO session_correlation
+           (account_id, session_id, node_id, provider, region, ttl_minutes, repo, setup_id, machine_id, app, compute_source, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
+         ON CONFLICT (account_id, session_id) DO UPDATE SET
+           node_id = EXCLUDED.node_id, provider = EXCLUDED.provider, region = EXCLUDED.region,
+           ttl_minutes = EXCLUDED.ttl_minutes, repo = EXCLUDED.repo, setup_id = EXCLUDED.setup_id,
+           machine_id = EXCLUDED.machine_id, app = EXCLUDED.app, compute_source = EXCLUDED.compute_source, updated_at = now()
+         RETURNING *`,
+        [
+          accountId, input.sessionId, input.nodeId, input.provider,
+          input.region ?? null, input.ttlMinutes ?? null, input.repo ?? null,
+          input.setupId ?? null, input.machineId ?? null, input.app ?? null, input.computeSource === "managed" ? "managed" : null,
+        ],
+      );
+      return this.mapSessionCorrelation(rows[0]);
+    });
   }
 
   async deleteSessionCorrelation(accountId: string, sessionId: string): Promise<void> {
-    await this.query(`DELETE FROM session_correlation WHERE account_id = $1 AND session_id = $2`, [accountId, sessionId]);
+    await this.query(`DELETE FROM session_correlation WHERE account_id = $1 AND session_id = $2 AND deleted = false`, [accountId, sessionId]);
+  }
+
+  async deleteRetiredSession(accountId: string, sessionId: string): Promise<void> {
+    const client = await this.database.beginTransaction();
+    try {
+      // Serialize with snapshot/correlation writes, including late offline uploads.
+      await client.query(`SELECT id FROM accounts WHERE id = $1 FOR UPDATE`, [accountId]);
+      // Keep only the account/session tombstone, not the saved routing details.
+      await client.query(`UPDATE session_correlation SET deleted = true, node_id = '', provider = '',
+        region = NULL, ttl_minutes = NULL, repo = NULL, setup_id = NULL,
+        machine_id = NULL, app = NULL, compute_source = NULL, updated_at = now()
+        WHERE account_id = $1 AND session_id = $2`, [accountId, sessionId]);
+      await client.query(`DELETE FROM session_snapshots WHERE account_id = $1 AND session_id = $2`, [accountId, sessionId]);
+      await client.query(`DELETE FROM session_index WHERE account_id = $1 AND session_id = $2`, [accountId, sessionId]);
+      await client.commit();
+    } catch (error) { await client.rollback(); throw error; }
+    finally { client.release(); }
   }
 
   async getNodeRoomKeyEnc(accountId: string, nodeId: string): Promise<SecretEnvelope | undefined> {

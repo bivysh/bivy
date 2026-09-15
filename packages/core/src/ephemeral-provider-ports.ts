@@ -154,4 +154,8 @@ export interface ProviderAdapter {
    *  implemented for providers where an orphaned resource keeps billing
    *  (Hetzner/Fly/EC2). */
   discover?(args: { exec: ExecFn; token: string; ownershipTag: string }): Promise<EphemeralMachine[]>;
+  /** Settle a canceled create whose response/identity was never recorded.
+   * Return true only after all resources for the exact launch are absent.
+   * Unsupported/ambiguous ownership must retain the reservation. */
+  cleanupAttempt?(args: { exec: ExecFn; token: string; nodeId: string; attemptId: string; ownershipTag: string }): Promise<boolean>;
 }

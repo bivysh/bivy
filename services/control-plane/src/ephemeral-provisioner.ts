@@ -444,13 +444,14 @@ export async function planAutoProvision(
 
 // Direct server-side provider-call exec (mirrors the /api/ephemeral/exec relay
 // handler). Core applies its host allowlist (assertAllowedUrl) before calling.
-function directExec(): ExecFn {
+function directExec(timeoutMs?: number): ExecFn {
   return async ({ method, url, headers, body }: ExecRequest) => {
     const res = await fetch(url, {
       method,
       headers: headers as Record<string, string> | undefined,
       body: body == null ? undefined : typeof body === "string" ? body : JSON.stringify(body),
       redirect: "manual",
+      ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
     });
     const text = await res.text();
     let parsed: unknown = text;
@@ -1069,6 +1070,13 @@ export interface ManagedSettlementEvent {
 }
 export type ManagedSettlementReporter = (accountId: string, event: ManagedSettlementEvent) => Promise<void>;
 
+export type CleanupAttemptFn = (attempt: HostedMachineAttempt, token: string, ownershipTag: string) => Promise<boolean>;
+const cleanupProviderAttempt: CleanupAttemptFn = async (attempt, token, ownershipTag) => {
+  const adapter = ephemeralAdapter(attempt.provider);
+  if (!adapter?.cleanupAttempt) return false;
+  return adapter.cleanupAttempt({ exec: directExec(30_000), token, nodeId: attempt.nodeId, attemptId: attempt.attemptId, ownershipTag });
+};
+
 export async function reconcileHostedMachines(
   store: EphemeralProvisioningPort,
   accountId: string,
@@ -1077,6 +1085,7 @@ export async function reconcileHostedMachines(
   destroy: DestroyFn = destroyEphemeralMachine,
   observe: ObserveFn = observeProviderMachine,
   reportManagedSettlement?: ManagedSettlementReporter,
+  cleanupAttempt: CleanupAttemptFn = cleanupProviderAttempt,
 ): Promise<number> {
   let machines = await store.getHostedMachines(accountId);
   // Older self-hosted/test store shims may not expose the new attempt table
@@ -1186,6 +1195,37 @@ export async function reconcileHostedMachines(
   const attemptById = new Map(attempts.map((a) => [a.attemptId, a]));
   const kept: Array<Record<string, unknown>> = [];
   let reaped = 0;
+  // Canceled creates without a recorded machine cannot reach the inventory
+  // loop below. Resolve their exact provider identity under the launch lease.
+  if (env && hosted && attempts.some((a) => !a.machine && a.desiredState === "deleted")) {
+    const holder = randomUUID();
+    if (await store.acquireHostedProvisionLease(accountId, holder, PROVISION_LEASE_SECONDS)) {
+      const heartbeat = startLeaseHeartbeat(store, accountId, holder);
+      try {
+        for (const listed of attempts) {
+          const attempt = await store.getHostedMachineAttempt(accountId, listed.attemptId);
+          if (!attempt || attempt.machine || attempt.state === "deleted" || attempt.desiredState !== "deleted" || heartbeat.isLost()) continue;
+          const credential = await resolveProviderCredential(hosted, attempt.provider, normalizeComputeSource(attempt.desired.computeSource));
+          if (!credential.token) continue;
+          try {
+            if (!await cleanupAttempt(attempt, credential.token, attempt.ownershipTag || ownershipTagFor(accountId))) continue;
+            if (heartbeat.isLost() || !await store.renewHostedProvisionLease(accountId, holder, PROVISION_LEASE_SECONDS)) break;
+            const latest = await store.getHostedMachineAttempt(accountId, attempt.attemptId);
+            if (!latest || latest.machine || latest.desiredState !== "deleted" || latest.version !== attempt.version) continue;
+            await store.removeNode(accountId, attempt.nodeId);
+            await store.putHostedMachineAttempt({ ...latest, state: "deleted", observedState: "gone", deadlineAt: undefined, updatedAt: new Date(nowMs).toISOString() });
+            reaped++;
+          } catch {
+            // An unavailable provider or incomplete deletion is not absence.
+            // Keep the receipt/capacity and retry on the next sweep.
+          }
+        }
+      } finally {
+        heartbeat.stop();
+        await store.releaseHostedProvisionLease(accountId, holder).catch(() => {});
+      }
+    }
+  }
   let inventoryChanged = adopted;
   for (const original of machines) {
     let m = original;
