@@ -21,13 +21,13 @@ COPY packages/ui/package.json ./packages/ui/package.json
 COPY packages/web/package.json ./packages/web/package.json
 RUN pnpm install --filter @bivy/web... --frozen-lockfile --ignore-scripts
 COPY packages/ ./packages/
-# Ephemeral-machines UI flag, baked into the web bundle at build time (Vite reads
-# VITE_*-prefixed env; see packages/web/src/flags.ts). Declare it only after the
+# Standalone UI fallback: vite.config.ts explicitly allowlists this one flag.
+# Hosted UI configuration comes from the runtime container. Declare after the
 # dependency layer so custom builds share that cache. Standard images leave
 # this off; the control plane overrides it via /runtime-config.js at runtime.
-# Pairs with the EPHEMERAL_MACHINES_ENABLED server-side enforcement flag.
-ARG VITE_EPHEMERAL_MACHINES_ENABLED
-ENV VITE_EPHEMERAL_MACHINES_ENABLED=$VITE_EPHEMERAL_MACHINES_ENABLED
+# The same variable controls server-side launch enforcement.
+ARG EPHEMERAL_MACHINES_ENABLED
+ENV EPHEMERAL_MACHINES_ENABLED=$EPHEMERAL_MACHINES_ENABLED
 RUN pnpm --filter @bivy/web run build
 
 # Stage 2 — the control plane service.

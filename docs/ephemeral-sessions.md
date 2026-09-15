@@ -28,7 +28,7 @@ account's validated provider credential, while `managed` uses an operator-owned
 credential configured on the control plane. Existing configurations default to
 `user`. Both sources use the same provisioner, lifecycle milestones, teardown,
 reconciliation, and orphan cleanup; only credential resolution differs.
-Managed launches are off by default and require `MANAGED_COMPUTE_ENABLED=1`.
+Managed launches are off by default and require `EPHEMERAL_MACHINES_ENABLED=1`.
 Turning the flag off stops new managed launches but deliberately leaves cleanup
 running so existing machines cannot be stranded.
 

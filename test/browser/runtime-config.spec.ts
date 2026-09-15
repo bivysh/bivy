@@ -24,7 +24,7 @@ for (const theme of ["light", "dark"]) {
     let requests = 0;
     await page.route("**/runtime-config.js", async route => {
       requests++;
-      await route.fulfill({ contentType: "application/javascript", headers: { "Cache-Control": "no-store" }, body: webRuntimeConfigScript({ VITE_EPHEMERAL_MACHINES_ENABLED: enabled }) });
+      await route.fulfill({ contentType: "application/javascript", headers: { "Cache-Control": "no-store" }, body: webRuntimeConfigScript({ EPHEMERAL_MACHINES_ENABLED: enabled }) });
     });
     const flag = () => page.evaluate(async () => {
       const modulePath = "/src/flags.ts";

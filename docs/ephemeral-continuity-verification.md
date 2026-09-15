@@ -90,7 +90,7 @@ Prepare **separate, disposable** control-plane and relay processes:
 - Generate a temporary shared `RELAY_SECRET` and a temporary 32-byte base64
   `HOSTED_CREDENTIAL_KEY`; never print them. Enable local dev-login only on the
   disposable control plane (`DISABLE_DEV_LOGIN=0`).
-- Enable `EPHEMERAL_MACHINES_ENABLED=1`, `MANAGED_COMPUTE_ENABLED=1`,
+- Enable `EPHEMERAL_MACHINES_ENABLED=1`,
   `MANAGED_COMPUTE_MAX_ACTIVE_PER_ACCOUNT=1`,
   `MANAGED_SESSION_TTL_MINUTES=5`, and
   `MANAGED_SESSION_SIZE=shared-2x-4gb` on that control plane.

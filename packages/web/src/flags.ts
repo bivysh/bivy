@@ -8,7 +8,7 @@ import { runtimeBoolean } from "./runtime-config.js";
  * Ephemeral machines: bring-your-own-cloud, short-lived runners (Fly.io,
  * Hetzner, AWS EC2). Product access is controlled by provider onboarding and
  * per-account opt-in. Operators enable them on the control-plane container
- * with VITE_EPHEMERAL_MACHINES_ENABLED=1. Its runtime config overrides the
+ * with EPHEMERAL_MACHINES_ENABLED=1. Its runtime config overrides the
  * build default; standalone/static hosts retain the build-time option.
  *
  * Gates every user-facing entry point: the NodeSwitcher "Ephemeral machine…"
@@ -21,7 +21,7 @@ import { runtimeBoolean } from "./runtime-config.js";
  */
 export const EPHEMERAL_MACHINES_ENABLED = runtimeBoolean(
   "ephemeralMachinesEnabled",
-  import.meta.env.VITE_EPHEMERAL_MACHINES_ENABLED === "1",
+  import.meta.env.EPHEMERAL_MACHINES_ENABLED === "1",
 );
 
 /**

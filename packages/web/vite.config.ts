@@ -54,6 +54,9 @@ export default defineConfig({
   base: "/",
   define: {
     __APP_VERSION__: JSON.stringify(pkgVersion),
+    // Allowlist the single deployment flag for standalone web builds too;
+    // never expose arbitrary server environment variables via envPrefix.
+    "import.meta.env.EPHEMERAL_MACHINES_ENABLED": JSON.stringify(process.env.EPHEMERAL_MACHINES_ENABLED ?? ""),
     // The moment this bundle was built, baked in so Settings can show when the
     // running (precached) PWA was last updated — a freshness signal for a
     // client that keeps working offline off an old cache.

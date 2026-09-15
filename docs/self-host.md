@@ -247,12 +247,19 @@ the endpoints fail closed rather than storing anything.
 cannot be decrypted; the account has to re-enter them. Treat it like
 `RELAY_SECRET` — it lives in `deploy/.env` (mode `600`) and nowhere else.
 
-The feature also needs ephemeral machines enabled. The server gate
-`EPHEMERAL_MACHINES_ENABLED` is on unless set to exactly `0`, but the UI
-requires an explicit `VITE_EPHEMERAL_MACHINES_ENABLED=1`.
+Set the single deployment flag `EPHEMERAL_MACHINES_ENABLED=1` to enable the
+UI and ephemeral launches. Managed compute is available when operator provider
+credentials are configured; BYO-only deployments do not need managed-guest
+attestation. There is no separate managed-compute or UI enable flag.
+For compatibility, leaving the flag unset preserves legacy BYO API behavior,
+but does not opt into the UI or managed compute. Set `0` to block all new launches.
+The former `MANAGED_COMPUTE_ENABLED` and `VITE_EPHEMERAL_MACHINES_ENABLED` flags
+are no longer read. When migrating, note that `1` now opts into managed compute
+as well if operator credentials are present; the old managed-disable flag does
+not override it. All managed production safety prerequisites still apply.
 
 Use the standard `ghcr.io/bivysh/bivy-control-plane:<full-core-sha>` image and
-set `VITE_EPHEMERAL_MACHINES_ENABLED=1` on the **running control-plane container**
+set `EPHEMERAL_MACHINES_ENABLED=1` on the **running control-plane container**
 to expose the UI. The control plane serves an uncached `/runtime-config.js`
 before the PWA starts; no rebuild or additional image is needed. This public
 configuration contains only allowlisted boolean flags, never credentials.
@@ -260,7 +267,7 @@ configuration contains only allowlisted boolean flags, never credentials.
 managed-guest hardening checks remain enforced server-side.
 
 Standalone/static web hosts without this endpoint retain the build-time
-`VITE_EPHEMERAL_MACHINES_ENABLED` option. The runtime script is excluded from
+`EPHEMERAL_MACHINES_ENABLED` option. The runtime script is excluded from
 service-worker precaching so a cached app shell still reads current deployment
 flags on reload. A missing script uses the build default (off in standard
 images); runtime configuration never grants server-side authority.
@@ -277,7 +284,7 @@ create, inspect, and destroy Machines, then configure the control plane:
 
 ```env
 # New managed launches are disabled unless this is exactly 1.
-MANAGED_COMPUTE_ENABLED=1
+EPHEMERAL_MACHINES_ENABLED=1
 MANAGED_PROVIDER_TOKEN_FLY=<operator Fly token>
 
 # Required when NODE_ENV=production. The deployment extension owns spend,
@@ -323,7 +330,9 @@ by an account API, persisted in Postgres, logged, or included in machine
 user-data. Keep it in your deployment secret manager or `deploy/.env` with mode
 `600`, and rotate it like any other infrastructure credential.
 
-Setting `MANAGED_COMPUTE_ENABLED=0` (or removing it) blocks new managed launches.
+Setting `EPHEMERAL_MACHINES_ENABLED=0` blocks new launches in both lanes and
+hides their UI. Removing it also blocks new managed launches, but preserves
+legacy BYO API behavior.
 It does **not** disable teardown, reconciliation, creation-attempt cleanup, or
 orphan sweeps; leave `MANAGED_PROVIDER_TOKEN_FLY` available until every managed
 machine has been destroyed. User-token/BYO configurations are unaffected.

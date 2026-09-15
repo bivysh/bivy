@@ -4,7 +4,7 @@
 // Managed compute lane: the same server-side provisioner as hosted BYO-cloud,
 // launching with an OPERATOR-owned provider token resolved by the config's
 // computeSource. Covers token-source resolution per compute source, the
-// MANAGED_COMPUTE_ENABLED kill switch (gates NEW launches only — teardown and
+// EPHEMERAL_MACHINES_ENABLED kill switch (gates NEW launches only — teardown and
 // creation-retry-abandonment keep running), and that the operator token never
 // leaks into stored records or the audit trail.
 import assert from "node:assert/strict";
@@ -80,9 +80,9 @@ function fakeLauncher(seen: { token?: string; hostedTasks?: boolean; hostedCrede
 
 await test("managedComputeEnabled: default OFF, only exact '1' enables", () => {
   assert.equal(managedComputeEnabled({} as never), false, "unset → off (default)");
-  assert.equal(managedComputeEnabled({ MANAGED_COMPUTE_ENABLED: "1" } as never), true, "=1 → on");
-  assert.equal(managedComputeEnabled({ MANAGED_COMPUTE_ENABLED: "0" } as never), false, "=0 → off");
-  assert.equal(managedComputeEnabled({ MANAGED_COMPUTE_ENABLED: "true" } as never), false, "only exact '1' enables");
+  assert.equal(managedComputeEnabled({ EPHEMERAL_MACHINES_ENABLED: "1" } as never), true, "=1 → on");
+  assert.equal(managedComputeEnabled({ EPHEMERAL_MACHINES_ENABLED: "0" } as never), false, "=0 → off");
+  assert.equal(managedComputeEnabled({ EPHEMERAL_MACHINES_ENABLED: "true" } as never), false, "only exact '1' enables");
 });
 
 await test("managed images: runtime-specific images fall back to the required baseline", () => {
@@ -134,27 +134,26 @@ await test("computeSource survives the store round-trip; junk values are dropped
 });
 
 const PREV = {
-  MANAGED_COMPUTE_ENABLED: process.env.MANAGED_COMPUTE_ENABLED,
-  MANAGED_PROVIDER_TOKEN_FLY: process.env.MANAGED_PROVIDER_TOKEN_FLY,
   EPHEMERAL_MACHINES_ENABLED: process.env.EPHEMERAL_MACHINES_ENABLED,
+  MANAGED_PROVIDER_TOKEN_FLY: process.env.MANAGED_PROVIDER_TOKEN_FLY,
 };
 try {
   delete process.env.EPHEMERAL_MACHINES_ENABLED;
 
   await test("kill switch off: a ready managed account must not plan a launch", async () => {
-    delete process.env.MANAGED_COMPUTE_ENABLED;
+    process.env.EPHEMERAL_MACHINES_ENABLED = "0";
     process.env.MANAGED_PROVIDER_TOKEN_FLY = OPERATOR_TOKEN;
     const { store, acctId } = await managedAccount();
     const plan = await planAutoProvision(store, acctId);
     assert.equal(plan.willProvision, false);
-    assert.match(plan.reason, /MANAGED_COMPUTE_ENABLED/, "reason names the switch");
+    assert.match(plan.reason, /EPHEMERAL_MACHINES_ENABLED/, "reason names the switch");
     const readiness = await hostedExecutionReadiness(store, acctId);
     assert.equal(readiness.ready, false);
-    assert.match(readiness.reason, /MANAGED_COMPUTE_ENABLED/);
+    assert.match(readiness.reason, /deployment emergency switch is off/);
   });
 
   await test("switch on but no operator token: refused with a lane-specific reason", async () => {
-    process.env.MANAGED_COMPUTE_ENABLED = "1";
+    process.env.EPHEMERAL_MACHINES_ENABLED = "1";
     delete process.env.MANAGED_PROVIDER_TOKEN_FLY;
     const { store, acctId } = await managedAccount();
     const plan = await planAutoProvision(store, acctId);
@@ -163,7 +162,7 @@ try {
   });
 
   await test("switch on + operator token: managed account plans a launch with zero user credentials", async () => {
-    process.env.MANAGED_COMPUTE_ENABLED = "1";
+    process.env.EPHEMERAL_MACHINES_ENABLED = "1";
     process.env.MANAGED_PROVIDER_TOKEN_FLY = OPERATOR_TOKEN;
     const { store, acctId } = await managedAccount();
     assert.deepEqual(await planAutoProvision(store, acctId), { willProvision: true, targetConfigId: MANAGED_CONFIG.id, reason: "ready to provision" });
@@ -171,7 +170,7 @@ try {
   });
 
   await test("managed launch forwards technical facts to the operator policy and honors denial", async () => {
-    process.env.MANAGED_COMPUTE_ENABLED = "1";
+    process.env.EPHEMERAL_MACHINES_ENABLED = "1";
     process.env.MANAGED_PROVIDER_TOKEN_FLY = OPERATOR_TOKEN;
     const { store, acctId } = await managedAccount();
     let request: Record<string, unknown> | undefined;
@@ -189,8 +188,8 @@ try {
     });
   });
 
-  await test("user-lane configs ignore the managed switch and still require the user's validated token", async () => {
-    delete process.env.MANAGED_COMPUTE_ENABLED;
+  await test("legacy BYO API behavior is preserved when unset, and operator tokens never replace user credentials", async () => {
+    delete process.env.EPHEMERAL_MACHINES_ENABLED;
     process.env.MANAGED_PROVIDER_TOKEN_FLY = OPERATOR_TOKEN; // present but must not be used for the user lane
     const store = await makeStore();
     const account = await store.findOrCreateAccount("user-lane@example.com");
@@ -201,11 +200,11 @@ try {
     assert.equal(plan.willProvision, false, "an operator token never substitutes for the user's own credential");
     assert.match(plan.reason, /no hosted token for provider fly/);
     await store.setHostedProvisioning(account.id, { enabled: true, providerTokens: { fly: "user-fly-token" }, validatedProviders: { fly: providerCredentialFingerprint("user-fly-token") } });
-    assert.equal((await planAutoProvision(store, account.id)).willProvision, true, "user lane works with the managed switch off");
+    assert.equal((await planAutoProvision(store, account.id)).willProvision, true, "legacy BYO API works when the deployment flag is unset");
   });
 
   await test("managed launch uses the operator token and records the same attempt/audit trail", async () => {
-    process.env.MANAGED_COMPUTE_ENABLED = "1";
+    process.env.EPHEMERAL_MACHINES_ENABLED = "1";
     process.env.MANAGED_PROVIDER_TOKEN_FLY = OPERATOR_TOKEN;
     const { store, acctId } = await managedAccount();
     const seen: { token?: string } = {};
@@ -222,7 +221,7 @@ try {
   });
 
   await test("managed queue launch can adopt a stable automation E2E identity", async () => {
-    process.env.MANAGED_COMPUTE_ENABLED = "1";
+    process.env.EPHEMERAL_MACHINES_ENABLED = "1";
     process.env.MANAGED_PROVIDER_TOKEN_FLY = OPERATOR_TOKEN;
     const { store, acctId } = await managedAccount();
     const seen: { reuseNodeId?: string; reuseRoomKeyB64?: string } = {};
@@ -235,7 +234,7 @@ try {
   });
 
   await test("managed authentication runner is credential-only and never polls task queues", async () => {
-    process.env.MANAGED_COMPUTE_ENABLED = "1";
+    process.env.EPHEMERAL_MACHINES_ENABLED = "1";
     process.env.MANAGED_PROVIDER_TOKEN_FLY = OPERATOR_TOKEN;
     const { store, acctId } = await managedAccount();
     const seen: { token?: string; hostedTasks?: boolean } = {};
@@ -249,7 +248,7 @@ try {
   });
 
   await test("interactive managed launch returns its E2E key and never polls unattended queues", async () => {
-    process.env.MANAGED_COMPUTE_ENABLED = "1";
+    process.env.EPHEMERAL_MACHINES_ENABLED = "1";
     process.env.MANAGED_PROVIDER_TOKEN_FLY = OPERATOR_TOKEN;
     const { store, acctId } = await managedAccount();
     const seen: { token?: string; hostedTasks?: boolean; hostedCredentialCustody?: boolean; hostedCredentialPublisher?: boolean } = {};
@@ -267,7 +266,7 @@ try {
   });
 
   await test("the operator token never appears in stored records, audit, or API-shaped views", async () => {
-    process.env.MANAGED_COMPUTE_ENABLED = "1";
+    process.env.EPHEMERAL_MACHINES_ENABLED = "1";
     process.env.MANAGED_PROVIDER_TOKEN_FLY = OPERATOR_TOKEN;
     const { store, acctId } = await managedAccount();
     await provisionEphemeralForAccount(store, acctId, MANAGED_CONFIG, env, fakeLauncher({}));
@@ -282,7 +281,7 @@ try {
   });
 
   await test("kill switch off: TTL teardown of a managed machine still runs, with the operator token", async () => {
-    delete process.env.MANAGED_COMPUTE_ENABLED; // launches gated OFF
+    process.env.EPHEMERAL_MACHINES_ENABLED = "0"; // both launch lanes gated OFF
     process.env.MANAGED_PROVIDER_TOKEN_FLY = OPERATOR_TOKEN; // cleanup credential stays available
     const { store, acctId } = await managedAccount();
     const machine = {
@@ -314,7 +313,7 @@ try {
   });
 
   await test("kill switch off: a managed creation retry is held, not run and not abandoned", async () => {
-    delete process.env.MANAGED_COMPUTE_ENABLED;
+    process.env.EPHEMERAL_MACHINES_ENABLED = "0";
     process.env.MANAGED_PROVIDER_TOKEN_FLY = OPERATOR_TOKEN;
     const { store, acctId } = await managedAccount();
     await store.putHostedMachineAttempt({
@@ -329,7 +328,7 @@ try {
   });
 
   await test("settled-reap of a managed machine resolves the operator token", async () => {
-    delete process.env.MANAGED_COMPUTE_ENABLED;
+    delete process.env.EPHEMERAL_MACHINES_ENABLED;
     process.env.MANAGED_PROVIDER_TOKEN_FLY = OPERATOR_TOKEN;
     const { store, acctId } = await managedAccount();
     const machine = { id: "fly-settled", provider: "fly", nodeId: "eph-settled", attemptId: "att-settled", setupId: MANAGED_CONFIG.id, createdAt: iso(5 * 60_000), ttlMinutes: 60, status: "running" };
