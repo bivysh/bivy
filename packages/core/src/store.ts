@@ -2122,7 +2122,8 @@ export class SessionStore {
   markLaunchFirstResponse(sessionId: string, at = Date.now()): void {
     this.set({
       sessions: this.state.sessionIndex.sessions.map((session) => session.sessionId === sessionId && session.launchProgress && !session.launchProgress.firstResponseAt
-        ? { ...session, launchProgress: { ...session.launchProgress, firstResponseAt: at } }
+        ? { ...session, launchProgress: { ...session.launchProgress, firstResponseAt: at, failedAt: undefined,
+            checkpoints: { ...session.launchProgress.checkpoints, agent: { state: "done", at } } } }
         : session),
     });
   }

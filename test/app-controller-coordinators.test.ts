@@ -199,6 +199,7 @@ test("ephemeral coordinator restores managed sessions without a device cloud tok
   const coordinator = new EphemeralCoordinator({
     currentNodeId: () => "eph-managed",
     roomKey: () => undefined,
+    nodes: () => [],
     correlations: () => [{ sessionId: "s1", nodeId: "eph-managed", provider: "fly", setupId: "managed-default", computeSource: "managed" }],
     restoreManagedMachine: async (input: unknown) => { events.push(`restore:${JSON.stringify(input)}`); return { nodeId: "eph-managed" } as any; },
     connectToNode: async (nodeId: string) => { events.push(`connect:${nodeId}`); },
@@ -211,6 +212,17 @@ test("ephemeral coordinator restores managed sessions without a device cloud tok
     'restore:{"configId":"managed-default","nodeId":"eph-managed","sessionId":"s1","requestId":"restore:s1:eph-managed:legacy"}',
     "connect:eph-managed",
   ]);
+});
+
+test("enrolled managed nodes reconnect instead of being restored, even while offline", () => {
+  for (const online of [true, false]) {
+    const coordinator = new EphemeralCoordinator({
+      currentNodeId: () => "eph-managed", direct: () => false,
+      nodes: () => [{ id: "eph-managed", online }],
+      correlations: () => [{ nodeId: "eph-managed", computeSource: "managed" }],
+    } as any);
+    assert.equal(coordinator.isCurrentNodeResumable(), false);
+  }
 });
 
 test("account coordinator refreshes both automation projections after cancellation", async () => {

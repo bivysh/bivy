@@ -146,6 +146,7 @@ import {
   type RuntimeInfo,
   type ServerEvent,
   type Transport,
+  type TransportHandlers,
   type LocalStore,
   type LocalModelDiscoveryResult,
   type LocalModelEndpointResult,
@@ -680,8 +681,8 @@ export class AppController {
     }
   }
 
-  private buildTransport(): Transport {
-    const handlers = {
+  private buildTransportHandlers(): TransportHandlers {
+    return {
       onEvent: (event: ServerEvent) => {
         const type = String(event.type || "");
         // Settle any save() awaiting this reply (see awaitAck) before anything
@@ -754,6 +755,14 @@ export class AppController {
         const before = this.store.getState();
         const appliedEvent = this.eventWithNodeScope(event);
         this.store.apply(appliedEvent);
+        if (appliedEvent.type === "session.error" && appliedEvent.sessionId) {
+          const session = this.store.getState().sessionIndex.sessions.find((entry) => entry.sessionId === appliedEvent.sessionId);
+          if (session?.launchProgress && !session.launchProgress.firstResponseAt) {
+            const error = typeof appliedEvent.error === "string" ? appliedEvent.error : "The agent could not respond. Check its model and credentials.";
+            this.store.updateLaunchCheckpoint(session.sessionId, "agent", "failed", error);
+            this.store.failPendingSession(session.sessionId);
+          }
+        }
         const activeAfter = this.store.getState().activeSession;
         if (
           activeAfter.activeSessionId &&
@@ -792,6 +801,10 @@ export class AppController {
         this.store.setError(message);
       },
     };
+  }
+
+  private buildTransport(): Transport {
+    const handlers = this.buildTransportHandlers();
     return this.direct
       ? new DirectTransport({ bootstrap: new URLSearchParams(location.search).get("bootstrap") || "", handlers })
       : new RelayTransport({ store: this.local, handlers });
@@ -2355,7 +2368,6 @@ export class AppController {
     };
     log("Machine accepted. Waiting for its secure Bivy service to come online…");
     this.startBootProgress(nodeId, provisionalId, log);
-    this.pollBootstrapStatus(nodeId, provisionalId, log);
 
     // RelayTransport reads `cur` from its store. Scope only that property to the
     // new node; credentials and room keys still come from the normal local store.
@@ -2364,18 +2376,27 @@ export class AppController {
       set: (target, property, value, receiver) => property === "cur" ? true : Reflect.set(target, property, value, receiver),
     }) as LocalStore;
     let transport: Transport;
+    let adoptedHandlers: TransportHandlers | undefined;
+    let online = false;
+    let credentialsReady = false;
+    const createWhenReady = () => {
+      if (online && (credentialsReady || task.config.computeSource !== "managed") && this.pendingLaunches.has(provisionalId)) void transport.send(task.prompt.frame);
+    };
     transport = new RelayTransport({
       store: scopedStore,
       handlers: {
         onStatus: (status) => {
-          if (status !== "online") return;
+          if (adoptedHandlers) { adoptedHandlers.onStatus(status); return; }
+          online = status === "online";
+          if (!online) return;
           log(`${task.config.name} is online. Preparing credentials, repository, and agent…`);
           this.store.updateLaunchCheckpoint(provisionalId, "service", "done");
-          this.store.updateLaunchCheckpoint(provisionalId, "credentials", "active");
+          this.store.updateLaunchCheckpoint(provisionalId, "credentials", credentialsReady ? "done" : "active");
           this.clearBootProgress(nodeId);
-          void transport.send(task.prompt.frame);
+          createWhenReady();
         },
         onEvent: (event) => {
+          if (adoptedHandlers) { adoptedHandlers.onEvent(event); return; }
           if (event.type === "session.error") {
             this.failPendingLaunch(provisionalId, String(event.error || "Session creation failed."));
             return;
@@ -2396,19 +2417,27 @@ export class AppController {
           // subsequent session.error is lost with the temporary transport.
           if (
             event.type === "session.user_message" &&
-            task.promptSent &&
+            (task.promptSent || task.promptSending) &&
             event.sessionId === task.sessionId &&
             event.clientMessageId === task.prompt.clientMessageId
           ) {
-            void this.finishPendingLaunch(provisionalId, String(task.sessionId), transport);
+            void this.finishPendingLaunch(provisionalId, String(task.sessionId), transport, () => {
+              adoptedHandlers = this.buildTransportHandlers();
+              return adoptedHandlers;
+            }, event);
           }
         },
         onError: (message) => {
+          if (adoptedHandlers) { adoptedHandlers.onError?.(message); return; }
           if (!/^node offline$/i.test(message.trim())) log(`Connection retry: ${message}`);
         },
       },
     });
     task.transport = transport;
+    this.pollBootstrapStatus(nodeId, provisionalId, log, () => {
+      credentialsReady = true;
+      createWhenReady();
+    });
     void transport.connect();
   }
 
@@ -2427,10 +2456,12 @@ export class AppController {
       // dedupe prevents a duplicate turn. Merely resolving transport.send is not
       // delivery confirmation and must not consume the preserved first prompt.
       await transport.send({ kind: "prompt", sessionId, text: task.prompt.text, clientMessageId: task.prompt.clientMessageId, attachments: task.prompt.attachments });
+      if (!this.pendingLaunches.has(provisionalId)) return;
       task.promptSent = true;
       task.updatedAt = new Date().toISOString();
       await this.pendingLaunchStore.put(task);
     } catch (error) {
+      if (!this.pendingLaunches.has(provisionalId)) return;
       task.logs.push(`First-message delivery retry: ${(error as Error)?.message || error}`);
       task.updatedAt = new Date().toISOString();
       await this.pendingLaunchStore.put(task);
@@ -2445,24 +2476,40 @@ export class AppController {
     }
   }
 
-  private async finishPendingLaunch(provisionalId: string, sessionId: string, transport: Transport): Promise<void> {
+  private async finishPendingLaunch(provisionalId: string, sessionId: string, transport: Transport, adopt: () => TransportHandlers, acknowledgement: ServerEvent): Promise<void> {
     const task = this.pendingLaunches.get(provisionalId);
     const nodeId = task?.machine?.nodeId;
     if (!task || !nodeId) return;
     this.store.updateLaunchCheckpoint(provisionalId, "message", "done");
-    for (const followup of task.followups) {
-      await transport.send({ kind: "prompt", sessionId, ...followup });
-    }
     this.clearBootProgress(nodeId);
     this.pendingLaunches.delete(provisionalId);
-    await this.pendingLaunchStore.remove(provisionalId);
+    // Do not yield between acknowledgement and connection adoption: the runtime
+    // can emit its first reply (or error) immediately after accepting the prompt.
+    void this.pendingLaunchStore.remove(provisionalId).catch(() => {});
     if (this.pendingPrompt?.provisionalId === provisionalId) this.pendingPrompt = null;
     this.store.completePendingSession(provisionalId, sessionId, nodeId);
     const wasOpen = this.store.getState().activeSession.activeSessionId === sessionId;
-    if (wasOpen) this.openSessionOnNode(sessionId, undefined, nodeId);
-    // Keep the transport alive long enough to flush its sealed frames, then let
-    // the normal account index/main connection own the now-real session.
-    setTimeout(() => transport.close(), 1000);
+    if (wasOpen) {
+      this.transport.close();
+      this.local.cur = nodeId;
+      this.store.setCurrentNode(nodeId);
+      this.transport = transport;
+      const handlers = adopt();
+      this.pendingCrossNodeOpen = { sessionId };
+      navigate({ kind: "session", id: sessionId });
+      this.store.setStatus("connecting");
+      handlers.onStatus("online");
+      handlers.onEvent(acknowledgement);
+      // Bootstrap catalog replies went to the launch-only listener. Refresh them
+      // now that this connection owns the visible chat and its model picker.
+      this.listRuntimes();
+      this.listProviders();
+      this.getNodeSettings();
+    }
+    for (const followup of task.followups) {
+      await transport.send({ kind: "prompt", sessionId, ...followup });
+    }
+    if (!wasOpen) setTimeout(() => transport.close(), 1000);
     setTimeout(() => this.refreshSessions(), 1500);
   }
 
@@ -2506,31 +2553,41 @@ export class AppController {
     this.bootstrapPhaseByNode.delete(nodeId);
   }
 
-  private pollBootstrapStatus(nodeId: string, provisionalId: string, log: (message: string) => void): void {
+  private pollBootstrapStatus(nodeId: string, provisionalId: string, log: (message: string) => void, onReady: () => void): void {
     const labels: Record<string, string> = {
       booting: "The machine booted and cloud-init started.",
       installing: "Cloud-init is installing Bivy…",
       starting: "Bivy is installed. Starting its secure service…",
-      ready: "The secure Bivy service and encrypted credentials are ready.",
+      ready: "The secure Bivy service is ready.",
       failed: "Cloud-init reported that the Bivy install failed.",
     };
+    let readinessReported = false;
     const poll = async () => {
       const task = this.pendingLaunches.get(provisionalId);
       if (!task || task.machine?.nodeId !== nodeId) return;
       try {
         const nodes = await fetchAccountNodes(this.local);
+        this.store.setNodes(nodes);
         const phase = nodes.find((n) => n.id === nodeId)?.bootstrapStatus?.phase;
         if (phase && phase !== this.bootstrapPhaseByNode.get(nodeId)) {
           this.bootstrapPhaseByNode.set(nodeId, phase);
           log(labels[phase] || `Bootstrap: ${phase}`);
-          if (phase === "ready") {
-            this.store.updateLaunchCheckpoint(provisionalId, "service", "done");
-            this.store.updateLaunchCheckpoint(provisionalId, "credentials", "done");
-          }
+          if (phase === "ready") this.store.updateLaunchCheckpoint(provisionalId, "service", "done");
           if (phase === "failed") this.failPendingLaunch(provisionalId, labels.failed!);
         }
+        // /nodes marks bootstrap ready on heartbeat, before model-auth hydration.
+        // Managed sessions need the separate, node-confirmed credential milestone.
+        const credentialsReady = task.config.computeSource === "managed"
+          ? Boolean((await fetchHostedMachines(this.local)).find((machine) => machine.nodeId === nodeId)?.milestones?.credentialsReadyAt)
+          : phase === "ready";
+        if (credentialsReady && !readinessReported && this.pendingLaunches.has(provisionalId) && task.phase !== "failed") {
+          readinessReported = true;
+          this.store.updateLaunchCheckpoint(provisionalId, "credentials", "done");
+          onReady();
+        }
       } catch {
-        // The relay connection remains authoritative; status polling is additive.
+        // Retry registry reads: relay presence alone does not establish that a
+        // managed node has finished loading its encrypted model credentials.
       }
       if (this.pendingLaunches.has(provisionalId)) setTimeout(poll, 3000);
     };
@@ -3408,7 +3465,7 @@ export class AppController {
   }
   isCurrentNodeResumable(): boolean { return this.ephemeralCoordinator.isCurrentNodeResumable(); }
   private shouldAutoResume(): boolean {
-    return this.isCurrentNodeResumable() && !this.resumingNode.has(this.local.cur);
+    return this.store.getState().connection.status !== "online" && this.isCurrentNodeResumable() && !this.resumingNode.has(this.local.cur);
   }
   /** Bring the current session's node back: `reprovisionEphemeral` self-selects
    *  wake (suspend providers) vs rebuild (destroy providers). Guarded so repeated

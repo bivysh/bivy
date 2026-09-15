@@ -548,7 +548,11 @@ export function createPendingEphemeralLaunchStore(
       }
     },
     async put(launch) {
-      await backend.put(launch.id, launch);
+      // Controllers also hold live transports/retry state on the in-memory task.
+      // Persist only the durable receipt; functions/sockets cannot be cloned by
+      // IndexedDB and transport internals must not enter the saved launch.
+      const { id, config, prompt, followups, logs, phase, machine, createdAt, updatedAt } = launch;
+      await backend.put(id, { id, config, prompt, followups, logs, phase, machine, createdAt, updatedAt });
     },
     async remove(id) {
       await backend.delete(id);
