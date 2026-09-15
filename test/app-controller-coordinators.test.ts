@@ -180,6 +180,18 @@ test("session coordinator owns draft creation ordering and first prompt framing"
   assert.equal(pending.frame.kind, "session.new");
   assert.equal(pending.frame.title, "hello");
   assert.deepEqual(events, ["message", "session.new"]);
+
+  events.length = 0;
+  pending = undefined;
+  let launch: any;
+  workflow.draftEphemeralRunner = () => ({ id: "cloud", provider: "fly" });
+  workflow.startEphemeralLaunch = (id: string, prompt: any) => { launch = { id, prompt }; events.push("launch"); };
+  coordinator.sendPrompt("Cloud prompt");
+  assert.equal(pending, undefined, "the regular connection must not also own the Cloud prompt");
+  assert.equal(launch.id, "starting-r1");
+  assert.equal(launch.prompt.text, "Cloud prompt");
+  assert.equal(launch.prompt.clientMessageId, "m1");
+  assert.deepEqual(events, ["message", "launch"]);
 });
 
 test("ephemeral coordinator assigns queue work only after launch", async () => {

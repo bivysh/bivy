@@ -256,6 +256,8 @@ export class AppController {
    *  reconnect (mobile Safari can drop the reply while backgrounded) — the node
    *  dedupes by requestId, so the retry adopts the same session rather than
    *  creating a duplicate. See retryPendingSessionNew / maybeFlushPendingPrompt. */
+  private transportGeneration = 0;
+  private pendingLaunchRestoration: Promise<void> = Promise.resolve();
   private pendingPrompt: { text: string; requestId: string; clientMessageId: string; attachments?: PromptAttachment[]; frame: Command; provisionalId?: string } | null = null;
   /** Ephemeral cold starts outlive the pane that launched them. Each first
    *  message gets a sidebar placeholder immediately, and its launch continues
@@ -361,8 +363,8 @@ export class AppController {
     });
     this.sessionCoordinator = new SessionOrchestrator({
       reportForkProgress: (message) => this.store.setForkProgress({ status: "working", message }),
-      send: (command) => { void this.transport.send(command); },
-      sendRequest: (command) => { void this.transport.send(command); },
+      send: (command) => { this.sendToCurrentNode(command); },
+      sendRequest: (command) => { this.sendToCurrentNode(command); },
       createRequestId: requestId,
       createClientMessageId: clientMessageId,
       currentNodeId: () => this.local.cur,
@@ -434,13 +436,13 @@ export class AppController {
         }
         return state.activeSession.activeSessionId;
       },
-      isPendingLaunch: (id) => this.pendingLaunches.has(id),
+      isPendingLaunch: (id) => this.isProvisionalSessionId(id),
       openSession: (sessionId, path) => {
         const row = this.store.getState().sessionIndex.sessions.find((session) => session.sessionId === sessionId);
         this.openSession(sessionId, path ?? row?.path);
       },
       sessionIsSaved: (id) => this.store.getState().sessionIndex.sessions.some((session) => session.sessionId === id && session.status === "saved"),
-      appendPendingLaunchFollowup: (id, prompt) => { this.pendingLaunches.get(id)?.followups.push(prompt); },
+      appendPendingLaunchFollowup: (id, prompt) => { void this.appendLaunchFollowup(id, prompt); },
       addUserMessage: (text, id, attachments) => this.store.addUserMessage(text, id, attachments),
       mustQueue: (id) => this.followupCoordinator.mustQueue(id),
       enqueueFollowup: (id, prompt) => this.store.enqueueFollowup(id, prompt, Date.now()),
@@ -471,7 +473,7 @@ export class AppController {
       resolveSessionId: (id) => id || this.store.getState().activeSession.activeSessionId,
     });
     this.credentialsModelsCoordinator = new CredentialsModelsCoordinator({
-      send: (command) => { void this.transport.send(command); },
+      send: (command) => { this.sendToCurrentNode(command); },
       awaitAck: (command, timeoutMs) => this.awaitAck(command, timeoutMs),
       selectModelLocally: (model) => {
         this.store.setCurrentModelLocal(model);
@@ -647,7 +649,9 @@ export class AppController {
     this.seedSessionsFromCache();
     this.installSessionCachePersist();
     this.installFollowupAutoDrain();
-    void this.restorePendingLaunches();
+    this.pendingLaunchRestoration = this.restorePendingLaunches().catch(() => {
+      this.store.setError("Couldn't load saved Cloud startups.");
+    });
     if (!this.direct && this.local.s) void this.refreshAccountSessions();
     // Seed the reactive auth flag from the token we may have just consumed above,
     // so the very first render lands on the right surface (sign-in vs. shell).
@@ -682,8 +686,10 @@ export class AppController {
   }
 
   private buildTransportHandlers(): TransportHandlers {
+    const generation = ++this.transportGeneration;
     return {
       onEvent: (event: ServerEvent) => {
+        if (generation !== this.transportGeneration) return;
         const type = String(event.type || "");
         // Settle any save() awaiting this reply (see awaitAck) before anything
         // else — harmless no-op when the requestId doesn't match a pending save
@@ -752,6 +758,18 @@ export class AppController {
         }
         // Fork/promotion request correlation belongs to the session workflow.
         if (this.sessionCoordinator.handleEvent(event)) return;
+        // A local launch placeholder is never a daemon session. Ignore late
+        // replies to invalid requests from an older client instead of turning
+        // a healthy startup into a failed conversation.
+        if (typeof event.sessionId === "string" && this.isProvisionalSessionId(event.sessionId)) return;
+        // Credential setup can leave the regular connection on the same node
+        // as the launch connection. Its broadcast replies still belong solely
+        // to the launch owner until first-message acknowledgement/adoption.
+        if ([...this.pendingLaunches.values()].some(task =>
+          (event.requestId && event.requestId === task.prompt.requestId) ||
+          (task.sessionId && event.sessionId === task.sessionId))) return;
+        const activeId = this.store.getState().activeSession.activeSessionId;
+        if (event.type === "session.created" && activeId && this.pendingLaunches.get(activeId)?.machine?.nodeId === this.local.cur) return;
         const before = this.store.getState();
         const appliedEvent = this.eventWithNodeScope(event);
         this.store.apply(appliedEvent);
@@ -781,6 +799,7 @@ export class AppController {
         this.reconcileSessionList(appliedEvent);
       },
       onStatus: (status: ConnectionStatus) => {
+        if (generation !== this.transportGeneration) return;
         const before = this.store.getState();
         const prev = before.connection.status;
         this.store.setStatus(status);
@@ -798,6 +817,7 @@ export class AppController {
         }
       },
       onError: (message: string) => {
+        if (generation !== this.transportGeneration) return;
         this.store.setError(message);
       },
     };
@@ -1377,6 +1397,29 @@ export class AppController {
     return removePairedDevice(this.local, deviceId);
   }
 
+  private isProvisionalSessionId(id: string): boolean {
+    return id.startsWith("starting-") || this.pendingLaunches.has(id) || this.store.getState().sessionIndex.sessions.some(session => session.sessionId === id && session.pendingLaunch);
+  }
+
+  private sendToCurrentNode(command: Command): void {
+    // Fence every session-scoped command, not just models.list. Reconnect,
+    // foreground refresh, credential setup and pickers all share this boundary.
+    if (typeof command.sessionId === "string" && this.isProvisionalSessionId(command.sessionId)) return;
+    void this.transport.send(command);
+  }
+
+  private async appendLaunchFollowup(id: string, prompt: { text: string; clientMessageId: string; attachments?: PromptAttachment[] }): Promise<void> {
+    if (!this.pendingLaunches.has(id)) await this.pendingLaunchRestoration;
+    const task = this.pendingLaunches.get(id);
+    if (!task) {
+      this.store.setError("Couldn't find the saved Cloud startup. Your message has not been sent.");
+      return;
+    }
+    task.followups.push(prompt);
+    try { await this.pendingLaunchStore.put(task); }
+    catch { this.store.setError("Couldn't save the queued message. Keep this page open until startup finishes."); }
+  }
+
   private send(command: Command): void {
     this.sessionCoordinator.send(command);
   }
@@ -1396,6 +1439,9 @@ export class AppController {
    * failure (a `*.error`-suffixed type rejects; anything else resolves).
    */
   private awaitAck(command: Command, timeoutMs = 10000): Promise<ServerEvent> {
+    if (typeof command.sessionId === "string" && this.isProvisionalSessionId(command.sessionId)) {
+      return Promise.reject(new Error("Cloud startup hasn't created a conversation yet."));
+    }
     const rid = requestId();
     return new Promise<ServerEvent>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -1403,7 +1449,7 @@ export class AppController {
         reject(new Error("Timed out waiting for the machine to respond."));
       }, timeoutMs);
       this.pendingAcks.set(rid, { resolve, reject, timer });
-      void this.transport.send({ ...command, requestId: rid });
+      this.sendToCurrentNode({ ...command, requestId: rid });
     });
   }
 
@@ -2354,7 +2400,6 @@ export class AppController {
     if (opts.navigate !== false) navigate({ kind: "session", id: provisionalId });
     this.store.beginOpen(provisionalId);
     this.store.addUserMessage(task.prompt.text, task.prompt.clientMessageId, task.prompt.attachments);
-    this.pendingPrompt = task.prompt;
   }
 
   /** Connect a freshly-created runner on its own small transport. This is what
@@ -2380,6 +2425,7 @@ export class AppController {
     }) as LocalStore;
     let transport: Transport;
     let adoptedHandlers: TransportHandlers | undefined;
+    const ownsLaunch = () => this.pendingLaunches.get(provisionalId) === task && task.transport === transport;
     let online = false;
     let credentialsReady = false;
     const createWhenReady = () => {
@@ -2395,6 +2441,7 @@ export class AppController {
       handlers: {
         onStatus: (status) => {
           if (adoptedHandlers) { adoptedHandlers.onStatus(status); return; }
+          if (!ownsLaunch()) return;
           online = status === "online";
           if (!online) return;
           task.modelApproved = false;
@@ -2409,6 +2456,7 @@ export class AppController {
         },
         onEvent: (event) => {
           if (adoptedHandlers) { adoptedHandlers.onEvent(event); return; }
+          if (!ownsLaunch()) return;
           const reportedModel = (event.type === "models.list" ? event.current : event.model) as ModelInfo | undefined;
           if (event.type === "session.error" && task.sessionId && !task.modelApproved && event.sessionId === task.sessionId) {
             task.modelSelecting = undefined;
@@ -2482,6 +2530,7 @@ export class AppController {
         },
         onError: (message) => {
           if (adoptedHandlers) { adoptedHandlers.onError?.(message); return; }
+          if (!ownsLaunch()) return;
           if (!/^node offline$/i.test(message.trim())) log(`Connection retry: ${message}`);
         },
       },
@@ -2586,11 +2635,12 @@ export class AppController {
     this.store.completePendingSession(provisionalId, sessionId, nodeId);
     const wasOpen = this.store.getState().activeSession.activeSessionId === sessionId;
     if (wasOpen) {
+      // Retire old callbacks before close() can synchronously report an error.
+      const handlers = adopt();
       this.transport.close();
       this.local.cur = nodeId;
       this.store.setCurrentNode(nodeId);
       this.transport = transport;
-      const handlers = adopt();
       this.pendingCrossNodeOpen = { sessionId };
       navigate({ kind: "session", id: sessionId });
       this.store.setStatus("connecting");
@@ -2613,7 +2663,9 @@ export class AppController {
     const task = this.pendingLaunches.get(provisionalId);
     if (!task) return;
     if (task.machine?.nodeId) this.clearBootProgress(task.machine.nodeId);
-    task.transport?.close();
+    const transport = task.transport;
+    task.transport = undefined;
+    transport?.close();
     task.logs.push(`Startup failed: ${message}`);
     this.store.setLaunchModelChoice(provisionalId, undefined);
     task.modelQuery = undefined;
@@ -2703,6 +2755,8 @@ export class AppController {
       this.pendingLaunches.set(launch.id, launch);
       this.store.persistPendingSession(launch.id, launch.prompt.text, false, launch.config.name, Date.parse(launch.createdAt) || Date.now());
       if (launch.machine?.nodeId && launch.phase !== "failed") {
+        this.store.retryPendingSession(launch.id);
+        this.store.setLaunchModelChoice(launch.id, undefined);
         this.store.updateLaunchCheckpoint(launch.id, "account", "done");
         this.store.updateLaunchCheckpoint(launch.id, "capacity", "done");
         this.store.updateLaunchCheckpoint(launch.id, "machine", "done");
@@ -2728,8 +2782,9 @@ export class AppController {
   async retryPendingLaunch(id: string): Promise<void> {
     const task = this.pendingLaunches.get(id);
     if (!task) return;
-    task.transport?.close();
+    const transport = task.transport;
     task.transport = undefined;
+    transport?.close();
     task.logs.push("Retrying startup…");
     task.phase = task.machine?.nodeId ? "booting" : "provisioning";
     task.updatedAt = new Date().toISOString();
@@ -2744,8 +2799,9 @@ export class AppController {
   async retryPendingLaunchOnFreshMachine(id: string): Promise<void> {
     const task = this.pendingLaunches.get(id);
     if (!task) return;
-    task.transport?.close();
+    const transport = task.transport;
     task.transport = undefined;
+    transport?.close();
     const nodeId = task.machine?.nodeId;
     if (nodeId) await this.destroyHostedMachine(nodeId).catch(() => {});
     task.machine = undefined;
@@ -2761,9 +2817,9 @@ export class AppController {
 
   async dismissPendingLaunch(id: string): Promise<void> {
     const task = this.pendingLaunches.get(id);
+    this.pendingLaunches.delete(id);
     task?.transport?.close();
     if (task?.machine?.nodeId) this.clearBootProgress(task.machine.nodeId);
-    this.pendingLaunches.delete(id);
     await this.pendingLaunchStore.remove(id);
     this.store.dismissPendingSession(id);
     if (this.store.getState().activeSession.activeSessionId == null) this.newSession();
@@ -2905,11 +2961,17 @@ export class AppController {
 
   /** Pick a model. Live session → select now; draft → keep local for session.new. */
   chooseModel(model: ModelInfo): void {
-    this.credentialsModelsCoordinator.selectModel(model, this.store.getState().activeSession.activeSessionId);
+    const id = this.store.getState().activeSession.activeSessionId;
+    if (id && this.isProvisionalSessionId(id)) {
+      void this.chooseLaunchModel(id, model);
+      return;
+    }
+    this.credentialsModelsCoordinator.selectModel(model, id);
   }
 
   setThinkingLevel(level: string): void {
     const sessionId = this.store.getState().activeSession.activeSessionId ?? undefined;
+    if (sessionId && this.isProvisionalSessionId(sessionId)) return;
     this.store.setThinkingLevel(level);
     this.send({ kind: "thinking.set_level", level, sessionId });
   }
@@ -3494,6 +3556,7 @@ export class AppController {
    * even with no device online. Provider destroy is idempotent/404-tolerant, so
    * these paths race harmlessly; TTL remains the final backstop. */
   private maybeTeardownFinishedEphemeral(sessionId: string): Promise<void> {
+    if (this.isProvisionalSessionId(sessionId) || [...this.pendingLaunches.values()].some(task => task.sessionId === sessionId)) return Promise.resolve();
     return this.ephemeralCoordinator.teardownFinishedSession(sessionId);
   }
 
@@ -3530,6 +3593,7 @@ export class AppController {
    *  launched, so it survives the node's teardown/unenroll (Gap 1). Deduped per
    *  (node, session); updates the local cache so an immediate rebuild sees it. */
   private async recordSessionCorrelation(sessionId: string, machine: EphemeralMachine): Promise<void> {
+    if (this.isProvisionalSessionId(sessionId)) return;
     if (this.direct || !this.local.s || !machine.nodeId || !sessionId) return;
     const dedupe = `${machine.nodeId}:${sessionId}`;
     if (this.correlatedSessions.has(dedupe)) return;
@@ -3778,13 +3842,13 @@ export class AppController {
    * prompt. No-op once the session has bound (pendingPrompt cleared).
    */
   private retryPendingSessionNew(): void {
-    if (!this.pendingPrompt) return;
+    if (!this.pendingPrompt || this.pendingPrompt.provisionalId || [...this.pendingLaunches.values()].some(task => task.prompt.requestId === this.pendingPrompt?.requestId)) return;
     if (this.store.getState().activeSession.activeSessionId) return;
     this.send(this.pendingPrompt.frame);
   }
 
   private maybeFlushPendingPrompt(event: { type?: string; requestId?: string; sessionId?: string }): void {
-    if (!this.pendingPrompt) return;
+    if (!this.pendingPrompt || this.pendingPrompt.provisionalId || [...this.pendingLaunches.values()].some(task => task.prompt.requestId === this.pendingPrompt?.requestId)) return;
     if (event.type !== "session.history") return;
     // Must be *our* session.new response, not any other session.history event
     // (e.g. opening an unrelated existing session, or a post-reconnect history
@@ -4026,6 +4090,13 @@ export class AppController {
   }
 
   async deleteSession(sessionId: string, path?: string): Promise<void> {
+    if (this.isProvisionalSessionId(sessionId)) {
+      await this.pendingLaunchRestoration;
+      if (this.pendingLaunches.has(sessionId)) {
+        await this.dismissPendingLaunch(sessionId);
+        return;
+      }
+    }
     const correlation = this.ephemeralCorrelations.find((entry) => entry.sessionId === sessionId);
     const online = correlation && this.store.getState().connection.nodes.some((node) => node.id === correlation.nodeId && node.online);
     if (!this.direct && correlation && !online) {

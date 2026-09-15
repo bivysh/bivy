@@ -546,7 +546,7 @@ export function Composer({
   }
 
   const modelLabel = destinationCatalogPending
-    ? "Choose during startup"
+    ? "Choose model"
     : state.catalogs.currentModel?.label || state.catalogs.currentModel?.id || "Choose a model";
   const agentLabel = String(currentRuntime?.displayName || currentRuntime?.name || currentRuntime?.id || state.catalogs.currentAgentName || "Choose an agent");
   // The repo pill also carries the chosen remote branch (#466) — picked from
@@ -833,6 +833,7 @@ export function Composer({
               <button
                 type="button"
                 className="btn sm ghost model-pill"
+                data-pending-model={destinationCatalogPending || undefined}
                 onClick={() => { if (modelSelectable) setPicker("model"); }}
                 disabled={!modelSelectable}
                 title={modelSelectable ? "Model" : destinationCatalogPending ? "Choose a model after startup, before your saved first message is sent" : "This agent uses its own default model"}

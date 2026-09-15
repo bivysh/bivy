@@ -898,6 +898,8 @@ button.sheet-action:last-child { border-bottom: 0; }
 .composer-meta > .btn {
   gap: var(--space-1); min-width: 0; flex: 0 1 auto; color: var(--ink);
 }
+/* Keep the startup action readable beside a long agent name on phones. */
+.composer-meta:has([data-pending-model]) { flex-wrap: wrap; }
 .pill-glyph { color: var(--accent); flex: none; display: inline-flex; align-items: center; }
 .pill-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Glyph-only / short controls keep their natural width; only the long

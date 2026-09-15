@@ -197,7 +197,8 @@ export class SessionOrchestrator {
     if (runner) {
       const provisionalId = `starting-${requestId}`;
       prompt.provisionalId = provisionalId;
-      port.setPendingPrompt(prompt);
+      // The launch owns this prompt until its exact acknowledgement. The
+      // normal chat workflow must not flush it on a broadcast creation reply.
       port.addUserMessage(trimmed, clientMessageId, files);
       port.startEphemeralLaunch(provisionalId, prompt, runner);
       return;
