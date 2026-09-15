@@ -1,10 +1,24 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import assert from "node:assert/strict";
-import { createPgMemStore } from "../src/pg-mem-store.js";
+import type pg from "pg";
+import { newDb } from "pg-mem";
+import { PostgresStore } from "../src/postgres-store.js";
 import { ConcurrentAttemptUpdateError } from "../src/store.js";
 
-const store = createPgMemStore();
+const { Pool } = newDb().adapters.createPg();
+const pool = new Pool();
+const query = pool.query.bind(pool);
+pool.query = (text: string, params?: unknown[]) => {
+  if (params?.length) {
+    // pg-mem accepts unused bind slots; PostgreSQL rejects their uninferred types.
+    // Validate the actual emitted queries, not just their in-memory effects.
+    const used = [...new Set([...text.matchAll(/\$(\d+)/g)].map((match) => Number(match[1])))].sort((a, b) => a - b);
+    assert.deepEqual(used, params.map((_, index) => index + 1), "every SQL bind parameter must be referenced");
+  }
+  return query(text, params);
+};
+const store = new PostgresStore("", pool as unknown as pg.Pool);
 await store.init();
 const account = await store.findOrCreateAccount("ephemeral-attempts@example.com");
 const now = new Date().toISOString();
@@ -66,11 +80,14 @@ console.log("✓ durable machine attempts survive gaps, drive fleet scans, and u
   assert.equal(readByPassB?.version, 1);
 
   // Pass A wins: writes with the version it read.
+  const updatedAt = new Date(Date.now() + 1000).toISOString();
   const afterA = await store.putHostedMachineAttempt(
-    { ...readByPassA!, state: "deleting", updatedAt: new Date().toISOString() },
+    { ...readByPassA!, state: "deleting", createdAt: updatedAt, updatedAt },
     { expectedVersion: readByPassA!.version },
   );
   assert.equal(afterA.state, "deleting");
+  assert.equal(afterA.createdAt, at, "fenced updates preserve the original creation timestamp");
+  assert.equal(afterA.updatedAt, updatedAt);
   assert.equal(afterA.version, 2, "version increments on a fenced write");
 
   // Pass B loses: it still holds the stale version-1 read and must be
