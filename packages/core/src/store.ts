@@ -146,6 +146,7 @@ export interface SessionLaunchProgress {
     state: SessionLaunchCheckpointState;
     at?: number;
     error?: string;
+    errorCode?: string;
   }>>;
 }
 
@@ -2096,6 +2097,7 @@ export class SessionStore {
     id: SessionLaunchCheckpointId,
     state: SessionLaunchCheckpointState,
     error?: string,
+    errorCode?: string,
   ): void {
     const at = Date.now();
     this.set({
@@ -2106,8 +2108,10 @@ export class SessionStore {
               ...session.launchProgress,
               ...(state === "failed" ? { failedAt: at } : {}),
               checkpoints: {
-                ...session.launchProgress.checkpoints,
-                [id]: { state, at, ...(error ? { error } : {}) },
+                ...Object.fromEntries(Object.entries(session.launchProgress.checkpoints).map(([key, checkpoint]) => [
+                  key, state === "failed" && checkpoint?.state === "active" ? { ...checkpoint, state: "waiting" as const } : checkpoint,
+                ])),
+                [id]: { state, at, ...(error ? { error } : {}), ...(errorCode ? { errorCode } : {}) },
               },
             },
           }

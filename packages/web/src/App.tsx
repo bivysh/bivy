@@ -799,7 +799,7 @@ export function App() {
         {/* The connected node is running an older Bivy than the latest release.
             One tap runs `bivy update` on the node (it restarts on the new build;
             this banner clears itself once the socket reconnects up to date). */}
-        {state.connection.nodeUpdate && (
+        {state.connection.nodeUpdate && !activeSession?.pendingLaunch && (
           <div className="banner" data-tone="accent" role="status">
             <span className="banner-text">
               This machine runs Bivy {state.connection.nodeUpdate.current} — {state.connection.nodeUpdate.latest} is available.
@@ -886,6 +886,13 @@ export function App() {
                 onSetupCredentials={async () => {
                   try {
                     await controller.setupManagedCredentials();
+                  } catch (error) {
+                    controller.store.setError(error instanceof Error ? error.message : String(error));
+                  }
+                }}
+                onRetryLaunch={async () => {
+                  try {
+                    await controller.retryPendingLaunch(activeSession.sessionId);
                   } catch (error) {
                     controller.store.setError(error instanceof Error ? error.message : String(error));
                   }

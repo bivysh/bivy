@@ -2243,7 +2243,9 @@ export class AppController {
       if (this.pendingPrompt?.provisionalId === provisionalId) this.pendingPrompt = null;
       if (e instanceof ManagedLaunchError && e.code === "managed_credentials_required") {
         this.store.updateLaunchCheckpoint(provisionalId, "capacity", "waiting");
-        this.store.updateLaunchCheckpoint(provisionalId, "account", "failed", (e as Error).message);
+        this.store.updateLaunchCheckpoint(provisionalId, "account", "failed", (e as Error).message, e.code);
+      } else if (e instanceof ManagedLaunchError && e.code === "managed_image_unavailable") {
+        this.store.updateLaunchCheckpoint(provisionalId, "machine", "failed", message, e.code);
       } else {
         this.failLaunchCheckpoint(provisionalId, message);
       }
@@ -2322,7 +2324,9 @@ export class AppController {
   private failLaunchCheckpoint(provisionalId: string, message: string): void {
     const progress = this.store.getState().sessionIndex.sessions.find((session) => session.sessionId === provisionalId)?.launchProgress;
     const order: SessionLaunchCheckpointId[] = ["account", "capacity", "machine", "service", "credentials", "repository", "agent", "message"];
-    const id = order.find((checkpoint) => progress?.checkpoints[checkpoint]?.state === "active")
+    // Startup checks overlap; blame the furthest active phase, not account
+    // access merely because it was started first.
+    const id = [...order].reverse().find((checkpoint) => progress?.checkpoints[checkpoint]?.state === "active")
       ?? order.find((checkpoint) => !progress?.checkpoints[checkpoint] || progress.checkpoints[checkpoint]?.state === "waiting")
       ?? "message";
     this.store.updateLaunchCheckpoint(provisionalId, id, "failed", message);

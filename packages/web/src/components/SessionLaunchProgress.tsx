@@ -24,12 +24,17 @@ function elapsedLabel(startedAt: number, endedAt: number): string {
 export function SessionLaunchProgressView({
   progress,
   onSetupCredentials,
+  onRetryLaunch,
   onRetryFreshMachine,
 }: {
   progress: SessionLaunchProgress;
   onSetupCredentials?: () => Promise<void>;
+  onRetryLaunch?: () => Promise<void>;
   onRetryFreshMachine?: () => Promise<void>;
 }) {
+  const needsCredentials = progress.checkpoints.account?.errorCode === "managed_credentials_required";
+  const retry = progress.checkpoints.machine?.state === "done" ? onRetryFreshMachine : onRetryLaunch;
+  const retryLabel = progress.checkpoints.machine?.state === "done" ? "Retry on a new Cloud Machine" : "Retry this launch";
   const terminalAt = progress.firstResponseAt ?? progress.failedAt;
   const [now, setNow] = useState(() => terminalAt ?? Date.now());
   const [startingSetup, setStartingSetup] = useState(false);
@@ -56,7 +61,7 @@ export function SessionLaunchProgressView({
       <ol className="session-launch-checkpoints">
         {CHECKPOINTS.map(({ id, label, skippedLabel }) => {
           const checkpoint = progress.checkpoints[id];
-          const state = checkpoint?.state ?? "waiting";
+          const state = progress.failedAt && checkpoint?.state === "active" ? "waiting" : checkpoint?.state ?? "waiting";
           const text = state === "skipped" && skippedLabel ? skippedLabel : label;
           return (
             <li key={id} className={`session-launch-checkpoint state-${state}`}>
@@ -72,7 +77,7 @@ export function SessionLaunchProgressView({
           );
         })}
       </ol>
-      {progress.checkpoints.account?.state === "failed" && onSetupCredentials && (
+      {progress.failedAt && needsCredentials && onSetupCredentials && (
         <button
           type="button"
           className="btn primary session-launch-action"
@@ -82,20 +87,20 @@ export function SessionLaunchProgressView({
             void onSetupCredentials().finally(() => setStartingSetup(false));
           }}
         >
-          {startingSetup ? "Starting Bivy Cloud…" : "Continue setup in this Cloud session"}
+          {startingSetup ? "Opening setup…" : "Set up model credentials"}
         </button>
       )}
-      {progress.failedAt && progress.checkpoints.account?.state !== "failed" && onRetryFreshMachine && (
+      {progress.failedAt && !needsCredentials && retry && (
         <button
           type="button"
           className="btn primary session-launch-action"
           disabled={startingSetup}
           onClick={() => {
             setStartingSetup(true);
-            void onRetryFreshMachine().finally(() => setStartingSetup(false));
+            void retry().finally(() => setStartingSetup(false));
           }}
         >
-          {startingSetup ? "Replacing Cloud Machine…" : "Retry on a new Cloud Machine"}
+          {startingSetup ? "Retrying…" : retryLabel}
         </button>
       )}
     </section>

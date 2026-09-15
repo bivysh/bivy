@@ -60,14 +60,9 @@ export function managedSessionImage(env: NodeJS.ProcessEnv = process.env, runtim
   const runtimeImage = MANAGED_RUNTIME_IMAGES.find(({ prefix }) => runtime.startsWith(prefix));
   const explicit = nonEmpty(runtimeImage ? env[runtimeImage.env] : undefined);
   const baseline = nonEmpty(env.MANAGED_SESSION_IMAGE);
-  if (explicit || !runtimeImage || !baseline) return explicit ?? baseline;
-  // The official workflow publishes every immutable/main tag with a runtime
-  // suffix. Derive it automatically so an existing deployment only has to set
-  // the required baseline image; custom registries can provide explicit vars.
-  if (baseline.startsWith("ghcr.io/bivysh/bivy-ephemeral-runner:") && !baseline.includes("@")) {
-    return `${baseline}-${runtimeImage.prefix}`;
-  }
-  return baseline;
+  // Deployment aliases and digests do not imply runtime-suffixed tags exist.
+  // Honor the configured artifact exactly unless a runtime image is explicit.
+  return explicit ?? baseline;
 }
 
 /** Authentication runners need several CLIs because the provider is selected

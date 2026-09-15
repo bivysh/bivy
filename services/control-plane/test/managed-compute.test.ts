@@ -99,7 +99,12 @@ await test("managed images: runtime-specific images fall back to the required ba
   assert.equal(managedSessionImage(images, "custom"), "runner:all");
   assert.equal(managedAuthRunnerImage(images), "runner:auth");
   assert.equal(managedAuthRunnerImage({ MANAGED_SESSION_IMAGE: "runner:all" } as NodeJS.ProcessEnv), "runner:all");
-  assert.equal(managedSessionImage({ MANAGED_SESSION_IMAGE: "ghcr.io/bivysh/bivy-ephemeral-runner:sha-abc1234" } as NodeJS.ProcessEnv, "codex"), "ghcr.io/bivysh/bivy-ephemeral-runner:sha-abc1234-codex");
+  for (const tag of ["sha-abc1234", "full-sha-staging", "main"]) {
+    const baseline = `ghcr.io/bivysh/bivy-ephemeral-runner:${tag}`;
+    for (const runtime of ["pi", "codex", "claude", "custom"]) {
+      assert.equal(managedSessionImage({ MANAGED_SESSION_IMAGE: baseline }, runtime), baseline, "never invent an unpublished runtime tag");
+    }
+  }
   assert.equal(managedSessionImage({} as NodeJS.ProcessEnv, "codex"), undefined);
 });
 

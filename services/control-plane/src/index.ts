@@ -15,6 +15,7 @@ import { centralGithubAppConfig, centralInstallUrl, applyCentralInstallationEven
 import { maybeAutoProvision, planAutoProvision, hostedExecutionReadiness, mintHostedInstallationToken, provisionEphemeralForAccount, provisionEphemeralRestore, reapSettledHostedMachine, reconcileAllHostedMachines, reconcileAllReadyCapacity, sweepAllOrphanProviderResources, validateHostedProviderToken, markHostedMachineMilestone, EPHEMERAL_MILESTONES, ephemeralMachinesEnabled, type ManagedProvisionRequest } from "./ephemeral-provisioner.js";
 import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecret, initializeHostedKeyring } from "./hosted-crypto.js";
 import { webRuntimeConfigScript } from "./web-runtime-config.js";
+import { publicManagedLaunchError } from "./managed-launch-error.js";
 import { listAppInstallations, listInstallationRepositories, listInstallationBranches, getAppInstallation, mintInstallationToken } from "./hosted-github-auth.js";
 import { correlateHostedSessions } from "./hosted-correlation.js";
 import { countActiveAccountSessions } from "./session-count.js";
@@ -1486,7 +1487,7 @@ async function respondManagedLaunch(res: Response, accountId: string, request: M
       res.status(error.status).json({ error: error.message, code: error.code, ...(error as ManagedLaunchConflict & { decision?: object }).decision });
     } else {
       // Never return provider bodies or credential-bearing bootstrap failures.
-      res.status(502).json({ error: "Managed launch failed. Retry the same request to recover it.", code: "managed_launch_failed" });
+      res.status(502).json(publicManagedLaunchError(error));
     }
   }
 }
