@@ -96,7 +96,9 @@ test("managed first prompts render quiet provisioning milestones in the session"
   expect(controller).toContain('updateLaunchCheckpoint(provisionalId, "credentials", "active")');
   expect(controller).toContain("Repository and agent are ready. Sending your prompt…");
   expect(controller).toContain("beginManagedCredentialSetup");
-  expect(controller).toContain("if (!task || task.promptSending) return");
+  expect(controller).toContain("if (!task || task.promptSending || !task.modelApproved) return");
+  expect(controller).toContain('event.type === "model.updated"');
+  expect(controller).toContain("this.refreshLaunchModels(provisionalId)");
   expect(controller).not.toContain("if (!task || task.promptSent) return");
   expect(controller).toContain("session.user_message acknowledges the exact");
 });

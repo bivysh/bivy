@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useEffect, useState } from "react";
-import type { SessionLaunchCheckpointId, SessionLaunchProgress } from "@bivy/core";
+import type { ModelInfo, SessionLaunchCheckpointId, SessionLaunchProgress } from "@bivy/core";
 import { Spinner } from "./Spinner.js";
+import { LaunchModelChoice } from "./LaunchModelChoice.js";
 
 const CHECKPOINTS: ReadonlyArray<{ id: SessionLaunchCheckpointId; label: string; skippedLabel?: string }> = [
   { id: "account", label: "Checking account and provider access" },
@@ -26,12 +27,17 @@ export function SessionLaunchProgressView({
   onSetupCredentials,
   onRetryLaunch,
   onRetryFreshMachine,
+  onChooseModel,
+  onRefreshModels,
 }: {
   progress: SessionLaunchProgress;
+  onChooseModel?: (model: ModelInfo) => Promise<void>;
+  onRefreshModels?: () => void;
   onSetupCredentials?: () => Promise<void>;
   onRetryLaunch?: () => Promise<void>;
   onRetryFreshMachine?: () => Promise<void>;
 }) {
+  const choice = progress.modelChoice;
   const needsCredentials = progress.checkpoints.account?.errorCode === "managed_credentials_required";
   const retry = progress.checkpoints.machine?.state === "done" ? onRetryFreshMachine : onRetryLaunch;
   const retryLabel = progress.checkpoints.machine?.state === "done" ? "Retry on a new Cloud Machine" : "Retry this launch";
@@ -53,6 +59,7 @@ export function SessionLaunchProgressView({
     ? `Agent responded in ${duration}`
     : progress.failedAt
       ? `Startup failed after ${duration}`
+      : choice ? choice.loading ? "Loading models from this machine" : choice.selecting ? "Confirming model selection" : "Choose a model before your first message"
       : progress.checkpoints.message?.state === "done"
         ? `Waiting for agent response · ${duration} elapsed`
         : `Starting Bivy Cloud · ${duration} elapsed`;
@@ -60,6 +67,7 @@ export function SessionLaunchProgressView({
   return (
     <section className="session-launch-progress" aria-label="Bivy Cloud startup progress">
       <div className="session-launch-progress-title" aria-live="polite">{title}</div>
+      {choice && <LaunchModelChoice choice={choice} onChoose={onChooseModel} onRefresh={onRefreshModels} onSetupCredentials={onSetupCredentials} />}
       <ol className="session-launch-checkpoints">
         {CHECKPOINTS.map(({ id, label, skippedLabel }) => {
           const checkpoint = progress.checkpoints[id];

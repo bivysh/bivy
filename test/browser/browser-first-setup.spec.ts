@@ -85,6 +85,7 @@ for (const theme of ["light", "dark"]) {
       await expect(page.getByText("Start with a small task", { exact: true })).toHaveCount(0);
       await expect(page.getByRole("status", { name: "Setup readiness" })).toHaveCount(0);
       await expect(page.locator(".composer-input")).toHaveValue("");
+      await expect(page.locator(".model-pill")).toContainText("Choose during startup");
       await page.screenshot({ path: testInfo.outputPath(`cloud-draft-${computeSource}-${theme}.png`), fullPage: true });
     }
     await page.evaluate(async () => {

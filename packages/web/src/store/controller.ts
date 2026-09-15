@@ -260,7 +260,7 @@ export class AppController {
   /** Ephemeral cold starts outlive the pane that launched them. Each first
    *  message gets a sidebar placeholder immediately, and its launch continues
    *  here even if the user presses New and starts another session. */
-  private pendingLaunches = new Map<string, PendingEphemeralLaunch & { transport?: Transport; sessionId?: string; promptSent?: boolean; promptSending?: boolean }>();
+  private pendingLaunches = new Map<string, PendingEphemeralLaunch & { transport?: Transport; sessionId?: string; promptSent?: boolean; promptSending?: boolean; models?: ModelInfo[]; modelSelecting?: ModelInfo; modelApproved?: boolean; modelQuery?: object }>();
   /** Timed, factual boot updates. Provider creation returning only means the VM
    *  exists; these heartbeats make the otherwise silent cloud-init wait visible. */
   private bootProgressTimers = new Map<string, ReturnType<typeof setTimeout>[]>();
@@ -1689,7 +1689,10 @@ export class AppController {
             updatedAt: prior?.updatedAt,
           };
         });
-      this.store.setSessions([...live, ...ghosts]);
+      // While model selection holds the first prompt, retain the provisional
+      // launch row rather than advertising a second, empty canonical session.
+      const pendingIds = new Set([...this.pendingLaunches.values()].map(task => task.sessionId));
+      this.store.setSessions([...live, ...ghosts].filter(session => !pendingIds.has(session.sessionId)));
     } catch {
       // Best-effort; the connected node's E2E sessions.list still keeps the app usable.
     }
@@ -2380,7 +2383,12 @@ export class AppController {
     let online = false;
     let credentialsReady = false;
     const createWhenReady = () => {
-      if (online && (credentialsReady || task.config.computeSource !== "managed") && this.pendingLaunches.has(provisionalId)) void transport.send(task.prompt.frame);
+      if (online && (credentialsReady || task.config.computeSource !== "managed") && this.pendingLaunches.has(provisionalId)) {
+        // Resolve even an explicit/saved choice against the destination catalog.
+        // Passing a stale model into session.new can fail before a picker exists.
+        const { model: _requestedModel, ...frame } = task.prompt.frame;
+        void transport.send(frame);
+      }
     };
     transport = new RelayTransport({
       store: scopedStore,
@@ -2389,6 +2397,10 @@ export class AppController {
           if (adoptedHandlers) { adoptedHandlers.onStatus(status); return; }
           online = status === "online";
           if (!online) return;
+          task.modelApproved = false;
+          task.modelSelecting = undefined;
+          task.modelQuery = undefined;
+          task.models = undefined;
           log(`${task.config.name} is online. Preparing credentials, repository, and agent…`);
           this.store.updateLaunchCheckpoint(provisionalId, "service", "done");
           this.store.updateLaunchCheckpoint(provisionalId, "credentials", credentialsReady ? "done" : "active");
@@ -2397,6 +2409,46 @@ export class AppController {
         },
         onEvent: (event) => {
           if (adoptedHandlers) { adoptedHandlers.onEvent(event); return; }
+          const reportedModel = (event.type === "models.list" ? event.current : event.model) as ModelInfo | undefined;
+          if (event.type === "session.error" && task.sessionId && !task.modelApproved && event.sessionId === task.sessionId) {
+            task.modelSelecting = undefined;
+            task.modelQuery = undefined;
+            task.prompt.frame = { ...task.prompt.frame, model: undefined };
+            void this.pendingLaunchStore.put(task).catch(() => {});
+            this.store.setLaunchModelChoice(provisionalId, { models: task.models ?? [], error: typeof event.error === "string" ? event.error : "Couldn't select this model. Choose another model or refresh." });
+            return;
+          }
+          if (event.type === "models.list" && event.sessionId === task.sessionId && !task.modelApproved) {
+            task.modelQuery = undefined;
+            if (event.modelSelection === false) {
+              task.modelApproved = true;
+              void this.sendPendingLaunchPrompt(provisionalId, task.sessionId!, transport);
+              return;
+            }
+            task.models = (Array.isArray(event.models) ? event.models : []).filter((model: ModelInfo) => model && model.configured !== false && typeof model.id === "string" && model.id !== "unknown" && typeof model.provider === "string" && model.provider !== "unknown" && model.id && model.provider);
+            const current = task.models?.find(model => model.id === reportedModel?.id && model.provider === reportedModel?.provider);
+            const requested = (task.prompt.frame as { model?: { id: string; provider: string } }).model;
+            if (!task.modelSelecting && current && requested?.id === current.id && requested.provider === current.provider) {
+              task.modelApproved = true;
+              this.store.setLaunchModelChoice(provisionalId, undefined);
+              void this.sendPendingLaunchPrompt(provisionalId, task.sessionId!, transport);
+            } else {
+              const desired = task.models?.find(model => model.id === requested?.id && model.provider === requested?.provider);
+              if (desired && !task.modelSelecting) void this.chooseLaunchModel(provisionalId, desired);
+              else {
+                this.store.updateLaunchCheckpoint(provisionalId, "message", "waiting");
+                this.store.setLaunchModelChoice(provisionalId, { models: task.models ?? [], current, selecting: Boolean(task.modelSelecting), error: requested && !desired ? "Your saved model isn't available on this machine. Choose another model." : undefined });
+              }
+            }
+            return;
+          }
+          if (event.type === "model.updated" && event.sessionId === task.sessionId && task.modelSelecting && reportedModel?.id === task.modelSelecting.id && reportedModel?.provider === task.modelSelecting.provider) {
+            task.modelSelecting = undefined;
+            task.modelApproved = true;
+            this.store.setLaunchModelChoice(provisionalId, undefined);
+            void this.sendPendingLaunchPrompt(provisionalId, task.sessionId!, transport);
+            return;
+          }
           if (event.type === "session.error") {
             this.failPendingLaunch(provisionalId, String(event.error || "Session creation failed."));
             return;
@@ -2406,8 +2458,9 @@ export class AppController {
               this.store.updateLaunchCheckpoint(provisionalId, "repository", "done");
             }
             this.store.updateLaunchCheckpoint(provisionalId, "agent", "done");
-            this.store.updateLaunchCheckpoint(provisionalId, "message", "active");
-            void this.sendPendingLaunchPrompt(provisionalId, String(event.sessionId), transport);
+            task.sessionId = String(event.sessionId);
+            if (task.modelApproved) void this.sendPendingLaunchPrompt(provisionalId, task.sessionId, transport);
+            else this.refreshLaunchModels(provisionalId);
             return;
           }
           // Do not replace the provisional row or close this transport merely
@@ -2441,9 +2494,52 @@ export class AppController {
     void transport.connect();
   }
 
+  refreshLaunchModels(provisionalId: string): void {
+    const task = this.pendingLaunches.get(provisionalId);
+    if (!task?.sessionId || !task.transport || task.modelApproved || task.modelSelecting) return;
+    const query = {};
+    task.modelQuery = query;
+    this.store.setLaunchModelChoice(provisionalId, { models: task.models ?? [], loading: true });
+    const failed = () => {
+      if (this.pendingLaunches.get(provisionalId) !== task || task.modelQuery !== query) return;
+      task.modelQuery = undefined;
+      this.store.setLaunchModelChoice(provisionalId, { models: task.models ?? [], error: "Couldn't load models from this machine. Refresh to try again; your prompt is still saved." });
+    };
+    setTimeout(failed, 15_000);
+    void Promise.resolve().then(() => task.transport?.send({ kind: "models.list", sessionId: task.sessionId })).catch(failed);
+  }
+
+  async chooseLaunchModel(provisionalId: string, model: ModelInfo): Promise<void> {
+    const task = this.pendingLaunches.get(provisionalId);
+    if (!task?.sessionId || !task.transport || task.modelSelecting || task.modelApproved || task.modelQuery) return;
+    const match = task.models?.find(candidate => candidate.id === model.id && candidate.provider === model.provider);
+    if (!match) return;
+    const available = { ...match };
+    task.modelSelecting = available;
+    this.store.setLaunchModelChoice(provisionalId, { models: task.models ?? [], current: available, selecting: true });
+    setTimeout(() => {
+      if (this.pendingLaunches.get(provisionalId) === task && task.modelSelecting === available) {
+        task.modelSelecting = undefined;
+        this.store.setLaunchModelChoice(provisionalId, { models: task.models ?? [], error: "Model selection wasn't confirmed. Refresh or choose again; your prompt is still saved." });
+      }
+    }, 15_000);
+    try {
+      // Preserve the choice with the original request/prompt. Reloading resumes
+      // this same session and confirms its model; it never creates another VM.
+      task.prompt.frame = { ...task.prompt.frame, model: { id: available.id, provider: String(available.provider) } };
+      await this.pendingLaunchStore.put(task);
+      if (this.pendingLaunches.get(provisionalId) !== task || task.modelSelecting !== available) return;
+      await task.transport.send({ kind: "model.select", sessionId: task.sessionId, id: available.id, provider: available.provider });
+    } catch {
+      task.modelSelecting = undefined;
+      this.store.setLaunchModelChoice(provisionalId, { models: task.models ?? [], error: "Couldn't select this model. Refresh and try again." });
+    }
+  }
+
   private async sendPendingLaunchPrompt(provisionalId: string, sessionId: string, transport: Transport): Promise<void> {
     const task = this.pendingLaunches.get(provisionalId);
-    if (!task || task.promptSending) return;
+    if (!task || task.promptSending || !task.modelApproved) return;
+    this.store.updateLaunchCheckpoint(provisionalId, "message", "active");
     task.sessionId = sessionId;
     task.promptSending = true;
     if (this.store.getState().activeSession.activeSessionId === provisionalId) {
@@ -2519,6 +2615,10 @@ export class AppController {
     if (task.machine?.nodeId) this.clearBootProgress(task.machine.nodeId);
     task.transport?.close();
     task.logs.push(`Startup failed: ${message}`);
+    this.store.setLaunchModelChoice(provisionalId, undefined);
+    task.modelQuery = undefined;
+    task.modelSelecting = undefined;
+    task.modelApproved = false;
     task.phase = "failed";
     task.updatedAt = new Date().toISOString();
     void this.pendingLaunchStore.put(task);

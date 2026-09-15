@@ -883,6 +883,8 @@ export function App() {
               onAction={runCommand}
               header={activeSession?.launchProgress ? <SessionLaunchProgressView
                 progress={activeSession.launchProgress}
+                onChooseModel={model => controller.chooseLaunchModel(activeSession.sessionId, model)}
+                onRefreshModels={() => controller.refreshLaunchModels(activeSession.sessionId)}
                 onSetupCredentials={async () => {
                   try {
                     await controller.setupManagedCredentials();
