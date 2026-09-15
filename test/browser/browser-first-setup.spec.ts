@@ -73,6 +73,25 @@ for (const theme of ["light", "dark"]) {
     await expect(page.getByRole("status", { name: "Setup readiness" })).toContainText("4 setup checks complete");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath(`first-task-${theme}.png`), fullPage: true });
+    // Cloud drafts must not show the starter prompt, even for an online account
+    // with no prior sessions. Switching back preserves first-machine onboarding.
+    for (const computeSource of ["managed", "user"]) {
+      await page.evaluate(async (computeSource) => {
+        const module = "/src/store/useStore.ts";
+        const { controller } = await import(module);
+        controller.store.setDraftEphemeralConfig({ id: "cloud", name: "Cloud", provider: "fly", computeSource, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+      }, computeSource);
+      await expect(page.getByRole("button", { name: "Use starter task" })).toHaveCount(0);
+      await expect(page.getByText("Start with a small task", { exact: true })).toHaveCount(0);
+      await expect(page.getByRole("status", { name: "Setup readiness" })).toHaveCount(0);
+      await expect(page.locator(".composer-input")).toHaveValue("");
+      await page.screenshot({ path: testInfo.outputPath(`cloud-draft-${computeSource}-${theme}.png`), fullPage: true });
+    }
+    await page.evaluate(async () => {
+      const module = "/src/store/useStore.ts";
+      const { controller } = await import(module);
+      controller.store.setDraftEphemeralConfig(null);
+    });
     await page.getByRole("button", { name: "example/api", exact: true }).click();
     await expect(page.locator(".repo-pill")).toContainText("example/api");
     await page.getByRole("button", { name: "Use starter task" }).click();

@@ -580,13 +580,13 @@ export function Composer({
     : `${state.catalogs.currentAgentName || "This agent"} can't ask for approval — treated as full access`;
   const canSend = !disabled && (Boolean(text.trim()) || attachments.length > 0);
   const firstIsolatedRun = isDraft && Boolean(state.draft.ephemeralConfig);
-  const firstTask = isDraft && state.sessionIndex.sessions.length === 0
+  const firstTask = isDraft && !firstIsolatedRun && state.sessionIndex.sessions.length === 0
     && state.activeSession.transcript.length === 0 && state.connection.status === "online";
   const starterTask = "Inspect this repository and explain how to run its tests. Do not change files.";
 
   return (
     <>
-      {(firstIsolatedRun || firstTask) && !text.trim() && attachments.length === 0 && (
+      {firstTask && !text.trim() && attachments.length === 0 && (
         <div className="composer-starter" role="note">
           <div>
             <strong>Start with a small task</strong>
