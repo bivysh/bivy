@@ -2425,6 +2425,7 @@ export class AppController {
     }) as LocalStore;
     let transport: Transport;
     let adoptedHandlers: TransportHandlers | undefined;
+    const ownsLaunch = () => this.pendingLaunches.get(provisionalId) === task && task.transport === transport;
     let online = false;
     let credentialsReady = false;
     const createWhenReady = () => {
@@ -2440,6 +2441,7 @@ export class AppController {
       handlers: {
         onStatus: (status) => {
           if (adoptedHandlers) { adoptedHandlers.onStatus(status); return; }
+          if (!ownsLaunch()) return;
           online = status === "online";
           if (!online) return;
           task.modelApproved = false;
@@ -2454,6 +2456,7 @@ export class AppController {
         },
         onEvent: (event) => {
           if (adoptedHandlers) { adoptedHandlers.onEvent(event); return; }
+          if (!ownsLaunch()) return;
           const reportedModel = (event.type === "models.list" ? event.current : event.model) as ModelInfo | undefined;
           if (event.type === "session.error" && task.sessionId && !task.modelApproved && event.sessionId === task.sessionId) {
             task.modelSelecting = undefined;
@@ -2527,6 +2530,7 @@ export class AppController {
         },
         onError: (message) => {
           if (adoptedHandlers) { adoptedHandlers.onError?.(message); return; }
+          if (!ownsLaunch()) return;
           if (!/^node offline$/i.test(message.trim())) log(`Connection retry: ${message}`);
         },
       },
@@ -2659,7 +2663,9 @@ export class AppController {
     const task = this.pendingLaunches.get(provisionalId);
     if (!task) return;
     if (task.machine?.nodeId) this.clearBootProgress(task.machine.nodeId);
-    task.transport?.close();
+    const transport = task.transport;
+    task.transport = undefined;
+    transport?.close();
     task.logs.push(`Startup failed: ${message}`);
     this.store.setLaunchModelChoice(provisionalId, undefined);
     task.modelQuery = undefined;
@@ -2776,8 +2782,9 @@ export class AppController {
   async retryPendingLaunch(id: string): Promise<void> {
     const task = this.pendingLaunches.get(id);
     if (!task) return;
-    task.transport?.close();
+    const transport = task.transport;
     task.transport = undefined;
+    transport?.close();
     task.logs.push("Retrying startup…");
     task.phase = task.machine?.nodeId ? "booting" : "provisioning";
     task.updatedAt = new Date().toISOString();
@@ -2792,8 +2799,9 @@ export class AppController {
   async retryPendingLaunchOnFreshMachine(id: string): Promise<void> {
     const task = this.pendingLaunches.get(id);
     if (!task) return;
-    task.transport?.close();
+    const transport = task.transport;
     task.transport = undefined;
+    transport?.close();
     const nodeId = task.machine?.nodeId;
     if (nodeId) await this.destroyHostedMachine(nodeId).catch(() => {});
     task.machine = undefined;
@@ -2809,9 +2817,9 @@ export class AppController {
 
   async dismissPendingLaunch(id: string): Promise<void> {
     const task = this.pendingLaunches.get(id);
+    this.pendingLaunches.delete(id);
     task?.transport?.close();
     if (task?.machine?.nodeId) this.clearBootProgress(task.machine.nodeId);
-    this.pendingLaunches.delete(id);
     await this.pendingLaunchStore.remove(id);
     this.store.dismissPendingSession(id);
     if (this.store.getState().activeSession.activeSessionId == null) this.newSession();
@@ -4082,6 +4090,13 @@ export class AppController {
   }
 
   async deleteSession(sessionId: string, path?: string): Promise<void> {
+    if (this.isProvisionalSessionId(sessionId)) {
+      await this.pendingLaunchRestoration;
+      if (this.pendingLaunches.has(sessionId)) {
+        await this.dismissPendingLaunch(sessionId);
+        return;
+      }
+    }
     const correlation = this.ephemeralCorrelations.find((entry) => entry.sessionId === sessionId);
     const online = correlation && this.store.getState().connection.nodes.some((node) => node.id === correlation.nodeId && node.online);
     if (!this.direct && correlation && !online) {

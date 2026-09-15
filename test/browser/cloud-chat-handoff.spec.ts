@@ -9,7 +9,7 @@ test.beforeAll(async () => {
   await server.listen(); origin = new URL(server.resolvedUrls!.local[0]).origin;
 });
 test.afterAll(async () => { await server?.close(); });
-for (const theme of ["light", "dark"]) for (const outcome of ["reply", "error", "waiting", "empty", "saved", "native"]) {
+for (const theme of ["light", "dark"]) for (const outcome of ["reply", "error", "waiting", "empty", "saved", "native", "cancel"]) {
   test(`Cloud chat owns immediate post-ack ${outcome} (${theme})`, async ({ page }, info) => {
     page.on("pageerror", error => console.error(error.message));
     let bootstrapReady = false;
@@ -76,7 +76,11 @@ for (const theme of ["light", "dark"]) for (const outcome of ["reply", "error", 
       };
       globalThis.provisionalSafe = controller.store.getState().activeSession.activeSessionId === task.id && !controller.store.getState().sessionIndex.sessions.find(row => row.sessionId === task.id)?.launchProgress?.failedAt;
       RelayTransport.prototype.connect = async function () { globalThis.connection = this; this.handlers.onStatus('online'); };
-      RelayTransport.prototype.close = function () { globalThis.closedCount++; };
+      RelayTransport.prototype.close = function () {
+        globalThis.closedCount++;
+        this.handlers.onError?.('Late launch connection error');
+        this.handlers.onStatus('online');
+      };
       RelayTransport.prototype.send = async function (command) {
         globalThis.commands.push(command.kind);
         if (command.kind === 'session.new') {
@@ -107,6 +111,18 @@ for (const theme of ["light", "dark"]) for (const outcome of ["reply", "error", 
       }
       createRoot(document.getElementById('root')).render(React.createElement(View));
       controller.startPendingRunner(task.id);
+      globalThis.staleLaunchPacket = () => {
+        const current = task.transport;
+        const sessionId = task.sessionId;
+        const models = task.models;
+        task.transport = { send: async () => {} };
+        current.handlers.onEvent({ type: 'session.history', requestId: 'create', sessionId: 'stale-session', messages: [] });
+        current.handlers.onStatus('online');
+        current.handlers.onError?.('Retired launch callback');
+        task.transport = current;
+        return task.sessionId === sessionId && task.models === models;
+      };
+      globalThis.cancelLaunch = () => controller.deleteSession(task.id);
       globalThis.queueDuringRestore = () => {
         let release;
         controller.pendingLaunchRestoration = new Promise(resolve => { release = resolve; });
@@ -134,6 +150,17 @@ for (const theme of ["light", "dark"]) for (const outcome of ["reply", "error", 
     expect(await page.evaluate("globalThis.commands")).not.toContain("prompt");
     await page.evaluate("globalThis.refreshAccountIndex()");
     expect(await page.evaluate("globalThis.sessionIds()")).toEqual(["starting-one"]);
+    expect(await page.evaluate("globalThis.staleLaunchPacket()")).toBe(true);
+    if (outcome === "cancel") {
+      await page.evaluate("globalThis.persisted = []; globalThis.cancelLaunch()");
+      expect(await page.evaluate("globalThis.inspect().pending")).toBe(0);
+      await page.waitForTimeout(1100);
+      expect(await page.evaluate("globalThis.commands")).not.toContain("prompt");
+      expect(await page.evaluate("globalThis.commands.filter(kind => kind === 'session.new').length")).toBe(1);
+      expect(await page.evaluate("globalThis.persisted")).toEqual([]);
+      await expect(page.getByText("Late launch connection error", { exact: true })).toHaveCount(0);
+      return;
+    }
     if (outcome === "waiting") {
       await page.evaluate("globalThis.queueDuringRestore()");
       await expect.poll(() => page.evaluate("globalThis.queuedFollowups().length")).toBe(1);
