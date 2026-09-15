@@ -199,7 +199,8 @@ export function Composer({
   // A Cloud draft has no destination catalog until its Machine starts. Never
   // present the connected personal Machine's model list as if it belonged to
   // that future runner; it may contain models or credentials Cloud cannot use.
-  const destinationCatalogPending = !state.activeSession.activeSessionId && Boolean(state.draft.ephemeralConfig);
+  const pendingLaunch = state.sessionIndex.sessions.find(session => session.sessionId === state.activeSession.activeSessionId)?.pendingLaunch;
+  const destinationCatalogPending = Boolean(pendingLaunch) || (!state.activeSession.activeSessionId && Boolean(state.draft.ephemeralConfig));
   const modelSelectable = !destinationCatalogPending && currentCaps?.modelSelection !== false;
   // The active agent's own slash commands (e.g. Claude Code's `/compact`). These
   // are advertised PER SESSION (session.created / session.capabilities → the
@@ -545,7 +546,7 @@ export function Composer({
   }
 
   const modelLabel = destinationCatalogPending
-    ? "Default"
+    ? "Choose during startup"
     : state.catalogs.currentModel?.label || state.catalogs.currentModel?.id || "Choose a model";
   const agentLabel = String(currentRuntime?.displayName || currentRuntime?.name || currentRuntime?.id || state.catalogs.currentAgentName || "Choose an agent");
   // The repo pill also carries the chosen remote branch (#466) — picked from
@@ -834,7 +835,7 @@ export function Composer({
                 className="btn sm ghost model-pill"
                 onClick={() => { if (modelSelectable) setPicker("model"); }}
                 disabled={!modelSelectable}
-                title={modelSelectable ? "Model" : destinationCatalogPending ? "Model options load when Bivy Cloud starts" : "This agent uses its own default model"}
+                title={modelSelectable ? "Model" : destinationCatalogPending ? "Choose a model after startup, before your saved first message is sent" : "This agent uses its own default model"}
               >
                 <span className="pill-glyph"><ModelGlyph /></span>
                 <span className="pill-label">{modelLabel}</span>

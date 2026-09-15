@@ -9539,7 +9539,7 @@ async function modelsListEventFor(record: SessionRecord) {
   const current = session.getCurrentModel();
   const models = await publicModelsList(session, current);
   const thinking = publicThinkingInfo(session);
-  return { type: "models.list" as const, sessionId: record.id, runtimeId: record.runtimeId, current: current ? publicModel(current, current) : null, models, thinking };
+  return { type: "models.list" as const, sessionId: record.id, runtimeId: record.runtimeId, modelSelection: getRuntime(record.runtimeId).capabilities.modelSelection !== false, current: current ? publicModel(current, current) : null, models, thinking };
 }
 
 function publicThinkingInfo(session: any) {
@@ -9566,7 +9566,7 @@ app.get("/api/models", async (req, res, next) => {
     const current = session.getCurrentModel();
     const models = await publicModelsList(session, current);
     const thinking = publicThinkingInfo(session);
-    res.json({ sessionId: record.id, current: current ? publicModel(current, current) : null, models, thinking });
+    res.json({ sessionId: record.id, modelSelection: getRuntime(record.runtimeId).capabilities.modelSelection !== false, current: current ? publicModel(current, current) : null, models, thinking });
   } catch (error) {
     next(error);
   }
