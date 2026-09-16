@@ -19,7 +19,8 @@ import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import { setCloudMachinesEnabled, useCloudMachinesEnabled } from "../cloudMachines.js";
 import { requestSignIn } from "../signInRequest.js";
 import { getAppIconBadgeEnabled, setAppIconBadgeEnabled, setNotificationPreferencesSnapshot, subscribeNotificationSettings } from "../notificationSettings.js";
-import { ChevronRightIcon, CloseIcon } from "./UiIcons.js";
+import { CheckIcon, ChevronRightIcon, CloseIcon, CopyIcon } from "./UiIcons.js";
+import { writeClipboard } from "../clipboard.js";
 import { CredentialVault } from "./CredentialVault.js";
 
 const VoiceSettings = lazy(() => import("./VoiceSettings.js").then((module) => ({ default: module.VoiceSettings })));
@@ -85,6 +86,11 @@ const IconBell = () => (
 const IconImport = () => (
   <Glyph><path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M5 19h14" /></Glyph>
 );
+// The platform share glyph (box + up arrow) — the panel is about the OS share
+// sheet, so the icon mirrors what users tap there.
+const IconShare = () => (
+  <Glyph><path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7" /><path d="m8 6 4-4 4 4" /><path d="M12 2v13" /></Glyph>
+);
 
 /** Render the baked-in PWA build timestamp (see __APP_BUILD_TIME__) as a short
  *  local date+time, or "" when it isn't a parseable ISO string. */
@@ -122,6 +128,7 @@ const TITLES: Record<View, string> = {
   providers: "Models & keys",
   models: "Models & keys",
   voice: "Voice",
+  share: "Share to Bivy",
   github: "GitHub App",
   linear: "Linear",
   slack: "Slack",
@@ -143,6 +150,7 @@ const SEARCH_TERMS: Record<View, string> = {
   providers: "model provider api key oauth openai anthropic google login credentials custom endpoint local ollama import claude codex grok machine",
   models: "model provider api key oauth ollama local custom endpoint",
   voice: "microphone speech transcription read aloud reader text to speech voice tone speed",
+  share: "share sheet send android ios iphone ipad shortcut link url target",
   github: "github app repository installation issue pull request",
   linear: "linear workspace issue integration",
   slack: "slack workspace channel integration",
@@ -248,6 +256,7 @@ export function Settings({
         { id: "notifications", label: "Notifications", icon: <IconBell /> },
         { id: "voice", label: "Voice", icon: <IconMic /> },
         { id: "import", label: "Import session", icon: <IconImport /> },
+        { id: "share", label: "Share to Bivy", icon: <IconShare /> },
       ],
     },
   ];
@@ -338,6 +347,7 @@ export function Settings({
             {activeView === "appearance" && <AppearancePanel />}
             {activeView === "notifications" && <NotificationsPanel />}
             {activeView === "import" && <ImportPanel onImported={(id) => onImported?.(id)} />}
+            {activeView === "share" && <SharePanel />}
             {activeView === "providers" && <CredentialVault state={state} initialProvider={credentialProvider} />}
             {/* Compatibility for old /settings/models links. New endpoints are
                 added from Models & keys; this keeps the full legacy endpoint
@@ -404,6 +414,48 @@ function ImportPanel({ onImported }: { onImported: (sessionId: string) => void }
         are listed.
       </p>
       <ImportSessionContent onDone={onImported} />
+    </div>
+  );
+}
+
+// ---- Share to Bivy (OS share-sheet entry points — see shareTarget.ts) ----
+function SharePanel() {
+  const [copied, setCopied] = useState(false);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (copyTimer.current) clearTimeout(copyTimer.current); }, []);
+  // The Shortcut appends the (URL-encoded) shared text itself, so the copyable
+  // piece is this origin's share URL up to the `text=` parameter.
+  const shareUrl = `${location.origin}/share?text=`;
+  const copy = async () => {
+    if (!await writeClipboard(shareUrl)) return;
+    setCopied(true);
+    if (copyTimer.current) clearTimeout(copyTimer.current);
+    copyTimer.current = setTimeout(() => setCopied(false), 1500);
+  };
+  return (
+    <div className="settings-form">
+      <p className="muted">Send text or a link from another app straight into a new Bivy session draft.</p>
+      <section className="settings-section">
+        <h4 className="settings-subhead">Android &amp; desktop</h4>
+        <p className="muted">Install Bivy (Add to Home Screen / Install app) and it appears in the system share sheet automatically. Whatever you share is waiting in the composer as a new session draft.</p>
+      </section>
+      <section className="settings-section">
+        <h4 className="settings-subhead">iPhone &amp; iPad</h4>
+        <p className="muted">iOS doesn't let web apps register in its share sheet, so add a one-time Shortcut that does the same job:</p>
+        <ol className="eph-steps">
+          <li>Open the <strong>Shortcuts</strong> app and tap <strong>+</strong> to create a new shortcut.</li>
+          <li>Add the <strong>URL Encode</strong> action — set its input to the <em>Shortcut Input</em> variable.</li>
+          <li>Add the <strong>Open URLs</strong> action, paste the address below into its URL field, and place the <em>URL Encoded Text</em> variable right after <code>text=</code>.</li>
+          <li>Open the shortcut's settings (ⓘ), turn on <strong>Show in Share Sheet</strong>, and name it <strong>Send to Bivy</strong>.</li>
+        </ol>
+        <div className="connect-command">
+          <code tabIndex={0} aria-label="Share URL for the iOS Shortcut">{shareUrl}</code>
+          <button type="button" className={`btn sm ghost icon-only${copied ? " is-copied" : ""}`} onClick={() => void copy()} aria-label={copied ? "Share URL copied" : "Copy share URL"} title={copied ? "Copied" : "Copy share URL"}>
+            {copied ? <CheckIcon size={16} /> : <CopyIcon size={16} />}
+          </button>
+        </div>
+        <p className="muted small">Sharing opens Bivy in Safari with the shared text in the composer — sign in there once if Safari and the installed app don't share a session.</p>
+      </section>
     </div>
   );
 }

@@ -32,6 +32,7 @@ export type SettingsView =
   | "providers"
   | "models"
   | "voice"
+  | "share"
   | "github"
   | "linear"
   | "slack"
@@ -50,6 +51,7 @@ const SETTINGS_VIEWS: readonly SettingsView[] = [
   "providers",
   "models",
   "voice",
+  "share",
   "github",
   "linear",
   "slack",

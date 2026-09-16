@@ -1089,10 +1089,14 @@ export class AppController {
     return () => this.composerPrefillListeners.delete(fn);
   }
 
-  /** Put a contextual prompt in the composer without sending an agent turn. */
-  prefillComposer(text: string): void {
+  /** Put a contextual prompt in the composer without sending an agent turn.
+   *  Returns whether a composer was mounted to receive it, so callers with a
+   *  must-not-drop payload (a share landing) can fall back to seeding the
+   *  stored draft instead. */
+  prefillComposer(text: string): boolean {
     for (const fn of this.composerPrefillListeners) fn(text);
     this.focusComposer();
+    return this.composerPrefillListeners.size > 0;
   }
 
   /** Subscribe to slash-menu-open requests (the Composer wires its "/" popover
