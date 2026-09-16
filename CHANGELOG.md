@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Nest sub-agent tool calls to arbitrary depth in session transcripts. A sub-agent that itself delegates (a grandchild tool call) previously vanished from the work-log sheet because the nesting walk only descended one level; it now nests under its parent at the correct depth, cycle-safe, and the delegation's "N steps nested below" count reflects the whole sub-tree.
+
 ## [0.16.24] - 2026-09-14
 
 ### Added
