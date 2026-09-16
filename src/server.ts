@@ -2584,7 +2584,18 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     // this a models.list answered for one agent (e.g. Codex's models) could
     // linger on the composer/picker after the user switched to another agent
     // (e.g. Claude) — the "Claude shows Codex models" bug.
-    relay?.sendEvent(await modelsListEventFor(record));
+    let event;
+    try {
+      event = await modelsListEventFor(record);
+    } catch (error) {
+      // A catalog read failure must never answer with silence: the generic
+      // relay catch would swallow the rejection and the client (notably a
+      // Cloud launch waiting to validate its saved model) could only guess
+      // via timeout. Name the real reason on the session instead.
+      relay?.sendEvent({ type: "session.error", sessionId: requestedSessionId ?? record.id, error: `Couldn't read this machine's model catalog: ${error instanceof Error ? error.message : String(error)}` });
+      return;
+    }
+    relay?.sendEvent(event);
   },
   "models.prefetch"(msg) {
     // The composer's agent picker opened: warm the scratch session for each

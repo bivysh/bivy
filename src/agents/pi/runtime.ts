@@ -333,8 +333,25 @@ class PiSession implements RuntimeSession {
    * reload. Async because that resolution reads the store.
    */
   async getModels(): Promise<ModelInfo[]> {
-    const models = await this.session.modelRuntime.getAvailable();
-    return models.map((model) => toModelInfo(model, true));
+    const runtime = this.session.modelRuntime;
+    try {
+      const models = await runtime.getAvailable();
+      return models.map((model) => toModelInfo(model, true));
+    } catch (error) {
+      // The runtime's availability refresh is a Promise.all across every
+      // provider's auth check, so one broken provider (an unreachable custom
+      // endpoint, a single failing credential read) rejects the whole catalog
+      // and the picker shows nothing. Degrade to per-provider listing and
+      // skip only the broken ones; rethrow only when truly nothing survives.
+      const models: ModelInfo[] = [];
+      for (const provider of runtime.getProviders()) {
+        try {
+          for (const model of await runtime.getAvailable(provider.id)) models.push(toModelInfo(model, true));
+        } catch { /* this provider is broken — the rest still list */ }
+      }
+      if (models.length) return models;
+      throw error instanceof Error ? error : new Error(String(error));
+    }
   }
 
   /**
@@ -347,7 +364,10 @@ class PiSession implements RuntimeSession {
   async getAllModels(): Promise<ModelInfo[]> {
     const runtime = this.session.modelRuntime;
     // Refresh availability first so `hasConfiguredAuth` reflects current creds.
-    await runtime.getAvailable();
+    // Best-effort: a failed refresh (one broken provider rejects the shared
+    // Promise.all) must not blank the full catalog — the flags then reflect
+    // the last successful refresh, which the picker can still act on.
+    await runtime.getAvailable().catch(() => {});
     return runtime.getModels().map((model) => toModelInfo(model, runtime.hasConfiguredAuth(model.provider)));
   }
 
