@@ -2,19 +2,26 @@
 // Copyright (c) 2026 Petter André Sjulstad
 // Share-target landing (`/share?title=…&text=…&url=…`): the Android share
 // sheet (Web Share Target) and the iOS "Send to Bivy" Shortcut both open this
-// URL; the client folds the payload into the new-session composer draft and
-// redirects to /sessions/new. See packages/web/src/shareTarget.ts.
+// URL; the client stashes the payload, redirects to /sessions/new, and shows a
+// destination sheet — new session by default, or any recent session. See
+// packages/web/src/shareTarget.ts and ShareDestinationSheet.tsx.
 import assert from "node:assert/strict";
 import {
   applyShareTarget,
+  clearPendingShare,
   mergeSharedText,
+  peekPendingShare,
+  PENDING_SHARE_KEY,
+  seedSessionDraft,
   sharedDraftText,
 } from "../packages/web/src/shareTarget.js";
+import { shareDestinations } from "../packages/web/src/components/ShareDestinationSheet.js";
 import {
   readComposerDraft,
   writeComposerDraft,
   type DraftStorage,
 } from "../packages/web/src/composerDraft.js";
+import type { SessionSummary } from "@bivy/core";
 
 class MemoryStorage implements DraftStorage {
   values = new Map<string, string>();
@@ -46,28 +53,57 @@ assert.equal(mergeSharedText("existing draft\n", "shared"), "existing draft\n\ns
 assert.equal(mergeSharedText("already has shared inside", "shared"), "already has shared inside");
 assert.equal(mergeSharedText("existing", ""), "existing");
 
-// --- applyShareTarget: seeds the "new" draft and redirects ------------------
-const storage = new MemoryStorage();
-assert.equal(applyShareTarget("/sessions/abc", "?text=nope", storage), null, "non-share paths are untouched");
-assert.equal(storage.values.size, 0);
+// --- applyShareTarget: stashes the payload and redirects --------------------
+const pending = new MemoryStorage();
+assert.equal(applyShareTarget("/sessions/abc", "?text=nope", pending), null, "non-share paths are untouched");
+assert.equal(pending.values.size, 0);
 
-assert.equal(applyShareTarget("/share", "?text=from%20the%20sheet", storage), "/sessions/new");
-assert.equal(readComposerDraft(storage, null).text, "from the sheet");
+assert.equal(applyShareTarget("/share", "?text=from%20the%20sheet", pending), "/sessions/new");
+assert.equal(peekPendingShare(pending), "from the sheet");
+// Peek does not consume — the sheet may not render until after a sign-in.
+assert.equal(peekPendingShare(pending), "from the sheet");
 
-// A second share appends below the existing draft and keeps attachments.
-writeComposerDraft(storage, null, readComposerDraft(storage, null).text, [
-  { kind: "file", name: "notes.txt", size: 4, mimeType: "text/plain" },
-]);
-assert.equal(applyShareTarget("/share/", "?text=another%20thing", storage), "/sessions/new");
-assert.deepEqual(readComposerDraft(storage, null), {
-  version: 2,
-  text: "from the sheet\n\nanother thing",
-  attachments: [{ kind: "file", name: "notes.txt", size: 4, mimeType: "text/plain" }],
-});
+// A second share before the first was placed appends to the stash.
+assert.equal(applyShareTarget("/share/", "?text=another%20thing", pending), "/sessions/new");
+assert.equal(peekPendingShare(pending), "from the sheet\n\nanother thing");
 
 // An empty payload still redirects (the share URL must never linger) but
-// leaves the draft alone.
-assert.equal(applyShareTarget("/share", "", storage), "/sessions/new");
-assert.equal(readComposerDraft(storage, null).text, "from the sheet\n\nanother thing");
+// leaves the stash alone.
+assert.equal(applyShareTarget("/share", "", pending), "/sessions/new");
+assert.equal(peekPendingShare(pending), "from the sheet\n\nanother thing");
+
+clearPendingShare(pending);
+assert.equal(peekPendingShare(pending), null);
+assert.equal(pending.values.has(PENDING_SHARE_KEY), false);
+
+// --- seedSessionDraft: destination drafts merge, attachments survive --------
+const drafts = new MemoryStorage();
+seedSessionDraft(drafts, null, "into the new draft");
+assert.equal(readComposerDraft(drafts, null).text, "into the new draft");
+
+writeComposerDraft(drafts, "session-9", "half-typed reply", [
+  { kind: "file", name: "notes.txt", size: 4, mimeType: "text/plain" },
+]);
+seedSessionDraft(drafts, "session-9", "shared payload");
+assert.deepEqual(readComposerDraft(drafts, "session-9"), {
+  version: 2,
+  text: "half-typed reply\n\nshared payload",
+  attachments: [{ kind: "file", name: "notes.txt", size: 4, mimeType: "text/plain" }],
+});
+// Delivering the same share twice never duplicates it.
+seedSessionDraft(drafts, "session-9", "shared payload");
+assert.equal(readComposerDraft(drafts, "session-9").text, "half-typed reply\n\nshared payload");
+
+// --- shareDestinations: newest first, provisioning placeholders excluded ----
+const session = (sessionId: string, updatedAt?: number, pendingLaunch?: boolean): SessionSummary =>
+  ({ sessionId, name: sessionId, updatedAt, pendingLaunch });
+const picked = shareDestinations([
+  session("old", 100),
+  session("provisioning", 900, true),
+  session("new", 500),
+  session("undated"),
+]);
+assert.deepEqual(picked.map((s) => s.sessionId), ["new", "old", "undated"]);
+assert.equal(shareDestinations(Array.from({ length: 20 }, (_, i) => session(`s${i}`, i))).length, 8, "list stays scannable");
 
 console.log("share-target: all tests passed");

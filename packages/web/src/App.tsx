@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { deriveActivation, cancelAutomationRun, deriveArtifacts, fetchAutomationRun, recordProductMetric, retryAutomationRun, type GithubQueueItem, type NotificationPreferences } from "@bivy/core";
+import { deriveActivation, cancelAutomationRun, deriveArtifacts, fetchAutomationRun, recordProductMetric, retryAutomationRun, type GithubQueueItem, type NotificationPreferences, type SessionSummary } from "@bivy/core";
 import { useAppState } from "./store/useStore.js";
 import { SessionList } from "./components/SessionList.js";
 import { ChatView } from "./components/ChatView.js";
@@ -27,6 +27,8 @@ import { classifySource, indexSessionSources, isLiveRunSession, isRunLogSession 
 import { runtimeSupportsTerminalTakeover } from "./terminalTakeover.js";
 import { indexRunEvidence, failingCheckNames } from "./runEvidence.js";
 import { SessionChangesSheet, countUniqueEditedFiles } from "./components/SessionChangesSheet.js";
+import { ShareDestinationSheet } from "./components/ShareDestinationSheet.js";
+import { clearPendingShare, peekPendingShare, seedSessionDraft } from "./shareTarget.js";
 import { ForkProgressDialog } from "./components/ForkProgressDialog.js";
 import { ArtifactsSheet } from "./components/ArtifactsSheet.js";
 import { ErrorToast } from "./components/ErrorToast.js";
@@ -116,6 +118,10 @@ export function App() {
   // over the transcript the store already holds (see deriveArtifacts) — no
   // extra round trip to the node.
   const [artifactsSheetOpen, setArtifactsSheetOpen] = useState(false);
+  // A share-sheet landing stashed its payload before mount (see shareTarget.ts
+  // / main.tsx); the destination sheet below lets the user pick where it goes.
+  // Shares always arrive via a full page load, so a mount-time read is enough.
+  const [pendingShare, setPendingShare] = useState<string | null>(() => peekPendingShare(sessionStorage));
   const artifacts = useMemo(() => deriveArtifacts(state.activeSession.transcript), [state.activeSession.transcript]);
   const [terminalOpen, setTerminalOpen] = useState(false);
   /** A live `bivy run` PTY selected from the sidebar; null means open the
@@ -1162,6 +1168,32 @@ export function App() {
             }}
           />
         </Suspense>
+      )}
+
+      {pendingShare && (
+        <ShareDestinationSheet
+          text={pendingShare}
+          sessions={state.sessionIndex.sessions}
+          onDeliver={(target: SessionSummary | null) => {
+            const text = pendingShare;
+            setPendingShare(null);
+            clearPendingShare(sessionStorage);
+            if (target) {
+              // Seed the stored draft BEFORE opening: the Composer reloads the
+              // draft on session switch, so the shared text is waiting there.
+              seedSessionDraft(localStorage, target.sessionId, text);
+              controller.openSessionOnNode(target.sessionId, target.path, target.nodeId);
+            } else if (state.activeSession.activeSessionId) {
+              // "New session" picked while a real session is active (a reload
+              // restored the stash mid-session): seed the new draft, then go.
+              seedSessionDraft(localStorage, null, text);
+              controller.newSession();
+            } else if (!controller.prefillComposer(text)) {
+              // No composer mounted to receive it — persist to the new draft.
+              seedSessionDraft(localStorage, null, text);
+            }
+          }}
+        />
       )}
 
       {/* Shared fixed-position stack: ErrorToast and UpdatePrompt can

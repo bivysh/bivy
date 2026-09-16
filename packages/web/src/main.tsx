@@ -19,8 +19,9 @@ import "./pwa-lifecycle.css";
 // Apply the saved theme before first paint to avoid a flash.
 applyTheme();
 // A share-sheet landing (`/share?text=…` — Android share target or the iOS
-// Shortcut) seeds the composer draft and rewrites the URL to /sessions/new.
-// Must happen before the app mounts so the Composer's draft read sees it.
+// Shortcut) stashes the payload for the destination sheet and rewrites the
+// URL to /sessions/new. Must happen before the app mounts so the App's
+// pending-share read sees it.
 consumeShareTarget();
 // Track the visual viewport so the shell stays pinned above the keyboard.
 initViewport();
