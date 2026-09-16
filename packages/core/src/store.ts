@@ -1076,17 +1076,10 @@ export class SessionStore {
   /** Per-session rendered transcript, so switching back paints instantly. */
   private transcriptCache = new Map<string, TranscriptEntry[]>();
   private static readonly CACHE_MAX = 30;
-  /** Session ids the user just deleted, kept briefly so an authoritative
-   *  full-list refresh that still predates the deletion can't resurrect the row.
-   *  In hosted mode `deleteSession` optimistically drops the row but then
-   *  immediately re-fetches the control-plane session index, which lags the
-   *  node's debounced, best-effort advert — so without this the just-deleted
-   *  session reappears and looks like the delete silently failed. Bounded by TTL
-   *  so a delete that genuinely failed on the node can't hide a row forever. */
+  /** Durable deletion intent. Offline ephemeral nodes and their account index
+   *  records can outlive any TTL; elapsed time must never resurrect a deleted
+   *  session. The view layer persists these markers across reloads. */
   private recentlyDeleted = new Map<string, number>();
-  // Long enough to survive a PWA reload and the node's 60s control-plane
-  // reconciliation. A failed delete still self-heals instead of hiding forever.
-  private static readonly DELETE_TOMBSTONE_MS = 5 * 60_000;
   /** Per-session raw node messages + history cursor (count + hash), so we can
    *  apply append deltas and echo the cursor for incremental backfill. */
   private historyRaw = new Map<string, { messages: any[]; count: number; historyHash: string }>();
@@ -2048,6 +2041,7 @@ export class SessionStore {
    *  the launch. The controller replaces this row with the node's canonical id
    *  as soon as session.new completes. */
   persistPendingSession(sessionId: string, name: string, activate = true, pendingNodeName?: string, startedAt = Date.now()): void {
+    if (this.isSessionDeleted(sessionId)) return;
     const existing = this.state.sessionIndex.sessions.find((s) => s.sessionId === sessionId);
     const row: SessionSummary = {
       ...existing,
@@ -2087,6 +2081,7 @@ export class SessionStore {
   }
 
   dismissPendingSession(sessionId: string): void {
+    this.recentlyDeleted.set(sessionId, Date.now());
     this.set({
       activeSessionId: this.state.activeSession.activeSessionId === sessionId ? null : this.state.activeSession.activeSessionId,
       sessions: this.state.sessionIndex.sessions.filter((s) => s.sessionId !== sessionId),
@@ -2141,6 +2136,7 @@ export class SessionStore {
 
   /** Replace a cold-start placeholder with the node's canonical session. */
   completePendingSession(pendingId: string, sessionId: string, nodeId: string): void {
+    if (this.isSessionDeleted(pendingId) || this.isSessionDeleted(sessionId)) return;
     const pending = this.state.sessionIndex.sessions.find((s) => s.sessionId === pendingId);
     const row: SessionSummary = {
       ...pending,
@@ -2186,12 +2182,11 @@ export class SessionStore {
       const at = Number(rawAt);
       if (id && Number.isFinite(at)) this.recentlyDeleted.set(id, at);
     }
-    this.pruneDeletedSessionTombstones();
+    this.set({ sessions: this.withoutRecentlyDeleted(this.state.sessionIndex.sessions) });
   }
 
   /** Serializable deletion guards for the view layer's local durable cache. */
   deletedSessionTombstones(): Record<string, number> {
-    this.pruneDeletedSessionTombstones();
     return Object.fromEntries(this.recentlyDeleted);
   }
 
@@ -2204,20 +2199,14 @@ export class SessionStore {
     this.set({ sessions: this.state.sessionIndex.sessions.filter((s) => s.sessionId !== sessionId) });
   }
 
-  private pruneDeletedSessionTombstones(): void {
-    const now = Date.now();
-    for (const [id, at] of this.recentlyDeleted) {
-      if (now - at > SessionStore.DELETE_TOMBSTONE_MS) this.recentlyDeleted.delete(id);
-    }
+  isSessionDeleted(sessionId: string): boolean {
+    return this.recentlyDeleted.has(sessionId);
   }
 
-  /** Drop rows the user just deleted, pruning expired tombstones as we go, so a
-   *  stale authoritative list can't resurrect a just-deleted session. */
+  /** Neither stale account records nor node refreshes can undo deletion. */
   private withoutRecentlyDeleted(sessions: SessionSummary[]): SessionSummary[] {
     if (this.recentlyDeleted.size === 0) return sessions;
-    this.pruneDeletedSessionTombstones();
-    if (this.recentlyDeleted.size === 0) return sessions;
-    return sessions.filter((s) => !this.recentlyDeleted.has(s.sessionId));
+    return sessions.filter((s) => !this.isSessionDeleted(s.sessionId));
   }
 
   /** Insert or merge a single session-list row (from a `session.created`
@@ -2225,7 +2214,7 @@ export class SessionStore {
    *  ahead of the authoritative `sessions.list` reconcile. Merges onto an
    *  existing row so we never clobber a name/status the list already carried. */
   private upsertSession(summary: SessionSummary): void {
-    if (!summary.sessionId) return;
+    if (!summary.sessionId || this.isSessionDeleted(summary.sessionId)) return;
     const existing = this.state.sessionIndex.sessions.find((s) => s.sessionId === summary.sessionId);
     if (existing) {
       const merged: SessionSummary = {

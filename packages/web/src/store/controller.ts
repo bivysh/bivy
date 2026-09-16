@@ -1804,7 +1804,7 @@ export class AppController {
     try {
       const raw = localStorage.getItem(AppController.DELETED_SESSIONS_KEY);
       if (raw) this.store.seedDeletedSessionTombstones(JSON.parse(raw));
-      this.persistDeletedSessionTombstones(); // also drops expired entries
+      this.persistDeletedSessionTombstones();
     } catch {
       /* corrupt/unavailable localStorage — live reconciliation still works */
     }
@@ -2762,6 +2762,12 @@ export class AppController {
   private async restorePendingLaunches(): Promise<void> {
     const launches = await this.pendingLaunchStore.list();
     for (const launch of launches) {
+      // A late provisioning write can race dismissal. Durable deletion intent
+      // wins over that saved startup, including after a browser reload.
+      if (this.store.isSessionDeleted(launch.id)) {
+        await this.pendingLaunchStore.remove(launch.id);
+        continue;
+      }
       this.pendingLaunches.set(launch.id, launch);
       this.store.persistPendingSession(launch.id, launch.prompt.text, false, launch.config.name, Date.parse(launch.createdAt) || Date.now());
       if (launch.machine?.nodeId && launch.phase !== "failed") {
@@ -2830,8 +2836,9 @@ export class AppController {
     this.pendingLaunches.delete(id);
     task?.transport?.close();
     if (task?.machine?.nodeId) this.clearBootProgress(task.machine.nodeId);
-    await this.pendingLaunchStore.remove(id);
     this.store.dismissPendingSession(id);
+    this.persistDeletedSessionTombstones();
+    await this.pendingLaunchStore.remove(id);
     if (this.store.getState().activeSession.activeSessionId == null) this.newSession();
   }
 

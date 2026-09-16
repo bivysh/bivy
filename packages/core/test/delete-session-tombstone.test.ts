@@ -51,6 +51,34 @@ describe("delete-session tombstone", () => {
     expect(reloaded.getState().sessionIndex.sessions).toEqual([]);
   });
 
+  it("ignores a late creation broadcast without hiding unrelated sessions", () => {
+    const store = new SessionStore();
+    store.removeSessionLocal("s1");
+    store.apply({ type: "session.created", sessionId: "s1" });
+    store.apply({ type: "session.created", sessionId: "s2" });
+    expect(store.getState().sessionIndex.sessions.map(s => s.sessionId)).toEqual(["s2"]);
+  });
+
+  it("does not restore or complete a dismissed cloud startup", () => {
+    const store = new SessionStore();
+    store.persistPendingSession("starting-1", "Test");
+    store.dismissPendingSession("starting-1");
+    store.completePendingSession("starting-1", "canonical-1", "eph-1");
+    expect(store.getState().sessionIndex.sessions).toEqual([]);
+    const reloaded = new SessionStore();
+    reloaded.seedDeletedSessionTombstones(store.deletedSessionTombstones());
+    reloaded.persistPendingSession("starting-1", "Test");
+    expect(reloaded.getState().sessionIndex.sessions).toEqual([]);
+    expect(reloaded.getState().activeSession.activeSessionId).toBeNull();
+  });
+
+  it("applies restored deletion intent to rows already in memory", () => {
+    const store = new SessionStore();
+    store.setSessions([{ sessionId: "s1" }]);
+    store.seedDeletedSessionTombstones({ s1: 1 });
+    expect(store.getState().sessionIndex.sessions).toEqual([]);
+  });
+
   it("tombstones a session.deleted broadcast so a stale refresh cannot resurrect a pruned session", () => {
     const store = new SessionStore();
     store.setSessions([{ sessionId: "s1", nodeId: "node-a", name: "One" }]);
@@ -59,7 +87,7 @@ describe("delete-session tombstone", () => {
     expect(store.getState().sessionIndex.sessions).toEqual([]);
   });
 
-  it("lets a session return once the tombstone expires", () => {
+  it("keeps offline ephemeral records deleted after months and a reload", () => {
     const store = new SessionStore();
     const realNow = Date.now;
     try {
@@ -67,10 +95,17 @@ describe("delete-session tombstone", () => {
       Date.now = () => now;
       store.setSessions([{ sessionId: "s1", nodeId: "node-a", name: "One" }]);
       store.removeSessionLocal("s1");
-      // Advance well past the durable tombstone TTL (5m).
-      now += 10 * 60_000;
-      store.setSessions([{ sessionId: "s1", nodeId: "node-a", name: "One" }]);
-      expect(store.getState().sessionIndex.sessions.map((s) => s.sessionId)).toEqual(["s1"]);
+      now += 180 * 24 * 60 * 60_000;
+      const stale = [{ sessionId: "s1", nodeId: "eph-retired", name: "One", rebuildable: true }];
+      store.setSessions(stale);
+      expect(store.getState().sessionIndex.sessions).toEqual([]);
+      const reloaded = new SessionStore();
+      reloaded.seedDeletedSessionTombstones(store.deletedSessionTombstones());
+      reloaded.seedSessions(stale);
+      reloaded.apply({ type: "sessions.list", sessions: stale });
+      reloaded.apply({ type: "session.created", sessionId: "s1" });
+      expect(reloaded.getState().sessionIndex.sessions).toEqual([]);
+      expect(reloaded.isSessionDeleted("s1")).toBe(true);
     } finally {
       Date.now = realNow;
     }
