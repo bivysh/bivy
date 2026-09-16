@@ -112,6 +112,16 @@ export default defineConfig({
         // painted frame instead of flashing an unrelated neutral.
         background_color: bgTokens.dark,
         theme_color: bgTokens.dark,
+        // Web Share Target: once installed, Bivy appears in the OS share sheet
+        // (Android/desktop Chromium — iOS ignores this; see the iOS Shortcut in
+        // Settings → Share to Bivy). Shared payloads arrive as a GET navigation
+        // to /share, which packages/web/src/shareTarget.ts folds into the
+        // new-session composer draft.
+        share_target: {
+          action: "/share",
+          method: "GET",
+          params: { title: "title", text: "text", url: "url" },
+        },
         icons: [
           { src: "/icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },
           { src: "/icon-512.png", sizes: "512x512", type: "image/png", purpose: "any" },

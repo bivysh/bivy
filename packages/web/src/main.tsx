@@ -10,6 +10,7 @@ import { initViewport } from "./viewport.js";
 import { requestPersistentStorage } from "./storage.js";
 import { initializeInstallLifecycle } from "./pwaLifecycle.js";
 import { controller } from "./store/useStore.js";
+import { consumeShareTarget } from "./shareTarget.js";
 import "@bivy/ui/tokens.css";
 import "./styles.css";
 import "./ux-cleanup.css";
@@ -17,6 +18,10 @@ import "./pwa-lifecycle.css";
 
 // Apply the saved theme before first paint to avoid a flash.
 applyTheme();
+// A share-sheet landing (`/share?text=…` — Android share target or the iOS
+// Shortcut) seeds the composer draft and rewrites the URL to /sessions/new.
+// Must happen before the app mounts so the Composer's draft read sees it.
+consumeShareTarget();
 // Track the visual viewport so the shell stays pinned above the keyboard.
 initViewport();
 // Ask for durable storage so the device keypair + session token survive relaunch

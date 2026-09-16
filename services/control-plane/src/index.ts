@@ -696,6 +696,16 @@ if (hasReactApp) {
     noStorePwaShell(res);
     res.type("html").send(reactIndexHtml);
   });
+  // Web Share Target landing (`/share?title=…&text=…&url=…` — see the
+  // `share_target` manifest entry in packages/web/vite.config.ts and
+  // packages/web/src/shareTarget.ts). Android's share sheet and the iOS
+  // "Send to Bivy" Shortcut open this as a plain navigation, so a cold load
+  // (no service worker yet) must serve the app shell; the client folds the
+  // params into the composer draft and rewrites the URL to /sessions/new.
+  app.get("/share", (_req, res) => {
+    noStorePwaShell(res);
+    res.type("html").send(reactIndexHtml);
+  });
 }
 
 function bearer(req: Request): string | null {
