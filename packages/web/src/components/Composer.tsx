@@ -196,11 +196,11 @@ export function Composer({
   const currentCaps = currentRuntime?.capabilities as
     | { modelSelection?: boolean; commands?: SlashCommand[] }
     | undefined;
-  // A Cloud draft has no destination catalog until its Machine starts. Never
-  // present the connected personal Machine's model list as if it belonged to
-  // that future runner; it may contain models or credentials Cloud cannot use.
+  // Cloud drafts use the account-backed catalog preview, so selection must
+  // remain available before a Machine connects. Only an in-flight launch waits
+  // for its destination catalog (and uses the launch-specific model picker).
   const pendingLaunch = state.sessionIndex.sessions.find(session => session.sessionId === state.activeSession.activeSessionId)?.pendingLaunch;
-  const destinationCatalogPending = Boolean(pendingLaunch) || (!state.activeSession.activeSessionId && Boolean(state.draft.ephemeralConfig));
+  const destinationCatalogPending = Boolean(pendingLaunch);
   const modelSelectable = !destinationCatalogPending && currentCaps?.modelSelection !== false;
   // The active agent's own slash commands (e.g. Claude Code's `/compact`). These
   // are advertised PER SESSION (session.created / session.capabilities → the
@@ -836,7 +836,7 @@ export function Composer({
                 data-pending-model={destinationCatalogPending || undefined}
                 onClick={() => { if (modelSelectable) setPicker("model"); }}
                 disabled={!modelSelectable}
-                title={modelSelectable ? "Model" : destinationCatalogPending ? "Choose a model after startup, before your saved first message is sent" : "This agent uses its own default model"}
+                title={modelSelectable ? `Model: ${modelLabel}` : destinationCatalogPending ? "Choose a model after startup, before your saved first message is sent" : "This agent uses its own default model"}
               >
                 <span className="pill-glyph"><ModelGlyph /></span>
                 <span className="pill-label">{modelLabel}</span>
