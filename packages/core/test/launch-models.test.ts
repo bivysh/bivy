@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from "vitest";
-import { launchModels } from "../src/launch-models.js";
+import { launchModels, launchModelUnavailableError } from "../src/launch-models.js";
 
 describe("pre-launch model catalog", () => {
   it("works without a machine and deduplicates account credentials", () => {
@@ -27,5 +27,23 @@ describe("pre-launch model catalog", () => {
     ]);
     expect(models.find(model => model.id === "local-model")?.configured).toBe(true);
     expect(models.some(model => model.id === "unknown" || model.modelCount != null)).toBe(false);
+  });
+});
+
+describe("saved-model unavailable diagnosis", () => {
+  const saved = { id: "claude-fable-5", provider: "anthropic" };
+
+  it("distinguishes a missing model id from a missing provider", () => {
+    const withProvider = launchModelUnavailableError(saved, [{ id: "claude-sonnet-4-5", provider: "anthropic" }], true);
+    expect(withProvider).toBe("Your saved model isn't available on this machine. Choose another model.");
+    const withoutProvider = launchModelUnavailableError(saved, [{ id: "gpt-test", provider: "openai-codex" }], true);
+    expect(withoutProvider).toContain("its anthropic credential didn't reach Bivy Cloud");
+    expect(withoutProvider).toContain("unattended-runs grant");
+  });
+
+  it("points user-owned machines at connecting the provider, not the Cloud grant", () => {
+    const error = launchModelUnavailableError(saved, [], false);
+    expect(error).toContain("no anthropic credential is connected here");
+    expect(error).not.toContain("Bivy Cloud");
   });
 });

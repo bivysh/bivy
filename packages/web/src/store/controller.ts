@@ -14,6 +14,7 @@ import { SessionTitleKeys } from "./session-title-keys.js";
 import {
   DirectTransport,
   launchModels,
+  launchModelUnavailableError,
   RelayTransport,
   SessionStore,
   createLocalStore,
@@ -2321,21 +2322,34 @@ export class AppController {
     }
   }
 
+  /** The model provider a managed launch definitely needs, when derivable:
+   *  agent-locked providers (Codex → openai-codex, Claude → anthropic) or the
+   *  saved model's provider. Null when the launch could run on any credential. */
+  private managedLaunchProvider(agentId: string, modelProvider?: string): string | null {
+    return agentId.startsWith("codex")
+      ? "openai-codex"
+      : agentId.startsWith("claude")
+        ? "anthropic"
+        : modelProvider ?? null;
+  }
+
   private async prepareManagedCredential(agentId: string, modelProvider?: string): Promise<boolean> {
     const hostedReady = await this.managedCredentialReady().catch(() => false);
     // Account readiness means the hosted snapshot contains at least one
     // credential, not necessarily the one this draft's agent needs. Always
     // check the requested provider before treating the snapshot as ready.
-    return await this.tryPublishManagedCredential(agentId, hostedReady, modelProvider) || hostedReady;
+    const published = await this.tryPublishManagedCredential(agentId, hostedReady, modelProvider);
+    // When the launch's provider is known, an unrelated credential in the
+    // hosted snapshot must not count as ready: the machine would boot green
+    // and only dead-end later on "your saved model isn't available". Fail
+    // here instead so the launch routes into credential setup for that
+    // provider (beginManagedCredentialSetup).
+    return this.managedLaunchProvider(agentId, modelProvider) ? published : published || hostedReady;
   }
 
   private async tryPublishManagedCredential(agentId: string, hostedReady: boolean, modelProvider?: string): Promise<boolean> {
     if (this.store.getState().connection.status !== "online") return false;
-    const provider = agentId.startsWith("codex")
-      ? "openai-codex"
-      : agentId.startsWith("claude")
-        ? "anthropic"
-        : modelProvider ?? null;
+    const provider = this.managedLaunchProvider(agentId, modelProvider);
     const candidate = this.store.getState().settings.credentialRecords.find(
       (record) => record.sync === "account" && record.kind !== "reference"
         && (!provider || record.provider === provider),
@@ -2381,9 +2395,13 @@ export class AppController {
     this.store.updateLaunchCheckpoint(provisionalId, "service", "done");
     this.listProviders();
     this.listCredentialRecords();
-    const provider = this.store.getState().settings.credentialRecords.find(
-      (record) => record.sync === "account" && record.kind !== "reference",
-    )?.provider ?? "anthropic";
+    // Set up the provider this launch actually needs (agent-locked or the saved
+    // model's), not whichever account credential happens to be listed first.
+    const frame = task.prompt.frame as { agent?: string; model?: { provider?: string } } | undefined;
+    const provider = this.managedLaunchProvider(String(frame?.agent || ""), frame?.model?.provider)
+      ?? this.store.getState().settings.credentialRecords.find(
+        (record) => record.sync === "account" && record.kind !== "reference",
+      )?.provider ?? "anthropic";
     this.store.setNeedsModelAuth({ nodeId, provider });
   }
 
@@ -2495,7 +2513,7 @@ export class AppController {
               if (desired && !task.modelSelecting) void this.chooseLaunchModel(provisionalId, desired);
               else {
                 this.store.updateLaunchCheckpoint(provisionalId, "message", "waiting");
-                this.store.setLaunchModelChoice(provisionalId, { models: task.models ?? [], current, selecting: Boolean(task.modelSelecting), error: requested && !desired ? "Your saved model isn't available on this machine. Choose another model." : undefined });
+                this.store.setLaunchModelChoice(provisionalId, { models: task.models ?? [], current, selecting: Boolean(task.modelSelecting), error: requested && !desired ? launchModelUnavailableError(requested, task.models ?? [], task.config.computeSource === "managed") : undefined });
               }
             }
             return;
