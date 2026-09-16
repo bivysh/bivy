@@ -24,3 +24,18 @@ export function launchModels(providers: readonly string[], discovered: readonly 
   }
   return [...models.values()];
 }
+
+/**
+ * Why a launch's saved model can't be selected on the destination machine.
+ * A catalog that lacks the whole provider means its credential never reached
+ * the machine — a very different fix from a catalog that has the provider but
+ * not this model id, so say which one it is instead of a generic shrug.
+ */
+export function launchModelUnavailableError(requested: { id: string; provider: string }, models: readonly ModelInfo[], managed: boolean): string {
+  if (models.some(model => model.provider === requested.provider)) {
+    return "Your saved model isn't available on this machine. Choose another model.";
+  }
+  return managed
+    ? `Your saved model isn't available on this machine — its ${requested.provider} credential didn't reach Bivy Cloud. Check its unattended-runs grant in Settings → Models & keys (with a machine online), then refresh, or choose another model.`
+    : `Your saved model isn't available on this machine — no ${requested.provider} credential is connected here. Connect ${requested.provider} on this machine, then refresh, or choose another model.`;
+}

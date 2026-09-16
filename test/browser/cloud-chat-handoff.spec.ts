@@ -177,7 +177,9 @@ for (const theme of ["light", "dark"]) for (const outcome of ["reply", "error", 
       await expect(page.getByText(/Couldn't load models from this machine/).last()).toBeVisible();
       await page.evaluate("globalThis.catalogQueryError = false");
       await page.getByRole("button", { name: "Refresh models" }).click();
-      await expect(page.getByText(/Your saved model isn't available on this machine/).last()).toBeVisible();
+      // The saved model's provider is absent from the destination catalog, so
+      // the error must name the credential-delivery gap, not shrug generically.
+      await expect(page.getByText(/Your saved model isn't available on this machine — its previous-node credential didn't reach Bivy Cloud/).last()).toBeVisible();
       expect(await page.evaluate("globalThis.commands")).not.toContain("prompt");
       await page.evaluate("globalThis.catalogReady = true");
       await page.getByRole("button", { name: "Refresh models" }).click();

@@ -70,6 +70,11 @@ test("managed-only cold start performs provider setup on the original interactiv
   expect(controller).toContain('record.sync === "account" && record.kind !== "reference"');
   expect(controller).not.toContain('record.kind !== "reference" && record.unattended');
   expect(controller).toContain("Stay on the original provisional session route");
+  // A provider-specific launch (agent-locked or saved-model provider) must not
+  // ride on an unrelated credential in the hosted snapshot — it fails into
+  // credential setup for that provider instead of dead-ending after boot.
+  expect(controller).toContain("this.managedLaunchProvider(agentId, modelProvider) ? published : published || hostedReady");
+  expect(controller).toContain("this.managedLaunchProvider(String(frame?.agent || \"\"), frame?.model?.provider)");
   expect(provisioner).toContain("hostedCredentialPublisher");
   expect(controlPlane).toContain("managed guests cannot replace hosted credentials");
   expect(wizard).toContain("controller.ensureManagedSessionDefaults()");
