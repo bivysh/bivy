@@ -13,6 +13,7 @@ import { SessionTitleKeys } from "./session-title-keys.js";
 
 import {
   DirectTransport,
+  launchModels,
   RelayTransport,
   SessionStore,
   createLocalStore,
@@ -696,6 +697,9 @@ export class AppController {
         // (e.g. a plain .get(), or an event from an unrelated flow that happens
         // to carry its own requestId).
         this.resolveAck(event);
+        // A connected machine's catalog must not overwrite an account-backed
+        // preview for a different, not-yet-created machine.
+        if ((type === "models.list" || type === "model.updated") && this.isCloudModelDraft()) return;
         if (type === "pong") {
           const rid = String(event.requestId || "");
           if (rid) this.pendingLivenessPings.delete(rid);
@@ -790,7 +794,10 @@ export class AppController {
           this.store.markLaunchFirstResponse(activeAfter.activeSessionId);
         }
         this.observeActivationMilestones(before, appliedEvent);
-        if (appliedEvent.type === "credentials.records") void this.maybeGrantManagedCredential();
+        if (appliedEvent.type === "credentials.records") {
+          void this.maybeGrantManagedCredential();
+          if (this.isCloudModelDraft()) this.listModels();
+        }
         if (appliedEvent.type === "session.deleted") this.persistDeletedSessionTombstones();
         this.maybeFlushPendingPrompt(appliedEvent);
         this.followupCoordinator.confirm(appliedEvent);
@@ -1330,6 +1337,7 @@ export class AppController {
    */
   pickDraftEphemeralRunner(config: EphemeralNodeConfig): void {
     this.store.setDraftEphemeralConfig(config);
+    this.listModels();
   }
 
   /** Switch to another node without a full reload. Selecting a concrete node
@@ -2103,13 +2111,9 @@ export class AppController {
   /** Draft repo/branch/agent/model to thread into the next session.new. */
   private draftSessionFields(): Record<string, unknown> {
     const s = this.store.getState();
-    // Model catalogs and their `configured` flags belong to the connected
-    // Machine. A Cloud/ephemeral draft targets a different, not-yet-booted
-    // Machine, so forwarding the current Machine's model selection can make an
-    // otherwise healthy launch fail with "Model is not available on this
-    // node." Let the destination runtime choose its credential-backed default;
-    // its own catalog becomes authoritative once it connects.
-    const model = !s.draft.ephemeralConfig && s.catalogs.currentModel
+    // Preserve the preview choice. Cloud startup validates it against the
+    // destination catalog before selecting it and sending the saved prompt.
+    const model = s.catalogs.currentModel
       ? { provider: (s.catalogs.currentModel as any).provider, id: s.catalogs.currentModel.id }
       : undefined;
     return {
@@ -2260,7 +2264,7 @@ export class AppController {
       // overlaps the provider create/image pull instead of adding up to 20s in
       // front of every managed cold start.
       const managedCredentialReadiness = config.computeSource === "managed"
-        ? this.prepareManagedCredential(requestedAgent)
+        ? this.prepareManagedCredential(requestedAgent, (task.prompt.frame as { model?: { provider?: string } }).model?.provider)
         : Promise.resolve(true);
       this.store.updateLaunchCheckpoint(provisionalId, "capacity", "active");
       if (!task.prompt.frame || !("repo" in task.prompt.frame) || !task.prompt.frame.repo) {
@@ -2317,21 +2321,21 @@ export class AppController {
     }
   }
 
-  private async prepareManagedCredential(agentId: string): Promise<boolean> {
+  private async prepareManagedCredential(agentId: string, modelProvider?: string): Promise<boolean> {
     const hostedReady = await this.managedCredentialReady().catch(() => false);
     // Account readiness means the hosted snapshot contains at least one
     // credential, not necessarily the one this draft's agent needs. Always
     // check the requested provider before treating the snapshot as ready.
-    return await this.tryPublishManagedCredential(agentId, hostedReady) || hostedReady;
+    return await this.tryPublishManagedCredential(agentId, hostedReady, modelProvider) || hostedReady;
   }
 
-  private async tryPublishManagedCredential(agentId: string, hostedReady: boolean): Promise<boolean> {
+  private async tryPublishManagedCredential(agentId: string, hostedReady: boolean, modelProvider?: string): Promise<boolean> {
     if (this.store.getState().connection.status !== "online") return false;
     const provider = agentId.startsWith("codex")
       ? "openai-codex"
       : agentId.startsWith("claude")
         ? "anthropic"
-        : null;
+        : modelProvider ?? null;
     const candidate = this.store.getState().settings.credentialRecords.find(
       (record) => record.sync === "account" && record.kind !== "reference"
         && (!provider || record.provider === provider),
@@ -2457,6 +2461,12 @@ export class AppController {
         onEvent: (event) => {
           if (adoptedHandlers) { adoptedHandlers.onEvent(event); return; }
           if (!ownsLaunch()) return;
+          // Credential hydration may finish after the first catalog response.
+          // Refresh on the launch's own channel, not whichever machine happens
+          // to be visible in the main pane. Keep the original prompt intact.
+          if ((event.type === "credentials.records" || event.type === "providers.list") && task.sessionId && !task.modelQuery) {
+            this.refreshLaunchModels(provisionalId);
+          }
           const reportedModel = (event.type === "models.list" ? event.current : event.model) as ModelInfo | undefined;
           if (event.type === "session.error" && task.sessionId && !task.modelApproved && event.sessionId === task.sessionId) {
             task.modelSelecting = undefined;
@@ -2476,7 +2486,7 @@ export class AppController {
             task.models = (Array.isArray(event.models) ? event.models : []).filter((model: ModelInfo) => model && model.configured !== false && typeof model.id === "string" && model.id !== "unknown" && typeof model.provider === "string" && model.provider !== "unknown" && model.id && model.provider);
             const current = task.models?.find(model => model.id === reportedModel?.id && model.provider === reportedModel?.provider);
             const requested = (task.prompt.frame as { model?: { id: string; provider: string } }).model;
-            if (!task.modelSelecting && current && requested?.id === current.id && requested.provider === current.provider) {
+            if (!task.modelSelecting && current && (!requested || (requested.id === current.id && requested.provider === current.provider))) {
               task.modelApproved = true;
               this.store.setLaunchModelChoice(provisionalId, undefined);
               void this.sendPendingLaunchPrompt(provisionalId, task.sessionId!, transport);
@@ -2927,7 +2937,48 @@ export class AppController {
     this.send({ kind: "capabilities.get" });
   }
 
+  private cloudModelQuery = 0;
+
+  private isCloudModelDraft(): boolean {
+    const s = this.store.getState();
+    return !s.activeSession.activeSessionId && !this.direct && Boolean(s.draft.ephemeralConfig || !this.local.cur);
+  }
+
+  private async listCloudModels(): Promise<void> {
+    const query = ++this.cloudModelQuery;
+    const state = this.store.getState();
+    const config = state.draft.ephemeralConfig;
+    const runtimeId = state.catalogs.selectedAgentId;
+    const nodeId = this.local.cur;
+    const discovered = state.catalogs.models;
+    const records = state.settings.credentialRecords;
+    try {
+      const [keys, oauth] = await Promise.all([
+        this.ephemeralKeys.modelKeyEntries(),
+        this.ephemeralKeys.oauthCredentialEntries(),
+      ]);
+      const current = this.store.getState();
+      if (query !== this.cloudModelQuery || !this.isCloudModelDraft()
+        || current.draft.ephemeralConfig !== config || current.catalogs.selectedAgentId !== runtimeId
+        || this.local.cur !== nodeId) return;
+      const providers = [
+        ...records.filter(record => record.sync === "account" && record.kind !== "reference"),
+        ...keys.filter(key => key.scope === "account" || config?.computeSource !== "managed"),
+        ...oauth,
+      ].map(record => record.provider);
+      this.store.apply({ type: "models.list", runtimeId, models: launchModels(providers, discovered) } as ServerEvent);
+    } catch {
+      if (query === this.cloudModelQuery && this.isCloudModelDraft()) {
+        this.store.setError("Couldn't load account models. Open the model picker to try again.");
+      }
+    }
+  }
+
   listModels(): void {
+    if (this.isCloudModelDraft()) {
+      void this.listCloudModels();
+      return;
+    }
     const s = this.store.getState();
     const activeId = s.activeSession.activeSessionId;
     // A managed launch installs a provisional UI identity before session.new is
@@ -3020,6 +3071,10 @@ export class AppController {
 
     this.store.setSelectedAgentLocal(rt.id);
     this.local.setLastChoice({ agentId: rt.id });
+    if (this.isCloudModelDraft()) {
+      this.listModels();
+      return;
+    }
     // Tell the node to switch its default runtime. Do NOT request models here:
     // runtime.select flips the default asynchronously on the node, so a
     // models.list sent now would race the switch and be answered against the
