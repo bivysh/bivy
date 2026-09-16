@@ -9,7 +9,7 @@ test.beforeAll(async () => {
   await server.listen(); origin = new URL(server.resolvedUrls!.local[0]).origin;
 });
 test.afterAll(async () => { await server?.close(); });
-for (const theme of ["light", "dark"]) for (const outcome of ["reply", "error", "waiting", "empty", "saved", "native", "cancel"]) {
+for (const theme of ["light", "dark"]) for (const outcome of ["reply", "error", "waiting", "empty", "saved", "default", "hydrated", "native", "cancel"]) {
   test(`Cloud chat owns immediate post-ack ${outcome} (${theme})`, async ({ page }, info) => {
     page.on("pageerror", error => console.error(error.message));
     let bootstrapReady = false;
@@ -45,11 +45,11 @@ for (const theme of ["light", "dark"]) for (const outcome of ["reply", "error", 
       controller.store.beginOpen('starting-one');
       for (const id of ['account','capacity','machine','service','credentials','repository','agent']) controller.store.updateLaunchCheckpoint('starting-one', id, 'done');
       const task = { id: 'starting-one', config: { name: 'Bivy Cloud', computeSource: 'managed' }, machine: { nodeId: 'cloud-node' }, phase: 'booting', logs: [], followups: [], prompt: { text: 'Test', clientMessageId: 'first', requestId: 'create', frame: { kind: 'session.new', requestId: 'create' } } };
-      if (${JSON.stringify(outcome)} === 'saved') {
+      if (['saved', 'hydrated'].includes(${JSON.stringify(outcome)})) {
         task.prompt.frame.model = { id: 'gpt-test', provider: 'openai-codex' };
       }
-      if (${JSON.stringify(outcome)} === 'reply') task.prompt.frame.model = { id: 'stale-model', provider: 'previous-node' };
-      globalThis.catalogReady = ${JSON.stringify(outcome)} !== 'empty';
+      if (!['saved', 'default', 'hydrated', 'native'].includes(${JSON.stringify(outcome)})) task.prompt.frame.model = { id: 'stale-model', provider: 'previous-node' };
+      globalThis.catalogReady = !['empty', 'hydrated'].includes(${JSON.stringify(outcome)});
       globalThis.catalogQueryError = ${JSON.stringify(outcome)} === 'empty';
       controller.pendingLaunches.set(task.id, task);
       globalThis.earlyTeardowns = 0;
@@ -88,10 +88,10 @@ for (const theme of ["light", "dark"]) for (const outcome of ["reply", "error", 
           this.handlers.onEvent({ type: 'session.history', sessionId: 'real-session', requestId: 'create', messages: [] });
         }
         if (command.kind === 'models.list' && globalThis.catalogQueryError) throw new Error('offline');
-        if (command.kind === 'models.list') this.handlers.onEvent({ type: 'models.list', sessionId: command.sessionId, modelSelection: ${JSON.stringify(outcome)} !== 'native', current: globalThis.selectedModel || (${JSON.stringify(theme)} === 'dark' ? { provider: 'openai-codex', id: 'gpt-test' } : { provider: 'unknown', id: 'unknown' }), models: globalThis.catalogReady && ${JSON.stringify(outcome)} !== 'native' ? [{ id: 'gpt-test', provider: 'openai-codex', label: 'Test model', configured: true }, { id: 'unconnected', provider: 'other', configured: false }] : [] });
+        if (command.kind === 'models.list') this.handlers.onEvent({ type: 'models.list', sessionId: command.sessionId, modelSelection: ${JSON.stringify(outcome)} !== 'native', current: globalThis.selectedModel || (${JSON.stringify(theme)} === 'dark' || ${JSON.stringify(outcome)} === 'default' ? { provider: 'openai-codex', id: 'gpt-test' } : { provider: 'unknown', id: 'unknown' }), models: globalThis.catalogReady && ${JSON.stringify(outcome)} !== 'native' ? [{ id: 'gpt-test', provider: 'openai-codex', label: 'Test model', configured: true }, { id: 'unconnected', provider: 'other', configured: false }] : [] });
         if (command.kind === 'model.select') {
           globalThis.selectedModel = { id: command.id, provider: command.provider };
-          if (${JSON.stringify(outcome)} === 'saved') this.handlers.onEvent({ type: 'model.updated', sessionId: 'real-session', model: globalThis.selectedModel });
+          if (['saved', 'hydrated'].includes(${JSON.stringify(outcome)})) this.handlers.onEvent({ type: 'model.updated', sessionId: 'real-session', model: globalThis.selectedModel });
         }
         if (command.kind === 'prompt') {
           globalThis.delivered.push(command);
@@ -145,7 +145,12 @@ for (const theme of ["light", "dark"]) for (const outcome of ["reply", "error", 
     expect(await page.evaluate("globalThis.mainCommands.some(command => command.kind === 'history' && command.sessionId === 'established-session')")).toBe(true);
     expect(await page.evaluate("globalThis.commands")).not.toContain("session.new");
     bootstrapReady = true;
-    if (outcome !== "saved" && outcome !== "native") {
+    if (outcome === "hydrated") {
+      await expect(page.getByText("Choose a model before your first message", { exact: true })).toBeVisible();
+      expect(await page.evaluate("globalThis.commands")).not.toContain("prompt");
+      await page.evaluate("globalThis.catalogReady = true; globalThis.connection.handlers.onEvent({ type: 'providers.list', providers: [] })");
+    }
+    if (outcome !== "saved" && outcome !== "default" && outcome !== "hydrated" && outcome !== "native") {
     await expect(page.getByText("Choose a model before your first message", { exact: true })).toBeVisible();
     expect(await page.evaluate("globalThis.commands")).not.toContain("prompt");
     await page.evaluate("globalThis.refreshAccountIndex()");
@@ -172,7 +177,7 @@ for (const theme of ["light", "dark"]) for (const outcome of ["reply", "error", 
       await expect(page.getByText(/Couldn't load models from this machine/).last()).toBeVisible();
       await page.evaluate("globalThis.catalogQueryError = false");
       await page.getByRole("button", { name: "Refresh models" }).click();
-      await expect(page.getByText(/No connected models are available/)).toBeVisible();
+      await expect(page.getByText(/Your saved model isn't available on this machine/).last()).toBeVisible();
       expect(await page.evaluate("globalThis.commands")).not.toContain("prompt");
       await page.evaluate("globalThis.catalogReady = true");
       await page.getByRole("button", { name: "Refresh models" }).click();
