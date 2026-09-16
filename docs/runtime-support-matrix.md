@@ -93,8 +93,9 @@ Beyond start/resume/model/approvals, the shared layer also surfaces, where the
 agent emits it: **token usage** (parsed from the agent's JSON — Gemini/Qwen/Goose
 today — via `getUsage`/`capabilities.usageReporting`), a **reasoning/thinking
 stream** (rendered as a collapsible thinking block, e.g. Codex reasoning items),
-and **reasoning-effort selection** (Codex `-c model_reasoning_effort=<level>`;
-enable for any agent with `BIVY_<ID>_THINKING`). Structured file diffs are already
+and **reasoning-effort selection** (Codex `-c model_reasoning_effort=<level>`,
+Grok `--reasoning-effort <low|medium|high|xhigh>`; enable for any agent with
+`BIVY_<ID>_THINKING`). Structured file diffs are already
 universal (the harness snapshots the worktree each turn → `session.changes`). The
 bivy-agent-protocol carries all of these too — a shim advertises models in its
 `hello` and answers `model.set`, emits `usage` / `message.reasoning`, resumes its
