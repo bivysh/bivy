@@ -87,6 +87,7 @@ import { forceAbortTurn } from "./session/abort-recovery.js";
 import { runRequiredAutomationChecks } from "./automation-checks.js";
 import { configToLegacySettings, mergeLegacyIntoNodeConfig, readNodeConfig, writeNodeConfig, type NodeConfig } from "./node-config.js";
 import { loadProjectPolicy, resolveProjectSafety } from "./project-policy.js";
+import { hostedCustodyNode } from "./hosted-custody.js";
 import type { ApprovalMode } from "./guard.js";
 import { PolicyEngine } from "./policy/policy-engine.js";
 import { SessionAllowRules } from "./policy/session-allow.js";
@@ -3234,7 +3235,11 @@ const hostedImportedRecordsPath = path.join(appDir, "model-auth-hosted-records.j
 let lastPushedModelAuthCiphertext = "";
 let lastPushedHostedModelAuthCiphertext = "";
 let lastPushedHostedModelAuthRevision = -1;
-const isHostedCustodyNode = () => Boolean(process.env.BIVY_HOSTED_CREDENTIAL_CUSTODY || process.env.BIVY_GITHUB_HOSTED_TASKS);
+// Custody semantics are keyed on the dedicated flag (plus an ephemeral
+// back-compat case) — see src/hosted-custody.ts. A persistent personal node
+// that polls the hosted GitHub queue is NOT a custody guest: it owns its
+// logins and must keep account sync and unattended-escrow publishing.
+const isHostedCustodyNode = () => hostedCustodyNode();
 
 function readLocalModelAuthVaultKey(): string | undefined {
   try {
