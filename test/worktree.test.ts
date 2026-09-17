@@ -95,7 +95,30 @@ async function main() {
     assert.ok(fs.existsSync(path.join(fallback.path, "README.md")), "invalid-base fallback has repo contents");
     await removeWorktree(fallback.repoRoot, fallback.path);
 
-    console.log("worktree: ok (create, local/remote recovery, dirty work preservation, collision safety, invalid-base fallback)");
+    // An empty repo (unborn HEAD, e.g. a brand-new GitHub repo with no commits)
+    // must still get a worktree: the branch starts as an orphan instead of
+    // failing with `fatal: invalid reference: HEAD`.
+    const empty = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-wt-empty-"));
+    try {
+      await exec("git", ["-C", empty, "init", "-q"]);
+      await exec("git", ["-C", empty, "config", "user.email", "t@t"]);
+      await exec("git", ["-C", empty, "config", "user.name", "t"]);
+      const orphan = await createWorktree({ repoDir: empty, id: "issue-1" });
+      assert.equal(orphan.branch, "bivy/issue-1");
+      // Re-adoption works even before any commit exists.
+      const unbornReadopt = await createWorktree({ repoDir: empty, id: "issue-1", branch: orphan.branch });
+      assert.equal(unbornReadopt.path, orphan.path);
+      // The agent can commit; that commit becomes the repo's root commit.
+      fs.writeFileSync(path.join(orphan.path, "hello.txt"), "hi\n");
+      await exec("git", ["-C", orphan.path, "add", "-A"]);
+      await exec("git", ["-C", orphan.path, "commit", "-qm", "root"]);
+      const bornReadopt = await createWorktree({ repoDir: empty, id: "issue-1", branch: orphan.branch });
+      assert.equal(bornReadopt.path, orphan.path);
+    } finally {
+      fs.rmSync(empty, { recursive: true, force: true });
+    }
+
+    console.log("worktree: ok (create, local/remote recovery, dirty work preservation, collision safety, invalid-base fallback, empty-repo orphan)");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
