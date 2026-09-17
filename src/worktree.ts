@@ -121,7 +121,14 @@ export async function createWorktree(opts: {
     if (remoteExists) base = `refs/remotes/origin/${branch}`;
     else if (base !== "HEAD" && !(await refExists(repoRoot, base))) base = "HEAD";
     // Fail closed on path collisions; never delete an unrelated directory.
-    await exec("git", ["-C", repoRoot, "worktree", "add", "-b", branch, wtPath, base]);
+    if (base === "HEAD" && !(await refExists(repoRoot, "HEAD"))) {
+      // Empty repo (e.g. a freshly created GitHub repo with no commits): HEAD is
+      // unborn, so it can't seed a worktree. Start the branch as an orphan —
+      // the session's first commit becomes the repo's root commit.
+      await exec("git", ["-C", repoRoot, "worktree", "add", "--orphan", "-b", branch, wtPath]);
+    } else {
+      await exec("git", ["-C", repoRoot, "worktree", "add", "-b", branch, wtPath, base]);
+    }
   }
 
   // Opportunistically reuse a sibling worktree's installed deps (node_modules,
