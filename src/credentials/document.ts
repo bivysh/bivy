@@ -100,15 +100,22 @@ function sameRecordContent(a: CredentialRecord | undefined, b: CredentialRecord)
   return JSON.stringify(strip(a)) === JSON.stringify(strip(b));
 }
 
+const stable = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(stable);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+    .map(([key, child]) => [key, stable(child)]));
+};
+
 function canonicalCredential(credential: OAuthCredential): string {
   const { updatedAt: _drop, ...content } = credential;
-  const stable = (value: unknown): unknown => {
-    if (Array.isArray(value)) return value.map(stable);
-    if (!value || typeof value !== "object") return value;
-    return Object.fromEntries(Object.entries(value as Record<string, unknown>)
-      .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
-      .map(([key, child]) => [key, stable(child)]));
-  };
+  return JSON.stringify(stable(content));
+}
+
+/** Stable record content sans the store-owned stamp — the final merge tie-break. */
+function canonicalRecord(record: CredentialRecord): string {
+  const { updatedAt: _drop, ...content } = record;
   return JSON.stringify(stable(content));
 }
 
@@ -141,6 +148,18 @@ export function preferIncomingRecord(local: CredentialRecord | undefined, incomi
   const localOauth = oauthOf(local);
   const incomingOauth = oauthOf(incoming);
   if (!localOauth || !incomingOauth) return true;
+  // Identical token content means this is a metadata-only change (an
+  // unattended-runs grant/revoke, a sync-tier move). Token freshness cannot
+  // order those, so the newer record write wins — without this, a grant made
+  // on one machine never reaches its peers, and a peer's next hosted-escrow
+  // push would read as "nothing granted". Equal stamps fall back to canonical
+  // record content so both merge directions still converge.
+  if (canonicalCredential(localOauth) === canonicalCredential(incomingOauth)) {
+    const localAt = Number(local.updatedAt) || 0;
+    const incomingAt = Number(incoming.updatedAt) || 0;
+    if (incomingAt !== localAt) return incomingAt > localAt;
+    return canonicalRecord(incoming) > canonicalRecord(local);
+  }
   return preferIncomingOAuthCredential(localOauth, incomingOauth);
 }
 
@@ -264,7 +283,14 @@ export function mergeDocuments(
     if (sameRecordContent(localRecord, incoming)) continue;
     if (!preferIncomingRecord(localRecord, incoming)) continue;
     if (!(key in credentials)) imported += 1;
-    credentials[key] = incoming;
+    // An incoming record with no opinion on unattended custody (undefined — the
+    // v2 wire and plaintext ingest never carry the flag) must not strip an
+    // explicit local grant/revoke: agent-side token refreshes flow through this
+    // merge, and dropping the flag would make the node's next escrow push
+    // silently revoke the encrypted cloud copy the user still relies on.
+    credentials[key] = localRecord && incoming.unattended === undefined && localRecord.unattended !== undefined
+      ? { ...incoming, unattended: localRecord.unattended }
+      : incoming;
     const incomingUpdatedAt = Number(incoming.updatedAt);
     if (!Number.isFinite(deletedAt[key]) || incomingUpdatedAt > deletedAt[key]) delete deletedAt[key];
     changed = true;

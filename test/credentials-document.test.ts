@@ -175,6 +175,39 @@ assert.equal(tombstoneWinsRecord(api("a", "l", "x"), 0), false, "a zero/absent s
   assert.equal(src.kind === "stored" && src.cred.type === "api_key" ? src.cred.key : undefined, "fresh", "a later re-login supersedes the tombstone");
 }
 
+// --- merge: unattended custody survives credential-content refreshes --------
+// The v2 wire and plaintext ingest (an agent's own TUI refreshing its OAuth
+// token set) produce records with NO unattended field. That refresh must not
+// strip an explicit local grant — the node's next hosted-escrow push would
+// otherwise silently revoke the encrypted cloud copy ("credential didn't reach
+// Bivy Cloud" on every later unattended/cloud session).
+{
+  const granted = { ...oauth("anthropic", "default", { access: "a1", refresh: "r1", refreshedAt: 100 }), unattended: true, updatedAt: 50 };
+  const refreshed = { ...recordFromStored("anthropic", { type: "oauth", access: "a2", refresh: "r2", expires: 0, refreshedAt: 200 }), updatedAt: 60 };
+  const doc: CredentialVaultDocumentV3 = { v: 3, credentials: { [K("anthropic")]: granted }, deletedAt: {} };
+  const merged = mergeDocuments(doc, { [K("anthropic")]: refreshed }).document.credentials[K("anthropic")];
+  const cred = merged.source.kind === "stored" && merged.source.cred.type === "oauth" ? merged.source.cred : undefined;
+  assert.equal(cred?.refresh, "r2", "the fresher token set still wins");
+  assert.equal(merged.unattended, true, "a token refresh with no custody opinion keeps the unattended grant");
+}
+
+// --- merge: a metadata-only change propagates between nodes ------------------
+// Grant/revoke toggles change no token content, so token freshness cannot
+// order them; the newer record write must win in BOTH directions or the grant
+// made on machine A never reaches machine B (whose next escrow push would then
+// publish "nothing granted").
+{
+  const plain = { ...oauth("anthropic", "default", { access: "a", refresh: "r", refreshedAt: 100 }), updatedAt: 50 };
+  const granted = { ...oauth("anthropic", "default", { access: "a", refresh: "r", refreshedAt: 100 }), unattended: true, updatedAt: 80 };
+  const plainDoc: CredentialVaultDocumentV3 = { v: 3, credentials: { [K("anthropic")]: plain }, deletedAt: {} };
+  const grantedDoc: CredentialVaultDocumentV3 = { v: 3, credentials: { [K("anthropic")]: granted }, deletedAt: {} };
+  assert.equal(mergeDocuments(plainDoc, grantedDoc.credentials).document.credentials[K("anthropic")].unattended, true, "a newer grant replaces the ungranted copy");
+  assert.equal(mergeDocuments(grantedDoc, plainDoc.credentials).document.credentials[K("anthropic")].unattended, true, "an older ungranted copy cannot undo the grant");
+
+  const revoked = { ...oauth("anthropic", "default", { access: "a", refresh: "r", refreshedAt: 100 }), unattended: false, updatedAt: 90 };
+  assert.equal(mergeDocuments(grantedDoc, { [K("anthropic")]: revoked }).document.credentials[K("anthropic")].unattended, false, "an explicit newer revoke does propagate");
+}
+
 // --- merge is pure: it never mutates its inputs -----------------------------
 {
   const local: CredentialVaultDocumentV3 = { v: 3, credentials: {}, deletedAt: {} };

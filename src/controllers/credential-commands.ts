@@ -41,8 +41,11 @@ export interface CredentialCommandDeps {
   sendEvent(event: unknown): void;
   /** Emit to every connected device (server's `broadcast`). */
   broadcast(event: unknown): void;
-  /** Push model-auth to the account vault after a credential change. */
-  pushModelAuthToControlPlane(): Promise<void>;
+  /** Push model-auth to the account vault after a credential change.
+   *  `throwOnFailure` rejects instead of best-effort logging; `allowEmptyHostedEscrow`
+   *  marks an EXPLICIT revoke/delete, the only callers allowed to publish an
+   *  empty unattended-custody snapshot (which removes the encrypted cloud copy). */
+  pushModelAuthToControlPlane(opts?: { throwOnFailure?: boolean; allowEmptyHostedEscrow?: boolean }): Promise<void>;
   /** Re-resolve the active session's credentials after an auth change. */
   refreshSessionAfterAuth(): Promise<void>;
   /** The unified provider list broadcast after a credential add/remove. */
@@ -126,7 +129,8 @@ export function createCredentialCommands(deps: CredentialCommandDeps): CommandEn
     async "credential.remove"(msg, ctx) {
       try {
         await removeProviderCredential(credsDir, String(msg.provider ?? ""), String(msg.label ?? ""));
-        await deps.pushModelAuthToControlPlane();
+        // Deleting a granted credential must also remove its escrowed cloud copy.
+        await deps.pushModelAuthToControlPlane({ allowEmptyHostedEscrow: true });
         await deps.refreshSessionAfterAuth();
         deps.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
         deps.broadcast({ type: "providers.list", providers: await deps.listProvidersUnified() });
@@ -141,7 +145,8 @@ export function createCredentialCommands(deps: CredentialCommandDeps): CommandEn
       try {
         const sync = msg.sync === "node" ? "node" : "account";
         await setCredentialSync(credsDir, String(msg.provider ?? ""), String(msg.label ?? ""), sync);
-        await deps.pushModelAuthToControlPlane();
+        // Demoting to machine-only revokes any custody grant; let it clear the escrow.
+        await deps.pushModelAuthToControlPlane({ allowEmptyHostedEscrow: sync === "node" });
         deps.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
         ctx.reply({ type: "credential.sync.set.ok", requestId: msg.requestId });
       } catch (error) {
@@ -156,7 +161,10 @@ export function createCredentialCommands(deps: CredentialCommandDeps): CommandEn
       const previous = (await listCredentialRecords(credsDir)).find((record) => record.provider === provider.trim().toLowerCase() && record.label === label)?.unattended === true;
       try {
         await setCredentialUnattended(credsDir, provider, label, msg.unattended === true);
-        await deps.pushModelAuthToControlPlane();
+        // Fail loud: the grant reply must reflect whether the encrypted cloud
+        // copy actually reached the control plane. An explicit disable is the
+        // one caller allowed to publish an empty escrow snapshot.
+        await deps.pushModelAuthToControlPlane({ throwOnFailure: true, allowEmptyHostedEscrow: msg.unattended !== true });
         deps.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
         ctx.reply({ type: "credential.unattended.set.ok", requestId: msg.requestId });
       } catch (error) {

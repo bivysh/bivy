@@ -91,6 +91,39 @@ function oauthRecord(provider: string, label: string, access: string, expires: n
   }
 }
 
+// --- a v2-shaped ingest (agent TUI token refresh) keeps custody + tier ------
+// Pi's plaintext auth.json (and the legacy v2 sync wire) carries bare
+// credentials with no record metadata. When the agent's own TUI refreshes the
+// OAuth token set, the fold-back into the vault must keep the record's
+// unattended-runs grant and sync tier — otherwise the node's next escrow push
+// silently revokes the encrypted cloud copy and unattended/cloud sessions
+// report the credential never reached Bivy Cloud.
+{
+  const credsDir = freshCredsDir();
+  try {
+    const store = createCredentialVault(credsDir);
+    await store.modify("anthropic", async () => ({ type: "oauth", access: "a1", refresh: "r1", expires: 100, refreshedAt: 100 }));
+    await setCredentialUnattended(credsDir, "anthropic", "default", true);
+    await store.modify("openai", async () => ({ type: "oauth", access: "b1", refresh: "q1", expires: 100, refreshedAt: 100 }));
+    await store.putRecord({ ...(await store.readRecord("openai", "default"))!, sync: "node" });
+
+    // The agent refreshed both token sets in its own plaintext store.
+    await store.importAll({
+      anthropic: { type: "oauth", access: "a2", refresh: "r2", expires: 200, refreshedAt: 200 },
+      openai: { type: "oauth", access: "b2", refresh: "q2", expires: 200, refreshedAt: 200 },
+    });
+
+    const anthropic = await store.readRecord("anthropic", "default");
+    assert.equal(anthropic?.source.kind === "stored" && anthropic.source.cred.type === "oauth" ? anthropic.source.cred.refresh : undefined, "r2", "the fresher token set is folded in");
+    assert.equal(anthropic?.unattended, true, "a token refresh never drops the unattended grant");
+    assert.deepEqual(Object.keys(await exportUnattendedRecords(credsDir)), ["anthropic:default"], "the escrow snapshot still contains the granted record");
+    assert.equal((await store.readRecord("openai", "default"))?.sync, "node", "a machine-only tier survives a v2-shaped ingest");
+    assert.ok(!("openai" in (await store.exportSyncable())), "the refreshed machine-only credential still never syncs");
+  } finally {
+    fs.rmSync(path.dirname(credsDir), { recursive: true, force: true });
+  }
+}
+
 // --- hosted snapshots authoritatively remove revoked custody ----------------
 {
   const credsDir = freshCredsDir();

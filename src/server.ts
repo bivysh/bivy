@@ -2172,7 +2172,7 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     credsDir,
     sendEvent: (event) => relay?.sendEvent(event),
     broadcast,
-    pushModelAuthToControlPlane,
+    pushModelAuthToControlPlane: (opts) => pushModelAuthToControlPlane(false, opts?.throwOnFailure === true, opts?.allowEmptyHostedEscrow === true),
     refreshSessionAfterAuth,
     listProvidersUnified,
   }),
@@ -2742,7 +2742,8 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
         }
       }
       await removeProvider(credsDir, id);
-      await pushModelAuthToControlPlane();
+      // Deleting a granted credential must also remove its escrowed cloud copy.
+      await pushModelAuthToControlPlane(false, false, true);
       await refreshSessionAfterAuth();
       broadcast({ type: "provider.oauth.reset", provider: id, ok: true, providers: await listProvidersUnified() });
       broadcast({ type: "providers.list", providers: await listProvidersUnified() });
@@ -2753,7 +2754,8 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
   async "provider.remove"(msg) {
     try {
       await removeProvider(credsDir, String(msg.provider ?? msg.id ?? ""));
-      await pushModelAuthToControlPlane();
+      // Deleting a granted credential must also remove its escrowed cloud copy.
+      await pushModelAuthToControlPlane(false, false, true);
       await refreshSessionAfterAuth();
       broadcast({ type: "providers.list", providers: await listProvidersUnified() });
     } catch (error) {
@@ -3550,12 +3552,19 @@ async function processModelAuthKeyRequests(requests: Array<{ nodeId: string; pub
   }
 }
 
-async function pushHostedModelAuthToControlPlane() {
+async function pushHostedModelAuthToControlPlane(allowEmpty = false) {
   const [records, revision] = await Promise.all([exportUnattendedRecords(credsDir), unattendedCredentialRevision(credsDir)]);
   // A setup guest must not establish an empty snapshot when the credential is
   // first saved (before the explicit grant command follows). Otherwise its
   // one allowed initial write would be consumed by an unusable vault.
-  if (isHostedCustodyNode() && Object.keys(records).length === 0) return;
+  //
+  // And an IMPLICIT empty push must never revoke the escrow: an empty snapshot
+  // is how "disable unattended runs" removes the cloud copy, but every vault
+  // change funnels through here — so a node whose copy simply lacks the grant
+  // (not yet synced, or granted elsewhere) would otherwise wipe the encrypted
+  // cloud copy the user's other machines just published. Only an explicit
+  // local revoke/delete (allowEmpty) may publish an empty snapshot.
+  if (Object.keys(records).length === 0 && (!allowEmpty || isHostedCustodyNode())) return;
   if (revision === lastPushedHostedModelAuthRevision) return;
   const key = ensureHostedModelAuthVaultKey();
   const ciphertext = encryptModelAuthProviders({}, {}, {}, key, records, {});
@@ -3583,7 +3592,7 @@ async function pushHostedModelAuthToControlPlane() {
   }
 }
 
-async function pushModelAuthToControlPlane(rotateKey = false, throwOnFailure = false) {
+async function pushModelAuthToControlPlane(rotateKey = false, throwOnFailure = false, allowEmptyHostedEscrow = false) {
   if (!sessionAdvertiseTarget) return;
   // Piggyback the (plaintext, non-secret) provider status summary on every
   // trigger that already pushes the encrypted model-auth vault — one "creds
@@ -3615,7 +3624,7 @@ async function pushModelAuthToControlPlane(rotateKey = false, throwOnFailure = f
     if (rotateKey) writeLocalModelAuthVaultKey(vaultKeyB64);
     const ciphertext = encryptModelAuthProviders(providers, deletedAt, localModels, vaultKeyB64, records, recordsDeletedAt);
     if (!rotateKey && ciphertext === lastPushedModelAuthCiphertext) {
-      await pushHostedModelAuthToControlPlane();
+      await pushHostedModelAuthToControlPlane(allowEmptyHostedEscrow);
       return;
     }
     const push = await modelAuthFetch("/node/model-auth-vault", { method: "PUT", body: JSON.stringify({ ciphertext, rotated: rotateKey }) });
@@ -3634,7 +3643,7 @@ async function pushModelAuthToControlPlane(rotateKey = false, throwOnFailure = f
     // Publish a DIFFERENT ciphertext under a DIFFERENT key containing only
     // records with `unattended:true`. Escrowing this key cannot decrypt the E2E
     // account vault, which is the critical custody separation.
-    await pushHostedModelAuthToControlPlane();
+    await pushHostedModelAuthToControlPlane(allowEmptyHostedEscrow);
   } catch (error) {
     console.warn("[auth-sync] could not push model auth:", (error as Error).message);
     if (throwOnFailure) throw error;
@@ -9927,7 +9936,8 @@ app.post("/api/auth/credentials", async (req, res, next) => {
 app.delete("/api/auth/credentials/:provider/:label", async (req, res, next) => {
   try {
     await removeProviderCredential(credsDir, String(req.params.provider), String(req.params.label));
-    await pushModelAuthToControlPlane();
+    // Deleting a granted credential must also remove its escrowed cloud copy.
+    await pushModelAuthToControlPlane(false, false, true);
     await refreshSessionAfterAuth();
     res.json({ ok: true, records: await listCredentialRecords(credsDir), providers: await listProvidersUnified() });
   } catch (error) {
@@ -9939,7 +9949,8 @@ app.post("/api/auth/credentials/:provider/:label/availability", async (req, res,
   try {
     const sync = req.body?.sync === "node" ? "node" : "account";
     await setCredentialSync(credsDir, String(req.params.provider), String(req.params.label), sync);
-    await pushModelAuthToControlPlane();
+    // Demoting to machine-only revokes any custody grant; let that clear the escrow.
+    await pushModelAuthToControlPlane(false, false, sync === "node");
     res.json({ ok: true, records: await listCredentialRecords(credsDir) });
   } catch (error) {
     next(error);
@@ -9947,11 +9958,20 @@ app.post("/api/auth/credentials/:provider/:label/availability", async (req, res,
 });
 
 app.post("/api/auth/credentials/:provider/:label/unattended", async (req, res, next) => {
+  const provider = String(req.params.provider);
+  const label = String(req.params.label);
+  const enable = req.body?.unattended === true;
+  const previous = (await listCredentialRecords(credsDir).catch(() => []))
+    .find((record) => record.provider === provider.trim().toLowerCase() && record.label === label)?.unattended === true;
   try {
-    await setCredentialUnattended(credsDir, String(req.params.provider), String(req.params.label), req.body?.unattended === true);
-    await pushModelAuthToControlPlane();
+    await setCredentialUnattended(credsDir, provider, label, enable);
+    // Fail loud (mirrors the relay command): the UI must never claim an
+    // encrypted cloud copy exists when custody publication failed. An explicit
+    // disable is the one caller allowed to publish an empty escrow snapshot.
+    await pushModelAuthToControlPlane(false, true, !enable);
     res.json({ ok: true, records: await listCredentialRecords(credsDir) });
   } catch (error) {
+    await setCredentialUnattended(credsDir, provider, label, previous).catch(() => {});
     next(error);
   }
 });
