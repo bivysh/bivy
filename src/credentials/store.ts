@@ -606,6 +606,22 @@ export class BivyCredentialStore {
       // engine (merge-never-destroy, freshest-OAuth-wins, rotation-safe,
       // tombstone-newer-wins — see document.ts).
       const incoming = migrateToV3({ v: 2, providers: snapshot, deletedAt });
+      // The v2 wire carries no record metadata, so migrateToV3 synthesizes
+      // defaults (sync: "account", origin: "bivy", no unattended flag). Those
+      // defaults must not clobber local intent — a machine-only sync tier or an
+      // unattended-runs custody grant — when only the token content is newer
+      // (e.g. an agent's own TUI refreshed the OAuth token set). Inherit the
+      // existing record's metadata; the merge engine still decides freshness.
+      for (const [key, record] of Object.entries(incoming.credentials)) {
+        const existing = document.credentials[key];
+        if (!existing) continue;
+        incoming.credentials[key] = {
+          ...record,
+          sync: existing.sync,
+          origin: existing.origin,
+          ...(existing.unattended !== undefined ? { unattended: existing.unattended } : {}),
+        };
+      }
       const result = mergeDocuments(document, incoming.credentials, incoming.deletedAt);
       if (result.changed) this.writeDocument(result.document);
       return result.imported;
