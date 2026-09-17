@@ -610,7 +610,9 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 
 .activity + .activity { border-top: 1px solid var(--line); }
 /* A sub-agent's own step, nested under the delegation that spawned it: indented
-   with an accent rail so the hand-off is legible without a second card system. */
+   with an accent rail so the hand-off is legible without a second card system.
+   Deeper levels (a sub-agent that itself delegates) add inline padding per depth
+   on top of this base indent — see ToolListRow — keeping the same single rail. */
 .activity.is-subagent-step .activity-row { padding-left: 28px; }
 .activity.is-subagent-step { border-left: 2px solid color-mix(in srgb, var(--accent) 45%, var(--line)); }
 .activity-row { width: 100%; display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 0; border-radius: 0; background: transparent; color: var(--ink); font: inherit; text-align: left; }

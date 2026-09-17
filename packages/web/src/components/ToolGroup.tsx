@@ -6,7 +6,7 @@ import { DiffView } from "./DiffView.js";
 import { Sheet } from "./Sheet.js";
 import { ChevronRightIcon } from "./UiIcons.js";
 import { Badge } from "./Badge.js";
-import { orderToolsWithDepth } from "./tool-nesting.js";
+import { orderToolsWithDepth, countDescendants } from "./tool-nesting.js";
 
 function GlyphIcon({ glyph }: { glyph: ToolGlyph }) {
   const common = { width: 16, height: 16, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
@@ -75,9 +75,13 @@ function ToolListRow({ tool, f, depth = 0, onSelect }: { tool: ToolActivity; f: 
   const baseLabel = toolRowLabel(f);
   const label = elapsed ? `${baseLabel || "Sub-agent"} · ${elapsed}` : baseLabel;
   const running = tool.status === "running";
+  // Each nesting level indents a little further so a sub-agent that itself
+  // delegates reads as deeper work, not a sibling of its parent. The rail +
+  // base indent come from `.is-subagent-step`; deeper levels add to it.
+  const indent = depth > 1 ? { paddingLeft: `${28 + (depth - 1) * 16}px` } : undefined;
   return (
-    <div className={`activity${running ? " is-running" : ""}${f.isError ? " is-error" : ""}${depth > 0 ? " is-subagent-step" : ""}`}>
-      <button className="activity-row" onClick={() => onSelect(tool.callId)}>
+    <div className={`activity${running ? " is-running" : ""}${f.isError ? " is-error" : ""}${depth > 0 ? " is-subagent-step" : ""}`} data-depth={depth || undefined}>
+      <button className="activity-row" style={indent} onClick={() => onSelect(tool.callId)}>
         <span className="activity-ic">
           <GlyphIcon glyph={f.glyph} />
         </span>
@@ -198,7 +202,10 @@ export function ToolActivitySheet({ tools, summary, onClose }: { tools: ToolActi
   // separately for the list row, the sheet title, and the detail view would
   // triple that work for no reason.
   const formatted = selected ? formatTool(selected.name, selected.input, selected.detail) : undefined;
-  const subSteps = selected ? tools.filter((t) => t.parentToolUseId === selected.callId && t.callId !== selected.callId).length : 0;
+  // Count the delegation's whole sub-tree (children, grandchildren, …), not just
+  // its direct calls, so the "N steps nested below" line reflects deeper
+  // sub-agent work the same way the indented list does.
+  const subSteps = selected ? countDescendants(selected.callId, tools) : 0;
 
   // The sheet's scrollable body is a single persistent DOM node (Sheet.tsx's
   // .sheet-content) that this component swaps between the list and a detail
