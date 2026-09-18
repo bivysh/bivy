@@ -81,6 +81,14 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         notify("session/update", { sessionId, update: { sessionUpdate: "tool_call_update", toolCallId: "split1", status: "in_progress", content: { type: "text", text: "file-a.txt\nfile-b.txt" } } });
         notify("session/update", { sessionId, update: { sessionUpdate: "tool_call_update", toolCallId: "split1", status: "completed" } });
       }
+      // Simulate a spec-compliant ACP agent (opencode) that reports a tool's
+      // output as the canonical ToolCallContent wrapper `{ type: "content",
+      // content: { type: "text", text } }` rather than a bare ContentBlock. The
+      // shim must unwrap it, not drop it and collapse the result to "completed".
+      if (process.env.ACP_WRAPPED_TOOL_OUTPUT === "1") {
+        notify("session/update", { sessionId, update: { sessionUpdate: "tool_call", toolCallId: "wrapped1", title: "read file", kind: "read", rawInput: { path: "sample.txt" } } });
+        notify("session/update", { sessionId, update: { sessionUpdate: "tool_call_update", toolCallId: "wrapped1", status: "completed", content: [{ type: "content", content: { type: "text", text: "hello world from testfile" } }] } });
+      }
       // Request permission to run a tool, then finish once granted.
       const permId = 9001;
       const done = new Promise((res) => { permResolve = res; });

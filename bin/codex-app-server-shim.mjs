@@ -415,6 +415,16 @@ function onNotification(m) {
       bivy({ type: "session.status", status: "working" });
       return;
     case "turn/completed": {
+      // The completion event is authoritative about a terminal failure: a turn
+      // that hit a usage limit (or any provider error) arrives here as
+      // `status: "failed"` carrying `turn.error`. Capture it directly instead of
+      // depending on a separate `error` notification landing first — otherwise a
+      // completion that omits that notification seals as session.done and the
+      // user sees a silent empty turn (fail loud, never swallow the error).
+      const turnError =
+        params?.turn?.error?.message ||
+        (params?.turn?.status === "failed" ? params?.error?.message || params?.message || "Codex turn failed" : undefined);
+      if (turnError && !sawError) sawError = turnError;
       // Codex 0.147 can publish turn/completed just before the final
       // collabAgentToolCall item/completed notification. Sealing immediately
       // leaves the sub-agent card running forever and drops its persisted

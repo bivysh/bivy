@@ -14,6 +14,10 @@
 //   "fail"           → turn/failed WITHOUT any following turn/completed, which is
 //                      exactly the terminal-failure shape that used to wedge the
 //                      Bivy session "working" forever (the shim now ends the turn).
+//   "usage-limit"    → turn/completed with status "failed" carrying turn.error and
+//                      NO preceding standalone `error` notification — the shape a
+//                      real usage-limit turn takes (codex 0.154). The shim must
+//                      still surface it as session.error, never a silent empty turn.
 import readline from "node:readline";
 
 const MODE = process.env.FAKE_CODEX_MODE || "ok";
@@ -62,6 +66,11 @@ rl.on("line", (line) => {
       notify("turn/started", { threadId: params?.threadId });
       if (MODE === "fail") {
         notify("turn/failed", { error: { message: "simulated codex failure" } });
+      } else if (MODE === "usage-limit") {
+        notify("turn/completed", {
+          threadId: params?.threadId,
+          turn: { id: "turn-1", status: "failed", error: { message: "You've hit your usage limit.", codexErrorInfo: "usageLimitExceeded" } },
+        });
       } else {
         notify("item/agentMessage/delta", { itemId: "item-1", delta: "BANANA" });
         notify("turn/completed", { threadId: params?.threadId });

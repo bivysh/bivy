@@ -135,6 +135,33 @@ await check("acp: a tool's output that streamed before the closing frame survive
   }
 });
 
+await check("acp: a tool result wrapped as ACP ToolCallContent survives (not collapsed to 'completed')", async () => {
+  // Regression: spec-compliant ACP agents (opencode) report a tool's output as
+  // the canonical `{ type: "content", content: { type: "text", text } }` wrapper.
+  // The shim's textOf only read the bare `{type:"text"}` form, so real read/
+  // execute output was dropped and the transcript showed the bare status.
+  process.env.BIVY_ACP_COMMAND = process.execPath;
+  process.env.BIVY_ACP_ARGS = JSON.stringify([acpAgent]);
+  process.env.ACP_WRAPPED_TOOL_OUTPUT = "1";
+  try {
+    const runtime = makeRuntime({ runtime: "acp", credsDir: __dirname, piDir: __dirname, sessionsDir: __dirname });
+    const { session } = await runtime.createSession({ workspace: __dirname, toolInterceptor: async () => undefined });
+    const events: RuntimeEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    await session.prompt("read a file whose output is wrapped");
+    await waitFor(events, (event) => event.type === "agent_end");
+    const result = events.find((e) => e.type === "tool_result" && (e as any).toolCallId === "wrapped1") as any;
+    assert.ok(result, "the wrapped-output tool produced a result");
+    assert.equal(result.result, "hello world from testfile", "the wrapped tool output survives, not the bare 'completed' status");
+    assert.equal(result.detail?.result?.text, "hello world from testfile", "normalized detail carries the real output");
+    session.dispose();
+  } finally {
+    delete process.env.BIVY_ACP_COMMAND;
+    delete process.env.BIVY_ACP_ARGS;
+    delete process.env.ACP_WRAPPED_TOOL_OUTPUT;
+  }
+});
+
 // 3A: Bivy's configured MCP servers must reach the ACP agent on session/new
 // (they were hardcoded to [] in the shim, cutting ACP agents off from MCP).
 await check("acp: forwards BIVY_ACP_MCP_SERVERS to the agent on session/new", async () => {
