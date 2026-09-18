@@ -40,6 +40,28 @@ export function forkTier(source: AgentForkCaps, dest: AgentForkCaps): ForkTier {
   return "seeded";
 }
 
+/** The minimal RuntimeInfo shape the matrix needs — so callers can derive the
+ *  matrix straight from the live agent registry (listRegisteredAgents) rather
+ *  than a hand-maintained table that silently drifts as agents are added. */
+export interface ForkCapableInfo {
+  id: string;
+  displayName?: string;
+  capabilities: { forkTransport?: boolean; forkHistoryImport?: boolean };
+}
+
+/** Project a registry RuntimeInfo onto the two flags that decide fork fidelity.
+ *  Keeps the registry the single source of truth: an agent that declares its
+ *  real fork capabilities (see the maintained integrations + cliAgentInfo)
+ *  appears with the correct tier automatically. */
+export function forkCapsFromInfo(info: ForkCapableInfo): AgentForkCaps {
+  return {
+    id: info.id,
+    ...(info.displayName ? { displayName: info.displayName } : {}),
+    forkTransport: info.capabilities.forkTransport === true,
+    forkHistoryImport: info.capabilities.forkHistoryImport === true,
+  };
+}
+
 export interface ForkMatrixCell {
   source: string;
   dest: string;

@@ -71,6 +71,7 @@ import { ProtocolRuntime, protocolRuntimeFromEnv, protocolCommandsFromEnv, type 
 import { codexSlashCommands, opencodeSlashCommands, type SlashCommandProvider } from "./slash-commands.js";
 import { withExactCapabilitySurface, type AgentRuntime } from "./types.js";
 import { installedAgentContributions } from "../plugins/store.js";
+import { forkCapsFromInfo, type AgentForkCaps } from "../session/fork-matrix.js";
 import { currentBivyVersion } from "../app-version.js";
 import type {
   AgentAvailability,
@@ -619,6 +620,17 @@ function cliAgentInfo(id: string, spec: AgentProfile): RuntimeInfo {
   }
   const authOwner = spec.authOwner ?? "agent";
   const credentialProviders = [...new Set((spec.model?.models ?? []).flatMap((model) => model.provider ? [model.provider] : []))];
+  // Fork fidelity, mirrored from what makeCliRuntime actually wires up. An
+  // ACP-promoted agent with a portable session store (OpenCode's SQLite) gets
+  // export/import + writeHistory hooks in acpRuntimeOptions, so its runtime
+  // advertises a byte-exact same-runtime fork (forkTransport) AND a full
+  // cross-runtime transcript replay INTO it (forkHistoryImport). Reporting a
+  // blanket fork:false here hid a full-fidelity fork target from the catalog
+  // and the generated fork matrix. Gated on the shipped default (acp.preferred)
+  // rather than a live binary probe so the capability is install-independent —
+  // the honest "what this adapter does by default", matching how resume/model
+  // are described before the optional BIVY_AGENT_PROBE refinement.
+  const nativeStoreFork = spec.behaviors?.sessionStore === "opencode" && spec.acp?.preferred === true;
   return {
     id,
     executionMode,
@@ -637,7 +649,8 @@ function cliAgentInfo(id: string, spec: AgentProfile): RuntimeInfo {
       modelSelection,
       resume,
       packages: false,
-      fork: false,
+      fork: nativeStoreFork,
+      ...(nativeStoreFork ? { forkTransport: true, forkHistoryImport: true } : {}),
       usageReporting,
       // Any agent with a readable on-disk session store (Codex, OpenCode) or
       // native-session behavior (Grok) can locate the session a `bivy run`
@@ -1109,6 +1122,25 @@ function agentRegistry(pluginDataDir?: string): AgentRegistry<RuntimeInfo, Runti
 /** All registered contributions, including hidden/planned rows, for diagnostics. */
 export function listRegisteredAgents(): RuntimeInfo[] {
   return agentRegistry().list().map((entry) => applyCertification(entry.describe()));
+}
+
+// Meta/host rows that are not concrete coding agents (they describe the generic
+// transports themselves), plus the hidden plain-`codex` exec runtime, which is a
+// duplicate of the governed `codex-approvals` we surface as "Codex".
+const FORK_MATRIX_EXCLUDE = new Set(["generic-cli", "bivy-agent-protocol", "acp", "codex"]);
+
+/** The built-in coding agents and their fork capabilities, derived from the live
+ *  registry, for docs/fork-matrix.md and its drift-guard test. Restricted to the
+ *  maintained (distribution) integrations so the generated doc is deterministic
+ *  regardless of which agents happen to be installed or which plugins are present. */
+export function forkMatrixAgents(): AgentForkCaps[] {
+  return listRegisteredAgents()
+    .filter((info) =>
+      info.status !== "planned" &&
+      !FORK_MATRIX_EXCLUDE.has(info.id) &&
+      info.source?.kind === "package" &&
+      info.source.location === "distribution")
+    .map(forkCapsFromInfo);
 }
 
 /** Resolve an id or historical alias through the authoritative registry. */
