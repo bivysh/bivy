@@ -40,7 +40,7 @@ function waitFor(events: RuntimeEvent[], pred: (event: RuntimeEvent) => boolean,
   });
 }
 
-function makeRuntime(mode: "ok" | "fail"): ProtocolRuntime {
+function makeRuntime(mode: "ok" | "fail" | "usage-limit"): ProtocolRuntime {
   return new ProtocolRuntime({
     id: "codex-approvals",
     displayName: "Codex",
@@ -71,6 +71,31 @@ test("a failed Codex turn ends the turn (agent_end + session.error), not left we
   // isStreaming must settle to false — a stuck-true bit is exactly what pins a
   // session busy and makes the next message vanish into a dead turn.
   assert.equal(session.isStreaming, false, "isStreaming is cleared after a failed turn");
+
+  session.dispose();
+});
+
+test("a turn/completed with status 'failed' surfaces the error, not a silent empty turn", async () => {
+  // Real usage-limit turns (codex 0.154) end as `turn/completed` with
+  // status "failed" carrying turn.error — NOT `turn/failed`, and with no preceding
+  // standalone `error` notification. The shim must read that authoritative
+  // completion event; otherwise the daemon seals session.done with no assistant
+  // text and `bivy exec` reports answer:"" exit 0 (a silent false success).
+  const runtime = makeRuntime("usage-limit");
+  const { session } = await runtime.createSession({
+    workspace: process.cwd(),
+    toolInterceptor: async () => undefined,
+  });
+  const events: RuntimeEvent[] = [];
+  session.subscribe((event) => events.push(event));
+
+  await session.prompt("trigger a usage limit");
+  await waitFor(events, (event) => event.type === "agent_end");
+
+  const error = events.find((event) => event.type === "session.error") as { error?: string } | undefined;
+  assert.ok(error, "a failed turn/completed surfaces a session.error");
+  assert.match(String(error?.error ?? ""), /usage limit/i, "the terminal turn error message reaches the transcript");
+  assert.equal(session.isStreaming, false, "isStreaming is cleared after a failed turn/completed");
 
   session.dispose();
 });

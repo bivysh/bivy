@@ -313,6 +313,13 @@ function onSessionUpdate(params) {
     if (!content) return "";
     if (typeof content === "string") return content;
     if (Array.isArray(content)) return content.map(textOf).join("");
+    // ACP's ToolCallContent wraps a ContentBlock: `{ type: "content", content:
+    // { type: "text", text } }`. Unwrap it (recursively) so a tool's real output
+    // — a command's stdout, a fetched document, a read's text — isn't dropped,
+    // which collapsed the tool_result to the bare status ("completed"). opencode
+    // and most spec-compliant ACP agents deliver tool output in this wrapped
+    // shape, so reading only the bare `{type:"text"}` form lost it in production.
+    if (content.type === "content" && content.content != null) return textOf(content.content);
     if (content.type === "text" && typeof content.text === "string") return content.text;
     if (typeof content.text === "string") return content.text;
     return "";
