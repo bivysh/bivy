@@ -342,6 +342,24 @@ async function main() {
     assert.equal(p.messages().filter((m) => m.role === "assistant").map((m) => JSON.stringify(m.content)).join("").includes("Two files."), true);
   });
 
+  await check("genericStreamJson: byte-array tool output with NO content block is decoded, not shown as a raw number array", () => {
+    // Some ACP/Grok result frames omit the display `content` block and carry the
+    // command output only as a UTF-8 byte array under rawOutput.output. Without a
+    // decode fallback the card would render `[97,46,116,120,116]` verbatim; we
+    // decode it to readable text (still never overriding a real content block).
+    const p = genericStreamJsonParser();
+    const bytes = Array.from(Buffer.from("a.txt\nb.txt", "utf8"));
+    const events = feed(p, [
+      JSON.stringify({ type: "tool_call", toolCallId: "c1", toolName: "run_terminal_command", rawInput: { command: "ls" } }),
+      JSON.stringify({ type: "tool_call_update", toolCallId: "c1", status: "completed", rawOutput: { type: "Bash", output: bytes, exit_code: 0, command: "ls" } }),
+      JSON.stringify({ type: "end" }),
+    ]);
+    const results = events.filter((e) => e.type === "tool_result");
+    assert.equal(results.length, 1, "exactly one tool_result surfaced");
+    assert.equal((results[0] as any).detail?.result?.text, "a.txt\nb.txt", "byte-array rawOutput.output decoded to readable text");
+    assert.equal((results[0] as any).detail?.result?.exitCode, 0, "exit code preserved alongside decoded text");
+  });
+
   await check("genericStreamJson: text and reasoning that resume after a tool get a paragraph break (no run-on)", () => {
     // The seam that produced Grok's \"…what it does.The workspace…\" and
     // \"…shell commandI have…\" run-ons: a fresh prose/reasoning segment streamed
