@@ -812,14 +812,38 @@ class ProtocolSession implements RuntimeSession {
       return;
     }
     if (type === "session.error") {
+      const errorText = String(msg.error || "Protocol agent error");
+      // Preserve whatever the failed turn already streamed — a partial assistant
+      // reply and its tool calls/results — persisted exactly as session.done
+      // persists a clean turn. The old handler wiped turnContent here, so a mid-
+      // turn failure dropped all of that work from the reopened transcript.
+      const hadTools = this.turnContent.length > 0 || this.turnToolResults.length > 0;
+      if (hadTools) {
+        this.flushPendingTurnText();
+        if (this.turnContent.length) this.messages.push({ role: "assistant", content: this.turnContent, timestamp: Date.now() });
+        if (this.turnToolResults.length) this.messages.push({ role: "user", content: this.turnToolResults, timestamp: Date.now() });
+      } else if (this.assistantText) {
+        this.messages.push({ role: "assistant", content: this.assistantText, timestamp: Date.now() });
+      }
+      // Append a terminal error marker in the shape store-render + terminalTurnError
+      // recognize (stopReason "error" + errorMessage), so the failure itself
+      // survives a reload as an inline error instead of the turn reopening blank
+      // ("looks done, no reply"). Matches the live session.error emitted just below.
+      const errored = { role: "assistant", content: "", stopReason: "error", errorMessage: errorText, timestamp: Date.now() };
+      this.messages.push(errored);
       this.streaming = false;
+      this.assistantText = "";
+      this.assistantItemBoundary = false;
       this.reasoningText = "";
       this.turnContent = [];
       this.turnTextFlushed = "";
       this.turnToolResults = [];
       this.toolDetailsByCallId.clear();
       this.openToolIds = [];
-      this.emit({ type: "session.error", error: String(msg.error || "Protocol agent error") });
+      // message_end drives the daemon's base-transcript snapshot (agent_end does
+      // not), so the preserved content + error marker are durably persisted.
+      this.emit({ type: "message_end", message: errored });
+      this.emit({ type: "session.error", error: errorText });
       this.emit({ type: "agent_end" });
       return;
     }
@@ -970,7 +994,10 @@ class ProtocolSession implements RuntimeSession {
     const preflightError = await this.preparePreflight();
     if (preflightError) {
       this.streaming = false;
-      const message = { role: "assistant", content: "", errorMessage: preflightError };
+      // stopReason "error" is what store-render keys on to re-render this as an
+      // inline error on reload (without it the turn reopened blank); it also
+      // matches the terminal-error message shape every other failure path uses.
+      const message = { role: "assistant", content: "", stopReason: "error", errorMessage: preflightError };
       this.messages.push(message);
       this.emit({ type: "message_start", message: { role: "assistant", content: "" } });
       this.emit({ type: "session.error", error: preflightError });

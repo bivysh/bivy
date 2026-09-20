@@ -136,6 +136,14 @@ rl.on('line', (line) => {
       streamingBehavior: msg.streamingBehavior ?? null,
     });
     send({ type: 'session.status', sessionId: msg.sessionId, status: 'working' });
+    // A turn that streams partial output and then fails mid-flight (a provider
+    // 4xx, an opencode ACP prompt rejection). The host must PRESERVE the partial
+    // reply AND persist a terminal error marker so the turn doesn't reopen blank.
+    if (process.env.FIXTURE_ERROR_MIDTURN === '1') {
+      send({ type: 'message.delta', sessionId: msg.sessionId, role: 'assistant', text: 'partial answer before the failure' });
+      send({ type: 'session.error', sessionId: msg.sessionId, error: 'upstream provider error: insufficient funds' });
+      return;
+    }
     // Reasoning stream (surfaced as a thinking sidecar) before the answer text.
     send({ type: 'message.reasoning', sessionId: msg.sessionId, text: `thinking with ${selectedModel}` });
     send({ type: 'message.delta', sessionId: msg.sessionId, role: 'assistant', text: 'hello ' });

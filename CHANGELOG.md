@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Preserve a protocol/ACP agent turn that fails mid-flight instead of losing it on reload. When a turn streamed a partial reply and then errored (a provider 4xx, an OpenCode ACP prompt rejection, an expired credential), the `session.error` path wiped the turn's content and persisted nothing, so a reopened session showed a blank "looks done, no reply" turn and the partial work vanished. The failed turn now keeps its partial assistant reply and tool activity and records a terminal error marker, so the reloaded transcript matches the live view (an inline error) for every protocol agent (OpenCode, Grok, Cursor, Amp, Gemini, …). The credential-preflight failure path gained the same reload-safe marker.
 - Nest sub-agent tool calls to arbitrary depth in session transcripts. A sub-agent that itself delegates (a grandchild tool call) previously vanished from the work-log sheet because the nesting walk only descended one level; it now nests under its parent at the correct depth, cycle-safe, and the delegation's "N steps nested below" count reflects the whole sub-tree.
 
 ## [0.16.24] - 2026-09-14
