@@ -190,7 +190,7 @@ try {
   }
   const braceVersion = resolvedPackageVersion("brace-expansion");
   const undiciVersion = resolvedPackageVersion("undici");
-  if (braceVersion !== "5.0.9" || undiciVersion !== "8.10.0") {
+  if (braceVersion !== "5.0.12" || undiciVersion !== "8.10.2") {
     throw new Error(`unsafe bundled dependency versions: brace-expansion ${braceVersion}, undici ${undiciVersion}`);
   }
 
