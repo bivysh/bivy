@@ -17,11 +17,11 @@
     "test:unit": "node scripts/run-tests.mjs"
   },
   "dependencies": {
-    "@sentry/node": "^10.71.0",
+    "@sentry/node": "^10.74.0",
     "@types/web-push": "^3.6.4",
     "cron-parser": "^5.10.0",
     "express": "^5.2.1",
-    "express-rate-limit": "^8.6.2",
+    "express-rate-limit": "^8.7.0",
     "pg": "^8.23.0",
     "pg-mem": "^3.0.14",
     "prom-client": "^15.1.3",

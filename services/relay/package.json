@@ -14,11 +14,11 @@
     "test:unit": "npm run test:process && npm run test:e2e && npm run test:solo"
   },
   "dependencies": {
-    "@sentry/node": "^10.71.0",
+    "@sentry/node": "^10.74.0",
     "ws": "^8.21.3"
   },
   "devDependencies": {
-    "@types/node": "^26.2.0",
+    "@types/node": "^26.5.1",
     "@types/ws": "^8.18.1",
     "tsx": "^4.23.12",
     "typescript": "^7.0.2"
