@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Refresh the release-tested agent pins to the current upstream builds: Claude Agent SDK `0.3.278`, Codex `0.155.1`, Pi `0.86.1`, and OpenCode `1.18.31` (previously `0.3.270` / `0.154.0` / `0.85.1` / `1.18.30`). Regenerates the certification matrix, CLI agent manifest, and supported-agent docs from the single source of truth, and updates the bundled SDK/lockfile. Each pinned version installs and probes cleanly; the pinned-certification CI job and the opt-in live workflow validate the governed turn path.
+
 ### Fixed
 
 - Nest sub-agent tool calls to arbitrary depth in session transcripts. A sub-agent that itself delegates (a grandchild tool call) previously vanished from the work-log sheet because the nesting walk only descended one level; it now nests under its parent at the correct depth, cycle-safe, and the delegation's "N steps nested below" count reflects the whole sub-tree.

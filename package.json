@@ -98,9 +98,9 @@
     "zod": "^4.0.0"
   },
   "optionalDependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.270",
-    "@earendil-works/pi-ai": "0.85.1",
-    "@earendil-works/pi-coding-agent": "0.85.1"
+    "@anthropic-ai/claude-agent-sdk": "0.3.278",
+    "@earendil-works/pi-ai": "0.86.1",
+    "@earendil-works/pi-coding-agent": "0.86.1"
   },
   "overrides": {
     "fast-uri": "3.1.6",
