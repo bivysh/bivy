@@ -1874,6 +1874,9 @@ button.template-card.is-featured .template-card-icon {
 }
 .autom-instructions-input:focus { outline: none; }
 .autom-instructions-input::placeholder { color: var(--muted); }
+.automation-composer-controls { display: flex; flex-wrap: wrap; gap: var(--space-1); min-width: 0; }
+.automation-composer-controls .btn { white-space: normal; text-align: left; }
+.autom-instructions:focus-within { border-color: var(--accent); }
 .autom-instructions-bar {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
   padding: 8px 10px 10px; border-top: 1px solid var(--line);

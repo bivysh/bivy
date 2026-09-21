@@ -81,14 +81,36 @@ async function fixture(page: Page, theme: string, empty = false, trigger = "sche
   </script></body></html>`);
   await page.route(`${origin}${fixturePath}`, (route) => route.fulfill({ contentType: "text/html", body: html }));
   await page.goto(`${origin}${fixturePath}`);
-  await page.getByRole("button", { name: "Edit Daily review" }).focus();
-  await page.getByRole("button", { name: "Edit Daily review" }).press('Enter');
+  await page.getByRole("button", { name: "View Daily review" }).focus();
+  await page.getByRole("button", { name: "View Daily review" }).press('Enter');
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
   return () => item;
 }
 
 for (const theme of ["light", "dark"]) {
+  test(`automation navigation and composer pickers (${theme})`, async ({ page }, testInfo) => {
+    await fixture(page, theme);
+    await page.getByRole('button', { name: 'Agent: Pi', exact: true }).click();
+    await page.getByText('Machine default', { exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Agent: Machine default', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Sandbox: Workspace write', exact: true }).click();
+    await page.getByText('Read only', { exact: true }).click();
+    await page.getByRole('button', { name: 'Approvals: Autonomous', exact: true }).click();
+    await page.getByText('Ask before risky actions', { exact: true }).click();
+    await page.getByLabel('Instructions', { exact: true }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath(`composer-${theme}.png`) });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+    await page.getByRole('button', { name: 'Back to automation', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'History', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '‹ Automations', exact: true }).click();
+    await page.getByRole('button', { name: 'New automation', exact: true }).click();
+    await page.getByRole('button', { name: /Blank automation/ }).click();
+    await page.getByRole('button', { name: 'Back to new automation', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: 'New automation', exact: true })).toBeVisible();
+  });
   test(`automation accounts round-trip without changing instructions (${theme})`, async ({ page }, testInfo) => {
     const item = await fixture(page, theme);
+    await page.getByRole("button", { name: "Accounts ▾", exact: true }).click();
     const anthropic = page.getByLabel("Anthropic account", { exact: true });
     const openai = page.getByLabel("OpenAI — ChatGPT subscription account", { exact: true });
     await expect(anthropic).toHaveValue("work");
@@ -102,15 +124,19 @@ for (const theme of ["light", "dark"]) {
     await page.screenshot({ path: testInfo.outputPath(`automation-accounts-${theme}.png`) });
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
     expect(overflow).toBe(false);
+    await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "Save changes", exact: true }).click();
     await expect(page.getByRole("dialog", { name: "Edit automation" })).toHaveCount(0);
     const decode = () => decodeAutomationTemplate(open(key, item().templateCiphertext.split(":").slice(2).join(":")));
     expect(decode()).toEqual({ instructions, credentialLabels: { anthropic: "default", "openai-codex": "work — engineering and platform team" } });
     await page.reload();
-    await page.getByRole("button", { name: "Edit Daily review" }).click();
+    await page.getByRole("button", { name: "View Daily review" }).click();
+    await page.getByRole("button", { name: "Edit", exact: true }).click();
+    await page.getByRole("button", { name: "Accounts ▾", exact: true }).click();
     await expect(anthropic).toHaveValue("default");
     await anthropic.selectOption("");
     await openai.selectOption("");
+    await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "Save changes", exact: true }).click();
     await expect(page.getByRole("dialog", { name: "Edit automation" })).toHaveCount(0);
     expect(decode()).toEqual({ instructions, credentialLabels: {} });
@@ -131,6 +157,7 @@ test("legacy CI editor preserves instructions when changing accounts", async ({ 
 
 test("unavailable accounts remain visible and can be cleared", async ({ page }) => {
   await fixture(page, "light", true);
+  await page.getByRole("button", { name: "Accounts ▾", exact: true }).click();
   const account = page.getByLabel("Anthropic account", { exact: true });
   await expect(account).toHaveValue("work");
   await expect(account.locator("option:checked")).toHaveText("work (unavailable here)");
@@ -166,7 +193,7 @@ test('editor contains Tab focus and restores focus on Escape', async ({page}) =>
   await expect(page.getByRole('button',{name:'Save changes',exact:true})).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(dialog).toHaveCount(0);
-  await expect(page.getByRole('button',{name:'Edit Daily review'})).toBeFocused();
+  await expect(page.getByRole('button',{name:'Edit',exact:true})).toBeFocused();
 });
 
 test('run now blocks duplicate clicks and reuses the dispatch key after an uncertain failure', async ({page}) => {
