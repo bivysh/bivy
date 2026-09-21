@@ -154,6 +154,14 @@ export function codexIntegration(origin: AgentIntegrationOrigin) {
           resume: true,
           packages: false,
           fork: true,
+          // Mirror the ProtocolRuntime this integration builds (createCodexRuntime
+          // above wires exportForFork+importForFork and writeHistory, which flip
+          // capabilities.forkTransport/forkHistoryImport on). The catalog is a
+          // consumed source of truth (fork-fidelity matrix / fork-target preview),
+          // so omitting these made Codex look seeded-only when its runtime does a
+          // byte-exact codex→codex fork and a full transcript replay INTO it.
+          forkTransport: true,
+          forkHistoryImport: true,
           usageReporting: true,
           interactiveTui: installed,
           nativeSessionDiscovery: true,

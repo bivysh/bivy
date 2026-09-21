@@ -18,6 +18,14 @@ const CLAUDE_CAPABILITIES: RuntimeCapabilities = withExactCapabilitySurface({
   packages: false,
   resume: true,
   fork: true,
+  // Must mirror ClaudeCodeRuntime.capabilities (runtime.ts): the catalog is a
+  // consumed source of truth (the fork-fidelity matrix and any fork-target
+  // fidelity preview read these), so under-reporting here makes Claude look
+  // like a seeded-only fork target when its runtime actually delivers a
+  // byte-exact same-runtime fork (forkTransport) and a full cross-runtime
+  // transcript replay INTO it (forkHistoryImport, via importHistoryForFork).
+  forkTransport: true,
+  forkHistoryImport: true,
   usageReporting: true,
   nativeSessionDiscovery: true,
   nativeSessionAdoption: true,
