@@ -76,9 +76,12 @@ test("voice input remains available after the user types a message", async () =>
 
 test("source Automation templates enter the encrypted review flow before going live", async () => {
   const view = await read("../../packages/web/src/components/AutomationsView.tsx");
-  expect(view).toContain('if (template.trigger !== "github_ci")');
-  expect(view).toContain("Review the encrypted instructions and turn it on when ready.");
-  expect(view).toContain("Finish connecting the source, then review and turn on the Automation.");
+  const templateFlow = view.slice(view.indexOf('function startFromSourceTemplate('), view.indexOf('function startFromTemplate('));
+  expect(templateFlow).toContain('setDraft({');
+  expect(templateFlow).toContain('instructions: defaultSourceInstructions()');
+  expect(templateFlow).toContain('template.trigger === "github_ci"');
+  expect(templateFlow).not.toContain('createAutomation(');
+  expect(templateFlow).not.toContain('updateAutomation(');
   expect(view).toContain("Draft · needs GitHub");
 });
 

@@ -1874,6 +1874,38 @@ button.template-card.is-featured .template-card-icon {
 }
 .autom-instructions-input:focus { outline: none; }
 .autom-instructions-input::placeholder { color: var(--muted); }
+.automation-template-rows { display: flex; flex-direction: column; }
+.automation-template-row {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-4);
+  width: 100%; padding: var(--space-4) 0; border: 0; border-bottom: 1px solid var(--line);
+  background: transparent; color: var(--ink); font: inherit; text-align: left; cursor: pointer;
+}
+.automation-template-row:hover { color: var(--accent); }
+.automation-template-row svg { flex-shrink: 0; }
+.autom-chooser .wizard-head { justify-content: flex-start; gap: var(--space-3); }
+.automation-detail-head {
+  display: flex; align-items: center; gap: var(--space-2); flex-shrink: 0;
+  padding: max(var(--space-3), env(safe-area-inset-top)) var(--space-4) var(--space-3);
+  border-bottom: 1px solid var(--line);
+}
+.automation-detail-head h1 { flex: 1; min-width: 0; margin: 0; font-size: var(--text-lg); line-height: var(--lh-lg); overflow-wrap: anywhere; }
+.automation-detail-head .icon { flex-shrink: 0; }
+.automation-detail-head svg { width: var(--space-5); height: var(--space-5); }
+.automations-view.is-history .automations-view-body { flex: 1; padding: var(--space-5) var(--space-4); }
+.automation-history-view, .automation-history-view .runs-overview { margin-top: 0; }
+.automation-history-row {
+  display: flex; align-items: center; gap: var(--space-3); width: 100%;
+  padding: var(--space-4) 0; border: 0; border-bottom: 1px solid var(--line);
+  background: transparent; color: var(--ink); font: inherit; text-align: left; cursor: pointer;
+}
+.automation-history-row:hover { color: var(--accent); }
+.automation-history-row-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: var(--space-1); overflow-wrap: anywhere; }
+.automation-history-row .badge { flex-shrink: 0; }
+.automation-detail-footer {
+  display: flex; justify-content: flex-end; flex-shrink: 0;
+  padding: var(--space-3) var(--space-4) max(var(--space-4), env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line); background: var(--bg);
+}
 .automation-composer-controls { display: flex; flex-wrap: wrap; gap: var(--space-1); min-width: 0; }
 .automation-composer-controls .btn { white-space: normal; text-align: left; }
 .autom-instructions:focus-within { border-color: var(--accent); }
@@ -3019,7 +3051,7 @@ select.picker-search { appearance: auto; }
 .autom-empty-icon svg { width: 42px; height: 42px; }
 .autom-empty-state .autom-hero-title { font-family: var(--font-sans, inherit); font-size: clamp(24px, 4vw, 32px); }
 .autom-empty-state .autom-hero-body { font-size: 16px; }
-.autom-empty-action { display: none; }
+.autom-empty-action { display: block; }
 .autom-empty-action > .btn { min-height: 48px; padding-inline: var(--space-5); }
 
 @media (max-width: 720px) {

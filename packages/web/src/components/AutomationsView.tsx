@@ -524,6 +524,7 @@ export function AutomationsView({
   }, []);
 
 
+  const historyItem = items.find(item => item.id === historyAutomationId);
   const defaultNodeId = state.connection.currentNodeId || controller.local.cur || "";
   const listedItems = useMemo(() => items.filter(isListedAutomation).sort(automationPrioritySort), [items]);
   const isEmpty = !loading && listedItems.length === 0;
@@ -866,8 +867,17 @@ export function AutomationsView({
   }
 
   return createPortal(
-    <div className={`automations-view${historyAutomationId ? " is-history" : ""}`} role="dialog" aria-modal="true" aria-label="Automations">
-      <header className="automations-view-head">
+    <div className={`automations-view${historyAutomationId ? " is-history" : ""}`} role="dialog" aria-modal="true" aria-label={historyItem?.name || "Automations"}>
+      {historyItem ? <header className="automation-detail-head">
+        <button type="button" className="btn ghost icon" onClick={() => setHistoryAutomationId(null)} aria-label="Back to automations">‹</button>
+        <h1>{historyItem.name}</h1>
+        <button type="button" className="btn sm ghost" onClick={() => void toggle(historyItem)} aria-label={historyItem.enabled ? "Pause automation" : "Resume automation"}>
+          <Badge tone={historyItem.enabled ? "ok" : undefined}>{historyItem.enabled ? "Active" : "Paused"}</Badge>
+        </button>
+        <button type="button" className="btn ghost icon" aria-label="Edit automation" onClick={() => void edit(historyItem).catch(e => setError(String(e)))}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m15 5 4 4M4 20l4-1L20 7a2.8 2.8 0 0 0-4-4L4 15v5Z" /></svg>
+        </button>
+      </header> : <header className="automations-view-head">
         <div className="automations-view-head-text">
           <h1 className="automations-view-heading">Automations</h1>
           <p className="automations-view-sub">Jobs that run on your machines while you&apos;re away.</p>
@@ -875,9 +885,9 @@ export function AutomationsView({
         <div className="automations-view-head-actions">
           <button type="button" className="btn ghost icon autom-close-btn" onClick={onClose} title="Close" aria-label="Close automations"><CloseIcon /></button>
         </div>
-      </header>
+      </header>}
 
-      <nav className="automations-tabs segmented" aria-label="Automations sections">
+      {!historyAutomationId && !draft && !sourceEdit && !chooserOpen && <nav className="automations-tabs segmented" aria-label="Automations sections">
         {AUTOMATIONS_TABS.map((tab) => (
           <button
             key={tab.label}
@@ -889,7 +899,7 @@ export function AutomationsView({
             {tab.label}
           </button>
         ))}
-      </nav>
+      </nav>}
 
       <div className="automations-view-body">
         {cloudAutomationGate && (
@@ -1084,21 +1094,9 @@ export function AutomationsView({
 
         {section === null && historyAutomationId && (
           <section className="autom-section automation-history-view">
-            <div className="autom-section-head">
-              <button type="button" className="btn link" onClick={() => setHistoryAutomationId(null)}>‹ Automations</button>
-              <strong>{listedItems.find((item) => item.id === historyAutomationId)?.name || "Automation"}</strong>
-              {(() => {
-                const item = items.find(item => item.id === historyAutomationId);
-                if (!item) return null;
-                return <div className="automations-view-head-actions">
-                  <button type="button" className="btn sm" onClick={() => void toggle(item)}>{item.enabled ? "Active · Pause" : "Paused · Resume"}</button>
-                  <button type="button" className="btn sm" onClick={() => void edit(item).catch(e => setError(String(e)))}>Edit</button>
-                </div>;
-              })()}
-            </div>
-            <h2 className="autom-section-label">History</h2>
+
             {cancelError && <div className="banner" data-tone="danger" role="alert">{cancelError}</div>}
-            <RunHistory
+            <RunHistory compact
               runs={runs.filter((run) => run.definitionId === historyAutomationId)}
               definitions={items}
               cancelBusyId={cancelBusyId}
@@ -1107,10 +1105,6 @@ export function AutomationsView({
               onOpenRun={onOpenRun}
               onOpenSession={(sessionId) => { onOpenSession(sessionId); onClose(); }}
             />
-            {(() => {
-              const item = items.find(item => item.id === historyAutomationId);
-              return item && <div className="wizard-actions"><button type="button" className="btn primary" disabled={dispatchingId === item.id} onClick={() => void runNow(item)}>{dispatchingId === item.id ? "Starting…" : "Run now"}</button></div>;
-            })()}
           </section>
         )}
 
@@ -1157,6 +1151,10 @@ export function AutomationsView({
 
         {section === "rulesets" && <RulesetsPanel state={state} />}
       </div>
+
+      {historyItem && <footer className="automation-detail-footer">
+        <button type="button" className="btn" disabled={dispatchingId === historyItem.id} onClick={() => void runNow(historyItem)}>{dispatchingId === historyItem.id ? "Starting…" : "▷ Run now"}</button>
+      </footer>}
 
       {pendingDelete && (
         <ConfirmDialog

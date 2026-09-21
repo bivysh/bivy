@@ -27,7 +27,10 @@ export function RunHistory({
   onCancel,
   onOpenRun,
   onOpenSession,
+  compact = false,
 }: {
+  /** A definition's history, without the global feed's filters and summary. */
+  compact?: boolean;
   runs: AccountAutomationRun[];
   definitions: AccountAutomation[];
   cancelBusyId?: string | null;
@@ -60,25 +63,30 @@ export function RunHistory({
     <section className="autom-section runs-overview">
       <div className="autom-section-head">
         <div>
-          <h2 className="autom-section-label">Recent runs</h2>
-          <p className="settings-hint">Live status and recent outcomes.</p>
+          <h2 className="autom-section-label">{compact ? "History" : "Recent runs"}</h2>
+          {!compact && <p className="settings-hint">Live status and recent outcomes.</p>}
         </div>
-        <div className="autom-section-actions">
+        {!compact && <div className="autom-section-actions">
           <button type="button" className="btn sm" onClick={onRefresh}>Refresh</button>
-        </div>
+        </div>}
       </div>
       {attentionCount > 0 && <div className="banner" data-tone="warn" role="alert"><div className="banner-text"><strong>{attentionCount} Run{attentionCount === 1 ? "" : "s"} need attention</strong><span>Review parked work, failed notification delivery, or terminal failures before retrying.</span></div></div>}
-      <div className="run-history-filters" role="group" aria-label="Filter Runs">
+      {!compact && <div className="run-history-filters" role="group" aria-label="Filter Runs">
         {filters.map((item) => <button type="button" key={item.id} className={`btn sm${filter === item.id ? " primary" : ""}`} aria-pressed={filter === item.id} onClick={() => setFilter(item.id)}>{item.label}</button>)}
-      </div>
-      {visible.length === 0 ? <p className="settings-hint autom-empty-hint">No Runs match this filter.</p> : (
+      </div>}
+      {visible.length === 0 ? <p className="settings-hint autom-empty-hint">{compact ? "No runs yet. Run this automation now, or wait for its trigger." : "No Runs match this filter."}</p> : (
         <div className="automation-list">
           {visible.slice(0, 30).map((run) => {
             const detail = projectRunDetail(run);
             const canonical = runFromAutomationRun(run);
             const tone: BadgeTone | undefined = detail.outcome.tone === "success" ? "ok" : detail.outcome.tone === "danger" ? "danger" : detail.outcome.tone === "warning" ? "warn" : undefined;
+            if (compact && onOpenRun) return <button type="button" className="automation-history-row" key={run.id} onClick={() => onOpenRun(run.id)}>
+              <span className="automation-history-row-copy"><strong>{run.title}</strong><span className="settings-hint">{formatAutomationMoment(run.createdAt)}</span></span>
+              <Badge tone={tone}>{detail.outcome.label}</Badge>
+              <span aria-hidden="true">›</span>
+            </button>;
             const defName = definitions.find((item) => item.id === run.definitionId)?.name;
-            const rowMain = <><div className="automation-row-title"><strong>{run.title}</strong><Badge tone={tone}>{detail.outcome.label}</Badge>{canonical.operationalState === "parked" && <Badge tone="warn">Parked</Badge>}{canonical.operationalState === "dead_letter" && <Badge tone="danger">Dead letter</Badge>}</div><div className="settings-hint">{[defName, formatAutomationMoment(run.createdAt), run.triggerKind, detail.checksSummary, `attempt ${canonical.attempt}${canonical.maxAttempts ? `/${canonical.maxAttempts}` : ""}`].filter(Boolean).join(" · ")}</div>{canonical.attemptReason && <div className="settings-hint">{canonical.attemptReason}</div>}{detail.failure && <div className="settings-hint warn-text">{detail.failure}</div>}</>;
+            const rowMain = <><div className="automation-row-title"><strong>{run.title}</strong><Badge tone={tone}>{detail.outcome.label}</Badge>{canonical.operationalState === "parked" && <Badge tone="warn">Parked</Badge>}{canonical.operationalState === "dead_letter" && <Badge tone="danger">Dead letter</Badge>}</div><div className="settings-hint">{[compact ? null : defName, formatAutomationMoment(run.createdAt), compact ? null : run.triggerKind, detail.checksSummary, compact ? null : `attempt ${canonical.attempt}${canonical.maxAttempts ? `/${canonical.maxAttempts}` : ""}`].filter(Boolean).join(" · ")}</div>{canonical.attemptReason && <div className="settings-hint">{canonical.attemptReason}</div>}{detail.failure && <div className="settings-hint warn-text">{detail.failure}</div>}</>;
             return <div className="automation-row run-row" key={run.id}>
               {onOpenRun ? <button type="button" className="automation-row-main run-row-open" onClick={() => onOpenRun(run.id)}>{rowMain}</button> : <div className="automation-row-main">{rowMain}</div>}
               <div className="automation-row-actions">
