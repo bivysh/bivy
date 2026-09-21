@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Refresh the release-tested agent pins to the current upstream builds: Claude Agent SDK `0.3.278`, Codex `0.155.1`, Pi `0.86.1`, and OpenCode `1.18.31` (previously `0.3.270` / `0.154.0` / `0.85.1` / `1.18.30`). Regenerates the certification matrix, CLI agent manifest, and supported-agent docs from the single source of truth, and updates the bundled SDK/lockfile. Each pinned version installs and probes cleanly; the pinned-certification CI job and the opt-in live workflow validate the governed turn path.
+
 ### Fixed
 
 - Preserve a protocol/ACP agent turn that fails mid-flight instead of losing it on reload. When a turn streamed a partial reply and then errored (a provider 4xx, an OpenCode ACP prompt rejection, an expired credential), the `session.error` path wiped the turn's content and persisted nothing, so a reopened session showed a blank "looks done, no reply" turn and the partial work vanished. The failed turn now keeps its partial assistant reply and tool activity and records a terminal error marker, so the reloaded transcript matches the live view (an inline error) for every protocol agent (OpenCode, Grok, Cursor, Amp, Gemini, …). The credential-preflight failure path gained the same reload-safe marker.
