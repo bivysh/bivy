@@ -211,7 +211,14 @@ export function createTranscriptPersistence(deps: TranscriptPersistenceDeps): Tr
       // clients, so dropping it from the persisted log loses nothing.
       return;
     } else {
-      eventLog.append(record.id, { ...base, id: `bivy-tool-call-${callId}`, content: [{ type: "tool_use", id: callId, name, input, ...(event.detail ? { detail: event.detail } : {}) }] } as ToolActivityMessage);
+      // Carry the delegation/sub-agent parent id onto the persisted tool_use
+      // block so a reloaded transcript nests a sub-agent's calls under the
+      // delegation that spawned them (toolEntriesFromContent → toolParentId),
+      // exactly like the live stream does. Without this the parent id lived only
+      // on the in-flight event and reopening a session flattened sub-agent work.
+      // Generic: any runtime whose tool_call event carries parentToolUseId nests.
+      const parentToolUseId = typeof event.parentToolUseId === "string" && event.parentToolUseId ? event.parentToolUseId : undefined;
+      eventLog.append(record.id, { ...base, id: `bivy-tool-call-${callId}`, content: [{ type: "tool_use", id: callId, name, input, ...(parentToolUseId ? { parentToolUseId } : {}), ...(event.detail ? { detail: event.detail } : {}) }] } as ToolActivityMessage);
     }
   }
 
