@@ -661,6 +661,23 @@ function rawExitCode(raw: unknown): number | undefined {
   return typeof exit === "number" ? exit : undefined;
 }
 
+/** Decode a UTF-8 byte array carried as a JSON `number[]` (Grok's
+ * `rawOutput.output` transports command output this way). Returns the decoded
+ * string, or undefined when the value isn't a plausible byte array. Used only as
+ * a LAST resort — a clean ACP `content` block is always preferred — so a result
+ * frame with no display content still renders readable text instead of a raw
+ * number array (`[97,46,116,120,116]`). */
+function decodeByteArray(v: unknown): string | undefined {
+  if (!Array.isArray(v) || v.length === 0) return undefined;
+  if (!v.every((n) => typeof n === "number" && Number.isInteger(n) && n >= 0 && n <= 255)) return undefined;
+  try {
+    const text = Buffer.from(v as number[]).toString("utf8");
+    return text.includes("\uFFFD") ? undefined : text;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Extract an ACP-style tool update. Two transports converge here:
  *   1. A JSON-RPC `session/update` notification (`params.update`), the true ACP
  *      wire form used by Gemini/Qwen/Copilot etc.
@@ -704,8 +721,16 @@ function acpToolUpdate(msg: Record<string, unknown>): {
     // the exit code from the raw payload when we take the content text instead.
     const contentText = flattenAcpContent(update.content);
     const exit = rawExitCode(raw);
-    const output = contentText !== undefined
-      ? (exit !== undefined ? { content: contentText, exit_code: exit } : contentText)
+    // Last-resort text when no clean ACP `content` block is present: decode a
+    // byte-array payload (Grok's rawOutput.output) so the card shows readable
+    // output instead of a raw `[97,46,…]` number array. Never overrides a real
+    // content block.
+    const decoded = contentText === undefined
+      ? (decodeByteArray(raw) ?? (raw && typeof raw === "object" && !Array.isArray(raw) ? decodeByteArray((raw as Record<string, unknown>).output) : undefined))
+      : undefined;
+    const text = contentText ?? decoded;
+    const output = text !== undefined
+      ? (exit !== undefined ? { content: text, exit_code: exit } : text)
       : (raw ?? update.content);
     return { kind: "result", id, output, error: status === "failed" || status === "error" };
   }
