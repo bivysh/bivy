@@ -23,7 +23,7 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => { await server?.close(); if (cacheDir) await rm(cacheDir, { recursive: true, force: true }); });
 
-async function fixture(page: Page, theme: string, empty = false, trigger = "schedule", options: { multiple?: boolean; locked?: boolean } = {}) {
+async function fixture(page: Page, theme: string, empty = false, trigger = "schedule", options: { multiple?: boolean; locked?: boolean; history?: boolean } = {}) {
   let item = {
     id: "automation-test", name: "Daily review", trigger, enabled: true,
     repo: "acme/app", nodeLabel: "bivy/Runner", runtimeId: "pi", model: "claude-sonnet",
@@ -45,7 +45,10 @@ async function fixture(page: Page, theme: string, empty = false, trigger = "sche
       : url.pathname === "/account/automations" ? (options.multiple ? [{...item,id:'first',name:'First source'}, item] : [item])
       : url.pathname === '/account/github-app' ? {connected:true,apps:[{appId:'app',connected:true,installed:true,installCount:1,mention:'bivy'}]}
       : url.pathname === "/account/nodes" ? nodes
-      : url.pathname === "/account/automation-runs" ? [] : { connected: false, enabled: false };
+      : url.pathname === "/account/automation-runs" ? (options.history ? [
+        { id: 'run-today', definitionId: item.id, title: 'Reviewed incoming work', triggerKind: 'schedule', status: 'succeeded', createdAt: '2026-09-21T09:00:00Z', completedAt: '2026-09-21T09:04:00Z' },
+        { id: 'run-yesterday', definitionId: item.id, title: 'Reviewed incoming work', triggerKind: 'schedule', status: 'succeeded', createdAt: '2026-09-20T09:00:00Z', completedAt: '2026-09-20T09:03:00Z' },
+      ] : []) : { connected: false, enabled: false };
     return route.fulfill({ json });
   });
   await page.route("**/nodes", (route) => route.fulfill({ json: nodes }));
@@ -77,40 +80,103 @@ async function fixture(page: Page, theme: string, empty = false, trigger = "sche
       { provider: "openai-codex", label: "default", kind: "oauth" },
       { provider: "openai-codex", label: "work — engineering and platform team", kind: "oauth" },
     ])};
-    createRoot(document.getElementById('root')).render(React.createElement(AutomationsView, {state, section: null, onSectionChange: () => {}, onOpenSession: () => {}, onClose: () => {}}));
+    createRoot(document.getElementById('root')).render(React.createElement(AutomationsView, {state, section: null, onSectionChange: () => {}, onOpenSession: () => {}, onOpenRun: () => {}, onClose: () => {}}));
   </script></body></html>`);
   await page.route(`${origin}${fixturePath}`, (route) => route.fulfill({ contentType: "text/html", body: html }));
   await page.goto(`${origin}${fixturePath}`);
-  await page.getByRole("button", { name: "Edit Daily review" }).focus();
-  await page.getByRole("button", { name: "Edit Daily review" }).press('Enter');
+  await page.getByRole("button", { name: "View Daily review" }).focus();
+  await page.getByRole("button", { name: "View Daily review" }).press('Enter');
+  await page.getByRole('button', { name: 'Edit automation', exact: true }).click();
   return () => item;
 }
 
 for (const theme of ["light", "dark"]) {
+  test(`automation screen hierarchy and grouped sheets (${theme})`, async ({ page }, testInfo) => {
+    await fixture(page, theme, false, 'schedule', { history: true });
+    const capture = async (name: string) => {
+      // Wait for the shared sheet's entrance/dismissal motion before capturing.
+      await page.waitForTimeout(350);
+      await page.screenshot({ path: testInfo.outputPath(`${name}-${theme}.png`), animations: 'disabled' });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+    };
+    await page.getByLabel('Instructions', { exact: true }).scrollIntoViewIfNeeded();
+    await capture('composer');
+    await page.getByRole('button', { name: 'Model and account: Claude Sonnet', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: 'Model', exact: true })).toBeVisible();
+    await capture('models');
+    await page.getByRole('button', { name: 'Change account for Claude Sonnet' }).click();
+    await capture('model-accounts');
+    await page.getByRole('button', { name: 'Back to models' }).click();
+    await expect(page.getByRole('dialog', { name: 'Model', exact: true })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: 'Protection: Workspace write' }).click();
+    await expect(page.getByText('Sandbox', { exact: true })).toBeVisible();
+    await expect(page.getByText('Approvals', { exact: true })).toBeVisible();
+    await capture('protection');
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: 'Back to automation', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Daily review', exact: true })).toBeVisible();
+    await expect(page.getByRole('navigation', { name: 'Automations sections' })).toHaveCount(0);
+    await expect(page.getByRole('group', { name: 'Filter Runs' })).toHaveCount(0);
+    await capture('history');
+    await page.getByRole('button', { name: 'Back to automations' }).click();
+    await expect(page.getByRole('navigation', { name: 'Automations sections' })).toBeVisible();
+    await capture('list');
+    await page.getByRole('button', { name: 'New automation', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Start from template' })).toBeVisible();
+    await expect(page.locator('.template-card')).toHaveCount(0);
+    await capture('chooser');
+    await page.getByRole('button', { name: 'Fix failed CI', exact: true }).click();
+    await expect(page.getByRole('textbox', { name: 'Name', exact: true })).toHaveValue('Fix failed CI');
+    await capture('editor');
+  });
+  test(`automation navigation and composer pickers (${theme})`, async ({ page }, testInfo) => {
+    await fixture(page, theme);
+    await page.getByRole('button', { name: 'Agent: Pi', exact: true }).click();
+    await page.getByText('Machine default', { exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Agent: Agent default', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Protection: Workspace write', exact: true }).click();
+    await page.getByText('Read only', { exact: true }).click();
+    await page.getByText('Ask before risky actions', { exact: true }).click();
+    await page.getByRole('button', { name: 'Done', exact: true }).click();
+    await page.getByLabel('Instructions', { exact: true }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath(`composer-${theme}.png`) });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+    await page.getByRole('button', { name: 'Back to automation', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'History', exact: true })).toBeVisible();
+    await expect(page.getByRole('navigation', { name: 'Automations sections' })).toHaveCount(0);
+    await expect(page.getByRole('group', { name: 'Filter Runs' })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Back to automations', exact: true }).click();
+    await page.getByRole('button', { name: 'New automation', exact: true }).click();
+    await page.getByRole('button', { name: 'New from scratch', exact: true }).click();
+    await page.getByRole('button', { name: 'Back to new automation', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: 'New automation', exact: true })).toBeVisible();
+  });
   test(`automation accounts round-trip without changing instructions (${theme})`, async ({ page }, testInfo) => {
     const item = await fixture(page, theme);
-    const anthropic = page.getByLabel("Anthropic account", { exact: true });
-    const openai = page.getByLabel("OpenAI — ChatGPT subscription account", { exact: true });
-    await expect(anthropic).toHaveValue("work");
-    await expect(openai).toHaveValue("retired");
-    await expect(openai.locator("option:checked")).toHaveText("retired (unavailable here)");
-    await anthropic.focus();
-    await expect(anthropic).toBeFocused();
-    await anthropic.selectOption("default");
-    await openai.selectOption("work — engineering and platform team");
-    await anthropic.scrollIntoViewIfNeeded();
+    await page.getByRole("button", { name: "Model and account: Claude Sonnet", exact: true }).click();
+    await page.getByRole('button', { name: 'Change account for Claude Sonnet' }).click();
+    await expect(page.getByRole('dialog', { name: 'Model accounts' })).toBeVisible();
+    await page.getByText('Default account', { exact: true }).click();
+    await page.getByText('OpenAI — ChatGPT subscription', { exact: true }).click();
+    await expect(page.getByText('Unavailable on the connected machine', { exact: true })).toBeVisible();
+    await page.getByText('work — engineering and platform team', { exact: true }).click();
     await page.screenshot({ path: testInfo.outputPath(`automation-accounts-${theme}.png`) });
-    const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
-    expect(overflow).toBe(false);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+    await page.keyboard.press('Escape');
     await page.getByRole("button", { name: "Save changes", exact: true }).click();
     await expect(page.getByRole("dialog", { name: "Edit automation" })).toHaveCount(0);
     const decode = () => decodeAutomationTemplate(open(key, item().templateCiphertext.split(":").slice(2).join(":")));
     expect(decode()).toEqual({ instructions, credentialLabels: { anthropic: "default", "openai-codex": "work — engineering and platform team" } });
     await page.reload();
-    await page.getByRole("button", { name: "Edit Daily review" }).click();
-    await expect(anthropic).toHaveValue("default");
-    await anthropic.selectOption("");
-    await openai.selectOption("");
+    await page.getByRole("button", { name: "View Daily review" }).click();
+    await page.getByRole("button", { name: "Edit automation", exact: true }).click();
+    await page.getByRole("button", { name: "Model and account: Claude Sonnet", exact: true }).click();
+    for (const provider of ['Anthropic', 'OpenAI — ChatGPT subscription']) {
+      await page.getByText(provider, { exact: true }).click();
+      await page.getByText('Machine/project default', { exact: true }).click();
+    }
+    await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "Save changes", exact: true }).click();
     await expect(page.getByRole("dialog", { name: "Edit automation" })).toHaveCount(0);
     expect(decode()).toEqual({ instructions, credentialLabels: {} });
@@ -131,12 +197,14 @@ test("legacy CI editor preserves instructions when changing accounts", async ({ 
 
 test("unavailable accounts remain visible and can be cleared", async ({ page }) => {
   await fixture(page, "light", true);
-  const account = page.getByLabel("Anthropic account", { exact: true });
-  await expect(account).toHaveValue("work");
-  await expect(account.locator("option:checked")).toHaveText("work (unavailable here)");
-  await account.selectOption("");
-  await page.getByLabel("OpenAI — ChatGPT subscription account", { exact: true }).selectOption("");
-  await expect(page.getByRole("status").filter({ hasText: "No accounts loaded" })).toBeVisible();
+  await page.getByRole('button', { name: 'Model and account: Claude Sonnet', exact: true }).click();
+  await page.getByRole('button', { name: 'Change account for Claude Sonnet' }).click();
+  await expect(page.getByText('Unavailable on the connected machine', { exact: true })).toBeVisible();
+  await expect(page.getByRole('status')).toContainText('No accounts loaded');
+  await page.getByText('Machine/project default', { exact: true }).click();
+  await page.getByText('OpenAI — ChatGPT subscription', { exact: true }).click();
+  await page.getByText('Machine/project default', { exact: true }).click();
+
 });
 
 for (const source of ['github', 'linear']) {
@@ -166,7 +234,7 @@ test('editor contains Tab focus and restores focus on Escape', async ({page}) =>
   await expect(page.getByRole('button',{name:'Save changes',exact:true})).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(dialog).toHaveCount(0);
-  await expect(page.getByRole('button',{name:'Edit Daily review'})).toBeFocused();
+  await expect(page.getByRole('button',{name:'Edit automation',exact:true})).toBeFocused();
 });
 
 test('run now blocks duplicate clicks and reuses the dispatch key after an uncertain failure', async ({page}) => {

@@ -2,10 +2,10 @@
 //
 // The first-class Automations destination — a full-screen surface reached from
 // the sidebar foot (peer to Settings). Outcome-first: suggested jobs, your
-// automations, recent activity. Source connect (GitHub / Linear / Slack) stays
-// on this surface via WorkQueueSetupSheet so setup never dumps people into
-// Settings and loses the thread. Creating/editing uses one form modal
-// (name → trigger → instructions → machine); templates pre-fill it. Everything
+// automations, recent activity. Definitions open their history before editing.
+// Source connect (GitHub / Linear / Slack) stays on this surface via
+// WorkQueueSetupSheet. Creating/editing uses one form modal
+// (name → trigger → machine → instructions); templates pre-fill it. Everything
 // still writes the same POST /account/automations definition.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -72,7 +72,7 @@ import { RunHistory } from "./RunHistory.js";
 import { compactCronSummary, formatAutomationMoment, formatNextAutomationRun } from "../automationPresentation.js";
 import { isListedAutomation } from "../automationList.js";
 import { Badge } from "./Badge.js";
-import { NewAutomationChooser, NewAutomationPicker } from "./NewAutomationChooser.js";
+import { NewAutomationChooser } from "./NewAutomationChooser.js";
 import { AutomationPreflightPanel, useAutomationPreflight } from "./AutomationPreflight.js";
 import { IconBolt, IconClock, IconPr, IconWebhook } from "./AutomationIcons.js";
 import { AddNodeSheet } from "./AddNodeSheet.js";
@@ -81,6 +81,7 @@ import { useModalFocus } from "../useModalFocus.js";
 
 import { decodeAutomationTemplate, encodeAutomationTemplate } from "@bivy/core";
 import { AutomationAccounts } from "./AutomationAccounts.js";
+import { AutomationComposerControls } from "./AutomationComposerControls.js";
 
 const TEMPLATE_PREFIX = "bivy-room-v1";
 
@@ -523,6 +524,7 @@ export function AutomationsView({
   }, []);
 
 
+  const historyItem = items.find(item => item.id === historyAutomationId);
   const defaultNodeId = state.connection.currentNodeId || controller.local.cur || "";
   const listedItems = useMemo(() => items.filter(isListedAutomation).sort(automationPrioritySort), [items]);
   const isEmpty = !loading && listedItems.length === 0;
@@ -572,97 +574,22 @@ export function AutomationsView({
     });
   }
 
-  async function startFromSourceTemplate(template: SourceTemplate) {
+  function startFromSourceTemplate(template: SourceTemplate) {
+    const base = emptyDraft(defaultNodeId);
     setError("");
     setNotice(null);
-    try {
-      // A source Automation is a Draft until its source is actually connected.
-      // Creating an enabled definition first made the UI claim “on” while no
-      // event could reach it. Probe before writing, then persist truthful state.
-      const github = template.trigger === "github" || template.trigger === "github_ci"
-        ? await fetchGithubApp(controller.local).catch(() => null)
-        : null;
-      const linear = template.trigger === "linear"
-        ? await fetchLinearHook(controller.local).catch(() => null)
-        : null;
-      const needsGithub = Boolean(github && githubSourceStatus(github).tone !== "on") || ((template.trigger === "github" || template.trigger === "github_ci") && !github);
-      const needsLinear = template.trigger === "linear" && linearSourceStatus(linear).tone !== "on";
-      const sourceReady = !needsGithub && !needsLinear;
-
-      if (template.trigger !== "github_ci") {
-        const existing = items.find((i) => i.trigger === template.trigger);
-        if (existing) {
-          await continueWithSource(template.trigger, emptyDraft(defaultNodeId));
-        } else {
-          const base = emptyDraft(defaultNodeId);
-          setDraft({
-            ...base,
-            name: template.prefill.name,
-            instructions: defaultSourceInstructions(),
-            hasTrigger: true,
-            trigger: template.trigger,
-            labels: (template.prefill.labels ?? ["bivy"]).join(", "),
-            githubEvents: template.trigger === "github"
-              ? { issuesLabeled: true, issueMention: true, prLabeled: true, prMention: true, workflowFailed: false }
-              : base.githubEvents,
-            approvalMode: "autonomous",
-            sandbox: "workspace-write",
-          });
-        }
-        if (needsGithub) openSetup("work-queue");
-        if (needsLinear) openSetup("linear");
-        setNotice({
-          tone: sourceReady ? "info" : "warn",
-          title: sourceReady ? `${template.title} ready to review` : `${template.title} needs setup`,
-          body: sourceReady
-            ? "Review the encrypted instructions and turn it on when ready."
-            : "Finish connecting the source, then review and turn on the Automation. It cannot receive events yet.",
-        });
-        return;
-      }
-
-      const existing = items.find((i) => i.trigger === template.trigger);
-      if (existing) {
-        if (sourceReady && !existing.enabled) await updateAutomation(controller.local, existing.id, { enabled: true });
-      } else {
-        await createAutomation(controller.local, {
-          name: template.prefill.name,
-          trigger: template.trigger,
-          templateId: template.prefill.templateId,
-          labels: template.prefill.labels,
-          enabled: sourceReady,
-        });
-      }
-      await refresh();
-
-      if (needsGithub) {
-        openSetup("github");
-        setNotice({
-          tone: "info",
-          title: `${template.title} saved as a draft`,
-          body: "Connect and install the GitHub App, then resume the Automation. It cannot receive events yet.",
-        });
-      } else if (needsLinear) {
-        openSetup("linear");
-        setNotice({
-          tone: "info",
-          title: `${template.title} saved as a draft`,
-          body: "Finish connecting Linear, then resume the Automation. It cannot receive events yet.",
-        });
-      } else {
-        setNotice({
-          tone: "ok",
-          title: `${template.title} is live`,
-          body: template.trigger === "github_ci"
-            ? "Failed workflow runs will open a diagnosing session. Existing GitHub Apps may need the workflow_run event."
-            : template.trigger === "linear"
-              ? "Label a Linear issue bivy (or bivy/<machine>) to enqueue it."
-              : "Label a GitHub issue bivy or @mention the app with what to do.",
-        });
-      }
-    } catch (e) {
-      setError(String((e as Error).message || e));
-    }
+    setDraft({
+      ...base,
+      name: template.prefill.name,
+      instructions: defaultSourceInstructions(),
+      hasTrigger: true,
+      trigger: template.trigger === "linear" ? "linear" : "github",
+      repo: rememberedRepo(state),
+      labels: (template.prefill.labels ?? ["bivy"]).join(", "),
+      githubEvents: template.trigger === "github_ci"
+        ? { issuesLabeled: false, issueMention: false, prLabeled: false, prMention: false, workflowFailed: true }
+        : base.githubEvents,
+    });
   }
 
   function startFromTemplate(template: AutomationTemplate) {
@@ -874,6 +801,7 @@ export function AutomationsView({
       await deleteAutomation(controller.local, item.id);
       setDraft(null);
       setSourceEdit(null);
+      setHistoryAutomationId(null);
       await refresh();
       setNotice({ tone: "ok", title: `Deleted “${item.name}”` });
     } catch (e) { setError(String((e as Error).message || e)); }
@@ -939,22 +867,27 @@ export function AutomationsView({
   }
 
   return createPortal(
-    <div className={`automations-view${historyAutomationId ? " is-history" : ""}`} role="dialog" aria-modal="true" aria-label="Automations">
-      <header className="automations-view-head">
+    <div className={`automations-view${historyAutomationId ? " is-history" : ""}`} role="dialog" aria-modal="true" aria-label={historyItem?.name || "Automations"}>
+      {historyItem ? <header className="automation-detail-head">
+        <button type="button" className="btn ghost icon" onClick={() => setHistoryAutomationId(null)} aria-label="Back to automations">‹</button>
+        <h1>{historyItem.name}</h1>
+        <button type="button" className="btn sm ghost" onClick={() => void toggle(historyItem)} aria-label={historyItem.enabled ? "Pause automation" : "Resume automation"}>
+          <Badge tone={historyItem.enabled ? "ok" : undefined}>{historyItem.enabled ? "Active" : "Paused"}</Badge>
+        </button>
+        <button type="button" className="btn ghost icon" aria-label="Edit automation" onClick={() => void edit(historyItem).catch(e => setError(String(e)))}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m15 5 4 4M4 20l4-1L20 7a2.8 2.8 0 0 0-4-4L4 15v5Z" /></svg>
+        </button>
+      </header> : <header className="automations-view-head">
         <div className="automations-view-head-text">
           <h1 className="automations-view-heading">Automations</h1>
           <p className="automations-view-sub">Jobs that run on your machines while you&apos;re away.</p>
         </div>
         <div className="automations-view-head-actions">
-          <button type="button" className="btn primary" onClick={openChooser} aria-label="New automation">
-            <PlusIcon size={18} />
-            <span className="action-label">New automation</span>
-          </button>
           <button type="button" className="btn ghost icon autom-close-btn" onClick={onClose} title="Close" aria-label="Close automations"><CloseIcon /></button>
         </div>
-      </header>
+      </header>}
 
-      <nav className="automations-tabs segmented" aria-label="Automations sections">
+      {!historyAutomationId && !draft && !sourceEdit && !chooserOpen && <nav className="automations-tabs segmented" aria-label="Automations sections">
         {AUTOMATIONS_TABS.map((tab) => (
           <button
             key={tab.label}
@@ -966,7 +899,7 @@ export function AutomationsView({
             {tab.label}
           </button>
         ))}
-      </nav>
+      </nav>}
 
       <div className="automations-view-body">
         {cloudAutomationGate && (
@@ -1056,7 +989,7 @@ export function AutomationsView({
           <p className="settings-hint" style={{ marginTop: 24 }}>Loading your automations…</p>
         )}
 
-        {/* Empty state is the create chooser itself — no buried templates. */}
+        {/* Empty and populated lists enter the same scratch/template chooser. */}
         {isEmpty && (
           <section className="autom-hero autom-empty-state">
             <div className="autom-empty-icon" aria-hidden="true"><IconClock /></div>
@@ -1071,12 +1004,7 @@ export function AutomationsView({
                 <PlusIcon size={22} /> New automation
               </button>
             </div>
-            <div className="autom-empty-picker">
-              <NewAutomationPicker
-                onScratch={startFromScratch}
-                onTemplate={startFromTemplate}
-              />
-            </div>
+
           </section>
         )}
 
@@ -1085,7 +1013,8 @@ export function AutomationsView({
           <>
             <section className="autom-section">
               <div className="autom-section-head">
-                <h2 className="autom-section-label">Your automations</h2>
+                <h2 className="autom-section-label">Automations</h2>
+                <button type="button" className="btn sm" onClick={openChooser} aria-label="New automation"><PlusIcon size={18} /> New</button>
               </div>
               <div className="automation-list">
                 {listedItems.map((item) => {
@@ -1103,14 +1032,14 @@ export function AutomationsView({
                       key={item.id}
                       role="button"
                       tabIndex={0}
-                      onClick={() => void edit(item).catch((e) => setError(String(e)))}
+                      onClick={() => setHistoryAutomationId(item.id)}
                       onKeyDown={(event) => {
                         if (event.key === "Enter" || event.key === " ") {
                           event.preventDefault();
-                          void edit(item).catch((e) => setError(String(e)));
+                          setHistoryAutomationId(item.id);
                         }
                       }}
-                      aria-label={`Edit ${item.name}`}
+                      aria-label={`View ${item.name}`}
                     >
                       <span className="automation-row-icon" aria-hidden="true">
                         {item.trigger === "webhook" ? <IconWebhook /> : isSourceTrigger(item.trigger) ? <IconPr /> : <IconClock />}
@@ -1165,11 +1094,9 @@ export function AutomationsView({
 
         {section === null && historyAutomationId && (
           <section className="autom-section automation-history-view">
-            <div className="autom-section-head">
-              <button type="button" className="btn link" onClick={() => setHistoryAutomationId(null)}>‹ Automations</button>
-              <strong>{listedItems.find((item) => item.id === historyAutomationId)?.name || "Automation"} history</strong>
-            </div>
-            <RunHistory
+
+            {cancelError && <div className="banner" data-tone="danger" role="alert">{cancelError}</div>}
+            <RunHistory compact
               runs={runs.filter((run) => run.definitionId === historyAutomationId)}
               definitions={items}
               cancelBusyId={cancelBusyId}
@@ -1225,6 +1152,10 @@ export function AutomationsView({
         {section === "rulesets" && <RulesetsPanel state={state} />}
       </div>
 
+      {historyItem && <footer className="automation-detail-footer">
+        <button type="button" className="btn" disabled={dispatchingId === historyItem.id} onClick={() => void runNow(historyItem)}>{dispatchingId === historyItem.id ? "Starting…" : "▷ Run now"}</button>
+      </footer>}
+
       {pendingDelete && (
         <ConfirmDialog
           title="Delete automation?"
@@ -1269,9 +1200,10 @@ export function AutomationsView({
           onRotate={rotate}
           onSourceSetup={(item) => openSetup(item.trigger === "linear" ? "linear" : "github")}
           onMove={moveSourceAutomation}
-          onCancel={() => setDraft(null)}
+          onCancel={() => { setDraft(null); if (!draft.id) setChooserOpen(true); }}
           onSaved={async (result) => {
             setDraft(null);
+            if (result?.id) setHistoryAutomationId(result.id);
             await refresh().catch((e) => setError(String(e)));
             if (result?.kind === "created-schedule") {
               const createdId = result.id;
@@ -1293,7 +1225,7 @@ export function AutomationsView({
               setNotice({ tone: "ok", title: `Saved “${result.name}”` });
             }
           }}
-          onSelectSource={(source, current) => { void continueWithSource(source, current).catch((e) => setError(String(e))); }}
+          onSelectSource={(source, current) => setDraft({ ...current, hasTrigger: true, trigger: source })}
           onOpenSourceSetup={openSetup}
         />
       )}
@@ -2095,7 +2027,7 @@ function AutomationEditor({
       >
         <div className="wizard-head">
           <strong>{created ? "Webhook ready" : d.id ? "Edit automation" : "New automation"}</strong>
-          <button type="button" className="btn ghost icon" onClick={closeWithBack} aria-label="Cancel">✕</button>
+          <button type="button" className="btn ghost icon" onClick={closeWithBack} aria-label={d.id ? "Back to automation" : "Back to new automation"}>‹</button>
         </div>
 
         {existing && !created && (
@@ -2482,66 +2414,20 @@ function AutomationEditor({
                     placeholder="What should the agent do on your machine…"
                   />
                   <div className="autom-instructions-bar">
-                    <span className="settings-hint">Encrypted end to end</span>
+                    <AutomationComposerControls state={state} value={d} onChange={patch => setD(current => ({ ...current, ...patch }))} />
                   </div>
                 </div>
                 <p className="settings-hint">Encrypted for the assigned machine before upload. The control plane never sees the plaintext prompt or code.</p>
               </div>
 
-              <section className="autom-field-block autom-safety-section" aria-labelledby="autom-safety-heading">
-                <div>
-                  <h2 className="autom-section-heading" id="autom-safety-heading">Agent, model &amp; safety</h2>
-                  <p className="settings-hint">Choose how the agent runs and which actions need approval.</p>
-                </div>
-                <div className="wizard-advanced">
-                  <div className="settings-field">
-                    <label className="field-label" htmlFor="autom-runtime">Agent</label>
-                    <select id="autom-runtime" className="picker-search" value={d.runtimeId} onChange={(e) => set("runtimeId", e.target.value)}>
-                      <option value="">Machine default</option>
-                      {state.catalogs.runtimes.map((r) => <option key={r.id} value={r.id}>{String(r.displayName || r.name || r.id)}</option>)}
-                      {d.runtimeId && !state.catalogs.runtimes.some((r) => r.id === d.runtimeId) && (
-                        <option value={d.runtimeId}>{d.runtimeId} (not installed here)</option>
-                      )}
-                    </select>
-                  </div>
-                  <div className="settings-field">
-                    <label className="field-label" htmlFor="autom-model">Model</label>
-                    <select id="autom-model" className="picker-search" value={d.model} onChange={(e) => set("model", e.target.value)}>
-                      <option value="">Agent default</option>
-                      {state.catalogs.models.map((m) => (
-                        <option key={String((m as { provider?: string }).provider || "") + ":" + m.id} value={m.id}>{m.label || m.id}</option>
-                      ))}
-                      {d.model && !state.catalogs.models.some((m) => m.id === d.model) && <option value={d.model}>{d.model}</option>}
-                    </select>
-                  </div>
-                  <div className="settings-field">
-                    <label className="field-label" htmlFor="autom-approvals">Approvals</label>
-                    <select id="autom-approvals" aria-describedby="autom-approval-help" className="picker-search" value={d.approvalMode} onChange={(e) => set("approvalMode", e.target.value as Draft["approvalMode"])}>
-                      <option value="autonomous">Autonomous (default)</option>
-                      <option value="risky">Ask before risky actions</option>
-                      <option value="always">Ask before every action</option>
-                      <option value="never">Never ask</option>
-                    </select>
-                    <p id="autom-approval-help" className="settings-hint">{d.approvalMode === "autonomous" ? "Runs unattended; pauses for high-risk actions." : d.approvalMode === "never" ? "Runs without asking for approval. Review the sandbox before enabling." : "Runs pause when approval is required. Keep a device available to respond."}</p>
-                  </div>
-                  <div className="settings-field">
-                    <label className="field-label" htmlFor="autom-sandbox">Sandbox</label>
-                    <select id="autom-sandbox" className="picker-search" value={d.sandbox} onChange={(e) => set("sandbox", e.target.value as Draft["sandbox"])}>
-                      <option value="read-only">Read only</option>
-                      <option value="workspace-write">Workspace write</option>
-                      <option value="danger-full-access">Full access</option>
-                    </select>
-                  </div>
-                </div>
+              <div className="autom-field-block">
                 {unsafeCombo && (
                   <label className="autom-check-row">
                     <input type="checkbox" checked={allowDangerous} onChange={(e) => setAllowDangerous(e.target.checked)} />
                     <span>I understand the risk of autonomous approval with full access — allow it anyway.</span>
                   </label>
                 )}
-              </section>
-
-              <AutomationAccounts state={state} value={d.credentialLabels} onChange={(value) => set("credentialLabels", value)} />
+              </div>
 
               {d.hasTrigger && (
                 <div className="settings-field">

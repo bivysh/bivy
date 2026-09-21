@@ -142,7 +142,7 @@ test("Linear setup does not include GitHub", async ({ page }) => {
 async function openEditor(page: Page, theme: string, trigger: string, apps: Array<typeof hosted | typeof custom> = [hosted, custom]) {
   await openSetup(page, theme, "automations", apps);
   await page.getByRole("button", { name: "New automation", exact: true }).first().click();
-  await page.getByRole("button", { name: /Start from scratch/ }).click();
+  await page.getByRole("button", { name: 'New from scratch', exact: true }).click();
   await page.getByRole("button", { name: "Add trigger" }).click();
   await page.getByRole("option", { name: new RegExp(`^${trigger}`) }).click();
 }
