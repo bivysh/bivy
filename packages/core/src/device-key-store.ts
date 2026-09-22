@@ -144,6 +144,16 @@ export function indexedDbDeviceKeyStore(): DeviceKeyStore | null {
           tx.onerror = () => reject(tx.error);
           tx.onabort = () => reject(tx.error);
         });
+        // A successful write is not proof of CryptoKey persistence. Some
+        // WebKit stores acknowledge the transaction but read back an unusable
+        // value. Reject before pairing drops its durable legacy identity or
+        // publishes a fresh key that would change on the next launch.
+        const saved = await idbRequest(db.transaction(STORE, "readonly").objectStore(STORE), (s) =>
+          s.get(RECORD_KEY),
+        );
+        if (!saved || !(saved.priv instanceof CryptoKey) || saved.priv.extractable || saved.pub !== pub) {
+          throw new Error("IndexedDB did not preserve the non-extractable device key");
+        }
       } finally {
         db.close();
       }
