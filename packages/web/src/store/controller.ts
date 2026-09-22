@@ -1000,8 +1000,12 @@ export class AppController {
     try {
       await flushClientStorage();
     } catch (error) {
-      this.local.s = "";
-      await flushClientStorage().catch(() => {});
+      // A superseding attempt may already own the store while this write was
+      // pending. Never erase its token when the obsolete attempt fails.
+      if (this.local.s === token) {
+        this.local.s = "";
+        await flushClientStorage().catch(() => {});
+      }
       throw error;
     }
     if (!isCurrent()) {

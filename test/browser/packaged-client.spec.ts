@@ -146,6 +146,27 @@ test("failed secure persistence does not complete sign-in or leak the bridge err
   await expect(page.getByRole("button", { name: "Continue with email" })).toBeVisible();
 });
 
+test("an obsolete secure-write failure does not erase a newer sign-in", async ({ page }) => {
+  await page.goto(origin);
+  await expect(page.getByRole("button", { name: "Continue with email" })).toBeVisible();
+  const state = await page.evaluate(async () => {
+    const native = (globalThis as unknown as { __BIVY_PACKAGED_BRIDGE__: { flush(): Promise<void> } }).__BIVY_PACKAGED_BRIDGE__;
+    const path = "/src/store/controller.ts";
+    const { controller } = await import(path);
+    let failFirst!: () => void;
+    let calls = 0;
+    native.flush = () => ++calls === 1
+      ? new Promise<void>((_, reject) => { failFirst = () => reject(new Error("write failed")); })
+      : Promise.resolve();
+    const first = controller.completeSignIn("obsolete").catch(() => {});
+    await controller.completeSignIn("current");
+    failFirst();
+    await first;
+    return controller.local.s;
+  });
+  expect(state).toBe("current");
+});
+
 test("a saved account from another control plane fails closed", async ({ page }) => {
   await page.addInitScript(() => {
     const native = (globalThis as unknown as { __BIVY_PACKAGED_BRIDGE__: { storage: Storage } }).__BIVY_PACKAGED_BRIDGE__;
