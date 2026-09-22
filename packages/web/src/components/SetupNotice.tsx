@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { isStandaloneDisplay, startGithubDeviceLogin, startEmailDeviceLogin, pollDeviceLogin, type EmailDeviceLogin } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { OwnerSignIn } from "./OwnerSignIn.js";
+import { accountOrigin, isPackagedClient, openPackagedExternal } from "../packaged-client.js";
 
 interface SignInMethods {
   enabled: boolean;
@@ -29,7 +30,7 @@ interface SignInMethods {
  *    app window stays put and finishes sign-in in place.
  */
 export function SetupNotice({ onDismiss }: { onDismiss?: () => void } = {}) {
-  const origin = location.origin;
+  const origin = accountOrigin();
   const [methods, setMethods] = useState<SignInMethods | null>(null);
   const [methodsError, setMethodsError] = useState("");
   const [retry, setRetry] = useState(0);
@@ -49,7 +50,9 @@ export function SetupNotice({ onDismiss }: { onDismiss?: () => void } = {}) {
         if (typeof data.enabled !== "boolean" || typeof data.github !== "boolean" || typeof data.email !== "boolean") throw new Error("Invalid sign-in configuration from server.");
         return data as SignInMethods;
       })
-      .then((value) => { if (active) setMethods(value); })
+      .then((value) => {
+        if (active) setMethods(isPackagedClient ? { ...value, enabled: false, github: false } : value);
+      })
       .catch(() => { if (active) setMethodsError("Could not reach your server. Check the connection and try again."); })
       .finally(() => clearTimeout(timeout));
     return () => { active = false; abort.abort(); clearTimeout(timeout); };
@@ -59,7 +62,7 @@ export function SetupNotice({ onDismiss }: { onDismiss?: () => void } = {}) {
   // would finish in that browser tab and never return here. Detect standalone so
   // both GitHub and email sign-in fall back to the device-poll flow, which keeps
   // the app window put and completes in place. See isStandaloneDisplay().
-  const standalone = isStandaloneDisplay();
+  const standalone = isPackagedClient || isStandaloneDisplay();
   const [email, setEmail] = useState("");
   const [note, setNote] = useState<{ text: string; href?: string } | null>(null);
   const [sending, setSending] = useState(false);
@@ -151,10 +154,18 @@ export function SetupNotice({ onDismiss }: { onDismiss?: () => void } = {}) {
       while (!token.cancelled && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, login.intervalMs));
         if (token.cancelled) return;
-        const result = await pollDeviceLogin(controller.local, login.deviceId, login.deviceSecret);
+        if (Date.now() >= deadline) break;
+        // Retry transient network loss across the Mail/Safari handoff, bounded
+        // by server expiry. Cancellation never completes an obsolete attempt.
+        let result;
+        try {
+          result = await pollDeviceLogin(controller.local, login.deviceId, login.deviceSecret);
+        } catch {
+          continue;
+        }
         if (token.cancelled) return;
         if (result.status === "complete") {
-          controller.completeSignIn(result.token);
+          await controller.completeSignIn(result.token, () => !token.cancelled);
           return;
         }
         if (result.status === "expired" || result.status === "error") {
@@ -185,7 +196,10 @@ export function SetupNotice({ onDismiss }: { onDismiss?: () => void } = {}) {
       if (standalone) {
         // Supersede any previous attempt's poll so a resend doesn't leave two loops.
         if (emailPoll.current) emailPoll.current.cancelled = true;
+        const token = { cancelled: false };
+        emailPoll.current = token;
         const login = await startEmailDeviceLogin(controller.local, value);
+        if (token.cancelled) return;
         if (login.devLink) {
           setNote({ text: "Dev link:", href: login.devLink });
         } else {
@@ -193,8 +207,6 @@ export function SetupNotice({ onDismiss }: { onDismiss?: () => void } = {}) {
         }
         setSentTo(value);
         setEmailWaiting(true);
-        const token = { cancelled: false };
-        emailPoll.current = token;
         void pollEmailDeviceLogin(login, token);
         return;
       }
@@ -260,7 +272,7 @@ export function SetupNotice({ onDismiss }: { onDismiss?: () => void } = {}) {
           // the token stored but the window stuck on this sign-in screen until a
           // manual close+reopen. completeSignIn flips the reactive auth state and
           // dials the node without navigating.
-          controller.completeSignIn(result.token);
+          await controller.completeSignIn(result.token, () => !cancelled.current);
           return;
         }
         if (result.status === "expired" || result.status === "error") {
@@ -288,14 +300,14 @@ export function SetupNotice({ onDismiss }: { onDismiss?: () => void } = {}) {
         )}
         <div className="setup-glyph">⛺</div>
         <h1>Bivy</h1>
-        <p>{methods?.enabled ? "Your self-hosted Bivy workspace." : "Run Claude Code, Codex, or another coding agent on a Machine you control — then continue it from your browser or phone."}</p>
+        <p>{isPackagedClient ? "Sign in to your existing Bivy account." : methods?.enabled ? "Your self-hosted Bivy workspace." : "Run Claude Code, Codex, or another coding agent on a Machine you control — then continue it from your browser or phone."}</p>
         {!methods && !methodsError && <p className="muted" role="status">Loading sign-in options…</p>}
         {methodsError && <div className="setup-error" role="alert">
           <p>{methodsError}</p>
           <button type="button" className="btn" onClick={() => setRetry((value) => value + 1)}>Retry</button>
         </div>}
         {methods?.enabled && <OwnerSignIn setupRequired={methods.setupRequired} passwordConfigured={methods.passwordConfigured} />}
-        {methods && !methods.enabled && !methods.github && !methods.email && <p className="muted">No browser sign-in method is configured. Use your private server-shell sign-in link, or configure SELF_HOST_SETUP_TOKEN in your deployment settings.</p>}
+        {methods && !methods.enabled && !methods.github && !methods.email && <p className="muted">{isPackagedClient ? "Email sign-in is unavailable on this server. Please contact support." : "No browser sign-in method is configured. Use your private server-shell sign-in link, or configure SELF_HOST_SETUP_TOKEN in your deployment settings."}</p>}
         {signInError && (
           <div className="setup-error" role="alert">
             {signInError}
@@ -350,11 +362,12 @@ export function SetupNotice({ onDismiss }: { onDismiss?: () => void } = {}) {
             inputMode="email"
             autoComplete="email"
             placeholder="you@example.com"
+            aria-label="Email address"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             required
           />
-          <button className="btn" type="submit" disabled={sending || emailWaiting || !email.trim()}>
+          <button className={isPackagedClient ? "btn primary" : "btn"} type="submit" disabled={sending || emailWaiting || !email.trim()}>
             {emailWaiting ? "Waiting for link…" : "Continue with email"}
           </button>
         </form>
@@ -362,7 +375,10 @@ export function SetupNotice({ onDismiss }: { onDismiss?: () => void } = {}) {
           <p className="setup-note muted">
             {note.text}{" "}
             {note.href && (
-              <a href={note.href}>{note.href}</a>
+              <a href={note.href} onClick={isPackagedClient ? (event) => {
+                event.preventDefault();
+                void openPackagedExternal(note.href!).catch(() => setSignInError("Could not open the sign-in link."));
+              } : undefined}>{note.href}</a>
             )}
           </p>
         )}

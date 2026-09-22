@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useState, useSyncExternalStore } from "react";
 import type { ConnectionStatus } from "@bivy/core";
+import { isPackagedClient } from "../packaged-client.js";
 import { describeAvailability, dismissInstall, getPwaLifecycleState, requestInstall, subscribePwaLifecycle } from "../pwaLifecycle.js";
 
 export function PwaLifecycleNotice({ status, hasCachedTranscript, machineName }: { status: ConnectionStatus; hasCachedTranscript: boolean; machineName?: string }) {
@@ -20,7 +21,7 @@ export function PwaLifecycleNotice({ status, hasCachedTranscript, machineName }:
   }, []);
   const availability = describeAvailability(browserOffline ? "offline" : status, hasCachedTranscript, lifecycle, machineName);
   const showStatus = availability.kind !== "live-control";
-  const showInstall = lifecycle.installChoice !== null && !lifecycle.standalone;
+  const showInstall = !isPackagedClient && lifecycle.installChoice !== null && !lifecycle.standalone;
   if (!showStatus && !showInstall) return null;
 
   return (

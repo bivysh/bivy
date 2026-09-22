@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { packagedClientCors } from "./packaged-client-cors.js";
 // Copyright (c) 2026 Petter André Sjulstad
 import path from "node:path";
 import fs from "node:fs";
@@ -427,6 +428,8 @@ function parseSimulationEventBody(value: unknown): EvaluationEvent {
 }
 
 const app = express();
+// Opt-in packaged WebViews only; no wildcard/cookie CORS or auth bypass.
+app.use(packagedClientCors());
 configureProxyTrust(app, process.env.TRUST_PROXY);
 
 // Operational counters for the relay ticket mint path. These are intentionally

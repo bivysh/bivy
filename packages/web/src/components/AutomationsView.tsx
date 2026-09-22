@@ -61,6 +61,7 @@ import { QueueRoutingSection } from "./QueueRouting.js";
 import { HostedMachinesPanel } from "./HostedMachines.js";
 import { takeAutomationsSetupFocus } from "../automationsRoute.js";
 import { requestSignIn } from "../signInRequest.js";
+import { isPackagedClient } from "../packaged-client.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import { useCloudMachinesEnabled } from "../cloudMachines.js";
 import type { AutomationsSection } from "../router.js";
@@ -405,6 +406,9 @@ function automationCloudGate(me: AccountMe | null): { title: string; message: st
   const extension = me?.extension;
   const automationFact = extension?.facts?.find((fact) => fact.id === "automations");
   if (!extension || !automationFact) return null;
+  if (isPackagedClient && /cloud required|\b0 left\b/i.test(automationFact.value)) {
+    return { title: "Hosted automations unavailable", message: "This account cannot start additional hosted automations right now.", actions: [] };
+  }
   if (/cloud required/i.test(automationFact.value)) {
     return {
       title: "Hosted automations require Cloud",

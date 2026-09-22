@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useAppState, controller } from "../store/useStore.js";
 import { StatusIcon, Toast } from "./Toast.js";
+import { companionPolicyMessage, isPackagedClient, showAccountExtension } from "../packaged-client.js";
 
 // A non-blocking error toast pinned above the composer. Keep verbose command
 // output collapsed initially so one failure cannot cover most of a phone screen;
@@ -22,13 +23,15 @@ export function ErrorToast() {
 
   useEffect(() => {
     setExpanded(false);
-    if (!error || errorActions.length > 0) return;
+    if (!error || (showAccountExtension() && errorActions.length > 0)) return;
     const t = setTimeout(() => controller.store.setError(""), dismissDelay(error));
     return () => clearTimeout(t);
   }, [error, errorActions]);
 
   if (!error) return null;
-  const message = error.trim();
+  const message = isPackagedClient && errorActions.length > 0
+    ? "This operation is not available for this account."
+    : companionPolicyMessage(error.trim());
   const hasDetails = message.includes("\n") || message.length > 240;
   return (
     <Toast tone="danger" className={`error-toast${expanded ? " expanded" : ""}`} role="alert">
@@ -40,7 +43,7 @@ export function ErrorToast() {
             {expanded ? "Hide details" : "Show details"}
           </button>
         )}
-        {errorActions.length > 0 && <div className="error-toast-actions">
+        {showAccountExtension() && errorActions.length > 0 && <div className="error-toast-actions">
           {errorActions.map((action) => <button
             key={action.id}
             className={`btn small${action.kind === "primary" ? " primary" : ""}`}

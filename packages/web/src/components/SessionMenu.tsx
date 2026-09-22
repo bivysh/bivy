@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { accountOrigin } from "../packaged-client.js";
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -156,7 +157,7 @@ export function SessionMenu({
   };
   const copyReference = async () => {
     close();
-    const url = `${location.origin}${routePath({ kind: "session", id: sessionId })}`;
+    const url = `${accountOrigin()}${routePath({ kind: "session", id: sessionId })}`;
     const copied = await writeClipboard(sessionReferenceText({
       url,
       sessionId,

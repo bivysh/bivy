@@ -18,6 +18,7 @@ import type { SettingsView } from "../router.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import { setCloudMachinesEnabled, useCloudMachinesEnabled } from "../cloudMachines.js";
 import { requestSignIn } from "../signInRequest.js";
+import { accountOrigin, showAccountExtension } from "../packaged-client.js";
 import { getAppIconBadgeEnabled, setAppIconBadgeEnabled, setNotificationPreferencesSnapshot, subscribeNotificationSettings } from "../notificationSettings.js";
 import { CheckIcon, ChevronRightIcon, CloseIcon, CopyIcon } from "./UiIcons.js";
 import { writeClipboard } from "../clipboard.js";
@@ -425,7 +426,7 @@ function SharePanel() {
   useEffect(() => () => { if (copyTimer.current) clearTimeout(copyTimer.current); }, []);
   // The Shortcut appends the (URL-encoded) shared text itself, so the copyable
   // piece is this origin's share URL up to the `text=` parameter.
-  const shareUrl = `${location.origin}/share?text=`;
+  const shareUrl = `${accountOrigin()}/share?text=`;
   const copy = async () => {
     if (!await writeClipboard(shareUrl)) return;
     setCopied(true);
@@ -2172,7 +2173,7 @@ function AccountPanel() {
         <Stat label="Devices" value={String(counts?.devices ?? devices.length)} />
         <Stat label="Visible sessions" value={counts?.sessions == null ? "—" : String(counts.sessions)} />
       </div>
-      {me?.extension && (
+      {me?.extension && showAccountExtension() && (
         <div className="settings-section">
           <h4 className="settings-subhead">{me.extension.title || "Account service"}</h4>
           {/* The extension's facts are opaque label/value pairs — render them
@@ -2288,7 +2289,7 @@ function AccountPanel() {
             title: "Sign out?",
             message: "Sign out of Bivy on this device?",
             label: "Sign out",
-            action: () => controller.signOut(),
+            action: () => controller.signOut().catch((e) => setErr(String(e?.message || e))),
           })}
         >
           Sign out
