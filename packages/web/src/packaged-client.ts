@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Explicit, build-time packaged companion profile. Never inferred from localhost
-// or a query parameter; ordinary web/PWA and self-hosted builds are unchanged.
+// Generic native platform adapter. Deployment/product policy lives in the
+// explicit client configuration, not in platform or URL detection.
+import { clientConfiguration } from "./client-config.js";
+export { showAccountExtension } from "./client-config.js";
 export interface PackagedBridge {
   /** Hydrate storage from the native secure store before the controller exists. */
   ready(): Promise<void>;
@@ -11,7 +13,7 @@ export interface PackagedBridge {
   openExternal(url: string): Promise<void>;
   onForeground(callback: () => void): () => void;
   /** Optional store-owned subscription management. Implemented by the native
-   * host; opaque web checkout actions remain disabled in packaged builds. */
+   * host. Visibility of deployment-extension actions is configured separately. */
   accountSubscriptions?: {
     open(account: { token: string; controlPlane: string }): Promise<void>;
     synchronize(account: { token: string; controlPlane: string }): Promise<void>;
@@ -23,17 +25,8 @@ declare global {
   var __BIVY_PACKAGED_BRIDGE__: PackagedBridge | undefined;
 }
 
-export function parsePackagedOrigin(value: string | undefined): string | null {
-  if (!value) return null;
-  const url = new URL(value);
-  if (url.protocol !== "https:" || url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
-    throw new Error("VITE_BIVY_PACKAGED_CP must be an HTTPS origin");
-  }
-  return url.origin;
-}
-
-export const packagedOrigin = parsePackagedOrigin(import.meta.env?.VITE_BIVY_PACKAGED_CP);
-export const isPackagedClient = packagedOrigin !== null;
+export const packagedOrigin = clientConfiguration.controlPlaneOrigin;
+export const isPackagedClient = clientConfiguration.platform === "native";
 let initialized = false;
 
 function bridge(): PackagedBridge {
@@ -55,17 +48,19 @@ async function nativeOperation<T>(operation: Promise<T>): Promise<T> {
 }
 
 export async function initializePackagedClient(): Promise<void> {
-  if (!isPackagedClient || initialized) return;
-  const native = bridge();
-  await nativeOperation(native.ready());
+  if (initialized || (!isPackagedClient && !packagedOrigin)) return;
+  const native = isPackagedClient ? bridge() : undefined;
+  if (native) await nativeOperation(native.ready());
+  const storage = native?.storage ?? localStorage;
   // A native adapter must namespace storage by control-plane origin. Never
   // silently reuse another environment's bearer token after a build switch.
-  const previous = native.storage.getItem("bivy_cp");
-  if ((previous || native.storage.getItem("bivy_session")) && previous !== packagedOrigin) {
+  const savedSession = storage.getItem("bivy_session");
+  const previous = storage.getItem("bivy_cp") || (!native && savedSession ? location.origin : null);
+  if ((previous || savedSession) && previous !== packagedOrigin) {
     throw new Error("This app's saved account belongs to a different server.");
   }
-  native.storage.setItem("bivy_cp", packagedOrigin!);
-  await nativeOperation(native.flush());
+  storage.setItem("bivy_cp", packagedOrigin!);
+  if (native) await nativeOperation(native.flush());
   initialized = true;
 }
 
@@ -125,16 +120,8 @@ export function installPackagedNavigation(onError: (message: string) => void): v
   });
 }
 
-/** The deployment extension is opaque: companion builds cannot safely infer
- * which server-supplied actions/facts advertise purchases. Hide that surface,
- * not the account's identity, devices, deletion, or repository integrations. */
-export function showAccountExtension(packaged = isPackagedClient): boolean {
-  return !packaged;
-}
-
-export function companionPolicyMessage(message: string, packaged = isPackagedClient): string {
-  if (packaged && /\b(upgrade|subscribe|subscription|checkout|payment|purchase)\b/i.test(message)) {
-    return "This operation is not available for this account.";
-  }
-  return message;
+/** Account action URLs must not navigate privileged native WebViews. */
+export async function openAccountAction(url: string): Promise<void> {
+  if (isPackagedClient) await openPackagedExternal(url);
+  else location.assign(url);
 }

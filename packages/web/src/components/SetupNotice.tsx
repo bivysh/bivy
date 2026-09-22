@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { isStandaloneDisplay, startGithubDeviceLogin, startEmailDeviceLogin, pollDeviceLogin, type EmailDeviceLogin } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { OwnerSignIn } from "./OwnerSignIn.js";
+import { clientConfiguration, configuredAuthentication } from "../client-config.js";
 import { accountOrigin, isPackagedClient, openPackagedExternal } from "../packaged-client.js";
 
 interface SignInMethods {
@@ -51,7 +52,7 @@ export function SetupNotice({ onDismiss }: { onDismiss?: () => void } = {}) {
         return data as SignInMethods;
       })
       .then((value) => {
-        if (active) setMethods(isPackagedClient ? { ...value, enabled: false, github: false } : value);
+        if (active) setMethods(configuredAuthentication(value));
       })
       .catch(() => { if (active) setMethodsError("Could not reach your server. Check the connection and try again."); })
       .finally(() => clearTimeout(timeout));
@@ -248,7 +249,7 @@ export function SetupNotice({ onDismiss }: { onDismiss?: () => void } = {}) {
     cancelled.current = false;
     // Open the tab synchronously inside the click handler so it isn't treated as
     // a blocked pop-up; navigate it to the authorize URL once we have it.
-    const tab = window.open("", "_blank");
+    const tab = isPackagedClient ? null : window.open("", "_blank");
     try {
       const login = await startGithubDeviceLogin(controller.local);
       // Render a real link regardless of whether `tab`/the fallback open()
@@ -256,8 +257,10 @@ export function SetupNotice({ onDismiss }: { onDismiss?: () => void } = {}) {
       // treating the user gesture as stale after the `await` above) leaves no
       // reliable signal to detect, so don't try; always give a manual escape
       // hatch instead of trusting window.open() silently worked.
+      if (cancelled.current) return;
       setAuthorizeUrl(login.authorizeUrl);
-      if (tab) tab.location.href = login.authorizeUrl;
+      if (isPackagedClient) await openPackagedExternal(login.authorizeUrl);
+      else if (tab) tab.location.href = login.authorizeUrl;
       else window.open(login.authorizeUrl, "_blank", "noopener");
 
       const deadline = Date.now() + login.expiresInMs;
@@ -300,14 +303,14 @@ export function SetupNotice({ onDismiss }: { onDismiss?: () => void } = {}) {
         )}
         <div className="setup-glyph">⛺</div>
         <h1>Bivy</h1>
-        <p>{isPackagedClient ? "Sign in to your existing Bivy account." : methods?.enabled ? "Your self-hosted Bivy workspace." : "Run Claude Code, Codex, or another coding agent on a Machine you control — then continue it from your browser or phone."}</p>
+        <p>{clientConfiguration.signInDescription ?? (methods?.enabled ? "Your self-hosted Bivy workspace." : "Run Claude Code, Codex, or another coding agent on a Machine you control — then continue it from your browser or phone.")}</p>
         {!methods && !methodsError && <p className="muted" role="status">Loading sign-in options…</p>}
         {methodsError && <div className="setup-error" role="alert">
           <p>{methodsError}</p>
           <button type="button" className="btn" onClick={() => setRetry((value) => value + 1)}>Retry</button>
         </div>}
         {methods?.enabled && <OwnerSignIn setupRequired={methods.setupRequired} passwordConfigured={methods.passwordConfigured} />}
-        {methods && !methods.enabled && !methods.github && !methods.email && <p className="muted">{isPackagedClient ? "Email sign-in is unavailable on this server. Please contact support." : "No browser sign-in method is configured. Use your private server-shell sign-in link, or configure SELF_HOST_SETUP_TOKEN in your deployment settings."}</p>}
+        {methods && !methods.enabled && !methods.github && !methods.email && <p className="muted">{clientConfiguration.unavailableSignInMessage ?? "No browser sign-in method is configured. Use your private server-shell sign-in link, or configure SELF_HOST_SETUP_TOKEN in your deployment settings."}</p>}
         {signInError && (
           <div className="setup-error" role="alert">
             {signInError}
@@ -367,7 +370,7 @@ export function SetupNotice({ onDismiss }: { onDismiss?: () => void } = {}) {
             onChange={(e) => setEmail(e.target.value)}
             required
           />
-          <button className={isPackagedClient ? "btn primary" : "btn"} type="submit" disabled={sending || emailWaiting || !email.trim()}>
+          <button className={!methods?.enabled && !methods?.github ? "btn primary" : "btn"} type="submit" disabled={sending || emailWaiting || !email.trim()}>
             {emailWaiting ? "Waiting for link…" : "Continue with email"}
           </button>
         </form>

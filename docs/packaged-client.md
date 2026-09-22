@@ -1,103 +1,83 @@
-# Packaged companion client integration
+# Client deployment configuration and native integration
 
-The shared web client can be built as a packaged, existing-account companion.
-This is an opt-in profile; ordinary browser/PWA and self-hosted builds keep their
-current sign-in, service-worker, and deployment-extension UI behavior.
+Core is the shared open-source client. Deployments choose their public endpoints
+and presentation policy; core supplies generic configuration and platform hooks.
+No server hostname or native platform selects a commercial product profile.
 
-## Build contract
+## Build configuration
+
+`VITE_BIVY_CLIENT_CONFIG` is an optional JSON object, validated by Vite at build
+startup and by the client. It is public, compiled configuration, never a place
+for credentials. Unknown fields, unsupported versions, malformed values, and
+unsafe origins fail rather than silently relaxing configuration.
+
+For an account-based native wrapper targeting a compatible self-hosted server:
 
 ```bash
-VITE_BIVY_PACKAGED_CP=https://staging-app.bivy.sh pnpm run build:web
+VITE_BIVY_CLIENT_CONFIG='{"version":1,"platform":"native","controlPlaneOrigin":"https://workspace.example","connectionMode":"account"}' pnpm run build:web
 ```
 
-The setting must be an HTTPS origin without a path, credentials, query, or
-fragment. It is public configuration, never a secret. It selects hosted relay
-mode even when local assets are served from `capacitor://localhost` or the URL
-contains `?local=1`. It does not grant authorization or change account policy.
-Packaged builds ignore pasted/hash account-token/control-plane payloads; route
-links must be translated into local session routes by the native host.
+This example **does not** restrict login to email, hide account extensions, or
+rewrite account messages. All server-supported login methods remain available.
+The previous `VITE_BIVY_PACKAGED_CP` setting is rejected; update the shell and
+client together rather than accidentally falling back to browser storage.
 
-The app uses the configured origin for sign-in-method discovery, account APIs,
-relay ticket minting, and public/share URLs. It does not register/update a browser
-service worker or display a PWA install prompt. Web Push is explicitly disabled
-in this profile until native notifications are integrated.
+| Field | Default | Meaning |
+|---|---|---|
+| `version` | `1` | Configuration schema version |
+| `platform` | `browser` | `native` explicitly requires the secure platform bridge; disables browser SW/install/Web Push paths |
+| `controlPlaneOrigin` | unset/null | Optional HTTPS origin, without credentials/path/query/fragment; selects account/discovery/share API origin, not authentication or billing policy |
+| `connectionMode` | `auto` | `account` forces account/relay routing and disallows direct/solo/hash-token/pasted account overrides; independent of platform |
+| `authenticationMethods` | `password`, `github`, `email` | Intersected with server-advertised methods; cannot enable a method the server disables |
+| `accountExtension` | `visible` | `hidden` suppresses opaque deployment-extension presentation/actions and blocks their dispatch |
+| `signInDescription` | ordinary client copy | Optional deployment-owned sign-in description |
+| `unavailableSignInMessage` | ordinary client copy | Optional message when no allowed server login method exists |
+| `accountUnavailableMessage` | generic unavailable text | Optional replacement for errors whose extension actions are suppressed |
+| `accountDeletionMessage` | generic irreversible account/data deletion warning | Deployment-owned cancellation/deletion disclosure; core does not promise to cancel external billing |
+| `accountMessageRules` | empty | Optional ordered `{terms: string[], replacement: string}` rules for account/policy presentation only; literal case-insensitive substring matching, not executable regex/code |
 
-Remote/live-site wrappers do **not** get this profile merely because Capacitor is
-present. Store distribution must use the deliberately built packaged bundle.
+A bare origin override remains a browser build. Native wrappers must explicitly
+set `platform: native` and provide an origin for secure-storage isolation. An
+account-only deployment must explicitly select `connectionMode: account`.
+Browser builds with a configured origin initialize the account store before UI
+mount; neither browser nor native builds silently reuse a saved bearer belonging
+to a different origin. Existing ordinary OSS/PWA builds need no configuration.
 
-## Native bridge (implemented by the shell, not by core)
+Deployments such as Bivy Cloud own their settings in their build environment or
+build-generated configuration, not as a preset in this repository. Server-side
+authentication, quotas and entitlement checks remain authoritative. Presentation
+rules do not filter user/agent transcript content or repository links.
 
-Before the entry module runs, install `globalThis.__BIVY_PACKAGED_BRIDGE__` with the
-`PackagedBridge` interface in `packages/web/src/packaged-client.ts`:
+## Native bridge (implemented by the shell)
 
-- `ready(): Promise<void>` hydrates its synchronous `storage: Storage` view from
-  native secure storage. It must not expose secret values through localStorage.
-- `storage` implements the complete standard Storage interface. Enqueue every
-  write/removal in order. Namespace data by app/environment/control-plane origin.
-  This includes bearer tokens, room keys, and any legacy device-key fallback.
-- `flush(): Promise<void>` resolves only after all previous writes/removals are
-  durably committed; reject on failure. Ordering must remain correct even if the
-  JS caller times out. The implementation must surface failures for later writes,
-  not silently discard them. Prefer Keychain `ThisDeviceOnly` storage and choose
-  the accessibility class deliberately for foreground-only use.
-- `openExternal(url)` opens validated HTTPS URLs in the system browser. Do not
-  navigate arbitrary remote pages into a privileged native WebView.
-- `onForeground(callback)` registers the native app-active event and returns an
-  unsubscribe function. Core sends it into the existing reconnect/reconciliation
-  path instead of maintaining a second native socket.
+Before the entry module executes, install `globalThis.__BIVY_PACKAGED_BRIDGE__`
+with the `PackagedBridge` interface from `packages/web/src/packaged-client.ts`:
 
-Startup waits for hydration before dynamically importing the controller/UI.
-Missing bridge, initialization failure, origin mismatch, or a 15-second storage
-timeout fails closed with a retry screen—never with a localStorage fallback.
-Sign-in flushes the token before publishing signed-in state; sign-out flushes
-removals before reloading. A cancelled email attempt does not commit signed-in
-state after a delayed secure-store flush. Transient poll network errors retry
-until the server's expiry. An app process termination intentionally requires a
-new email attempt: pending device-login secrets are not persisted.
+- `ready(): Promise<void>` hydrates synchronous `storage: Storage` from native
+  secure storage. Never duplicate secrets in localStorage.
+- `storage` implements the full Storage interface. Namespace data by app and
+  control-plane origin. Queue every write/removal in order, including bearer
+  tokens, room keys, and any legacy device-key fallback.
+- `flush(): Promise<void>` resolves only after durable ordered writes/removals.
+  A timeout must not allow later stale writes to resurrect a logged-out session.
+  Prefer Keychain `ThisDeviceOnly`, with a deliberate accessibility class.
+- `openExternal(url)` opens validated HTTPS URLs outside the privileged WebView.
+  Generic native GitHub login and account-extension action URLs use this hook.
+- `onForeground(callback)` hooks native app activation into the existing
+  reconnect/reconciliation path, not a second socket implementation.
 
-The existing non-extractable IndexedDB device-key path remains in place. If core
-falls back to its LocalStore key path, that path now uses the injected native
-storage. Actual X25519/IndexedDB persistence and logout isolation require testing
-on the minimum supported iOS version; a Chromium mock is not evidence of them.
+Native startup waits for hydration before importing the controller/UI. Missing
+bridge, hydration failure, origin mismatch, and storage timeout fail closed—no
+localStorage fallback. Sign-in flushes before publishing signed-in state;
+sign-out flushes removals before reloading. Cancelled email attempts do not commit
+late completions. Transient email-poll network errors retry until server expiry.
 
-## Control-plane configuration
+The existing non-extractable IndexedDB device-key path remains. Its iOS behavior,
+secure-storage fallback, logout and origin isolation need physical-device tests.
 
-Explicitly opt in on the test deployment:
+### Optional store-owned account management
 
-```text
-PACKAGED_CLIENT_ORIGINS=capacitor://localhost
-```
-
-Multiple exact origins are comma separated. HTTPS, `capacitor`, and `ionic`
-origins are supported; no wildcards, credentials, paths, `null`, or HTTP origins.
-Requests receive no credentialed-cookie permission. Allowed preflights are limited
-to supported HTTP methods and Authorization/Content-Type headers; actual routes
-still require their existing bearer tokens/tickets. Unknown origins receive no
-CORS permission. **An Origin header is not an identity or authorization check.**
-
-Changing this environment variable requires the normal reviewed deployment
-process. This PR does not deploy or modify production/staging configuration.
-If a real WebView reports a null origin, investigate the WebView/scheme setup;
-do not solve that by globally allowing null origins.
-
-## Companion presentation policy
-
-Packaged clients expose email account login only. GitHub repository/provider
-connections are not account login and remain available. If the server has no
-email method, the UI says it is unavailable rather than offering GitHub/password
-fallbacks. This UI policy does not disable server-side login methods for browsers.
-
-Opaque deployment account-extension facts/actions are hidden; account identity,
-devices, sign-out and deletion remain. Extension-action dispatch is also blocked
-in the controller, so stale UI cannot open a purchase URL. Policy-error toast
-actions are hidden and purchase-oriented errors are replaced with neutral account
-availability text. Automation limit gates have neutral messages and no purchase
-actions. This is presentation only: no quota, entitlement, or backend permission
-is bypassed. User/agent transcript content and repository links are not censored.
-
-## Optional native subscription capability
-
-A native host may additionally install `bridge.accountSubscriptions` before mounting core:
+The host may provide `bridge.accountSubscriptions`:
 
 ```ts
 {
@@ -107,23 +87,40 @@ A native host may additionally install `bridge.accountSubscriptions` before moun
 }
 ```
 
-`open` presents the store-owned purchase/restore/manage UI and resolves on dismissal; Settings then reloads account state. `synchronize` resumes delivery on startup/sign-in/foreground (throttled), without opening a purchase prompt. `clear` stops observers and removes any in-memory account bearer at logout. The host must guard account changes, validate the configured environment, never persist the passed bearer outside its secure account storage, and implement retry/idempotency. Failed synchronization does not block account login. Ordinary browsers never call these hooks.
+`open` presents native management and resolves on dismissal; Settings then reloads
+account state. `synchronize` resumes transaction delivery at startup/sign-in and
+foreground without presenting a purchase prompt. `clear` stops observers and
+removes in-memory account credentials on logout. Guard account changes, keep
+credentials in secure storage, and make delivery retryable/idempotent.
 
-Settings exposes this entry point only when the packaged host provides the capability. It also warns that deleting an account does not cancel app-store billing. Opaque deployment-extension purchase actions remain blocked. Pricing, receipts, payment-provider SDKs, product mapping, and entitlement verification belong to the native host/private billing service, not to core; this interface never grants paid access itself.
+This capability is independent of extension visibility. Prices, product IDs,
+payment SDKs, receipt verification, entitlements, and deletion disclosures are
+owned by the shell/deployment. Core supplies no paid access itself. Deployments
+must configure accurate deletion/cancellation copy for their billing providers.
+
+## Control-plane CORS
+
+Explicitly opt in on a compatible server, for example:
+
+```text
+PACKAGED_CLIENT_ORIGINS=capacitor://localhost
+```
+
+Exact comma-separated origins only; no wildcard, null origin, or cookie CORS.
+Authorization remains required. Investigate unexpected null origins rather than
+broadening permission. This configuration does not deploy or change a server.
 
 ## Validation and remaining native work
 
-- Unit tests: packaged origin/presentation helpers and CORS allow/deny/auth cases.
-- `test/browser/packaged-client.spec.ts`: real shared UI, mocked account API and
-  in-memory native bridge; desktop/mobile, light/dark, email completion, transient
-  polling failure, cancellation, secure-write failure, and startup isolation.
-- Existing browser/PWA contracts and account/relay tests remain relevant.
+- Configuration tests cover unchanged OSS defaults, policy/platform/origin
+  independence, server auth intersection, and rejection of invalid configuration.
+- Browser tests use the real UI with mocked APIs/bridges: explicit restricted
+  deployment, generic browser/native login and account actions, external handoff,
+  secure persistence, cancellation, startup isolation and subscription lifecycle.
+- Ordinary browser/PWA, source-contract and core tests remain relevant.
 
-The native adapter, real Keychain persistence, Universal Links, native APNs,
-WKWebView crypto behavior, and real email/relay/background recovery are **not
-implemented or certified by these browser tests**. They belong in the shell and
-must be proved on a physical iPhone before completing the native acceptance gate.
-The packaged asset's public `runtime-config.js` does not inherit the hosted
-server's deployment flags; do not enable managed-compute UI by fetching/executing
-remote JavaScript. A future allowlisted JSON configuration path may be needed
-for deployment-specific optional features.
+These tests are not proof of Keychain, StoreKit, native APNs, WKWebView crypto,
+real email/OAuth, live relay or background recovery. Native adapters and device
+acceptance belong to the shell. No production deployment or release-pin change
+is implied. Do not fetch and execute remote JavaScript to configure a native
+bundle; existing hosted `runtime-config.js` flags are a separate mechanism.

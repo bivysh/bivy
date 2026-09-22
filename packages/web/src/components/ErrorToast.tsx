@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import { useAppState, controller } from "../store/useStore.js";
 import { StatusIcon, Toast } from "./Toast.js";
-import { companionPolicyMessage, isPackagedClient, showAccountExtension } from "../packaged-client.js";
+import { accountUnavailableMessage, accountPresentationMessage } from "../client-config.js";
+import { openAccountAction, showAccountExtension } from "../packaged-client.js";
 
 // A non-blocking error toast pinned above the composer. Keep verbose command
 // output collapsed initially so one failure cannot cover most of a phone screen;
@@ -29,9 +30,9 @@ export function ErrorToast() {
   }, [error, errorActions]);
 
   if (!error) return null;
-  const message = isPackagedClient && errorActions.length > 0
-    ? "This operation is not available for this account."
-    : companionPolicyMessage(error.trim());
+  const message = !showAccountExtension() && errorActions.length > 0
+    ? accountUnavailableMessage()
+    : accountPresentationMessage(error.trim());
   const hasDetails = message.includes("\n") || message.length > 240;
   return (
     <Toast tone="danger" className={`error-toast${expanded ? " expanded" : ""}`} role="alert">
@@ -52,8 +53,8 @@ export function ErrorToast() {
             onClick={() => {
               setOpeningAction(action.id);
               controller.invokeAccountExtensionAction(action.id)
-                .then(({ url }) => {
-                  if (url) window.location.assign(url);
+                .then(async ({ url }) => {
+                  if (url) await openAccountAction(url);
                   else controller.store.setError("");
                 })
                 .catch((cause) => controller.store.setError(cause instanceof Error ? cause.message : String(cause)))

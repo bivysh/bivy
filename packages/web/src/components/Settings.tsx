@@ -18,7 +18,8 @@ import type { SettingsView } from "../router.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import { setCloudMachinesEnabled, useCloudMachinesEnabled } from "../cloudMachines.js";
 import { requestSignIn } from "../signInRequest.js";
-import { accountOrigin, hasNativeSubscriptions, openNativeSubscriptions, showAccountExtension } from "../packaged-client.js";
+import { clientConfiguration } from "../client-config.js";
+import { accountOrigin, hasNativeSubscriptions, openAccountAction, openNativeSubscriptions, showAccountExtension } from "../packaged-client.js";
 import { getAppIconBadgeEnabled, setAppIconBadgeEnabled, setNotificationPreferencesSnapshot, subscribeNotificationSettings } from "../notificationSettings.js";
 import { CheckIcon, ChevronRightIcon, CloseIcon, CopyIcon } from "./UiIcons.js";
 import { writeClipboard } from "../clipboard.js";
@@ -2210,7 +2211,7 @@ function AccountPanel() {
                 onClick={() => {
                   setAccountAction(action.id);
                   controller.invokeAccountExtensionAction(action.id)
-                    .then(({ url }) => { window.location.assign(url); })
+                    .then(({ url }) => openAccountAction(url))
                     .catch((e) => setErr(String(e?.message || e)))
                     .finally(() => setAccountAction(null));
                 }}
@@ -2312,9 +2313,7 @@ function AccountPanel() {
           disabled={accountAction !== null}
           onClick={() => setConfirm({
             title: "Delete account?",
-            message: hasNativeSubscriptions()
-              ? "This permanently deletes your Bivy account and its data. App store subscriptions must be cancelled separately in your store's subscription settings; deleting this account does not stop those charges. This cannot be undone."
-              : "This permanently deletes your Bivy account, billing subscription, and its data. This cannot be undone.",
+            message: clientConfiguration.accountDeletionMessage ?? "This permanently deletes your Bivy account and its data. This cannot be undone.",
             label: "Delete account",
             action: () => {
               setAccountAction("delete-account");

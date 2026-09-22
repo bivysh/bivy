@@ -163,7 +163,8 @@ import {
   type AccountAutomation,
 } from "@bivy/core";
 import { navigate, parseRoute, routePath, type Route } from "../router.js";
-import { accountOrigin, clearNativeSubscriptions, clientStorage, companionPolicyMessage, flushClientStorage, hasNativeSubscriptions, isPackagedClient, onNativeForeground, synchronizeNativeSubscriptions } from "../packaged-client.js";
+import { requiresAccountConnection, showAccountExtension, accountPresentationMessage } from "../client-config.js";
+import { accountOrigin, clearNativeSubscriptions, clientStorage, flushClientStorage, hasNativeSubscriptions, isPackagedClient, onNativeForeground, synchronizeNativeSubscriptions } from "../packaged-client.js";
 import { EPHEMERAL_MACHINES_ENABLED, EPHEMERAL_KEEP_FAILED_MACHINES } from "../flags.js";
 import { cloudMachinesEnabled } from "../cloudMachines.js";
 import { markFirstSuccessfulResponse } from "../pwaLifecycle.js";
@@ -240,7 +241,7 @@ const RUNNER_BOOT_TIMEOUT_MS = 4 * 60 * 1000;
  * node through the E2E relay.
  */
 export function isDirectMode(store = createLocalStore(clientStorage())): boolean {
-  if (isPackagedClient) return false;
+  if (requiresAccountConnection) return false;
   const params = new URLSearchParams(location.search);
   if (params.has("local")) return true;
   return LOOPBACK.test(location.hostname) && !store.s && !location.hash.includes("payload=");
@@ -624,7 +625,7 @@ export class AppController {
     // (`…#<payload>`), then clean the URL. Must run before the direct/relay
     // decision, since a fresh sign-in sets store.s.
     try {
-      if (!isPackagedClient && consumeLinkPayload(this.local, location.hash)) {
+      if (!requiresAccountConnection && consumeLinkPayload(this.local, location.hash)) {
         history.replaceState(null, "", location.pathname + location.search);
       }
     } catch {
@@ -638,7 +639,7 @@ export class AppController {
     this.direct = isDirectMode(this.local);
     // Solo: not on the hosted CP (no session) but the QR left room-token creds
     // for the selected node. Distinct from `direct` (loopback) and hosted.
-    this.solo = !isPackagedClient && !this.direct && !this.local.s && Boolean(this.local.solo()[this.local.cur]);
+    this.solo = !requiresAccountConnection && !this.direct && !this.local.s && Boolean(this.local.solo()[this.local.cur]);
     // The hosted client remembers this origin as its control plane.
     if (!this.direct && !this.local.cp) this.local.cp = accountOrigin();
     this.transport = this.buildTransport();
@@ -828,7 +829,7 @@ export class AppController {
       },
       onError: (message: string) => {
         if (generation !== this.transportGeneration) return;
-        this.store.setError(companionPolicyMessage(message));
+        this.store.setError(accountPresentationMessage(message));
       },
     };
   }
@@ -3353,7 +3354,7 @@ export class AppController {
   fetchMe(): Promise<AccountMe> { return this.accountCoordinator.fetchMe(); }
   deleteAccount(): Promise<void> { return apiDeleteAccount(this.local); }
   invokeAccountExtensionAction(action: string): Promise<{ url: string }> {
-    if (isPackagedClient) return Promise.reject(new Error("Account service actions are unavailable in this app."));
+    if (!showAccountExtension()) return Promise.reject(new Error("Account service actions are unavailable in this app."));
     return invokeAccountExtensionAction(this.local, action);
   }
   fetchGithubApp(): ReturnType<typeof fetchGithubApp> { return this.accountCoordinator.fetchGithubApp() as ReturnType<typeof fetchGithubApp>; }
@@ -3923,7 +3924,7 @@ export class AppController {
   applyLinkPayload(text: string): boolean {
     // Packaged companions use one configured account server, never a pasted
     // token/control-plane override. Native session links carry route IDs only.
-    if (isPackagedClient || !consumeLinkPayload(this.local, text)) return false;
+    if (requiresAccountConnection || !consumeLinkPayload(this.local, text)) return false;
     // A QR/device-link payload can carry a fresh session token — keep the
     // reactive auth flag in step so the shell renders even if this is the first
     // token this client has held.

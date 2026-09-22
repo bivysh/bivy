@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv, type UserConfig } from "vite";
+import { parseClientConfiguration } from "./src/client-config.js";
 import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -41,7 +42,7 @@ const bgTokens = ((): { light: string; dark: string } => {
 // Bivy's single web client. Both the node daemon and the control plane serve
 // this build at the root; the legacy vanilla client it replaced has been
 // removed, so there is no longer a `/next` migration base.
-export default defineConfig({
+const config: UserConfig = {
   resolve: {
     alias: {
       "@bivy/core": path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../core/src/index.ts"),
@@ -147,4 +148,11 @@ export default defineConfig({
       "/ws": { target: "ws://localhost:4317", ws: true },
     },
   },
+};
+
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, path.dirname(fileURLToPath(import.meta.url)), "VITE_");
+  if (env.VITE_BIVY_PACKAGED_CP) throw new Error("Replace VITE_BIVY_PACKAGED_CP with VITE_BIVY_CLIENT_CONFIG");
+  parseClientConfiguration(env.VITE_BIVY_CLIENT_CONFIG);
+  return config;
 });

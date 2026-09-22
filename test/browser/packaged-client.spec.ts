@@ -12,7 +12,13 @@ test.beforeAll(async () => {
   const { createServer } = await import(pathToFileURL(require.resolve("vite")).href);
   server = await createServer({
     root: fileURLToPath(new URL("../../packages/web/", import.meta.url)),
-    define: { "import.meta.env.VITE_BIVY_PACKAGED_CP": JSON.stringify(cp) },
+    define: { "import.meta.env.VITE_BIVY_CLIENT_CONFIG": JSON.stringify(JSON.stringify({
+      version: 1, platform: "native", controlPlaneOrigin: cp, connectionMode: "account",
+      authenticationMethods: ["email"], accountExtension: "hidden",
+      signInDescription: "Sign in to your example workspace.",
+      accountDeletionMessage: "Deleting this account does not stop those charges. Cancel store subscriptions separately.",
+      accountMessageRules: [{ terms: ["upgrade", "purchase"], replacement: "This operation is not available for this account." }],
+    })) },
     server: { host: "127.0.0.1", port: 0 }, logLevel: "error",
   });
   await server.listen();
@@ -49,6 +55,49 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
+for (const platform of ["native", "browser"]) {
+  test(`generic ${platform} deployment preserves server login methods and account actions`, async ({ page }) => {
+    const { createServer } = await import(pathToFileURL(require.resolve("vite")).href);
+    const independent = await createServer({
+      root: fileURLToPath(new URL("../../packages/web/", import.meta.url)),
+      define: { "import.meta.env.VITE_BIVY_CLIENT_CONFIG": JSON.stringify(JSON.stringify({ platform, controlPlaneOrigin: cp, connectionMode: "account" })) },
+      server: { host: "127.0.0.1", port: 0 }, logLevel: "error",
+    });
+    try {
+      await independent.listen();
+      await page.goto(new URL(independent.resolvedUrls!.local[0]).origin);
+      await expect(page.getByText("Continue with GitHub", { exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Continue with email" })).toBeVisible();
+      if (platform === "native") {
+        await page.route(`${cp}/auth/device/github/start`, route => route.fulfill({ json: {
+          deviceId: "github-id", deviceSecret: "github-secret", authorizeUrl: "https://signin.example.invalid/authorize", intervalMs: 50, expiresInMs: 5000,
+        } }));
+        await page.route(`${cp}/auth/device/poll`, route => route.fulfill({ json: { status: "pending" } }));
+        await page.getByText("Continue with GitHub", { exact: true }).click();
+        await expect.poll(() => page.evaluate(() => (globalThis as unknown as { testExternal: string }).testExternal)).toBe("https://signin.example.invalid/authorize");
+        expect(page.context().pages()).toHaveLength(1);
+        await page.getByRole("button", { name: "Cancel", exact: true }).click();
+      }
+      await page.evaluate(async () => {
+        const controllerPath = "/src/store/controller.ts";
+        await (await import(controllerPath)).controller.completeSignIn("generic-session");
+        const settingsPath = "/src/settingsRoute.ts";
+        (await import(settingsPath)).openSettings("account");
+      });
+      await expect(page.getByRole("button", { name: "Purchase now", exact: true })).toBeVisible();
+      const secureWrites = await page.evaluate(() => (globalThis as unknown as { testFlushes: number }).testFlushes);
+      expect(secureWrites > 0).toBe(platform === "native");
+      if (platform === "native") {
+        await page.evaluate(async () => {
+          const path = "/src/packaged-client.ts";
+          await (await import(path)).openAccountAction("https://account.example.invalid/manage");
+        });
+        expect(await page.evaluate(() => (globalThis as unknown as { testExternal: string }).testExternal)).toBe("https://account.example.invalid/manage");
+      }
+    } finally { await independent.close(); }
+  });
+}
+
 for (const theme of ["light", "dark"]) {
   test(`packaged sign-in is hosted, email-only, and uses the configured discovery origin (${theme})`, async ({ page }, testInfo) => {
     await page.addInitScript(theme => {
@@ -61,6 +110,7 @@ for (const theme of ["light", "dark"]) {
     await page.goto(`${origin}/?local=1`);
     await expect(page.getByRole("button", { name: "Continue with email" })).toBeVisible();
     await expect(page.getByText("Continue with GitHub")).toHaveCount(0);
+    await expect(page.getByText("Sign in to your example workspace.")).toBeVisible();
     await expect(page.getByText("Buy a subscription")).toHaveCount(0);
     const config = await page.evaluate(async () => {
       const path = "/src/store/controller.ts";
@@ -128,7 +178,7 @@ test("native subscription management is opt-in, account-scoped, and cleared at l
   await expect(page.getByRole("button", { name: "Manage subscriptions", exact: true })).toBeEnabled();
   await expect(page.getByText("Purchase now", { exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "Delete account", exact: true }).click();
-  await expect(page.getByText(/deleting this account does not stop those charges/)).toBeVisible();
+  await expect(page.getByText(/deleting this account does not stop those charges/i)).toBeVisible();
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   const calls = await page.evaluate(async () => {
     const path = "/src/store/controller.ts";
