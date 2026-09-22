@@ -34,6 +34,52 @@ import { normalizedIntermediateText, thinkingTextFromContent, mergeTranscript, t
 import type { RuntimeMessage } from "../runtime/types.js";
 import type { AttachmentRef } from "./attachment-store.js";
 
+/** The serialization-independent atoms mergeBases folds a reopen on (see below). */
+export interface MessageContentAtoms {
+  /** Globally-unique tool-call and tool-result ids the message carries. */
+  toolIds: string[];
+  /** Normalized non-empty text fragments the message carries. */
+  texts: string[];
+}
+
+/**
+ * Decompose a transcript message into serialization-independent "atoms": the
+ * agent's own tool ids (unique + identical across serializations) and its text
+ * fragments. Used by mergeBases to recognize when a native-store reload re-states
+ * turns already in the streamed event-log base, even when the two serializations
+ * group blocks into messages differently (Claude keeps tool + text separate;
+ * OpenCode bundles them; a reload may drop tool blocks Bivy recorded as overlays).
+ */
+export function messageContentAtoms(message: RuntimeMessage | undefined): MessageContentAtoms {
+  const toolIds: string[] = [];
+  const texts: string[] = [];
+  if (!message) return { toolIds, texts };
+  const content = (message as { content?: unknown }).content;
+  const role = typeof (message as { role?: unknown }).role === "string" ? (message as { role: string }).role : "";
+  const pushText = (value: unknown) => {
+    if (typeof value !== "string") return;
+    const text = value.trim();
+    if (text) texts.push(`${role}#${text}`);
+  };
+  if (typeof content === "string") {
+    pushText(content);
+    return { toolIds, texts };
+  }
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      if (!block || typeof block !== "object") continue;
+      const b = block as Record<string, unknown>;
+      const type = String(b.type || "");
+      if (type === "tool_use" && b.id) toolIds.push(`tu:${String(b.id)}`);
+      else if (type === "tool_result") {
+        const id = b.tool_use_id ?? b.toolUseId;
+        if (id) toolIds.push(`tr:${String(id)}`);
+      } else if (type === "text") pushText(b.text);
+    }
+  }
+  return { toolIds, texts };
+}
+
 /**
  * Union of a persisted base and a runtime's live transcript, such that the result
  * is never shorter than either input alone. A live session's runtime transcript
@@ -57,28 +103,74 @@ export function mergeBases(logged: RuntimeMessage[], runtime: readonly RuntimeMe
   const keys: string[] = [];
   const known = new Set<string>();
   const identities = new Map<string, number>();
-  const add = (m: RuntimeMessage) => {
-    const key = JSON.stringify(m);
-    if (known.has(key)) return;
+  const identityOf = (m: RuntimeMessage): string => {
     const identified = m as RuntimeMessage & { id?: unknown; timestamp?: unknown };
-    const identity = typeof identified.id === "string" && identified.id
+    return typeof identified.id === "string" && identified.id
       ? `id:${identified.id}`
       : typeof identified.timestamp === "number" ? `time:${identified.role}:${identified.timestamp}` : "";
+  };
+  const add = (m: RuntimeMessage): boolean => {
+    const key = JSON.stringify(m);
+    if (known.has(key)) return false;
+    const identity = identityOf(m);
     const index = identity ? identities.get(identity) : undefined;
     if (index !== undefined) {
       known.delete(keys[index]!);
       keys[index] = key;
       known.add(key);
       merged[index] = m;
-      return;
+      return false;
     }
     known.add(key);
     keys.push(key);
     merged.push(m);
     if (identity) identities.set(identity, merged.length - 1);
+    return true;
   };
   for (const m of logged) add(m);
-  for (const m of runtime) add(m);
+  // Cross-serialization fold (the reopen case): a native-store agent (Claude,
+  // Codex, Pi, OpenCode) reloads its FULL transcript on reopen, but that reload
+  // reconstructs each turn with the agent's OWN timestamps and a possibly very
+  // different block shape than the event-log base Bivy streamed and stored live
+  // (e.g. OpenCode's reload is just user + final text, the tool blocks living
+  // only in Bivy's overlays). The id/timestamp fold above can't match those two
+  // serializations, so every turn double-appeared on reopen. Recognize a
+  // re-serialization by its serialization-independent atoms — the agent's own
+  // unique tool ids and its text fragments — and drop a runtime message whose
+  // atoms are ALL already covered by the logged base. Tool ids are globally
+  // unique (a covered id is literally the same call); text is matched through a
+  // consumed multiset so a genuinely repeated turn ("run tests" twice) and a
+  // disjoint resumed turn are both preserved rather than collapsed.
+  const loggedToolIds = new Set<string>();
+  const loggedTexts = new Map<string, number>();
+  for (const m of merged) {
+    const atoms = messageContentAtoms(m);
+    for (const id of atoms.toolIds) loggedToolIds.add(id);
+    for (const text of atoms.texts) loggedTexts.set(text, (loggedTexts.get(text) ?? 0) + 1);
+  }
+  const coveredByLogged = (m: RuntimeMessage): boolean => {
+    const atoms = messageContentAtoms(m);
+    if (!atoms.toolIds.length && !atoms.texts.length) return false; // opaque → keep
+    for (const id of atoms.toolIds) if (!loggedToolIds.has(id)) return false;
+    // Text must be available in the (remaining) logged multiset; tentatively
+    // consume so two runtime copies can't both match a single logged fragment.
+    const consumed = new Map<string, number>();
+    for (const text of atoms.texts) {
+      const available = (loggedTexts.get(text) ?? 0) - (consumed.get(text) ?? 0);
+      if (available <= 0) return false;
+      consumed.set(text, (consumed.get(text) ?? 0) + 1);
+    }
+    for (const [text, n] of consumed) loggedTexts.set(text, (loggedTexts.get(text) ?? 0) - n);
+    return true;
+  };
+  for (const m of runtime) {
+    const key = JSON.stringify(m);
+    if (known.has(key)) continue;
+    const identity = identityOf(m);
+    if (identity && identities.has(identity)) { add(m); continue; } // streaming refinement of a known turn
+    if (coveredByLogged(m)) continue; // reopen re-serialization already in the base
+    add(m); // a genuinely new (resumed) turn
+  }
   return merged;
 }
 

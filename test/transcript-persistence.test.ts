@@ -73,6 +73,18 @@ test("a structured-pipe tool_result (id nested under result.toolCallId) pairs wi
   assert.equal(eventLog.appended[1].entry.content[0].toolUseId, "call-abc-0");
 });
 
+test("a sub-agent tool_call persists its parentToolUseId onto the tool_use block so a reload still nests it", () => {
+  const { tp, eventLog } = harness();
+  // The delegation (Claude's Agent/Task tool) records first, then the sub-agent's
+  // own call arrives carrying parentToolUseId = the delegation's id. The live
+  // stream nests it; the persisted overlay must too, or reopening flattens it.
+  tp.persistToolActivityFromEvent(sess(), { type: "tool_call", toolName: "Agent", input: { description: "count files" }, id: "parent-1" } as any);
+  tp.persistToolActivityFromEvent(sess(), { type: "tool_call", toolName: "Bash", input: { command: "ls" }, id: "child-1", parentToolUseId: "parent-1" } as any);
+  assert.equal(eventLog.appended.length, 2);
+  assert.equal(eventLog.appended[0].entry.content[0].parentToolUseId, undefined, "a top-level call carries no parent");
+  assert.equal(eventLog.appended[1].entry.content[0].parentToolUseId, "parent-1", "the sub-agent call nests under its delegation on reload");
+});
+
 test("a progress-only tool_execution_update (elapsedSeconds, no detail) does not overwrite the tool-call overlay", () => {
   const { tp, eventLog } = harness();
   // The initiating call records the real input + classification.

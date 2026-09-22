@@ -125,6 +125,48 @@ test("mergeBases still appends a disjoint resumed turn", () => {
   assert.deepEqual(mergeBases(logged, resumed), [...logged, ...resumed]);
 });
 
+test("mergeBases folds a native-store reopen: the same turns re-serialized with fresh timestamps never double-appear", () => {
+  // The reopen bug: a native-store agent (Claude/Codex/Pi/OpenCode) reloads its
+  // FULL transcript with the agent's OWN timestamps (not the Date.now() Bivy
+  // stamped when it streamed the event-log base) and a possibly different block
+  // shape. Same conversation, different serialization — the id/timestamp fold
+  // can't match it, so before this every turn duplicated on reopen.
+  const toolUse = (id: string, name: string, ts: number) => ({ role: "assistant", content: [{ type: "tool_use", id, name, input: {} }], timestamp: ts });
+  const toolResult = (id: string, ts: number) => ({ role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ok" }], timestamp: ts });
+  const streamed = [baseMsg("user", "run echo", 1000), toolUse("toolu_1", "Bash", 1001), toolResult("toolu_1", 1002), baseMsg("assistant", "done", 1003)];
+  // Native reload: identical content, DIFFERENT timestamps (and the CLI omits the
+  // tool `input`/`name` echo — shape differs, tool id is the stable anchor).
+  const reloaded = [baseMsg("user", "run echo", 5000), { role: "assistant", content: [{ type: "tool_use", id: "toolu_1" }], timestamp: 5001 }, toolResult("toolu_1", 5002), baseMsg("assistant", "done", 5003)];
+  const merged = mergeBases(streamed, reloaded);
+  assert.equal(merged.length, 4, "reopen keeps a single copy of the four turns");
+  assert.deepEqual(merged.map((m) => (m as any).role), ["user", "assistant", "user", "assistant"]);
+});
+
+test("mergeBases folds a reopen even when the native reload re-chunks the turn differently (OpenCode shape)", () => {
+  // OpenCode's ACP reload restates the whole turn as just [user, final text] — the
+  // tool blocks live only in Bivy's overlays, and the final text that the streamed
+  // base bundled INTO a tool+text message arrives standalone. Atom coverage (tool
+  // ids + text fragments) still recognizes it as the same conversation.
+  const streamed = [
+    baseMsg("user", "create oc-test.txt", 1000),
+    { role: "assistant", content: [{ type: "tool_use", id: "call_edit", name: "edit", input: {} }], timestamp: 1001 },
+    { role: "assistant", content: [{ type: "tool_use", id: "call_read", name: "read", input: {} }, { type: "text", text: "Contents: opencode ok" }], timestamp: 1002 },
+    { role: "user", content: [{ type: "tool_result", tool_use_id: "call_edit", content: "" }, { type: "tool_result", tool_use_id: "call_read", content: "opencode ok" }], timestamp: 1003 },
+  ];
+  const reloaded = [baseMsg("user", "create oc-test.txt", 9000), baseMsg("assistant", "Contents: opencode ok", 9001)];
+  const merged = mergeBases(streamed as any, reloaded);
+  assert.equal(merged.length, streamed.length, "the minimal native reload adds no duplicate turn");
+});
+
+test("mergeBases keeps a genuinely repeated message (positional, not set-based, dedup)", () => {
+  // A user who sends "run tests" twice must keep BOTH turns — the content fold is
+  // positional (aligns two serializations of ONE conversation), never a flat set
+  // that would collapse legitimate repeats.
+  const logged = [baseMsg("user", "run tests", 100), baseMsg("assistant", "passed", 200), baseMsg("user", "run tests", 300), baseMsg("assistant", "passed", 400)];
+  assert.deepEqual(mergeBases(logged, []), logged);
+  assert.equal(mergeBases(logged, logged).length, 4, "a re-serialization of the same 4 turns stays 4, repeats intact");
+});
+
 test("replayExtras reproduces the legacy two-sidecar fold for every stream", () => {
   for (const [name, events] of Object.entries(STREAMS)) {
     const viaLog = mergeTranscript(BASE, replayExtras(events));
