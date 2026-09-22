@@ -95,6 +95,22 @@ availability text. Automation limit gates have neutral messages and no purchase
 actions. This is presentation only: no quota, entitlement, or backend permission
 is bypassed. User/agent transcript content and repository links are not censored.
 
+## Optional native subscription capability
+
+A native host may additionally install `bridge.accountSubscriptions` before mounting core:
+
+```ts
+{
+  open(account: { token: string; controlPlane: string }): Promise<void>;
+  synchronize(account: { token: string; controlPlane: string }): Promise<void>;
+  clear(): Promise<void>;
+}
+```
+
+`open` presents the store-owned purchase/restore/manage UI and resolves on dismissal; Settings then reloads account state. `synchronize` resumes delivery on startup/sign-in/foreground (throttled), without opening a purchase prompt. `clear` stops observers and removes any in-memory account bearer at logout. The host must guard account changes, validate the configured environment, never persist the passed bearer outside its secure account storage, and implement retry/idempotency. Failed synchronization does not block account login. Ordinary browsers never call these hooks.
+
+Settings exposes this entry point only when the packaged host provides the capability. It also warns that deleting an account does not cancel app-store billing. Opaque deployment-extension purchase actions remain blocked. Pricing, receipts, payment-provider SDKs, product mapping, and entitlement verification belong to the native host/private billing service, not to core; this interface never grants paid access itself.
+
 ## Validation and remaining native work
 
 - Unit tests: packaged origin/presentation helpers and CORS allow/deny/auth cases.

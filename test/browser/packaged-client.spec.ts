@@ -105,6 +105,41 @@ test("email completion persists via bridge, hides dynamic purchase actions, and 
   await expect(page.getByText("This operation is not available for this account.", { exact: true })).toBeVisible();
 });
 
+test("native subscription management is opt-in, account-scoped, and cleared at logout", async ({ page }) => {
+  await page.goto(origin);
+  await expect(page.getByRole("button", { name: "Continue with email" })).toBeVisible();
+  await page.evaluate(async () => {
+    const state = globalThis as unknown as {
+      __BIVY_PACKAGED_BRIDGE__: { accountSubscriptions?: unknown };
+      subscriptionCalls: unknown[];
+    };
+    state.subscriptionCalls = [];
+    state.__BIVY_PACKAGED_BRIDGE__.accountSubscriptions = {
+      open: async (account: unknown) => { state.subscriptionCalls.push(["open", account]); },
+      synchronize: async (account: unknown) => { state.subscriptionCalls.push(["synchronize", account]); },
+      clear: async () => { state.subscriptionCalls.push(["clear"]); },
+    };
+    const controllerPath = "/src/store/controller.ts";
+    await (await import(controllerPath)).controller.completeSignIn("native-subscription-session");
+    const settingsPath = "/src/settingsRoute.ts";
+    (await import(settingsPath)).openSettings("account");
+  });
+  await page.getByRole("button", { name: "Manage subscriptions", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Manage subscriptions", exact: true })).toBeEnabled();
+  await expect(page.getByText("Purchase now", { exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Delete account", exact: true }).click();
+  await expect(page.getByText(/deleting this account does not stop those charges/)).toBeVisible();
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  const calls = await page.evaluate(async () => {
+    const path = "/src/store/controller.ts";
+    await (await import(path)).controller.signOut();
+    return (globalThis as unknown as { subscriptionCalls: unknown[] }).subscriptionCalls;
+  });
+  expect(calls).toContainEqual(["synchronize", { token: "native-subscription-session", controlPlane: cp }]);
+  expect(calls).toContainEqual(["open", { token: "native-subscription-session", controlPlane: cp }]);
+  expect(calls).toContainEqual(["clear"]);
+});
+
 test("cancellation ignores an in-flight email completion", async ({ page }) => {
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
