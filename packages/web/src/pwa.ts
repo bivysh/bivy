@@ -6,6 +6,7 @@
 // chooses — never mid-session.
 
 import { registerSW } from "virtual:pwa-register";
+import { isPackagedClient } from "./packaged-client.js";
 import { canActivateUpdate, setUpdateAvailable } from "./pwaLifecycle.js";
 import { activateWaitingWorker } from "./pwaUpdate.js";
 
@@ -15,6 +16,7 @@ const listeners = new Set<UpdateListener>();
 let needRefresh = false;
 
 export function initPwa(): void {
+  if (isPackagedClient) return;
   registerSW({
     immediate: true,
     // Reload is owned by the explicit click below. A different tab activating
@@ -36,6 +38,7 @@ export function onUpdateAvailable(fn: UpdateListener): () => void {
 
 /** Activate the waiting worker only after every user-work blocker clears. */
 export async function reloadForUpdate(): Promise<boolean> {
+  if (isPackagedClient) return false;
   if (!canActivateUpdate()) return false;
   const registration = await navigator.serviceWorker?.getRegistration();
   if (!canActivateUpdate()) return false;

@@ -28,7 +28,7 @@ export function OwnerSignIn({ setupRequired, passwordConfigured }: { setupRequir
       if (typeof data.token !== "string" || !data.token) throw new Error("The server did not return a sign-in token.");
       if (typeof data.relayUrl === "string") controller.local.relay = data.relayUrl;
       setSecret(""); setPassword(""); setConfirmation("");
-      controller.completeSignIn(data.token);
+      await controller.completeSignIn(data.token);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not reach your server. Try again.");
     } finally { setBusy(false); }

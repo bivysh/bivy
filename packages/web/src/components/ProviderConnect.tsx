@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type { AppState } from "@bivy/core";
 import { controller } from "../store/useStore.js";
+import { isPackagedClient, openPackagedExternal } from "../packaged-client.js";
 
 /**
  * The device-code / callback-url step of an in-flight OAuth login
@@ -44,7 +45,9 @@ export function OauthStep() {
 
   const useThisDevice = () => {
     setDeviceFallback(true);
-    if (url) window.open(url, "_blank", "noopener");
+    if (!url) return;
+    if (isPackagedClient) void openPackagedExternal(url).catch(() => setOpenError("Could not open the browser."));
+    else window.open(url, "_blank", "noopener");
   };
 
   const pasteClipboard = async () => {

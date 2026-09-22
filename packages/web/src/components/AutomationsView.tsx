@@ -61,6 +61,7 @@ import { QueueRoutingSection } from "./QueueRouting.js";
 import { HostedMachinesPanel } from "./HostedMachines.js";
 import { takeAutomationsSetupFocus } from "../automationsRoute.js";
 import { requestSignIn } from "../signInRequest.js";
+import { openAccountAction, showAccountExtension } from "../packaged-client.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import { useCloudMachinesEnabled } from "../cloudMachines.js";
 import type { AutomationsSection } from "../router.js";
@@ -402,7 +403,7 @@ const AUTOMATIONS_TABS: Array<{ label: string; section: AutomationsSection | nul
 ];
 
 function automationCloudGate(me: AccountMe | null): { title: string; message: string; actions: NonNullable<NonNullable<AccountMe["extension"]>["actions"]> } | null {
-  const extension = me?.extension;
+  const extension = showAccountExtension() ? me?.extension : undefined;
   const automationFact = extension?.facts?.find((fact) => fact.id === "automations");
   if (!extension || !automationFact) return null;
   if (/cloud required/i.test(automationFact.value)) {
@@ -811,7 +812,7 @@ export function AutomationsView({
   const cloudAutomationGate = useMemo(() => automationCloudGate(me), [me]);
   const invokeCloudGateAction = useCallback((actionId: string) => {
     controller.invokeAccountExtensionAction(actionId)
-      .then(({ url }) => { window.location.assign(url); })
+      .then(({ url }) => openAccountAction(url))
       .catch((e) => setError(String(e?.message || e)));
   }, []);
   const ghStatus = githubSourceStatus(sources.github);

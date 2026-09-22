@@ -9,6 +9,7 @@
 // already-sanitized record; it never reaches for a prompt/transcript/diff.
 
 import { deriveRunOutcome, type GithubQueueItem } from "@bivy/core";
+import { accountPresentationMessage } from "./client-config.js";
 
 /** sessionId → its run evidence. Only a claimed-or-later run carries
  *  `output.sessionId`, so pending items simply don't appear (nothing to join
@@ -131,7 +132,7 @@ export function rowHint(item: GithubQueueItem | undefined): RowHint | null {
     const ev = [...(item.events ?? [])].reverse().find(
       (e) => e.kind === "needs_attention" || e.kind === "approval" || e.kind === "policy_denial",
     );
-    return { text: ev?.summary || item.routingReason || "needs your input", tone: "warn" };
+    return { text: accountPresentationMessage(ev?.summary || item.routingReason || "needs your input"), tone: "warn" };
   }
   return null;
 }

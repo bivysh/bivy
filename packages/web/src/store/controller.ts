@@ -163,6 +163,8 @@ import {
   type AccountAutomation,
 } from "@bivy/core";
 import { navigate, parseRoute, routePath, type Route } from "../router.js";
+import { requiresAccountConnection, showAccountExtension, accountPresentationMessage } from "../client-config.js";
+import { accountOrigin, clearNativeSubscriptions, clientStorage, flushClientStorage, hasNativeSubscriptions, isPackagedClient, onNativeForeground, synchronizeNativeSubscriptions } from "../packaged-client.js";
 import { EPHEMERAL_MACHINES_ENABLED, EPHEMERAL_KEEP_FAILED_MACHINES } from "../flags.js";
 import { cloudMachinesEnabled } from "../cloudMachines.js";
 import { markFirstSuccessfulResponse } from "../pwaLifecycle.js";
@@ -238,7 +240,8 @@ const RUNNER_BOOT_TIMEOUT_MS = 4 * 60 * 1000;
  * `?local=1`) talks directly; a hosted control plane (app.bivy.sh) talks to a
  * node through the E2E relay.
  */
-export function isDirectMode(store = createLocalStore(localStorage)): boolean {
+export function isDirectMode(store = createLocalStore(clientStorage())): boolean {
+  if (requiresAccountConnection) return false;
   const params = new URLSearchParams(location.search);
   if (params.has("local")) return true;
   return LOOPBACK.test(location.hostname) && !store.s && !location.hash.includes("payload=");
@@ -246,7 +249,7 @@ export function isDirectMode(store = createLocalStore(localStorage)): boolean {
 
 export class AppController {
   readonly store = new SessionStore();
-  readonly local = createLocalStore(localStorage);
+  readonly local = createLocalStore(clientStorage());
   readonly direct: boolean;
   /** Account-free ("solo") mode: paired to a node over the relay via a room
    *  token from the QR, with NO control plane. Not signed in (no `local.s`), so
@@ -386,7 +389,7 @@ export class AppController {
         }
       },
       addUserMessage: (text, id) => this.store.addUserMessage(text, id),
-      transcriptUrl: (sessionId) => `${location.origin}${routePath({ kind: "session", id: sessionId })}`,
+      transcriptUrl: (sessionId) => `${accountOrigin()}${routePath({ kind: "session", id: sessionId })}`,
       refreshAccountSessions: () => { void this.refreshAccountSessions(); },
       launchManagedDestination: async (configId, runtimeId) => {
         const machine = await launchManagedSessionMachine(this.local, configId, { runtimeId });
@@ -622,7 +625,7 @@ export class AppController {
     // (`…#<payload>`), then clean the URL. Must run before the direct/relay
     // decision, since a fresh sign-in sets store.s.
     try {
-      if (consumeLinkPayload(this.local, location.hash)) {
+      if (!requiresAccountConnection && consumeLinkPayload(this.local, location.hash)) {
         history.replaceState(null, "", location.pathname + location.search);
       }
     } catch {
@@ -636,9 +639,9 @@ export class AppController {
     this.direct = isDirectMode(this.local);
     // Solo: not on the hosted CP (no session) but the QR left room-token creds
     // for the selected node. Distinct from `direct` (loopback) and hosted.
-    this.solo = !this.direct && !this.local.s && Boolean(this.local.solo()[this.local.cur]);
+    this.solo = !requiresAccountConnection && !this.direct && !this.local.s && Boolean(this.local.solo()[this.local.cur]);
     // The hosted client remembers this origin as its control plane.
-    if (!this.direct && !this.local.cp) this.local.cp = location.origin;
+    if (!this.direct && !this.local.cp) this.local.cp = accountOrigin();
     this.transport = this.buildTransport();
     this.store.setCurrentNode(this.direct ? null : this.local.cur || null);
     // Restore delete guards before painting the cached sidebar. A service-worker
@@ -826,7 +829,7 @@ export class AppController {
       },
       onError: (message: string) => {
         if (generation !== this.transportGeneration) return;
-        this.store.setError(message);
+        this.store.setError(accountPresentationMessage(message));
       },
     };
   }
@@ -991,10 +994,28 @@ export class AppController {
    * observe in storage. Driving the transition through the reactive store makes
    * it happen the moment the poll completes, with no navigation required.
    */
-  completeSignIn(token: string): void {
-    if (!token) return;
+  async completeSignIn(token: string, isCurrent: () => boolean = () => true): Promise<void> {
+    if (!token || !isCurrent()) return;
     this.local.s = token;
-    if (!this.local.cp) this.local.cp = location.origin;
+    if (!this.local.cp) this.local.cp = accountOrigin();
+    try {
+      await flushClientStorage();
+    } catch (error) {
+      // A superseding attempt may already own the store while this write was
+      // pending. Never erase its token when the obsolete attempt fails.
+      if (this.local.s === token) {
+        this.local.s = "";
+        await flushClientStorage().catch(() => {});
+      }
+      throw error;
+    }
+    if (!isCurrent()) {
+      if (this.local.s === token) {
+        this.local.s = "";
+        await flushClientStorage();
+      }
+      return;
+    }
     // A solo (account-free QR) pairing signing in mid-session: `solo` and the
     // room-token transport were fixed at construction, so flipping the reactive
     // flag alone would leave a half-account client (hidden NodeSwitcher, stale
@@ -1004,6 +1025,7 @@ export class AppController {
       location.reload();
       return;
     }
+    this.nativeSubscriptionsStopped = false;
     this.store.setSignedIn(true);
     // Reconcile the device vault once on sign-in: a producer device satisfies any
     // pending wrapped-key requests from the account's other devices; a consumer
@@ -1012,8 +1034,28 @@ export class AppController {
     this.connect();
   }
 
+  private nativeSubscriptionSyncAt = 0;
+  private nativeSubscriptionSyncToken = "";
+  private nativeSubscriptionSyncing = false;
+  private nativeSubscriptionsStopped = false;
+
+  private syncNativeSubscriptions(): void {
+    const token = this.local.s;
+    if (this.nativeSubscriptionsStopped || !token || !hasNativeSubscriptions() || this.nativeSubscriptionSyncing) return;
+    if (token === this.nativeSubscriptionSyncToken && Date.now() - this.nativeSubscriptionSyncAt < 5 * 60_000) return;
+    this.nativeSubscriptionSyncing = true;
+    this.nativeSubscriptionSyncToken = token;
+    this.nativeSubscriptionSyncAt = Date.now();
+    void synchronizeNativeSubscriptions(token)
+      .catch(() => {
+        if (!this.nativeSubscriptionsStopped && this.local.s === token) this.store.setError("Subscription status could not be refreshed. Open Subscriptions to retry.");
+      })
+      .finally(() => { this.nativeSubscriptionSyncing = false; });
+  }
+
   connect(): void {
     this.nodeCoordinator.connect();
+    this.syncNativeSubscriptions();
   }
 
   private foregroundTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1038,6 +1080,7 @@ export class AppController {
         this.backgroundDisconnectTimer = null;
       }
       this.refreshAfterForeground();
+      this.syncNativeSubscriptions();
     };
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "visible") {
@@ -1056,6 +1099,7 @@ export class AppController {
         if (document.visibilityState === "hidden") this.transport.close();
       }, AppController.BACKGROUND_DISCONNECT_DELAY_MS);
     });
+    onNativeForeground(onForeground);
     window.addEventListener("pageshow", onForeground);
     window.addEventListener("focus", onForeground);
     // Back/forward navigation between sessions: sync the app to the URL the user
@@ -1360,6 +1404,12 @@ export class AppController {
   /** Sign out: revoke the session server-side (and free this device's slot),
    *  then clear local state and return to the sign-in screen. */
   async signOut(): Promise<void> {
+    this.nativeSubscriptionsStopped = true;
+    // Stop native transaction observers retaining this session; revocation and
+    // local secret deletion still run if the native host fails to respond.
+    await clearNativeSubscriptions().catch(() => {});
+    this.nativeSubscriptionSyncToken = "";
+    this.nativeSubscriptionSyncAt = 0;
     this.sessionTitleKeys?.close();
     try {
       this.transport.close();
@@ -1389,6 +1439,8 @@ export class AppController {
     }
     await this.attachmentDiskCache.clear();
     this.local.clear();
+    // Do not report a completed logout/reload until native deletion is durable.
+    await flushClientStorage();
     this.store.setSignedIn(false);
     // Return to the root shell rather than reloading into a `/sessions/:id` deep
     // link we can no longer open (and to drop any stale query/hash).
@@ -3256,7 +3308,7 @@ export class AppController {
   /** Ask the node to mint a manifest + hook. The reply drives a GitHub redirect. */
   githubAppManifestStart(org?: string): void {
     this.store.setGithubAppPhase("starting");
-    this.send({ kind: "github.app.manifest.start", requestId: requestId(), origin: location.origin, org: org || undefined });
+    this.send({ kind: "github.app.manifest.start", requestId: requestId(), origin: accountOrigin(), org: org || undefined });
   }
 
   /** Relay the one-time code GitHub returned back to the node to finish setup. */
@@ -3301,7 +3353,10 @@ export class AppController {
 
   fetchMe(): Promise<AccountMe> { return this.accountCoordinator.fetchMe(); }
   deleteAccount(): Promise<void> { return apiDeleteAccount(this.local); }
-  invokeAccountExtensionAction(action: string): Promise<{ url: string }> { return invokeAccountExtensionAction(this.local, action); }
+  invokeAccountExtensionAction(action: string): Promise<{ url: string }> {
+    if (!showAccountExtension()) return Promise.reject(new Error("Account service actions are unavailable in this app."));
+    return invokeAccountExtensionAction(this.local, action);
+  }
   fetchGithubApp(): ReturnType<typeof fetchGithubApp> { return this.accountCoordinator.fetchGithubApp() as ReturnType<typeof fetchGithubApp>; }
   fetchGithubQueue(limit = 30): ReturnType<typeof fetchGithubQueue> { return this.accountCoordinator.fetchGithubQueue(limit); }
   fetchAutomationRuns(limit = 50, options: { summary?: boolean } = {}): ReturnType<typeof fetchAutomationRuns> {
@@ -3337,9 +3392,18 @@ export class AppController {
   }
   githubAppDisconnect(appId?: string, hookId?: string): Promise<void> { return this.accountCoordinator.disconnectGithubApp(appId, hookId); }
   removeNode(nodeId: string): Promise<void> { return this.accountCoordinator.removeNode(nodeId); }
-  enablePush(): Promise<string> { return this.accountCoordinator.enablePush(); }
-  disablePush(): Promise<string> { return this.accountCoordinator.disablePush(); }
-  pushStatus(): ReturnType<typeof getPushSubscriptionStatus> { return this.accountCoordinator.pushStatus(); }
+  enablePush(): Promise<string> {
+    if (isPackagedClient) return Promise.reject(new Error("Native notifications are not connected yet."));
+    return this.accountCoordinator.enablePush();
+  }
+  disablePush(): Promise<string> {
+    if (isPackagedClient) return Promise.reject(new Error("Native notifications are not connected yet."));
+    return this.accountCoordinator.disablePush();
+  }
+  pushStatus(): ReturnType<typeof getPushSubscriptionStatus> {
+    if (isPackagedClient) return Promise.resolve({ supported: false, subscribed: false, permission: "default" });
+    return this.accountCoordinator.pushStatus();
+  }
   getNotificationPreferences(): Promise<NotificationPreferences> { return this.accountCoordinator.getNotificationPreferences(); }
   setNotificationPreferences(patch: Partial<NotificationPreferences>): Promise<NotificationPreferences> { return this.accountCoordinator.setNotificationPreferences(patch); }
 
@@ -3858,7 +3922,9 @@ export class AppController {
 
   /** Apply a pasted device-link payload (QR text) and reconnect. */
   applyLinkPayload(text: string): boolean {
-    if (!consumeLinkPayload(this.local, text)) return false;
+    // Packaged companions use one configured account server, never a pasted
+    // token/control-plane override. Native session links carry route IDs only.
+    if (requiresAccountConnection || !consumeLinkPayload(this.local, text)) return false;
     // A QR/device-link payload can carry a fresh session token — keep the
     // reactive auth flag in step so the shell renders even if this is the first
     // token this client has held.

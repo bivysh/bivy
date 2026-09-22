@@ -33,7 +33,7 @@ for (const theme of ["light", "dark"]) {
     }, theme);
     await page.route("**/api/**", route => route.fulfill({ json: {} }));
     // Keep network connection/reconnect out of this store-driven App fixture.
-    await page.route("**/src/main.tsx", async route => {
+    await page.route("**/src/mount.tsx", async route => {
       const response = await route.fetch();
       const source = (await response.text()).replace("controller.connect();", "").replace("controller.installLifecycleHandlers();", "");
       await route.fulfill({ response, body: source });

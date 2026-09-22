@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { accountOrigin } from "../packaged-client.js";
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, useState } from "react";
 import type { AccountNodeClaim } from "@bivy/core";
@@ -20,7 +21,7 @@ export function MachineInstallInstructions({ onEnrolled }: { onEnrolled?: (nodeI
   enrolled.current = onEnrolled;
   // Never place the reusable browser session in a shell command. Older servers
   // can still use the explicit, ordinary sign-in fallback below.
-  const install = installCommand(location.origin, controller.local.relay);
+  const install = installCommand(accountOrigin(), controller.local.relay);
 
   useEffect(() => {
     let cancelled = false;

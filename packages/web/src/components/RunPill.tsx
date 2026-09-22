@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { accountPresentationMessage } from "../client-config.js";
 // Copyright (c) 2026 Petter André Sjulstad
 //
 // The in-session run card. It sits in the band above the composer for *every*
@@ -264,7 +265,7 @@ export function RunPill({
                 {attempt > 1 && (
                   <Row k="Attempts">{reason ? `${attempt} · ${reason}` : String(attempt)}</Row>
                 )}
-                {evidence.routingReason && <Row k="Routing">{evidence.routingReason}</Row>}
+                {evidence.routingReason && <Row k="Routing">{accountPresentationMessage(evidence.routingReason)}</Row>}
                 {evidence.output?.branch && (
                   <Row k="Branch"><code>{evidence.output.branch}</code></Row>
                 )}

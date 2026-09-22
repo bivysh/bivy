@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { accountPresentationMessage } from "../client-config.js";
 // Copyright (c) 2026 Petter André Sjulstad
 //
 // The routable Run details screen (`/runs/:runId`). It is a standalone,
@@ -441,7 +442,7 @@ function RunBody({
                 <div>
                   <strong>{milestone.stage.replaceAll("_", " ")}</strong>
                   <span>{formatWhen(milestone.at)}{milestone.attempt ? ` · attempt ${milestone.attempt}` : ""}</span>
-                  <p>{milestone.summary}</p>
+                  <p>{milestone.reasonCode ? accountPresentationMessage(milestone.summary) : milestone.summary}</p>
                   {milestone.evidenceRef && <code>{milestone.evidenceRef}</code>}
                 </div>
               </li>
