@@ -2796,7 +2796,7 @@ select.picker-search { appearance: auto; }
 .setup-card { width: 100%; max-width: 380px; margin: auto; text-align: center; }
 /* Back out of a summoned sign-in (solo pairing) — pinned to the card's leading edge. */
 .setup-back { display: block; text-align: left; margin-bottom: 4px; }
-.setup-glyph { font-size: 44px; }
+.setup-logo { display: block; width: var(--space-8); height: var(--space-8); margin-inline: auto; color: var(--ink); }
 .setup-card h1 { margin: 6px 0 12px; }
 .setup-card p { color: var(--ink); margin: 8px 0; }
 .setup-card .muted { color: var(--muted); font-size: 13px; }
