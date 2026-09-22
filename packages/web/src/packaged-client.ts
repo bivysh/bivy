@@ -10,6 +10,13 @@ export interface PackagedBridge {
   flush(): Promise<void>;
   openExternal(url: string): Promise<void>;
   onForeground(callback: () => void): () => void;
+  /** Optional store-owned subscription management. Implemented by the native
+   * host; opaque web checkout actions remain disabled in packaged builds. */
+  accountSubscriptions?: {
+    open(account: { token: string; controlPlane: string }): Promise<void>;
+    synchronize(account: { token: string; controlPlane: string }): Promise<void>;
+    clear(): Promise<void>;
+  };
 }
 
 declare global {
@@ -89,6 +96,20 @@ export async function openPackagedExternal(url: string): Promise<void> {
   const parsed = new URL(url);
   if (parsed.protocol !== "https:" || parsed.username || parsed.password) throw new Error("Unsupported external URL.");
   await bridge().openExternal(parsed.href);
+}
+
+export function hasNativeSubscriptions(): boolean {
+  return isPackagedClient && Boolean(globalThis.__BIVY_PACKAGED_BRIDGE__?.accountSubscriptions);
+}
+export async function openNativeSubscriptions(token: string): Promise<void> {
+  if (!token || !hasNativeSubscriptions()) throw new Error("Native subscriptions are unavailable.");
+  await bridge().accountSubscriptions!.open({ token, controlPlane: packagedOrigin! });
+}
+export async function synchronizeNativeSubscriptions(token: string): Promise<void> {
+  if (token && hasNativeSubscriptions()) await bridge().accountSubscriptions!.synchronize({ token, controlPlane: packagedOrigin! });
+}
+export async function clearNativeSubscriptions(): Promise<void> {
+  if (hasNativeSubscriptions()) await nativeOperation(bridge().accountSubscriptions!.clear());
 }
 
 export function installPackagedNavigation(onError: (message: string) => void): void {

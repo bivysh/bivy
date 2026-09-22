@@ -18,7 +18,7 @@ import type { SettingsView } from "../router.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import { setCloudMachinesEnabled, useCloudMachinesEnabled } from "../cloudMachines.js";
 import { requestSignIn } from "../signInRequest.js";
-import { accountOrigin, showAccountExtension } from "../packaged-client.js";
+import { accountOrigin, hasNativeSubscriptions, openNativeSubscriptions, showAccountExtension } from "../packaged-client.js";
 import { getAppIconBadgeEnabled, setAppIconBadgeEnabled, setNotificationPreferencesSnapshot, subscribeNotificationSettings } from "../notificationSettings.js";
 import { CheckIcon, ChevronRightIcon, CloseIcon, CopyIcon } from "./UiIcons.js";
 import { writeClipboard } from "../clipboard.js";
@@ -2173,6 +2173,19 @@ function AccountPanel() {
         <Stat label="Devices" value={String(counts?.devices ?? devices.length)} />
         <Stat label="Visible sessions" value={counts?.sessions == null ? "—" : String(counts.sessions)} />
       </div>
+      {hasNativeSubscriptions() && (
+        <div className="settings-section">
+          <h4 className="settings-subhead">Subscriptions</h4>
+          <button type="button" className="btn" disabled={accountAction !== null} onClick={() => {
+            setAccountAction("native-subscriptions");
+            openNativeSubscriptions(controller.local.s)
+              .then(reloadMe)
+              .catch(() => setErr("Could not open subscriptions. Please try again."))
+              .finally(() => setAccountAction(null));
+          }}>{accountAction === "native-subscriptions" ? "Opening…" : "Manage subscriptions"}</button>
+          <p className="muted">Purchases and restores are handled by your app store.</p>
+        </div>
+      )}
       {me?.extension && showAccountExtension() && (
         <div className="settings-section">
           <h4 className="settings-subhead">{me.extension.title || "Account service"}</h4>
@@ -2299,7 +2312,9 @@ function AccountPanel() {
           disabled={accountAction !== null}
           onClick={() => setConfirm({
             title: "Delete account?",
-            message: "This permanently deletes your Bivy account, billing subscription, and its data. This cannot be undone.",
+            message: hasNativeSubscriptions()
+              ? "This permanently deletes your Bivy account and its data. App store subscriptions must be cancelled separately in your store's subscription settings; deleting this account does not stop those charges. This cannot be undone."
+              : "This permanently deletes your Bivy account, billing subscription, and its data. This cannot be undone.",
             label: "Delete account",
             action: () => {
               setAccountAction("delete-account");

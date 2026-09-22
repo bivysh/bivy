@@ -163,7 +163,7 @@ import {
   type AccountAutomation,
 } from "@bivy/core";
 import { navigate, parseRoute, routePath, type Route } from "../router.js";
-import { accountOrigin, clientStorage, companionPolicyMessage, flushClientStorage, isPackagedClient, onNativeForeground } from "../packaged-client.js";
+import { accountOrigin, clearNativeSubscriptions, clientStorage, companionPolicyMessage, flushClientStorage, hasNativeSubscriptions, isPackagedClient, onNativeForeground, synchronizeNativeSubscriptions } from "../packaged-client.js";
 import { EPHEMERAL_MACHINES_ENABLED, EPHEMERAL_KEEP_FAILED_MACHINES } from "../flags.js";
 import { cloudMachinesEnabled } from "../cloudMachines.js";
 import { markFirstSuccessfulResponse } from "../pwaLifecycle.js";
@@ -1024,6 +1024,7 @@ export class AppController {
       location.reload();
       return;
     }
+    this.nativeSubscriptionsStopped = false;
     this.store.setSignedIn(true);
     // Reconcile the device vault once on sign-in: a producer device satisfies any
     // pending wrapped-key requests from the account's other devices; a consumer
@@ -1032,8 +1033,28 @@ export class AppController {
     this.connect();
   }
 
+  private nativeSubscriptionSyncAt = 0;
+  private nativeSubscriptionSyncToken = "";
+  private nativeSubscriptionSyncing = false;
+  private nativeSubscriptionsStopped = false;
+
+  private syncNativeSubscriptions(): void {
+    const token = this.local.s;
+    if (this.nativeSubscriptionsStopped || !token || !hasNativeSubscriptions() || this.nativeSubscriptionSyncing) return;
+    if (token === this.nativeSubscriptionSyncToken && Date.now() - this.nativeSubscriptionSyncAt < 5 * 60_000) return;
+    this.nativeSubscriptionSyncing = true;
+    this.nativeSubscriptionSyncToken = token;
+    this.nativeSubscriptionSyncAt = Date.now();
+    void synchronizeNativeSubscriptions(token)
+      .catch(() => {
+        if (!this.nativeSubscriptionsStopped && this.local.s === token) this.store.setError("Subscription status could not be refreshed. Open Subscriptions to retry.");
+      })
+      .finally(() => { this.nativeSubscriptionSyncing = false; });
+  }
+
   connect(): void {
     this.nodeCoordinator.connect();
+    this.syncNativeSubscriptions();
   }
 
   private foregroundTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1058,6 +1079,7 @@ export class AppController {
         this.backgroundDisconnectTimer = null;
       }
       this.refreshAfterForeground();
+      this.syncNativeSubscriptions();
     };
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "visible") {
@@ -1381,6 +1403,12 @@ export class AppController {
   /** Sign out: revoke the session server-side (and free this device's slot),
    *  then clear local state and return to the sign-in screen. */
   async signOut(): Promise<void> {
+    this.nativeSubscriptionsStopped = true;
+    // Stop native transaction observers retaining this session; revocation and
+    // local secret deletion still run if the native host fails to respond.
+    await clearNativeSubscriptions().catch(() => {});
+    this.nativeSubscriptionSyncToken = "";
+    this.nativeSubscriptionSyncAt = 0;
     this.sessionTitleKeys?.close();
     try {
       this.transport.close();
