@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { isStandaloneDisplay, startGithubDeviceLogin, startEmailDeviceLogin, pollDeviceLogin, type EmailDeviceLogin } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { OwnerSignIn } from "./OwnerSignIn.js";
+import { BivyMark } from "./BivyMark.js";
 import { clientConfiguration, configuredAuthentication } from "../client-config.js";
 import { accountOrigin, isPackagedClient, openPackagedExternal } from "../packaged-client.js";
 
@@ -301,7 +302,7 @@ export function SetupNotice({ onDismiss }: { onDismiss?: () => void } = {}) {
             ‹ Back
           </button>
         )}
-        <div className="setup-glyph">⛺</div>
+        <BivyMark className="setup-logo" />
         <h1>Bivy</h1>
         <p>{clientConfiguration.signInDescription ?? (methods?.enabled ? "Your self-hosted Bivy workspace." : "Run Claude Code, Codex, or another coding agent on a Machine you control — then continue it from your browser or phone.")}</p>
         {!methods && !methodsError && <p className="muted" role="status">Loading sign-in options…</p>}

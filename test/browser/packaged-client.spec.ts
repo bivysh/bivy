@@ -55,6 +55,32 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
+test("sign-in uses the regular themed Bivy mark instead of the tent emoji", async ({ page }, testInfo) => {
+  await page.goto(origin);
+  await expect(page.getByRole("textbox", { name: "Email address" })).toBeVisible();
+  const logo = page.locator("svg.setup-logo");
+  await expect(logo).toBeVisible();
+  await expect(logo).toHaveAttribute("aria-hidden", "true");
+  await expect(logo).toHaveAttribute("focusable", "false");
+  await expect(page.getByRole("heading", { name: "Bivy", exact: true })).toHaveCount(1);
+  await expect(page.locator(".setup-card")).not.toContainText("⛺");
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+    const colors = await logo.evaluate(element => ({
+      ink: getComputedStyle(element).color,
+      ridge: getComputedStyle(element.querySelector('path[stroke="currentColor"]')!).stroke,
+      spark: getComputedStyle(element.querySelector("path")!).fill,
+      accent: getComputedStyle(document.documentElement).getPropertyValue("--accent").trim(),
+    }));
+    expect(colors.ridge).toBe(colors.ink);
+    expect(colors.spark).not.toBe("none");
+    expect(colors.accent).toBeTruthy();
+    await page.screenshot({ path: testInfo.outputPath(`sign-in-${theme}.png`) });
+  }
+  await page.getByRole("textbox", { name: "Email address" }).focus();
+  await expect(page.getByRole("textbox", { name: "Email address" })).toBeFocused();
+});
+
 for (const platform of ["native", "browser"]) {
   test(`generic ${platform} deployment preserves server login methods and account actions`, async ({ page }) => {
     const { createServer } = await import(pathToFileURL(require.resolve("vite")).href);
