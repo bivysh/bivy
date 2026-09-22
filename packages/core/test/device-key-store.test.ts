@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import "fake-indexeddb/auto";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { clearIndexedDbDeviceKey } from "../src/device-key-store.js";
 import { b64url, createLocalStore, deviceKeypair, indexedDbDeviceKeyStore } from "../src/index.js";
 
 function mem(): Storage {
@@ -21,6 +22,37 @@ function mem(): Storage {
 // Exercises the real IndexedDB-backed key store (via fake-indexeddb) — the code
 // path the browser uses by default, not covered by the injected in-memory store.
 describe("indexedDbDeviceKeyStore (real IDB)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  function corruptWrites() {
+    const put = IDBObjectStore.prototype.put;
+    vi.spyOn(IDBObjectStore.prototype, "put").mockImplementation(function (this: IDBObjectStore, value, key) {
+      return put.call(this, { priv: {}, pub: value.pub }, key);
+    });
+  }
+
+  it("rejects acknowledged writes that do not preserve a usable CryptoKey", async () => {
+    await clearIndexedDbDeviceKey();
+    corruptWrites();
+    const pair = await crypto.subtle.generateKey({ name: "X25519" }, false, ["deriveBits"]) as CryptoKeyPair;
+    await expect(indexedDbDeviceKeyStore()!.save(pair.privateKey, "fixture-public-key")).rejects.toThrow("did not preserve");
+  });
+
+  it("keeps a durable fallback identity across fresh stores after a corrupt IDB write", async () => {
+    await clearIndexedDbDeviceKey();
+    corruptWrites();
+    const storage = mem();
+    const firstStore = createLocalStore(storage, mem());
+    const first = await deviceKeypair(firstStore);
+    expect(firstStore.device()?.pub).toBe(first.pub);
+    // A fresh LocalStore bypasses the in-flight/cache WeakMap, like a relaunch.
+    const nextStore = createLocalStore(storage, mem());
+    const next = await deviceKeypair(nextStore);
+    expect(next.pub).toBe(first.pub);
+    // A failed migration must not clear the existing durable fallback.
+    expect(nextStore.device()?.pub).toBe(first.pub);
+  });
+
   it("is available when indexedDB exists", () => {
     expect(indexedDbDeviceKeyStore()).not.toBeNull();
   });
