@@ -638,7 +638,7 @@ export class AppController {
     this.direct = isDirectMode(this.local);
     // Solo: not on the hosted CP (no session) but the QR left room-token creds
     // for the selected node. Distinct from `direct` (loopback) and hosted.
-    this.solo = !this.direct && !this.local.s && Boolean(this.local.solo()[this.local.cur]);
+    this.solo = !isPackagedClient && !this.direct && !this.local.s && Boolean(this.local.solo()[this.local.cur]);
     // The hosted client remembers this origin as its control plane.
     if (!this.direct && !this.local.cp) this.local.cp = accountOrigin();
     this.transport = this.buildTransport();

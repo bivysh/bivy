@@ -51,7 +51,13 @@ test.beforeEach(async ({ page }) => {
 
 for (const theme of ["light", "dark"]) {
   test(`packaged sign-in is hosted, email-only, and uses the configured discovery origin (${theme})`, async ({ page }, testInfo) => {
-    await page.addInitScript(theme => localStorage.setItem("bivy_theme", theme), theme);
+    await page.addInitScript(theme => {
+      localStorage.setItem("bivy_theme", theme);
+      // Legacy room-only pairing data must not bypass packaged account login.
+      const storage = (globalThis as unknown as { __BIVY_PACKAGED_BRIDGE__: { storage: Storage } }).__BIVY_PACKAGED_BRIDGE__.storage;
+      storage.setItem("bivy_current", "old-node");
+      storage.setItem("bivy_solo", JSON.stringify({ "old-node": { room: "old-room", roomToken: "old-token" } }));
+    }, theme);
     await page.goto(`${origin}/?local=1`);
     await expect(page.getByRole("button", { name: "Continue with email" })).toBeVisible();
     await expect(page.getByText("Continue with GitHub")).toHaveCount(0);
@@ -59,9 +65,9 @@ for (const theme of ["light", "dark"]) {
     const config = await page.evaluate(async () => {
       const path = "/src/store/controller.ts";
       const { controller } = await import(path);
-      return { direct: controller.direct, cp: controller.local.cp, session: localStorage.getItem("bivy_session") };
+      return { direct: controller.direct, solo: controller.solo, cp: controller.local.cp, session: localStorage.getItem("bivy_session") };
     });
-    expect(config).toEqual({ direct: false, cp, session: null });
+    expect(config).toEqual({ direct: false, solo: false, cp, session: null });
     expect(await page.evaluate(async () => (await navigator.serviceWorker.getRegistrations()).length)).toBe(0);
     await page.getByRole("link", { name: "Terms", exact: true }).click();
     await expect.poll(() => page.evaluate(() => (globalThis as unknown as { testExternal: string }).testExternal)).toBe("https://bivy.sh/terms.html");
