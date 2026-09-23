@@ -98,6 +98,52 @@ payment SDKs, receipt verification, entitlements, and deletion disclosures are
 owned by the shell/deployment. Core supplies no paid access itself. Deployments
 must configure accurate deletion/cancellation copy for their billing providers.
 
+## Optional native notifications and incoming links
+
+A host may expose `notifications` with `status(account)`, `enable(account)`,
+`disable(account)`, `synchronize(account)` and `clear()`. `account` contains
+`token` and `controlPlane`; status returns `{supported, subscribed, permission}`.
+The shared Notifications settings retain account-wide event preferences. The
+host must request OS permission only from `enable`, serialize registration and
+logout, scope requests to its configured origin, and keep device tokens in
+secure storage. Foreground/login synchronization must not prompt for permission.
+
+`onOpenURL(callback)` delivers HTTPS session/run links, including a buffered
+cold-start link. Core accepts only its configured origin, `/sessions/:id` with
+an optional single `node` hint, or `/runs/:id`. Credentials, fragments, other
+parameters and authentication routes are rejected. The privileged WebView is
+never navigated to the remote URL. Session opens wait for sign-in/connection;
+the server remains authoritative for account/session ownership.
+
+The control plane optionally supports APNs via `APNS_ENABLED=1`, `APNS_TEAM_ID`,
+`APNS_KEY_ID`, `APNS_TOPIC`, secret `APNS_PRIVATE_KEY` (P-256), and
+`APNS_ENVIRONMENT=sandbox|production`. Missing/invalid enabled configuration
+fails startup. No deployment hostname or commercial policy is built in.
+Authenticated account clients use GET/POST/DELETE `/api/push/native`; POST and
+DELETE carry `{token: <APNs hex token>}`. Node-scoped grants cannot register.
+POST is rate limited, with at most 16 installations/account. Registrations are
+bound to a hashed account login session; revocation/deletion cascades to the
+registration. Delivery ignores expired sessions and installations not refreshed
+for seven days. Account deletion also cascades; APNs 410 removes only the unchanged
+registration revision. Stale rows are pruned by the existing auth janitor and
+on the account's next registration.
+
+Delivery shares existing entitlement and event-preference checks with Web Push.
+APNs receives only generic alert copy and a validated opaque session/run route,
+never prompts, session titles or tool output. Delivery is best-effort, bounded
+to 32 concurrent HTTP/2 requests with 10-second timeouts. Expiration zero avoids
+queueing stale account notifications at Apple; offline devices must recover
+state when opening the app. Offline logout cannot retract an already delivered
+alert: the host clears delivered notifications and retries registration removal,
+while the server checks grant validity on each send. Operators should monitor
+`[native-push]` rejection/unavailability logs, which omit device tokens and keys.
+
+For Universal Links, configure `APPLE_ASSOCIATED_APP_IDS` as a comma-separated
+list of exact Apple App ID prefixes + bundle IDs (e.g. `ABCDEFGHIJ.org.example.app`).
+`/.well-known/apple-app-site-association` returns JSON for session/run paths only,
+or 404 when disabled. The native entitlement must name the same HTTPS domain.
+Provisioning and real APNs/Universal Link validation belong to the native host.
+
 ## Control-plane CORS
 
 Explicitly opt in on a compatible server, for example:

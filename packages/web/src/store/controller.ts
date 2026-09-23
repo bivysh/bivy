@@ -164,7 +164,8 @@ import {
 } from "@bivy/core";
 import { navigate, parseRoute, routePath, type Route } from "../router.js";
 import { requiresAccountConnection, showAccountExtension, accountPresentationMessage } from "../client-config.js";
-import { accountOrigin, clearNativeSubscriptions, clientStorage, flushClientStorage, hasNativeSubscriptions, isPackagedClient, onNativeForeground, synchronizeNativeSubscriptions } from "../packaged-client.js";
+import { nativeSessionLink } from "../native-session-link.js";
+import { accountOrigin, clearNativeSubscriptions, clientStorage, flushClientStorage, hasNativeSubscriptions, isPackagedClient, nativeNotifications, onNativeOpenURL, onNativeForeground, synchronizeNativeSubscriptions } from "../packaged-client.js";
 import { EPHEMERAL_MACHINES_ENABLED, EPHEMERAL_KEEP_FAILED_MACHINES } from "../flags.js";
 import { cloudMachinesEnabled } from "../cloudMachines.js";
 import { markFirstSuccessfulResponse } from "../pwaLifecycle.js";
@@ -1041,6 +1042,11 @@ export class AppController {
 
   private syncNativeSubscriptions(): void {
     const token = this.local.s;
+    if (!this.nativeSubscriptionsStopped && token) {
+      void nativeNotifications()?.synchronize({ token, controlPlane: accountOrigin() }).catch(() => {
+        this.store.setError("Notification registration could not be refreshed. Open Notifications to retry.");
+      });
+    }
     if (this.nativeSubscriptionsStopped || !token || !hasNativeSubscriptions() || this.nativeSubscriptionSyncing) return;
     if (token === this.nativeSubscriptionSyncToken && Date.now() - this.nativeSubscriptionSyncAt < 5 * 60_000) return;
     this.nativeSubscriptionSyncing = true;
@@ -1104,7 +1110,21 @@ export class AppController {
     window.addEventListener("focus", onForeground);
     // Back/forward navigation between sessions: sync the app to the URL the user
     // landed on, without writing history back (the browser already did).
-    window.addEventListener("popstate", () => this.applyRoute(parseRoute(), { navigate: false }));
+    window.addEventListener("popstate", () => {
+      const route = parseRoute();
+      const node = this.consumeDeepLinkNode();
+      if (route.kind === "session" && (node || !this.signedIn || this.store.getState().connection.status !== "online")) {
+        this.pendingRoute = route;
+        this.pendingRouteNode = node;
+        if (this.signedIn && this.store.getState().connection.status === "online") this.applyInitialRoute();
+      } else this.applyRoute(route, { navigate: false });
+    });
+    onNativeOpenURL(input => {
+      const link = nativeSessionLink(input, accountOrigin());
+      if (!link) return;
+      history.replaceState(null, "", link.path + (link.node ? `?node=${encodeURIComponent(link.node)}` : ""));
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
   }
 
   /** Subscribe to account Run changes pushed over the relay. The callback is a
@@ -1407,6 +1427,7 @@ export class AppController {
     this.nativeSubscriptionsStopped = true;
     // Stop native transaction observers retaining this session; revocation and
     // local secret deletion still run if the native host fails to respond.
+    await nativeNotifications()?.clear().catch(() => {});
     await clearNativeSubscriptions().catch(() => {});
     this.nativeSubscriptionSyncToken = "";
     this.nativeSubscriptionSyncAt = 0;
@@ -3393,15 +3414,15 @@ export class AppController {
   githubAppDisconnect(appId?: string, hookId?: string): Promise<void> { return this.accountCoordinator.disconnectGithubApp(appId, hookId); }
   removeNode(nodeId: string): Promise<void> { return this.accountCoordinator.removeNode(nodeId); }
   enablePush(): Promise<string> {
-    if (isPackagedClient) return Promise.reject(new Error("Native notifications are not connected yet."));
+    if (isPackagedClient) return nativeNotifications()?.enable({ token: this.local.s, controlPlane: accountOrigin() }) ?? Promise.reject(new Error("Native notifications are unavailable."));
     return this.accountCoordinator.enablePush();
   }
   disablePush(): Promise<string> {
-    if (isPackagedClient) return Promise.reject(new Error("Native notifications are not connected yet."));
+    if (isPackagedClient) return nativeNotifications()?.disable({ token: this.local.s, controlPlane: accountOrigin() }) ?? Promise.reject(new Error("Native notifications are unavailable."));
     return this.accountCoordinator.disablePush();
   }
   pushStatus(): ReturnType<typeof getPushSubscriptionStatus> {
-    if (isPackagedClient) return Promise.resolve({ supported: false, subscribed: false, permission: "default" });
+    if (isPackagedClient) return nativeNotifications()?.status({ token: this.local.s, controlPlane: accountOrigin() }) ?? Promise.resolve({ supported: false, subscribed: false, permission: "default" });
     return this.accountCoordinator.pushStatus();
   }
   getNotificationPreferences(): Promise<NotificationPreferences> { return this.accountCoordinator.getNotificationPreferences(); }
