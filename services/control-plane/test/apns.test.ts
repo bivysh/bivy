@@ -34,7 +34,7 @@ await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
 try {
   const address = server.address();
   assert.ok(address && typeof address !== 'string');
-  const sender = createApns({ APNS_ENABLED: '1', APNS_TEAM_ID: 'ABCDEFGHIJ', APNS_KEY_ID: 'KLMNOPQRST', APNS_TOPIC: 'sh.example.app', APNS_ENVIRONMENT: 'sandbox', APNS_PRIVATE_KEY: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString() }, ((host: string) => {
+  const sender = createApns({ APNS_ENABLED: '1', APNS_TEAM_ID: 'ABCDEFGHIJ', APNS_KEY_ID: 'KLMNOPQRST', APNS_TOPIC: 'sh.example.app', APNS_ENVIRONMENT: 'sandbox', PUBLIC_CONTROL_PLANE_URL: 'https://app.example', APNS_PRIVATE_KEY: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString() }, ((host: string) => {
     assert.equal(host, 'https://api.sandbox.push.apple.com');
     return connect(`http://127.0.0.1:${address.port}`);
   }) as typeof connect)!;
@@ -44,11 +44,16 @@ try {
   assert.equal(requests[0].headers['apns-topic'], 'sh.example.app');
   assert.equal(requests[0].headers['apns-push-type'], 'alert');
   assert.ok(!requests[0].body.includes('secret'));
+  assert.equal(JSON.parse(requests[0].body).origin, 'https://app.example');
   const jwt = String(requests[0].headers.authorization).slice('bearer '.length);
   const [header, claims, signature] = jwt.split('.');
   assert.equal(JSON.parse(Buffer.from(claims, 'base64url').toString()).iss, 'ABCDEFGHIJ');
   assert.equal(verify('sha256', Buffer.from(`${header}.${claims}`), { key: publicKey, dsaEncoding: 'ieee-p1363' }, Buffer.from(signature, 'base64url')), true);
   assert.equal(requests[1].headers.authorization, requests[0].headers.authorization, 'provider JWT is cached');
   await assert.rejects(sender.send('not-a-token', {}), /Invalid/);
+  status = 200;
+  const burst = await Promise.allSettled(Array.from({ length: 33 }, () => sender.send('b'.repeat(64), {})));
+  assert.equal(burst.filter(result => result.status === 'fulfilled').length, 32);
+  assert.equal(burst.filter(result => result.status === 'rejected').length, 1, 'transport bounds in-flight work');
 } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
 console.log("APNs configuration, ES256 authentication, HTTP/2 delivery, association scope and minimized payload checks passed");

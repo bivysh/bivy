@@ -8,6 +8,9 @@ export function createApns(env: NodeJS.ProcessEnv = process.env, connectTo: type
   if (env.APNS_ENABLED !== "1") return undefined;
   const { APNS_TEAM_ID: team, APNS_KEY_ID: keyId, APNS_TOPIC: topic, APNS_PRIVATE_KEY: pem, APNS_ENVIRONMENT: environment } = env;
   if (!team || !/^[A-Z0-9]{10}$/.test(team) || !keyId || !/^[A-Z0-9]{10}$/.test(keyId) || !topic || !/^[A-Za-z0-9.-]{3,255}$/.test(topic) || !pem || !["sandbox", "production"].includes(environment || "")) throw new Error("Incomplete APNs configuration");
+  const publicUrl = new URL(env.PUBLIC_CONTROL_PLANE_URL || "");
+  if (publicUrl.protocol !== "https:" || publicUrl.username || publicUrl.password || publicUrl.pathname !== "/" || publicUrl.search || publicUrl.hash) throw new Error("APNs requires an HTTPS control-plane origin");
+  const origin = publicUrl.origin;
   const key = createPrivateKey(pem.includes("-----BEGIN") ? pem : Buffer.from(pem, "base64").toString("utf8"));
   if (key.asymmetricKeyType !== "ec" || key.asymmetricKeyDetails?.namedCurve !== "prime256v1") throw new Error("APNs requires a P-256 key");
   const host = environment === "sandbox" ? "https://api.sandbox.push.apple.com" : "https://api.push.apple.com";
@@ -45,7 +48,7 @@ export function createApns(env: NodeJS.ProcessEnv = process.env, connectTo: type
           request.on("data", () => {}); // Never log tokens or Apple's response bodies.
           request.on("error", () => finish(new Error("APNs request failed")));
           request.on("end", () => finish(undefined, status));
-          request.end(JSON.stringify(nativePushPayload(payload)));
+          request.end(JSON.stringify({ ...nativePushPayload(payload), origin }));
         });
       } finally { active--; }
     },

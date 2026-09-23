@@ -117,7 +117,9 @@ the server remains authoritative for account/session ownership.
 
 The control plane optionally supports APNs via `APNS_ENABLED=1`, `APNS_TEAM_ID`,
 `APNS_KEY_ID`, `APNS_TOPIC`, secret `APNS_PRIVATE_KEY` (P-256), and
-`APNS_ENVIRONMENT=sandbox|production`. Missing/invalid enabled configuration
+`APNS_ENVIRONMENT=sandbox|production`. `PUBLIC_CONTROL_PLANE_URL` must be the
+client's HTTPS origin; notifications include this origin and hosts must reject
+cross-environment taps. Missing/invalid enabled configuration
 fails startup. No deployment hostname or commercial policy is built in.
 Authenticated account clients use GET/POST/DELETE `/api/push/native`; POST and
 DELETE carry `{token: <APNs hex token>}`. Node-scoped grants cannot register.
@@ -129,7 +131,7 @@ registration revision. Stale rows are pruned by the existing auth janitor and
 on the account's next registration.
 
 Delivery shares existing entitlement and event-preference checks with Web Push.
-APNs receives only generic alert copy and a validated opaque session/run route,
+APNs receives only generic alert copy, the public origin and a validated opaque session/run route,
 never prompts, session titles or tool output. Delivery is best-effort, bounded
 to 32 concurrent HTTP/2 requests with 10-second timeouts. Expiration zero avoids
 queueing stale account notifications at Apple; offline devices must recover
