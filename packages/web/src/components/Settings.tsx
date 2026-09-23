@@ -19,7 +19,7 @@ import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import { setCloudMachinesEnabled, useCloudMachinesEnabled } from "../cloudMachines.js";
 import { requestSignIn } from "../signInRequest.js";
 import { clientConfiguration } from "../client-config.js";
-import { accountOrigin, hasNativeSubscriptions, openAccountAction, openNativeSubscriptions, showAccountExtension } from "../packaged-client.js";
+import { accountOrigin, hasNativeSubscriptions, isPackagedClient, openAccountAction, openNativeSubscriptions, showAccountExtension } from "../packaged-client.js";
 import { getAppIconBadgeEnabled, setAppIconBadgeEnabled, setNotificationPreferencesSnapshot, subscribeNotificationSettings } from "../notificationSettings.js";
 import { CheckIcon, ChevronRightIcon, CloseIcon, CopyIcon } from "./UiIcons.js";
 import { writeClipboard } from "../clipboard.js";
@@ -582,15 +582,15 @@ function NotificationsPanel() {
         </div>
         <Toggle checked={on} disabled={busy} onChange={setMaster} label="Enable push notifications" />
       </div>
-      <div className="settings-toggle-row">
+      {(!isPackagedClient || typeof (navigator as Navigator & { setAppBadge?: unknown }).setAppBadge === "function") && <div className="settings-toggle-row">
         <div className="settings-toggle-text">
           <span className="settings-toggle-title">App icon badge</span>
           <p className="muted">Show the number of sessions that need attention on this device's home screen icon.</p>
         </div>
         <Toggle checked={appIconBadgeEnabled} onChange={setAppIconBadgeEnabled} label="Show app icon badge" />
-      </div>
+      </div>}
       {status?.permission === "denied" && (
-        <div className="banner inline" data-tone="warn">Notifications are blocked in your browser settings — allow them there to enable push.</div>
+        <div className="banner inline" data-tone="warn">Notifications are blocked in your device or browser settings — allow them there to enable push.</div>
       )}
       {msg && <div className="banner inline">{msg}</div>}
       {err && <div className="banner inline" data-tone="danger" role="alert">{err}</div>}

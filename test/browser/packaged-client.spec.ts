@@ -45,14 +45,47 @@ test.beforeEach(async ({ page }) => {
       removeItem: key => { values.delete(key); },
       clear: () => values.clear(), key: index => [...values.keys()][index] ?? null,
     };
-    const state = globalThis as unknown as { __BIVY_PACKAGED_BRIDGE__: unknown; testFlushes: number; testForeground?: () => void; testExternal?: string };
+    const state = globalThis as unknown as { __BIVY_PACKAGED_BRIDGE__: unknown; testFlushes: number; testForeground?: () => void; testExternal?: string; testLink?: (url: string) => void };
     state.testFlushes = 0;
     state.__BIVY_PACKAGED_BRIDGE__ = {
       storage, ready: async () => {}, flush: async () => { state.testFlushes++; },
       onForeground: (callback: () => void) => { state.testForeground = callback; return () => {}; },
+      onOpenURL: (callback: (url: string) => void) => {
+        state.testLink = callback;
+        const cold = new URLSearchParams(location.search).get('testNativeLink');
+        if (cold) callback(cold);
+        return () => {};
+      },
       openExternal: async (url: string) => { state.testExternal = url; },
     };
   });
+});
+
+test("native links queue behind sign-in without navigating to a remote page", async ({ page }) => {
+  await page.goto(origin + '?testNativeLink=' + encodeURIComponent(cp + '/sessions/cold?node=node_1'));
+  await expect(page.getByRole('textbox', { name: 'Email address' })).toBeVisible();
+  await expect(page).toHaveURL(origin + '/sessions/cold');
+  const deliver = (url: string) => page.evaluate(url => (globalThis as unknown as { testLink(url: string): void }).testLink(url), url);
+  for (const bad of ['https://evil.example/sessions/a', cp + '/auth/device/start', cp + '/sessions/a?token=secret']) {
+    await deliver(bad);
+    await expect(page).toHaveURL(origin + '/sessions/cold');
+  }
+  await deliver(cp + '/sessions/warm?node=node_2');
+  await expect(page).toHaveURL(origin + '/sessions/warm');
+  await expect(page.getByRole('textbox', { name: 'Email address' })).toBeVisible();
+  const opened = await page.evaluate(async cp => {
+    const path = '/src/store/controller.ts';
+    const { controller } = await import(path);
+    const opened: unknown[] = [];
+    controller.openSessionOnNode = (id: string, _title: unknown, node: string) => { opened.push([id, node]); };
+    await controller.completeSignIn('native-link-session');
+    if (opened.length) throw new Error('Link opened before a connection was available');
+    controller.store.setStatus('online');
+    controller.applyInitialRoute(); // Simulate transport readiness, not a real relay.
+    (globalThis as unknown as { testLink(url: string): void }).testLink(cp + '/sessions/online?node=node_3');
+    return opened;
+  }, cp);
+  expect(opened).toEqual([['warm', 'node_2'], ['online', 'node_3']]);
 });
 
 test("sign-in uses the regular themed Bivy mark instead of the tent emoji", async ({ page }, testInfo) => {
@@ -214,6 +247,47 @@ test("native subscription management is opt-in, account-scoped, and cleared at l
   expect(calls).toContainEqual(["synchronize", { token: "native-subscription-session", controlPlane: cp }]);
   expect(calls).toContainEqual(["open", { token: "native-subscription-session", controlPlane: cp }]);
   expect(calls).toContainEqual(["clear"]);
+});
+
+test("native Notifications settings use the host lifecycle and clear it at logout", async ({ page }, testInfo) => {
+  await page.goto(origin);
+  await expect(page.getByRole('button', { name: 'Continue with email' })).toBeVisible();
+  await page.evaluate(async () => {
+    const state = globalThis as unknown as { __BIVY_PACKAGED_BRIDGE__: { notifications?: unknown }; notificationCalls: unknown[] };
+    state.notificationCalls = [];
+    Object.defineProperty(navigator, 'setAppBadge', { value: undefined });
+    let subscribed = false;
+    state.__BIVY_PACKAGED_BRIDGE__.notifications = {
+      status: async () => ({ supported: true, subscribed, permission: 'granted' }),
+      synchronize: async (account: unknown) => { state.notificationCalls.push(['sync', account]); },
+      enable: async (account: unknown) => { subscribed = true; state.notificationCalls.push(['enable', account]); return 'Notifications enabled'; },
+      disable: async () => { subscribed = false; return 'Notifications disabled'; },
+      clear: async () => { state.notificationCalls.push(['clear']); },
+    };
+    const controllerPath = '/src/store/controller.ts';
+    await (await import(controllerPath)).controller.completeSignIn('native-push-session');
+    const settingsPath = '/src/settingsRoute.ts';
+    (await import(settingsPath)).openSettings('notifications');
+  });
+  const toggle = page.getByRole('switch', { name: 'Enable push notifications', exact: true });
+  await expect(toggle).toBeVisible();
+  await expect(page.getByRole('switch', { name: 'Show app icon badge' })).toHaveCount(0);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-checked', 'true');
+  for (const theme of ['light', 'dark']) {
+    await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+    await page.screenshot({ path: testInfo.outputPath(`native-notifications-${theme}.png`) });
+  }
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-checked', 'false');
+  const calls = await page.evaluate(async () => {
+    const path = '/src/store/controller.ts';
+    await (await import(path)).controller.signOut();
+    return (globalThis as unknown as { notificationCalls: unknown[] }).notificationCalls;
+  });
+  expect(calls).toContainEqual(['sync', { token: 'native-push-session', controlPlane: cp }]);
+  expect(calls).toContainEqual(['enable', { token: 'native-push-session', controlPlane: cp }]);
+  expect(calls).toContainEqual(['clear']);
 });
 
 test("cancellation ignores an in-flight email completion", async ({ page }) => {

@@ -8,6 +8,8 @@ import { fileURLToPath } from "node:url";
 import express, { type Request, type Response, type NextFunction } from "express";
 import { ipKeyGenerator, rateLimit } from "express-rate-limit";
 import webpush from "web-push";
+import { createApns } from "./apns.js";
+import { associatedApps } from "./associated-apps.js";
 import { resolveWebhookAuth, verifyWebhookAuth, DEFAULT_WEBHOOK_HEADER, type WebhookAuth } from "./webhook-auth.js";
 import { matchGithubItemTrigger } from "./github-item-trigger.js";
 import { ephemeralAdapter, validateCapabilityTags } from "@bivy/core";
@@ -382,6 +384,8 @@ const provisionEnv = (): { cpBaseUrl: string; relayUrl: string } => ({
 const vapidPublicKey = process.env.WEB_PUSH_VAPID_PUBLIC_KEY || process.env.VAPID_PUBLIC_KEY || "";
 const vapidPrivateKey = process.env.WEB_PUSH_VAPID_PRIVATE_KEY || process.env.VAPID_PRIVATE_KEY || "";
 const vapidSubject = process.env.WEB_PUSH_SUBJECT || "mailto:support@bivy.sh";
+const appleAssociation = associatedApps(process.env.APPLE_ASSOCIATED_APP_IDS);
+const apns = createApns();
 const webPushEnabled = Boolean(vapidPublicKey && vapidPrivateKey);
 if (webPushEnabled) webpush.setVapidDetails(vapidSubject, vapidPublicKey, vapidPrivateKey);
 // Fetch every signal the shared preflight checklist (src/automation/preflight.ts,
@@ -1978,7 +1982,7 @@ function pushSubscriptionEndpoint(subscription: unknown): string {
 }
 
 async function sendPushToAccount(accountId: string, payload: Record<string, unknown>) {
-  if (!webPushEnabled) return { enabled: false, sent: 0 };
+  if (!webPushEnabled && !apns) return { enabled: false, sent: 0 };
   const admission = await deploymentDecision(accountId, "push.deliver");
   if (!admission.allowed) return { enabled: true, sent: 0, reason: admission.code ?? "policy_denied" };
   // Per-account, per-kind opt-out. The `kind` string arrives from the node's
@@ -1990,7 +1994,15 @@ async function sendPushToAccount(accountId: string, payload: Record<string, unkn
     if ((prefs as Record<string, boolean>)[kind] === false) return { enabled: true, sent: 0, reason: "muted" };
   }
   let sent = 0;
-  for (const sub of await store.listPushSubscriptions(accountId)) {
+  if (apns) await Promise.all((await store.listNativePush(accountId)).map(async sub => {
+    try {
+      const status = await apns.send(sub.token, payload);
+      if (status === 200) sent++;
+      else if (status === 410) await store.removeNativePush(accountId, sub.token, sub.revision);
+      else console.warn("[native-push] delivery rejected", status);
+    } catch { console.warn("[native-push] delivery unavailable"); }
+  }));
+  for (const sub of webPushEnabled ? await store.listPushSubscriptions(accountId) : []) {
     try {
       await webpush.sendNotification(sub.subscription as webpush.PushSubscription, JSON.stringify(payload));
       sent += 1;
@@ -2002,6 +2014,38 @@ async function sendPushToAccount(accountId: string, payload: Record<string, unkn
   }
   return { enabled: true, sent };
 }
+
+app.get("/.well-known/apple-app-site-association", (_req, res) => {
+  if (!appleAssociation) return res.sendStatus(404);
+  res.set("Cache-Control", "public, max-age=3600").json(appleAssociation);
+});
+
+app.get("/api/push/native", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client || client.nodeId) return res.status(401).json({ error: "Account authentication required" });
+  res.json({ enabled: Boolean(apns) });
+}));
+
+app.post("/api/push/native", asyncHandler(async (req, res) => {
+  const token = bearer(req);
+  const client = await store.resolveClient(token);
+  if (!client || client.nodeId) return res.status(401).json({ error: "Account authentication required" });
+  if (!apns) return res.status(503).json({ error: "Native push is unavailable" });
+  if (await store.rateLimitExceeded("native-push-register", client.accountId, 20, 60_000)) return res.status(429).json({ error: "Try again later" });
+  const deviceToken = req.body?.token;
+  if (typeof deviceToken !== "string" || !/^[a-f0-9]{64,200}$/.test(deviceToken)) return res.status(400).json({ error: "Invalid device token" });
+  await store.upsertNativePush(client.accountId, token!, deviceToken);
+  res.json({ ok: true });
+}));
+
+app.delete("/api/push/native", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client || client.nodeId) return res.status(401).json({ error: "Account authentication required" });
+  const deviceToken = req.body?.token;
+  if (typeof deviceToken !== "string" || !/^[a-f0-9]{64,200}$/.test(deviceToken)) return res.status(400).json({ error: "Invalid device token" });
+  await store.removeNativePush(client.accountId, deviceToken);
+  res.json({ ok: true });
+}));
 
 app.get("/api/push/vapid-public-key", (_req, res) => {
   res.json({ enabled: webPushEnabled, publicKey: webPushEnabled ? vapidPublicKey : "" });

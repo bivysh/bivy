@@ -366,6 +366,16 @@ export class PostgresStore implements ControlPlaneStore {
         PRIMARY KEY (account_id, session_id)
       );
 
+      CREATE TABLE IF NOT EXISTS native_push_subscriptions (
+        token TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        auth_hash TEXT NOT NULL REFERENCES sessions(token_hash) ON DELETE CASCADE,
+        revision TEXT NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS native_push_account_idx ON native_push_subscriptions(account_id);
+      CREATE INDEX IF NOT EXISTS native_push_refresh_idx ON native_push_subscriptions(updated_at);
+
       CREATE TABLE IF NOT EXISTS push_subscriptions (
         account_id    TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
         endpoint      TEXT PRIMARY KEY,
@@ -1522,6 +1532,40 @@ export class PostgresStore implements ControlPlaneStore {
       [accountId, sessionId, toNodeId, expectedEpoch],
     );
     return rows[0] ? mapOwnership(rows[0]) : undefined;
+  }
+
+  async upsertNativePush(accountId: string, bearer: string, token: string): Promise<void> {
+    const transaction = await this.database.beginTransaction();
+    try {
+      await transaction.query(`SELECT id FROM accounts WHERE id = $1 FOR UPDATE`, [accountId]);
+      await transaction.query(`DELETE FROM native_push_subscriptions WHERE account_id = $1 AND updated_at < now() - interval '7 days'`, [accountId]);
+      // Bound installation storage per account. Re-registering an existing token
+      // does not consume a slot; stale installations expire before admission.
+      const { rows } = await transaction.query(`SELECT count(*)::int AS count FROM native_push_subscriptions WHERE account_id = $1 AND token <> $2`, [accountId, token]);
+      if (rows[0].count >= 16) throw new Error("Native notification device limit reached");
+      await transaction.query(`INSERT INTO native_push_subscriptions (token, account_id, auth_hash, revision)
+        VALUES ($1, $2, $3, $4) ON CONFLICT (token) DO UPDATE SET
+        account_id = EXCLUDED.account_id, auth_hash = EXCLUDED.auth_hash,
+        revision = EXCLUDED.revision, updated_at = now()`, [token, accountId, hashToken(bearer), randomUUID()]);
+      await transaction.commit();
+    } catch (error) {
+      await transaction.rollback();
+      throw error;
+    } finally { transaction.release(); }
+  }
+
+  async removeNativePush(accountId: string, token: string, revision?: string): Promise<void> {
+    await this.query(`DELETE FROM native_push_subscriptions WHERE account_id = $1 AND token = $2
+      AND ($3::text IS NULL OR revision = $3)`, [accountId, token, revision ?? null]);
+  }
+
+  async listNativePush(accountId: string): Promise<{ token: string; revision: string }[]> {
+    // Revoked/expired login grants cannot continue receiving notifications.
+    // A refresh lease also bounds abandoned installations and offline logout.
+    const { rows } = await this.query(`SELECT p.token, p.revision FROM native_push_subscriptions p
+      WHERE p.account_id = $1 AND p.updated_at > now() - interval '7 days' AND
+        EXISTS (SELECT 1 FROM sessions s WHERE s.token_hash = p.auth_hash AND s.account_id = p.account_id AND s.expires_at > now())`, [accountId]);
+    return rows;
   }
 
   async upsertPushSubscription(accountId: string, endpoint: string, subscription: unknown): Promise<void> {
@@ -3423,6 +3467,9 @@ export class PostgresStore implements ControlPlaneStore {
     }
     const { rowCount } = await this.query(`DELETE FROM auth_rate_limits WHERE reset_at < $1`, [nowIso]);
     total += rowCount ?? 0;
+    const { rowCount: pushRemoved } = await this.query(`DELETE FROM native_push_subscriptions WHERE updated_at < $1`,
+      [new Date(Date.parse(nowIso) - 7 * 24 * 60 * 60_000).toISOString()]);
+    total += pushRemoved ?? 0;
     return total;
   }
 

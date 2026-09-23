@@ -12,6 +12,14 @@ export interface PackagedBridge {
   flush(): Promise<void>;
   openExternal(url: string): Promise<void>;
   onForeground(callback: () => void): () => void;
+  onOpenURL?(callback: (url: string) => void): () => void;
+  notifications?: {
+    status(account: { token: string; controlPlane: string }): Promise<{ supported: boolean; subscribed: boolean; permission: string }>;
+    enable(account: { token: string; controlPlane: string }): Promise<string>;
+    disable(account: { token: string; controlPlane: string }): Promise<string>;
+    synchronize(account: { token: string; controlPlane: string }): Promise<void>;
+    clear(): Promise<void>;
+  };
   /** Optional store-owned subscription management. Implemented by the native
    * host. Visibility of deployment-extension actions is configured separately. */
   accountSubscriptions?: {
@@ -91,6 +99,17 @@ export async function openPackagedExternal(url: string): Promise<void> {
   const parsed = new URL(url);
   if (parsed.protocol !== "https:" || parsed.username || parsed.password) throw new Error("Unsupported external URL.");
   await bridge().openExternal(parsed.href);
+}
+
+export function nativeNotifications() {
+  return isPackagedClient ? bridge().notifications : undefined;
+}
+export async function clearNativeNotifications(): Promise<void> {
+  const capability = nativeNotifications();
+  if (capability) await nativeOperation(capability.clear());
+}
+export function onNativeOpenURL(callback: (url: string) => void): void {
+  if (isPackagedClient) bridge().onOpenURL?.(callback);
 }
 
 export function hasNativeSubscriptions(): boolean {

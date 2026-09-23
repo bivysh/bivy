@@ -1343,6 +1343,9 @@ export interface SessionIndexRepository {
 
 export interface NotificationRepository {
   // Web Push subscriptions for hosted PWA notifications.
+  upsertNativePush(accountId: string, bearer: string, token: string): Promise<void>;
+  removeNativePush(accountId: string, token: string, revision?: string): Promise<void>;
+  listNativePush(accountId: string): Promise<{ token: string; revision: string }[]>;
   upsertPushSubscription(accountId: string, endpoint: string, subscription: unknown): Promise<void>;
   removePushSubscription(accountId: string, endpoint: string): Promise<void>;
   listPushSubscriptions(accountId: string): Promise<PushSubscriptionRecord[]>;
