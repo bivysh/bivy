@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { createPrivateKey, sign } from "node:crypto";
+import { createHash, createPrivateKey, sign } from "node:crypto";
 import { connect } from "node:http2";
 
 /** Deployment-configured APNs transport. Never accepts a host, topic, key or
@@ -42,6 +42,7 @@ export function createApns(env: NodeJS.ProcessEnv = process.env, connectTo: type
           const request = session.request({
             ":method": "POST", ":path": `/3/device/${token}`, authorization: `bearer ${jwt()}`,
             "apns-topic": topic, "apns-push-type": "alert", "apns-priority": "10", "apns-expiration": "0",
+            "apns-collapse-id": createHash("sha256").update(`${origin}:${String(payload.kind || "")}:${String(payload.url || "")}`).digest("hex"),
           });
           let status = 0;
           request.on("response", headers => { status = Number(headers[":status"]); });

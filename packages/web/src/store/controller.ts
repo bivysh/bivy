@@ -165,7 +165,7 @@ import {
 import { navigate, parseRoute, routePath, type Route } from "../router.js";
 import { requiresAccountConnection, showAccountExtension, accountPresentationMessage } from "../client-config.js";
 import { nativeSessionLink } from "../native-session-link.js";
-import { accountOrigin, clearNativeSubscriptions, clientStorage, flushClientStorage, hasNativeSubscriptions, isPackagedClient, nativeNotifications, onNativeOpenURL, onNativeForeground, synchronizeNativeSubscriptions } from "../packaged-client.js";
+import { accountOrigin, clearNativeNotifications, clearNativeSubscriptions, clientStorage, flushClientStorage, hasNativeSubscriptions, isPackagedClient, nativeNotifications, onNativeOpenURL, onNativeForeground, synchronizeNativeSubscriptions } from "../packaged-client.js";
 import { EPHEMERAL_MACHINES_ENABLED, EPHEMERAL_KEEP_FAILED_MACHINES } from "../flags.js";
 import { cloudMachinesEnabled } from "../cloudMachines.js";
 import { markFirstSuccessfulResponse } from "../pwaLifecycle.js";
@@ -1110,20 +1110,20 @@ export class AppController {
     window.addEventListener("focus", onForeground);
     // Back/forward navigation between sessions: sync the app to the URL the user
     // landed on, without writing history back (the browser already did).
-    window.addEventListener("popstate", () => {
-      const route = parseRoute();
-      const node = this.consumeDeepLinkNode();
-      if (route.kind === "session" && (node || !this.signedIn || this.store.getState().connection.status !== "online")) {
-        this.pendingRoute = route;
-        this.pendingRouteNode = node;
-        if (this.signedIn && this.store.getState().connection.status === "online") this.applyInitialRoute();
-      } else this.applyRoute(route, { navigate: false });
+    window.addEventListener("popstate", event => {
+      // Native dispatch updates the route-driven overlays too, but its session
+      // open below must wait for authentication/connection and select the node.
+      // Ordinary browser history retains its existing offline/cache behavior.
+      if (!event.state?.bivyNativeLink) this.applyRoute(parseRoute(), { navigate: false });
     });
     onNativeOpenURL(input => {
       const link = nativeSessionLink(input, accountOrigin());
       if (!link) return;
-      history.replaceState(null, "", link.path + (link.node ? `?node=${encodeURIComponent(link.node)}` : ""));
-      window.dispatchEvent(new PopStateEvent("popstate"));
+      history.replaceState(null, "", link.path);
+      this.pendingRoute = parseRoute();
+      this.pendingRouteNode = link.node;
+      window.dispatchEvent(new PopStateEvent("popstate", { state: { bivyNativeLink: true } }));
+      if (this.signedIn && this.store.getState().connection.status === "online") this.applyInitialRoute();
     });
   }
 
@@ -1427,8 +1427,7 @@ export class AppController {
     this.nativeSubscriptionsStopped = true;
     // Stop native transaction observers retaining this session; revocation and
     // local secret deletion still run if the native host fails to respond.
-    await nativeNotifications()?.clear().catch(() => {});
-    await clearNativeSubscriptions().catch(() => {});
+    await Promise.allSettled([clearNativeNotifications(), clearNativeSubscriptions()]);
     this.nativeSubscriptionSyncToken = "";
     this.nativeSubscriptionSyncAt = 0;
     this.sessionTitleKeys?.close();

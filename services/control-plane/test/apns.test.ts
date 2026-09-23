@@ -43,6 +43,7 @@ try {
   assert.equal(await sender.send('a'.repeat(64), {}), 410);
   assert.equal(requests[0].headers['apns-topic'], 'sh.example.app');
   assert.equal(requests[0].headers['apns-push-type'], 'alert');
+  assert.match(String(requests[0].headers['apns-collapse-id']), /^[a-f0-9]{64}$/);
   assert.ok(!requests[0].body.includes('secret'));
   assert.equal(JSON.parse(requests[0].body).origin, 'https://app.example');
   const jwt = String(requests[0].headers.authorization).slice('bearer '.length);

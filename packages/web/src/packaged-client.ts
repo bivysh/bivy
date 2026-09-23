@@ -104,6 +104,10 @@ export async function openPackagedExternal(url: string): Promise<void> {
 export function nativeNotifications() {
   return isPackagedClient ? bridge().notifications : undefined;
 }
+export async function clearNativeNotifications(): Promise<void> {
+  const capability = nativeNotifications();
+  if (capability) await nativeOperation(capability.clear());
+}
 export function onNativeOpenURL(callback: (url: string) => void): void {
   if (isPackagedClient) bridge().onOpenURL?.(callback);
 }
