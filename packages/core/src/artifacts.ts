@@ -27,6 +27,7 @@
 
 import type { AttachmentRef, PromptAttachment } from "./protocol.js";
 import type { TranscriptEntry } from "./store.js";
+import type { AppReference } from "./apps.js";
 
 /** Where an artifact's bytes originated. */
 export type ArtifactOrigin =
@@ -129,4 +130,20 @@ export function deriveArtifacts(transcript: readonly TranscriptEntry[]): Artifac
   }
   const list = [...byHash.values()].sort((x, y) => (y.createdAt ?? -1) - (x.createdAt ?? -1));
   return list.slice(0, MAX_ARTIFACTS);
+}
+
+/**
+ * The apps a session has published, folded from the same TranscriptEntry[] the
+ * client already holds (each `app_published` becomes an entry carrying `.app`;
+ * see store-render.ts). Like deriveArtifacts, this is a pure projection — no
+ * wire command — so a header affordance can show "N apps" and reopen the sheet
+ * once the inline launcher card scrolls out of view. Deduplicated by appId,
+ * keeping first-seen order so the list is stable as the transcript grows.
+ */
+export function deriveApps(transcript: readonly TranscriptEntry[]): AppReference[] {
+  const byId = new Map<string, AppReference>();
+  for (const entry of transcript) {
+    if (entry.app && !byId.has(entry.app.appId)) byId.set(entry.app.appId, entry.app);
+  }
+  return [...byId.values()];
 }

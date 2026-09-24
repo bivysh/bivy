@@ -118,6 +118,8 @@ export function RunPill({
   onOpenChanges,
   artifactsCount,
   onOpenArtifacts,
+  appsCount,
+  onOpenApps,
   onRecover,
   onOpenRun,
   anchorId,
@@ -155,6 +157,12 @@ export function RunPill({
   artifactsCount?: number;
   /** Open the Artifacts sheet. */
   onOpenArtifacts?: () => void;
+  /** Count of apps this session has published — from
+   *  deriveApps(state.activeSession.transcript), computed in App. Lets the
+   *  header reopen the Apps sheet after the inline launcher card scrolls away. */
+  appsCount?: number;
+  /** Open the Apps sheet. */
+  onOpenApps?: () => void;
   /** Invoked when the user taps a recovery action on a terminal run (C2). The
    *  parent (App) maps each kind onto a real capability: fix → send a "fix the
    *  failing checks" prompt, retry → re-run the checks, fork → fork the session.
@@ -200,6 +208,9 @@ export function RunPill({
 
   const filesLabel = filesEdited && filesEdited > 0
     ? `${filesEdited} file${filesEdited === 1 ? "" : "s"} edited`
+    : null;
+  const appsLabel = appsCount && appsCount > 0
+    ? `${appsCount} app${appsCount === 1 ? "" : "s"}`
     : null;
   const artifactsLabel = artifactsCount && artifactsCount > 0
     ? `${artifactsCount} artifact${artifactsCount === 1 ? "" : "s"}`
@@ -316,6 +327,18 @@ export function RunPill({
                 <span className="run-sheet-changes-icon" aria-hidden>📎</span>
                 <span>{artifactsLabel}</span>
                 <span className="run-sheet-changes-hint">View artifacts</span>
+              </button>
+            )}
+
+            {appsLabel && onOpenApps && (
+              <button
+                type="button"
+                className="sheet-action run-sheet-changes"
+                onClick={() => dismiss(onOpenApps)}
+              >
+                <span className="run-sheet-changes-icon" aria-hidden>◆</span>
+                <span>{appsLabel}</span>
+                <span className="run-sheet-changes-hint">Open apps</span>
               </button>
             )}
 
