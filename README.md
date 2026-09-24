@@ -207,8 +207,9 @@ answer questions, approve supported tool calls, or stop the agent.
 - Send screenshots, images, logs, and other files from your phone.
 - Download reports and artifacts the agent creates.
 - Publish [session apps](docs/apps.md) with web and CLI/TUI views using
-  `bivy app publish bivy.app.json`. Web previews require a separately configured
-  HTTPS preview domain; terminal views use the existing connection.
+  `bivy app publish bivy.app.json`. Linked machines automatically discover web
+  preview delivery through Bivy's relay—no per-machine domains, certificates or
+  public ports. Terminal views use the existing connection.
 - Use voice input and read-aloud where supported; provider-backed voice may
   send audio or text to the selected provider.
 - Keep a native terminal workflow or use structured chat, depending on the agent.

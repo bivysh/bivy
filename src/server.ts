@@ -29,6 +29,7 @@ import { CLIENT_COMMAND_SCHEMAS } from "./protocol/client-command-schemas.js";
 import { CLIENT_COMMAND_ROUTES } from "./protocol/client-command-routes.js";
 import { AppRegistry } from "./apps/registry.js";
 import { AppGateway } from "./apps/gateway.js";
+import { RemotePreview } from "./apps/remote-preview.js";
 import { AppService } from "./apps/service.js";
 import { createAppCommands } from "./controllers/app-commands.js";
 import { bindClientCommandRoutes } from "./http/client-command-routes.js";
@@ -2105,19 +2106,22 @@ const promptDedupe = createSessionNewDedupe<void>();
 const dedupePrompt = (clientMessageId: string | undefined, run: () => Promise<void>) =>
   promptDedupe.run(clientMessageId, run);
 
-// Preview traffic has its own listener and per-view origins. Never mount
-// generated content on the authenticated node API origin.
+// Preview traffic has isolated per-view origins and a private gateway. Relay
+// delivery needs no listener; direct ingress is an optional operator override.
+// Never mount generated content on the authenticated node API origin.
 const appPreviewPort = Number(process.env.BIVY_APPS_PORT || 4318);
 if (process.env.BIVY_APPS_ORIGIN && (!Number.isInteger(appPreviewPort) || appPreviewPort < 1024 || appPreviewPort > 65535 || appPreviewPort === port)) {
   throw new Error("BIVY_APPS_PORT must be between 1024 and 65535 and different from the node API port.");
 }
-const appRegistry = new AppRegistry([port, appPreviewPort]);
-const appGateway = process.env.BIVY_APPS_ORIGIN ? new AppGateway(appRegistry, process.env.BIVY_APPS_ORIGIN, () => {
+const appRegistry = new AppRegistry([port, ...(process.env.BIVY_APPS_ORIGIN ? [appPreviewPort] : [])]);
+const appReturnOrigins = () => {
   const config = loadRelayConfig(appDir);
   return [config?.clientBaseUrl, config?.controlPlaneUrl, ...(process.env.BIVY_APPS_RETURN_ORIGINS ?? "").split(",")]
     .filter((value): value is string => Boolean(value?.trim())).map((value) => new URL(value.trim()).origin);
-}) : undefined;
-const appService = new AppService(appRegistry, appGateway, {
+};
+const appGateway = process.env.BIVY_APPS_ORIGIN ? new AppGateway(appRegistry, process.env.BIVY_APPS_ORIGIN, appReturnOrigins) : undefined;
+const remotePreview = new RemotePreview(appRegistry, appReturnOrigins);
+const appService = new AppService(appRegistry, appGateway ?? remotePreview, {
   start: async (spec) => {
     let failure = "Could not start the app terminal.";
     const id = await runTerms.openRunTerminal({ ...spec, agent: "app", label: spec.name }, (event) => {
@@ -3206,6 +3210,7 @@ function startRelayIfConfigured() {
   if (!config) return false;
   relay = new RelayConnector(config, (msg) => void handleRelayMessage(msg), {
     pairing: pairingStore,
+    previews: appGateway ? undefined : remotePreview,
     onWorkAvailable: (hint) => {
       controlPlanePoller?.poke(hint.id);
       // A relay wake also means "something changed for this account" — kick a
@@ -11685,6 +11690,7 @@ function shutdown(signal: string) {
   if (shuttingDown) return;
   shuttingDown = true;
   appGateway?.close();
+  remotePreview.close();
   relay?.stop();
   githubPoller?.stop();
   controlPlanePoller?.stop();

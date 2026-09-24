@@ -113,7 +113,7 @@ test("terminal starts only on open, single-flights retries, restarts exited prog
     service.remove("s", app.id); await Promise.resolve(); assert.equal(live.size, 0);
     await assert.rejects(() => service.open("s", app.id, view), /not found/);
     const web = service.publish("s", dir, staticManifest);
-    await assert.rejects(() => service.open("s", web.id, web.views[0].id), /HTTPS/);
+    await assert.rejects(() => service.open("s", web.id, web.views[0].id), /preview service is unavailable/);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 

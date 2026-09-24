@@ -6,11 +6,29 @@ through the self-hosted relay has no commercial admission policy.
 
 ## Privacy invariant (the selling point)
 
-The relay reads **only** the envelope routing field (`t`). For data frames
+For the session transport, the relay reads **only** the envelope routing field (`t`). For data frames
 (`t === "frame"`) the opaque `p` payload is forwarded **verbatim** and never
 parsed, logged, or stored. Session content is encrypted by the node + client
 with a key established during pairing (AES-256-GCM, see `../../src/e2e.ts`).
 The relay does not have that key, so it **cannot read session content**.
+
+## Automatic app previews
+
+Set `RELAY_PREVIEW_ORIGIN=https://{app}.preview.example.net` on the deployment
+and route that dedicated wildcard HTTPS domain to this relay. The relay advertises
+preview delivery to admitted nodes, which need no preview configuration or open
+ports. A stable node-specific host suffix binds each request to its admitted node.
+This is Bivy deployment infrastructure, not an end-user or per-app setup step.
+
+Preview HTTP and WebSocket bytes use separate bounded outbound streams through
+`/preview/stream`; a one-use ticket in the Authorization header admits each stream.
+Browser requests are authorized by the node's app gateway. Preview hosts never
+fall through to the relay's operational or admission routes. There is no generic
+TCP port forwarding. See [app delivery and security](../../docs/apps.md).
+
+**Preview content is not session E2E ciphertext.** The HTTPS ingress and relay
+operator can see app preview traffic; session frames and pairing remain unchanged.
+Do not include preview request bodies, headers, cookies, or tickets in access logs.
 
 ## Run
 
@@ -43,7 +61,8 @@ room. Ownership is enforced — a client may only reach a node owned by the same
 account. A node that is offline is unreachable.
 
 Control messages the relay generates: `ready`, `peer.online`, `peer.offline`,
-`error`.
+`error`, and (for preview-enabled deployments) `preview.connect`. Client-supplied
+preview control messages are never forwarded to nodes.
 
 ## Test
 

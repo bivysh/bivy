@@ -2,7 +2,12 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import type { AppManifest, OpenAppViewResult, SessionAppsResult } from "./types.js";
 import { AppRegistry } from "./registry.js";
-import type { AppGateway } from "./gateway.js";
+
+export interface AppPreviewProvider {
+  readonly available?: boolean;
+  open(id: string, returnTo?: string): string;
+  revoke(id: string): void;
+}
 
 export interface AppTerminalProvider {
   start(input: { command: string; args: string[]; workspace: string; name: string }): Promise<string>;
@@ -14,14 +19,14 @@ export interface AppTerminalProvider {
  * never knows about terminals. New providers can extend open/remove here. */
 export class AppService {
   private terminalStarts = new Map<string, Promise<string>>();
-  constructor(readonly registry: AppRegistry, readonly gateway: AppGateway | undefined, private readonly terminals: AppTerminalProvider) {}
+  constructor(readonly registry: AppRegistry, readonly gateway: AppPreviewProvider | undefined, private readonly terminals: AppTerminalProvider) {}
 
-  list(sessionId: string): SessionAppsResult { return { apps: this.registry.list(sessionId), previewAvailable: Boolean(this.gateway) }; }
+  list(sessionId: string): SessionAppsResult { return { apps: this.registry.list(sessionId), previewAvailable: Boolean(this.gateway) && this.gateway?.available !== false }; }
   publish(sessionId: string, workspace: string, manifest: AppManifest) { return this.registry.publish(sessionId, workspace, manifest); }
   async open(sessionId: string, appId: string, viewId: string, returnTo?: string): Promise<OpenAppViewResult> {
     const entry = this.registry.requireView(sessionId, appId, viewId);
     if (entry.view.kind === "web") {
-      if (!this.gateway) throw new Error("Web previews need a dedicated HTTPS preview domain. See docs/apps.md.");
+      if (!this.gateway) throw new Error("Bivy's preview service is unavailable on this connection.");
       return { kind: "web", url: this.gateway.open(viewId, returnTo) };
     }
     if (entry.target.kind !== "terminal") throw new Error("Unsupported app view provider.");

@@ -4,6 +4,7 @@ import { createServer, type IncomingMessage } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { WebSocketServer, WebSocket } from "ws";
 import { forwardOrEvict } from "./backpressure.js";
+import { PreviewRelay } from "./preview.js";
 import { renderRelayMetrics, PROMETHEUS_CONTENT_TYPE } from "./metrics.js";
 import { initSentry } from "./instrument.js";
 
@@ -227,7 +228,11 @@ function authOk(req: { headers: Record<string, string | string[] | undefined> })
   return String(req.headers.authorization ?? "") === `Bearer ${relaySecret}`;
 }
 
+// One domain per deployment/shard, advertised automatically to admitted nodes.
+// No user, agent, app manifest, or node needs DNS/TLS/port configuration.
+const previews = process.env.RELAY_PREVIEW_ORIGIN ? new PreviewRelay(process.env.RELAY_PREVIEW_ORIGIN) : undefined;
 const httpServer = createServer((req, res) => {
+  if (previews?.handle(req, res)) return;
   if (req.url === "/healthz") {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ ok: true, shardId, rooms: rooms.size }));
@@ -326,6 +331,7 @@ const httpServer = createServer((req, res) => {
 const wss = new WebSocketServer({ noServer: true, maxPayload: maxFrameBytes });
 
 httpServer.on("upgrade", (req, socket, head) => {
+  if (previews?.upgrade(req, socket, head) || previews?.upgradeStream(req, socket, head)) return;
   const url = new URL(req.url ?? "", "http://relay");
   const role = url.pathname === "/node" ? "node" : url.pathname === "/client" ? "client" : null;
   if (!role) {
@@ -523,7 +529,7 @@ function attachNode(ws: WebSocket, nodeId: string, accountId: string) {
   r.node = ws;
   r.nodeAccountId = accountId;
   void setNodeStatus(nodeId, true);
-  send(ws, { t: "ready", role: "node", nodeId });
+  send(ws, { t: "ready", role: "node", nodeId, previewOrigin: previews?.attach(ws, nodeId) });
   // Tell the node about already-waiting clients, and symmetrically tell every
   // waiting client the node is back. Without the client-side notice a node
   // reconnect (common on flaky/mobile links — the node blips offline mid-session
