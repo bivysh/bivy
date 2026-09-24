@@ -14,7 +14,9 @@ export default defineConfig({
   testDir: "./test/browser",
   // Reuse each file's Vite server instead of duplicating cold transforms across
   // workers. Independent files still execute in parallel.
-  workers: process.env.CI ? 2 : undefined,
+  // Public-repository Linux runners have four vCPUs; Playwright's default
+  // uses only half of them.
+  workers: process.env.CI ? 4 : undefined,
   timeout: 30_000,
   expect: { timeout: 5_000 },
   use: {

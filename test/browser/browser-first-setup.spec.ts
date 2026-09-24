@@ -30,6 +30,8 @@ for (const theme of ["light", "dark"]) {
       }
       return route.fulfill({ json: [{ ...claim, status: mode === "expired" ? "expired" : "pending" }] });
     });
+    // Keep all polling behavior, but do not wait through real refresh intervals.
+    await page.clock.install();
     await page.goto(origin);
     await expect(page.getByRole("button", { name: "Retry install command" })).toBeVisible();
     mode = "pending";
@@ -38,6 +40,7 @@ for (const theme of ["light", "dark"]) {
     expect(created).toBe(2);
     await expect(page.locator(".machine-install-instructions")).not.toContainText("sess_private");
     mode = "expired";
+    await page.clock.runFor(5000);
     await expect(page.getByRole("button", { name: "Create new install command" })).toBeVisible({ timeout: 10_000 });
     await expect(page.getByRole("button", { name: "Copy install command", exact: true })).toHaveCount(0);
     mode = "pending";
@@ -64,9 +67,11 @@ for (const theme of ["light", "dark"]) {
       controller.chooseRepo = (repo: string) => controller.store.setDraftRepo(repo);
     });
     await page.route("**/nodes", route => route.fulfill({ json: [{ id: "first-machine", name: "My laptop", online: false }] }));
+    await page.clock.runFor(5000);
     await expect(page.getByRole("button", { name: /My laptop/ })).toBeVisible({ timeout: 10_000 });
     await expect(page.getByRole("heading", { name: "Run this on your machine" })).toBeVisible();
     await page.route("**/nodes", route => route.fulfill({ json: [{ id: "first-machine", name: "My laptop", online: true }] }));
+    await page.clock.runFor(5000);
     await expect(page.getByRole("button", { name: "Use starter task" })).toBeVisible({ timeout: 10_000 });
     await expect(page.getByRole("heading", { name: "Run this on your machine" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "example/api", exact: true })).toBeVisible();
