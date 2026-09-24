@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { deriveActivation, cancelAutomationRun, deriveArtifacts, fetchAutomationRun, recordProductMetric, retryAutomationRun, type GithubQueueItem, type NotificationPreferences, type SessionSummary } from "@bivy/core";
+import { deriveActivation, cancelAutomationRun, deriveApps, deriveArtifacts, fetchAutomationRun, recordProductMetric, retryAutomationRun, type GithubQueueItem, type NotificationPreferences, type SessionSummary } from "@bivy/core";
 import { useAppState } from "./store/useStore.js";
 import { SessionList } from "./components/SessionList.js";
 import { ChatView } from "./components/ChatView.js";
@@ -31,6 +31,7 @@ import { ShareDestinationSheet } from "./components/ShareDestinationSheet.js";
 import { clearPendingShare, peekPendingShare, seedSessionDraft } from "./shareTarget.js";
 import { ForkProgressDialog } from "./components/ForkProgressDialog.js";
 import { ArtifactsSheet } from "./components/ArtifactsSheet.js";
+import { AppsSheet } from "./components/AppsSheet.js";
 import { ErrorToast } from "./components/ErrorToast.js";
 import { NoticeToast } from "./components/NoticeToast.js";
 import { Spinner } from "./components/Spinner.js";
@@ -118,11 +119,16 @@ export function App() {
   // over the transcript the store already holds (see deriveArtifacts) — no
   // extra round trip to the node.
   const [artifactsSheetOpen, setArtifactsSheetOpen] = useState(false);
+  // Session apps sheet — opened from the run pill ("N apps"), so a published
+  // app stays reachable after its inline launcher card scrolls out of the
+  // transcript. Same pure-fold approach as artifacts (see deriveApps).
+  const [appsSheetOpen, setAppsSheetOpen] = useState(false);
   // A share-sheet landing stashed its payload before mount (see shareTarget.ts
   // / main.tsx); the destination sheet below lets the user pick where it goes.
   // Shares always arrive via a full page load, so a mount-time read is enough.
   const [pendingShare, setPendingShare] = useState<string | null>(() => peekPendingShare(sessionStorage));
   const artifacts = useMemo(() => deriveArtifacts(state.activeSession.transcript), [state.activeSession.transcript]);
+  const apps = useMemo(() => deriveApps(state.activeSession.transcript), [state.activeSession.transcript]);
   const [terminalOpen, setTerminalOpen] = useState(false);
   /** A live `bivy run` PTY selected from the sidebar; null means open the
    * ordinary shell terminal for the active chat/node. */
@@ -963,6 +969,10 @@ export function App() {
               <ArtifactsSheet artifacts={artifacts} onClose={() => setArtifactsSheetOpen(false)} />
             )}
 
+            {appsSheetOpen && activeSession && (
+              <AppsSheet sessionId={activeSession.sessionId} onClose={() => setAppsSheetOpen(false)} />
+            )}
+
             <div className="composer-gh">
               {/* The run card now stands for every active session — an automation
                   trigger, a fork, or a plain hand-opened one — carrying whatever
@@ -984,6 +994,8 @@ export function App() {
                   onOpenChanges={() => setChangesSheetOpen(true)}
                   artifactsCount={artifacts.length}
                   onOpenArtifacts={() => setArtifactsSheetOpen(true)}
+                  appsCount={apps.length}
+                  onOpenApps={() => setAppsSheetOpen(true)}
                   onOpenRun={(runId) => openRun(runId)}
                   onRecover={(kind) => {
                     // C2: recover a terminal run using existing capabilities. fix/retry

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { describe, expect, it } from "vitest";
-import { deriveArtifacts, MAX_ARTIFACTS, type ArtifactEntry } from "../src/artifacts.js";
+import { deriveApps, deriveArtifacts, MAX_ARTIFACTS, type ArtifactEntry } from "../src/artifacts.js";
 import type { TranscriptEntry } from "../src/store.js";
+import type { AppReference } from "../src/apps.js";
 
 const HASH_A = "a".repeat(64);
 const HASH_B = "b".repeat(64);
@@ -125,5 +126,31 @@ describe("deriveArtifacts — projection over a session's transcript", () => {
 
   it("returns an empty list for a transcript with no attachments", () => {
     expect(deriveArtifacts([entry({ id: "e1", role: "assistant", text: "just talk" })])).toEqual([] satisfies ArtifactEntry[]);
+  });
+});
+
+describe("deriveApps — published-app projection over a transcript", () => {
+  const app = (appId: string, name: string): AppReference => ({ appId, sessionId: "s", name });
+
+  it("collects each published app once, in first-seen order", () => {
+    const transcript = [
+      entry({ id: "u", role: "user", text: "build two tools" }),
+      entry({ id: "a1", role: "assistant", text: "", app: app("app-1", "Invoice workbench") }),
+      entry({ id: "reply", role: "assistant", text: "done" }),
+      entry({ id: "a2", role: "assistant", text: "", app: app("app-2", "Console") }),
+    ];
+    expect(deriveApps(transcript)).toEqual([app("app-1", "Invoice workbench"), app("app-2", "Console")]);
+  });
+
+  it("deduplicates a re-emitted app id, keeping the first occurrence", () => {
+    const transcript = [
+      entry({ id: "a1", role: "assistant", text: "", app: app("app-1", "Preview") }),
+      entry({ id: "a1-dup", role: "assistant", text: "", app: app("app-1", "Preview") }),
+    ];
+    expect(deriveApps(transcript)).toHaveLength(1);
+  });
+
+  it("returns an empty list when nothing was published", () => {
+    expect(deriveApps([entry({ id: "e1", role: "assistant", text: "just talk" })])).toEqual([] satisfies AppReference[]);
   });
 });
