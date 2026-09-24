@@ -50,7 +50,6 @@ import {
   applyDefaultNode,
   meetsTriggerAccess,
   parseAutomationEvent,
-  renderEventContext,
   normalizeAutomationRepo,
   parseGithubWorkflowRunFailure,
 } from "./webhooks.js";
@@ -4367,7 +4366,9 @@ app.post("/webhooks/automation/run/:definitionId", asyncHandler(async (req, res)
     // Operator instructions stay E2E-encrypted; the untrusted event goes in a
     // separate field the node appends as data, not commands.
     body: def.templateCiphertext,
-    eventContext: renderEventContext(event),
+    // Preserve structured input for node-side filters. Still untrusted context,
+    // never executable instructions; no authentication headers are included.
+    eventContext: JSON.stringify(payload),
     url: event.sourceUrl,
     externalId: event.externalId,
     // Definition workspace wins; event.repo fills in when the automation left it open.

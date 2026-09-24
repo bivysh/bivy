@@ -10,6 +10,8 @@ import { PairingStore } from "./device-registry.js";
 import { NodeIdentity } from "./identity.js";
 import { seal } from "./e2e.js";
 import { readNodeConfig } from "./node-config.js";
+import { encodeAutomationTemplate } from "./automation-template.js";
+import { AutomationFilterError, runAutomationFilter, webhookFilterInput } from "./automation-filter.js";
 import { loadProjectPolicy, resolveProjectSafety } from "./project-policy.js";
 
 function value(args: string[], flag: string): string | undefined {
@@ -30,6 +32,7 @@ Commands:
   validate [path]             Parse and validate without network access
   plan [path] [--json]        Show triggers, routing, and effective safety
   test [path] --event <file>  Simulate an event and explain the first match
+  test-filter [path] --id <key> --event <json>  Execute a trusted filter locally
   apply [path] [--prune]      Encrypt instructions and reconcile the control plane
 
 Run commands (normally invoked as 'bivy runs ...'):
@@ -55,7 +58,7 @@ ciphertext only.`);
 function configPath(args: string[]): string {
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i]!;
-    if (arg === "--event") { i += 1; continue; }
+    if (arg === "--event" || arg === "--id") { i += 1; continue; }
     if (arg.startsWith("-")) continue;
     return path.resolve(arg);
   }
@@ -210,7 +213,7 @@ function appliedInput(entry: AutomationConfigEntry, configOrder: number, nodeId:
     name: entry.name,
     enabled: entry.enabled,
     trigger: entry.trigger,
-    templateCiphertext: `bivy-room-v1:${nodeId}:${seal(roomKey, entry.instructions)}`,
+    templateCiphertext: `bivy-room-v1:${nodeId}:${seal(roomKey, encodeAutomationTemplate(entry.instructions, {}, entry.filter))}`,
     schedule: entry.schedule,
     repo: entry.repo,
     repos: entry.repos,
@@ -398,6 +401,7 @@ async function main() {
       id: a.id, action: "reconcile", enabled: a.enabled, trigger: a.trigger,
       route: { node: a.routing.node ?? "applying node", agent: a.routing.agent ?? "node default", model: a.routing.model ?? "agent default", ephemeral: a.routing.ephemeral ?? false },
       safety: { approval: safety.approval, sandbox: safety.sandbox, requestedApproval: a.safety.approval, requestedSandbox: a.safety.sandbox, maxAttempts: a.safety.maxAttempts, checks: a.trigger === "schedule" || a.trigger === "webhook" || a.trigger === "github" || a.trigger === "linear" ? "project test/lint/typecheck when declared" : "project defaults" },
+      filter: a.filter,
       workspace: a.repo ?? (a.repos?.length ? a.repos.join(", ") : "from event"),
     };
     });
@@ -408,8 +412,22 @@ async function main() {
         console.log(`  route   ${item.route.node} · ${item.route.agent} · ${item.route.model}${item.route.ephemeral ? " · ephemeral" : ""}`);
         console.log(`  safety  ${item.safety.sandbox} · approvals ${item.safety.approval} · at most ${item.safety.maxAttempts} attempt(s)`);
         console.log(`  checks  ${item.safety.checks}`);
+        if (item.filter) console.log(`  filter  ${JSON.stringify(item.filter.command)} in ${item.filter.cwd} (${item.filter.timeoutSeconds}s)`);
       }
     }
+    return;
+  }
+
+  if (command === "test-filter") {
+    const id = value(args, "--id");
+    const eventFile = value(args, "--event");
+    if (!id || !eventFile) throw new Error("--id <automation-key> and --event <payload.json> are required");
+    const entry = config.automations.find(a => a.id === id);
+    if (!entry?.filter) throw new Error(`No filter configured for ${id}`);
+    const payload = JSON.parse(fs.readFileSync(path.resolve(eventFile), "utf8"));
+    const result = await runAutomationFilter(entry.filter, webhookFilterInput(payload, "local-test"));
+    if (result.diagnostics) process.stderr.write(result.diagnostics);
+    console.log(JSON.stringify({ decision: result.decision, ...(result.reason === undefined ? {} : { reason: result.reason }) }));
     return;
   }
 
@@ -423,7 +441,7 @@ async function main() {
     printOverlapWarnings(config);
     if (!result.matched) { console.error("No automation matched."); process.exitCode = 2; return; }
     const a = result.matched;
-    console.log(`\nWould run ${a.name}`);
+    console.log(`\nWould run ${a.name}${a.filter ? " (subject to filter; use test-filter to execute it)" : ""}`);
     console.log(`  node: ${a.routing.node ?? "applying node"}`);
     console.log(`  agent: ${a.routing.agent ?? "node default"}`);
     const safety = effectiveSafety(a, file);
@@ -481,6 +499,7 @@ async function main() {
 }
 
 main().catch((error) => {
+  if (error instanceof AutomationFilterError && error.diagnostics) process.stderr.write(error.diagnostics);
   console.error(`Automation error: ${error instanceof Error ? error.message : String(error)}`);
   process.exit(1);
 });

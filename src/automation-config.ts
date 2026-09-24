@@ -8,6 +8,7 @@
  */
 import { parse as parseYaml } from "yaml";
 import { matchFirst } from "./automation/index.js";
+import { parseAutomationFilter, type AutomationFilter } from "./automation-template.js";
 
 export const AUTOMATION_CONFIG_VERSION = 1 as const;
 export const DEFAULT_AUTOMATION_CONFIG_PATH = ".bivy/automations.yaml";
@@ -32,6 +33,7 @@ export interface AutomationConfigEntry {
   enabled: boolean;
   instructions: string;
   trigger: AutomationTrigger;
+  filter?: AutomationFilter;
   schedule?: { kind: "once"; at: string } | { kind: "cron"; expression: string; timezone: string };
   repo?: string;
   repos?: string[];
@@ -140,7 +142,7 @@ function parseEntry(value: unknown, index: number, errors: string[], warnings: s
   const at = `automations[${index}]`;
   const o = obj(value);
   if (!o) { errors.push(`${at} must be an object`); return undefined; }
-  rejectUnknown(o, ["id", "name", "enabled", "instructions", "trigger", "schedule", "repo", "repos", "labels", "on", "routing", "safety"], at, errors);
+  rejectUnknown(o, ["id", "name", "enabled", "instructions", "trigger", "schedule", "repo", "repos", "labels", "on", "routing", "safety", "filter"], at, errors);
 
   const id = typeof o.id === "string" ? o.id.trim() : "";
   const name = typeof o.name === "string" ? o.name.trim() : "";
@@ -165,6 +167,13 @@ function parseEntry(value: unknown, index: number, errors: string[], warnings: s
   }
   if (trigger === "github" && !on?.length) warnings.push(`${id || at}: GitHub trigger has no on rules; it will use the default bivy label contract`);
   if (trigger !== "github" && on) errors.push(`${at}.on is only valid for github triggers`);
+
+  let filter: AutomationFilter | undefined;
+  if (o.filter !== undefined) {
+    try { filter = parseAutomationFilter(o.filter); }
+    catch (error) { errors.push(`${at}.${(error as Error).message}`); }
+    if (trigger !== "webhook") errors.push(`${at}.filter is only valid for webhook triggers`);
+  }
 
   const routingRaw = o.routing === undefined ? {} : obj(o.routing);
   if (!routingRaw) errors.push(`${at}.routing must be an object`);
@@ -197,7 +206,7 @@ function parseEntry(value: unknown, index: number, errors: string[], warnings: s
 
   if (!id || !name || !instructions || !trigger) return undefined;
   return {
-    id, name, enabled: o.enabled !== false, instructions, trigger, schedule, repo, repos, labels, on,
+    id, name, enabled: o.enabled !== false, instructions, trigger, schedule, repo, repos, labels, on, filter,
     routing: {
       node,
       agent: typeof routing.agent === "string" ? routing.agent.trim() || undefined : undefined,
