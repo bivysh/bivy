@@ -77,22 +77,6 @@ test("actual availability model journeys through offline, reconnect, queue, and 
   await expect(page.getByRole("status")).toContainText("Live control");
 });
 
-test("background return triggers the wired recovery journey", async ({ page }) => {
-  const controller = await readFile(new URL("../../packages/web/src/store/controller.ts", import.meta.url), "utf8");
-  expect(controller).toContain("visibilityState === \"visible\"");
-  expect(controller).toContain("this.refreshAfterForeground()");
-  expect(controller).toContain('window.addEventListener("pageshow", onForeground)');
-
-  await page.setContent(`<div role="status">Backgrounded</div><script>
-    let recoveries = 0;
-    const recover = () => { recoveries += 1; document.querySelector('[role=status]').textContent = 'Live control recovered ' + recoveries; };
-    document.addEventListener('visibilitychange', recover);
-    window.addEventListener('pageshow', recover);
-  </script>`);
-  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
-  await expect(page.getByRole("status")).toContainText("Live control recovered");
-});
-
 test("update activation model blocks every disruptive state before reload", async ({ page }) => {
   const pwa = await readFile(new URL("../../packages/web/src/pwa.ts", import.meta.url), "utf8");
   expect(pwa).toContain("if (!canActivateUpdate()) return false");

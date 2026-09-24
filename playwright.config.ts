@@ -1,11 +1,19 @@
 import { defineConfig } from "@playwright/test";
 
+// Browser behavior that does not depend on viewport runs once. Attachment
+// tests already exercise explicit narrow/wide viewports inside each case.
+const singleViewport = [
+  "**/cloud-chat-handoff.spec.ts",
+  "**/api-isolation.spec.ts",
+  "**/runtime-config.spec.ts",
+  "**/chat-attachments.spec.ts",
+  "**/pwa-lifecycle.spec.ts",
+];
+
 export default defineConfig({
   testDir: "./test/browser",
-  // Shard individual cases, not whole files: large light/dark scenario matrices
-  // otherwise pin an entire runner while other shards finish early. Explicit
-  // serial suites still stay together. Bound workers on shared CI runners.
-  fullyParallel: true,
+  // Reuse each file's Vite server instead of duplicating cold transforms across
+  // workers. Independent files still execute in parallel.
   workers: process.env.CI ? 2 : undefined,
   timeout: 30_000,
   expect: { timeout: 5_000 },
@@ -16,7 +24,8 @@ export default defineConfig({
   projects: [
     // Source-contract checks need neither Chromium nor duplicate viewports.
     { name: "contracts", testDir: "./test/web-contracts" },
-    { name: "desktop", use: { viewport: { width: 1280, height: 800 } } },
-    { name: "mobile", use: { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true } },
+    { name: "behavior", testMatch: singleViewport, use: { viewport: { width: 1280, height: 800 } } },
+    { name: "desktop", testIgnore: singleViewport, use: { viewport: { width: 1280, height: 800 } } },
+    { name: "mobile", testIgnore: singleViewport, use: { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true } },
   ],
 });
