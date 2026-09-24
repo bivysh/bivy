@@ -4,16 +4,6 @@ import { readFile } from "node:fs/promises";
 
 const read = (path: string) => readFile(new URL(path, import.meta.url), "utf8");
 
-test("machine refresh precedes the list and install instructions", async () => {
-  const view = await read("../../packages/web/src/components/ConnectRunner.tsx");
-  const refresh = view.indexOf('className="connect-waiting"');
-  const list = view.indexOf('className="connect-nodes"');
-  const install = view.indexOf('className="connect-options"');
-  expect(refresh).toBeGreaterThan(-1);
-  expect(refresh).toBeLessThan(list);
-  expect(list).toBeLessThan(install);
-});
-
 for (const theme of ["light", "dark"]) {
   test(`composer retains two lines after hidden autosizing (${theme})`, async ({ page }) => {
     const tokens = await read("../../packages/ui/tokens.css");

@@ -27,6 +27,11 @@ export BIVY_VERSION="file:$ARTIFACT" SHELL=/bin/bash
 # Use curl's file transport for the candidate installer, preserving the public
 # command's pipe semantics without deploying unreviewed code to bivy.sh.
 curl -fsSL "file:$DIR/../install.sh" | bash
+# The installer cannot change this parent shell's PATH. Read the PATH from a
+# fresh interactive Bash, as instructed by the installer, including when Node
+# fell back to its tarball and npm's bin directory is versioned.
+PATH="$(bash -ic 'printf "%s" "$PATH"')"
+export PATH
 bivy --version
 bivy --help >/dev/null
 node "$DIR/smoke-pty.mjs" "$(npm root -g)/@bivy/bivy"

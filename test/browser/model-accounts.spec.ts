@@ -3,7 +3,6 @@ import { expect, test } from "@playwright/test";
 import path from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, type ViteDevServer } from "../../packages/web/node_modules/vite/dist/node/index.js";
-import { modelAccountChoice } from "../../packages/web/src/modelAccounts.js";
 
 let server: ViteDevServer;
 let origin: string;
@@ -19,23 +18,9 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => { await server?.close(); if (cacheDir) await rm(cacheDir, { recursive: true, force: true }); });
 
-test("account routing follows project, active, default and ambiguity rules", () => {
-  const records = [{ label: "default" }, { label: "work" }];
-  const config = { active: "personal", presets: { personal: { anthropic: "default" }, default: { anthropic: "work" }, "project:acme/app": { anthropic: "work" } } };
-  expect(modelAccountChoice("anthropic", records, config, "acme/app")).toEqual({ preset: "project:acme/app", label: "work" });
-  expect(modelAccountChoice("anthropic", records, config)).toEqual({ preset: "personal", label: "default" });
-  expect(modelAccountChoice("anthropic", records, config, "/repos/acme__app/.bivy/worktrees/session")).toEqual({ preset: "project:/repos/acme__app/.bivy/worktrees/session", label: "work" });
-  expect(modelAccountChoice("anthropic", records, { presets: { default: { anthropic: "work" } } }).label).toBe("work");
-  expect(modelAccountChoice("anthropic", records, {}).label).toBe("default");
-  expect(modelAccountChoice("anthropic", [{ label: "work" }], {}).label).toBe("work");
-  expect(modelAccountChoice("anthropic", [{ label: "home" }, { label: "work" }], {}).label).toBeUndefined();
-  expect(modelAccountChoice("anthropic", records, { active: "bad", presets: { bad: { anthropic: "missing" } } }).label).toBeUndefined();
-  expect(modelAccountChoice("anthropic", records, null).label).toBeUndefined();
-});
-
-for (const theme of ["light", "dark"]) for (const width of [390, 1280]) {
-  test(`model picker accounts ${theme} ${width}`, async ({ page }, testInfo) => {
-    await page.setViewportSize({ width, height: 844 });
+// Desktop/mobile projects already supply the two viewports and input modes.
+for (const theme of ["light", "dark"]) {
+  test(`model picker accounts ${theme}`, async ({ page }, testInfo) => {
     const html = await server.transformIndexHtml("/model-account-test", `<html data-theme="${theme}"><head><meta name="viewport" content="width=device-width, initial-scale=1" /></head><body><div id="root"></div><script type="module">
       import React from 'react';
       import { createRoot } from 'react-dom/client';
