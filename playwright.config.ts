@@ -17,7 +17,7 @@ export default defineConfig({
   // workers. Independent files still execute in parallel.
   // Public-repository Linux runners have four vCPUs; Playwright's default
   // uses only half of them.
-  workers: process.env.CI ? 4 : undefined,
+  workers: process.env.CI ? "100%" : undefined,
   timeout: 30_000,
   expect: { timeout: 5_000 },
   use: {
