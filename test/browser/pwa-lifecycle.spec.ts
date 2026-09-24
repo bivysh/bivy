@@ -50,53 +50,8 @@ test("reload restores a real composer snapshot and only safe attachment metadata
   expect(stored).not.toContain("file contents");
 });
 
-test("actual availability model journeys through offline, reconnect, queue, and live states", async ({ page }) => {
-  await openModuleFixture(page, `<div role="status" id="state"></div><script type="module">
-    import { describeAvailability } from '/src/pwaLifecycle.ts';
-    const base = { updateAvailable: false, installChoice: null, standalone: false, shellCached: true, firstSuccess: true, hasDraft: false, pendingAttachments: 0, readingAttachments: false, turnActive: false, locallyQueuedPrompts: 0 };
-    window.renderAvailability = (status, transcript, patch = {}) => {
-      const message = describeAvailability(status, transcript, { ...base, ...patch });
-      state.dataset.kind = message.kind;
-      state.textContent = message.label + ' — ' + message.detail;
-    };
-    window.renderAvailability('offline', false);
-  </script>`);
-  const render = (status: string, transcript: boolean, patch = {}) => page.evaluate(
-    ([nextStatus, cached, nextPatch]) => (window as unknown as { renderAvailability(s: string, c: boolean, p: object): void }).renderAvailability(nextStatus, cached, nextPatch),
-    [status, transcript, patch] as const,
-  );
-
-  await expect(page.getByRole("status")).toHaveAttribute("data-kind", "cached-shell");
-  await render("offline", true);
-  await expect(page.getByRole("status")).toHaveAttribute("data-kind", "cached-transcript");
-  await render("reconnecting", true);
-  await expect(page.getByRole("status")).toContainText("Reconnecting Machine");
-  await render("reconnecting", true, { locallyQueuedPrompts: 1 });
-  await expect(page.getByRole("status")).toContainText("Prompt queued on this device");
-  await render("online", true);
-  await expect(page.getByRole("status")).toContainText("Live control");
-});
-
-test("update activation model blocks every disruptive state before reload", async ({ page }) => {
-  const pwa = await readFile(new URL("../../packages/web/src/pwa.ts", import.meta.url), "utf8");
-  expect(pwa).toContain("if (!canActivateUpdate()) return false");
-  await openModuleFixture(page, `<button id="reload">Reload safely</button><p role="status"></p><script type="module">
-    import { canActivateUpdate, updateBlockers } from '/src/pwaLifecycle.ts';
-    const base = { updateAvailable: true, installChoice: null, standalone: false, shellCached: true, firstSuccess: true, hasDraft: false, pendingAttachments: 0, readingAttachments: false, turnActive: false, locallyQueuedPrompts: 0 };
-    window.setWork = patch => {
-      const state = { ...base, ...patch };
-      reload.disabled = !canActivateUpdate(state);
-      document.querySelector('[role=status]').textContent = updateBlockers(state).join(', ') || 'Draft text and attachment names are stored in this browser.';
-    };
-    window.setWork({ turnActive: true, readingAttachments: true, hasDraft: true, pendingAttachments: 1, locallyQueuedPrompts: 1 });
-  </script>`);
-  await expect(page.getByRole("button", { name: "Reload safely" })).toBeDisabled();
-  await expect(page.getByRole("status")).toContainText("active turn finishes");
-  await expect(page.getByRole("status")).toContainText("locally queued prompts reach the Machine");
-  await page.evaluate(() => (window as unknown as { setWork(p: object): void }).setWork({}));
-  await expect(page.getByRole("button", { name: "Reload safely" })).toBeEnabled();
-  await expect(page.getByRole("status")).toContainText("Draft text and attachment names");
-});
+// Availability labels and update-blocker permutations are pure functions covered
+// by test/pwa-lifecycle.test.ts. Keep browser storage/reload and install events here.
 
 test("install suggestion is compact, out of the composer flow, and permanently dismissible", async ({ page }) => {
   await openModuleFixture(page, `<button id="dismiss" hidden>Dismiss install suggestion</button><script type="module">

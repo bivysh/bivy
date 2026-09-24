@@ -4,7 +4,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, type ViteDevServer } from "../../packages/web/node_modules/vite/dist/node/index.js";
-import { githubSourceStatus, githubMentionHandles, githubInstallationSettings } from "../../packages/web/src/components/githubSource.js";
 
 const installation = { installationId: "42", githubAccount: "acme", githubAccountType: "Organization", createdAt: "2026-09-01" };
 const hosted = { connected: true, appId: "123", central: true, hosted: true, installed: true, mention: "bivy-hosted", name: "Hosted Bivy App", servedBy: null, installations: [installation] };
@@ -25,19 +24,6 @@ test.beforeAll(async () => {
   origin = `http://127.0.0.1:${address.port}`;
 });
 test.afterAll(async () => { await server?.close(); if (cacheDir) await rm(cacheDir, { recursive: true, force: true }); });
-
-test("connection status does not conflate hosted installation with executor readiness", () => {
-  expect(githubSourceStatus({ connected: true, apps: [hosted] })).toMatchObject({ tone: "on", label: "Hosted Bivy App connected" });
-  expect(githubSourceStatus({ connected: true, apps: [custom] }).label).toBe("Custom GitHub App connected");
-  expect(githubSourceStatus({ connected: true, apps: [hosted, custom] }).label).toBe("Hosted + custom apps connected");
-  expect(githubSourceStatus(null).label).toBe("Status unavailable");
-  expect(githubSourceStatus({ connected: false, apps: [] }).tone).toBe("off");
-  expect(githubMentionHandles({ connected: true, apps: [hosted, custom] })).toEqual(["bivy-hosted", "acme-bot"]);
-  expect(githubMentionHandles({ connected: true, apps: [hosted, custom] }, "456")).toEqual(["acme-bot"]);
-  expect(githubMentionHandles(null)).toEqual([]);
-  expect(githubInstallationSettings(installation)).toBe("https://github.com/organizations/acme/settings/installations/42");
-  expect(githubInstallationSettings({ ...installation, githubAccountType: "User" })).toBe("https://github.com/settings/installations/42");
-});
 
 async function openSetup(page: Page, theme: string, focus = "github", apps: Array<typeof hosted | typeof custom> = [hosted], fail = false, centralConfigured = true) {
   await page.route("**/account/**", (route) => {

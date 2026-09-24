@@ -9,8 +9,25 @@ test.beforeAll(async () => {
   await server.listen(); origin = new URL(server.resolvedUrls!.local[0]).origin;
 });
 test.afterAll(async () => { await server?.close(); });
-for (const theme of ["light", "dark"]) for (const outcome of ["reply", "error", "waiting", "empty", "saved", "default", "hydrated", "native", "cancel"]) {
-  test(`Cloud chat owns immediate post-ack ${outcome} (${theme})`, async ({ page }, info) => {
+// Theme previously also selected the fixture's current model. Keep both model
+// states where saved-model adoption depends on them, not a theme cross-product
+// for every outcome. Model-picker appearance is covered in cloud-model-preview.
+const scenarios = [
+  { outcome: "reply", currentModelKnown: false },
+  { outcome: "error", currentModelKnown: false },
+  { outcome: "waiting", currentModelKnown: false },
+  { outcome: "empty", currentModelKnown: false },
+  { outcome: "saved", currentModelKnown: false },
+  { outcome: "saved", currentModelKnown: true },
+  { outcome: "default", currentModelKnown: true },
+  { outcome: "hydrated", currentModelKnown: false },
+  { outcome: "hydrated", currentModelKnown: true },
+  { outcome: "native", currentModelKnown: false },
+  { outcome: "cancel", currentModelKnown: false },
+];
+for (const { outcome, currentModelKnown } of scenarios) {
+  const theme = "light";
+  test(`Cloud chat owns immediate post-ack ${outcome} (current model ${currentModelKnown ? "known" : "unknown"})`, async ({ page }, info) => {
     page.on("pageerror", error => console.error(error.message));
     let bootstrapReady = false;
     let polls = 0;
@@ -88,7 +105,7 @@ for (const theme of ["light", "dark"]) for (const outcome of ["reply", "error", 
           this.handlers.onEvent({ type: 'session.history', sessionId: 'real-session', requestId: 'create', messages: [] });
         }
         if (command.kind === 'models.list' && globalThis.catalogQueryError) throw new Error('offline');
-        if (command.kind === 'models.list') this.handlers.onEvent({ type: 'models.list', sessionId: command.sessionId, modelSelection: ${JSON.stringify(outcome)} !== 'native', current: globalThis.selectedModel || (${JSON.stringify(theme)} === 'dark' || ${JSON.stringify(outcome)} === 'default' ? { provider: 'openai-codex', id: 'gpt-test' } : { provider: 'unknown', id: 'unknown' }), models: globalThis.catalogReady && ${JSON.stringify(outcome)} !== 'native' ? [{ id: 'gpt-test', provider: 'openai-codex', label: 'Test model', configured: true }, { id: 'unconnected', provider: 'other', configured: false }] : [] });
+        if (command.kind === 'models.list') this.handlers.onEvent({ type: 'models.list', sessionId: command.sessionId, modelSelection: ${JSON.stringify(outcome)} !== 'native', current: globalThis.selectedModel || (${JSON.stringify(currentModelKnown)} ? { provider: 'openai-codex', id: 'gpt-test' } : { provider: 'unknown', id: 'unknown' }), models: globalThis.catalogReady && ${JSON.stringify(outcome)} !== 'native' ? [{ id: 'gpt-test', provider: 'openai-codex', label: 'Test model', configured: true }, { id: 'unconnected', provider: 'other', configured: false }] : [] });
         if (command.kind === 'model.select') {
           globalThis.selectedModel = { id: command.id, provider: command.provider };
           if (['saved', 'hydrated'].includes(${JSON.stringify(outcome)})) this.handlers.onEvent({ type: 'model.updated', sessionId: 'real-session', model: globalThis.selectedModel });

@@ -4,6 +4,7 @@ import { defineConfig } from "@playwright/test";
 // tests already exercise explicit narrow/wide viewports inside each case.
 const singleViewport = [
   "**/cloud-chat-handoff.spec.ts",
+  "**/machine-claim-selection.spec.ts",
   "**/api-isolation.spec.ts",
   "**/runtime-config.spec.ts",
   "**/chat-attachments.spec.ts",
