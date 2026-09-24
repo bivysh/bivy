@@ -22,6 +22,9 @@ RUN pnpm install --frozen-lockfile --ignore-scripts
 COPY tsconfig.json ./
 COPY packages/ ./packages/
 COPY src/ ./src/
+# src/apps/preview-stream.ts shares the relay's bounded HTTP stream adapter.
+# Include its canonical source so the symlink also resolves inside this stage.
+COPY services/relay/src/preview-stream.ts ./services/relay/src/preview-stream.ts
 COPY bin/ ./bin/
 COPY public/qr.js ./public/qr.js
 COPY scripts/ ./scripts/
