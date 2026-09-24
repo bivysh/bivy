@@ -763,6 +763,19 @@ function acpRuntimeOptions(opts: { id: string; displayName: string; command: str
     // ACP handshake doesn't carry them); a bare ACP agent has none.
     ...(slashCommands ? { slashCommands } : {}),
     ...(opts.credsDir ? { credentials: createCredentialStore(opts.credsDir) } : {}),
+    // Declared credential behaviors apply to the governed path exactly as they do
+    // to the pipe path: the preflight surfaces a clear no-credential error before
+    // the shim spawns, and Grok's prepare materializes `auth.json` from Bivy's
+    // vault (pinning GROK_HOME) so `grok agent stdio` starts authenticated.
+    ...(opts.behaviors?.preflight ? { preflight: PREFLIGHT_BEHAVIORS[opts.behaviors.preflight] } : {}),
+    ...(opts.behaviors?.prepare === "grok-auth" && opts.credsDir
+      ? {
+          prepare: async (): Promise<Record<string, string>> => {
+            const home = await ensureGrokAuth(opts.credsDir!);
+            return home ? { GROK_HOME: home } : {};
+          },
+        }
+      : {}),
     // OpenCode's own store is SQLite under $XDG_DATA_HOME, so an ACP-promoted
     // opencode can both read a resumed session's transcript back for history
     // preload (loadHistory), drop it on delete (deleteHistory), and — the fork

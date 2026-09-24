@@ -1,9 +1,13 @@
 # Grok
 
-xAI's official Grok coding agent (`grok`), run under Bivy as one headless prompt
-per turn (`grok -p` / `--single`).
+xAI's official Grok coding agent (`grok`), driven through its native ACP server
+(`grok agent stdio`) by default → the governed `ProtocolRuntime`: per-tool
+Approve/Deny, native resume, and a model list read from the live session. An
+older binary without the ACP mode falls back to one headless prompt per turn
+(`grok -p` / `--single`); force that path with `BIVY_GROK_ACP=0`.
 
 - **Runtime id:** `grok` · **Tier:** Supported · **In picker:** Yes
+- **Release-tested against:** Grok CLI 1.0.41 (the governed ACP path)
 
 ## Install
 
@@ -65,7 +69,8 @@ too, so a continued turn keeps the chosen effort. Override the levels/flag with
 
 ## Known gaps
 
-- Governance is effect-level, not per-tool approval cards.
+- On the pipe fallback (`BIVY_GROK_ACP=0` or a pre-ACP binary), governance is
+  effect-level, not per-tool approval cards.
 - Launch flags are best-effort; override with `BIVY_GROK_ARGS`.
 - A node that still has `@vibe-kit/grok-cli` first on `PATH` will keep asking for
   `GROK_API_KEY` even after an OAuth sign-in — install the official CLI (or put

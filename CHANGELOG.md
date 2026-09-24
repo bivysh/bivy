@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Promote Grok to the fully certified tier. `grok agent stdio` is a first-party ACP server, so Grok now runs on the governed `ProtocolRuntime` by default (`acp.preferred`, gated on the installed binary evidencing the mode): per-tool Approve/Deny, native resume, and a live model list — the same bar Claude Code, governed Codex, Pi, and OpenCode clear. Joins the certification matrix release-tested against Grok CLI 1.0.41, with the full deterministic scenario fixture set in normal CI; the nightly drift report reads xAI's plain-text version endpoint (a new data-driven `latestUrl` upstream source for non-npm agents). The ACP launch path now also honors an agent's declared credential behaviors (Grok's vault-minted `auth.json` + preflight), which previously only applied to the pipe path. `BIVY_GROK_ACP=0` forces the structured-pipe fallback (effect-level governance, adapter-tested), and a pre-ACP binary degrades to it automatically.
+
 ### Changed
 
 - Refresh the release-tested agent pins to the current upstream builds: Claude Agent SDK `0.3.281`, Codex `0.156.1`, Pi `0.87.1`, and OpenCode `1.18.32` (previously `0.3.270` / `0.154.0` / `0.85.1` / `1.18.30`). Regenerates the certification matrix, CLI agent manifest, and supported-agent docs from the single source of truth, and updates the bundled SDK/lockfile. Each pinned version installs and probes cleanly; the pinned-certification CI job and the opt-in live workflow validate the governed turn path.

@@ -24,7 +24,7 @@ per-agent pages under [docs/agents/](agents/README.md).
 | [Crush](agents/crush.md) | `crush` | Supported | Yes | Yes | Yes | No | No | Effect-level (FS/MCP/net) | No | Crush CLI | `crush run -q`; best-effort flags, override with `BIVY_CRUSH_ARGS`. No resume flag upstream yet for `crush run` (tracked in charmbracelet/crush#1982, #1015). |
 | [Cursor](agents/cursor.md) | `cursor` | Supported | Yes | Yes | Yes | Yes | Yes (`-m`) | Effect-level (FS/MCP/net) | No | Cursor CLI | `cursor-agent --force -p`; resumes via `--resume=<id>`. |
 | [GitHub Copilot](agents/copilot.md) | `copilot` | Supported | Yes | Yes | Yes | No | Yes (`--model`) | Effect-level (FS/MCP/net) | No | Copilot CLI/GitHub | `copilot --allow-all-tools -p`; no pinned by-id resume flag yet (`BIVY_COPILOT_RESUME_TEMPLATE`). |
-| [Grok](agents/grok.md) | `grok` | Supported | Yes | Yes | Yes | Yes (`--resume`) | Yes (`-m`, default `grok-4.6`) | Effect-level (FS/MCP/net) | **Yes** | Grok CLI/xAI | Official `grok -p` / `grok --resume <id>` (install via `curl -fsSL https://x.ai/cli/install.sh \| bash`). SuperGrok/X subscription → `~/.grok/auth.json` materialization; API key → `XAI_API_KEY`/`GROK_API_KEY`. `bivy run grok` pins `--session-id` so sessions persist after the PTY exits and can be taken over as chat. |
+| [Grok](agents/grok.md) | `grok` | Supported | Yes | Yes | Yes | Yes | Yes (ACP) | **Per-tool (Approve/Deny)** | **Yes** | Grok CLI/xAI | Driven through its native `grok agent stdio` ACP server by default → the governed `ProtocolRuntime`: per-tool approvals, native resume, and a model list read from the live session. Falls back to the `grok -p` structured pipe (effect-level governance, `-m`, `--resume <id>`) when the installed binary predates the ACP mode. SuperGrok/X subscription → `~/.grok/auth.json` materialization; API key → `XAI_API_KEY`/`GROK_API_KEY`. Release-tested against Grok CLI 1.0.41. |
 | [Amp](agents/amp.md) | `amp` | Supported | Yes | Yes | Yes | Yes | No | Effect-level (FS/MCP/net) | No | Amp CLI/Sourcegraph | `amp -x`; resumes threads via `amp threads continue <id>`. Model is Amp-managed. |
 | [Auggie](agents/auggie.md) | `auggie` | Supported | Yes | Yes | Yes | No | No | Effect-level (FS/MCP/net) | No | Augment CLI | `auggie --quiet --print`; model Augment-managed; no pinned resume flag (`BIVY_AUGGIE_RESUME_TEMPLATE`). |
 | [Droid](agents/droid.md) | `droid` | Supported | Yes | Yes | Yes | No | Yes (`--model`) | Effect-level (FS/MCP/net) | No | Factory CLI | `droid exec --auto high`; no pinned resume flag yet (`BIVY_DROID_RESUME_TEMPLATE`). |
@@ -70,14 +70,15 @@ activity, **`session/load` resume**, and **model selection** (`session/set_model
 matches the providers that node has actually authenticated) with zero per-agent
 code. The picker agents that ship a native ACP server declare it as data (an
 `acp` field in `AGENT_PROFILES`): **Gemini** (`--experimental-acp`), **Qwen
-Code** (`--experimental-acp` / newer `--acp`), **OpenCode** (`acp`), **Goose**
-(`acp`), **Kilo Code** (`acp`), **Cursor** (`acp`), **Cline** (`--acp`), and
-**GitHub Copilot** (`--acp`).
+Code** (`--experimental-acp` / newer `--acp`), **OpenCode** (`acp`), **Grok**
+(`agent stdio`), **Goose** (`acp`), **Kilo Code** (`acp`), **Cursor** (`acp`),
+**Cline** (`--acp`), and **GitHub Copilot** (`--acp`).
 
-**OpenCode is promoted by default** (`acp.preferred`), having been validated
-end-to-end against 1.18.32 — that governed path is what earns its release-tested
-capability signal. The rest stay opt-in with `BIVY_<ID>_ACP=1` (or `BIVY_PREFER_ACP=1` for all
-at once) until they're validated the same way.
+**OpenCode and Grok are promoted by default** (`acp.preferred`), having been
+validated end-to-end against OpenCode 1.18.32 and Grok CLI 1.0.41 — that
+governed path is what earns their release-tested capability signal. The rest
+stay opt-in with `BIVY_<ID>_ACP=1` (or `BIVY_PREFER_ACP=1` for all at once)
+until they're validated the same way.
 
 Because ACP is a hard switch — once a session opens over the protocol there is no
 falling back to the pipe mid-flight — a *default-on* promotion is always gated on
@@ -86,7 +87,7 @@ subcommand). A node whose CLI is too old keeps the pipe path and the picker
 honestly reports the lower capabilities, rather than opening a session that hangs
 and dies. An explicit `BIVY_<ID>_ACP=1` skips the probe (the operator knows their
 binary); `BIVY_<ID>_ACP=0` forces the pipe path back. Agents with no first-party
-ACP mode (Aider, Amp, Crush, Continue, Grok) stay on the pipe until one ships.
+ACP mode (Aider, Amp, Crush, Continue) stay on the pipe until one ships.
 See [agents/acp.md](agents/acp.md).
 
 Beyond start/resume/model/approvals, the shared layer also surfaces, where the

@@ -191,7 +191,7 @@
       "hidden": false,
       "supportTier": "supported",
       "certification": "release-tested",
-      "testedVersion": "1.0.0",
+      "testedVersion": "1.0.41",
       "headlessFlags": [
         "--always-approve",
         "-p",
