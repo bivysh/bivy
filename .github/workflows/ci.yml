@@ -44,6 +44,7 @@ jobs:
       pull-requests: read
     outputs:
       root: ${{ steps.filter.outputs.root }}
+      installer: ${{ steps.filter.outputs.installer }}
       relay: ${{ steps.filter.outputs.relay }}
       control_plane: ${{ steps.filter.outputs.control_plane }}
       e2e: ${{ steps.filter.outputs.e2e }}
@@ -60,8 +61,32 @@ jobs:
           filters: |
             common: &common
               - '.github/workflows/ci.yml'
-            root:
+            # A clean OS bootstrap is an installer/packaging gate, not a second
+            # npm consumer test for every application change. Root includes the
+            # same paths so the artifact producer always runs with this job.
+            installer: &installer
               - *common
+              - '.github/workflows/release.yml'
+              - 'install.sh'
+              - '.npmrc'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'npm-shrinkwrap.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - 'tsconfig.json'
+              - 'packages/**/package.json'
+              - 'bin/**'
+              - 'scripts/build-release.mjs'
+              - 'scripts/release-*.mjs'
+              - 'scripts/smoke-*.mjs'
+              - 'scripts/smoke-installer.sh'
+              - 'scripts/installer-smoke-guest.sh'
+              - 'scripts/wait-release-artifact.sh'
+              - 'test/installer*'
+              - 'test/ci-installer-gate.test.ts'
+            root:
+              - *installer
               - 'package.json'
               - 'install.sh'
               - 'pnpm-lock.yaml'
@@ -253,7 +278,7 @@ jobs:
   # supported desktop OS families. This catches release-only dependency/audit,
   # native-module, README metadata, and built-in Pi discovery regressions.
   release-consumer:
-    # Prepare the consumer/guest while root-release builds. The bounded artifact
+    # Prepare the consumer while root-release builds. The bounded artifact
     # wait below replaces the whole-job dependency; ci-ok still gates both jobs.
     needs: changes
     permissions:
@@ -277,13 +302,46 @@ jobs:
       - name: Cache consumer downloads
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
+          path: ~/.npm
+          key: consumer-downloads-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package.json', 'pnpm-lock.yaml') }}
+          restore-keys: consumer-downloads-${{ runner.os }}-${{ runner.arch }}-
+      - name: Wait for this run's release package
+        run: bash scripts/wait-release-artifact.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Download release package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-package
+          path: release-artifact
+      - name: Verify fresh npm consumers
+        run: node scripts/smoke-release.mjs --artifact release-artifact/bivy-npm.tgz
+
+  # apt/Node bootstrap can take minutes on a cold Ubuntu mirror. Keep the real
+  # fresh-machine promise, but pay for it only when its inputs change or on a
+  # force_all release. Ordinary src/web changes still run both npm consumers.
+  installer-smoke:
+    needs: changes
+    if: inputs.force_all || needs.changes.outputs.installer == 'true'
+    name: Clean installer (Ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Cache only downloads. Every guest starts without Node, build tools or
+      # Bivy; registry integrity checks and package lifecycle hooks still run.
+      - name: Cache installer downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
           path: |
-            ~/.npm
             ~/.cache/bivy-installer-npm
             ~/.cache/bivy-installer-apt
-          key: release-downloads-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml', 'install.sh', 'scripts/smoke-installer.sh') }}
+          key: installer-downloads-${{ runner.os }}-${{ runner.arch }}-ubuntu24-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'install.sh', 'scripts/smoke-installer.sh', 'scripts/installer-smoke-guest.sh') }}
+          restore-keys: installer-downloads-${{ runner.os }}-${{ runner.arch }}-ubuntu24-
       - name: Prepare clean guest concurrently with packaging
-        if: runner.os == 'Linux'
         run: bash scripts/installer-smoke-guest.sh start
       - name: Wait for this run's release package
         run: bash scripts/wait-release-artifact.sh
@@ -294,26 +352,10 @@ jobs:
         with:
           name: release-package
           path: release-artifact
-      - name: Release consumer and fresh installer
-        # Independent consumers of the same immutable tarball. Wait for both,
-        # even if one fails; neither check may be hidden by the other result.
-        shell: bash
-        run: |
-          node scripts/smoke-release.mjs --artifact release-artifact/bivy-npm.tgz &
-          consumer=$!
-          installer=
-          if [ "$RUNNER_OS" = Linux ]; then
-            bash scripts/installer-smoke-guest.sh test &
-            installer=$!
-          fi
-          status=0
-          wait "$consumer" || status=1
-          if [ -n "$installer" ]; then
-            wait "$installer" || status=1
-          fi
-          exit "$status"
+      - name: Verify clean-machine installer
+        run: bash scripts/installer-smoke-guest.sh test
       - name: Dispose installer guest
-        if: always() && runner.os == 'Linux'
+        if: always()
         run: bash scripts/installer-smoke-guest.sh cleanup
 
   # Keep desktop/mobile layout coverage, but run viewport-independent behavior
@@ -485,6 +527,7 @@ jobs:
       - root-release
       - agent-certification
       - release-consumer
+      - installer-smoke
       - browser
       - docs-links
       - control-plane
