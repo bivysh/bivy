@@ -202,7 +202,7 @@ export function foldTranscriptEvent(input: TranscriptFoldValue, event: ServerEve
     case "attachment": {
       const ref = (event as any).ref;
       if (!ref || typeof ref.hash !== "string" || (ref.kind !== "image" && ref.kind !== "file")) return { handled: true, value: input, commands: [] };
-      value.pendingAgentAttachments.push({ attachment: { kind: ref.kind, name: ref.name, size: ref.size, mimeType: ref.mimeType, hash: ref.hash, createdAt: now, ...((event as any).artifact ? { artifact: true } : {}) }, caption: typeof (event as any).caption === "string" ? (event as any).caption : "" }); break;
+      value.pendingAgentAttachments.push({ attachment: { kind: ref.kind, name: ref.name, size: ref.size, mimeType: ref.mimeType, hash: ref.hash, description: typeof (event as any).caption === "string" ? (event as any).caption : undefined, createdAt: now, ...((event as any).artifact ? { artifact: true } : {}) }, caption: typeof (event as any).caption === "string" ? (event as any).caption : "" }); break;
     }
     case "inlineImage": {
       const url = (event as any).url; const ref = (event as any).ref;
