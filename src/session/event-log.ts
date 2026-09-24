@@ -33,6 +33,7 @@ import path from "node:path";
 import { normalizedIntermediateText, thinkingTextFromContent, mergeTranscript, type SidecarMessage } from "./transcript-merge.js";
 import type { RuntimeMessage } from "../runtime/types.js";
 import type { AttachmentRef } from "./attachment-store.js";
+import { APP_PUBLICATION_BLOCK, isAppReference, type AppReference } from "../apps/types.js";
 
 /** The serialization-independent atoms mergeBases folds a reopen on (see below). */
 export interface MessageContentAtoms {
@@ -257,7 +258,14 @@ export interface InlineImageLogEntry {
 }
 
 /** Any record the log can hold. */
-export type LogRecord = EventLogEntry | BaseLogEntry | AttachmentLogEntry | OutboundAttachmentLogEntry | InlineImageLogEntry;
+export interface AppPublicationLogEntry {
+  bivyKind: "app-publication";
+  createdAt: number;
+  afterMessageCount: number;
+  id: string;
+  app: AppReference;
+}
+export type LogRecord = EventLogEntry | BaseLogEntry | AttachmentLogEntry | OutboundAttachmentLogEntry | InlineImageLogEntry | AppPublicationLogEntry;
 
 /** Content-block type carried by a folded outbound attachment. MUST match
  *  `AGENT_ATTACHMENT_BLOCK` in packages/core/src/store-render.ts — the client's
@@ -307,8 +315,14 @@ function isInlineImage(value: unknown): value is InlineImageLogEntry {
   );
 }
 
+function isAppPublication(value: unknown): value is AppPublicationLogEntry {
+  if (!value || typeof value !== "object") return false;
+  const entry = value as Partial<AppPublicationLogEntry>;
+  return entry.bivyKind === "app-publication" && typeof entry.id === "string" && typeof entry.createdAt === "number" && typeof entry.afterMessageCount === "number" && isAppReference(entry.app);
+}
+
 function isRecord(value: unknown): value is LogRecord {
-  return isOverlay(value) || isBase(value) || isAttachment(value) || isOutboundAttachment(value) || isInlineImage(value);
+  return isOverlay(value) || isBase(value) || isAttachment(value) || isOutboundAttachment(value) || isInlineImage(value) || isAppPublication(value);
 }
 
 /**
@@ -405,7 +419,13 @@ export function replayExtras(entries: readonly LogRecord[]): SidecarMessage[] {
     if (entry.bivyKind === "intermediate") intermediate.push(entry);
     else if (entry.bivyKind === "tool") tool.push(entry);
   }
-  return [...foldIntermediate(intermediate), ...foldTool(tool), ...replayOutboundAttachments(entries)];
+  const apps = new Map<string, AppPublicationLogEntry>();
+  for (const entry of entries) if (entry.bivyKind === "app-publication") apps.set(entry.id, entry);
+  const publications: SidecarMessage[] = [...apps.values()].map((entry) => ({
+    role: "assistant", content: [{ type: APP_PUBLICATION_BLOCK, app: entry.app }],
+    id: entry.id, afterMessageCount: entry.afterMessageCount, createdAt: entry.createdAt,
+  }));
+  return [...foldIntermediate(intermediate), ...foldTool(tool), ...replayOutboundAttachments(entries), ...publications];
 }
 
 /**
@@ -638,6 +658,11 @@ export class EventLog {
    * length so history replay interleaves it where it was emitted. Coalesces on
    * the transcript-entry id so a re-emit of the same attachment updates in place.
    */
+  appendAppPublication(id: string, entry: { id: string; afterMessageCount: number; app: AppReference }): void {
+    this.load(id);
+    this.enqueue(id, `app:${entry.id}`, { ...entry, app: { ...entry.app }, bivyKind: "app-publication", createdAt: Date.now() });
+  }
+
   appendOutboundAttachment(id: string, entry: { afterMessageCount: number; id: string; ref: AttachmentRef; caption?: string; artifact?: boolean }): void {
     this.load(id);
     const record: OutboundAttachmentLogEntry = {

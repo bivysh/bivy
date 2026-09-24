@@ -2418,6 +2418,57 @@ async function cmdAttach(args = []) {
   console.log(c.green(`Attached ${body.name} (${body.kind}, ${body.size} bytes) to the chat.`));
 }
 
+// Universal app publishing: every agent that can write JSON and run a command
+// uses the same contract. Relative static directories are manifest-relative.
+async function cmdApp(args = []) {
+  const [action, ...rest] = args;
+  if (!action || rest.some((arg) => arg === "--help" || arg === "-h") || ["help", "--help", "-h"].includes(action)) {
+    console.log(`Usage: bivy app publish <manifest.json> [--session <id>]
+       bivy app list [--session <id>]
+       bivy app remove <app-id> [--session <id>]
+
+Manifest: {"version":1,"name":"My app","views":[
+  {"kind":"web","name":"Website","source":{"kind":"service","port":3000}},
+  {"kind":"terminal","name":"Console","command":"bin/rails","args":["console"]}
+]}
+
+Static web source: {"kind":"static","directory":"./dist"}
+Publishing does not start commands. Open Apps in the session menu to view or run.
+Terminal commands run with the node user's permissions, not in a new sandbox.
+Web previews require operator setup; see docs/apps.md.`);
+    return;
+  }
+  if (!["publish", "list", "remove"].includes(action)) throw new Error("Unknown app command. Run bivy app --help.");
+  const sessionIndex = rest.indexOf("--session");
+  if (sessionIndex >= 0 && (!rest[sessionIndex + 1] || rest[sessionIndex + 1].startsWith("--"))) throw new Error("--session requires an id.");
+  const sessionId = resolveAttachSessionId({ sessionFlag: sessionIndex >= 0 ? rest[sessionIndex + 1] : undefined, env: process.env });
+  if (!sessionId) throw new Error("Set --session <id> or run inside a Bivy agent session.");
+  const positional = rest.filter((_, i) => i !== sessionIndex && (sessionIndex < 0 || i !== sessionIndex + 1));
+  if (positional.some((a) => a.startsWith("-")) || positional.length !== (action === "list" ? 0 : 1)) throw new Error("Invalid arguments. Run bivy app --help.");
+  const body = { sessionId };
+  if (action === "publish") {
+    const file = path.resolve(positional[0]);
+    if (fs.statSync(file).size > 64 * 1024) throw new Error("App manifest exceeds 64 KiB.");
+    const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (!manifest || typeof manifest !== "object") throw new Error("App manifest must be a JSON object.");
+    if (Array.isArray(manifest.views)) for (const view of manifest.views) {
+      if (view?.kind === "web" && view.source?.kind === "static" && typeof view.source.directory === "string") {
+        view.source.directory = path.resolve(path.dirname(file), view.source.directory);
+      }
+    }
+    body.manifest = manifest;
+  } else if (action === "remove") body.appId = positional[0];
+  const config = loadConfig();
+  if (!(await ensureNodeRunning(config))) throw new Error("Could not reach the Bivy node.");
+  const token = await localDeviceToken(config);
+  const response = await fetch(`${url(config)}/api/apps/${action}`, {
+    method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(body),
+  });
+  const result = await response.json();
+  if (!response.ok || result.error) throw new Error(result.error || `App command failed (${response.status}).`);
+  console.log(JSON.stringify(result, null, 2));
+}
+
 // Map a saved session's runtime id to the `bivy run` agent whose native CLI can
 // resume it in a terminal. Only agents with a real native resume qualify; other
 // runtimes (generic-cli, SDK-only) have no terminal resume and open in the web app.
@@ -5045,6 +5096,7 @@ ${c.bold("bivy")} — Bivy node CLI
   ${c.cyan("bivy token")}       Print a device token for this node (for 'bivy nodes add' elsewhere)
   ${c.cyan("bivy sessions")}     List recent sessions (live + saved) and resume one (alias: ls)
   ${c.cyan("bivy resume")} [n|id] Resume a session directly (default: most recent)
+  ${c.cyan("bivy app")}             Publish and list session apps (web and terminal views)
   ${c.cyan("bivy send <id>")} "..."  Send a prompt to an existing session and stream the reply
   ${c.cyan("bivy kill <id>")}    Stop a session/terminal (--delete also removes a saved session)
   ${c.cyan("bivy prune")}         Delete old sessions/workspaces/worktrees (--keep N, --older-than 7d, --dry-run)
@@ -5166,6 +5218,9 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
       break;
     case "send":
       await cmdSend(args);
+      break;
+    case "app":
+      await cmdApp(args);
       break;
     case "attach":
       await cmdAttach(args);

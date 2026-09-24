@@ -8,6 +8,7 @@ export function focusEntries(entries: TranscriptEntry[], working: boolean): Tran
   let lastAssistant: TranscriptEntry | null = null;
   let lastAssistantWithText: TranscriptEntry | null = null;
   let attachments: NonNullable<TranscriptEntry["attachments"]> = [];
+  let apps: TranscriptEntry[] = [];
   const flush = () => {
     const retained = lastAssistantWithText ?? lastAssistant;
     if (retained) {
@@ -26,14 +27,17 @@ export function focusEntries(entries: TranscriptEntry[], working: boolean): Tran
         keep.push({ ...retained, attachments: unique });
       }
     }
+    keep.push(...apps.filter((entry) => entry.id !== retained?.id));
     lastAssistant = null;
     lastAssistantWithText = null;
     attachments = [];
+    apps = [];
   };
   for (const entry of entries) {
     if (entry.tool || entry.role === "thinking") continue;
     if (entry.role === "assistant") {
       lastAssistant = entry;
+      if (entry.app) apps.push(entry);
       if (entry.text || entry.streaming) lastAssistantWithText = entry;
       if (entry.attachments?.length) attachments.push(...entry.attachments);
       continue;
@@ -49,6 +53,6 @@ export function focusEntries(entries: TranscriptEntry[], working: boolean): Tran
     if (!isCurrentAssistant) return [entry];
     // Hide in-progress prose as before, but never hide files the agent has
     // already emitted. Their row remains and the final prose joins it on settle.
-    return entry.attachments?.length ? [{ ...entry, text: "", html: undefined, streaming: false }] : [];
+    return entry.app || entry.attachments?.length ? [{ ...entry, text: "", html: undefined, streaming: false }] : [];
   });
 }

@@ -1,0 +1,256 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Petter André Sjulstad
+import http, { type IncomingMessage, type ServerResponse, type OutgoingHttpHeaders } from "node:http";
+import type { Duplex } from "node:stream";
+import { randomBytes } from "node:crypto";
+import path from "node:path";
+import { readFileSync } from "node:fs";
+import { previewShell } from "./preview-shell.js";
+import type { AppRegistry, RegisteredView } from "./registry.js";
+
+const MIME: Record<string, string> = {
+  ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8", ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png",
+  ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".ico": "image/x-icon",
+  ".woff": "font/woff", ".woff2": "font/woff2", ".ttf": "font/ttf", ".wasm": "application/wasm",
+  ".txt": "text/plain; charset=utf-8", ".pdf": "application/pdf", ".mp4": "video/mp4", ".webm": "video/webm",
+};
+
+const COOKIE = "__Host-bivy-preview";
+const OPEN_PATH = "/__bivy/open";
+const REDEEM_PATH = "/__bivy/redeem";
+const HOUR = 60 * 60_000;
+const HOP = new Set(["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"]);
+
+/** Separate per-app origins are mandatory. TLS terminates at the operator's
+ * reverse proxy, which must preserve Host and reach ONLY this gateway port. */
+export function previewOriginTemplate(raw: string): string {
+  const parsed = new URL(raw.replace("{app}", "a"));
+  if (!/^https:\/\/\{app\}\.[a-z0-9.-]+\/?$/.test(raw) || raw.split("{app}").length !== 2 || parsed.username || parsed.password || parsed.pathname !== "/" || parsed.search || parsed.hash || parsed.port) {
+    throw new Error("BIVY_APPS_ORIGIN must be https://{app}.<dedicated-preview-domain> (no path or port).");
+  }
+  return raw.replace(/\/$/, "").toLowerCase();
+}
+
+function cleanHeaders(headers: IncomingMessage["headers"]): OutgoingHttpHeaders {
+  const blocked = new Set([...HOP, ...(headers.connection ?? "").toLowerCase().split(",").map((s) => s.trim())]);
+  return Object.fromEntries(Object.entries(headers).filter(([key]) => !blocked.has(key) && !key.startsWith("x-forwarded-") && key !== "forwarded"));
+}
+function upstreamHeaders(req: IncomingMessage, origin: string): OutgoingHttpHeaders {
+  const headers = cleanHeaders(req.headers);
+  // The preview credential is never disclosed to generated code/backends.
+  headers.cookie = (req.headers.cookie ?? "").split(";").filter((part) => part.trim().split("=", 1)[0] !== COOKIE).join(";");
+  headers.host = new URL(origin).host;
+  headers["x-forwarded-host"] = headers.host;
+  headers["x-forwarded-proto"] = "https";
+  return headers;
+}
+function responseHeaders(headers: IncomingMessage["headers"], shellOrigin: string): OutgoingHttpHeaders {
+  const result = cleanHeaders(headers);
+  if (headers["set-cookie"]) {
+    result["set-cookie"] = headers["set-cookie"].filter((cookie) => cookie.split("=", 1)[0].trim() !== COOKIE)
+      .map((cookie) => cookie.replace(/;\s*domain=[^;]*/ig, ""));
+  }
+  // Preview data must not become a shared proxy cache entry. Apps cannot frame
+  // Bivy, retain an opener, or cache an offline service-worker copy of the gate.
+  result["cache-control"] = "no-store";
+  result["referrer-policy"] = "no-referrer";
+  result["cross-origin-opener-policy"] = "same-origin";
+  result["x-content-type-options"] = "nosniff";
+  // The preview shell is the only allowed ancestor. Preserve the app's other
+  // CSP directives, but replace framing restrictions with this narrower host.
+  delete result["x-frame-options"];
+  const csp = result["content-security-policy"];
+  const policies = (Array.isArray(csp) ? csp : csp ? [String(csp)] : []).map((policy) => policy.replace(/(^|[;,])\s*frame-ancestors[^;,]*/gi, "$1"));
+  result["content-security-policy"] = [...policies, `frame-ancestors ${shellOrigin}; worker-src 'none'`].join(", ");
+  return result;
+}
+
+export class AppGateway {
+  readonly server: http.Server;
+  private readonly template: string;
+  private readonly tickets = new Map<string, { appId: string; expires: number; returnTo?: string }>();
+  private readonly styles = new Map([
+    ["/__bivy/tokens.css", readFileSync(new URL("./tokens.css", import.meta.url))],
+    ["/__bivy/styles.css", readFileSync(new URL("./styles.css", import.meta.url))],
+  ]);
+  private readonly sessions = new Map<string, { appId: string; expires: number }>();
+  private readonly sockets = new Map<string, Set<Duplex>>();
+
+  constructor(private readonly registry: AppRegistry, originTemplate: string, private readonly returnOrigins: () => readonly string[] = () => []) {
+    this.template = previewOriginTemplate(originTemplate);
+    this.server = http.createServer((req, res) => { void this.handle(req, res).catch(() => { if (!res.headersSent) res.writeHead(502); res.end("Preview request failed."); }); });
+    this.server.maxConnections = 256;
+    this.server.headersTimeout = 15_000;
+    this.server.requestTimeout = 60_000;
+    this.server.on("upgrade", (req, socket, head) => this.upgrade(req, socket, head));
+  }
+
+  origin(id: string): string { return this.template.replace("{app}", id); }
+  shellOrigin(id: string): string { return this.template.replace("{app}", `view-${id}`); }
+  open(id: string, returnTo?: string): string {
+    const entry = this.registry.getView(id);
+    if (entry?.view.kind !== "web") throw new Error("Web view not found.");
+    if (returnTo) {
+      const url = new URL(returnTo);
+      const safeScheme = url.protocol === "https:" || (url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname));
+      if (!this.returnOrigins().includes(url.origin)) throw new Error("Return-to-chat origin is not configured on this machine. Set BIVY_APPS_RETURN_ORIGINS for an additional Bivy client origin.");
+      if (!safeScheme || url.username || url.password || url.search || url.hash || url.pathname !== `/sessions/${encodeURIComponent(entry.app.sessionId)}`) throw new Error("Invalid return-to-chat URL.");
+      returnTo = url.href;
+    }
+    this.sweep();
+    if (this.tickets.size >= 500 || this.sessions.size >= 500) throw new Error("Too many preview grants. Try again later.");
+    const ticket = randomBytes(32).toString("hex");
+    this.tickets.set(ticket, { appId: id, expires: Date.now() + 60_000, returnTo });
+    // Fragment never reaches reverse-proxy access logs or the application.
+    return `${this.shellOrigin(id)}${OPEN_PATH}#${ticket}`;
+  }
+  revoke(id: string): void {
+    for (const map of [this.tickets, this.sessions]) for (const [key, grant] of map) if (grant.appId === id) map.delete(key);
+    for (const socket of this.sockets.get(id) ?? []) socket.destroy();
+    this.sockets.delete(id);
+  }
+  close(): void {
+    for (const id of this.sockets.keys()) this.revoke(id);
+    this.tickets.clear(); this.sessions.clear();
+    this.server.close();
+    this.server.closeAllConnections();
+  }
+  private sweep(): void {
+    for (const map of [this.tickets, this.sessions]) for (const [key, grant] of map) if (grant.expires <= Date.now()) map.delete(key);
+  }
+  private entry(req: IncomingMessage): RegisteredView | undefined {
+    const host = req.headers.host ?? "";
+    const id = host.split(".")[0];
+    if (!/^[a-f0-9]{32}$/.test(id) || host !== new URL(this.origin(id)).host) return undefined;
+    const entry = this.registry.getView(id);
+    return entry?.view.kind === "web" ? entry : undefined;
+  }
+  private authorize(req: IncomingMessage, id: string): number | undefined {
+    this.sweep();
+    const token = (req.headers.cookie ?? "").split(";").map((part) => part.trim()).find((part) => part.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1);
+    const session = token && this.sessions.get(token);
+    return session && session.appId === id ? session.expires : undefined;
+  }
+  private track(id: string, socket: Duplex, expires: number): void {
+    let sockets = this.sockets.get(id);
+    if (!sockets) { sockets = new Set(); this.sockets.set(id, sockets); }
+    if (sockets.has(socket)) return;
+    sockets.add(socket);
+    const timer = setTimeout(() => socket.destroy(), Math.max(1, expires - Date.now()));
+    timer.unref();
+    socket.once("close", () => { clearTimeout(timer); sockets.delete(socket); if (!sockets.size) this.sockets.delete(id); });
+  }
+  private async handleShell(req: IncomingMessage, res: ServerResponse, id: string): Promise<void> {
+    const origin = this.shellOrigin(id);
+    const nonce = randomBytes(16).toString("hex");
+    res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+    res.setHeader("Content-Security-Policy", `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'self' 'nonce-${nonce}'; connect-src 'self'; frame-src ${this.origin(id)}; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`);
+    if (req.method === "GET" && this.styles.has(req.url ?? "")) {
+      res.setHeader("Content-Type", "text/css; charset=utf-8");
+      res.end(this.styles.get(req.url!)); return;
+    }
+    if (req.url === OPEN_PATH && req.method === "GET") {
+      res.setHeader("Content-Type", "text/html; charset=utf-8"); res.end(previewShell(nonce)); return;
+    }
+    if (req.url === "/__bivy/launch" && req.method === "POST") {
+      if (req.headers.origin !== origin) { res.writeHead(403); res.end(); return; }
+      let ticket = "";
+      for await (const chunk of req) { ticket += chunk.toString(); if (ticket.length > 128) { res.writeHead(413); res.end(); return; } }
+      this.sweep();
+      const grant = this.tickets.get(ticket);
+      const entry = this.registry.getView(id);
+      if (!grant || grant.appId !== id || !entry) { res.writeHead(401); res.end(); return; }
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ name: entry.app.name, origin: this.origin(id), returnTo: grant.returnTo })); return;
+    }
+    res.writeHead(404); res.end("Preview shell route not found.");
+  }
+
+  private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const entry = this.entry(req);
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Referrer-Policy", "no-referrer");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    const shellId = /^view-([a-f0-9]{32})\./.exec(req.headers.host ?? "")?.[1];
+    if (shellId && req.headers.host === new URL(this.shellOrigin(shellId)).host) { await this.handleShell(req, res, shellId); return; }
+    if (!entry) { res.writeHead(404); res.end("App unavailable. Republish from your Bivy session."); return; }
+    const id = entry.view.id;
+    if (req.url === OPEN_PATH && req.method === "GET") {
+      const nonce = randomBytes(16).toString("hex");
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+      res.setHeader("Content-Security-Policy", `default-src 'none'; script-src 'nonce-${nonce}'; connect-src 'self'; frame-ancestors ${this.shellOrigin(id)}; base-uri 'none'`);
+      res.end(`<!doctype html><html lang="en"><meta name="viewport" content="width=device-width"><title>Open Bivy preview</title><p id="status" role="status">Opening preview…</p><script nonce="${nonce}">const ticket=location.hash.slice(1);history.replaceState(null,'',location.pathname);fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body:ticket}).then(r=>{if(!r.ok)throw Error();location.replace('/');}).catch(()=>{document.getElementById('status').textContent='Preview link expired or cookies are blocked. Open a new link from Bivy.';});</script></html>`);
+      return;
+    }
+    if (req.url === REDEEM_PATH && req.method === "POST") {
+      if (req.headers.origin !== this.origin(id)) { res.writeHead(403); res.end(); return; }
+      let body = "";
+      for await (const chunk of req) { body += chunk.toString(); if (body.length > 128) { res.writeHead(413); res.end(); return; } }
+      this.sweep();
+      const grant = this.tickets.get(body);
+      if (!grant || grant.appId !== id || this.sessions.size >= 500) { res.writeHead(401); res.end(); return; }
+      this.tickets.delete(body);
+      const token = randomBytes(32).toString("hex");
+      this.sessions.set(token, { appId: id, expires: Date.now() + HOUR });
+      res.setHeader("Set-Cookie", `${COOKIE}=${token}; Secure; HttpOnly; SameSite=Lax; Path=/; Max-Age=3600`);
+      res.writeHead(204); res.end(); return;
+    }
+    const expires = this.authorize(req, id);
+    if (!expires) { res.writeHead(401); res.end("Preview access expired. Open a new preview link from Bivy."); return; }
+    // Block cross-site mutations even if a client sends the preview cookie.
+    if (!["GET", "HEAD"].includes(req.method ?? "") && req.headers.origin !== this.origin(id)) { res.writeHead(403); res.end("Forbidden origin."); return; }
+    if (req.headers["sec-fetch-dest"] === "serviceworker") { res.writeHead(403); res.end(); return; }
+    if (!req.url?.startsWith("/") || req.url.startsWith("//")) { res.writeHead(400); res.end(); return; }
+    this.track(id, req.socket, expires);
+    if (entry.target.kind === "static") {
+      if (!["GET", "HEAD"].includes(req.method ?? "")) { res.writeHead(405, { Allow: "GET, HEAD" }); res.end(); return; }
+      let file: string;
+      try { file = decodeURIComponent(req.url.split("?")[0]); } catch { res.writeHead(400); res.end(); return; }
+      if (file.endsWith("/")) file += "index.html";
+      const data = entry.target.files.get(file);
+      if (!data) { res.writeHead(404); res.end("File not found."); return; }
+      const headers = responseHeaders({}, this.shellOrigin(id));
+      headers["content-type"] = MIME[path.extname(file).toLowerCase()] || "application/octet-stream";
+      res.writeHead(200, { ...headers, "content-length": data.length });
+      res.end(req.method === "HEAD" ? undefined : data); return;
+    }
+    if (entry.target.kind !== "service") { res.writeHead(404); res.end(); return; }
+    const upstream = http.request({ hostname: "127.0.0.1", port: entry.target.port, path: req.url, method: req.method, headers: upstreamHeaders(req, this.origin(id)) }, (response) => {
+      res.writeHead(response.statusCode ?? 502, responseHeaders(response.headers, this.shellOrigin(id)));
+      response.on("error", () => res.destroy());
+      response.pipe(res);
+    });
+    upstream.setTimeout(60_000, () => upstream.destroy(new Error("Preview timed out")));
+    upstream.on("error", () => { if (!res.headersSent) res.writeHead(502, { "content-type": "text/plain" }); res.end("App server unavailable. Start it on the registered port, then reload."); });
+    res.on("close", () => upstream.destroy());
+    req.pipe(upstream);
+  }
+  private upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
+    const entry = this.entry(req);
+    const expires = entry && this.authorize(req, entry.view.id);
+    if (!entry || !expires || entry.target.kind !== "service" || req.headers.origin !== this.origin(entry.view.id) || req.headers.upgrade?.toLowerCase() !== "websocket" || !req.url?.startsWith("/") || req.url.startsWith("//")) {
+      socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n"); return;
+    }
+    this.track(entry.view.id, socket, expires);
+    const upstream = http.request({ hostname: "127.0.0.1", port: entry.target.port, path: req.url, headers: { ...upstreamHeaders(req, this.origin(entry.view.id)), connection: "Upgrade", upgrade: "websocket" } });
+    upstream.setTimeout(10_000, () => upstream.destroy());
+    upstream.on("upgrade", (response, peer, upstreamHead) => {
+      peer.setTimeout(0);
+      this.track(entry.view.id, peer, expires);
+      const headers = cleanHeaders(response.headers);
+      delete headers["set-cookie"];
+      socket.write(`HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n${Object.entries(headers).filter(([, value]) => value !== undefined).map(([key, value]) => `${key}: ${value}\r\n`).join("")}\r\n`);
+      if (upstreamHead.length) socket.write(upstreamHead);
+      if (head.length) peer.write(head);
+      socket.on("error", () => peer.destroy()); peer.on("error", () => socket.destroy());
+      socket.on("close", () => peer.destroy()); peer.on("close", () => socket.destroy());
+      socket.pipe(peer).pipe(socket);
+    });
+    upstream.on("response", (response) => { response.resume(); socket.end("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n"); });
+    upstream.on("error", () => socket.destroy());
+    socket.on("close", () => upstream.destroy());
+    upstream.end();
+  }
+}

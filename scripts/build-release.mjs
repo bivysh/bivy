@@ -77,6 +77,11 @@ for (const file of ["hosted-endpoints.mjs", "hosted-endpoints.d.mts", "pty-runne
   fs.copyFileSync(path.join(root, "src", file), path.join(root, "dist", file));
 }
 
+// The isolated preview header reuses the canonical design system, not a fork.
+for (const [source, target] of [["packages/ui/tokens.css", "tokens.css"], ["packages/web/src/styles.css", "styles.css"]]) {
+  fs.copyFileSync(path.join(root, source), path.join(root, "dist/apps", target));
+}
+
 // The node is a pure data plane and no longer hosts the web UI, so the release
 // artifact ships no PWA bundle. The React/Vite app (@bivy/web) is built and
 // served independently by the control plane (see deploy/Dockerfile.control-plane

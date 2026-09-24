@@ -291,6 +291,20 @@ export class DirectTransport implements Transport {
           }
           break;
         }
+        case "apps.list":
+        case "apps.publish":
+        case "apps.open":
+        case "apps.remove": {
+          const requestId = String(obj.requestId ?? "");
+          try {
+            const result = await this.directApi(`/api/apps/${obj.kind.slice(5)}`, { method: "POST", body: JSON.stringify(obj) });
+            if (typeof result.error === "string") throw new Error(result.error);
+            this.emit({ ...result, type: `${obj.kind}.ok`, requestId });
+          } catch (error) {
+            this.emit({ type: `${obj.kind}.error`, requestId, error: error instanceof Error ? error.message : String(error) });
+          }
+          break;
+        }
         case "attachment.fetch": {
           // Fetch attachment bytes from the local HTTP endpoint and re-emit as an
           // `attachment.data` event, so the client's fetchAttachment() settles the
