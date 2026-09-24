@@ -128,6 +128,7 @@ export const hetznerProvider: ProviderAdapter = {
   // `shutdown -h now` only powers a Hetzner server off; billing continues until
   // the API resource is deleted. Hosted reconciliation supplies that authority.
   guestCanEnsureDeletion: false,
+  supportsPersistent: true,
   async validateToken({ exec, token }) {
     const res = await call(exec, {
       method: "GET",
@@ -179,7 +180,7 @@ export const hetznerProvider: ProviderAdapter = {
       });
       if (found.status < 300 && Array.isArray(found.body?.servers) && found.body.servers[0]) {
         const s = found.body.servers[0];
-        return { id: String(s.id), provider: "hetzner", name, region: config.region || "nbg1", status: mapHetznerStatus(s.status), ip: s.public_net?.ipv4?.ip || null, createdAt: nowIso(), ttlMinutes: config.ttlMinutes };
+        return { id: String(s.id), provider: "hetzner", name, region: config.region || "nbg1", status: mapHetznerStatus(s.status), ip: s.public_net?.ipv4?.ip || null, createdAt: nowIso(), ...(config.lifecycle ? { lifecycle: config.lifecycle } : {}), ttlMinutes: config.lifecycle === "persistent" ? undefined : config.ttlMinutes };
       }
     }
     const res = await call(exec, {
@@ -194,7 +195,7 @@ export const hetznerProvider: ProviderAdapter = {
         user_data: userData,
         start_after_create: true,
         labels: {
-          bivy: "ephemeral",
+          bivy: config.lifecycle === "persistent" ? "persistent" : "ephemeral",
           ...(config.attemptId ? { "bivy-attempt": String(config.attemptId) } : {}),
           ...(config.ownershipTag ? { "bivy-account": String(config.ownershipTag) } : {}),
         },
@@ -211,7 +212,8 @@ export const hetznerProvider: ProviderAdapter = {
       status: mapHetznerStatus(s.status),
       ip: s.public_net?.ipv4?.ip || null,
       createdAt: nowIso(),
-      ttlMinutes: config.ttlMinutes,
+      ...(config.lifecycle ? { lifecycle: config.lifecycle } : {}),
+      ttlMinutes: config.lifecycle === "persistent" ? undefined : config.ttlMinutes,
     };
   },
   async status({ exec, token, machine }) {
@@ -249,6 +251,7 @@ export const hetznerProvider: ProviderAdapter = {
       ip: s.public_net?.ipv4?.ip || null,
       createdAt: typeof s.created === "string" ? s.created : "",
       attemptId: typeof s.labels?.["bivy-attempt"] === "string" ? s.labels["bivy-attempt"] : undefined,
+      ...(s.labels?.bivy === "persistent" ? { lifecycle: "persistent" as const } : {}),
     }));
   },
 };

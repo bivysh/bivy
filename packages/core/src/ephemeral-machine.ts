@@ -6,11 +6,15 @@
 
 import type { EphemeralLifecycleMilestones } from "./ephemeral-lifecycle.js";
 
+/** Absent lifecycle preserves the existing disposable-runner behavior. */
+export type MachineLifecycle = "ephemeral" | "persistent";
+
 export type EphemeralMilestones = EphemeralLifecycleMilestones;
 
 export type EphemeralMachinePurpose = "queue-item" | "queue-default" | "ready-capacity" | "auth-runner" | "interactive";
 
 export interface EphemeralMachine {
+  lifecycle?: MachineLifecycle;
   id: string;
   provider: string;
   name: string;

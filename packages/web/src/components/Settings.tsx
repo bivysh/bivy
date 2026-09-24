@@ -1812,7 +1812,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
   const [busy, setBusy] = useState(false);
 
   const refreshMachines = () =>
-    controller.listEphemeralMachines().then((all) => setMachines(all.filter((m) => m.provider === providerId))).catch(() => {});
+    controller.listEphemeralMachines().then((all) => setMachines(all.filter((m) => m.provider === providerId && m.lifecycle !== "persistent"))).catch(() => {});
   const editSetup = (setup: EphemeralNodeConfig | null) => {
     setSetupId(setup?.id ?? null);
     setSetupName(setup?.name ?? "");
@@ -2238,7 +2238,7 @@ function AccountPanel() {
                     e.stopPropagation();
                     setConfirm({
                       title: "Remove machine?",
-                      message: `Remove ${n.name || n.id} from your account?`,
+                      message: `Disconnect ${n.name || n.id} from your account? This does not delete the server or stop provider charges. Delete cloud servers in your provider console when you no longer need them.`,
                       action: () => controller.removeNode(n.id).then(() => controller.listNodes().then(setNodes)),
                     });
                   }}

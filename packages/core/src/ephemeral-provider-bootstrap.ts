@@ -33,7 +33,7 @@ export function bivyRelayJson(opts: BootstrapOpts): string {
 function bivyBootstrapExports(opts: BootstrapOpts): string[] {
   // Every supported ephemeral provider is a destroy lane. The daemon learns
   // that it is disposable so it can snapshot and end the machine once idle.
-  const ephemeral = Boolean(opts.provider);
+  const ephemeral = opts.lifecycle !== "persistent" && Boolean(opts.provider);
   return [
     "export BIVY_DATA_DIR=/etc/bivy",
     opts.repo ? `export BIVY_REPO=${shq(opts.repo)}` : "",
@@ -86,6 +86,7 @@ export function bivyBootstrapStatusCommand(opts: BootstrapOpts, phase: "booting"
 
 export function buildBootstrapUserData(opts: BootstrapOpts): string {
   const relay = bivyRelayJson(opts);
+  const persistent = opts.lifecycle === "persistent";
   const ttl = clampTtlMinutes(opts.ttlMinutes);
   const installUrl = opts.installUrl || "https://bivy.sh/install.sh";
   const startScript = bivyStartScript(opts);
@@ -104,8 +105,31 @@ export function buildBootstrapUserData(opts: BootstrapOpts): string {
       "    permissions: '0755'",
       "    content: |",
       indentJson(startScript, "      "),
+      // Persistent machines must restart after a reboot, not just survive the
+      // initial cloud-init process. Keep the unit on disk and enable it.
+      ...(persistent ? [
+        "  - path: /etc/systemd/system/bivy.service",
+        "    permissions: '0644'",
+        "    content: |",
+        indentJson([
+          "[Unit]",
+          "Description=Bivy agent workspace",
+          "Wants=network-online.target",
+          "After=network-online.target",
+          "StartLimitIntervalSec=0",
+          "[Service]",
+          "Type=simple",
+          "Environment=HOME=/root",
+          "WorkingDirectory=/root",
+          "ExecStart=/etc/bivy/start.sh",
+          "Restart=always",
+          "RestartSec=5",
+          "[Install]",
+          "WantedBy=multi-user.target",
+        ].join("\n"), "      "),
+      ] : []),
       "runcmd:",
-      `  - [ bash, -lc, ${JSON.stringify(ttlCommand)} ]`,
+      ...(!persistent ? [`  - [ bash, -lc, ${JSON.stringify(ttlCommand)} ]`] : []),
       `  - [ bash, -lc, ${JSON.stringify(status("booting"))} ]`,
       // 1. Install Bivy (state lands in /etc/bivy via BIVY_DATA_DIR).
       `  - [ bash, -lc, ${JSON.stringify(`set -euo pipefail; ${status("installing")}; mkdir -p /etc/bivy && export BIVY_DATA_DIR=/etc/bivy && (command -v bivy >/dev/null 2>&1 || curl --connect-timeout 10 --max-time 120 -fsSL ${shq(installUrl)} | bash) || { ${status("failed")}; exit 1; }`)} ]`,
@@ -114,7 +138,9 @@ export function buildBootstrapUserData(opts: BootstrapOpts): string {
       //    running after cloud-init's own unit exits (a bare backgrounded process
       //    would be cleaned up with cloud-final's cgroup); the setsid fallback
       //    covers a rare image without systemd-run.
-      `  - [ bash, -lc, "systemd-run --unit=bivy --collect --property=Restart=on-failure /etc/bivy/start.sh || setsid bash /etc/bivy/start.sh </dev/null >/var/log/bivy.log 2>&1 &" ]`,
+      persistent
+        ? `  - [ bash, -lc, ${JSON.stringify(`systemctl daemon-reload && systemctl enable --now bivy.service || { ${status("failed")}; exit 1; }`)} ]`
+        : `  - [ bash, -lc, "systemd-run --unit=bivy --collect --property=Restart=on-failure /etc/bivy/start.sh || setsid bash /etc/bivy/start.sh </dev/null >/var/log/bivy.log 2>&1 &" ]`,
 
     ].join("\n") + "\n"
   );

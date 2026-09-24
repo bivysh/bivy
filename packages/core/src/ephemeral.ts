@@ -11,7 +11,7 @@ import {
   type ExecFn,
   type ProviderSize,
 } from "./ephemeral-provider-adapters.js";
-import type { EphemeralMachine } from "./ephemeral-machine.js";
+import type { EphemeralMachine, MachineLifecycle } from "./ephemeral-machine.js";
 import { planEphemeralLaunch, trackProvisionedMachine } from "./ephemeral-launch-plan.js";
 import { createEphemeralExecutionEnvelope } from "./ephemeral-execution-envelope.js";
 import type { EphemeralKeyStore, MachineStore } from "./ephemeral-storage.js";
@@ -44,6 +44,7 @@ export {
   isEphemeralNode,
   type EphemeralMachine,
   type EphemeralMachinePurpose,
+  type MachineLifecycle,
   type EphemeralMilestones,
   type SessionCorrelation,
 } from "./ephemeral-machine.js";
@@ -156,6 +157,8 @@ export interface EphemeralLaunchEvent {
 }
 
 export interface LaunchOpts {
+  /** Persistent BYO machines remain billable until explicitly deleted. */
+  lifecycle?: MachineLifecycle;
   computeSource?: "user" | "managed";
   provider: string;
   /** Stable operation identity. Hosted controllers persist this before any
@@ -247,19 +250,25 @@ export async function listEphemeralSizes(
 }
 
 /**
- * Provision an ephemeral node: enroll it on the account, mint a room key, build
- * cloud-init, and ask the provider to boot a machine that self-destructs at TTL.
+ * Provision a cloud node: enroll it, mint a room key, and build its bootstrap.
+ * The default is disposable; persistent BYO must be explicitly requested.
  */
 export async function launchEphemeralMachine(
   opts: LaunchOpts,
   deps: { store: LocalStore; exec: ExecFn; keys: EphemeralKeyStore; machines: MachineStore; fetchImpl?: typeof fetch; persistRoomKey?: (nodeId: string, roomKeyB64: string) => Promise<void>; enrollment?: { token?: string; persist: (nodeId: string, token: string) => Promise<void> } },
 ): Promise<EphemeralMachine> {
+  if (opts.lifecycle === "persistent" && (opts.computeSource === "managed" || opts.externalTeardownGuaranteed || opts.ownershipTag)) {
+    throw new Error("Persistent machines currently support device-provisioned BYO only; hosted lifecycle management is not enabled.");
+  }
   if (opts.computeSource === "managed" && !opts.externalTeardownGuaranteed) throw new Error("Bivy hosted machines must be launched by the control plane, not with a device-held cloud token.");
   if (deps.enrollment?.token && !opts.reuseNodeId) throw new Error("Saved enrollment requires the original node identity");
   const requestedAt = nowIso();
   const fetchImpl = deps.fetchImpl ?? fetch;
   const adapter = ephemeralAdapter(opts.provider);
   if (!adapter) throw new Error(`Unknown provider: ${opts.provider}`);
+  const persistent = opts.lifecycle === "persistent";
+  if (persistent && !adapter.supportsPersistent) throw new Error(`${adapter.name} does not support persistent provisioning yet.`);
+  if (persistent && (opts.reuseNodeId || opts.restoreSessionId)) throw new Error("Reconnect to your persistent server instead of rebuilding it as a session runner.");
   // Progress is deliberately best-effort: presentation code must never be able
   // to abort provisioning. Keep these messages free of credentials, enrollment
   // tokens, user-data, and provider response bodies.
@@ -269,7 +278,7 @@ export async function launchEphemeralMachine(
   progress(`Preparing ${adapter.name} launch…`);
   const token = await deps.keys.getToken(opts.provider);
   if (!token) throw new Error(`Add a ${adapter.name} token first.`);
-  if (adapter.guestCanEnsureDeletion === false && !opts.externalTeardownGuaranteed) {
+  if (!persistent && adapter.guestCanEnsureDeletion === false && !opts.externalTeardownGuaranteed) {
     throw new Error(`${adapter.name} requires hosted provisioning: powering off its guest does not delete the billable server, so a device-only launch is unsafe.`);
   }
 
@@ -279,9 +288,9 @@ export async function launchEphemeralMachine(
   // attempt before enrollment: after this callback every later side effect has a
   // durable owner even if this process crashes.
   const attemptId = opts.attemptId || randHex(16);
-  const nodeId = opts.reuseNodeId || "eph-" + randHex(8);
+  const nodeId = opts.reuseNodeId || (persistent ? "server-" : "eph-") + randHex(8);
   await opts.onLifecycle?.({ attemptId, nodeId, phase: "requested" });
-  const enrollBody = JSON.stringify({ nodeId, name: opts.name || `Ephemeral ${adapter.name}` });
+  const enrollBody = JSON.stringify({ nodeId, name: opts.name || `${persistent ? "My" : "Ephemeral"} ${adapter.name}` });
   progress("Enrolling a secure Bivy node…");
   const enrollOnce = async () => {
     const res = await fetchImpl(`${cpBase(deps.store)}/nodes/enroll`, {
