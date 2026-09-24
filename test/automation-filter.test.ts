@@ -11,7 +11,7 @@ import { decodeAutomationTemplate, encodeAutomationTemplate, parseAutomationFilt
 import { parseAutomationConfig } from "../src/automation-config.js";
 
 const input = webhookFilterInput({ pull_request: { draft: true }, text: "$(touch /not-executed)" }, "delivery-123");
-const filter = (code: string) => ({ command: [process.execPath, "-e", code], cwd: os.tmpdir(), timeoutSeconds: 5 });
+const filter = (code: string, ...args: string[]) => ({ command: [process.execPath, "-e", code, ...args], cwd: os.tmpdir(), timeoutSeconds: 5 });
 
 test("JSON stdin, explicit decisions, and bounded diagnostics", async () => {
   const result = await runAutomationFilter(filter(`
@@ -66,9 +66,15 @@ test("POSIX timeout kills descendants, not only the filter parent", { skip: proc
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-filter-tree-"));
   const marker = path.join(dir, "escaped");
   try {
-    const childCode = `setTimeout(() => require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'escaped'), 1800)`;
-    const parentCode = `require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(childCode)}], {stdio:'inherit'}); setInterval(()=>{},1000)`;
-    await assert.rejects(runAutomationFilter({ ...filter(parentCode), timeoutSeconds: 1 }, input), /timed out/);
+    const parentCode = `
+      require('node:child_process').spawn(process.execPath, [
+        '-e',
+        "setTimeout(() => require('node:fs').writeFileSync(process.argv[1], 'escaped'), 1800)",
+        process.argv[1],
+      ], {stdio:'inherit'});
+      setInterval(()=>{},1000);
+    `;
+    await assert.rejects(runAutomationFilter({ ...filter(parentCode, marker), timeoutSeconds: 1 }, input), /timed out/);
     await new Promise(resolve => setTimeout(resolve, 1200));
     assert.equal(fs.existsSync(marker), false);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
@@ -93,7 +99,8 @@ test("gate records accept/skip and never accepts missing/malformed context", asy
   const report = async (p: Record<string, unknown>) => { reports.push(p); };
   const signal = new AbortController().signal;
   for (const decision of ["accept", "skip"]) {
-    assert.equal(await passWebhookFilter(filter(`console.log('${JSON.stringify({ decision, reason: "test" })}')`), { id: "run-1", eventContext: '{"a":1}' }, report, signal), decision === "accept");
+    const config = filter("console.log(process.argv[1])", JSON.stringify({ decision, reason: "test" }));
+    assert.equal(await passWebhookFilter(config, { id: "run-1", eventContext: '{"a":1}' }, report, signal), decision === "accept");
   }
   assert.equal((reports[1].checks as Array<{ status: string }>)[0].status, "skipped");
   assert.match(JSON.stringify(reports), /Webhook filter skipped delivery: test/);
