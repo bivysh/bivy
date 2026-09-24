@@ -206,6 +206,39 @@ test("ephemeral coordinator assigns queue work only after launch", async () => {
   assert.deepEqual(events, ["launch", "refresh", "assign", "refresh"]);
 });
 
+test("saving a BYO provider token does not create a disposable runner profile", async () => {
+  const events: string[] = [];
+  const coordinator = new EphemeralCoordinator({
+    validateProviderToken: async () => { events.push("validate"); },
+    setProviderToken: async () => { events.push("save"); },
+    listConfigs: async () => { throw new Error("must not create a session profile"); },
+  } as any);
+  await coordinator.saveProviderToken("hetzner", "secret");
+  assert.deepEqual(events, ["validate", "save"]);
+});
+
+test("persistent servers never tear down on session finish, even with a stale finish flag", async () => {
+  const coordinator = new EphemeralCoordinator({
+    direct: () => false, followupCount: () => 0, currentNodeId: () => "server-one",
+    machines: async () => [{ id: "1", nodeId: "server-one", lifecycle: "persistent", teardownOnAgentFinish: true }],
+    recordSessionCorrelation: () => { throw new Error("must not correlate for rebuild"); },
+    schedule: () => { throw new Error("must not schedule deletion"); },
+  } as any);
+  await coordinator.teardownFinishedSession("session-one");
+});
+
+test("persistent server recovery never provisions a replacement", async () => {
+  let reported: Error | undefined;
+  const coordinator = new EphemeralCoordinator({
+    correlations: () => [], roomKey: () => "key", nodes: () => [],
+    machines: async () => [{ id: "1", nodeId: "server-one", lifecycle: "persistent" }],
+    reportError: (error: Error) => { reported = error; },
+    launchMachine: () => { throw new Error("must not launch a replacement"); },
+  } as any);
+  await coordinator.reprovision("server-one", "session-one");
+  assert.match(reported!.message, /Restart or repair it in your provider console/);
+});
+
 test("ephemeral coordinator restores managed sessions without a device cloud token or room key", async () => {
   const events: string[] = [];
   const coordinator = new EphemeralCoordinator({

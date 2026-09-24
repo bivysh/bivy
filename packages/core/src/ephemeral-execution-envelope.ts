@@ -3,9 +3,10 @@
 // Sensitive launch material. Unlike EphemeralLaunchPlan, this value is never
 // suitable for logs, analytics, persistence, or presentation.
 
-import type { BootstrapOpts } from "./ephemeral-provider-ports.js";
+import type { BootstrapOpts, MachineLifecycle } from "./ephemeral-provider-ports.js";
 
 export interface EphemeralExecutionEnvelopeInput {
+  lifecycle?: MachineLifecycle;
   provider: string;
   nodeId: string;
   relayUrl: string;
@@ -37,7 +38,8 @@ export function createEphemeralExecutionEnvelope(input: EphemeralExecutionEnvelo
       controlPlaneUrl: input.controlPlaneUrl,
       enrollmentToken: input.enrollmentToken,
       e2eKeyB64: input.roomKeyB64,
-      ttlMinutes: input.ttlMinutes,
+      ...(input.lifecycle ? { lifecycle: input.lifecycle } : {}),
+      ttlMinutes: input.lifecycle === "persistent" ? undefined : input.ttlMinutes,
       repo: input.repo,
       hostedTasks: input.hostedTasks,
       hostedCredentialCustody: input.hostedCredentialCustody,
@@ -46,7 +48,7 @@ export function createEphemeralExecutionEnvelope(input: EphemeralExecutionEnvelo
       githubToken: input.githubToken,
       hostedMint: input.hostedMint,
       provider: input.provider,
-      teardownOnAgentFinish: input.teardownOnAgentFinish,
+      teardownOnAgentFinish: input.lifecycle === "persistent" ? false : input.teardownOnAgentFinish,
       debugKeepMachine: input.debugKeepMachine,
       restoreSessionId: input.restoreSessionId,
     },

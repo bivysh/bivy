@@ -418,11 +418,18 @@ not a public issue. See [SECURITY.md](SECURITY.md).
 
 ### In development—not available at launch
 
-Automatically provisioned, short-lived **ephemeral machines** are in development
-for hosted and bring-your-own-cloud deployments. Neither path is ready or
-supported for this launch. Use an existing computer or server you operate.
-Experimental provisioning has different credential-custody and encryption
-boundaries; see the [provisioning trust model](docs/hosted-provisioning-trust-model.md).
+Cloud provisioning remains experimental and disabled unless the deployment
+explicitly enables it. The first persistent BYO flow can create an always-on
+Hetzner server in your own account, with an 8 GB recommendation and no automatic
+expiry. You pay Hetzner directly and manage security updates and backups. See
+[persistent machines and the managed-hosting roadmap](docs/persistent-cloud-machines.md)
+for limitations and the required live pilot checks.
+
+Short-lived **ephemeral machines** remain an advanced option. Paid persistent
+managed hosting is not enabled by this work. For supported use, connect an
+existing computer or server you operate. Experimental provisioning has different
+credential-custody and encryption boundaries; see the
+[provisioning trust model](docs/hosted-provisioning-trust-model.md).
 
 ## License
 

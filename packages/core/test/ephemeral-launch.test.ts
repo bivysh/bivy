@@ -120,6 +120,56 @@ describe("launchEphemeralMachine — durable lifecycle", () => {
     expect(fetched).toBe(false);
   });
 
+  it("launches a persistent Hetzner server without a hosted deletion controller", async () => {
+    const keys = createEphemeralKeyStore(memoryBackend());
+    await keys.setToken("hetzner", "hz-token");
+    const store = fakeStore();
+    const machines = createMachineStore(memoryBackend());
+    let body: Record<string, unknown> = {};
+    const machine = await launchEphemeralMachine({
+      provider: "hetzner", lifecycle: "persistent", ttlMinutes: 5, teardownOnAgentFinish: true,
+    }, {
+      store, keys, machines,
+      exec: async req => {
+        if (req.method === "GET") return { status: 200, body: { servers: [] } };
+        body = req.body as Record<string, unknown>;
+        return { status: 201, body: { server: { id: 42, status: "running" } } };
+      },
+      fetchImpl: (async (_url: unknown, init: RequestInit) => {
+        const enrollment = JSON.parse(String(init.body));
+        expect(enrollment.nodeId).toMatch(/^server-/);
+        expect(enrollment.name).toBe("My Hetzner Cloud");
+        return { ok: true, json: async () => ({ enrollmentToken: "enrollment-token" }) };
+      }) as unknown as typeof fetch,
+    });
+    expect(machine.lifecycle).toBe("persistent");
+    expect(machine.ttlMinutes).toBeUndefined();
+    expect(machine.teardownOnAgentFinish).toBe(false);
+    expect(body.labels).toMatchObject({ bivy: "persistent" });
+    expect(body.labels).not.toHaveProperty("bivy-account");
+    expect(body.user_data).toContain("systemctl enable --now bivy.service");
+    expect(body.user_data).not.toContain("shutdown -h now");
+    expect(body.user_data).not.toContain("hz-token");
+    expect(await machines.list()).toEqual([machine]);
+    expect(store.keys()[machine.nodeId!]).toBeTruthy();
+  });
+
+  it.each([
+    { provider: "fly", lifecycle: "persistent" as const },
+    { provider: "aws", lifecycle: "persistent" as const },
+    { provider: "hetzner", lifecycle: "persistent" as const, computeSource: "managed" as const },
+    { provider: "hetzner", lifecycle: "persistent" as const, externalTeardownGuaranteed: true },
+    { provider: "hetzner", lifecycle: "persistent" as const, ownershipTag: "hosted-account" },
+    { provider: "hetzner", lifecycle: "persistent" as const, reuseNodeId: "server-existing" },
+  ])("rejects unsupported persistent provisioning before any effects: %j", async opts => {
+    await expect(launchEphemeralMachine(opts, {
+      store: fakeStore(), keys: { getToken: async () => { throw new Error("unexpected credential access"); } } as never,
+      machines: createMachineStore(memoryBackend()),
+      exec: async () => { throw new Error("unexpected provider request"); },
+      fetchImpl: (async () => { throw new Error("unexpected enrollment"); }) as typeof fetch,
+    })).rejects.toThrow(/persistent|Persistent/);
+  });
+
   it("refuses a removed provider before reading credentials or enrolling", async () => {
     let fetched = false;
     await expect(launchEphemeralMachine(

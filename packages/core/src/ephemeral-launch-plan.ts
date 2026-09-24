@@ -5,9 +5,10 @@
 // supplied facts into a plan and projects a provider result into tracked data.
 
 import type { EphemeralMachine, EphemeralMachinePurpose } from "./ephemeral-machine.js";
-import type { ProviderProvisionConfig } from "./ephemeral-provider-ports.js";
+import type { MachineLifecycle, ProviderProvisionConfig } from "./ephemeral-provider-ports.js";
 
 export interface EphemeralLaunchPlanInput {
+  lifecycle?: MachineLifecycle;
   provider: string;
   attemptId: string;
   nodeId: string;
@@ -36,7 +37,7 @@ export interface EphemeralLaunchPlan {
   region: string;
   size: string;
   providerConfig: ProviderProvisionConfig;
-  machineFacts: Partial<Pick<EphemeralMachine, "name" | "setupId" | "repo" | "teardownOnAgentFinish" | "workItemId" | "purpose">>;
+  machineFacts: Partial<Pick<EphemeralMachine, "name" | "setupId" | "repo" | "lifecycle" | "ttlMinutes" | "teardownOnAgentFinish" | "workItemId" | "purpose">>;
 }
 
 export function ephemeralNodeLabel(nodeId: string): string {
@@ -60,7 +61,8 @@ export function planEphemeralLaunch(input: EphemeralLaunchPlanInput): EphemeralL
       region,
       size,
       image: input.image,
-      ttlMinutes: input.ttlMinutes,
+      ...(input.lifecycle ? { lifecycle: input.lifecycle } : {}),
+      ttlMinutes: input.lifecycle === "persistent" ? undefined : input.ttlMinutes,
       attemptId: input.attemptId,
       ownershipTag: input.ownershipTag,
     },
@@ -68,7 +70,10 @@ export function planEphemeralLaunch(input: EphemeralLaunchPlanInput): EphemeralL
       ...(chosenName ? { name: chosenName } : {}),
       ...(input.setupId ? { setupId: input.setupId } : {}),
       ...(input.repo ? { repo: input.repo } : {}),
-      ...(input.teardownOnAgentFinish ? { teardownOnAgentFinish: true } : {}),
+      ...(input.lifecycle ? { lifecycle: input.lifecycle } : {}),
+      ...(input.lifecycle === "persistent"
+        ? { ttlMinutes: undefined, teardownOnAgentFinish: false }
+        : input.teardownOnAgentFinish ? { teardownOnAgentFinish: true } : {}),
       ...(input.workItemId ? { workItemId: input.workItemId } : {}),
       ...(input.purpose ? { purpose: input.purpose } : {}),
     },

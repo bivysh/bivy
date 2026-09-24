@@ -89,6 +89,8 @@ test("first-use custody language matches the product trust boundary", async () =
   const connect = await read("../../packages/web/src/components/ConnectRunner.tsx");
   const model = await read("../../packages/web/src/components/FirstRunModelAuth.tsx");
   expect(connect).not.toContain("Bivy never receives your code or keys");
-  expect(connect).toContain("hosted credential custody");
+  // BYO onboarding does not enable hosted custody. Be explicit about who
+  // pays and operates the server rather than implying managed hosting.
+  expect(connect).toContain("You pay Hetzner directly and manage updates and backups");
   expect(model).toContain("hosted credential custody");
 });

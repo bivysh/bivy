@@ -3484,6 +3484,10 @@ export class AppController {
   getEphemeralToken(id: string): Promise<string> {
     return this.ephemeralCoordinator.getProviderToken(id);
   }
+  /** Save a BYO credential without creating a disposable session profile. */
+  saveCloudProviderToken(id: string, token: string): Promise<void> {
+    return this.ephemeralCoordinator.saveProviderToken(id, token);
+  }
   setEphemeralToken(id: string, token: string): Promise<void> {
     return this.ephemeralCoordinator.setProviderToken(id, token);
   }
@@ -3761,7 +3765,7 @@ export class AppController {
    *  launched, so it survives the node's teardown/unenroll (Gap 1). Deduped per
    *  (node, session); updates the local cache so an immediate rebuild sees it. */
   private async recordSessionCorrelation(sessionId: string, machine: EphemeralMachine): Promise<void> {
-    if (this.isProvisionalSessionId(sessionId)) return;
+    if (this.isProvisionalSessionId(sessionId) || machine.lifecycle === "persistent") return;
     if (this.direct || !this.local.s || !machine.nodeId || !sessionId) return;
     const dedupe = `${machine.nodeId}:${sessionId}`;
     if (this.correlatedSessions.has(dedupe)) return;

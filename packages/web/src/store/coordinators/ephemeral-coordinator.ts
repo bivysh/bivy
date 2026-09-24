@@ -60,9 +60,13 @@ export class EphemeralCoordinator {
   removeConfig(id: string): Promise<void> { return this.deps.removeConfig(id); }
   listSizes(providerId: string, region?: string): Promise<ProviderSize[]> { return this.deps.listSizes(providerId, region); }
 
-  async setProviderToken(providerId: string, token: string): Promise<void> {
+  async saveProviderToken(providerId: string, token: string): Promise<void> {
     await this.deps.validateProviderToken(providerId, token);
     await this.deps.setProviderToken(providerId, token);
+  }
+
+  async setProviderToken(providerId: string, token: string): Promise<void> {
+    await this.saveProviderToken(providerId, token);
     void this.ensureDefaultRunner(providerId);
   }
 
@@ -152,7 +156,7 @@ export class EphemeralCoordinator {
     const nodeId = this.deps.currentNodeId();
     if (!nodeId) return;
     const machine = (await this.deps.machines().catch(() => []))
-      .find((candidate) => candidate.nodeId === nodeId && candidate.teardownOnAgentFinish);
+      .find((candidate) => candidate.nodeId === nodeId && candidate.lifecycle !== "persistent" && candidate.teardownOnAgentFinish);
     if (!machine || this.finishingMachines.has(machine.id)) return;
     this.deps.recordSessionCorrelation(sessionId, machine);
     this.finishingMachines.add(machine.id);
@@ -197,6 +201,7 @@ export class EphemeralCoordinator {
         ?? (node ? this.deps.machineFromNode(node) : null)
         ?? (correlation ? this.deps.machineFromCorrelation(correlation) : null);
       if (!machine) throw new Error("No record of the machine to rebuild — re-launch it from Ephemeral settings.");
+      if (machine.lifecycle === "persistent") throw new Error("This is a persistent server. Restart or repair it in your provider console; it will not be replaced automatically.");
       await this.launch({
         provider: machine.provider,
         region: machine.region || undefined,

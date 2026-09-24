@@ -32,7 +32,10 @@ test("the journey gates in order: sign-in first, then machine connection, then t
   expect(app).toContain("const needsNode =");
   expect(app).toContain("{needsNode && (");
   expect(app).toContain("<ConnectRunner");
-  expect(app).toContain("ephemeralEnabled={false}");
+  // BYO setup creates an explicitly purchased persistent server, never a
+  // temporary runner on first prompt. Deployment provisioning remains gated.
+  expect(app).toContain("cloudSetupEnabled={EPHEMERAL_MACHINES_ENABLED}");
+  expect(app).toContain('<AddNodeSheet initialMode="server"');
 });
 
 test("direct/self-host mode never shows the sign-in gate — it has no account to sign into", async () => {

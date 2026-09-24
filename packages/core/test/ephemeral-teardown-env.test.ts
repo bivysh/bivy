@@ -38,6 +38,28 @@ describe("bootstrap ephemeral self-teardown env", () => {
     expect(buildBootstrapUserData({ ...base, provider: "fly" })).not.toContain("BIVY_RESTORE");
   });
 
+  it("persistent BYO has no shutdown timer or teardown flags, even with stale TTL settings", () => {
+    const userData = buildBootstrapUserData({ ...base, provider: "hetzner", lifecycle: "persistent", teardownOnAgentFinish: true });
+    expect(userData).not.toContain("BIVY_EPHEMERAL");
+    expect(userData).not.toContain("BIVY_TEARDOWN_ON_FINISH");
+    expect(userData).not.toContain("bivy-ttl");
+    expect(userData).not.toContain("shutdown -h now");
+    expect(userData).not.toContain("systemd-run");
+    expect(userData).toContain("/etc/systemd/system/bivy.service");
+    expect(userData).toContain("WantedBy=multi-user.target");
+    expect(userData).toContain("Restart=always");
+    expect(userData).toContain("Environment=HOME=/root");
+    expect(userData).toContain("systemctl daemon-reload && systemctl enable --now bivy.service");
+  });
+
+  it("legacy ephemeral boot retains its TTL and transient service", () => {
+    const userData = buildBootstrapUserData({ ...base, provider: "hetzner" });
+    expect(userData).toContain("--on-active=90m");
+    expect(userData).toContain("shutdown -h now");
+    expect(userData).toContain("systemd-run --unit=bivy");
+    expect(userData).not.toContain("/etc/systemd/system/bivy.service");
+  });
+
   it("skips network installation when a runner image already has bivy", () => {
     const userData = buildBootstrapUserData({ ...base, provider: "hetzner" });
     expect(userData).toContain("command -v bivy >/dev/null 2>&1 || curl --connect-timeout 10 --max-time 120 -fsSL");

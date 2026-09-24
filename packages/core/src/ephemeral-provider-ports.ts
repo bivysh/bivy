@@ -4,7 +4,8 @@
 // receive transport capabilities through ExecFn and retain no secret globals.
 
 import type { PricedMachineSize } from "./ephemeral-lifecycle.js";
-import type { EphemeralMachine } from "./ephemeral-machine.js";
+import type { EphemeralMachine, MachineLifecycle } from "./ephemeral-machine.js";
+export type { MachineLifecycle } from "./ephemeral-machine.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -21,6 +22,7 @@ export interface ExecResult {
 export type ExecFn = (request: ExecRequest) => Promise<ExecResult>;
 
 export interface BootstrapOpts {
+  lifecycle?: MachineLifecycle;
   relayUrl: string;
   controlPlaneUrl: string;
   enrollmentToken: string;
@@ -103,6 +105,7 @@ export interface ProviderSize extends PricedMachineSize {
 }
 
 export interface ProviderProvisionConfig {
+  lifecycle?: MachineLifecycle;
   slug: string;
   region: string;
   size: string;
@@ -134,6 +137,8 @@ export interface ProviderAdapter {
    * provider may launch only when an independent controller has teardown
    * credentials; device-only TTL shutdown is not a billing guarantee. */
   guestCanEnsureDeletion?: boolean;
+  /** Supports durable system-disk BYO machines with reboot-safe bootstrap. */
+  supportsPersistent?: boolean;
   /** Optionally fetch the provider's live, currently-orderable sizes so the
    *  hardcoded `sizes` list can't silently go stale (e.g. a plan gets
    *  deprecated). When a region is given, results are narrowed to what that
