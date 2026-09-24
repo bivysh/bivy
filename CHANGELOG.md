@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Refresh the release-tested agent pins to the current upstream builds: Claude Agent SDK `0.3.278`, Codex `0.155.1`, Pi `0.86.1`, and OpenCode `1.18.31` (previously `0.3.270` / `0.154.0` / `0.85.1` / `1.18.30`). Regenerates the certification matrix, CLI agent manifest, and supported-agent docs from the single source of truth, and updates the bundled SDK/lockfile. Each pinned version installs and probes cleanly; the pinned-certification CI job and the opt-in live workflow validate the governed turn path.
+- Refresh the release-tested agent pins to the current upstream builds: Claude Agent SDK `0.3.281`, Codex `0.156.1`, Pi `0.87.1`, and OpenCode `1.18.32` (previously `0.3.270` / `0.154.0` / `0.85.1` / `1.18.30`). Regenerates the certification matrix, CLI agent manifest, and supported-agent docs from the single source of truth, and updates the bundled SDK/lockfile. Each pinned version installs and probes cleanly; the pinned-certification CI job and the opt-in live workflow validate the governed turn path.
 
 ### Fixed
 
