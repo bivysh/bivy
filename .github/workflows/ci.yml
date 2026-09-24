@@ -316,13 +316,14 @@ jobs:
         if: always() && runner.os == 'Linux'
         run: bash scripts/installer-smoke-guest.sh cleanup
 
-  # Keep real desktop/mobile coverage; distribute files across independent
-  # runners. Source-only contracts run once in their own Playwright project.
+  # Keep real desktop/mobile coverage; distribute individual cases across six
+  # runners (fullyParallel in playwright.config.ts). Source-only contracts run
+  # once in their own Playwright project.
   browser:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6]
     needs: changes
     if: inputs.force_all || needs.changes.outputs.root == 'true'
     runs-on: ubuntu-latest
@@ -343,7 +344,7 @@ jobs:
       # Install fonts as well as shared libraries: a successful browser launch
       # alone does not guarantee the screenshot environment matches baselines.
       - run: pnpm exec playwright install --with-deps --only-shell chromium
-      - run: pnpm run test:browser --project=desktop --project=mobile --shard=${{ matrix.shard }}/4 --reporter=line,json
+      - run: pnpm run test:browser --project=desktop --project=mobile --shard=${{ matrix.shard }}/6 --reporter=line,json
         env:
           PLAYWRIGHT_JSON_OUTPUT_NAME: test-results/timings.json
       - name: Upload PWA screenshot review artifacts

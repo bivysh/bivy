@@ -2,6 +2,11 @@ import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./test/browser",
+  // Shard individual cases, not whole files: large light/dark scenario matrices
+  // otherwise pin an entire runner while other shards finish early. Explicit
+  // serial suites still stay together. Bound workers on shared CI runners.
+  fullyParallel: true,
+  workers: process.env.CI ? 2 : undefined,
   timeout: 30_000,
   expect: { timeout: 5_000 },
   use: {

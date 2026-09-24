@@ -136,6 +136,9 @@ for (const theme of ["light", "dark"]) for (const outcome of ["reply", "error", 
       globalThis.inspect = () => ({ adopted: controller.transport === globalThis.connection, id: controller.store.getState().activeSession.activeSessionId, shouldRestore: controller.shouldAutoResume(), pending: controller.pendingLaunches.size });
     </script></body></html>`);
     await page.route(`${origin}${fixturePath}`, route => route.fulfill({ contentType: "text/html", body: html }));
+    // Install before application timers exist so polling, cancellation, and
+    // delayed transport cleanup all run on the same controllable clock.
+    await page.clock.install();
     await page.goto(`${origin}${fixturePath}`);
     await expect.poll(() => polls).toBeGreaterThan(0);
     expect(await page.evaluate("globalThis.provisionalSafe")).toBe(true);
@@ -145,6 +148,10 @@ for (const theme of ["light", "dark"]) for (const outcome of ["reply", "error", 
     expect(await page.evaluate("globalThis.mainCommands.some(command => command.kind === 'history' && command.sessionId === 'established-session')")).toBe(true);
     expect(await page.evaluate("globalThis.commands")).not.toContain("session.new");
     bootstrapReady = true;
+    await expect.poll(async () => {
+      await page.clock.runFor(1000);
+      return page.evaluate("globalThis.commands.includes('session.new')");
+    }).toBe(true);
     if (outcome === "hydrated") {
       await expect(page.getByText("Choose a model before your first message", { exact: true })).toBeVisible();
       expect(await page.evaluate("globalThis.commands")).not.toContain("prompt");
@@ -159,7 +166,8 @@ for (const theme of ["light", "dark"]) for (const outcome of ["reply", "error", 
     if (outcome === "cancel") {
       await page.evaluate("globalThis.persisted = []; globalThis.cancelLaunch()");
       expect(await page.evaluate("globalThis.inspect().pending")).toBe(0);
-      await page.waitForTimeout(1100);
+      // Exercise delayed cleanup without spending real time on the grace period.
+      await page.clock.runFor(1100);
       expect(await page.evaluate("globalThis.commands")).not.toContain("prompt");
       expect(await page.evaluate("globalThis.commands.filter(kind => kind === 'session.new').length")).toBe(1);
       expect(await page.evaluate("globalThis.persisted")).toEqual([]);
@@ -191,7 +199,6 @@ for (const theme of ["light", "dark"]) for (const outcome of ["reply", "error", 
     await page.keyboard.press("Escape");
     await expect(page.getByRole("button", { name: "Choose model and send" })).toBeFocused();
     await page.getByRole("button", { name: "Choose model and send" }).click();
-    if (outcome === "waiting") await page.clock.install();
     await page.getByText("Test model", { exact: true }).click();
     await expect.poll(() => page.evaluate("globalThis.commands.includes('model.select')")).toBe(true);
     expect(await page.evaluate("globalThis.commands")).not.toContain("prompt");
@@ -242,7 +249,7 @@ for (const theme of ["light", "dark"]) for (const outcome of ["reply", "error", 
       expect(await page.evaluate("globalThis.delivered[1]")).toMatchObject({ sessionId: "real-session", text: "Followup", clientMessageId: queued.clientMessageId });
     }
     expect(await page.evaluate("globalThis.commands")).toEqual(expect.arrayContaining(["models.list", "runtimes.list", "providers.list"]));
-    await page.waitForTimeout(1100);
+    await page.clock.runFor(1100);
     expect(await page.evaluate("globalThis.closedCount")).toBe(0);
     await page.screenshot({ path: info.outputPath(`handoff-${theme}-${outcome}.png`), fullPage: true });
     if (outcome === "error") {
