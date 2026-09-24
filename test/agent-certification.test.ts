@@ -50,6 +50,7 @@ await assert.rejects(() => cancelledRun, /cancelled by test/);
 // release-tested signal is attached only when the configured path matches the
 // active matrix data; a different path remains Supported but adapter-tested.
 process.env.BIVY_OPENCODE_ACP = "1";
+process.env.BIVY_GROK_ACP = "1";
 const listed = listRegisteredAgents();
 for (const entry of matrix.agents) {
   const runtime = listed.find((agent) => agent.id === entry.id)!;
@@ -60,10 +61,16 @@ for (const entry of matrix.agents) {
   assert.equal(certificationEntry(runtime.id)?.status, "active");
 }
 process.env.BIVY_OPENCODE_ACP = "0";
-const fallback = listRegisteredAgents().find((agent) => agent.id === "opencode")!;
-assert.equal(fallback.executionMode, "pipe");
-assert.equal(fallback.supportTier, "supported");
-assert.equal(fallback.certification, "adapter-tested");
+process.env.BIVY_GROK_ACP = "0";
+// OpenCode's fallback is the plain pipe; Grok's is the structured pipe (it has a
+// verified NDJSON parser). Both stay Supported but drop to adapter-tested.
+for (const [id, mode] of [["opencode", "pipe"], ["grok", "structured-pipe"]] as const) {
+  const fallback = listRegisteredAgents().find((agent) => agent.id === id)!;
+  assert.equal(fallback.executionMode, mode);
+  assert.equal(fallback.supportTier, "supported");
+  assert.equal(fallback.certification, "adapter-tested");
+}
 delete process.env.BIVY_OPENCODE_ACP;
+delete process.env.BIVY_GROK_ACP;
 
 console.log("agent-certification: all tests passed");

@@ -52,7 +52,7 @@ function validate() {
     for (const scenario of REQUIRED) if (!Array.isArray(fixture.scenarios?.[scenario]) || fixture.scenarios[scenario].length === 0) errors.push(`${agent.id}: fixture missing ${scenario}`);
     if (JSON.stringify(fixture).includes(fixture.secretSentinel) && JSON.stringify(fixture.scenarios).includes(fixture.secretSentinel)) errors.push(`${agent.id}: fixture leaks its secret sentinel`);
   }
-  if (ids.size !== 4 || !["claude-code-sdk", "codex-approvals", "pi", "opencode"].every((id) => ids.has(id))) errors.push("initial certification set must contain exactly Claude Code, governed Codex, Pi, and OpenCode ACP");
+  if (ids.size !== 5 || !["claude-code-sdk", "codex-approvals", "pi", "opencode", "grok"].every((id) => ids.has(id))) errors.push("certification set must contain exactly Claude Code, governed Codex, Pi, OpenCode ACP, and Grok ACP");
   if (errors.length) throw new Error(`Certification matrix invalid:\n- ${errors.join("\n- ")}`);
 }
 
@@ -82,9 +82,12 @@ async function latest() {
   const rows = [];
   for (const agent of matrix.agents) {
     try {
-      const response = await fetch(`https://registry.npmjs.org/${encodeURIComponent(agent.upstream.package)}/latest`, { signal: AbortSignal.timeout(15_000) });
+      // Non-npm agents (Grok's curl installer) declare a `latestUrl` whose plain-text
+      // body is the current version; everything else resolves through the npm registry.
+      const url = agent.upstream.latestUrl ?? `https://registry.npmjs.org/${encodeURIComponent(agent.upstream.package)}/latest`;
+      const response = await fetch(url, { signal: AbortSignal.timeout(15_000) });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const latestVersion = (await response.json()).version;
+      const latestVersion = agent.upstream.latestUrl ? (await response.text()).trim() : (await response.json()).version;
       rows.push({ agent: agent.id, pinned: agent.upstream.pinnedVersion, latest: latestVersion, inRange: satisfies(latestVersion, agent.upstream.supportedRange) });
     } catch (error) { rows.push({ agent: agent.id, pinned: agent.upstream.pinnedVersion, latest: "unknown", inRange: false, error: error.message }); }
   }

@@ -529,8 +529,11 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     behaviors: { preflight: "grok", prepare: "grok-auth", nativeSessions: "grok" },
     command: "grok",
     packageName: "grok (curl -fsSL https://x.ai/cli/install.sh | bash)",
+    // Supported tier: Grok runs on the governed ACP path by default (per-tool
+    // Approve/Deny + native resume + live model state), the same bar Pi, Claude
+    // Code, Codex, and OpenCode clear. See `acp` below for the version fallback.
     supportTier: "supported",
-    testedVersion: "1.0.0",
+    testedVersion: "1.0.41",
     authOwner: "mixed",
     blurb: "xAI's official Grok coding agent (Grok CLI) — SuperGrok/X subscription or API key.",
     // Official CLI: `grok -p "<prompt>"` (alias `--single`) runs one headless
@@ -587,6 +590,16 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     // continued turn keeps the chosen effort. Override with BIVY_GROK_THINKING.
     thinking: { levels: ["low", "medium", "high", "xhigh"], default: "high", template: ["--reasoning-effort", "{level}"], insertAt: 0 },
     promptMode: "argv",
+    // `grok agent stdio` ("Run the agent over stdio") is a full ACP server
+    // (protocolVersion 1: session/new, session/prompt, session/request_permission,
+    // loadSession resume, live model state) — the governed ProtocolRuntime path
+    // that supersedes the `--always-approve` pipe above with real per-tool
+    // Approve/Deny. Validated against grok 1.0.41, so it is ON by default
+    // (`preferred`) — gated on the binary actually describing the `agent`
+    // subcommand ("Run Grok without the interactive UI" in `grok --help`), so an
+    // older CLI falls back to the pipe path rather than opening a dead session.
+    // Force the pipe path back with BIVY_GROK_ACP=0.
+    acp: { args: ["agent", "stdio"], helpToken: "without the interactive ui", preferred: true },
     install: {
       kind: "curl",
       display: "curl -fsSL https://x.ai/cli/install.sh | bash",

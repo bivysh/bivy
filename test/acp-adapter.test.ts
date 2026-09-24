@@ -402,11 +402,11 @@ await check("gemini: BIVY_GEMINI_ACP=1 promotes it to the governed ACP path end-
 // expected set and guards against a spec regression silently dropping an agent
 // off — or onto — the ACP path. Capability advertisement is derived purely from
 // the spec + env, so it needs no installed binary.
-const ACP_CAPABLE = ["gemini", "qwen", "opencode", "goose", "kilocode", "cursor", "cline", "copilot"] as const;
+const ACP_CAPABLE = ["gemini", "qwen", "opencode", "goose", "kilocode", "cursor", "cline", "copilot", "grok"] as const;
 // Agents promoted to ACP BY DEFAULT (spec.acp.preferred) — their default state
 // depends on whether the installed binary evidences the ACP mode, so the opt-in
 // assertion below doesn't apply to them.
-const ACP_DEFAULT_ON = new Set(["opencode"]);
+const ACP_DEFAULT_ON = new Set(["opencode", "grok"]);
 await check("acp: the expected agents declare an ACP mode and promote to governed caps", () => {
   for (const id of ACP_CAPABLE) {
     const envKey = `BIVY_${id.toUpperCase()}_ACP`;
@@ -432,6 +432,9 @@ await check("acp: the expected agents declare an ACP mode and promote to governe
 // capabilities the picker shows have to follow it — otherwise the catalog would
 // advertise approvals a downgraded session doesn't actually enforce.
 await check("acp: a default-on agent can be forced back to the pipe with =0", () => {
+  // The forced fallback is each agent's honest non-protocol mode: OpenCode has no
+  // verified parser (plain pipe); Grok's NDJSON parser keeps the structured pipe.
+  const FALLBACK_MODE: Record<string, string> = { opencode: "pipe", grok: "structured-pipe" };
   for (const id of ACP_DEFAULT_ON) {
     const envKey = `BIVY_${id.toUpperCase()}_ACP`;
     process.env[envKey] = "0";
@@ -440,7 +443,7 @@ await check("acp: a default-on agent can be forced back to the pipe with =0", ()
       assert.ok(info, `${id} must be in the picker`);
       const caps = info!.capabilities as Record<string, unknown>;
       assert.equal(caps.toolInterception, false, `${id} must drop per-tool approvals when forced onto the pipe`);
-      assert.equal(info!.executionMode, "pipe", `${id} must actually run on the pipe when forced`);
+      assert.equal(info!.executionMode, FALLBACK_MODE[id], `${id} must actually run on its pipe fallback when forced`);
     } finally {
       delete process.env[envKey];
     }
@@ -478,7 +481,7 @@ await check("acp: default-on promotion degrades to the pipe when the binary has 
 // Agents with no first-party ACP server must NOT declare `acp`: setting the env
 // flag is a no-op and they stay on the honest pipe (effect-level governance).
 await check("acp: agents without a native ACP mode are not promotable", () => {
-  for (const id of ["aider", "amp", "crush", "continue", "grok"]) {
+  for (const id of ["aider", "amp", "crush", "continue"]) {
     const envKey = `BIVY_${id.toUpperCase()}_ACP`;
     process.env[envKey] = "1";
     try {

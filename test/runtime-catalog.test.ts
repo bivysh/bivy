@@ -2,13 +2,14 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { listRegisteredAgents, listRuntimes } from "../src/runtime/index.js";
 
-// OpenCode is promoted to the governed ACP path by default, but only when the
-// binary on THIS machine evidences the `acp` subcommand — so its advertised
-// capabilities would otherwise differ between a dev box with opencode installed
+// OpenCode and Grok are promoted to the governed ACP path by default, but only
+// when the binary on THIS machine evidences the ACP mode — so their advertised
+// capabilities would otherwise differ between a dev box with the CLI installed
 // and CI without it. Pin the pipe path for the effect-level assertions below
 // (they describe what the plain ProcessRuntime adapters deliver); the promoted
 // path is asserted at the end of this file, and end-to-end in acp-adapter.test.ts.
 process.env.BIVY_OPENCODE_ACP = "0";
+process.env.BIVY_GROK_ACP = "0";
 
 // The agent picker must offer exactly the most-used coding agents, all driven
 // through Bivy's general paths (native runtimes, the Codex app-server shim, and
@@ -247,20 +248,26 @@ assert.equal(codexCaps.resume, true, "Codex must resume its thread to be Support
 assert.equal(codexCaps.modelSelection, true, "Codex must drive a real model picker to be Supported");
 assert.equal(codex.protectionLevel, "native-sandbox", "Codex keeps its native sandbox containment");
 
-// OpenCode earns it through its ACP server. Assert the promoted path directly —
-// the file-level pin above holds it on the pipe for the effect-level assertions.
-process.env.BIVY_OPENCODE_ACP = "1";
-try {
-  const opencode = listRuntimes().find((r) => r.id === "opencode")!;
-  const caps = opencode.capabilities as Record<string, unknown>;
-  assert.equal(opencode.executionMode, "protocol", "OpenCode must run over ACP to be Supported");
-  assert.equal(opencode.supportTier, "supported", "active ACP certification must confer Supported status");
-  assert.equal(opencode.certification, "release-tested");
-  assert.equal(caps.toolInterception, true, "OpenCode must gate each tool call to be Supported");
-  assert.equal(caps.resume, true, "OpenCode must resume via session/load to be Supported");
-  assert.equal(opencode.protectionLevel, "tool-controls", "promoted OpenCode is governed by Bivy tool controls, not bare user permissions");
-} finally {
-  process.env.BIVY_OPENCODE_ACP = "0";
+// OpenCode and Grok earn it through their ACP servers. Assert the promoted path
+// directly — the file-level pins above hold them on the pipe for the effect-level
+// assertions.
+for (const [id, name, envKey] of [
+  ["opencode", "OpenCode", "BIVY_OPENCODE_ACP"],
+  ["grok", "Grok", "BIVY_GROK_ACP"],
+] as const) {
+  process.env[envKey] = "1";
+  try {
+    const promoted = listRuntimes().find((r) => r.id === id)!;
+    const caps = promoted.capabilities as Record<string, unknown>;
+    assert.equal(promoted.executionMode, "protocol", `${name} must run over ACP to be Supported`);
+    assert.equal(promoted.supportTier, "supported", "active ACP certification must confer Supported status");
+    assert.equal(promoted.certification, "release-tested");
+    assert.equal(caps.toolInterception, true, `${name} must gate each tool call to be Supported`);
+    assert.equal(caps.resume, true, `${name} must resume natively to be Supported`);
+    assert.equal(promoted.protectionLevel, "tool-controls", `promoted ${name} is governed by Bivy tool controls, not bare user permissions`);
+  } finally {
+    process.env[envKey] = "0";
+  }
 }
 
 // Codex pins the exact external CLI release certified for the governed path.
