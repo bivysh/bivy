@@ -7,6 +7,7 @@ import { toHtml } from "./markdown.js";
 import { eventKind, toolCallId, toolDetail, toolInput, toolName, toolParentId } from "./tool-activity.js";
 import { contentThinking, contentToText, toolEntriesFromContent } from "./store-render.js";
 import { humanizeError, looksLikeAgentError } from "./store-errors.js";
+import { isAppReference, type AppReference } from "./apps.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -16,6 +17,7 @@ export interface TranscriptFoldTool {
   parentToolUseId?: string;
 }
 export interface TranscriptFoldEntry {
+  app?: AppReference;
   id: string; role: "user" | "assistant" | "system" | "thinking" | "error"; text: string;
   html?: string; tool?: TranscriptFoldTool; streaming?: boolean; attachments?: PromptAttachment[];
   imageRefs?: Record<string, unknown>;
@@ -199,6 +201,14 @@ export function foldTranscriptEvent(input: TranscriptFoldValue, event: ServerEve
       if (value.draft.finalized) value.draft = freshTranscriptDraft(false);
       setWorking(value, "Drafting response…");
     } break;
+    case "app_published": {
+      const app = event.app;
+      if (!isAppReference(app)) break;
+      if (!value.transcript.some((entry) => entry.app?.appId === app.appId)) {
+        value.transcript.push({ id: `app-${app.appId}`, role: "assistant", text: "", app });
+      }
+      break;
+    }
     case "attachment": {
       const ref = (event as any).ref;
       if (!ref || typeof ref.hash !== "string" || (ref.kind !== "image" && ref.kind !== "file")) return { handled: true, value: input, commands: [] };

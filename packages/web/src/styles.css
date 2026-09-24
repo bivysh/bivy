@@ -2920,6 +2920,13 @@ select.picker-search { appearance: auto; }
 
 /* Artifacts sheet (components/ArtifactsSheet.tsx) — agent-sent attachments,
    user uploads, and resolved inline images grouped by kind. */
+.app-views-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.app-views-heading .artifact-name, .app-message .artifact-name { white-space: normal; overflow-wrap: anywhere; }
+.app-view-row { flex-wrap: wrap; }
+.app-view-row > .btn, .app-views-heading > .btn { min-block-size: var(--space-7); flex-shrink: 0; }
+.app-terminal-status { padding: var(--space-2) var(--space-4); margin: 0; color: var(--muted); font-size: var(--text-sm); }
+.app-view-command { overflow-wrap: anywhere; white-space: pre-wrap; font-size: var(--text-xs); color: var(--muted); }
+.app-view-row .artifact-main { flex-basis: 60%; }
 .artifacts-group { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
 .artifacts-group:last-child { margin-bottom: 0; }
 .artifacts-group-title { font-size: 12px; font-weight: 600; opacity: 0.6; text-transform: uppercase; letter-spacing: 0.04em; }

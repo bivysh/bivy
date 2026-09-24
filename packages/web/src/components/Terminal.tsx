@@ -354,12 +354,15 @@ function Chip({
 export function TerminalOverlay({
   sessionId,
   attachTermId,
+  attachOnly = false,
   standalone,
   tui,
   onClose,
 }: {
   sessionId: string | null;
   attachTermId?: string | null;
+  /** App views must never silently replace an exited program with a shell. */
+  attachOnly?: boolean;
   /** True for the session-less terminal opened from the sidebar's terminal
    *  button (#460): always opens at the connected node's default workspace
    *  folder, ignoring any active chat session. */
@@ -881,6 +884,11 @@ export function TerminalOverlay({
     }
 
     const openFresh = () => {
+      if (attachOnly) {
+        setStatus("exited");
+        setStatusText("App stopped — reopen its view to start again");
+        return;
+      }
       requestAnimationFrame(() => {
         doFit();
         // "Continue in terminal": launch the runtime's interactive TUI resuming
@@ -952,6 +960,8 @@ export function TerminalOverlay({
 
     const off = controller.onTerminal((e: ServerEvent) => {
       const p = e as any;
+      if (attachOnly && typeof p.termId === "string" && p.termId !== attachTermId) return;
+      if (attachOnly && e.type === "terminal.opened") return;
       switch (String(e.type)) {
         case "terminal.opened":
           termIdRef.current = p.termId;
@@ -1244,7 +1254,7 @@ export function TerminalOverlay({
     setCtrlOpen(true);
   };
 
-  const hasAttachables = runTerminals.length > 0 || muxSessions.length > 0;
+  const hasAttachables = !attachOnly && (runTerminals.length > 0 || muxSessions.length > 0);
 
   // The batch compose panel — placed above the output on desktop, below the
   // bottom toolbar on touch (see the two `showComposer` render sites).
@@ -1446,6 +1456,7 @@ export function TerminalOverlay({
       {/* Desktop composer sits above the output (below the header/search). On
           touch it instead opens below the bottom toolbar — see `composer` below. */}
       {!touch && showComposer && composer}
+      {touch && attachOnly && status !== "connected" && <p className="app-terminal-status" role="status">{statusText}</p>}
 
       <div className="term-out" ref={mountRef} />
 

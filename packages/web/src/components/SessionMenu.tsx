@@ -6,6 +6,7 @@ import { createPortal } from "react-dom";
 import { controller, useAppState } from "../store/useStore.js";
 import { ConfirmDialog, RenameDialog } from "./AppDialog.js";
 import { ForkSheet } from "./ForkSheet.js";
+import { AppsSheet } from "./AppsSheet.js";
 import { sessionReferenceText, writeClipboard } from "../clipboard.js";
 import { routePath } from "../router.js";
 import { useModalEscape } from "../modalStack.js";
@@ -115,6 +116,7 @@ export function SessionMenu({
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [forkOpen, setForkOpen] = useState(false);
+  const [appsOpen, setAppsOpen] = useState(false);
   const [resumeOpen, setResumeOpen] = useState(false);
   const [prBusy, setPrBusy] = useState(false);
   const { presentation: { prResult, error } } = useAppState();
@@ -200,6 +202,7 @@ export function SessionMenu({
           onSave={(next) => { controller.renameSession(sessionId, next); setRenaming(false); }}
         />
       )}
+      {appsOpen && <AppsSheet sessionId={sessionId} onClose={() => setAppsOpen(false)} />}
       {forkOpen && <ForkSheet sessionId={sessionId} onClose={() => setForkOpen(false)} />}
       {resumeOpen && <ResumeCommandDialog sessionId={sessionId} name={name} onCancel={() => setResumeOpen(false)} />}
       {deleting && (
@@ -226,6 +229,7 @@ export function SessionMenu({
               <span>The last {eventLogHealth.operation ?? "storage"} operation failed. History may be incomplete.</span>
             </div>
           )}
+          <button className="menu-item session-actions-item" role="menuitem" onClick={() => { close(); setAppsOpen(true); }}>Apps…</button>
           <button className="menu-item session-actions-item" role="menuitem" onClick={copyReference} disabled={prBusy}>
             Copy session reference
           </button>

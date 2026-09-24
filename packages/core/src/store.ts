@@ -264,6 +264,8 @@ export interface ToolActivity {
 export type TranscriptRole = "user" | "assistant" | "system" | "thinking" | "error";
 
 export interface TranscriptEntry {
+  /** Agent-published app launcher, rehydrated from the event log. */
+  app?: import("./apps.js").AppReference;
   id: string;
   role: TranscriptRole;
   /** Raw text (already plain). Rendered to HTML lazily by the view via `html`. */
@@ -2787,7 +2789,8 @@ export class SessionStore {
         // forward-everything wrap. Folding this blanket "something happened,
         // must be working" update over that would clobber the needs_action
         // status right back to working the instant it was set.
-        if (sid && innerKind !== "user_question" && innerKind !== "user_question_resolved") {
+        // Publishing an app is display output, not evidence of an agent turn.
+        if (sid && innerKind !== "user_question" && innerKind !== "user_question_resolved" && innerKind !== "app_published") {
           // Keep the dot live for every event — tool calls and streaming
           // deltas are real signs the session is "working", worth showing.
           // But *ordering* the sidebar on every one of them (#479) meant a

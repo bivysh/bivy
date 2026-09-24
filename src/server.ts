@@ -27,6 +27,10 @@ import type { CommandCtx } from "./protocol/command-spec.js";
 import { CommandRegistry, type CommandEntries } from "./protocol/command-registry.js";
 import { CLIENT_COMMAND_SCHEMAS } from "./protocol/client-command-schemas.js";
 import { CLIENT_COMMAND_ROUTES } from "./protocol/client-command-routes.js";
+import { AppRegistry } from "./apps/registry.js";
+import { AppGateway } from "./apps/gateway.js";
+import { AppService } from "./apps/service.js";
+import { createAppCommands } from "./controllers/app-commands.js";
 import { bindClientCommandRoutes } from "./http/client-command-routes.js";
 import { collectDiscoveredSessions, planNativeAdoption, type NativeAdoptionPlan } from "./runtime/native-session-discovery.js";
 import { aggregateModelCatalog, mergeProviderCatalog } from "./runtime/model-catalog.js";
@@ -2100,7 +2104,41 @@ const promptDedupe = createSessionNewDedupe<void>();
 const dedupePrompt = (clientMessageId: string | undefined, run: () => Promise<void>) =>
   promptDedupe.run(clientMessageId, run);
 
+// Preview traffic has its own listener and per-view origins. Never mount
+// generated content on the authenticated node API origin.
+const appPreviewPort = Number(process.env.BIVY_APPS_PORT || 4318);
+if (process.env.BIVY_APPS_ORIGIN && (!Number.isInteger(appPreviewPort) || appPreviewPort < 1024 || appPreviewPort > 65535 || appPreviewPort === port)) {
+  throw new Error("BIVY_APPS_PORT must be between 1024 and 65535 and different from the node API port.");
+}
+const appRegistry = new AppRegistry([port, appPreviewPort]);
+const appGateway = process.env.BIVY_APPS_ORIGIN ? new AppGateway(appRegistry, process.env.BIVY_APPS_ORIGIN, () => {
+  const config = loadRelayConfig(appDir);
+  return [config?.clientBaseUrl, config?.controlPlaneUrl, ...(process.env.BIVY_APPS_RETURN_ORIGINS ?? "").split(",")]
+    .filter((value): value is string => Boolean(value?.trim())).map((value) => new URL(value.trim()).origin);
+}) : undefined;
+const appService = new AppService(appRegistry, appGateway, {
+  start: async (spec) => {
+    let failure = "Could not start the app terminal.";
+    const id = await runTerms.openRunTerminal({ ...spec, agent: "app", label: spec.name }, (event) => {
+      const e = event as { type?: string; error?: string };
+      if (e.type === "terminal.error" && e.error) failure = e.error;
+    });
+    if (!id) throw new Error(failure);
+    return id;
+  },
+  has: (id) => terminals.has(id),
+  close: (id) => { terminals.close(id); },
+});
+
 const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
+  ...createAppCommands(appService, (id) => { const record = resolveSession(id); return record ? harnessDirFor(record) : undefined; }, (app) => {
+    const record = resolveSession(app.sessionId);
+    if (!record) return;
+    const ref = { appId: app.id, sessionId: app.sessionId, name: app.name };
+    const id = `app-${app.id}`;
+    eventLog.appendAppPublication(record.id, { id, afterMessageCount: record.session.getMessages().length, app: ref });
+    broadcast(stampSessionEvent({ type: "session.event", sessionId: record.id, event: { type: "app_published", id, app: ref } }));
+  }),
   ping(msg, ctx) {
     ctx.reply({ type: "pong", requestId: typeof msg.requestId === "string" ? msg.requestId : undefined });
   },
@@ -7009,6 +7047,7 @@ async function deleteSessionFile(opts: { id?: string; path?: string; fallbackAct
     });
   }
   if (deletedSessionId) {
+    for (const app of appRegistry.list(deletedSessionId)) appService.remove(deletedSessionId, app.id);
     // Cancel any pending throttled write and forget the cached arrays so a late
     // flush can't recreate the file we're about to delete.
     eventLog.drop(deletedSessionId);
@@ -11519,6 +11558,10 @@ const server = app.listen(port, host, async () => {
   console.log(`Agent data dir: ${piDir}`);
   console.log(`Workspace: ${defaultWorkspace}`);
   startRelayIfConfigured();
+  if (appGateway) {
+    appGateway.server.on("error", (error) => { console.error("[apps] Preview gateway could not start:", error); shutdown("preview gateway failure"); });
+    appGateway.server.listen(appPreviewPort, "127.0.0.1", () => console.log(`[apps] Preview gateway listening on 127.0.0.1:${appPreviewPort}`));
+  }
   // Rebuild-resume (Gap B): restore before starting unattended pollers. Starting
   // queue work concurrently could claim the follow-up before its transcript and
   // checkpoint exist locally, producing a fresh session instead of a continuation.
@@ -11635,6 +11678,7 @@ let shuttingDown = false;
 function shutdown(signal: string) {
   if (shuttingDown) return;
   shuttingDown = true;
+  appGateway?.close();
   relay?.stop();
   githubPoller?.stop();
   controlPlanePoller?.stop();

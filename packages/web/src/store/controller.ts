@@ -1562,6 +1562,15 @@ export class AppController {
     });
   }
 
+  /** Apps use the same authenticated command path over direct HTTP or relay. */
+  async appCommand(command: "apps.list" | "apps.open" | "apps.remove", sessionId: string, fields: { appId?: string; viewId?: string; returnTo?: string } = {}): Promise<ServerEvent> {
+    const { connection } = this.store.getState();
+    if (connection.status !== "online") throw new Error("Connect to the machine to open its apps.");
+    const result = await this.awaitAck({ kind: command, sessionId, ...fields }, 30_000);
+    if (this.store.getState().connection.currentNodeId !== connection.currentNodeId) throw new Error("Machine changed. Reopen Apps on the selected machine.");
+    return result;
+  }
+
   /** Resolve/reject an in-flight awaitAck() call from its matching reply. */
   private resolveAck(event: ServerEvent): void {
     const rid = String(event.requestId || "");
