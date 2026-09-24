@@ -203,6 +203,12 @@ async function main() {
   });
   const providerFired = await trigger(port, auto.body.webhookUrl, auto.body.webhookSecret, providerRaw, "basecamp-17000492462");
   expect(providerFired.status === 202 && providerFired.body.code === "accepted", "provider-native JSON fires without a Bivy-specific envelope");
+  const filterQueue = await json(port, "GET", "/node/work?labels=bivy/runner", undefined, nodeToken);
+  const providerDelivery = filterQueue.body.items.find((item: any) => item.id === providerFired.body.id);
+  const envelopeDelivery = filterQueue.body.items.find((item: any) => item.id === fired.body.id);
+  expect(providerDelivery?.eventContext === providerRaw, "node-side filters receive the original structured provider JSON");
+  expect(envelopeDelivery?.eventContext === evtRaw, "node-side filters receive the full Bivy envelope without lossy rendering");
+  expect(!providerDelivery.eventContext.includes(auto.body.webhookSecret), "filter input does not include webhook signing secrets");
 
   const oversized = await trigger(port, auto.body.webhookUrl, auto.body.webhookSecret, "x".repeat(70_000), "evt-oversized");
   expect(oversized.status === 413 && oversized.body.code === "payload_too_large", "oversized bodies receive a stable rejection");

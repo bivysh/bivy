@@ -310,6 +310,35 @@ test("poller: deployment quota denial parks work without agent retry or completi
   assert.ok(bodies.some(body => body.includes("quota_exhausted") && body.includes("policy_denial")));
 });
 
+test("poller: filter failure parks work without agent retries or uploading diagnostics", async () => {
+  const { AutomationFilterError } = await import("../src/automation-filter.js");
+  const cfg: ControlPlaneTaskConfig = { controlPlaneUrl: "https://cp", enrollmentToken: "tok", labels: ["bivy"], pollMs: 60_000 };
+  const calls: string[] = [];
+  const bodies: string[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    calls.push(new URL(url).pathname);
+    if (init?.body) bodies.push(String(init.body));
+    return { ok: true, status: 200, json: async () => ({ ok: true }) } as Response;
+  }) as typeof fetch;
+  let attempts = 0;
+  const poller = new ControlPlaneTaskPoller(cfg, async () => {
+    attempts++;
+    throw new AutomationFilterError("Filter timed out", "private stderr");
+  }, undefined, { policy: { decide: () => { throw new Error("must not reach agent retry policy"); } } });
+  try {
+    await (poller as unknown as { runOne(i: WorkItem): Promise<void> }).runOne({ id: "filter-failure", label: "bivy", source: "automation:test", status: "pending", title: "Filtered webhook" });
+  } finally {
+    poller.stop();
+    globalThis.fetch = original;
+  }
+  assert.equal(attempts, 1);
+  assert.ok(calls.some(path => path.endsWith("/needs-attention")));
+  assert.ok(!calls.some(path => path.endsWith("/complete") || path.endsWith("/fail")));
+  assert.ok(bodies.some(body => body.includes("webhook-filter") && body.includes("failed")));
+  assert.ok(bodies.every(body => !body.includes("private stderr")));
+});
+
 test("poller: relay poke cancellation aborts active work without completing or failing", async () => {
   const cfg: ControlPlaneTaskConfig = { controlPlaneUrl: "https://cp", enrollmentToken: "tok", labels: ["bivy"], pollMs: 60_000 };
   const calls: string[] = [];

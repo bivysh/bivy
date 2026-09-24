@@ -41,7 +41,8 @@ import { InMemoryLocationRegistry } from "./runtime/location-registry.js";
 import { ControlPlaneSessionLocationRegistry, LayeredSessionLocationRegistry, type NodeSessionRow } from "./runtime/control-plane-location.js";
 import { attachAdoptedSessions, classifyAttachFailure } from "./runtime/adoption.js";
 import { createCredentialStore, testProviderCredential } from "./runtime/credentials.js";
-import { decodeAutomationTemplate } from "./automation-template.js";
+import { decodeAutomationTemplate, type AutomationFilter } from "./automation-template.js";
+import { passWebhookFilter } from "./automation-filter-gate.js";
 import { isModelAuthError, authProviderForSession, classifyModelAuthError } from "./runtime/auth-errors.js";
 import { createCredentialVault, migrateVaultDir } from "./runtime/credential-store.js";
 import { probeAnthropicAccess } from "./runtime/anthropic-preflight.js";
@@ -5210,6 +5211,7 @@ async function executeWorkItem(item: ControlPlaneWorkItem, report: (patch: Evide
   // on issue/Slack/Linear bodies, so decrypt whenever it's present regardless of
   // source.
   let credentialLabels: Record<string, string> | undefined;
+  let filter: AutomationFilter | undefined;
   if (item.body?.startsWith("bivy-room-v1:")) {
     const [, nodeId, ...payload] = item.body.split(":");
     if (nodeId !== identity.nodeId || payload.length === 0) {
@@ -5218,11 +5220,15 @@ async function executeWorkItem(item: ControlPlaneWorkItem, report: (patch: Evide
     try {
       const template = decodeAutomationTemplate(open(pairingStore.roomKey(), payload.join(":")));
       credentialLabels = template.credentialLabels;
+      filter = template.filter;
       item = { ...item, body: template.instructions };
     } catch {
       throw new Error("could not decrypt automation instructions on this node");
     }
   }
+  // Gate before any repository fetch, session continuation, or agent creation.
+  // A skip finishes this selected automation; it does not fall through to another.
+  if (filter && !await passWebhookFilter(filter, item, report, signal)) return;
   // A webhook trigger's event payload is untrusted. Append it AFTER the operator's
   // own (decrypted) instructions, clearly framed as data, so the agent treats it
   // as context rather than as commands to follow.

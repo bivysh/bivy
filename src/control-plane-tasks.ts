@@ -21,6 +21,7 @@ import { randomUUID } from "node:crypto";
 import { WorkResultOutbox, type WorkResult } from "./work-result-outbox.js";
 import type { RunDecision, RunPolicy } from "./policy/run-policy.js";
 import { RemoteSessionAdmissionError } from "./session/remote-session-admission.js";
+import { AutomationFilterError } from "./automation-filter.js";
 
 export interface ControlPlaneTaskConfig {
   controlPlaneUrl: string;
@@ -542,6 +543,18 @@ export class ControlPlaneTaskPoller {
           return;
         }
         if (run.state !== "active") return;
+        // Filter errors are operator/configuration failures, never provider retries.
+        if (error instanceof AutomationFilterError) {
+          const now = new Date().toISOString();
+          await report({
+            checks: [{ name: "webhook-filter", status: "failed" }],
+            events: [{ at: now, kind: "needs_attention", summary: `Webhook filter failed: ${error.message}`, attempt }],
+            attention: { severity: "warning", reason: `Webhook filter failed: ${error.message}`, since: now },
+          });
+          if (run.state !== "active") return;
+          await this.finishWork(item.id, 'needs-attention', run);
+          return;
+        }
         // Deployment admission is not an agent failure. Never reroute/retry it
         // through a provider policy or mark the work successfully completed.
         if (error instanceof RemoteSessionAdmissionError) {
