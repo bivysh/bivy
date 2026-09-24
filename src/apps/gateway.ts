@@ -22,11 +22,11 @@ const REDEEM_PATH = "/__bivy/redeem";
 const HOUR = 60 * 60_000;
 const HOP = new Set(["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"]);
 
-/** Separate per-app origins are mandatory. TLS terminates at the operator's
- * reverse proxy, which must preserve Host and reach ONLY this gateway port. */
+/** Separate per-app origins are mandatory. TLS terminates at the deployment's
+ * preview ingress. Delivery reaches only this gateway, never the node API. */
 export function previewOriginTemplate(raw: string): string {
   const parsed = new URL(raw.replace("{app}", "a"));
-  if (!/^https:\/\/\{app\}\.[a-z0-9.-]+\/?$/.test(raw) || raw.split("{app}").length !== 2 || parsed.username || parsed.password || parsed.pathname !== "/" || parsed.search || parsed.hash || parsed.port) {
+  if (!/^https:\/\/\{app\}(?:-[a-f0-9]{24})?\.[a-z0-9.-]+\/?$/.test(raw) || raw.split("{app}").length !== 2 || parsed.username || parsed.password || parsed.pathname !== "/" || parsed.search || parsed.hash || parsed.port) {
     throw new Error("BIVY_APPS_ORIGIN must be https://{app}.<dedicated-preview-domain> (no path or port).");
   }
   return raw.replace(/\/$/, "").toLowerCase();
@@ -121,8 +121,8 @@ export class AppGateway {
   }
   private entry(req: IncomingMessage): RegisteredView | undefined {
     const host = req.headers.host ?? "";
-    const id = host.split(".")[0];
-    if (!/^[a-f0-9]{32}$/.test(id) || host !== new URL(this.origin(id)).host) return undefined;
+    const id = /^([a-f0-9]{32})(?:[.-])/.exec(host)?.[1];
+    if (!id || host !== new URL(this.origin(id)).host) return undefined;
     const entry = this.registry.getView(id);
     return entry?.view.kind === "web" ? entry : undefined;
   }
@@ -172,7 +172,7 @@ export class AppGateway {
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("Referrer-Policy", "no-referrer");
     res.setHeader("X-Content-Type-Options", "nosniff");
-    const shellId = /^view-([a-f0-9]{32})\./.exec(req.headers.host ?? "")?.[1];
+    const shellId = /^view-([a-f0-9]{32})(?:[.-])/.exec(req.headers.host ?? "")?.[1];
     if (shellId && req.headers.host === new URL(this.shellOrigin(shellId)).host) { await this.handleShell(req, res, shellId); return; }
     if (!entry) { res.writeHead(404); res.end("App unavailable. Republish from your Bivy session."); return; }
     const id = entry.view.id;

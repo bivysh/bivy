@@ -88,7 +88,7 @@ export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; ap
     <p className="muted">Web views open in a preview tab with a Back to chat header. Terminal views run here.</p>
     {busy && <p role="status">{result ? "Preparing…" : "Loading apps…"}</p>}
     {error && <p role="alert" className="artifact-unavailable">{error}</p>}
-    {result && !result.previewAvailable && <p className="muted">Web previews need a dedicated HTTPS preview domain configured on this machine. Terminal views work without it.</p>}
+    {result && !result.previewAvailable && <p className="muted">Bivy’s preview service is unavailable. Try Refresh shortly. Terminal views still work.</p>}
     {result?.apps.length === 0 && <div className="changes-binary">No apps published yet. Ask the agent to create a manifest and run <code>bivy app publish bivy.app.json</code>.</div>}
     {result && appId && !result.apps.some((app) => app.id === appId) && <p role="status">This app is no longer available. Ask the agent to republish it; previews expire when the machine restarts.</p>}
     {result?.apps.filter((app) => !appId || app.id === appId).map((app) => <section className="artifacts-group" key={app.id} aria-label={app.name}>

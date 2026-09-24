@@ -135,6 +135,9 @@ services:
       # Override for a relay running on another host against the control-plane
       # load balancer; the single-host stack keeps using Docker DNS.
       CONTROL_PLANE_URL: "${CONTROL_PLANE_URL:-http://control-plane:4400}"
+      # Deployment-owned wildcard HTTPS preview ingress; auto-discovered by
+      # every admitted node. No per-user/node preview configuration is needed.
+      RELAY_PREVIEW_ORIGIN: "${RELAY_PREVIEW_ORIGIN:-}"
       RELAY_MAX_FRAME_BYTES: "${RELAY_MAX_FRAME_BYTES:-1048576}"
       # Per-socket message-rate caps. Set the CLIENT limit explicitly: the legacy
       # RELAY_MAX_MESSAGES_PER_MINUTE became the client limit via a fallback, and

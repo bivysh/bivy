@@ -93,14 +93,56 @@ and absolute localhost redirects must be fixed in the application's configuratio
 Long-lived HTTP streams time out after 60 seconds of inactivity. This initial
 static server does not provide SPA fallback, range requests or directory listings.
 
-## Operator setup for web previews
+## Automatic web preview delivery
 
-**Terminal views work over Bivy's existing direct or encrypted relay transport.
-Web data does not currently travel through that relay.** A phone must be able to
-reach a separately configured HTTPS preview gateway, directly or over a VPN.
-No dev port is automatically made public.
+On a linked machine, `bivy app publish` is sufficient: open the published app
+from chat or the session menu. **Users and agents do not configure a preview
+domain, DNS, certificates, ports, or tunnels.** The authenticated relay advertises
+its preview endpoint and the node automatically connects outbound when a browser
+requests a preview. The app gateway runs on private in-process streams, without
+binding a network port. Static assets, forms, uploads, cookies and WebSocket/HMR
+traffic follow the same path; generated applications need no Bivy adapter.
 
-Configure the node process:
+Disconnecting the machine closes active tunnels. On reconnection, delivery
+recovers automatically; unexpired grants survive ordinary reconnects to the same
+relay endpoint. Restarting the node still requires republishing ephemeral apps.
+Older deployments without preview delivery report it unavailable; publishing
+must not be described as a working preview until the deployment supports it.
+
+### Bivy deployment responsibility (not user setup)
+
+The deployment operator provisions one isolated wildcard HTTPS preview domain
+per relay shard and routes it to that relay's existing HTTP/WebSocket listener:
+
+```sh
+RELAY_PREVIEW_ORIGIN='https://{app}.preview.example.net'
+```
+
+Preserve Host and WebSocket upgrade headers at the TLS proxy. Use a dedicated
+registrable domain, separate from the Bivy UI and other authenticated services.
+Each view and its trusted shell get distinct origins beneath that wildcard.
+The relay derives a stable node-specific hostname suffix from the admitted node
+identity; nodes cannot register or claim another node's hostname family.
+No per-node DNS, certificate or ingress is required. The hosted Bivy deployment
+must ship this infrastructure alongside the feature, rather than asking users
+or agents to provide it. For a self-hosted deployment this is a single platform
+installation step, not an app-publishing step.
+
+Preview bytes use separate, bounded outbound WebSocket streams, not encrypted
+session-frame payloads. Single-use ten-second stream tickets are delivered only
+to the authenticated node and presented in request headers, never URLs. Streams
+can reach only that node's app gateway, not arbitrary TCP addresses. Limits are
+64 simultaneous pending/active streams per node and 1,024 per relay; stream
+frames are limited to 64 KiB with bidirectional backpressure. Disconnection
+cancels pending requests and active streams. Browser access remains protected
+by the gateway's view-scoped grants, cookies and origin checks below.
+
+### Optional direct gateway
+
+Advanced/local-only deployments may bypass automatic relay delivery and expose
+a dedicated gateway through their own TLS proxy or VPN. This is an explicit
+operator override, **not required on linked user machines**. Configure the node
+process (choose a port different from its API port):
 
 ```sh
 BIVY_APPS_ORIGIN='https://{app}.preview.example.net'
@@ -149,7 +191,7 @@ server {
 other authenticated services.** Do not serve generated content on Bivy's origin,
 and do not configure preview hosts as trusted node API origins. Sharing a parent
 domain with an authenticated service can expose domain-scoped cookies. Bivy does
-not automatically provision DNS, certificates or a public tunnel in this version.
+not provision DNS or certificates for this optional direct-gateway mode.
 
 A paired client requests a one-use, one-minute launch grant through the normal
 Bivy command channel. The grant is carried in a URL fragment (not access logs),
@@ -173,8 +215,10 @@ escaping its frame or unsandboxed OAuth popups, it needs its normal development
 URL outside this preview mode. The header remains available even when app access
 expires. Reload resets the app frame to its root URL.
 
-Preview data uses HTTPS to the configured TLS proxy, **not Bivy relay E2E
-encryption**. The operator of that proxy can see preview traffic. Generated
+Preview data uses HTTPS to the deployment's preview ingress and, in automatic
+mode, a separate outbound WebSocket tunnel to the node, **not Bivy session E2E
+encryption**. The preview ingress/relay operator can see preview traffic. The
+existing encrypted chat, terminal and pairing frame transport is unchanged. Generated
 service workers are disabled to prevent an offline worker from bypassing the
 preview gate; PWA/offline behavior must be tested outside this preview mode.
 

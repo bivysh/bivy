@@ -102,6 +102,12 @@ export interface RelayConnectorOptions {
   // encryption, and the responder for X25519 pairing handshakes over the relay.
   // Required — there is no static-key fallback.
   pairing: PairingStore;
+  // Preview bytes use separate outbound streams, never session frame payloads.
+  previews?: {
+    ready(origin: string | undefined, relayUrl: string): void;
+    connect(ticket: string): void;
+    disconnect(): void;
+  };
   // Control-plane hint delivered via the relay when a webhook enqueues work.
   // The hint carries only routing metadata; the node still fetches + claims the
   // item over the authenticated control-plane API.
@@ -162,7 +168,7 @@ export class RelayConnector {
   constructor(
     private readonly config: RelayConfig,
     private readonly onClientMessage: (msg: ClientMessage) => void,
-    options: RelayConnectorOptions,
+    private readonly options: RelayConnectorOptions,
   ) {
     this.pairing = options.pairing;
     this.onWorkAvailable = options.onWorkAvailable;
@@ -204,6 +210,7 @@ export class RelayConnector {
   }
 
   stop() {
+    this.options.previews?.disconnect();
     this.closed = true;
     this.ready = false;
     this.remoteClients = 0;
@@ -409,7 +416,7 @@ export class RelayConnector {
 
     ws.on("message", (data) => {
       if (this.ws !== ws) return;
-      let env: { t?: string; p?: string; clients?: unknown };
+      let env: { t?: string; p?: string; clients?: unknown; previewOrigin?: unknown; ticket?: unknown };
       try {
         env = JSON.parse(data.toString());
       } catch {
@@ -423,7 +430,13 @@ export class RelayConnector {
         this.admissionRejected = false;
         this.startHeartbeat(ws);
         this.scheduleBackoffReset(ws);
+        try { this.options.previews?.ready(typeof env.previewOrigin === "string" ? env.previewOrigin : undefined, relayBase); }
+        catch { console.warn("[apps] Relay advertised an invalid preview endpoint"); }
         console.log("[relay] connected");
+        return;
+      }
+      if (env.t === "preview.connect" && this.ready && typeof env.ticket === "string") {
+        this.options.previews?.connect(env.ticket);
         return;
       }
       if (env.t === "peer.online" || env.t === "peer.offline") {
@@ -480,6 +493,7 @@ export class RelayConnector {
 
     ws.on("close", () => {
       if (this.ws !== ws) return;
+      this.options.previews?.disconnect();
       this.ready = false;
       this.remoteClients = 0;
       this.stopHeartbeat();

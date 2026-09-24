@@ -111,6 +111,9 @@ for (const theme of ["light", "dark"]) {
     await page.getByRole("button", { name: "Refresh", exact: true }).click();
     await expect(page.getByRole("button", { name: "Open preview" })).toBeDisabled();
     await expect(page.getByRole("button", { name: "Open terminal", exact: true })).toBeEnabled();
+    await expect(page.getByText("Bivy’s preview service is unavailable.", { exact: false })).toBeVisible();
+    await expect(page.getByText(/preview domain configured/)).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath(`apps-unavailable-${theme}.png`), fullPage: true });
     expect(errors).toEqual([]);
   });
 }
