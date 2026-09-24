@@ -258,7 +258,16 @@ test("gateway proxies HTTP bodies, cookies, external host and WebSockets without
   const backend = http.createServer((req, res) => {
     headers = req.headers;
     let body = ""; req.on("data", (chunk) => { body += chunk; });
-    req.on("end", () => { res.setHeader("x-frame-options", "DENY"); res.setHeader("content-security-policy", "default-src 'self'; frame-ancestors 'none'"); res.setHeader("set-cookie", ["session=abc; Domain=example.net; Path=/", "__Host-bivy-preview=attack; Path=/; Secure"]); res.end(`${req.url}:${body}`); });
+    req.on("end", () => {
+      // This fixture tests byte forwarding, never HTML rendering. Reflected
+      // request data must remain inert even when it contains HTML markup.
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("x-frame-options", "DENY");
+      res.setHeader("content-security-policy", "default-src 'self'; frame-ancestors 'none'");
+      res.setHeader("set-cookie", ["session=abc; Domain=example.net; Path=/", "__Host-bivy-preview=attack; Path=/; Secure"]);
+      res.end(`${req.url}:${body}`);
+    });
   });
   const wsServer = new WebSocketServer({ server: backend });
   wsServer.on("connection", (ws, req) => { headers = req.headers; ws.on("message", (data) => ws.send(data)); });
@@ -270,6 +279,8 @@ test("gateway proxies HTTP bodies, cookies, external host and WebSockets without
     const id = app.views[0].id; const { url, cookie } = await grant(gateway, port, id);
     const response = await request(port, url.host, "/invoices?q=1", { method: "POST", headers: { cookie: `${cookie}; user=ok`, origin: url.origin, "content-type": "application/json", "x-forwarded-host": "evil.net" }, body: '{"value":2}' });
     assert.equal(response.body, '/invoices?q=1:{"value":2}');
+    assert.equal(response.headers["content-type"], "text/plain; charset=utf-8");
+    assert.equal(response.headers["x-content-type-options"], "nosniff");
     assert.equal(headers.host, url.host); assert.equal(headers["x-forwarded-host"], url.host);
     assert.equal(headers.cookie?.trim(), "user=ok");
     assert.deepEqual(response.headers["set-cookie"], ["session=abc; Path=/"]);
@@ -277,6 +288,11 @@ test("gateway proxies HTTP bodies, cookies, external host and WebSockets without
     assert.match(String(response.headers["content-security-policy"]), /default-src 'self'/);
     assert.ok(String(response.headers["content-security-policy"]).includes(`frame-ancestors ${gateway.shellOrigin(id)}`));
     assert.ok(!String(response.headers["content-security-policy"]).includes("frame-ancestors 'none'"));
+    const markup = "<script>alert('fixture')</script>";
+    const reflected = await request(backendPort, "127.0.0.1", "/echo", { method: "POST", body: markup });
+    assert.equal(reflected.body, `/echo:${markup}`);
+    assert.equal(reflected.headers["content-type"], "text/plain; charset=utf-8");
+    assert.equal(reflected.headers["x-content-type-options"], "nosniff");
     const ws = new WebSocket(`ws://127.0.0.1:${port}/socket`, { origin: url.origin, headers: { host: url.host, cookie } });
     await once(ws, "open");
     ws.send("hello"); const [data] = await once(ws, "message"); assert.equal(data.toString(), "hello");
