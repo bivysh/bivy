@@ -273,7 +273,7 @@ export function renderHistory(messages: any[]): TranscriptEntry[] {
               id: nextId(),
               role: "assistant",
               text: typeof block.caption === "string" ? block.caption : "",
-              attachments: [attachmentFromRef(block.ref, { createdAt, artifact: block.artifact })],
+              attachments: [{ ...attachmentFromRef(block.ref, { createdAt, artifact: block.artifact }), description: typeof block.caption === "string" ? block.caption : undefined }],
             });
           } else if (isTextBlock(block)) {
             flushThinking();

@@ -416,19 +416,17 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 /* Attachments sent with a user message: shown inside the same bubble, above
    the text. Images are a real thumbnail; files/omitted content are a chip
    matching the composer's own pre-send .attach-chip look. */
-.msg-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.msg-attachments { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-3); margin-bottom: var(--space-3); min-width: 0; }
 .msg-attachments:last-child { margin-bottom: 0; }
-.msg-attachment.image { display: block; max-width: 220px; border-radius: var(--radius-md); overflow: hidden; line-height: 0; }
-.msg-attachment.image img { display: block; max-width: 100%; max-height: 220px; object-fit: cover; }
-.msg-attachment.file {
-  display: inline-flex; align-items: center; gap: 6px; max-width: 220px;
-  border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink);
-  border-radius: var(--radius-sm); padding: 4px 8px; font-size: 12px; text-decoration: none;
-}
-.msg-attachment.file:hover { border-color: var(--accent); }
-.msg-attachment.file.omitted { opacity: 0.7; cursor: default; }
-.msg-attachment.file .attach-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 120px; }
-.msg-attachment.file .attach-size { color: var(--muted); flex: none; }
+.msg-attachment { width: var(--sidebar-width); max-width: 100%; min-width: 0; border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: var(--surface); color: var(--ink); overflow: hidden; }
+.attach-preview { display: block; background: var(--surface-2); border-bottom: 1px solid var(--line); }
+.attach-preview img { display: block; width: 100%; max-height: var(--sidebar-width); object-fit: contain; }
+.attach-details { display: flex; align-items: stretch; }
+.attach-copy { flex: 1; min-width: 0; padding: var(--space-3); }
+.attach-name { font-size: var(--text-sm); font-weight: var(--weight-semibold); overflow-wrap: anywhere; }
+.attach-description { margin-top: var(--space-1); color: var(--muted); font-size: var(--text-sm); overflow-wrap: anywhere; white-space: pre-wrap; }
+.attach-details .attach-download { flex: none; width: var(--space-7); height: auto; min-height: var(--space-7); border: 0; border-left: 1px solid var(--line); border-radius: 0; }
+.attach-preview:focus-visible, .attach-download:focus-visible { outline-offset: calc(-1 * var(--space-1)); }
 /* align-self:stretch (not flex-start) + width:100% is deliberate, mirroring the
    same fix already applied to .tool-group below. Assistant text has no visible
    bubble background, so filling the available width looks identical for short
@@ -1052,9 +1050,11 @@ button.sheet-action:last-child { border-bottom: 0; }
 /* Fullscreen image viewer (tap a composer thumbnail). */
 .image-viewer {
   position: fixed; inset: 0; z-index: var(--z-modal); display: grid; place-items: center;
-  background: var(--overlay-strong); padding: 24px; cursor: zoom-out;
+  background: var(--overlay-strong); padding: var(--space-6); cursor: zoom-out;
+  grid-template-rows: minmax(0, 1fr); grid-template-columns: minmax(0, 1fr);
+  height: 100dvh; box-sizing: border-box; overflow: hidden;
 }
-.image-viewer-img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: var(--radius-sm); cursor: default; }
+.image-viewer-img { min-width: 0; min-height: 0; max-width: 100%; max-height: 100%; object-fit: contain; border-radius: var(--radius-sm); cursor: default; }
 .image-viewer-close {
   position: absolute; top: max(12px, env(safe-area-inset-top)); right: 16px;
   border: 0; background: var(--overlay); color: var(--accent-contrast); width: 40px; height: 40px;

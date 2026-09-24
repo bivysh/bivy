@@ -44,7 +44,7 @@ export function useAttachmentUrl(attachment: PromptAttachment | null | undefined
   // Synchronous URL for inline content — bytes we already hold in memory.
   const inlineUrl = useMemo(() => {
     if (!attachment || attachment.omitted) return null;
-    if (attachment.kind === "image" && attachment.data) return base64ToBlobUrl(attachment.data, attachment.mimeType);
+    if (attachment.data) return base64ToBlobUrl(attachment.data, attachment.mimeType);
     if (attachment.text !== undefined) {
       try {
         return URL.createObjectURL(new Blob([attachment.text], { type: attachment.mimeType || "text/plain" }));
@@ -94,10 +94,10 @@ export function useAttachmentUrl(attachment: PromptAttachment | null | undefined
 function AttachmentChip({ attachment, onOpenImage }: { attachment: PromptAttachment; onOpenImage?: () => void }) {
   const url = useAttachmentUrl(attachment);
 
-  if (attachment.kind === "image" && url) {
-    return (
-      <a
-        className="msg-attachment image"
+  return (
+    <div className="msg-attachment">
+      {attachment.kind === "image" && url && <a
+        className="attach-preview"
         href={url}
         target="_blank"
         rel="noopener"
@@ -113,26 +113,29 @@ function AttachmentChip({ attachment, onOpenImage }: { attachment: PromptAttachm
             : undefined
         }
       >
-        <img src={url} alt={attachment.name} />
-      </a>
-    );
-  }
-  const label = (
-    <>
-      <span className="attach-glyph">{attachment.kind === "image" ? "🖼" : "📄"}</span>
-      <span className="attach-name">{attachment.name}</span>
-      <span className="attach-size">{fmtBytes(attachment.size)}</span>
-    </>
+        <img src={url} alt={attachment.description || attachment.name} />
+      </a>}
+      <div className="attach-details">
+        <div className="attach-copy">
+          <div className="attach-name">{attachment.name}</div>
+          <div className="attach-description">{attachment.description || `${attachment.mimeType || (attachment.kind === "image" ? "Image" : "File")} · ${fmtBytes(attachment.size)}`}</div>
+        </div>
+        {url ? (
+          <a className="btn icon attach-download" href={url} download={attachment.name} aria-label={`Download ${attachment.name}`} title={`Download ${attachment.name}`}>
+            <DownloadIcon />
+          </a>
+        ) : (
+          <button className="btn icon attach-download" disabled aria-label={`Download ${attachment.name} unavailable`} title="Content unavailable or still loading">
+            <DownloadIcon />
+          </button>
+        )}
+      </div>
+    </div>
   );
-  return url ? (
-    <a className="msg-attachment file" href={url} download={attachment.name} title={`Open ${attachment.name}`}>
-      {label}
-    </a>
-  ) : (
-    <span className="msg-attachment file omitted" title="Content not available">
-      {label}
-    </span>
-  );
+}
+
+function DownloadIcon() {
+  return <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 15v5h16v-5" /></svg>;
 }
 
 /**
@@ -458,13 +461,14 @@ const EntryView = memo(function EntryView({
   // way user uploads render, above any caption bubble. Reuses AttachmentChip, so
   // hash-only refs rehydrate their bytes on demand exactly like inbound ones.
   const hasAttachments = !!entry.attachments && entry.attachments.length > 0;
+  const captionOnly = entry.attachments?.length === 1 && entry.attachments[0]?.description === entry.text;
   return (
     <div className="assistant-row" id={hasAttachments ? `msg-${entry.id}` : undefined}>
       {hasAttachments && <MessageAttachments attachments={entry.attachments!} />}
-      {(entry.text || !hasAttachments) && (
+      {((entry.text && !captionOnly) || !hasAttachments) && (
         <div ref={bodyRef} className="msg assistant" dangerouslySetInnerHTML={{ __html: html }} />
       )}
-      {entry.text && (
+      {entry.text && !captionOnly && (
         <div className="msg-actions">
           <CopyButton text={entry.text} />
           {readAloudSupported() && <SpeakButton text={entry.text} />}

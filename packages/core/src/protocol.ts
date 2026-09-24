@@ -193,6 +193,8 @@ export interface PromptAttachment {
   name: string;
   size: number;
   mimeType: string;
+  /** Sender-provided caption, retained when attachments are grouped with prose. */
+  description?: string;
   /** base64 (no data-URL prefix): the image bytes, or a file's raw bytes. */
   data?: string;
   /** extracted text for text files (an alternative to `data`). */

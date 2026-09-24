@@ -32,7 +32,7 @@ describe("agent attachment — live reducer (grouped onto the final bubble)", ()
     expect(t).toHaveLength(1);
     expect(t[0]!.role).toBe("assistant");
     expect(t[0]!.text).toBe("Here it is.");
-    expect(t[0]!.attachments).toEqual([{ kind: "image", name: "chart.png", size: 1234, mimeType: "image/png", hash: HASH, createdAt: expect.any(Number) }]);
+    expect(t[0]!.attachments).toEqual([{ kind: "image", name: "chart.png", size: 1234, mimeType: "image/png", hash: HASH, description: "cap", createdAt: expect.any(Number) }]);
   });
 
   it("groups MULTIPLE attachments from one turn under the final bubble, in emit order", () => {
@@ -95,6 +95,7 @@ describe("agent attachment — history render (grouped onto the final bubble)", 
     ]);
     expect(entries.map((e) => e.role)).toEqual(["user", "assistant"]);
     expect(entries[1]!.text).toBe("Here's your chart.");
+    expect(entries[1]!.attachments?.[0]?.description).toBe("cap");
     expect(entries[1]!.attachments?.map((a) => a.hash)).toEqual([HASH]);
   });
 
