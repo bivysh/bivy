@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { expect, test } from "./fixtures.js";
+import { expect, test, themes } from "./fixtures.js";
 import { createServer, type ViteDevServer } from "../../packages/web/node_modules/vite/dist/node/index.js";
 import path from "node:path";
 let server: ViteDevServer;
@@ -9,7 +9,7 @@ test.beforeAll(async () => {
   await server.listen(); origin = new URL(server.resolvedUrls!.local[0]).origin;
 });
 test.afterAll(async () => { await server?.close(); });
-for (const theme of ["light", "dark"]) {
+for (const theme of themes) {
   test(`delete a retired session without opening or contacting its machine (${theme})`, async ({ page }, info) => {
     let fail = true;
     let requests = 0;

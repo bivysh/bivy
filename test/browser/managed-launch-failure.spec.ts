@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { expect, test } from "./fixtures.js";
+import { expect, test, themes } from "./fixtures.js";
 import { createServer, type ViteDevServer } from "../../packages/web/node_modules/vite/dist/node/index.js";
 import path from "node:path";
 
@@ -12,7 +12,7 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => { await server?.close(); });
 
-for (const theme of ["light", "dark"]) {
+for (const theme of themes) {
   for (const credentials of [false, true]) {
     test(`failed launch offers the correct recovery without active spinners (${theme}, credentials=${credentials})`, async ({ page }, info) => {
       const progress = { startedAt: 1000, failedAt: 3000, checkpoints: {

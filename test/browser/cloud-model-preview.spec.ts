@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { expect, test } from "./fixtures.js";
+import { expect, test, themes } from "./fixtures.js";
 import { createServer, type ViteDevServer } from "../../packages/web/node_modules/vite/dist/node/index.js";
 import path from "node:path";
 
@@ -12,7 +12,7 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => { await server?.close(); });
 
-for (const theme of ["light", "dark"]) test(`Cloud model selection before any machine exists (${theme})`, async ({ page }, info) => {
+for (const theme of themes) test(`Cloud model selection before any machine exists (${theme})`, async ({ page }, info) => {
   const url = `/cloud-model-preview-${theme}`;
   const html = await server.transformIndexHtml(url, `<html data-theme="${theme}"><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div class="app"><aside class="sidebar"></aside><main class="main" id="root"></main></div><script type="module">
     import React from 'react'; import { createRoot } from 'react-dom/client';

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { expect, test } from "./fixtures.js";
+import { expect, test, themes } from "./fixtures.js";
 import path from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, type ViteDevServer } from "../../packages/web/node_modules/vite/dist/node/index.js";
@@ -18,7 +18,7 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => { await server?.close(); if (cacheDir) await rm(cacheDir, { recursive: true, force: true }); });
 
-for (const theme of ["light", "dark"]) {
+for (const theme of themes) {
   test(`app web and terminal views, permissions and failure states (${theme})`, async ({ page }, testInfo) => {
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(e.message));

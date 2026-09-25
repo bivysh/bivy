@@ -34,8 +34,12 @@ path-filtered to the areas your change touches:
 - **Merge queue:** every unit suite, the web build, the release package, and a
   desktop browser smoke set, plus packaging and remote e2e when their inputs change.
 - **Nightly, releases, queued release commits, and any change to `ci.yml`:** everything, including
-  macOS, clean-installer, full browser coverage on every viewport, and remote e2e.
+  macOS, clean-installer, every browser spec (plus the layout-sensitive mobile set), and remote e2e.
   A failed nightly opens or updates a "Nightly full CI is failing" issue.
+
+Browser behavior specs run in light theme only; `test/browser/screenshots.spec.ts`
+owns the light + dark visual contract. Set `PW_THEMES=light,dark` to get dark
+review screenshots from every spec locally.
 
 There is no local pre-push gate; run the checks yourself before pushing when you
 want a fast local signal:

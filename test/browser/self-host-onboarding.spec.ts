@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { expect, test } from "./fixtures.js";
+import { expect, test, themes } from "./fixtures.js";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -19,7 +19,7 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => { await server?.close(); });
 
-for (const theme of ["light", "dark"] as const) {
+for (const theme of themes) {
   test(`portable browser owner setup and recovery (${theme})`, async ({ page }, testInfo) => {
     await page.addInitScript(({ selectedTheme }) => {
       localStorage.clear();

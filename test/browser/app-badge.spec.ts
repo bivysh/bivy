@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { expect, test } from "./fixtures.js";
+import { expect, test, themes } from "./fixtures.js";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -16,7 +16,7 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => { await server?.close(); });
 
-for (const theme of ["light", "dark"]) {
+for (const theme of themes) {
   test(`badge matches session attention and clears on resume (${theme})`, async ({ page }, testInfo) => {
     // Exercise the real App with store snapshots and mocked OS badge I/O.
     await page.addInitScript((theme) => {

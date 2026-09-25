@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { expect, test } from "@playwright/test";
+import { themes } from "./fixtures.js";
 import path from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, type ViteDevServer } from "../../packages/web/node_modules/vite/dist/node/index.js";
@@ -19,7 +20,7 @@ test.beforeAll(async () => {
 test.afterAll(async () => { await server?.close(); if (cacheDir) await rm(cacheDir, { recursive: true, force: true }); });
 
 // Desktop/mobile projects already cover narrow/wide layouts and input modes.
-for (const theme of ["light", "dark"]) {
+for (const theme of themes) {
   test(`settings native login import ${theme}`, async ({ page }, testInfo) => {
     const html = await server.transformIndexHtml("/native-import-test", `<html data-theme="${theme}"><head><meta name="viewport" content="width=device-width, initial-scale=1" /></head><body><div id="root" class="settings-body"></div><script type="module">
       import React from 'react';

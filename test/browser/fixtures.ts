@@ -2,6 +2,11 @@ import { test as base, expect } from "@playwright/test";
 
 export * from "@playwright/test";
 
+// Themes that behavior specs repeat over. Their assertions do not depend on the
+// theme, so CI runs light only; screenshots.spec.ts owns the light + dark visual
+// contract. Set PW_THEMES=light,dark locally to get dark review screenshots too.
+export const themes = (process.env.PW_THEMES ?? "light").split(",") as ("light" | "dark")[];
+
 // These are UI tests, not live-backend tests. Page-level routes in individual
 // specs take precedence over this context-level safety net, including deliberate
 // error responses. Never let an omitted mock reach the developer's local daemon.
