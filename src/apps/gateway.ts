@@ -25,6 +25,12 @@ const HOUR = 60 * 60_000;
  * polling can tell them apart from an app's own 502s. */
 const UPSTREAM_DOWN = "x-bivy-upstream-down";
 
+/** A top-level or framed page load. Browsers without Fetch Metadata still ask for HTML. */
+function isPageLoad(req: IncomingMessage): boolean {
+  const dest = req.headers["sec-fetch-dest"];
+  return req.method === "GET" && (dest ? ["document", "iframe"].includes(dest) : /text\/html/.test(req.headers.accept ?? ""));
+}
+
 /** Served on the app's origin in place of a blank frame. It reloads itself once
  * the server answers, and tells a framing shell so it can offer next steps. */
 function upstreamDownPage(nonce: string, port: number, shellOrigin: string): string {
@@ -244,11 +250,20 @@ export class AppGateway {
       let file: string;
       try { file = decodeURIComponent(req.url.split("?")[0]); } catch { res.writeHead(400); res.end(); return; }
       if (file.endsWith("/")) file += "index.html";
-      const data = entry.target.files.get(file);
+      let data = entry.target.files.get(file);
+      let status = 200;
+      // Client-side routes: an extensionless page load falls back like common
+      // static hosts do — to 404.html (status 404) when present, else index.html.
+      if (!data && !path.extname(file) && isPageLoad(req)) {
+        const notFound = entry.target.files.get("/404.html");
+        file = notFound ? "/404.html" : "/index.html";
+        data = notFound ?? entry.target.files.get(file);
+        if (notFound) status = 404;
+      }
       if (!data) { res.writeHead(404); res.end("File not found."); return; }
       const headers = responseHeaders({}, this.shellOrigin(id));
       headers["content-type"] = MIME[path.extname(file).toLowerCase()] || "application/octet-stream";
-      res.writeHead(200, { ...headers, "content-length": data.length });
+      res.writeHead(status, { ...headers, "content-length": data.length });
       res.end(req.method === "HEAD" ? undefined : data); return;
     }
     if (entry.target.kind !== "service") { res.writeHead(404); res.end(); return; }
@@ -261,10 +276,7 @@ export class AppGateway {
     upstream.setTimeout(60_000, () => upstream.destroy(new Error("Preview timed out")));
     upstream.on("error", () => {
       if (res.headersSent) { res.destroy(); return; }
-      // Page loads only; browsers without Fetch Metadata still ask for HTML.
-      const dest = req.headers["sec-fetch-dest"];
-      const page = req.method === "GET" && (dest ? ["document", "iframe"].includes(dest) : /text\/html/.test(req.headers.accept ?? ""));
-      if (!page) { res.writeHead(502, { "content-type": "text/plain", [UPSTREAM_DOWN]: "1" }); res.end("App server unavailable. Start it on the registered port, then reload."); return; }
+      if (!isPageLoad(req)) { res.writeHead(502, { "content-type": "text/plain", [UPSTREAM_DOWN]: "1" }); res.end("App server unavailable. Start it on the registered port, then reload."); return; }
       const nonce = randomBytes(16).toString("hex");
       res.writeHead(502, { "content-type": "text/html; charset=utf-8", [UPSTREAM_DOWN]: "1", "content-security-policy": `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; connect-src 'self'; frame-ancestors ${this.shellOrigin(id)}; base-uri 'none'` });
       res.end(upstreamDownPage(nonce, port, this.shellOrigin(id)));

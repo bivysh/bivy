@@ -111,8 +111,10 @@ answering on the port, the preview shows **Nothing is answering on port N**
 instead of a blank frame. It reloads by itself once the server is back, and
 **Ask agent to fix** opens the session with a drafted request (nothing is sent
 until you send it). Service previews also reload after an agent turn that changed
-files, for servers without hot reload. This initial
-static server does not provide SPA fallback, range requests or directory listings.
+files, for servers without hot reload. Static views
+serve client-side routes: an extensionless page load that matches no file gets
+`404.html` (with status 404) if the snapshot has one, otherwise `index.html`.
+The static server does not provide range requests or directory listings.
 
 ## Automatic web preview delivery
 
