@@ -10,6 +10,8 @@ WORKDIR /app
 COPY --chown=node:node services/relay/package.json services/relay/package-lock.json ./
 RUN npm ci
 COPY --chown=node:node services/relay/ ./
+# Bundle to plain JS at build time; the container runs `node`, not tsx.
+RUN npm run build
 # Keep the license and attribution beside the distributed AGPL service source.
 COPY --chown=node:node LICENSE NOTICE ./
 # Pin V8's old-space ceiling below the container's docker-compose mem_limit
@@ -24,4 +26,6 @@ COPY --chown=node:node LICENSE NOTICE ./
 # this too.
 ENV NODE_OPTIONS="--max-old-space-size=384"
 EXPOSE 4500
-CMD ["npm", "start"]
+# node directly (no npm/tsx wrapper chain): one process, and SIGTERM reaches the
+# service itself, which exits on it.
+CMD ["node", "--enable-source-maps", "dist/index.js"]

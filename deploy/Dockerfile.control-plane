@@ -32,8 +32,8 @@ RUN pnpm --filter @bivy/web run build
 
 # Stage 2 — the control plane service.
 FROM node:22-slim
-# npm's prestart rebuild writes generated files under /repo, so give the
-# unprivileged runtime user ownership before installing or copying source.
+# The build steps below write generated files under /repo as the unprivileged
+# runtime user, so give it ownership before installing or copying source.
 RUN mkdir -p /repo && chown node:node /repo
 USER node
 # Preserve the monorepo layout so the control-plane lockfile's
@@ -47,20 +47,23 @@ COPY --chown=node:node packages/core/package.json /repo/packages/core/package.js
 COPY --chown=node:node packages/automation-core/package.json /repo/packages/automation-core/package.json
 COPY --chown=node:node services/control-plane/package.json services/control-plane/package-lock.json ./
 # postinstall builds automation-core, whose source is intentionally in the next
-# layer; prestart performs that same build before the service boots.
+# layer; it is built explicitly once that source is copied in.
 RUN test -f package-lock.json && npm ci --ignore-scripts
 COPY --chown=node:node packages/core /repo/packages/core
 COPY --chown=node:node packages/automation-core /repo/packages/automation-core
 # automation-core's tsconfig compiles canonical sources from ../../src/automation.
 COPY --chown=node:node src/automation /repo/src/automation
 # Keep the local package linked to its source directory. Build and verify it now
-# that its canonical source is present; prestart rebuilds it again on boot.
+# that its canonical source is present.
 RUN rm -rf node_modules/@bivy/automation-core \
     && ln -s /repo/packages/automation-core node_modules/@bivy/automation-core \
     && npm run build:automation-core \
     && node --input-type=module -e \
       "import('@bivy/automation-core').then((m) => { if (typeof m.evaluateAutomation !== 'function') process.exit(1) })"
 COPY --chown=node:node services/control-plane/ ./
+# Bundle to plain JS at build time (automation-core is already built above); the
+# container runs `node`, not tsx.
+RUN node scripts/build.mjs
 # Keep the license and attribution beside the distributed AGPL service source.
 COPY --chown=node:node LICENSE NOTICE /repo/
 # Bundle the built React client so the control plane serves it at the root.
@@ -77,4 +80,6 @@ COPY --chown=node:node --from=webbuild /repo/packages/web/dist ./public/react
 # this too.
 ENV NODE_OPTIONS="--max-old-space-size=384"
 EXPOSE 4400
-CMD ["npm", "start"]
+# node directly (no npm/tsx wrapper chain): one process, and SIGTERM reaches the
+# service's own graceful shutdown handler.
+CMD ["node", "--enable-source-maps", "dist/index.js"]

@@ -606,6 +606,10 @@ function attachClient(ws: WebSocket, nodeId: string, accountId: string) {
   });
 }
 
+// The container runs node as PID 1, which gets no default SIGTERM action. Exit
+// explicitly so `docker stop` is immediate; nodes and clients reconnect.
+for (const signal of ["SIGTERM", "SIGINT"] as const) process.once(signal, () => process.exit(0));
+
 httpServer.listen({ port, host: process.env.BIND_HOST || undefined }, () => {
   console.log(`Relay listening on http://localhost:${port}  (control plane: ${controlPlaneUrl}, max frame: ${maxFrameBytes} bytes, max buffered: ${maxBufferedBytes} bytes, rate: client ${maxClientMessagesPerMinute}/min, node ${maxNodeMessagesPerMinute}/min)`);
 });

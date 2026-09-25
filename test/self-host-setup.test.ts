@@ -23,7 +23,7 @@ function fixture(overrides: NodeJS.ProcessEnv = {}) {
 printf 'docker %s\\n' "$*" >> "$MARKER"
 if [[ "$*" == *' up '* && "\${FAIL_HEALTH:-0}" == 1 ]]; then exit 1; fi
 if [[ "$*" == *generateVAPIDKeys* ]]; then echo 'public-key:private-key'; fi
-if [[ "$*" == *operator-login-cli.ts* ]]; then echo 'private login link'; fi
+if [[ "$*" == *operator-login-cli.js* ]]; then echo 'private login link'; fi
 if [[ "$*" == *'/auth/owner/status'* ]]; then exit "\${OWNER_PASSWORD_STATUS:-2}"; fi
 if [[ "$*" == *pg_dump* ]]; then echo 'database fixture'; fi
 `, { mode: 0o755 });
@@ -59,7 +59,7 @@ try {
   assert.match(fs.readFileSync(path.join(first.deploy, "Caddyfile"), "utf8"), /handle_path \/relay\/\*/);
   assert.match(first.calls(), /--wait --wait-timeout 180/);
   assert.match(first.calls(), /https:\/\/app.test.example\/relay\/healthz/);
-  assert.match(first.calls(), /operator-login-cli.ts/);
+  assert.match(first.calls(), /operator-login-cli.js/);
   assert.match(first.config(), /^WEB_PUSH_VAPID_PUBLIC_KEY=public-key$/m);
   const original = first.config();
   const custom = fs.readFileSync(path.join(first.deploy, "Caddyfile"), "utf8") + "\n# custom\n";
@@ -81,7 +81,7 @@ try {
   const result = two.setup(["app.test.example", "relay.test.example"]);
   success(result);
   assert.match(result.stdout, /sign in with your configured provider/);
-  assert.doesNotMatch(two.calls(), /operator-login-cli.ts/);
+  assert.doesNotMatch(two.calls(), /operator-login-cli.js/);
   assert.match(two.config(), /^RELAY_PUBLIC_URL=wss:\/\/relay.test.example$/m);
   assert.match(fs.readFileSync(path.join(two.deploy, "Caddyfile"), "utf8"), /^relay.test.example \{/m);
 
@@ -167,7 +167,7 @@ try {
     const run = broken.setup();
     assert.equal(run.status, 1);
     assert.doesNotMatch(run.stdout, /stack is ready/);
-    assert.doesNotMatch(broken.calls(), /operator-login-cli.ts/);
+    assert.doesNotMatch(broken.calls(), /operator-login-cli.js/);
   }
   console.log("self-host: owner/external auth, one/two domains, recovery, backups, managed DB, reruns and readiness failures passed");
 } finally {
