@@ -50,6 +50,10 @@ export class RemotePreview {
     if (!this.available) throw new Error("Preview delivery is unavailable. Reconnect the machine and try again.");
     return this.gateway!.open(id, returnTo);
   }
+  share(id: string): { url: string; expiresAt: number } {
+    if (!this.available) throw new Error("Preview delivery is unavailable. Reconnect the machine and try again.");
+    return this.gateway!.share(id);
+  }
   revoke(id: string): void { this.gateway?.revoke(id); }
   disconnect(): void {
     this.online = false;

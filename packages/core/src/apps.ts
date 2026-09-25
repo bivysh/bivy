@@ -27,3 +27,5 @@ export function isAppReference(value: unknown): value is AppReference {
 }
 export interface SessionAppsResult { apps: SessionApp[]; previewAvailable: boolean }
 export type OpenAppViewResult = { kind: "web"; url: string } | { kind: "terminal"; termId: string };
+/** A reusable preview link; a bearer capability until `expiresAt` or revoke. */
+export interface ShareAppViewResult { url: string; expiresAt: number }

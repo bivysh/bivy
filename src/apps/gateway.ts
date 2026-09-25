@@ -20,6 +20,8 @@ const COOKIE = "__Host-bivy-preview";
 const OPEN_PATH = "/__bivy/open";
 const REDEEM_PATH = "/__bivy/redeem";
 const HOUR = 60 * 60_000;
+/** Copied links are reusable until revoked, capped so a forgotten one lapses. */
+export const SHARE_TTL = 24 * HOUR;
 const HOP = new Set(["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"]);
 
 /** Separate per-app origins are mandatory. TLS terminates at the deployment's
@@ -69,7 +71,7 @@ function responseHeaders(headers: IncomingMessage["headers"], shellOrigin: strin
 export class AppGateway {
   readonly server: http.Server;
   private readonly template: string;
-  private readonly tickets = new Map<string, { appId: string; expires: number; returnTo?: string }>();
+  private readonly tickets = new Map<string, { appId: string; expires: number; returnTo?: string; reusable?: boolean }>();
   private readonly styles = new Map([
     ["/__bivy/tokens.css", readFileSync(new URL("./tokens.css", import.meta.url))],
     ["/__bivy/styles.css", readFileSync(new URL("./styles.css", import.meta.url))],
@@ -89,8 +91,7 @@ export class AppGateway {
   origin(id: string): string { return this.template.replace("{app}", id); }
   shellOrigin(id: string): string { return this.template.replace("{app}", `view-${id}`); }
   open(id: string, returnTo?: string): string {
-    const entry = this.registry.getView(id);
-    if (entry?.view.kind !== "web") throw new Error("Web view not found.");
+    const entry = this.requireWeb(id);
     if (returnTo) {
       const url = new URL(returnTo);
       const safeScheme = url.protocol === "https:" || (url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname));
@@ -98,12 +99,15 @@ export class AppGateway {
       if (!safeScheme || url.username || url.password || url.search || url.hash || url.pathname !== `/sessions/${encodeURIComponent(entry.app.sessionId)}`) throw new Error("Invalid return-to-chat URL.");
       returnTo = url.href;
     }
-    this.sweep();
-    if (this.tickets.size >= 500 || this.sessions.size >= 500) throw new Error("Too many preview grants. Try again later.");
-    const ticket = randomBytes(32).toString("hex");
-    this.tickets.set(ticket, { appId: id, expires: Date.now() + 60_000, returnTo });
     // Fragment never reaches reverse-proxy access logs or the application.
-    return `${this.shellOrigin(id)}${OPEN_PATH}#${ticket}`;
+    return `${this.shellOrigin(id)}${OPEN_PATH}#${this.grant({ appId: id, expires: Date.now() + 60_000, returnTo })}`;
+  }
+  /** A reusable link straight to the app origin (no shell frame), so it opens
+   * in any browser and can be inspected. Valid until revoked or SHARE_TTL. */
+  share(id: string): { url: string; expiresAt: number } {
+    this.requireWeb(id);
+    const expiresAt = Date.now() + SHARE_TTL;
+    return { url: `${this.origin(id)}${OPEN_PATH}#${this.grant({ appId: id, expires: expiresAt, reusable: true })}`, expiresAt };
   }
   revoke(id: string): void {
     for (const map of [this.tickets, this.sessions]) for (const [key, grant] of map) if (grant.appId === id) map.delete(key);
@@ -115,6 +119,18 @@ export class AppGateway {
     this.tickets.clear(); this.sessions.clear();
     this.server.close();
     this.server.closeAllConnections();
+  }
+  private requireWeb(id: string): RegisteredView {
+    const entry = this.registry.getView(id);
+    if (entry?.view.kind !== "web") throw new Error("Web view not found.");
+    return entry;
+  }
+  private grant(grant: { appId: string; expires: number; returnTo?: string; reusable?: boolean }): string {
+    this.sweep();
+    if (this.tickets.size >= 500 || this.sessions.size >= 500) throw new Error("Too many preview grants. Try again later.");
+    const ticket = randomBytes(32).toString("hex");
+    this.tickets.set(ticket, grant);
+    return ticket;
   }
   private sweep(): void {
     for (const map of [this.tickets, this.sessions]) for (const [key, grant] of map) if (grant.expires <= Date.now()) map.delete(key);
@@ -191,10 +207,12 @@ export class AppGateway {
       this.sweep();
       const grant = this.tickets.get(body);
       if (!grant || grant.appId !== id || this.sessions.size >= 500) { res.writeHead(401); res.end(); return; }
-      this.tickets.delete(body);
+      if (!grant.reusable) this.tickets.delete(body);
+      // A browser session never outlives the link that created it.
+      const expires = Math.min(Date.now() + HOUR, grant.expires);
       const token = randomBytes(32).toString("hex");
-      this.sessions.set(token, { appId: id, expires: Date.now() + HOUR });
-      res.setHeader("Set-Cookie", `${COOKIE}=${token}; Secure; HttpOnly; SameSite=Lax; Path=/; Max-Age=3600`);
+      this.sessions.set(token, { appId: id, expires });
+      res.setHeader("Set-Cookie", `${COOKIE}=${token}; Secure; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.max(1, Math.floor((expires - Date.now()) / 1000))}`);
       res.writeHead(204); res.end(); return;
     }
     const expires = this.authorize(req, id);

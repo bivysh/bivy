@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import type { AppView, OpenAppViewResult, SessionApp, SessionAppsResult } from "@bivy/core";
+import type { AppView, OpenAppViewResult, SessionApp, SessionAppsResult, ShareAppViewResult } from "@bivy/core";
 import { controller, useAppState } from "../store/useStore.js";
 import { Sheet } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { accountOrigin } from "../packaged-client.js";
+import { writeClipboard } from "../clipboard.js";
 const TerminalOverlay = lazy(() => import("./Terminal.js").then((module) => ({ default: module.TerminalOverlay })));
 
 export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; appId?: string; onClose: () => void }) {
@@ -16,6 +17,9 @@ export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; ap
   const [refresh, setRefresh] = useState(0);
   const [terminal, setTerminal] = useState<string | null>(null);
   const [link, setLink] = useState<{ viewId: string; url: string } | null>(null);
+  // Per-view outcome of Copy link / Revoke access. `url` is set only when the
+  // clipboard refused, so the link can be copied by hand.
+  const [notice, setNotice] = useState<{ viewId: string; text: string; url?: string } | null>(null);
   const [confirm, setConfirm] = useState<{ app: SessionApp; view?: AppView } | null>(null);
   const generation = useRef(0);
   const online = connection.status === "online";
@@ -26,7 +30,7 @@ export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; ap
 
   useEffect(() => {
     const current = ++generation.current;
-    setBusy(true); setError(""); setResult(null); setLink(null); setConfirm(null);
+    setBusy(true); setError(""); setResult(null); setLink(null); setNotice(null); setConfirm(null);
     void controller.appCommand("apps.list", sessionId).then((event) => {
       if (generation.current === current) setResult(event as unknown as SessionAppsResult);
     }).catch((e: unknown) => {
@@ -62,12 +66,38 @@ export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; ap
       if (generation.current !== current) { popup?.close(); return; }
       if (response.kind === "terminal") setTerminal(response.termId);
       else if (response.kind === "web") {
-        const url = new URL(response.url);
-        if (url.protocol !== "https:" || url.origin === location.origin || url.username || url.password) throw new Error("Machine returned an unsafe preview URL.");
-        if (popup && !popup.closed) { popup.location.replace(url.href); onClose(); }
-        else setLink({ viewId: view.id, url: url.href });
+        const url = previewUrl(response.url);
+        if (popup && !popup.closed) { popup.location.replace(url); onClose(); }
+        else setLink({ viewId: view.id, url });
       } else throw new Error("This app view is not supported by this client.");
     } catch (e) { popup?.close(); if (generation.current === current) setError(e instanceof Error ? e.message : "Could not open view."); }
+    finally { if (generation.current === current) setBusy(false); }
+  };
+  const previewUrl = (raw: string) => {
+    const url = new URL(raw);
+    if (url.protocol !== "https:" || url.origin === location.origin || url.username || url.password) throw new Error("Machine returned an unsafe preview URL.");
+    return url.href;
+  };
+  const share = async (app: SessionApp, view: AppView) => {
+    const current = generation.current;
+    setBusy(true); setError(""); setNotice(null);
+    try {
+      const response = await controller.appCommand("apps.share", sessionId, { appId: app.id, viewId: view.id }) as unknown as ShareAppViewResult;
+      if (generation.current !== current) return;
+      const url = previewUrl(response.url);
+      const hours = Math.round((response.expiresAt - Date.now()) / 3_600_000);
+      const validity = `Anyone with it can open ${view.name} in any browser for ${hours} hours, or until you revoke access.`;
+      setNotice(await writeClipboard(url) ? { viewId: view.id, text: `Link copied. ${validity}` } : { viewId: view.id, text: `Copy this link. ${validity}`, url });
+    } catch (e) { if (generation.current === current) setError(e instanceof Error ? e.message : "Could not create a link."); }
+    finally { if (generation.current === current) setBusy(false); }
+  };
+  const revoke = async (app: SessionApp, view: AppView) => {
+    const current = generation.current;
+    setBusy(true); setError(""); setNotice(null); setLink(null);
+    try {
+      await controller.appCommand("apps.revoke", sessionId, { appId: app.id, viewId: view.id });
+      if (generation.current === current) setNotice({ viewId: view.id, text: `Access revoked. Copied links and open previews of ${view.name} stopped working.` });
+    } catch (e) { if (generation.current === current) setError(e instanceof Error ? e.message : "Could not revoke access."); }
     finally { if (generation.current === current) setBusy(false); }
   };
   const remove = async (app: SessionApp) => {
@@ -101,11 +131,21 @@ export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; ap
           <span className="artifact-meta">{view.kind === "terminal" ? "Interactive terminal · starts on request" : view.source === "static" ? "Web · published snapshot" : "Web · live server"}</span>
           {view.kind === "terminal" && <code className="app-view-command">{[view.command, ...view.args.map((arg) => JSON.stringify(arg))].join(" ")}</code>}
         </div>
-        {link?.viewId === view.id
-          ? <a className="btn sm" href={link.url} target="_blank" rel="noopener noreferrer" onClick={() => setTimeout(onClose, 0)}>Open preview ↗</a>
-          : <button className="btn sm" disabled={busy || !online || (view.kind === "web" && !result.previewAvailable)} onClick={() => view.kind === "terminal" ? setConfirm({ app, view }) : void open(app, view)}>
-            {view.kind === "terminal" ? "Open terminal" : "Open preview"}
-          </button>}
+        <div className="app-view-actions">
+          {view.kind === "web" && <>
+            <button className="btn sm ghost" disabled={busy || !online || !result.previewAvailable} onClick={() => void revoke(app, view)} aria-label={`Revoke access to ${view.name}`}>Revoke access</button>
+            <button className="btn sm ghost" disabled={busy || !online || !result.previewAvailable} onClick={() => void share(app, view)} aria-label={`Copy link to ${view.name}`}>Copy link</button>
+          </>}
+          {link?.viewId === view.id
+            ? <a className="btn sm" href={link.url} target="_blank" rel="noopener noreferrer" onClick={() => setTimeout(onClose, 0)}>Open preview ↗</a>
+            : <button className="btn sm" disabled={busy || !online || (view.kind === "web" && !result.previewAvailable)} onClick={() => view.kind === "terminal" ? setConfirm({ app, view }) : void open(app, view)}>
+              {view.kind === "terminal" ? "Open terminal" : "Open preview"}
+            </button>}
+        </div>
+        {notice?.viewId === view.id && <div className="app-view-notice" role="status">
+          <span className="artifact-meta">{notice.text}</span>
+          {notice.url && <input className="field" readOnly value={notice.url} aria-label={`Link to ${view.name}`} autoFocus onFocus={(e) => e.currentTarget.select()} />}
+        </div>}
       </div>)}
     </section>)}
     <p className="muted">Apps are available while this machine is running. Removing an app closes its terminals and revokes preview access; externally started web servers keep running.</p>

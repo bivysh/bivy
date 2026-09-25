@@ -294,6 +294,8 @@ export class DirectTransport implements Transport {
         case "apps.list":
         case "apps.publish":
         case "apps.open":
+        case "apps.share":
+        case "apps.revoke":
         case "apps.remove": {
           const requestId = String(obj.requestId ?? "");
           try {

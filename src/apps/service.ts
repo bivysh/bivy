@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import type { AppManifest, OpenAppViewResult, SessionAppsResult } from "./types.js";
+import type { AppManifest, OpenAppViewResult, SessionAppsResult, ShareAppViewResult } from "./types.js";
 import { AppRegistry } from "./registry.js";
 
 export interface AppPreviewProvider {
   readonly available?: boolean;
   open(id: string, returnTo?: string): string;
+  share(id: string): ShareAppViewResult;
   revoke(id: string): void;
 }
 
@@ -49,6 +50,17 @@ export class AppService {
       if (this.terminalStarts.get(viewId) === pending) this.terminalStarts.delete(viewId);
       throw error;
     }
+  }
+  share(sessionId: string, appId: string, viewId: string): ShareAppViewResult {
+    if (this.registry.requireView(sessionId, appId, viewId).view.kind !== "web") throw new Error("Only web views have preview links.");
+    if (!this.gateway) throw new Error("Bivy's preview service is unavailable on this connection.");
+    return this.gateway.share(viewId);
+  }
+  /** Ends every link, browser session and open connection for one view; the app stays. */
+  revoke(sessionId: string, appId: string, viewId: string): { ok: true } {
+    this.registry.requireView(sessionId, appId, viewId);
+    this.gateway?.revoke(viewId);
+    return { ok: true };
   }
   remove(sessionId: string, appId: string): void {
     const app = this.registry.require(sessionId, appId);
