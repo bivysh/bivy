@@ -122,7 +122,7 @@ turn boundaries, and the CLI.
 
 | Phase | Ships | Done when |
 |---|---|---|
-| **1: close the loop** (~2 wks) | Listener detection + adopt · typed health + SPA fallback · turn-stamped reload · QR / *Open on my phone* | The first preview needs no manifest; a dead server shows a cause and a fix button, never a blank frame |
+| **1: close the loop** (~2 wks) | Listener detection + adopt · typed health + SPA fallback · turn-stamped reload · hand-off via the existing **Copy link** (QR deferred) | The first preview needs no manifest; a dead server shows a cause and a fix button, never a blank frame |
 | **2: hold it** (~4 wks) | Peek drawer / split pane · floating pill · inspector (point and tell, console, lens) | A UI bug can be found, pointed at, and sent from a phone without typing a description |
 | **3: keep it** (~6 wks) | Managed start + persistence · stable home-screen address · snapshots + Compare · `bivy app shot` · reviewer pins | A preview added to the home screen on Tuesday opens the latest turn on Wednesday, even after a reboot |
 
@@ -131,7 +131,7 @@ Suggested first PRs, in this order:
 1. Listener detection → offers.
 2. Typed health states in the shell.
 3. Turn-stamped reload.
-4. QR hand-off.
+4. SPA fallback. Hand-off uses the existing **Copy link**; QR is deferred.
 
 Each PR is small and independent.
 
