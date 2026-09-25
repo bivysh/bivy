@@ -22,19 +22,13 @@ const mobileSpecs = [
   "**/activity-history.spec.ts",
 ];
 
-// The merge queue runs only these core flows (PW_SMOKE=1, desktop viewport);
-// nightly and release runs execute every spec on every viewport. Pick specs
-// that span first run, chat, automation and update paths, not edge cases.
-const smokeSpecs = [
-  "**/screenshots.spec.ts",
-  "**/browser-first-setup.spec.ts",
+// Mobile-specific specs whose mobile run does everything the desktop run does
+// (plus touch-target, drawer or layout checks); desktop would only repeat it.
+const mobileOnlySpecs = [
   "**/self-host-onboarding.spec.ts",
-  "**/chat-follow.spec.ts",
-  "**/run-details.spec.ts",
-  "**/pwa-update.spec.ts",
-  "**/automation-accounts.spec.ts",
+  "**/app-badge.spec.ts",
+  "**/changes-card.spec.tsx",
 ];
-const smoke = Boolean(process.env.PW_SMOKE);
 
 export default defineConfig({
   testDir: "./test/browser",
@@ -53,7 +47,7 @@ export default defineConfig({
     // Source-contract checks need neither Chromium nor duplicate viewports.
     { name: "contracts", testDir: "./test/web-contracts" },
     { name: "behavior", testMatch: singleViewport, use: { viewport: { width: 1280, height: 800 } } },
-    { name: "desktop", testIgnore: singleViewport, ...(smoke && { testMatch: smokeSpecs }), use: { viewport: { width: 1280, height: 800 } } },
+    { name: "desktop", testIgnore: [...singleViewport, ...mobileOnlySpecs], use: { viewport: { width: 1280, height: 800 } } },
     { name: "mobile", testMatch: mobileSpecs, use: { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true } },
   ],
 });

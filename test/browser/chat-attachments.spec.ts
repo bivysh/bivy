@@ -14,7 +14,9 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => { await server?.close(); });
 
-for (const theme of themes) for (const width of [390, 1280]) {
+// The tall test image is height-bound at any width; the phone width is the
+// stricter case for the card row and the fitted gallery.
+for (const theme of themes) for (const width of [390]) {
   test(`${theme} ${width}: attachment cards and fitted gallery`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 800 });
     const html = await server.transformIndexHtml('/attachment-test', `<!doctype html><html data-theme="${theme}"><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="root" style="height:100dvh;display:flex;flex-direction:column"></div><script type="module">
