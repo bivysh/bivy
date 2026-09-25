@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { expect, test } from "./fixtures.js";
+import { expect, test, themes } from "./fixtures.js";
 import { createRequire } from "node:module";
 import path from "node:path";
 
@@ -45,7 +45,7 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-for (const theme of ["light", "dark"]) {
+for (const theme of themes) {
   for (const entry of ["menu", "picker"]) {
     test(`${entry} fork stays modal until canonical history is available (${theme})`, async ({ page }, testInfo) => {
       await page.evaluate((value) => document.documentElement.dataset.theme = value, theme);

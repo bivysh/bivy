@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { expect, test, type Page } from "./fixtures.js";
+import { expect, test, type Page, themes } from "./fixtures.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -60,7 +60,7 @@ async function openSetup(page: Page, theme: string, focus = "github", apps: Arra
   await page.goto(`${origin}${fixturePath}`);
 }
 
-for (const theme of ["light", "dark"]) {
+for (const theme of themes) {
   test(`hosted GitHub setup is separate, actionable, and explicit (${theme})`, async ({ page }, testInfo) => {
     await openSetup(page, theme);
     const dialog = page.getByRole("dialog", { name: "Manage GitHub Apps" });
@@ -83,7 +83,7 @@ for (const theme of ["light", "dark"]) {
   });
 }
 
-for (const theme of ["light", "dark"]) {
+for (const theme of themes) {
   for (const configured of [true, false]) {
     test(`hosted management stays available with configured=${configured} (${theme})`, async ({ page }, testInfo) => {
       await openSetup(page, theme, "github", [custom], false, configured);
@@ -199,7 +199,7 @@ async function openSessionComposer(page: Page, theme: string) {
   await page.goto(`${origin}${fixture}`);
 }
 
-for (const theme of ["light", "dark"]) {
+for (const theme of themes) {
   test(`session model resolves without opening the picker (${theme})`, async ({ page }, testInfo) => {
     await openSessionComposer(page, theme);
     await expect(page.locator(".model-pill")).toBeVisible();

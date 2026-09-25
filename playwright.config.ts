@@ -11,6 +11,17 @@ const singleViewport = [
   "**/pwa-lifecycle.spec.ts",
 ];
 
+// Specs whose layout, touch targets or visual baselines differ on a phone.
+// Everything else asserts behavior that the desktop viewport already covers.
+const mobileSpecs = [
+  "**/screenshots.spec.ts",
+  "**/self-host-onboarding.spec.ts",
+  "**/app-badge.spec.ts",
+  "**/fresh-composer-layout.spec.ts",
+  "**/changes-card.spec.tsx",
+  "**/activity-history.spec.ts",
+];
+
 // The merge queue runs only these core flows (PW_SMOKE=1, desktop viewport);
 // nightly and release runs execute every spec on every viewport. Pick specs
 // that span first run, chat, automation and update paths, not edge cases.
@@ -43,6 +54,6 @@ export default defineConfig({
     { name: "contracts", testDir: "./test/web-contracts" },
     { name: "behavior", testMatch: singleViewport, use: { viewport: { width: 1280, height: 800 } } },
     { name: "desktop", testIgnore: singleViewport, ...(smoke && { testMatch: smokeSpecs }), use: { viewport: { width: 1280, height: 800 } } },
-    { name: "mobile", testIgnore: singleViewport, use: { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true } },
+    { name: "mobile", testMatch: mobileSpecs, use: { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true } },
   ],
 });

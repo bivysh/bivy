@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures.js";
+import { expect, test, themes } from "./fixtures.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer, type ViteDevServer } from "../../packages/web/node_modules/vite/dist/node/index.js";
@@ -28,7 +28,7 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => { await server.close(); });
 
-for (const theme of ["light", "dark"]) {
+for (const theme of themes) {
   test(`explicit update reload and retry (${theme})`, async ({ page }, info) => {
     await page.route(`${origin}/update-test`, route => route.fulfill({
       contentType: "text/html",

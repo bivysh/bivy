@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { expect, test, type Page } from "./fixtures.js";
+import { expect, test, type Page, themes } from "./fixtures.js";
 import path from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, type ViteDevServer } from "../../packages/web/node_modules/vite/dist/node/index.js";
@@ -90,7 +90,7 @@ async function fixture(page: Page, theme: string, empty = false, trigger = "sche
   return () => item;
 }
 
-for (const theme of ["light", "dark"]) {
+for (const theme of themes) {
   test(`automation screen hierarchy and grouped sheets (${theme})`, async ({ page }, testInfo) => {
     await fixture(page, theme, false, 'schedule', { history: true });
     const capture = async (name: string) => {
@@ -183,7 +183,7 @@ for (const theme of ["light", "dark"]) {
   });
 }
 
-for (const theme of ["light", "dark"]) {
+for (const theme of themes) {
   test(`webhook filter round-trips through the app editor (${theme})`, async ({ page }, testInfo) => {
     const filter = { command: ["node", "basecamp filter.mjs"], cwd: "/srv/bivy/trusted-filters", timeoutSeconds: 5 };
     const item = await fixture(page, theme, false, "webhook", { filter });

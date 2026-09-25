@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { expect, test } from "./fixtures.js";
+import { expect, test, themes } from "./fixtures.js";
 import { readFile } from "node:fs/promises";
 
 const read = (path: string) => readFile(new URL(path, import.meta.url), "utf8");
 
-for (const theme of ["light", "dark"]) {
+for (const theme of themes) {
   test(`composer retains two lines after hidden autosizing (${theme})`, async ({ page }) => {
     const tokens = await read("../../packages/ui/tokens.css");
     const styles = await read("../../packages/web/src/styles.css");

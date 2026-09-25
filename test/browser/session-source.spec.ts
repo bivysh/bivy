@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { expect, test } from "./fixtures.js";
+import { expect, test, themes } from "./fixtures.js";
 import path from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, type ViteDevServer } from "../../packages/web/node_modules/vite/dist/node/index.js";
@@ -18,7 +18,7 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => { await server?.close(); if (cacheDir) await rm(cacheDir, { recursive: true, force: true }); });
 
-for (const theme of ["light", "dark"]) {
+for (const theme of themes) {
   test(`repository sessions show creating triggers (${theme})`, async ({ page }, testInfo) => {
     const html = await server.transformIndexHtml("/source-fixture", `<html data-theme="${theme}"><head><meta name="viewport" content="width=device-width, initial-scale=1" /></head><body><div id="root" style="width: var(--sidebar-width); max-width: 100%"></div><script type="module">
       import React from 'react';

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { expect, test } from "@playwright/test";
+import { themes } from "./fixtures.js";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -157,7 +158,7 @@ for (const platform of ["native", "browser"]) {
   });
 }
 
-for (const theme of ["light", "dark"]) {
+for (const theme of themes) {
   test(`packaged sign-in is hosted, email-only, and uses the configured discovery origin (${theme})`, async ({ page }, testInfo) => {
     await page.addInitScript(theme => {
       localStorage.setItem("bivy_theme", theme);
