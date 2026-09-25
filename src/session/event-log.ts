@@ -482,12 +482,12 @@ export interface EventLogIssue {
   at: number;
 }
 
-function parseLogDetailed(body: string): { records: LogRecord[]; malformedLines: number } {
+function parseLogDetailed(body: string, keep: (line: string) => boolean = () => true): { records: LogRecord[]; malformedLines: number } {
   const records: LogRecord[] = [];
   let malformedLines = 0;
   for (const line of body.split("\n")) {
     const trimmed = line.trim();
-    if (!trimmed) continue;
+    if (!trimmed || !keep(trimmed)) continue;
     try {
       const value = JSON.parse(trimmed);
       if (isRecord(value)) records.push(value);
@@ -512,9 +512,15 @@ export function parseLog(body: string): LogRecord[] {
  * `throttleMs` per session (a burst of same-id deltas within a window collapses to
  * one appended line). Durability at boundaries is explicit `flush()` (turn-end,
  * close, delete, shutdown), mirroring `SidecarStore`.
+ *
+ * The in-memory copy of flushed records is an LRU capped at `maxCachedBytes`
+ * (measured as log-file size): an evicted session simply re-reads its file on next
+ * use, so memory tracks the sessions in use, not the node's whole history.
  */
 export class EventLog {
   private disk = new Map<string, LogRecord[]>();
+  private diskBytes = new Map<string, number>();
+  private cachedBytes = 0;
   private pending = new Map<string, Map<string, LogRecord>>();
   private timers = new Map<string, NodeJS.Timeout>();
   private lastFlush = new Map<string, number>();
@@ -531,6 +537,7 @@ export class EventLog {
     private redact: (text: string) => string = (t) => t,
     private throttleMs = 500,
     private onIssue: (issue: EventLogIssue) => void = (issue) => console.error(`[event-log] ${issue.operation} failed for ${issue.sessionId}: ${issue.message}`),
+    private maxCachedBytes = 64 * 1024 * 1024,
   ) {}
 
   private report(id: string, operation: EventLogIssue["operation"], error: unknown): void {
@@ -568,19 +575,64 @@ export class EventLog {
     return { files, bytes };
   }
 
-  private load(id: string): LogRecord[] {
-    const cached = this.disk.get(id);
-    if (cached) return cached;
-    let data: LogRecord[] = [];
+  /** Read + parse a session's log file (lines passing `keep`), reporting problems. */
+  private readLog(id: string, keep?: (line: string) => boolean): { records: LogRecord[]; bytes: number } {
     try {
-      const parsed = parseLogDetailed(fs.readFileSync(this.pathFor(id), "utf8"));
-      data = parsed.records;
+      const body = fs.readFileSync(this.pathFor(id), "utf8");
+      const parsed = parseLogDetailed(body, keep);
       if (parsed.malformedLines > 0) this.report(id, "parse", new Error(`${parsed.malformedLines} malformed record(s); valid history was recovered`));
+      return { records: parsed.records, bytes: body.length };
     } catch (error) {
       if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") this.report(id, "read", error);
+      return { records: [], bytes: 0 };
     }
-    this.disk.set(id, data);
-    return data;
+  }
+
+  private load(id: string): LogRecord[] {
+    const cached = this.disk.get(id);
+    if (cached) {
+      // Re-insert to mark most-recently-used (Map iterates in insertion order).
+      this.disk.delete(id);
+      this.disk.set(id, cached);
+      return cached;
+    }
+    const { records, bytes } = this.readLog(id);
+    this.cache(id, records, bytes);
+    return records;
+  }
+
+  /** Store a session's flushed records, then evict least-recently-used others past the cap. */
+  private cache(id: string, records: LogRecord[], bytes: number): void {
+    this.uncache(id);
+    this.disk.set(id, records);
+    this.diskBytes.set(id, bytes);
+    this.cachedBytes += bytes;
+    for (const oldest of this.disk.keys()) {
+      if (this.cachedBytes <= this.maxCachedBytes || oldest === id) break;
+      this.uncache(oldest);
+    }
+  }
+
+  private uncache(id: string): void {
+    this.cachedBytes -= this.diskBytes.get(id) ?? 0;
+    this.diskBytes.delete(id);
+    this.disk.delete(id);
+  }
+
+  /**
+   * The session's records of the given kinds, read WITHOUT caching the log. For
+   * whole-store sweeps (attachment GC) that visit every session, where `load` would
+   * pin every log in memory. Uses the cached copy when there is one, and always
+   * includes pending records so unflushed writes are never missed. Off the cache only
+   * candidate lines are parsed: those naming a wanted kind, plus torn lines (not
+   * ending in `}`) so a truncated write is still reported and callers can fail closed.
+   */
+  scan(id: string, kinds: readonly LogRecord["bivyKind"][]): LogRecord[] {
+    const wanted = new Set<string>(kinds);
+    const markers = kinds.map((kind) => `"bivyKind":${JSON.stringify(kind)}`);
+    const flushed = this.disk.get(id) ?? this.readLog(id, (line) => !line.endsWith("}") || markers.some((m) => line.includes(m))).records;
+    const pending = this.pending.get(id)?.values() ?? [];
+    return [...flushed, ...pending].filter((record) => wanted.has(record.bivyKind));
   }
 
   /** Allocate a unique synthetic coalescing key (for id-less records). */
@@ -756,9 +808,16 @@ export class EventLog {
     const lines = [...batch.values()];
     try {
       fs.mkdirSync(this.dir, { recursive: true });
-      fs.appendFileSync(this.pathFor(id), this.redact(lines.map((e) => JSON.stringify(e)).join("\n") + "\n"));
-      const disk = this.load(id);
-      disk.push(...lines);
+      const body = this.redact(lines.map((e) => JSON.stringify(e)).join("\n") + "\n");
+      fs.appendFileSync(this.pathFor(id), body);
+      // Extend the cached copy only if it is still cached: an evicted session re-reads
+      // the file (which now holds these lines) on next use, so loading here would
+      // double-count them.
+      const cached = this.disk.get(id);
+      if (cached) {
+        cached.push(...lines);
+        this.cache(id, cached, (this.diskBytes.get(id) ?? 0) + body.length);
+      }
       batch.clear();
       this.lastFlush.set(id, Date.now());
     } catch (error) {
@@ -780,10 +839,10 @@ export class EventLog {
     if (timer) { clearTimeout(timer); this.timers.delete(id); }
     this.pending.delete(id);
     this.baseKeys.delete(id);
-    this.disk.set(id, copy);
+    const body = copy.length ? copy.map((e) => JSON.stringify(e)).join("\n") + "\n" : "";
+    this.cache(id, copy, body.length);
     try {
       fs.mkdirSync(this.dir, { recursive: true });
-      const body = copy.length ? copy.map((e) => JSON.stringify(e)).join("\n") + "\n" : "";
       fs.writeFileSync(this.pathFor(id), this.redact(body));
       this.lastFlush.set(id, Date.now());
     } catch (error) {
@@ -795,7 +854,7 @@ export class EventLog {
   drop(id: string): void {
     const timer = this.timers.get(id);
     if (timer) { clearTimeout(timer); this.timers.delete(id); }
-    this.disk.delete(id);
+    this.uncache(id);
     this.pending.delete(id);
     this.lastFlush.delete(id);
     this.counters.delete(id);

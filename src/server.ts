@@ -1955,8 +1955,10 @@ function referencedAttachmentHashes(): Set<string> | null {
   const hashes = new Set<string>();
   const ids = new Set(metadata.listSessions().map((session) => session.id));
   for (const record of new Set(openSessions.values())) ids.add(record.id);
+  // `scan`, not `entries`: this visits every session ever created, and must not pin
+  // each one's full log in the event-log cache.
   for (const id of ids) {
-    for (const entry of eventLog.entries(id)) {
+    for (const entry of eventLog.scan(id, ["attachment", "outbound-attachment", "inline-image"])) {
       if (entry.bivyKind === "attachment") for (const ref of entry.refs) hashes.add(ref.hash);
       else if (entry.bivyKind === "outbound-attachment" || entry.bivyKind === "inline-image") hashes.add(entry.ref.hash);
     }
