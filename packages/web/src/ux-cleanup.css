@@ -6,26 +6,15 @@
     box-shadow: none;
   }
   .sidebar.open { box-shadow: var(--shadow-xl); }
-  .sidebar-head {
-    min-height: 56px;
-    padding: max(var(--space-3), env(safe-area-inset-top)) var(--space-4) var(--space-3);
-  }
-  .brand { font-size: var(--text-lg); }
-  .sidebar-head-actions { gap: var(--space-1); }
-  .sidebar-head-actions .btn { min-height: 40px; }
-  .sidebar-nav {
-    padding: var(--space-2) var(--space-3);
-  }
+  .sidebar-head { min-height: 56px; }
+  .sidebar-head-actions .btn { min-width: 44px; min-height: 44px; }
   .sidebar-nav-item { min-height: 44px; }
-  .sidebar-foot { padding: var(--space-3); background: var(--surface-2); }
-  .settings-gear { min-height: 44px; }
-  .session-list { padding: var(--space-2) var(--space-3); }
-  .session-list-heading { padding-inline: var(--space-1); }
-  .session-item { align-items: flex-start; padding: var(--space-3) var(--space-2); }
-  .session-name { line-height: var(--lh-md); }
-  .session-meta { line-height: var(--lh-sm); overflow-wrap: anywhere; }
+  .session-list { padding: var(--space-1) var(--space-3); }
+  .session-item { padding: var(--space-3) var(--space-2); }
+  .session-name { font-size: var(--text-lg); line-height: var(--lh-lg); }
+  .session-meta { font-size: var(--text-base); line-height: var(--lh-base); }
+  .session-filter-btn { width: 40px; height: 40px; }
   .row-menu-btn { min-width: 44px; min-height: 44px; opacity: 1; }
-  .session-pr { flex: none; }
 
   .automations-view-head {
     min-height: 64px;

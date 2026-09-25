@@ -5,26 +5,27 @@ import { githubIssueRefFromSource, primaryPr, repoFromSource, type GithubQueueIt
 import { useAppState } from "../store/useStore.js";
 import { controller } from "../store/useStore.js";
 import { attentionRank, statusDotState, statusLabel, type SessionDotState } from "../sessionStatus.js";
-import { SourceMark } from "./SourceMark.js";
 import { Badge } from "./Badge.js";
-import { classifySource, CLI_SOURCE, type SourceInfo, type SourceKind } from "../sessionSource.js";
+import { classifySource, CLI_SOURCE, shortSourceLabel, type SourceInfo } from "../sessionSource.js";
+import { StatusDot } from "./StatusDot.js";
+import { SourceMark } from "./SourceMark.js";
 import { rowHint } from "../runEvidence.js";
 import { sessionDateGroup } from "../sessionPresentation.js";
-import { CheckIcon } from "./UiIcons.js";
+import { CheckIcon, SearchIcon } from "./UiIcons.js";
 import { ConfirmDialog } from "./AppDialog.js";
 
-/** The leading indicator on a session row: a tinted source tile carrying the
- *  trigger's glyph, with the live status as a small dot badge on its corner.
- *  Source is the identity, status is the presence — one element, two axes, so
- *  the row now reads "where it came from" and "what it's doing" at a glance.
- *  The dot's colour/shape logic is the same StatusDot the header uses. */
-export function RowMark({ kind, status, srLabel }: { kind: SourceKind; status: SessionDotState; srLabel: string }) {
+/** Row states loud enough to earn a visible dot. The calm majority (idle /
+ *  saved) carries none, so a dot in the list always means "look here". */
+const LOUD_STATES: ReadonlySet<SessionDotState> = new Set(["working", "needs-action", "failed", "unseen"]);
+
+/** The leading indicator on a session row: the canonical StatusDot, shown only
+ *  for states that want attention. Rows otherwise start flush with the title,
+ *  like a plain list of conversations. The full source + status is always
+ *  mirrored as screen-reader text. */
+export function RowMark({ status, srLabel }: { status: SessionDotState; srLabel: string }) {
   return (
     <>
-      <SourceMark kind={kind} size="sm" status={status} />
-      {/* The mark + badge are colour/shape only and aria-hidden; mirror both the
-          source and the status as screen-reader-only text (parity with the old
-          bare status dot, which did the same for status alone). */}
+      {LOUD_STATES.has(status) && <span className="row-status"><StatusDot status={status} /></span>}
       <span className="sr-only">{srLabel}</span>
     </>
   );
@@ -41,23 +42,32 @@ export function GhMark() {
   );
 }
 
-/** Compact PR status badge for a sidebar row — mirrors the header pill's state
- *  colours. Shows the primary PR (open wins, else most recent); a count suffix
- *  when a session carries more than one. Non-interactive (the row is a button). */
+/** Per-state PR presentation: the glyph's shape carries the state (so it never
+ *  rests on colour alone), the tone colours it, the label names it. */
+const PR_STATE = {
+  open: { label: "Open pull request", tone: "ok", paths: ["M13 6h3a2 2 0 0 1 2 2v7", "M6 9v12"] },
+  merged: { label: "Merged", tone: "merged", paths: ["M6 21V9a9 9 0 0 0 9 9"] },
+  closed: { label: "Closed pull request", tone: undefined, paths: ["M6 9v12", "m21 3-6 6", "m21 9-6-6", "M18 11.5V15"] },
+} as const;
+
+/** Compact PR status mark: a pull-request glyph shaped by state, plus a count
+ *  when a session carries more than one. Shows the primary PR (open wins, else
+ *  most recent). Non-interactive (the row/pill around it is the button). */
 export function PrBadge({ prs }: { prs?: PrRef[] }) {
   const pr = primaryPr(prs);
   if (!pr) return null;
-  const label = pr.state === "merged" ? "Merged" : pr.state === "closed" ? "Closed" : "PR";
+  const state = PR_STATE[pr.state === "merged" || pr.state === "closed" ? pr.state : "open"];
   const count = prs && prs.length > 1 ? prs.length : 0;
+  const label = count ? `${state.label} · ${count} pull requests` : state.label;
   return (
-    <Badge
-      tone={pr.state === "merged" ? "merged" : pr.state === "open" ? "ok" : undefined}
-      className="session-pr"
-      title={count ? `${label} · ${count} pull requests` : label}
-      aria-hidden
-    >
-      <GhMark />
-      <span className="session-pr-text">{count ? `${label} ${count}` : label}</span>
+    <Badge tone={state.tone} variant="soft" className="session-pr" title={label}>
+      <svg className="pr-glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <circle cx="6" cy="6" r="3" />
+        <circle cx="18" cy="18" r="3" />
+        {state.paths.map((d) => <path key={d} d={d} />)}
+      </svg>
+      {count > 0 && <span className="session-pr-text" aria-hidden>{count}</span>}
+      <span className="sr-only">{label}</span>
     </Badge>
   );
 }
@@ -113,8 +123,12 @@ function sessionMeta(
   const titleSlug = String(s.name || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   const branchSlug = branch.toLowerCase().split("/").pop()?.replace(/-[a-f0-9]{5,}$/i, "") || "";
   const usefulBranch = branch && branchSlug !== titleSlug ? branch : "";
-  const context = repo || queueSourceMeta(s.source);
-  const parts = [s.forkedFrom ? "Forked" : null, s.agentName, nodeLabel, context, usefulBranch];
+  // An automation-triggered session names its trigger up front ("Schedule",
+  // "Slack"); hand-opened ones stay quiet — they're the default. A queue
+  // descriptor that would only repeat that trigger name is dropped.
+  const src = classifySource(s.source);
+  const context = repo || (src.automation ? "" : queueSourceMeta(s.source));
+  const parts = [src.automation ? shortSourceLabel(src.kind) : null, s.forkedFrom ? "Forked" : null, s.agentName, nodeLabel, context, usefulBranch];
   return parts.filter(Boolean).join(" · ");
 }
 
@@ -140,7 +154,7 @@ function queueSourceMeta(source: string | undefined): string {
 // what's mounted and let the user page through the tail.
 const PAGE = 10;
 
-export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSources, onOpenAutomations, automationsActive }: { onPick: (sessionId: string, path?: string, nodeId?: string) => void; onPickTerminal: (termId: string, nodeId?: string) => void; runEvidence?: Map<string, GithubQueueItem>; sessionSources?: Map<string, SourceInfo>; onOpenAutomations?: () => void; automationsActive?: boolean }) {
+export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSources, onOpenAutomations, automationsActive, onOpenTerminal, terminalDisabled }: { onPick: (sessionId: string, path?: string, nodeId?: string) => void; onPickTerminal: (termId: string, nodeId?: string) => void; runEvidence?: Map<string, GithubQueueItem>; sessionSources?: Map<string, SourceInfo>; onOpenAutomations?: () => void; automationsActive?: boolean; onOpenTerminal?: () => void; terminalDisabled?: boolean }) {
   const { sessionIndex: { sessions, runTerminals }, activeSession: { activeSessionId }, connection: { nodes, currentNodeId } } = useAppState();
   const [query, setQuery] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<{ sessionId: string; name: string } | null>(null);
@@ -195,6 +209,10 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSource
   // Before `nodes` has loaded, fall back to nothing rather than the raw node
   // id/UUID — a friendly name or no meta segment beats a UUID on every row.
   const nodeName = (nodeId?: string) => controller.direct || !nodeId ? null : nodes.find((n) => n.id === nodeId)?.name || nodeId;
+  // On the row's meta line the machine only helps tell sessions apart when
+  // there's more than one to tell apart; with a single machine it's the same
+  // word on every row. (Search and the filter menu still use nodeName.)
+  const rowNodeName = (nodeId?: string) => nodes.length > 1 ? nodeName(nodeId) : null;
 
   const repoOptions = useMemo(() => {
     return Array.from(new Set(sessions.map(sessionRepo).filter(Boolean))).sort((a, b) => a.localeCompare(b));
@@ -264,11 +282,11 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSource
   const filterSummary = [nodeFilter ? nodeName(nodeFilter) : !controller.direct ? "All machines" : null, repoFilter || null].filter(Boolean).join(" · ");
   const emptyText = query.trim() || repoFilter || nodeFilter
     ? "No matching sessions."
-    : "No sessions yet. Use ＋ New to start one.";
+    : "No sessions yet. Start one with New session.";
 
   const runMeta = (t: RunTerminalSummary): string => {
     const workspace = String(t.workspace || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop();
-    return [t.label || t.agent, nodeName(t.nodeId || currentNodeId || undefined), workspace].filter(Boolean).join(" · ");
+    return [t.label || t.agent, rowNodeName(t.nodeId || currentNodeId || undefined), workspace].filter(Boolean).join(" · ");
   };
 
   return (
@@ -286,29 +304,42 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSource
           void controller.deleteSession(id).catch(() => controller.store.setError("Couldn't delete the session.")).finally(() => setDeletingId(null));
         }}
       />}
-      {onOpenAutomations && (
+      {(onOpenAutomations || onOpenTerminal) && (
         <nav className="sidebar-nav" aria-label="Workspace">
-          <button className={`sidebar-nav-item${automationsActive ? " active" : ""}`} onClick={onOpenAutomations} title="Automations">
-            <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M13 2 3 14h9l-1 8 10-12h-9z" />
-            </svg>
-            <span>Automations</span>
-            <span className="sidebar-nav-chevron" aria-hidden="true">›</span>
-          </button>
+          {onOpenAutomations && (
+            <button className={`sidebar-nav-item${automationsActive ? " active" : ""}`} onClick={onOpenAutomations} aria-current={automationsActive ? "page" : undefined}>
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M13 2 3 14h9l-1 8 10-12h-9z" />
+              </svg>
+              <span>Automations</span>
+            </button>
+          )}
+          {/* Standalone terminal: independent of any session, opened at the
+              picked node's workspace folder (#460). */}
+          {onOpenTerminal && (
+            <button className="sidebar-nav-item" onClick={onOpenTerminal} disabled={terminalDisabled} aria-label="Open standalone terminal">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <rect x="3" y="4" width="18" height="16" rx="2" />
+                <path d="m7 9 3 3-3 3" />
+                <path d="M13 15h4" />
+              </svg>
+              <span>Terminal</span>
+            </button>
+          )}
         </nav>
       )}
-      <div className="session-list-heading">
-        <span>Sessions</span>
-        {filtered.length > 0 && <span className="session-list-count">{filtered.length}</span>}
-      </div>
       <div className="session-list-tools">
-        <input
-          className="field session-search"
-          type="search"
-          placeholder="Search sessions…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
+        <label className="session-search-wrap">
+          <SearchIcon size={17} aria-hidden />
+          <input
+            className="field session-search"
+            type="search"
+            aria-label="Search sessions"
+            placeholder={sessions.length > 1 ? `Search ${sessions.length} sessions` : "Search sessions"}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </label>
         <div className="session-filter" ref={filterRef}>
           <button
             className={`session-filter-btn${activeFilterCount ? " active" : ""}`}
@@ -413,9 +444,9 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSource
           return (
             <li key={t.termId} className="session-row">
               <button className="session-item" onClick={() => onPickTerminal(t.termId, t.nodeId)}>
-                <RowMark kind={CLI_SOURCE.kind} status="working" srLabel={`${CLI_SOURCE.label} · Running in terminal`} />
                 <span className="session-body">
                   <span className="session-title-row">
+                    <RowMark status="working" srLabel={`${CLI_SOURCE.label} · Running in terminal`} />
                     <span className="session-name">{title}</span>
                     {relTime(t.lastActivityAt ?? t.createdAt) && (
                       <span className="session-age" title="Running in terminal">
@@ -438,7 +469,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSource
           const groupHeading = group !== previousGroup
             ? <li className="session-group-label">{group}</li>
             : null;
-          const meta = sessionMeta(s, nodeName(s.nodeId) || s.pendingNodeName || null);
+          const meta = sessionMeta(s, rowNodeName(s.nodeId) || s.pendingNodeName || null);
           const label = statusLabel(s);
           const src = sessionSources?.get(s.sessionId) ?? classifySource(s.source);
           // A one-word exception hint on failed / waiting-on-you runs, so those
@@ -465,9 +496,9 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSource
                 aria-current={s.sessionId === activeSessionId ? "page" : undefined}
                 onClick={() => onPick(s.sessionId, s.path, s.nodeId)}
               >
-                <RowMark kind={src.kind} status={statusDotState(s)} srLabel={`${src.label} · ${label}`} />
                 <span className="session-body">
                   <span className="session-title-row">
+                    <RowMark status={statusDotState(s)} srLabel={`${src.label} · ${label}`} />
                     <span className="session-name">{s.name}</span>
                     <PrBadge prs={s.prs} />
                     {relTime(s.updatedAt) && (
@@ -478,6 +509,9 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSource
                   </span>
                   {(hint || meta) && (
                     <span className="session-meta">
+                      {/* An automation names its trigger with the canonical source
+                          glyph (the meta text spells it out beside it). */}
+                      {src.automation && <SourceMark kind={src.kind} size="xs" />}
                       {hint && <span className={`row-hint ${hint.tone}`}>{hint.text}</span>}
                       {hint && meta ? " · " : ""}
                       {meta}

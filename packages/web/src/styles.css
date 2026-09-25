@@ -169,6 +169,8 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .badge[data-variant="soft"][data-tone="ok"] { background: color-mix(in srgb, var(--ok) 16%, var(--surface)); color: var(--ok); }
 .badge[data-variant="soft"][data-tone="warn"] { background: var(--warn-soft); color: var(--warn); }
 .badge[data-variant="soft"][data-tone="danger"] { background: var(--danger-soft); color: var(--danger); }
+.badge[data-variant="soft"][data-tone="merged"] { background: color-mix(in srgb, var(--merged) 16%, var(--surface)); color: var(--merged); }
+.badge[data-variant="soft"]:not([data-tone]) { background: var(--surface-3); color: var(--muted); }
 .badge[data-variant="solid"] { border-color: transparent; color: var(--accent-contrast); }
 .badge[data-variant="solid"][data-tone="accent"] { background: var(--accent); }
 .badge[data-variant="solid"][data-tone="ok"] { background: var(--ok); }
@@ -211,29 +213,39 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 }
 .sidebar-head {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 14px 16px; border-bottom: 1px solid var(--line);
+  min-height: 56px; padding: var(--space-2) var(--space-2) var(--space-1) var(--space-4);
   /* As a fixed drawer on mobile the sidebar starts at the very top of the
      screen, so its header must clear the status bar / notch the same way the
-     main .topbar does — otherwise "Bivy" and "+ New" sit under the clock. */
-  padding-top: max(14px, env(safe-area-inset-top));
+     main .topbar does — otherwise the wordmark sits under the clock. */
+  padding-top: max(var(--space-2), env(safe-area-inset-top));
 }
-.sidebar-head-actions { display: flex; align-items: center; gap: 8px; }
-.brand { font-family: var(--font-serif); font-weight: 500; font-size: 17px; letter-spacing: 0; }
+.sidebar-head-actions { display: flex; align-items: center; gap: var(--space-2); }
+.brand { font-family: var(--font-serif); font-weight: 500; font-size: var(--text-xl); letter-spacing: 0; }
 /* Primary destinations sit above the session stream. Keeping Automations here
    makes it discoverable without competing with the quieter Settings footer. */
-.sidebar-nav { padding: var(--space-2) 0 var(--space-3); }
+.sidebar-nav { display: flex; flex-direction: column; gap: 2px; padding: 0 0 var(--space-3); }
 .sidebar-nav-item {
-  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 40px;
-  padding: 9px 10px; border: 0; border-radius: var(--radius-sm);
-  background: transparent; color: var(--ink); font: inherit; font-size: var(--text-sm); font-weight: var(--weight-medium);
+  display: flex; align-items: center; gap: var(--space-3); width: 100%; min-height: 40px;
+  padding: var(--space-2); border: 0; border-radius: var(--radius-md);
+  background: transparent; color: var(--ink); font: inherit; font-size: var(--text-md); font-weight: var(--weight-normal);
   text-align: left; cursor: pointer; transition: color var(--dur) var(--ease-standard), background var(--dur) var(--ease-standard);
 }
-.sidebar-nav-item svg { color: var(--accent); flex: none; }
-.sidebar-nav-item:hover { background: var(--surface-2); }
-.sidebar-nav-item.active { background: transparent; color: var(--accent); }
-.sidebar-nav-item.active:hover { background: var(--surface-2); }
-.sidebar-nav-chevron { margin-left: auto; color: var(--muted); font-size: var(--text-xl); font-weight: var(--weight-normal); line-height: 1; }
-.sidebar-foot { margin-top: auto; padding: var(--space-2); border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: var(--space-1); }
+.sidebar-nav-item svg { color: var(--ink); flex: none; }
+.sidebar-nav-item:hover:not(:disabled) { background: var(--surface-2); }
+.sidebar-nav-item:disabled { opacity: 0.45; cursor: default; }
+.sidebar-nav-item.active { background: var(--surface-2); }
+/* Foot: the single primary action (New session) + the Settings gear. No rule
+   above it — the list simply scrolls underneath. */
+.sidebar-foot {
+  margin-top: auto; display: flex; align-items: center; justify-content: space-between; gap: var(--space-2);
+  padding: var(--space-3) var(--space-3) max(var(--space-3), env(safe-area-inset-bottom));
+  background: var(--surface);
+}
+.btn.new-session-btn {
+  display: inline-flex; align-items: center; gap: var(--space-2); min-height: 44px;
+  padding: 0 var(--space-5) 0 var(--space-4); border-radius: var(--radius-full);
+  font-size: var(--text-md); font-weight: var(--weight-semibold);
+}
 /* Red dot on the mobile ☰ burger when something needs the user that they
    haven't seen (an agent blocked on approval/question, an unseen finished run,
    a provider needing auth). Replaces the old separate inbox surface — the
@@ -281,15 +293,18 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .session-list { display: flex; flex-direction: column; min-height: 0; flex: 1; overflow-y: auto; overflow-x: hidden; padding: 8px; }
 .session-list-heading { display: flex; align-items: baseline; justify-content: space-between; padding: var(--space-3) var(--space-2) var(--space-2); color: var(--ink); font-size: var(--text-md); font-weight: var(--weight-semibold); }
 .session-list-count { color: var(--muted); font-size: var(--text-xs); font-weight: var(--weight-normal); font-variant-numeric: tabular-nums; }
-.session-list-tools { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-2); }
-.session-search { flex: 1; min-width: 0; }
+/* Search (the canonical .field, with a leading glyph) + a quiet filter icon. */
+.session-list-tools { display: flex; align-items: center; gap: var(--space-1); margin-bottom: var(--space-2); }
+.session-search-wrap { position: relative; flex: 1; min-width: 0; display: flex; color: var(--muted); }
+.session-search-wrap > svg { position: absolute; left: var(--space-3); top: 50%; transform: translateY(-50%); pointer-events: none; }
+.session-search { flex: 1; min-width: 0; padding-left: calc(var(--space-3) + 17px + var(--space-2)); }
 .session-filter { position: relative; flex: none; }
 .session-filter-btn {
   position: relative; display: inline-flex; align-items: center; justify-content: center;
-  width: 38px; height: 38px; border: 1px solid var(--line); border-radius: var(--radius-md);
-  background: var(--surface-2); color: var(--muted); font-size: 20px; line-height: 1;
+  width: 32px; height: 32px; border: 0; border-radius: var(--radius-full);
+  background: transparent; color: var(--muted); font-size: 20px; line-height: 1;
 }
-.session-filter-btn:hover, .session-filter-btn.active, .session-filter-btn[aria-expanded="true"] { color: var(--ink); border-color: var(--line-strong); background: var(--surface-3); }
+.session-filter-btn:hover, .session-filter-btn.active, .session-filter-btn[aria-expanded="true"] { color: var(--ink); background: var(--surface-3); }
 .session-filter-count { position: absolute; right: -5px; top: -5px; min-width: 17px; height: 17px; padding: 0 var(--space-1); }
 .session-filter-menu {
   position: absolute; right: 0; top: calc(100% + 6px); width: min(280px, calc(100vw - 24px)); z-index: var(--z-dropdown);
@@ -305,36 +320,30 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .session-filter-clear { flex: none; border: 0; background: transparent; color: var(--accent); padding: 2px 0; font-size: 12px; }
 .session-list ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .session-group-label {
-  padding: 12px 8px 4px; color: var(--muted); font-size: 11px; line-height: 1.2;
-  font-weight: 650; letter-spacing: 0.02em;
+  padding: var(--space-4) var(--space-2) var(--space-1); color: var(--muted);
+  font-size: var(--text-xs); line-height: var(--lh-xs); font-weight: var(--weight-semibold);
 }
-.session-group-label:first-child { padding-top: 6px; }
+.session-group-label:first-child { padding-top: var(--space-2); }
 .session-item {
-  position: relative; display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
-  padding: 9px 8px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--ink);
+  position: relative; display: flex; align-items: center; gap: var(--space-2); width: 100%; text-align: left;
+  padding: var(--space-2); border: 0; border-radius: var(--radius-md); background: transparent; color: var(--ink);
 }
 .session-item:hover { background: var(--surface-2); }
-.session-item.active, .session-item[aria-current="page"] {
-  background: var(--surface-2);
-}
-.session-item.active::before, .session-item[aria-current="page"]::before {
-  content: ""; position: absolute; inset: 0 auto 0 0; width: 2px;
-  background: var(--accent);
-}
-/* Column wrapper for the two-line row (title row + meta row) so the dot can
-   stay a single flex sibling, vertically centered across both lines. */
+.session-item.active, .session-item[aria-current="page"] { background: var(--surface-2); }
+/* Two single-line rows: title (+ status dot, PR mark, age) over a quiet meta
+   line. A dot appears only for states that want attention (see RowMark). */
 .session-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.session-title-row { display: flex; align-items: flex-start; gap: 6px; min-width: 0; }
+.session-title-row { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.row-status { flex: none; display: inline-flex; }
 .session-name {
-  flex: 1; min-width: 0; overflow: hidden; font-size: 13px; font-weight: 600; line-height: 1.25;
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--text-md); line-height: var(--lh-md); font-weight: var(--weight-medium);
 }
 /* Relative age, pinned to the row's trailing edge; flex:none so it never
    shrinks or forces the row to scroll sideways. */
-.session-age { flex: none; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; line-height: 1.25; }
-/* Agent / node / branch descriptor line, below the title. Slightly larger than
-   before: 11px muted text was the main source of an illegible sidebar. */
-.session-meta { font-size: 12px; line-height: 1.25; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-age { flex: none; font-size: var(--text-xs); color: var(--muted); font-variant-numeric: tabular-nums; line-height: var(--lh-xs); }
+/* Agent / repo / branch descriptor line, below the title. */
+.session-meta { font-size: var(--text-sm); line-height: var(--lh-sm); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @keyframes dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
 .session-row { position: relative; display: flex; align-items: center; }
 .session-row .session-item { flex: 1; min-width: 0; }
@@ -396,6 +405,12 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
    the composer no longer moves it. margin-bottom stays auto so a tall pane keeps
    it in the upper-middle rather than pinned hard to the top. */
 .chat-empty { margin: calc(var(--app-h, 100dvh) * 0.22) auto auto; color: var(--muted); max-width: 320px; padding: 0 20px; text-align: center; }
+.chat-greeting { margin: auto; padding: var(--space-6) var(--space-4); text-align: center; }
+.chat-greeting h2 {
+  margin: 0; font-family: var(--font-serif); font-weight: var(--weight-normal);
+  font-size: var(--text-3xl); line-height: var(--lh-3xl); color: var(--ink); text-wrap: balance;
+}
+@media (max-width: 720px) { .chat-greeting h2 { font-size: var(--text-2xl); line-height: var(--lh-2xl); } }
 .chat-empty-title { margin: 0 0 6px; font-size: 16px; font-weight: 600; color: var(--ink); }
 .chat-empty-sub { margin: 0; font-size: 13px; line-height: 1.5; }
 .chat-empty-sub b { color: var(--ink); font-weight: 600; }
@@ -571,19 +586,27 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
    discoverability pattern as .row-menu-btn — and a touch-friendly baseline
    opacity on devices with no hover. */
 .assistant-row { align-self: stretch; width: 100%; max-width: 680px; }
-.msg-actions { display: flex; align-items: center; gap: 2px; margin-top: 4px; }
+.msg-actions { display: flex; align-items: center; gap: 2px; margin-top: var(--space-1); margin-left: -6px; }
 .msg-copy-btn, .msg-speak-btn {
   border: 0; background: transparent; color: var(--muted);
   display: inline-flex; align-items: center; justify-content: center;
-  width: 26px; height: 26px; padding: 0; border-radius: var(--radius-sm); opacity: 0.35;
-  cursor: pointer; transition: opacity 0.12s ease, color 0.12s ease;
+  width: 32px; height: 32px; padding: 0; border-radius: var(--radius-sm);
+  cursor: pointer; transition: opacity var(--dur-fast) ease, color var(--dur-fast) ease;
 }
-.assistant-row:hover .msg-copy-btn, .assistant-row:hover .msg-speak-btn,
-.msg-copy-btn:focus-visible, .msg-speak-btn:focus-visible { opacity: 1; }
 .msg-copy-btn:hover, .msg-speak-btn:hover { background: var(--surface-2); color: var(--ink); }
-.msg-copy-btn.copied { color: var(--ok); opacity: 1; }
-.msg-speak-btn.speaking { color: var(--accent); opacity: 1; }
-@media (hover: none) { .msg-copy-btn, .msg-speak-btn { opacity: 0.6; } }
+.msg-copy-btn.copied { color: var(--ok); }
+.msg-speak-btn.speaking { color: var(--accent); }
+/* Actions belong to the answer: only a turn's final reply carries them. An
+   interim reply ("Let me look at…") drops them on touch, and on a wide pointer
+   screen keeps them one hover (or Tab) away in the column's right gutter. */
+.turn-response-body > .assistant-row:has(~ .assistant-row) > .msg-actions { display: none; }
+@media (hover: hover) and (min-width: 1100px) {
+  .turn-response-body > .assistant-row:has(~ .assistant-row) { position: relative; }
+  .turn-response-body > .assistant-row:has(~ .assistant-row) > .msg-actions {
+    display: flex; position: absolute; top: 0; left: 100%; margin: 0 0 0 var(--space-2); opacity: 0;
+  }
+  .turn-response-body > .assistant-row:has(~ .assistant-row):is(:hover, :focus-within) > .msg-actions { opacity: 1; }
+}
 
 /* ---- Tool activity (grouped summary line -> bottom sheet detail + diff) ---- */
 .tool-group { align-self: stretch; width: 100%; max-width: 680px; }
@@ -711,14 +734,13 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .github-pill .gh-icon { width: 14px; height: 14px; }
 .github-pill .gh-text { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* Compact PR badge on a sidebar row (open/merged/closed), colour-matched to the
-   header pill. Non-interactive — it sits inside the row's <button>. */
-.session-pr { flex: none; gap: 3px; padding: 0 6px; height: 16px; font-size: 10px; line-height: 1; letter-spacing: 0.02em; }
-.session-pr .gh-icon { width: 10px; height: 10px; }
-/* The label is all-caps with no descenders, so within the line box its ink
-   rides above the optical centre and reads high in the fixed-height pill. Nudge
-   it down a touch to sit on the pill's true centre next to the glyph. */
-.session-pr-text { white-space: nowrap; position: relative; top: 0.5px; }
+/* Compact PR mark (open/merged/closed): a soft tinted chip whose glyph shape
+   names the state, plus a count when there's more than one. Non-interactive —
+   it sits inside a row/pill <button>. */
+.session-pr { flex: none; gap: 3px; padding: 0 var(--space-1); height: 18px; font-size: 11px; line-height: 1; font-variant-numeric: tabular-nums; }
+.session-pr:not(:has(.session-pr-text)) { width: 18px; padding: 0; justify-content: center; }
+.session-pr .pr-glyph { width: 12px; height: 12px; flex: none; }
+.session-pr-text { white-space: nowrap; font-weight: var(--weight-semibold); }
 
 /* ---- Source marks & run pill (see sessionSource.ts / SourceMark.tsx) ----
    Source identity is carried by the glyph alone: every mark renders a quiet
@@ -746,6 +768,9 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .source-mark svg { width: 17px; height: 17px; display: block; }
 .source-mark.sm { width: 22px; height: 22px; border-radius: var(--radius-sm); }
 .source-mark.sm svg { width: 13px; height: 13px; }
+/* Inline in a row's meta line, sized to the text. */
+.source-mark.xs { width: 16px; height: 16px; border-radius: calc(var(--radius-sm) / 2); margin-right: var(--space-1); vertical-align: -3px; }
+.source-mark.xs svg { width: 10px; height: 10px; }
 .source-mark.has-status { position: relative; }
 .source-mark.has-status .status-dot {
   position: absolute; right: -3px; bottom: -3px;
@@ -757,26 +782,20 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 /* In-session run pill (App.tsx composer band): supersedes the GitHub pill for a
    triggered session. Source glyph + short label + a status segment. */
 .run-pill {
-  display: inline-flex; align-items: center; gap: 7px; flex: 0 1 auto; min-width: 0;
-  border: 1px solid var(--line); background: var(--surface-2); color: var(--ink);
-  border-radius: var(--radius-full); padding: 4px 11px 4px 5px; font-size: 12px; font-weight: 600;
+  display: inline-flex; align-items: center; gap: var(--space-2); flex: 0 1 auto; min-width: 0; min-height: 32px;
+  border: 0; background: var(--surface-2); color: var(--ink);
+  border-radius: var(--radius-full); padding: var(--space-1) var(--space-3);
+  font-size: var(--text-sm); font-weight: var(--weight-medium);
 }
-.run-pill:hover { border-color: var(--line-strong); background: var(--surface-3); }
+.run-pill:has(> .source-mark) { padding-left: var(--space-1); }
+.run-pill:hover { background: var(--surface-3); }
 .run-pill-label { flex: none; }
 .run-pill-stat {
-  display: inline-flex; align-items: center; gap: 5px; min-width: 0;
-  padding-left: 8px; border-left: 1px solid var(--line); color: var(--muted);
+  display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--muted);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 /* Session-level file edit count — replaces the bulky ChangesCard above the composer. */
-.run-pill-files {
-  flex: none;
-  padding-left: 8px;
-  border-left: 1px solid var(--line);
-  color: var(--muted);
-  font-weight: 600;
-  white-space: nowrap;
-}
+.run-pill-files { flex: none; color: var(--muted); white-space: nowrap; }
 .run-pill.working .run-pill-stat { color: var(--accent); }
 .run-pill.needs-action .run-pill-stat, .run-pill.failed .run-pill-stat { color: var(--danger); }
 
@@ -800,9 +819,10 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 /* Run-pill sheet outcome: the run evidence (checks, attempts, duration,
    branch/commit, agent) joined from the account queue — see runEvidence.ts. */
 .run-sheet-failure { padding: 11px 16px; border-bottom: 1px solid var(--line); color: var(--danger); font-size: 13px; line-height: 1.4; }
-.run-sheet-rows { display: flex; flex-direction: column; }
-.run-sheet-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 9px 16px; border-bottom: 1px solid var(--line); font-size: 13px; }
-.run-sheet-row:last-child { border-bottom: 0; }
+/* Key/value facts read as one quiet group: no rule between rows, one rule
+   between groups (and before the action rows that follow). */
+.run-sheet-rows { display: flex; flex-direction: column; padding: var(--space-2) 0; border-bottom: 1px solid var(--line); }
+.run-sheet-row { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); padding: 6px var(--space-4); font-size: var(--text-sm); }
 .run-sheet-row .k { flex: none; color: var(--muted); }
 .run-sheet-row .v { min-width: 0; display: flex; flex-wrap: wrap; gap: 4px 8px; justify-content: flex-end; align-items: center; color: var(--ink); font-weight: 600; text-align: right; }
 .run-sheet-row code { font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; padding: 1px 5px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--surface-2); }
@@ -836,7 +856,10 @@ button.sheet-action:last-child { border-bottom: 0; }
 /* GitHub pills parked in a band just above the composer: the repo picker on a
    draft (.composer-lead) and the issue/PR context pill on an active session
    (.composer-gh). .composer-gh collapses out of flow when there's no context. */
-.composer-gh, .composer-lead { display: flex; padding: 8px 10px 0; }
+/* The band and the composer share the transcript's centred column, so on a wide
+   screen the input sits under the conversation rather than spanning the pane. */
+.composer-gh, .composer-lead, .composer { align-self: center; width: min(100%, 800px); box-sizing: border-box; }
+.composer-gh, .composer-lead { display: flex; padding: var(--space-2) var(--space-3) 0; }
 .composer-gh { align-items: center; gap: 6px; }
 /* The draft lead row carries more than one pick (repo + sandbox), so space them
    and let them wrap on a narrow phone instead of squashing. */
@@ -862,14 +885,14 @@ button.sheet-action:last-child { border-bottom: 0; }
 
 /* ---- Composer ---- */
 .composer {
-  display: flex; padding: 8px 10px;
-  padding-bottom: max(8px, env(safe-area-inset-bottom));
+  display: flex; padding: var(--space-2) var(--space-3);
+  padding-bottom: max(var(--space-2), env(safe-area-inset-bottom));
 }
 .composer-card {
   position: relative;
-  flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px;
-  border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: var(--surface-2);
-  padding: 8px 8px 8px 12px;
+  flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--space-1);
+  border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface-2);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
 }
 /* Slash-command autocomplete: a popover floating just above the composer. */
 .slash-menu {
@@ -880,7 +903,7 @@ button.sheet-action:last-child { border-bottom: 0; }
 .slash-empty { padding: 10px 12px; color: var(--muted); font-size: 13px; }
 .slash-name { font-weight: 600; font-size: 14px; flex: none; min-width: 74px; }
 .slash-desc { color: var(--muted); font-size: 13px; }
-.composer-card:focus-within { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.composer-card:focus-within { border-color: var(--accent); }
 /* Keep two readable lines even when autosize runs inside the hidden onboarding shell. */
 .composer-input {
   min-height: calc(2 * var(--lh-lg) + 2 * var(--space-1)); flex-shrink: 0;
@@ -896,11 +919,12 @@ button.sheet-action:last-child { border-bottom: 0; }
   flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; overflow: hidden;
 }
 .composer-meta > .btn {
-  gap: var(--space-1); min-width: 0; flex: 0 1 auto; color: var(--ink);
+  gap: 6px; min-width: 0; flex: 0 1 auto; color: var(--muted); font-weight: var(--weight-medium);
 }
+.composer-meta > .btn:hover { color: var(--ink); }
 /* Keep the startup action readable beside a long agent name on phones. */
 .composer-meta:has([data-pending-model]) { flex-wrap: wrap; }
-.pill-glyph { color: var(--accent); flex: none; display: inline-flex; align-items: center; }
+.pill-glyph { color: inherit; flex: none; display: inline-flex; align-items: center; }
 .pill-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Glyph-only / short controls keep their natural width; only the long
    agent + model labels give way when space is tight. */
@@ -914,7 +938,9 @@ button.sheet-action:last-child { border-bottom: 0; }
 .composer-btn.send:not(:disabled):hover { background: var(--accent-hover); }
 .composer-btn.send:not(:disabled):active { transform: scale(0.92); }
 .composer-btn.send:disabled { opacity: 0.35; cursor: default; }
-.composer-btn.stop { background: var(--danger); color: var(--danger-contrast); }
+/* Stop is a neutral, high-contrast square — the most important control while a
+   turn runs, without borrowing the danger colour for an ordinary action. */
+.composer-btn.stop { background: var(--ink); color: var(--bg); }
 .composer-btn.stop.is-stopping { width: auto; border-radius: var(--radius-full); padding-inline: var(--space-3); display: inline-flex; gap: var(--space-2); }
 .composer-btn.stop:active { transform: scale(0.92); }
 /* "Steer current turn": an explicit interrupt, distinct from the default Send
@@ -927,7 +953,7 @@ button.sheet-action:last-child { border-bottom: 0; }
 .attach-pill { padding: 4px 8px; }
 
 /* Voice-input trigger: a circular icon button seated just left of Send. */
-.composer-btn.mic { background: var(--surface-3); color: var(--muted); }
+.composer-btn.mic { background: transparent; color: var(--muted); }
 .composer-btn.mic:not(:disabled):hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--surface-3)); }
 .composer-btn.mic:not(:disabled):active { transform: scale(0.92); }
 .composer-btn.mic:disabled { opacity: 0.4; cursor: default; }
@@ -2193,6 +2219,13 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
   /* Keep both selected values visible. Long agent/model names share the
      available row and use the composer's standard ellipsis behavior. */
   .composer-meta { gap: 2px; }
+  /* Phone width can't hold both full names beside two 44px buttons: the
+     (already compacted) model keeps its label, the agent name gives way first,
+     and the agent's decorative glyph goes so its name keeps more letters. */
+  .composer-meta > .btn { padding-inline: 6px; }
+  .composer-meta > .model-pill { flex-shrink: 0; max-width: 50%; }
+  .agent-pill .pill-glyph { display: none; }
+  .composer-actions { gap: var(--space-1); }
   .automations-view-head { align-items: center; padding-bottom: 8px; }
   .automations-view-head-text { min-width: 0; }
   .automations-view-sub { display: none; }
@@ -2629,15 +2662,13 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 .btn.lg { padding: 11px 18px; font-size: var(--text-md); }
 .btn.icon { padding: var(--space-1); min-width: var(--space-7); min-height: var(--space-7); font-size: var(--text-xl); line-height: 1; }
 .btn[aria-busy="true"] { cursor: wait; }
-/* ---- Sidebar settings gear (single entry point, ChatGPT-style) ---- */
-.settings-gear {
-  display: inline-flex; align-items: center; justify-content: flex-start; gap: 10px; position: relative;
-  width: 100%; border: 0; background: transparent; color: var(--ink);
-  border-radius: var(--radius-sm); padding: 9px 10px; min-height: 40px; font-size: 13px; font-weight: 550;
+/* ---- Sidebar settings gear (round companion to New session, ChatGPT-style) ---- */
+.btn.icon.settings-gear {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 44px; height: 44px; padding: 0; border: 0; border-radius: var(--radius-full);
+  background: var(--surface-2); color: var(--ink);
 }
-.settings-gear:hover { background: var(--surface-2); }
-.settings-gear svg { flex: none; color: var(--muted); }
-.settings-gear:hover svg { color: var(--ink); }
+.btn.icon.settings-gear:hover { background: var(--surface-3); }
 
 /* ---- Usage bar ---- */
 

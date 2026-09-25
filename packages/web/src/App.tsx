@@ -64,7 +64,7 @@ import { useEdgeSwipe } from "./useEdgeSwipe.js";
 import { useModalEscape } from "./modalStack.js";
 import { CloseIcon } from "./components/UiIcons.js";
 import { controller } from "./store/useStore.js";
-import { attentionRank, isUnseen, runStatusLabel, statusClass, statusDotState, statusLabel, type SessionStatusInput } from "./sessionStatus.js";
+import { attentionRank, isUnseen, runStatusLabel, statusClass, type SessionStatusInput } from "./sessionStatus.js";
 import { getAppIconBadgeEnabled, getNotificationPreferencesSnapshot, setNotificationPreferencesSnapshot, subscribeNotificationSettings } from "./notificationSettings.js";
 
 const DRAWER_FOCUSABLE = 'a[href],button:not(:disabled),textarea:not(:disabled),input:not(:disabled),select:not(:disabled),[tabindex]:not([tabindex="-1"])';
@@ -622,37 +622,6 @@ export function App() {
         <div className="sidebar-head">
           <span className="brand">Bivy</span>
           <div className="sidebar-head-actions">
-            {/* Standalone terminal: independent of any session, opened at the
-                picked node's workspace folder. Sits to the left of "+ New" —
-                see #460. */}
-            <button
-              className="btn ghost icon term-btn"
-              onClick={openStandaloneTerminal}
-              disabled={!online}
-              title="Terminal"
-              aria-label="Open standalone terminal"
-            >
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <rect x="3" y="4" width="18" height="16" rx="2" />
-                <path d="m7 9 3 3-3 3" />
-                <path d="M13 15h4" />
-              </svg>
-            </button>
-            {/* Discover/adopt a provider-native session (Claude Code, Codex, …)
-                started outside Bivy — issue #156. This used to be a header icon,
-                but a rarely-used discovery/adopt flow didn't belong crammed next
-                to "+ New"; it now lives in Settings → Import session. */}
-            <button
-              className="btn sm ghost"
-              onClick={() => {
-                setPendingRunTerm(null);
-                controller.newSession();
-                closeDrawer();
-              }}
-              title="New session"
-            >
-              + New
-            </button>
             <button className="btn ghost icon only-mobile sidebar-close" onClick={closeDrawer} aria-label="Close sessions">
               <CloseIcon />
             </button>
@@ -662,6 +631,8 @@ export function App() {
           runEvidence={runEvidence}
           sessionSources={sessionSources}
           automationsActive={Boolean(automationsOpen)}
+          onOpenTerminal={openStandaloneTerminal}
+          terminalDisabled={!online}
           onOpenAutomations={() => {
             openAutomations();
             closeDrawer();
@@ -704,10 +675,26 @@ export function App() {
           }}
           onPickTerminal={pickTerminal}
         />
-        {/* Settings is the low-attention utility below the scrollable sidebar content. */}
+        {/* The one primary action floats at the foot, in thumb reach on a phone;
+            Settings is the low-attention utility beside it. Importing a
+            provider-native session (#156) lives in Settings → Import session. */}
         <div className="sidebar-foot">
           <button
-            className="settings-gear"
+            className="btn primary new-session-btn"
+            onClick={() => {
+              setPendingRunTerm(null);
+              controller.newSession();
+              closeDrawer();
+            }}
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 20h9" />
+              <path d="M16.4 3.6a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+            </svg>
+            <span>New session</span>
+          </button>
+          <button
+            className="btn icon settings-gear"
             onClick={() => {
               openSettings();
               closeDrawer();
@@ -719,7 +706,6 @@ export function App() {
               <circle cx="12" cy="12" r="3" />
               <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
             </svg>
-            <span>Settings</span>
           </button>
         </div>
       </div>
@@ -739,15 +725,8 @@ export function App() {
           </button>
           <div className="topbar-title">
             <div className="topbar-title-row">
-              {/* Same dot/color rules as the sidebar row (see sessionStatus.ts) —
-                  a session opened here should read identically whether you're
-                  looking at the list or already inside it. Only rendered once a
-                  real session is open; a brand-new draft has no status yet. */}
-              {activeSession && (
-                <span title={statusLabel(activeSession)}>
-                  <StatusDot status={statusDotState(activeSession)} label={statusLabel(activeSession)} />
-                </span>
-              )}
+              {/* No status dot here: the run pill above the composer states the
+                  live status in words, one place, not twice. */}
               <h1 className="title" title={needsNode ? "Connect a Machine" : state.activeSession.activeTitle}>
                 {needsNode ? "Connect a Machine" : state.activeSession.activeTitle}
               </h1>
@@ -889,6 +868,7 @@ export function App() {
               // `/settings/*` while Settings is open without changing (or clearing)
               // whatever session is open behind it.
               draftRoute={!state.activeSession.activeSessionId}
+              greeting={state.sessionIndex.sessions.length > 0 ? "What should we work on?" : undefined}
               opening={state.activeSession.opening}
               sessionKey={state.activeSession.activeSessionId}
               focusView={focusView}
