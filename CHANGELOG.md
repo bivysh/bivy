@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-09-25
+
 ### Added
 
 - Promote Grok to the fully certified tier. `grok agent stdio` is a first-party ACP server, so Grok now runs on the governed `ProtocolRuntime` by default (`acp.preferred`, gated on the installed binary evidencing the mode): per-tool Approve/Deny, native resume, and a live model list — the same bar Claude Code, governed Codex, Pi, and OpenCode clear. Joins the certification matrix release-tested against Grok CLI 1.0.41, with the full deterministic scenario fixture set in normal CI; the nightly drift report reads xAI's plain-text version endpoint (a new data-driven `latestUrl` upstream source for non-npm agents). The ACP launch path now also honors an agent's declared credential behaviors (Grok's vault-minted `auth.json` + preflight), which previously only applied to the pipe path. `BIVY_GROK_ACP=0` forces the structured-pipe fallback (effect-level governance, adapter-tested), and a pre-ACP binary degrades to it automatically.
