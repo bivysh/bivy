@@ -191,6 +191,18 @@ describe("agent attachment — sticky across a lossy reconcile (append-only)", (
     expect(new Set(hashes)).toEqual(new Set([HASH, HASH2]));
   });
 
+  it("restores a dropped chip into its original turn, not the latest reply", () => {
+    const later = [{ role: "user", content: "now something else" }, { role: "assistant", content: [{ type: "text", text: "Sure." }] }];
+    const s = new SessionStore();
+    s.beginOpen("s1");
+    s.apply(historyEvent(withOverlay, 3, "h3", "r1") as never);
+    s.apply(historyEvent([...withoutOverlay, ...later], 4, "hRaw4") as never); // lossy, one turn later
+    const t = s.getState().activeSession.transcript;
+    expect(t.map((e) => [e.text, e.attachments?.length ?? 0])).toEqual([
+      ["make a logo", 0], ["Here it is.", 1], ["now something else", 0], ["Sure.", 0],
+    ]);
+  });
+
   it("a re-broadcast live attachment already in history is not duplicated", () => {
     const s = new SessionStore();
     s.beginOpen("s1");

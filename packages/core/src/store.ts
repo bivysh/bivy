@@ -1008,7 +1008,7 @@ export class SessionStore {
    *  lossy, and must not be allowed to erase the chip. withStickyAgentAttachments
    *  re-applies any missing ones; keying by hash also de-dupes a re-broadcast of a
    *  live `attachment` event the transcript already carries. */
-  private knownAgentAttachmentsBySession = new Map<string, Map<string, { attachment: PromptAttachment; caption: string }>>();
+  private knownAgentAttachmentsBySession = new Map<string, Map<string, { attachment: PromptAttachment; caption: string; turn: number }>>();
   /** The user's last-used model, remembered across sessions and reloads. Honored
    *  by the models.list reducer *only* while no session is active (a fresh
    *  draft), so a new session opens on the same model the user last picked. The
@@ -3088,46 +3088,59 @@ export class SessionStore {
     return hashes;
   }
 
-  /** Index of the assistant prose bubble agent attachments hang on: the last
-   *  attachment-free assistant text entry since the most recent user message (the
-   *  turn's final reply). -1 when the turn has no such bubble. */
-  private agentAttachmentTarget(transcript: TranscriptEntry[]): number {
-    let turnStart = -1;
-    for (let i = transcript.length - 1; i >= 0; i--) {
-      if (transcript[i]!.role === "user") { turnStart = i; break; }
-    }
-    for (let i = transcript.length - 1; i > turnStart; i--) {
-      const e = transcript[i]!;
-      if (e.role === "assistant" && !e.tool && e.text && !(e.attachments && e.attachments.length)) return i;
-    }
-    return -1;
+  /** The number of user entries in a transcript — i.e. the ordinal of its latest
+   *  turn, where turn N is the run of entries after the Nth user message. */
+  private turnCount(transcript: TranscriptEntry[]): number {
+    return transcript.reduce((n, e) => n + (e.role === "user" ? 1 : 0), 0);
   }
 
-  /** Group `items` onto the turn's final assistant bubble, or append them as their
-   *  own caption-carrying entries when the turn has no prose bubble. Returns the
-   *  same array reference unchanged when there is nothing to place. */
+  /** Group `items` onto the final assistant bubble of turn `turn` (default: the
+   *  latest), or insert them as their own caption-carrying entries at the end of
+   *  that turn when it has no prose bubble. A turn past the transcript's end
+   *  clamps to the latest. Returns the same array reference unchanged when there
+   *  is nothing to place. */
   private placeAgentAttachments(
     transcript: TranscriptEntry[],
     items: Array<{ attachment: PromptAttachment; caption: string }>,
+    turn = this.turnCount(transcript),
   ): TranscriptEntry[] {
     if (!items.length) return transcript;
-    const chips = items.map((b) => b.attachment);
-    const target = this.agentAttachmentTarget(transcript);
+    turn = Math.min(turn, this.turnCount(transcript));
+    // [start, end) spans the target turn: after its user message, up to the next.
+    let start = 0;
+    let end = transcript.length;
+    for (let i = 0, users = 0; i < transcript.length; i++) {
+      if (transcript[i]!.role !== "user") continue;
+      users += 1;
+      if (users === turn) start = i + 1;
+      else if (users === turn + 1) { end = i; break; }
+    }
+    // The turn's final reply: its last attachment-free assistant text entry.
+    let target = -1;
+    for (let i = end - 1; i >= start; i--) {
+      const e = transcript[i]!;
+      if (e.role === "assistant" && !e.tool && e.text && !(e.attachments && e.attachments.length)) { target = i; break; }
+    }
     if (target >= 0) {
+      const chips = items.map((b) => b.attachment);
       return transcript.map((e, i) => (i === target ? { ...e, attachments: [...(e.attachments ?? []), ...chips] } : e));
     }
     // No prose this turn — keep each attachment as its own entry (with caption),
     // preserving the pre-grouping behaviour for the caption-only case.
-    return [...transcript, ...items.map((b) => ({ id: nextId(), role: "assistant" as const, text: b.caption, attachments: [b.attachment] }))];
+    const standalone = items.map((b) => ({ id: nextId(), role: "assistant" as const, text: b.caption, attachments: [b.attachment] }));
+    return [...transcript.slice(0, end), ...standalone, ...transcript.slice(end)];
   }
 
   /** Record every agent-sent attachment in a rendered transcript into the durable
-   *  per-session map, keyed by hash (append-only). Only assistant entries carry
-   *  agent attachments; user uploads live on user entries and are ignored. */
+   *  per-session map, keyed by hash (append-only), along with the turn it
+   *  appeared in. Only assistant entries carry agent attachments; user uploads
+   *  live on user entries and are ignored. */
   private rememberAgentAttachments(sessionId: string | null, transcript: TranscriptEntry[]): void {
     if (!sessionId) return;
     let map = this.knownAgentAttachmentsBySession.get(sessionId);
+    let turn = 0;
     for (const e of transcript) {
+      if (e.role === "user") turn += 1;
       if (e.role !== "assistant" || !e.attachments) continue;
       for (const a of e.attachments) {
         if (!a.hash) continue;
@@ -3135,21 +3148,31 @@ export class SessionStore {
         // Caption only matters for the standalone (no-prose-in-turn) fallback; a
         // grouped chip's entry text is the reply prose, not a caption, so default
         // to empty rather than risk re-adding prose as a caption.
-        if (!map.has(a.hash)) map.set(a.hash, { attachment: a, caption: "" });
+        if (!map.has(a.hash)) map.set(a.hash, { attachment: a, caption: "", turn });
       }
     }
   }
 
   /** Re-apply any known agent attachment a (possibly lossy) snapshot dropped, so a
    *  reconcile that lacks the outbound-attachment overlay can't erase a chip the
-   *  session already showed. No-op once every known hash is present. */
+   *  session already showed. Each goes back into the turn it was first seen in —
+   *  never the latest turn, which would drag an old chip down onto every new reply
+   *  as the conversation grows. No-op once every known hash is present. */
   private withStickyAgentAttachments(sessionId: string | null, transcript: TranscriptEntry[]): TranscriptEntry[] {
     if (!sessionId) return transcript;
     const known = this.knownAgentAttachmentsBySession.get(sessionId);
     if (!known || known.size === 0) return transcript;
     const present = this.attachmentHashesIn(transcript);
-    const missing = [...known.values()].filter((k) => k.attachment.hash && !present.has(k.attachment.hash));
-    return this.placeAgentAttachments(transcript, missing);
+    const byTurn = new Map<number, Array<{ attachment: PromptAttachment; caption: string }>>();
+    for (const k of known.values()) {
+      if (!k.attachment.hash || present.has(k.attachment.hash)) continue;
+      byTurn.set(k.turn, [...(byTurn.get(k.turn) ?? []), k]);
+    }
+    // Latest turn first, so inserting a standalone entry never shifts the bounds
+    // of a turn still to be placed.
+    let next = transcript;
+    for (const turn of [...byTurn.keys()].sort((a, b) => b - a)) next = this.placeAgentAttachments(next, byTurn.get(turn)!, turn);
+    return next;
   }
 
   /** Fold a live field update (status, branch, PR link, …) onto a session-list
