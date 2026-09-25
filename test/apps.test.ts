@@ -372,6 +372,35 @@ test("a view's stable address sends signed-out visits through Bivy and back to t
   } finally { gateway.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("people with a shared link can leave bounded notes that come back to the session", async () => {
+  const registry = new AppRegistry(); const gateway = new AppGateway(registry, "https://{app}.preview.example.net");
+  const dir = workspace(); const port = await listen(gateway.server);
+  const service = new AppService(registry, gateway, { start: async () => "t", has: () => true, close: () => {} });
+  try {
+    const app = registry.publish("s", dir, staticManifest); const id = app.views[0].id;
+    const shared = new URL(gateway.share(id).url);
+    const host = shared.host;
+    const redeemed = await request(port, host, "/__bivy/redeem", { method: "POST", headers: { origin: shared.origin }, body: shared.hash.slice(1) });
+    const reviewer = redeemed.headers["set-cookie"]![0].split(";")[0];
+    const owner = (await grant(gateway, port, id)).cookie;
+    // Only a shared-link session gets the reviewer tools.
+    assert.match((await request(port, host, "/__bivy/inspector.js", { headers: { cookie: reviewer } })).body, /REVIEWER=true/);
+    assert.match((await request(port, host, "/__bivy/inspector.js", { headers: { cookie: owner } })).body, /REVIEWER=false/);
+    const post = (body: string, headers: Record<string, string> = {}) => request(port, host, "/__bivy/notes", { method: "POST", headers: { cookie: reviewer, origin: shared.origin, ...headers }, body });
+    assert.equal((await post(JSON.stringify({ note: "Make this bigger", selector: "h1", text: "Preview", path: "/", viewport: { width: 390, height: 844 } }))).status, 204);
+    assert.equal((await post(JSON.stringify({ note: "x" }), { origin: "https://evil.example" })).status, 403);
+    assert.equal((await request(port, host, "/__bivy/notes", { method: "POST", headers: { origin: shared.origin }, body: JSON.stringify({ note: "x" }) })).status, 401);
+    assert.equal((await post(JSON.stringify({ note: "  " }))).status, 400);
+    assert.equal((await post(JSON.stringify({ note: "x".repeat(5000) }))).status, 413);
+    for (let i = 0; i < 60; i++) await post(JSON.stringify({ note: `n${i}`, path: "javascript:alert(1)" }));
+    const notes = service.list("s").apps[0].views[0].kind === "web" ? service.list("s").apps[0].views[0].notes! : [];
+    assert.equal(notes.length, 50);
+    assert.equal(notes.at(-1)!.note, "n59"); assert.equal(notes.at(-1)!.path, "/");
+    service.clearNotes("s", app.id, id);
+    assert.equal(service.list("s").apps[0].views[0].kind === "web" && service.list("s").apps[0].views[0].notes, undefined);
+  } finally { gateway.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("copied links open the app unframed, are reusable until revoked and lapse after a day", async (t) => {
   const registry = new AppRegistry(); const gateway = new AppGateway(registry, "https://{app}.preview.example.net");
   const dir = workspace(); const port = await listen(gateway.server);

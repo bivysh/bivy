@@ -316,3 +316,30 @@ test("Compare shows before and after the agent's last change", async ({ page }, 
     await page.screenshot({ path: testInfo.outputPath("compare.png") });
   } finally { fixture.close(); await fs.rm(dir, { recursive: true, force: true }); }
 });
+
+// Someone with a shared link sees the app unframed with one extra control:
+// point at an element, write a note, send it. The owner gets it in Apps.
+test("a reviewer on a shared link can pin a note to an element", async ({ page }, testInfo) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "bivy-review-"));
+  const registry = new AppRegistry();
+  const fixture = await delivery(registry, false);
+  const gateway = fixture.gateway as AppGateway;
+  try {
+    await fs.writeFile(path.join(dir, "index.html"), '<!doctype html><html lang="en"><head><title>Ledger</title></head><body><h1>Ledger</h1><button class="cta">Add transaction</button></body></html>');
+    const id = registry.publish("s", dir, { version: 1, name: "Ledger", views: [{ kind: "web", name: "Ledger", source: { kind: "static", directory: "." } }] }).views[0]!.id;
+    await page.route("https://*.preview.example.net/**", async (route) => {
+      const request = route.request(); const url = new URL(request.url());
+      const response = await route.fetch({ url: `http://127.0.0.1:${fixture.port}${url.pathname}${url.search}`, headers: { ...await request.allHeaders(), host: url.host, ...(request.isNavigationRequest() ? { "sec-fetch-dest": "document" } : {}) }, maxRedirects: 0 }).catch(() => undefined);
+      await (response ? route.fulfill({ response }) : route.abort()).catch(() => {});
+    });
+    await page.goto(gateway.share(id).url);
+    await page.getByRole("button", { name: "Leave a note" }).click();
+    await expect(page.getByText("Tap the part of the page your note is about.")).toBeVisible();
+    await page.getByRole("button", { name: "Add transaction" }).click();
+    await page.getByRole("textbox", { name: "Your note" }).fill("Use a plus icon here");
+    await page.screenshot({ path: testInfo.outputPath("reviewer-note.png") });
+    await page.getByRole("button", { name: "Send note" }).click();
+    await expect(page.getByText("Sent. Thanks")).toBeVisible();
+    expect(registry.getView(id)!.notes).toEqual([expect.objectContaining({ note: "Use a plus icon here", selector: "button.cta", text: "Add transaction", path: "/" })]);
+  } finally { fixture.close(); await fs.rm(dir, { recursive: true, force: true }); }
+});

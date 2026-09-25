@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
-import type { AppManifest, AppView, SessionApp } from "./types.js";
+import type { AppManifest, AppView, ReviewerNote, SessionApp } from "./types.js";
 
 const MAX_BYTES = 25 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 100 * 1024 * 1024;
@@ -20,6 +20,8 @@ export interface RegisteredView {
   revision: number;
   /** Last page the preview shell framed; a reload returns there, not to `/`. */
   lastPath?: string;
+  /** Reviewer notes from shared links, newest last, capped. */
+  notes?: ReviewerNote[];
   /** Recent screenshots for Compare, newest last (agent screenshots on only). */
   shots?: { revision: number; at: number; png: Buffer }[];
   /** Where a static snapshot came from, so a turn can re-take it. */

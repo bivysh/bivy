@@ -295,6 +295,15 @@ open connection for that view without removing the app. A copied link is a
 bearer capability: anyone holding it can use the app, including a live server's
 backend, until it lapses or is revoked.
 
+**Reviewer notes.** A copied link opens the app with one extra control,
+**Leave a note**. It sits in a shadow root so the app's styles don't touch it.
+The visitor points at an element and writes a note. The note is stored with the
+element's selector and text, the page and the viewport. The owner sees notes
+under the view in **Apps**, with **Add to message** (drafts them into the
+composer) and **Clear**. Notes are untrusted text: at most 1,000 characters
+each, 50 per view (oldest dropped), same-origin POSTs from a valid link only,
+kept in memory. They never reach the agent unless the owner sends them.
+
 The app iframe is sandboxed: scripts, forms, same-origin app storage, downloads
 and sandboxed popups are allowed; top-level navigation is not. Upstream
 `X-Frame-Options` and CSP `frame-ancestors` are replaced with a policy allowing

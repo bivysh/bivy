@@ -23,6 +23,8 @@ const REDEEM_PATH = "/__bivy/redeem";
 const REVISION_PATH = "/__bivy/revision";
 const INSPECTOR_PATH = "/__bivy/inspector.js";
 const COMPARE_PATH = "/__bivy/compare";
+const NOTES_PATH = "/__bivy/notes";
+const MAX_NOTES = 50;
 /** Larger HTML documents pass through without the inspector. */
 const MAX_INJECT_BYTES = 5 * 1024 * 1024;
 
@@ -126,7 +128,8 @@ export class AppGateway {
     ["/__bivy/tokens.css", readFileSync(new URL("./tokens.css", import.meta.url))],
     ["/__bivy/styles.css", readFileSync(new URL("./styles.css", import.meta.url))],
   ]);
-  private readonly sessions = new Map<string, { appId: string; expires: number }>();
+  /** `reviewer`: the browser session came from a copied (shared) link. */
+  private readonly sessions = new Map<string, { appId: string; expires: number; reviewer?: boolean }>();
   private readonly sockets = new Map<string, Set<Duplex>>();
 
   /** `signIn` sends a signed-out visit to a view's stable address back
@@ -204,12 +207,13 @@ export class AppGateway {
     const entry = this.registry.getView(id);
     return entry?.view.kind === "web" ? entry : undefined;
   }
-  private authorize(req: IncomingMessage, id: string): number | undefined {
+  private session(req: IncomingMessage, id: string): { expires: number; reviewer?: boolean } | undefined {
     this.sweep();
     const token = (req.headers.cookie ?? "").split(";").map((part) => part.trim()).find((part) => part.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1);
-    const session = token && this.sessions.get(token);
-    return session && session.appId === id ? session.expires : undefined;
+    const session = token ? this.sessions.get(token) : undefined;
+    return session?.appId === id ? session : undefined;
   }
+  private authorize(req: IncomingMessage, id: string): number | undefined { return this.session(req, id)?.expires; }
   private track(id: string, socket: Duplex, expires: number): void {
     let sockets = this.sockets.get(id);
     if (!sockets) { sockets = new Set(); this.sockets.set(id, sockets); }
@@ -280,7 +284,7 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
       // A browser session never outlives the link that created it.
       const expires = Math.min(Date.now() + HOUR, grant.expires);
       const token = randomBytes(32).toString("hex");
-      this.sessions.set(token, { appId: id, expires });
+      this.sessions.set(token, { appId: id, expires, reviewer: grant.reusable === true });
       // Framed inside Bivy, the cookie is third-party: it must be SameSite=None,
       // and Partitioned keys it to Bivy's top-level site so no other site can use it.
       const scope = embedded ? "SameSite=None; Partitioned" : "SameSite=Lax";
@@ -302,8 +306,9 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
     if ((req.url === COMPARE_PATH || req.url.startsWith(`${COMPARE_PATH}/`)) && req.method === "GET") { this.compare(req, res, entry); return; }
     if (req.url === INSPECTOR_PATH && req.method === "GET") {
       res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
-      res.end(inspectorScript(this.shellOrigin(id))); return;
+      res.end(inspectorScript(this.shellOrigin(id), this.session(req, id)?.reviewer === true)); return;
     }
+    if (req.url === NOTES_PATH && req.method === "POST") { await this.note(req, res, entry); return; }
     const inspect = isPageLoad(req);
     // Remember the framed page so a turn reload lands where the user was.
     if (req.method === "GET" && req.headers["sec-fetch-dest"] === "iframe" && req.url.length <= 2048) entry.lastPath = req.url;
@@ -361,6 +366,25 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
     });
     res.on("close", () => upstream.destroy());
     req.pipe(upstream);
+  }
+  /** A reviewer's note. Untrusted text: stored bounded, shown as text, and only
+   * ever turned into a draft by the owner. Same-origin POSTs only (checked above). */
+  private async note(req: IncomingMessage, res: ServerResponse, entry: RegisteredView): Promise<void> {
+    let body = "";
+    for await (const chunk of req) { body += chunk.toString(); if (body.length > 4096) { res.writeHead(413); res.end(); return; } }
+    let input: Record<string, unknown>;
+    try { input = JSON.parse(body); } catch { res.writeHead(400); res.end(); return; }
+    const text = (value: unknown, max: number) => typeof value === "string" ? value.trim().slice(0, max) : "";
+    const note = text(input.note, 1000);
+    if (!note) { res.writeHead(400); res.end("A note needs some text."); return; }
+    const viewport = input.viewport as { width?: unknown; height?: unknown } | undefined;
+    const path = text(input.path, 2048);
+    entry.notes = [...(entry.notes ?? []), {
+      id: randomBytes(8).toString("hex"), at: Date.now(), note, selector: text(input.selector, 300), text: text(input.text, 200),
+      path: path.startsWith("/") ? path : "/", viewport: { width: Number(viewport?.width) || 0, height: Number(viewport?.height) || 0 },
+    }].slice(-MAX_NOTES);
+    this.registry.emit("notes", entry.view.id);
+    res.writeHead(204); res.end();
   }
   /** Compare shots for the shell: the list, or one PNG by index. */
   private compare(req: IncomingMessage, res: ServerResponse, entry: RegisteredView): void {

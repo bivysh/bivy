@@ -38,7 +38,7 @@ for (const theme of themes) {
       window.realOpen = window.open.bind(window);
       window.open = () => null;
       const app = {id:'a', sessionId:'s', name:'Accounting application with a deliberately long project name', createdAt:0, views:[
-        {id:'web',kind:'web',name:'Website and invoice editor',source:'service'},
+        {id:'web',kind:'web',name:'Website and invoice editor',source:'service',notes:[{id:'n1',at:1,note:'The total is cut off on my phone',selector:'td.total',text:'12 480',path:'/invoices',viewport:{width:390,height:844}}]},
         {id:'term',kind:'terminal',name:'Interactive application console',command:'bin/rails',args:['console','--environment=development-with-a-long-name']}
       ]};
       controller.appCommand = async (kind, sessionId, fields) => {
@@ -75,6 +75,11 @@ for (const theme of themes) {
     await expect(page.getByRole("button", { name: "Open preview" })).toBeEnabled();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath(`apps-${theme}.png`), fullPage: true });
+    // Notes from people with a shared link show as text and can be cleared.
+    const notes = page.getByRole("group", { name: "Reviewer notes on Website and invoice editor" });
+    await expect(notes).toContainText("“The total is cut off on my phone” on “12 480” · /invoices");
+    await notes.getByRole("button", { name: "Clear" }).click();
+    await expect.poll(() => page.evaluate(() => (window as any).commands.some((c: any) => c.kind === "apps.clearNotes" && c.viewId === "web"))).toBe(true);
     // A copied link is reusable, so the sheet states who can use it and for how long.
     await page.getByRole("button", { name: "Copy link to Website and invoice editor" }).click();
     await expect(page.getByRole("status").filter({ hasText: "for 24 hours, or until you revoke access" })).toBeVisible();

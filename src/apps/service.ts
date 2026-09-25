@@ -53,7 +53,12 @@ export class AppService {
   list(sessionId: string): SessionAppsResult {
     const available = Boolean(this.gateway) && this.gateway?.available !== false;
     const apps = this.registry.list(sessionId);
-    if (available) for (const app of apps) for (const view of app.views) if (view.kind === "web") view.address = this.gateway?.address?.(view.id);
+    for (const app of apps) for (const view of app.views) {
+      if (view.kind !== "web") continue;
+      if (available) view.address = this.gateway?.address?.(view.id);
+      const notes = this.registry.getView(view.id)?.notes;
+      if (notes?.length) view.notes = structuredClone(notes);
+    }
     return { apps, previewAvailable: available };
   }
   publish(sessionId: string, workspace: string, manifest: AppManifest) { return this.registry.publish(sessionId, workspace, manifest); }
@@ -194,6 +199,10 @@ export class AppService {
     if (this.registry.requireView(sessionId, appId, viewId).view.kind !== "web") throw new Error("Only web views have preview links.");
     if (!this.gateway) throw new Error("Bivy's preview service is unavailable on this connection.");
     return this.gateway.share(viewId);
+  }
+  clearNotes(sessionId: string, appId: string, viewId: string): { ok: true } {
+    delete this.registry.requireView(sessionId, appId, viewId).notes;
+    return { ok: true };
   }
   /** Ends every link, browser session and open connection for one view; the app stays. */
   revoke(sessionId: string, appId: string, viewId: string): { ok: true } {

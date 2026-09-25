@@ -12,7 +12,9 @@ export interface AppManifest { version: 1; name: string; views: AppViewSpec[] }
 export type AppView =
   | { id: string; kind: "web"; name: string; source: "static" | "service"; managed?: boolean;
       /** Stable address for a home screen; opens only on signed-in devices. */
-      address?: string }
+      address?: string;
+      /** Notes left by people viewing a shared link. Untrusted text. */
+      notes?: ReviewerNote[] }
   | { id: string; kind: "terminal"; name: string; command: string; args: string[] };
 export interface SessionApp {
   id: string;
@@ -21,6 +23,8 @@ export interface SessionApp {
   views: AppView[];
   createdAt: number;
 }
+/** A note pinned to an element by someone viewing a shared link. */
+export interface ReviewerNote { id: string; at: number; note: string; selector: string; text: string; path: string; viewport: { width: number; height: number } }
 /** Durable chat reference; never persist launch tickets or preview URLs. */
 export interface AppReference { appId: string; sessionId: string; name: string }
 export const APP_PUBLICATION_BLOCK = "bivy_app";

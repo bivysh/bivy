@@ -8,6 +8,7 @@ import { ConfirmDialog } from "./AppDialog.js";
 import { accountOrigin } from "../packaged-client.js";
 import { writeClipboard } from "../clipboard.js";
 import { PreviewPeek, peekBlocked } from "./PreviewPeek.js";
+import { seedSessionDraft } from "../shareTarget.js";
 const TerminalOverlay = lazy(() => import("./Terminal.js").then((module) => ({ default: module.TerminalOverlay })));
 
 export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; appId?: string; onClose: () => void }) {
@@ -126,6 +127,20 @@ export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; ap
     } catch (e) { if (generation.current === current) setError(e instanceof Error ? e.message : "Could not create a link."); }
     finally { if (generation.current === current) setBusy(false); }
   };
+  /** Reviewer notes are untrusted text: they only ever become a draft. */
+  const notesToMessage = (view: AppView & { kind: "web" }) => {
+    const text = `Notes from people reviewing "${view.name}":\n` + (view.notes ?? []).map((n) =>
+      `- "${n.note}" on ${n.selector}${n.text ? ` ("${n.text}")` : ""}, page ${n.path}, viewport ${n.viewport.width}×${n.viewport.height}`).join("\n");
+    if (!controller.prefillComposer(text)) seedSessionDraft(localStorage, sessionId, text);
+    onClose();
+  };
+  const clearNotes = async (app: SessionApp, view: AppView) => {
+    const current = generation.current;
+    setBusy(true); setError("");
+    try { await controller.appCommand("apps.clearNotes", sessionId, { appId: app.id, viewId: view.id }); if (generation.current === current) setRefresh((n) => n + 1); }
+    catch (e) { if (generation.current === current) setError(e instanceof Error ? e.message : "Could not clear notes."); }
+    finally { if (generation.current === current) setBusy(false); }
+  };
   /** The stable address grants nothing by itself, so it can go on a home screen. */
   const copyAddress = async (view: AppView & { kind: "web" }) => {
     if (!view.address) return;
@@ -200,6 +215,14 @@ export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; ap
               {view.kind === "terminal" ? "Open terminal" : "Open preview"}
             </button>}
         </div>
+        {view.kind === "web" && view.notes?.length ? <div className="app-view-notice" role="group" aria-label={`Reviewer notes on ${view.name}`}>
+          <span className="artifact-meta">{view.notes.length === 1 ? "1 note" : `${view.notes.length} notes`} from people with a shared link</span>
+          <ul className="app-view-notes">{view.notes.map((note) => <li key={note.id}>“{note.note}” <span className="artifact-meta">{note.text ? `on “${note.text}”` : note.selector} · {note.path}</span></li>)}</ul>
+          <div className="app-view-actions">
+            <button className="btn sm ghost" disabled={busy || !online} onClick={() => void clearNotes(app, view)}>Clear</button>
+            <button className="btn sm" onClick={() => notesToMessage(view)}>Add to message</button>
+          </div>
+        </div> : null}
         {notice?.viewId === view.id && <div className="app-view-notice" role="status">
           <span className="artifact-meta">{notice.text}</span>
           {notice.url && <input className="field" readOnly value={notice.url} aria-label={`Link to ${view.name}`} autoFocus onFocus={(e) => e.currentTarget.select()} />}
