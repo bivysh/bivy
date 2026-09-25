@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Type } from "typebox";
 import { CommandRegistry } from "../src/protocol/command-registry.js";
+import { validateInput } from "../src/protocol/command-spec.js";
 import { CLIENT_COMMAND_ROUTES } from "../src/protocol/client-command-routes.js";
 import { CLIENT_COMMAND_SCHEMAS } from "../src/protocol/client-command-schemas.js";
 
@@ -46,4 +47,17 @@ test("inline schemas remain supported while schemas migrate to the data table", 
   await registry.dispatch("count", { kind: "count", count: "bad" }, ctx);
   await registry.dispatch("count", { kind: "count", count: 1 }, ctx);
   assert.equal(calls, 1);
+});
+
+test("validateInput: no schema passes through; invalid input fails closed with 1-20 errors", () => {
+  const passthrough = validateInput(undefined, { anything: true });
+  assert.equal(passthrough.ok, true);
+  if (passthrough.ok) assert.deepEqual(passthrough.value, { anything: true });
+  const schema = Type.Object({ sessionId: Type.String(), title: Type.String({ minLength: 1 }) });
+  const bad = validateInput(schema, { sessionId: 42 });
+  assert.equal(bad.ok, false);
+  if (!bad.ok) {
+    assert.ok(bad.errors.length >= 1);
+    assert.ok(bad.errors.length <= 20);
+  }
 });

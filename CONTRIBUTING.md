@@ -19,6 +19,14 @@ pnpm run test:unit -- --list config-cli
 TEST_AFFECTED_BASE=origin/main pnpm run test:unit
 ```
 
+To find suites whose coverage other suites already provide (a review list,
+not an automatic deletion; coverage shows code ran, not that it was asserted):
+
+```bash
+TEST_COVERAGE_DIR=.coverage/suites pnpm run test:unit > .coverage/run.log
+node scripts/test-redundancy.mjs .coverage/suites .coverage/run.log
+```
+
 `TEST_SHARD=1/2` splits the suite across machines. Set `TEST_CONCURRENCY=1`
 when debugging ordering or port issues locally.
 

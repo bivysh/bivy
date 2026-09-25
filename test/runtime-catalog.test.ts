@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { PI_CAPABILITIES } from "../src/agents/pi/capabilities.js";
+import { LazyPiRuntime } from "../src/agents/pi/integration.js";
 import { listRegisteredAgents, listRuntimes } from "../src/runtime/index.js";
 
 // OpenCode and Grok are promoted to the governed ACP path by default, but only
@@ -164,6 +166,12 @@ const piCaps = listRuntimes().find((r) => r.id === "pi")!.capabilities as Record
 assert.deepEqual(piCaps.streamingBehaviors, ["steer", "followUp"], "pi must advertise steer + followUp in the catalog");
 assert.deepEqual(piCaps.inputModes, { queued: true, steer: true, outOfBand: false });
 assert.deepEqual((claudeCaps.sessionActions as Record<string, unknown>).forkConversation, true);
+// The lazy Pi facade must expose the shared capability table before Pi loads.
+// When it did not, closed Pi chats reopened as new empty sessions because the
+// resume ref was not treated as a transcript path.
+const lazyPi = new LazyPiRuntime({ credsDir: "/tmp/creds", piDir: "/tmp/pi", sessionsDir: "/tmp/sessions", credentialOwner: "bivy" });
+assert.equal(lazyPi.capabilities, PI_CAPABILITIES, "LazyPiRuntime must expose the single shared Pi capability table");
+assert.equal(lazyPi.capabilities.sessionRefIsPath, true, "pi resumes by transcript path");
 const aiderCaps = listRuntimes().find((r) => r.id === "aider")!.capabilities as Record<string, unknown>;
 assert.deepEqual(aiderCaps.inputModes, { queued: true, steer: false, outOfBand: false });
 assert.equal((aiderCaps.sessionActions as Record<string, unknown>).resume, false);

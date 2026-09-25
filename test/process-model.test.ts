@@ -30,7 +30,13 @@ const argsFile = path.join(tmp, "args.txt");
 const stub = path.join(tmp, "stub-agent");
 fs.writeFileSync(
   stub,
-  ["#!/bin/sh", `[ -n "$STUB_ARGS_FILE" ] && printf '%s' "$*" > "$STUB_ARGS_FILE"`, "printf 'ok\\n'", ""].join("\n"),
+  [
+    "#!/bin/sh",
+    `[ -n "$STUB_ARGS_FILE" ] && printf '%s' "$*" > "$STUB_ARGS_FILE"`,
+    `[ -n "$STUB_ENV_FILE" ] && env > "$STUB_ENV_FILE"`,
+    "printf 'ok\\n'",
+    "",
+  ].join("\n"),
   { mode: 0o755 },
 );
 fs.chmodSync(stub, 0o755);
@@ -238,6 +244,14 @@ await check("getUsage returns the token snapshot parsed from the turn", async ()
 await check("usageReporting defaults off", () => {
   const plain = new ProcessRuntime({ id: "x", command: stub, promptMode: "argv" });
   assert.equal(plain.capabilities.usageReporting ?? false, false);
+});
+
+await check("BIVY_SESSION_ID is in the agent's env so `bivy attach` resolves this session", async () => {
+  const envFile = path.join(tmp, "env.txt");
+  const runtime = new ProcessRuntime({ id: "stub-cli", displayName: "Stub CLI", command: stub, promptMode: "argv", env: { STUB_ENV_FILE: envFile } });
+  const { session } = await runtime.createSession({ workspace: tmp });
+  await runToEnd(session);
+  assert.match(fs.readFileSync(envFile, "utf8"), new RegExp(`^BIVY_SESSION_ID=${session.id}$`, "m"));
 });
 
 try {

@@ -2,8 +2,8 @@
 // Copyright (c) 2026 Petter André Sjulstad
 //
 // Issue #290: unlike Claude Code, ProcessRuntime, and ProtocolRuntime (see
-// process-runtime-attach-env.test.ts / protocol-runtime-attach-env.test.ts /
-// claude-attach-prompt.test.ts), the pi adapter runs its agent loop in-process
+// process-model.test.ts / protocol-runtime.test.ts /
+// claude-attach-tool.test.ts), the pi adapter runs its agent loop in-process
 // rather than under a subprocess Bivy controls, so it has no hook to inject
 // BIVY_SESSION_ID into its own bash tool's env. resolveAttachSessionId
 // (bin/attach-session-id.mjs, used by `bivy attach` — bin/bivy.mjs's cmdAttach)

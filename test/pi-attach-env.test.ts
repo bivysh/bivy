@@ -5,8 +5,8 @@
 // in-process rather than under a subprocess Bivy controls (see the comment on
 // PiSession.interactiveTuiCommand), so it can't inject BIVY_SESSION_ID into its
 // bash tool's env the way Claude Code / ProcessRuntime / ProtocolRuntime do (see
-// claude-attach-prompt.test.ts / process-runtime-attach-env.test.ts /
-// protocol-runtime-attach-env.test.ts). The one subprocess pi.ts DOES configure
+// claude-attach-tool.test.ts / process-model.test.ts /
+// protocol-runtime.test.ts). The one subprocess pi.ts DOES configure
 // itself is the interactive-TUI hand-off; this locks in that it carries
 // BIVY_SESSION_ID too, matching the session's own id. The live-chat gap is
 // closed separately, via the PI_SESSION_ID fallback in bin/attach-session-id.mjs

@@ -47,6 +47,26 @@ function fakeJwt(accountId: string): string {
   return `${header}.${payload}.sig`;
 }
 
+/**
+ * Run `fn` with timers firing immediately, returning the delays it asked for.
+ * Device-code polling waits real provider intervals (≥ 5s by default), which
+ * made this suite the slowest in CI while testing nothing about the wait.
+ */
+async function withInstantTimers(fn: () => Promise<void>): Promise<number[]> {
+  const original = globalThis.setTimeout;
+  const delays: number[] = [];
+  globalThis.setTimeout = ((callback: () => void, ms?: number) => {
+    delays.push(ms ?? 0);
+    return original(callback, 0);
+  }) as typeof setTimeout;
+  try {
+    await fn();
+  } finally {
+    globalThis.setTimeout = original;
+  }
+  return delays;
+}
+
 type FetchStub = { url: string; body: string };
 function stubFetch(handler: (call: FetchStub) => { ok?: boolean; status?: number; json: unknown }): () => FetchStub[] {
   const calls: FetchStub[] = [];
@@ -138,7 +158,10 @@ await check("xAI device-code login requests a code, polls, and persists", async 
   });
   let sawDeviceCode = false;
   const interaction: AuthInteraction = { notify: (e) => { if (e.type === "device_code") sawDeviceCode = true; }, prompt: async () => "" };
-  await loginModelOAuth(dir, "xai", interaction);
+  const delays = await withInstantTimers(() => loginModelOAuth(dir, "xai", interaction).then(() => {}));
+  // interval 0 is treated as absent: polling keeps the RFC 8628 5s default
+  // rather than spinning against the provider.
+  assert.ok(delays.length >= 2 && delays.every((ms) => ms >= 5000), `poll waits ${delays.join(", ")}`);
   assert.ok(sawDeviceCode, "surfaced the device code to the user");
   assert.ok(polls >= 2, "polled through the pending state");
   const cred = await createCredentialVault(dir).read("xai");
@@ -159,7 +182,7 @@ await check("xAI device poll treats a friendly \"not yet authorized\" 400 as pen
     if (polls < 3) return { ok: false, status: 400, json: { error_description: "User has not yet authorized" } };
     return { json: { access_token: "xai-at", refresh_token: "xai-rt", expires_in: 3600 } };
   });
-  await loginModelOAuth(dir, "xai", { notify: () => {}, prompt: async () => "" });
+  await withInstantTimers(() => loginModelOAuth(dir, "xai", { notify: () => {}, prompt: async () => "" }).then(() => {}));
   assert.ok(polls >= 3, "polled through the friendly pending responses instead of throwing");
   const cred = await createCredentialVault(dir).read("xai");
   assert.equal((cred as { access?: string }).access, "xai-at");

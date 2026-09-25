@@ -49,6 +49,11 @@ session.subscribe((event) => events.push(event));
 await session.prompt("say hello");
 await waitFor(events, (event) => event.type === "agent_end");
 
+// The fixture echoes its env on session.create: BIVY_SESSION_ID must match the
+// session id so `bivy attach` from inside the agent resolves this session.
+const envInfo = await waitFor(events, (event) => event.type === "env.info");
+assert.equal((envInfo as { bivySessionId?: string | null }).bivySessionId, session.id);
+
 assert.equal(decisions.length, 1);
 assert.equal((decisions[0] as { toolName: string }).toolName, "shell");
 
@@ -421,5 +426,41 @@ await waitFor(okEvents, (event) => event.type === "prompt.received");
 await waitFor(okEvents, (event) => event.type === "agent_end");
 assert.ok(!okEvents.some((event) => event.type === "session.error"), "no error when the credential preflight passes");
 okSession.dispose();
+
+// A resumed session adopts the canonical Bivy id instead of the agent's ref,
+// which previously duplicated OpenCode sessions after a resume.
+const canonicalRuntime = new ProtocolRuntime({ command: process.execPath, args: [fixture], displayName: "Fixture Protocol", resumable: true });
+const { session: canonical } = await canonicalRuntime.openSession({
+  workspace: process.cwd(),
+  sessionFile: "ses_abc123",
+  canonicalId: "uuid-1111-2222-3333",
+  toolInterceptor: async () => undefined,
+});
+assert.equal(canonical.id, "uuid-1111-2222-3333", "resumed session adopts the canonical Bivy id, not the agent ref");
+assert.equal(canonical.sessionFile, "ses_abc123", "resume ref is preserved for the shim to reconnect the agent session");
+canonical.dispose();
+const { session: refKeyed } = await canonicalRuntime.openSession({ workspace: process.cwd(), sessionFile: "ses_fresh999", toolInterceptor: async () => undefined });
+assert.equal(refKeyed.id, "ses_fresh999", "without a canonical id, the ref remains the id");
+refKeyed.dispose();
+
+// An agent that does not gate tools still streams tool calls live, with no
+// interceptor round-trip.
+const ungoverned = new ProtocolRuntime({ command: process.execPath, args: [fixture], env: { FIXTURE_NO_INTERCEPTION: "1" }, displayName: "Ungoverned Fixture" });
+const ungovernedDecisions: unknown[] = [];
+const { session: ungovernedSession } = await ungoverned.createSession({
+  workspace: process.cwd(),
+  toolInterceptor: async (ctx) => { ungovernedDecisions.push(ctx); return undefined; },
+});
+assert.equal(ungoverned.capabilities.toolInterception, false, "fixture advertises no tool interception");
+const ungovernedEvents: RuntimeEvent[] = [];
+ungovernedSession.subscribe((event) => ungovernedEvents.push(event));
+await ungovernedSession.prompt("run a tool");
+await waitFor(ungovernedEvents, (event) => event.type === "agent_end");
+const streamedTool = ungovernedEvents.find((event) => event.type === "tool_call") as (RuntimeEvent & { toolName?: string; detail?: { kind?: string } }) | undefined;
+assert.equal(streamedTool?.toolName, "shell", "the tool_call streamed live with its name");
+assert.equal(streamedTool?.detail?.kind, "shell", "the normalized ToolCallDetail rode along");
+assert.equal(ungovernedDecisions.length, 0, "no interceptor round-trip when interception is off");
+assert.ok(ungovernedEvents.some((event) => event.type === "tool_result"), "the tool result streamed too");
+ungovernedSession.dispose();
 
 console.log("protocol-runtime: all tests passed");
