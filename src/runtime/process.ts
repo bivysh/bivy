@@ -189,8 +189,8 @@ export interface ProcessRuntimeOptions {
  * worker processes) die with it instead of being orphaned. Relies on the child
  * having been spawned `detached` (making it its own process-group leader, POSIX
  * only — see the spawn() call in ProcessSession.prompt); `process.kill(-pid,
- * signal)` then targets the whole group, mirroring `pty-runner.py`'s
- * `os.killpg`. Falls back to killing just the direct child on Windows (no
+ * signal)` then targets the whole group, as the PTY command launcher does
+ * (src/command-launch.ts). Falls back to killing just the direct child on Windows (no
  * negative-pid group kill there) or if the group is already gone.
  */
 function killProcessGroup(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {

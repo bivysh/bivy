@@ -73,7 +73,7 @@ fs.rmSync(path.join(root, "dist"), { recursive: true, force: true });
 run("npx", ["tsc", "--noEmit", "false", "--rootDir", "src"]);
 fs.mkdirSync(path.join(root, "dist"), { recursive: true });
 // tsc does not emit .mjs helper modules. Keep runtime imports in dist complete.
-for (const file of ["hosted-endpoints.mjs", "hosted-endpoints.d.mts", "pty-runner.py"]) {
+for (const file of ["hosted-endpoints.mjs", "hosted-endpoints.d.mts"]) {
   fs.copyFileSync(path.join(root, "src", file), path.join(root, "dist", file));
 }
 

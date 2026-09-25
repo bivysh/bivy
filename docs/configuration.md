@@ -458,8 +458,6 @@ Off by default and inert — the in-process path is unchanged when it is off.
 | `BIVY_TSX` | path | the bundled `tsx` CLI | Escape hatch (packaging) | **Setting it to the empty string is meaningful** — packaged builds do that to drop `tsx` entirely |
 | `BIVY_PI_COMMAND` | command/path | `pi` | Supported | Operator-installed Pi executable used for native TUI hand-off |
 | `BIVY_CLAUDE_COMMAND` | command/path | `claude` | Supported | Operator-installed Claude Code executable used by the SDK bridge |
-| `BIVY_PTY_RUNNER` | path | `<asset-root>/src/pty-runner.py`, else `dist/pty-runner.py` | Escape hatch (packaging) | |
-| `PYTHON` | command | `python3` | Supported | Interpreter for the PTY runner |
 | `BIVY_UPDATE_DETACHED` | `1` | unset | Internal | Re-exec marker set by `bivy update` when it detaches from a Bivy terminal |
 | `BIVY_CODEX_APPROVAL_POLICY` | Codex policy string | `untrusted` | Internal | Read by the Codex app-server shim; set by Bivy when spawning it |
 | `BIVY_CODEX_SANDBOX` | Codex sandbox mode | `workspace-write` | Internal | Same |

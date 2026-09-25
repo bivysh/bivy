@@ -3,7 +3,7 @@
 // own worker processes) left orphaned grandchildren running after abort.
 // Regression coverage for the fix: the child is spawned `detached` (its own
 // process-group leader on POSIX) and abort() signals the whole group via
-// `process.kill(-pid, sig)`, mirroring `pty-runner.py`'s `os.killpg`. Also
+// `process.kill(-pid, sig)`, as the PTY command launcher does. Also
 // covers the "capture the child before the 2s SIGKILL timer" fix — a fast
 // re-spawn between abort() and the delayed SIGKILL must not be caught by it.
 //
