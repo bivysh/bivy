@@ -7,7 +7,10 @@ workers, or browser security. Do not put every business-rule permutation here.
 - Pure state/formatting/routing rules belong in `test/*.test.ts` or the
   browser-free `test/web-contracts` project. Do not repeat unit assertions inside
   a page just to inspect the same result through a DOM element.
-- Source-string checks belong in `test/web-contracts`, without Vite hooks.
+- Source-string checks belong in `test/web-contracts`, without Vite hooks, and
+  only for invariants nothing else can express (security, trust copy, a past
+  regression). Design-system migrations are rows in
+  `scripts/check-design-tokens.mjs`; copy and class names are not contracts.
 - Test real app code or real styles. Inline replicas of app behavior only test
   the replica and should not be added as regression coverage.
 - Desktop/mobile projects already supply viewport and input-mode coverage.

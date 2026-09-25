@@ -39,7 +39,10 @@ UI, CSS, or component:
   browser) is the visual contract — light + dark.
 - Full rules for the PWA: **[`packages/web/AGENTS.md`](packages/web/AGENTS.md)**.
 - Run **`pnpm run check:design`** before finishing UI work — it fails if a
-  palette token is redeclared outside `tokens.css` and flags raw-color drift.
+  palette token is redeclared outside `tokens.css`, a retired class returns, or a
+  component rule restyles a primitive's shell, and flags raw-color drift. When you
+  retire a class or migrate a component onto a primitive, add a row to its
+  `RETIRED_CLASSES` / `LAYOUT_ONLY` tables instead of writing a source-string test.
 
 ## UI implementation workflow
 

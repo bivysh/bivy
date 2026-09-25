@@ -11,8 +11,11 @@
 //   node scripts/check-design-tokens.mjs   # exit 1 if a palette token is
 //                                           # redeclared outside tokens.css
 //
-// It also rejects raw numeric z-index values and component classes retired in
-// favor of canonical design-system primitives. Raw hex/rgb color literals are
+// It also rejects raw numeric z-index values, component classes retired in favor
+// of canonical design-system primitives, and component rules that restyle the
+// shell a primitive owns (LAYOUT_ONLY). Previously each of these was a separate
+// source-string test; as rows here they cover every file.
+// Raw hex/rgb color literals are
 // reported as a drift signal — app CSS should reference var(--…), not hardcode color. Flip
 // HEX_IS_ERROR to true once the app stylesheets are fully tokenized to promote
 // that from a warning to a hard failure (same pattern as check-module-boundaries).
@@ -49,8 +52,43 @@ const RETIRED_CLASSES = [
   "picker-action", "repo-connect-copy", "connect-copy", "connect-refresh",
   "autom-notice", "autom-banner", "autom-success", "routing-readiness",
   "autom-trigger-menu", "autom-trigger-option", "template-card-badge",
+  // → <Badge>
+  "approval-badge", "question-chip", "artifact-badge", "tool-fail", "chk", "chip", "ruleset-chip",
+  "runtime-cap", "runtime-tier", "runtime-protection", "autom-status", "run-status", "import-session-badge",
+  // → .btn variants
+  "link-btn", "ghost-btn", "icon-btn", "notice-action",
+  // → <Toast> / <Spinner> / .field / <Sheet> / <SourceMark> / <StatusDot>
+  "error-toast-icon", "notice-toast-icon",
+  "chat-loading-spinner", "attach-spinner", "reconnect-spinner", "voice-spinner", "onboarding-spinner",
+  "schedule-input", "action-sheet", "session-mark", "run-pill-glyph",
+  "node-dot", "session-dot", "run-dot", "attn-dot", "voice-listening-dot", "mark-badge",
+  // → the single composer Send control
+  "split-send", "split-send-toggle", "send-options-menu",
 ];
 const retiredClassRe = new RegExp(`(?:\\.|className[^\\n]*[\\"'\\x60 {])(${RETIRED_CLASSES.join("|")})(?=[\\s.\\"'\\x60}:])`, "g");
+// Retired selector shapes that are not a single class name.
+const RETIRED_PATTERNS = [
+  { re: /\.banner\.(?:error|success|warn|info|update)\b|className="[^"]*\bbanner\s[^"]*\b(?:error|success|warn|info|update)\b/, use: '.banner[data-tone="…"]' },
+];
+
+// Component rules that must inherit their visual shell from a canonical
+// primitive and only own layout. Each row: the primitive, the properties it
+// owns, and the local selectors that may not redeclare them.
+const STYLES_FILE = "packages/web/src/styles.css";
+const LAYOUT_ONLY = [
+  { shell: ".card", owns: /(?:background|border(?!-collapse)|border-radius|box-shadow)\s*:/, selectors: [
+    ".tui-locked-card", ".followup-card", ".wq-status-card", ".setup-card", ".changes-card", ".readiness",
+    ".ruleset-rule-card", ".queue-card", ".autom-runner-card", ".question-card"] },
+  { shell: ".toast", owns: /(?:background|border(?!-collapse)|border-radius|box-shadow|padding)\s*:/, selectors: [
+    ".update-toast", ".error-toast", ".notice-toast"] },
+  { shell: ".field", owns: /(?:background|border(?!-collapse)|border-radius|color|font-size|font-family)\s*:/, selectors: [
+    ".session-search", ".settings-search", ".followup-edit-input", ".question-other-input", ".term-search-input"] },
+  { shell: ".menu", owns: /(?:background|border|border-radius|box-shadow|animation)\s*:/, selectors: [
+    ".session-actions-menu", ".row-menu-pop", ".session-filter-menu", ".reasoning-menu", ".term-attach-menu",
+    ".node-menu", ".slash-menu"] },
+  { shell: ".btn", owns: /(?:background|border(?!-collapse)|border-radius|color|font-size|font-weight|padding)\s*:/, selectors: [
+    ".fork-submit", ".import-session-action", ".banner-action"] },
+];
 
 function walk(dir) {
   const abs = path.join(repoRoot, dir);
@@ -81,7 +119,23 @@ for (const file of files) {
     hexRe.lastIndex = 0;
     if (rawZIndexRe.test(line)) rawZIndexHits.push({ file, line: i + 1, text: line.trim() });
     for (const m of line.matchAll(retiredClassRe)) retiredClassHits.push({ file, line: i + 1, className: m[1] });
+    for (const p of RETIRED_PATTERNS) if (p.re.test(line)) retiredClassHits.push({ file, line: i + 1, className: `${line.trim().slice(0, 60)} → use ${p.use}` });
   });
+}
+
+const layoutHits = [];
+const styles = fs.readFileSync(path.join(repoRoot, STYLES_FILE), "utf8");
+for (const { shell, owns, selectors } of LAYOUT_ONLY) {
+  for (const selector of selectors) {
+    const start = styles.indexOf(`\n${selector} {`);
+    if (start < 0) {
+      layoutHits.push(`${selector}: rule not found (update LAYOUT_ONLY if it was renamed or removed)`);
+      continue;
+    }
+    const body = styles.slice(styles.indexOf("{", start) + 1, styles.indexOf("}", start));
+    const m = body.match(owns);
+    if (m) layoutHits.push(`${selector} redeclares \`${m[0].replace(/\s*:$/, "")}\`, which ${shell} owns`);
+  }
 }
 
 let failed = false;
@@ -106,6 +160,12 @@ if (retiredClassHits.length) {
   failed = true;
   console.error(`\n✖ ${retiredClassHits.length} retired design-system class use(s):`);
   for (const h of retiredClassHits) console.error(`  ${h.file}:${h.line}  .${h.className}`);
+}
+
+if (layoutHits.length) {
+  failed = true;
+  console.error(`\n✖ ${layoutHits.length} component rule(s) restyle their design-system shell in ${STYLES_FILE}; own layout only:`);
+  for (const h of layoutHits) console.error(`  ${h}`);
 }
 
 if (hexHits.length) {
