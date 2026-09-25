@@ -35,11 +35,6 @@ await test("falls back to localhost when nothing is set", () => {
   assert.match(urls[0], /^ws:\/\//);
 });
 
-await test("fnv1a is deterministic and well-distributed enough", () => {
-  assert.equal(fnv1a("node-abc"), fnv1a("node-abc"));
-  assert.notEqual(fnv1a("node-abc"), fnv1a("node-abd"));
-});
-
 await test("single shard always returns the one URL", () => {
   const urls = ["wss://only.bivy.sh"];
   assert.equal(shardForNode("anything", urls), "wss://only.bivy.sh");
@@ -50,15 +45,6 @@ await test("a node maps to a stable shard across calls", () => {
   const urls = ["wss://r0", "wss://r1", "wss://r2", "wss://r3"];
   const first = shardForNode("node-stable", urls);
   for (let i = 0; i < 100; i++) assert.equal(shardForNode("node-stable", urls), first);
-});
-
-await test("node and its clients co-locate (same nodeId -> same shard)", () => {
-  const urls = ["wss://r0", "wss://r1", "wss://r2", "wss://r3"];
-  // Whatever the node resolves to, a client targeting that node resolves to the
-  // same URL — that's the whole invariant that keeps them in one room.
-  for (const nodeId of ["n1", "n2", "long-node-id-xyz", "00000000-aaaa"]) {
-    assert.equal(shardForNode(nodeId, urls), shardForNode(nodeId, urls));
-  }
 });
 
 await test("distributes nodes across shards (not all on one)", () => {

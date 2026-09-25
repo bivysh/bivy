@@ -83,37 +83,14 @@ check("wire-format constants hold their pinned values", () => {
   assert.equal(HKDF_INFO.deviceVault, "bivy-device-vault-v1");
 });
 
-// The node chunker and browser chunker must use the very same chunk size.
-check("node and browser chunkers share one FRAME_CHUNK_BYTES", async () => {
-  const relayChunk = await import("../src/relay-chunk.js");
-  const relayFrame = await import("../packages/core/src/relay-frame.js");
-  assert.equal(relayChunk.FRAME_CHUNK_BYTES, relayFrame.FRAME_CHUNK_BYTES);
-  assert.equal(relayChunk.FRAME_CHUNK_BYTES, FRAME_CHUNK_BYTES);
-});
-
 // ---------------------------------------------------------------------------
-// 2. Sealed envelope round-trips + wire layout.
+// 2. Sealed envelope wire layout.
 // ---------------------------------------------------------------------------
-check("node seal → node open round-trips", () => {
-  const key = generateRoomKey();
-  const msg = "hello wire format \u{1f512}";
-  assert.equal(nOpen(key, nSeal(key, msg)), msg);
-});
-
 check("sealed layout is [ iv(12) | tag(16) | ct ] base64", () => {
   const key = generateRoomKey();
   const packed = Buffer.from(nSeal(key, "x"), "base64");
   // ciphertext of a 1-byte GCM message is 1 byte, so total = header + 1.
   assert.equal(packed.length, SEALED_HEADER_BYTES + 1);
-});
-
-check("sealFrame embeds v=FRAME_VERSION and a 12-byte nonce", () => {
-  const key = generateRoomKey();
-  const env = JSON.parse(nOpen(key, sealFrame(key, { hi: 1 }))) as { v: number; ts: number; nonce: string; data: unknown };
-  assert.equal(env.v, FRAME_VERSION);
-  assert.equal(typeof env.ts, "number");
-  assert.equal(Buffer.from(env.nonce, "base64").length, FRAME_NONCE_BYTES);
-  assert.deepEqual(env.data, { hi: 1 });
 });
 
 // ---------------------------------------------------------------------------

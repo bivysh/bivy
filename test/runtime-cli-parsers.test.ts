@@ -282,13 +282,6 @@ async function main() {
     assert.equal(p.messages().length, 0, "error text must not become an assistant message");
   });
 
-  await check("genericStreamJson: namespaced error frames (session/error) are recognized", () => {
-    const p = genericStreamJsonParser();
-    const events = feed(p, [JSON.stringify({ type: "session/error", message: "model overloaded" })]);
-    assert.ok(events.some((e) => e.type === "session.error" && /overloaded/.test((e as any).error)));
-    assert.equal(p.messages().length, 0);
-  });
-
   await check("genericStreamJson: Grok's {type,data} shape — answer text, reasoning sidecar, and `end` terminal", () => {
     // Grok CLI 1.x `--output-format streaming-json` does NOT emit ACP envelopes:
     // it keys content off `type` with the chunk under `data` ({type:'text'} for

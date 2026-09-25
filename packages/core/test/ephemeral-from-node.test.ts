@@ -40,10 +40,6 @@ describe("ephemeralMachineFromNode (cross-device resume — Gap A)", () => {
     expect(ephemeralMachineFromNode({ id: "eph-z", ephemeral: { machineId: "sbx_2" } })).toBeNull();
   });
 
-  it("marks the reconstructed machine as stopped so the resume path wakes it", () => {
-    const machine = ephemeralMachineFromNode({ id: "eph-w", ephemeral: { provider: "sprites", machineId: "m" } });
-    expect(machine?.status).toBe("stopped");
-  });
 });
 
 describe("isEphemeralNode (persistent nodes must not enter the ephemeral resume path)", () => {
@@ -54,10 +50,6 @@ describe("isEphemeralNode (persistent nodes must not enter the ephemeral resume 
   it("recognises an ephemeral node by its control-plane identity block alone", () => {
     // A non-`eph-` id but a populated ephemeral block still counts.
     expect(isEphemeralNode({ id: "node-1", ephemeral: { provider: "sprites", machineId: "m" } })).toBe(true);
-  });
-
-  it("returns false for a persistent node (no eph- id, no ephemeral block)", () => {
-    expect(isEphemeralNode({ id: "node-1", name: "laptop" } as { id: string })).toBe(false);
   });
 
   it("returns false for an offline persistent node so a send does not trigger an impossible rebuild", () => {

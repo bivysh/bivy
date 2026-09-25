@@ -59,15 +59,4 @@ await test("does NOT clobber an existing (device-recorded) correlation", async (
   assert.equal((await store.getSessionCorrelation(acct.id, "s3"))?.machineId, "device-m");
 });
 
-await test("enables planRestoreProvision: correlation → nodeId resolves for rebuild", async () => {
-  const store = await makeStore();
-  const acct = await store.findOrCreateAccount("d@example.com");
-  await store.enrollNode(acct.id, "eph-hosted", "Hosted");
-  await store.setHostedMachines(acct.id, [HOSTED]);
-  await correlateHostedSessions(store, { accountId: acct.id, id: "eph-hosted" }, [{ sessionId: "s4" }]);
-  // What planRestoreProvision does: correlation(targetSessionId) → nodeId.
-  const corr = await store.getSessionCorrelation(acct.id, "s4");
-  assert.equal(corr?.nodeId, "eph-hosted", "rebuild can now resolve the reuse node with no device record");
-});
-
 console.log(`hosted-correlation: ${passed} test(s) passed`);

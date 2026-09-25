@@ -15,8 +15,4 @@ describe("transcript cache (no IndexedDB available)", () => {
     await expect(cache.get("s1")).resolves.toBeNull();
   });
 
-  it("ignores puts without a history hash (never caches a partial prefix)", async () => {
-    const cache = createTranscriptCache({ indexedDB: undefined });
-    await expect(cache.put("s1", [], 0, "")).resolves.toBeUndefined();
-  });
 });

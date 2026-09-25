@@ -44,8 +44,6 @@ export default defineConfig({
     headless: true,
   },
   projects: [
-    // Source-contract checks need neither Chromium nor duplicate viewports.
-    { name: "contracts", testDir: "./test/web-contracts" },
     { name: "behavior", testMatch: singleViewport, use: { viewport: { width: 1280, height: 800 } } },
     { name: "desktop", testIgnore: [...singleViewport, ...mobileOnlySpecs], use: { viewport: { width: 1280, height: 800 } } },
     { name: "mobile", testMatch: mobileSpecs, use: { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true } },

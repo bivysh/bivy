@@ -155,6 +155,19 @@ for (const [name, version] of expected) {
   }
 }
 
+// Service lockfiles: every pinned registry tarball must still be the version its
+// entry claims. A release version bump once relabeled third-party entries.
+for (const service of ["control-plane", "relay"]) {
+  const lock = JSON.parse(fs.readFileSync(`services/${service}/package-lock.json`, "utf8"));
+  for (const [name, entry] of Object.entries(lock.packages ?? {})) {
+    if (!entry.version || !entry.resolved?.startsWith("https://registry.npmjs.org/")) continue;
+    const artifact = decodeURIComponent(new URL(entry.resolved).pathname);
+    if (!artifact.endsWith(`-${entry.version}.tgz`)) {
+      problems.push(`services/${service}/package-lock.json: ${name} ${entry.version} does not match its pinned tarball ${artifact}`);
+    }
+  }
+}
+
 if (problems.length) {
   console.error("Security pin check failed:\n" + problems.map((p) => `  - ${p}`).join("\n"));
   process.exit(1);

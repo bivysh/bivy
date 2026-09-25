@@ -53,12 +53,6 @@ export function ephemeralLifecyclePhase(
   return "provisioning";
 }
 
-export function ephemeralColdStartMs(facts: Pick<EphemeralLifecycleFacts, "milestones">): number | undefined {
-  const start = Date.parse(String(facts.milestones?.requestedAt || ""));
-  const ready = Date.parse(String(facts.milestones?.firstAgentEventAt || ""));
-  return Number.isFinite(start) && Number.isFinite(ready) && ready >= start ? ready - start : undefined;
-}
-
 /** Currency symbol for indicative cost estimates, not invoices. */
 function currencySymbol(currency: string): string {
   return currency === "EUR" ? "€" : "$";

@@ -69,10 +69,6 @@ test("have beyond current length → full resync", () => {
   assert.equal(d.mode, "full");
 });
 
-test("historyHash is stable for identical content", () => {
-  assert.equal(historyDelta(msgs(8)).historyHash, historyDelta(msgs(8)).historyHash);
-});
-
 test("have <= 0 is ignored → full send", () => {
   const all = msgs(4);
   const d = historyDelta(all, { have: 0, haveToken: historyDelta([]).historyHash });

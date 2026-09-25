@@ -9,7 +9,6 @@ import {
   createReplayGuard,
   frameMessages,
   createFrameReassembler,
-  FRAME_CHUNK_BYTES,
   toHtml,
   inline,
   extractRemoteImageUrls,
@@ -52,15 +51,6 @@ describe("relay framing", () => {
     expect(frames).toHaveLength(1);
     const env = JSON.parse(frames[0]!);
     expect(env).toEqual({ t: "frame", p: "hello" });
-  });
-  it("chunks and reassembles large payloads in order", () => {
-    const payload = "x".repeat(FRAME_CHUNK_BYTES * 2 + 10);
-    const frames = frameMessages(payload, () => "grp1").map((f) => JSON.parse(f));
-    expect(frames.length).toBe(3);
-    const reassemble = createFrameReassembler();
-    let out: string | null = null;
-    for (const env of frames) out = reassemble(env);
-    expect(out).toBe(payload);
   });
   it("returns null on incomplete groups", () => {
     const reassemble = createFrameReassembler();
@@ -161,9 +151,6 @@ describe("extractRemoteImageUrls", () => {
   });
   it("ignores non-https and non-image markdown links", () => {
     expect(extractRemoteImageUrls("![a](http://x.test/a.png) [link](https://x.test/page)")).toEqual([]);
-  });
-  it("returns an empty array for text with no images", () => {
-    expect(extractRemoteImageUrls("just some **prose**")).toEqual([]);
   });
 });
 

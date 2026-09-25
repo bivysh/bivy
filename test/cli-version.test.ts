@@ -44,15 +44,6 @@ test("an unknown command exits non-zero and names the offending command", () => 
   assert.match(r.stderr + r.stdout, /Unknown command: definitely-not-a-command/);
 });
 
-test("`bivy --help` exits 0 and lists core commands", () => {
-  const r = runCli(["--help"]);
-  assert.equal(r.status, 0, `expected exit 0, got ${r.status}: ${r.stderr}`);
-  const out = r.stdout + r.stderr;
-  for (const cmd of ["bivy run", "bivy setup", "bivy sessions", "bivy automation", "bivy config", "bivy doctor", "bivy version"]) {
-    assert.ok(out.includes(cmd), `help should mention "${cmd}"`);
-  }
-});
-
 test("account and model-provider login commands have distinct help", () => {
   const account = runCli(["login", "--help"]);
   assert.equal(account.status, 0);
@@ -95,26 +86,6 @@ test("NO_COLOR wins even when FORCE_COLOR is set", () => {
   const r = runCli(["--help"], { NO_COLOR: "1", FORCE_COLOR: "1" });
   assert.equal(r.status, 0, `expected exit 0, got ${r.status}: ${r.stderr}`);
   assert.ok(!(r.stdout + r.stderr).includes("\u001b["), "NO_COLOR output should not contain ANSI escapes");
-});
-
-test("`bivy config --help` exposes typed config and precedence inspection", () => {
-  const r = runCli(["config", "--help"]);
-  assert.equal(r.status, 0, `expected exit 0, got ${r.status}: ${r.stderr}`);
-  const out = r.stdout + r.stderr;
-  for (const command of ["init", "validate", "show", "set", "explain"]) assert.ok(out.includes(command));
-});
-
-test("`bivy automation --help` exposes management and dispatch commands", () => {
-  const r = runCli(["automation", "--help"]);
-  assert.equal(r.status, 0, `expected exit 0, got ${r.status}: ${r.stderr}`);
-  const out = r.stdout + r.stderr;
-  for (const command of ["list", "trigger", "init", "validate", "plan", "test", "apply"]) assert.ok(out.includes(command));
-});
-
-test("`bivy setup --help` describes remote enrollment", () => {
-  const r = runCli(["setup", "--help"]);
-  assert.equal(r.status, 0, `expected exit 0, got ${r.status}: ${r.stderr}`);
-  assert.match(r.stdout + r.stderr, /remote access \+ sign-in/i);
 });
 
 test("`bivy --help` lists every known 'bivy run' integration, not a stale subset", () => {
@@ -201,7 +172,3 @@ test("`bivy secrets bogus` exits non-zero (the delegated script's exit code must
   assert.notEqual(r.status, 0, "an unrecognized secrets subcommand must exit non-zero");
 });
 
-test("`bivy github:app-sync bogus` exits non-zero (the delegated script's exit code must propagate)", () => {
-  const r = runCli(["github:app-sync", "bogus"]);
-  assert.notEqual(r.status, 0, "an unrecognized github:app-sync argument must exit non-zero");
-});

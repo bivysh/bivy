@@ -82,11 +82,3 @@ export function describeCapabilityState(state: CapabilityState): string {
       return "Unknown";
   }
 }
-
-/** Tally of a probe/agent list's states for a compact summary line (e.g. "3
- *  available, 1 unknown"). */
-export function summarizeCapabilityStates(states: readonly CapabilityState[]): Record<CapabilityState, number> {
-  const out: Record<CapabilityState, number> = { available: 0, unavailable: 0, unknown: 0 };
-  for (const state of states) out[state] += 1;
-  return out;
-}

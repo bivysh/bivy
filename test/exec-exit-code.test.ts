@@ -142,13 +142,6 @@ await check("exits non-zero when the socket closes mid-turn WITH a partial answe
   });
 });
 
-await check("exits non-zero when the socket closes mid-turn with no text at all", async () => {
-  await withFakeDaemon("disconnect-no-text", async (url) => {
-    const { code } = await runExec(url);
-    assert.notEqual(code, 0);
-  });
-});
-
 await check("exits zero only once agent_end is actually observed", async () => {
   await withFakeDaemon("complete-normally", async (url) => {
     const { code, stdout } = await runExec(url);

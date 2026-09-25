@@ -53,10 +53,6 @@ describe("indexedDbDeviceKeyStore (real IDB)", () => {
     expect(nextStore.device()?.pub).toBe(first.pub);
   });
 
-  it("is available when indexedDB exists", () => {
-    expect(indexedDbDeviceKeyStore()).not.toBeNull();
-  });
-
   it("round-trips a non-extractable CryptoKey across store instances", async () => {
     const kp = (await crypto.subtle.generateKey({ name: "X25519" }, false, ["deriveBits"])) as CryptoKeyPair;
     const pub = b64url(new Uint8Array(await crypto.subtle.exportKey("raw", kp.publicKey)));

@@ -170,11 +170,6 @@ describe("canonical Run projection", () => {
 });
 
 describe("Run route parsing and serialization", () => {
-  it("round-trips a run id through the route", () => {
-    expect(runRoutePath("run_1")).toBe("/runs/run_1");
-    expect(parseRunRoute(runRoutePath("run_1"))).toBe("run_1");
-  });
-
   it("encodes and restores ids that need escaping", () => {
     const id = "github:issue/owner repo#5";
     const path = runRoutePath(id);

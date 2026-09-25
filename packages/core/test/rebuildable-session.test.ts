@@ -22,9 +22,4 @@ describe("rebuildable session flag", () => {
     expect(store.getState().sessionIndex.sessions.find((s) => s.sessionId === "s1")?.rebuildable).toBeUndefined();
   });
 
-  it("a normal live session is never rebuildable", () => {
-    const store = new SessionStore();
-    store.setSessions([{ sessionId: "s2", nodeId: "node-a", name: "Live" }]);
-    expect(store.getState().sessionIndex.sessions.find((s) => s.sessionId === "s2")?.rebuildable).toBeUndefined();
-  });
 });

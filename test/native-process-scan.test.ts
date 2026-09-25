@@ -52,10 +52,6 @@ check("never reports live for an unknown cwd, even with a matching binary elsewh
   assert.equal(hasLiveProcessForCwd("", ["claude"], lister), false);
 });
 
-check("an empty cwd never matches", () => {
-  assert.equal(hasLiveProcessForCwd("", ["claude"], lister), false);
-});
-
 check("a lister that throws is treated as no live process, not a crash", () => {
   const throwing = () => {
     throw new Error("ps not found");

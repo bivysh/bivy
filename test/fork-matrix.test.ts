@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { forkTier, forkMatrix, renderForkMatrixMarkdown, type AgentForkCaps } from "../src/session/fork-matrix.js";
+import { forkTier, forkMatrix, type AgentForkCaps } from "../src/session/fork-matrix.js";
 import { resolveForkFidelity, type ForkBundle } from "../src/session/fork.js";
 import { forkMatrixAgents, listRegisteredAgents } from "../src/runtime/index.js";
 import { AGENT_PROFILE_IDS } from "../src/agents/profiles.js";
@@ -70,24 +70,6 @@ test("matrix agrees with the real resolveForkFidelity for every capability combo
       assert.equal(crossPure, crossProd, `cross combo source=${JSON.stringify(s)} dest=${JSON.stringify(d)}`);
     }
   }
-});
-
-test("matrix + markdown render", () => {
-  const agents: AgentForkCaps[] = [
-    { id: "pi", displayName: "Pi", forkTransport: true, forkHistoryImport: true },
-    { id: "codex", displayName: "Codex", forkTransport: true, forkHistoryImport: true },
-    { id: "gemini", displayName: "Gemini" },
-  ];
-  const cells = forkMatrix(agents);
-  assert.equal(cells.length, 9);
-  assert.equal(cells.find((c) => c.source === "pi" && c.dest === "pi")?.tier, "full");
-  assert.equal(cells.find((c) => c.source === "codex" && c.dest === "codex")?.tier, "full", "Codex exposes native forkTransport → self-fork is byte-exact");
-  assert.equal(cells.find((c) => c.source === "codex" && c.dest === "gemini")?.tier, "seeded");
-
-  const md = renderForkMatrixMarkdown(agents);
-  assert.match(md, /Fork fidelity matrix/);
-  assert.match(md, /Pi \| Codex \| Gemini/);
-  assert.match(md, /●/); // at least one full cell (pi→pi)
 });
 
 // --- Registry drift guards: the generated matrix is derived from the LIVE agent

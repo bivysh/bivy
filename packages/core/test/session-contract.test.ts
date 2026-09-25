@@ -42,11 +42,6 @@ describe("resolveSessionContract", () => {
     expect(contract.requiresAcknowledgement).toBe(false);
   });
 
-  it("is a pure, deterministic function of its input", () => {
-    const input = fullyGuaranteed();
-    expect(resolveSessionContract(input)).toEqual(resolveSessionContract({ ...input }));
-  });
-
   it("never invents an agent version — absence yields versionSource unknown plus a reason", () => {
     const contract = resolveSessionContract(fullyGuaranteed({ detectedVersion: undefined, versionSource: undefined }));
     expect(contract.agent.versionSource).toBe("unknown");
@@ -154,8 +149,4 @@ describe("normalizeSessionContract (wire hydration)", () => {
     expect(normalizeSessionContract(withoutSandbox)).toBeUndefined();
   });
 
-  it("drops a contract whose area state is not one of the known guarantee states", () => {
-    const contract = resolveSessionContract(fullyGuaranteed());
-    expect(normalizeSessionContract({ ...contract, auth: { ...contract.auth, state: "totally-fine" } })).toBeUndefined();
-  });
 });

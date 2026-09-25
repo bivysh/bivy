@@ -8,7 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createCredentialVault } from "../src/runtime/credential-store.js";
-import { ensureGrokAuth, grokAuthEntryKey, resolveGrokHome, GROK_OIDC_ISSUER } from "../src/runtime/grok-auth.js";
+import { ensureGrokAuth, grokAuthEntryKey, GROK_OIDC_ISSUER } from "../src/runtime/grok-auth.js";
 import { grokAuthFile, grokCredentialPreflight, GROK_NO_CREDENTIAL_MESSAGE } from "../src/runtime/grok-preflight.js";
 
 let failures = 0;
@@ -134,12 +134,6 @@ await check("returns undefined when an API key is already ambient (no auth.json 
   assert.equal(result, undefined);
   assert.ok(!fs.existsSync(path.join(home, "auth.json")), "no auth.json when API key is present");
   delete process.env.XAI_API_KEY;
-});
-
-await check("resolveGrokHome respects GROK_HOME", () => {
-  process.env.GROK_HOME = "/tmp/custom-grok-home";
-  assert.equal(resolveGrokHome(), "/tmp/custom-grok-home");
-  delete process.env.GROK_HOME;
 });
 
 await check("preflight passes when XAI_API_KEY is set", () => {

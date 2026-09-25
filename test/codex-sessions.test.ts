@@ -144,18 +144,6 @@ check("discoverNativeCodexSessions omits a session Codex never assigned an id to
   assert.ok(!discovered.some((s) => s.cwd === "/work/no-id"));
 });
 
-check("discoverNativeCodexSessions honors a non-default CODEX_HOME (no throw, empty list)", () => {
-  const prev = process.env.CODEX_HOME;
-  const otherHome = fs.mkdtempSync(path.join(os.tmpdir(), "codex-sessions-other-home-"));
-  process.env.CODEX_HOME = otherHome;
-  try {
-    assert.deepEqual(discoverNativeCodexSessions(() => false), []);
-  } finally {
-    process.env.CODEX_HOME = prev;
-    fs.rmSync(otherHome, { recursive: true, force: true });
-  }
-});
-
 // --- writeCodexRollout: the write-side of a true "replayed" fork INTO Codex ---
 
 check("writeCodexRollout synthesises a rollout that reads back as the full transcript", () => {

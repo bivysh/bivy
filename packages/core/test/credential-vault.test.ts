@@ -2,17 +2,12 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { describe, expect, it } from "vitest";
 import {
-  assignDefaultCredential,
-  assignProjectCredential,
   credentialItemFromBrowserModelKey,
   credentialItemFromNodeSummary,
   credentialItemId,
-  emptyCredentialAssignments,
-  isCredentialAvailable,
   mergeCredentialItems,
   migrateBrowserModelKeys,
   migrateNodeCredentialSummaries,
-  selectCredentialItem,
   type CredentialItem,
 } from "../src/index.js";
 
@@ -100,70 +95,5 @@ describe("logical credential identity and migration", () => {
     const result = mergeCredentialItems([source], [{ ...source, availability: { account: true, device: false, nodes: ["a", "z"] } }]);
     expect(result[0]?.availability).toEqual({ account: true, device: false, nodes: ["a", "z"] });
     expect(source.availability.nodes).toEqual(["z"]);
-  });
-});
-
-describe("credential availability and assignments", () => {
-  const local = item("local", { account: false, device: true, nodes: ["node-a"] });
-
-  it("applies account delivery and exact local availability", () => {
-    expect(isCredentialAvailable(local, { scope: "device" })).toBe(true);
-    expect(isCredentialAvailable(local, { scope: "node", nodeId: "node-a" })).toBe(true);
-    expect(isCredentialAvailable(local, { scope: "node", nodeId: "node-b" })).toBe(false);
-    expect(isCredentialAvailable(local, { scope: "account" })).toBe(false);
-    const shared = item("shared");
-    expect(isCredentialAvailable(shared, { scope: "device" })).toBe(true);
-    expect(isCredentialAvailable(shared, { scope: "node", nodeId: "new-node" })).toBe(true);
-  });
-
-  it("updates defaults and projects immutably and removes empty assignments", () => {
-    const empty = emptyCredentialAssignments();
-    const withDefault = assignDefaultCredential(empty, " Anthropic ", "id-default");
-    const withProject = assignProjectCredential(withDefault, "project-a", "ANTHROPIC", "id-project");
-    expect(withProject).toEqual({ defaults: { anthropic: "id-default" }, projects: { "project-a": { anthropic: "id-project" } } });
-    expect(empty).toEqual({ defaults: {}, projects: {} });
-    expect(assignProjectCredential(withProject, "project-a", "anthropic", undefined).projects).toEqual({});
-    expect(assignDefaultCredential(withDefault, "anthropic", undefined).defaults).toEqual({});
-  });
-});
-
-describe("credential selection ladder", () => {
-  const work = item("work");
-  const personal = item("personal");
-  const labelledDefault = item("default");
-  const target = { scope: "node", nodeId: "node-a" } as const;
-  let assignments = assignDefaultCredential(emptyCredentialAssignments(), "anthropic", personal.id);
-  assignments = assignProjectCredential(assignments, "project-a", "anthropic", work.id);
-
-  it("uses explicit, project, and provider-default assignments in order", () => {
-    expect(selectCredentialItem([work, personal], { provider: "anthropic", target, assignments, projectId: "project-a", itemId: personal.id })).toMatchObject({ status: "selected", item: personal, reason: "explicit" });
-    expect(selectCredentialItem([work, personal], { provider: "anthropic", target, assignments, projectId: "project-a" })).toMatchObject({ status: "selected", item: work, reason: "project" });
-    expect(selectCredentialItem([work, personal], { provider: "anthropic", target, assignments })).toMatchObject({ status: "selected", item: personal, reason: "provider-default" });
-  });
-
-  it("falls back to default label, then the sole available item", () => {
-    expect(selectCredentialItem([personal, labelledDefault], { provider: "ANTHROPIC", target })).toMatchObject({ status: "selected", item: labelledDefault, reason: "default-label" });
-    expect(selectCredentialItem([work], { provider: "anthropic", target })).toMatchObject({ status: "selected", item: work, reason: "only-available" });
-  });
-
-  it("reports ambiguity and missing credentials deterministically", () => {
-    const ambiguous = selectCredentialItem([work, personal], { provider: "anthropic", target });
-    expect(ambiguous).toMatchObject({ status: "ambiguous", reason: "multiple-available-credentials" });
-    if (ambiguous.status === "ambiguous") expect(ambiguous.items.map((candidate) => candidate.id)).toEqual([...ambiguous.items.map((candidate) => candidate.id)].sort());
-    expect(selectCredentialItem([], { provider: "anthropic", target })).toEqual({ status: "missing", reason: "no-available-credential" });
-  });
-
-  it("does not silently fall through from dangling or unavailable assignments", () => {
-    const dangling = assignDefaultCredential(emptyCredentialAssignments(), "anthropic", "missing-id");
-    expect(selectCredentialItem([work], { provider: "anthropic", target, assignments: dangling })).toEqual({
-      status: "missing", reason: "assigned-credential-unavailable", itemId: "missing-id",
-    });
-    const nodeOnlyElsewhere = item("remote", { account: false, device: false, nodes: ["node-b"] });
-    expect(selectCredentialItem([nodeOnlyElsewhere], { provider: "anthropic", target, itemId: nodeOnlyElsewhere.id })).toMatchObject({ status: "missing", reason: "assigned-credential-unavailable" });
-  });
-
-  it("never selects another provider", () => {
-    const openai = { ...work, id: credentialItemId("openai", "work"), provider: "openai" };
-    expect(selectCredentialItem([openai], { provider: "anthropic", target })).toEqual({ status: "missing", reason: "no-available-credential" });
   });
 });

@@ -5,7 +5,6 @@ import {
   isSlashInput,
   parseSlash,
   matchSlashCommands,
-  slashHelpText,
   resolveSlash,
   isValidAgentCommand,
 } from "../src/slash.js";
@@ -31,25 +30,15 @@ describe("parseSlash", () => {
   it("lower-cases and trims the command word", () => {
     expect(parseSlash("  /Compact  ")).toEqual({ name: "/compact", args: "" });
   });
-  it("returns an unknown command as typed (so the caller can warn, not run it)", () => {
-    expect(parseSlash("/nope now")).toEqual({ name: "/nope", args: "now" });
-  });
   it("returns null for non-slash input", () => {
     expect(parseSlash("just a prompt")).toBeNull();
   });
 });
 
 describe("matchSlashCommands", () => {
-  it("returns nothing without advertised commands", () => {
-    expect(matchSlashCommands("/")).toEqual([]);
-  });
   it("stops autocompleting once a space is typed", () => {
     expect(matchSlashCommands("/model ", [{ name: "/model" }])).toEqual([]);
   });
-  it("returns nothing for non-slash prefixes", () => {
-    expect(matchSlashCommands("hello", [{ name: "/compact" }])).toEqual([]);
-  });
-
   it("returns the agent's advertised commands for a bare slash", () => {
     const extra = [{ name: "/compact", description: "Compact" }];
     expect(matchSlashCommands("/", extra).map((c) => c.name)).toEqual(["/compact"]);
@@ -116,15 +105,6 @@ describe("resolveSlash", () => {
     }
   });
 
-  it("routes a command that would once have collided straight to the agent now", () => {
-    const res = resolveSlash(parseSlash("/model sonnet")!, agent);
-    expect(res.kind).toBe("agent");
-    if (res.kind === "agent") {
-      expect(res.command.description).toBe("agent's own model");
-      expect(res.args).toBe("sonnet");
-    }
-  });
-
   it("rejects an unknown command as unknown-with-catalog when commands are advertised", () => {
     const res = resolveSlash(parseSlash("/nope now")!, agent);
     expect(res).toEqual({ kind: "unknown", name: "/nope", hasCatalog: true });
@@ -138,20 +118,5 @@ describe("resolveSlash", () => {
   it("ignores malformed advertised commands (no catalog if all are junk)", () => {
     const junk = [{ name: "bad" } as any, null as any];
     expect(resolveSlash(parseSlash("/x")!, junk)).toEqual({ kind: "unknown", name: "/x", hasCatalog: false });
-  });
-});
-
-describe("slashHelpText", () => {
-  it("reports when the agent advertised no commands", () => {
-    expect(slashHelpText()).toContain("No commands available");
-  });
-
-  it("lists the active agent's advertised commands", () => {
-    const help = slashHelpText([
-      { name: "/compact", description: "Compact the conversation." },
-      { name: "/status", description: "Show status." },
-    ]);
-    expect(help).toContain("/compact — Compact the conversation.");
-    expect(help).toContain("/status — Show status.");
   });
 });

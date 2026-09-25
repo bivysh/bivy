@@ -3,7 +3,6 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 
-import { readFileSync } from "node:fs";
 import { AGENT_PROFILES } from "../src/agents/profiles.js";
 
 function assertDataOnly(value: unknown, path: string): void {
@@ -20,27 +19,3 @@ test("agent profiles are entirely declarative and structured-cloneable", () => {
   assert.doesNotThrow(() => structuredClone(AGENT_PROFILES));
 });
 
-test("maintained wrapper variations are named profile behavior data", () => {
-  assert.deepEqual(AGENT_PROFILES.codex.behaviors, {
-    preflight: "codex",
-    slashCommands: "codex",
-    sessionStore: "codex",
-  });
-  assert.deepEqual(AGENT_PROFILES.opencode.behaviors, {
-    preflight: "opencode",
-    slashCommands: "opencode",
-    sessionStore: "opencode",
-  });
-  assert.deepEqual(AGENT_PROFILES.grok.behaviors, {
-    preflight: "grok",
-    prepare: "grok-auth",
-    nativeSessions: "grok",
-  });
-
-  const runtime = readFileSync(new URL("../src/runtime/index.ts", import.meta.url), "utf8");
-  assert.doesNotMatch(
-    runtime,
-    /id\s*===\s*["'](?:codex|opencode|grok)["']/,
-    "the generic runtime wrapper must interpret behavior values instead of branching on maintained agent ids",
-  );
-});

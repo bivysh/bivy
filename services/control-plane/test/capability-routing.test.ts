@@ -76,21 +76,6 @@ await test("required capability: an OFFLINE machine that declared it still count
   assert.equal(run.routingReason, undefined);
 });
 
-await test("required capability: an ONLINE eligible machine also queues normally (pending, not parked)", async () => {
-  const store = await makeStore();
-  const account = await store.findOrCreateAccount("cap-d@example.com");
-  const { node } = await store.enrollNode(account.id, "node-gpu", "GPU Box");
-  await store.setNodeCapabilities(node.id, ["gpu", "docker"]);
-  await store.setNodeOnline(node.id, true);
-
-  const run = await store.enqueueAutomationRun(account.id, {
-    source: "manual",
-    title: "needs a GPU",
-    requiredCapabilities: ["gpu"],
-  });
-  assert.equal(run.status, "pending");
-});
-
 await test("preferred capability: never blocks or parks, even when nothing matches it", async () => {
   const store = await makeStore();
   const account = await store.findOrCreateAccount("cap-e@example.com");

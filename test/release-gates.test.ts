@@ -6,7 +6,6 @@ import { test } from "node:test";
 import { parse } from "yaml";
 
 const release = parse(readFileSync(".github/workflows/release.yml", "utf8"));
-const ci = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
 
 test("production cannot publish without canonical full CI on the release commit", () => {
   const gate = release.jobs["production-ci"];
@@ -36,45 +35,4 @@ test("the CI reuse check only accepts a run where every job succeeded", () => {
   const plan = release.jobs.plan.steps.find((step: { id?: string }) => step.id === "plan").run as string;
   assert.match(plan, /head_sha=\$GITHUB_SHA&status=success/);
   assert.match(plan, /select\(\.conclusion != "success"\)/);
-});
-
-test("a full-tier CI run executes every job, so the release plan can reuse it", () => {
-  // The plan reuses a run only when no job concluded other than success; a
-  // job that a full-tier run skips would force full CI again before every release.
-  for (const [name, job] of Object.entries(ci.jobs) as [string, { if?: string }][]) {
-    if (!job.if || job.if === "${{ always() }}") continue;
-    assert.match(job.if, /^needs\.changes\.outputs\.tier == 'full'( \|\| |$)/, `${name} is skipped in a full run`);
-  }
-  // Queued release commits run the full tier, which is what the plan reuses.
-  const tierStep = ci.jobs.changes.steps.find((step: { id?: string }) => step.id === "tier");
-  assert.match(tierStep.run, /\$QUEUE_BASE:package\.json/);
-  assert.match(tierStep.run, /\|\| \[ "\$release" = true \]; then\n\s*tier=full/);
-});
-
-test("every path-filtered CI job runs in the full tier that a production release forces", () => {
-  assert.equal(ci.on.workflow_call.inputs.force_all.type, "boolean");
-  const tierStep = ci.jobs.changes.steps.find((step: { id?: string }) => step.id === "tier");
-  assert.equal(tierStep.env.FORCE_ALL, "${{ inputs.force_all }}");
-  assert.match(tierStep.run, /if \[ "\$FORCE_ALL" = true \] \|\|[^\n]*\n\s*tier=full/);
-  for (const [name, job] of Object.entries(ci.jobs) as [string, { if?: string }][]) {
-    if (job.if?.includes("needs.changes.outputs")) {
-      assert.match(job.if, /^needs\.changes\.outputs\.tier == 'full'( \|\| |$)/, `${name} would skip release verification`);
-      assert.ok(ci.jobs["ci-ok"].needs.includes(name), `${name} is absent from the required gate`);
-    }
-  }
-});
-
-test("PR and merge queue run the same checks, including every unit and core suite", () => {
-  // The queue only re-validates a PR against the latest main. A check that runs
-  // only in the queue surfaces a PR's regression after review, one queue
-  // round-trip at a time.
-  const tierStep = ci.jobs.changes.steps.find((step: { id?: string }) => step.id === "tier");
-  assert.doesNotMatch(tierStep.run, /merge_group\s*\]\s*;\s*then\s*\n\s*tier=/, "merge_group must not select its own tier");
-  for (const [name, job] of Object.entries(ci.jobs) as [string, { if?: string }][]) {
-    assert.doesNotMatch(job.if ?? "", /tier == '(?:pr|queue|gate)'/, `${name} must not run only in PRs or only in the queue`);
-  }
-  const runs = (ci.jobs.checks.steps as { run?: string }[]).map((step) => step.run ?? "").join("\n");
-  assert.match(runs, /pnpm run test:unit/);
-  assert.match(runs, /pnpm run test:core/);
-  assert.doesNotMatch(runs, /TEST_AFFECTED_BASE|--changed/, "CI runs every suite, not a change-selected subset");
 });

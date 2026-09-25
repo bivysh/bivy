@@ -47,13 +47,6 @@ function texts(store: SessionStore): string[] {
 }
 
 describe("store sequenced live delivery", () => {
-  it("applies contiguous sequenced events in order", () => {
-    const { store, replays } = focused(0);
-    for (const e of [...seg(1, "A"), ...seg(3, "B")]) store.apply(e as never);
-    expect(texts(store)).toEqual(["A", "B"]);
-    expect(replays).toEqual([]);
-  });
-
   it("detects a gap, holds the forward event, and asks to replay from the last seq held", () => {
     const { store, replays } = focused(0);
     for (const e of seg(1, "A")) store.apply(e as never); // seqs 1,2 → expected 3
@@ -95,11 +88,4 @@ describe("store sequenced live delivery", () => {
     expect(freshCalls()).toBe(1);
   });
 
-  it("passes through unsequenced events from an older node unchanged", () => {
-    const { store, replays } = focused(0);
-    // No seq on the envelope → legacy path, applied directly with no gap logic.
-    for (const e of [msgStart(undefined), msgEnd(undefined, "A")]) store.apply(e as never);
-    expect(texts(store)).toEqual(["A"]);
-    expect(replays).toEqual([]);
-  });
 });

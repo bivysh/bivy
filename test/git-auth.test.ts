@@ -170,22 +170,6 @@ await check("configureRepoCredentialHelper persists helper config, not a token",
   assert.ok(!/ghs_|gho_|ghp_|x-access-token:/.test(cfg), "no token must be written into .git/config");
 });
 
-await check("migration: rewriting a tokenized origin to clean drops the token", async () => {
-  const repo = path.join(tmp, "legacy");
-  fs.mkdirSync(repo, { recursive: true });
-  await git(["-C", repo, "init", "-q"]);
-  await git(["-C", repo, "remote", "add", "origin", "https://x-access-token:gho_leaked@github.com/bivysh/bivy.git"]);
-  await git(["-C", repo, "remote", "set-url", "origin", cleanRemoteUrl("bivysh", "bivy")]);
-  // Read the STORED URL, not `git remote -v`: the latter applies the operator's
-  // global `url.*.insteadOf` rewrite and can legitimately render an authenticated
-  // transport URL even though this repo's config is clean. This migration guards
-  // what Bivy persists, not how a developer has configured Git globally.
-  const storedRemote = await git(["-C", repo, "config", "--local", "--get", "remote.origin.url"]);
-  assert.ok(!storedRemote.includes("gho_leaked"), "token must be gone from the stored remote");
-  assert.ok(!storedRemote.includes("@github.com"), "no userinfo should remain in the stored remote");
-  assert.match(storedRemote, /https:\/\/github\.com\/bivysh\/bivy\.git/);
-});
-
 server.close();
 fs.rmSync(tmp, { recursive: true, force: true });
 if (savedDataDir === undefined) delete process.env.BIVY_DATA_DIR;

@@ -225,28 +225,6 @@ function requireKeyring(): Keyring {
   return keyring;
 }
 
-/** Hosted-key boundary retained for callers that use an async provider API. */
-export interface HostedKeyProvider {
-  available(): Promise<boolean>;
-  primaryKeyId(): Promise<string | null>;
-  encrypt(accountId: string, plaintext: string): Promise<SecretEnvelope>;
-  decrypt(accountId: string, envelope: SecretEnvelope): Promise<string>;
-}
-
-let configuredProvider: HostedKeyProvider | null = null;
-export function setHostedKeyProvider(provider: HostedKeyProvider | null): void { configuredProvider = provider; }
-export function hostedKeyProvider(): HostedKeyProvider { return configuredProvider ?? environmentHostedKeyProvider; }
-
-export const environmentHostedKeyProvider: HostedKeyProvider = {
-  available: async () => hostedEncryptionAvailable(),
-  primaryKeyId: async () => hostedPrimaryKid(),
-  encrypt: async (accountId, plaintext) => encryptSecret(accountId, plaintext),
-  decrypt: async (accountId, envelope) => decryptSecret(accountId, envelope),
-};
-
-export const encryptHostedSecret = (accountId: string, plaintext: string) => hostedKeyProvider().encrypt(accountId, plaintext);
-export const decryptHostedSecret = (accountId: string, envelope: SecretEnvelope) => hostedKeyProvider().decrypt(accountId, envelope);
-
 export function hostedEncryptionAvailable(): boolean { return loadKeyring() != null; }
 export function hostedPrimaryKid(): string | null { return loadKeyring()?.primaryKid ?? null; }
 

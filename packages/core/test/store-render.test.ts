@@ -138,20 +138,6 @@ describe("renderHistory block interleaving", () => {
     expect(tool?.result).toBe("workspace");
   });
 
-  it("handles string content and text-only assistant messages unchanged", () => {
-    const entries = renderHistory([{ role: "assistant", content: "just text" }]);
-    expect(entries).toHaveLength(1);
-    expect(entries[0]).toMatchObject({ role: "assistant", text: "just text" });
-  });
-
-  it("renders a tool with no surrounding prose as a single card", () => {
-    const entries = renderHistory([
-      { role: "assistant", content: [{ type: "tool_use", id: "x", name: "bash", input: { command: "ls" } }] },
-    ]);
-    expect(entries).toHaveLength(1);
-    expect(entries[0].tool?.callId).toBe("x");
-  });
-
   it("closes a tool_use whose tool_result is echoed inside a role:user message (the fork/reload shape)", () => {
     // Claude Code / pi persist tool results as tool_result blocks inside a
     // role:"user" message. A forked session is rebuilt purely from this

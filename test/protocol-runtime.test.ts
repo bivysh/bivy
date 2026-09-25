@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ProtocolRuntime, protocolCommandsFromEnv } from "../src/runtime/protocol.js";
-import type { RuntimeEvent } from "../src/runtime/types.js";
+import type { RuntimeEvent, ForkNativePayload } from "../src/runtime/types.js";
+import { test } from "node:test";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const fixture = path.join(__dirname, "fixtures/protocol-agent.mjs");
@@ -464,3 +465,116 @@ assert.ok(ungovernedEvents.some((event) => event.type === "tool_result"), "the t
 ungovernedSession.dispose();
 
 console.log("protocol-runtime: all tests passed");
+
+// --- merged from protocol-fork-transport.test.ts ---
+{
+  // The constructor sets capabilities + wires the delegating methods without ever
+  // spawning the child, so these assert the native-transport plumbing in isolation.
+
+  test("forkTransport is advertised only when BOTH hooks are present", () => {
+    const neither = new ProtocolRuntime({ command: "node", id: "x" });
+    assert.equal(neither.capabilities.forkTransport, undefined);
+
+    const exportOnly = new ProtocolRuntime({ command: "node", id: "x", exportForFork: () => undefined });
+    assert.notEqual(exportOnly.capabilities.forkTransport, true, "export alone is inert");
+
+    const both = new ProtocolRuntime({
+      command: "node",
+      id: "codex",
+      exportForFork: () => ({ runtimeId: "ignored", kind: "k", data: {} }),
+      importForFork: async () => ({ sessionFile: "s", id: "s" }),
+    });
+    assert.equal(both.capabilities.forkTransport, true, "both hooks → forkTransport");
+  });
+
+  test("exportForFork stamps this runtime's id (so the engine imports into a match)", () => {
+    const rt = new ProtocolRuntime({
+      command: "node",
+      id: "codex",
+      exportForFork: () => ({ runtimeId: "whatever", kind: "codex-rollout", data: { jsonl: "x" } }),
+      importForFork: async () => ({ sessionFile: "s", id: "s" }),
+    });
+    const payload = rt.exportForFork("ref");
+    assert.equal(payload?.runtimeId, "codex", "runtimeId overwritten to the runtime's own id");
+    assert.equal(payload?.kind, "codex-rollout");
+  });
+
+  test("exportForFork returns undefined when the hook has nothing to export", () => {
+    const rt = new ProtocolRuntime({ command: "node", id: "codex", exportForFork: () => undefined, importForFork: async () => ({ sessionFile: "s", id: "s" }) });
+    assert.equal(rt.exportForFork("ref"), undefined);
+  });
+
+  test("importForFork delegates to the hook", async () => {
+    let received: ForkNativePayload | undefined;
+    const rt = new ProtocolRuntime({
+      command: "node",
+      id: "codex",
+      exportForFork: () => undefined,
+      importForFork: async (payload, ctx) => { received = payload; return { sessionFile: ctx.cwd, id: "new" }; },
+    });
+    const out = await rt.importForFork({ runtimeId: "codex", kind: "codex-rollout", data: { jsonl: "x" } }, { workspace: "/w", cwd: "/w/cwd" });
+    assert.equal(out.id, "new");
+    assert.equal(out.sessionFile, "/w/cwd");
+    assert.equal(received?.kind, "codex-rollout");
+  });
+
+  test("importForFork throws when no hook is configured", async () => {
+    const rt = new ProtocolRuntime({ command: "node", id: "x" });
+    await assert.rejects(() => rt.importForFork({ runtimeId: "x", kind: "k", data: {} }, { workspace: "/w", cwd: "/w" }), /does not support native fork transport/);
+  });
+}
+
+// --- merged from protocol-runtime-tool-observe.test.ts ---
+{
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const fixture = path.join(__dirname, "fixtures/protocol-agent.mjs");
+
+  function waitFor(events: RuntimeEvent[], pred: (event: RuntimeEvent) => boolean, timeoutMs = 3000): Promise<RuntimeEvent> {
+    const existing = events.find(pred);
+    if (existing) return Promise.resolve(existing);
+    return new Promise((resolve, reject) => {
+      const started = Date.now();
+      const timer = setInterval(() => {
+        const event = events.find(pred);
+        if (event) { clearInterval(timer); resolve(event); return; }
+        if (Date.now() - started > timeoutMs) { clearInterval(timer); reject(new Error("timed out waiting for observed tool")); }
+      }, 10);
+    });
+  }
+
+  const runtime = new ProtocolRuntime({
+    id: "codex-observe-fixture",
+    command: process.execPath,
+    args: [fixture],
+    env: { FIXTURE_OBSERVED_TOOL: "1" },
+    displayName: "Observed Tool Fixture",
+  });
+
+  const decisions: unknown[] = [];
+  const { session } = await runtime.createSession({
+    workspace: process.cwd(),
+    toolInterceptor: async (ctx) => { decisions.push(ctx); return undefined; },
+  });
+  assert.equal(runtime.capabilities.toolInterception, true, "fixture can normally gate tools");
+
+  const events: RuntimeEvent[] = [];
+  session.subscribe((event) => events.push(event));
+  await session.prompt("delegate a task");
+  await waitFor(events, (event) => event.type === "agent_end");
+
+  const call = events.find((event) => event.type === "tool_call") as (RuntimeEvent & { detail?: { kind?: string; label?: string } }) | undefined;
+  assert.ok(call, "observed activity streams a live tool card");
+  assert.equal(call?.detail?.kind, "delegation", "Codex collaboration renders as sub-agent work");
+  assert.equal(call?.detail?.label, "explorer");
+  assert.equal(decisions.length, 0, "observed activity never asks for retroactive approval");
+  assert.ok(events.some((event) => event.type === "tool_result"), "observed activity completes normally");
+
+  const messages = session.getMessages() as Array<{ content?: unknown }>;
+  const serialized = JSON.stringify(messages);
+  assert.match(serialized, /tool_use/, "observed call persists in transcript history");
+  assert.match(serialized, /spawn_agent/, "persisted call keeps its delegation identity");
+  assert.match(serialized, /tool_result/, "observed result persists with the call");
+
+  session.dispose();
+  console.log("protocol-runtime-tool-observe: ok");
+}

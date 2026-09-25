@@ -13,12 +13,6 @@ test("disabled when minFreeBytes <= 0 → always allowed", () => {
   assert.equal(d.allowed, true);
 });
 
-test("allows when free space is above the floor", () => {
-  const d = checkDiskAdmission("/x", { minFreeBytes: 1000, statfs: statfsWithFree(5000) });
-  assert.equal(d.allowed, true);
-  assert.equal(d.freeBytes, 5000);
-});
-
 test("denies when free space is below the floor, with a reason", () => {
   const d = checkDiskAdmission("/x", { minFreeBytes: 10_000_000, statfs: statfsWithFree(1_000_000) });
   assert.equal(d.allowed, false);

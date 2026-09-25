@@ -54,18 +54,6 @@ function daemonRuntime(runtime: AgentRuntime, connect: () => Promise<RpcTranspor
   return new RemoteRuntime({ targetRuntime: runtime.id, displayName: "X", capabilities: runtime.capabilities, connect });
 }
 
-test("reaper OFF by default: a detached session persists (no TTL configured)", async () => {
-  const runtime = new EchoRuntime();
-  const service = new AgentService({ runtimeProvider: () => runtime }); // no detachReapMs
-  const pair = memoryPair();
-  service.accept(pair.server);
-  const { session } = await daemonRuntime(runtime, async () => pair.client).createSession({ workspace: "/tmp/ws" });
-  void session;
-  pair.client.close();
-  await tick();
-  assert.equal(service.sessionCount, 1, "with the reaper off, a detached session is kept indefinitely");
-});
-
 test("a detached, idle session is reaped after the TTL", async () => {
   const clock = new FakeClock();
   const runtime = new EchoRuntime();

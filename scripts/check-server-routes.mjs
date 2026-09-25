@@ -36,4 +36,25 @@ if (duplicates.length) {
   process.exit(1);
 }
 
-console.log(`✓ ${routes.length} Express routes have unique method/path pairs.`);
+// Express runs middleware in registration order, so an /api route declared
+// before the auth middleware is public. Only these may be.
+const PUBLIC_API_ROUTES = new Set([
+  "GET /api/integrations/oauth/callback",
+  "GET /api/git-credential",
+  "POST /api/auth/bootstrap",
+]);
+const authLine = source.split("\n").findIndex((line) => line.includes('app.use("/api", authMiddleware(')) + 1;
+if (authLine === 0) {
+  console.error('src/server.ts no longer registers app.use("/api", authMiddleware(...)); update this check.');
+  process.exit(1);
+}
+const unauthenticated = literalRoutes.filter((route) =>
+  route.line < authLine && route.path.startsWith("/api") && !PUBLIC_API_ROUTES.has(`${route.method} ${route.path}`));
+if (unauthenticated.length) {
+  console.error(`/api routes registered before the auth middleware (src/server.ts:${authLine}) are public:`);
+  for (const route of unauthenticated) console.error(`  ${route.method} ${route.path} (line ${route.line})`);
+  console.error("Move them after authMiddleware, or add them to PUBLIC_API_ROUTES if they must be public.");
+  process.exit(1);
+}
+
+console.log(`✓ ${routes.length} Express routes have unique method/path pairs; only ${PUBLIC_API_ROUTES.size} allowlisted /api routes precede auth.`);

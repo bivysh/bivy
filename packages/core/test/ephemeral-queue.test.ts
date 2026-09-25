@@ -15,10 +15,6 @@ import {
 // label + (optional) GitHub token, all without ever touching the control plane.
 
 describe("ephemeralNodeLabel", () => {
-  it("strips the eph- prefix off a generated node id", () => {
-    expect(ephemeralNodeLabel("eph-ab12cd34")).toBe("ab12cd34");
-  });
-
   it("passes through a value with no eph- prefix unchanged", () => {
     expect(ephemeralNodeLabel("some-other-id")).toBe("some-other-id");
   });

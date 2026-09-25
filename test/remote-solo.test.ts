@@ -34,7 +34,3 @@ test("buildDialUrl (solo) presents room + roomToken, url-encoded", () => {
   );
 });
 
-test("buildDialUrl strips exactly one trailing slash from the base", () => {
-  assert.equal(buildDialUrl("wss://r", "node", { ticket: "t" }), "wss://r/node?ticket=t");
-  assert.equal(buildDialUrl("wss://r/", "node", { ticket: "t" }), "wss://r/node?ticket=t");
-});

@@ -3,7 +3,6 @@ import {
   interpretTokenResponse,
   requestDeviceCode,
   deviceFlowClientId,
-  REPO_CONNECT_SCOPE,
 } from "../src/github-device-auth.js";
 
 /**
@@ -16,10 +15,6 @@ const tests: Array<{ name: string; fn: () => Promise<void> | void }> = [];
 function test(name: string, fn: () => Promise<void> | void) {
   tests.push({ name, fn });
 }
-
-test("scope is the repo scope (not minimal login scope)", () => {
-  assert.equal(REPO_CONNECT_SCOPE, "repo");
-});
 
 test("clientId comes from env, undefined when unset", () => {
   assert.equal(deviceFlowClientId({ BIVY_GITHUB_OAUTH_CLIENT_ID: " abc " }), "abc");

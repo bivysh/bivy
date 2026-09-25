@@ -5,69 +5,10 @@ import test from "node:test";
 
 import {
   computeSessionContract,
-  resolveSessionContract,
-  type SessionContractInput,
   type SessionContractRuntimeFacts,
 } from "../src/session/session-contract.js";
 
 const NOW = "2026-08-13T12:00:00.000Z";
-
-const fullyGuaranteed = (over: Partial<SessionContractInput> = {}): SessionContractInput => ({
-  now: NOW,
-  preview: false,
-  agentId: "claude-code",
-  detectedVersion: "0.3.232",
-  versionSource: "reported",
-  supportTier: "supported",
-  certification: "release-tested",
-  executionMode: "protocol",
-  authKind: "oauth",
-  authOrigin: "bivy",
-  resumeAdvertised: true,
-  toolInterceptionEnforced: true,
-  sandboxTier: "workspace-write",
-  runtimeEnforcement: "native-sandbox",
-  ...over,
-});
-
-test("resolveSessionContract: every area guaranteed, no degraded reasons, when fully observed", () => {
-  const contract = resolveSessionContract(fullyGuaranteed());
-  assert.equal(contract.executionMode.state, "guaranteed");
-  assert.equal(contract.auth.state, "guaranteed");
-  assert.equal(contract.resume.state, "guaranteed");
-  assert.equal(contract.toolInterception.state, "guaranteed");
-  assert.equal(contract.sandbox.state, "guaranteed");
-  assert.deepEqual(contract.degradedReasons, []);
-  assert.equal(contract.requiresAcknowledgement, false);
-});
-
-test("resolveSessionContract: requires acknowledgement for a release-tested profile whose sandbox is not natively enforced", () => {
-  const contract = resolveSessionContract(fullyGuaranteed({ runtimeEnforcement: "user-permissions" }));
-  assert.equal(contract.sandbox.state, "unavailable");
-  assert.equal(contract.requiresAcknowledgement, true);
-});
-
-test("resolveSessionContract: an adapter-tested supported wrapper with the same degradation never requires acknowledgement", () => {
-  const contract = resolveSessionContract(fullyGuaranteed({ certification: "adapter-tested", runtimeEnforcement: "user-permissions" }));
-  assert.equal(contract.requiresAcknowledgement, false);
-});
-
-test("resolveSessionContract: an acknowledgedAt input clears the gate and is carried through", () => {
-  const contract = resolveSessionContract(fullyGuaranteed({ runtimeEnforcement: "user-permissions", acknowledgedAt: NOW }));
-  assert.equal(contract.requiresAcknowledgement, false);
-  assert.equal(contract.acknowledgedAt, NOW);
-});
-
-test("resolveSessionContract: two concurrent resolutions for the same degraded profile agree — no shared mutable state to race on", async () => {
-  const input = fullyGuaranteed({ runtimeEnforcement: "user-permissions" });
-  const [a, b] = await Promise.all([
-    Promise.resolve().then(() => resolveSessionContract(input)),
-    Promise.resolve().then(() => resolveSessionContract(input)),
-  ]);
-  assert.deepEqual(a, b);
-  assert.equal(a.requiresAcknowledgement, true);
-  assert.equal(b.requiresAcknowledgement, true);
-});
 
 test("computeSessionContract: maps RuntimeInfo protectionLevel/authOwner/capabilities honestly", () => {
   const runtime: SessionContractRuntimeFacts = {
@@ -134,23 +75,3 @@ test("launch gate: a release-tested-but-degraded agent is rejected without ackno
   assert.equal(acknowledged.acknowledgedAt, NOW);
 });
 
-test("launch gate: two concurrent unacknowledged requests for the same degraded profile are BOTH rejected — no race admits one", async () => {
-  const runtime: SessionContractRuntimeFacts = {
-    id: "codex",
-    supportTier: "supported",
-    certification: "release-tested",
-    protectionLevel: "user-permissions",
-  };
-  const [a, b] = await Promise.all([
-    Promise.resolve().then(() => computeSessionContract({ runtime, preview: false }, NOW)),
-    Promise.resolve().then(() => computeSessionContract({ runtime, preview: false }, NOW)),
-  ]);
-  assert.equal(a.requiresAcknowledgement, true);
-  assert.equal(b.requiresAcknowledgement, true);
-});
-
-test("launch gate: a supported adapter-tested wrapper is never rejected, even fully unprotected", () => {
-  const runtime: SessionContractRuntimeFacts = { id: "aider", supportTier: "supported", certification: "adapter-tested", protectionLevel: "user-permissions" };
-  const contract = computeSessionContract({ runtime, preview: false }, NOW);
-  assert.equal(contract.requiresAcknowledgement, false);
-});

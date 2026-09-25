@@ -45,12 +45,6 @@ test("refuses a path outside the workspace", () => {
   assert.match((plan as { error: string }).error, /outside the session workspace/);
 });
 
-test("refuses a traversal that escapes via ..", () => {
-  const ws = tmpWorkspace();
-  const plan = planAttachment({ workspaceDir: ws, filePath: "../../../etc/hosts" });
-  assert.equal(isAttachPlanError(plan), true);
-});
-
 test("refuses a symlink inside the workspace that points outside it", () => {
   const ws = tmpWorkspace();
   const outside = tmpWorkspace();

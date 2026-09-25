@@ -136,11 +136,6 @@ describe("fly adapter — provision", () => {
     expect(machineConfig(create).guest).toEqual({ cpu_kind: "shared", cpus: 8, memory_mb: 16384 });
   });
 
-  it("catalogs the 8 vCPU / 16 GB size with an indicative price", () => {
-    const size = ephemeralAdapter("fly")!.sizes.find((s) => s.id === "shared-8x-16gb")!;
-    expect(size).toMatchObject({ vcpus: 8, memoryMiB: 16384, architecture: "x86_64", pricePerHour: 0.1234, priceSource: "indicative" });
-  });
-
   it("rejects unsupported cloud-init before creating any billable resource", async () => {
     const { exec, calls } = fakeFlyExec();
     const adapter = ephemeralAdapter("fly")!;

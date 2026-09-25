@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import assert from "node:assert/strict";
 import test from "node:test";
-import { publicManagedLaunchError } from "../services/control-plane/src/managed-launch-error.js";
+import { publicManagedLaunchError } from "../src/managed-launch-error.js";
 
 test("missing manifests produce an actionable but credential-free diagnostic", () => {
   const result = publicManagedLaunchError(new Error('Provider failed to create machine (HTTP 400: failed to get manifest registry/private:tag MANIFEST_UNKNOWN secret-token)'));

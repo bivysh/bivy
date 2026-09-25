@@ -302,12 +302,53 @@ const explicitFacadeChecks = [
     reject: new RegExp(`export\\s*\\*\\s*from\\s*["']\\./${specifier.replace(".", "\\.")}["']`),
     reason: `the core entrypoint must explicitly export supported ${specifier} symbols`,
   })),
+  // AGENTS.md: generalize the agent wrapper. The runtime interprets profile
+  // behavior data; it never branches on a maintained agent's id.
+  {
+    file: "src/runtime/index.ts",
+    reject: /\bid\s*===\s*["'](?:codex|opencode|grok|claude-code|pi|gemini)["']/,
+    reason: "the generic runtime wrapper must interpret profile behavior data, not branch on agent ids",
+  },
+  // Coordinators receive state and effects as explicit ports.
+  ...fs.readdirSync(path.join(repoRoot, "packages/web/src/store/coordinators"))
+    .filter((name) => name.endsWith(".ts"))
+    .map((name) => ({
+      file: `packages/web/src/store/coordinators/${name}`,
+      reject: /\bSessionStore\b|provider-interpreters/,
+      reason: "coordinators take explicit ports, never the store class or provider interpreters",
+    })),
+  // Attachments and artifacts are end-to-end encrypted between a node and its
+  // devices (docs/security-model.md); the control plane never touches them.
+  ...walk("services/control-plane/src").map((file) => ({
+    file,
+    reject: /attachment-store|AttachmentStore|attach-to-chat|PromptAttachment|artifacts\.(?:js|ts)|deriveArtifacts/,
+    reason: "the control plane must not reference the node's attachment/artifact machinery",
+  })),
+  // Control-plane store: narrow repository ports, one explicit transaction context.
+  { file: "services/control-plane/src/store.ts", reject: /MeshStore/, reason: "the monolithic MeshStore surface must not return" },
+  ...walk("services/control-plane/src")
+    .filter((file) => !/\/(store|postgres-store|store-factory)\.ts$/.test(file))
+    .map((file) => ({
+      file,
+      reject: /\bControlPlaneStore\b/,
+      reason: "consumers depend on narrow repository ports, not the aggregate ControlPlaneStore",
+    })),
+  {
+    file: "services/control-plane/src/postgres-store.ts",
+    reject: /this\.pool|query\("BEGIN"\)/,
+    reason: "repositories use the explicit PostgresDatabaseContext / transaction context",
+  },
+  {
+    file: "services/control-plane/src/store.ts",
+    reject: /\bartifact(?!url)\w*\s*[?:]/i,
+    reason: "the only artifact field on control-plane records is artifactUrl, an external link",
+  },
 ];
 const facadeViolations = explicitFacadeChecks.filter(({ file, reject }) =>
   reject.test(fs.readFileSync(path.join(repoRoot, file), "utf8")),
 );
-console.log(`\n[${facadeViolations.length ? "FAIL" : "CLEAN"}] core-facades-have-explicit-exports  — ${facadeViolations.length} violation(s)`);
-console.log("        touched compatibility facades enumerate their supported exports.");
+console.log(`\n[${facadeViolations.length ? "FAIL" : "CLEAN"}] source-pattern-rules  — ${facadeViolations.length} violation(s)`);
+console.log("        explicit facade exports, no agent-id branching, port-only coordinators, no attachments in the control plane.");
 for (const violation of facadeViolations) console.log(`        ${violation.file}  → ${violation.reason}`);
 if (facadeViolations.length) {
   totalViolations += facadeViolations.length;

@@ -18,19 +18,6 @@ describe("tool progress ping does not clobber a running tool's input", () => {
     return store;
   }
 
-  it("keeps the original command after an elapsedSeconds-only update (no detail)", () => {
-    const store = play([
-      { type: "agent_start" },
-      { type: "turn_start" },
-      { type: "tool_call", toolName: "some_unclassified_tool", input: { command: "run-the-thing --flag" }, toolCallId: "t1" },
-      { type: "tool_execution_update", toolName: "some_unclassified_tool", toolCallId: "t1", input: { elapsedSeconds: 7 } },
-    ]);
-    const card = store.getState().activeSession.transcript.find((e) => e.tool?.callId === "t1")?.tool;
-    expect(card).toBeTruthy();
-    expect(card!.status).toBe("running");
-    expect(card!.input).toMatchObject({ command: "run-the-thing --flag", elapsedSeconds: 7 });
-  });
-
   it("still lets a later enriching update win per key (e.g. late rawInput)", () => {
     const store = play([
       { type: "agent_start" },

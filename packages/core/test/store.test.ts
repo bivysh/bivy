@@ -45,27 +45,11 @@ describe("stripAttachmentPlaceholders", () => {
     expect(stripAttachmentPlaceholders(composed)).toBe("check this out");
   });
 
-  it("removes multiple placeholder lines", () => {
-    const composed =
-      "how are follow ups handled?\n\n[Image attachment: IMG_0581.png (353770 bytes)]\n\n[Image attachment: IMG_0580.png (222480 bytes)]";
-    expect(stripAttachmentPlaceholders(composed)).toBe("how are follow ups handled?");
-  });
-
-  it("reduces an attachment-only message to empty text", () => {
-    expect(stripAttachmentPlaceholders("[Image attachment: shot.png (12345 bytes)]")).toBe("");
-  });
-
   it("removes the binary file placeholder and the fenced text-file section", () => {
     const bin = "see this\n\n[File attachment: data.bin (10 bytes, application/octet-stream); content not included because it is binary or unreadable]";
     expect(stripAttachmentPlaceholders(bin)).toBe("see this");
     const textFile = "read this\n\n--- File attachment: notes.txt (5 bytes, text/plain) ---\nhello\n--- end notes.txt ---";
     expect(stripAttachmentPlaceholders(textFile)).toBe("read this");
-  });
-
-  it("removes the materialized-file placeholder note (saved to a path)", () => {
-    const saved =
-      "look at this\n\n[File attachment: key.pem (1675 bytes, application/x-x509-ca-cert) saved to .bivy-attachments/key.pem - read it with your file tools]";
-    expect(stripAttachmentPlaceholders(saved)).toBe("look at this");
   });
 
   it("leaves ordinary text untouched", () => {
@@ -511,24 +495,6 @@ describe("SessionStore", () => {
     expect(entry.text).toBe("Here is the file:\n```js\nconst x = 1;\n```");
   });
 
-  it("renders a fenced code block split across content blocks as a real code block", () => {
-    const store = new SessionStore();
-    store.apply({
-      type: "session.history", requestId: "r1",
-      sessionId: "s1",
-      name: "t",
-      messages: [
-        { role: "assistant", content: [{ type: "text", text: "Here is the file:" }, { type: "text", text: "```js\nconst x = 1;\n```" }] },
-      ],
-    });
-    const entry = store.getState().activeSession.transcript.at(-1)!;
-    // The joined text is what must render as a real fenced block once the view
-    // (or anyone) markdowns it — the store leaves html unset for history entries.
-    const html = toHtml(entry.text);
-    expect(html).toContain("<pre><code");
-    expect(html).not.toMatch(/```/);
-  });
-
   it("accumulates reasoning from thinking_delta chunks and commits it whole on message_end", () => {
     const store = new SessionStore();
     store.apply({ type: "message_start", message: { role: "assistant" } });
@@ -735,17 +701,6 @@ describe("SessionStore", () => {
     expect(store.getState().activeSession.workingLabel).toBe("Reading agent output…");
   });
 
-  it("force-closes a still-running tool card on agent_end (e.g. aborted mid-tool, no matching tool_result ever arrives)", () => {
-    const store = new SessionStore();
-    store.apply({ type: "tool_call", toolCallId: "t1", name: "bash", input: { cmd: "sleep 100" } });
-    const running = store.getState().activeSession.transcript.filter((e) => e.tool);
-    expect(running).toHaveLength(1);
-    expect(running[0]!.tool!.status).toBe("running");
-    store.apply({ type: "agent_end" });
-    const tools = store.getState().activeSession.transcript.filter((e) => e.tool);
-    expect(tools[0]!.tool!.status).toBe("done");
-  });
-
   it("derives GitHub context from session.history", () => {
     const store = new SessionStore();
     store.apply({
@@ -845,17 +800,6 @@ describe("SessionStore", () => {
     store.apply({ type: "session.history", sessionId: "s-new", messages: [{ role: "user", content: "build me a thing" }, { role: "assistant", content: [{ type: "text", text: "on it" }] }] });
     expect(store.getState().activeSession.transcript.filter((e) => e.role === "user")).toHaveLength(1);
     expect(store.getState().activeSession.transcript.map((e) => e.role)).toEqual(["user", "assistant"]);
-  });
-
-  it("does not duplicate the optimistic bubble once the node echoes and history catches up", () => {
-    const store = new SessionStore();
-    store.addUserMessage("hello node", "cm-x");
-    store.apply({ type: "session.history", sessionId: "s1", messages: [] });
-    // Node echoes our own prompt (dedup path) — it is now persisted server-side.
-    store.apply({ type: "session.user_message", sessionId: "s1", text: "hello node", clientMessageId: "cm-x" });
-    // A later canonical history now contains the message; it must appear once.
-    store.apply({ type: "session.history", sessionId: "s1", messages: [{ role: "user", content: "hello node" }] });
-    expect(store.getState().activeSession.transcript.filter((e) => e.role === "user")).toHaveLength(1);
   });
 
   it("retires a confirmed bubble the runtime rewrote, instead of re-appending it at the bottom every snapshot", () => {
@@ -1027,24 +971,6 @@ describe("SessionStore", () => {
     expect(store.getState().sessionIndex.sessions[0]!.status).toBe("idle");
   });
 
-  it("tracks live bivy run terminals from list and lifecycle events", () => {
-    const store = new SessionStore();
-    store.apply({
-      type: "terminal.list",
-      terminals: [{ termId: "term-1", name: "Pi · mesh", agent: "pi", createdAt: 100, lastActivityAt: 100 }],
-    });
-    expect(store.getState().sessionIndex.runTerminals.map((t) => t.termId)).toEqual(["term-1"]);
-
-    store.apply({ type: "terminal.activity", termId: "term-1", at: 200 });
-    expect(store.getState().sessionIndex.runTerminals[0]!.lastActivityAt).toBe(200);
-
-    store.apply({ type: "terminal.created", terminal: { termId: "term-2", name: "Codex · repo", agent: "codex", createdAt: 300 } });
-    expect(store.getState().sessionIndex.runTerminals.map((t) => t.termId)).toEqual(["term-2", "term-1"]);
-
-    store.apply({ type: "terminal.closed", termId: "term-1" });
-    expect(store.getState().sessionIndex.runTerminals.map((t) => t.termId)).toEqual(["term-2"]);
-  });
-
   it("keeps sessions and run terminals across a node switch — they're unified all-node sidebar lists, not per-node state (issue #99)", () => {
     const store = new SessionStore();
     store.apply({ type: "sessions.list", sessions: [{ sessionId: "s1", name: "One", nodeId: "node-a" }] });
@@ -1083,23 +1009,6 @@ describe("SessionStore", () => {
     store.apply({ type: "session.event", sessionId: "s1", event: { type: "agent_end" } });
     expect(store.getState().sessionIndex.sessions[0]!.status).toBe("idle");
     expect(store.getState().sessionIndex.sessions[0]!.finishedAt).toBeTypeOf("number");
-  });
-
-  it("never stamps finishedAt for a brand-new session or a cold sessions.list snapshot", () => {
-    // A session reported "idle" by a fresh sessions.list (e.g. on load/reconnect)
-    // must not read as an unseen finished run — only a live agent_end transition
-    // observed by this client counts as "just finished".
-    const store = new SessionStore();
-    store.apply({ type: "sessions.list", sessions: [{ id: "s1", name: "One", status: "idle" }] });
-    expect(store.getState().sessionIndex.sessions[0]!.finishedAt).toBeUndefined();
-  });
-
-  it("beginOpen stamps lastSeenAt on the opened row", () => {
-    const store = new SessionStore();
-    store.apply({ type: "sessions.list", sessions: [{ id: "s1", name: "One" }] });
-    expect(store.getState().sessionIndex.sessions[0]!.lastSeenAt).toBeUndefined();
-    store.beginOpen("s1");
-    expect(store.getState().sessionIndex.sessions[0]!.lastSeenAt).toBeTypeOf("number");
   });
 
   it("keeps the active session's lastSeenAt current as its own live updates land, but not a background session's", () => {

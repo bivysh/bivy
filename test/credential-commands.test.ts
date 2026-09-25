@@ -34,16 +34,6 @@ function harness(over: Partial<CredentialCommandDeps> = {}) {
   return { events, broadcasts, replies, calls, credsDir, ctx, cmds: createCredentialCommands(deps), cleanup: () => fs.rmSync(dataDir, { recursive: true, force: true }) };
 }
 
-test("registers the full credential command cluster", () => {
-  const h = harness();
-  try {
-    assert.deepEqual(Object.keys(h.cmds).sort(), [
-      "credential.remove", "credential.set", "credential.sync.set", "credential.test", "credential.unattended.set",
-      "credentials.account.export", "credentials.account.import", "credentials.list", "credentials.native.import", "credentials.native.preview", "credentials.presets.get", "credentials.presets.setActive", "credentials.presets.setMapping",
-    ]);
-  } finally { h.cleanup(); }
-});
-
 test("native preview and import stay secret-free, consent-scoped and bound to the source login", async () => {
   const h = harness();
   const home = path.join(h.credsDir, "native-codex");

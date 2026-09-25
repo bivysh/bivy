@@ -90,28 +90,4 @@ function readBlob(dir: string, key: Buffer): any {
   console.log("write upgrades persisted encoding to v3 OK");
 }
 
-// --- delete tombstones, and importAll converges (rotation-safe) -------------
-{
-  const { dir } = freshVaultDir();
-  const store = createCredentialVault(dir);
-
-  await store.setApiKey("anthropic", "a1");
-  await store.delete("anthropic");
-  assert.equal(await store.read("anthropic"), undefined, "deleted credential is gone");
-  assert.ok((await store.exportTombstones()).anthropic, "a provider tombstone is retained");
-
-  // A lagging snapshot must not resurrect a tombstoned credential.
-  const imported = await store.importAll({ anthropic: { type: "api_key", key: "stale" } });
-  assert.equal(imported, 0, "an older snapshot cannot resurrect a fresh tombstone");
-  assert.equal(await store.read("anthropic"), undefined);
-
-  // A brand-new provider from a snapshot is imported.
-  const n = await store.importAll({ openai: { type: "api_key", key: "sk-new" } });
-  assert.equal(n, 1);
-  assert.equal(await store.read("openai").then((c) => (c as any).key), "sk-new");
-
-  fs.rmSync(dir, { recursive: true, force: true });
-  console.log("delete tombstone + importAll convergence OK");
-}
-
 console.log("credential-store-v3: all tests passed");

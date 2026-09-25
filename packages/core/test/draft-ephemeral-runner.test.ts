@@ -16,18 +16,6 @@ const RUNNER: EphemeralNodeConfig = {
 // survives a node switch (resetSession) or a fresh draft (resetActiveSession) —
 // so a stale pick can't leak onto an unrelated session.
 describe("draftEphemeralConfig (pick-a-runner-then-send)", () => {
-  it("defaults to null", () => {
-    expect(new SessionStore().getState().draft.ephemeralConfig).toBeNull();
-  });
-
-  it("picks and clears via setDraftEphemeralConfig", () => {
-    const store = new SessionStore();
-    store.setDraftEphemeralConfig(RUNNER);
-    expect(store.getState().draft.ephemeralConfig).toEqual(RUNNER);
-    store.setDraftEphemeralConfig(null);
-    expect(store.getState().draft.ephemeralConfig).toBeNull();
-  });
-
   it("clears on a node switch (resetSession) — e.g. after binding the launched machine", () => {
     const store = new SessionStore();
     store.setDraftEphemeralConfig(RUNNER);

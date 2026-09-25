@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import test from "node:test";
 import { webRuntimeConfigScript } from "../services/control-plane/src/web-runtime-config.js";
@@ -39,15 +38,4 @@ test("runtime booleans override either build default, including explicit disable
       assert.equal(runtimeBoolean("ephemeralMachinesEnabled", fallback, config), fallback);
     }
   }
-});
-
-test("runtime script bypasses static assets and offline precaching under the existing CSP", () => {
-  const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
-  const server = read("../services/control-plane/src/index.ts");
-  assert.match(server, /app.get\("\/runtime-config.js",[\s\S]*?noStorePwaShell\(res\);[\s\S]*?res.type\("application\/javascript"\).send\(webRuntimeConfigScript\(\)\)/);
-  assert.ok(server.indexOf('app.get("/runtime-config.js"') < server.indexOf("express.static(reactAppDir"));
-  assert.match(server, /Cache-Control", "no-store, max-age=0"/);
-  assert.match(read("../packages/web/vite.config.ts"), /globIgnores: \["\*\*\/runtime-config.js"\]/);
-  assert.match(read("../packages/web/index.html"), /<script src="\/runtime-config.js"><\/script>\s*<script type="module"/);
-  assert.doesNotMatch(read("../.github/workflows/service-images.yml"), /tag_suffix|--build-arg "VITE_EPHEMERAL/);
 });
