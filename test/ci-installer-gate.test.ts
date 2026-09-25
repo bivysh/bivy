@@ -45,11 +45,11 @@ test("ordinary application changes retain npm consumers without bootstrapping an
   }
 });
 
-test("installer is required when selected and always runs for force_all releases", () => {
-  assert.equal(jobs["installer-smoke"].if, "inputs.force_all || needs.changes.outputs.installer == 'true'");
-  for (const name of ["root-release", "release-consumer"]) {
-    assert.equal(jobs[name].if, "inputs.force_all || needs.changes.outputs.root == 'true'");
-  }
+test("installer is required when selected in the queue and always runs in the full tier", () => {
+  const queueOrFull = (filter: string) =>
+    `needs.changes.outputs.tier == 'full' || (needs.changes.outputs.tier == 'queue' && needs.changes.outputs.${filter} == 'true')`;
+  for (const name of ["installer-smoke", "release-consumer"]) assert.equal(jobs[name].if, queueOrFull("installer"));
+  assert.equal(jobs["root-release"].if, queueOrFull("root"));
   assert.ok(jobs["ci-ok"].needs?.includes("installer-smoke"));
   assert.match(jobs["ci-ok"].steps![0].run!, /contains\(needs\.\*\.result, 'failure'\)/);
   assert.match(jobs["ci-ok"].steps![0].run!, /contains\(needs\.\*\.result, 'cancelled'\)/);

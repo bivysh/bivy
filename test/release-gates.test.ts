@@ -38,11 +38,14 @@ test("the CI reuse check only accepts a run where every job succeeded", () => {
   assert.match(plan, /select\(\.conclusion != "success"\)/);
 });
 
-test("every path-filtered CI job can be forced for a production release", () => {
+test("every path-filtered CI job runs in the full tier that a production release forces", () => {
   assert.equal(ci.on.workflow_call.inputs.force_all.type, "boolean");
+  const tierStep = ci.jobs.changes.steps.find((step: { id?: string }) => step.id === "tier");
+  assert.equal(tierStep.env.FORCE_ALL, "${{ inputs.force_all }}");
+  assert.match(tierStep.run, /if \[ "\$FORCE_ALL" = true \] \|\|[^\n]*\n\s*tier=full/);
   for (const [name, job] of Object.entries(ci.jobs) as [string, { if?: string }][]) {
     if (job.if?.includes("needs.changes.outputs")) {
-      assert.match(job.if, /^inputs\.force_all \|\| /, `${name} would skip release verification`);
+      assert.match(job.if, /^needs\.changes\.outputs\.tier == 'full'( \|\| |$)/, `${name} would skip release verification`);
       assert.ok(ci.jobs["ci-ok"].needs.includes(name), `${name} is absent from the required gate`);
     }
   }

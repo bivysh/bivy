@@ -8,6 +8,11 @@ on:
   # temporary merge group and queued PRs eventually time out.
   merge_group:
     types: [checks_requested]
+  # Nightly full run: the cross-OS, packaging and e2e lanes that no longer gate
+  # every PR still run against main once a day.
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
   # Lets other workflows call this one to run the exact same gate rather than
   # re-implementing it. Used by release.yml so a production promotion runs the
   # full suite before publishing, instead of a hand-rolled subset that can drift
@@ -30,12 +35,20 @@ concurrency:
 permissions:
   contents: read
 
+# Checks are tiered by how often they catch something relative to what they
+# cost. Every tier also respects the changed-path filters below.
+#
+#   pr     every push to a PR: one job with lint, types, policy and only the
+#          unit suites that depend on the change.
+#   queue  the merge queue: every unit suite, the web build, the release
+#          package, a desktop browser smoke, plus packaging/e2e lanes only when
+#          their own inputs changed.
+#   full   nightly, manual, release (force_all) and any change to this file:
+#          everything, on every OS family and viewport.
 jobs:
-  # Detect which areas a change actually touches so we only run relevant jobs.
-  # Even though standard runners are free for this public repository, filtering
-  # keeps feedback focused and leaves the account's concurrency available for
-  # other PRs. Changing ci.yml itself re-runs everything (the `common` anchor is
-  # folded into every filter) so CI cannot disable its own coverage unnoticed.
+  # Detect which areas a change actually touches so we only run relevant jobs,
+  # and which tier this run is. Changing ci.yml itself runs the full tier so CI
+  # cannot disable its own coverage unnoticed.
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -43,6 +56,9 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
+      tier: ${{ steps.tier.outputs.tier }}
+      base: ${{ steps.tier.outputs.base }}
+      browser_shards: ${{ steps.tier.outputs.browser_shards }}
       root: ${{ steps.filter.outputs.root }}
       installer: ${{ steps.filter.outputs.installer }}
       relay: ${{ steps.filter.outputs.relay }}
@@ -119,18 +135,42 @@ jobs:
               - 'docs/**'
               - '*.md'
               - 'scripts/check-links.mjs'
+      - id: tier
+        env:
+          FORCE_ALL: ${{ inputs.force_all }}
+          EVENT: ${{ github.event_name }}
+          CI_CHANGED: ${{ steps.filter.outputs.common }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$FORCE_ALL" = true ] || [ "$EVENT" = schedule ] || [ "$EVENT" = workflow_dispatch ] || [ "$CI_CHANGED" = true ]; then
+            tier=full; shards='[1,2,3,4,5,6]'
+          elif [ "$EVENT" = merge_group ]; then
+            tier=queue; shards='[1]'
+          else
+            tier=pr; shards='[1]' # unused: the browser job is skipped on PRs
+          fi
+          echo "tier=$tier" >> "$GITHUB_OUTPUT"
+          echo "base=$PR_BASE" >> "$GITHUB_OUTPUT"
+          echo "browser_shards=$shards" >> "$GITHUB_OUTPUT"
+          echo "CI tier: $tier" >> "$GITHUB_STEP_SUMMARY"
 
-  # Root checks are split by responsibility. Standard GitHub-hosted runners are
-  # free for this public repository, so running these in parallel gives much
-  # faster feedback without consuming the private-repository minutes allowance.
-  root-security:
+  # One runner for every cheap, high-signal root check. Separate jobs each paid
+  # ~30s of checkout/install for 10-40s of work; about half of all runner time
+  # was setup. On PRs only the unit suites that depend on the change run
+  # (scripts/affected-tests.mjs); queue and full tiers run all of them.
+  checks:
     needs: changes
-    if: inputs.force_all || needs.changes.outputs.root == 'true'
-    name: Root security + policy
+    if: needs.changes.outputs.tier == 'full' || needs.changes.outputs.root == 'true'
+    name: Root checks + unit tests
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
+    env:
+      TIER: ${{ needs.changes.outputs.tier }}
+      BASE: ${{ needs.changes.outputs.base }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: ${{ needs.changes.outputs.tier == 'pr' && '0' || '1' }}
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -140,9 +180,7 @@ jobs:
       # Verify the transitive security pins actually took effect on disk, and
       # that package.json (which resolves the published npm artifact) and
       # pnpm-workspace.yaml (which resolves what CI tests) declare the same ones.
-      # This replaces an older check for pi-coding-agent's patched NESTED
-      # node_modules: pnpm ignores a dependency's shrinkwrap, so those nested
-      # copies no longer exist here at all. See scripts/check-security-pins.mjs.
+      # See scripts/check-security-pins.mjs.
       - run: pnpm run check:pins
       # Production dependencies ship to users; do not release an unreviewed
       # high/critical advisory. audit:prod applies the documented narrow
@@ -150,83 +188,40 @@ jobs:
       - run: pnpm run audit:prod
       - run: pnpm run check:licenses
       - run: pnpm run check:secrets -- --current-only
-
-  root-quality:
-    needs: changes
-    if: inputs.force_all || needs.changes.outputs.root == 'true'
-    name: Root lint + typechecks
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '22.19.0'
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
       - run: pnpm run lint
       - run: pnpm run check:boundaries
       - run: pnpm run check:routes
       - run: pnpm run check:design
+      - run: pnpm run certification:check
       - run: pnpm run typecheck
       - run: pnpm run typecheck:web
       - name: Web source contracts (no browser)
         run: pnpm exec playwright test --project=contracts
-
-  root-tests:
-    needs: changes
-    if: inputs.force_all || needs.changes.outputs.root == 'true'
-    name: Root unit tests (${{ matrix.shard }})
-    runs-on: ubuntu-latest
-    # A healthy shard finishes in ~2 min. Without this a single hung suite
-    # keeps the job (and the merge queue) waiting for GitHub's 6h default.
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: ["1/2", "2/2"]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '22.19.0'
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm run test:core
-        if: matrix.shard == '2/2'
-      # Each machine gets a stable shard; within it, run independent suites
-      # across the runner's CPUs while serializing suites with a shared port.
-      - run: pnpm run test:unit
-        env:
-          TEST_SHARD: ${{ matrix.shard }}
-
-  root-builds:
-    needs: changes
-    if: inputs.force_all || needs.changes.outputs.root == 'true'
-    name: Web build
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '22.19.0'
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      - name: Core tests
+        run: |
+          if [ "$TIER" = pr ]; then
+            pnpm --filter @bivy/core exec vitest run --changed "$BASE" --passWithNoTests
+          else
+            pnpm run test:core
+          fi
+      # Within the runner, independent suites run across its CPUs while suites
+      # with a shared port are serialized (scripts/run-tests.mjs).
+      - name: Unit tests
+        run: |
+          if [ "$TIER" = pr ]; then export TEST_AFFECTED_BASE="$BASE"; fi
+          pnpm run test:unit
       # Initial-bundle budget (B4b): fail if the PWA entry chunk grows past its
       # raw/gzip ceiling. The long-transcript budget runs in test:unit.
-      - run: pnpm run build:web
-      - run: node scripts/check-bundle-size.mjs
+      - name: Web build + bundle budget
+        if: env.TIER != 'pr'
+        run: pnpm run build:web && node scripts/check-bundle-size.mjs
 
-  # Build the platform-independent release package in parallel with the PWA.
-  # Consumer installation is the longest downstream check, so making it wait
-  # for an unrelated web build adds directly to the overall critical path.
+  # Build the platform-independent release package. Emitting JavaScript and
+  # curating the package catches cross-boundary imports that tsc --noEmit can
+  # miss, so it gates the merge queue even when consumers do not run.
   root-release:
     needs: changes
-    if: inputs.force_all || needs.changes.outputs.root == 'true'
+    if: needs.changes.outputs.tier == 'full' || (needs.changes.outputs.tier == 'queue' && needs.changes.outputs.root == 'true')
     name: Release package
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -238,9 +233,8 @@ jobs:
           node-version: '22.19.0'
           cache: pnpm
       - run: pnpm install --filter @bivy/bivy --frozen-lockfile
-      # Exercise emitted JavaScript and package curation, which catches
-      # cross-boundary imports that tsc --noEmit can miss. Pack the exact npm
-      # payload; unlike the fallback archive it needs no excluded package-lock.
+      # Pack the exact npm payload; unlike the fallback archive it needs no
+      # excluded package-lock.
       - run: node scripts/build-release.mjs --npm-pack release-artifact
       - name: Upload release package for consumer tests
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -250,12 +244,11 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # The Supported promise is a release gate of its own. Run deterministic pinned
-  # fixtures on every certified OS family; no live credentials or latest-version
-  # resolution is allowed in this lane.
+  # The Supported promise on every certified OS family. The Linux fixtures also
+  # run in the unit suite; this lane adds macOS and runs in the full tier.
   agent-certification:
     needs: changes
-    if: inputs.force_all || needs.changes.outputs.root == 'true'
+    if: needs.changes.outputs.tier == 'full'
     name: Pinned agent certification (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -276,7 +269,8 @@ jobs:
 
   # Install the exact curated npm tarball into a fresh consumer project on both
   # supported desktop OS families. This catches release-only dependency/audit,
-  # native-module, README metadata, and built-in Pi discovery regressions.
+  # native-module, README metadata, and built-in Pi discovery regressions. It
+  # gates the queue when packaging inputs change; otherwise it runs nightly.
   release-consumer:
     # Prepare the consumer while root-release builds. The bounded artifact
     # wait below replaces the whole-job dependency; ci-ok still gates both jobs.
@@ -284,7 +278,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    if: inputs.force_all || needs.changes.outputs.root == 'true'
+    if: needs.changes.outputs.tier == 'full' || (needs.changes.outputs.tier == 'queue' && needs.changes.outputs.installer == 'true')
     name: Release consumer (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -318,11 +312,11 @@ jobs:
         run: node scripts/smoke-release.mjs --artifact release-artifact/bivy-npm.tgz
 
   # apt/Node bootstrap can take minutes on a cold Ubuntu mirror. Keep the real
-  # fresh-machine promise, but pay for it only when its inputs change or on a
-  # force_all release. Ordinary src/web changes still run both npm consumers.
+  # fresh-machine promise, but pay for it only when its inputs change or in the
+  # full tier.
   installer-smoke:
     needs: changes
-    if: inputs.force_all || needs.changes.outputs.installer == 'true'
+    if: needs.changes.outputs.tier == 'full' || (needs.changes.outputs.tier == 'queue' && needs.changes.outputs.installer == 'true')
     name: Clean installer (Ubuntu)
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -358,18 +352,21 @@ jobs:
         if: always()
         run: bash scripts/installer-smoke-guest.sh cleanup
 
-  # Keep desktop/mobile layout coverage, but run viewport-independent behavior
-  # once. Six shards keep browser execution off the critical path without
-  # duplicating each spec's Vite startup within a runner.
+  # The merge queue runs the desktop smoke set (PW_SMOKE, see
+  # playwright.config.ts) on one runner. The full tier keeps desktop/mobile
+  # layout coverage across six shards. PRs run no browser.
   browser:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6]
+        shard: ${{ fromJSON(needs.changes.outputs.browser_shards) }}
     needs: changes
-    if: inputs.force_all || needs.changes.outputs.root == 'true'
+    if: needs.changes.outputs.tier == 'full' || (needs.changes.outputs.tier == 'queue' && needs.changes.outputs.root == 'true')
+    name: Browser (${{ needs.changes.outputs.tier == 'full' && format('{0}/6', matrix.shard) || 'smoke' }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      PW_SMOKE: ${{ needs.changes.outputs.tier != 'full' && '1' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
@@ -386,7 +383,14 @@ jobs:
       # Install fonts as well as shared libraries: a successful browser launch
       # alone does not guarantee the screenshot environment matches baselines.
       - run: pnpm exec playwright install --with-deps --only-shell chromium
-      - run: pnpm run test:browser --project=behavior --project=desktop --project=mobile --shard=${{ matrix.shard }}/6 --reporter=line,json
+      - name: Smoke (desktop)
+        if: env.PW_SMOKE
+        run: pnpm run test:browser --project=desktop --reporter=line,json
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_NAME: test-results/timings.json
+      - name: Full (all viewports)
+        if: ${{ !env.PW_SMOKE }}
+        run: pnpm run test:browser --project=behavior --project=desktop --project=mobile --shard=${{ matrix.shard }}/6 --reporter=line,json
         env:
           PLAYWRIGHT_JSON_OUTPUT_NAME: test-results/timings.json
       - name: Upload PWA screenshot review artifacts
@@ -404,7 +408,7 @@ jobs:
   # uses node:fs/node:path. Its own filter keeps docs-only feedback fast.
   docs-links:
     needs: changes
-    if: inputs.force_all || needs.changes.outputs.docs == 'true'
+    if: needs.changes.outputs.tier == 'full' || needs.changes.outputs.docs == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -415,11 +419,12 @@ jobs:
       - run: node scripts/check-links.mjs
 
   # Service checks use separate runners so control-plane verification does not
-  # block relay feedback. The relay suite still installs control-plane because it
-  # spawns that service as a child process for integration coverage.
+  # block relay feedback. They are cheap and path-filtered, so they run in every
+  # tier. The relay suite still installs control-plane because it spawns that
+  # service as a child process for integration coverage.
   control-plane:
     needs: changes
-    if: inputs.force_all || needs.changes.outputs.control_plane == 'true'
+    if: needs.changes.outputs.tier == 'full' || needs.changes.outputs.control_plane == 'true'
     name: Control plane
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -456,7 +461,7 @@ jobs:
 
   relay:
     needs: changes
-    if: inputs.force_all || needs.changes.outputs.relay == 'true'
+    if: needs.changes.outputs.tier == 'full' || needs.changes.outputs.relay == 'true'
     name: Relay
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -482,12 +487,12 @@ jobs:
       - run: npm run --if-present test:unit
         working-directory: services/relay
 
-  # Run the independent remote-path and X25519 pairing suites on separate
-  # runners. This duplicates setup but minimizes wall-clock time on public-repo
-  # runners and keeps each suite's service ports isolated.
+  # Remote-path and X25519 pairing suites run on separate runners to keep each
+  # suite's service ports isolated. They gate the queue when the relay or
+  # control plane changes; otherwise they run in the full tier.
   remote-e2e:
     needs: changes
-    if: inputs.force_all || needs.changes.outputs.e2e == 'true'
+    if: needs.changes.outputs.tier == 'full' || (needs.changes.outputs.tier == 'queue' && needs.changes.outputs.relay == 'true')
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -514,16 +519,13 @@ jobs:
       - run: pnpm exec tsx ${{ matrix.script }}
 
   # Single gate for branch protection. Always runs, and passes only if no needed
-  # job failed or was cancelled. A skipped job means its area was untouched and
-  # is expected. Keep this as the sole required status check.
+  # job failed or was cancelled. A skipped job means its area was untouched or
+  # its tier did not run it. Keep this as the sole required status check.
   ci-ok:
     if: ${{ always() }}
     needs:
       - changes
-      - root-security
-      - root-quality
-      - root-tests
-      - root-builds
+      - checks
       - root-release
       - agent-certification
       - release-consumer
@@ -544,3 +546,27 @@ jobs:
             exit 1
           fi
           echo "CI passed (skipped jobs are expected when their area was untouched)."
+
+  # Nobody watches a scheduled run. Keep one open issue for a red nightly and
+  # comment on it again for each further failure, so it cannot go unnoticed.
+  nightly-alert:
+    needs: ci-ok
+    if: ${{ always() && github.event_name == 'schedule' && needs.ci-ok.result == 'failure' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - run: |
+          title="Nightly full CI is failing"
+          issue=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number')
+          body="Nightly full CI failed: $RUN_URL"
+          if [ -n "$issue" ]; then
+            gh issue comment "$issue" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi
