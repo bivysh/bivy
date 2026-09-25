@@ -3,7 +3,7 @@ import { expect, test } from "./fixtures.js";
 import { readFile } from "node:fs/promises";
 
 for (const theme of ["light", "dark"]) {
-  test(`Automations navigation has no background (${theme})`, async ({ page }) => {
+  test(`Automations navigation is unfilled until active (${theme})`, async ({ page }) => {
     const css = await Promise.all([
       "../../packages/ui/tokens.css",
       "../../packages/web/src/styles.css",
@@ -25,7 +25,9 @@ for (const theme of ["light", "dark"]) {
     await page.keyboard.press("Tab");
     await expect(link).toBeFocused();
     await expect(link).toHaveCSS("outline-style", "solid");
+    // The active row is the one exception: it carries the same fill as hover so
+    // the current destination reads at a glance. Everything around it stays flat.
     await link.evaluate((element) => element.classList.add("active"));
-    await expect(link).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+    await expect(link).not.toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
   });
 }
