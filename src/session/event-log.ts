@@ -76,6 +76,13 @@ export function messageContentAtoms(message: RuntimeMessage | undefined): Messag
         const id = b.tool_use_id ?? b.toolUseId;
         if (id) toolIds.push(`tr:${String(id)}`);
       } else if (type === "text") pushText(b.text);
+      // Reasoning is an atom too: Claude streams each thinking block as its own
+      // assistant message, and without this a reloaded thinking-only message had
+      // no atoms, read as "opaque", and was re-appended after the final answer.
+      else if (type === "thinking" || type === "reasoning") {
+        const text = thinkingTextFromContent([b]).trim();
+        if (text) texts.push(`thinking#${text}`);
+      }
     }
   }
   return { toolIds, texts };
