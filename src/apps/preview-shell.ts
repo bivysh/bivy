@@ -11,13 +11,14 @@ html,body { margin:0; width:100%; height:100%; }
 body { display:flex; flex-direction:column; background:var(--bg); color:var(--ink); font-family:var(--font-sans); }
 nav { display:flex; align-items:center; gap:var(--space-2); padding:var(--space-2) var(--space-3); border-bottom:thin solid var(--line); background:var(--surface); flex-shrink:0; }
 nav .btn { min-height:var(--space-7); flex-shrink:0; }
+#stamp { font-size:var(--text-xs); white-space:nowrap; }
 #title { flex:1; min-width:0; font-size:var(--text-sm); font-weight:var(--weight-semibold); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 #down { flex-shrink:0; }
 #status { padding:var(--space-4); margin:0; font-size:var(--text-sm); }
 iframe { flex:1; min-height:0; width:100%; border:0; background:var(--bg); }
 [hidden] { display:none !important; }
 </style></head><body>
-<nav aria-label="Bivy preview controls"><button class="btn ghost" id="back">‹ Back to chat</button><span id="title">App preview</span><button class="btn ghost" id="reload" disabled>Reload</button></nav>
+<nav aria-label="Bivy preview controls"><button class="btn ghost" id="back">‹ Back to chat</button><span id="title">App preview</span><span id="stamp" class="muted" role="status"></span><button class="btn ghost" id="reload" disabled>Reload</button></nav>
 <div class="banner" data-tone="warn" id="down" hidden><span class="banner-text" id="down-text" role="status"></span><span class="banner-actions"><button class="btn sm" id="ask" hidden>Ask agent to fix</button></span></div>
 <p id="status" role="status">Opening app…</p>
 <iframe id="app" title="App preview" hidden sandbox="allow-scripts allow-same-origin allow-forms allow-downloads allow-popups" referrerpolicy="no-referrer"></iframe>
@@ -37,9 +38,27 @@ function show(data,launch){
   frame.src=data.origin+(launch?'/__bivy/open#'+launch:'/');
   reload.disabled=false;
   status.textContent='Loading app…';
-  frame.onload=()=>{status.hidden=true;};
+  frame.onload=()=>{status.hidden=true;if(revision===null){revision=-1;watch();}else if(wake)wake();};
   // Store navigation metadata only, never tickets or cookies.
   try{sessionStorage.setItem(storageKey,JSON.stringify(data));}catch{}
+}
+// Reload when an agent turn changes files, returning to the last framed page.
+// Until the frame has redeemed its access cookie, polls fail; back off, and
+// let the next frame load retry at once.
+let revision=null,retry=0,wake=null;
+async function watch(){
+  wake=null;
+  try{
+    const r=await fetch(metadata.origin+'/__bivy/revision?after='+revision,{credentials:'include',cache:'no-store'});
+    if(!r.ok)throw Error();
+    const d=await r.json();
+    if(revision>=0&&d.revision!==revision){
+      const path=typeof d.path==='string'&&d.path.startsWith('/')&&!d.path.startsWith('//')?d.path:'/';
+      frame.src=metadata.origin+path;
+      document.getElementById('stamp').textContent='Updated after the agent’s turn';
+    }
+    revision=d.revision;retry=0;setTimeout(watch,0);
+  }catch{retry=Math.min(30000,(retry||1000)*2);const t=setTimeout(watch,retry);wake=()=>{clearTimeout(t);watch();};}
 }
 // The app origin reports when its server stops answering. Its content is
 // untrusted: the port is only ever placed in a draft the user reviews.

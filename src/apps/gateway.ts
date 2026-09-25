@@ -19,6 +19,7 @@ const MIME: Record<string, string> = {
 const COOKIE = "__Host-bivy-preview";
 const OPEN_PATH = "/__bivy/open";
 const REDEEM_PATH = "/__bivy/redeem";
+const REVISION_PATH = "/__bivy/revision";
 const HOUR = 60 * 60_000;
 /** Marks gateway-generated "server not answering" responses, so recovery
  * polling can tell them apart from an app's own 502s. */
@@ -174,7 +175,7 @@ export class AppGateway {
     const origin = this.shellOrigin(id);
     const nonce = randomBytes(16).toString("hex");
     res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
-    res.setHeader("Content-Security-Policy", `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'self' 'nonce-${nonce}'; connect-src 'self'; frame-src ${this.origin(id)}; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`);
+    res.setHeader("Content-Security-Policy", `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'self' 'nonce-${nonce}'; connect-src 'self' ${this.origin(id)}; frame-src ${this.origin(id)}; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`);
     if (req.method === "GET" && this.styles.has(req.url ?? "")) {
       res.setHeader("Content-Type", "text/css; charset=utf-8");
       res.end(this.styles.get(req.url!)); return;
@@ -235,6 +236,9 @@ export class AppGateway {
     if (req.headers["sec-fetch-dest"] === "serviceworker") { res.writeHead(403); res.end(); return; }
     if (!req.url?.startsWith("/") || req.url.startsWith("//")) { res.writeHead(400); res.end(); return; }
     this.track(id, req.socket, expires);
+    if (req.url.startsWith(`${REVISION_PATH}?`) && req.method === "GET") { this.revision(req, res, entry); return; }
+    // Remember the framed page so a turn reload lands where the user was.
+    if (req.method === "GET" && req.headers["sec-fetch-dest"] === "iframe" && req.url.length <= 2048) entry.lastPath = req.url;
     if (entry.target.kind === "static") {
       if (!["GET", "HEAD"].includes(req.method ?? "")) { res.writeHead(405, { Allow: "GET, HEAD" }); res.end(); return; }
       let file: string;
@@ -267,6 +271,25 @@ export class AppGateway {
     });
     res.on("close", () => upstream.destroy());
     req.pipe(upstream);
+  }
+  /** Long poll from the trusted shell (same-site, credentialed CORS): answers
+   * when the view's revision differs from `after`, or after 25 seconds. */
+  private revision(req: IncomingMessage, res: ServerResponse, entry: RegisteredView): void {
+    const id = entry.view.id;
+    const after = Number(new URL(req.url!, "http://gateway").searchParams.get("after"));
+    let timer: NodeJS.Timeout | undefined;
+    const onRevision = (viewId: string) => { if (viewId === id) send(); };
+    const cleanup = () => { clearTimeout(timer); this.registry.off("revision", onRevision); };
+    const send = () => {
+      cleanup();
+      if (res.writableEnded || res.destroyed) return;
+      res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": this.shellOrigin(id), "access-control-allow-credentials": "true", vary: "Origin" });
+      res.end(JSON.stringify({ revision: entry.revision, path: entry.lastPath ?? "/" }));
+    };
+    if (entry.revision !== after) { send(); return; }
+    this.registry.on("revision", onRevision);
+    timer = setTimeout(send, 25_000);
+    res.on("close", cleanup);
   }
   private upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     const entry = this.entry(req);

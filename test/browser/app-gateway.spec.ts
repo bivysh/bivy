@@ -65,8 +65,9 @@ for (const mode of ["direct", "automatic"]) test(`preview launch redeems its fra
     const id = app.views[0].id;
     await page.route("https://*.preview.example.net/**", async (route) => {
       const request = route.request(); const url = new URL(request.url());
-      const response = await route.fetch({ url: `http://127.0.0.1:${port}${url.pathname}${url.search}`, headers: { ...await request.allHeaders(), host: url.host }, maxRedirects: 0 });
-      await route.fulfill({ response });
+      // A revision long poll can still be open when the fixture shuts down.
+      const response = await route.fetch({ url: `http://127.0.0.1:${port}${url.pathname}${url.search}`, headers: { ...await request.allHeaders(), host: url.host }, maxRedirects: 0 }).catch(() => undefined);
+      await (response ? route.fulfill({ response }) : route.abort()).catch(() => {});
     });
     const returnTo = 'https://bivy.example/sessions/s';
     await page.route(returnTo, (route) => route.fulfill({ contentType: "text/html", body: "<h1>Bivy chat</h1>" }));
@@ -80,6 +81,11 @@ for (const mode of ["direct", "automatic"]) test(`preview launch redeems its fra
     await expect(page.getByRole("navigation", { name: "Bivy preview controls" })).toBeVisible();
     await page.getByRole("button", { name: "Reload", exact: true }).click();
     await expect(content.locator("output")).toHaveText("0");
+    // An agent turn that rebuilds the output reloads the open preview.
+    await fs.writeFile(path.join(dir, "index.html"), '<!doctype html><html lang="en"><title>Generated app</title><h1>Rebuilt by the agent</h1></html>');
+    registry.touch("s");
+    await expect(content.getByRole("heading", { name: "Rebuilt by the agent" })).toBeVisible();
+    await expect(page.getByText("Updated after the agent’s turn")).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath("open-app-with-header.png"), fullPage: true });
     const light = await page.getByRole("navigation").evaluate((element) => getComputedStyle(element).backgroundColor);
     await page.emulateMedia({ colorScheme: "dark" });
@@ -118,8 +124,9 @@ test("a silent service shows a recoverable state and drafts a fix request", asyn
     const id = app.views[0].id;
     await page.route("https://*.preview.example.net/**", async (route) => {
       const request = route.request(); const url = new URL(request.url());
-      const response = await route.fetch({ url: `http://127.0.0.1:${port}${url.pathname}${url.search}`, headers: { ...await request.allHeaders(), host: url.host }, maxRedirects: 0 });
-      await route.fulfill({ response });
+      // A revision long poll can still be open when the fixture shuts down.
+      const response = await route.fetch({ url: `http://127.0.0.1:${port}${url.pathname}${url.search}`, headers: { ...await request.allHeaders(), host: url.host }, maxRedirects: 0 }).catch(() => undefined);
+      await (response ? route.fulfill({ response }) : route.abort()).catch(() => {});
     });
     await page.route("https://bivy.example/**", (route) => route.fulfill({ contentType: "text/html", body: "<h1>Bivy chat</h1>" }));
     await page.goto(gateway.open(id, "https://bivy.example/sessions/s"));

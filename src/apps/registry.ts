@@ -3,16 +3,28 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import { EventEmitter } from "node:events";
 import type { AppManifest, AppView, SessionApp } from "./types.js";
 
 const MAX_BYTES = 25 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 100 * 1024 * 1024;
 const MAX_FILES = 2000;
-export type AppTarget = { kind: "static"; files: Map<string, Buffer>; bytes: number } | { kind: "service"; port: number } | { kind: "terminal"; command: string; args: string[]; workspace: string };
-export interface RegisteredView { app: SessionApp; view: AppView; target: AppTarget }
+type StaticTarget = { kind: "static"; files: Map<string, Buffer>; bytes: number };
+export type AppTarget = StaticTarget | { kind: "service"; port: number } | { kind: "terminal"; command: string; args: string[]; workspace: string };
+export interface RegisteredView {
+  app: SessionApp; view: AppView; target: AppTarget;
+  /** Bumped when an agent turn changes files, so open previews reload. */
+  revision: number;
+  /** Last page the preview shell framed; a reload returns there, not to `/`. */
+  lastPath?: string;
+  /** Where a static snapshot came from, so a turn can re-take it. */
+  source?: { workspace: string; directory: string };
+}
+
+const sameFiles = (a: Map<string, Buffer>, b: Map<string, Buffer>) => a.size === b.size && [...a].every(([key, data]) => b.get(key)?.equals(data));
 
 /** Snapshot, not a live filesystem server: symlinks and hidden files are never published. */
-function snapshot(workspace: string, directory: string): AppTarget {
+function snapshot(workspace: string, directory: string): StaticTarget {
   const base = fs.realpathSync(workspace);
   const root = fs.realpathSync(path.resolve(base, directory));
   const relative = path.relative(base, root);
@@ -62,10 +74,10 @@ function snapshot(workspace: string, directory: string): AppTarget {
 }
 
 /** Deliberately ephemeral: restart invalidates apps rather than trusting reused local ports. */
-export class AppRegistry {
+export class AppRegistry extends EventEmitter {
   private apps = new Map<string, SessionApp>();
   private views = new Map<string, RegisteredView>();
-  constructor(private readonly reservedPorts: number[] = []) {}
+  constructor(private readonly reservedPorts: number[] = []) { super(); this.setMaxListeners(0); }
 
   publish(sessionId: string, workspace: string, input: AppManifest): SessionApp {
     const name = (value: unknown): string => {
@@ -81,6 +93,7 @@ export class AppRegistry {
       const base = { id: randomBytes(16).toString("hex"), name: name(spec?.name) };
       let target: AppTarget;
       let view: AppView;
+      let source: RegisteredView["source"];
       if (spec.kind === "web" && spec.source?.kind === "service") {
         const port = spec.source.port;
         if (!Number.isInteger(port) || port < 1024 || port > 65535 || this.reservedPorts.includes(port)) throw new Error("Choose a non-reserved local service port between 1024 and 65535.");
@@ -89,7 +102,8 @@ export class AppRegistry {
       } else if (spec.kind === "web" && spec.source?.kind === "static") {
         if (typeof spec.source.directory !== "string" || !spec.source.directory) throw new Error("Static directory is required.");
         target = snapshot(workspace, spec.source.directory);
-        if (target.kind === "static") total += target.bytes;
+        source = { workspace, directory: spec.source.directory };
+        total += target.bytes;
         if (total > MAX_TOTAL_BYTES) throw new Error("Static apps exceed the node's 100 MiB snapshot budget.");
         view = { ...base, kind: "web", source: "static" };
       } else if (spec.kind === "terminal") {
@@ -100,7 +114,7 @@ export class AppRegistry {
         view = { ...base, kind: "terminal", command: spec.command, args };
       } else throw new Error("Unsupported app view. This machine supports web and terminal views.");
       app.views.push(view);
-      entries.push({ app, view, target });
+      entries.push({ app, view, target, revision: 0, source });
     }
     // Commit all views together: a bad later view cannot leave a partial app.
     this.apps.set(app.id, app);
@@ -112,6 +126,28 @@ export class AppRegistry {
     return structuredClone([...this.apps.values()].filter((app) => app.sessionId === sessionId));
   }
   getView(id: string): RegisteredView | undefined { return this.views.get(id); }
+  /** An agent turn changed files: re-take changed static snapshots and bump
+   * every affected web view (emits `revision`). Returns the bumped view IDs. */
+  touch(sessionId: string): string[] {
+    const bumped: string[] = [];
+    let total = [...this.views.values()].reduce((sum, item) => sum + (item.target.kind === "static" ? item.target.bytes : 0), 0);
+    for (const entry of this.views.values()) {
+      if (entry.app.sessionId !== sessionId || entry.view.kind !== "web") continue;
+      if (entry.target.kind === "static") {
+        if (!entry.source) continue;
+        let next: StaticTarget;
+        // A broken build keeps the last good snapshot rather than blanking the preview.
+        try { next = snapshot(entry.source.workspace, entry.source.directory); } catch { continue; }
+        if (sameFiles(entry.target.files, next.files) || total - entry.target.bytes + next.bytes > MAX_TOTAL_BYTES) continue;
+        total += next.bytes - entry.target.bytes;
+        entry.target = next;
+      }
+      entry.revision++;
+      bumped.push(entry.view.id);
+      this.emit("revision", entry.view.id);
+    }
+    return bumped;
+  }
   /** Ports a session already previews, and ports no app may claim. */
   claimedPorts(sessionId: string): Set<number> {
     const ports = new Set(this.reservedPorts);

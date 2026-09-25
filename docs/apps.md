@@ -90,7 +90,10 @@ Replace the web source with:
 The CLI resolves directories relative to the manifest; direct API callers use
 paths relative to the session workspace. The directory must be inside that
 workspace and contain `index.html`. Bivy snapshots its bytes at publication, so
-later edits do not silently change the published view. Publish again to update.
+edits in the middle of a turn never change the published view. When an agent turn
+finishes with file changes, Bivy re-takes the snapshot and open previews reload,
+returning to the page you were on. A build that no longer produces `index.html`
+keeps the last good snapshot. Publish again to update between turns.
 Hidden files and `node_modules` are excluded; symlinks and special files are
 rejected. Limits: 25 MiB / 2,000 files per snapshot, 100 MiB total static data,
 50 apps per node, and 8 views per app. Only publish a dedicated output directory,
@@ -107,7 +110,8 @@ Long-lived HTTP streams time out after 60 seconds of inactivity. If nothing is
 answering on the port, the preview shows **Nothing is answering on port N**
 instead of a blank frame. It reloads by itself once the server is back, and
 **Ask agent to fix** opens the session with a drafted request (nothing is sent
-until you send it). This initial
+until you send it). Service previews also reload after an agent turn that changed
+files, for servers without hot reload. This initial
 static server does not provide SPA fallback, range requests or directory listings.
 
 ## Automatic web preview delivery

@@ -250,6 +250,31 @@ test("preview grants and browser sessions expire; unavailable services return an
   } finally { gateway.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("a turn that changes files re-takes static snapshots and wakes the shell's revision poll", async () => {
+  const registry = new AppRegistry(); const gateway = new AppGateway(registry, "https://{app}.preview.example.net");
+  const dir = workspace(); const port = await listen(gateway.server);
+  try {
+    const id = registry.publish("s", dir, staticManifest).views[0].id;
+    const { url, cookie } = await grant(gateway, port, id);
+    const shell = gateway.shellOrigin(id);
+    const poll = request(port, url.host, "/__bivy/revision?after=0", { headers: { cookie } });
+    // A turn that leaves the output unchanged doesn't reload anyone.
+    assert.deepEqual(registry.touch("s"), []);
+    fs.writeFileSync(path.join(dir, "dist/index.html"), "<h1>Rebuilt</h1>");
+    assert.deepEqual(registry.touch("other"), []);
+    assert.deepEqual(registry.touch("s"), [id]);
+    const woke = await poll;
+    assert.equal(woke.status, 200); assert.equal(woke.headers["access-control-allow-origin"], shell);
+    assert.deepEqual(JSON.parse(woke.body), { revision: 1, path: "/" });
+    assert.equal((await request(port, url.host, "/", { headers: { cookie } })).body, "<h1>Rebuilt</h1>");
+    // A broken build keeps serving the last good snapshot.
+    fs.rmSync(path.join(dir, "dist/index.html"));
+    assert.deepEqual(registry.touch("s"), []);
+    assert.equal((await request(port, url.host, "/", { headers: { cookie } })).body, "<h1>Rebuilt</h1>");
+    assert.equal((await request(port, url.host, "/__bivy/revision?after=0")).status, 401);
+  } finally { gateway.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("copied links open the app unframed, are reusable until revoked and lapse after a day", async (t) => {
   const registry = new AppRegistry(); const gateway = new AppGateway(registry, "https://{app}.preview.example.net");
   const dir = workspace(); const port = await listen(gateway.server);

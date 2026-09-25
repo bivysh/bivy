@@ -1106,6 +1106,8 @@ async function harnessEndTurn(record: SessionRecord): Promise<void> {
     const result = await harness.endTurn(record.id, `after turn @ ${new Date().toISOString()}`);
     record.workspaceState = (await harness.isDirty(record.id)) ? "dirty" : "clean";
     if (!result || result.changes.length === 0) return;
+    // Open previews of this session reload; static snapshots are re-taken.
+    appService.turnChanged(record.id);
     broadcast({
       type: "session.changes",
       sessionId: record.id,

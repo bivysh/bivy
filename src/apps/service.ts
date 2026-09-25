@@ -25,6 +25,8 @@ export class AppService {
 
   list(sessionId: string): SessionAppsResult { return { apps: this.registry.list(sessionId), previewAvailable: Boolean(this.gateway) && this.gateway?.available !== false }; }
   publish(sessionId: string, workspace: string, manifest: AppManifest) { return this.registry.publish(sessionId, workspace, manifest); }
+  /** An agent turn changed files in this session's workspace. */
+  turnChanged(sessionId: string): string[] { return this.registry.touch(sessionId); }
   /** Servers running in the workspace that this session doesn't preview yet. */
   async offers(sessionId: string, workspace: string): Promise<SessionAppOffersResult> {
     const claimed = this.registry.claimedPorts(sessionId);
