@@ -112,6 +112,12 @@ export class AppRegistry {
     return structuredClone([...this.apps.values()].filter((app) => app.sessionId === sessionId));
   }
   getView(id: string): RegisteredView | undefined { return this.views.get(id); }
+  /** Ports a session already previews, and ports no app may claim. */
+  claimedPorts(sessionId: string): Set<number> {
+    const ports = new Set(this.reservedPorts);
+    for (const { app, target } of this.views.values()) if (app.sessionId === sessionId && target.kind === "service") ports.add(target.port);
+    return ports;
+  }
   require(sessionId: string, id: string): SessionApp {
     const app = this.apps.get(id);
     if (!app || app.sessionId !== sessionId) throw new Error("App not found in this session. Republish after a machine restart.");

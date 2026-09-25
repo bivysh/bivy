@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import type { AppView, OpenAppViewResult, SessionApp, SessionAppsResult, ShareAppViewResult } from "@bivy/core";
+import type { AppOffer, AppView, OpenAppViewResult, SessionApp, SessionAppOffersResult, SessionAppsResult, ShareAppViewResult } from "@bivy/core";
 import { controller, useAppState } from "../store/useStore.js";
 import { Sheet } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
@@ -12,6 +12,9 @@ const TerminalOverlay = lazy(() => import("./Terminal.js").then((module) => ({ d
 export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; appId?: string; onClose: () => void }) {
   const { connection } = useAppState();
   const [result, setResult] = useState<SessionAppsResult | null>(null);
+  // Servers running in the workspace that aren't previewed yet. Older nodes
+  // don't detect them; that is an empty list, not an error.
+  const [offers, setOffers] = useState<AppOffer[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [refresh, setRefresh] = useState(0);
@@ -31,8 +34,11 @@ export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; ap
   useEffect(() => {
     const current = ++generation.current;
     setBusy(true); setError(""); setResult(null); setLink(null); setNotice(null); setConfirm(null);
-    void controller.appCommand("apps.list", sessionId).then((event) => {
-      if (generation.current === current) setResult(event as unknown as SessionAppsResult);
+    const offered = controller.appCommand("apps.offers", sessionId).then((event) => (event as unknown as SessionAppOffersResult).offers ?? [], () => []);
+    void Promise.all([controller.appCommand("apps.list", sessionId), offered]).then(([event, found]) => {
+      if (generation.current !== current) return;
+      setResult(event as unknown as SessionAppsResult);
+      setOffers(found);
     }).catch((e: unknown) => {
       if (generation.current === current) setError(e instanceof Error ? e.message : "Could not load apps.");
     }).finally(() => { if (generation.current === current) setBusy(false); });
@@ -47,12 +53,13 @@ export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; ap
     return () => clearTimeout(timer);
   }, [link]);
 
-  const open = async (app: SessionApp, view: AppView) => {
+  /** Opens a published view, or publishes a detected server first (`offer`). */
+  const open = async (target: { app: SessionApp; view: AppView } | { offer: AppOffer }) => {
     const current = generation.current;
     setBusy(true); setError(""); setLink(null); setConfirm(null);
     // Create the window during the tap, before awaiting the node, so mobile
     // browsers don't classify it as an unsolicited popup. No opener is exposed.
-    const popup = view.kind === "web" ? window.open("about:blank", "_blank") : null;
+    const popup = "offer" in target || target.view.kind === "web" ? window.open("about:blank", "_blank") : null;
     try {
       if (popup) {
         popup.opener = null;
@@ -62,6 +69,17 @@ export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; ap
         status.textContent = "Opening app…";
         popup.document.body?.append(status);
       }
+      let app: SessionApp, view: AppView;
+      if ("offer" in target) {
+        app = (await controller.appCommand("apps.adopt", sessionId, { port: target.offer.port }) as unknown as { app: SessionApp }).app;
+        view = app.views[0]!;
+        // Show it as published without a reload, which would cancel this open.
+        if (generation.current === current) {
+          const adopted = app;
+          setResult((prev) => prev && { ...prev, apps: [...prev.apps, adopted] });
+          setOffers((prev) => prev.filter((item) => item.port !== target.offer.port));
+        }
+      } else ({ app, view } = target);
       const response = await controller.appCommand("apps.open", sessionId, { appId: app.id, viewId: view.id, returnTo: `${accountOrigin()}/sessions/${encodeURIComponent(sessionId)}` }) as unknown as OpenAppViewResult;
       if (generation.current !== current) { popup?.close(); return; }
       if (response.kind === "terminal") setTerminal(response.termId);
@@ -119,7 +137,20 @@ export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; ap
     {busy && <p role="status">{result ? "Preparing…" : "Loading apps…"}</p>}
     {error && <p role="alert" className="artifact-unavailable">{error}</p>}
     {result && !result.previewAvailable && <p className="muted">Bivy’s preview service is unavailable. Try Refresh shortly. Terminal views still work.</p>}
-    {result?.apps.length === 0 && <div className="changes-binary">No apps published yet. Ask the agent to create a manifest and run <code>bivy app publish bivy.app.json</code>.</div>}
+    {result?.apps.length === 0 && offers.length === 0 && <div className="changes-binary">No apps yet. When the agent starts a web server in this session’s workspace, it appears here. Agents can also publish views with <code>bivy app publish</code>.</div>}
+    {!appId && offers.length > 0 && <section className="artifacts-group" aria-label="Running in this workspace">
+      <div className="app-views-heading"><strong className="artifact-name">Running in this workspace</strong></div>
+      {offers.map((offer) => <div className="artifact-row app-view-row" key={offer.port}>
+        <div className="artifact-main">
+          <strong className="artifact-name">Port {offer.port}</strong>
+          <span className="artifact-meta">Web · live server · not previewed yet</span>
+          <code className="app-view-command">{offer.command}</code>
+        </div>
+        <div className="app-view-actions">
+          <button className="btn sm" disabled={busy || !online || !result?.previewAvailable} onClick={() => void open({ offer })} aria-label={`Preview port ${offer.port}`}>Preview</button>
+        </div>
+      </div>)}
+    </section>}
     {result && appId && !result.apps.some((app) => app.id === appId) && <p role="status">This app is no longer available. Ask the agent to republish it; previews expire when the machine restarts.</p>}
     {result?.apps.filter((app) => !appId || app.id === appId).map((app) => <section className="artifacts-group" key={app.id} aria-label={app.name}>
       <div className="app-views-heading"><strong className="artifact-name">{app.name}</strong>
@@ -138,7 +169,7 @@ export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; ap
           </>}
           {link?.viewId === view.id
             ? <a className="btn sm" href={link.url} target="_blank" rel="noopener noreferrer" onClick={() => setTimeout(onClose, 0)}>Open preview ↗</a>
-            : <button className="btn sm" disabled={busy || !online || (view.kind === "web" && !result.previewAvailable)} onClick={() => view.kind === "terminal" ? setConfirm({ app, view }) : void open(app, view)}>
+            : <button className="btn sm" disabled={busy || !online || (view.kind === "web" && !result.previewAvailable)} onClick={() => view.kind === "terminal" ? setConfirm({ app, view }) : void open({ app, view })}>
               {view.kind === "terminal" ? "Open terminal" : "Open preview"}
             </button>}
         </div>
@@ -155,7 +186,7 @@ export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; ap
         ? `This starts or reconnects to ${JSON.stringify([confirm.view.command, ...confirm.view.args])}. It runs with the machine user’s permissions, not in a new sandbox. Only run code you trust.`
         : "Preview access will be revoked and this app’s terminals stopped. Project files and externally started servers are not removed."}
       confirmLabel={confirm.view ? "Open terminal" : "Remove app"} danger={!confirm.view}
-      onCancel={() => setConfirm(null)} onConfirm={() => { if (confirm.view) void open(confirm.app, confirm.view); else void remove(confirm.app); }}
+      onCancel={() => setConfirm(null)} onConfirm={() => { if (confirm.view) void open({ app: confirm.app, view: confirm.view }); else void remove(confirm.app); }}
     />}
   </Sheet>;
 }

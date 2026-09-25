@@ -39,6 +39,19 @@ bivy app list --session <session-id>
 bivy app remove <app-id> --session <session-id>
 ```
 
+### Detected servers (no manifest)
+
+A manifest is optional for a single live server. When a process whose working
+directory is inside the session workspace listens on loopback (`127.0.0.1`,
+`::1`) or all interfaces, session menu → **Apps** lists it under **Running in
+this workspace**. Tapping **Preview** publishes it as a one-view app and opens
+it. Detection grants nothing on its own: access starts only when someone taps,
+and the node re-checks that the port is still a workspace listener before it
+publishes (`apps.offers` / `apps.adopt`). Detection reads `/proc` on Linux and
+uses `lsof` on macOS. It sees only processes owned by the node's user and ports
+from 1024 up. Use a manifest to name views, add terminals or publish static
+snapshots.
+
 Inside an agent session, `--session` defaults to the same session environment used
 by `bivy attach`. No per-agent adapter or special model tool is required.
 `bivy app --help` describes the contract. The CLI prints JSON, including app and

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import type { AppManifest, OpenAppViewResult, SessionAppsResult, ShareAppViewResult } from "./types.js";
+import type { AppManifest, AppOffer, OpenAppViewResult, SessionApp, SessionAppOffersResult, SessionAppsResult, ShareAppViewResult } from "./types.js";
 import { AppRegistry } from "./registry.js";
+import { scanListeners } from "./listeners.js";
 
 export interface AppPreviewProvider {
   readonly available?: boolean;
@@ -20,10 +21,21 @@ export interface AppTerminalProvider {
  * never knows about terminals. New providers can extend open/remove here. */
 export class AppService {
   private terminalStarts = new Map<string, Promise<string>>();
-  constructor(readonly registry: AppRegistry, readonly gateway: AppPreviewProvider | undefined, private readonly terminals: AppTerminalProvider) {}
+  constructor(readonly registry: AppRegistry, readonly gateway: AppPreviewProvider | undefined, private readonly terminals: AppTerminalProvider, private readonly scan: (workspace: string) => Promise<AppOffer[]> = scanListeners) {}
 
   list(sessionId: string): SessionAppsResult { return { apps: this.registry.list(sessionId), previewAvailable: Boolean(this.gateway) && this.gateway?.available !== false }; }
   publish(sessionId: string, workspace: string, manifest: AppManifest) { return this.registry.publish(sessionId, workspace, manifest); }
+  /** Servers running in the workspace that this session doesn't preview yet. */
+  async offers(sessionId: string, workspace: string): Promise<SessionAppOffersResult> {
+    const claimed = this.registry.claimedPorts(sessionId);
+    return { offers: (await this.scan(workspace)).filter((offer) => !claimed.has(offer.port)) };
+  }
+  /** Publish a detected server. Re-scanned so a client can't adopt an arbitrary port. */
+  async adopt(sessionId: string, workspace: string, port: number): Promise<SessionApp> {
+    const offer = (await this.offers(sessionId, workspace)).offers.find((item) => item.port === port);
+    if (!offer) throw new Error(`Nothing in this session's workspace is listening on port ${port} any more.`);
+    return this.registry.publish(sessionId, workspace, { version: 1, name: `${offer.command} · :${port}`.slice(0, 100), views: [{ kind: "web", name: `Port ${port}`, source: { kind: "service", port } }] });
+  }
   async open(sessionId: string, appId: string, viewId: string, returnTo?: string): Promise<OpenAppViewResult> {
     const entry = this.registry.requireView(sessionId, appId, viewId);
     if (entry.view.kind === "web") {
