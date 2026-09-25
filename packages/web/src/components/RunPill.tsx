@@ -28,6 +28,8 @@ const RECOVERY_LABEL: Record<RecoveryKind, string> = { fix: "Fix", retry: "Retry
 
 interface Action {
   label: string;
+  /** Trailing muted qualifier (e.g. a PR's state). */
+  detail?: string;
   url: string;
 }
 
@@ -60,11 +62,19 @@ function formatWhen(value: number | string): string {
   return d.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
-function prActionLabel(pr: PrRef): string {
-  const num = pr.number ? ` #${pr.number}` : "";
-  const state = pr.state === "merged" ? "merged" : pr.state === "closed" ? "closed" : "open";
-  return `Pull request${num} (${state})`;
+/** "$19.62" — cents are the useful precision; sub-cent spend keeps enough
+ *  digits to not read as free. The exact figure stays in the tooltip. */
+export function formatCost(usd: number): string {
+  if (usd > 0 && usd < 0.01) return `$${usd.toFixed(4)}`;
+  return `$${usd.toFixed(2)}`;
 }
+
+/** "17.5M" / "842K" / "312" — a compact count; exact value in the tooltip. */
+export function formatCount(n: number): string {
+  return new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(n);
+}
+
+const PR_STATE_LABEL: Record<PrRef["state"], string> = { open: "Open", merged: "Merged", closed: "Closed" };
 
 // The sheet's GitHub links (issue / PR / branch) — one row anatomy, each led by
 // the GitHub mark, so they read as one group. `gh.repo` is "owner/name"; lead
@@ -73,7 +83,7 @@ function prActionLabel(pr: PrRef): string {
 function actionsFor(gh: GithubContext): Action[] {
   const actions: Action[] = [];
   if (gh.issueUrl) actions.push({ label: "Open issue", url: gh.issueUrl });
-  for (const pr of gh.prs) actions.push({ label: prActionLabel(pr), url: pr.url });
+  for (const pr of gh.prs) actions.push({ label: `Pull request${pr.number ? ` #${pr.number}` : ""}`, detail: PR_STATE_LABEL[pr.state] ?? pr.state, url: pr.url });
   if (gh.branch && gh.repo)
     actions.push({ label: `${gh.repo} · ${gh.branch}`, url: `https://github.com/${gh.repo}/tree/${encodeURIComponent(gh.branch)}` });
   return actions;
@@ -224,8 +234,9 @@ export function RunPill({
         onClick={() => setOpen(true)}
         title={[source.label, statusLabel, filesLabel].filter(Boolean).join(" · ")}
       >
-        <SourceMark kind={source.kind} size="sm" />
-        <span className="run-pill-label">{short}</span>
+        {/* A hand-opened session is the default, so only an automation trigger
+            names itself here; the full source always heads the sheet. */}
+        {source.automation && <><SourceMark kind={source.kind} size="sm" /><span className="run-pill-label">{short}</span></>}
         <span className="run-pill-stat"><StatusDot status={statusClass} />{statusLabel}</span>
         <PrBadge prs={gh.prs} />
         {filesLabel && <span className="run-pill-files">{filesLabel}</span>}
@@ -295,8 +306,8 @@ export function RunPill({
 
             {hasUsage && (
               <div className="run-sheet-rows">
-                {hasCost && <Row k="Cost">${usage!.costUsd!.toFixed(4)}</Row>}
-                {tokenTotal > 0 && <Row k="Tokens">{tokenTotal.toLocaleString()}</Row>}
+                {hasCost && <Row k="Cost"><span title={`$${usage!.costUsd!.toFixed(4)}`}>{formatCost(usage!.costUsd!)}</span></Row>}
+                {tokenTotal > 0 && <Row k="Tokens"><span title={tokenTotal.toLocaleString()}>{formatCount(tokenTotal)}</span></Row>}
                 {planWindows.map((w) => (
                   <Row k={w.label} key={w.label}>
                     {typeof w.utilizationPct === "number" ? `${Math.round(w.utilizationPct)}% used` : "usage unknown"}
@@ -353,6 +364,7 @@ export function RunPill({
               >
                 <GhMark />
                 <span>{a.label}</span>
+                {a.detail && <span className="run-sheet-changes-hint">{a.detail}</span>}
               </a>
             ))}
             {evidence?.output?.artifactUrl && (

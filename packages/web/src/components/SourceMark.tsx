@@ -79,12 +79,12 @@ export function SourceMark({
   title,
 }: {
   kind: SourceKind;
-  size?: "md" | "sm";
+  size?: "md" | "sm" | "xs";
   status?: StatusDotState;
   title?: string;
 }) {
   return (
-    <span className={`source-mark${size === "sm" ? " sm" : ""}${status ? " has-status" : ""}`} title={title} aria-hidden>
+    <span className={`source-mark${size === "md" ? "" : ` ${size}`}${status ? " has-status" : ""}`} title={title} aria-hidden>
       <SourceGlyph kind={kind} />
       {status && <StatusDot status={status} />}
     </span>

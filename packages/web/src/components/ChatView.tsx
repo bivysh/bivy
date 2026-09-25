@@ -563,6 +563,7 @@ export function ChatView({
   onAction,
   header,
   footer,
+  greeting,
 }: {
   entries: TranscriptEntry[];
   working: boolean;
@@ -590,6 +591,9 @@ export function ChatView({
    *  the content box, so the auto-follow layout-effect scrolls it into view on
    *  its own when the user is pinned to the bottom — no separate key needed. */
   footer?: ReactNode;
+  /** Quiet headline centred on an empty draft (omitted during first-run
+   *  onboarding, where the readiness checklist owns that space). */
+  greeting?: string;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -725,6 +729,9 @@ export function ChatView({
               <Spinner size="lg" />
               <p>Fetching transcript…</p>
             </div>
+          )}
+          {total === 0 && !header && draftRoute && greeting && (
+            <div className="chat-greeting"><h2>{greeting}</h2></div>
           )}
           {total === 0 && !header && !draftRoute && !opening && (
             <div className="chat-empty">

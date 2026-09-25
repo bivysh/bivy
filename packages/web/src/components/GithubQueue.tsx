@@ -450,9 +450,9 @@ export function GithubQueuePanel({
                       className={`session-item${s.sessionId === activeSessionId ? " active" : ""}`}
                       onClick={() => onPick(s.sessionId, s.path, s.nodeId)}
                     >
-                      <RowMark kind={src.kind} status={statusDotState(s)} srLabel={`${src.label} · ${label}`} />
                       <span className="session-body">
                         <span className="session-title-row">
+                          <RowMark status={statusDotState(s)} srLabel={`${src.label} · ${label}`} />
                           <span className="session-name">{s.name}</span>
                           <PrBadge prs={s.prs} />
                           {relTime(s.updatedAt) && (

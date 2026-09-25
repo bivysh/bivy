@@ -129,6 +129,16 @@ function ModelGlyph() {
   );
 }
 
+/** The model pill's visible text, minus a leading word it shares with the agent
+ *  pill beside it ("Claude Opus 5.5" next to "Claude Code SDK" → "Opus 5.5"),
+ *  so both fit a phone-width row without truncating. The full name stays in
+ *  the pill's title and in the picker. */
+export function compactModelLabel(model: string, agent: string): string {
+  const [first, ...rest] = model.split(" ");
+  const agentFirst = agent.split(" ")[0];
+  return rest.length && first && agentFirst && first.toLowerCase() === agentFirst.toLowerCase() ? rest.join(" ") : model;
+}
+
 export function Composer({
   state,
   disabled,
@@ -839,7 +849,7 @@ export function Composer({
                 title={modelSelectable ? `Model: ${modelLabel}` : destinationCatalogPending ? "Choose a model after startup, before your saved first message is sent" : "This agent uses its own default model"}
               >
                 <span className="pill-glyph"><ModelGlyph /></span>
-                <span className="pill-label">{modelLabel}</span>
+                <span className="pill-label">{state.catalogs.currentModel && !destinationCatalogPending ? compactModelLabel(modelLabel, agentLabel) : modelLabel}</span>
               </button>
             </div>
 
@@ -889,7 +899,9 @@ export function Composer({
                 aria-label={stopping ? "Stopping current turn" : "Stop current turn"}
                 disabled={stopping}
               >
-                {stopping ? <><span className="working-dots" aria-hidden><i /><i /><i /></span><span>Stopping…</span></> : "■"}
+                {stopping ? <><span className="working-dots" aria-hidden><i /><i /><i /></span><span>Stopping…</span></> : (
+                  <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden><rect x="4" y="4" width="16" height="16" rx="3" fill="currentColor" /></svg>
+                )}
               </button>
             )}
             {(!working || canSend) && (
@@ -900,7 +912,7 @@ export function Composer({
                 title={working ? "Queue follow-up" : firstIsolatedRun ? "Launch Machine and send task" : "Send"}
                 aria-label={firstIsolatedRun ? "Launch Machine and send task" : working ? "Queue follow-up" : "Send"}
               >
-                ↑
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M12 19V5" /><path d="m5 12 7-7 7 7" /></svg>
               </button>
             )}
           </div>
