@@ -1391,6 +1391,12 @@ function NodesPanel({ state, cloudMachinesEnabled }: { state: AppState; cloudMac
                 label="Enable auto-attach for tool images"
               />
             </div>
+            </div>
+          </details>
+
+          <details className="settings-section settings-disclosure">
+            <summary className="settings-disclosure-summary">App previews</summary>
+            <div className="settings-disclosure-body">
             <div className="settings-toggle-row">
               <div className="settings-toggle-text">
                 <span className="settings-toggle-title">Let agents screenshot their app previews</span>
