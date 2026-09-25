@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Edit a webhook automation's pre-agent filter — command, trusted directory, and timeout — from the automation editor, instead of only through `bivy automation apply`. The filter lives in the encrypted instruction template, so saving an automation from the app no longer silently drops a filter that was applied from the CLI.
+
+### Changed
+
+- Quieter sidebar, chat, and composer. The sidebar puts **New session** as the primary action at the foot beside a round Settings button, promotes Terminal to a nav row, folds the Sessions heading and count into the search placeholder, and renders single-line rows that show a status dot only for states that want attention, a compact shape-coded PR mark, a source glyph for automation runs, and the machine name only when there is more than one machine. In chat, copy and read-aloud appear on a turn's final reply (interim replies reveal them on hover), the header drops its duplicate status dot, the run pill names only automation sources, and the composer shares the transcript column with a neutral Stop and a greeting on an empty draft. The run sheet shows cost to the cent and compact token counts. The dark theme is now true black, with neutrals carrying a faint cool tint matched to the accent hue.
+
+### Fixed
+
+- Keep a reopened session's thinking blocks where they belong instead of stacking them after the final answer. Claude persists each thinking block as its own assistant message; with no tool ids or reply text to match on, the reload couldn't recognize those messages as ones already in the stored log and appended them to the end of the turn. Thinking text now counts toward that match, so the reloaded transcript reads in the same order as the live one.
+- Stop Run details from crashing the app for automation runs. An automation run's source (`automation:<uuid>`) is longer than the receipt format allows, which threw while rendering the panel and took the whole app down with it. Long `<kind>:<id>` sources now project as a kind plus a reference, and Run details hides the receipt row rather than crashing when a receipt can't be built.
+
 ## [0.17.0] - 2026-09-25
 
 ### Added
