@@ -35,22 +35,22 @@ both published from CI via the single `release.yml` workflow:
 
 | Channel | dist-tag | Version shape | When it publishes | Install |
 |---|---|---|---|---|
-| **Production** | `latest` | `X.Y.Z` | on a deliberate "Promote" dispatch | `npm i -g @bivy/bivy` (default) |
+| **Production** | `latest` | `X.Y.Z` | when a `pnpm release` commit lands, after approval | `npm i -g @bivy/bivy` (default) |
 | **Staging** | `staging` | `X.Y.Z-staging.N` | automatically on every merge to `main` | `BIVY_CHANNEL=staging` / `npm i -g @bivy/bivy@staging` |
 
 The flow is trunk-based: every change lands on `main` through a PR, and each merge
 immediately publishes a unique, provenance-signed **staging** build that the dev
-fleet can install with `BIVY_CHANNEL=staging`. `latest` never moves on a merge —
-it only advances when a maintainer promotes the current `package.json` version to
-production (see "Cutting a production release"). Staging versions are semver
-prereleases, so they sort *below* `X.Y.Z` and never satisfy a plain `@bivy/bivy`
-install; they also never consume the eventual stable `X.Y.Z` version.
+fleet can install with `BIVY_CHANNEL=staging`. `latest` only advances when a
+maintainer releases (see "Cutting a production release"). Staging versions are
+semver prereleases, so they never satisfy a plain `@bivy/bivy` install and never
+consume a stable `X.Y.Z`.
 
-`package.json` on `main` always holds the **next** clean release version
-(`X.Y.Z`, no prerelease suffix). Staging builds derive from it (`X.Y.Z-staging.N`);
-promoting publishes exactly that `X.Y.Z`. After a production release, bump
-`package.json` to the next target in a PR so subsequent staging builds carry the
-new number.
+`package.json` on `main` holds the **last released** version (`X.Y.Z`, no
+prerelease suffix). Staging builds target the next patch after it
+(`X.Y.(Z+1)-staging.N`), so they always sort above `latest`; no version-bump PR
+is needed after a release. A commit that sets an **unreleased** version — the one
+`pnpm release` produces — is the release: its staging build is the release
+candidate and the same Release run promotes it.
 
 ## Why npm rather than a signed tarball
 
@@ -155,23 +155,35 @@ npm view @bivy/bivy dist-tags        # see what `staging` and `latest` point at
 
 ## Cutting a production release
 
-Production is a deliberate promotion of whatever version `package.json` currently
-holds on `main`, to the `latest` dist-tag.
+Add user-facing notes to `CHANGELOG.md`'s `[Unreleased]` section as changes land.
+Then, from any clean checkout:
 
-1. Open a PR that, on `main`:
-   - runs `pnpm run release:version -- X.Y.Z` to set the root, package, and
-     service manifests together to a clean release version;
-   - moves `CHANGELOG.md`'s `[Unreleased]` into a `## [X.Y.Z]` section.
-   Merge it and wait for its required CI and automatic staging publish to pass.
-   (The staging build is a release candidate for exactly this commit.)
-2. Run the **Promote** button: Actions → **Release** → *Run workflow* (from
-   `main`), and type the exact `X.Y.Z` into the confirmation field. Or from the
-   CLI:
+```bash
+pnpm release --dry-run   # preview the version and release notes
+pnpm release             # patch; or `pnpm release minor|major|X.Y.Z`
+```
 
-   ```bash
-   gh workflow run release.yml --ref main -f confirm_version=X.Y.Z
-   ```
-3. Approve the run when it pauses on the `release` environment.
+That branches from the latest `origin/main`, sets the root, package, and service
+manifests to the new version, dates `[Unreleased]` as `## [X.Y.Z] - YYYY-MM-DD`,
+opens the `chore(release): X.Y.Z` PR and turns on auto-merge. It refuses to run
+with an empty `[Unreleased]`. When the PR merges, the Release run for that commit
+publishes the staging candidate and then waits on the `release` environment —
+**approve it** and the run promotes to `latest`, tags `vX.Y.Z`, and creates the
+GitHub release. That approval is the only manual step after `pnpm release`.
+
+Full CI must pass on the exact release commit. The merge queue already runs every
+CI job on it (a release commit touches every manifest), so promotion reuses that
+run instead of repeating it. A commit without such a run — pushed past branch
+protection, say — gets the canonical CI workflow with `force_all: true` before
+the production job can publish. A successful staging publish alone is not
+evidence that tests passed.
+
+To promote by hand (for example after rejecting the approval), dispatch the
+workflow from `main` and type the version:
+
+```bash
+gh workflow run release.yml --ref main -f confirm_version=X.Y.Z
+```
 
 Before publishing, promotion creates the durable tag
 `release-intent-vX.Y.Z`, binding that version to the exact commit. The tag is
@@ -188,20 +200,12 @@ current commit and npm's `latest` tag already names that version. Image aliases,
 the final `vX.Y.Z` tag, and the GitHub release are idempotent, so this recovery
 cannot mix artifacts from different commits.
 
-The release PR must pass the repository's full required CI before it can merge.
-Promotion also calls the canonical CI workflow with `force_all: true` for the
-exact release commit (including recovery tags), before the production job can
-publish. A successful staging publish alone is not evidence that tests passed.
-It then verifies that the commit completed its automatic staging publish,
-validates the version and workspace agreement, and publishes the stable build
-to `latest` via Trusted Publishing (automatic provenance). It then tags the commit `vX.Y.Z` and creates
-the GitHub release from the matching CHANGELOG section
-(`scripts/extract-changelog.mjs`). If Promote is clicked while staging is still
-running, it waits for up to ten minutes.
-
-After the release, use `pnpm run release:version -- X.Y.Z` in the development
-version PR as well; this replaces the previous manual edits across every
-manifest.
+Promotion also verifies the commit's staging publish, validates the version and
+workspace agreement, requires the public service images for the SHA, and
+publishes the stable build to `latest` via Trusted Publishing (automatic
+provenance). The GitHub release body is the matching CHANGELOG section
+(`scripts/extract-changelog.mjs`). A manual dispatch clicked while staging is
+still running waits for up to ten minutes.
 
 ### Publishing by hand (discouraged)
 
