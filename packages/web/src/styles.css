@@ -337,13 +337,13 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .row-status { flex: none; display: inline-flex; }
 .session-name {
   flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-size: var(--text-md); line-height: var(--lh-md); font-weight: var(--weight-medium);
+  font-size: var(--text-base); line-height: var(--lh-base); font-weight: var(--weight-medium);
 }
 /* Relative age, pinned to the row's trailing edge; flex:none so it never
    shrinks or forces the row to scroll sideways. */
 .session-age { flex: none; font-size: var(--text-xs); color: var(--muted); font-variant-numeric: tabular-nums; line-height: var(--lh-xs); }
 /* Agent / repo / branch descriptor line, below the title. */
-.session-meta { font-size: var(--text-sm); line-height: var(--lh-sm); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-meta { font-size: var(--text-xs); line-height: var(--lh-xs); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @keyframes dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
 .session-row { position: relative; display: flex; align-items: center; }
 .session-row .session-item { flex: 1; min-width: 0; }
