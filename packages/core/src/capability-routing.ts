@@ -81,25 +81,6 @@ export function anyNodeEligible(nodeCapabilities: Array<string[] | undefined>, r
   return nodeCapabilities.some((caps) => matchCapabilities(caps, required, undefined).eligible);
 }
 
-const EXPLANATION_MAX = 200;
-
-/** Bounded, privacy-safe explanation of a capability match: only tag names,
- * never endpoint URLs, command text, node identity beyond a caller-supplied
- * safe label, or any other secret/private material. Trims to fit the same
- * 200-character routingReason budget the rest of the routing system uses. */
-export function explainCapabilityMatch(match: CapabilityMatch, opts?: { label?: string }): string {
-  const parts: string[] = [];
-  const label = opts?.label?.trim();
-  if (!match.eligible) {
-    parts.push(`missing required capability: ${match.missingRequired.join(", ")}`);
-  } else {
-    if (label) parts.push(`routed to ${label}`);
-    if (match.matchedPreferred.length) parts.push(`matched preferred: ${match.matchedPreferred.join(", ")}`);
-    if (match.unmatchedPreferred.length) parts.push(`preferred unavailable: ${match.unmatchedPreferred.join(", ")}`);
-  }
-  const text = parts.join("; ") || (match.eligible ? "eligible" : "not eligible");
-  return text.length > EXPLANATION_MAX ? `${text.slice(0, EXPLANATION_MAX - 1)}…` : text;
-}
 
 /**
  * Soft, best-effort claim delay in milliseconds for a preferred-capability

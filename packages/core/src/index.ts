@@ -17,7 +17,6 @@ export * from "./outcome.js";
 export * from "./run.js";
 export * from "./activation.js";
 export * from "./capabilities.js";
-export * from "./credentialReadiness.js";
 export * from "./provider-catalog.js";
 export * from "./launch-models.js";
 export * from "./credential-vault.js";
@@ -67,7 +66,6 @@ export {
   ephemeralComputeIntent,
   ephemeralComputeIntentLabel,
   ephemeralCatalogEntry,
-  ephemeralColdStartMs,
   ephemeralCostEstimate,
   ephemeralCostHint,
   ephemeralLifecyclePhase,

@@ -5,7 +5,6 @@ import {
   validateCapabilityTags,
   matchCapabilities,
   anyNodeEligible,
-  explainCapabilityMatch,
   capabilityClaimDelayMs,
   MAX_CAPABILITY_TAGS,
 } from "../src/capability-routing.js";
@@ -112,34 +111,6 @@ describe("anyNodeEligible (required-tag parking honesty)", () => {
     // fresh one are indistinguishable inputs, by design.
     const staleNodeCapabilities = ["gpu"];
     expect(anyNodeEligible([staleNodeCapabilities], ["gpu"])).toBe(true);
-  });
-});
-
-describe("explainCapabilityMatch (privacy-safe, bounded)", () => {
-  it("names only the missing tag on a hard block", () => {
-    const match = matchCapabilities(["docker"], ["gpu"], undefined);
-    const text = explainCapabilityMatch(match);
-    expect(text).toBe("missing required capability: gpu");
-  });
-
-  it("never exceeds 200 characters", () => {
-    const many = Array.from({ length: MAX_CAPABILITY_TAGS }, (_, i) => `preferred-tag-number-${i}`);
-    const match = matchCapabilities([], undefined, many);
-    expect(explainCapabilityMatch(match).length).toBeLessThanOrEqual(200);
-  });
-
-  it("contains no URL-shaped or secret-shaped substrings", () => {
-    const match = matchCapabilities(["gpu"], ["gpu"], ["docker"]);
-    const text = explainCapabilityMatch(match, { label: "my-gpu-box" });
-    expect(text).not.toMatch(/https?:\/\//);
-    expect(text).not.toMatch(/token|secret|key|password/i);
-  });
-
-  it("reports matched and unmatched preferred tags separately when eligible", () => {
-    const match = matchCapabilities(["gpu"], undefined, ["gpu", "docker"]);
-    const text = explainCapabilityMatch(match);
-    expect(text).toContain("matched preferred: gpu");
-    expect(text).toContain("preferred unavailable: docker");
   });
 });
 

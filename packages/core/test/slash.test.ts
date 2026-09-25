@@ -5,7 +5,6 @@ import {
   isSlashInput,
   parseSlash,
   matchSlashCommands,
-  slashHelpText,
   resolveSlash,
   isValidAgentCommand,
 } from "../src/slash.js";
@@ -119,20 +118,5 @@ describe("resolveSlash", () => {
   it("ignores malformed advertised commands (no catalog if all are junk)", () => {
     const junk = [{ name: "bad" } as any, null as any];
     expect(resolveSlash(parseSlash("/x")!, junk)).toEqual({ kind: "unknown", name: "/x", hasCatalog: false });
-  });
-});
-
-describe("slashHelpText", () => {
-  it("reports when the agent advertised no commands", () => {
-    expect(slashHelpText()).toContain("No commands available");
-  });
-
-  it("lists the active agent's advertised commands", () => {
-    const help = slashHelpText([
-      { name: "/compact", description: "Compact the conversation." },
-      { name: "/status", description: "Show status." },
-    ]);
-    expect(help).toContain("/compact — Compact the conversation.");
-    expect(help).toContain("/status — Show status.");
   });
 });

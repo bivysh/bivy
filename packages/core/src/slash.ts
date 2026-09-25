@@ -109,18 +109,3 @@ export function matchSlashCommands(prefix: string, extra: SlashCommand[] = []): 
     (c) => c.name.toLowerCase().startsWith(p) || c.aliases?.some((a) => a.toLowerCase().startsWith(p)),
   );
 }
-
-/**
- * A human-readable help block listing the active session's advertised agent
- * commands, for the `/help` output. Returns a friendly line when the session
- * advertised none.
- */
-export function slashHelpText(extra: SlashCommand[] = []): string {
-  const describe = (c: SlashCommand) => {
-    const names = [c.name, ...(c.aliases ?? [])].join(", ");
-    return c.description ? `${names} — ${c.description}` : names;
-  };
-  const lines = extra.filter(isValidAgentCommand).map(describe);
-  if (!lines.length) return "No commands available for this agent.";
-  return ["Commands:", ...lines].join("\n");
-}

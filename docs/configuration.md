@@ -610,7 +610,6 @@ Publishing is driven by flags, not environment: `--publish`, `--dry-run`.
 | Variable | Where | Default | Notes |
 | --- | --- | --- | --- |
 | `GH_ENV` | `scripts/sync-github-env.sh` | `staging` | Target GitHub environment |
-| `BIVY_CODEX_E2E` | `test/codex-approvals-e2e.test.ts` | unset | `1` runs the Codex end-to-end test |
 | `BIVY_TEST_SECRET` | `test/secrets.test.ts` | unset | Test fixture for `env://` resolution |
 
 `scripts/secret-scan.mjs`, `scripts/check-licenses.mjs`,

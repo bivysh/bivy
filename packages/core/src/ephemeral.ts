@@ -29,7 +29,6 @@ export {
 } from "./ephemeral-compute.js";
 export {
   clampTtlMinutes,
-  ephemeralColdStartMs,
   ephemeralCostHint,
   ephemeralLifecyclePhase,
   formatEphemeralPrice,
