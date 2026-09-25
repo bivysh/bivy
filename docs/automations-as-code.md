@@ -131,7 +131,9 @@ enabled definitions in file order, repository filters, then event predicates.
 
 Generic `trigger: webhook` automations can run a trusted executable on their
 assigned node. GitHub/Linear-specific triggers are not supported by this first
-version. Signature verification and intake limits still happen first; the filter
+version. Automations created in the app can use the same filter: open the
+webhook automation and turn on **Filter deliveries with a script**, then enter
+the command, directory, and timeout described below. Signature verification and intake limits still happen first; the filter
 runs after queue claim but before repository fetching or any agent session.
 
 ```yaml

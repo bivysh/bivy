@@ -53,6 +53,8 @@ import { WorkQueueSetupSheet, type SourceSetupFocus } from "./WorkQueueSetupShee
 import { githubSourceStatus, githubMentionHandles } from "./githubSource.js";
 import { buildGithubOn, togglesFromAutomation, type GithubEventToggles } from "./githubAutomationEvents.js";
 import { WebhookAuthFields } from "./WebhookAuthFields.js";
+import { WebhookFilterFields } from "./WebhookFilterFields.js";
+import { buildWebhookFilter, filterDraftFrom, type WebhookFilterDraft } from "./webhookFilterDraft.js";
 import { GithubTriggerAccess } from "./GithubTriggerAccess.js";
 import { RepositoryEventFilter } from "./RepositoryEventFilter.js";
 import { GithubQueuePanel } from "./GithubQueue.js";
@@ -339,6 +341,8 @@ interface Draft {
   requireSigning: boolean;
   webhookHeader: string;
   webhookAuthMode: "hmac" | "header";
+  /** Webhook-only pre-agent gate; stored inside the encrypted template. */
+  filter: WebhookFilterDraft;
 }
 
 function emptyDraft(nodeId: string): Draft {
@@ -368,6 +372,7 @@ function emptyDraft(nodeId: string): Draft {
     requireSigning: true,
     webhookHeader: "x-bivy-signature-256",
     webhookAuthMode: "hmac",
+    filter: filterDraftFrom(),
   };
 }
 
@@ -691,6 +696,7 @@ export function AutomationsView({
       requireSigning: item.trigger === "webhook" ? item.requireSigning !== false : base.requireSigning,
       webhookHeader: item.webhookHeader || base.webhookHeader,
       webhookAuthMode: item.webhookAuthMode || base.webhookAuthMode,
+      filter: filterDraftFrom(template.filter),
       nodeId,
       repo: item.repo || "",
       runtimeId: item.runtimeId || "",
@@ -1366,7 +1372,7 @@ function SourceAutomationEditor({
     const nodeId = node?.id;
     const key = nodeId ? controller.local.keys()[nodeId] : undefined;
     if (!nodeId || !key) throw new Error("Choose a paired machine before saving account selections.");
-    return `${TEMPLATE_PREFIX}:${nodeId}:${await seal(await importRoomKey(unb64url(key)), encodeAutomationTemplate(accountTemplate.instructions, accountTemplate.credentialLabels))}`;
+    return `${TEMPLATE_PREFIX}:${nodeId}:${await seal(await importRoomKey(unb64url(key)), encodeAutomationTemplate(accountTemplate.instructions, accountTemplate.credentialLabels, accountTemplate.filter))}`;
   }
 
   async function save() {
@@ -1860,6 +1866,8 @@ function AutomationEditor({
   if (d.hasTrigger && !repoOk) missing.push("a repository");
   if (d.hasTrigger && d.trigger === "github" && !Object.values(d.githubEvents).some(Boolean)) missing.push("a GitHub event");
   if (d.hasTrigger && d.trigger === "github" && githubSourceStatus(sources.github).tone !== "on") missing.push("a connected GitHub App");
+  const webhookFilter = d.trigger === "webhook" ? buildWebhookFilter(d.filter) : {};
+  if (d.hasTrigger && webhookFilter.error) missing.push("a valid filter script");
   if (!d.instructions.trim()) missing.push("instructions");
   if (!d.nodeId) missing.push("a machine");
   else if (!controller.local.keys()[d.nodeId]) missing.push("a paired machine (encryption key missing)");
@@ -1876,7 +1884,7 @@ function AutomationEditor({
     const roomKey = d.nodeId ? controller.local.keys()[d.nodeId] : undefined;
     let templateCiphertext: string | undefined;
     if (d.nodeId && roomKey && d.instructions.trim()) {
-      templateCiphertext = `${TEMPLATE_PREFIX}:${d.nodeId}:${await seal(await importRoomKey(unb64url(roomKey)), encodeAutomationTemplate(d.instructions.trim(), d.credentialLabels))}`;
+      templateCiphertext = `${TEMPLATE_PREFIX}:${d.nodeId}:${await seal(await importRoomKey(unb64url(roomKey)), encodeAutomationTemplate(d.instructions.trim(), d.credentialLabels, webhookFilter.filter))}`;
     }
     const labels = d.labels.split(/[,\n]/).map((v) => v.trim()).filter(Boolean);
     const repos = d.repos.split(/[,\n]/).map((v) => v.trim()).filter(Boolean);
@@ -1909,7 +1917,7 @@ function AutomationEditor({
     try {
       const roomKey = d.nodeId ? controller.local.keys()[d.nodeId] : undefined;
       if (!d.nodeId || !roomKey) throw new Error("Connect to the assigned machine before saving encrypted instructions.");
-      const encrypted = await seal(await importRoomKey(unb64url(roomKey)), encodeAutomationTemplate(d.instructions.trim(), d.credentialLabels));
+      const encrypted = await seal(await importRoomKey(unb64url(roomKey)), encodeAutomationTemplate(d.instructions.trim(), d.credentialLabels, webhookFilter.filter));
       const nodeName = selectedManaged ? undefined : selectedNode?.name;
       if (selectedManaged && managedTarget) {
         await controller.setQueueRouting({ primary: { kind: "config", configId: managedTarget.config.id } });
@@ -2240,6 +2248,7 @@ function AutomationEditor({
                       onHeader={(header) => set("webhookHeader", header)}
                       onSecret={setCustomWebhookSecret}
                     /> : <p className="settings-hint">Anyone with this URL can start a run without authentication.</p>}
+                    <WebhookFilterFields value={d.filter} error={webhookFilter.error} onChange={(filter) => set("filter", filter)} />
                   </div>
                 )}
                 {d.hasTrigger && (d.trigger === "github" || d.trigger === "linear") && (
