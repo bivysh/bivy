@@ -1,5 +1,4 @@
 import { expect, test } from "./fixtures.js";
-import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 // Vite is a @bivy/web devDependency, not a root dependency.
@@ -52,75 +51,3 @@ test("reload restores a real composer snapshot and only safe attachment metadata
 
 // Availability labels and update-blocker permutations are pure functions covered
 // by test/pwa-lifecycle.test.ts. Keep browser storage/reload and install events here.
-
-test("install suggestion is compact, out of the composer flow, and permanently dismissible", async ({ page }) => {
-  await openModuleFixture(page, `<button id="dismiss" hidden>Dismiss install suggestion</button><script type="module">
-    import { dismissInstall, getPwaLifecycleState, initializeInstallLifecycle, markFirstSuccessfulResponse, subscribePwaLifecycle } from '/src/pwaLifecycle.ts';
-    const button = document.querySelector('#dismiss');
-    const render = () => { button.hidden = getPwaLifecycleState().installChoice === null; };
-    subscribePwaLifecycle(render);
-    initializeInstallLifecycle();
-    const offer = new Event('beforeinstallprompt', { cancelable: true });
-    offer.prompt = async () => {};
-    offer.userChoice = Promise.resolve({ outcome: 'dismissed', platform: 'web' });
-    dispatchEvent(offer);
-    markFirstSuccessfulResponse();
-    button.addEventListener('click', dismissInstall);
-    window.offerInstallAgain = () => dispatchEvent(offer);
-    window.installChoice = () => getPwaLifecycleState().installChoice;
-  </script>`);
-
-  const dismiss = page.getByRole("button", { name: "Dismiss install suggestion" });
-  await expect(dismiss).toBeVisible();
-  await dismiss.click();
-  await expect(dismiss).toBeHidden();
-  await page.evaluate(() => (window as unknown as { offerInstallAgain(): void }).offerInstallAgain());
-  expect(await page.evaluate(() => (window as unknown as { installChoice(): unknown }).installChoice())).toBeNull();
-  expect(await page.evaluate(() => localStorage.getItem("bivy.pwa.install-dismissed"))).toBe("1");
-
-  const [notice, styles] = await Promise.all([
-    readFile(new URL("../../packages/web/src/components/PwaLifecycleNotice.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../../packages/web/src/pwa-lifecycle.css", import.meta.url), "utf8"),
-  ]);
-  expect(notice).toContain('aria-label="Dismiss install suggestion"');
-  expect(styles).toMatch(/\.pwa-install\s*{[^}]*position: fixed;/s);
-  expect(styles).toContain("width: min(360px, calc(100vw - 32px))");
-});
-
-test("install is contextual after success with native, iOS/Safari, and standalone fallbacks", async ({ page }) => {
-  await openModuleFixture(page, `<button id="install" hidden>Install Bivy</button><output></output><script type="module">
-    import { fallbackInstallChoice, getPwaLifecycleState, initializeInstallLifecycle, markFirstSuccessfulResponse, requestInstall, subscribePwaLifecycle } from '/src/pwaLifecycle.ts';
-    const installButton = document.querySelector('#install');
-    const result = document.querySelector('output');
-    const render = () => { installButton.hidden = getPwaLifecycleState().installChoice !== 'native'; };
-    subscribePwaLifecycle(render);
-    initializeInstallLifecycle();
-    let prompted = 0;
-    const event = new Event('beforeinstallprompt', { cancelable: true });
-    event.prompt = async () => { prompted += 1; };
-    event.userChoice = Promise.resolve({ outcome: 'accepted', platform: 'web' });
-    dispatchEvent(event);
-    render();
-    const request = async () => { result.textContent = (await requestInstall()) + ':' + prompted; };
-    installButton.addEventListener('click', request);
-    window.installTest = {
-      success: markFirstSuccessfulResponse,
-      fallbacks: () => [
-        fallbackInstallChoice('Mozilla/5.0 (iPhone) Safari', 'iPhone', 5),
-        fallbackInstallChoice('Mozilla/5.0 Version/17.4 Safari/605.1', 'MacIntel', 0),
-        fallbackInstallChoice('Mozilla/5.0 (iPhone) Safari', 'iPhone', 5, true),
-      ],
-    };
-  </script>`);
-  await expect(page.getByRole("button", { name: "Install Bivy" })).toBeHidden();
-  await page.evaluate(() => (window as unknown as { installTest: { success(): void } }).installTest.success());
-  await expect(page.getByRole("button", { name: "Install Bivy" })).toBeVisible();
-  await page.getByRole("button", { name: "Install Bivy" }).click();
-  await expect(page.locator("output")).toHaveText("accepted:1");
-  expect(await page.evaluate(() => (window as unknown as { installTest: { fallbacks(): unknown[] } }).installTest.fallbacks())).toEqual(["ios", "safari", null]);
-
-  const notice = await readFile(new URL("../../packages/web/src/components/PwaLifecycleNotice.tsx", import.meta.url), "utf8");
-  expect(notice).toContain("Add to Home Screen");
-  expect(notice).toContain("Safari 17 or later");
-  expect(notice).toContain("cannot install Bivy as a web app");
-});

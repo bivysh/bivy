@@ -15,9 +15,13 @@ workers, or browser security. Do not put every business-rule permutation here.
   the replica and should not be added as regression coverage.
 - Desktop/mobile projects already supply viewport and input-mode coverage.
   Do not add a second width matrix inside those projects.
-- Viewport-independent browser checks run once via `singleViewport` in
-  `playwright.config.ts`. Keep both projects when there is a distinct mobile
-  interaction or layout assertion.
+- Every spec runs on every PR that touches the app, so each test must earn its
+  place. Viewport-independent checks run once via `singleViewport`; a spec runs
+  on mobile only when it is in `mobileSpecs`, and on mobile alone when it is in
+  `mobileOnlySpecs` (its mobile run already covers desktop). Behavior specs loop
+  over `themes` (light in CI); `screenshots.spec.ts` owns light + dark pixels.
+- If a check only reads controller state or a pure function's output, write a
+  node test in `test/*.test.ts` instead (see `test/pwa-install.test.ts`).
 - Repeat themes for appearance checks, not startup/configuration rules. Express
   model/credential/state variations explicitly rather than tying them to theme.
 - For timer-driven scenarios, install Playwright's clock before application

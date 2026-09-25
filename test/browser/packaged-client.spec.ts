@@ -115,7 +115,9 @@ test("sign-in uses the regular themed Bivy mark instead of the tent emoji", asyn
   await expect(page.getByRole("textbox", { name: "Email address" })).toBeFocused();
 });
 
-for (const platform of ["native", "browser"]) {
+// The browser platform variant of this policy is covered by
+// test/packaged-client.test.ts; only the native host behavior needs Chromium.
+for (const platform of ["native"]) {
   test(`generic ${platform} deployment preserves server login methods and account actions`, async ({ page }) => {
     const { createServer } = await import(pathToFileURL(require.resolve("vite")).href);
     const independent = await createServer({

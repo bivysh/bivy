@@ -54,8 +54,10 @@ for (const theme of themes) {
     await expect(failed).toBeFocused();
   });
 
-  for (const dismissal of ["backdrop", "close", "escape", "browser back", "rapid close", "nested"]) {
-    test(`${theme}: activity ${dismissal} stays in the current session`, async ({ page }, testInfo) => {
+  // Only the dismissals that touch browser history differ from modal-history's
+  // generic Sheet coverage: they must not leak into session routing.
+  for (const dismissal of ["browser back", "rapid close", "nested"]) {
+    test(`${theme}: activity ${dismissal} stays in the current session`, async ({ page }) => {
       const html = await server.transformIndexHtml('/modal-test', `<!doctype html><html data-theme="${theme}"><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="root"></div>
           <script type="module">
             import { createElement as h, StrictMode } from 'react';
@@ -94,7 +96,6 @@ for (const theme of themes) {
       await expect(page.locator(".activity-detail")).toBeVisible();
       await page.getByRole("button", { name: "Back", exact: true }).click();
       await expect(page.locator(".activity-row")).toBeVisible();
-      if (dismissal === "backdrop") await page.screenshot({ path: testInfo.outputPath(`activity-${theme}.png`) });
       if (dismissal === "nested") {
         const historyLength = await page.evaluate(() => {
           // Open through a real user gesture: Chromium may skip history entries
@@ -119,10 +120,7 @@ for (const theme of themes) {
           button.click();
           button.click();
         });
-      } else if (dismissal === "backdrop") await page.locator(".sheet-backdrop").click({ position: { x: 5, y: 5 } });
-      else if (dismissal === "close") await page.getByRole("button", { name: "Close", exact: true }).click();
-      else if (dismissal === "escape") await page.keyboard.press("Escape");
-      else await page.goBack();
+      } else await page.goBack();
       await expect(page.getByRole("dialog")).toHaveCount(0);
       await expect(page).toHaveURL(`${origin}/sessions/current`);
       expect(await page.evaluate(() => (window as unknown as { routeEvents: number }).routeEvents)).toBe(0);

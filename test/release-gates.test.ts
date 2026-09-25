@@ -64,12 +64,17 @@ test("every path-filtered CI job runs in the full tier that a production release
   }
 });
 
-test("the full tier runs every unit and core suite; only pr/queue select by change", () => {
-  // The nightly and release runs are the only complete runs once the queue is
-  // change-selected, so selection must never leak into the full tier.
-  const steps = ci.jobs.checks.steps as { name?: string; run?: string }[];
-  for (const name of ["Unit tests", "Core tests"]) {
-    const run = steps.find((step) => step.name === name)?.run ?? "";
-    assert.match(run, /if \[ "\$TIER" != full \]; then/, `${name} must select by change only outside the full tier`);
+test("PR and merge queue run the same checks, including every unit and core suite", () => {
+  // The queue only re-validates a PR against the latest main. A check that runs
+  // only in the queue surfaces a PR's regression after review, one queue
+  // round-trip at a time.
+  const tierStep = ci.jobs.changes.steps.find((step: { id?: string }) => step.id === "tier");
+  assert.doesNotMatch(tierStep.run, /merge_group\s*\]\s*;\s*then\s*\n\s*tier=/, "merge_group must not select its own tier");
+  for (const [name, job] of Object.entries(ci.jobs) as [string, { if?: string }][]) {
+    assert.doesNotMatch(job.if ?? "", /tier == '(?:pr|queue|gate)'/, `${name} must not run only in PRs or only in the queue`);
   }
+  const runs = (ci.jobs.checks.steps as { run?: string }[]).map((step) => step.run ?? "").join("\n");
+  assert.match(runs, /pnpm run test:unit/);
+  assert.match(runs, /pnpm run test:core/);
+  assert.doesNotMatch(runs, /TEST_AFFECTED_BASE|--changed/, "CI runs every suite, not a change-selected subset");
 });

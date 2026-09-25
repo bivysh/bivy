@@ -45,11 +45,13 @@ test("ordinary application changes retain npm consumers without bootstrapping an
   }
 });
 
-test("installer is required when selected in the queue and always runs in the full tier", () => {
-  const queueOrFull = (filter: string) =>
-    `needs.changes.outputs.tier == 'full' || (needs.changes.outputs.tier == 'queue' && needs.changes.outputs.${filter} == 'true')`;
-  for (const name of ["installer-smoke", "release-consumer"]) assert.equal(jobs[name].if, queueOrFull("installer"));
-  assert.equal(jobs["root-release"].if, queueOrFull("root"));
+test("installer runs when its inputs change and always in the full tier", () => {
+  const gated = (filter: string) => `needs.changes.outputs.tier == 'full' || needs.changes.outputs.${filter} == 'true'`;
+  assert.equal(jobs["installer-smoke"].if, gated("installer"));
+  // Packaging and the Linux npm consumer run on every app change: ordinary
+  // source changes break the published package too.
+  assert.equal(jobs["release-consumer"].if, gated("root"));
+  assert.equal(jobs["root-release"].if, gated("root"));
   assert.ok(jobs["ci-ok"].needs?.includes("installer-smoke"));
   assert.match(jobs["ci-ok"].steps![0].run!, /contains\(needs\.\*\.result, 'failure'\)/);
   assert.match(jobs["ci-ok"].steps![0].run!, /contains\(needs\.\*\.result, 'cancelled'\)/);
