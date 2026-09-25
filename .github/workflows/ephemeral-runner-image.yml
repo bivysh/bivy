@@ -1,20 +1,24 @@
 name: Ephemeral runner image
 
+# PAUSED: automatic ephemeral runner image builds are disabled for now — we'll
+# revisit this later. The push trigger below is intentionally commented out so
+# no image is prebuilt on review branches or main. Manual runs remain available
+# via workflow_dispatch. To re-enable, uncomment the push block.
 on:
-  push:
-    # Prebuild on review branches too. Staging deploys can then retag/use the
-    # exact Core SHA immediately instead of spending several minutes compiling
-    # node-pty and exporting the runner image on the deployment critical path.
-    paths:
-      - deploy/Dockerfile.ephemeral-runner
-      - src/**
-      - bin/**
-      - packages/**
-      - package.json
-      - pnpm-lock.yaml
-      - pnpm-workspace.yaml
-      - scripts/build-release.mjs
-      - .github/workflows/ephemeral-runner-image.yml
+  # push:
+  #   # Prebuild on review branches too. Staging deploys can then retag/use the
+  #   # exact Core SHA immediately instead of spending several minutes compiling
+  #   # node-pty and exporting the runner image on the deployment critical path.
+  #   paths:
+  #     - deploy/Dockerfile.ephemeral-runner
+  #     - src/**
+  #     - bin/**
+  #     - packages/**
+  #     - package.json
+  #     - pnpm-lock.yaml
+  #     - pnpm-workspace.yaml
+  #     - scripts/build-release.mjs
+  #     - .github/workflows/ephemeral-runner-image.yml
   workflow_dispatch:
 
 permissions:
