@@ -136,7 +136,13 @@ export async function takeShots(views: RegisteredView[], request: ShotRequest, o
     clearTimeout(deadline);
     ws?.terminate();
     for (const server of servers) server.close();
-    browser?.kill("SIGKILL");
-    fs.rmSync(profile, { recursive: true, force: true });
+    // Wait for the browser to exit before removing its profile: a killed
+    // Chrome can still be writing into it. Cleanup never fails a shot.
+    if (browser && browser.exitCode === null && browser.signalCode === null) {
+      const exited = once(browser, "exit").catch(() => {});
+      browser.kill("SIGKILL");
+      await exited;
+    }
+    try { fs.rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* temp dir; the OS reclaims it */ }
   }
 }
