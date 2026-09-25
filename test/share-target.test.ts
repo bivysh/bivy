@@ -55,22 +55,31 @@ assert.equal(mergeSharedText("existing", ""), "existing");
 
 // --- applyShareTarget: stashes the payload and redirects --------------------
 const pending = new MemoryStorage();
-assert.equal(applyShareTarget("/sessions/abc", "?text=nope", pending), null, "non-share paths are untouched");
+assert.equal(applyShareTarget("/sessions/abc", "?text=nope", pending, new MemoryStorage()), null, "non-share paths are untouched");
 assert.equal(pending.values.size, 0);
 
-assert.equal(applyShareTarget("/share", "?text=from%20the%20sheet", pending), "/sessions/new");
+assert.equal(applyShareTarget("/share", "?text=from%20the%20sheet", pending, new MemoryStorage()), "/sessions/new");
 assert.equal(peekPendingShare(pending), "from the sheet");
 // Peek does not consume — the sheet may not render until after a sign-in.
 assert.equal(peekPendingShare(pending), "from the sheet");
 
 // A second share before the first was placed appends to the stash.
-assert.equal(applyShareTarget("/share/", "?text=another%20thing", pending), "/sessions/new");
+assert.equal(applyShareTarget("/share/", "?text=another%20thing", pending, new MemoryStorage()), "/sessions/new");
 assert.equal(peekPendingShare(pending), "from the sheet\n\nanother thing");
 
 // An empty payload still redirects (the share URL must never linger) but
 // leaves the stash alone.
-assert.equal(applyShareTarget("/share", "", pending), "/sessions/new");
+assert.equal(applyShareTarget("/share", "", pending, new MemoryStorage()), "/sessions/new");
 assert.equal(peekPendingShare(pending), "from the sheet\n\nanother thing");
+
+// A named session skips the destination sheet: the text lands in that
+// session's draft (merged, never replacing what was typed) and it opens.
+const named = new MemoryStorage();
+writeComposerDraft(named, "s-1", "typed", []);
+assert.equal(applyShareTarget("/share", "?session=s-1&text=restart%20the%20server", pending, named), "/sessions/s-1");
+assert.equal(readComposerDraft(named, "s-1").text, "typed\n\nrestart the server");
+assert.equal(peekPendingShare(pending), "from the sheet\n\nanother thing", "a named share bypasses the stash");
+assert.equal(applyShareTarget("/share", "?session=..%2Fx&text=hi", pending, named), "/sessions/new", "malformed ids fall back to the sheet");
 
 clearPendingShare(pending);
 assert.equal(peekPendingShare(pending), null);

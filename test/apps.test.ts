@@ -236,6 +236,17 @@ test("preview grants and browser sessions expire; unavailable services return an
     const access = await grant(gateway, port, service.views[0].id);
     const response = await request(port, access.url.host, "/", { headers: { cookie: access.cookie } });
     assert.equal(response.status, 502); assert.match(response.body, /Start it on the registered port/);
+    // A page load gets a self-recovering page instead of a blank frame; its
+    // marker is what recovery polling watches, so a restarted server clears it.
+    const page = await request(port, access.url.host, "/", { headers: { cookie: access.cookie, "sec-fetch-dest": "iframe" } });
+    assert.equal(page.status, 502); assert.match(page.body, new RegExp(`Nothing is answering on port ${deadPort}`));
+    assert.ok(page.headers["x-bivy-upstream-down"]);
+    assert.match(String(page.headers["content-security-policy"]), new RegExp(`frame-ancestors ${gateway.shellOrigin(service.views[0].id)};`));
+    const restarted = http.createServer((_req, res) => res.end("back")); restarted.listen(deadPort, "127.0.0.1"); await once(restarted, "listening");
+    try {
+      const probe = await request(port, access.url.host, "/", { method: "HEAD", headers: { cookie: access.cookie } });
+      assert.equal(probe.status, 200); assert.equal(probe.headers["x-bivy-upstream-down"], undefined);
+    } finally { restarted.close(); }
   } finally { gateway.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 

@@ -103,7 +103,11 @@ keep the service bound to `127.0.0.1`. HTTP bodies and WebSocket upgrades are
 forwarded without an app-specific adapter. Root-relative routes, forms, cookies,
 and WebSocket connections can use the view's own origin; hardcoded localhost URLs
 and absolute localhost redirects must be fixed in the application's configuration.
-Long-lived HTTP streams time out after 60 seconds of inactivity. This initial
+Long-lived HTTP streams time out after 60 seconds of inactivity. If nothing is
+answering on the port, the preview shows **Nothing is answering on port N**
+instead of a blank frame. It reloads by itself once the server is back, and
+**Ask agent to fix** opens the session with a drafted request (nothing is sent
+until you send it). This initial
 static server does not provide SPA fallback, range requests or directory listings.
 
 ## Automatic web preview delivery

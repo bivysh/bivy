@@ -12,11 +12,13 @@ body { display:flex; flex-direction:column; background:var(--bg); color:var(--in
 nav { display:flex; align-items:center; gap:var(--space-2); padding:var(--space-2) var(--space-3); border-bottom:thin solid var(--line); background:var(--surface); flex-shrink:0; }
 nav .btn { min-height:var(--space-7); flex-shrink:0; }
 #title { flex:1; min-width:0; font-size:var(--text-sm); font-weight:var(--weight-semibold); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#down { flex-shrink:0; }
 #status { padding:var(--space-4); margin:0; font-size:var(--text-sm); }
 iframe { flex:1; min-height:0; width:100%; border:0; background:var(--bg); }
 [hidden] { display:none !important; }
 </style></head><body>
 <nav aria-label="Bivy preview controls"><button class="btn ghost" id="back">‹ Back to chat</button><span id="title">App preview</span><button class="btn ghost" id="reload" disabled>Reload</button></nav>
+<div class="banner" data-tone="warn" id="down" hidden><span class="banner-text" id="down-text" role="status"></span><span class="banner-actions"><button class="btn sm" id="ask" hidden>Ask agent to fix</button></span></div>
 <p id="status" role="status">Opening app…</p>
 <iframe id="app" title="App preview" hidden sandbox="allow-scripts allow-same-origin allow-forms allow-downloads allow-popups" referrerpolicy="no-referrer"></iframe>
 <script nonce="${nonce}">
@@ -39,6 +41,22 @@ function show(data,launch){
   // Store navigation metadata only, never tickets or cookies.
   try{sessionStorage.setItem(storageKey,JSON.stringify(data));}catch{}
 }
+// The app origin reports when its server stops answering. Its content is
+// untrusted: the port is only ever placed in a draft the user reviews.
+const down=document.getElementById('down'),downText=document.getElementById('down-text'),ask=document.getElementById('ask');
+let downPort=0;
+addEventListener('message',e=>{
+  if(!metadata||e.origin!==metadata.origin||e.source!==frame.contentWindow||e.data?.type!=='bivy:upstream')return;
+  downPort=Number(e.data.port)||0;
+  down.hidden=e.data.state!=='down';
+  downText.textContent='Nothing is answering on port '+downPort+'.';
+  ask.hidden=!metadata.returnTo;
+});
+ask.onclick=()=>{
+  const to=new URL(metadata.returnTo),session=to.pathname.split('/').pop();
+  const text='The app preview "'+metadata.name+'" isn’t loading: nothing is answering on port '+downPort+'. Please find out why the server stopped, restart it, and tell me when it’s back.';
+  location.assign(to.origin+'/share?session='+encodeURIComponent(session)+'&text='+encodeURIComponent(text));
+};
 back.onclick=()=>{if(metadata?.returnTo){window.close();setTimeout(()=>location.replace(metadata.returnTo),100);}else{window.close();status.hidden=false;status.textContent='You can close this tab to return to Bivy.';}};
 reload.onclick=()=>{if(metadata){status.hidden=false;status.textContent='Reloading app…';frame.src=metadata.origin+'/';}};
 (async()=>{

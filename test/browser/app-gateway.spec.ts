@@ -102,3 +102,43 @@ for (const mode of ["direct", "automatic"]) test(`preview launch redeems its fra
     await expect(page).toHaveURL(returnTo);
   } finally { fixture.close(); await fs.rm(dir, { recursive: true, force: true }); }
 });
+
+// A stopped dev server is a state with a next step, not a blank frame: the
+// shell says which port is silent, the frame recovers by itself when the
+// server returns, and "Ask agent to fix" lands as a draft in that session.
+test("a silent service shows a recoverable state and drafts a fix request", async ({ page }, testInfo) => {
+  const registry = new AppRegistry();
+  const fixture = await delivery(registry, false);
+  const { gateway, port } = fixture;
+  const probe = http.createServer(); probe.listen(0, "127.0.0.1"); await once(probe, "listening");
+  const deadPort = (probe.address() as { port: number }).port; await new Promise<void>((resolve) => probe.close(() => resolve()));
+  let server: http.Server | undefined;
+  try {
+    const app = registry.publish("s", os.tmpdir(), { version: 1, name: "Ledger", views: [{ kind: "web", name: "Ledger", source: { kind: "service", port: deadPort } }] });
+    const id = app.views[0].id;
+    await page.route("https://*.preview.example.net/**", async (route) => {
+      const request = route.request(); const url = new URL(request.url());
+      const response = await route.fetch({ url: `http://127.0.0.1:${port}${url.pathname}${url.search}`, headers: { ...await request.allHeaders(), host: url.host }, maxRedirects: 0 });
+      await route.fulfill({ response });
+    });
+    await page.route("https://bivy.example/**", (route) => route.fulfill({ contentType: "text/html", body: "<h1>Bivy chat</h1>" }));
+    await page.goto(gateway.open(id, "https://bivy.example/sessions/s"));
+    const banner = page.locator("#down");
+    await expect(banner).toContainText(`Nothing is answering on port ${deadPort}`);
+    await expect(page.frameLocator('iframe[title="Ledger"]').getByRole("heading", { name: `Nothing is answering on port ${deadPort}` })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("server-down.png"), fullPage: true });
+    await page.emulateMedia({ colorScheme: "dark" });
+    await page.screenshot({ path: testInfo.outputPath("server-down-dark.png"), fullPage: true });
+
+    server = http.createServer((_req, res) => { res.setHeader("content-type", "text/html"); res.end("<h1>Ledger is back</h1>"); });
+    server.listen(deadPort, "127.0.0.1"); await once(server, "listening");
+    await expect(page.frameLocator('iframe[title="Ledger"]').getByRole("heading", { name: "Ledger is back" })).toBeVisible({ timeout: 10_000 });
+    await expect(banner).toBeHidden();
+
+    server.closeAllConnections(); await new Promise<void>((resolve) => server!.close(() => resolve())); server = undefined;
+    await page.reload();
+    await page.getByRole("button", { name: "Ask agent to fix" }).click();
+    await expect(page).toHaveURL(/^https:\/\/bivy\.example\/share\?session=s&text=/);
+    expect(new URL(page.url()).searchParams.get("text")).toContain(`nothing is answering on port ${deadPort}`);
+  } finally { server?.close(); fixture.close(); }
+});
