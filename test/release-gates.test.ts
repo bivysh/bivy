@@ -63,3 +63,13 @@ test("every path-filtered CI job runs in the full tier that a production release
     }
   }
 });
+
+test("the full tier runs every unit and core suite; only pr/queue select by change", () => {
+  // The nightly and release runs are the only complete runs once the queue is
+  // change-selected, so selection must never leak into the full tier.
+  const steps = ci.jobs.checks.steps as { name?: string; run?: string }[];
+  for (const name of ["Unit tests", "Core tests"]) {
+    const run = steps.find((step) => step.name === name)?.run ?? "";
+    assert.match(run, /if \[ "\$TIER" != full \]; then/, `${name} must select by change only outside the full tier`);
+  }
+});

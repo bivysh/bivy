@@ -39,8 +39,9 @@ path-filtered to the areas your change touches:
 
 - **Pull requests:** one job with lint, typechecks, policy checks, and only the
   unit suites that depend on your change.
-- **Merge queue:** every unit suite, the web build, the release package, and a
-  desktop browser smoke set, plus packaging and remote e2e when their inputs change.
+- **Merge queue:** the PR checks against the queue base (still only affected unit
+  suites), the web build, the release package, and a desktop browser smoke set,
+  plus packaging and remote e2e when their inputs change.
 - **Nightly, releases, queued release commits, and any change to `ci.yml`:** everything, including
   macOS, clean-installer, every browser spec (plus the layout-sensitive mobile set), and remote e2e.
   A failed nightly opens or updates a "Nightly full CI is failing" issue.

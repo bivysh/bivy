@@ -40,9 +40,10 @@ permissions:
 #
 #   pr     every push to a PR: one job with lint, types, policy and only the
 #          unit suites that depend on the change.
-#   queue  the merge queue: every unit suite, the web build, the release
-#          package, a desktop browser smoke, plus packaging/e2e lanes only when
-#          their own inputs changed.
+#   queue  the merge queue: the pr checks against the queue base, the web
+#          build, the release package, a desktop browser smoke, plus
+#          packaging/e2e lanes only when their own inputs changed. Unit suites
+#          stay change-selected here; the nightly full run executes all of them.
 #   full   nightly, manual, release (force_all), a queued release commit and
 #          any change to this file: everything, on every OS family and
 #          viewport. Every job runs and must succeed, so release.yml can reuse
@@ -161,14 +162,15 @@ jobs:
             tier=pr; shards='[1]' # unused: the browser job is skipped on PRs
           fi
           echo "tier=$tier" >> "$GITHUB_OUTPUT"
-          echo "base=$PR_BASE" >> "$GITHUB_OUTPUT"
+          echo "base=${PR_BASE:-$QUEUE_BASE}" >> "$GITHUB_OUTPUT"
           echo "browser_shards=$shards" >> "$GITHUB_OUTPUT"
           echo "CI tier: $tier" >> "$GITHUB_STEP_SUMMARY"
 
   # One runner for every cheap, high-signal root check. Separate jobs each paid
   # ~30s of checkout/install for 10-40s of work; about half of all runner time
-  # was setup. On PRs only the unit suites that depend on the change run
-  # (scripts/affected-tests.mjs); queue and full tiers run all of them.
+  # was setup. PR and queue runs execute only the unit and core suites that
+  # depend on the change (scripts/affected-tests.mjs, vitest --changed); the
+  # full tier runs all of them, so a missed dependency surfaces by the nightly.
   checks:
     needs: changes
     if: needs.changes.outputs.tier == 'full' || needs.changes.outputs.root == 'true'
@@ -181,7 +183,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: ${{ needs.changes.outputs.tier == 'pr' && '0' || '1' }}
+          fetch-depth: ${{ needs.changes.outputs.tier != 'full' && '0' || '1' }}
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -210,7 +212,7 @@ jobs:
         run: pnpm exec playwright test --project=contracts
       - name: Core tests
         run: |
-          if [ "$TIER" = pr ]; then
+          if [ "$TIER" != full ]; then
             pnpm --filter @bivy/core exec vitest run --changed "$BASE" --passWithNoTests
           else
             pnpm run test:core
@@ -219,7 +221,7 @@ jobs:
       # with a shared port are serialized (scripts/run-tests.mjs).
       - name: Unit tests
         run: |
-          if [ "$TIER" = pr ]; then export TEST_AFFECTED_BASE="$BASE"; fi
+          if [ "$TIER" != full ]; then export TEST_AFFECTED_BASE="$BASE"; fi
           pnpm run test:unit
       # Initial-bundle budget (B4b): fail if the PWA entry chunk grows past its
       # raw/gzip ceiling. The long-transcript budget runs in test:unit.
