@@ -11,7 +11,7 @@ type PtyProcess = import("node-pty").IPty;
 
 let ptyModule: NodePty | null | undefined;
 
-function loadPty(): NodePty {
+export function loadPty(): NodePty {
   if (ptyModule) return ptyModule;
   if (ptyModule === null) {
     throw new Error("PTY support is unavailable because the node-pty dependency is not installed. Reinstall Bivy after installing build tools, or use governed chat/exec sessions instead of interactive terminals.");

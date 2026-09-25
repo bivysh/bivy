@@ -5,7 +5,7 @@ import { createNodeUpdateChecker, updateRegistryUrl } from "./node-update.js";
 import { createRemoteSessionAdmission, RemoteSessionAdmissionError } from "./session/remote-session-admission.js";
 import path from "node:path";
 import os from "node:os";
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomUUID, randomBytes, timingSafeEqual, createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import express from "express";
@@ -98,7 +98,7 @@ import type { ApprovalMode } from "./guard.js";
 import { PolicyEngine } from "./policy/policy-engine.js";
 import { SessionAllowRules } from "./policy/session-allow.js";
 import { TerminalManager } from "./terminal.js";
-import { commandLaunch } from "./command-launch.js";
+import { launchCommand, type CommandHandle } from "./command-launch.js";
 import { listMultiplexerSessions, attachCommand, type MultiplexerKind } from "./multiplexer.js";
 import { createWorktree, removeWorktree, gitRepoRoot, type Worktree } from "./worktree.js";
 import { HarnessManager } from "./harness/manager.js";
@@ -428,12 +428,6 @@ const worktreeCleanupSweepMs = Math.max(60 * 60 * 1000, Math.min(worktreeRetenti
 // Native Pi commands run the operator-installed agent. Bivy does not substitute
 // a private TUI; BIVY_PI_COMMAND is an explicit path override for managed nodes.
 const piCommand = process.env.BIVY_PI_COMMAND?.trim() || "pi";
-const ptyRunnerScript = process.env.BIVY_PTY_RUNNER ?? (
-  fs.existsSync(path.join(assetRoot, "src", "pty-runner.py"))
-    ? path.join(assetRoot, "src", "pty-runner.py")
-    : path.join(assetRoot, "dist", "pty-runner.py")
-);
-const pythonCommand = process.env.PYTHON ?? "python3";
 
 type MeshCommand = {
   name: string;
@@ -939,7 +933,7 @@ const accessDevices = createAccessDeviceController({
   onRevoked: (id) => broadcast({ type: "device.revoked", id }),
 });
 const clients = new Set<WebSocket>();
-const commandProcesses = new Map<string, ChildProcessWithoutNullStreams>();
+const commandProcesses = new Map<string, CommandHandle>();
 const oauthLogins = new Map<string, OAuthLoginState>();
 // A browser-initiated subscription login parks the node on `manualCodePromise`
 // until the remote device pastes the code (`provider.oauth.code`). If the user
@@ -5823,27 +5817,19 @@ function runNativeCommand(command: MeshCommand) {
     NO_COLOR: "1",
   };
   // Native commands (login/model/config/etc.) need a TTY for prompts and the
-  // terminal UI. Everything else uses ordinary pipes: this avoids an extra
-  // Python process and PTY relay for non-interactive commands while preserving
-  // the old behavior for commands that genuinely require terminal semantics.
-  const launch = commandLaunch(command.spawn.command, command.spawn.args, command.spawn.requiresTty, pythonCommand, ptyRunnerScript);
-  const child = spawn(launch.command, launch.args, { cwd: repoRoot, env });
-
-  commandProcesses.set(runId, child);
-  child.stdout.on("data", (data) => {
-    broadcast({ type: "command.output", runId, command: command.name, stream: "stdout", text: stripAnsi(String(data)) });
+  // terminal UI, so they run under a PTY; everything else uses ordinary pipes.
+  const handle = launchCommand({ command: command.spawn.command, args: command.spawn.args, cwd: repoRoot, env }, command.spawn.requiresTty, {
+    onOutput: (stream, text) => broadcast({ type: "command.output", runId, command: command.name, stream, text: stripAnsi(text) }),
+    onError: (error) => {
+      commandProcesses.delete(runId);
+      broadcast({ type: "command.error", runId, command: command.name, error: String(error?.stack ?? error) });
+    },
+    onExit: (code, signal) => {
+      commandProcesses.delete(runId);
+      broadcast({ type: "command.exited", runId, command: command.name, code, signal });
+    },
   });
-  child.stderr.on("data", (data) => {
-    broadcast({ type: "command.output", runId, command: command.name, stream: "stderr", text: stripAnsi(String(data)) });
-  });
-  child.on("error", (error) => {
-    commandProcesses.delete(runId);
-    broadcast({ type: "command.error", runId, command: command.name, error: String(error?.stack ?? error) });
-  });
-  child.on("exit", (code, signal) => {
-    commandProcesses.delete(runId);
-    broadcast({ type: "command.exited", runId, command: command.name, code, signal });
-  });
+  commandProcesses.set(runId, handle);
 
   return { ok: true, runId };
 }
@@ -11363,7 +11349,7 @@ app.post("/api/commands/:runId/input", (req, res) => {
   const child = commandProcesses.get(req.params.runId);
   if (!child) return res.status(404).json({ error: "No active command process" });
 
-  child.stdin.write(`${String(req.body?.text ?? "")}\n`);
+  child.write(`${String(req.body?.text ?? "")}\n`);
   res.json({ ok: true });
 });
 
@@ -11371,7 +11357,7 @@ app.post("/api/commands/:runId/terminate", (req, res) => {
   const child = commandProcesses.get(req.params.runId);
   if (!child) return res.status(404).json({ error: "No active command process" });
 
-  child.kill("SIGINT");
+  child.interrupt();
   res.json({ ok: true });
 });
 
