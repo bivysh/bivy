@@ -8,13 +8,18 @@ name: Release
 #                         the `staging` dist-tag on every merge. No approval, no
 #                         git tag, never moves `latest`. This is the dev channel
 #                         every change lands on.
-#   workflow_dispatch  -> PRODUCTION (deliberate). Promotes the current
-#                         package.json version to the `latest` dist-tag, gated by
-#                         the `release` environment approval. Promotion reuses
-#                         the canonical CI workflow and requires its staging publish
-#                         to have succeeded, then tags the commit and creates the
-#                         GitHub release. Full CI also gates the exact promoted
-#                         commit, including recovery refs.
+#   release commit     -> PRODUCTION (automatic, approval-gated). A push that
+#                         lands a package.json version npm does not have yet
+#                         (`pnpm release` makes that PR) publishes staging, then
+#                         promotes that version to the `latest` dist-tag behind
+#                         the `release` environment approval, tags the commit and
+#                         creates the GitHub release.
+#   workflow_dispatch  -> PRODUCTION (manual). The same promotion, for a retry or
+#                         a release-intent recovery ref.
+#
+# Full CI gates the exact promoted commit: a CI run on this SHA that already
+# passed every job (the merge queue's, for a release commit) is reused;
+# otherwise the canonical CI workflow runs here with force_all.
 #
 # Both jobs authenticate to npm with the job's GitHub Actions OIDC identity
 # (`id-token: write`) against the ONE trusted publisher configured for
@@ -78,13 +83,21 @@ jobs:
       # minor starts at a readable version like 0.15.0-staging.1 instead of using
       # GitHub's repository-wide run number. npm versions are immutable, so we
       # derive the next suffix from already-published versions for this base.
+      # Once package.json's version is released, staging targets the next patch,
+      # so post-release builds sort above `latest` without a version-bump PR.
       - name: Stamp a unique staging prerelease version
         run: |
           base="$(node -p "require('./package.json').version")"
           case "$base" in
             *-*) echo "::error::package.json version '$base' is already a prerelease; main must hold a clean X.Y.Z."; exit 1 ;;
           esac
-          next="$(npm view @bivy/bivy versions --json | node -e '
+          versions="$(npm view @bivy/bivy versions --json)"
+          base="$(echo "$versions" | node -e '
+            const versions = JSON.parse(require("fs").readFileSync(0, "utf8"));
+            const [major, minor, patch] = process.argv[1].split(".").map(Number);
+            console.log(versions.includes(process.argv[1]) ? `${major}.${minor}.${patch + 1}` : process.argv[1]);
+          ' "$base")"
+          next="$(echo "$versions" | node -e '
             const versions = JSON.parse(require("fs").readFileSync(0, "utf8"));
             const prefix = `${process.argv[1]}-staging.`;
             const suffixes = versions
@@ -102,11 +115,60 @@ jobs:
         run: pnpm run publish:npm -- --tag staging
 
   # --------------------------------------------------------------- PRODUCTION --
+  # Decide whether this run promotes, and whether full CI already covered it.
+  #   release: a dispatch always promotes; a push promotes when it lands a
+  #            package.json version that npm does not have yet (the commit
+  #            `pnpm release` produces).
+  #   tested:  a successful CI run on this exact SHA ran every job (the merge
+  #            queue does this for a release commit, which touches every
+  #            manifest). Otherwise production-ci runs the full suite here.
+  plan:
+    name: Plan production promotion
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      release: ${{ steps.plan.outputs.release }}
+      tested: ${{ steps.plan.outputs.tested }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            release=true
+          # Fails closed: a registry error makes this test false, so no promotion.
+          elif npm view @bivy/bivy versions --json | node -e '
+            process.exit(JSON.parse(require("fs").readFileSync(0, "utf8")).includes(process.argv[1]) ? 1 : 0)
+          ' "$version"; then
+            release=true
+            echo "::notice::main now holds unreleased $version; promoting it after the staging publish."
+          else
+            release=false
+          fi
+          tested=false
+          if [ "$release" = true ]; then
+            for run in $(gh api "/repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&status=success" --jq '.workflow_runs[].id'); do
+              if [ "$(gh api --paginate "/repos/$GITHUB_REPOSITORY/actions/runs/$run/jobs" --jq '.jobs[] | select(.conclusion != "success") | .name' | wc -l)" -eq 0 ]; then
+                tested=true
+                echo "CI run $run already passed every job on $GITHUB_SHA; not re-running it."
+                break
+              fi
+            done
+          fi
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+          echo "tested=$tested" >> "$GITHUB_OUTPUT"
+
   # A staging publish proves packaging, not correctness. Reuse the canonical CI
   # workflow on this exact SHA, even when branch protection was bypassed or the
   # dispatch uses a recovery tag. Do not duplicate a subset of its checks here.
   production-ci:
-    if: github.event_name == 'workflow_dispatch'
+    needs: plan
+    if: needs.plan.outputs.release == 'true' && needs.plan.outputs.tested != 'true'
     uses: ./.github/workflows/ci.yml
     permissions:
       contents: read
@@ -116,8 +178,15 @@ jobs:
       force_all: true
 
   production:
-    if: github.event_name == 'workflow_dispatch'
-    needs: production-ci
+    # Explicit results rather than always(): a failed or cancelled dependency
+    # skips publication. On a push, this run's own staging publish must succeed.
+    if: >-
+      !cancelled()
+      && needs.plan.outputs.release == 'true'
+      && (github.event_name == 'workflow_dispatch' || needs.staging.result == 'success')
+      && (needs.production-ci.result == 'success'
+          || (needs.production-ci.result == 'skipped' && needs.plan.outputs.tested == 'true'))
+    needs: [plan, staging, production-ci]
     name: Promote to npm `latest` + tag + GitHub release
     runs-on: ubuntu-latest
     # Approval gate: a dispatch alone cannot publish to production.
@@ -130,8 +199,10 @@ jobs:
     steps:
       # Full CI passed in production-ci. Also require the automatic staging
       # publication for the exact main SHA; packaging alone is not a CI receipt.
-      # Wait briefly when Promote is clicked immediately after merge.
+      # Wait briefly when Promote is clicked immediately after merge. A push
+      # promotion already `needs` this run's own staging job.
       - name: Require a successful staging publish for this commit
+        if: github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -176,18 +247,19 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       # package.json is the single source of truth for the version to release.
-      # Validate it is clean and explicitly confirmed. A same-commit tag is
+      # Validate it is clean and explicitly confirmed: a dispatch types it, a
+      # push confirms it by landing the release commit. A same-commit tag is
       # accepted so a run interrupted after npm publication can resume safely.
       - name: Resolve and validate the release version
         id: ver
         env:
-          CONFIRM: ${{ inputs.confirm_version }}
+          CONFIRM: ${{ inputs.confirm_version || '' }}
         run: |
           version="$(node -p "require('./package.json').version")"
           case "$version" in
             *-*) echo "::error::package.json version '$version' is a prerelease; bump it to a clean X.Y.Z in a PR before promoting."; exit 1 ;;
           esac
-          if [ "$CONFIRM" != "$version" ]; then
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$CONFIRM" != "$version" ]; then
             echo "::error::Confirmation '$CONFIRM' does not match package.json version '$version'. Re-run and type the exact version to promote."; exit 1
           fi
           git fetch --tags origin
