@@ -15,6 +15,7 @@ export const CLIENT_COMMAND_SCHEMAS: Readonly<Record<string, TSchema>> = {
   "apps.offers": Type.Object({ ...request, ...session }),
   "apps.adopt": Type.Object({ ...request, ...session, port: Type.Integer({ minimum: 1024, maximum: 65535 }) }),
   "apps.open": Type.Object({ ...request, ...session, appId: Type.String(), viewId: Type.String(), returnTo: Type.Optional(Type.String({ maxLength: 2048 })) }),
+  "apps.logs": Type.Object({ ...request, ...session, appId: Type.String(), viewId: Type.String() }),
   "apps.share": Type.Object({ ...request, ...session, appId: Type.String(), viewId: Type.String() }),
   "apps.revoke": Type.Object({ ...request, ...session, appId: Type.String(), viewId: Type.String() }),
   "apps.remove": Type.Object({ ...request, ...session, appId: Type.String() }),

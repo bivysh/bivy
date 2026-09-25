@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import type { AppManifest, AppOffer, OpenAppViewResult, SessionApp, SessionAppOffersResult, SessionAppsResult, ShareAppViewResult } from "./types.js";
-import { AppRegistry } from "./registry.js";
+import { AppRegistry, type RegisteredView } from "./registry.js";
 import { scanListeners } from "./listeners.js";
 
 export interface AppPreviewProvider {
@@ -19,9 +19,15 @@ export interface AppTerminalProvider {
 
 /** Composes view providers; registry never spawns processes and the gateway
  * never knows about terminals. New providers can extend open/remove here. */
+/** A managed server that keeps exiting is left down after this many restarts
+ * in RESTART_WINDOW; opening the view again tries afresh. */
+const MAX_RESTARTS = 5;
+const RESTART_WINDOW = 10 * 60_000;
+
 export class AppService {
   private terminalStarts = new Map<string, Promise<string>>();
-  constructor(readonly registry: AppRegistry, readonly gateway: AppPreviewProvider | undefined, private readonly terminals: AppTerminalProvider, private readonly scan: (workspace: string) => Promise<AppOffer[]> = scanListeners) {}
+  private servers = new Map<string, { termId?: string; pending?: Promise<string>; restarts: number[]; timer?: NodeJS.Timeout }>();
+  constructor(readonly registry: AppRegistry, readonly gateway: AppPreviewProvider | undefined, private readonly terminals: AppTerminalProvider, private readonly scan: (workspace: string) => Promise<AppOffer[]> = scanListeners, private readonly serverWatchMs = 5_000) {}
 
   list(sessionId: string): SessionAppsResult { return { apps: this.registry.list(sessionId), previewAvailable: Boolean(this.gateway) && this.gateway?.available !== false }; }
   publish(sessionId: string, workspace: string, manifest: AppManifest) { return this.registry.publish(sessionId, workspace, manifest); }
@@ -42,7 +48,12 @@ export class AppService {
     const entry = this.registry.requireView(sessionId, appId, viewId);
     if (entry.view.kind === "web") {
       if (!this.gateway) throw new Error("Bivy's preview service is unavailable on this connection.");
-      return { kind: "web", url: this.gateway.open(viewId, returnTo) };
+      const url = this.gateway.open(viewId, returnTo);
+      // Don't wait for a managed server to boot: the preview shows it starting
+      // and reloads itself once it answers.
+      if (this.servers.get(viewId)) this.servers.get(viewId)!.restarts = [];
+      void this.ensureServer(entry).catch(() => {});
+      return { kind: "web", url };
     }
     if (entry.target.kind !== "terminal") throw new Error("Unsupported app view provider.");
     let pending = this.terminalStarts.get(viewId);
@@ -65,6 +76,49 @@ export class AppService {
       throw error;
     }
   }
+  /** The managed server's output, as an attachable terminal (starts it if needed). */
+  async logs(sessionId: string, appId: string, viewId: string): Promise<OpenAppViewResult> {
+    const entry = this.registry.requireView(sessionId, appId, viewId);
+    const termId = await this.ensureServer(entry);
+    if (!termId) throw new Error("Only views with a start command have server logs.");
+    return { kind: "terminal", termId };
+  }
+  private ensureServer(entry: RegisteredView): Promise<string | undefined> {
+    if (entry.target.kind !== "service" || !entry.target.start) return Promise.resolve(undefined);
+    const id = entry.view.id, start = entry.target.start;
+    let state = this.servers.get(id);
+    if (!state) { state = { restarts: [] }; this.servers.set(id, state); }
+    const server = state;
+    if (server.termId && this.terminals.has(server.termId)) return Promise.resolve(server.termId);
+    server.pending ??= this.terminals.start({ ...start, name: `${entry.app.name} · ${entry.view.name} server` })
+      .then((termId) => {
+        if (!this.registry.getView(id)) { this.terminals.close(termId); throw new Error("App was removed while starting."); }
+        server.termId = termId; return termId;
+      })
+      .finally(() => { server.pending = undefined; });
+    // Watch for exits and restart, backing off a crash loop.
+    server.timer ??= setInterval(() => {
+      const current = this.registry.getView(id);
+      if (!current) { this.stopServer(id); return; }
+      if (server.pending || !server.termId || this.terminals.has(server.termId)) return;
+      const now = Date.now();
+      server.restarts = server.restarts.filter((at) => now - at < RESTART_WINDOW);
+      if (server.restarts.length >= MAX_RESTARTS) return;
+      server.restarts.push(now);
+      server.termId = undefined;
+      void this.ensureServer(current).catch(() => {});
+    }, this.serverWatchMs);
+    server.timer.unref?.();
+    return server.pending;
+  }
+  private stopServer(id: string): void {
+    const server = this.servers.get(id);
+    if (!server) return;
+    clearInterval(server.timer);
+    if (server.termId) this.terminals.close(server.termId);
+    void server.pending?.then((termId) => this.terminals.close(termId)).catch(() => {});
+    this.servers.delete(id);
+  }
   share(sessionId: string, appId: string, viewId: string): ShareAppViewResult {
     if (this.registry.requireView(sessionId, appId, viewId).view.kind !== "web") throw new Error("Only web views have preview links.");
     if (!this.gateway) throw new Error("Bivy's preview service is unavailable on this connection.");
@@ -81,6 +135,7 @@ export class AppService {
     this.registry.remove(sessionId, appId);
     for (const view of app.views) {
       this.gateway?.revoke(view.id);
+      this.stopServer(view.id);
       const pending = this.terminalStarts.get(view.id);
       this.terminalStarts.delete(view.id);
       if (pending) void pending.then((id) => this.terminals.close(id)).catch(() => {});

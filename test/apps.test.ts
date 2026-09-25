@@ -77,6 +77,60 @@ test("publication validates version, view types, arguments, reserved ports and a
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("apps survive a restart with their IDs, except services Bivy doesn't run", () => {
+  const dir = workspace(); const file = path.join(dir, "apps.json");
+  try {
+    const registry = new AppRegistry([4317], file);
+    const kept = registry.publish("s", dir, { version: 1, name: "Kept", views: [
+      staticManifest.views[0], terminalManifest.views[0],
+      { kind: "web", name: "Managed", source: { kind: "service", port: 3000, start: { command: "npm", args: ["run", "dev"] } } },
+      { kind: "web", name: "External", source: { kind: "service", port: 3001 } },
+    ] });
+    const gone = registry.publish("s", dir, staticManifest);
+    const external = registry.publish("s", dir, { version: 1, name: "Only external", views: [{ kind: "web", name: "External", source: { kind: "service", port: 3002 } }] });
+    registry.remove("s", gone.id);
+    fs.writeFileSync(path.join(dir, "dist/index.html"), "<h1>After restart</h1>");
+
+    const restarted = new AppRegistry([4317], file);
+    const apps = restarted.list("s");
+    assert.deepEqual(apps.map((app) => app.id), [kept.id]);
+    assert.deepEqual(apps[0].views.map((view) => [view.id, view.name]), kept.views.slice(0, 3).map((view) => [view.id, view.name]));
+    assert.equal(apps[0].views[2].kind === "web" && apps[0].views[2].managed, true);
+    const snapshot = restarted.getView(kept.views[0].id)!.target;
+    assert.equal(snapshot.kind === "static" && snapshot.files.get("/index.html")!.toString(), "<h1>After restart</h1>");
+    assert.throws(() => restarted.require("s", external.id), /not found/);
+    assert.equal((fs.statSync(file).mode & 0o777).toString(8), "600");
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("managed servers start on first open, restart when they exit, and stop backing off a crash loop", async () => {
+  const dir = workspace();
+  let live = new Set<string>(); const started: string[] = []; const closed: string[] = [];
+  const terminals = { start: async (spec: { command: string; name: string }) => { const id = `t${started.length}`; started.push(spec.command); live.add(id); return id; }, has: (id: string) => live.has(id), close: (id: string) => { closed.push(id); live.delete(id); } };
+  const gateway = { open: () => "https://view-x.preview.example.net/__bivy/open#t", share: () => ({ url: "", expiresAt: 0 }), revoke: () => {} };
+  const service = new AppService(new AppRegistry(), gateway, terminals, async () => [], 5);
+  const until = async (check: () => boolean) => { for (let i = 0; i < 200 && !check(); i++) await new Promise((r) => setTimeout(r, 5)); assert.ok(check()); };
+  try {
+    const app = service.publish("s", dir, { version: 1, name: "Web", views: [{ kind: "web", name: "Site", source: { kind: "service", port: 3000, start: { command: "npm", args: ["run", "dev"] } } }] });
+    assert.deepEqual(started, [], "publishing starts nothing");
+    const viewId = app.views[0].id;
+    await Promise.all([service.open("s", app.id, viewId), service.open("s", app.id, viewId)]);
+    await until(() => started.length === 1);
+    assert.deepEqual(await service.logs("s", app.id, viewId), { kind: "terminal", termId: "t0" });
+    live.delete("t0"); // the server exits
+    await until(() => started.length === 2);
+    // A crash loop is left down after five restarts in the window…
+    for (let i = 0; i < 10; i++) { live = new Set(); await new Promise((r) => setTimeout(r, 15)); }
+    assert.equal(started.length, 6);
+    // …until someone opens the view again.
+    await service.open("s", app.id, viewId);
+    await until(() => started.length === 7);
+    service.remove("s", app.id);
+    assert.ok(closed.includes("t6"));
+    await assert.rejects(service.logs("s", app.id, viewId), /not found/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("static snapshots reject traversal, symlinks, oversized files and exclude hidden files", () => {
   const dir = workspace();
   try {

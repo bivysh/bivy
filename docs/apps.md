@@ -86,6 +86,21 @@ UI detaches; ending the terminal stops it. An exited app never silently becomes 
 shell. Commands are executables plus argument arrays, not implicitly shell-parsed
 strings. For shell syntax, explicitly choose a shell and `-c` arguments.
 
+### Servers Bivy runs (`start`)
+
+A service view can say how to start its server:
+
+```json
+{ "kind": "service", "port": 5173, "start": { "command": "pnpm", "args": ["dev", "--port", "5173"] } }
+```
+
+Publishing still starts nothing. The first **Open preview** starts the command
+in the session workspace, in a Bivy terminal, with the node user's permissions,
+the same as a terminal view. The preview shows *Nothing is answering* until the
+server listens, then reloads. If the server exits, Bivy restarts it. After five
+restarts in ten minutes it is left down until someone opens the view again.
+**Logs** in the Apps sheet attaches to its output. Removing the app stops it.
+
 ### Static sites
 
 Replace the web source with:
@@ -299,9 +314,13 @@ preview gate; PWA/offline behavior must be tested outside this preview mode.
 - Generated apps do not receive Bivy's device token or preview cookie. Their own
   APIs, credentials and mutations remain their responsibility. No API credential
   broker or transaction-approval layer is implemented by this preview feature.
-- Apps and static snapshots are currently in memory. A node restart clears them,
-  invalidates all access grants and requires republishing. This avoids restoring
-  stale port registrations. Project manifests remain in the workspace.
+- Apps persist across node restarts with the same IDs, so chat launchers and
+  preview addresses keep working. The data is in `apps.json` in the node's data
+  directory, mode 0600. Static views are re-snapshotted, and terminal views and
+  managed services come back. **Service views without `start` are not
+  restored**: after a restart their port could belong to any process. Detection
+  offers them again, one tap to preview. Access grants never persist. After a
+  restart, open the preview again from Bivy.
 - Removing an app stops terminal processes started through its views, not unrelated
   terminals. It cannot retract bytes already downloaded or undo side effects.
 

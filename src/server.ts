@@ -2112,7 +2112,9 @@ const appPreviewPort = Number(process.env.BIVY_APPS_PORT || 4318);
 if (process.env.BIVY_APPS_ORIGIN && (!Number.isInteger(appPreviewPort) || appPreviewPort < 1024 || appPreviewPort > 65535 || appPreviewPort === port)) {
   throw new Error("BIVY_APPS_PORT must be between 1024 and 65535 and different from the node API port.");
 }
-const appRegistry = new AppRegistry([port, ...(process.env.BIVY_APPS_ORIGIN ? [appPreviewPort] : [])]);
+// Apps persist with their IDs, so chat launchers and preview addresses survive
+// restarts; see AppRegistry for which views are restored.
+const appRegistry = new AppRegistry([port, ...(process.env.BIVY_APPS_ORIGIN ? [appPreviewPort] : [])], path.join(appDir, "apps.json"));
 const appReturnOrigins = () => {
   const config = loadRelayConfig(appDir);
   return [config?.clientBaseUrl, config?.controlPlaneUrl, ...(process.env.BIVY_APPS_RETURN_ORIGINS ?? "").split(",")]

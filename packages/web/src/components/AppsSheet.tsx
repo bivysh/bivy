@@ -103,6 +103,16 @@ export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; ap
     if (url.protocol !== "https:" || url.origin === location.origin || url.username || url.password) throw new Error("Machine returned an unsafe preview URL.");
     return url.href;
   };
+  /** A managed server's output opens in the existing terminal overlay. */
+  const logs = async (app: SessionApp, view: AppView) => {
+    const current = generation.current;
+    setBusy(true); setError("");
+    try {
+      const response = await controller.appCommand("apps.logs", sessionId, { appId: app.id, viewId: view.id }) as unknown as OpenAppViewResult;
+      if (generation.current === current && response.kind === "terminal") setTerminal(response.termId);
+    } catch (e) { if (generation.current === current) setError(e instanceof Error ? e.message : "Could not open the server logs."); }
+    finally { if (generation.current === current) setBusy(false); }
+  };
   const share = async (app: SessionApp, view: AppView) => {
     const current = generation.current;
     setBusy(true); setError(""); setNotice(null);
@@ -168,10 +178,11 @@ export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; ap
       {app.views.map((view) => <div className="artifact-row app-view-row" key={view.id}>
         <div className="artifact-main">
           <strong className="artifact-name">{view.name}</strong>
-          <span className="artifact-meta">{view.kind === "terminal" ? "Interactive terminal · starts on request" : view.source === "static" ? "Web · published snapshot" : "Web · live server"}</span>
+          <span className="artifact-meta">{view.kind === "terminal" ? "Interactive terminal · starts on request" : view.source === "static" ? "Web · published snapshot" : view.managed ? "Web · server run by Bivy" : "Web · live server"}</span>
           {view.kind === "terminal" && <code className="app-view-command">{[view.command, ...view.args.map((arg) => JSON.stringify(arg))].join(" ")}</code>}
         </div>
         <div className="app-view-actions">
+          {view.kind === "web" && view.managed && <button className="btn sm ghost" disabled={busy || !online} onClick={() => void logs(app, view)} aria-label={`Server logs for ${view.name}`}>Logs</button>}
           {view.kind === "web" && <>
             <button className="btn sm ghost" disabled={busy || !online || !result.previewAvailable} onClick={() => void revoke(app, view)} aria-label={`Revoke access to ${view.name}`}>Revoke access</button>
             <button className="btn sm ghost" disabled={busy || !online || !result.previewAvailable} onClick={() => void share(app, view)} aria-label={`Copy link to ${view.name}`}>Copy link</button>

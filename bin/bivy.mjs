@@ -2433,7 +2433,9 @@ Manifest: {"version":1,"name":"My app","views":[
 ]}
 
 Static web source: {"kind":"static","directory":"./dist"}
-Publishing does not start commands. Open Apps in the session menu to view or run.
+Server Bivy runs: {"kind":"service","port":5173,"start":{"command":"pnpm","args":["dev"]}}
+Publishing does not start commands. Open Apps in the session menu to view or run;
+a server with "start" starts on first open and is restarted if it exits.
 Terminal commands run with the node user's permissions, not in a new sandbox.
 Web previews require operator setup; see docs/apps.md.`);
     return;
