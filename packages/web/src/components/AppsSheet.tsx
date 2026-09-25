@@ -7,6 +7,7 @@ import { Sheet } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { accountOrigin } from "../packaged-client.js";
 import { writeClipboard } from "../clipboard.js";
+import { PreviewPeek, peekBlocked } from "./PreviewPeek.js";
 const TerminalOverlay = lazy(() => import("./Terminal.js").then((module) => ({ default: module.TerminalOverlay })));
 
 export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; appId?: string; onClose: () => void }) {
@@ -19,6 +20,7 @@ export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; ap
   const [busy, setBusy] = useState(false);
   const [refresh, setRefresh] = useState(0);
   const [terminal, setTerminal] = useState<string | null>(null);
+  const [peek, setPeek] = useState<{ url: string; app: SessionApp; view: AppView } | null>(null);
   const [link, setLink] = useState<{ viewId: string; url: string } | null>(null);
   // Per-view outcome of Copy link / Revoke access. `url` is set only when the
   // clipboard refused, so the link can be copied by hand.
@@ -53,13 +55,17 @@ export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; ap
     return () => clearTimeout(timer);
   }, [link]);
 
-  /** Opens a published view, or publishes a detected server first (`offer`). */
-  const open = async (target: { app: SessionApp; view: AppView } | { offer: AppOffer }) => {
+  /** Opens a published view, or publishes a detected server first (`offer`).
+   *  Web views peek in a drawer over the chat unless a tab is asked for or this
+   *  browser refuses framed preview cookies. */
+  const open = async (target: { app: SessionApp; view: AppView } | { offer: AppOffer }, mode: "peek" | "tab" = "peek") => {
     const current = generation.current;
     setBusy(true); setError(""); setLink(null); setConfirm(null);
+    const web = "offer" in target || target.view.kind === "web";
+    const inTab = web && (mode === "tab" || peekBlocked());
     // Create the window during the tap, before awaiting the node, so mobile
     // browsers don't classify it as an unsolicited popup. No opener is exposed.
-    const popup = "offer" in target || target.view.kind === "web" ? window.open("about:blank", "_blank") : null;
+    const popup = inTab ? window.open("about:blank", "_blank") : null;
     try {
       if (popup) {
         popup.opener = null;
@@ -85,7 +91,8 @@ export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; ap
       if (response.kind === "terminal") setTerminal(response.termId);
       else if (response.kind === "web") {
         const url = previewUrl(response.url);
-        if (popup && !popup.closed) { popup.location.replace(url); onClose(); }
+        if (!inTab) { setPeek({ url, app, view }); }
+        else if (popup && !popup.closed) { popup.location.replace(url); onClose(); }
         else setLink({ viewId: view.id, url });
       } else throw new Error("This app view is not supported by this client.");
     } catch (e) { popup?.close(); if (generation.current === current) setError(e instanceof Error ? e.message : "Could not open view."); }
@@ -128,12 +135,14 @@ export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; ap
     finally { if (generation.current === current) setBusy(false); }
   };
 
+  if (peek) return <PreviewPeek url={peek.url} name={peek.app.name} sessionId={sessionId} onClose={onClose}
+    onOpenInTab={() => { const { app, view } = peek; setPeek(null); void open({ app, view }, "tab"); }} />;
   if (terminal) return <Suspense fallback={<Sheet title="App terminal" onClose={() => setTerminal(null)}><p role="status">Loading terminal…</p></Sheet>}>
     <TerminalOverlay sessionId={sessionId} attachTermId={terminal} attachOnly onClose={() => setTerminal(null)} />
   </Suspense>;
   return <Sheet title="Apps" ariaLabel="Session apps" onClose={onClose} autoFocusSearch={false} size="large"
     headExtra={<button className="btn sm ghost" onClick={() => setRefresh((n) => n + 1)} disabled={busy || !online}>Refresh</button>}>
-    <p className="muted">Web views open in a preview tab with a Back to chat header. Terminal views run here.</p>
+    <p className="muted">Web views open over the chat; use Open in tab for a full browser tab. Terminal views run here.</p>
     {busy && <p role="status">{result ? "Preparing…" : "Loading apps…"}</p>}
     {error && <p role="alert" className="artifact-unavailable">{error}</p>}
     {result && !result.previewAvailable && <p className="muted">Bivy’s preview service is unavailable. Try Refresh shortly. Terminal views still work.</p>}

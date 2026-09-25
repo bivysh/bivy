@@ -215,3 +215,49 @@ test("inspector reports console errors and pointed elements to the pill", async 
     expect(new URL(page.url()).searchParams.get("text")).toMatch(/^Make the title bigger[\s\S]*page \/saved/);
   } finally { app.close(); app.closeAllConnections(); fixture.close(); }
 });
+
+// Peek: a Bivy page frames the shell, which frames the app. The app's cookie
+// is third-party there, so the embedded launch sets a Partitioned cookie, and
+// drafts go to the framing Bivy page by message instead of navigating.
+test("the preview works framed inside Bivy and hands drafts to it", async ({ page }, testInfo) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "bivy-peek-"));
+  const registry = new AppRegistry();
+  const fixture = await delivery(registry, false);
+  const { gateway, port } = fixture;
+  try {
+    await fs.writeFile(path.join(dir, "index.html"), '<!doctype html><html lang="en"><title>Ledger</title><h1>Ledger</h1><button id="save">Add transaction</button></html>');
+    const id = registry.publish("s", dir, { version: 1, name: "Ledger", views: [{ kind: "web", name: "Ledger", source: { kind: "static", directory: "." } }] }).views[0].id;
+    await page.route("https://*.preview.example.net/**", async (route) => {
+      const request = route.request(); const url = new URL(request.url());
+      const response = await route.fetch({ url: `http://127.0.0.1:${port}${url.pathname}${url.search}`, headers: { ...await request.allHeaders(), host: url.host }, maxRedirects: 0 }).catch(() => undefined);
+      await (response ? route.fulfill({ response }) : route.abort()).catch(() => {});
+    });
+    const shellUrl = gateway.open(id, "https://bivy.example/sessions/s");
+    await page.route("https://bivy.example/chat", (route) => route.fulfill({ contentType: "text/html", body: `<!doctype html><html lang="en"><title>Bivy</title><body><script>window.drafts=[];addEventListener("message",e=>{if(e.data&&e.data.source==="bivy-preview")window.drafts.push(e.data);});</script><iframe title="Peek" style="width:800px;height:600px" sandbox="allow-scripts allow-same-origin allow-forms allow-downloads allow-popups" src="${shellUrl}"></iframe></body></html>` }));
+    await page.goto("https://bivy.example/chat");
+    const shell = page.frameLocator('iframe[title="Peek"]');
+    const app = shell.frameLocator('iframe[title="Ledger"]');
+    await expect(app.getByRole("heading", { name: "Ledger" })).toBeVisible();
+    await expect(shell.getByRole("button", { name: "Back to chat" })).toBeHidden();
+    await page.screenshot({ path: testInfo.outputPath("peek-embedded.png") });
+    await shell.getByRole("button", { name: "Point" }).click();
+    await app.getByRole("button", { name: "Add transaction" }).click();
+    await expect(shell.getByRole("textbox", { name: "What should change?" })).toBeFocused();
+    await page.keyboard.type("Use a plus icon");
+    await shell.getByRole("button", { name: "Add to chat" }).click();
+    await expect.poll(() => page.evaluate(() => (window as any).drafts)).toEqual([expect.objectContaining({ type: "draft", text: expect.stringMatching(/^Use a plus icon\n\nIn the app preview "Ledger"/) })]);
+    await expect(page).toHaveURL("https://bivy.example/chat");
+
+    // A browser that refuses the framed cookie is detected and reported, so
+    // Bivy can fall back to a tab instead of showing a dead frame.
+    await page.route("https://*.preview.example.net/__bivy/redeem", async (route) => {
+      const request = route.request(); const url = new URL(request.url());
+      const response = await route.fetch({ url: `http://127.0.0.1:${port}${url.pathname}`, headers: { ...await request.allHeaders(), host: url.host } });
+      await route.fulfill({ status: response.status(), headers: Object.fromEntries(Object.entries(response.headers()).filter(([key]) => key !== "set-cookie")) });
+    });
+    await page.context().clearCookies();
+    // A fresh frame, as the drawer mounts one per open (a fragment-only change wouldn't reload).
+    await page.evaluate((url) => { (window as any).drafts = []; const old = document.querySelector("iframe")!; const next = old.cloneNode() as HTMLIFrameElement; next.src = url; old.replaceWith(next); }, gateway.open(id, "https://bivy.example/sessions/s"));
+    await expect.poll(() => page.evaluate(() => (window as any).drafts)).toEqual([{ source: "bivy-preview", type: "blocked" }]);
+  } finally { fixture.close(); await fs.rm(dir, { recursive: true, force: true }); }
+});

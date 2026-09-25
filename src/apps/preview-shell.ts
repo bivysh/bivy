@@ -76,6 +76,9 @@ const $=id=>document.getElementById(id);
 const frame=$('app'),status=$('status'),back=$('back'),reload=$('reload'),stage=$('stage');
 const ticket=location.hash.slice(1);history.replaceState(null,'',location.pathname);
 let metadata,currentPath='/';
+// Peek: framed by a Bivy client, which owns closing and the composer.
+const embedded=parent!==window;
+const toBivy=m=>parent.postMessage(Object.assign({source:'bivy-preview'},m),new URL(metadata.returnTo).origin);
 const storageKey='bivy-preview';
 const safePath=p=>typeof p==='string'&&p.startsWith('/')&&!p.startsWith('//')&&p.length<=2048?p:'/';
 const open=(path,message)=>{status.hidden=false;status.textContent=message;resetConsole();frame.src=metadata.origin+safePath(path);};
@@ -87,7 +90,8 @@ function show(data,launch){
   back.title=data.returnTo?'Return to '+new URL(data.returnTo).host:'Close preview';
   frame.title=data.name;
   frame.hidden=false;
-  frame.src=data.origin+(launch?'/__bivy/open#'+launch:'/');
+  frame.src=data.origin+(launch?'/__bivy/open#'+(embedded?'e:':'')+launch:'/');
+  back.hidden=embedded&&Boolean(data.returnTo);
   for(const b of [reload,$('point'),$('errors')])b.disabled=false;
   status.textContent='Loading app…';
   frame.onload=()=>{status.hidden=true;if(revision===null){revision=-1;watch();}else if(wake)wake();};
@@ -113,6 +117,7 @@ async function watch(){
 }
 // Drafts go to the session's composer; nothing is ever sent from here.
 function toChat(text){
+  if(embedded)return toBivy({type:'draft',text});
   const to=new URL(metadata.returnTo),session=to.pathname.split('/').pop();
   location.assign(to.origin+'/share?session='+encodeURIComponent(session)+'&text='+encodeURIComponent(text));
 }
@@ -169,7 +174,8 @@ let downPort=0;
 addEventListener('message',e=>{
   if(!metadata||e.origin!==metadata.origin||e.source!==frame.contentWindow)return;
   const d=e.data||{};
-  if(d.type==='bivy:upstream'){
+  if(d.type==='bivy:access'&&d.state==='blocked'&&embedded&&metadata.returnTo)toBivy({type:'blocked'});
+  else if(d.type==='bivy:upstream'){
     downPort=Number(d.port)||0;
     down.hidden=d.state!=='down';
     downText.textContent='Nothing is answering on port '+downPort+'.';

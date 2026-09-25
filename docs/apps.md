@@ -58,17 +58,23 @@ by `bivy attach`. No per-agent adapter or special model tool is required.
 view IDs. API callers can use the same `apps.publish/list/open/remove` commands.
 
 Publishing adds a durable **Open app** button to the chat. You can also use the
-session menu → **Apps**. Both open the same view selector. **Open preview** opens
-a separate preview tab with Bivy's controls in a floating pill (see
-[Preview controls](#preview-controls)).
-If the browser blocks popups, a normal link is offered instead. **Back to chat**
-closes the preview tab where permitted, otherwise navigates to the originating
+session menu → **Apps**. Both open the same view selector. **Open preview**
+**peeks**: the preview opens in a drawer over the chat, with Bivy's controls in a
+floating pill (see [Preview controls](#preview-controls)) and the composer still
+reachable. **Open in tab ↗** opens the same preview in a separate tab. If the
+browser blocks popups, a normal link is offered instead. In a tab, **Back to
+chat** closes it where permitted, otherwise navigates to the originating
 session. Closing the view does not stop an external app server.
 
-Web apps do not currently open inside the Bivy PWA itself. The preview tab hosts
-a Bivy-owned shell, and the generated app is framed on a separate, same-site
-origin. This keeps app code away from Bivy's controls and avoids depending on
-cross-site iframe cookies inside the PWA. Terminal views ask for confirmation,
+The drawer and the tab both host a Bivy-owned shell on its own origin, and the
+generated app is framed on a separate, same-site origin, so app code never
+reaches Bivy's controls. Inside the drawer, the app's access cookie is a
+third-party cookie. The embedded launch therefore sets it `SameSite=None;
+Partitioned`, keyed to Bivy's top-level site, so no other site can use it. The
+shell may be framed only by the configured Bivy client origins. Browsers that
+refuse framed cookies are detected on the first try. That device then opens
+previews in a tab from then on. The Bivy client's CSP allows HTTPS frames
+(`frame-src 'self' https:`) for this. Terminal views ask for confirmation,
 then open inside Bivy's existing terminal with input, output, resizing and mobile
 controls. Chat launchers survive reload, but opening a removed app or one cleared
 by a machine restart reports that it needs republishing.

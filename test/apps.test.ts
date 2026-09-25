@@ -340,7 +340,8 @@ test("the trusted shell only accepts scoped launch grants and configured chat re
     assert.equal(launch.origin, gateway.shellOrigin(id));
     const shell = await request(port, launch.host, "/__bivy/open");
     assert.match(shell.body, /Back to chat/); assert.match(shell.body, /sandbox=/);
-    assert.match(String(shell.headers["content-security-policy"]), /frame-ancestors 'none'/);
+    // Only configured Bivy clients may frame the shell (Peek).
+    assert.match(String(shell.headers["content-security-policy"]), /frame-ancestors https:\/\/bivy\.example http:\/\/localhost:5173;/);
     assert.equal((await request(port, launch.host, "/index.html")).status, 404);
     assert.equal((await request(port, launch.host, "/__bivy/launch", { method: "POST", headers: { origin: gateway.origin(id) }, body: launch.hash.slice(1) })).status, 403);
     const response = await request(port, launch.host, "/__bivy/launch", { method: "POST", headers: { origin: launch.origin }, body: launch.hash.slice(1) });
