@@ -17,6 +17,7 @@ import { providerCredentialFingerprint, type Account, type NodeRecord, type Noti
 import { centralGithubAppConfig, centralInstallUrl, applyCentralInstallationEvent, resolveGithubIdentity } from "./central-github-app.js";
 import { maybeAutoProvision, planAutoProvision, hostedExecutionReadiness, mintHostedInstallationToken, provisionEphemeralForAccount, provisionEphemeralRestore, reapSettledHostedMachine, reconcileAllHostedMachines, reconcileAllReadyCapacity, sweepAllOrphanProviderResources, validateHostedProviderToken, markHostedMachineMilestone, EPHEMERAL_MILESTONES, ephemeralMachinesEnabled, type ManagedProvisionRequest } from "./ephemeral-provisioner.js";
 import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecret, initializeHostedKeyring } from "./hosted-crypto.js";
+import { hostedVaultWriteRejection, legacyEscrowWriteRejection } from "./hosted-vault-policy.js";
 import { webRuntimeConfigScript } from "./web-runtime-config.js";
 import { publicManagedLaunchError } from "./managed-launch-error.js";
 import { listAppInstallations, listInstallationRepositories, listInstallationBranches, getAppInstallation, mintInstallationToken } from "./hosted-github-auth.js";
@@ -2186,12 +2187,9 @@ app.put("/node/model-auth-key/hosted-escrow", requireNode, asyncHandler(async (r
   // Legacy endpoint retained only so pre-vault nodes fail safely during a rolling
   // upgrade. Once a filtered hosted snapshot exists, an old node must not replace
   // its distinct key with the ordinary account-vault key.
-  if (!(await store.getHostedProvisioning(node.accountId)).enabled) {
-    return res.status(403).json({ error: "hosted provisioning not enabled for this account" });
-  }
-  if (await store.getHostedModelAuthVault(node.accountId)) {
-    return res.status(409).json({ error: "filtered hosted credential vault already active" });
-  }
+  const provisioningEnabled = (await store.getHostedProvisioning(node.accountId)).enabled;
+  const legacyRejection = legacyEscrowWriteRejection({ provisioningEnabled, vaultActive: provisioningEnabled && Boolean(await store.getHostedModelAuthVault(node.accountId)) });
+  if (legacyRejection) return res.status(legacyRejection.status).json({ error: legacyRejection.error });
   await store.setHostedModelAuthVaultKey(node.accountId, encryptSecret(node.accountId, vaultKeyB64));
   res.json({ ok: true });
 }));
@@ -2221,17 +2219,11 @@ app.put("/node/model-auth-hosted-vault", requireNode, asyncHandler(async (req, r
   if (!ciphertext || !vaultKeyB64 || Buffer.from(vaultKeyB64, "base64").length !== 32 || !Number.isSafeInteger(expectedGeneration) || expectedGeneration < 0 || !Number.isSafeInteger(revision) || revision < 0) {
     return res.status(400).json({ error: "Missing/invalid hosted vault" });
   }
-  if (!(await store.getHostedProvisioning(node.accountId)).enabled) {
-    return res.status(403).json({ error: "hosted provisioning not enabled for this account" });
-  }
-  const currentVault = await store.getHostedModelAuthVault(node.accountId);
-  const managedGuest = (await store.listHostedMachineAttempts(node.accountId, false)).some((attempt) => attempt.nodeId === node.id);
-  // A managed setup guest can create the first filtered snapshot, but must
-  // never replace/revoke custody after an agent could have run on it. Personal
-  // Machines remain the authorities for all subsequent changes.
-  if (managedGuest && currentVault) {
-    return res.status(403).json({ error: "managed guests cannot replace hosted credentials" });
-  }
+  const provisioningEnabled = (await store.getHostedProvisioning(node.accountId)).enabled;
+  const currentVault = provisioningEnabled ? await store.getHostedModelAuthVault(node.accountId) : undefined;
+  const managedGuest = provisioningEnabled && (await store.listHostedMachineAttempts(node.accountId, false)).some((attempt) => attempt.nodeId === node.id);
+  const rejection = hostedVaultWriteRejection({ provisioningEnabled, managedGuest, vaultActive: Boolean(currentVault) });
+  if (rejection) return res.status(rejection.status).json({ error: rejection.error });
   const generation = await store.setHostedModelAuthVault(node.accountId, ciphertext, encryptSecret(node.accountId, vaultKeyB64), expectedGeneration, revision);
   if (generation === undefined) {
     const current = await store.getHostedModelAuthVault(node.accountId);

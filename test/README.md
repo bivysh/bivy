@@ -24,6 +24,3 @@ Where tests live:
 - Repository rules that are not behavior (design tokens, retired classes, module
   boundaries, route collisions and auth order) are data rows in
   `scripts/check-*.mjs`, not tests.
-
-`test/web-invariants.test.ts` holds the few PWA safety rules that are still
-checked as source text; replace each with a behavior test when you touch it.

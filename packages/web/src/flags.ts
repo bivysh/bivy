@@ -4,6 +4,9 @@
 // Deployment feature flags for the web client.
 import { runtimeBoolean } from "./runtime-config.js";
 
+// Vite defines import.meta.env; outside a Vite build (node tests) it is absent.
+const env: Record<string, string | undefined> = import.meta.env ?? {};
+
 /**
  * Ephemeral machines: bring-your-own-cloud, short-lived runners (Fly.io,
  * Hetzner, AWS EC2). Product access is controlled by provider onboarding and
@@ -21,7 +24,7 @@ import { runtimeBoolean } from "./runtime-config.js";
  */
 export const EPHEMERAL_MACHINES_ENABLED = runtimeBoolean(
   "ephemeralMachinesEnabled",
-  import.meta.env.EPHEMERAL_MACHINES_ENABLED === "1",
+  env.EPHEMERAL_MACHINES_ENABLED === "1",
 );
 
 /**
@@ -35,4 +38,4 @@ export const EPHEMERAL_MACHINES_ENABLED = runtimeBoolean(
  * explicit staging/debug build setting; production must never retain billable
  * machines merely to preserve logs.
  */
-export const EPHEMERAL_KEEP_FAILED_MACHINES = import.meta.env.VITE_BIVY_KEEP_FAILED_EPHEMERAL === "1";
+export const EPHEMERAL_KEEP_FAILED_MACHINES = env.VITE_BIVY_KEEP_FAILED_EPHEMERAL === "1";

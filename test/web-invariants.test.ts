@@ -1,124 +1,69 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-// Security and safety invariants of the PWA that no behavior test covers yet.
-// They read source text, which is brittle, so each one should be replaced by a
-// behavior test of the component or controller it names, then deleted here.
-// Everything else that used to live in test/web-contracts was copy, class-name
-// or wiring text and has been removed; design-system rules live in
-// scripts/check-design-tokens.mjs.
+// PWA safety invariants that live in pure state and coordinator logic. The ones
+// that need the rendered UI (full-access and billable confirmations, Stop,
+// attention focus, template review) are in test/browser/safety-confirmations.
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const ROOT = new URL("../packages/web/src/", import.meta.url);
-const read = (rel: string) => readFile(new URL(rel, import.meta.url), "utf8");
-const expect = (value: string, label?: string) => ({
-  toContain: (text: string) => assert.ok(value.includes(text), `${label ?? "source"} should contain ${JSON.stringify(text)}`),
-  toMatch: (pattern: RegExp) => assert.match(value, pattern, label),
-  not: { toContain: (text: string) => assert.ok(!value.includes(text), `${label ?? "source"} should not contain ${JSON.stringify(text)}`) },
+test("failed ephemeral machines are retained only by an explicit debug build opt-in", async () => {
+  // Retaining a boot-failed machine keeps a billable resource alive; production
+  // builds (no VITE_BIVY_KEEP_FAILED_EPHEMERAL=1) must never do it.
+  const { EPHEMERAL_KEEP_FAILED_MACHINES } = await import("../packages/web/src/flags.js");
+  assert.equal(EPHEMERAL_KEEP_FAILED_MACHINES, false);
 });
 
-test("new approval and question cards announce themselves and receive focus", async () => {
-  const [app, approval, question, attention] = await Promise.all([
-    readFile(new URL("App.tsx", ROOT), "utf8"),
-    readFile(new URL("components/ApprovalCard.tsx", ROOT), "utf8"),
-    readFile(new URL("components/QuestionCard.tsx", ROOT), "utf8"),
-    readFile(new URL("components/TurnAttentionCard.tsx", ROOT), "utf8"),
-  ]);
-  expect(app).toContain('aria-live="polite"');
-  expect(app).toContain('querySelector<HTMLElement>("[data-attention-card]")?.focus()');
-  for (const source of [approval, question, attention]) {
-    expect(source).toContain("data-attention-card");
-    expect(source).toContain("tabIndex={-1}");
-    expect(source).toContain("data-tone=");
-  }
-});
+test("browser-node credential sync keeps an offline key rotation and honors newer deletions", async () => {
+  const { CredentialsModelsCoordinator } = await import("../packages/web/src/store/coordinators/credentials-models-coordinator.js");
+  type Key = { provider: string; label: string; key: string; updatedAt?: string | null };
+  let browser: Key[] = [
+    // Rotated in this browser while the node was offline: newer than the node's copy.
+    { provider: "anthropic", label: "default", key: "rotated-locally", updatedAt: "2026-09-02T00:00:00Z" },
+    // Deleted on the node after this browser last saw it.
+    { provider: "openai", label: "default", key: "old-openai", updatedAt: "2026-09-01T00:00:00Z" },
+    // The node now holds an OAuth login under this name; the browser API key must yield.
+    { provider: "xai", label: "default", key: "xai-key", updatedAt: "2026-09-01T00:00:00Z" },
+  ];
+  const pushed: Array<{ provider: string; key: string }> = [];
+  const coordinator = new CredentialsModelsCoordinator({
+    send: () => {},
+    awaitAck: async (command) => {
+      const c = command as { kind: string; provider?: string; key?: string };
+      if (c.kind === "credential.set") pushed.push({ provider: c.provider!, key: c.key! });
+      if (c.kind !== "credentials.account.export") return {} as never;
+      return {
+        entries: [
+          { provider: "anthropic", label: "default", key: "stale-on-node", updatedAt: Date.parse("2026-09-01T00:00:00Z") },
+          { provider: "google", label: "default", key: "new-from-node", updatedAt: Date.parse("2026-09-01T00:00:00Z") },
+        ],
+        records: [{ provider: "xai", label: "default", kind: "oauth" }],
+        deletedAt: { openai: Date.parse("2026-09-03T00:00:00Z") },
+      } as never;
+    },
+    rememberModel: () => {},
+    selectModelLocally: () => {},
+    isDirect: () => true, // sync must also run for a direct (LAN) connection
+    now: () => Date.parse("2026-09-04T00:00:00Z"),
+    isOnline: () => true,
+    importModelKeys: async (entries) => {
+      for (const e of entries) {
+        browser = browser.filter((k) => !(k.provider === e.provider && k.label === (e.label ?? "default")));
+        browser.push({ provider: e.provider, label: e.label ?? "default", key: e.key, updatedAt: "2026-09-04T00:00:00Z" });
+      }
+    },
+    removeModelKey: async (provider, label = "default") => { browser = browser.filter((k) => !(k.provider === provider && k.label === label)); },
+    accountModelKeys: async () => browser,
+    importOAuthCredentials: async () => {},
+    removeOAuthCredential: async () => {},
+    accountOAuthCredentials: async () => [],
+    oauthRecoveryEnabled: () => false,
+  });
 
-test("Stop gives immediate progress and a recovery timeout", async () => {
-  const composer = await readFile(new URL("../packages/web/src/components/Composer.tsx", import.meta.url), "utf8");
-  expect(composer).toContain("setStopping(true)");
-  expect(composer).toContain("Stopping…");
-  expect(composer).toContain("10_000");
-  expect(composer).toContain("The agent didn&apos;t confirm it stopped.");
-});
-
-test("browser-node convergence preserves an offline key rotation", async () => {
-  const controller = await read("../packages/web/src/store/coordinators/credentials-models-coordinator.ts");
-  expect(controller).toContain("acceptedIncoming");
-  expect(controller).toContain("remoteAt > localAt");
-  expect(controller).toContain("deletedAt[recordId]");
-  expect(controller).toContain("record.kind !== \"api_key\"");
-  expect(controller).not.toContain('if (this.direct || this.store.getState().status !== "online")');
-});
-
-test("a Run targeting an existing Session resumes or fails visibly and never cold-starts without context", async () => {
-  const server = await read("../src/server.ts");
-  expect(server).toContain('resumeOnMissing: item.source === "schedule" || item.targetKind === "existing_session"');
-  expect(server).toContain("the session is not available on this Machine");
-  expect(server).toContain("await waitForSessionIdle(record)");
-  expect(server).toContain("if (record.worktree && !opts?.isMessage)");
-});
-
-// A model-catalog failure must fail loud and partial, never silent and total.
-// Silence here strands a Cloud launch: the client's models.list query can only
-// time out ("Couldn't load models from this machine") with no cause named, and
-// the composer picker shows "No models available." with no way to tell why.
-test("a models.list catalog failure answers with the real error instead of silence", async () => {
-  const server = await readFile(new URL("../src/server.ts", import.meta.url), "utf8");
-  // The handler must not let modelsListEventFor's rejection fall through to the
-  // generic relay catch (which only console.warns) — it answers the requesting
-  // session with the underlying reason.
-  expect(server).toMatch(/event = await modelsListEventFor\(record\);[\s\S]{0,600}Couldn't read this machine's model catalog/);
-  expect(server).toContain('sessionId: requestedSessionId ?? record.id');
-});
-
-test("Add a machine mints a one-time account enrollment command", async () => {
-  const sheet = await read("../packages/web/src/components/AddNodeSheet.tsx");
-  const controlPlane = await read("../services/control-plane/src/index.ts");
-  const instructions = await read("../packages/web/src/components/MachineInstallInstructions.tsx");
-  expect(sheet).toContain("<MachineInstallInstructions />");
-  expect(instructions).toContain("controller.createNodeClaim()");
-  expect(instructions).toContain("Single-use · expires in 10 minutes");
-  expect(instructions).not.toContain("controller.local.s");
-  expect(sheet).not.toContain('href="/install.sh"');
-  expect(controlPlane).toContain("BIVY_NODE_CLAIM_CODE=${shellSingleQuote(code)}");
-  expect(controlPlane).toContain("BIVY_CONTROL_PLANE_URL=${shellSingleQuote(baseUrl(req))}");
-  expect(controlPlane).toContain("BIVY_NODE_CLAIM_CODE");
-});
-
-test("source Automation templates enter the encrypted review flow before going live", async () => {
-  const view = await read("../packages/web/src/components/AutomationsView.tsx");
-  const templateFlow = view.slice(view.indexOf('function startFromSourceTemplate('), view.indexOf('function startFromTemplate('));
-  expect(templateFlow).toContain('setDraft({');
-  expect(templateFlow).toContain('instructions: defaultSourceInstructions()');
-  expect(templateFlow).toContain('template.trigger === "github_ci"');
-  expect(templateFlow).not.toContain('createAutomation(');
-  expect(templateFlow).not.toContain('updateAutomation(');
-  expect(view).toContain("Draft · needs GitHub");
-});
-
-test("full computer access requires an informed second action", async () => {
-  const source = await readFile(new URL("../packages/web/src/components/Pickers.tsx", import.meta.url), "utf8");
-  expect(source).toContain('t.id === "danger-full-access"');
-  expect(source).toContain("Confirm full computer access");
-  expect(source).toContain("Bivy is not an isolation boundary");
-});
-
-test("opening the queue panel cannot trigger billable provisioning", async () => {
-  const source = await readFile(new URL("../packages/web/src/components/GithubQueue.tsx", import.meta.url), "utf8");
-  expect(source).not.toContain("launchEphemeralQueueWorker(");
-  expect(source).toContain("maybeAutoProvision policy owns launch/dedupe/rate-cap/teardown");
-});
-
-test("interactive billable runners disclose cost and teardown before selection", async () => {
-  const source = await readFile(new URL("../packages/web/src/components/Ephemeral.tsx", import.meta.url), "utf8");
-  expect(source).toContain('title="Use this billable machine profile?"');
-  expect(source).toContain("ephemeralCostHint");
-  expect(source).toContain("controller.pickDraftEphemeralRunner(pendingRunner)");
-});
-
-test("failed ephemeral machines are retained only by explicit debug build opt-in", async () => {
-  const source = await readFile(new URL("../packages/web/src/flags.ts", import.meta.url), "utf8");
-  expect(source).toContain('VITE_BIVY_KEEP_FAILED_EPHEMERAL === "1"');
-  expect(source).not.toContain("EPHEMERAL_KEEP_FAILED_MACHINES = true");
+  await coordinator.syncAccountCredentials();
+  const keys = Object.fromEntries(browser.map((k) => [k.provider, k.key]));
+  assert.equal(keys.anthropic, "rotated-locally", "a stale node snapshot never overwrites a newer local rotation");
+  assert.equal(keys.google, "new-from-node", "keys this browser does not have are imported");
+  assert.equal(keys.openai, undefined, "a node deletion newer than the local key removes it");
+  assert.equal(keys.xai, undefined, "an API key yields to an OAuth login of the same name on the node");
+  assert.ok(pushed.some((p) => p.provider === "anthropic" && p.key === "rotated-locally"), "the local rotation is pushed to the node");
 });

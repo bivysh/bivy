@@ -86,6 +86,10 @@ async function main() {
 
   const claim = await req(port, "POST", "/account/node-claims", undefined, token);
   expect(claim.status === 201 && typeof claim.json?.command === "string", "signed-in account creates a one-time machine command");
+  expect(
+    /BIVY_NODE_CLAIM_CODE='[A-Za-z0-9_-]{43}' BIVY_CONTROL_PLANE_URL='http/.test(claim.json.command) && !claim.json.command.includes(token),
+    "the machine command carries only the one-time claim and control-plane URL, never the account session",
+  );
   const claimUrl = new URL(claim.json.claimUrl);
   const scriptResponse = await fetch(`http://localhost:${port}${claimUrl.pathname}`);
   const script = await scriptResponse.text();
