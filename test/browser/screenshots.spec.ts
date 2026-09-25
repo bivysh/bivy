@@ -145,10 +145,11 @@ for (const [name, markup] of Object.entries(fixtures)) {
         animations: "disabled",
         caret: "hide",
         // Text and native controls vary slightly with the runner's font
-        // rasterizer. Draft now renders its setup labels directly, so it has a
-        // little more anti-aliasing noise; both limits remain far below a
-        // visible layout or copy regression.
-        maxDiffPixels: name === "draft" ? 600 : 100,
+        // rasterizer. Draft renders its setup labels and a sidebar row
+        // directly, so it has more anti-aliasing noise (~900 px between a
+        // local and a CI render); both limits remain far below a visible
+        // layout or copy regression (~0.1% of the frame).
+        maxDiffPixels: name === "draft" ? 1200 : 100,
       });
     }
   });
