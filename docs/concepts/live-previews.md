@@ -155,12 +155,15 @@ Each PR is small and independent.
 - The UI uses `packages/ui/tokens.css` and existing primitives (Sheet, btn,
   status). The concept palettes are mood only.
 
-## Open decisions
+## Decisions (2026-09-25)
 
-1. **Stable address auth:** paired devices only (recommended), or also passkey
-   sign-in so it can replace share links for teammates?
-2. **Peek on iOS:** confirm that Safari's `Partitioned` cookie behavior works
-   in a framed, cross-site shell before committing Peek as the default there.
-   Otherwise, iOS keeps the tab fallback.
-3. **Agent eyes default:** off on self-hosted nodes. Should it be on by default
-   on managed compute?
+1. **Stable address auth:** works only on the owner's signed-in devices.
+   Sharing it with others comes later; time-limited share links still cover
+   that today.
+2. **Peek on iOS:** verify that Safari accepts `Partitioned` cookies in a
+   framed shell before building on it. Otherwise, iOS keeps the tab fallback.
+3. **Agent eyes:** off by default on the user's own machines, with an on/off
+   node setting (Settings → this machine in the PWA, and from the CLI). When
+   it's off, `bivy app shot` fails with a message saying where to enable it.
+   Managed compute is out of scope for now.
+4. **Hand-off:** the existing **Copy link**. QR is deferred.
