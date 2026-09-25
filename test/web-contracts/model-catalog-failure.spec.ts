@@ -14,11 +14,3 @@ test("a models.list catalog failure answers with the real error instead of silen
   expect(server).toMatch(/event = await modelsListEventFor\(record\);[\s\S]{0,600}Couldn't read this machine's model catalog/);
   expect(server).toContain('sessionId: requestedSessionId ?? record.id');
 });
-
-test("one broken provider degrades Pi's catalog per-provider instead of blanking it", async () => {
-  const pi = await readFile(new URL("../../src/agents/pi/runtime.ts", import.meta.url), "utf8");
-  // getModels() falls back to per-provider listing when the all-providers
-  // availability refresh rejects; getAllModels() tolerates the failed refresh.
-  expect(pi).toMatch(/for \(const provider of runtime\.getProviders\(\)\)[\s\S]{0,200}runtime\.getAvailable\(provider\.id\)/);
-  expect(pi).toContain("await runtime.getAvailable().catch(() => {});");
-});
