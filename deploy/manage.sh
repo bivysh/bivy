@@ -16,7 +16,7 @@ case "${1:-help}" in
     [[ -n "$(env_value SELF_HOST_OWNER_EMAIL)" ]] || {
       echo "Server-shell login is not configured. Set SELF_HOST_OWNER_EMAIL in deploy/.env and rerun setup." >&2; exit 1;
     }
-    compose exec -T control-plane ./node_modules/.bin/tsx src/operator-login-cli.ts
+    compose exec -T control-plane node dist/operator-login-cli.js
     ;;
   status) compose ps ;;
   logs) compose logs --tail 100 ;;

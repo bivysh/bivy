@@ -26,7 +26,7 @@ try {
   const mocks = {
     docker: `printf '%s\\n' "$*" >> "$CALLS"
 if [[ "$*" == *generateVAPIDKeys* ]]; then echo 'pub:priv'; fi
-if [[ "$*" == *operator-login-cli.ts* ]]; then echo 'single-use login'; fi
+if [[ "$*" == *operator-login-cli.js* ]]; then echo 'single-use login'; fi
 if [[ "$*" == *'/auth/owner/status'* ]]; then exit "\${OWNER_PASSWORD_STATUS:-2}"; fi`,
     getent: "echo '203.0.113.1 STREAM app.test.example'",
     ss: "exit 0",

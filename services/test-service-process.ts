@@ -18,6 +18,15 @@ export function spawnTestService(cwd: string, env: Record<string, string>): Chil
   });
 }
 
+/** Start a service's built bundle exactly as its container does (`npm run build` first). */
+export function spawnBuiltService(cwd: string, env: Record<string, string>): ChildProcess {
+  return spawn(process.execPath, ["--enable-source-maps", "dist/index.js"], {
+    cwd,
+    env: { ...process.env, ...env },
+    stdio: "inherit",
+  });
+}
+
 async function stopTestService(child: ChildProcess, timeoutMs: number): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return;
 

@@ -23,7 +23,7 @@ compose up -d --wait --wait-timeout 180 postgres control-plane relay
 # Validate the actual generated one-domain route; do not request real ACME TLS.
 compose run --rm --no-deps caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 # Pass the private link via stdin, never command-line arguments or CI logs.
-OWNER_LINK="$(compose exec -T control-plane ./node_modules/.bin/tsx src/operator-login-cli.ts)"
+OWNER_LINK="$(compose exec -T control-plane node dist/operator-login-cli.js)"
 printf '%s' "$OWNER_LINK" | compose exec -T control-plane node --input-type=module -e '
 import assert from "node:assert/strict";
 import fs from "node:fs";
