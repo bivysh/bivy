@@ -4,7 +4,7 @@ import path from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, type ViteDevServer } from "../../packages/web/node_modules/vite/dist/node/index.js";
 import { seal, open } from "../../src/e2e.js";
-import { encodeAutomationTemplate, decodeAutomationTemplate } from "../../src/automation-template.js";
+import { encodeAutomationTemplate, decodeAutomationTemplate, type AutomationFilter } from "../../src/automation-template.js";
 
 let server: ViteDevServer;
 let origin: string;
@@ -23,12 +23,12 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => { await server?.close(); if (cacheDir) await rm(cacheDir, { recursive: true, force: true }); });
 
-async function fixture(page: Page, theme: string, empty = false, trigger = "schedule", options: { multiple?: boolean; locked?: boolean; history?: boolean } = {}) {
+async function fixture(page: Page, theme: string, empty = false, trigger = "schedule", options: { multiple?: boolean; locked?: boolean; history?: boolean; filter?: AutomationFilter } = {}) {
   let item = {
     id: "automation-test", name: "Daily review", trigger, enabled: true,
     repo: "acme/app", nodeLabel: "bivy/Runner", runtimeId: "pi", model: "claude-sonnet",
     schedule: { kind: "cron", expression: "0 9 * * 1-5", timezone: "UTC" },
-    templateCiphertext: `bivy-room-v1:runner:${seal(key, encodeAutomationTemplate(instructions, { anthropic: "work", "openai-codex": "retired" }))}`,
+    templateCiphertext: `bivy-room-v1:runner:${seal(key, encodeAutomationTemplate(instructions, { anthropic: "work", "openai-codex": "retired" }, options.filter))}`,
   };
   const nodes = [{ id: "runner", name: "Runner", online: true }];
   for (const endpoint of ["runtimes", "models", "repos"]) {
@@ -180,6 +180,39 @@ for (const theme of ["light", "dark"]) {
     await page.getByRole("button", { name: "Save changes", exact: true }).click();
     await expect(page.getByRole("dialog", { name: "Edit automation" })).toHaveCount(0);
     expect(decode()).toEqual({ instructions, credentialLabels: {} });
+  });
+}
+
+for (const theme of ["light", "dark"]) {
+  test(`webhook filter round-trips through the app editor (${theme})`, async ({ page }, testInfo) => {
+    const filter = { command: ["node", "basecamp filter.mjs"], cwd: "/srv/bivy/trusted-filters", timeoutSeconds: 5 };
+    const item = await fixture(page, theme, false, "webhook", { filter });
+    const decode = () => decodeAutomationTemplate(open(key, item().templateCiphertext.split(":").slice(2).join(":")));
+    const toggle = page.getByRole("checkbox", { name: /Filter deliveries with a script/ });
+    await expect(toggle).toBeChecked();
+    const command = page.getByLabel("Command", { exact: true });
+    await expect(command).toHaveValue("node 'basecamp filter.mjs'");
+    await page.getByLabel("Timeout (seconds)", { exact: true }).fill("12");
+    await command.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath(`webhook-filter-${theme}.png`) });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+    await page.getByLabel("Directory on the machine", { exact: true }).fill("relative");
+    await expect(page.getByText("The filter directory must be an absolute path on the machine.")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Save changes", exact: true })).toBeDisabled();
+    await page.getByLabel("Directory on the machine", { exact: true }).fill(filter.cwd);
+    await page.getByRole("button", { name: "Save changes", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "Edit automation" })).toHaveCount(0);
+    expect(decode().filter).toEqual({ ...filter, timeoutSeconds: 12 });
+    expect(decode().instructions).toBe(instructions);
+    await page.reload();
+    await page.getByRole("button", { name: "View Daily review" }).click();
+    await page.getByRole("button", { name: "Edit automation", exact: true }).click();
+    await expect(page.getByLabel("Timeout (seconds)", { exact: true })).toHaveValue("12");
+    await page.getByText("Filter deliveries with a script", { exact: true }).click();
+    await expect(page.getByRole("checkbox", { name: /Filter deliveries with a script/ })).not.toBeChecked();
+    await page.getByRole("button", { name: "Save changes", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "Edit automation" })).toHaveCount(0);
+    expect(decode().filter).toBeUndefined();
   });
 }
 
