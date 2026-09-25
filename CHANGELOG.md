@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.2] - 2026-09-25
+
 ### Added
 
 - **Copy link** and **Revoke access** for app web views in the Apps sheet. Opening a preview still uses a one-use launch link; Copy link gives a reusable link that opens the app on its own origin, outside the preview frame, so you can open it in another browser or inspect it with devtools. It works for 24 hours or until you revoke access, which ends every link, browser session and open connection for that view without removing the app.
