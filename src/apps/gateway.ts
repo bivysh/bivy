@@ -22,6 +22,7 @@ const OPEN_PATH = "/__bivy/open";
 const REDEEM_PATH = "/__bivy/redeem";
 const REVISION_PATH = "/__bivy/revision";
 const INSPECTOR_PATH = "/__bivy/inspector.js";
+const COMPARE_PATH = "/__bivy/compare";
 /** Larger HTML documents pass through without the inspector. */
 const MAX_INJECT_BYTES = 5 * 1024 * 1024;
 
@@ -222,7 +223,7 @@ export class AppGateway {
     const origin = this.shellOrigin(id);
     const nonce = randomBytes(16).toString("hex");
     res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
-    res.setHeader("Content-Security-Policy", `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'self' 'nonce-${nonce}'; connect-src 'self' ${this.origin(id)}; frame-src ${this.origin(id)}; frame-ancestors ${this.returnOrigins().join(" ") || "'none'"}; base-uri 'none'; form-action 'none'`);
+    res.setHeader("Content-Security-Policy", `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'self' 'nonce-${nonce}'; connect-src 'self' ${this.origin(id)}; img-src blob:; frame-src ${this.origin(id)}; frame-ancestors ${this.returnOrigins().join(" ") || "'none'"}; base-uri 'none'; form-action 'none'`);
     if (req.method === "GET" && this.styles.has(req.url ?? "")) {
       res.setHeader("Content-Type", "text/css; charset=utf-8");
       res.end(this.styles.get(req.url!)); return;
@@ -298,6 +299,7 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
     if (!req.url?.startsWith("/") || req.url.startsWith("//")) { res.writeHead(400); res.end(); return; }
     this.track(id, req.socket, expires);
     if (req.url.startsWith(`${REVISION_PATH}?`) && req.method === "GET") { this.revision(req, res, entry); return; }
+    if ((req.url === COMPARE_PATH || req.url.startsWith(`${COMPARE_PATH}/`)) && req.method === "GET") { this.compare(req, res, entry); return; }
     if (req.url === INSPECTOR_PATH && req.method === "GET") {
       res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
       res.end(inspectorScript(this.shellOrigin(id))); return;
@@ -359,6 +361,20 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
     });
     res.on("close", () => upstream.destroy());
     req.pipe(upstream);
+  }
+  /** Compare shots for the shell: the list, or one PNG by index. */
+  private compare(req: IncomingMessage, res: ServerResponse, entry: RegisteredView): void {
+    const shots = entry.shots ?? [];
+    const cors = { "access-control-allow-origin": this.shellOrigin(entry.view.id), "access-control-allow-credentials": "true", vary: "Origin" };
+    const index = req.url === COMPARE_PATH ? -1 : Number(req.url!.slice(COMPARE_PATH.length + 1));
+    if (index < 0) {
+      res.writeHead(200, { ...cors, "content-type": "application/json" });
+      res.end(JSON.stringify({ shots: shots.map((shot, i) => ({ index: i, revision: shot.revision, at: shot.at })) })); return;
+    }
+    const shot = Number.isInteger(index) ? shots[index] : undefined;
+    if (!shot) { res.writeHead(404, cors); res.end(); return; }
+    res.writeHead(200, { ...cors, "content-type": "image/png", "content-length": shot.png.length });
+    res.end(shot.png);
   }
   /** Long poll from the trusted shell (same-site, credentialed CORS): answers
    * when the view's revision differs from `after`, or after 25 seconds. */

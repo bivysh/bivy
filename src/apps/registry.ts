@@ -20,6 +20,8 @@ export interface RegisteredView {
   revision: number;
   /** Last page the preview shell framed; a reload returns there, not to `/`. */
   lastPath?: string;
+  /** Recent screenshots for Compare, newest last (agent screenshots on only). */
+  shots?: { revision: number; at: number; png: Buffer }[];
   /** Where a static snapshot came from, so a turn can re-take it. */
   source?: { workspace: string; directory: string };
 }

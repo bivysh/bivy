@@ -117,6 +117,7 @@ const ENV_FOR_KEY: Record<string, string> = {
   "defaults.sandbox": "BIVY_SANDBOX",
   "defaults.approval": "BIVY_APPROVAL_MODE",
   "sessions.autoAttachToolImages": "BIVY_AUTO_ATTACH_TOOL_IMAGES",
+  "sessions.appScreenshots": "BIVY_APP_SCREENSHOTS",
   "automation.checks": "BIVY_AUTOMATION_CHECKS",
   "automation.checkTimeoutMinutes": "BIVY_AUTOMATION_CHECK_TIMEOUT_MS",
 };
@@ -132,6 +133,7 @@ const BUILTIN_VALUES: Record<string, unknown> = {
   "sessions.worktreeSync": false,
   "sessions.resume": "auto",
   "sessions.autoAttachToolImages": false,
+  "sessions.appScreenshots": false,
   "automation.checks": ["test", "lint", "typecheck"],
   "automation.checkTimeoutMinutes": 10,
 };

@@ -1500,6 +1500,7 @@ function writeSettings(settings: Record<string, unknown>) {
     ...("syncStandbyNodeId" in settings ? { standbyNodeId: typeof settings.syncStandbyNodeId === "string" ? settings.syncStandbyNodeId || undefined : undefined } : {}),
     ...(settings.sessionResumeMode === "auto" || settings.sessionResumeMode === "manual" ? { resume: settings.sessionResumeMode } : {}),
     ...(typeof settings.autoAttachToolImages === "boolean" ? { autoAttachToolImages: settings.autoAttachToolImages } : {}),
+    ...(typeof settings.appScreenshots === "boolean" ? { appScreenshots: settings.appScreenshots } : {}),
     ...(Number.isInteger(settings.forkWorkspaceMaxBytes) ? { forkWorkspaceMaxBytes: Number(settings.forkWorkspaceMaxBytes) } : {}),
   };
   next.github = {
@@ -1606,6 +1607,10 @@ type NodeSettings = {
    *  src/harness/tool-image-attachments.ts) so a chatty tool can't flood the
    *  transcript even once enabled. */
   autoAttachToolImages: boolean;
+  /** Let agents screenshot their app previews (`bivy app shot`) with a local
+   *  headless browser. Off by default: it needs Chrome/Chromium and a few
+   *  hundred MB of memory while it runs. */
+  appScreenshots: boolean;
   forkWorkspaceMaxBytes: number;
 };
 
@@ -1631,6 +1636,14 @@ function nodeConfiguredDefaultAgent(): string {
 
 /** How interactive sessions recover after a restart interrupted them mid-turn.
  *  Defaults to "auto" (re-drive the turn); "manual" waits for a user tap. */
+/** Agents may screenshot app previews: the node setting, or BIVY_APP_SCREENSHOTS. */
+function appScreenshotsEnabled(): boolean {
+  const env = process.env.BIVY_APP_SCREENSHOTS;
+  if (env === "1" || env === "true") return true;
+  if (env === "0" || env === "false") return false;
+  return readSettings().appScreenshots === true;
+}
+
 function nodeSessionResumeMode(): "auto" | "manual" {
   return readSettings().sessionResumeMode === "manual" ? "manual" : "auto";
 }
@@ -1667,6 +1680,7 @@ function nodeSettingsSnapshot(): NodeSettings {
     })(),
     sessionResumeMode: nodeSessionResumeMode(),
     autoAttachToolImages: readSettings().autoAttachToolImages === true,
+    appScreenshots: appScreenshotsEnabled(),
     forkWorkspaceMaxBytes: Number.isInteger(readSettings().forkWorkspaceMaxBytes) ? Number(readSettings().forkWorkspaceMaxBytes) : 50 * 1024 * 1024,
   };
 }
@@ -1721,6 +1735,7 @@ async function applyNodeSettings(patch: Record<string, unknown>): Promise<NodeSe
   if ("sessionResumeMode" in patch) {
     settings.sessionResumeMode = patch.sessionResumeMode === "manual" ? "manual" : "auto";
   }
+  if ("appScreenshots" in patch) settings.appScreenshots = patch.appScreenshots === true;
   if ("autoAttachToolImages" in patch) {
     settings.autoAttachToolImages = patch.autoAttachToolImages === true;
     setConfiguredAutoAttachToolImages(settings.autoAttachToolImages);
@@ -2141,7 +2156,7 @@ const appService = new AppService(appRegistry, appGateway ?? remotePreview, {
   },
   has: (id) => terminals.has(id),
   close: (id) => { terminals.close(id); },
-});
+}, { screenshots: { enabled: appScreenshotsEnabled } });
 
 const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
   ...createAppCommands(appService, (id) => { const record = resolveSession(id); return record ? harnessDirFor(record) : undefined; }, (app) => {

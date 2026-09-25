@@ -32,6 +32,12 @@ nav .btn[aria-pressed="true"] { background:var(--accent-soft); color:var(--accen
 .panel { width:min(560px, 100%); max-height:50vh; overflow:auto; background:var(--surface); border:thin solid var(--line); border-radius:var(--radius-lg); box-shadow:var(--shadow-lg); padding:var(--space-3); box-sizing:border-box; }
 .panel h2 { font-size:var(--text-sm); margin:0 0 var(--space-2); display:flex; align-items:center; justify-content:space-between; gap:var(--space-2); }
 .panel-actions { display:flex; justify-content:flex-end; gap:var(--space-2); margin-top:var(--space-2); flex-wrap:wrap; }
+#compare-stage { display:grid; justify-content:center; background:var(--surface-2); border-radius:var(--radius-md); overflow:hidden; }
+/* Both shots share one grid cell, so they overlay exactly at any size. */
+#compare-stage img { grid-area:1 / 1; display:block; max-height:32vh; max-width:100%; }
+/* Same column as the shots, so the handle sits on the split. */
+#compare-slider { grid-area:2 / 1; width:100%; margin:var(--space-2) 0; accent-color:var(--accent); }
+#compare-hint { font-size:var(--text-xs); margin:var(--space-1) 0 0; }
 #entries { list-style:none; margin:0; padding:0; font-family:var(--font-mono); font-size:var(--text-xs); }
 #entries li { display:flex; gap:var(--space-2); align-items:baseline; padding:var(--space-1) 0; border-top:thin solid var(--line); overflow-wrap:anywhere; }
 #draft-text { width:100%; min-height:5em; box-sizing:border-box; font:inherit; font-size:var(--text-sm); resize:vertical; }
@@ -52,6 +58,11 @@ nav .btn[aria-pressed="true"] { background:var(--accent-soft); color:var(--accen
     <ul id="entries"></ul>
     <div class="panel-actions"><button class="btn sm" id="send-errors" disabled>Send to agent…</button></div>
   </section>
+  <section class="panel" id="compare" hidden aria-labelledby="compare-title">
+    <h2 id="compare-title">Before and after the agent’s last change</h2>
+    <div id="compare-stage"><img id="compare-after" alt="After the agent’s last change"><img id="compare-before" alt="Before the agent’s last change"><input type="range" id="compare-slider" min="0" max="100" value="50" aria-label="Show more of before or after"></div>
+    <p class="muted" id="compare-hint">Left of the handle: before. Right: now. Screenshots at phone width.</p>
+  </section>
   <section class="panel" id="draft" hidden aria-labelledby="draft-title">
     <h2 id="draft-title">Draft for the agent</h2>
     <textarea class="field" id="draft-text" aria-label="What should change?" placeholder="What should change?"></textarea>
@@ -65,6 +76,7 @@ nav .btn[aria-pressed="true"] { background:var(--accent-soft); color:var(--accen
     <span id="name"><span id="title">App preview</span><span id="stamp" class="muted" role="status"></span></span>
     <button class="btn sm ghost" id="hide" aria-label="Hide Bivy controls" title="Hide controls">⌄</button>
     <button class="btn sm ghost" id="point" aria-pressed="false" disabled>Point</button>
+    <button class="btn sm ghost" id="compare-btn" aria-pressed="false" hidden>Compare</button>
     <button class="btn sm ghost" id="errors" aria-pressed="false" aria-label="Console" disabled>Console <span class="badge" data-variant="solid" data-tone="danger" id="error-count" hidden></span></button>
     <div class="segmented" id="lens" role="radiogroup" aria-label="Preview width"><button class="seg-btn" role="radio" aria-selected="true" data-lens="full">Full</button><button class="seg-btn" role="radio" aria-selected="false" data-lens="tablet">Tablet</button><button class="seg-btn" role="radio" aria-selected="false" data-lens="phone">Phone</button></div>
     <button class="btn sm ghost" id="reload" disabled>Reload</button>
@@ -94,7 +106,7 @@ function show(data,launch){
   back.hidden=embedded&&Boolean(data.returnTo);
   for(const b of [reload,$('point'),$('errors')])b.disabled=false;
   status.textContent='Loading app…';
-  frame.onload=()=>{status.hidden=true;if(revision===null){revision=-1;watch();}else if(wake)wake();};
+  frame.onload=()=>{status.hidden=true;void loadCompare();if(revision===null){revision=-1;watch();}else if(wake)wake();};
   // Store navigation metadata only, never tickets or cookies.
   try{sessionStorage.setItem(storageKey,JSON.stringify(data));}catch{}
 }
@@ -111,6 +123,8 @@ async function watch(){
     if(revision>=0&&d.revision!==revision){
       open(currentPath!=='/'?currentPath:d.path,'Updating…');
       $('stamp').textContent='Updated after the agent’s turn';
+      // Screenshots for Compare land a few seconds after the change.
+      for(const ms of [5000,15000])setTimeout(()=>void loadCompare(),ms);
     }
     revision=d.revision;retry=0;setTimeout(watch,0);
   }catch{retry=Math.min(30000,(retry||1000)*2);const t=setTimeout(watch,retry);wake=()=>{clearTimeout(t);watch();};}
@@ -122,7 +136,7 @@ function toChat(text){
   location.assign(to.origin+'/share?session='+encodeURIComponent(session)+'&text='+encodeURIComponent(text));
 }
 function draft(context){
-  $('console').hidden=true;$('errors').setAttribute('aria-pressed','false');
+  panels(null);
   $('draft').hidden=false;
   $('draft-add').textContent=metadata.returnTo?'Add to chat':'Copy';
   $('draft-context').textContent=context;
@@ -144,7 +158,7 @@ function renderConsole(){
   $('console-empty').hidden=entries.length>0;$('send-errors').disabled=!entries.length;
   $('entries').replaceChildren(...entries.map(e=>{const li=document.createElement('li');const tag=document.createElement('span');tag.className='badge';tag.dataset.tone=e.level==='error'?'danger':'warn';tag.textContent=e.level;const text=document.createElement('span');text.textContent=e.text;li.append(tag,text);return li;}));
 }
-$('errors').onclick=()=>{const p=$('console');p.hidden=!p.hidden;$('errors').setAttribute('aria-pressed',String(!p.hidden));$('draft').hidden=true;};
+$('errors').onclick=()=>panels($('console').hidden?'console':null);
 $('clear').onclick=resetConsole;
 $('send-errors').onclick=()=>draft('Console output in the app preview "'+metadata.name+'" (page '+currentPath+'):\\n'+entries.slice(-20).map(e=>'- '+e.level+': '+e.text).join('\\n'));
 // Point and tell
@@ -160,6 +174,24 @@ function picked(d){
     +'Element: '+String(d.selector).slice(0,300)+(d.text?' ("'+String(d.text).slice(0,200)+'")':'')+', '+r.width+'×'+r.height+' at '+r.x+','+r.y
     +(errors.length?'\\nRecent errors:\\n'+errors.map(e=>'- '+e.text).join('\\n'):''));
 }
+// Compare: screenshots around the agent's last change (agent screenshots on).
+const compareBtn=$('compare-btn');let shots=[],urls=[];
+async function loadCompare(){
+  try{const r=await fetch(metadata.origin+'/__bivy/compare',{credentials:'include',cache:'no-store'});if(!r.ok)return;shots=(await r.json()).shots||[];compareBtn.hidden=shots.length<2;}catch{}
+}
+function panels(open){for(const [id,btn] of [['console','errors'],['compare','compare-btn']]){$(id).hidden=id!==open;$(btn).setAttribute('aria-pressed',String(id===open));}$('draft').hidden=true;}
+compareBtn.onclick=async()=>{
+  if(!$('compare').hidden)return panels(null);
+  panels('compare');
+  for(const u of urls)URL.revokeObjectURL(u);
+  const pick=[shots[shots.length-2],shots[shots.length-1]];
+  urls=await Promise.all(pick.map(async s=>URL.createObjectURL(await (await fetch(metadata.origin+'/__bivy/compare/'+s.index,{credentials:'include'})).blob())));
+  const before=$('compare-before'),after=$('compare-after');
+  before.src=urls[0];after.src=urls[1];
+  split();
+};
+const split=()=>{$('compare-before').style.clipPath='inset(0 '+(100-Number($('compare-slider').value))+'% 0 0)';};
+$('compare-slider').oninput=split;
 // The pill can cover an app's own bottom bar; collapse it to a corner button.
 $('hide').onclick=()=>{if(point.getAttribute('aria-pressed')==='true')pointing(false);$('dock').hidden=true;$('show').hidden=false;$('show').focus();};
 $('show').onclick=()=>{$('dock').hidden=false;$('show').hidden=true;$('hide').focus();};
@@ -187,7 +219,7 @@ addEventListener('message',e=>{
   }
 });
 ask.onclick=()=>toChat('The app preview "'+metadata.name+'" isn’t loading: nothing is answering on port '+downPort+'. Please find out why the server stopped, restart it, and tell me when it’s back.');
-addEventListener('keydown',e=>{if(e.key==='Escape'){if(point.getAttribute('aria-pressed')==='true')pointing(false);else{$('draft').hidden=true;$('console').hidden=true;$('errors').setAttribute('aria-pressed','false');}}});
+addEventListener('keydown',e=>{if(e.key==='Escape'){if(point.getAttribute('aria-pressed')==='true')pointing(false);else panels(null);}});
 back.onclick=()=>{if(metadata?.returnTo){window.close();setTimeout(()=>location.replace(metadata.returnTo),100);}else{window.close();status.hidden=false;status.textContent='You can close this tab to return to Bivy.';}};
 reload.onclick=()=>{if(metadata)open(currentPath,'Reloading app…');};
 (async()=>{

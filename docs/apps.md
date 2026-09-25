@@ -86,6 +86,30 @@ UI detaches; ending the terminal stops it. An exited app never silently becomes 
 shell. Commands are executables plus argument arrays, not implicitly shell-parsed
 strings. For shell syntax, explicitly choose a shell and `-c` arguments.
 
+### Agent screenshots (`bivy app shot`)
+
+```sh
+bivy app shot                       # every web view: 390 and 1280 px, light
+bivy app shot <app-id> --widths 390 --themes light,dark --path /settings
+```
+
+Any agent can screenshot its session's web views to check its own UI. The
+command prints JSON with one PNG path per view, width and theme. Phone widths
+(< 600 px) render at 2×. Themes are emulated for the page
+(`prefers-color-scheme`). It uses Chrome or Chromium on the machine
+(`BIVY_CHROME` to pick one; a Playwright install also works), one browser at a
+time, and needs a few hundred MB of memory while it runs. Service views load
+straight from loopback; static views from a temporary loopback server. Where
+Chromium's sandbox is unavailable (as root, or where AppArmor blocks user
+namespaces), it runs without it. The pages are the session's own apps, already
+running as the node user.
+
+**Off by default.** Turn it on in Bivy → Settings → this machine, *Let agents
+screenshot their app previews*. From a terminal, run
+`bivy config set sessions.appScreenshots true` (or set
+`BIVY_APP_SCREENSHOTS=1`). While it's off, the command explains how to turn it
+on.
+
 ### Servers Bivy runs (`start`)
 
 A service view can say how to start its server:
@@ -292,6 +316,10 @@ own bottom bar.
 - **Console**: errors and warnings from the page, with a count on the pill.
   **Send to agent…** drafts them the same way.
 - **Full / Tablet / Phone** (wide screens): constrains the app to 768 or 390 px.
+- **Compare** (with agent screenshots on): before/after screenshots at phone
+  width around the agent's last change, with a handle to reveal either. Bivy
+  takes a baseline the first time a view is opened, and one after each turn that
+  changes files, of the page last viewed. The last four are kept in memory.
 
 These work through a small inspector script that the gateway adds to the app's
 HTML page loads, served from the app's own origin (`/__bivy/inspector.js`). The

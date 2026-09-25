@@ -108,7 +108,7 @@ test("managed servers start on first open, restart when they exit, and stop back
   let live = new Set<string>(); const started: string[] = []; const closed: string[] = [];
   const terminals = { start: async (spec: { command: string; name: string }) => { const id = `t${started.length}`; started.push(spec.command); live.add(id); return id; }, has: (id: string) => live.has(id), close: (id: string) => { closed.push(id); live.delete(id); } };
   const gateway = { open: () => "https://view-x.preview.example.net/__bivy/open#t", share: () => ({ url: "", expiresAt: 0 }), revoke: () => {} };
-  const service = new AppService(new AppRegistry(), gateway, terminals, async () => [], 5);
+  const service = new AppService(new AppRegistry(), gateway, terminals, { scan: async () => [], serverWatchMs: 5 });
   const until = async (check: () => boolean) => { for (let i = 0; i < 200 && !check(); i++) await new Promise((r) => setTimeout(r, 5)); assert.ok(check()); };
   try {
     const app = service.publish("s", dir, { version: 1, name: "Web", views: [{ kind: "web", name: "Site", source: { kind: "service", port: 3000, start: { command: "npm", args: ["run", "dev"] } } }] });

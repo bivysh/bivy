@@ -1088,6 +1088,7 @@ function NodesPanel({ state, cloudMachinesEnabled }: { state: AppState; cloudMac
         syncStandbyNodeId: form.syncStandbyNodeId ?? "",
         sessionResumeMode: form.sessionResumeMode,
         autoAttachToolImages: form.autoAttachToolImages,
+        appScreenshots: form.appScreenshots === true,
       });
       setSavedMsg("Saved");
       setTimeout(() => setSavedMsg(null), 1500);
@@ -1388,6 +1389,21 @@ function NodesPanel({ state, cloudMachinesEnabled }: { state: AppState; cloudMac
                 checked={form.autoAttachToolImages}
                 onChange={(v) => setForm({ ...form, autoAttachToolImages: v })}
                 label="Enable auto-attach for tool images"
+              />
+            </div>
+            <div className="settings-toggle-row">
+              <div className="settings-toggle-text">
+                <span className="settings-toggle-title">Let agents screenshot their app previews</span>
+                <span className="muted small">
+                  Agents can run <code>bivy app shot</code> to see their previews at phone and desktop widths, in light
+                  and dark, before they say they’re done. It uses Chrome or Chromium on this machine and a few hundred
+                  MB of memory while it runs. Also used for before/after comparisons in previews.
+                </span>
+              </div>
+              <Toggle
+                checked={form.appScreenshots === true}
+                onChange={(v) => setForm({ ...form, appScreenshots: v })}
+                label="Let agents screenshot their app previews"
               />
             </div>
             </div>

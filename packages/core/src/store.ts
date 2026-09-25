@@ -725,6 +725,8 @@ export interface NodeSettings {
    *  output) into the chat as attachments, with no explicit "attach" call
    *  (issue #292). Off by default; bounded per-turn regardless once enabled. */
   autoAttachToolImages: boolean;
+  /** Agents may screenshot their app previews (`bivy app shot`). Off by default. */
+  appScreenshots?: boolean;
 }
 
 export interface ConnectionAccountState {

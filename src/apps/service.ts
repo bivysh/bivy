@@ -2,7 +2,11 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import type { AppManifest, AppOffer, OpenAppViewResult, SessionApp, SessionAppOffersResult, SessionAppsResult, ShareAppViewResult } from "./types.js";
 import { AppRegistry, type RegisteredView } from "./registry.js";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { scanListeners } from "./listeners.js";
+import { takeShots, type Shot, type ShotRequest } from "./screenshot.js";
 
 export interface AppPreviewProvider {
   readonly available?: boolean;
@@ -24,12 +28,27 @@ export interface AppTerminalProvider {
 /** A managed server that keeps exiting is left down after this many restarts
  * in RESTART_WINDOW; opening the view again tries afresh. */
 const MAX_RESTARTS = 5;
+/** Compare keeps this many shots per view, taken after servers settle. */
+const COMPARE_KEEP = 4;
+const COMPARE_SETTLE_MS = 1_500;
 const RESTART_WINDOW = 10 * 60_000;
 
 export class AppService {
   private terminalStarts = new Map<string, Promise<string>>();
   private servers = new Map<string, { termId?: string; pending?: Promise<string>; restarts: number[]; timer?: NodeJS.Timeout }>();
-  constructor(readonly registry: AppRegistry, readonly gateway: AppPreviewProvider | undefined, private readonly terminals: AppTerminalProvider, private readonly scan: (workspace: string) => Promise<AppOffer[]> = scanListeners, private readonly serverWatchMs = 5_000) {}
+  private readonly scan: (workspace: string) => Promise<AppOffer[]>;
+  private readonly serverWatchMs: number;
+  private readonly screenshots: { enabled: () => boolean; take: typeof takeShots };
+  private shooting: Promise<unknown> = Promise.resolve();
+  constructor(readonly registry: AppRegistry, readonly gateway: AppPreviewProvider | undefined, private readonly terminals: AppTerminalProvider, options: {
+    scan?: (workspace: string) => Promise<AppOffer[]>; serverWatchMs?: number;
+    /** Agent screenshots are a node setting, off by default. */
+    screenshots?: { enabled: () => boolean; take?: typeof takeShots };
+  } = {}) {
+    this.scan = options.scan ?? scanListeners;
+    this.serverWatchMs = options.serverWatchMs ?? 5_000;
+    this.screenshots = { enabled: options.screenshots?.enabled ?? (() => false), take: options.screenshots?.take ?? takeShots };
+  }
 
   list(sessionId: string): SessionAppsResult {
     const available = Boolean(this.gateway) && this.gateway?.available !== false;
@@ -38,8 +57,30 @@ export class AppService {
     return { apps, previewAvailable: available };
   }
   publish(sessionId: string, workspace: string, manifest: AppManifest) { return this.registry.publish(sessionId, workspace, manifest); }
-  /** An agent turn changed files in this session's workspace. */
-  turnChanged(sessionId: string): string[] { return this.registry.touch(sessionId); }
+  /** An agent turn changed files in this session's workspace. With agent
+   * screenshots on, Compare gets an "after" shot once servers have rebuilt. */
+  turnChanged(sessionId: string): string[] {
+    const bumped = this.registry.touch(sessionId);
+    if (bumped.length && this.screenshots.enabled()) setTimeout(() => void this.capture(bumped), COMPARE_SETTLE_MS).unref?.();
+    return bumped;
+  }
+  /** One phone-width shot per view of the page last viewed, kept for Compare. */
+  async capture(viewIds: string[]): Promise<void> {
+    for (const id of viewIds) {
+      const entry = this.registry.getView(id);
+      if (!entry || entry.view.kind !== "web") continue;
+      const outDir = path.join(os.tmpdir(), "bivy-shots", "compare", id);
+      const run = this.shooting.catch(() => {}).then(() => this.screenshots.take([entry], { widths: [390], themes: ["light"], path: entry.lastPath ?? "/" }, outDir));
+      this.shooting = run;
+      try {
+        const [shot] = await run;
+        if (!shot) continue;
+        const png = fs.readFileSync(shot.file);
+        fs.rmSync(outDir, { recursive: true, force: true });
+        entry.shots = [...(entry.shots ?? []), { revision: entry.revision, at: Date.now(), png }].slice(-COMPARE_KEEP);
+      } catch { /* a failed shot just leaves Compare without this turn */ }
+    }
+  }
   /** Servers running in the workspace that this session doesn't preview yet. */
   async offers(sessionId: string, workspace: string): Promise<SessionAppOffersResult> {
     const claimed = this.registry.claimedPorts(sessionId);
@@ -63,6 +104,8 @@ export class AppService {
       // and reloads itself once it answers.
       if (this.servers.get(viewId)) this.servers.get(viewId)!.restarts = [];
       void this.ensureServer(entry).catch(() => {});
+      // Compare needs a "before": take a baseline the first time it's opened.
+      if (!entry.shots?.length && this.screenshots.enabled()) setTimeout(() => void this.capture([viewId]), COMPARE_SETTLE_MS).unref?.();
       return { kind: "web", url };
     }
     if (entry.target.kind !== "terminal") throw new Error("Unsupported app view provider.");
@@ -85,6 +128,24 @@ export class AppService {
       if (this.terminalStarts.get(viewId) === pending) this.terminalStarts.delete(viewId);
       throw error;
     }
+  }
+  /** Screenshots of a session's web views (one app, or all), for agents to
+   * check their own UI. One browser at a time node-wide; PNGs in a temp dir. */
+  async shot(sessionId: string, appId: string | undefined, input: Partial<ShotRequest>): Promise<{ shots: Shot[] }> {
+    if (!this.screenshots.enabled()) throw new Error("Agent screenshots are off on this machine. Turn on “Let agents screenshot their app previews” in Bivy → Settings → this machine, or run: bivy config set sessions.appScreenshots true");
+    const widths = input.widths ?? [390, 1280];
+    const themes = input.themes ?? ["light"];
+    const page = input.path ?? "/";
+    if (!Array.isArray(widths) || !widths.length || widths.length > 4 || widths.some((w) => !Number.isInteger(w) || w < 240 || w > 2560)) throw new Error("Widths must be 1–4 whole numbers between 240 and 2560.");
+    if (!Array.isArray(themes) || !themes.length || themes.some((t) => t !== "light" && t !== "dark")) throw new Error("Themes must be light and/or dark.");
+    if (typeof page !== "string" || !page.startsWith("/") || page.startsWith("//") || page.length > 2048) throw new Error("Path must start with /.");
+    const apps = appId ? [this.registry.require(sessionId, appId)] : this.registry.list(sessionId);
+    const views = apps.flatMap((app) => app.views).filter((view) => view.kind === "web").map((view) => this.registry.getView(view.id)!).filter(Boolean);
+    if (!views.length) throw new Error("This session has no web views to screenshot. Publish one with bivy app publish, or preview a detected server.");
+    const outDir = path.join(os.tmpdir(), "bivy-shots", sessionId.replace(/[^A-Za-z0-9_-]/g, "_"), String(Date.now()));
+    const run = this.shooting.catch(() => {}).then(() => this.screenshots.take(views, { widths, themes: [...new Set(themes)], path: page }, outDir));
+    this.shooting = run;
+    return { shots: await run };
   }
   /** The managed server's output, as an attachable terminal (starts it if needed). */
   async logs(sessionId: string, appId: string, viewId: string): Promise<OpenAppViewResult> {

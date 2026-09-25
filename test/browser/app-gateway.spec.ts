@@ -285,3 +285,34 @@ test("a stable address comes back from Bivy to the same page", async ({ page }) 
     expect(await page.evaluate(() => window.top === window)).toBe(true);
   } finally { fixture.close(); await fs.rm(dir, { recursive: true, force: true }); }
 });
+
+// Compare shows the last two screenshots around the agent's change, with a
+// handle that reveals more of either. (Taking the shots is covered in
+// test/app-screenshot.test.ts; here, the shell's side.)
+test("Compare shows before and after the agent's last change", async ({ page }, testInfo) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "bivy-compare-"));
+  const registry = new AppRegistry();
+  const fixture = await delivery(registry, false);
+  const { gateway, port } = fixture;
+  try {
+    await fs.writeFile(path.join(dir, "index.html"), '<!doctype html><html lang="en"><title>Ledger</title><h1>Ledger</h1></html>');
+    const id = registry.publish("s", dir, { version: 1, name: "Ledger", views: [{ kind: "web", name: "Ledger", source: { kind: "static", directory: "." } }] }).views[0]!.id;
+    await page.setContent('<body style="margin:0;background:#c33;width:390px;height:600px"></body>');
+    const before = await page.screenshot({ clip: { x: 0, y: 0, width: 390, height: 600 } });
+    await page.setContent('<body style="margin:0;background:#3a3;width:390px;height:600px"></body>');
+    const after = await page.screenshot({ clip: { x: 0, y: 0, width: 390, height: 600 } });
+    registry.getView(id)!.shots = [{ revision: 0, at: 1, png: before }, { revision: 1, at: 2, png: after }];
+    await page.route("https://*.preview.example.net/**", async (route) => {
+      const request = route.request(); const url = new URL(request.url());
+      const response = await route.fetch({ url: `http://127.0.0.1:${port}${url.pathname}${url.search}`, headers: { ...await request.allHeaders(), host: url.host }, maxRedirects: 0 }).catch(() => undefined);
+      await (response ? route.fulfill({ response }) : route.abort()).catch(() => {});
+    });
+    await page.goto(gateway.open(id));
+    await page.getByRole("button", { name: "Compare" }).click();
+    const panel = page.getByRole("region", { name: "Before and after the agent’s last change" });
+    await expect.poll(() => panel.getByRole("img", { name: "Before the agent’s last change" }).evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(390);
+    await panel.getByRole("slider").fill("20");
+    expect(await panel.getByRole("img", { name: "Before the agent’s last change" }).evaluate((img: HTMLElement) => img.style.clipPath)).toBe("inset(0px 80% 0px 0px)");
+    await page.screenshot({ path: testInfo.outputPath("compare.png") });
+  } finally { fixture.close(); await fs.rm(dir, { recursive: true, force: true }); }
+});
