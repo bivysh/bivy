@@ -35,6 +35,11 @@ concurrency:
 
 jobs:
   smoke:
+    # PAUSED: tests on ephemeral machines are disabled for now — we'll revisit
+    # this later. This workflow is manual-only (workflow_dispatch), and the guard
+    # below keeps a dispatch from provisioning real ephemeral machines. To
+    # re-enable, remove this `if`.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     environment: ephemeral-live-smoke
     timeout-minutes: 20
