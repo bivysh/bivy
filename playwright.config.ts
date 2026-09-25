@@ -11,6 +11,20 @@ const singleViewport = [
   "**/pwa-lifecycle.spec.ts",
 ];
 
+// The merge queue runs only these core flows (PW_SMOKE=1, desktop viewport);
+// nightly and release runs execute every spec on every viewport. Pick specs
+// that span first run, chat, automation and update paths, not edge cases.
+const smokeSpecs = [
+  "**/screenshots.spec.ts",
+  "**/browser-first-setup.spec.ts",
+  "**/self-host-onboarding.spec.ts",
+  "**/chat-follow.spec.ts",
+  "**/run-details.spec.ts",
+  "**/pwa-update.spec.ts",
+  "**/automation-accounts.spec.ts",
+];
+const smoke = Boolean(process.env.PW_SMOKE);
+
 export default defineConfig({
   testDir: "./test/browser",
   // Reuse each file's Vite server instead of duplicating cold transforms across
@@ -28,7 +42,7 @@ export default defineConfig({
     // Source-contract checks need neither Chromium nor duplicate viewports.
     { name: "contracts", testDir: "./test/web-contracts" },
     { name: "behavior", testMatch: singleViewport, use: { viewport: { width: 1280, height: 800 } } },
-    { name: "desktop", testIgnore: singleViewport, use: { viewport: { width: 1280, height: 800 } } },
+    { name: "desktop", testIgnore: singleViewport, ...(smoke && { testMatch: smokeSpecs }), use: { viewport: { width: 1280, height: 800 } } },
     { name: "mobile", testIgnore: singleViewport, use: { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true } },
   ],
 });

@@ -15,21 +15,30 @@ During development, pass filename substrings to run only the relevant suites:
 ```bash
 pnpm run test:unit -- config-cli plugin-cli
 pnpm run test:unit -- --list config-cli
+# only suites that depend on what your branch changed (what PR CI runs)
+TEST_AFFECTED_BASE=origin/main pnpm run test:unit
 ```
 
-CI splits the complete root suite across machines with `TEST_SHARD=1/2` and
-`TEST_SHARD=2/2`. Set `TEST_CONCURRENCY=1` when debugging ordering or port
-issues locally.
+`TEST_SHARD=1/2` splits the suite across machines. Set `TEST_CONCURRENCY=1`
+when debugging ordering or port issues locally.
 
 UI/UX work for the hosted/mobile PWA should target the React client in `packages/web/` (`@bivy/web`), which is served by the control plane. The node daemon hosts no web UI.
 
 ## CI checks
 
-CI runs on GitHub Actions (`.github/workflows/ci.yml`) for every push and pull
-request — lint, typecheck, core/unit tests, a docs link checker, control-plane,
-relay, and the remote e2e suites, path-filtered to the areas your change
-touches. There is no local pre-push gate; run the checks yourself before
-pushing when you want a fast local signal:
+CI runs on GitHub Actions (`.github/workflows/ci.yml`) in three tiers, each
+path-filtered to the areas your change touches:
+
+- **Pull requests:** one job with lint, typechecks, policy checks, and only the
+  unit suites that depend on your change.
+- **Merge queue:** every unit suite, the web build, the release package, and a
+  desktop browser smoke set, plus packaging and remote e2e when their inputs change.
+- **Nightly, releases, queued release commits, and any change to `ci.yml`:** everything, including
+  macOS, clean-installer, full browser coverage on every viewport, and remote e2e.
+  A failed nightly opens or updates a "Nightly full CI is failing" issue.
+
+There is no local pre-push gate; run the checks yourself before pushing when you
+want a fast local signal:
 
 ```bash
 pnpm run lint
